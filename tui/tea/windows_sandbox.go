@@ -131,6 +131,7 @@ func (m *Model) startWindowsSandboxSetupStatus(mode chatwidget.WindowsSandboxMod
 	}
 	status := chatwidget.WindowsSandboxSetupInProgressStatus()
 	m.windowsSandboxSetupActive = true
+	m.statusTimer.ResetAt(0, m.currentTime())
 	m.windowsSandboxSetupMode = mode
 	m.windowsSandboxSetupStatus = status
 	m.notice = status.Status
@@ -177,6 +178,7 @@ func (m *Model) applyWindowsSandboxSetupResult(msg WindowsSandboxSetupResultMsg)
 	}
 	if msg.Outcome.Completion != nil {
 		m.windowsSandboxSetupActive = true
+		m.statusTimer.ResetAt(0, m.currentTime())
 		m.windowsSandboxSetupMode = msg.Mode
 		m.applyWindowsSandboxSetupCompleted(*msg.Outcome.Completion)
 		return

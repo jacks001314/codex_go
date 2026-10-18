@@ -16,9 +16,11 @@ const keymapCaptureViewID = "keymap-capture"
 type keymapCaptureIntent string
 
 const (
-	keymapCaptureReplaceAll keymapCaptureIntent = "replace_all"
-	keymapCaptureAdd        keymapCaptureIntent = "add_alternate"
-	keymapCaptureReplaceOne keymapCaptureIntent = "replace_one"
+	keymapCaptureReplaceAll      keymapCaptureIntent = "replace_all"
+	keymapCaptureAdd             keymapCaptureIntent = "add_alternate"
+	keymapCaptureReplaceOne      keymapCaptureIntent = "replace_one"
+	keymapCaptureChordReplaceAll keymapCaptureIntent = "replace_all_chord"
+	keymapCaptureChordAdd        keymapCaptureIntent = "add_alternate_chord"
 	// keymapCaptureLeader captures the completion key of a leader <key> spec
 	// (Rust #52273, keymap_setup/capture.rs:97-98,161-162).
 	keymapCaptureLeader keymapCaptureIntent = "leader_chord"
@@ -29,6 +31,7 @@ type keymapCaptureState struct {
 	Action       string
 	Intent       keymapCaptureIntent
 	OldKey       string
+	ChordFirst   string
 	ErrorMessage string
 }
 
@@ -155,6 +158,10 @@ func (m *Model) applyKeymapModalOption(viewID string, optionID string) bubbletea
 			m.openKeymapCapture(context, action, keymapCaptureReplaceAll, "")
 		case "add":
 			m.openKeymapCapture(context, action, keymapCaptureAdd, "")
+		case "set_chord":
+			m.openKeymapCapture(context, action, keymapCaptureChordReplaceAll, "")
+		case "add_chord":
+			m.openKeymapCapture(context, action, keymapCaptureChordAdd, "")
 		case "replace_one":
 			m.openKeymapReplaceBindingMenu(context, action)
 		case "leader_set":
@@ -216,6 +223,19 @@ func (m *Model) updateKeymapCapture(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	capture := *m.modal.keymapCapture
 	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, capture.Context, capture.Action)
+	if capture.Intent == keymapCaptureChordReplaceAll || capture.Intent == keymapCaptureChordAdd {
+		if capture.ChordFirst == "" {
+			if key == "esc" {
+				m.openKeymapActionMenu(capture.Context, capture.Action)
+				return nil
+			}
+			capture.ChordFirst = key
+			m.modal.keymapCapture.ChordFirst = key
+			m.modal.keymapCapture.ErrorMessage = ""
+			return nil
+		}
+		key = capture.ChordFirst + " " + key
+	}
 	nextBindings := []string{key}
 	switch capture.Intent {
 	case keymapCaptureLeader:
@@ -224,6 +244,15 @@ func (m *Model) updateKeymapCapture(message bubbletea.KeyMsg) bubbletea.Cmd {
 		key = "leader " + key
 		nextBindings = []string{key}
 	case keymapCaptureAdd:
+		for _, binding := range bindings {
+			if binding == key {
+				m.openKeymapPicker(capture.Context, capture.Action)
+				m.notice = fmt.Sprintf("No change: `%s.%s` already uses `%s`.", capture.Context, capture.Action, key)
+				return nil
+			}
+		}
+		nextBindings = append(append([]string(nil), bindings...), key)
+	case keymapCaptureChordAdd:
 		for _, binding := range bindings {
 			if binding == key {
 				m.openKeymapPicker(capture.Context, capture.Action)
@@ -290,6 +319,12 @@ func (m *Model) renderKeymapCapture() string {
 	prompt := "Press the new key now. Esc cancels."
 	if capture.Intent == keymapCaptureLeader {
 		prompt = "Press the key that follows the configured leader. Esc cancels."
+	} else if capture.Intent == keymapCaptureChordReplaceAll || capture.Intent == keymapCaptureChordAdd {
+		if capture.ChordFirst == "" {
+			prompt = "Press the first key of the chord. Esc cancels."
+		} else {
+			prompt = "First key: " + capture.ChordFirst + ". Press the second key. Esc cancels."
+		}
 	}
 	lines := []string{
 		"Remap Shortcut",
@@ -306,6 +341,10 @@ func (m *Model) renderKeymapCapture() string {
 func (m *Model) keyMatches(context string, action string, keySpec string) bool {
 	if keySpec == "" {
 		return false
+	}
+	if chord := strings.TrimSpace(m.activeKeyChord); chord != "" &&
+		codextui.KeymapActionHasBinding(m.keymapConfig, context, action, chord) {
+		return true
 	}
 	return codextui.KeymapActionHasBinding(m.keymapConfig, context, action, keySpec)
 }

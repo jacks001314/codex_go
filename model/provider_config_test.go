@@ -160,7 +160,7 @@ func TestProviderAWSConfigParsesAuthRefreshLikeRust(t *testing.T) {
 	values := map[string]any{
 		"model_providers": map[string]any{
 			"amazon-bedrock": map[string]any{
-				"aws":    map[string]any{
+				"aws": map[string]any{
 					"region": "us-east-1",
 					"auth_refresh": map[string]any{
 						"command":    "aws",

@@ -286,7 +286,7 @@ func WorktreeBrowserActionItems(entry WorktreeBrowserEntry, requestCWD string) [
 		}
 		items = append(items, WorktreeBrowserActionItem{
 			Name:   "Resume owner thread",
-			Action: WorktreeBrowserAction{Kind: WorktreeActionResume, ThreadID: threadID},
+			Action: WorktreeBrowserAction{Kind: WorktreeActionResume, ThreadID: threadID, Path: entry.CWD},
 		})
 	}
 	items = append(items, WorktreeBrowserActionItem{

@@ -9,7 +9,7 @@ import (
 
 // Rust parity: codex-rs/tui/src/bottom_pane/command_popup.rs.
 
-var commandPopupColumnWidth = NewColumnWidthConfig(ColumnWidthAutoAllRows, nil)
+var commandPopupColumnWidth = NewColumnWidthConfig(ColumnWidthAutoAllRows, nil).WithFullWidthSelection()
 
 type CommandPopupItem struct {
 	Name         string
@@ -216,7 +216,7 @@ func (p *CommandPopup) CalculateRequiredHeight(width int) int {
 	if p == nil {
 		return 0
 	}
-	return MeasureGenericRowsHeight(commandPopupDisplayRows(p.FilteredItems()), p.state, MaxPopupRows, max(width-2, 1), commandPopupColumnWidth)
+	return MeasureGenericRowsHeight(commandPopupDisplayRows(p.FilteredItems(), p.state), p.state, MaxPopupRows, max(width, 1), commandPopupColumnWidth)
 }
 
 func (p *CommandPopup) Rows(width int) []string {
@@ -229,12 +229,7 @@ func (p *CommandPopup) Rows(width int) []string {
 	}
 	p.state.ClampSelection(len(items))
 	p.state.EnsureVisible(len(items), min(MaxPopupRows, len(items)))
-	rendered := RenderGenericRows(commandPopupDisplayRows(items), p.state, MaxPopupRows, "no matches", max(width-2, 1), commandPopupColumnWidth)
-	rows := make([]string, 0, len(rendered))
-	for _, row := range rendered {
-		rows = append(rows, "  "+row)
-	}
-	return rows
+	return RenderGenericRows(commandPopupDisplayRows(items, p.state), p.state, MaxPopupRows, "no matches", max(width, 1), commandPopupColumnWidth)
 }
 
 func (p *CommandPopup) refreshSelection() {
@@ -269,11 +264,12 @@ func commandPopupMatchIndices(query string) []int {
 	return indices
 }
 
-func commandPopupDisplayRows(items []CommandPopupItem) []GenericDisplayRow {
+func commandPopupDisplayRows(items []CommandPopupItem, state ScrollState) []GenericDisplayRow {
 	rows := make([]GenericDisplayRow, 0, len(items))
-	for _, item := range items {
+	for index, item := range items {
 		row := GenericDisplayRow{
 			Name:         "/" + item.Name,
+			NamePrefix:   codextui.SelectionPrefix(state.HasSelection && state.SelectedIdx == index),
 			MatchIndices: item.MatchIndices,
 			Description:  item.Description,
 		}

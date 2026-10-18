@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/tui"
 )
 
 // Rust #48807, `separators_tests.rs::completion_label_shows_known_durations_including_short_turns`:
@@ -29,7 +31,7 @@ func TestCompletionLabelShowsShortDurationsLikeRust(t *testing.T) {
 		{seconds(3605), "Worked for 1h 0m 5s \u2022 done 2:32 PM"},
 	}
 	for _, tc := range cases {
-		cell := NewFinalMessageSeparator(tc.elapsed, nil).WithCompletedAt(completedAt)
+		cell := NewFinalMessageSeparator(tc.elapsed, nil).WithCompletedAt(completedAt).WithClockFormat(tui.ClockFormatTwelveHour)
 		cell.DisplayDate = separatorDate(completedAt)
 		if got := cell.Label(); got != tc.want {
 			t.Errorf("elapsed=%v label = %q, want %q", tc.elapsed, got, tc.want)

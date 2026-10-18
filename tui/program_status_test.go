@@ -69,7 +69,7 @@ func TestITermSessionDetailSanitizationLikeRust(t *testing.T) {
 // cache: identical states are not re-emitted, invalidation forces a re-emit,
 // and clearing twice emits once.
 func TestProgramStatusCacheSuppressesDuplicatesLikeRust(t *testing.T) {
-	restore := SetTerminalProgramStatusSupportForTest(true, false)
+	restore := SetTerminalProgramStatusSupportForTest(true, true)
 	defer restore()
 
 	working := ProgramStatus{State: ProgramStatusWorking}
@@ -78,6 +78,12 @@ func TestProgramStatusCacheSuppressesDuplicatesLikeRust(t *testing.T) {
 	}
 	if got := SetTerminalProgramStatus(working, ""); got != "" {
 		t.Fatalf("duplicate report emitted %q", got)
+	}
+	if got := SetTerminalProgramStatus(working, "Reading source"); got == "" {
+		t.Fatal("changed activity detail was suppressed")
+	}
+	if got := SetTerminalProgramStatus(working, "Reading source"); got != "" {
+		t.Fatalf("duplicate activity detail emitted %q", got)
 	}
 	if got := SetTerminalProgramStatus(ProgramStatus{State: ProgramStatusDone}, ""); got == "" {
 		t.Fatal("changed status was suppressed")

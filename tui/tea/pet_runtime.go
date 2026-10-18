@@ -174,6 +174,7 @@ func (r *petRuntime) appendPayloadLocked() {
 // reaches the terminal so the sprite is redrawn after each Bubble Tea frame.
 type petOutputWriter struct {
 	runtime *petRuntime
+	images  *transcriptImageRuntime
 }
 
 var _ term.File = (*petOutputWriter)(nil)
@@ -184,11 +185,19 @@ func (w *petOutputWriter) Write(p []byte) (int, error) {
 	}
 	w.runtime.mu.Lock()
 	defer w.runtime.mu.Unlock()
+	// Clear graphics that no longer fit before the frame text repaints their
+	// rows, then redraw the live placements after the text is flushed.
+	if w.images != nil {
+		w.images.beforeWrite()
+	}
 	n, err := w.runtime.out.Write(p)
 	if err != nil {
 		return n, err
 	}
 	w.runtime.appendPayloadLocked()
+	if w.images != nil {
+		w.images.afterWrite()
+	}
 	return n, nil
 }
 

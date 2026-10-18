@@ -744,6 +744,35 @@ func TestVimReplaceModeBackspaceRestoresCharactersLikeRust(t *testing.T) {
 	}
 }
 
+// TestVimReplaceModeAbsorbsPromptPrefixLikeRust pins #54742's Vim Replace
+// edge: typing the leading slash moves it into prompt state without losing
+// the overwritten character, and Backspace at the start restores that
+// character while removing the marker.
+func TestVimReplaceModeAbsorbsPromptPrefixLikeRust(t *testing.T) {
+	m := vimTestModel("abc")
+	m = vimKeyPress(m, 'R')
+	m = vimKeyPress(m, '/')
+	if m.composerPrefix != composerPrefixSlash || m.composer.Value() != "bc" {
+		t.Fatalf("after slash prefix: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
+	}
+
+	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	if m.composerPrefix != composerPrefixNone || m.composer.Value() != "abc" {
+		t.Fatalf("after prefix Backspace: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
+	}
+
+	m = vimTestModel("")
+	m = vimKeyPress(m, 'R')
+	m = vimKeyPress(m, '/')
+	if m.composerPrefix != composerPrefixSlash || m.composer.Value() != "" {
+		t.Fatalf("empty slash prefix: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
+	}
+	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	if m.composerPrefix != composerPrefixNone || m.composer.Value() != "" {
+		t.Fatalf("empty prefix Backspace: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
+	}
+}
+
 func TestVimReplaceModeDotRepeatLikeRust(t *testing.T) {
 	m := vimTestModel("abc")
 	m = vimKeyPress(m, 'R')

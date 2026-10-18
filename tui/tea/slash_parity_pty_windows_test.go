@@ -81,6 +81,13 @@ func TestSystemCodexSlashParityWithConPTY(t *testing.T) {
 func runCodexSlashPTY(t *testing.T, exe string, cwd string, startupMarker string, commands []string) string {
 	t.Helper()
 	home := t.TempDir()
+	// A daemon launched for this session can outlive the TUI and keep its
+	// socket open, so stop only processes rooted at this test's CODEX_HOME
+	// before TempDir cleanup runs.
+	t.Cleanup(func() {
+		killCodexProcessesUnderPath(home)
+		time.Sleep(500 * time.Millisecond)
+	})
 	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test"}`), 0o600); err != nil {
 		t.Fatalf("write isolated PTY auth fixture: %v", err)
 	}

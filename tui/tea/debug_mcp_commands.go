@@ -105,12 +105,23 @@ func (m *Model) applyMCPCommand(args string) bubbletea.Cmd {
 		return nil
 	}
 	detail := false
-	switch strings.ToLower(strings.TrimSpace(args)) {
-	case "":
-	case "verbose":
+	trimmed := strings.TrimSpace(args)
+	switch {
+	case trimmed == "":
+	case strings.EqualFold(trimmed, "verbose"):
 		detail = true
+	case len(trimmed) > len("login") &&
+		strings.EqualFold(trimmed[:len("login")], "login") &&
+		(trimmed[len("login")] == ' ' || trimmed[len("login")] == '\t'):
+		name := strings.TrimSpace(trimmed[len("login"):])
+		if name == "" {
+			m.notice = "Usage: /mcp [verbose | login <name>]"
+			m.refreshTranscript()
+			return nil
+		}
+		return m.startMCPLogin(name)
 	default:
-		m.notice = "Usage: /mcp [verbose]"
+		m.notice = "Usage: /mcp [verbose | login <name>]"
 		m.refreshTranscript()
 		return nil
 	}

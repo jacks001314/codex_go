@@ -24,8 +24,32 @@ func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T
 	enabled := NewModel(codextui.NewState(nil), Options{
 		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &on,
 	})
-	if view := utils.StripANSI(enabled.View()); !strings.Contains(view, "Tip: ") {
-		t.Fatalf("enabled tooltips missing the session tip:\n%s", view)
+	view := utils.StripANSI(enabled.View())
+	if strings.Contains(view, "Tip: ") {
+		t.Fatalf("fullscreen transcript must hide the startup tip (Rust #48513):\n%s", view)
+	}
+	enabled.rawOutput = true
+	if raw := utils.StripANSI(enabled.View()); !strings.Contains(raw, "Tip: ") {
+		t.Fatalf("raw output must retain the startup tip:\n%s", raw)
+	}
+	enabled.rawOutput = false
+
+	fullscreenOff := false
+	inline := NewModel(codextui.NewState(nil), Options{
+		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &on, FullscreenTranscript: &fullscreenOff,
+	})
+	if inlineView := utils.StripANSI(inline.View()); !strings.Contains(inlineView, "Tip: ") {
+		t.Fatalf("inline scrollback must retain the startup tip:\n%s", inlineView)
+	}
+	narrow := NewModel(codextui.NewState(nil), Options{
+		Width: 32, Height: 24, ShowSessionHeader: true, ShowTooltips: &on,
+	})
+	narrowView := utils.StripANSI(narrow.View())
+	if strings.Contains(narrowView, "Tip: ") {
+		t.Fatalf("narrow fullscreen transcript must hide the startup tip:\n%s", narrowView)
+	}
+	if strings.Contains(narrowView, "**") || strings.Contains(narrowView, "](") {
+		t.Fatalf("narrow transcript tip leaked Markdown source:\n%s", narrowView)
 	}
 
 	// A live settings update toggles the preference.

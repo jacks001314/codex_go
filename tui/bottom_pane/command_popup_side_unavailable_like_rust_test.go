@@ -21,7 +21,7 @@ func TestCommandPopupSideUnavailableCommandShownOnlyWhenSearchedLikeRust(t *test
 	if selected, ok := popup.SelectedItem(); ok {
 		t.Fatalf("disabled archive must not be selectable, selected=%#v", selected)
 	}
-	rows := commandPopupDisplayRows(items)
+	rows := commandPopupDisplayRows(items, ScrollState{})
 	if len(rows) != 1 || !rows[0].IsDisabled || rows[0].DisabledReason != "not available in a side conversation" {
 		t.Fatalf("display rows = %#v, want one disabled row with the side reason", rows)
 	}

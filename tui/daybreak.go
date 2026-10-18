@@ -1,14 +1,9 @@
 package tui
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "strings"
 
-// Rust parity: codex-rs/tui/src/daybreak.rs. Read-only Daybreak eligibility used
-// to choose the cyber refusal copy. Account-scoped discovery runs in the
-// background; pending or failed reads use the neutral Limited copy. Astra takes
-// precedence and the TUI never configures the app's access program.
+// Rust parity: codex-rs/tui/src/daybreak.rs. Cyber refusal guidance comes from
+// the current model's catalog-advertised access programs.
 
 // DaybreakNotice is the account's Daybreak eligibility for refusal copy.
 type DaybreakNotice int
@@ -23,39 +18,27 @@ const (
 	DaybreakNoticeLimited
 )
 
-// DaybreakNoticeForModel maps a model to its refusal-copy eligibility (Rust
-// Notice::for_model). Model identifiers match the app's
-// isDaybreakUnavailableModel.
-func DaybreakNoticeForModel(notice DaybreakNotice, model string) DaybreakNotice {
-	switch strings.TrimSpace(model) {
-	case "gpt-6-astra", "gpt-6-astra-wm":
-		return DaybreakNoticeAstra
-	case "gpt-5.6-sol":
-		return notice
-	default:
+// DaybreakNoticeFromCyberPrograms selects refusal guidance from one model's
+// `available_access_programs` metadata (Rust notice_for_model). Missing
+// metadata and non-Astra standard access use the application guidance.
+func DaybreakNoticeFromCyberPrograms(model string, programs []string) DaybreakNotice {
+	hasStandard := false
+	hasDaybreak := false
+	for _, program := range programs {
+		switch strings.ToLower(strings.TrimSpace(program)) {
+		case "standard":
+			hasStandard = true
+		case "daybreak_blue", "daybreak_red":
+			hasDaybreak = true
+		}
+	}
+	if hasDaybreak {
 		return DaybreakNoticeLimited
 	}
-}
-
-// DaybreakVerifiedAccess is the `/accounts/verified_access` response.
-type DaybreakVerifiedAccess struct {
-	Programs []DaybreakProgram `json:"programs"`
-}
-
-// DaybreakProgram is one access program entry. Unknown programs are ignored.
-type DaybreakProgram struct {
-	Program string            `json:"program"`
-	State   string            `json:"state,omitempty"`
-	Grants  []json.RawMessage `json:"grants,omitempty"`
-}
-
-// Notice maps the account's programs to the refusal-copy eligibility (Rust
-// VerifiedAccess::notice): the apply copy is used only when no cyber access is
-// active and no grants exist.
-func (a DaybreakVerifiedAccess) Notice() DaybreakNotice {
-	for _, program := range a.Programs {
-		if program.Program == "cyber" && (program.State != "inactive" || len(program.Grants) > 0) {
-			return DaybreakNoticeLimited
+	switch strings.TrimSpace(model) {
+	case "gpt-6-astra", "gpt-6-astra-wm":
+		if hasStandard {
+			return DaybreakNoticeAstra
 		}
 	}
 	return DaybreakNoticeApply

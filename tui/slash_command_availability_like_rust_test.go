@@ -4,14 +4,15 @@ import "testing"
 
 // The false arm of Rust SlashCommand::available_during_task
 // (codex-rs/tui/src/slash_command.rs:249-313), expressed in Go commands.
-// Upstream also blocks /tui (:260) and /config (:312); neither has a Go carrier
-// (section T5.11), so they cannot appear here.
+// Upstream also blocks /config (:312), which now has a Go carrier.
 var rustCommandsBlockedDuringTask = []Command{
 	CommandNew, CommandDelete, CommandFork, CommandWorktree, CommandInit,
 	CommandCompact, CommandRecap, CommandExport, CommandKeymap, CommandVim,
+	CommandTUI,
 	CommandElevateSandbox, CommandExperimental, CommandMemories, CommandImport,
 	CommandReview, CommandPlan, CommandCd, CommandClear, CommandLogout,
 	CommandMemoryDrop, CommandMemoryUpdate, CommandTheme, CommandPets,
+	CommandConfig,
 }
 
 // Rust SlashCommand::available_in_side_conversation

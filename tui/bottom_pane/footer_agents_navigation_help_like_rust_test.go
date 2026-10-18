@@ -80,3 +80,38 @@ func indexOfFooterLine(lines []string, want string) int {
 	}
 	return -1
 }
+
+// Rust #41917 renders the empty-composer agents hint ahead of the shortcuts
+// hint, appends it to an existing status line, and includes it in the shortcut
+// overlay.
+func TestFooterAgentsNavigationHintLikeRust(t *testing.T) {
+	hints := FooterKeyHints{
+		Agents:          "\u2190",
+		ToggleShortcuts: "?",
+	}
+	lines := FooterLines(FooterProps{KeyHints: hints})
+	if len(lines) != 1 || lines[0] != "\u2190 for agents \u00b7 ? for shortcuts" {
+		t.Fatalf("empty-composer footer = %#v, want agents then shortcuts", lines)
+	}
+
+	status := FooterLines(FooterProps{
+		Mode:              FooterModeComposerEmpty,
+		StatusLineEnabled: true,
+		StatusLineValue:   "model \u00b7 project",
+		KeyHints:          hints,
+	})
+	if len(status) != 1 || status[0] != "model \u00b7 project \u00b7 \u2190 for agents" {
+		t.Fatalf("status-line footer = %#v", status)
+	}
+
+	props := FooterProps{Mode: FooterModeComposerEmpty, KeyHints: hints}
+	layout := ComputeSingleLineFooterLayout( /*width*/ 40 /*contextWidth*/, len("100% context left"), props, true, false)
+	if layout.LeftKind != SummaryLeftCustom || layout.Left != "\u2190 for agents" || !layout.ShowContext {
+		t.Fatalf("compact agents layout = %#v", layout)
+	}
+
+	overlay := FooterShortcutOverlayLines(props)
+	if indexOfFooterLine(overlay, "\u2190 for agents (empty prompt)") < 0 {
+		t.Fatalf("shortcut overlay missing the agents row: %#v", overlay)
+	}
+}

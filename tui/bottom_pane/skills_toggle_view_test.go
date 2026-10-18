@@ -30,11 +30,18 @@ func TestSkillsToggleViewFiltersSortsAndRowsMatchRust(t *testing.T) {
 	}
 
 	rows := view.Rows(80)
-	if !bottomPaneContainsRow(rows, tui.RenderSelectedRow("\u203a [x] Repo Scout        Summarize the repo layout")) {
+	selected := selectedPickerRowContaining(rows, "[x] Repo Scout")
+	if selected == "" || !strings.Contains(selected, "Summarize the repo layout") {
 		t.Fatalf("rows missing selected repo row:\n%s", strings.Join(rows, "\n"))
+	}
+	if width := tui.DisplayWidth(stripANSIForSelectionTest(selected)); width != 80 {
+		t.Fatalf("selected skill row width = %d, want 80: %q", width, selected)
 	}
 	if !bottomPaneContainsRow(rows, SkillsSearchPrompt+"re") {
 		t.Fatalf("rows missing search query:\n%s", strings.Join(rows, "\n"))
+	}
+	if !bottomPaneContainsRow(rows, "space/enter toggle \u00b7 esc close") {
+		t.Fatalf("rows missing compact hint:\n%s", strings.Join(rows, "\n"))
 	}
 }
 

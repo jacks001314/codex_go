@@ -282,6 +282,7 @@ func (m *Model) expandAsyncQuestions() {
 		return
 	}
 	m.asyncQuestionMainDraft = m.composerText()
+	m.asyncQuestionMainElements = cloneComposerTextElements(m.composerElements)
 	m.asyncQuestions.SetExpanded(true, "")
 	m.setComposerPrompt(m.asyncQuestions.CurrentDraft())
 	m.resetVimEditHistory()
@@ -295,8 +296,22 @@ func (m *Model) collapseAsyncQuestions() {
 		return
 	}
 	m.asyncQuestions.SetExpanded(false, m.composerText())
-	m.setComposerPrompt(m.asyncQuestionMainDraft)
+	m.restoreAsyncQuestionMainDraft()
+}
+
+// restoreAsyncQuestionMainDraft returns the composer to the draft that was
+// active before the question editor took it over, including structured text
+// elements such as mentions.
+func (m *Model) restoreAsyncQuestionMainDraft() {
+	if m == nil {
+		return
+	}
+	text := m.asyncQuestionMainDraft
+	elements := cloneComposerTextElements(m.asyncQuestionMainElements)
 	m.asyncQuestionMainDraft = ""
+	m.asyncQuestionMainElements = nil
+	m.setComposerPrompt(text)
+	m.composerElements = elements
 	m.resetVimEditHistory()
 }
 
@@ -310,8 +325,7 @@ func (m *Model) acceptAsyncQuestion() {
 	draft := m.asyncQuestions.AcceptAnswer()
 	if m.asyncQuestions.UnansweredCount() == 0 {
 		m.asyncQuestions.SetExpanded(false, draft)
-		m.setComposerPrompt(m.asyncQuestionMainDraft)
-		m.asyncQuestionMainDraft = ""
+		m.restoreAsyncQuestionMainDraft()
 	} else {
 		m.composer.SetValue(draft)
 	}
@@ -388,6 +402,100 @@ func (m *Model) clearAsyncQuestionsForNewPrompt() {
 	}
 	m.asyncQuestions.ClearPending()
 	m.asyncQuestionMainDraft = ""
+	m.asyncQuestionMainElements = nil
+}
+
+// takeQuestionDrafts mirrors Rust's ChatWidget::take_question_drafts (#47424):
+// drop a stale async-question notification, capture the focused question's
+// answer, restore the main composer draft, then consume every pending question
+// while returning its non-empty answer drafts.
+func (m *Model) takeQuestionDrafts() []string {
+	if m == nil {
+		return nil
+	}
+	m.notifications.ClearKind(chatwidget.NotificationAsyncQuestion)
+	if m.asyncQuestions.UnansweredCount() == 0 {
+		return nil
+	}
+	if m.asyncQuestions.Expanded() {
+		m.asyncQuestions.SetExpanded(false, m.composerText())
+		m.restoreAsyncQuestionMainDraft()
+	}
+	return m.asyncQuestions.TakePendingDrafts()
+}
+
+// appendQuestionDrafts appends recovered answers after turn finalization while
+// preserving the main draft's structured text elements.
+func (m *Model) appendQuestionDrafts(drafts []string) {
+	if m == nil || len(drafts) == 0 {
+		return
+	}
+	recovered := strings.Join(drafts, "\n\n")
+	if recovered == "" {
+		return
+	}
+	if m.editHistorySearchSavedDraft(func(saved string) string {
+		return appendRecoveredDraftText(saved, recovered)
+	}) {
+		return
+	}
+	m.escapeComposerPromptForRecoveredDraft()
+	before := m.composer.Value()
+	separator := ""
+	if before != "" {
+		separator = "\n\n"
+	}
+	after := before + separator + recovered
+	m.composer.SetValue(after)
+	m.syncComposerElements(before)
+	m.setComposerCursorOffset(utf8.RuneCountInString(after))
+	m.resetVimEditHistory()
+}
+
+func appendRecoveredDraftText(current string, recovered string) string {
+	current = escapeRecoveredCommandDraftText(current)
+	if current == "" {
+		return recovered
+	}
+	return current + "\n\n" + recovered
+}
+
+// escapeRecoveredCommandDraftText makes command-like saved text plain before
+// appending recovered answers. Path-like slash drafts retain their action.
+func escapeRecoveredCommandDraftText(text string) string {
+	prefix, body := splitComposerPrompt(text)
+	if prefix == composerPrefixNone {
+		return text
+	}
+	if prefix == composerPrefixSlash {
+		parsed := bottompane.ParseSlashName(strings.TrimLeft(text, " \t\r\n"))
+		if parsed.OK && strings.Contains(parsed.Name, "/") {
+			return text
+		}
+	}
+	return "\\" + prefix.text() + body
+}
+
+// escapeComposerPromptForRecoveredDraft makes a command-like main draft plain
+// text before appending quoted answers, so the recovered text is not submitted
+// as shell or slash-command input.
+func (m *Model) escapeComposerPromptForRecoveredDraft() {
+	if m == nil || m.composerPrefix == composerPrefixNone {
+		return
+	}
+	if m.composerPrefix == composerPrefixSlash {
+		parsed := bottompane.ParseSlashName(strings.TrimLeft(m.composerText(), " \t\r\n"))
+		if parsed.OK && strings.Contains(parsed.Name, "/") {
+			// Path-like slash drafts keep their normal submission action.
+			return
+		}
+	}
+	before := m.composer.Value()
+	prefix := m.composerPrefix.text()
+	m.composerPrefix = composerPrefixNone
+	m.composer.SetValue("\\" + prefix + before)
+	m.syncComposerElements(before)
+	m.refreshComposerPrompt()
 }
 
 // appendBufferedAsyncQuestions retains questions carried by buffered live

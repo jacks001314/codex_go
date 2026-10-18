@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"codex_go/appserver"
+	"codex_go/cli"
 	"codex_go/config"
+	codextui "codex_go/tui"
 )
 
 // TestApplyServerEffectiveLaunchDefaults covers Rust #43177's precedence: the
@@ -113,4 +115,35 @@ func cloneThreadStartParams(params appserver.ThreadStartParams) appserver.Thread
 		}
 	}
 	return cloned
+}
+
+func TestRemoteNewThreadPreservesLaunchAndLaterPermissionsLikeRust(t *testing.T) {
+	root := &cli.RootOptions{Shared: cli.SharedOptions{
+		ApprovalPolicy: "never",
+		Sandbox:        "danger-full-access",
+	}}
+	state := codextui.NewState(&codextui.Options{
+		ApprovalPolicy: "never",
+		Sandbox:        "danger-full-access",
+	})
+
+	params, err := remoteThreadStartParams(root, state)
+	if err != nil {
+		t.Fatalf("launch thread/start params: %v", err)
+	}
+	if params.ApprovalPolicy != "never" || params.Sandbox != "danger-full-access" {
+		t.Fatalf("launch permissions = approval:%#v sandbox:%#v", params.ApprovalPolicy, params.Sandbox)
+	}
+
+	// A later permission-picker choice becomes the live session state and must
+	// win for the next fresh session, rather than the original launch value.
+	state.ApprovalPolicy = "on-request"
+	state.Sandbox = "read-only"
+	params, err = remoteThreadStartParams(root, state)
+	if err != nil {
+		t.Fatalf("updated thread/start params: %v", err)
+	}
+	if params.ApprovalPolicy != "on-request" || params.Sandbox != "read-only" {
+		t.Fatalf("updated permissions = approval:%#v sandbox:%#v", params.ApprovalPolicy, params.Sandbox)
+	}
 }

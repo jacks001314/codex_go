@@ -4,20 +4,25 @@ import "strings"
 
 const (
 	SafetyBufferingPromptViewID     = "safety-buffering-prompt"
-	SafetyBufferingMessageWithRetry = "This request requires additional safety checks, which can take extra time. Hang tight or retry with a faster model for a quicker response, though it may be less capable of handling complex requests."
-	SafetyBufferingMessageNoRetry   = "This request requires additional safety checks, which can take extra time."
+	SafetyBufferingHeader           = "Giving this request a little extra thought"
+	SafetyBufferingMessageWithRetry = "If you'd rather not wait, retry with a faster model. It may be less capable of handling complex requests."
+	SafetyBufferingMessageNoRetry   = SafetyBufferingHeader
+	SafetyBufferingFooter           = "No action is required. Codex will keep waiting, and this menu will close when the response is ready."
+	SafetyBufferingLearnMoreURL     = "https://help.openai.com/en/articles/20001326"
 )
 
 const (
 	SafetyBufferingActionRetry     UsageMenuAction = "safety_buffering_retry"
 	SafetyBufferingActionWait      UsageMenuAction = "safety_buffering_wait"
 	SafetyBufferingActionStopRetry UsageMenuAction = "safety_buffering_stop_retry"
+	SafetyBufferingActionLearnMore UsageMenuAction = "safety_buffering_learn_more"
 )
 
 type SafetyBufferingState struct {
 	SubmittedTurnID     string
 	ActiveTurnID        string
 	RetryPromptShown    bool
+	RetryPromptHadRetry bool
 	AgentMessageStarted bool
 }
 
@@ -76,17 +81,19 @@ func (s *SafetyBufferingState) ResetForTurnStart() SafetyBufferingResult {
 	}
 	s.ActiveTurnID = ""
 	s.RetryPromptShown = false
+	s.RetryPromptHadRetry = false
 	s.AgentMessageStarted = false
 	return SafetyBufferingResult{DismissPrompt: true, Cleared: true}
 }
 
-func (s *SafetyBufferingState) MarkAgentMessageStarted() {
-	if s == nil {
-		return
+// MarkAgentMessageStarted records the first visible response text and reports
+// whether the buffering UI should now close.
+func (s *SafetyBufferingState) MarkAgentMessageStarted() bool {
+	if s == nil || s.ActiveTurnID == "" || s.AgentMessageStarted {
+		return false
 	}
-	if s.ActiveTurnID != "" {
-		s.AgentMessageStarted = true
-	}
+	s.AgentMessageStarted = true
+	return true
 }
 
 func (s *SafetyBufferingState) IsWaiting() bool {
@@ -109,10 +116,14 @@ func (s *SafetyBufferingState) ApplyWithContext(update SafetyBufferingUpdate, co
 		(context.EnforceTurn && (!context.AgentTurnRunning || context.LastTurnID != update.TurnID)) {
 		return SafetyBufferingResult{Ignored: true}
 	}
+	if s.AgentMessageStarted && s.ActiveTurnID == update.TurnID {
+		return SafetyBufferingResult{Ignored: true}
+	}
 	if !update.ShowBufferingUI {
 		if s.ActiveTurnID == update.TurnID {
 			s.ActiveTurnID = ""
 			s.RetryPromptShown = false
+			s.RetryPromptHadRetry = false
 			s.AgentMessageStarted = false
 			return SafetyBufferingResult{Cleared: true, DismissPrompt: true, Redraw: true}
 		}
@@ -123,14 +134,15 @@ func (s *SafetyBufferingState) ApplyWithContext(update SafetyBufferingUpdate, co
 		s.SubmittedTurnID == update.TurnID &&
 		(context.Replay == ReplayNone) &&
 		(!context.EnforceTurn || context.ThreadID != "")
-	shouldShowPrompt := canRetry && !s.RetryPromptShown
+	shouldShowPrompt := !s.RetryPromptShown || s.RetryPromptHadRetry != canRetry
 	if shouldShowPrompt {
 		s.RetryPromptShown = true
+		s.RetryPromptHadRetry = canRetry
 	}
 	s.ActiveTurnID = update.TurnID
 	message := SafetyBufferingMessageNoRetry
 	if canRetry {
-		message = SafetyBufferingMessageWithRetry
+		message = SafetyBufferingHeader + " " + SafetyBufferingMessageWithRetry
 	}
 	result := SafetyBufferingResult{
 		Status: StatusIndicatorState{
@@ -140,11 +152,10 @@ func (s *SafetyBufferingState) ApplyWithContext(update SafetyBufferingUpdate, co
 		},
 		Waiting:        !s.AgentMessageStarted,
 		RetryAvailable: canRetry,
-		DismissPrompt:  !canRetry,
 		Redraw:         true,
 	}
 	if shouldShowPrompt {
-		view := NewSafetyBufferingPromptView(update.FasterModel)
+		view := NewSafetyBufferingPromptView(update.FasterModel, canRetry)
 		result.Prompt = &view
 	}
 	return result
@@ -182,28 +193,38 @@ func (s *SafetyBufferingState) FailRetry(queue *InputQueueState, cancelEdit *Can
 	}
 }
 
-func NewSafetyBufferingPromptView(fasterModel string) SelectionView {
-	return SelectionView{
+// NewSafetyBufferingPromptView builds the buffering prompt with the retry entry
+// only when the server selected an eligible faster model.
+func NewSafetyBufferingPromptView(fasterModel string, retryAvailable bool) SelectionView {
+	view := SelectionView{
 		ViewID:      SafetyBufferingPromptViewID,
-		Title:       "Additional safety checks",
-		Subtitle:    SafetyBufferingMessageWithRetry,
+		Title:       SafetyBufferingHeader,
 		AllowCancel: true,
-		Items: []SelectionItem{
-			{
-				ID:              "retry",
-				Name:            "Retry with a faster model",
-				Description:     fasterModel,
-				Action:          SafetyBufferingActionRetry,
-				DismissOnSelect: true,
-			},
-			{
-				ID:              "wait",
-				Name:            "Keep waiting",
-				Action:          SafetyBufferingActionWait,
-				DismissOnSelect: true,
-			},
-		},
+		FooterNote:  SafetyBufferingFooter,
 	}
+	if retryAvailable {
+		view.Subtitle = SafetyBufferingMessageWithRetry
+		view.Items = append(view.Items, SelectionItem{
+			ID:              "retry",
+			Name:            "Retry with a faster model",
+			Action:          SafetyBufferingActionRetry,
+			DismissOnSelect: true,
+		})
+	}
+	view.Items = append(view.Items,
+		SelectionItem{
+			ID:              "wait",
+			Name:            "Dismiss and keep waiting",
+			Action:          SafetyBufferingActionWait,
+			DismissOnSelect: true,
+		},
+		SelectionItem{
+			ID:     "learn-more",
+			Name:   "Learn more",
+			Action: SafetyBufferingActionLearnMore,
+		},
+	)
+	return view
 }
 
 // NewSafetyBufferingConfirmationView shows the Rust #42380 confirmation before
@@ -229,7 +250,6 @@ func NewSafetyBufferingConfirmationView(fasterModel string) SelectionView {
 			{
 				ID:              "stop-retry",
 				Name:            "Stop and retry",
-				Description:     modelLabel,
 				Action:          SafetyBufferingActionStopRetry,
 				DismissOnSelect: true,
 			},

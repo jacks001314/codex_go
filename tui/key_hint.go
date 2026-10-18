@@ -22,6 +22,7 @@ const (
 	KeyModifierControl KeyModifier = "control"
 	KeyModifierShift   KeyModifier = "shift"
 	KeyModifierAlt     KeyModifier = "alt"
+	KeyModifierSuper   KeyModifier = "super"
 )
 
 // ModifierKeyLabelForPlatform returns the label Rust's MODIFIER_LABELS table
@@ -51,6 +52,11 @@ func ModifierKeyLabelForPlatform(modifier KeyModifier, goos string) string {
 			return "\u2325"
 		}
 		return "alt"
+	case KeyModifierSuper:
+		if goos == "darwin" {
+			return "\u2318"
+		}
+		return "super"
 	}
 	return ""
 }
@@ -72,6 +78,12 @@ func ShiftKeyLabel() string {
 // `alt` everywhere else.
 func AltKeyLabel() string {
 	return ModifierKeyLabelForPlatform(KeyModifierAlt, runtime.GOOS)
+}
+
+// SuperKeyLabel is the name Rust's key hints give the super/command modifier:
+// the command glyph on macOS and `super` everywhere else.
+func SuperKeyLabel() string {
+	return ModifierKeyLabelForPlatform(KeyModifierSuper, runtime.GOOS)
 }
 
 // ModifierLabelPrefix renders a modifier label followed by its separator the way

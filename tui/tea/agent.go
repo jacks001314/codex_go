@@ -257,6 +257,7 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
 			m.State.BumpMessagesRevision()
+			m.insertSessionHeader()
 			m.setStatus("idle")
 		}
 		m.setActiveAgentLabel(entry)
@@ -324,6 +325,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		delete(m.backgroundThreadEvents, entry.ThreadID)
 		m.State.Messages = messages
 		m.State.BumpMessagesRevision()
+		m.insertSessionHeader()
 		status := strings.TrimSpace(message.Response.Status)
 		if status == "" {
 			status = "idle"

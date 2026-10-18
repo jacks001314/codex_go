@@ -403,6 +403,8 @@ type Settings struct {
 	MultiAgentMode          string         `json:"multiAgentMode"`
 	Personality             *string        `json:"personality,omitempty"`
 	PersonalitySet          bool           `json:"-"`
+	InstructionSources      []string       `json:"instructionSources,omitempty"`
+	InstructionSourcesSet   bool           `json:"-"`
 	RuntimeWorkspaceRoots   []string       `json:"runtimeWorkspaceRoots,omitempty"`
 }
 
@@ -424,6 +426,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		Summary                 *string        `json:"summary"`
 		CollaborationMode       map[string]any `json:"collaborationMode"`
 		Personality             *string        `json:"personality"`
+		InstructionSources      []string       `json:"instructionSources"`
 		RuntimeWorkspaceRoots   []string       `json:"runtimeWorkspaceRoots"`
 	}{
 		DisabledPluginIDs:       append([]string{}, s.DisabledPluginIDs...),
@@ -439,6 +442,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		Summary:                 cloneString(s.Summary),
 		CollaborationMode:       threadSettingsCollaborationMode(s),
 		Personality:             cloneString(s.Personality),
+		InstructionSources:      append([]string(nil), s.InstructionSources...),
 		RuntimeWorkspaceRoots:   append([]string(nil), s.RuntimeWorkspaceRoots...),
 	})
 }
@@ -959,6 +963,7 @@ func cloneSettings(settings Settings) Settings {
 	settings.Summary = cloneString(settings.Summary)
 	settings.CollaborationMode = cloneAnyMap(settings.CollaborationMode)
 	settings.Personality = cloneString(settings.Personality)
+	settings.InstructionSources = append([]string(nil), settings.InstructionSources...)
 	settings.RuntimeWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
 	return settings
 }

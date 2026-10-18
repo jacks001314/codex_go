@@ -1125,13 +1125,15 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// failed resolve would otherwise hand to the Model.
 	liveSettings := interactiveNewThreadLocalSettings(root)
 	settings := liveSettings.Tui
+	settings = interactiveScreenReaderAnimationSettings(settings)
 	// Rust #53859: the embedded TUI records one codex.tui.start observation and
 	// keeps its size-free launch tags for later terminal-size observations.
 	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, nil, false), "in_process")
 	defer tuiTelemetry.close()
-	accountDisplay, hasChatGPTAccount := interactiveStatusAccount(root)
+	accountDisplay, hasChatGPTAccount, requiresOpenAIAuth := interactiveStatusAccount(root)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
+	state.RequiresOpenAIAuth = requiresOpenAIAuth
 	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
 	store := newSessionStore()
 	threadID, err := interactiveStartLocalTUIThread(root, state, store)
@@ -1191,7 +1193,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		stopSession:      voiceStop,
 	})
 	options := codextea.Options{
-		NoAltScreen:                  root != nil && root.Shared.NoAltScreen,
+		NoAltScreen:                  interactiveNoAltScreen(root, settings),
+		AlternateScreenMode:          settings.AlternateScreenMode,
+		WindowsTerminalMappedInput:   codextea.WindowsTerminalMappedInputEnabled(),
 		LocalSession:                 true,
 		TerminalSizeContext:          tuiTelemetry.context,
 		TerminalSizeExporter:         tuiTelemetry.exporter,
@@ -1208,6 +1212,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		AutoRecap:                   settings.AutoRecap,
 		MouseScrollSpeed:            settings.MouseScrollSpeed,
 		RightClickPaste:             interactiveRightClickPasteValue(settings.RightClickPaste),
+		CopyOnSelect:                interactiveCopyOnSelectValue(settings.CopyOnSelect),
+		CopyOnSelectClearSelection:  settings.CopyOnSelectClearSelection != nil && *settings.CopyOnSelectClearSelection,
+		StartInVimMode:              settings.StartInVimMode != nil && *settings.StartInVimMode,
+		ResumeCWD:                   interactiveResumeCWDValue(settings.ResumeCWD),
 		ShowRawReasoning:            interactiveShowRawAgentReasoning(root),
 		LocalWorktreeOperations:     true,
 		WorktreesEnabled:            worktreeEnabled,
@@ -1221,6 +1229,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		QuickDials:                  settings.QuickDials,
 		ShowSessionHeader:           true,
 		ShowTooltips:                settings.ShowTooltips,
+		ShowServerVersionNotice:     settings.ShowServerVersionNotice,
+		FullscreenTranscript:        settings.FullscreenTranscript,
 		SessionHeaderVersion:        doctor.Version(),
 		WindowsSandboxStartupPrompt: interactiveWindowsSandboxStartupPrompt(root, settings.PermissionRequirements),
 		OnSessionAction:             interactiveSessionActionHandler(root),
@@ -1231,6 +1241,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
 		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(interactiveShowRawAgentReasoning(root)),
 		OnRenameThread:              interactiveRenameThreadHandler(),
+		OnUpdateDaybreak:            interactiveDaybreakUpdateHandler(),
 		OnLogout:                    interactiveLogoutHandler(ctx, root),
 		OnOpenDesktopThread:         interactiveOpenDesktopThread,
 		OnVoiceConversationStart: func(threadID string, attemptID uint64) bubbletea.Cmd {
@@ -1310,6 +1321,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			}
 			return interactiveHistoryMCPStatuses(response.Data), nil
 		},
+		OnStartMCPLogin:           interactiveLocalMCPLoginStarter(mcpService),
 		OnReadRateLimits:          interactiveLocalRateLimitsReader(),
 		OnReadBackendBanner:       interactiveLocalBackendBannerReader(),
 		OnBackendBannerAction:     interactiveBackendBannerActionHandler(interactiveLocalAddCreditsNudgeSender()),
@@ -1397,7 +1409,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			userInputBroker.respond(response)
 			return interactiveLocalModelSelectionCommand(root, response.Picker)
 		},
-		HasChatGPTAccount: hasChatGPTAccount,
+		HasChatGPTAccount:  hasChatGPTAccount,
+		RequiresOpenAIAuth: requiresOpenAIAuth,
 	}
 	// Rust #46117 + #49855: an elevated Windows session reports why the shared
 	// background server is disabled, and a launch that opted into daemon
@@ -1538,6 +1551,14 @@ func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State
 		return "", errors.New("thread/start failed during TUI bootstrap: response did not include a thread")
 	}
 	threadID := strings.TrimSpace(result.Thread.ID)
+	if state != nil {
+		cwd := strings.TrimSpace(result.CWD)
+		if cwd == "" {
+			cwd = state.CWD
+		}
+		home, _ := os.UserHomeDir()
+		state.AgentsSummary = codextui.FormatInstructionSources(result.InstructionSources, cwd, home)
+	}
 	source := string(appserver.SessionSourceCli)
 	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Source: &source}, false); err != nil {
 		return "", fmt.Errorf("mark TUI bootstrap thread as CLI: %w", err)
@@ -1582,18 +1603,33 @@ func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycel
 	return service, statuses, expectedServers
 }
 
-func interactiveStatusAccount(root *cli.RootOptions) (string, bool) {
+func interactiveStatusAccount(root *cli.RootOptions) (string, bool, *bool) {
 	codexHome := auth.DefaultCodexHome()
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
-		return "", false
+		return "", false, nil
 	}
+	requiresOpenAIAuth := interactiveRequiresOpenAIAuth(loaded)
 	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
 	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
 	if err != nil || resolved == nil {
-		return "", false
+		return "", false, requiresOpenAIAuth
 	}
-	return interactiveAccountDisplay(auth.AccountFromAuth(&resolved.Auth))
+	display, hasChatGPTAccount := interactiveAccountDisplay(auth.AccountFromAuth(&resolved.Auth))
+	return display, hasChatGPTAccount, requiresOpenAIAuth
+}
+
+func interactiveRequiresOpenAIAuth(loaded *config.Config) *bool {
+	if loaded == nil {
+		return nil
+	}
+	providerID := interactiveStringFromConfig(loaded.Values, "model_provider")
+	provider, err := modelpkg.ProviderForConfigID(loaded.Values, providerID, interactiveStringFromConfig(loaded.Values, "openai_base_url"))
+	if err != nil {
+		return nil
+	}
+	requiresOpenAIAuth := provider.RequiresOpenAIAuth
+	return &requiresOpenAIAuth
 }
 
 func interactiveAccountDisplay(account *auth.Account) (string, bool) {
@@ -1943,7 +1979,7 @@ type interactiveLocalSettings struct {
 func interactiveLocalSettingsFromLive(root *cli.RootOptions, settings codextea.SettingsWriteResult) interactiveLocalSettings {
 	return interactiveLocalSettings{
 		Tui:         settings,
-		NoAltScreen: root != nil && root.Shared.NoAltScreen,
+		NoAltScreen: interactiveNoAltScreen(root, settings),
 	}
 }
 
@@ -2169,29 +2205,36 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		// Rust #49861/#49856: the configured default for a *new* thread
 		// (Config::daybreak_enabled). The TUI's bootstrap thread is persistent,
 		// so Rust's `!config.ephemeral` guard always holds here.
-		DaybreakDefault:         loaded.DaybreakEnabled(),
-		UseMemories:             interactiveMemoryBoolFromConfig(values, "use_memories"),
-		GenerateMemories:        interactiveMemoryBoolFromConfig(values, "generate_memories"),
-		FeedbackEnabled:         interactiveFeedbackEnabledFromConfig(values),
-		DisablePasteBurst:       loaded.DisablePasteBurst(),
-		AnimationsEnabled:       interactiveAnimationsEnabled(values),
-		ShowTooltips:            interactiveShowTooltips(values),
-		StatusLineUseColors:     interactiveStatusLineUseColors(values),
-		QuestionEscBack:         interactiveQuestionEscBack(values),
-		AutoRecap:               interactiveAutoRecap(values),
-		MouseScrollSpeed:        interactiveMouseScrollSpeed(values),
-		RightClickPaste:         interactiveRightClickPaste(values),
-		Rendering:               interactiveRenderingSettings(values),
-		Effects:                 interactiveEffectsSettings(values),
-		Personality:             interactivePersonalityFromConfig(values),
-		Notifications:           interactiveNotificationSettingsFromConfig(values),
-		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
-		NotificationCondition:   interactiveNotificationConditionFromConfig(values),
-		PermissionRequirements:  interactivePermissionRequirementsFromConfig(values),
-		HideRateLimitModelNudge: interactiveHideRateLimitModelNudgeFromConfig(values),
-		TUITheme:                interactiveTUIStringFromConfig(values, "theme"),
-		TUIPet:                  interactiveTUIStringFromConfig(values, "pet"),
-		SessionPickerView:       interactiveTUIStringFromConfig(values, "session_picker_view"),
+		DaybreakDefault:            loaded.DaybreakEnabled(),
+		UseMemories:                interactiveMemoryBoolFromConfig(values, "use_memories"),
+		GenerateMemories:           interactiveMemoryBoolFromConfig(values, "generate_memories"),
+		FeedbackEnabled:            interactiveFeedbackEnabledFromConfig(values),
+		DisablePasteBurst:          loaded.DisablePasteBurst(),
+		AnimationsEnabled:          interactiveAnimationsEnabled(values),
+		ShowTooltips:               interactiveShowTooltips(values),
+		ShowServerVersionNotice:    interactiveShowServerVersionNotice(values),
+		FullscreenTranscript:       interactiveFullscreenTranscript(values),
+		AlternateScreenMode:        interactiveAlternateScreenMode(values),
+		StatusLineUseColors:        interactiveStatusLineUseColors(values),
+		QuestionEscBack:            interactiveQuestionEscBack(values),
+		AutoRecap:                  interactiveAutoRecap(values),
+		MouseScrollSpeed:           interactiveMouseScrollSpeed(values),
+		RightClickPaste:            interactiveRightClickPaste(values),
+		CopyOnSelect:               interactiveCopyOnSelect(values),
+		CopyOnSelectClearSelection: interactiveCopyOnSelectClearSelection(values),
+		StartInVimMode:             interactiveStartInVimMode(values),
+		ResumeCWD:                  interactiveResumeCWD(values),
+		Rendering:                  interactiveRenderingSettings(values),
+		Effects:                    interactiveEffectsSettings(values),
+		Personality:                interactivePersonalityFromConfig(values),
+		Notifications:              interactiveNotificationSettingsFromConfig(values),
+		NotificationMethod:         interactiveNotificationMethodFromConfig(values),
+		NotificationCondition:      interactiveNotificationConditionFromConfig(values),
+		PermissionRequirements:     interactivePermissionRequirementsFromConfig(values),
+		HideRateLimitModelNudge:    interactiveHideRateLimitModelNudgeFromConfig(values),
+		TUITheme:                   interactiveTUIStringFromConfig(values, "theme"),
+		TUIPet:                     interactiveTUIStringFromConfig(values, "pet"),
+		SessionPickerView:          interactiveTUIStringFromConfig(values, "session_picker_view"),
 		// Rust #50786: remember the Command Center grouping across launches.
 		AgentsOverviewGrouping: interactiveTUIStringFromConfig(values, "agents_overview_grouping"),
 		// Rust #54379: `tui.presets` ride along in the TUI local settings.
@@ -2226,6 +2269,68 @@ func interactiveShowTooltips(values map[string]any) *bool {
 		}
 	}
 	return &enabled
+}
+
+// interactiveShowServerVersionNotice resolves the configured
+// `tui.show_server_version_notice` value (Rust #43698). The config default is
+// enabled.
+func interactiveShowServerVersionNotice(values map[string]any) *bool {
+	enabled := true
+	if raw, ok := interactiveTUIConfig(values)["show_server_version_notice"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactiveFullscreenTranscript resolves the configured
+// `tui.fullscreen_transcript` preference (Rust #46883). The config default is
+// enabled.
+func interactiveFullscreenTranscript(values map[string]any) *bool {
+	enabled := true
+	if raw, ok := interactiveTUIConfig(values)["fullscreen_transcript"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactiveAlternateScreenMode resolves `tui.alternate_screen`. Invalid
+// values fall back to auto, matching the config default.
+func interactiveAlternateScreenMode(values map[string]any) string {
+	mode := "auto"
+	if raw, ok := interactiveTUIConfig(values)["alternate_screen"]; ok {
+		if configured, ok := raw.(string); ok {
+			switch strings.ToLower(strings.TrimSpace(configured)) {
+			case "always", "never", "auto":
+				mode = strings.ToLower(strings.TrimSpace(configured))
+			}
+		}
+	}
+	return mode
+}
+
+// interactiveNoAltScreen resolves this launch's terminal ownership. Rust owns
+// the screen only when fullscreen transcripts and the alternate screen are both
+// enabled (TranscriptMode::resolve); `--no-alt-screen` always wins.
+func interactiveNoAltScreen(root *cli.RootOptions, settings codextea.SettingsWriteResult) bool {
+	if root != nil && root.Shared.NoAltScreen {
+		return true
+	}
+	fullscreen := settings.FullscreenTranscript == nil || *settings.FullscreenTranscript
+	if !fullscreen {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(settings.AlternateScreenMode), "never")
+}
+
+func interactiveNoAltScreenFromValues(root *cli.RootOptions, values map[string]any) bool {
+	return interactiveNoAltScreen(root, codextea.SettingsWriteResult{
+		FullscreenTranscript: interactiveFullscreenTranscript(values),
+		AlternateScreenMode:  interactiveAlternateScreenMode(values),
+	})
 }
 
 // interactiveStatusLineUseColors resolves the configured
@@ -2287,6 +2392,83 @@ func interactiveRightClickPaste(values map[string]any) *string {
 func interactiveRightClickPasteValue(mode *string) string {
 	if mode == nil {
 		return string(tuiapp.RightClickPasteAuto)
+	}
+	return *mode
+}
+
+// interactiveCopyOnSelect resolves `tui.copy_on_select` (`auto`/`always`/
+// `never`, default auto).
+func interactiveCopyOnSelect(values map[string]any) *string {
+	mode := "auto"
+	if raw, ok := interactiveTUIConfig(values)["copy_on_select"]; ok {
+		if configured, ok := raw.(string); ok {
+			switch strings.ToLower(strings.TrimSpace(configured)) {
+			case "always":
+				mode = "always"
+			case "never":
+				mode = "never"
+			default:
+				mode = "auto"
+			}
+		}
+	}
+	return &mode
+}
+
+// interactiveCopyOnSelectClearSelection resolves
+// `tui.copy_on_select_clear_selection` (Rust default false).
+func interactiveCopyOnSelectClearSelection(values map[string]any) *bool {
+	enabled := false
+	if raw, ok := interactiveTUIConfig(values)["copy_on_select_clear_selection"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactiveCopyOnSelectValue flattens the resolved setting for the TUI
+// options; an unset value is Rust's `auto` default.
+func interactiveCopyOnSelectValue(mode *string) string {
+	if mode == nil {
+		return "auto"
+	}
+	return *mode
+}
+
+// interactiveStartInVimMode resolves `tui.vim_mode_default` (default false).
+func interactiveStartInVimMode(values map[string]any) *bool {
+	enabled := false
+	if raw, ok := interactiveTUIConfig(values)["vim_mode_default"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactiveResumeCWD resolves `tui.resume_cwd` (`ask`/`current`/`session`,
+// default ask).
+func interactiveResumeCWD(values map[string]any) *string {
+	mode := "ask"
+	if raw, ok := interactiveTUIConfig(values)["resume_cwd"]; ok {
+		if configured, ok := raw.(string); ok {
+			switch strings.ToLower(strings.TrimSpace(configured)) {
+			case "current":
+				mode = "current"
+			case "session":
+				mode = "session"
+			default:
+				mode = "ask"
+			}
+		}
+	}
+	return &mode
+}
+
+func interactiveResumeCWDValue(mode *string) string {
+	if mode == nil {
+		return "ask"
 	}
 	return *mode
 }
@@ -2727,6 +2909,20 @@ func interactivePersonalityFromConfig(values map[string]any) chatwidget.Personal
 	}
 }
 
+// interactiveTurnPersonalityOverrides keeps the explicit `none` opt-out while
+// dropping retired Friendly/Pragmatic selection from turn-start config
+// (Rust #44946).
+func interactiveTurnPersonalityOverrides(state *codextui.State) []string {
+	if state == nil {
+		return nil
+	}
+	personality := chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(state.Personality))))
+	if personality == "" {
+		return nil
+	}
+	return []string{"personality=" + string(personality)}
+}
+
 func interactiveHideRateLimitModelNudgeFromConfig(values map[string]any) *bool {
 	if values == nil {
 		return nil
@@ -3139,6 +3335,19 @@ func interactiveRenameThreadHandler() codextea.ThreadRenameFunc {
 			return err
 		}
 		return rollout.AppendThreadName(auth.DefaultCodexHome(), threadID, name)
+	}
+}
+
+func interactiveDaybreakUpdateHandler() codextea.DaybreakUpdateFunc {
+	return func(threadID string, enabled bool) error {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return errors.New("Daybreak update requires a thread id")
+		}
+		value := enabled
+		store := newSessionStore()
+		_, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{DaybreakEnabled: &value}, false)
+		return err
 	}
 }
 
@@ -3751,13 +3960,14 @@ func interactiveTurnCommand(ctx context.Context, root *cli.RootOptions, runner i
 // whose model input is the goal continuation prompt (internal, not rendered as
 // a user message), mirroring Rust's app-server goal runtime effects.
 func interactiveLocalGoalContinuationCommand(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker, interrupts *interactiveInterruptController) codextea.GoalContinuationFunc {
-	return func(goal appserver.Goal) bubbletea.Cmd {
+	return func(goal appserver.Goal, cyberAccessProgram string) bubbletea.Cmd {
 		item := interactiveGoalContinuationInputItem(goal)
 		if item == nil {
 			return nil
 		}
 		request := codextea.SubmitRequest{InternalInputItems: []any{item}}
 		request.TurnTrigger = "goal"
+		request.CyberAccessProgram = cyberAccessProgram
 		return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 	}
 }
@@ -3945,8 +4155,8 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 			turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "service_tier="+tier)
 		}
 	}
-	if state != nil && strings.TrimSpace(state.Personality) != "" {
-		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "personality="+strings.TrimSpace(state.Personality))
+	if state != nil {
+		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), interactiveTurnPersonalityOverrides(state)...)
 	}
 	// Rust #50811: new embedded threads follow the server's and the model's
 	// reasoning-summary defaults; only explicit launch choices (profile or
@@ -3998,6 +4208,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		Color:                 "auto",
 		JSON:                  true,
 		StreamAssistantDeltas: true,
+		CyberAccessProgram:    strings.TrimSpace(request.CyberAccessProgram),
 	}
 	if state != nil && strings.TrimSpace(state.ThreadID) != "" {
 		execOpts.Subcommand = "resume"

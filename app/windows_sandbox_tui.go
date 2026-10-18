@@ -100,6 +100,10 @@ func windowsSandboxReadyViaClient(ctx context.Context, client *remoteAppServerTU
 	return response.Status == sandbox.WindowsReadinessReady
 }
 
+func remoteAppServerRunsOnWindows(client *remoteAppServerTUIClient) bool {
+	return client != nil && client.platformOS == "windows"
+}
+
 // interactiveRemoteWindowsSandboxReady queries readiness from a local app
 // server, bounded like Rust's 5-second readiness timeout. An unavailable or
 // slow server reports not-ready so the configured behavior is preserved.
@@ -114,6 +118,12 @@ func interactiveRemoteWindowsSandboxReady(ctx context.Context, endpoint *appserv
 		return false
 	}
 	defer client.close()
+	// Rust #42202: the connected server reports its own platform metadata.
+	// Older servers that omit platformOs are treated like any other non-Windows
+	// server, even when the TUI host itself is Windows.
+	if !remoteAppServerRunsOnWindows(client) {
+		return false
+	}
 	return windowsSandboxReadyViaClient(callCtx, client)
 }
 

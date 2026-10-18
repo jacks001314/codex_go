@@ -1,6 +1,8 @@
 package tea
 
 import (
+	"time"
+
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 )
@@ -17,6 +19,8 @@ func (m *Model) resetThreadScopedState() {
 	// listener, snapshots, and pending state so /side can reopen it later.
 	m.deactivateSideConversation()
 	m.currentTurnID = ""
+	// The fresh-task starfield belongs to the previous thread/task.
+	m.sparkle = composerSparkleState{}
 	m.misalignmentPolicyStopped = false
 	m.misalignmentReview = nil
 	if m.modal != nil && m.modal.kind == ModalKindMisalignment {
@@ -37,6 +41,9 @@ func (m *Model) resetThreadScopedState() {
 	m.daybreakEnabled = false
 	m.needsFinalMessageSeparator = false
 	m.activeAssistantDeltaItemID = ""
+	m.deferredSubAgentActivity = nil
+	m.hookLifecycle = chatwidget.HookLifecycleState{}
+	m.hookRunDeadlines = map[string]time.Time{}
 	m.Transcript.lastTurnError = ""
 	m.Transcript.needsFinalMessageSeparator = false
 	m.Transcript.activeAssistantDeltaItemID = ""
@@ -48,6 +55,10 @@ func (m *Model) resetThreadScopedState() {
 	// transcript.
 	m.startupWarnings = historycell.StartupWarningsCell{}
 	m.startupWarningsIndex = -1
+	m.warningCells = nil
+	m.warningDisplay.ResetForTranscript()
+	m.warningsView = nil
+	m.warningsFlash = ""
 	// Rust history_ui clears the active skill-load diagnostics with the
 	// thread-scoped history.
 	if m.skillLoadWarnings != nil {

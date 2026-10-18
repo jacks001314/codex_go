@@ -16,6 +16,8 @@ const (
 	DaemonMenuViewID = "daemon-menu"
 	// DaemonConfirmViewID identifies the daemon update confirmation.
 	DaemonConfirmViewID = "daemon-confirm"
+	// DaemonRestartConfirmViewID identifies the managed restart confirmation.
+	DaemonRestartConfirmViewID = "daemon-restart-confirm"
 
 	// DaemonMenuItemPublicStable / DaemonMenuItemThisCli select a package source.
 	DaemonMenuItemPublicStable = string(codextui.DaemonUpdateSourcePublicStable)
@@ -23,6 +25,9 @@ const (
 	// DaemonMenuItemCancel / DaemonMenuItemUpdateAndExit are the confirmation's.
 	DaemonMenuItemCancel        = "cancel"
 	DaemonMenuItemUpdateAndExit = "update-and-exit"
+	// DaemonMenuItemRestart / DaemonMenuItemRestartAndReconnect control restart.
+	DaemonMenuItemRestart             = "restart"
+	DaemonMenuItemRestartAndReconnect = "restart-and-reconnect"
 )
 
 const (
@@ -30,6 +35,8 @@ const (
 	daemonMenuUnavailableRemote       = "Manage this server on its host. Local daemon updates are unavailable for remote connections."
 	daemonMenuUnavailableNoCLI        = "Run the Codex CLI to manage the daemon from this menu."
 	daemonMenuDisabledNoPackage       = "This CLI has no local package to copy"
+	daemonMenuRestartUnverified       = "Codex hasn't verified it manages this server. Restart it where it was started."
+	daemonMenuRestartUnavailable      = "Restart is available only for a managed local background server."
 	daemonMenuPublicStableExplanation = "Install the latest public stable release. Restore production updates; keep your automatic-update setting."
 	daemonMenuRestartNotice           = "\nThis may restart the daemon and interrupt active or queued work.\nCodex exits to update in this terminal. Relaunch it afterward."
 )
@@ -47,6 +54,9 @@ type DaemonMenuConfig struct {
 	CLIExecutable string
 	// HasPackage reports whether that CLI has a complete local package.
 	HasPackage bool
+	// ManagedDaemon reports whether Codex verified that it manages the local
+	// background server and can restart it.
+	ManagedDaemon bool
 }
 
 // DaemonMenuView builds the `/daemon` source menu (Rust
@@ -73,6 +83,15 @@ func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 	if unavailable == "" && !config.HasPackage {
 		thisCliReason = daemonMenuDisabledNoPackage
 	}
+	restartReason := ""
+	switch {
+	case unavailable != "":
+		restartReason = daemonMenuRestartUnavailable
+	case !config.LocalDaemon:
+		restartReason = daemonMenuRestartUnavailable
+	case !config.ManagedDaemon:
+		restartReason = daemonMenuRestartUnverified
+	}
 	return SelectionView{
 		ViewID:      DaemonMenuViewID,
 		Title:       "Daemon",
@@ -90,6 +109,13 @@ func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 				Name:            "Use this CLI build",
 				Disabled:        unavailable != "" || thisCliReason != "",
 				DisabledReason:  thisCliReason,
+				DismissOnSelect: true,
+			},
+			{
+				ID:              DaemonMenuItemRestart,
+				Name:            "Restart background server",
+				Disabled:        restartReason != "",
+				DisabledReason:  restartReason,
 				DismissOnSelect: true,
 			},
 		},
@@ -123,6 +149,24 @@ func DaemonConfirmView(source codextui.DaemonUpdateSource, cliVersion string, ex
 				Name:                        "Update and exit",
 				RequireExplicitConfirmation: true,
 				DismissOnSelect:             true,
+			},
+		},
+	}
+}
+
+// DaemonRestartConfirmView builds the managed-server restart confirmation.
+func DaemonRestartConfirmView() SelectionView {
+	return SelectionView{
+		ViewID:      DaemonRestartConfirmViewID,
+		Title:       "Restart background server?",
+		Subtitle:    "Active or queued work in other chats may be interrupted.\nCodex will reconnect automatically when the server is ready.",
+		AllowCancel: true,
+		Items: []SelectionItem{
+			{ID: DaemonMenuItemCancel, Name: "Cancel", DismissOnSelect: true},
+			{
+				ID:              DaemonMenuItemRestartAndReconnect,
+				Name:            "Restart and reconnect",
+				DismissOnSelect: true,
 			},
 		},
 	}

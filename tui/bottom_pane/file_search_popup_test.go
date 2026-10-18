@@ -14,7 +14,7 @@ func TestFileSearchPopupMatchesRustStateFlow(t *testing.T) {
 	}
 
 	popup.SetEmptyPrompt()
-	if popup.CalculateRequiredHeight() != 1 {
+	if popup.CalculateRequiredHeight() != 3 {
 		t.Fatalf("empty prompt height = %d", popup.CalculateRequiredHeight())
 	}
 	if rows := popup.Rows(80); !bottomPaneContainsRow(rows, "  no matches") {
@@ -38,8 +38,8 @@ func TestFileSearchPopupMatchesRustStateFlow(t *testing.T) {
 	if len(popup.Matches) != MaxPopupRows {
 		t.Fatalf("matches len = %d, want %d", len(popup.Matches), MaxPopupRows)
 	}
-	if popup.CalculateRequiredHeight() != MaxPopupRows {
-		t.Fatalf("height = %d", popup.CalculateRequiredHeight())
+	if popup.CalculateRequiredHeight() != MaxPopupRows+2 {
+		t.Fatalf("height = %d, want %d", popup.CalculateRequiredHeight(), MaxPopupRows+2)
 	}
 	selected, ok := popup.SelectedMatch()
 	if !ok || selected.Path != "src/file_0.go" {
@@ -61,16 +61,19 @@ func TestFileSearchPopupNavigationRowsAndSelectionColorBar(t *testing.T) {
 		t.Fatalf("selected = %#v ok=%v", selected, ok)
 	}
 	rows := popup.Rows(20)
-	if !bottomPaneContainsRow(rows, tui.RenderSelectedRow("  src/really/long/pa")) {
+	if len(rows) != 2 {
+		t.Fatalf("rows should stay single-line: %#v", rows)
+	}
+	if !strings.Contains(rows[1], "›") || !strings.Contains(rows[1], "file.go") {
 		t.Fatalf("rows missing selected row:\n%s", strings.Join(rows, "\n"))
 	}
 	for _, row := range rows {
-		if strings.Contains(row, "\x1b[") && !strings.Contains(row, "...") {
-			continue
+		if width := tui.DisplayWidth(stripANSIForSelectionTest(row)); width > 20 {
+			t.Fatalf("row exceeds width: %q width=%d", row, width)
 		}
-		if strings.Contains(row, "...") {
-			t.Fatalf("file search rows should wrap instead of ellipsis-truncating:\n%s", strings.Join(rows, "\n"))
-		}
+	}
+	if width := tui.DisplayWidth(stripANSIForSelectionTest(rows[1])); width != 20 {
+		t.Fatalf("selected row should fill width: %q width=%d", rows[1], width)
 	}
 
 	popup.MoveDown()
@@ -80,18 +83,66 @@ func TestFileSearchPopupNavigationRowsAndSelectionColorBar(t *testing.T) {
 	}
 }
 
-func TestFileSearchPopupWrapsWidePathsByDisplayWidth(t *testing.T) {
+func TestFileSearchPopupShortensWidePathsByDisplayWidth(t *testing.T) {
 	popup := NewFileSearchPopup()
 	popup.SetQuery("wide")
 	popup.SetMatches("wide", []FileSearchMatch{{Path: "src/中文文件名很长.go"}})
 
 	rows := popup.Rows(12)
-	if len(rows) < 2 {
-		t.Fatalf("wide path should wrap, got %#v", rows)
+	if len(rows) != 1 {
+		t.Fatalf("wide path should shorten to one row, got %#v", rows)
 	}
 	for _, row := range rows {
 		if width := tui.DisplayWidth(stripANSIForSelectionTest(row)); width > 12 {
 			t.Fatalf("row exceeds width: %q width=%d rows=%#v", row, width, rows)
+		}
+	}
+	if !strings.Contains(rows[0], "…") || strings.Contains(rows[0], "...") {
+		t.Fatalf("wide filename should use the single-cell ellipsis: %q", rows[0])
+	}
+}
+
+func TestFileSearchPopupPreservesDistinguishingFilenamesLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		parent string
+		width  int
+	}{
+		{parent: "src/shared/long_directory", width: 28},
+		{parent: "long_directory_name_that_fills_row", width: 40},
+		{parent: "長いディレクトリ名/e\u0301tudes", width: 80},
+	} {
+		popup := NewFileSearchPopup()
+		popup.SetQuery("parser")
+		popup.SetMatches("parser", []FileSearchMatch{
+			{Path: tc.parent + "/parser_alpha.rs", Indices: []int{0, 1, 2, 3, 4, 5}},
+			{Path: tc.parent + "/parser_beta.rs", Indices: []int{0, 1, 2, 3, 4, 5}},
+		})
+		rows := popup.Rows(tc.width)
+		if len(rows) != 2 {
+			t.Fatalf("width %d rows = %#v", tc.width, rows)
+		}
+		plainRows := make([]string, len(rows))
+		for i, row := range rows {
+			plainRows[i] = stripANSIForSelectionTest(row)
+		}
+		joined := strings.Join(plainRows, "\n")
+		if !strings.Contains(joined, "parser_alpha.rs") || !strings.Contains(joined, "parser_beta.rs") {
+			t.Fatalf("width %d lost distinguishing filenames:\n%s", tc.width, joined)
+		}
+		if !strings.Contains(rows[0], "›") || !strings.Contains(rows[0], "\x1b[") {
+			t.Fatalf("width %d selected row = %q", tc.width, rows[0])
+		}
+		if !strings.Contains(rows[1], "\x1b[1m") {
+			t.Fatalf("width %d unselected fuzzy match is not highlighted: %q", tc.width, rows[1])
+		}
+		for _, row := range rows {
+			if width := tui.DisplayWidth(stripANSIForSelectionTest(row)); width > tc.width {
+				t.Fatalf("width %d row exceeds width: %q width=%d", tc.width, row, width)
+			}
+		}
+		popup.MoveDown()
+		if selected, ok := popup.SelectedMatch(); !ok || !strings.HasSuffix(selected.Path, "parser_beta.rs") {
+			t.Fatalf("width %d selection identity = %#v ok=%v", tc.width, selected, ok)
 		}
 	}
 }

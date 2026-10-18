@@ -45,6 +45,7 @@ const (
 	ModalKindAutoReview      ModalKind = "auto_review_denials"
 	ModalKindGoal            ModalKind = "goal"
 	ModalKindPresets         ModalKind = "presets"
+	ModalKindConfig          ModalKind = "config"
 	ModalKindMisalignment    ModalKind = "misalignment"
 	ModalKindWindowsSandbox  ModalKind = "windows_sandbox"
 	ModalKindRunningTaskExit ModalKind = "running_task_exit"
@@ -136,13 +137,17 @@ type UserInputDecision struct {
 }
 
 type modalState struct {
-	id                string
-	kind              ModalKind
-	title             string
-	body              string
-	bodyOffset        int
-	options           []ModalOption
-	selected          int
+	id         string
+	kind       ModalKind
+	title      string
+	body       string
+	bodyOffset int
+	options    []ModalOption
+	selected   int
+	// optionScrollTop/optionVisibleRows track the rendered result viewport so
+	// page navigation uses the rows that actually fit (Rust #46680).
+	optionScrollTop   int
+	optionVisibleRows int
 	footerNote        string
 	footerHint        string
 	reopenOnCancel    bool
@@ -154,6 +159,9 @@ type modalState struct {
 	armedOptionID string
 
 	elicitation *bottompane.ElicitationFormRequest
+	// userVerification marks the openai/userVerification elicitation so its
+	// title and request details carry terminal hyperlinks (Rust #51458).
+	userVerification bool
 	// appLink is the validated tool-suggestion popup shown in place of the plain
 	// elicitation form (Rust #48015 app link view).
 	appLink *bottompane.AppLinkView
@@ -173,6 +181,8 @@ type modalState struct {
 	themePicker            *codextui.ThemePicker
 	themeFilter            string
 	themeSubtitle          string
+	themeScrollTop         int
+	themeVisibleRows       int
 	userInput              *codextui.RequestUserInputState
 	statusLineSetup        *statusLineSetupModal
 	terminalTitleSetup     *terminalTitleSetupModal
@@ -181,6 +191,7 @@ type modalState struct {
 	goalObjective          string
 	memories               *memoriesModalState
 	feedback               *feedbackModalState
+	configPanel            *configPanelState
 	manageSkills           *manageSkillsModalState
 	externalAgentMigration *externalAgentMigrationModalState
 	hooksBrowser           *hooksBrowserModalState
@@ -223,6 +234,9 @@ func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
 }
 
 func (m *Model) openModal(message ModalRequestMsg) {
+	if m != nil && m.modal == nil {
+		m.statusTimer.PauseAt(m.currentTime())
+	}
 	options := normalizeModalOptions(message.Options)
 	if len(options) == 0 {
 		options = []ModalOption{{ID: "ok", Label: "OK", Shortcut: "enter"}}
@@ -272,6 +286,14 @@ func normalizeModalOptions(options []ModalOption) []ModalOption {
 func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil {
 		return nil
+	}
+	if m.modal.id == resumeCWDPromptID && message.Type == bubbletea.KeyCtrlC {
+		m.modal = nil
+		m.pendingResumeCWD = nil
+		return bubbletea.Quit
+	}
+	if m.modal.configPanel != nil {
+		return m.updateConfigPanelKey(message)
 	}
 	if m.modal.themePicker != nil {
 		return m.updateThemePickerModal(message)
@@ -418,6 +440,22 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 		return nil
 	case bubbletea.KeyDown, bubbletea.KeyTab:
 		m.moveModalSelection(1)
+		m.disarmModalOption()
+		return nil
+	case bubbletea.KeyPgUp:
+		m.moveModalSelectionPage(-max(m.modal.optionVisibleRows, 1))
+		m.disarmModalOption()
+		return nil
+	case bubbletea.KeyPgDown:
+		m.moveModalSelectionPage(max(m.modal.optionVisibleRows, 1))
+		m.disarmModalOption()
+		return nil
+	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
+		m.selectModalEdge(false)
+		m.disarmModalOption()
+		return nil
+	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+		m.selectModalEdge(true)
 		m.disarmModalOption()
 		return nil
 	case bubbletea.KeyRunes:
@@ -731,6 +769,60 @@ func (m *Model) moveModalSelection(delta int) {
 			break
 		}
 	}
+	m.syncModalSelectionTargets()
+}
+
+// moveModalSelectionPage moves by enabled options without wrapping, so a page
+// key never jumps from the end of a long picker back to its start.
+func (m *Model) moveModalSelectionPage(delta int) {
+	if m == nil || m.modal == nil || len(m.modal.options) == 0 || delta == 0 {
+		return
+	}
+	sign := 1
+	if delta < 0 {
+		sign = -1
+		delta = -delta
+	}
+	next := m.modal.selected
+	for moved := 0; moved < delta; {
+		candidate := next + sign
+		if candidate < 0 || candidate >= len(m.modal.options) {
+			break
+		}
+		next = candidate
+		if !m.modal.options[next].Disabled {
+			moved++
+		}
+	}
+	if next == m.modal.selected || m.modal.options[next].Disabled {
+		return
+	}
+	m.modal.selected = next
+	m.syncModalSelectionTargets()
+}
+
+// selectModalEdge selects the first or last enabled option.
+func (m *Model) selectModalEdge(fromEnd bool) {
+	if m == nil || m.modal == nil || len(m.modal.options) == 0 {
+		return
+	}
+	start, end, step := 0, len(m.modal.options), 1
+	if fromEnd {
+		start, end, step = len(m.modal.options)-1, -1, -1
+	}
+	for index := start; index != end; index += step {
+		if !m.modal.options[index].Disabled {
+			m.modal.selected = index
+			m.syncModalSelectionTargets()
+			return
+		}
+	}
+}
+
+func (m *Model) syncModalSelectionTargets() {
+	if m == nil || m.modal == nil {
+		return
+	}
 	if m.modal.modelPicker != nil {
 		m.modal.modelPicker.Select(m.modal.selected)
 	}
@@ -749,6 +841,9 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	if m == nil || m.modal == nil {
 		return nil
 	}
+	defer func() {
+		m.syncStatusTimerPause(m.currentTime())
+	}()
 	modal := m.modal
 	if modal.appLink != nil {
 		return m.respondAppLinkModal(modal, cancelled)
@@ -775,6 +870,9 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		response.OptionLabel = modal.options[modal.selected].Label
 	} else if cancelled {
 		m.notice = "Cancelled"
+	}
+	if modal.kind == ModalKindGeneric && modal.id == resumeCWDPromptID {
+		return m.finishResumeCWDPrompt(response)
 	}
 	if modal.kind == ModalKindElicitation {
 		decision, ok := m.resolveElicitationModal(modal, response.OptionID, cancelled)
@@ -957,6 +1055,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applyKeymapModalOption(modal.id, response.OptionID)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.TUIModePickerViewID {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyTUIModeModalOption(response.OptionID)
+	}
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.CopyTargetPickerViewID {
 		m.modal = nil
 		if cancelled {
@@ -1015,7 +1121,6 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.SafetyBufferingPromptViewID {
 		m.modal = nil
 		if cancelled {
-			m.notice = "No action is required. Codex will keep waiting."
 			return nil
 		}
 		return m.applySafetyBufferingModalOption(response.OptionID)
@@ -1025,7 +1130,24 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		if cancelled {
 			return nil
 		}
+		if response.OptionID == chatwidget.DaemonMenuItemRestart {
+			return m.confirmDaemonRestart()
+		}
 		return m.confirmDaemonUpdate(codextui.DaemonUpdateSource(response.OptionID))
+	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.DaybreakPromptViewID {
+		m.modal = nil
+		if cancelled || response.OptionID != chatwidget.DaybreakEnableItem {
+			return nil
+		}
+		return m.setDaybreakPreference(true)
+	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.DaemonRestartConfirmViewID {
+		m.modal = nil
+		if cancelled || response.OptionID != chatwidget.DaemonMenuItemRestartAndReconnect {
+			return nil
+		}
+		return m.runDaemonRestart()
 	}
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.DaemonConfirmViewID {
 		m.modal = nil
@@ -1055,6 +1177,11 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		callback = m.onModalResponse(response)
 	}
 	if modal.exitAfterSessionAction && !cancelled && response.Picker != nil {
+		if modal.sessionAction != nil &&
+			modal.sessionAction.Kind == codextui.SessionSelectionDelete &&
+			m.sharedServerCommandCenterAvailable() {
+			return m.closeSessionPickerTerminalMode(bubbletea.Sequence(callback, m.applyAgentsCommand()))
+		}
 		return m.closeSessionPickerTerminalMode(bubbletea.Sequence(callback, bubbletea.Quit))
 	}
 	if modal.sessionPicker != nil {
@@ -1431,6 +1558,23 @@ func (m *Model) updateThemePickerModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	case bubbletea.KeyDown, bubbletea.KeyTab:
 		picker.MoveFiltered(1, modal.themeFilter)
 		return nil
+	case bubbletea.KeyPgUp:
+		m.moveThemePickerFilteredBy(-max(modal.themeVisibleRows, 1))
+		return nil
+	case bubbletea.KeyPgDown:
+		m.moveThemePickerFilteredBy(max(modal.themeVisibleRows, 1))
+		return nil
+	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
+		picker.SelectFirstFiltered(modal.themeFilter)
+		modal.themeScrollTop = 0
+		return nil
+	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+		indices := picker.FilteredIndices(modal.themeFilter)
+		if len(indices) > 0 {
+			picker.Select(indices[len(indices)-1])
+			modal.themeScrollTop = max(len(indices)-max(modal.themeVisibleRows, 1), 0)
+		}
+		return nil
 	case bubbletea.KeyBackspace:
 		if modal.themeFilter != "" {
 			runes := []rune(modal.themeFilter)
@@ -1466,6 +1610,26 @@ func ensureThemePickerSelection(modal *modalState) {
 	modal.themePicker.Select(indices[0])
 }
 
+func (m *Model) moveThemePickerFilteredBy(delta int) {
+	if m == nil || m.modal == nil || m.modal.themePicker == nil {
+		return
+	}
+	picker := m.modal.themePicker
+	indices := picker.FilteredIndices(m.modal.themeFilter)
+	if len(indices) == 0 {
+		return
+	}
+	position := 0
+	for index, themeIndex := range indices {
+		if themeIndex == picker.Selected {
+			position = index
+			break
+		}
+	}
+	position = clampModalInt(position+delta, 0, len(indices)-1)
+	picker.Select(indices[position])
+}
+
 func themePickerSelectionVisible(modal *modalState) bool {
 	if modal == nil || modal.themePicker == nil {
 		return false
@@ -1479,9 +1643,69 @@ func themePickerSelectionVisible(modal *modalState) bool {
 	return false
 }
 
+// modalLineCount counts rendered rows after dropping trailing newlines.
+func modalLineCount(text string) int {
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+func clampModalInt(value int, low int, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
+// modalOptionBudget returns the rows available to the picker's result
+// viewport. The status and footer rows stay visible and the transcript keeps
+// its minimum height.
+func (m *Model) modalOptionBudget(prefixRows int, suffixRows int) int {
+	maxRows := max(m.height-6, 4)
+	return max(maxRows-prefixRows-suffixRows, 1)
+}
+
+// modalOptionWindow keeps the selected option visible and reserves rows for
+// the ↑/↓ overflow indicators when the result viewport is smaller than the
+// option list.
+func modalOptionWindow(total int, selected int, scrollTop int, budget int) (start int, rows int, above bool, below bool) {
+	if total <= 0 {
+		return 0, 0, false, false
+	}
+	if budget <= 0 {
+		budget = 1
+	}
+	if total <= budget {
+		return 0, total, false, false
+	}
+	rows = budget
+	if budget >= 3 {
+		rows = budget - 2
+	}
+	rows = max(rows, 1)
+	selected = clampModalInt(selected, 0, total-1)
+	start = clampModalInt(scrollTop, 0, total-rows)
+	if selected < start {
+		start = selected
+	}
+	if selected >= start+rows {
+		start = selected + 1 - rows
+	}
+	start = clampModalInt(start, 0, total-rows)
+	return start, rows, start > 0, start+rows < total
+}
+
 func (m *Model) renderModal() string {
 	if m == nil || m.modal == nil {
 		return ""
+	}
+	if m.modal.configPanel != nil {
+		return m.renderConfigPanel()
 	}
 	if m.modal.kind == ModalKindWindowsSandbox {
 		return m.renderWindowsSandboxModal()
@@ -1523,9 +1747,31 @@ func (m *Model) renderModal() string {
 		return m.renderSessionPickerModal()
 	}
 	var builder strings.Builder
-	builder.WriteString(m.modal.title)
-	builder.WriteString("\n")
+	title := m.modal.title
 	body := m.modal.body
+	footerNote := m.modal.footerNote
+	if m.modal.userVerification {
+		// Rust #51458 renders the verification title and request details with
+		// HyperlinkText, so URLs stay clickable and keep their complete target.
+		title = annotationWrappedText(title, max(m.width-2, 8))
+		body = annotationWrappedText(body, max(m.width-4, 8))
+	}
+	if m.modal.id == chatwidget.SafetyBufferingPromptViewID {
+		title = strings.Join(codextui.WrapLines([]string{title}, codextui.WrapOptions{
+			Width:      max(m.width-2, 8),
+			BreakWords: true,
+		}), "\n")
+		body = strings.Join(codextui.WrapLines(strings.Split(body, "\n"), codextui.WrapOptions{
+			Width:      max(m.width-4, 8),
+			BreakWords: true,
+		}), "\n")
+		footerNote = strings.Join(codextui.WrapLines([]string{footerNote}, codextui.WrapOptions{
+			Width:      max(m.width-4, 8),
+			BreakWords: true,
+		}), "\n")
+	}
+	builder.WriteString(title)
+	builder.WriteString("\n")
 	if m.modal.kind == ModalKindMisalignment {
 		body = m.renderMisalignmentBody()
 	}
@@ -1533,20 +1779,49 @@ func (m *Model) renderModal() string {
 		builder.WriteString(indentLines(body, "  "))
 		builder.WriteString("\n")
 	}
+	footer := firstNonEmpty(m.modal.footerHint, "Esc cancel | Enter choose")
+	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
+		footer = firstNonEmpty(m.modal.footerHint, "space toggle \u00b7 enter save \u00b7 esc cancel")
+	} else if m.modal.kind == ModalKindExperimental {
+		footer = firstNonEmpty(m.modal.footerHint, "space toggle \u00b7 enter save \u00b7 esc save/close")
+	}
+	if m.modal.userInput != nil {
+		switch {
+		case m.modal.userInput.ConfirmUnanswered:
+			footer = "Press enter to confirm or esc to go back"
+		case m.modal.userInput.NotesVisible:
+			footer = "Tab or Esc clear notes | Enter submit answer"
+		}
+	}
+	prefixRows := modalLineCount(builder.String())
+	suffixRows := modalLineCount(footerNote) + modalLineCount(footer)
+	optionBudget := m.modalOptionBudget(prefixRows, suffixRows)
+
 	// A modal whose picker hides narrow descriptions renders through the
 	// responsive option renderer (Rust #46691 replaced stacking with hiding).
 	if m.modal.descriptionLayout.Mode == bottompane.SelectionDescriptionHideWhenNarrow {
-		builder.WriteString(m.renderResponsiveModalOptions())
+		builder.WriteString(m.renderResponsiveModalOptions(optionBudget))
 		builder.WriteString("\n")
-		if m.modal.footerNote != "" {
-			builder.WriteString(m.modal.footerNote)
+		if footerNote != "" {
+			builder.WriteString(footerNote)
 			builder.WriteString("\n")
 		}
-		footer := firstNonEmpty(m.modal.footerHint, "Esc cancel | Enter choose")
 		builder.WriteString(footer)
 		return strings.TrimRight(builder.String(), "\n")
 	}
-	for i, option := range m.modal.options {
+	start, visible, above, below := modalOptionWindow(
+		len(m.modal.options),
+		m.modal.selected,
+		m.modal.optionScrollTop,
+		optionBudget,
+	)
+	m.modal.optionScrollTop = start
+	m.modal.optionVisibleRows = visible
+	if above {
+		builder.WriteString("\u2191\n")
+	}
+	for i := start; i < start+visible && i < len(m.modal.options); i++ {
+		option := m.modal.options[i]
 		selected := i == m.modal.selected
 		prefix := codextui.NumberedSelectionPrefix(i, selected)
 		check := ""
@@ -1579,25 +1854,34 @@ func (m *Model) renderModal() string {
 		builder.WriteString(line)
 		builder.WriteString("\n")
 	}
-	footer := "Esc cancel | Enter choose"
-	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
-		footer = "Space toggle | Enter save | Esc cancel"
-	} else if m.modal.kind == ModalKindExperimental {
-		footer = "Space toggle | Enter save | Esc cancel"
+	if below {
+		builder.WriteString("\u2193\n")
 	}
-	if m.modal.userInput != nil {
-		switch {
-		case m.modal.userInput.ConfirmUnanswered:
-			footer = "Press enter to confirm or esc to go back"
-		case m.modal.userInput.NotesVisible:
-			footer = "Tab or Esc clear notes | Enter submit answer"
-		}
+	if footerNote != "" {
+		builder.WriteString(footerNote)
+		builder.WriteString("\n")
 	}
 	builder.WriteString(footer)
 	return strings.TrimRight(builder.String(), "\n")
 }
 
-func (m *Model) renderResponsiveModalOptions() string {
+// annotationWrappedText wraps each explicit line and annotates complete web
+// URLs with OSC-8 targets while leaving other text unchanged.
+func annotationWrappedText(text string, width int) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	lines := codextui.WrapLines(strings.Split(text, "\n"), codextui.WrapOptions{
+		Width:      max(width, 1),
+		BreakWords: true,
+	})
+	for i := range lines {
+		lines[i] = codextui.AnnotateCompleteWebURLsInLine(lines[i])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderResponsiveModalOptions(optionBudget int) string {
 	if m == nil || m.modal == nil {
 		return ""
 	}
@@ -1639,8 +1923,54 @@ func (m *Model) renderResponsiveModalOptions() string {
 	if width <= 0 {
 		width = max(m.width, 1)
 	}
-	state := bottompane.ScrollState{SelectedIdx: m.modal.selected, HasSelection: true}
-	return strings.Join(bottompane.RenderGenericRowsWithDescriptionLayout(rows, state, len(rows), "", width, m.modal.columnWidth, m.modal.descriptionLayout), "\n")
+	start, visible, above, below := modalOptionWindow(
+		len(rows),
+		m.modal.selected,
+		m.modal.optionScrollTop,
+		optionBudget,
+	)
+	var lines []string
+	for {
+		state := bottompane.ScrollState{
+			SelectedIdx:  m.modal.selected,
+			ScrollTop:    start,
+			HasSelection: true,
+		}
+		lines = bottompane.RenderGenericRowsWithDescriptionLayout(
+			rows,
+			state,
+			visible,
+			"",
+			width,
+			m.modal.columnWidth,
+			m.modal.descriptionLayout,
+		)
+		indicatorRows := 0
+		if above {
+			indicatorRows++
+		}
+		if below {
+			indicatorRows++
+		}
+		if len(lines)+indicatorRows <= optionBudget || visible <= 1 {
+			break
+		}
+		start, visible, above, below = modalOptionWindow(
+			len(rows),
+			m.modal.selected,
+			start,
+			max(visible+indicatorRows-1, 1),
+		)
+	}
+	m.modal.optionScrollTop = start
+	m.modal.optionVisibleRows = visible
+	if above {
+		lines = append([]string{"\u2191"}, lines...)
+	}
+	if below {
+		lines = append(lines, "\u2193")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) renderSessionPickerModal() string {
@@ -1718,43 +2048,91 @@ func (m *Model) renderThemePickerModal() string {
 	if listWidth <= 0 {
 		listWidth = contentWidth
 	}
-	prompt := renderThemePickerSearchPrompt(m.modal.themeFilter, listWidth)
-	listRows := append([]string{prompt}, m.renderThemePickerRows(listWidth)...)
+	picker := m.modal.themePicker
+	previewWidth := layout.SideWidth
+	if previewWidth > 2 {
+		previewWidth -= 2
+	}
+	var previewRows []string
 	if layout.Wide {
-		previewWidth := layout.SideWidth
-		if previewWidth > 2 {
-			previewWidth -= 2
+		previewRows = renderThemePreviewRows(codextui.ThemePreviewRows(previewWidth), previewWidth, picker.PreviewThemeID())
+	} else {
+		previewRows = renderThemePreviewRows(codextui.NarrowThemePreviewRows(contentWidth), contentWidth, picker.PreviewThemeID())
+	}
+	maxRows := max(m.height-6, 8)
+	subtitleRows := 0
+	if subtitle != "" {
+		subtitleRows = 1
+	}
+	// Controls and at least a few results take precedence over the preview.
+	if !layout.Wide && previewRows != nil {
+		required := 4 + subtitleRows + 1 + 3 + 1 + len(previewRows)
+		if maxRows < required {
+			previewRows = nil
 		}
-		previewRows := renderThemePreviewRows(codextui.ThemePreviewRows(previewWidth), previewWidth, m.modal.themePicker.PreviewThemeID())
+	}
+	themeBudget := maxRows - 4 - subtitleRows - 1 // title/blank/blank/footer + prompt
+	if !layout.Wide && previewRows != nil {
+		themeBudget -= len(previewRows) + 1
+	}
+	themeBudget = max(themeBudget, 1)
+
+	indices := picker.FilteredIndices(m.modal.themeFilter)
+	selectedPosition := 0
+	for position, index := range indices {
+		if index == picker.Selected {
+			selectedPosition = position
+			break
+		}
+	}
+	start, visible, above, below := modalOptionWindow(
+		len(indices),
+		selectedPosition,
+		m.modal.themeScrollTop,
+		themeBudget,
+	)
+	m.modal.themeScrollTop = start
+	m.modal.themeVisibleRows = visible
+	prompt := renderThemePickerSearchPrompt(m.modal.themeFilter, listWidth)
+	listRows := []string{prompt}
+	if above {
+		listRows = append(listRows, "\u2191")
+	}
+	if len(indices) == 0 {
+		listRows = append(listRows, renderThemePickerDimLine("  no matches", listWidth))
+	} else {
+		listRows = append(listRows, m.renderThemePickerRows(indices[start:start+visible], listWidth)...)
+	}
+	if below {
+		listRows = append(listRows, "\u2193")
+	}
+	if layout.Wide {
 		builder.WriteString(joinThemePickerColumns(listRows, previewRows, listWidth, previewWidth))
 	} else {
 		for _, row := range listRows {
 			builder.WriteString(row)
 			builder.WriteString("\n")
 		}
-		builder.WriteString("\n")
-		for _, row := range renderThemePreviewRows(codextui.NarrowThemePreviewRows(contentWidth), contentWidth, m.modal.themePicker.PreviewThemeID()) {
-			builder.WriteString(row)
+		if previewRows != nil {
 			builder.WriteString("\n")
+			for _, row := range previewRows {
+				builder.WriteString(row)
+				builder.WriteString("\n")
+			}
 		}
 	}
 	builder.WriteString("\n")
-	builder.WriteString(renderThemePickerDimLine("Press enter to confirm or esc to go back", contentWidth))
+	builder.WriteString(renderThemePickerDimLine(firstNonEmpty(m.modal.footerHint, "enter select \u00b7 esc back"), contentWidth))
 	return strings.TrimRight(builder.String(), "\n")
 }
 
-func (m *Model) renderThemePickerRows(width int) []string {
+func (m *Model) renderThemePickerRows(indices []int, width int) []string {
 	if m == nil || m.modal == nil || m.modal.themePicker == nil {
 		return nil
 	}
 	picker := m.modal.themePicker
-	indices := picker.FilteredIndices(m.modal.themeFilter)
-	if len(indices) == 0 {
-		return []string{renderThemePickerDimLine("  no matches", width)}
-	}
-	visible := themePickerVisibleIndices(indices, picker.Selected, themePickerListHeight(m.height))
-	rows := make([]string, 0, len(visible))
-	for _, index := range visible {
+	rows := make([]string, 0, len(indices))
+	for _, index := range indices {
 		if index < 0 || index >= len(picker.Themes) {
 			continue
 		}
@@ -1771,41 +2149,6 @@ func (m *Model) renderThemePickerRows(width int) []string {
 			row = codextui.RenderSelectedRow(row)
 		}
 		rows = append(rows, row)
-	}
-	return rows
-}
-
-func themePickerVisibleIndices(indices []int, selected int, maxRows int) []int {
-	if maxRows <= 0 || len(indices) <= maxRows {
-		return append([]int(nil), indices...)
-	}
-	position := 0
-	for i, index := range indices {
-		if index == selected {
-			position = i
-			break
-		}
-	}
-	start := position - maxRows/2
-	if start < 0 {
-		start = 0
-	}
-	if start+maxRows > len(indices) {
-		start = len(indices) - maxRows
-	}
-	return append([]int(nil), indices[start:start+maxRows]...)
-}
-
-func themePickerListHeight(height int) int {
-	if height <= 0 {
-		return 12
-	}
-	rows := height - 10
-	if rows < 8 {
-		return 8
-	}
-	if rows > 18 {
-		return 18
 	}
 	return rows
 }

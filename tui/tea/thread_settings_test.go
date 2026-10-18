@@ -1,11 +1,40 @@
 package tea
 
 import (
+	"path/filepath"
 	"testing"
 
 	"codex_go/appserver"
 	codextui "codex_go/tui"
 )
+
+// TestApplyThreadSettingsShowsInstructionSourcesLikeRust mirrors #40502: the
+// server-reported AGENTS.md sources populate the /status summary.
+func TestApplyThreadSettingsShowsInstructionSourcesLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
+	model.State.SetThreadID("thread-a")
+	model.applyThreadSettingsUpdated(ThreadSettingsUpdatedMsg{
+		ThreadID: "thread-a",
+		Settings: appserver.Settings{
+			CWD: cwd,
+			InstructionSources: []string{
+				filepath.Join(cwd, "AGENTS.md"),
+				filepath.Join(cwd, "nested", "AGENTS.md"),
+			},
+		},
+	})
+	if got, want := model.State.AgentsSummary, "AGENTS.md, nested/AGENTS.md"; got != want {
+		t.Fatalf("AgentsSummary = %q, want %q", got, want)
+	}
+	model.applyThreadSettingsUpdated(ThreadSettingsUpdatedMsg{
+		ThreadID: "thread-a",
+		Settings: appserver.Settings{CWD: cwd, InstructionSourcesSet: true},
+	})
+	if model.State.AgentsSummary != "" {
+		t.Fatalf("AgentsSummary after source removal = %q, want empty", model.State.AgentsSummary)
+	}
+}
 
 // TestApplyThreadSettingsUpdatedAppliesServerSettings covers Rust
 // #43330/#43340: the active thread's server settings replace the TUI's

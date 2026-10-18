@@ -34,6 +34,10 @@ func (p composerPrefix) text() string {
 	}
 }
 
+func (p composerPrefix) len() int {
+	return len(p.text())
+}
+
 // prompt is what the textarea prints in front of the first line. The plain
 // composer keeps its historical "> " marker.
 func (p composerPrefix) prompt() string {
@@ -84,6 +88,7 @@ func (m *Model) setComposerPrompt(text string) {
 	}
 	prefix, body := splitComposerPrompt(text)
 	m.composerPrefix = prefix
+	m.composerElements = nil
 	m.composer.SetValue(body)
 	m.refreshComposerPrompt()
 }
@@ -93,6 +98,7 @@ func (m *Model) resetComposer() {
 	if m == nil {
 		return
 	}
+	m.endHistorySearch()
 	m.composerPrefix = composerPrefixNone
 	m.composer.Reset()
 	m.refreshComposerPrompt()

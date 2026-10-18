@@ -15,6 +15,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/rivo/uniseg"
+
 	"codex_go/gitutil"
 )
 
@@ -101,6 +103,18 @@ func (g Grouping) Label() string {
 		return "group: model"
 	default:
 		return "group: project"
+	}
+}
+
+// DisplayLabel is the title-cased grouping shown in the command-center header.
+func (g Grouping) DisplayLabel() string {
+	switch g {
+	case GroupingStatus:
+		return "Status"
+	case GroupingModel:
+		return "Model"
+	default:
+		return "Project"
 	}
 }
 
@@ -297,6 +311,13 @@ type View struct {
 	ExitOnCancel bool
 	Completion   Completion
 	hints        map[string]string
+	// Notice replaces the footer hint rows while a connection, refresh, or
+	// server-version message is active (Rust #46838). Key-chord hints take
+	// priority over notices; Go has no separate chord-hint state here.
+	Notice string
+	// Loading reports the initial task refresh. An empty task list renders
+	// "Loading tasks…" instead of "No tasks yet".
+	Loading bool
 
 	// pinRanks maps a pinned thread id to its shared-section position (Rust
 	// #51500 pinned_thread_ranks). Nil means shared pinning is unavailable
@@ -1048,26 +1069,71 @@ func (v *View) singleLineViewport(width int) string {
 	if v == nil || width <= 0 {
 		return ""
 	}
-	runes := []rune(v.State.Input)
-	if len(runes) <= width {
+	type grapheme struct {
+		text  string
+		width int
+		start int
+		end   int
+	}
+	graphemes := make([]grapheme, 0, len(v.State.Input))
+	iterator := uniseg.NewGraphemes(v.State.Input)
+	offset := 0
+	for iterator.Next() {
+		text := iterator.Str()
+		graphemes = append(graphemes, grapheme{
+			text:  text,
+			width: uniseg.StringWidth(text),
+			start: offset,
+			end:   offset + len(text),
+		})
+		offset += len(text)
+	}
+	totalWidth := 0
+	for _, item := range graphemes {
+		totalWidth += item.width
+	}
+	if totalWidth <= width {
 		return v.State.Input
 	}
 	cursor := v.State.InputCursor
 	if cursor < 0 {
 		cursor = 0
 	}
-	if cursor > len(runes) {
-		cursor = len(runes)
+	cursorOffset := len(v.State.Input)
+	runeOffset := 0
+	for byteOffset := range v.State.Input {
+		if runeOffset == cursor {
+			cursorOffset = byteOffset
+			break
+		}
+		runeOffset++
 	}
-	start := cursor - width + 1
-	if start < 0 {
-		start = 0
+	cursorIndex := len(graphemes) - 1
+	for i := range graphemes {
+		if cursorOffset < graphemes[i].end {
+			cursorIndex = i
+			break
+		}
 	}
-	end := start + width
-	if end > len(runes) {
-		end = len(runes)
+	if cursorIndex < 0 {
+		cursorIndex = 0
 	}
-	return string(runes[start:end])
+	start := cursorIndex
+	used := 0
+	for start >= 0 {
+		if used+graphemes[start].width > width {
+			break
+		}
+		used += graphemes[start].width
+		start--
+	}
+	start++
+	end := cursorIndex
+	for end+1 < len(graphemes) && used+graphemes[end+1].width <= width {
+		end++
+		used += graphemes[end].width
+	}
+	return v.State.Input[graphemes[start].start:graphemes[end].end]
 }
 
 // CanOpenWithRight reports whether Right should open the selected task

@@ -323,12 +323,21 @@ func (p *MultiSelectPicker) Rows(width int) []string {
 		rows = append(rows, MultiSelectSearchPromptPrefix+p.SearchQuery)
 	}
 	displayRows, displayState := p.displayRows()
-	rows = append(rows, RenderGenericRowsSingleLine(displayRows, displayState, p.maxRows(), "no matches", max(width-2, 1), ColumnWidthConfig{})...)
+	rows = append(rows, RenderPickerRowsSingleLine(displayRows, displayState, p.maxRows(), "no matches", width)...)
 	if p.Preview != "" {
 		rows = append(rows, p.Preview)
 	}
-	rows = append(rows, "Space to toggle; Enter to confirm; Esc to close")
+	rows = append(rows, p.FooterHint())
 	return rows
+}
+
+// FooterHint returns Rust's compact multi-select key hints.
+func (p *MultiSelectPicker) FooterHint() string {
+	hint := "space toggle"
+	if p != nil && p.OrderingEnabled {
+		hint += " \u00b7 \u2190/\u2192 reorder"
+	}
+	return hint + " \u00b7 enter save \u00b7 esc cancel"
 }
 
 func (p *MultiSelectPicker) DesiredHeight(width int) int {
@@ -351,12 +360,10 @@ func (p *MultiSelectPicker) displayRows() ([]GenericDisplayRow, ScrollState) {
 		if multiSelectEnabled(item) {
 			marker = "x"
 		}
-		prefix := " "
-		if p.State.HasSelection && p.State.SelectedIdx == visible {
-			prefix = selectedRowMarker
-		}
-		name := prefix + " [" + marker + "] " + truncateMultiSelectText(multiSelectDisplayName(item), MultiSelectItemNameTruncateLen)
+		selected := p.State.HasSelection && p.State.SelectedIdx == visible
+		name := "[" + marker + "] " + truncateMultiSelectText(multiSelectDisplayName(item), MultiSelectItemNameTruncateLen)
 		rows = append(rows, GenericDisplayRow{
+			NamePrefix:  pickerRowSelectionPrefix(selected),
 			Name:        name,
 			Description: item.Description,
 		})

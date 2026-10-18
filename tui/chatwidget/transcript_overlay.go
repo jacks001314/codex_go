@@ -39,6 +39,10 @@ type TranscriptOverlay struct {
 	height   int
 	content  string
 	title    string
+	// navigationHint/actionsHint are the pager's two help rows (Rust
+	// pager_overlay::transcript::render_hints). The owner resolves key bindings.
+	navigationHint string
+	actionsHint    string
 	// highlightStart/highlightEnd bound the 0-based, end-exclusive content line
 	// range drawn in reverse video (Rust PagerView::set_highlight_cell).
 	highlightStart int
@@ -61,7 +65,12 @@ func NewTranscriptOverlayWithTitle(width int, height int, content string, title 
 	if title == "" {
 		title = "T R A N S C R I P T"
 	}
-	overlay := &TranscriptOverlay{title: title, mouseScroll: codextui.NewMouseScrollAccumulator(nil)}
+	overlay := &TranscriptOverlay{
+		title:          title,
+		navigationHint: "↑/↓ to scroll · pgup/pgdn to page · home/end to jump",
+		actionsHint:    "q close · f3 find · esc browse prompts",
+		mouseScroll:    codextui.NewMouseScrollAccumulator(nil),
+	}
 	overlay.Resize(width, height)
 	overlay.SetContent(content)
 	overlay.viewport.GotoBottom()
@@ -80,7 +89,7 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	if o.viewport.Width > 0 && o.width == width && o.height == height {
 		return
 	}
-	bodyHeight := height - 2
+	bodyHeight := height - 3
 	if bodyHeight < minOverlayBodyHeight {
 		bodyHeight = minOverlayBodyHeight
 	}
@@ -105,6 +114,15 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 		return
 	}
 	o.viewport.SetYOffset(offset)
+}
+
+// SetHints installs the resolved two-row pager help text.
+func (o *TranscriptOverlay) SetHints(navigation string, actions string) {
+	if o == nil {
+		return
+	}
+	o.navigationHint = strings.TrimSpace(navigation)
+	o.actionsHint = strings.TrimSpace(actions)
 }
 
 func (o *TranscriptOverlay) SetContent(content string) {
@@ -268,9 +286,9 @@ func (o *TranscriptOverlay) ApplyPagerAction(action string) bool {
 	case PagerPageDown:
 		o.viewport.PageDown()
 	case PagerHalfPageUp:
-		o.viewport.HalfPageUp()
+		o.viewport.ScrollUp(o.halfPageRows())
 	case PagerHalfPageDown:
-		o.viewport.HalfPageDown()
+		o.viewport.ScrollDown(o.halfPageRows())
 	case PagerJumpTop:
 		o.viewport.GotoTop()
 	case PagerJumpBottom:
@@ -279,6 +297,16 @@ func (o *TranscriptOverlay) ApplyPagerAction(action string) bool {
 		return false
 	}
 	return true
+}
+
+// halfPageRows mirrors Rust #43889: the pager rounds a half page up against the
+// rendered content height. Go's viewport height is the last rendered body
+// height, while the viewport library's own HalfPage helpers round down.
+func (o *TranscriptOverlay) halfPageRows() int {
+	if o == nil || o.viewport.Height <= 0 {
+		return 0
+	}
+	return (o.viewport.Height + 1) / 2
 }
 
 // SetMouseScrollSpeed applies the resolved `tui.mouse_scroll_speed` (Rust #50209
@@ -342,11 +370,12 @@ func (o *TranscriptOverlay) View() string {
 	}
 	width := firstPositive(o.width, defaultOverlayWidth)
 	header := overlayHeader(width, o.scrollPercent(), o.title)
-	help := fitLine("up/down/k/j scroll | pgup/pgdn page | home/end jump | / find | q/ctrl+t close", width)
+	help := fitLine(o.navigationHint, width)
+	actions := fitLine(o.actionsHint, width)
 	if o.find.active() {
-		help = fitLine(o.FindBarLine(), width)
+		actions = fitLine(o.FindBarLine(), width)
 	}
-	return strings.Join([]string{header, o.viewport.View(), help}, "\n")
+	return strings.Join([]string{header, o.viewport.View(), help, actions}, "\n")
 }
 
 func (o *TranscriptOverlay) scrollPercent() int {

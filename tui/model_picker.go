@@ -22,6 +22,9 @@ type ModelPickerOption struct {
 	DefaultReasoningEffort    string
 	SupportedReasoningEfforts []ReasoningEffortOption
 	ServiceTiers              []string
+	// AvailableCyberPrograms is the catalog-advertised cyber access list for
+	// this model (standard/daybreak_blue/daybreak_red).
+	AvailableCyberPrograms []string
 }
 
 type ReasoningEffortOption struct {
@@ -87,6 +90,7 @@ func ModelPickerOptionsFromPresets(presets []model.ModelPreset) []ModelPickerOpt
 			DefaultReasoningEffort:    strings.TrimSpace(preset.DefaultReasoningLevel),
 			SupportedReasoningEfforts: reasoningOptionsForModelPreset(preset),
 			ServiceTiers:              append([]string(nil), preset.ServiceTiers...),
+			AvailableCyberPrograms:    modelPickerCyberPrograms(preset),
 		})
 	}
 	return options
@@ -116,9 +120,23 @@ func ModelPickerOptionsFromPresetsIncludingHidden(presets []model.ModelPreset) [
 			DefaultReasoningEffort:    strings.TrimSpace(preset.DefaultReasoningLevel),
 			SupportedReasoningEfforts: reasoningOptionsForModelPreset(preset),
 			ServiceTiers:              append([]string(nil), preset.ServiceTiers...),
+			AvailableCyberPrograms:    modelPickerCyberPrograms(preset),
 		})
 	}
 	return options
+}
+
+func modelPickerCyberPrograms(preset model.ModelPreset) []string {
+	if preset.AvailableAccessPrograms == nil {
+		return nil
+	}
+	out := make([]string, 0, len(preset.AvailableAccessPrograms.Cyber))
+	for _, program := range preset.AvailableAccessPrograms.Cyber {
+		if value := strings.TrimSpace(string(program)); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func NewModelPicker(options []ModelPickerOption, current string) *ModelPicker {
@@ -228,6 +246,8 @@ func normalizeModelPickerOptions(options []ModelPickerOption, current string) []
 			IsDefault:                 option.IsDefault,
 			DefaultReasoningEffort:    strings.TrimSpace(option.DefaultReasoningEffort),
 			SupportedReasoningEfforts: cloneReasoningEffortOptions(option.SupportedReasoningEfforts),
+			ServiceTiers:              append([]string(nil), option.ServiceTiers...),
+			AvailableCyberPrograms:    append([]string(nil), option.AvailableCyberPrograms...),
 		})
 	}
 	return out

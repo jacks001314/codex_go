@@ -169,6 +169,7 @@ func (m *Model) selectPermissionProfileInline(args string) bubbletea.Cmd {
 		// Rust #54385 keeps the full-access confirmation for every reviewer.
 		pending := item
 		m.pendingPermissionItem = &pending
+		m.pendingPermissionSessionOnly = false
 		m.openFullAccessConfirmation()
 		return nil
 	}
@@ -231,6 +232,7 @@ func (m *Model) showPermissionsMenu(explicit bool) {
 	view := chatwidget.NewPermissionsPopupView(m.permissionMenuConfig(explicit))
 	m.permissionItems = append([]chatwidget.PermissionMenuItem(nil), view.Items...)
 	m.pendingPermissionItem = nil
+	m.pendingPermissionSessionOnly = false
 	m.openModal(ModalRequestMsg{
 		ID:      "permissions",
 		Kind:    ModalKindPermissions,
@@ -375,6 +377,7 @@ func (m *Model) applyPermissionsModalOption(optionID string) bubbletea.Cmd {
 	}
 	if item.RequiresConfirmation {
 		m.pendingPermissionItem = &item
+		m.pendingPermissionSessionOnly = false
 		m.openFullAccessConfirmation()
 		return nil
 	}
@@ -406,16 +409,23 @@ func (m *Model) applyFullAccessConfirmation(optionID string) bubbletea.Cmd {
 	}
 	if optionID == "cancel" || m.pendingPermissionItem == nil {
 		m.pendingPermissionItem = nil
+		m.pendingPermissionSessionOnly = false
 		m.notice = "Cancelled"
 		m.refreshTranscript()
 		return nil
 	}
 	item := *m.pendingPermissionItem
+	sessionOnly := m.pendingPermissionSessionOnly
 	m.pendingPermissionItem = nil
-	return m.applyPermissionSelection(item)
+	m.pendingPermissionSessionOnly = false
+	return m.applyPermissionSelectionWithPersistence(item, !sessionOnly)
 }
 
 func (m *Model) applyPermissionSelection(item chatwidget.PermissionMenuItem) bubbletea.Cmd {
+	return m.applyPermissionSelectionWithPersistence(item, true)
+}
+
+func (m *Model) applyPermissionSelectionWithPersistence(item chatwidget.PermissionMenuItem, persistReviewer bool) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
@@ -440,7 +450,7 @@ func (m *Model) applyPermissionSelection(item chatwidget.PermissionMenuItem) bub
 	// config/batchWrite so it survives the session, and a failed save keeps the
 	// backend's cause.
 	var reviewerCmd bubbletea.Cmd
-	if item.Reviewer != nil && m.onWriteSettings != nil {
+	if persistReviewer && item.Reviewer != nil && m.onWriteSettings != nil {
 		reviewerCmd = m.writeSettings(settingsWriteKindApprovalsReviewer, []SettingsEdit{{
 			KeyPath: "approvals_reviewer",
 			Value:   string(*item.Reviewer),
@@ -460,6 +470,63 @@ func (m *Model) permissionItemByID(id string) (chatwidget.PermissionMenuItem, bo
 		}
 	}
 	return chatwidget.PermissionMenuItem{}, false
+}
+
+// applyPermissionShortcutKey cycles the built-in permission modes without
+// writing config. Full access still uses the normal warning confirmation.
+func (m *Model) applyPermissionShortcutKey(keySpec string) (bubbletea.Cmd, bool) {
+	if m == nil || m.State == nil || m.readOnlyThread || m.modal != nil || m.overlay != nil ||
+		m.slashPopup.Active || m.skillPopup.Active {
+		return nil, false
+	}
+	forward := false
+	switch {
+	case m.keyMatches("chat", "previous_permission_mode", keySpec):
+	case m.keyMatches("chat", "next_permission_mode", keySpec):
+		forward = true
+	default:
+		return nil, false
+	}
+	view := chatwidget.NewPermissionsPopupView(m.permissionMenuConfig(false))
+	available := make([]chatwidget.PermissionMenuItem, 0, len(view.Items))
+	for _, item := range view.Items {
+		if strings.TrimSpace(item.DisabledReason) == "" {
+			available = append(available, item)
+		}
+	}
+	if len(available) <= 1 {
+		m.applyHistoryCell(historycell.NewInfoEvent("No other permission modes are available.", ""))
+		m.notice = "Permissions"
+		m.refreshTranscript()
+		return nil, true
+	}
+	current := 0
+	for index, item := range available {
+		if item.Current || (strings.TrimSpace(item.ProfileID) != "" &&
+			strings.TrimSpace(item.ProfileID) == strings.TrimSpace(m.State.Sandbox)) {
+			current = index
+			break
+		}
+	}
+	next := current + 1
+	if !forward {
+		next = current - 1
+	}
+	if next < 0 {
+		next = len(available) - 1
+	}
+	if next >= len(available) {
+		next = 0
+	}
+	item := available[next]
+	if item.RequiresConfirmation {
+		pending := item
+		m.pendingPermissionItem = &pending
+		m.pendingPermissionSessionOnly = true
+		m.openFullAccessConfirmation()
+		return nil, true
+	}
+	return m.applyPermissionSelectionWithPersistence(item, false), true
 }
 
 func currentPermissionApprovalPolicy(m *Model) chatwidget.ApprovalPolicy {

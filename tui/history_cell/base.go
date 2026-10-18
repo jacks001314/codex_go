@@ -13,6 +13,24 @@ type HistoryCell interface {
 	RawLines() []string
 }
 
+// ImagePathCell is implemented by history cells that carry a local image
+// artifact the owned fullscreen transcript may preview.
+type ImagePathCell interface {
+	ImagePath() string
+}
+
+// TranscriptLinesCell exposes a full transcript rendering distinct from the
+// bounded inline history preview.
+type TranscriptLinesCell interface {
+	TranscriptLines(width int) []string
+}
+
+// ActivityIDCell is implemented by history cells with stable activity
+// disclosure identities (Rust HistoryCell::activity_ids).
+type ActivityIDCell interface {
+	ActivityIDs() []string
+}
+
 type HyperlinkLine struct {
 	Text  string
 	Links []tui.TerminalHyperlink

@@ -308,7 +308,7 @@ func (m *Model) runWorktreeAction(action codextui.WorktreeBrowserAction) bubblet
 		}
 		_, notice, _ := m.applySessionSelection(codextui.SessionSelection{
 			Kind:   codextui.SessionSelectionResume,
-			Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID},
+			Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID, CWD: action.Path},
 		})
 		m.notice = notice
 		m.refreshTranscript()

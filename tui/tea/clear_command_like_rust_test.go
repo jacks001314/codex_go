@@ -25,6 +25,7 @@ func TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust(t *testing.T) {
 
 			var sequences []string
 			model := NewModel(state, Options{
+				ShowSessionHeader: true,
 				OnClearTerminal: func(sequence string) bubbletea.Cmd {
 					sequences = append(sequences, sequence)
 					return func() bubbletea.Msg { return nil }
@@ -38,11 +39,12 @@ func TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust(t *testing.T) {
 			if len(sequences) != 1 || sequences[0] != testCase.want {
 				t.Fatalf("terminal clear sequences = %#v, want %q", sequences, testCase.want)
 			}
-			if state.ThreadID != "" || len(state.Messages) != 0 || state.Status != "idle" {
+			if state.ThreadID != "" || len(state.Messages) != 1 || state.Status != "idle" {
 				t.Fatalf("clear state = thread %q messages %d status %q", state.ThreadID, len(state.Messages), state.Status)
 			}
-			if !strings.Contains(model.View(), "No messages yet.") {
-				t.Fatalf("View() missing fresh transcript:\n%s", model.View())
+			// Rust #48562 re-inserts the compact borderless header after /clear.
+			if view := model.View(); !strings.Contains(view, ">_ gcode (vdev)") || strings.Contains(view, "No messages yet.") {
+				t.Fatalf("View() missing fresh session header:\n%s", view)
 			}
 		})
 	}

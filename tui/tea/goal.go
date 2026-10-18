@@ -305,8 +305,13 @@ func (m *Model) maybeContinueGoal(goal *appserver.Goal) bubbletea.Cmd {
 	if !m.isIdle() {
 		return nil
 	}
+	program, err := m.cyberAccessProgramForTurn()
+	if err != nil {
+		m.notice = err.Error()
+		return nil
+	}
 	cloned := cloneGoalTea(goal)
-	return m.onGoalContinuation(*cloned)
+	return m.onGoalContinuation(*cloned, program)
 }
 
 func (m *Model) applyGoalDraftMaterializeResult(msg GoalDraftMaterializeMsg) bubbletea.Cmd {

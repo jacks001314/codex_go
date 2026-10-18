@@ -417,11 +417,7 @@ var rustSlashCommandOrder = []string{
 // rustSlashCommandOrder without a Go carrier: the popup omits them until a frame
 // exists. They are new subsystems, tracked as round-90 立项 candidates and not
 // started, so adding a frame is what removes an entry here.
-var rustSlashCommandsWithoutFrame = map[string]bool{
-	"daybreak": true, // SlashCommand::Daybreak
-	"config":   true, // SlashCommand::Config
-	"tui":      true, // SlashCommand::Tui
-}
+var rustSlashCommandsWithoutFrame = map[string]bool{}
 
 var rustSlashCommandDescriptions = map[string]string{
 	"model":                 "choose what model and reasoning effort to use",
@@ -457,6 +453,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"diff":                  "show git diff (including untracked files)",
 	"mention":               "mention a file",
 	"status":                "show current session configuration and token usage",
+	"config":                "open the settings panel",
 	"warnings":              "view retained warnings and diagnostic details",
 	"usage":                 "view account usage or use a usage limit reset",
 	"debug-config":          "show config layers and requirement sources for debugging",

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -38,26 +37,17 @@ func TestCollectDiffRowsSortsAndSummarizes(t *testing.T) {
 	}
 }
 
-func TestCreateDiffPreviewLimitsRowsLikeRust(t *testing.T) {
-	content := ""
-	for i := 0; i < 40; i++ {
-		content += "line" + strconv.Itoa(i) + "\n"
-	}
-	changes := map[string]FileChange{
+func TestCreateDiffSummaryRendersAllLinesLikeRust(t *testing.T) {
+	content := strings.Repeat("line\n", 40) + "tail-sentinel"
+	summary := CreateDiffSummary(map[string]FileChange{
 		"a.txt": {Type: FileChangeAdd, Content: content},
-		"b.txt": {Type: FileChangeAdd, Content: content},
-		"c.txt": {Type: FileChangeAdd, Content: content},
+	}, "/repo", 80, "dark")
+	joined := utils.StripANSI(strings.Join(summary, "\n"))
+	if !strings.Contains(joined, "tail-sentinel") {
+		t.Fatalf("complete diff missing tail:\n%s", joined)
 	}
-	preview := CreateDiffPreview(changes, "/repo", 80, "dark")
-	if !strings.Contains(strings.Join(preview, "\n"), "additional lines omitted") {
-		t.Fatalf("preview missing omission notice: %#v", preview)
-	}
-	full := CreateDiffSummary(changes, "/repo", 80, "dark")
-	if strings.Contains(strings.Join(full, "\n"), "additional lines omitted") {
-		t.Fatalf("full summary should not contain omission notice")
-	}
-	if len(full) <= len(preview) {
-		t.Fatalf("preview (%d) should be shorter than full (%d)", len(preview), len(full))
+	if strings.Contains(joined, "omitted") {
+		t.Fatalf("complete diff still reports a preview limit:\n%s", joined)
 	}
 }
 

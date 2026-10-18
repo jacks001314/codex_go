@@ -47,6 +47,39 @@ func TestEditQueuedMessageAltUpRestoresMostRecentLikeRust(t *testing.T) {
 	}
 }
 
+// TestEditQueuedMessagePreservesSlashPromptElementsLikeRust pins #54742's
+// queue round trip: restoring a command with a mention must put the prompt
+// marker back and keep the element range relative to the editable body.
+func TestEditQueuedMessagePreservesSlashPromptElementsLikeRust(t *testing.T) {
+	model := newEditQueuedMessageModel()
+	model.setComposerPrompt("/tmp/$imagegen file")
+	model.registerComposerElement(model.composer.Value(), len("tmp/"), len("tmp/$imagegen"))
+	model.queueComposer(false)
+	if len(model.queued) != 1 {
+		t.Fatalf("seeded queue = %d, want 1", len(model.queued))
+	}
+
+	queued := model.queued[0].Request
+	if queued.Prompt != "/tmp/$imagegen file" || len(queued.TextElements) != 1 {
+		t.Fatalf("queued request = %#v", queued)
+	}
+	if element := queued.TextElements[0]; element.Start != len("/tmp/") || element.End != len("/tmp/$imagegen") {
+		t.Fatalf("queued element = %#v", element)
+	}
+
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+	if model.composerPrefix != composerPrefixSlash || model.composer.Value() != "tmp/$imagegen file" {
+		t.Fatalf("restored prefix=%v body=%q", model.composerPrefix, model.composer.Value())
+	}
+	if len(model.composerElements) != 1 {
+		t.Fatalf("restored elements = %#v, want one", model.composerElements)
+	}
+	if element := model.composerElements[0]; element.Start != len("tmp/") || element.End != len("tmp/$imagegen") {
+		t.Fatalf("restored element = %#v", element)
+	}
+}
+
 // TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust mirrors Rust
 // vim_normal_history_up_edits_queued_message_without_duplicating_it: in Vim
 // normal mode an empty composer's history-up binding (vim_normal move_up,

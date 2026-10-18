@@ -22,7 +22,32 @@ func (m *Model) openDaemonMenu() {
 		Remote:        m.remoteAppServer,
 		CLIExecutable: m.daemonCLIExecutable,
 		HasPackage:    m.daemonCLIPackage,
+		ManagedDaemon: m.daemonManaged,
 	}))
+}
+
+// confirmDaemonRestart shows the managed-server restart confirmation.
+func (m *Model) confirmDaemonRestart() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.openSelectionViewModal(ModalKindGeneric, chatwidget.DaemonRestartConfirmView())
+	return nil
+}
+
+// runDaemonRestart asks the host to restart the managed daemon and reconnect
+// the TUI after this program exits.
+func (m *Model) runDaemonRestart() bubbletea.Cmd {
+	if m == nil {
+		return bubbletea.Quit
+	}
+	m.pendingDaemonRestart = true
+	return bubbletea.Quit
+}
+
+// PendingDaemonRestart reports that the TUI exited for a managed restart.
+func (m *Model) PendingDaemonRestart() bool {
+	return m != nil && m.pendingDaemonRestart
 }
 
 // confirmDaemonUpdate shows the confirmation for a selected source.

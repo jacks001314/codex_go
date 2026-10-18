@@ -18,12 +18,23 @@ type vimDraftSnapshot struct {
 // restore the overwritten rune (or remove an appended rune), mirroring Rust
 // #42194 replace recovery.
 type vimReplaceRecoveryEntry struct {
-	replacement rune
-	original    rune
-	appended    bool
+	replacement    rune
+	original       rune
+	appended       bool
+	absorbedPrefix bool
 }
 
 const maxVimUndoSteps = 64
+
+// shouldHandleVimInsertEscape mirrors Rust TextArea::should_handle_vim_insert_escape:
+// Vim consumes Esc in insert/replace mode and while an operator waits for its
+// motion, so these states must keep Esc away from backtrack handling.
+func (m *Model) shouldHandleVimInsertEscape() bool {
+	if m == nil || !m.vimMode {
+		return false
+	}
+	return m.vimInsert || m.isVimReplaceMode() || m.vimPendingOp != "" || m.vimPendingObject != ""
+}
 
 // vimSearchRange is a byte-offset match range in the composer draft.
 type vimSearchRange struct {
@@ -220,10 +231,13 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 			m.clearVimReplaceRecovery()
 		case msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1:
 			m.replaceVimCharAdvancing(msg.Runes[0])
+			m.absorbVimReplacePromptPrefix()
 		case keySpec == "enter":
 			m.replaceVimCharAdvancing('\n')
 		case keySpec == "backspace":
-			m.restoreVimReplacedCharacter()
+			if !m.backspaceVimReplacePromptPrefix() {
+				m.restoreVimReplacedCharacter()
+			}
 		case keySpec == "left":
 			m.vimCursorLeft()
 		}
@@ -559,7 +573,13 @@ func (m *Model) recordVimReplaceChange() {
 	}
 	text := make([]rune, 0, len(m.vimReplaceRecovery))
 	for _, entry := range m.vimReplaceRecovery {
+		if entry.absorbedPrefix {
+			continue
+		}
 		text = append(text, entry.replacement)
+	}
+	if len(text) == 0 {
+		return
 	}
 	m.vimHasLastDelete = false
 	m.vimLastDeleteWord = false
@@ -641,6 +661,45 @@ func (m *Model) replaceVimCharAdvancing(ch rune) {
 
 func (m *Model) isVimReplaceMode() bool {
 	return m != nil && m.vimReplaceMode
+}
+
+func (m *Model) absorbVimReplacePromptPrefix() {
+	if m == nil || m.composerPrefix != composerPrefixNone || len(m.vimReplaceRecovery) == 0 {
+		return
+	}
+	prefix, rest := splitComposerPrompt(m.composer.Value())
+	if prefix == composerPrefixNone || m.composerCursorOffset() != prefix.len() {
+		return
+	}
+	index := len(m.vimReplaceRecovery) - 1
+	entry := &m.vimReplaceRecovery[index]
+	if entry.replacement != []rune(prefix.text())[0] {
+		return
+	}
+	entry.absorbedPrefix = true
+	m.composerPrefix = prefix
+	m.composer.SetValue(rest)
+	m.setComposerCursorOffset(0)
+	m.refreshComposerPrompt()
+}
+
+func (m *Model) backspaceVimReplacePromptPrefix() bool {
+	if m == nil || m.composerPrefix == composerPrefixNone || m.composerCursorOffset() != 0 {
+		return false
+	}
+	if len(m.vimReplaceRecovery) > 0 {
+		index := len(m.vimReplaceRecovery) - 1
+		entry := m.vimReplaceRecovery[index]
+		if entry.absorbedPrefix && entry.replacement == []rune(m.composerPrefix.text())[0] {
+			m.vimReplaceRecovery = m.vimReplaceRecovery[:index]
+			if !entry.appended && entry.original != 0 {
+				m.composer.SetValue(string(entry.original) + m.composer.Value())
+			}
+		}
+	}
+	m.clearComposerPrefix()
+	m.refreshSlashPopup()
+	return true
 }
 
 func (m *Model) clearVimReplaceRecovery() {

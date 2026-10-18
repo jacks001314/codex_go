@@ -2486,6 +2486,39 @@ func TestDisablePasteBurstAccessorLikeRust(t *testing.T) {
 	}
 }
 
+func TestDisablePasteBurstTuiPrecedenceLikeRust(t *testing.T) {
+	cases := []struct {
+		name      string
+		config    string
+		overrides []string
+		want      bool
+	}{
+		{name: "tui key", config: "[tui]\ndisable_paste_burst = true\n", want: true},
+		{name: "legacy key", config: "disable_paste_burst = true\n", want: true},
+		{name: "tui wins in same file", config: "disable_paste_burst = true\n[tui]\ndisable_paste_burst = false\n", want: false},
+		{name: "top-level CLI beats tui file", config: "[tui]\ndisable_paste_burst = true\n", overrides: []string{"disable_paste_burst=false"}, want: false},
+		{name: "tui CLI wins", config: "disable_paste_burst = false\n", overrides: []string{"tui.disable_paste_burst=true"}, want: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(ConfigPath(home), []byte(testCase.config), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := LoadEffectiveWithOptions(home, &EffectiveOptions{
+				StrictConfig: true,
+				RawOverrides: testCase.overrides,
+			})
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if got := cfg.DisablePasteBurst(); got != testCase.want {
+				t.Fatalf("DisablePasteBurst = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestLoadEffectiveStrictConfigAcceptsRealtimeAudioLikeRust(t *testing.T) {
 	// Mirrors Rust RealtimeAudioToml (config/src/config_toml.rs + core config
 	// test realtime_audio_loads_from_config_toml, Rust #49836): [audio]

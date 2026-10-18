@@ -84,6 +84,17 @@ func (s *WarningDisplayState) WarningCount() int {
 	return s.count
 }
 
+// ResetForTranscript clears warning decisions tied to the previous transcript.
+// The next transcript may deliver the same diagnostic identity and must show it
+// again (Rust history_ui::reset_transcript_state_after_clear).
+func (s *WarningDisplayState) ResetForTranscript() {
+	if s == nil {
+		return
+	}
+	s.dismissed = nil
+	s.count = 0
+}
+
 func (s *WarningDisplayState) ShouldDisplay(message string) bool {
 	if s == nil {
 		return true

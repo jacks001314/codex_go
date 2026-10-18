@@ -68,6 +68,7 @@ const (
 	PreparedSlashArgsShowMcpVerbose         PreparedSlashArgsActionKind = "show_mcp_verbose"
 	PreparedSlashArgsOpenKeymapDebug        PreparedSlashArgsActionKind = "open_keymap_debug"
 	PreparedSlashArgsSetRawOutput           PreparedSlashArgsActionKind = "set_raw_output"
+	PreparedSlashArgsShowTUIModePicker      PreparedSlashArgsActionKind = "show_tui_mode_picker"
 	PreparedSlashArgsRenameThread           PreparedSlashArgsActionKind = "rename_thread"
 	PreparedSlashArgsSubmitPlanMessage      PreparedSlashArgsActionKind = "submit_plan_message"
 	PreparedSlashArgsQueuePlanMessage       PreparedSlashArgsActionKind = "queue_plan_message"
@@ -249,6 +250,9 @@ func DispatchPreparedSlashArgs(context PreparedSlashArgsContext) PreparedSlashAr
 			decision.Action = PreparedSlashArgsError
 			decision.ErrorMessage = RawUsageText
 		}
+		return decision
+	case codextui.CommandTUI:
+		decision.Action = PreparedSlashArgsShowTUIModePicker
 		return decision
 	case codextui.CommandRename:
 		if !context.RenameAllowed {

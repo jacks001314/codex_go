@@ -53,7 +53,7 @@ Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | Sand
 > Ask gcode
 >
 >
-Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
 }
 
 func TestModelVT100TerminalSnapshotApprovalModal(t *testing.T) {
@@ -82,7 +82,7 @@ Run command?
   2. Allow for this session (a)
   3. Deny (d)
 Esc cancel | Enter choose
-Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
 }
 
 func assertVT100Snapshot(t *testing.T, view string, width int, height int, want string) {

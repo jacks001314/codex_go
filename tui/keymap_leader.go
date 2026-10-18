@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -25,6 +26,10 @@ import (
 // defaultLeaderBinding is Rust `key_hint::ctrl(KeyCode::Char('x'))`
 // (keymap/leader.rs:12).
 const defaultLeaderBinding = "ctrl-x"
+
+// LeaderChordTimeout is Rust's KEY_CHORD_TIMEOUT: a pending leader prefix
+// expires after this long.
+const LeaderChordTimeout = time.Second
 
 // leaderReservedBindings mirrors MAIN_RESERVED_BINDINGS
 // (codex-rs/tui/src/keymap.rs:2469-2491): a leader prefix may not collide with a
@@ -122,7 +127,7 @@ func leaderPrefixIsBareCharacter(prefix string) bool {
 	key := segments[len(segments)-1]
 	for _, modifier := range segments[:len(segments)-1] {
 		switch modifier {
-		case "ctrl", "control", "alt", "option":
+		case "ctrl", "control", "alt", "option", "super", "cmd", "command":
 			return false
 		}
 	}

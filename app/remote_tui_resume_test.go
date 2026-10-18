@@ -40,6 +40,7 @@ func TestRemoteTUISettingsFromResume(t *testing.T) {
 		ServiceTier:             &tier,
 		ActivePermissionProfile: &sandbox.ActivePermissionProfile{ID: "trusted"},
 		DisabledPluginIDs:       []string{"plugin-1"},
+		InstructionSources:      []string{"D:/repo/AGENTS.md"},
 		RuntimeWorkspaceRoots:   []string{"D:/repo"},
 	})
 	if settings == nil {
@@ -60,7 +61,20 @@ func TestRemoteTUISettingsFromResume(t *testing.T) {
 	if len(settings.DisabledPluginIDs) != 1 || len(settings.RuntimeWorkspaceRoots) != 1 {
 		t.Fatalf("lists = %#v / %#v", settings.DisabledPluginIDs, settings.RuntimeWorkspaceRoots)
 	}
+	if len(settings.InstructionSources) != 1 || settings.InstructionSources[0] != "D:/repo/AGENTS.md" {
+		t.Fatalf("instruction sources = %#v", settings.InstructionSources)
+	}
 	if remoteTUISettingsFromResume(nil) != nil {
 		t.Fatal("nil resume response must produce nil settings")
+	}
+}
+
+func TestRemoteTUISettingsFromStartedThreadIncludesInstructionSources(t *testing.T) {
+	settings := remoteTUISettingsFromStartedThread(&appserver.ThreadStartResponse{
+		CWD:                "D:/repo",
+		InstructionSources: []string{"D:/repo/AGENTS.md", "D:/repo/nested/AGENTS.md"},
+	})
+	if settings == nil || len(settings.InstructionSources) != 2 {
+		t.Fatalf("started settings = %#v", settings)
 	}
 }

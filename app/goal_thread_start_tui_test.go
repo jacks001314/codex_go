@@ -195,7 +195,7 @@ func TestRemoteGoalContinuationCommandStartsGoalTurnLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-goal")
 	command := interactiveRemoteGoalContinuationCommand(ctx, &cli.RootOptions{}, appserverdaemon.NewUnixSocketEndpoint(socketPath), state, remoteTUIBrokers{}, nil, nil)
-	continuation := command(appserver.Goal{ThreadID: "thread-goal", Objective: "finish the goal", Status: appserver.GoalActive})
+	continuation := command(appserver.Goal{ThreadID: "thread-goal", Objective: "finish the goal", Status: appserver.GoalActive}, "")
 	if continuation == nil {
 		t.Fatal("goal continuation command is nil")
 	}

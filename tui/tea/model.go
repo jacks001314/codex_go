@@ -35,6 +35,7 @@ import (
 	"codex_go/tui/anim"
 	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
+	composerhistory "codex_go/tui/bottom_pane/chat_composer"
 	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
 	execcell "codex_go/tui/exec_cell"
@@ -45,6 +46,7 @@ import (
 	pets "codex_go/tui/pets"
 	streamingpkg "codex_go/tui/streaming"
 	"codex_go/tui/styles"
+	"codex_go/tui/transcript_image"
 	"codex_go/voicehost"
 	"codex_go/worktree"
 )
@@ -56,7 +58,7 @@ const (
 	minTranscriptHeight   = 3
 	maxBottomLines        = 6
 	regionChromeMinWidth  = 100
-	footerHelpText        = "Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands"
+	footerHelpText        = "enter send \u00b7 ctrl+j newline \u00b7 ctrl+g editor \u00b7 ctrl+c quit \u00b7 /help commands"
 	mcpStartupFinishLag   = 4 * time.Second
 	// imagePasteRepeatWindow mirrors Rust's IMAGE_PASTE_REPEAT_WINDOW (#51411):
 	// the sliding window that suppresses auto-repeat image-paste presses.
@@ -98,6 +100,10 @@ type SubmitRequest struct {
 	// prompt reaches the model through this map instead, without being rendered
 	// as a user message.
 	AdditionalContext map[string]any
+	// CyberAccessProgram is the selected explicit cyber program for this turn
+	// (standard/daybreak_blue/daybreak_red). Rust #49859 computes it from the
+	// account, model catalog and thread Daybreak setting.
+	CyberAccessProgram string
 	// ResponsesAPIClientMetadata adds per-turn Responses client metadata.
 	// Misalignment continuation uses it for `misalignment_override`.
 	ResponsesAPIClientMetadata map[string]string
@@ -174,6 +180,9 @@ type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeR
 type StartManagedWorktreeFunc func(mode string, name string, cwd string, threadID string) (SessionResumeResponse, error)
 
 type ThreadRenameFunc func(threadID string, name string) error
+
+// DaybreakUpdateFunc persists a thread's Daybreak preference.
+type DaybreakUpdateFunc func(threadID string, enabled bool) error
 
 type LogoutFunc func() error
 
@@ -276,7 +285,7 @@ type GoalDraftMaterializeFunc func(draft codextui.GoalDraft) (string, error)
 // goal, mirroring the Rust app-server's goal runtime effects after /goal set
 // or resume. The TUI supplies the internal continuation input so the model
 // starts working without a visible user message.
-type GoalContinuationFunc func(goal appserver.Goal) bubbletea.Cmd
+type GoalContinuationFunc func(goal appserver.Goal, cyberAccessProgram string) bubbletea.Cmd
 
 type SettingsEdit struct {
 	KeyPath string
@@ -310,7 +319,18 @@ type SettingsWriteResult struct {
 	// ShowTooltips is the configured `tui.show_tooltips` value (Rust
 	// local_settings). Nil preserves the current value; the config default is
 	// enabled.
-	ShowTooltips          *bool
+	ShowTooltips *bool
+	// ShowServerVersionNotice is the configured
+	// `tui.show_server_version_notice` value (Rust #43698). Nil preserves the
+	// current value; the config default is enabled.
+	ShowServerVersionNotice *bool
+	// FullscreenTranscript is the configured `tui.fullscreen_transcript` value
+	// (Rust #46883). Nil preserves the current value; the config default is
+	// enabled.
+	FullscreenTranscript *bool
+	// AlternateScreenMode is the configured `tui.alternate_screen` mode
+	// (`always`/`never`/`auto`). Empty means auto.
+	AlternateScreenMode   string
 	Personality           chatwidget.Personality
 	Notifications         *chatwidget.NotificationsSetting
 	NotificationMethod    codextui.NotificationMethod
@@ -318,6 +338,20 @@ type SettingsWriteResult struct {
 	// RightClickPaste is the configured `tui.right_click_paste` value (#48118).
 	// Nil preserves the current value; the config default is `auto`.
 	RightClickPaste *string
+	// CopyOnSelect is the configured `tui.copy_on_select` value (`auto`,
+	// `always`, `never`). Nil preserves the current value.
+	CopyOnSelect *string
+	// CopyOnSelectClearSelection is `tui.copy_on_select_clear_selection`.
+	CopyOnSelectClearSelection *bool
+	// StartInVimMode is the configured `tui.vim_mode_default` value.
+	StartInVimMode *bool
+	// ResumeCWD is the configured `tui.resume_cwd` mode (`ask`, `current`,
+	// `session`). Nil preserves the current value.
+	ResumeCWD *string
+	// RemoteCWDOverride is the explicit `--cd` value for a remote workspace.
+	// Rust treats it as the only usable "current" directory there; when it is
+	// empty, Current directory is unavailable for remote resumes.
+	RemoteCWDOverride string
 	// MouseScrollSpeed is the configured `tui.mouse_scroll_speed` multiplier for
 	// transcript wheel scrolling (Rust #50209). Nil preserves the current value;
 	// the resolved default is one row per event.
@@ -521,6 +555,29 @@ type TurnInterruptedMsg struct {
 	Err      error
 }
 
+// ClipboardWriteResultMsg delivers an asynchronous clipboard write result.
+type ClipboardWriteResultMsg struct {
+	Label    string
+	Err      error
+	Warnings bool
+}
+
+// AccountStatusUpdatedMsg replaces the status account display after an
+// app-server account/updated notification (Rust #50199).
+type AccountStatusUpdatedMsg struct {
+	Display           string
+	HasChatGPTAccount bool
+	EmailRequestID    string
+}
+
+// AccountEmailLoadedMsg carries the asynchronous account email read started by
+// AccountStatusUpdatedMsg. RequestID prevents an obsolete identity from
+// overwriting a newer account update.
+type AccountEmailLoadedMsg struct {
+	RequestID string
+	Email     string
+}
+
 type reviewTokenSnapshot struct {
 	Total         codextui.TokenUsage
 	Last          codextui.TokenUsage
@@ -557,6 +614,32 @@ type MCPInventoryResultMsg struct {
 	RequestID uint64
 	Servers   []historycell.McpServerStatus
 	Err       error
+}
+
+// MCPLoginStart identifies one OAuth attempt and the single terminal completion
+// the host will deliver for it.
+type MCPLoginStart struct {
+	LoginID     string
+	Completions <-chan MCPLoginCompletedMsg
+}
+
+// MCPLoginStartedMsg reports the result of asking the host to start OAuth.
+type MCPLoginStartedMsg struct {
+	RequestID string
+	Name      string
+	ThreadID  string
+	Result    MCPLoginStart
+	Err       error
+}
+
+// MCPLoginCompletedMsg carries one MCP OAuth completion for the originating
+// thread (Rust ServerNotification::McpServerOauthLoginCompleted).
+type MCPLoginCompletedMsg struct {
+	Name     string
+	ThreadID string
+	LoginID  string
+	Success  bool
+	Error    string
 }
 
 // ModelsResultMsg is delivered when an async model-list refresh completes.
@@ -970,9 +1053,12 @@ type Options struct {
 	Width                     int
 	Height                    int
 	NoAltScreen               bool
-	Placeholder               string
-	ModelPickerOptions        []codextui.ModelPickerOption
-	ServiceTierCommands       []bottompane.ServiceTierCommand
+	// AlternateScreenMode is the configured `tui.alternate_screen` value.
+	// `always` opts into owned-screen mouse selection; auto/never stay inline.
+	AlternateScreenMode string
+	Placeholder         string
+	ModelPickerOptions  []codextui.ModelPickerOption
+	ServiceTierCommands []bottompane.ServiceTierCommand
 	// ServiceTierRequirements carries the server's configRequirements/read
 	// response so the model catalog's service tiers are constrained by the
 	// server's reported speed policies before the picker and the service-tier
@@ -993,7 +1079,13 @@ type Options struct {
 	// the session header shows a startup tooltip resolved against the current
 	// keybindings. A nil value keeps tooltips off, so callers that do not opt in
 	// (including tests) render a deterministic header.
-	ShowTooltips              *bool
+	ShowTooltips *bool
+	// ShowServerVersionNotice mirrors Rust's
+	// `tui.show_server_version_notice` preference (#43698).
+	ShowServerVersionNotice *bool
+	// FullscreenTranscript seeds the stored `tui.fullscreen_transcript`
+	// preference for the `/tui` picker. Nil defaults to enabled.
+	FullscreenTranscript      *bool
 	OnSubmit                  SubmitFunc
 	OnSubmitRequest           SubmitRequestFunc
 	OnSteerRequest            SteerRequestFunc
@@ -1065,6 +1157,16 @@ type Options struct {
 	// `auto` (the Windows/Linux default), `on` (also macOS) or `off`. An empty
 	// value or an unknown spelling resolves to `auto`.
 	RightClickPaste string
+	// CopyOnSelect is the configured `tui.copy_on_select` value.
+	CopyOnSelect string
+	// CopyOnSelectClearSelection is `tui.copy_on_select_clear_selection`.
+	CopyOnSelectClearSelection bool
+	// StartInVimMode is the configured `tui.vim_mode_default` value.
+	StartInVimMode bool
+	// ResumeCWD is the configured `tui.resume_cwd` mode.
+	ResumeCWD string
+	// RemoteCWDOverride is the explicit `--cd` for a remote workspace.
+	RemoteCWDOverride string
 	// OnClipboardRead, when set, supplies clipboard text for the fullscreen
 	// right-click paste fallback (#48118). Nil reads the system clipboard.
 	OnClipboardRead func() (string, error)
@@ -1072,10 +1174,9 @@ type Options struct {
 	// (Rust config default false). It selects the raw chain-of-thought variant
 	// of a reasoning block, mirroring RawReasoningVisibility::Visible.
 	ShowRawReasoning bool
-	// OnDaybreakNotice resolves the account's Daybreak access state for the
-	// refusal copy (Rust daybreak::Notice). A nil hook uses the neutral Limited
-	// copy, which is also Rust's pending/failed default.
-	OnDaybreakNotice func(model string) codextui.DaybreakNotice
+	// OnUpdateDaybreak persists the thread preference toggled by /daybreak and
+	// the refusal picker. A nil hook keeps the change session-only.
+	OnUpdateDaybreak DaybreakUpdateFunc
 	// OnLoadTranscriptPreview lazily loads a session's newest transcript lines
 	// for the resume picker's expanded rows (Rust
 	// resume_picker_transcript_preview.rs). Nil leaves expanded rows without a
@@ -1155,6 +1256,9 @@ type Options struct {
 	// DaemonCLIPackage reports whether that CLI has a complete local package, so
 	// its build can be copied into the daemon's releases directory.
 	DaemonCLIPackage bool
+	// DaemonManaged reports whether Codex verified that it manages the local
+	// background server and can restart it.
+	DaemonManaged bool
 	// DaemonVersion is the running local daemon's app-server version, when known.
 	DaemonVersion string
 	// RemoteAppServer reports an explicit remote app server, whose daemon cannot
@@ -1284,6 +1388,7 @@ type Options struct {
 	BackgroundProcesses            []historycell.UnifiedExecProcessDetails
 	MCPServers                     []historycell.McpServerStatus
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
+	OnStartMCPLogin                func(name, threadID string) (MCPLoginStart, error)
 	OnListModels                   func(includeHidden bool) ([]codextui.ModelPickerOption, error)
 	MCPStartupExpectedServers      []string
 	// StartupConfigWarnings carries the requirement-driven config warnings known
@@ -1297,6 +1402,9 @@ type Options struct {
 	GenerateMemories      *bool
 	FeedbackEnabled       *bool
 	DisablePasteBurst     bool
+	// WindowsTerminalMappedInput enables decoding of Windows Terminal's
+	// single-key Shift+Enter sequence.
+	WindowsTerminalMappedInput bool
 	// DaybreakDefault seeds a new thread's Daybreak preference (Rust
 	// `params.daybreak_enabled = config.daybreak_enabled && !ephemeral`,
 	// #49861). The live value is still gated by the cli_daybreak feature.
@@ -1412,10 +1520,48 @@ type Model struct {
 
 	transcript viewport.Model
 	composer   textarea.Model
+	// composerScroll/composerManual track owned-screen wheel browsing without
+	// moving the caret (Rust #50109). composerTopRow is the zero-based screen
+	// row where the composer section starts, and composerRows includes its
+	// painted border.
+	composerScroll     int
+	composerManual     bool
+	composerTopRow     int
+	composerRows       int
+	composerLastValue  string
+	composerLastCursor int
+	// composerSelection tracks mouse-selected editable text; composerTextTopRow
+	// and composerTextLeft locate its painted textarea inside the frame.
+	composerSelection composerTextSelection
+	// composerRightClickCopy marks the pending clipboard write as a right-click
+	// copy, which collapses the selection only after the write succeeds.
+	composerRightClickCopy bool
+	composerTextTopRow     int
+	composerTextLeft       int
+	composerPromptWidth    int
+	composerLinkValue      string
+	composerLinkCache      []composerHyperlink
+	composerLinkValid      bool
+	// composerSparkle is the one-shot Astra starfield state (Rust #46096).
+	sparkle              composerSparkleState
+	sparkleObservedModel string
+	// welcomeBlossom is the settled fullscreen welcome animation (Rust #48513).
+	welcomeBlossom welcomeBlossomState
+	// renderedSelection owns mouse selection over painted status/footer rows
+	// (Rust #52270); transcript selection stays terminal-owned.
+	renderedSelection renderedSelectionState
+	// pinnedPrompt is the clickable header for a scrolled-away user prompt
+	// (Rust #52778).
+	pinnedPrompt pinnedPromptState
 	// composerPrefix holds the leading `!`/`/` marker that is rendered as the
 	// prompt instead of living in the editable text (#54742).
 	composerPrefix composerPrefix
 	activityFollow bool
+	// windowsKeySequence buffers the seven-key Shift+Enter sequence emitted by
+	// Windows Terminal before deciding whether to replay it or insert a newline.
+	windowsKeySequence           []bubbletea.KeyMsg
+	windowsKeySequenceGeneration uint64
+	windowsTerminalMappedInput   bool
 	// mouseScroll is the live `tui.mouse_scroll_speed` accumulator for the main
 	// transcript viewport (Rust #50209 `TranscriptView::pending_mouse_scroll`).
 	mouseScroll codextui.MouseScrollAccumulator
@@ -1472,6 +1618,15 @@ type Model struct {
 	agentsOverviewUsageNextRequest    uint64
 	transcriptMessages                transcriptMessageCache
 	overlayMessages                   transcriptMessageCache
+	// transcriptImages draws bounded Kitty/Sixel previews for local image
+	// artifacts in the owned fullscreen transcript (Rust #54216).
+	transcriptImages     *transcriptImageRuntime
+	transcriptImageCache transcriptImageCache
+	transcriptImageCell  transcript_image.CellSize
+	transcriptImagePlans []transcriptImagePlan
+	// transcriptImageFrameRows is the row count of the last composed View. The
+	// graphics writer anchors it to the bottom of the inline terminal.
+	transcriptImageFrameRows int
 	// mainFind is the owned transcript's in-place Find state (Rust #50045).
 	// The pager overlay keeps its own find state in chatwidget.TranscriptOverlay.
 	mainFind mainTranscriptFind
@@ -1484,6 +1639,10 @@ type Model struct {
 	width       int
 	height      int
 	noAltScreen bool
+	// ownedScreen records whether this launch paints the alternate screen
+	// itself. Rust's owned transcript, including bounded composer scrolling,
+	// only applies there.
+	ownedScreen bool
 	// localSettings is the staged record of this launcher's client-owned
 	// preferences (Rust #51510 App::local_settings): only a successful
 	// configuration reload replaces it, and it is applied to the live state when
@@ -1527,8 +1686,11 @@ type Model struct {
 	lastTurnError              string
 	needsFinalMessageSeparator bool
 	activeAssistantDeltaItemID string
-	mcpStartup                 chatwidget.McpStartupRoundState
-	mcpStartupHeader           string
+	// deferredSubAgentActivity preserves answer ordering while an assistant
+	// stream is active (Rust #46867).
+	deferredSubAgentActivity []protocol.ThreadItem
+	mcpStartup               chatwidget.McpStartupRoundState
+	mcpStartupHeader         string
 	// workingStatusHeader is the live reasoning summary line shown as the
 	// working indicator's header (Rust #43921).
 	workingStatusHeader string
@@ -1563,8 +1725,29 @@ type Model struct {
 	startupWarningsIndex    int
 	startupWarningsComplete bool
 	sessionHeaderShown      bool
+	// sessionHeaderEnabled mirrors Options.ShowSessionHeader for sessions
+	// started later through /new, /clear, resume, or an agent switch.
+	sessionHeaderEnabled bool
+	// sessionHeaderVersion is reused when a later fresh, resumed, forked, or
+	// cleared session re-inserts the compact borderless header (Rust #48562).
+	sessionHeaderVersion string
 	// showTooltips mirrors Rust's `local_settings.tui.show_tooltips`.
 	showTooltips bool
+	// showServerVersionNotice mirrors Rust's
+	// `local_settings.tui.show_server_version_notice` (#43698).
+	showServerVersionNotice bool
+	// serverVersionWarningAdded prevents duplicating the retained warning when a
+	// settings reload re-enables notices.
+	serverVersionWarningAdded bool
+	// agentsOverviewServerVersionNotice is the compact service-version line
+	// rendered in the command-center footer.
+	agentsOverviewServerVersionNotice string
+	// fullscreenTranscript is the stored next-launch renderer preference
+	// (`tui.fullscreen_transcript`); the running renderer is unchanged.
+	fullscreenTranscript bool
+	// tuiModeWrite holds the pending `/tui` save value so a failed write never
+	// changes the stored preference.
+	tuiModeWrite *bool
 	// turnTips mirrors Rust's `App::turn_tips`: the foreground turn's tip
 	// cadence and exposure state (see turn_tips.go).
 	turnTips turnTips
@@ -1659,6 +1842,11 @@ type Model struct {
 	backgroundProcesses             []historycell.UnifiedExecProcessDetails
 	mcpServers                      []historycell.McpServerStatus
 	onReadMCPInventory              func(detail bool) ([]historycell.McpServerStatus, error)
+	onStartMCPLogin                 func(name, threadID string) (MCPLoginStart, error)
+	pendingMCPLoginStart            *mcpLoginStartRequest
+	activeMCPLoginIDs               map[string]string
+	mcpLoginResultsByThread         map[string][]MCPLoginCompletedMsg
+	nextMCPLoginRequestID           uint64
 	onListModels                    func(includeHidden bool) ([]codextui.ModelPickerOption, error)
 	nextModelsRequestID             uint64
 	pendingModelsRequestID          uint64
@@ -1672,6 +1860,15 @@ type Model struct {
 	tuiTheme                        string
 	tuiPet                          string
 	vimMode                         bool
+	vimModeDefault                  bool
+	resumeCWD                       string
+	remoteCWDOverride               string
+	pendingResumeCWD                *pendingResumeCWD
+	pendingConfigPanelSave          *configPanelPendingSave
+	// legacyVimEscapeRecovery enables splitting legacy terminals' Alt+character
+	// encoding back into Esc plus the character (Rust #42584). It is disabled on
+	// Windows, which does not share the Unix Esc-prefix ambiguity.
+	legacyVimEscapeRecovery bool
 	// vimInsert is the Vim mode state when vimMode is enabled: false = normal
 	// mode (keys dispatch vim_normal actions), true = insert mode (keys type
 	// normally until Esc). Rust starts the composer in Vim normal mode when
@@ -1757,6 +1954,8 @@ type Model struct {
 	daemonCLIVersion      string
 	daemonCLIPackage      bool
 	daemonVersion         string
+	daemonManaged         bool
+	pendingDaemonRestart  bool
 	remoteAppServer       bool
 	// pendingUpdateAction records the update the TUI wants the CLI to run after
 	// it exits (Rust App::pending_update_action).
@@ -1775,7 +1974,8 @@ type Model struct {
 	// asyncQuestionMainDraft stashes the composer draft while the async question
 	// editor owns the composer, because Go uses one composer where Rust keeps a
 	// separate main composer and question editor.
-	asyncQuestionMainDraft string
+	asyncQuestionMainDraft    string
+	asyncQuestionMainElements []ComposerTextElement
 	// asyncQuestionAnswerInFlight marks an accepted question answer so the
 	// new-prompt question clearing (#44328) does not drop the remaining
 	// questions.
@@ -1853,6 +2053,8 @@ type Model struct {
 	// delivered at the next render while the same thread/draft/cursor stays
 	// eligible. clipboardReadPending is Rust's worker `is_busy` guard.
 	rightClickPasteMode     tuiapp.RightClickPasteMode
+	copyOnSelectMode        string
+	copyOnSelectClear       bool
 	rightClickPasteEnv      tuiapp.PasteEnvironment
 	rightClickPasteTarget   *tuiapp.RightClickPasteTarget
 	rightClickPasteResult   *rightClickPasteResult
@@ -1861,7 +2063,7 @@ type Model struct {
 	onExportTranscript      TranscriptExportFunc
 	onGenerateRecap         RecapGenerateFunc
 	recapInFlight           bool
-	onDaybreakNotice        func(model string) codextui.DaybreakNotice
+	onUpdateDaybreak        DaybreakUpdateFunc
 	onLoadTranscriptPreview TranscriptPreviewFunc
 	onReadSessionTranscript SessionTranscriptFunc
 	// sessionTranscriptThreadID identifies the picker transcript overlay's
@@ -2001,11 +2203,19 @@ type Model struct {
 	statusLineConfiguredByUser bool
 	statusSurfaceOverrides     statusSurfaceOverrides
 	lastTerminalTitleSequence  string
-	rateLimitSnapshots         map[string]chatwidget.RateLimitSnapshot
-	approvalsReviewer          chatwidget.ApprovalsReviewer
-	permissionRequirements     chatwidget.PermissionRequirements
-	permissionItems            []chatwidget.PermissionMenuItem
-	pendingPermissionItem      *chatwidget.PermissionMenuItem
+	// Time-varying terminal-title animation state (Rust #46832): progress
+	// drives the working spinner and title drives the blocked prefix blink.
+	terminalTitleSpinnerText     string
+	terminalTitleActionRequired  bool
+	terminalTitleActionHidden    bool
+	terminalTitleAnimationOrigin time.Time
+	terminalTitleAnimationReady  bool
+	rateLimitSnapshots           map[string]chatwidget.RateLimitSnapshot
+	approvalsReviewer            chatwidget.ApprovalsReviewer
+	permissionRequirements       chatwidget.PermissionRequirements
+	permissionItems              []chatwidget.PermissionMenuItem
+	pendingPermissionItem        *chatwidget.PermissionMenuItem
+	pendingPermissionSessionOnly bool
 	// pendingPermissionProfileArgs is the inline `/permissions` request waiting
 	// for the server catalog (Rust InlinePermissionProfileSelection::Discovering).
 	pendingPermissionProfileArgs string
@@ -2032,6 +2242,7 @@ type Model struct {
 	goalObservedAt                   time.Time
 	pendingGoalObjective             string
 	hasChatGPTAccount                bool
+	accountEmailRequestID            string
 	chatGPTPlanType                  string
 	availableRateLimitResetCredits   *int64
 	nextUsageRequestID               uint64
@@ -2047,9 +2258,16 @@ type Model struct {
 	pendingSettingsRequestID         uint64
 	submitted                        []string
 	inputHistory                     []string
+	inputHistoryElements             [][]ComposerTextElement
 	inputHistoryIndex                int
 	inputHistoryDraft                string
+	inputHistoryDraftElements        []ComposerTextElement
 	inputHistoryActive               bool
+	historySearch                    *composerhistory.HistorySearchSession
+	historySearchElements            []ComposerTextElement
+	historySearchPreviewText         string
+	historySearchAttachments         []bottompane.ComposerAttachment
+	historySearchMentionBindings     []string
 	submitRequests                   []SubmitRequest
 	queued                           []queuedSubmission
 	pendingSteers                    []pendingSteerSubmission
@@ -2064,6 +2282,23 @@ type Model struct {
 	completedThreadIDs               map[string]bool
 	pendingThreadName                bool
 	taskStartedAt                    time.Time
+	// statusTimer is the pause-aware clock independent of the optional status
+	// row (Rust #41913).
+	statusTimer codextui.StatusTimer
+	// hookRunDeadlines tracks each hook's 300ms reveal delay so fast hooks stay
+	// hidden and concurrent hooks share one summary (Rust #42118).
+	hookRunDeadlines map[string]time.Time
+	// leaderChordPending tracks a pressed leader prefix waiting for a
+	// completion key (Rust #54381 open_presets).
+	leaderChordPending    bool
+	leaderChordStartedAt  time.Time
+	leaderChordCompletion string
+	// pendingKeyChordPrefix stores the first stroke of a configured two-stroke
+	// binding. activeKeyChord carries the completed chord through the current
+	// key dispatch so existing keyMatches-based action handlers stay unchanged.
+	pendingKeyChordPrefix  string
+	pendingKeyChordStarted time.Time
+	activeKeyChord         string
 
 	composerPasteEnterUntil *time.Time
 	// composerLastCharAt is when the composer last received a character event,
@@ -2189,7 +2424,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	}
 	clipboardRead := options.OnClipboardRead
 	if clipboardRead == nil {
-		clipboardRead = sysclipboard.ReadAll
+		clipboardRead = defaultClipboardRead()
 	}
 
 	model := &Model{
@@ -2205,6 +2440,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 		Transcript:                   newTranscriptComponent(),
 		Composer:                     newComposerComponent(options.Placeholder),
 		StatusBar:                    newStatusBarComponent(),
+		legacyVimEscapeRecovery:      legacyVimEscapeRecoverySupported(),
+		vimModeDefault:               options.StartInVimMode,
+		vimMode:                      options.StartInVimMode,
+		vimInsert:                    options.StartInVimMode,
+		resumeCWD:                    normalizeResumeCWD(options.ResumeCWD),
+		remoteCWDOverride:            strings.TrimSpace(options.RemoteCWDOverride),
 		transcript:                   transcript,
 		activityFollow:               true,
 		mouseScroll:                  codextui.NewMouseScrollAccumulator(options.MouseScrollSpeed),
@@ -2214,6 +2455,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		skillLoadWarnings:            chatwidget.NewSkillLoadWarningState(),
 		composer:                     composer,
 		noAltScreen:                  options.NoAltScreen,
+		ownedScreen:                  options.usesOwnedScreen(),
+		composerTopRow:               -1,
+		composerTextTopRow:           -1,
 		quickDials:                   cloneTUIPresets(options.QuickDials),
 		presetSetReadOnly:            cloneBoolMapTea(options.PresetSetReadOnly),
 		presetClearReadOnly:          cloneBoolMapTea(options.PresetClearReadOnly),
@@ -2240,6 +2484,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		backgroundProcesses:             cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
 		mcpServers:                      cloneMcpServerStatuses(options.MCPServers),
 		onReadMCPInventory:              options.OnReadMCPInventory,
+		onStartMCPLogin:                 options.OnStartMCPLogin,
+		activeMCPLoginIDs:               map[string]string{},
+		mcpLoginResultsByThread:         map[string][]MCPLoginCompletedMsg{},
 		onListModels:                    options.OnListModels,
 		pendingMCPInventoryMessageIndex: -1,
 		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
@@ -2247,6 +2494,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		featureSettings:                 cloneBoolMapTea(options.FeatureSettings),
 		daybreakEnabled:                 daybreakFeatureEnabledForAccount(options.FeatureSettings, options.HasChatGPTAccount, state.AccountDisplay) && options.DaybreakDefault,
 		disablePasteBurst:               options.DisablePasteBurst,
+		windowsTerminalMappedInput:      options.WindowsTerminalMappedInput,
 		personality:                     initialPersonality(state, options.Personality),
 		tuiTheme:                        strings.TrimSpace(options.TUITheme),
 		tuiPet:                          normalizePetIDTea(options.TUIPet),
@@ -2260,6 +2508,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		daemonCLIVersion:                strings.TrimSpace(options.DaemonCLIVersion),
 		daemonCLIPackage:                options.DaemonCLIPackage,
 		daemonVersion:                   strings.TrimSpace(options.DaemonVersion),
+		daemonManaged:                   options.DaemonManaged,
 		remoteAppServer:                 options.RemoteAppServer,
 		localSession:                    options.LocalSession,
 		animationsEnabled:               options.AnimationsEnabled == nil || *options.AnimationsEnabled,
@@ -2313,10 +2562,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 		clipboardWriteRich:              clipboardWriteRich,
 		clipboardRead:                   clipboardRead,
 		rightClickPasteMode:             tuiapp.ParseRightClickPasteMode(options.RightClickPaste),
+		copyOnSelectMode:                normalizeCopyOnSelectMode(options.CopyOnSelect),
+		copyOnSelectClear:               options.CopyOnSelectClearSelection,
 		rightClickPasteEnv:              detectRightClickPasteEnvironment(),
 		onExportTranscript:              options.OnExportTranscript,
 		onGenerateRecap:                 options.OnGenerateRecap,
-		onDaybreakNotice:                options.OnDaybreakNotice,
+		onUpdateDaybreak:                options.OnUpdateDaybreak,
 		onLoadTranscriptPreview:         options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:         options.OnReadSessionTranscript,
 		disableAutoRecap:                options.AutoRecap != nil && !*options.AutoRecap,
@@ -2421,6 +2672,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		completedThreadIDs:              map[string]bool{},
 		now:                             time.Now,
 	}
+	if shouldWarmClipboardReader(options.OnClipboardRead != nil, options.usesOwnedScreen(), model.rightClickPasteEnv, model.rightClickPasteMode) {
+		warmDefaultClipboardReader()
+	}
 	// Rust #48761: the hidden-output disclosure hints use the configured
 	// `open_transcript` shortcut, resolved on every render so a runtime remap is
 	// reflected immediately.
@@ -2432,6 +2686,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 		state.CLIVersion = strings.TrimSpace(options.SessionHeaderVersion)
 	}
 	state.HasChatGPTAccount = options.HasChatGPTAccount
+	if state.RequiresOpenAIAuth == nil && options.RequiresOpenAIAuth != nil {
+		requiresOpenAIAuth := *options.RequiresOpenAIAuth
+		state.RequiresOpenAIAuth = &requiresOpenAIAuth
+	}
 	if strings.TrimSpace(state.Personality) == "" && strings.TrimSpace(string(options.Personality)) != "" {
 		state.Personality = string(model.personality)
 	}
@@ -2458,9 +2716,20 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model.terminalSizeSettledColumns, model.terminalSizeSettledRows = terminalSizeTagPair(model.width, model.height)
 	model.terminalSizeInitialized = true
 	model.showTooltips = options.ShowTooltips != nil && *options.ShowTooltips
-	if options.ShowSessionHeader {
-		model.addStartupSessionHeader(options.SessionHeaderVersion)
+	model.showServerVersionNotice = options.ShowServerVersionNotice == nil || *options.ShowServerVersionNotice
+	model.fullscreenTranscript = options.FullscreenTranscript == nil || *options.FullscreenTranscript
+	model.statusTimer = codextui.NewStatusTimer(model.currentTime())
+	model.sessionHeaderEnabled = options.ShowSessionHeader
+	model.sessionHeaderVersion = strings.TrimSpace(options.SessionHeaderVersion)
+	model.sparkleObservedModel = strings.TrimSpace(model.State.Model)
+	model.welcomeBlossom = newWelcomeBlossomState()
+	if strings.TrimSpace(model.State.ThreadID) == "" && len(model.State.Messages) == 0 {
+		model.markFreshAstraSparkle()
 	}
+	if options.ShowSessionHeader {
+		model.addStartupSessionHeader(model.sessionHeaderVersion)
+	}
+	model.appendDaybreakNewTurnNotice()
 	for _, cell := range options.InitialHistoryCells {
 		if cell != nil {
 			model.addHistoryCell(cell)
@@ -2469,9 +2738,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 	for _, warning := range options.StartupConfigWarnings {
 		model.applyStartupConfigWarning(warning)
 	}
+	model.applyServerVersionNotice()
 	if options.WindowsSandboxStartupPrompt != nil {
 		model.openWindowsSandboxEnablePrompt(*options.WindowsSandboxStartupPrompt)
 	}
+	model.transcriptImageCell = transcript_image.TerminalCellSize()
+	model.transcriptImages = newTranscriptImageRuntime(nil, options.PetEnv)
 	model.refreshTranscript()
 	model.petCodexHome = strings.TrimSpace(options.CodexHome)
 	model.codexHome = strings.TrimSpace(options.CodexHome)
@@ -2484,6 +2756,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if petID := normalizePetIDTea(options.TUIPet); petID != "" && petID != chatwidget.DisabledPetID && model.petImageSupport().Supported() && model.petCodexHome != "" {
 		model.petLoadPending = petID
 	}
+	// The initial refresh above ran before the terminal environment was
+	// installed. Re-render now so resumed image entries can reserve preview rows.
+	model.refreshTranscript()
 	return model
 }
 
@@ -2499,14 +2774,32 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	}
 	if output != nil {
 		model.petRuntime.setOutput(output)
-		programOptions = append(programOptions, bubbletea.WithOutput(&petOutputWriter{runtime: model.petRuntime}))
+		model.transcriptImages.setOutput(output)
+		programOptions = append(programOptions, bubbletea.WithOutput(&petOutputWriter{runtime: model.petRuntime, images: model.transcriptImages}))
 	}
 	programOptions = append(programOptions, bubbletea.WithReportFocus())
+	if options.usesOwnedScreen() {
+		// Rust #52270: fullscreen owned-screen mode needs terminal mouse
+		// reporting so painted status/footer rows can be selected by the app.
+		// The default auto/inline mode deliberately leaves selection to the
+		// terminal and preserves native scrollback.
+		programOptions = append(programOptions, bubbletea.WithAltScreen(), bubbletea.WithMouseCellMotion())
+	}
 	// Rust parity: normal chat runs in the terminal's inline buffer so finalized
 	// conversation rows remain in native scrollback. Alternate screen is reserved
 	// for temporary overlays; starting the whole chat there makes terminals map
 	// the mouse wheel to Up/Down keys, which incorrectly navigates composer history.
 	return bubbletea.NewProgram(model, programOptions...)
+}
+
+// usesOwnedScreen reports the explicit fullscreen opt-in. Auto mode remains
+// inline in Go, while `tui.alternate_screen = "always"` owns the screen so the
+// app can implement footer/status selection.
+func (o Options) usesOwnedScreen() bool {
+	if o.NoAltScreen {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(o.AlternateScreenMode), "always")
 }
 
 // resolveProgramSize fills in the terminal size when the caller did not
@@ -2559,6 +2852,7 @@ func detectTerminalSize(input io.Reader, output io.Writer) (int, int, bool) {
 
 func Run(ctx context.Context, state *codextui.State, options Options, input io.Reader, output io.Writer) (*Model, error) {
 	defer clearTerminalProgramStatusOnExit(output)
+	defer closeDefaultClipboardReader()
 	// Install the terminal's OSC 10/11 default colors before the input loop
 	// starts so the summary shimmer can blend against the real palette
 	// (Rust terminal_probe::default_colors at TUI startup).
@@ -2573,6 +2867,9 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	}
 	if model.petRuntime != nil {
 		model.petRuntime.clearImmediately()
+	}
+	if model.transcriptImages != nil {
+		model.transcriptImages.releaseFiles()
 	}
 	return model, nil
 }
@@ -2629,23 +2926,32 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	}
 	m.acknowledgeProgramStatusOnInput(message)
+	if handled, cmd := m.handleWindowsMappedShiftEnter(message); handled {
+		return m, cmd
+	}
 	model, cmd := m.updateMessage(message)
 	next, ok := model.(*Model)
 	if !ok || next == nil {
 		return model, cmd
 	}
+	next.observeSparkleModel()
 	statusCmd := next.refreshTerminalProgramStatusCmd()
 	settleCmd := next.terminalSizeSettleCmd()
-	if statusCmd == nil && settleCmd == nil {
+	titleCmd := next.terminalTitleStatusCmd()
+	if statusCmd == nil && settleCmd == nil && titleCmd == nil {
 		return model, cmd
 	}
-	return model, bubbletea.Batch(cmd, statusCmd, settleCmd)
+	return model, bubbletea.Batch(cmd, statusCmd, settleCmd, titleCmd)
 }
 
 func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
 	}
+	if key, ok := message.(bubbletea.KeyMsg); ok {
+		m.prepareComposerSparkleKey(key)
+	}
+	m.flushMCPLoginResultsForCurrentThread()
 	// #48118: real input, focus changes and resizes invalidate a pending
 	// fullscreen right-click paste before the message is handled, so a late
 	// clipboard result can never overwrite newer input.
@@ -2684,12 +2990,16 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 	case bubbletea.FocusMsg:
+		m.clearLeaderChord()
 		codextui.InvalidateTerminalProgramStatus()
 		m.terminalFocused = true
 		m.noteRecapFocusGained()
 		return m, nil
 	case bubbletea.BlurMsg:
+		m.clearLeaderChord()
 		m.terminalFocused = false
+		m.composerSelection.clear()
+		m.renderedSelection.clear()
 		return m, m.noteRecapFocusLost()
 	case StatusMsg:
 		if warning, ok := warningMessageFromStatus(msg.Status); ok {
@@ -2719,6 +3029,14 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ModelSafetyBufferingMsg:
 		m.applySafetyBufferingUpdate(msg)
 		return m, nil
+	case AccountStatusUpdatedMsg:
+		m.applyAccountStatusUpdated(msg)
+		return m, m.refreshStatusControlsCmd()
+	case AccountEmailLoadedMsg:
+		if m.applyAccountEmailLoaded(msg) {
+			return m, m.refreshStatusControlsCmd()
+		}
+		return m, nil
 	case TurnCompletedMsg:
 		if m.applyInactiveThreadTurnCompleted(msg) {
 			return m, m.refreshStatusControlsCmd()
@@ -2735,6 +3053,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		m.applyTurnInterrupted(msg)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(appserver.TurnStatusInterrupted))
+	case ClipboardWriteResultMsg:
+		m.applyClipboardWriteResult(msg)
+		return m, nil
 	case SteerResultMsg:
 		m.applySteerResult(msg)
 		return m, nil
@@ -2755,6 +3076,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case MCPInventoryResultMsg:
 		m.applyMCPInventoryResult(msg)
 		return m, nil
+	case MCPLoginStartedMsg:
+		return m, m.applyMCPLoginStarted(msg)
+	case MCPLoginCompletedMsg:
+		return m, m.applyMCPLoginCompleted(msg)
 	case ModelsResultMsg:
 		m.applyModelsResult(msg)
 		return m, nil
@@ -2822,6 +3147,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// A turn-tip deadline only needs a frame: the working tip is computed
 		// while rendering, so the message itself has no state to apply.
 		return m, nil
+	case configNotificationTestMsg:
+		return m, m.postConfigTestNotification()
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
 	case permissionProfilesLoadedMsg:
@@ -2837,8 +3164,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ThreadSettingsUpdatedMsg:
 		return m, m.applyThreadSettingsUpdated(msg)
 	case HookRunMsg:
-		m.applyHookRun(msg)
-		return m, nil
+		return m, m.applyHookRun(msg)
+	case hookStatusTickMsg:
+		return m, m.ensureHookStatusTick(m.currentTime())
 	case HistoryCellMsg:
 		m.applyHistoryCell(msg.Cell)
 		return m, nil
@@ -3067,10 +3395,29 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		cmd := m.applyStreamMessage(msg.Message)
 		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
 	case bubbletea.KeyMsg:
+		if msg.Type == bubbletea.KeyEsc && m.renderedSelection.active {
+			m.renderedSelection.clear()
+			return m, nil
+		}
+		m.resetComposerFollow()
+		m.activeKeyChord = ""
+		if m.modal != nil {
+			m.pendingKeyChordPrefix = ""
+			m.pendingKeyChordStarted = time.Time{}
+		}
 		// Rust #51411: any key other than the image-paste shortcut clears the
 		// suppression window so a fresh paste can proceed immediately.
 		if m != nil && msg.Type != bubbletea.KeyCtrlV {
 			m.suppressImagePasteUntil = time.Time{}
+		}
+		// Rust #42584: legacy terminals encode Alt+character the same way as
+		// Esc followed by that character. When Vim can consume the Esc and no
+		// active binding claims the Alt stroke, replay both halves in order.
+		if m.shouldRecoverVimInsertEscape(msg, m.legacyVimEscapeRecovery) {
+			_, escapeCmd := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+			msg.Alt = false
+			recoveredModel, characterCmd := m.Update(msg)
+			return recoveredModel, bubbletea.Sequence(escapeCmd, characterCmd)
 		}
 		// The warnings viewer (#48205/#48206) owns the keyboard while it is open;
 		// no key is forwarded to the draft.
@@ -3083,10 +3430,22 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			}
 		}
 		if msg.Type == bubbletea.KeyRunes && msg.Paste {
+			m.pendingKeyChordPrefix = ""
+			m.pendingKeyChordStarted = time.Time{}
+			m.clearLeaderChord()
+			pasted := string(msg.Runes)
+			// Rust #45262: an active Ctrl+R search owns pastes. Empty or
+			// sanitized-empty pastes are consumed without changing the match.
+			if m.historySearch != nil && m.historySearch.Active && m.modal == nil {
+				draft, _ := m.historySearch.AppendPastedQuery(pasted)
+				m.showHistorySearchDraft(draft)
+				m.clearComposerPasteWindow()
+				return m, nil
+			}
 			// Handle bracketed paste before overlays, popups and keymaps. Windows
 			// Terminal commonly delivers Ctrl+V/right-click paste through this
 			// path rather than as KeyCtrlV.
-			if pasted := string(msg.Runes); pasted != "" && m.modal == nil {
+			if pasted != "" && m.modal == nil {
 				if m.mainFind.active() && m.overlay == nil {
 					m.editMainTranscriptFindQuery(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: msg.Runes})
 					return m, nil
@@ -3119,6 +3478,31 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// Rust #43253: a conversation owned by another app accepts only the
 			// notice's advertised keys (R retry, exit, transcript).
 			return m, m.handleReadOnlyThreadKey(msg, keySpecFromKeyMsg(msg))
+		}
+		if m.renderedSelection.active {
+			if msg.Type == bubbletea.KeyCtrlC {
+				cmd := m.copyRenderedSelection()
+				m.renderedSelection.clear()
+				m.refreshTranscript()
+				return m, cmd
+			}
+			m.renderedSelection.clear()
+		}
+		if m.composerSelection.active {
+			if msg.Type == bubbletea.KeyCtrlC {
+				cmd := m.copyComposerSelection()
+				return m, cmd
+			}
+			if msg.Type == bubbletea.KeyEsc {
+				m.composerSelection.clear()
+				return m, nil
+			}
+		}
+		if m.mainFind.active() && msg.Type == bubbletea.KeyCtrlC {
+			// Rust #50039: Ctrl+C cancels Find and restores the pre-search
+			// presentation instead of interrupting or quitting the session.
+			m.cancelMainTranscriptFind()
+			return m, nil
 		}
 		switch msg.Type {
 		case bubbletea.KeyCtrlC:
@@ -3210,6 +3594,16 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if cmd, handled := m.updateSlashPopupKey(msg); handled {
 			return m, cmd
 		}
+		keySpec := keySpecFromKeyMsg(msg)
+		if handled, cmd := m.handleKeyChordKey(keySpec, m.currentTime()); handled {
+			return m, cmd
+		}
+		if handled, cmd := m.handleLeaderChordKey(keySpec); handled {
+			return m, cmd
+		}
+		if m.keyMatches("chat", "open_presets", keySpec) {
+			return m, m.openQuickDialMenu()
+		}
 		if msg.Alt && m.composerIsEmpty() && len(m.attachments) == 0 {
 			switch msg.Type {
 			case bubbletea.KeyLeft:
@@ -3218,7 +3612,6 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, m.navigateAgent(1)
 			}
 		}
-		keySpec := keySpecFromKeyMsg(msg)
 		// Rust app_backtrack: Esc primes/advances prompt editing, Enter confirms
 		// a primed selection, and any other key cancels the primed state.
 		switch msg.Type {
@@ -3237,6 +3630,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.backtrack.Primed && tuiapp.ShouldResetPrimedBacktrackOnKeyPress(true, keySpec) {
 			m.resetBacktrackState()
+		}
+		// Rust #41917: a plain Left press on an empty, focused composer opens
+		// the agents overview in local-daemon sessions. Explicit editor/Vim
+		// remaps and every transient input surface take precedence.
+		if PlainKey(bubbletea.KeyLeft).IsPress(msg) && m.agentsNavigationAvailable() {
+			return m, m.applyAgentsCommand()
 		}
 		if m.keyMatches("global", "toggle_side_conversation", keySpec) ||
 			(keySpec == "ctrl-7" && m.keyMatches("global", "toggle_side_conversation", "ctrl-/")) {
@@ -3274,6 +3673,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if cmd, handled := m.applyAsyncQuestionKey(msg, keySpec); handled {
 			return m, cmd
 		}
+		if cmd, handled := m.applyPermissionShortcutKey(keySpec); handled {
+			return m, cmd
+		}
+		if m.applyActiveHistorySearchKey(msg, keySpec) {
+			return m, nil
+		}
 		if m.applyEditQueuedMessageKey(msg, keySpec) {
 			return m, nil
 		}
@@ -3281,6 +3686,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, nil
 		}
 		if m.applyVimModeKey(msg, keySpec) {
+			return m, nil
+		}
+		if m.maybeBeginHistorySearch(keySpec) {
 			return m, nil
 		}
 		if m.applyInputHistoryKey(msg) {
@@ -3348,6 +3756,25 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.insertComposerNewline()
 		}
 	case bubbletea.MouseMsg:
+		m.clearLeaderChord()
+		if handled, cmd := m.handleComposerSelectionMouse(msg); handled {
+			return m, cmd
+		}
+		// Rust #50109: a wheel gesture over a scrollable owned-screen prompt
+		// browses the draft and leaves transcript selection, search, and
+		// activity focus untouched.
+		if m.handleComposerWheel(msg) {
+			return m, nil
+		}
+		if m.handlePinnedPromptClick(msg) {
+			return m, nil
+		}
+		if handled, cmd := m.handleRenderedSelectionMouse(msg); handled {
+			return m, cmd
+		}
+		if m.handleWelcomeBlossomClick(msg) {
+			return m, nil
+		}
 		if m.overlay != nil {
 			return m, m.updateTranscriptOverlayMouse(msg)
 		}
@@ -3381,12 +3808,20 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.activityFollow = m.transcript.AtBottom()
 	}
 	var composerCmd bubbletea.Cmd
-	composerBefore := m.composerText()
+	composerBefore := m.composer.Value()
 	if handled, prefixCmd := m.handleComposerPrefixKey(message); handled {
 		composerCmd = prefixCmd
 		m.syncComposerElements(composerBefore)
 		m.refreshSlashPopup()
 		return m, bubbletea.Batch(cmd, composerCmd)
+	}
+	if key, ok := message.(bubbletea.KeyMsg); ok {
+		if handled, selectionCmd := m.applyComposerSelectionKey(key); handled {
+			m.syncComposerPrefixFromText()
+			m.syncComposerElements(composerBefore)
+			m.refreshSlashPopup()
+			return m, bubbletea.Batch(cmd, selectionCmd)
+		}
 	}
 	m.composer, composerCmd = m.composer.Update(message)
 	m.syncComposerPrefixFromText()
@@ -3401,37 +3836,55 @@ func (m *Model) View() string {
 	if m == nil {
 		return ""
 	}
+	m.composerTopRow = -1
+	m.composerTextTopRow = -1
+	m.flushMCPLoginResultsForCurrentThread()
 	// #48118: a completed right-click clipboard read is delivered only here, on
 	// the synchronized render, matching Rust's "only a draw may deliver a read".
 	m.deliverRightClickPasteAtRender()
 	m.ensureSize()
+	m.syncStatusTimerPause(m.currentTime())
 	m.syncTranscriptHeight()
 	m.storePetDrawRequest()
 	if m.overlay != nil {
+		m.hideTranscriptImages()
 		if m.overlayTranscript {
 			m.syncTranscriptOverlay()
 		}
 		return m.overlay.View()
 	}
 	if m.agentsOverview != nil {
+		m.hideTranscriptImages()
 		return m.renderAgentsOverview() + m.agentsOverviewCursorStyleSequence()
 	}
 	// Rust renders the session picker as a temporary full-screen surface. It
 	// must not be appended below the transcript, where the transcript viewport
 	// would push the picker to the bottom of the terminal and clip its rows.
 	if m.modal != nil && m.modal.sessionPicker != nil {
+		m.hideTranscriptImages()
 		return m.renderSessionPickerModal()
 	}
 	m.refreshTranscript()
+	m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
 
 	chrome := m.regionChromeEnabled()
-	status := m.statusStyle.Render(fitTerminalLine(m.renderStatusHeader(), m.width))
+	statusLine := m.renderStatusHeader()
+	if m.renderedSelection.active && m.renderedSelection.region != renderedRegionStatus {
+		// Reuse the existing status row so the selectable footer and tip rows
+		// keep their painted positions while the selection hint is visible.
+		statusLine = "Selecting text \u00b7 esc cancel"
+	}
+	status := m.statusStyle.Render(fitTerminalLine(statusLine, m.width))
 	transcript := m.transcript.View()
 	if chrome {
 		status = m.renderStatusRegion(status)
 		transcript = m.renderActivityRegion(transcript)
 	}
+	transcript = m.applyPinnedPromptHeader(transcript, sectionHeight(status))
 	sections := []string{status, transcript}
+	composerIndex := -1
+	footerIndex := -1
+	workingIndex := -1
 	if bottom := m.renderBottomPane(); bottom != "" {
 		sections = append(sections, m.bottomStyle.Render(bottom))
 	}
@@ -3454,17 +3907,38 @@ func (m *Model) View() string {
 		if banner := m.renderBackendBanner(); banner != "" {
 			sections = append(sections, m.bottomStyle.Render(banner))
 		}
+		if hook := m.renderHookStatus(m.currentTime()); hook != "" &&
+			(!m.isTaskRunning() || m.hookActivityNeedsReflow(m.currentTime(), max(m.width-2, 1))) {
+			sections = append(sections, m.footerStyle.Render(hook))
+		}
 		if working := m.renderWorkingIndicator(); working != "" {
+			workingIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(working))
 		}
 		if hud := m.renderQuickDialHUD(); hud != "" {
 			sections = append(sections, m.bottomStyle.Render(hud))
 		}
-		composer := m.composer.View()
-		composer = annotateComposerHyperlinks(composer)
+		composer := m.renderComposerWindow()
+		composer = m.applyComposerSparkle(composer, m.currentTime())
+		if !m.composerBounded() {
+			composer = m.annotateInlineComposerHyperlinks(composer)
+		}
 		if chrome {
 			composer = m.renderComposerRegion(composer)
 		}
+		m.composerTopRow = 0
+		for _, section := range sections {
+			m.composerTopRow += sectionHeight(section)
+		}
+		m.composerRows = m.composerSectionRows()
+		m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
+		m.composerTextTopRow = m.composerTopRow
+		m.composerTextLeft = 0
+		if chrome {
+			m.composerTextTopRow++
+			m.composerTextLeft = 2
+		}
+		composerIndex = len(sections)
 		sections = append(sections, composer)
 		if m.vimSearchMode {
 			sections = append(sections, m.renderVimSearchFooter())
@@ -3492,7 +3966,11 @@ func (m *Model) View() string {
 		sections = append(sections, m.footerStyle.Render("IDE context"))
 	}
 	footerLine := footerHelpText
-	if m.mainFind.active() {
+	footerAlreadyStyled := false
+	if searchLine, ok := m.historySearchFooterLine(); ok {
+		footerLine = searchLine
+		footerAlreadyStyled = true
+	} else if m.mainFind.active() {
 		footerLine = m.mainFind.barLine()
 	} else if m.activityFocus.active {
 		footerLine = m.activityFocusBarLine()
@@ -3501,6 +3979,9 @@ func (m *Model) View() string {
 		// second-Esc prompt once backtrack mode is primed.
 		footerLine = bottompane.EscHintLine(true)
 	} else {
+		if m.agentsNavigationAvailable() {
+			footerLine = PlainKey(bubbletea.KeyLeft).Label() + " for agents \u00b7 " + footerLine
+		}
 		// Rust #48205/#48206: the passive hint row right-aligns the retained
 		// warning count (with its open-warnings shortcut) when it fits.
 		m.warningDisplay.SyncWarnings(m.retainedWarningCells())
@@ -3508,8 +3989,21 @@ func (m *Model) View() string {
 			footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
 		}
 	}
-	sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerLine, m.width)))
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	if footerAlreadyStyled {
+		footerIndex = len(sections)
+		sections = append(sections, fitTerminalLine(footerLine, m.width))
+	} else {
+		footerIndex = len(sections)
+		sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerLine, m.width)))
+	}
+	m.captureRenderedSelectionRegions(sections, footerIndex)
+	m.captureTurnTipSelectionRegions(sections, workingIndex)
+	sections = m.applyRenderedSelection(sections)
+	sections = m.insertWelcomeBlossom(sections, composerIndex)
+	rendered := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	m.transcriptImageFrameRows = strings.Count(rendered, "\n") + 1
+	m.publishTranscriptImages()
+	return rendered
 }
 
 // passiveWarningNoticeApplies mirrors `show_warning_notice`'s reachable gates:
@@ -4316,7 +4810,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
-	textElements := m.composerTextElementsForPromptValue(m.composerText(), input)
+	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -4350,6 +4844,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	// Rust's dismiss_backend_banner_for_new_turn: a shown, dismissible banner
 	// hides once the user starts a new turn.
 	m.dismissBackendBannerForNewTurn()
+	m.markFreshAstraSparkle()
 	return m.submitRequest(request, false)
 }
 
@@ -4364,6 +4859,12 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	invocation, ok := codextui.ParseCommand(input)
 	if !ok || !slashInvocationDispatchable(invocation) {
 		return nil, false
+	}
+	if invocation.Command == codextui.CommandReview && m.reviewBlockedDuringForegroundWork() {
+		m.slashPopup = slashCommandPopup{}
+		m.skillPopup = skillPopupState{}
+		m.showReviewBusyError()
+		return nil, true
 	}
 	if len(m.attachments) > 0 {
 		if invocation.Command != codextui.CommandGoal {
@@ -4448,6 +4949,15 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 			return m.applyCommand(invocation)
 		}
 	}
+	if strings.TrimSpace(request.CyberAccessProgram) == "" {
+		program, err := m.cyberAccessProgramForTurn()
+		if err != nil {
+			m.notice = err.Error()
+			m.refreshTranscript()
+			return nil
+		}
+		request.CyberAccessProgram = program
+	}
 	m.captureIDEContext(&request)
 	displayPrompt := m.promptWithRequestAttachments(request)
 	m.notice = ""
@@ -4466,6 +4976,7 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	m.submitted = append(m.submitted, displayPrompt)
 	if strings.TrimSpace(request.Prompt) != "" {
 		m.inputHistory = append(m.inputHistory, request.Prompt)
+		m.inputHistoryElements = append(m.inputHistoryElements, cloneComposerTextElements(request.TextElements))
 	}
 	m.resetInputHistoryNavigation()
 	m.submitRequests = append(m.submitRequests, cloneSubmitRequest(request))
@@ -4507,7 +5018,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
-	textElements := m.composerTextElementsForPromptValue(m.composerText(), input)
+	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -4548,7 +5059,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
-	textElements := m.composerTextElementsForPromptValue(m.composerText(), input)
+	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -4572,6 +5083,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	m.pendingSteers = append(m.pendingSteers, pendingSteerSubmission{ID: clientID, Request: cloneSubmitRequest(request)})
 	if strings.TrimSpace(request.Prompt) != "" {
 		m.inputHistory = append(m.inputHistory, request.Prompt)
+		m.inputHistoryElements = append(m.inputHistoryElements, cloneComposerTextElements(request.TextElements))
 	}
 	m.resetInputHistoryNavigation()
 	m.notice = ""
@@ -4802,6 +5314,9 @@ func (m *Model) applyStartupConfigWarning(message string) {
 		return
 	}
 	m.warningDisplay.MarkStartupConfigWarning(message)
+	if m.daemonManaged && m.localDaemonSession && m.startupWarnings.RestartHint == "" {
+		m.startupWarnings.RestartHint = "restart with /daemon"
+	}
 	m.mergeStartupWarnings(historycell.NewStartupWarnings([]string{message}))
 }
 
@@ -4868,11 +5383,13 @@ func (m *Model) resetTaskTimerFromReplayedStart(startedAtMS *int64) {
 	if m == nil || startedAtMS == nil || *startedAtMS <= 0 {
 		return
 	}
+	now := m.currentTime()
 	started := time.UnixMilli(*startedAtMS)
-	if now := m.currentTime(); started.After(now) {
+	if started.After(now) {
 		started = now
 	}
 	m.taskStartedAt = started
+	m.statusTimer.ResetAt(now.Sub(started), now)
 }
 
 func (m *Model) syncTaskRunningTimer() {
@@ -4881,7 +5398,11 @@ func (m *Model) syncTaskRunningTimer() {
 	}
 	if m.isTaskRunning() {
 		if m.taskStartedAt.IsZero() {
-			m.taskStartedAt = m.currentTime()
+			now := m.currentTime()
+			m.taskStartedAt = now
+			// A new turn resets elapsed time but keeps an outstanding modal's
+			// pause state (Rust #41913).
+			m.statusTimer.ResetAt(0, now)
 		}
 		// Rust #43921: a fresh StatusIndicatorWidget starts the shimmer phase
 		// when the turn begins.
@@ -4892,6 +5413,20 @@ func (m *Model) syncTaskRunningTimer() {
 	}
 	m.taskStartedAt = time.Time{}
 	m.workingHeaderStartedAt = time.Time{}
+}
+
+// syncStatusTimerPause keeps modal wait time out of the status clock. Called
+// when a modal opens/closes and on every draw so direct modal transitions are
+// covered.
+func (m *Model) syncStatusTimerPause(now time.Time) {
+	if m == nil {
+		return
+	}
+	if m.modal != nil {
+		m.statusTimer.PauseAt(now)
+		return
+	}
+	m.statusTimer.ResumeAt(now)
 }
 
 func (m *Model) renderWorkingIndicator() string {
@@ -4905,7 +5440,16 @@ func (m *Model) renderWorkingIndicator() string {
 	if m.workingHeaderStartedAt.IsZero() {
 		m.workingHeaderStartedAt = m.taskStartedAt
 	}
-	indicator := codextui.NewStatusIndicator(m.taskStartedAt)
+	// Keep the independent clock aligned when a caller seeds taskStartedAt
+	// directly (replay and tests) without going through syncTaskRunningTimer.
+	if m.statusTimer.LastResumeAt.IsZero() ||
+		(m.statusTimer.ElapsedRunning == 0 && !m.statusTimer.Paused &&
+			m.statusTimer.LastResumeAt.After(m.taskStartedAt)) {
+		m.statusTimer.ResetAt(0, m.taskStartedAt)
+	}
+	indicator := codextui.NewStatusIndicator(now)
+	indicator.PausedElapsed = m.statusTimer.ElapsedAt(now)
+	indicator.Paused = true
 	if m.mcpStartupActive && strings.TrimSpace(m.mcpStartupHeader) != "" {
 		indicator.Header = m.mcpStartupHeader
 	} else if strings.EqualFold(strings.TrimSpace(m.workingStatusHeader), "Waiting for background terminal") {
@@ -4929,6 +5473,9 @@ func (m *Model) renderWorkingIndicator() string {
 	lines := indicator.Render(width, now)
 	if len(lines) == 0 {
 		return ""
+	}
+	if summary := m.runningHookSummary(now); summary != "" && !m.hookActivityNeedsReflow(now, width) {
+		lines = append(lines, m.footerStyle.Render("  \u2514 ")+m.renderHookSummaryText(summary, now))
 	}
 	// Rust #48352: a random tip appears beneath the working status once the turn
 	// has run for the working delay; exposure is counted only once it rendered.
@@ -5069,7 +5616,7 @@ func (m *Model) addHistoryCell(cell historycell.HistoryCell) {
 	if width < 20 {
 		width = 20
 	}
-	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+	m.State.AddHistoryMessage(historyMessageFromCell(cell, width))
 	m.renderStartupWarnings()
 }
 
@@ -5085,6 +5632,8 @@ func (m *Model) shouldSubmitOnTab() bool {
 }
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
+	questionDrafts := m.takeQuestionDrafts()
+	m.clearSafetyBuffering()
 	m.flushComputerActivityGroup()
 	m.flushActiveExecCell()
 	m.deferPendingSteers()
@@ -5101,8 +5650,10 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		m.markActiveToolCallsFailed(errorMessage)
 		m.clearCurrentThreadAfterFailure(errorMessage)
 		m.addTurnErrorHistoryMessage(errorMessage)
+		m.flushDeferredSubAgentActivity()
 		m.notice = errorMessage
 		m.refreshTranscript()
+		m.appendQuestionDrafts(questionDrafts)
 		return nil
 	}
 	if strings.TrimSpace(message.ThreadID) != "" {
@@ -5114,12 +5665,21 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	if strings.TrimSpace(message.AssistantMessage) != "" {
 		m.mergeAssistantFinal(message.AssistantMessage)
 	}
+	m.flushDeferredSubAgentActivity()
 	// Rust #43558: a successful turn shows its completion metadata after the
 	// final answer, including plain conversational answers.
 	var elapsedSeconds *int64
 	if message.DurationMS != nil && *message.DurationMS >= 0 {
 		value := *message.DurationMS / 1000
 		elapsedSeconds = &value
+	} else if !m.taskStartedAt.IsZero() {
+		// Rust #41913: a completion without a protocol duration falls back to
+		// the independent, pause-aware status clock.
+		elapsed := m.statusTimer.ElapsedAt(m.currentTime())
+		if elapsed > 0 {
+			value := int64(elapsed.Seconds())
+			elapsedSeconds = &value
+		}
 	}
 	m.Transcript.appendCompletionFooter(m.State, m.width, elapsedSeconds, time.Now())
 	// Rust #54114: a live completion is reported as done until acknowledged.
@@ -5128,6 +5688,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	m.Transcript.lastTurnError = ""
 	m.notice = ""
 	m.refreshTranscript()
+	m.appendQuestionDrafts(questionDrafts)
 	if len(m.queued) > 0 || len(m.rejectedSteers) > 0 {
 		return nil
 	}
@@ -5147,7 +5708,13 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 }
 
 func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
-	if m == nil || !m.isTaskRunning() {
+	if m == nil {
+		return
+	}
+	questionDrafts := m.takeQuestionDrafts()
+	m.clearSafetyBuffering()
+	if !m.isTaskRunning() {
+		m.flushDeferredSubAgentActivity()
 		return
 	}
 	m.flushComputerActivityGroup()
@@ -5171,7 +5738,9 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	// `interrupted_turn_message` helper. Mirrors the Rust assertion in
 	// chatwidget/tests/review_mode.rs::interrupted_turn_error_message_snapshot.
 	m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{chatwidget.ConversationInterruptedNotice}))
+	m.flushDeferredSubAgentActivity()
 	m.refreshTranscript()
+	m.appendQuestionDrafts(questionDrafts)
 }
 
 func (m *Model) interruptRunningTask() bubbletea.Cmd {
@@ -5197,6 +5766,7 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 
 func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
+	var questionDrafts []string
 	switch event.Type {
 	case "thread.started":
 		if current := strings.TrimSpace(m.State.ThreadID); current != "" && current != strings.TrimSpace(event.ThreadID) {
@@ -5289,6 +5859,8 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "item.plan.delta":
 		m.applyProposedPlanDelta(event.Delta)
 	case "turn.completed":
+		questionDrafts = m.takeQuestionDrafts()
+		m.clearSafetyBuffering()
 		m.setStatus("idle")
 		m.finishUnifiedExecWaitStreak()
 		m.resetReasoningSummaryHeader()
@@ -5299,6 +5871,8 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.clearCompactionActivity()
 		m.VoiceConversation.ClearVoiceDelegatedTurn()
 	case "turn.failed", "error":
+		questionDrafts = m.takeQuestionDrafts()
+		m.clearSafetyBuffering()
 		message := "Unknown error"
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
 			message = strings.TrimSpace(event.Error.Message)
@@ -5317,6 +5891,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "thread.token_usage.updated":
 		m.applyTokenUsage(event.TokenUsage)
 	}
+	m.appendQuestionDrafts(questionDrafts)
 	m.refreshTranscript()
 	return cmd
 }
@@ -5366,6 +5941,11 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 		m.renderWebSearchItem(item, false)
 	case "tool_call":
 		m.Transcript.finishAssistantPreambleBeforeTool()
+		if isViewImageThreadItem(item) {
+			// Rust projects view_image calls into an ImageView cell once the
+			// tool completes; do not paint a generic in-progress tool row.
+			break
+		}
 		m.startOrUpdateToolCall(item)
 	case "file_change":
 		m.Transcript.finishAssistantPreambleBeforeTool()
@@ -5380,6 +5960,8 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 		m.applyReasoningItemStarted(item.ID)
 	case "imageGeneration":
 		// The completed event carries the saved path.
+	case "imageView", "image_view":
+		// The completed event carries the local artifact path.
 	case "contextCompaction", "context_compaction":
 		m.startCompactionActivity(strings.TrimSpace(item.ID), startedAtMS, "Compacting context...")
 	case "enteredReviewMode", "entered_review_mode":
@@ -5500,6 +6082,14 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	case "web_search", "webSearch":
 		m.renderWebSearchItem(item, true)
 	case "tool_call":
+		if isViewImageThreadItem(item) {
+			if path := viewImagePathFromThreadItem(item); path != "" {
+				m.applyImageViewItem(&protocol.ThreadItem{ID: item.ID, Type: "imageView", Path: path})
+			} else {
+				m.startOrUpdateToolCall(item)
+			}
+			break
+		}
 		m.startOrUpdateToolCall(item)
 	case "tool_output":
 		if request, ok := approvalRequestFromToolOutput(item); ok {
@@ -5513,6 +6103,8 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		m.renderFileChangeItem(item, true)
 	case "imageGeneration":
 		m.applyImageGenerationItem(item)
+	case "imageView", "image_view":
+		m.applyImageViewItem(item)
 	case "exitedReviewMode", "exited_review_mode":
 		m.exitReviewMode()
 	case "enteredReviewMode", "entered_review_mode":
@@ -5575,8 +6167,25 @@ func (m *Model) renderSubAgentActivity(item *protocol.ThreadItem) {
 	if !ok {
 		return
 	}
-	m.Transcript.finishAssistantPreambleBeforeTool()
+	if strings.TrimSpace(m.Transcript.activeAssistantDeltaItemID) != "" {
+		m.deferredSubAgentActivity = append(m.deferredSubAgentActivity, *item)
+		return
+	}
 	m.applyHistoryCell(cell)
+}
+
+// flushDeferredSubAgentActivity renders activity that arrived during an
+// assistant stream once the authoritative answer has settled.
+func (m *Model) flushDeferredSubAgentActivity() {
+	if m == nil || len(m.deferredSubAgentActivity) == 0 {
+		return
+	}
+	items := m.deferredSubAgentActivity
+	m.deferredSubAgentActivity = nil
+	m.Transcript.activeAssistantDeltaItemID = ""
+	for index := range items {
+		m.renderSubAgentActivity(&items[index])
+	}
 }
 
 func (m *Model) renderFileChangeItem(item *protocol.ThreadItem, completed bool) {
@@ -5627,6 +6236,53 @@ func (m *Model) applyImageGenerationItem(item *protocol.ThreadItem) {
 	revisedPrompt := firstNonEmpty(strings.TrimSpace(item.RevisedPrompt), metadataString(item.Metadata, "revisedPrompt"), metadataString(item.Metadata, "revised_prompt"))
 	savedPath := firstNonEmpty(strings.TrimSpace(item.SavedPath), metadataString(item.Metadata, "savedPath"), metadataString(item.Metadata, "saved_path"))
 	m.applyHistoryCell(historycell.NewImageGenerationCall(item.ID, status, revisedPrompt, savedPath))
+}
+
+// applyImageViewItem mirrors Rust's ThreadItem::ImageView cell: the local
+// artifact stays a disclosure entry, and its preview appears when expanded.
+func (m *Model) applyImageViewItem(item *protocol.ThreadItem) {
+	if m == nil || item == nil {
+		return
+	}
+	path := firstNonEmpty(
+		strings.TrimSpace(item.Path),
+		strings.TrimSpace(item.Text),
+		metadataString(item.Metadata, "path"),
+	)
+	m.applyHistoryCell(historycell.NewViewImageToolCallWithID(item.ID, path, m.sessionCWD))
+}
+
+// isViewImageThreadItem recognizes the built-in view_image tool call that Rust
+// projects into ThreadItem::ImageView instead of a generic tool row.
+func isViewImageThreadItem(item *protocol.ThreadItem) bool {
+	if item == nil || item.Type != "tool_call" {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(item.ToolName))
+	if index := strings.LastIndexAny(name, "./:"); index >= 0 {
+		name = name[index+1:]
+	}
+	return name == "view_image" || name == "viewimage"
+}
+
+// viewImagePathFromThreadItem reads the local artifact from a view_image
+// invocation, which carries JSON arguments rather than the ImageView path field.
+func viewImagePathFromThreadItem(item *protocol.ThreadItem) string {
+	if item == nil {
+		return ""
+	}
+	if path := strings.TrimSpace(item.Path); path != "" {
+		return path
+	}
+	if strings.TrimSpace(item.Input) != "" {
+		var arguments map[string]any
+		if err := json.Unmarshal([]byte(item.Input), &arguments); err == nil {
+			if path, ok := arguments["path"].(string); ok && strings.TrimSpace(path) != "" {
+				return strings.TrimSpace(path)
+			}
+		}
+	}
+	return metadataString(item.Metadata, "path")
 }
 
 func (m *Model) applyDelta(delta *protocol.Delta) {
@@ -6538,6 +7194,9 @@ func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []str
 		TranscriptText: transcript,
 		ActivityIDs:    ids,
 	}
+	if index >= 0 && index < len(m.State.Messages) {
+		message.ImagePath = m.State.Messages[index].ImagePath
+	}
 	if index >= 0 && index < len(m.State.Messages) && m.State.Messages[index].Role == codextui.RoleHistory {
 		m.State.Messages[index] = message
 		m.State.BumpMessagesRevision()
@@ -7041,9 +7700,9 @@ func metadataInt(metadata map[string]any, key string) (int, bool) {
 	}
 }
 
-func (m *Model) applyHookRun(message HookRunMsg) {
+func (m *Model) applyHookRun(message HookRunMsg) bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	if strings.TrimSpace(message.ThreadID) != "" {
 		m.State.SetThreadID(strings.TrimSpace(message.ThreadID))
@@ -7051,6 +7710,10 @@ func (m *Model) applyHookRun(message HookRunMsg) {
 	entries := make([]historycell.HookOutputEntry, 0, len(message.Entries))
 	for _, entry := range message.Entries {
 		if strings.TrimSpace(entry.Kind) == "" && strings.TrimSpace(entry.Text) == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(entry.Kind), string(historycell.HookOutputContext)) {
+			// Rust #42118: model-facing hook context is not shown in TUI history.
 			continue
 		}
 		entries = append(entries, historycell.HookOutputEntry{
@@ -7069,22 +7732,30 @@ func (m *Model) applyHookRun(message HookRunMsg) {
 	if width < 20 {
 		width = 20
 	}
+	now := m.currentTime()
 	if message.Running {
-		m.addBottomLines(cell.DisplayLines(width)...)
+		if id := hookRunID(message); id != "" {
+			m.markHookRunReveal(id, now)
+		}
 	} else {
-		m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+		m.syncHookRunDeadlines()
+		status := strings.ToLower(strings.TrimSpace(message.Status))
+		quietSuccess := (status == "" || status == "completed" || status == "success") &&
+			len(entries) == 0 &&
+			strings.TrimSpace(message.StatusMessage) == ""
+		if !quietSuccess {
+			m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+		}
 	}
 	m.refreshTranscript()
+	return m.ensureHookStatusTick(now)
 }
 
 func (m *Model) trackHookLifecycle(message HookRunMsg, entries []historycell.HookOutputEntry) {
 	if m == nil {
 		return
 	}
-	id := strings.TrimSpace(message.ID)
-	if id == "" {
-		id = strings.TrimSpace(message.EventName)
-	}
+	id := hookRunID(message)
 	if id == "" {
 		return
 	}
@@ -7103,10 +7774,18 @@ func (m *Model) trackHookLifecycle(message HookRunMsg, entries []historycell.Hoo
 		Managed: false,
 	}
 	if message.Running {
-		m.hookLifecycle.Start(run)
+		m.hookLifecycle.OnHookStarted(run)
 		return
 	}
-	m.hookLifecycle.Complete(run)
+	m.hookLifecycle.OnHookCompleted(run)
+}
+
+func hookRunID(message HookRunMsg) string {
+	id := strings.TrimSpace(message.ID)
+	if id == "" {
+		id = strings.TrimSpace(message.EventName)
+	}
+	return id
 }
 
 func hookStatusFromMessage(status string, running bool) chatwidget.HookStatus {
@@ -7137,27 +7816,87 @@ func (m *Model) addStartupSessionHeader(version string) {
 		return
 	}
 	m.sessionHeaderShown = true
-	cwd := strings.TrimSpace(m.State.CWD)
-	if cwd == "" {
-		cwd = strings.TrimSpace(m.sessionCWD)
-	}
-	if cwd == "" {
-		cwd = strings.TrimSpace(m.statusControlsRuntime().CWD)
-	}
-	header := historycell.NewSessionHeader(
-		m.modelDisplayName(m.State.Model),
-		m.State.EffectiveReasoningEffort(),
-		cwd,
-		firstNonEmpty(strings.TrimSpace(version), "dev"),
-	)
-	cell := historycell.NewSessionInfo(header, false, m.startupSessionTooltip())
+	header := m.sessionHeaderCell(version)
 	width := m.width
 	if width < 20 {
 		width = 20
 	}
+	tooltipLines := renderStartupTooltipLines(
+		m.startupSessionTooltip(),
+		width,
+		m.keymapConfig,
+		m.activeTUITheme(),
+		m.sessionCWD,
+	)
+	cell := historycell.NewSessionInfoWithTooltipLines(header, false, nil)
 	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+	if len(tooltipLines) > 0 {
+		tip := historyMessageFromCell(historycell.NewPlainHistoryCell(tooltipLines), width)
+		tip.StartupTip = true
+		m.State.AddHistoryMessage(tip)
+	}
 	// The startup warnings entry waits for the splash (Rust pending_header).
 	m.renderStartupWarnings()
+}
+
+// sessionHeaderCell builds the compact borderless session header shared by
+// fresh, resumed, forked, and clear-screen flows (Rust #48562).
+func (m *Model) sessionHeaderCell(version string) historycell.SessionHeaderHistoryCell {
+	cwd := ""
+	if m != nil && m.State != nil {
+		cwd = strings.TrimSpace(m.State.CWD)
+	}
+	if cwd == "" && m != nil {
+		cwd = strings.TrimSpace(m.sessionCWD)
+	}
+	if cwd == "" && m != nil {
+		cwd = strings.TrimSpace(m.statusControlsRuntime().CWD)
+	}
+	model := ""
+	effort := ""
+	if m != nil && m.State != nil {
+		model = m.modelDisplayName(m.State.Model)
+		effort = m.State.EffectiveReasoningEffort()
+	}
+	return historycell.NewSessionHeader(
+		model,
+		effort,
+		cwd,
+		firstNonEmpty(strings.TrimSpace(version), strings.TrimSpace(m.sessionHeaderVersion), "dev"),
+	).WithYoloMode(m.sessionYoloMode())
+}
+
+// sessionYoloMode mirrors Rust's `history_cell::is_yolo_mode`: approval never
+// combined with the unrestricted full-access profile.
+func (m *Model) sessionYoloMode() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(m.State.ApprovalPolicy), string(chatwidget.ApprovalNever)) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(m.State.Sandbox)) {
+	case chatwidget.DangerFullAccessProfile, "danger-full-access", "full-access":
+		return true
+	default:
+		return false
+	}
+}
+
+// insertSessionHeader puts the shared borderless header at the top of the
+// transcript. The stored raw lines keep /clear headers correct after a raw
+// output toggle, matching Rust's display_lines_for_mode path.
+func (m *Model) insertSessionHeader() {
+	if m == nil || m.State == nil || !m.sessionHeaderEnabled {
+		return
+	}
+	header := m.sessionHeaderCell("")
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	m.insertHistoryMessageAt(0, header.DisplayLines(width), header.RawLines())
+	m.sessionHeaderShown = true
 }
 
 // sessionShowFastStatus mirrors Rust's
@@ -7206,8 +7945,28 @@ func (m *Model) applyHistoryCell(cell historycell.HistoryCell) {
 	if width < 20 {
 		width = 20
 	}
-	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+	m.State.AddHistoryMessage(historyMessageFromCell(cell, width))
 	m.refreshTranscript()
+}
+
+// historyMessageFromCell carries the optional transcript metadata a history
+// cell exposes (activity disclosure identities and a local preview artifact).
+func historyMessageFromCell(cell historycell.HistoryCell, width int) codextui.Message {
+	message := codextui.Message{
+		Role:    codextui.RoleHistory,
+		Text:    strings.Join(cell.DisplayLines(width), "\n"),
+		RawText: strings.Join(cell.RawLines(), "\n"),
+	}
+	if imageCell, ok := cell.(historycell.ImagePathCell); ok {
+		message.ImagePath = strings.TrimSpace(imageCell.ImagePath())
+	}
+	if transcriptCell, ok := cell.(historycell.TranscriptLinesCell); ok {
+		message.TranscriptText = strings.Join(transcriptCell.TranscriptLines(width), "\n")
+	}
+	if activityCell, ok := cell.(historycell.ActivityIDCell); ok {
+		message.ActivityIDs = normalizeActivityIDs(activityCell.ActivityIDs())
+	}
+	return message
 }
 
 func (m *Model) applyWarningMessage(message string) {
@@ -7569,6 +8328,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandDaemon:
 		m.openDaemonMenu()
 		return nil
+	case codextui.CommandDaybreak:
+		return m.applyDaybreakCommand()
 	case codextui.CommandUsage:
 		return m.applyUsageCommand(invocation.Args)
 	case codextui.CommandGoal:
@@ -7577,6 +8338,9 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyStatusLineCommand(invocation.Args)
 	case codextui.CommandTitle:
 		return m.applyTerminalTitleCommand(invocation.Args)
+	case codextui.CommandConfig:
+		m.openConfigPanel()
+		return nil
 	case codextui.CommandDebugConfig:
 		return m.applyDebugConfigCommand()
 	case codextui.CommandNew:
@@ -7603,6 +8367,9 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyRecapCommand()
 	case codextui.CommandRaw:
 		return m.applyRawOutputCommand(invocation.Args)
+	case codextui.CommandTUI:
+		m.openTUIModePicker()
+		return nil
 	case codextui.CommandDiff:
 		return m.applyDiffCommand()
 	case codextui.CommandPs:
@@ -8179,8 +8946,12 @@ func (m *Model) resize(width int, height int) {
 	if m.regionChromeEnabled() {
 		composerWidth = max(m.width-6, 1)
 	}
+	if m.composerBounded() {
+		// Leave two columns beside the prompt for the hidden-row arrows.
+		composerWidth = max(composerWidth-2, 1)
+	}
 	m.composer.SetWidth(composerWidth)
-	m.composer.SetHeight(defaultComposerHeight)
+	m.composer.SetHeight(m.composerTargetRows())
 	// The startup warnings summary is width-sensitive (Rust reflows it on
 	// resize).
 	m.renderStartupWarnings()
@@ -8211,9 +8982,13 @@ func (m *Model) bottomReservedRows() int {
 	if modal := m.renderModal(); modal != "" {
 		return len(strings.Split(strings.TrimRight(modal, "\n"), "\n"))
 	}
-	rows := defaultComposerHeight
+	rows := m.composerTargetRows()
 	if working := m.renderWorkingIndicator(); working != "" {
 		rows += len(strings.Split(strings.TrimRight(working, "\n"), "\n"))
+	}
+	if hook := m.renderHookStatus(m.currentTime()); hook != "" &&
+		(!m.isTaskRunning() || m.hookActivityNeedsReflow(m.currentTime(), max(m.width-2, 1))) {
+		rows += sectionHeight(hook)
 	}
 	return rows + m.popupRowCount()
 }
@@ -8237,13 +9012,49 @@ func (m *Model) transcriptRenderCached(state *codextui.State, width int) string 
 	if state == nil {
 		return "No messages yet."
 	}
-	return renderTranscriptWithCache(&m.transcriptMessages, state, m.rawOutput, width, m.activeTUITheme(), false, m.sessionCWD, m.showRawReasoning)
+	content, _, plans := renderTranscriptLayout(
+		&m.transcriptMessages,
+		state,
+		m.rawOutput,
+		width,
+		m.activeTUITheme(),
+		false,
+		nil,
+		m.sessionCWD,
+		m.showRawReasoning,
+		m.transcriptImageResolver(width, false),
+	)
+	m.transcriptImagePlans = plans
+	return content
+}
+
+// renderTranscriptWithExpandedMessages renders the main transcript with the
+// active disclosure expansion and publishes its image placements.
+func (m *Model) renderTranscriptWithExpandedMessages(state *codextui.State, width int, expanded map[int]bool, revealViewedImages bool) (string, [][2]int) {
+	if m == nil || state == nil {
+		return "No messages yet.", nil
+	}
+	content, ranges, plans := renderTranscriptLayout(
+		&m.transcriptMessages,
+		state,
+		m.rawOutput,
+		width,
+		m.activeTUITheme(),
+		false,
+		expanded,
+		m.sessionCWD,
+		m.showRawReasoning,
+		m.transcriptImageResolver(width, revealViewedImages),
+	)
+	m.transcriptImagePlans = plans
+	return content, ranges
 }
 
 func (m *Model) refreshTranscript() {
 	if m == nil {
 		return
 	}
+	defer m.publishTranscriptImages()
 	m.transcript.Height = m.transcriptHeightForLayout()
 	if m.mainFind.active() {
 		m.refreshMainTranscriptFindIfNeeded()
@@ -8281,24 +9092,19 @@ func (m *Model) refreshTranscript() {
 	}
 	content := m.transcriptRenderCached(m.State, m.transcript.Width)
 	if expanded := m.expandedTranscriptActivityMessages(); len(expanded) > 0 {
-		content, _ = renderTranscriptWithExpandedMessages(
-			&m.transcriptMessages,
-			m.State,
-			m.rawOutput,
-			m.transcript.Width,
-			m.activeTUITheme(),
-			false,
-			expanded,
-			m.sessionCWD,
-			m.showRawReasoning,
-		)
+		content, _ = m.renderTranscriptWithExpandedMessages(m.State, m.transcript.Width, expanded, true)
+	}
+	if m.fullscreenTranscript && !m.rawOutput {
+		content = m.hideFullscreenStartupTips(content)
 	}
 	// Rust #48352: once a turn finished with a final answer and the cadence
 	// allows it, a completion tip renders in the transcript (four columns are
 	// reserved for its "  └ " prefix) until the next turn replaces it.
 	if m.completionTipAllowed() && strings.TrimSpace(content) != "" {
 		if tip, ok := m.turnTips.completionTip(m.transcript.Width-4, m.keymapConfig, m.activeTUITheme(), m.sessionCWD); ok {
-			content = strings.TrimRight(content, "\n") + "\n  \u2514 " + tip
+			// Trailing newlines can be reserved image rows; never trim them
+			// into the completion tip's row.
+			content += "\n  \u2514 " + tip
 			m.turnTips.acknowledge(turnTipSurfaceCompletion)
 		}
 	}
@@ -8321,6 +9127,32 @@ func (m *Model) refreshTranscript() {
 	m.lastTranscriptHeight = m.transcript.Height
 }
 
+// hideFullscreenStartupTips removes retained startup tooltip rows from the
+// fullscreen transcript while leaving them in State.Messages and raw output,
+// matching Rust #48513's hide-in-fullscreen/keep-in-scrollback split.
+func (m *Model) hideFullscreenStartupTips(content string) string {
+	if m == nil || m.State == nil {
+		return content
+	}
+	for _, message := range m.State.Messages {
+		if !message.StartupTip || strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		index := strings.Index(content, message.Text)
+		if index < 0 {
+			continue
+		}
+		start, end := index, index+len(message.Text)
+		if start > 0 && content[start-1] == '\n' {
+			start--
+		} else if end < len(content) && content[end] == '\n' {
+			end++
+		}
+		content = content[:start] + content[end:]
+	}
+	return content
+}
+
 func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -8334,6 +9166,10 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 		m.overlayTranscript = true
 		m.syncTranscriptOverlay()
 	}
+	m.overlay.SetHints(
+		"\u2191/\u2193 to scroll \u00b7 pgup/pgdn to page \u00b7 home/end to jump",
+		m.pagerActionsHint(),
+	)
 	return m.openPagerTerminalMode()
 }
 
@@ -8608,22 +9444,58 @@ func (m *Model) applyCopyTargetModalOption(optionID string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
-	var err error
-	if m.clipboardWriteRich != nil && target.ID == chatwidget.CopyTargetWholeID {
-		err = m.clipboardWriteRich(markdown.RenderClipboardHTML(target.Text), target.Text)
-	} else {
-		err = m.clipboardWrite(target.Text)
-	}
-	if err != nil {
-		m.notice = "Copy failed: " + err.Error()
-		m.addErrorHistoryMessage(m.notice)
-		m.refreshTranscript()
+	return m.clipboardWriteCmd(target.Label, target.Text, target.ID == chatwidget.CopyTargetWholeID, false)
+}
+
+func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings bool) bubbletea.Cmd {
+	if m == nil {
 		return nil
 	}
-	m.notice = "Copied " + target.Label + " to clipboard"
+	write := m.clipboardWrite
+	writeRich := m.clipboardWriteRich
+	return func() bubbletea.Msg {
+		var err error
+		switch {
+		case rich && writeRich != nil:
+			err = writeRich(markdown.RenderClipboardHTML(text), text)
+		case write == nil:
+			err = fmt.Errorf("clipboard is unavailable")
+		default:
+			err = write(text)
+		}
+		return ClipboardWriteResultMsg{Label: label, Err: err, Warnings: warnings}
+	}
+}
+
+func (m *Model) applyClipboardWriteResult(msg ClipboardWriteResultMsg) {
+	if m == nil {
+		return
+	}
+	if msg.Warnings {
+		if msg.Err != nil {
+			m.warningsFlash = "Copy failed"
+		} else {
+			m.warningsFlash = "Copied"
+		}
+		return
+	}
+	if msg.Label == "composer selection" && m.composerRightClickCopy {
+		m.composerRightClickCopy = false
+		if msg.Err == nil {
+			// Rust #46895: a confirmed right-click copy collapses the editable
+			// selection; a failed or unconfirmed copy keeps it highlighted.
+			m.composerSelection.clear()
+		}
+	}
+	if msg.Err != nil {
+		m.notice = "Copy failed: " + msg.Err.Error()
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return
+	}
+	m.notice = "Copied " + msg.Label + " to clipboard"
 	m.addInfoHistoryMessage(m.notice)
 	m.refreshTranscript()
-	return nil
 }
 
 const rawOutputModeOnNotice = "Raw output mode on: transcript text is shown for clean terminal selection."
@@ -8843,6 +9715,7 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 	case bubbletea.KeyUp:
 		if !m.inputHistoryActive {
 			m.inputHistoryDraft = m.composerText()
+			m.inputHistoryDraftElements = m.currentComposerTextElements()
 			m.inputHistoryIndex = len(m.inputHistory)
 			m.inputHistoryActive = true
 		}
@@ -8850,6 +9723,7 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 			m.inputHistoryIndex--
 		}
 		m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
+		m.restoreComposerTextElements(m.inputHistory[m.inputHistoryIndex], m.inputHistoryElementsAt(m.inputHistoryIndex))
 		m.composer.SetCursor(len(m.composer.Value()))
 		return true
 	case bubbletea.KeyDown:
@@ -8859,8 +9733,10 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		if m.inputHistoryIndex < len(m.inputHistory)-1 {
 			m.inputHistoryIndex++
 			m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
+			m.restoreComposerTextElements(m.inputHistory[m.inputHistoryIndex], m.inputHistoryElementsAt(m.inputHistoryIndex))
 		} else {
 			m.setComposerPrompt(m.inputHistoryDraft)
+			m.restoreComposerTextElements(m.inputHistoryDraft, m.inputHistoryDraftElements)
 			m.resetInputHistoryNavigation()
 		}
 		m.composer.SetCursor(len(m.composer.Value()))
@@ -8900,6 +9776,7 @@ func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) 
 	last := m.queued[len(m.queued)-1]
 	m.queued = m.queued[:len(m.queued)-1]
 	m.setComposerPrompt(last.Request.Prompt)
+	m.restoreComposerTextElements(last.Request.Prompt, last.Request.TextElements)
 	m.composer.SetCursor(len(m.composer.Value()))
 	m.attachments = cloneComposerAttachments(last.Request.Attachments)
 	m.composerMentionBindings = append([]string(nil), last.Request.MentionBindings...)
@@ -8916,12 +9793,21 @@ func (m *Model) resetInputHistoryNavigation() {
 	m.inputHistoryActive = false
 	m.inputHistoryIndex = len(m.inputHistory)
 	m.inputHistoryDraft = ""
+	m.inputHistoryDraftElements = nil
+}
+
+func (m *Model) inputHistoryElementsAt(index int) []ComposerTextElement {
+	if m == nil || index < 0 || index >= len(m.inputHistoryElements) {
+		return nil
+	}
+	return m.inputHistoryElements[index]
 }
 
 func (m *Model) appendAssistantDelta(itemID string, delta string) {
 	if m == nil || delta == "" {
 		return
 	}
+	m.markSafetyBufferingAgentMessageStarted()
 	m.Transcript.appendAssistantDelta(m.State, itemID, delta, m.width)
 }
 
@@ -8929,7 +9815,9 @@ func (m *Model) mergeAssistantFinal(text string) {
 	if m == nil {
 		return
 	}
+	m.markSafetyBufferingAgentMessageStarted()
 	m.Transcript.mergeAssistantFinal(m.State, text, m.width)
+	m.flushDeferredSubAgentActivity()
 }
 
 func (m *Model) insertFinalMessageSeparatorIfNeeded() {
@@ -9033,17 +9921,26 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 }
 
 func renderTranscriptMessagesWithRangesAndExpansion(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool) (string, [][2]int) {
+	content, ranges, _ := renderTranscriptLayout(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning, nil)
+	return content, ranges
+}
+
+// renderTranscriptLayout renders the transcript and, when resolveImage is set,
+// reserves layout-only rows below entries whose local artifact can be
+// previewed. Image rows join the message's range but carry no searchable text.
+func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage) (string, [][2]int, []transcriptImagePlan) {
 	if state == nil || len(state.Messages) == 0 {
-		return "No messages yet.", nil
+		return "No messages yet.", nil, nil
 	}
 	if raw {
-		return renderRawTranscript(state), nil
+		return renderRawTranscript(state), nil, nil
 	}
 	if width < 20 {
 		width = 20
 	}
 	var builder strings.Builder
 	ranges := make([][2]int, len(state.Messages))
+	var plans []transcriptImagePlan
 	line := 0
 	first := true
 	for i, message := range state.Messages {
@@ -9080,20 +9977,38 @@ func renderTranscriptMessagesWithRangesAndExpansion(cache *transcriptMessageCach
 		}
 		if !first {
 			builder.WriteString("\n\n")
-			line += 2
+			// The two newlines terminate the previous line and leave one
+			// blank separator row before this message starts.
+			line++
 		}
 		builder.WriteString(strings.TrimRight(strings.Join(lines, "\n"), "\r\n"))
 		ranges[i] = [2]int{line, line + len(lines)}
 		line += len(lines)
+		if resolveImage != nil {
+			if preview := resolveImage(message, expanded); preview != nil && preview.Rows > 0 {
+				rows := int(preview.Rows)
+				for range rows {
+					builder.WriteString("\n")
+				}
+				plans = append(plans, transcriptImagePlan{
+					image:      preview,
+					contentRow: line,
+					columns:    int(preview.Columns),
+					rows:       rows,
+				})
+				line += rows
+				ranges[i][1] = line
+			}
+		}
 		first = false
 	}
 	if cache != nil && len(cache.messages) > len(state.Messages) {
 		cache.messages = cache.messages[:len(state.Messages)]
 	}
 	if builder.Len() == 0 {
-		return "No messages yet.", nil
+		return "No messages yet.", nil, nil
 	}
-	return builder.String(), ranges
+	return builder.String(), ranges, plans
 }
 
 // flattenTranscriptDisplayLines turns embedded newlines into separate display

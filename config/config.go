@@ -167,6 +167,13 @@ func (c *Config) DisablePasteBurst() bool {
 	if c == nil || c.Values == nil {
 		return false
 	}
+	// Rust #41976: the [tui] location is preferred; the top-level key remains a
+	// legacy fallback.
+	if tuiValues, ok := c.Values["tui"].(map[string]any); ok {
+		if value, ok := tuiValues["disable_paste_burst"].(bool); ok {
+			return value
+		}
+	}
 	value, ok := c.Values["disable_paste_burst"].(bool)
 	if !ok {
 		return false
@@ -583,6 +590,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		})
 	}
 	ApplyOverrides(cfg.Values, overrides)
+	applyDisablePasteBurstOverride(overrides, cfg.Values)
 	// Rust #39630: the untrusted approval policy is retired. Explicit
 	// `approval_policy = "untrusted"` settings fail with an actionable error
 	// regardless of strict mode so callers cannot silently fall back.
@@ -651,6 +659,23 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		}
 	}
 	return cfg, nil
+}
+
+// applyDisablePasteBurstOverride keeps CLI top-level overrides ahead of a
+// project/user [tui] value. Rust resolves by layer precedence first, then by
+// preferring the new tui key within the winning layer (#41976).
+func applyDisablePasteBurstOverride(overrides []Override, values map[string]any) {
+	for _, override := range overrides {
+		if strings.TrimSpace(override.Path) != "disable_paste_burst" {
+			continue
+		}
+		tuiValues, ok := values["tui"].(map[string]any)
+		if !ok {
+			tuiValues = map[string]any{}
+			values["tui"] = tuiValues
+		}
+		tuiValues["disable_paste_burst"] = override.Value
+	}
 }
 
 // validateCloudConfigValues mirrors Rust's CloudToml

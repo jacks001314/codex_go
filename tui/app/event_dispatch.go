@@ -63,18 +63,30 @@ type DisconnectInfo struct {
 	StopHint string
 }
 
+// ResumableThread identifies a persisted thread offered in the TUI exit summary.
+type ResumableThread struct {
+	ThreadID   string
+	ThreadName *string
+}
+
 // AppExitInfo summarizes the terminal exit output, distinguishing a
 // disconnect from an interrupted turn or a removed thread.
 type AppExitInfo struct {
 	ThreadID       string
 	ExitReason     ExitReason
-	ResumeHint     string
+	ResumeHint     *ResumableThread
 	TokenUsageLine string
 	Disconnect     *DisconnectInfo
 }
 
 // FormatExitMessages renders the exit summary lines.
 func (i *AppExitInfo) FormatExitMessages() []string {
+	return i.FormatExitMessagesWithColor(false)
+}
+
+// FormatExitMessagesWithColor renders the exit summary lines, highlighting
+// resume commands and named-thread picker guidance when requested.
+func (i *AppExitInfo) FormatExitMessagesWithColor(colorEnabled bool) []string {
 	if i == nil {
 		return nil
 	}
@@ -85,8 +97,15 @@ func (i *AppExitInfo) FormatExitMessages() []string {
 	if i.ThreadID != "" {
 		lines = append(lines, "Thread: "+i.ThreadID)
 	}
-	if i.ResumeHint != "" {
-		lines = append(lines, i.ResumeHint)
+	if thread := i.ResumeHint; thread != nil && strings.TrimSpace(thread.ThreadID) != "" {
+		lines = append(lines, "To continue this session, run:")
+		lines = append(lines, "  "+colorExitCommand("codex resume "+thread.ThreadID, colorEnabled))
+		if thread.ThreadName != nil {
+			if name := strings.TrimSpace(*thread.ThreadName); name != "" {
+				lines = append(lines, "Or run "+colorExitCommand("codex resume", colorEnabled)+
+					" and select "+colorExitCommand(name, colorEnabled)+".")
+			}
+		}
 	}
 	if i.Disconnect != nil {
 		if len(i.Disconnect.Command) > 0 {
@@ -100,6 +119,13 @@ func (i *AppExitInfo) FormatExitMessages() []string {
 		}
 	}
 	return lines
+}
+
+func colorExitCommand(value string, enabled bool) string {
+	if !enabled {
+		return value
+	}
+	return "\x1b[36m" + value + "\x1b[39m"
 }
 
 type ExitModeDecision struct {

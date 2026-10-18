@@ -267,7 +267,7 @@ func (v *SkillsToggleView) Rows(width int) []string {
 	}
 	itemRows := v.itemRows(width)
 	rows = append(rows, itemRows...)
-	rows = append(rows, "Press space or enter to toggle; esc to close")
+	rows = append(rows, "space/enter toggle \u00b7 esc close")
 	return rows
 }
 
@@ -289,7 +289,7 @@ func (v *SkillsToggleView) itemRows(width int) []string {
 	length := len(v.FilteredIndices)
 	v.State.ClampSelection(length)
 	v.State.EnsureVisible(length, skillsMaxVisibleRows(length))
-	return RenderGenericRowsSingleLine(v.displayRows(), v.State, skillsMaxVisibleRows(length), "no matches", max(width-2, 1), ColumnWidthConfig{})
+	return RenderPickerRowsSingleLine(v.displayRows(), v.State, skillsMaxVisibleRows(length), "no matches", width)
 }
 
 func (v *SkillsToggleView) syncEnabledDisabled() {
@@ -378,16 +378,13 @@ func (v *SkillsToggleView) displayRows() []GenericDisplayRow {
 			continue
 		}
 		item := v.Items[actualIdx]
-		prefix := " "
-		if v.State.HasSelection && v.State.SelectedIdx == visibleIdx {
-			prefix = selectedRowMarker
-		}
 		marker := " "
 		if item.Enabled {
 			marker = "x"
 		}
 		rows = append(rows, GenericDisplayRow{
-			Name:        prefix + " [" + marker + "] " + TruncateSkillName(item.Name),
+			NamePrefix:  pickerRowSelectionPrefix(v.State.HasSelection && v.State.SelectedIdx == visibleIdx),
+			Name:        "[" + marker + "] " + TruncateSkillName(item.Name),
 			Description: item.Description,
 		})
 	}

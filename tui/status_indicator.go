@@ -29,6 +29,75 @@ type StatusIndicator struct {
 	Paused            bool
 }
 
+// StatusTimer is the pause-aware clock owned independently of the optional
+// status row (Rust #41913). Streaming may hide the row, and modal approvals
+// pause the clock without losing accumulated time.
+type StatusTimer struct {
+	ElapsedRunning time.Duration
+	LastResumeAt   time.Time
+	Paused         bool
+}
+
+func NewStatusTimer(now time.Time) StatusTimer {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return StatusTimer{LastResumeAt: now}
+}
+
+// ResetAt replaces the accumulated elapsed time without changing a modal's
+// pause state, matching Rust's StatusTimer::reset.
+func (t *StatusTimer) ResetAt(elapsed time.Duration, now time.Time) {
+	if t == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	t.ElapsedRunning = elapsed
+	t.LastResumeAt = now
+}
+
+func (t *StatusTimer) PauseAt(now time.Time) {
+	if t == nil || t.Paused {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if !t.LastResumeAt.IsZero() && now.After(t.LastResumeAt) {
+		t.ElapsedRunning += now.Sub(t.LastResumeAt)
+	}
+	t.Paused = true
+}
+
+func (t *StatusTimer) ResumeAt(now time.Time) {
+	if t == nil || !t.Paused {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	t.LastResumeAt = now
+	t.Paused = false
+}
+
+func (t *StatusTimer) ElapsedAt(now time.Time) time.Duration {
+	if t == nil {
+		return 0
+	}
+	if t.Paused || t.LastResumeAt.IsZero() {
+		return t.ElapsedRunning
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if now.Before(t.LastResumeAt) {
+		return t.ElapsedRunning
+	}
+	return t.ElapsedRunning + now.Sub(t.LastResumeAt)
+}
+
 func NewStatusIndicator(now time.Time) *StatusIndicator {
 	if now.IsZero() {
 		now = time.Now()

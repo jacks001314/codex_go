@@ -50,10 +50,12 @@ var daemonServerFeatureKeys = map[string]bool{
 // feature keys a client may set on a shared-server launch.
 var daemonAllowedFeatureKeys = map[string]bool{
 	// Client gates and per-thread settings already forwarded in thread requests.
-	"daemon_auto_start":     true,
-	"worktrees":             true,
-	"realtime_conversation": true,
-	"standalone_web_search": true,
+	"daemon_auto_start":                true,
+	"transcript_v2":                    true,
+	"standalone_web_search":            true,
+	"app_server_websocket_compression": true,
+	"worktrees":                        true,
+	"realtime_conversation":            true,
 	// Shared services and threadless MCP operations need daemon compatibility checks.
 	"api_key_model_discovery":        true,
 	"code_mode_host":                 true,

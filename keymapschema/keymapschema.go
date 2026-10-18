@@ -37,6 +37,7 @@ var ContextActions = map[string]map[string]struct{}{
 		"edit_queued_message":       {},
 		"prompt_stack_back":         {},
 		"skip_question":             {},
+		"open_presets":              {},
 	},
 	"composer": {
 		"submit":                  {},

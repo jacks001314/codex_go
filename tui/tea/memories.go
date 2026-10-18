@@ -50,7 +50,7 @@ func (m *Model) openMemoriesSettings() {
 		Body:       "Choose how Codex uses and creates memories. Changes are saved to config.toml",
 		Options:    memoriesSettingsOptions(state),
 		FooterNote: "Learn more: " + memoriesDocsURL,
-		FooterHint: "Space to toggle  Enter to save  Esc to cancel",
+		FooterHint: "space toggle \u00b7 enter save/select \u00b7 esc cancel",
 	})
 	m.modal.memories = state
 }

@@ -129,9 +129,15 @@ func FormatDirectoryDisplay(directory string, maxWidth int) string {
 }
 
 func FormatResetTimestamp(dt time.Time, capturedAt time.Time) string {
+	return FormatResetTimestampWithClock(dt, capturedAt, codextui.SystemClockFormat())
+}
+
+// FormatResetTimestampWithClock formats a reset using an explicit host clock
+// preference (Rust #47321).
+func FormatResetTimestampWithClock(dt time.Time, capturedAt time.Time, format codextui.ClockFormat) string {
 	local := dt.Local()
 	capturedLocal := capturedAt.Local()
-	timePart := local.Format("15:04")
+	timePart := format.FormatTime(local)
 	year, month, day := local.Date()
 	cYear, cMonth, cDay := capturedLocal.Date()
 	if year == cYear && month == cMonth && day == cDay {

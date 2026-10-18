@@ -36,7 +36,7 @@ func TestModelCopyUsesStatusOutputLikeRust(t *testing.T) {
 
 	// Selecting "Model" (second item) copies just the model.
 	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 	if copied != "gpt-5.4" {
 		t.Fatalf("copied = %q, want gpt-5.4", copied)
 	}
@@ -44,7 +44,7 @@ func TestModelCopyUsesStatusOutputLikeRust(t *testing.T) {
 	// Whole status copies the rendered /status text as plain output.
 	typeText(t, model, "/copy")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 	if !strings.HasPrefix(copied, "/status\n") {
 		t.Fatalf("copied = %q, want the /status text", copied)
 	}
@@ -84,7 +84,7 @@ func TestModelCopyReturnsToResponseAfterOtherCommandLikeRust(t *testing.T) {
 	if view := model.View(); strings.Contains(view, "Whole status") || !strings.Contains(view, "Whole response") {
 		t.Fatalf("expected response copy targets:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 	if copied != "final answer" {
 		t.Fatalf("copied = %q, want final answer", copied)
 	}
@@ -112,7 +112,7 @@ func TestModelWholeStatusCopyKeepsFullPathsAtNarrowWidthsLikeRust(t *testing.T) 
 	model.Update(key(bubbletea.KeyEnter))
 	typeText(t, model, "/copy")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 
 	if copied == "" {
 		t.Fatal("/copy did not copy the whole status")

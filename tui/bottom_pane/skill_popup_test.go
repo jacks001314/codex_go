@@ -45,7 +45,7 @@ func TestSkillPopupRowsScrollAndHeightMatchRust(t *testing.T) {
 		})
 	}
 	popup := NewSkillPopup(items)
-	if height := popup.CalculateRequiredHeight(72); height != MaxPopupRows+2 {
+	if height := popup.CalculateRequiredHeight(72); height != MaxPopupRows+3 {
 		t.Fatalf("height = %d", height)
 	}
 	for i := 0; i <= MaxPopupRows; i++ {
@@ -56,12 +56,61 @@ func TestSkillPopupRowsScrollAndHeightMatchRust(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected selected mention")
 	}
-	expected := tui.RenderSelectedRow(tui.SelectionPrefix(true) + selected.DisplayName + " - [Skill] Description " + strings.TrimPrefix(selected.DisplayName, "Mention "))
-	if !bottomPaneContainsRow(rows, expected) {
-		t.Fatalf("rows missing selected:\n%s", strings.Join(rows, "\n"))
+	selectedRow := ""
+	for _, row := range rows {
+		if strings.Contains(stripANSIForSelectionTest(row), selected.DisplayName) && strings.Contains(row, "›") {
+			selectedRow = row
+			break
+		}
+	}
+	if selectedRow == "" {
+		t.Fatalf("rows missing selected %q:\n%s", selected.DisplayName, strings.Join(rows, "\n"))
+	}
+	plainSelected := stripANSIForSelectionTest(selectedRow)
+	if !strings.Contains(plainSelected, "Description") || !strings.Contains(plainSelected, "[Skill]") {
+		t.Fatalf("selected row content = %q", plainSelected)
+	}
+	if width := tui.DisplayWidth(plainSelected); width != 72 {
+		t.Fatalf("selected row width = %d, want 72: %q", width, plainSelected)
 	}
 	if !bottomPaneContainsRow(rows, SkillPopupHintLine()) {
 		t.Fatalf("rows missing hint:\n%s", strings.Join(rows, "\n"))
+	}
+}
+
+func TestSkillPopupCategoryTagsSurviveHiddenDescriptionsLikeRust(t *testing.T) {
+	popup := NewSkillPopup([]MentionItem{
+		{
+			DisplayName: "Shared",
+			Description: stringPtr("Secondary details"),
+			InsertText:  "@App",
+			SearchTerms: []string{"Shared"},
+			CategoryTag: stringPtr("[App]"),
+			SortRank:    0,
+		},
+		{
+			DisplayName: "Shared",
+			Description: stringPtr("Secondary details"),
+			InsertText:  "$Skill",
+			SearchTerms: []string{"Shared"},
+			CategoryTag: stringPtr("[Skill]"),
+			SortRank:    1,
+		},
+	})
+	popup.SetQuery("Shared")
+	for _, width := range []int{32, 72} {
+		joined := stripANSIForSelectionTest(strings.Join(popup.Rows(width), "\n"))
+		if !strings.Contains(joined, "[App]") || !strings.Contains(joined, "[Skill]") {
+			t.Fatalf("width %d lost category tags:\n%s", width, joined)
+		}
+		if contains := strings.Contains(joined, "Secondary details"); contains != (width == 72) {
+			t.Fatalf("width %d description visible=%v:\n%s", width, contains, joined)
+		}
+		for _, row := range popup.Rows(width) {
+			if lineWidth := tui.DisplayWidth(stripANSIForSelectionTest(row)); lineWidth > width {
+				t.Fatalf("width %d row exceeds width: %q width=%d", width, row, lineWidth)
+			}
+		}
 	}
 }
 

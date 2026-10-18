@@ -109,6 +109,9 @@ type ThreadItem struct {
 	Output   string         `json:"output,omitempty"`
 	Query    string         `json:"query,omitempty"`
 	Action   map[string]any `json:"action,omitempty"`
+	// Path carries the local artifact of an imageView item (Rust
+	// ThreadItem::ImageView { id, path }).
+	Path string `json:"path,omitempty"`
 	// Results carries the structured results a web search returned, mirroring
 	// Rust's `WebSearchItem { results }`. The pointer keeps Rust's distinction
 	// between an absent field and a present-but-empty array.

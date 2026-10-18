@@ -69,6 +69,9 @@ type SessionTarget struct {
 	BackendID BackendID
 	Path      string
 	ThreadID  string
+	// CWD is the working directory reported by thread/list or thread/read at
+	// selection time (Rust SessionTarget::cwd).
+	CWD string
 }
 
 // EnsureBackend rejects a selection that came from a different backend before
@@ -95,6 +98,10 @@ type SessionSelection struct {
 	Kind   SessionSelectionKind
 	Target SessionTarget
 	Name   string
+	// ResumeCWD is the working directory chosen for this resume after applying
+	// `tui.resume_cwd`. An empty value means no override was chosen, so the
+	// server keeps the directory saved with the thread.
+	ResumeCWD string
 }
 
 type SessionFilterMode int
@@ -455,7 +462,7 @@ func (s *SessionPickerState) Selection() (SessionSelection, bool) {
 		return SessionSelection{}, false
 	}
 	selection := SessionSelection{
-		Target: SessionTarget{BackendID: s.BackendID, Path: item.Path, ThreadID: item.ThreadID},
+		Target: SessionTarget{BackendID: s.BackendID, Path: item.Path, ThreadID: item.ThreadID, CWD: item.CWD},
 	}
 	switch s.Action {
 	case SessionPickerFork:
@@ -882,7 +889,7 @@ func expandedTimeDetailLine(label string, ts time.Time, now time.Time, width int
 	if ts.IsZero() {
 		return expandedDetailLine(label, "-", width)
 	}
-	value := relativeTimeLong(now, ts) + " \u00b7 " + ts.Format("2006-01-02 15:04:05")
+	value := relativeTimeLong(now, ts) + " \u00b7 " + SystemClockFormat().FormatDateTime(ts)
 	return expandedDetailLine(label, value, width)
 }
 

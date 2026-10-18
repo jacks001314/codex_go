@@ -1,5 +1,7 @@
 package status
 
+import "strings"
+
 type AccountMode string
 
 const (
@@ -66,4 +68,31 @@ func (s AccountStatus) displayMode() AccountMode {
 		return AccountModeChatGPT
 	}
 	return AccountModeUnknown
+}
+
+// AccountDisplayWithEmail restores the email omitted by account/update while
+// preserving the current ChatGPT plan label (Rust #50199).
+func AccountDisplayWithEmail(current string, email string) string {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return strings.TrimSpace(current)
+	}
+	current = strings.TrimSpace(current)
+	switch {
+	case current == "", current == "ChatGPT":
+		return email
+	case strings.HasPrefix(current, "API key configured"):
+		return email
+	case !strings.Contains(current, "@"):
+		return email + " (" + current + ")"
+	}
+	planStart := strings.Index(current, " (")
+	if planStart < 0 {
+		return email
+	}
+	plan := strings.TrimSuffix(current[planStart+2:], ")")
+	if plan = strings.TrimSpace(plan); plan == "" {
+		return email
+	}
+	return email + " (" + plan + ")"
 }

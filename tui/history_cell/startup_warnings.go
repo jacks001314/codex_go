@@ -27,6 +27,9 @@ type StartupWarningsCell struct {
 	SignInServers  map[string]bool
 	PendingHeader  bool
 	TranscriptHint string
+	// RestartHint is shown for a managed local daemon's first configuration
+	// warning; the original diagnostic remains in Messages/RawLines.
+	RestartHint string
 }
 
 func cloneWarningDetails(values map[string][]string) map[string][]string {
@@ -130,6 +133,7 @@ func (c StartupWarningsCell) Merge(incoming StartupWarningsCell) StartupWarnings
 		SignInServers:  cloneWarningSet(c.SignInServers),
 		PendingHeader:  c.PendingHeader,
 		TranscriptHint: c.TranscriptHint,
+		RestartHint:    c.RestartHint,
 	}
 	for _, message := range incoming.Messages {
 		if !containsWarningMessage(merged.Messages, message) {
@@ -165,6 +169,12 @@ func (c StartupWarningsCell) Merge(incoming StartupWarningsCell) StartupWarnings
 			merged.SignInServers = map[string]bool{}
 		}
 		merged.SignInServers[server] = true
+	}
+	if merged.TranscriptHint == "" {
+		merged.TranscriptHint = incoming.TranscriptHint
+	}
+	if merged.RestartHint == "" {
+		merged.RestartHint = incoming.RestartHint
 	}
 	return merged
 }
@@ -218,6 +228,10 @@ func (c StartupWarningsCell) SummaryLine() string {
 		builder.WriteString(" \u00b7 ")
 		builder.WriteString(hint)
 		builder.WriteString(" for details")
+	}
+	if hint := strings.TrimSpace(c.RestartHint); hint != "" {
+		builder.WriteString(" \u00b7 ")
+		builder.WriteString(hint)
 	}
 	return builder.String()
 }

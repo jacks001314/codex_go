@@ -718,6 +718,11 @@ func (m *Model) applyAgentsOverviewNewWorktree(message agentsOverviewNewWorktree
 		if text == "" {
 			text = "the server returned no thread id"
 		}
+		if notice, ok := m.agentsOverviewShutdownNotice(text); ok {
+			m.agentsOverviewNotice = notice
+			m.refreshTranscript()
+			return nil
+		}
 		// Rust reports the worktree session failure verbatim (the app layer already
 		// prefixes the start failure with "Failed to start session: "), so the
 		// notice must not add a second prefix.
@@ -767,6 +772,10 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 		if text == "" {
 			text = "unknown error"
 		}
+		if notice, ok := m.agentsOverviewShutdownNotice(text); ok {
+			m.agentsOverviewNotice = notice
+			return nil
+		}
 		m.agentsOverviewNotice = "Failed to start session: " + text
 		return nil
 	}
@@ -787,6 +796,35 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 	m.closeAgentsOverview()
 	m.applyAgentSwitchResult(AgentSwitchResultMsg{ThreadID: threadID, Response: message.response})
 	return m.refreshStatusControlsCmd()
+}
+
+// agentsOverviewShutdownNotice mirrors Rust #52721 for servers that omit the
+// structured `serverShuttingDown` reason. The exact legacy draining message is
+// required so unrelated invalid requests are not misclassified.
+func (m *Model) agentsOverviewShutdownNotice(text string) (string, bool) {
+	const legacyDrainingMessage = "Server is draining; retry after reconnecting"
+	text = strings.TrimSpace(text)
+	rest := ""
+	switch {
+	case text == legacyDrainingMessage:
+	case strings.HasPrefix(text, legacyDrainingMessage+" "):
+		rest = strings.TrimSpace(strings.TrimPrefix(text, legacyDrainingMessage))
+	case text == "Failed to start session: "+legacyDrainingMessage:
+		return m.agentsOverviewShutdownNotice(legacyDrainingMessage)
+	case strings.HasPrefix(text, "Failed to start session: "+legacyDrainingMessage+" "):
+		rest = strings.TrimSpace(strings.TrimPrefix(text, "Failed to start session: "+legacyDrainingMessage))
+	default:
+		return "", false
+	}
+	message := "New sessions are paused while active turns finish or are canceled. The default shutdown wait is up to one minute."
+	embedded := m != nil && m.localSession && !m.localDaemonSession && !m.remoteAppServer
+	if !embedded {
+		message += " If the server restarts, Codex will reconnect automatically."
+	}
+	if rest != "" {
+		message += " " + rest
+	}
+	return "Codex's background server is shutting down: " + message, true
 }
 
 // SetAgentsOverviewBlankSession records a started session whose live snapshot
@@ -1126,10 +1164,12 @@ func (m *Model) renderAgentsOverview() string {
 	if m == nil || m.agentsOverview == nil {
 		return ""
 	}
-	lines := m.agentsOverview.RenderStyled(m.width, m.height)
-	if m.agentsOverviewNotice != "" {
-		lines = append(lines, "  "+m.agentsOverviewNotice)
+	m.agentsOverview.Notice = strings.TrimSpace(m.agentsOverviewNotice)
+	if m.agentsOverview.Notice == "" {
+		m.agentsOverview.Notice = strings.TrimSpace(m.agentsOverviewServerVersionNotice)
 	}
+	m.agentsOverview.Loading = (m.agentsOverviewInflight || m.agentsOverviewPending) && len(m.agentsOverview.Rows) == 0
+	lines := m.agentsOverview.RenderStyled(m.width, m.height)
 	if m.agentsOverviewLifecycleProgress != "" {
 		lines = centerAgentsOverviewDialog(lines, m.agentsOverviewLifecycleProgress, m.width, m.height)
 	}

@@ -40,6 +40,10 @@ type Message struct {
 	// overlay renders, mirroring Rust's transcript-only history cells (a
 	// completed reasoning block belongs to Ctrl+T, not to the live scrollback).
 	TranscriptOnly bool
+	// StartupTip marks the retained startup tooltip row. Fullscreen rendering
+	// hides it while raw output and terminal scrollback keep the copy
+	// (Rust #48513).
+	StartupTip bool
 	// ItemID carries the thread item a transcript-only entry belongs to, so the
 	// live reasoning lifecycle can replace the restored snapshot in place
 	// (Rust ReasoningReplay restores the active item instead of committing it).
@@ -59,6 +63,9 @@ type Message struct {
 	// group. Disclosure focus/expansion follows these IDs across cell
 	// replacements and history regrouping (Rust #46734).
 	ActivityIDs []string
+	// ImagePath is the local artifact a rich fullscreen transcript may preview
+	// below this entry. Image rows are layout-only and never searchable text.
+	ImagePath string
 }
 
 // MessageTextElement is a structured byte range inside a user prompt (a mention
@@ -86,6 +93,7 @@ type Options struct {
 	AccountDisplay          string
 	AgentsSummary           string
 	HasChatGPTAccount       bool
+	RequiresOpenAIAuth      *bool
 }
 
 type State struct {
@@ -116,6 +124,10 @@ type State struct {
 	AccountDisplay          string
 	AgentsSummary           string
 	HasChatGPTAccount       bool
+	// RequiresOpenAIAuth is the connected server's provider capability. Nil
+	// keeps the legacy provider-name heuristic for callers without an account
+	// response.
+	RequiresOpenAIAuth *bool
 	// RemoteConnection reports that this TUI is attached to an app server,
 	// either an explicit remote server or the local background daemon (Rust
 	// `RemoteConnectionStatus`, #49145). The `tui` package cannot import
@@ -156,8 +168,17 @@ func NewState(options *Options) *State {
 		state.AccountDisplay = strings.TrimSpace(options.AccountDisplay)
 		state.AgentsSummary = strings.TrimSpace(options.AgentsSummary)
 		state.HasChatGPTAccount = options.HasChatGPTAccount
+		state.RequiresOpenAIAuth = cloneStatusBool(options.RequiresOpenAIAuth)
 	}
 	return state
+}
+
+func cloneStatusBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func (s *State) SetThreadID(threadID string) {
@@ -214,15 +235,29 @@ func (s *State) AddUserPromptMessage(displayText string, prompt string, localIma
 }
 
 func (s *State) AddHistoryLines(displayLines []string, rawLines []string) {
+	s.AddHistoryMessage(Message{
+		Role:    RoleHistory,
+		Text:    strings.TrimRight(strings.Join(displayLines, "\n"), "\r\n"),
+		RawText: strings.TrimRight(strings.Join(rawLines, "\n"), "\r\n"),
+	})
+}
+
+// AddHistoryMessage appends a prepared history entry, preserving optional
+// transcript metadata such as activity identities and a preview image path.
+func (s *State) AddHistoryMessage(message Message) {
 	if s == nil {
 		return
 	}
-	display := strings.TrimRight(strings.Join(displayLines, "\n"), "\r\n")
+	display := strings.TrimRight(message.Text, "\r\n")
 	if strings.TrimSpace(display) == "" {
 		return
 	}
-	raw := strings.TrimRight(strings.Join(rawLines, "\n"), "\r\n")
-	s.Messages = append(s.Messages, Message{Role: RoleHistory, Text: display, RawText: raw})
+	message.Text = display
+	message.RawText = strings.TrimRight(message.RawText, "\r\n")
+	if message.Role == "" {
+		message.Role = RoleHistory
+	}
+	s.Messages = append(s.Messages, message)
 	s.BumpMessagesRevision()
 }
 
@@ -422,8 +457,14 @@ func (s *State) RenderStatusCardWidth(width int) string {
 		continuation string
 	}
 	rows := []statusCardRow{{text: indent + header, continuation: indent}, {}}
-	providerLower := strings.ToLower(strings.TrimSpace(s.Provider))
-	if providerLower == "" || strings.Contains(providerLower, "openai") || strings.Contains(providerLower, "codex") {
+	showUsageLink := false
+	if s.RequiresOpenAIAuth != nil {
+		showUsageLink = *s.RequiresOpenAIAuth
+	} else {
+		providerLower := strings.ToLower(strings.TrimSpace(s.Provider))
+		showUsageLink = providerLower == "" || strings.Contains(providerLower, "openai") || strings.Contains(providerLower, "codex")
+	}
+	if showUsageLink {
 		rows = append(rows,
 			statusCardRow{text: indent + AnnotateCompleteWebURLsInLine("Visit https://chatgpt.com/codex/settings/usage for up-to-date"), continuation: indent},
 			statusCardRow{text: indent + "information on rate limits and credits", continuation: indent},
@@ -723,10 +764,11 @@ func formatStatusReset(value time.Time, capturedAt time.Time) string {
 		capturedAt = time.Now()
 	}
 	capturedAt = capturedAt.Local()
+	format := SystemClockFormat()
 	if value.Year() == capturedAt.Year() && value.YearDay() == capturedAt.YearDay() {
-		return value.Format("15:04")
+		return format.FormatTime(value)
 	}
-	return value.Format("15:04 on 2 Jan")
+	return format.FormatTime(value) + " on " + value.Format("2 Jan")
 }
 
 func wrapStatusText(value string, width int) []string {
@@ -859,7 +901,7 @@ func (s *State) RenderFrame() string {
 		}
 	}
 	builder.WriteString("----------------------------------------\n")
-	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /debug-config /new /clear /copy /raw /diff /ps /stop /model /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /btw /agent /subagents /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /quit /exit\n")
+	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /config /debug-config /new /clear /copy /raw /diff /ps /stop /model /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /btw /agent /subagents /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /quit /exit\n")
 	return builder.String()
 }
 
@@ -873,6 +915,7 @@ func (s *State) RenderHelp() string {
 		"  /goal [ACTION]        show or manage the current thread goal",
 		"  /statusline [ITEMS]   configure which items appear in the status line",
 		"  /title [ITEMS]        configure which items appear in the terminal title",
+		"  /config               open the settings panel",
 		"  /debug-config         show config layers and requirement sources for debugging",
 		"  /new                  start a fresh local thread",
 		"  /clear                clear the terminal and start a new chat",
@@ -930,11 +973,13 @@ const (
 	CommandKeymap           Command = "keymap"
 	CommandStatus           Command = "status"
 	CommandDaemon           Command = "daemon"
+	CommandDaybreak         Command = "daybreak"
 	CommandWarnings         Command = "warnings"
 	CommandUsage            Command = "usage"
 	CommandGoal             Command = "goal"
 	CommandStatusline       Command = "statusline"
 	CommandTitle            Command = "title"
+	CommandConfig           Command = "config"
 	CommandDebugConfig      Command = "debug-config"
 	CommandNew              Command = "new"
 	CommandWorktree         Command = "worktree"
@@ -945,6 +990,7 @@ const (
 	CommandCopy             Command = "copy"
 	CommandExport           Command = "export"
 	CommandRaw              Command = "raw"
+	CommandTUI              Command = "tui"
 	CommandDiff             Command = "diff"
 	CommandPs               Command = "ps"
 	CommandStop             Command = "stop"
@@ -1034,6 +1080,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandStatus, Args: args, Name: name}, true
 	case "/daemon":
 		return &CommandInvocation{Command: CommandDaemon, Args: args, Name: name}, true
+	case "/daybreak":
+		return &CommandInvocation{Command: CommandDaybreak, Args: args, Name: name}, true
 	case "/warnings":
 		return &CommandInvocation{Command: CommandWarnings, Args: args, Name: name}, true
 	case "/usage":
@@ -1044,6 +1092,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandStatusline, Args: args, Name: name}, true
 	case "/title":
 		return &CommandInvocation{Command: CommandTitle, Args: args, Name: name}, true
+	case "/config":
+		return &CommandInvocation{Command: CommandConfig, Args: args, Name: name}, true
 	case "/debug-config":
 		return &CommandInvocation{Command: CommandDebugConfig, Args: args, Name: name}, true
 	case "/new":
@@ -1064,6 +1114,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandExport, Args: args, Name: name}, true
 	case "/raw":
 		return &CommandInvocation{Command: CommandRaw, Args: args, Name: name}, true
+	case "/tui":
+		return &CommandInvocation{Command: CommandTUI, Args: args, Name: name}, true
 	case "/diff":
 		return &CommandInvocation{Command: CommandDiff, Args: args, Name: name}, true
 	case "/ps":

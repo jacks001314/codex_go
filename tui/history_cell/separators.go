@@ -34,8 +34,12 @@ type FinalMessageSeparator struct {
 	RuntimeMetrics *RuntimeMetricsSummary
 	// CompletedAt is the local completion time, when the turn reported one. Rust
 	// #43558 shows "done <time>" after the final answer; times use a twelve-hour
-	// clock, other local days add the date, and other years add the year.
+	// clock unless the host prefers 24-hour time, other local days add the date,
+	// and other years add the year.
 	CompletedAt *time.Time
+	// ClockFormat captures the host's 12/24-hour preference. Nil uses the
+	// process-wide detected preference.
+	ClockFormat *tui.ClockFormat
 	// DisplayDate fixes "today" at construction so crossing midnight cannot
 	// invalidate cached heights.
 	DisplayDate time.Time
@@ -58,6 +62,12 @@ func (c FinalMessageSeparator) WithCompletedAt(completedAt time.Time) FinalMessa
 // WithRuntimeMetrics attaches runtime metrics to the completion metadata.
 func (c FinalMessageSeparator) WithRuntimeMetrics(runtimeMetrics *RuntimeMetricsSummary) FinalMessageSeparator {
 	c.RuntimeMetrics = cloneRuntimeMetricsSummary(runtimeMetrics)
+	return c
+}
+
+// WithClockFormat pins the timestamp clock format for deterministic callers.
+func (c FinalMessageSeparator) WithClockFormat(format tui.ClockFormat) FinalMessageSeparator {
+	c.ClockFormat = &format
 	return c
 }
 
@@ -101,7 +111,11 @@ func (c FinalMessageSeparator) labelParts() []string {
 		parts = append(parts, "Worked for "+formatElapsedFull(*c.ElapsedSeconds))
 	}
 	if c.CompletedAt != nil {
-		parts = append(parts, "done "+formatCompletionTime(*c.CompletedAt, c.displayDate()))
+		format := tui.SystemClockFormat()
+		if c.ClockFormat != nil {
+			format = *c.ClockFormat
+		}
+		parts = append(parts, "done "+formatCompletionTime(*c.CompletedAt, c.displayDate(), format))
 	}
 	if c.RuntimeMetrics != nil {
 		if label := RuntimeMetricsLabel(*c.RuntimeMetrics); label != "" {
@@ -125,15 +139,15 @@ func separatorDate(value time.Time) time.Time {
 
 // formatCompletionTime mirrors Rust's timestamp formatting: twelve-hour clock,
 // with the date for other local days and the year for other years.
-func formatCompletionTime(completedAt time.Time, today time.Time) string {
+func formatCompletionTime(completedAt time.Time, today time.Time, format tui.ClockFormat) string {
 	local := completedAt.Local()
 	switch {
 	case sameSeparatorDate(local, today):
-		return local.Format("3:04 PM")
+		return format.FormatTime(local)
 	case local.Year() == today.Year():
-		return local.Format("Jan 2 at 3:04 PM")
+		return format.FormatDateTime(local)
 	default:
-		return local.Format("Jan 2, 2006 at 3:04 PM")
+		return local.Format(format.DateTimeYearLayout())
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +46,12 @@ import (
 	"codex_go/turn"
 )
 
+var daemonRestartForTUI = func() error {
+	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
+	_, err := runner.Run(appserverdaemon.LifecycleRestart)
+	return err
+}
+
 type remoteAppServerDialFunc func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 type remoteAppServerUnixDialFunc func(context.Context, string, bool) (*websocket.Conn, error)
 
@@ -66,11 +74,17 @@ type remoteAppServerTUIClient struct {
 	transport       remoteAppServerTransport
 	nextRequestID   int64
 	codexHome       string
+	platformFamily  string
+	platformOS      string
 	turnCompleted   bool
 	turnInterrupted bool
 	// turnDurationMS carries the completed turn's protocol duration so the TUI
 	// can show "Worked for" completion metadata (Rust #43558).
 	turnDurationMS *int64
+	// accountEmailMu guards the single account/update email request so an
+	// obsolete identity can never replace a newer one (Rust #50199).
+	accountEmailMu        sync.Mutex
+	accountEmailRequestID string
 	// reasoningBuffers accumulates streaming reasoning summaries per
 	// turn+item so the status row can show the latest usable line
 	// (Rust #43921).
@@ -349,13 +363,15 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	if remoteSettings, err := interactiveRemoteLoadSettings(ctx, endpoint); err == nil {
 		settings = remoteSettings
 	}
+	settings = interactiveScreenReaderAnimationSettings(settings)
 	keymapConfig := interactiveKeymapConfig(root)
 	if remoteKeymap, err := interactiveRemoteKeymapConfig(ctx, endpoint); err == nil {
 		keymapConfig = remoteKeymap
 	}
-	accountDisplay, hasChatGPTAccount := interactiveRemoteStatusAccount(ctx, endpoint)
+	accountDisplay, hasChatGPTAccount, requiresOpenAIAuth := interactiveRemoteStatusAccount(ctx, endpoint)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
+	state.RequiresOpenAIAuth = requiresOpenAIAuth
 	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
 	showRawReasoning := interactiveShowRawAgentReasoning(root)
 	// Rust #54681: this TUI talks to a distinct backend even when the endpoint
@@ -375,33 +391,6 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		taskToolsHost = nil
 	}
 	defer taskToolsHost.close()
-	// Rust daybreak::prefetch_notice: read the account's Daybreak eligibility in
-	// the background for a local openai-provider session; the refusal copy falls
-	// back to the neutral notice until the read lands.
-	daybreakCache := &daybreakNoticeCache{}
-	daybreakProvider := ""
-	if state != nil {
-		daybreakProvider = strings.TrimSpace(state.Provider)
-	}
-	if interactiveRemoteEndpointIsLocal(endpoint) && strings.EqualFold(daybreakProvider, "openai") {
-		prefetchDaybreakNotice(ctx, daybreakCache, func(callCtx context.Context) (appserver.AuthStatusResponse, error) {
-			client, err := openRemoteSessionClient(callCtx, endpoint)
-			if err != nil {
-				return appserver.AuthStatusResponse{}, err
-			}
-			defer client.close()
-			includeToken := true
-			refreshToken := false
-			var response appserver.AuthStatusResponse
-			if err := remoteSessionRequest(callCtx, client, appserver.MethodGetAuthStatus, appserver.AuthStatusParams{
-				IncludeToken: &includeToken,
-				RefreshToken: &refreshToken,
-			}, &response); err != nil {
-				return appserver.AuthStatusResponse{}, err
-			}
-			return response, nil
-		}, interactiveDaybreakBaseURL(), auth.DefaultCodexHome())
-	}
 	// The TUI owns the voice helper and relays its handshake through the
 	// app-server on a dedicated connection, so a media session never competes
 	// with the interactive read loop.
@@ -443,7 +432,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// directly instead of the tea model).
 	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
 	options := codextea.Options{
-		NoAltScreen:                  root != nil && root.Shared.NoAltScreen,
+		NoAltScreen:                  interactiveNoAltScreen(root, settings),
+		AlternateScreenMode:          settings.AlternateScreenMode,
+		WindowsTerminalMappedInput:   codextea.WindowsTerminalMappedInputEnabled(),
 		TerminalSizeContext:          tuiTelemetry.context,
 		TerminalSizeExporter:         tuiTelemetry.exporter,
 		TerminalSizeAnalyticsEnabled: tuiTelemetry.analyticsEnabled,
@@ -453,6 +444,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		DaemonCLIVersion:             daemonCLIVersion,
 		DaemonCLIPackage:             daemonCLIPackage,
 		DaemonVersion:                interactiveDaemonVersionForEndpoint(endpoint),
+		DaemonManaged:                interactiveManagedDaemonForEndpoint(endpoint),
 		RemoteAppServer:              interactiveRemoteEndpointIsExplicitRemote(root),
 		AnimationsEnabled:            settings.AnimationsEnabled,
 		Effects:                      settings.Effects,
@@ -460,6 +452,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		AutoRecap:                    settings.AutoRecap,
 		MouseScrollSpeed:             settings.MouseScrollSpeed,
 		RightClickPaste:              interactiveRightClickPasteValue(settings.RightClickPaste),
+		CopyOnSelect:                 interactiveCopyOnSelectValue(settings.CopyOnSelect),
+		CopyOnSelectClearSelection:   settings.CopyOnSelectClearSelection != nil && *settings.CopyOnSelectClearSelection,
+		StartInVimMode:               settings.StartInVimMode != nil && *settings.StartInVimMode,
+		ResumeCWD:                    interactiveResumeCWDValue(settings.ResumeCWD),
+		RemoteCWDOverride:            strings.TrimSpace(root.Shared.CWD),
 		ShowRawReasoning:             showRawReasoning,
 		// Managed worktree operations stay local, so a remote session never
 		// enables them (Rust #43120/#43286, #54175).
@@ -473,6 +470,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		AgentsOverviewGrouping:      settings.AgentsOverviewGrouping,
 		ShowSessionHeader:           true,
 		ShowTooltips:                settings.ShowTooltips,
+		ShowServerVersionNotice:     settings.ShowServerVersionNotice,
+		FullscreenTranscript:        settings.FullscreenTranscript,
 		SessionHeaderVersion:        doctor.Version(),
 		InitialHistoryCells:         interactiveUpdateHistoryCells(root),
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
@@ -481,15 +480,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
-		OnDaybreakNotice: func(model string) codextui.DaybreakNotice {
-			return daybreakNoticeForModel(daybreakProvider, daybreakCache, model)
-		},
-		OnLoadTranscriptPreview: interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
-		OnReadSessionTranscript: interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
-		OnRenameThread:          interactiveRemoteRenameThreadHandler(ctx, endpoint),
-		OnLogout:                interactiveRemoteLogoutHandler(ctx, endpoint),
-		KeymapConfig:            keymapConfig,
-		OnKeymapEdit:            interactiveRemoteKeymapEditHandler(ctx, endpoint),
+		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
+		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
+		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
+		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),
+		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
+		KeymapConfig:                keymapConfig,
+		OnKeymapEdit:                interactiveRemoteKeymapEditHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
 			if strings.TrimSpace(currentThreadID) == "" && state != nil {
 				currentThreadID = state.ThreadID
@@ -535,6 +532,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		NotificationMethod:      settings.NotificationMethod,
 		NotificationCondition:   settings.NotificationCondition,
 		PermissionRequirements:  settings.PermissionRequirements,
+		OnStartMCPLogin:         interactiveRemoteMCPLoginStarter(ctx, endpoint),
 		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
 		TUITheme:                settings.TUITheme,
 		StartupConfigWarnings:   remoteTUIStartupConfigWarnings(settings.TUITheme),
@@ -732,28 +730,39 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnCloseSide: func(params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
 			return interactiveRemoteCloseSide(ctx, endpoint, params, interrupts)
 		},
-		HasChatGPTAccount: hasChatGPTAccount,
+		HasChatGPTAccount:  hasChatGPTAccount,
+		RequiresOpenAIAuth: requiresOpenAIAuth,
 	}
 	model, err := codextea.Run(ctx, state, options, stdin, stdout)
 	if err != nil {
 		return err
 	}
+	if model != nil && model.PendingDaemonRestart() {
+		if err := daemonRestartForTUI(); err != nil {
+			return fmt.Errorf("restart background server: %w", err)
+		}
+		return runInteractiveRemoteTUI(ctx, root, endpoint, stdin, stdout, stderr)
+	}
 	return runPendingDaemonUpdate(ctx, model, stdout, stderr)
 }
 
-func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool) {
+func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool, *bool) {
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
-	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	response, err := remoteReadAccount(reqCtx, endpoint)
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
-	defer client.close()
-	var response auth.GetAccountResponse
-	if err := remoteSessionRequest(reqCtx, client, appserver.MethodGetAccount, auth.GetAccountParams{}, &response); err != nil {
-		return "", false
+	return remoteStatusAccountValues(response)
+}
+
+func remoteStatusAccountValues(response *auth.GetAccountResponse) (string, bool, *bool) {
+	if response == nil {
+		return "", false, nil
 	}
-	return interactiveAccountDisplay(response.Account)
+	display, hasChatGPTAccount := interactiveAccountDisplay(response.Account)
+	requiresOpenAIAuth := response.RequiresOpenAIAuth
+	return display, hasChatGPTAccount, &requiresOpenAIAuth
 }
 
 func interactiveRemoteKeymapConfig(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (*codextui.KeymapConfig, error) {
@@ -1610,6 +1619,26 @@ func interactiveRemoteRenameThreadHandler(ctx context.Context, endpoint *appserv
 	}
 }
 
+func interactiveRemoteDaybreakUpdateHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.DaybreakUpdateFunc {
+	return func(threadID string, enabled bool) error {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return errors.New("remote Daybreak update requires a thread id")
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		value := enabled
+		var response map[string]any
+		return remoteSessionRequest(ctx, client, appserver.MethodThreadMetadataUpdate, appserver.ThreadMetadataUpdateParams{
+			ThreadID:        threadID,
+			DaybreakEnabled: &value,
+		}, &response)
+	}
+}
+
 func interactiveRemoteLogoutHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.LogoutFunc {
 	return func() error {
 		client, err := openRemoteSessionClient(ctx, endpoint)
@@ -1640,6 +1669,7 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		// Rust #53816: check the selected thread's metadata before resuming and
 		// refuse Guardian review threads. A failed metadata read preserves the
 		// existing resume behavior.
+		resumeCWD := strings.TrimSpace(selection.ResumeCWD)
 		if thread, readErr := remoteTUIReadThread(ctx, client, threadID, false); readErr == nil && thread != nil {
 			parentThreadID := ""
 			if thread.ParentThreadID != nil {
@@ -1648,13 +1678,20 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 			if guardErr := validateResumeTargetSource(string(thread.Source), parentThreadID); guardErr != nil {
 				return codextea.SessionResumeResponse{}, guardErr
 			}
+			if resumeCWD != "" && remoteTUISameCWD(resumeCWD, selection.Target.CWD) && strings.TrimSpace(thread.CWD) != "" {
+				resumeCWD = strings.TrimSpace(thread.CWD)
+			}
 		}
 		// Rust #43253: resume through the app server so the server owns the
 		// writer and reports the thread's saved settings. When another app owns
 		// the conversation the resume fails with the active-writer conflict and
 		// the TUI falls back to a read-only history snapshot.
 		var resumed appserver.ThreadResumeResponse
-		resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, remoteTUIResumeParams(root, threadID), &resumed)
+		resumeParams, err := remoteTUIResumeParams(root, threadID, resumeCWD)
+		if err != nil {
+			return codextea.SessionResumeResponse{}, err
+		}
+		resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, resumeParams, &resumed)
 		if resumeErr == nil && resumed.Thread != nil {
 			response := remoteTUIResumeResponseFromThread(resumed.Thread)
 			response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
@@ -1673,18 +1710,34 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 	}
 }
 
-// remoteTUIResumeParams builds the thread/resume request used when the remote
-// TUI attaches to a thread. Rust #49624 (tui/src/app_server_session.rs
-// resume_thread_with_permission_overrides -> thread_resume_params_from_config)
-// resumes a remote thread with `cwd = remote_cwd_override`, so the caller's
-// working directory is forwarded as the resumed thread's cwd override rather
-// than leaving the server's saved directory in place.
-func remoteTUIResumeParams(root *cli.RootOptions, threadID string) appserver.ThreadResumeParams {
+// remoteTUIResumeParams builds the thread/resume request used when the TUI
+// attaches to a thread. Rust resolves the resume directory before the request:
+// Embedded thread params carry the chosen config cwd, while Remote params carry
+// only the explicit --cd override and otherwise leave the server-owned saved
+// directory untouched (tui/src/app_server_session.rs:thread_cwd_from_config).
+func remoteTUIResumeParams(root *cli.RootOptions, threadID string, resumeCWD string) (appserver.ThreadResumeParams, error) {
 	params := appserver.ThreadResumeParams{ThreadID: strings.TrimSpace(threadID)}
-	if cwd := interactiveSessionPickerCWD(root); cwd != "" {
+	if interactiveRemoteEndpointIsExplicitRemote(root) {
+		if cwd := strings.TrimSpace(root.Shared.CWD); cwd != "" {
+			params.CWD = &cwd
+		} else if strings.TrimSpace(resumeCWD) != "" {
+			return params, errors.New("`tui.resume_cwd = \"current\"` requires `--cd` when using a remote workspace")
+		}
+		return params, nil
+	}
+	if cwd := strings.TrimSpace(resumeCWD); cwd != "" {
 		params.CWD = &cwd
 	}
-	return params
+	return params, nil
+}
+
+func remoteTUISameCWD(a string, b string) bool {
+	a = filepath.Clean(strings.TrimSpace(a))
+	b = filepath.Clean(strings.TrimSpace(b))
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // remoteTUIResumeResponseFromThread builds the TUI resume response from a
@@ -1774,6 +1827,8 @@ func remoteTUISettingsFromResume(resumed *appserver.ThreadResumeResponse) *appse
 		Effort:                resumed.ReasoningEffort,
 		ServiceTier:           resumed.ServiceTier,
 		DisabledPluginIDs:     append([]string(nil), resumed.DisabledPluginIDs...),
+		InstructionSources:    append([]string(nil), resumed.InstructionSources...),
+		InstructionSourcesSet: true,
 		RuntimeWorkspaceRoots: append([]string(nil), resumed.RuntimeWorkspaceRoots...),
 	}
 	if resumed.ApprovalsReviewer != nil {
@@ -1803,6 +1858,8 @@ func remoteTUISettingsFromStartedThread(started *appserver.ThreadStartResponse) 
 		Effort:                started.ReasoningEffort,
 		ServiceTier:           started.ServiceTier,
 		DisabledPluginIDs:     append([]string(nil), started.DisabledPluginIDs...),
+		InstructionSources:    append([]string(nil), started.InstructionSources...),
+		InstructionSourcesSet: true,
 		RuntimeWorkspaceRoots: append([]string(nil), started.RuntimeWorkspaceRoots...),
 	}
 	if started.ApprovalsReviewer != nil {
@@ -2100,8 +2157,18 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	// reports the thread's settings. When another app server already owns the
 	// task the resume fails with the active-writer conflict, so fall back to a
 	// frozen read-only history snapshot instead of refusing to open it.
+	resumeCWD := ""
+	if !interactiveRemoteEndpointIsExplicitRemote(root) {
+		if thread, readErr := remoteTUIReadThread(ctx, client, threadID, false); readErr == nil && thread != nil {
+			resumeCWD = strings.TrimSpace(thread.CWD)
+		}
+	}
+	resumeParams, err := remoteTUIResumeParams(root, threadID, resumeCWD)
+	if err != nil {
+		return codextea.AgentThreadSwitchResponse{}, err
+	}
 	var resumed appserver.ThreadResumeResponse
-	resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, remoteTUIResumeParams(root, threadID), &resumed)
+	resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, resumeParams, &resumed)
 	if resumeErr == nil && resumed.Thread != nil {
 		response := remoteTUIAgentSwitchResponseFromThread(resumed.Thread)
 		response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
@@ -2511,6 +2578,45 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 			TranscriptOnly:   true,
 			ItemID:           strings.TrimSpace(item.ID),
 		}, true
+	case itemType == "imageview":
+		path := firstNonEmptyLocal(
+			remoteTUIAnyString(item.Data["path"]),
+			strings.TrimSpace(item.Text),
+		)
+		if path == "" {
+			return codextui.Message{}, false
+		}
+		cell := historycell.NewViewImageToolCallWithID(item.ID, path, "")
+		text := strings.Join(cell.DisplayLines(0), "\n")
+		return codextui.Message{
+			Role:        codextui.RoleHistory,
+			Text:        text,
+			RawText:     text,
+			ImagePath:   cell.ImagePath(),
+			ActivityIDs: cell.ActivityIDs(),
+		}, true
+	case itemType == "imagegeneration":
+		status := firstNonEmptyLocal(
+			remoteTUIAnyString(item.Data["status"]),
+			strings.TrimSpace(item.Status),
+		)
+		revisedPrompt := firstNonEmptyLocal(
+			remoteTUIAnyString(item.Data["revisedPrompt"]),
+			remoteTUIAnyString(item.Data["revised_prompt"]),
+			strings.TrimSpace(item.Text),
+		)
+		savedPath := firstNonEmptyLocal(
+			remoteTUIAnyString(item.Data["savedPath"]),
+			remoteTUIAnyString(item.Data["saved_path"]),
+		)
+		cell := historycell.NewImageGenerationCall(item.ID, status, revisedPrompt, savedPath)
+		text := strings.Join(cell.DisplayLines(0), "\n")
+		return codextui.Message{
+			Role:      codextui.RoleHistory,
+			Text:      text,
+			RawText:   text,
+			ImagePath: cell.ImagePath(),
+		}, true
 	case itemType == "commandexecution" || itemType == "mcptoolcall" || itemType == "dynamictoolcall" || itemType == "collabagenttoolcall" || itemType == "subagentactivity":
 		text := remoteTUIThreadItemToolText(item)
 		if text == "" {
@@ -2833,7 +2939,7 @@ func sendRemoteThreadStartError(messages chan<- bubbletea.Msg, err error) {
 // per-request connections are gone by then, so the continuation prompt travels
 // as the turn's goal additional context.
 func interactiveRemoteGoalContinuationCommand(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, brokers remoteTUIBrokers, taskTools *taskToolsMCPHost, interrupts *remoteTUIInterruptController) codextea.GoalContinuationFunc {
-	return func(goal appserver.Goal) bubbletea.Cmd {
+	return func(goal appserver.Goal, cyberAccessProgram string) bubbletea.Cmd {
 		continuation := prompt.Continuation(&prompt.Goal{
 			Objective:       strings.TrimSpace(goal.Objective),
 			TokenBudget:     cloneInt64PtrRemote(goal.TokenBudget),
@@ -2844,7 +2950,8 @@ func interactiveRemoteGoalContinuationCommand(ctx context.Context, root *cli.Roo
 			return nil
 		}
 		request := codextea.SubmitRequest{
-			TurnTrigger: "goal",
+			TurnTrigger:        "goal",
+			CyberAccessProgram: cyberAccessProgram,
 			AdditionalContext: map[string]any{
 				"goal": map[string]any{
 					"kind":  string(turn.AdditionalContextApplication),
@@ -3082,6 +3189,7 @@ func (c *remoteAppServerTUIClient) close() {
 	// the TUI offering a request that can no longer be answered.
 	if c != nil {
 		c.brokers.elicitation.close()
+		c.setAccountEmailRequestID("")
 	}
 	if c != nil && c.transport != nil {
 		c.transport.close()
@@ -3155,6 +3263,8 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 		return err
 	}
 	c.codexHome = strings.TrimSpace(response.CodexHome)
+	c.platformFamily = strings.TrimSpace(response.PlatformFamily)
+	c.platformOS = strings.TrimSpace(response.PlatformOS)
 	return nil
 }
 
@@ -3188,6 +3298,14 @@ func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.Ro
 		return "", errors.New("thread/start response did not include a thread id")
 	}
 	threadID := strings.TrimSpace(response.Thread.ID)
+	if c.state != nil {
+		cwd := strings.TrimSpace(response.CWD)
+		if cwd == "" {
+			cwd = c.state.CWD
+		}
+		home, _ := os.UserHomeDir()
+		c.state.AgentsSummary = codextui.FormatInstructionSources(response.InstructionSources, cwd, home)
+	}
 	// The TUI only offers task mentions for threads that host the task-tool
 	// namespace (Rust AppServerSession::task_tools_available), and persists the
 	// capability so a later process can still offer them.
@@ -4271,6 +4389,22 @@ func (c *remoteAppServerTUIClient) notificationThreadIsActive(threadID string) b
 	return current == "" || current == threadID
 }
 
+// hiddenThreadStartedNotification reports whether a thread/started event
+// belongs to an internal helper that must stay out of visible TUI routing.
+// Persisted system threads remain visible; only ephemeral feature workers
+// (Rust #40494 and #46531) are suppressed.
+func hiddenThreadStartedNotification(thread *appserver.Thread) bool {
+	if thread == nil || !thread.Ephemeral || thread.ThreadSource == nil {
+		return false
+	}
+	switch strings.TrimSpace(string(*thread.ThreadSource)) {
+	case "system", "thread_title":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *remoteAppServerTUIClient) noteNotificationThreadID(threadID string) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" || c == nil || c.state == nil {
@@ -4314,6 +4448,13 @@ func sideParentStatusForTurnStatus(status appserver.TurnStatus) (codextea.SidePa
 func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMessage) error {
 	method := appserver.NotificationMethod(strings.TrimSpace(message.Method))
 	switch method {
+	case appserver.NotificationAccountUpdated:
+		var payload auth.AccountUpdatedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		c.accountStatusUpdated(payload)
+		return nil
 	case appserver.NotificationThreadArchived:
 		var payload appserver.ThreadArchivedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -4332,6 +4473,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		var payload appserver.ThreadStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
 			return err
+		}
+		if hiddenThreadStartedNotification(payload.Thread) {
+			return nil
 		}
 		if payload.Thread != nil && strings.TrimSpace(payload.Thread.ID) != "" {
 			threadID := strings.TrimSpace(payload.Thread.ID)
@@ -4909,9 +5053,12 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 	if specs, err := DynamicToolSpecsRaw(); err == nil {
 		params.DynamicTools = specs
 	}
-	if state != nil && strings.TrimSpace(state.Personality) != "" {
-		personality := strings.TrimSpace(state.Personality)
-		params.Personality = &personality
+	if state != nil {
+		personality := chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(state.Personality))))
+		if personality != "" {
+			value := string(personality)
+			params.Personality = &value
+		}
 	}
 	source := appserver.ThreadSourceUser
 	params.ThreadSource = &source
@@ -5008,10 +5155,17 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 		AdditionalContext: additionalContext,
 	}
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
-	if state != nil && strings.TrimSpace(state.Personality) != "" {
-		personality := strings.TrimSpace(state.Personality)
-		params.Personality = &personality
-		params.PersonalitySet = true
+	if program := strings.TrimSpace(request.CyberAccessProgram); program != "" {
+		value := turn.CyberAccessProgram(program)
+		params.CyberAccessProgram = &value
+	}
+	if state != nil {
+		personality := chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(state.Personality))))
+		if personality != "" {
+			value := string(personality)
+			params.Personality = &value
+			params.PersonalitySet = true
+		}
 	}
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
 		params.Effort = &effort
@@ -5126,6 +5280,12 @@ func remoteConfigValues(root *cli.RootOptions, shared cli.SharedOptions) (map[st
 	// destination server's default or a saved thread's search setting; a losing
 	// legacy `[features] web_search*` flag is dropped from the request.
 	applyWebSearchLaunchOverride(root, webSearchParamsRemote, values)
+	if raw, ok := values["personality"]; ok {
+		personality, _ := raw.(string)
+		if chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(personality)))) == "" {
+			delete(values, "personality")
+		}
+	}
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -5236,6 +5396,12 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			remotePayloadString(payload, "query"),
 			action,
 		)
+	case "imageView", "image_view":
+		return protocol.ThreadItem{
+			ID:   id,
+			Type: "imageView",
+			Path: remotePayloadString(payload, "path"),
+		}
 	case "reasoning":
 		// Rust #43921: a completed reasoning item carries the complete summary,
 		// which a refreshed snapshot reconciles against partial live deltas.

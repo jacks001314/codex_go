@@ -257,6 +257,7 @@ func TestParseCommand(t *testing.T) {
 		{input: "/debug-config", command: CommandDebugConfig, ok: true},
 		{input: "/copy", command: CommandCopy, ok: true},
 		{input: "/raw on", command: CommandRaw, args: "on", ok: true},
+		{input: "/tui", command: CommandTUI, ok: true},
 		{input: "/diff", command: CommandDiff, ok: true},
 		{input: "/ps", command: CommandPs, ok: true},
 		{input: "/stop", command: CommandStop, ok: true},

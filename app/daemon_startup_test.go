@@ -26,6 +26,10 @@ func TestDaemonConfigExclusionOverridesLikeRust(t *testing.T) {
 	}{
 		{"features.worktrees=true", true},
 		{"features.worktrees=false", true},
+		{"features.transcript_v2=true", true},
+		{"features.transcript_v2=false", true},
+		{"features.app_server_websocket_compression=true", true},
+		{"features.app_server_websocket_compression=false", true},
 		{"features={worktrees=true}", true},
 		{"features={worktrees=true,api_key_model_discovery=false}", false},
 		{"features.auth_elicitation=false", false},

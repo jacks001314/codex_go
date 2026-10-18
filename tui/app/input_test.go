@@ -84,3 +84,62 @@ func TestBacktrackEscGatingMatchesRust(t *testing.T) {
 		t.Fatal("primed backtrack reset mismatch")
 	}
 }
+
+func TestRecoverVimInsertEscapeGatingMatchesRust(t *testing.T) {
+	type recoveryState struct {
+		unix                bool
+		enhancedKeys        bool
+		overlay             bool
+		modalOrPopup        bool
+		altCharacter        bool
+		vimCanConsumeEscape bool
+		imagePaste          bool
+		agentNavigation     bool
+		altBindingMatches   bool
+	}
+	base := recoveryState{
+		unix:                true,
+		altCharacter:        true,
+		vimCanConsumeEscape: true,
+	}
+	recoverable := func(state recoveryState) bool {
+		t.Helper()
+		return ShouldRecoverVimInsertEscape(
+			state.unix,
+			state.enhancedKeys,
+			state.overlay,
+			state.modalOrPopup,
+			state.altCharacter,
+			state.vimCanConsumeEscape,
+			state.imagePaste,
+			state.agentNavigation,
+			state.altBindingMatches,
+		)
+	}
+	with := func(mutate func(*recoveryState)) recoveryState {
+		state := base
+		mutate(&state)
+		return state
+	}
+	if !recoverable(base) {
+		t.Fatal("plain legacy Vim character should be recoverable")
+	}
+	for _, testCase := range []struct {
+		name  string
+		state recoveryState
+	}{
+		{name: "windows", state: with(func(s *recoveryState) { s.unix = false })},
+		{name: "enhanced keys", state: with(func(s *recoveryState) { s.enhancedKeys = true })},
+		{name: "overlay", state: with(func(s *recoveryState) { s.overlay = true })},
+		{name: "modal or popup", state: with(func(s *recoveryState) { s.modalOrPopup = true })},
+		{name: "not an alt character", state: with(func(s *recoveryState) { s.altCharacter = false })},
+		{name: "vim cannot consume escape", state: with(func(s *recoveryState) { s.vimCanConsumeEscape = false })},
+		{name: "image paste", state: with(func(s *recoveryState) { s.imagePaste = true })},
+		{name: "agent navigation", state: with(func(s *recoveryState) { s.agentNavigation = true })},
+		{name: "alt binding", state: with(func(s *recoveryState) { s.altBindingMatches = true })},
+	} {
+		if recoverable(testCase.state) {
+			t.Fatalf("%s: recovery should be disabled", testCase.name)
+		}
+	}
+}

@@ -34,6 +34,55 @@ func TestTranscriptOverlayPagerActionsPreserveAndFollowBottom(t *testing.T) {
 	}
 }
 
+// TestTranscriptOverlayKeepsFollowingTailAcrossResizesLikeRust mirrors
+// #40751: a bottom-following pager stays pinned when the available body height
+// changes, then follows subsequently appended content.
+func TestTranscriptOverlayKeepsFollowingTailAcrossResizesLikeRust(t *testing.T) {
+	overlay := NewTranscriptOverlay(48, 24, numberedTranscript(40))
+	for _, height := range []int{12, 30, 10} {
+		overlay.Resize(48, height)
+		if !overlay.AtBottom() {
+			t.Fatalf("height %d moved the overlay away from the tail: offset=%d", height, overlay.YOffset())
+		}
+	}
+	overlay.SetContent(numberedTranscript(45))
+	if !overlay.AtBottom() || !strings.Contains(overlay.Content(), "line 44") {
+		t.Fatalf("appended tail was not followed after resize: offset=%d", overlay.YOffset())
+	}
+}
+
+// TestTranscriptOverlayPreservesReadingPositionAcrossContentRebuild keeps a
+// scrolled-away pager at the same offset when history is replaced.
+func TestTranscriptOverlayPreservesReadingPositionAcrossContentRebuild(t *testing.T) {
+	overlay := NewTranscriptOverlay(48, 12, numberedTranscript(50))
+	overlay.ApplyPagerAction(PagerJumpTop)
+	overlay.ApplyPagerAction(PagerScrollDown)
+	offset := overlay.YOffset()
+	overlay.SetContent(numberedTranscript(60))
+	if got := overlay.YOffset(); got != offset {
+		t.Fatalf("reading offset after rebuild = %d, want %d", got, offset)
+	}
+	overlay.Resize(40, 16)
+	if got := overlay.YOffset(); got != offset {
+		t.Fatalf("reading offset after resize = %d, want %d", got, offset)
+	}
+}
+
+// Rust #43889 rounds a half page up against the rendered content height; the
+// viewport library's HalfPage helpers round down.
+func TestTranscriptOverlayHalfPageRoundsUpLikeRust(t *testing.T) {
+	overlay := NewTranscriptOverlay(40, 11, numberedTranscript(50))
+	overlay.ApplyPagerAction(PagerJumpTop)
+	overlay.ApplyPagerAction(PagerHalfPageDown)
+	if got := overlay.YOffset(); got != 4 {
+		t.Fatalf("half page down offset = %d, want 4", got)
+	}
+	overlay.ApplyPagerAction(PagerHalfPageUp)
+	if got := overlay.YOffset(); got != 0 {
+		t.Fatalf("half page up offset = %d, want 0", got)
+	}
+}
+
 func TestTranscriptOverlayViewFitsHeaderAndHelp(t *testing.T) {
 	overlay := NewTranscriptOverlay(32, 6, numberedTranscript(20))
 	view := overlay.View()

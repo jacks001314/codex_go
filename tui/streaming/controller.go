@@ -150,7 +150,7 @@ func (c *streamCore) refreshProsePreview() bool {
 	}
 	var lines []string
 	if start < len(safe) {
-		lines = c.renderSourceLines(safe[start:])
+		lines = c.renderPreviewSourceLines(safe[start:])
 	}
 	if start > 0 {
 		lines = append([]string{"…"}, lines...)
@@ -359,6 +359,14 @@ func bareListMarkerSourceStart(source string) (int, bool) {
 }
 
 func (c *streamCore) renderSourceLines(source string) []string {
+	if c.hasVisualization || strings.Contains(source, tui.InlineVisualizationDirectivePrefix) {
+		source, _ = tui.RewriteInlineVisualizations(source, nil)
+	}
+	return renderSourceLines(source, c.width, c.theme)
+}
+
+func (c *streamCore) renderPreviewSourceLines(source string) []string {
+	source = tui.HideUnfinishedFollowupDirective(source)
 	if c.hasVisualization || strings.Contains(source, tui.InlineVisualizationDirectivePrefix) {
 		source, _ = tui.RewriteInlineVisualizations(source, nil)
 	}

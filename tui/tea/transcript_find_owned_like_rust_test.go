@@ -85,8 +85,17 @@ func TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust(t *testing.T) {
 		t.Fatalf("reopening Find lost the query: editing=%v query=%q", model.mainFind.editing, model.mainFind.query)
 	}
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	if !model.mainFind.active() || !model.mainFind.accepted || model.mainFind.editing ||
+		model.mainFind.query != "needle" {
+		t.Fatalf("first Esc did not retain the query in reading mode: %#v", model.mainFind)
+	}
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "hidden needle") || !strings.Contains(view, "esc latest") {
+		t.Fatalf("reading mode lost the selected match or hints:\n%s", view)
+	}
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
 	if model.mainFind.active() {
-		t.Fatal("Esc did not clear the accepted Find")
+		t.Fatal("second Esc did not clear the accepted Find")
 	}
 	view = model.View()
 	if strings.Contains(view, "hidden needle") {
@@ -114,10 +123,34 @@ func TestOwnedTranscriptFindRevealsTranscriptOnlyMatchLikeRust(t *testing.T) {
 	if !strings.Contains(view, "hidden reasoning needle") {
 		t.Fatalf("transcript-only match was not revealed:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlC})
 	view = utils.StripANSI(model.View())
 	if strings.Contains(view, "hidden reasoning needle") {
 		t.Fatalf("transcript-only match stayed visible after cancel:\n%s", view)
+	}
+}
+
+func TestOwnedTranscriptFindCtrlCCancelsWithoutQuittingLikeRust(t *testing.T) {
+	model := ownedFindFixture(t)
+	model.transcript.SetYOffset(2)
+	model.activityFollow = false
+	model.Update(agentsF3Event())
+	for _, r := range "needle" {
+		model.Update(findKeyRunes(string(r)))
+	}
+	if !model.mainFind.editing || model.mainFind.query != "needle" {
+		t.Fatalf("find setup = %#v", model.mainFind)
+	}
+	savedOffset := model.mainFind.savedOffset
+	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatalf("Ctrl+C returned a quit/interrupt command while Find was active")
+	}
+	if model.mainFind.active() {
+		t.Fatalf("Ctrl+C left Find active: %#v", model.mainFind)
+	}
+	if model.transcript.YOffset != savedOffset {
+		t.Fatalf("Ctrl+C restored offset %d, want %d", model.transcript.YOffset, savedOffset)
 	}
 }
 

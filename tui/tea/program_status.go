@@ -147,6 +147,17 @@ func (m *Model) refreshTerminalProgramStatusCmd() bubbletea.Cmd {
 	return m.programStatusWriter(sequence)
 }
 
+func (m *Model) clearTerminalProgramStatusCmd() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	sequence := codextui.ClearTerminalProgramStatus()
+	if sequence == "" {
+		return nil
+	}
+	return m.programStatusWriter(sequence)
+}
+
 // clearTerminalProgramStatusOnExit releases the terminal's lifecycle indicator
 // when the TUI exits (Rust #52203/#54114 clear-on-exit behavior).
 func clearTerminalProgramStatusOnExit(output io.Writer) {

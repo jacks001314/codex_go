@@ -73,7 +73,7 @@ Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sandb
 > Ask gcode
 >
 >
-Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
 	})
 
 	t.Run("approval modal", func(t *testing.T) {
@@ -102,7 +102,7 @@ Run command?
   2. Allow for this session (a)
   3. Deny (d)
 Esc cancel | Enter choose
-Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
 	})
 
 	t.Run("session picker", func(t *testing.T) {
@@ -184,7 +184,7 @@ Request user input
 › 1. Plan (1) - Only update the plan.
   2. All (2) - Apply everywhere.
 Esc cancel | Enter choose
-Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
 	})
 }
 

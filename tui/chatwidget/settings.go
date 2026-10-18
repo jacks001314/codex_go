@@ -14,6 +14,15 @@ const (
 	PersonalityPragmatic Personality = "pragmatic"
 )
 
+// PersonalityOptOutOnly retains the explicit `none` opt-out while retiring
+// Friendly/Pragmatic selection from TUI requests (Rust #44946).
+func PersonalityOptOutOnly(personality Personality) Personality {
+	if personality == PersonalityNone {
+		return personality
+	}
+	return ""
+}
+
 type SettingsPopupKind string
 
 const (

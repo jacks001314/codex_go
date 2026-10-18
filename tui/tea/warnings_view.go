@@ -77,7 +77,7 @@ func (m *Model) updateWarningsViewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		if m.keyMatches("global", "copy", keySpec) {
 			if entry, ok := m.warningsView.CurrentEntry(); ok {
-				m.copyWarningsText(entry.Details)
+				return m.copyWarningsText(entry.Details)
 			}
 			return nil
 		}
@@ -120,19 +120,15 @@ func (m *Model) warningsListAction(keySpec string) string {
 
 // copyWarningsText mirrors `AppEvent::CopyWarning`: the diagnostic's full text
 // is copied as plain text and the viewer shows the result.
-func (m *Model) copyWarningsText(text string) {
+func (m *Model) copyWarningsText(text string) bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	if m.clipboardWrite == nil {
 		m.warningsFlash = "Copy unavailable"
-		return
+		return nil
 	}
-	if err := m.clipboardWrite(text); err != nil {
-		m.warningsFlash = "Copy failed"
-		return
-	}
-	m.warningsFlash = "Copied"
+	return m.clipboardWriteCmd("warning", text, false, true)
 }
 
 // warningsHints resolves the footer labels from the current keymap (Rust

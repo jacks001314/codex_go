@@ -1,6 +1,7 @@
 package historycell
 
 import (
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,9 +34,8 @@ func newPatchEventTheme(changes map[string]tui.FileChange, cwd string, theme str
 }
 
 func (c PatchHistoryCell) DisplayLines(width int) []string {
-	// Rust #41143: the inline patch preview is bounded, while the transcript and
-	// raw view retain the complete diff.
-	return tui.CreateDiffPreview(c.Changes, c.CWD, width, c.Theme)
+	// Rust #42107: TUI history renders the complete patch inline.
+	return tui.CreateDiffSummary(c.Changes, c.CWD, width, c.Theme)
 }
 
 func (c PatchHistoryCell) RawLines() []string {
@@ -76,30 +76,139 @@ func patchApplyFailureLines(stderr string, lineLimit int) []string {
 	return out
 }
 
-func NewViewImageToolCall(path string, cwd string) PlainHistoryCell {
-	displayPath := strings.TrimSpace(path)
-	if displayPath != "" && cwd != "" {
-		if abs, err := filepath.Abs(displayPath); err == nil {
-			if rel, err := filepath.Rel(cwd, abs); err == nil && !strings.HasPrefix(rel, "..") {
+// ViewImageHistoryCell renders a viewed local image and carries the artifact
+// path the owned fullscreen transcript may preview.
+type ViewImageHistoryCell struct {
+	ActivityID string
+	Path       string
+	Label      string
+	CWD        string
+}
+
+// NewViewImageToolCall creates a viewed-image cell for callers without an item
+// id. The path-derived identity keeps the preview behind disclosure, matching
+// Rust's always-identified ImageView cell.
+func NewViewImageToolCall(path string, cwd string) ViewImageHistoryCell {
+	return NewViewImageToolCallWithID("legacy:"+strings.TrimSpace(path), path, cwd)
+}
+
+// NewViewImageToolCallWithID creates a viewed-image cell whose activity ID
+// controls disclosure of the optional preview.
+func NewViewImageToolCallWithID(id string, path string, cwd string) ViewImageHistoryCell {
+	cwd = strings.TrimSpace(cwd)
+	return ViewImageHistoryCell{
+		ActivityID: strings.TrimSpace(id),
+		Path:       absoluteImagePath(path, cwd),
+		Label:      strings.TrimSpace(path),
+		CWD:        cwd,
+	}
+}
+
+func (c ViewImageHistoryCell) DisplayLines(width int) []string {
+	_ = width
+	displayPath := strings.TrimSpace(c.Label)
+	if displayPath != "" && c.CWD != "" {
+		if abs, err := filepath.Abs(c.Path); err == nil {
+			if rel, err := filepath.Rel(c.CWD, abs); err == nil && !strings.HasPrefix(rel, "..") {
 				displayPath = filepath.ToSlash(rel)
 			}
 		}
 	}
-	return NewPlainHistoryCell([]string{
+	if displayPath == "" {
+		displayPath = c.Label
+	}
+	return []string{
 		"\u2022 Viewed Image",
 		"  \u2514 " + displayPath,
-	})
+	}
 }
 
-func NewImageGenerationCall(callID string, status string, revisedPrompt string, savedPath string) PlainHistoryCell {
+func (c ViewImageHistoryCell) RawLines() []string {
+	return c.DisplayLines(0)
+}
+
+// ActivityIDs returns the stable disclosure identity for the viewed image.
+func (c ViewImageHistoryCell) ActivityIDs() []string {
+	if c.ActivityID == "" {
+		return nil
+	}
+	return []string{"image-view:" + c.ActivityID}
+}
+
+// ImagePath returns the local artifact path for transcript previews.
+func (c ViewImageHistoryCell) ImagePath() string {
+	return c.Path
+}
+
+// ImageGenerationHistoryCell renders a generated-image result and carries the
+// saved local artifact for transcript previews.
+type ImageGenerationHistoryCell struct {
+	Lines     []string
+	SavedPath string
+}
+
+// NewImageGenerationCall creates a generated-image cell. Failed generations
+// keep the saved-path text but do not offer a preview.
+func NewImageGenerationCall(callID string, status string, revisedPrompt string, savedPath string) ImageGenerationHistoryCell {
 	detail := firstNonEmptyHistory(revisedPrompt, callID)
 	heading := "\u2022 Generated Image:"
-	if strings.EqualFold(strings.TrimSpace(status), "failed") {
+	failed := strings.EqualFold(strings.TrimSpace(status), "failed")
+	if failed {
 		heading = "\u2717 Image generation failed"
 	}
 	lines := []string{heading, "  \u2514 " + detail}
+	previewPath := ""
 	if strings.TrimSpace(savedPath) != "" {
 		lines = append(lines, "  \u2514 Saved to: "+strings.TrimSpace(savedPath))
+		if !failed {
+			previewPath = absoluteImagePath(savedPath, "")
+		}
 	}
-	return NewPlainHistoryCell(lines)
+	return ImageGenerationHistoryCell{Lines: lines, SavedPath: previewPath}
+}
+
+func (c ImageGenerationHistoryCell) DisplayLines(width int) []string {
+	_ = width
+	return append([]string(nil), c.Lines...)
+}
+
+func (c ImageGenerationHistoryCell) RawLines() []string {
+	return plainLines(c.Lines)
+}
+
+// ImagePath returns the saved local artifact path for transcript previews.
+func (c ImageGenerationHistoryCell) ImagePath() string {
+	return c.SavedPath
+}
+
+// absoluteImagePath resolves a local artifact (including a file:// URL) against
+// the supplied cwd so decoding never depends on the process working directory.
+func absoluteImagePath(path string, cwd string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(path); err == nil && parsed.Scheme == "file" {
+		path = parsed.Path
+		if parsed.Host != "" && parsed.Host != "localhost" {
+			path = "//" + parsed.Host + parsed.Path
+		}
+		if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
+			path = path[1:]
+		}
+		path = filepath.FromSlash(path)
+	}
+	if !filepath.IsAbs(path) {
+		if cwd == "" {
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+		} else {
+			path = filepath.Join(cwd, path)
+		}
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }

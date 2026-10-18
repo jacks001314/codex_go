@@ -32,6 +32,9 @@ func (m *Model) transcriptActivityExpandable(index int) bool {
 	if message.Role != codextui.RoleHistory {
 		return false
 	}
+	if len(normalizeActivityIDs(message.ActivityIDs)) > 0 {
+		return true
+	}
 	if strings.TrimSpace(message.TranscriptText) != "" {
 		return true
 	}
@@ -126,16 +129,7 @@ func (m *Model) nearestTranscriptActivityIndex() int {
 		return -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
-	_, ranges := renderTranscriptMessagesWithRanges(
-		&m.transcriptMessages,
-		m.State,
-		m.rawOutput,
-		width,
-		m.activeTUITheme(),
-		false,
-		m.sessionCWD,
-		m.showRawReasoning,
-	)
+	_, ranges := m.renderTranscriptWithExpandedMessages(m.State, width, m.expandedTranscriptActivityMessages(), true)
 	top := m.transcript.YOffset
 	bottom := top + m.transcript.Height
 	for index := len(indexes) - 1; index >= 0; index-- {
@@ -270,17 +264,7 @@ func (m *Model) renderTranscriptActivityContent() (string, int) {
 		return "No messages yet.", -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
-	content, ranges := renderTranscriptWithExpandedMessages(
-		&m.transcriptMessages,
-		m.State,
-		m.rawOutput,
-		width,
-		m.activeTUITheme(),
-		false,
-		m.expandedTranscriptActivityMessages(),
-		m.sessionCWD,
-		m.showRawReasoning,
-	)
+	content, ranges := m.renderTranscriptWithExpandedMessages(m.State, width, m.expandedTranscriptActivityMessages(), true)
 	index := m.focusedTranscriptActivityIndex()
 	if index < 0 || index >= len(ranges) {
 		return content, -1

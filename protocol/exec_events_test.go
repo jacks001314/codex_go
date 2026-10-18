@@ -43,6 +43,36 @@ func TestCommandExecutionItemAttributionJSONShape(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #51463: started sub-agent activity carries the resolved model
+// and reasoning effort, while older records without those fields stay valid.
+func TestSubAgentActivityItemSettingsJSONShapeLikeRust(t *testing.T) {
+	model := "gpt-5.4"
+	effort := "high"
+	item := SubAgentActivityItemWithSettings("activity-1", "started", "child-1", "/root/child", &model, &effort)
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal settings item: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		`"model":"gpt-5.4"`,
+		`"reasoning_effort":"high"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("settings item JSON missing %s: %s", want, got)
+		}
+	}
+
+	legacy := `{"id":"activity-2","type":"sub_agent_activity","kind":"started","agent_thread_id":"child-2"}`
+	var parsed ThreadItem
+	if err := json.Unmarshal([]byte(legacy), &parsed); err != nil {
+		t.Fatalf("Unmarshal legacy activity: %v", err)
+	}
+	if parsed.Model != nil || parsed.ReasoningEffort != nil {
+		t.Fatalf("legacy activity settings = %v/%v, want nil", parsed.Model, parsed.ReasoningEffort)
+	}
+}
+
 func TestAgentMessageItemCompletedJSONShape(t *testing.T) {
 	event := ItemCompleted(AgentMessageItem("item-1", "hello"))
 	data, err := json.Marshal(event)

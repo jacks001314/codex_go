@@ -109,11 +109,18 @@ func (m *Model) startFreshNamedSession(args string, defaultNotice string) {
 	}
 	m.clearMisalignmentState()
 	name := strings.TrimSpace(args)
+	// Daybreak is session-scoped for a fresh thread: retain the current
+	// preference across the thread-scoped reset (Rust #54097).
+	daybreakEnabled := m.daybreakEnabled && m.daybreakFeatureEnabled()
 	m.resetAgentPickerRefresh(true)
 	// Rust #43994: a fresh chat must not inherit the previous thread's
 	// transcript state.
 	m.resetThreadScopedState()
+	m.daybreakEnabled = daybreakEnabled
 	m.State.ResetThread()
+	m.markFreshAstraSparkle()
+	m.insertSessionHeader()
+	m.appendDaybreakNewTurnNotice()
 	m.State.SetThreadName(name)
 	m.pendingThreadName = name != ""
 	if name == "" {
@@ -687,6 +694,12 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 			body = header
 		}
 	}
+	footerHint := view.FooterHint
+	// Rust's bottom pane replaces the standard confirmation placeholder with
+	// the compact picker hint for cancellable selection views.
+	if view.AllowCancel && (strings.TrimSpace(footerHint) == "" || footerHint == chatwidget.StandardPopupHintLine) {
+		footerHint = chatwidget.PickerPopupHintLine
+	}
 	m.openModal(ModalRequestMsg{
 		ID:                view.ViewID,
 		Kind:              kind,
@@ -694,7 +707,7 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 		Body:              body,
 		Options:           options,
 		FooterNote:        view.FooterNote,
-		FooterHint:        view.FooterHint,
+		FooterHint:        footerHint,
 		ReopenOnCancel:    view.ReopenOnCancel,
 		ColumnWidth:       view.ColumnWidth,
 		DescriptionLayout: view.DescriptionLayout,

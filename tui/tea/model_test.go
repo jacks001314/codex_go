@@ -43,7 +43,7 @@ func TestModelViewRendersState(t *testing.T) {
 	view := model.View()
 	cleanView := utils.StripANSI(view)
 
-	for _, want := range []string{"Thread: thread-1", "Model: gpt-test", "› hello", "• hi there", "Enter send"} {
+	for _, want := range []string{"Thread: thread-1", "Model: gpt-test", "› hello", "• hi there", "enter send"} {
 		if !strings.Contains(cleanView, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
@@ -1392,7 +1392,7 @@ func TestModelCopiesLastAgentResponse(t *testing.T) {
 	if !strings.Contains(model.View(), "Copy to clipboard") {
 		t.Fatalf("copy should open a target picker:\n%s", model.View())
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 	if copied != "second" {
 		t.Fatalf("copied = %q, want second", copied)
 	}
@@ -1435,7 +1435,7 @@ func TestModelSlashCopyLastAgentResponse(t *testing.T) {
 	if !strings.Contains(model.View(), "Copy to clipboard") {
 		t.Fatalf("/copy should open a target picker:\n%s", model.View())
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 	if copied != "final answer" {
 		t.Fatalf("copied = %q, want final answer", copied)
 	}
@@ -2744,6 +2744,8 @@ func TestModelCompactionStatusIsAnimatedActivity(t *testing.T) {
 func TestModelAppliesHookRunMessages(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
+	now := time.Unix(100, 0)
+	model.now = func() time.Time { return now }
 
 	model.Update(HookRunMsg{
 		ThreadID:      "thread-hook",
@@ -2752,12 +2754,19 @@ func TestModelAppliesHookRunMessages(t *testing.T) {
 		StatusMessage: "checking command",
 		Running:       true,
 	})
+	if view := model.View(); strings.Contains(view, "Running PreToolUse hook") {
+		t.Fatalf("fast hook was revealed before the 300ms delay:\n%s", view)
+	}
+	now = now.Add(301 * time.Millisecond)
 	view := model.View()
 	if state.ThreadID != "thread-hook" {
 		t.Fatalf("ThreadID = %q, want thread-hook", state.ThreadID)
 	}
-	if !strings.Contains(view, "Running PreToolUse hook: checking command") {
+	if !strings.Contains(view, "Checking command") {
 		t.Fatalf("View() missing running hook:\n%s", view)
+	}
+	if got := countRole(state.Messages, codextui.RoleHistory); got != 0 {
+		t.Fatalf("running hook entered history: %#v", state.Messages)
 	}
 
 	model.Update(HookRunMsg{
@@ -2774,12 +2783,14 @@ func TestModelAppliesHookRunMessages(t *testing.T) {
 	for _, want := range []string{
 		"PostToolUse hook (failed)",
 		"warning: Heads up from the hook",
-		"hook context: Remember the startup checklist.",
 		"error: hook exited with code 7",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Remember the startup checklist") {
+		t.Fatalf("model-facing hook context leaked into TUI history:\n%s", view)
 	}
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
 		t.Fatalf("history message count = %d, want 1; messages=%#v", got, state.Messages)
@@ -5351,7 +5362,7 @@ func TestModelPermissionsMenuHonorsRequirements(t *testing.T) {
 	typeText(t, model, "/permissions")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	if !strings.Contains(view, "Full Access") || !strings.Contains(view, "Disabled by requirements.") {
+	if !strings.Contains(view, "Full Access") || !strings.Contains(view, "Disabled by requirements") {
 		t.Fatalf("permissions menu should show disabled full access:\n%s", view)
 	}
 	if model.modal == nil {
@@ -5486,7 +5497,7 @@ func TestModelWindowsSandboxStartupPromptMatchesRustFlow(t *testing.T) {
 		"Set up default sandbox (requires Administrator permissions)",
 		"Use non-admin sandbox (higher risk if prompt injected)",
 		"Quit",
-		"Press enter to confirm or esc to go back",
+		"enter select · esc back",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("startup prompt missing %q:\n%s", want, view)
@@ -5803,7 +5814,7 @@ func TestModelThemeAndPetsPickersUseCurrentSelections(t *testing.T) {
 		"Type to filter themes...",
 		"dracula (current)",
 		"summarize",
-		"Press enter to confirm or esc to go back",
+		"enter select · esc back",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("theme picker missing %q:\n%s", want, view)
@@ -6642,7 +6653,7 @@ func TestModelStatusControlsSetupHistoryAndInvalidItem(t *testing.T) {
 	typeText(t, model, "/statusline")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	for _, want := range []string{"Status line setup", "Select which items", "[x] model-with-reasoning", "Space toggle"} {
+	for _, want := range []string{"Status line setup", "Select which items", "[x] model-with-reasoning", "space toggle"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("statusline setup modal missing %q:\n%s", want, view)
 		}
@@ -6678,7 +6689,7 @@ func TestModelStatusLineSetupModalTogglesAndSaves(t *testing.T) {
 
 	typeText(t, model, "/statusline")
 	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Status line setup") || !strings.Contains(view, "Space toggle | Enter save | Esc cancel") {
+	if view := model.View(); !strings.Contains(view, "Status line setup") || !strings.Contains(view, "space toggle · enter save · esc cancel") {
 		t.Fatalf("status line setup modal missing:\n%s", view)
 	}
 
@@ -6839,7 +6850,7 @@ func TestModelGoalSetStartsContinuationWhenActiveAndIdle(t *testing.T) {
 				Status:    goalStatus,
 			}, nil
 		},
-		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+		OnGoalContinuation: func(goal appserver.Goal, _ string) bubbletea.Cmd {
 			continuationCalls = append(continuationCalls, goal)
 			return func() bubbletea.Msg { return GoalClearedMsg{ThreadID: "thread-goal"} }
 		},
@@ -6898,7 +6909,7 @@ func TestModelGoalContinuationSkippedWhileTurnRunning(t *testing.T) {
 				Status:    appserver.GoalActive,
 			}, nil
 		},
-		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+		OnGoalContinuation: func(goal appserver.Goal, _ string) bubbletea.Cmd {
 			continuationCalls++
 			return nil
 		},
@@ -6935,7 +6946,7 @@ func TestModelGoalContinuesAfterTurnWhenStillActive(t *testing.T) {
 			reads++
 			return cloneGoalTea(stored), nil
 		},
-		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+		OnGoalContinuation: func(goal appserver.Goal, _ string) bubbletea.Cmd {
 			continuationCalls++
 			return func() bubbletea.Msg { return GoalClearedMsg{ThreadID: "thread-goal"} }
 		},
@@ -6972,7 +6983,7 @@ func TestModelGoalDoesNotContinueAfterTurnWhenCompleted(t *testing.T) {
 			reads++
 			return cloneGoalTea(stored), nil
 		},
-		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+		OnGoalContinuation: func(goal appserver.Goal, _ string) bubbletea.Cmd {
 			continuationCalls++
 			return nil
 		},
@@ -7533,6 +7544,7 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	var responses []ModalResponse
 	model := NewModel(state, Options{
 		SessionPickerCWD: `D:\repo\a`,
+		ResumeCWD:        "session",
 		SessionPickerItems: []codextui.SessionSummary{
 			{
 				ThreadID:  "thread-resume",
@@ -8884,6 +8896,39 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 	view = utils.StripANSI(model.View())
 	if !strings.Contains(view, "Late configuration warning.") {
 		t.Fatalf("late config warning should use the warning path:\n%s", view)
+	}
+}
+
+// Rust #53173: a managed local daemon adds a restart hint to the first startup
+// configuration warning while the diagnostic itself remains copyable in raw.
+func TestManagedDaemonStartupWarningRestartHintLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:              100,
+		Height:             24,
+		ShowSessionHeader:  true,
+		LocalDaemonSession: true,
+		DaemonManaged:      true,
+		StartupConfigWarnings: []string{
+			"Configured value for `approval_policy` is disallowed by requirements.",
+		},
+	})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "restart with /daemon") {
+		t.Fatalf("managed startup warning missing restart hint:\n%s", view)
+	}
+	if raw := model.State.Messages[model.startupWarningsIndex].RawText; strings.Contains(raw, "restart with /daemon") {
+		t.Fatalf("restart hint leaked into raw details: %q", raw)
+	}
+
+	unmanaged := NewModel(codextui.NewState(nil), Options{
+		Width:                 100,
+		Height:                24,
+		ShowSessionHeader:     true,
+		LocalDaemonSession:    true,
+		StartupConfigWarnings: []string{"Configured value is disallowed."},
+	})
+	if view := utils.StripANSI(unmanaged.View()); strings.Contains(view, "restart with /daemon") {
+		t.Fatalf("unmanaged daemon warning carried restart hint:\n%s", view)
 	}
 }
 

@@ -20,6 +20,16 @@ func TestToggleMultiSelectCompatibility(t *testing.T) {
 	}
 }
 
+func selectedPickerRowContaining(rows []string, text string) string {
+	for _, row := range rows {
+		plain := stripANSIForSelectionTest(row)
+		if strings.Contains(plain, "\u203a") && strings.Contains(plain, text) {
+			return row
+		}
+	}
+	return ""
+}
+
 func TestMultiSelectPickerSearchToggleConfirmCancelRowsMatchRustCore(t *testing.T) {
 	picker := NewMultiSelectPicker("Select Items", "Choose what to enable", []MultiSelectItem{
 		{ID: "alpha", Name: "Alpha Item", Description: "First", Selected: true, Orderable: true},
@@ -36,8 +46,12 @@ func TestMultiSelectPickerSearchToggleConfirmCancelRowsMatchRustCore(t *testing.
 		t.Fatalf("search query=%q filtered=%#v", picker.SearchQuery, picker.FilteredIndices)
 	}
 	rows := picker.Rows(80)
-	if !bottomPaneContainsRow(rows, "> be") || !bottomPaneContainsRow(rows, tui.RenderSelectedRow("\u203a [ ] Beta Item  Second")) {
+	selected := selectedPickerRowContaining(rows, "[ ] Beta Item")
+	if !bottomPaneContainsRow(rows, "> be") || selected == "" || !strings.Contains(selected, "Second") {
 		t.Fatalf("rows missing search/selected beta:\n%s", strings.Join(rows, "\n"))
+	}
+	if width := tui.DisplayWidth(stripANSIForSelectionTest(selected)); width != 80 {
+		t.Fatalf("selected beta row width = %d, want 80: %q", width, selected)
 	}
 	picker.HandleKey("space")
 	if got := picker.SelectedIDs(); !reflect.DeepEqual(got, []string{"alpha", "beta"}) {
@@ -102,7 +116,8 @@ func TestMultiSelectPickerNavigationPreviewNoMatchesAndTruncation(t *testing.T) 
 		t.Fatalf("down should wrap to first item, got %#v", item)
 	}
 	rows := picker.Rows(24)
-	if !bottomPaneContainsRow(rows, tui.RenderSelectedRow("\u203a [x] A very very ver\u2026")) {
+	selected := selectedPickerRowContaining(rows, "[x] A very")
+	if selected == "" || !strings.Contains(selected, "\u2026") {
 		t.Fatalf("rows missing selected truncated row:\n%s", strings.Join(rows, "\n"))
 	}
 	if !bottomPaneContainsRow(rows, "Selected: a") {
@@ -113,6 +128,47 @@ func TestMultiSelectPickerNavigationPreviewNoMatchesAndTruncation(t *testing.T) 
 	rows = picker.Rows(40)
 	if !bottomPaneContainsRow(rows, "no matches") {
 		t.Fatalf("rows missing no matches:\n%s", strings.Join(rows, "\n"))
+	}
+}
+
+func TestMultiSelectPickerFooterHintsMatchRust(t *testing.T) {
+	picker := NewMultiSelectPicker("Pick", "", nil)
+	if got, want := picker.FooterHint(), "space toggle \u00b7 enter save \u00b7 esc cancel"; got != want {
+		t.Fatalf("footer hint = %q, want %q", got, want)
+	}
+	picker.OrderingEnabled = true
+	if got, want := picker.FooterHint(), "space toggle \u00b7 \u2190/\u2192 reorder \u00b7 enter save \u00b7 esc cancel"; got != want {
+		t.Fatalf("ordering hint = %q, want %q", got, want)
+	}
+}
+
+// TestMultiSelectVerticalActionBeatsReorderLikeRust covers #54081's
+// overlapping page-down/move-left case: centralized vertical navigation is
+// resolved before view-specific reordering or search input.
+func TestMultiSelectVerticalActionBeatsReorderLikeRust(t *testing.T) {
+	items := make([]MultiSelectItem, 0, 8)
+	for index := 0; index < 8; index++ {
+		items = append(items, MultiSelectItem{
+			ID:        formatInt(index),
+			Name:      "Item " + formatInt(index),
+			Orderable: true,
+		})
+	}
+	picker := NewMultiSelectPicker("Pick", "", items)
+	picker.OrderingEnabled = false
+	picker.MaxRows = 2
+	picker.State.SelectedIdx = 0
+	picker.State.HasSelection = true
+	if action, ok := VerticalActionFor("ctrl-d"); !ok || action != ListActionPageDown {
+		t.Fatalf("ctrl-d action = %q ok=%v", action, ok)
+	}
+	picker.HandleKey("ctrl-d")
+	if picker.State.SelectedIdx != 2 {
+		t.Fatalf("ctrl-d selected index = %d, want page-down to 2", picker.State.SelectedIdx)
+	}
+	order := multiSelectIDs(picker.Items)
+	if !reflect.DeepEqual(order, []string{"0", "1", "2", "3", "4", "5", "6", "7"}) {
+		t.Fatalf("page-down reordered items: %#v", order)
 	}
 }
 

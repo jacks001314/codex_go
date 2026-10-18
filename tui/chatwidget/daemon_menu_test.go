@@ -24,14 +24,28 @@ func TestDaemonMenuViewLikeRust(t *testing.T) {
 	if !strings.Contains(header, "Daemon") || !strings.Contains(header, "Running daemon: 1.2.3") {
 		t.Fatalf("header = %q", header)
 	}
-	if len(view.Items) != 2 ||
-		view.Items[0].ID != DaemonMenuItemPublicStable || view.Items[1].ID != DaemonMenuItemThisCli {
+	if len(view.Items) != 3 ||
+		view.Items[0].ID != DaemonMenuItemPublicStable || view.Items[1].ID != DaemonMenuItemThisCli ||
+		view.Items[2].ID != DaemonMenuItemRestart {
 		t.Fatalf("items = %#v", view.Items)
 	}
-	for _, item := range view.Items {
+	for _, item := range view.Items[:2] {
 		if item.Disabled || item.DisabledReason != "" {
 			t.Fatalf("item %q disabled = %v (%q), want enabled", item.ID, item.Disabled, item.DisabledReason)
 		}
+	}
+	if !view.Items[2].Disabled || !strings.Contains(view.Items[2].DisabledReason, "hasn't verified") {
+		t.Fatalf("unverified restart = %#v", view.Items[2])
+	}
+
+	managed := DaemonMenuView(DaemonMenuConfig{
+		LocalDaemon:   true,
+		CLIExecutable: "/usr/local/bin/codex",
+		HasPackage:    true,
+		ManagedDaemon: true,
+	})
+	if managed.Items[2].Disabled {
+		t.Fatalf("managed restart disabled: %#v", managed.Items[2])
 	}
 
 	// Without a local daemon the status falls back to the disconnected text.

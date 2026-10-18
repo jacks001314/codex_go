@@ -23,6 +23,27 @@ func (c UnifiedExecInteractionCell) DisplayLines(width int) []string {
 	if width <= 0 {
 		return nil
 	}
+	header, waitedOnly := c.interactionHeader()
+	lines := tui.AdaptiveWrapLine(header, tui.WrapOptions{Width: width, BreakWords: true})
+	if waitedOnly {
+		return lines
+	}
+	wrapped := tui.WrapLines(rawLinesFromSource(c.Stdin), tui.WrapOptions{
+		Width:            width,
+		InitialIndent:    "  \u2514 ",
+		SubsequentIndent: "    ",
+		BreakWords:       true,
+	})
+	lines = append(lines, wrapped...)
+	return lines
+}
+
+// TranscriptLines renders the same complete input as the inline history cell.
+func (c UnifiedExecInteractionCell) TranscriptLines(width int) []string {
+	return c.DisplayLines(width)
+}
+
+func (c UnifiedExecInteractionCell) interactionHeader() (string, bool) {
 	waitedOnly := c.Stdin == ""
 	header := "\u2022 Waited for background terminal"
 	if !waitedOnly {
@@ -31,19 +52,7 @@ func (c UnifiedExecInteractionCell) DisplayLines(width int) []string {
 	if c.CommandDisplay != "" {
 		header += " \u00b7 " + c.CommandDisplay
 	}
-	lines := tui.AdaptiveWrapLine(header, tui.WrapOptions{Width: width, BreakWords: true})
-	if waitedOnly {
-		return lines
-	}
-	for _, raw := range rawLinesFromSource(c.Stdin) {
-		lines = append(lines, tui.AdaptiveWrapLine(raw, tui.WrapOptions{
-			Width:            width,
-			InitialIndent:    "  \u2514 ",
-			SubsequentIndent: "    ",
-			BreakWords:       true,
-		})...)
-	}
-	return lines
+	return header, waitedOnly
 }
 
 func (c UnifiedExecInteractionCell) RawLines() []string {

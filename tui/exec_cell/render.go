@@ -263,7 +263,7 @@ func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, sty
 				}
 				line = prefix + line
 				if styled {
-					line = ansiWrap(ansiDim, line)
+					line = dimOutputUnlessStyled(line)
 				}
 				lines = append(lines, line)
 			}
@@ -279,7 +279,7 @@ func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, sty
 		if len(output.Lines) == 0 && !call.IsUnifiedExecInteraction() {
 			line := "  └ (no output)"
 			if styled {
-				line = ansiWrap(ansiDim, line)
+				line = dimOutputUnlessStyled(line)
 			}
 			lines = append(lines, line)
 		} else {
@@ -300,13 +300,23 @@ func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, sty
 			}
 			for _, line := range truncateOutputLinesMiddle(prefixedOutput, displayLimit, width, output.Omitted) {
 				if styled {
-					line = ansiWrap(ansiDim, line)
+					line = dimOutputUnlessStyled(line)
 				}
 				lines = append(lines, line)
 			}
 		}
 	}
 	return lines
+}
+
+// dimOutputUnlessStyled preserves syntax-highlighted output. Wrapping an
+// already-styled line in the dim SGR would undo contrast correction
+// (Rust #46680).
+func dimOutputUnlessStyled(line string) string {
+	if strings.Contains(line, "\x1b[") {
+		return line
+	}
+	return ansiWrap(ansiDim, line)
 }
 
 func commandHeaderLines(prefix string, command string, width int, themeID string, styled bool) []string {

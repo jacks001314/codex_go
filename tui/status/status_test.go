@@ -9,6 +9,7 @@ import (
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/sandbox"
+	codextui "codex_go/tui"
 )
 
 func TestAccountStatusDisplayMatchesRustStatusAccountDisplay(t *testing.T) {
@@ -29,6 +30,33 @@ func TestAccountStatusDisplayMatchesRustStatusAccountDisplay(t *testing.T) {
 		got, ok := tt.in.DisplayValue()
 		if got != tt.want || ok != tt.ok {
 			t.Fatalf("%s DisplayValue() = %q ok=%v, want %q ok=%v", tt.name, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+// TestAccountDisplayWithEmailRestoresRustStatusIdentity covers #50199: the
+// asynchronous email read fills the omitted address without losing the current
+// plan, including plans whose display name contains parentheses.
+func TestAccountDisplayWithEmailRestoresRustStatusIdentity(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		current string
+		email   string
+		want    string
+	}{
+		{name: "plan only", current: "Pro 200", email: "user@example.com", want: "user@example.com (Pro 200)"},
+		{name: "no plan", current: "ChatGPT", email: "user@example.com", want: "user@example.com"},
+		{name: "email only", current: "old@example.com", email: "new@example.com", want: "new@example.com"},
+		{
+			name:    "nested plan label",
+			current: "old@example.com (Enterprise (Automation))",
+			email:   "new@example.com",
+			want:    "new@example.com (Enterprise (Automation))",
+		},
+		{name: "missing email keeps plan", current: "Pro 200", want: "Pro 200"},
+	} {
+		if got := AccountDisplayWithEmail(testCase.current, testCase.email); got != testCase.want {
+			t.Fatalf("%s: AccountDisplayWithEmail = %q, want %q", testCase.name, got, testCase.want)
 		}
 	}
 }
@@ -256,10 +284,10 @@ func TestHelpersMatchRustFormatting(t *testing.T) {
 	}
 
 	capturedAt := time.Date(2024, 1, 2, 3, 4, 5, 0, time.Local)
-	if got := FormatResetTimestamp(capturedAt.Add(10*time.Minute), capturedAt); got != "03:14" {
+	if got := FormatResetTimestampWithClock(capturedAt.Add(10*time.Minute), capturedAt, codextui.ClockFormatTwentyFourHour); got != "03:14" {
 		t.Fatalf("same-day reset = %q", got)
 	}
-	if got := FormatResetTimestamp(capturedAt.Add(25*time.Hour), capturedAt); got != "04:04 on 3 Jan" {
+	if got := FormatResetTimestampWithClock(capturedAt.Add(25*time.Hour), capturedAt, codextui.ClockFormatTwentyFourHour); got != "04:04 on 3 Jan" {
 		t.Fatalf("next-day reset = %q", got)
 	}
 }

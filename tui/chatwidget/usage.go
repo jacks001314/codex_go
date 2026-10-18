@@ -10,9 +10,15 @@ import (
 const (
 	UsageMenuViewID      = "usage-menu"
 	RateLimitResetViewID = "rate-limit-reset"
-	// standardPopupHintLine is the shared popup hint (Rust's
-	// popup_consts::standard_popup_hint_line, with the compact key labels).
-	standardPopupHintLine = "Press enter to confirm or esc to go back"
+	// StandardPopupHintLine is Rust's standard confirmation hint
+	// (popup_consts::standard_popup_hint_line).
+	StandardPopupHintLine = "Press enter to confirm or esc to go back"
+	// PickerPopupHintLine is Rust's compact footer for cancellable selection
+	// pickers (picker_hint_line_for_keymap).
+	PickerPopupHintLine = "enter select \u00b7 esc back"
+	// standardPopupHintLine is the internal name selection views use; the
+	// bottom pane rewrites it to PickerPopupHintLine for pickers.
+	standardPopupHintLine = StandardPopupHintLine
 )
 
 type UsageMenuAction string

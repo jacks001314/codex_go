@@ -1959,3 +1959,13 @@ green.
   code-block URLs left alone. Clicking is handled by the terminal through
   OSC-8 hyperlinks, so Rust's app-owned stationary-click state machine has no
   separate Go carrier.
+- `#46864` and `#46866` are not applicable: Rust's analytics usage dashboard
+  (charts, report tabs, responsive layouts, per-report reading positions, and
+  mouse hit targets) has no Go counterpart. Go's `/usage` is a limit-state and
+  reset menu without report surfaces, scroll offsets, or tab/control rectangles.
+- `#46895` is complete for Go's app-owned composer selection: right-clicking
+  inside the selected editable text copies it without pasting, preserves the
+  draft and cursor, and clears the highlight only after a successful clipboard
+  write; failures retain it. Ctrl+C now also retains the selection, matching
+  Rust. Transcript right-click copy has no carrier because transcript selection
+  remains terminal-owned.

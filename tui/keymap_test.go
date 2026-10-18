@@ -72,34 +72,28 @@ func TestRenderKeymapCatalog(t *testing.T) {
 	}
 }
 
-func TestOpenAgentsDefaultBinding(t *testing.T) {
+func TestOpenAgentsDefaultBindingUnboundLikeRust(t *testing.T) {
+	// Rust #41917: the empty-composer Left shortcut replaced the configurable
+	// Alt+A default, so `global.open_agents` starts unbound.
 	config := NewKeymapConfig()
 	bindings, source, custom := ResolvedKeymapBindings(config, "global", "open_agents")
-	if custom || source != "default" || strings.Join(bindings, ",") != "alt-a" {
-		t.Fatalf("open_agents resolved bindings = %#v source=%q custom=%v, want alt-a default", bindings, source, custom)
+	if custom || source != "default" || len(bindings) != 0 {
+		t.Fatalf("open_agents resolved bindings = %#v source=%q custom=%v, want unbound", bindings, source, custom)
 	}
-	if !KeymapActionHasBinding(config, "global", "open_agents", "alt-a") {
-		t.Fatal("open_agents default alt-a binding is not active")
+	if KeymapActionHasBinding(config, "global", "open_agents", "alt-a") {
+		t.Fatal("open_agents must not resolve the retired alt-a default")
 	}
-}
 
-func TestOpenAgentsDefaultShadowedByCustomAltA(t *testing.T) {
-	// Rust #39142: when the user binds alt-a to another main-surface action,
-	// the new default agents shortcut is disabled so it never shadows the
-	// existing custom binding.
-	config := NewKeymapConfig()
-	if err := config.Set("global", "copy", []string{"alt-a"}); err != nil {
+	// A user binding still works: only the built-in default was removed.
+	if err := config.Set("global", "open_agents", []string{"alt-a"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := config.Validate(); err != nil {
 		t.Fatalf("Validate error = %v", err)
 	}
-	bindings, source, custom := ResolvedKeymapBindings(config, "global", "open_agents")
-	if custom || source != "default" || len(bindings) != 0 {
-		t.Fatalf("shadowed open_agents resolved bindings = %#v source=%q custom=%v, want unbound", bindings, source, custom)
-	}
-	if KeymapActionHasBinding(config, "global", "open_agents", "alt-a") {
-		t.Fatal("open_agents should not resolve alt-a when another action uses it")
+	bindings, source, custom = ResolvedKeymapBindings(config, "global", "open_agents")
+	if !custom || strings.Join(bindings, ",") != "alt-a" {
+		t.Fatalf("custom open_agents bindings = %#v source=%q custom=%v, want alt-a", bindings, source, custom)
 	}
 }
 

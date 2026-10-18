@@ -91,6 +91,8 @@ func newDeterministicResponsesServer(t *testing.T) *httptest.Server {
 		switch {
 		case strings.Contains(body, "Generate a concise, single-line task title"):
 			answer = `{"title":"Side navigation"}`
+		case strings.Contains(body, "followup prompt"):
+			answer = `- :codex-followup[Inspect **items**]{prompt="private"}`
 		case strings.Contains(body, "after resume"):
 			answer = "RESUMED_OK"
 		case strings.Contains(body, "side prompt"):

@@ -159,6 +159,36 @@ func TestExecCellDisplayMatchesRustContinuationAndOutputLayout(t *testing.T) {
 	}
 }
 
+// Rust #46680: syntax-highlighted diff/output text keeps its foreground colors
+// instead of being wrapped in the dim SGR.
+func TestExecCellDoesNotDimSyntaxHighlightedOutputLikeRust(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-1",
+		Command: []string{"git", "diff"},
+		Output: &CommandOutput{
+			ExitCode:         0,
+			AggregatedOutput: "\x1b[31m+red line\x1b[0m\nplain line\n",
+		},
+		Source: ExecSourceUserShell,
+	}, false)
+	lines := cell.DisplayLinesWithTheme(80, "dracula")
+	sawStyled, sawPlainDim := false, false
+	for _, line := range lines {
+		if strings.Contains(line, "+red line") {
+			sawStyled = true
+			if strings.Contains(line, ansiDim) {
+				t.Fatalf("syntax-highlighted line was dimmed: %q", line)
+			}
+		}
+		if strings.Contains(line, "plain line") && strings.Contains(line, ansiDim) {
+			sawPlainDim = true
+		}
+	}
+	if !sawStyled || !sawPlainDim {
+		t.Fatalf("styled=%v plainDim=%v lines=%#v", sawStyled, sawPlainDim, lines)
+	}
+}
+
 // Mirrors Rust #46492: agent command output uses the shared three-row preview,
 // so the visible rows are bounded and the hidden logical lines are counted, while
 // the transcript keeps the full output.

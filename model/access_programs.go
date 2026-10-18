@@ -15,6 +15,13 @@ type AccessPrograms struct {
 	Cyber string `json:"cyber"`
 }
 
+func cloneModelAccessPrograms(value *ModelAccessPrograms) *ModelAccessPrograms {
+	if value == nil {
+		return nil
+	}
+	return &ModelAccessPrograms{Cyber: append([]CyberAccessProgram(nil), value.Cyber...)}
+}
+
 // ApiKeyCyberAccessPrograms mirrors Rust
 // `core::cyber_access_program::ApiKeyCyberAccessPrograms`: the config-derived
 // policy for an explicit program on an API-key session.

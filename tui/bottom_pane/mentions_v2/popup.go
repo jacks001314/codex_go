@@ -125,8 +125,8 @@ func (p *Popup) NextSearchMode() {
 }
 
 func (p *Popup) CalculateRequiredHeight(width int) int {
-	visible := minInt(MaxPopupRows, maxInt(1, len(p.rows)))
-	return visible + 2
+	// Rust #46694 keeps one stable viewport across searches and filters.
+	return PopupHeight
 }
 
 func (p *Popup) Rows() []SearchResult {

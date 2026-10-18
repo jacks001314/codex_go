@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 )
@@ -50,6 +51,15 @@ func TruncateToWidth(text string, maxWidth int) string {
 func TruncateWithEllipsis(text string, maxWidth int) string {
 	if maxWidth <= 0 {
 		return ""
+	}
+	if strings.Contains(text, "\x1b") {
+		if ansi.StringWidth(text) <= maxWidth {
+			return text
+		}
+		if maxWidth == 1 {
+			return "…"
+		}
+		return ansi.Truncate(text, maxWidth, "…")
 	}
 	if DisplayWidth(text) <= maxWidth {
 		return text

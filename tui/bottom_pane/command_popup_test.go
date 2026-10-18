@@ -160,6 +160,22 @@ func TestCommandPopupRowsUseSelectedColorBarAndScroll(t *testing.T) {
 	if !commandPopupRowsContainSelected(rows, "/"+selected.Name) {
 		t.Fatalf("rows missing selected rendered line for %q:\n%s", selected.Name, strings.Join(rows, "\n"))
 	}
+	selectedConfirmed := false
+	for _, row := range rows {
+		if !strings.Contains(stripANSIForSelectionTest(row), "/"+selected.Name) {
+			continue
+		}
+		if !strings.Contains(row, "›") {
+			t.Fatalf("selected command row missing Rust marker: %q", row)
+		}
+		if width := tui.DisplayWidth(stripANSIForSelectionTest(row)); width != 72 {
+			t.Fatalf("selected command row width = %d, want 72: %q", width, row)
+		}
+		selectedConfirmed = true
+	}
+	if !selectedConfirmed {
+		t.Fatalf("selected command row not found in %#v", rows)
+	}
 
 	popup.OnComposerTextChange("/st")
 	if popup.state.ScrollTop != 0 {
@@ -191,6 +207,52 @@ func TestCommandPopupRowsWrapDescriptionsWithoutLegacyEllipsis(t *testing.T) {
 		}
 		if width := tui.DisplayWidth(stripANSIForSelectionTest(row)); width > 28 {
 			t.Fatalf("row exceeds width: %q width=%d", row, width)
+		}
+	}
+}
+
+func TestCommandPopupWrapBoundaryKeepsFollowingChoiceLikeRust(t *testing.T) {
+	popup := NewCommandPopup(
+		CommandPopupFlags{ServiceTierCommandsEnabled: true},
+		[]ServiceTierCommand{
+			{ID: "tier-one", Name: "tier-one", Description: "Use faster inference"},
+			{ID: "tier-two", Name: "tier-two", Description: "Keep default speed"},
+		},
+	)
+	popup.OnComposerTextChange("/tier")
+	for _, tc := range []struct {
+		width int
+		want  []string
+	}{
+		{
+			width: 32,
+			want: []string{
+				"› /tier-one  Use faster",
+				"             inference",
+				"  /tier-two  Keep default speed",
+			},
+		},
+		{
+			width: 33,
+			want: []string{
+				"› /tier-one  Use faster inference",
+				"  /tier-two  Keep default speed",
+			},
+		},
+		{
+			width: 34,
+			want: []string{
+				"› /tier-one  Use faster inference",
+				"  /tier-two  Keep default speed",
+			},
+		},
+	} {
+		got := make([]string, 0, len(popup.Rows(tc.width)))
+		for _, row := range popup.Rows(tc.width) {
+			got = append(got, strings.TrimRight(stripANSIForSelectionTest(row), " "))
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("width %d rows = %#v raw=%q, want %#v", tc.width, got, popup.Rows(tc.width), tc.want)
 		}
 	}
 }

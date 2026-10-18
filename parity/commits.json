@@ -17241,9 +17241,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: select_row"
+        "Rust changes its analytics usage dashboard: per-report reading positions, responsive chart/table layouts, plan periods, and picker-style selected rows. Go has no analytics/usage-report view; /usage only opens the account usage menu for viewing limit state and redeeming resets, with no charts, report tabs, dashboard scroll state, or plan-period panel. The layout and reading-position behavior therefore has no Go carrier."
       ]
     },
     {
@@ -17253,9 +17253,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: invalidate_mouse_targets"
+        "Rust routes clicks and wheel events through AnalyticsView's painted tab/control hit rectangles and per-surface scroll offsets. Go has no analytics usage view or mouse-driven report controls; its /usage menu is a keyboard/picker flow for limit state and resets. There are no tab/control hit targets or report/dashboard/help scroll surfaces to invalidate, so this mouse-navigation change has no carrier."
       ]
     },
     {
@@ -17349,9 +17349,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: contains_mouse, copy_composer_selection, copy_selection"
+        "Go's app-owned composer selection now copies on an unmodified right-button press inside the editable text, blocks the right-click paste fallback for that gesture, preserves draft/cursor/reading state, clears the highlight only after the clipboard write succeeds, and retains it on failure; Ctrl+C copies and keeps the selection like Rust. A right-click outside the selection clears the stale highlight and falls through. Rust's transcript right-click copy has no Go carrier because in-transcript selection is terminal-owned. Tests TestComposerRightClickCopiesAndClearsOnlyWhenConfirmedLikeRust, TestComposerRightClickOutsideSelectionFallsThroughLikeRust, and TestComposerSelectionCtrlCCopiesLikeRust pass."
       ]
     },
     {

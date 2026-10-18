@@ -70,7 +70,7 @@ func TestPermissionsPopupViewDisablesBuiltinsByRequirements(t *testing.T) {
 	if view.Items[0].DisabledReason != "" || view.Items[1].DisabledReason != "" {
 		t.Fatalf("read-only/workspace should be enabled: %#v", view.Items)
 	}
-	if view.Items[2].Name != "Full Access" || view.Items[2].DisabledReason != "Disabled by requirements." {
+	if view.Items[2].Name != "Full Access" || view.Items[2].DisabledReason != "Disabled by requirements" {
 		t.Fatalf("full access should be disabled by requirements: %#v", view.Items[2])
 	}
 }
@@ -88,7 +88,7 @@ func TestPermissionsPopupViewDisablesReviewerByRequirements(t *testing.T) {
 	if view.Items[0].Name != AskForApprovalLabel || view.Items[0].DisabledReason != "" {
 		t.Fatalf("user approval should be enabled: %#v", view.Items[0])
 	}
-	if view.Items[1].Name != ApproveForMeLabel || view.Items[1].DisabledReason != "Disabled by requirements." {
+	if view.Items[1].Name != ApproveForMeLabel || view.Items[1].DisabledReason != "Disabled by requirements" {
 		t.Fatalf("auto reviewer should be disabled: %#v", view.Items[1])
 	}
 }
@@ -129,7 +129,7 @@ func TestPermissionProfilesPopupViewIncludesBuiltinsAndCustomProfiles(t *testing
 	if !view.Items[4].Current || view.Items[4].Description != "Developer profile." {
 		t.Fatalf("custom current = %#v", view.Items[4])
 	}
-	if view.Items[5].DisabledReason != "Disabled by requirements." || view.Items[5].Description != "Configured permission profile." {
+	if view.Items[5].DisabledReason != "Disabled by requirements" || view.Items[5].Description != "Configured permission profile" {
 		t.Fatalf("custom disabled = %#v", view.Items[5])
 	}
 }
@@ -159,7 +159,7 @@ func TestPermissionProfilesPopupAppliesRequirementsToCustomProfiles(t *testing.T
 	if dev, ok := byID["dev"]; !ok || dev.DisabledReason != "" {
 		t.Fatalf("allowed profile = %#v", dev)
 	}
-	if other, ok := byID["other"]; !ok || other.DisabledReason != "Disabled by requirements." {
+	if other, ok := byID["other"]; !ok || other.DisabledReason != "Disabled by requirements" {
 		t.Fatalf("disallowed profile = %#v", other)
 	}
 
@@ -172,7 +172,7 @@ func TestPermissionProfilesPopupAppliesRequirementsToCustomProfiles(t *testing.T
 			AllowedApprovalPolicies: []ApprovalPolicy{ApprovalNever},
 		},
 	})
-	if view.Items[len(view.Items)-1].DisabledReason != "Disabled by requirements." {
+	if view.Items[len(view.Items)-1].DisabledReason != "Disabled by requirements" {
 		t.Fatalf("approval-policy gate = %#v", view.Items[len(view.Items)-1])
 	}
 }

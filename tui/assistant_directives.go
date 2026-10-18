@@ -17,6 +17,7 @@ import (
 // source representation.
 type AssistantDirective struct {
 	Name       string
+	Label      string
 	Attributes map[string]string
 	Raw        string
 }
@@ -70,6 +71,17 @@ func ParseAssistantDirectiveWithBudget(source string, escaping QuoteEscaping, re
 	}
 	name := rest[:nameLen]
 	suffix := rest[nameLen:]
+	label := ""
+	if strings.HasPrefix(suffix, "[") {
+		if name != "codex-followup" {
+			return AssistantDirective{}, false
+		}
+		var ok bool
+		label, suffix, ok = scanFollowupLabel(suffix[1:], remaining)
+		if !ok {
+			return AssistantDirective{}, false
+		}
+	}
 	if !strings.HasPrefix(suffix, "{") {
 		return AssistantDirective{}, false
 	}
@@ -89,6 +101,7 @@ func ParseAssistantDirectiveWithBudget(source string, escaping QuoteEscaping, re
 			// In `::git-push{cwd="/repo"} done`, retain the directive but not ` done`.
 			return AssistantDirective{
 				Name:       name,
+				Label:      label,
 				Attributes: attributes,
 				Raw:        source[:len(source)-(len(rest)-1)],
 			}, true
@@ -126,6 +139,86 @@ func ParseAssistantDirectiveWithBudget(source string, escaping QuoteEscaping, re
 		attributes[key] = parsed
 		rest = next
 	}
+}
+
+// scanFollowupLabel consumes the `[label]` prefix accepted by
+// `:codex-followup[...]`. Brackets nest, escaped brackets stay literal, and a
+// balanced backtick code span hides brackets inside it. An unmatched backtick
+// run is treated as literal Markdown, matching Rust's replay strategy.
+func scanFollowupLabel(source string, remaining *int) (string, string, bool) {
+	label, suffix, ok := scanFollowupLabelCodeAware(source, remaining, true)
+	if ok {
+		return label, suffix, true
+	}
+	return scanFollowupLabelCodeAware(source, remaining, false)
+}
+
+func scanFollowupLabelCodeAware(source string, remaining *int, codeAware bool) (string, string, bool) {
+	depth := 1
+	codeTicks := 0
+	for index := 0; index < len(source); {
+		character, size := utf8.DecodeRuneInString(source[index:])
+		if !spendDirectiveScanBudget(remaining, size) {
+			return "", "", false
+		}
+		switch character {
+		case '\n', '\r':
+			return "", "", false
+		case '`':
+			if !codeAware {
+				index += size
+				continue
+			}
+			ticks := 1
+			next := index + size
+			for next < len(source) && source[next] == '`' {
+				if !spendDirectiveScanBudget(remaining, 1) {
+					return "", "", false
+				}
+				ticks++
+				next++
+			}
+			switch {
+			case codeTicks == 0:
+				codeTicks = ticks
+			case codeTicks == ticks:
+				codeTicks = 0
+			}
+			index = next
+			continue
+		case '\\':
+			if codeTicks > 0 {
+				index += size
+				continue
+			}
+			next := index + size
+			if next >= len(source) {
+				return "", "", false
+			}
+			escaped, escapedSize := utf8.DecodeRuneInString(source[next:])
+			if !spendDirectiveScanBudget(remaining, escapedSize) {
+				return "", "", false
+			}
+			if escaped == '\n' || escaped == '\r' {
+				return "", "", false
+			}
+			index = next + escapedSize
+			continue
+		case '[':
+			if codeTicks == 0 {
+				depth++
+			}
+		case ']':
+			if codeTicks == 0 {
+				depth--
+				if depth == 0 {
+					return source[:index], source[index+size:], true
+				}
+			}
+		}
+		index += size
+	}
+	return "", "", false
 }
 
 // scanDirectiveValue parses one quoted or unquoted attribute value and returns

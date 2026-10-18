@@ -27,7 +27,11 @@ func TestCopyWholeResponseUsesRichClipboardWriter(t *testing.T) {
 	})
 	markdown := "## Heading\n\n```go\npackage main\n```"
 	model.copyTargets = chatwidget.CopyTargetsFromMarkdown(markdown)
-	model.applyCopyTargetModalOption(chatwidget.CopyTargetWholeID)
+	if cmd := model.applyCopyTargetModalOption(chatwidget.CopyTargetWholeID); cmd == nil {
+		t.Fatal("copy returned no command")
+	} else {
+		model.Update(cmd())
+	}
 	if !strings.Contains(richHTML, "<h2>Heading</h2>") || !strings.Contains(richHTML, "package main") {
 		t.Fatalf("rich html = %q", richHTML)
 	}
@@ -52,7 +56,11 @@ func TestCopyCodeTargetStaysPlainText(t *testing.T) {
 		copied = text
 		return nil
 	}
-	model.applyCopyTargetModalOption(model.copyTargets[1].ID)
+	if cmd := model.applyCopyTargetModalOption(model.copyTargets[1].ID); cmd == nil {
+		t.Fatal("copy returned no command")
+	} else {
+		model.Update(cmd())
+	}
 	if copied != "package main\n" || strings.Contains(copied, "```") {
 		t.Fatalf("copied code = %q", copied)
 	}

@@ -122,6 +122,22 @@ func NewWarningEvent(message string) WarningEventCell {
 	return WarningEventCell{Key: message, Diagnostic: message}
 }
 
+// NewServerVersionNotice mirrors Rust's `new_server_version_warning`: the notice
+// is a retained warning identified by its message, with optional local-daemon
+// maintenance guidance.
+func NewServerVersionNotice(message string, offerUpdate bool) WarningEventCell {
+	diagnostic := message
+	if offerUpdate {
+		diagnostic += "\nUse /daemon to manage the local background server."
+		diagnostic += "\nUpdating may interrupt active or queued work."
+	}
+	return WarningEventCell{
+		ServerVersionNotice: true,
+		Key:                 message,
+		Diagnostic:          diagnostic,
+	}
+}
+
 // DisplayLines renders the prefixed warning line.
 func (c WarningEventCell) DisplayLines(width int) []string {
 	return NewPrefixedWrappedHistoryCell(c.Diagnostic, "\u26a0 ", "  ").DisplayLines(width)

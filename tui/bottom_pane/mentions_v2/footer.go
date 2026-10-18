@@ -1,10 +1,6 @@
 package mentionsv2
 
-import (
-	"strings"
-
-	codextui "codex_go/tui"
-)
+import "strings"
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/mentions_v2/footer.rs.
 
@@ -37,22 +33,7 @@ func RenderFooter(width int, searchMode SearchMode) string {
 	if width <= 0 {
 		return ""
 	}
-	right := SearchModeIndicatorLine(searchMode)
-	rightWidth := codextui.DisplayWidth(right)
-	leftWidth := width - rightWidth
-	if right != "" {
-		leftWidth--
-	}
-	if leftWidth < 0 {
-		leftWidth = 0
-	}
-	left := truncateRunes(FooterHintLine(), leftWidth)
-	if right == "" || rightWidth > width {
-		return truncateRunes(left, width)
-	}
-	gap := width - codextui.DisplayWidth(left) - rightWidth
-	if gap < 0 {
-		gap = 0
-	}
-	return truncateRunes(left+strings.Repeat(" ", gap)+right, width)
+	// Filter tabs now live above the results (#46694), so the footer carries
+	// only the key hints.
+	return truncateRunes(FooterHintLine(), width)
 }

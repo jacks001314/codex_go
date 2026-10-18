@@ -51,6 +51,9 @@ type HistorySearchSession struct {
 	entries []string
 	matches []string
 	index   int
+	// fallbackDraft freezes the visible no-match preview before background
+	// recovery updates OriginalDraft; cancellation restores the updated draft.
+	fallbackDraft DraftState
 }
 
 // LargePasteCharThreshold mirrors Rust LARGE_PASTE_CHAR_THRESHOLD: a composer
@@ -76,6 +79,7 @@ func NewHistorySearchSession(originalDraft DraftState, entries []string) *Histor
 	return &HistorySearchSession{
 		OriginalDraft: original,
 		PreviewDraft:  cloneDraftState(original),
+		fallbackDraft: cloneDraftState(original),
 		Status:        HistorySearchIdle,
 		Active:        true,
 		entries:       append([]string(nil), entries...),
@@ -96,17 +100,27 @@ func (s *HistorySearchSession) SetEntries(entries []string) {
 	s.index = -1
 }
 
+// EditSavedDraft updates the draft restored on cancellation without changing
+// the active query or visible no-match preview.
+func (s *HistorySearchSession) EditSavedDraft(edit func(*DraftState)) {
+	if s == nil || !s.Active || edit == nil {
+		return
+	}
+	edit(&s.OriginalDraft)
+	s.OriginalDraft.clampCursor()
+}
+
 func (s *HistorySearchSession) UpdateQuery(query string) (DraftState, HistorySearchResult) {
 	if s == nil {
 		return DraftState{}, HistorySearchResult{Kind: HistorySearchResultNotFound}
 	}
 	s.Query = query
 	s.Status = HistorySearchSearching
-	s.PreviewDraft = cloneDraftState(s.OriginalDraft)
+	s.PreviewDraft = cloneDraftState(s.fallbackDraft)
 	if query == "" {
 		s.resetSearch()
 		s.Status = HistorySearchIdle
-		return cloneDraftState(s.OriginalDraft), HistorySearchResult{Kind: HistorySearchResultNotFound}
+		return cloneDraftState(s.fallbackDraft), HistorySearchResult{Kind: HistorySearchResultNotFound}
 	}
 	result := s.search(query, HistorySearchOlder, true)
 	return s.ApplyResult(result), result
@@ -119,8 +133,8 @@ func (s *HistorySearchSession) SearchInDirection(direction HistorySearchDirectio
 	if s.Query == "" {
 		s.resetSearch()
 		s.Status = HistorySearchIdle
-		s.PreviewDraft = cloneDraftState(s.OriginalDraft)
-		return cloneDraftState(s.OriginalDraft), HistorySearchResult{Kind: HistorySearchResultNotFound}
+		s.PreviewDraft = cloneDraftState(s.fallbackDraft)
+		return cloneDraftState(s.fallbackDraft), HistorySearchResult{Kind: HistorySearchResultNotFound}
 	}
 	result := s.search(s.Query, direction, false)
 	return s.ApplyResult(result), result
@@ -140,10 +154,10 @@ func (s *HistorySearchSession) ApplyResult(result HistorySearchResult) DraftStat
 		s.Status = HistorySearchMatch
 	case HistorySearchResultNotFound:
 		s.Status = HistorySearchNoMatch
-		s.PreviewDraft = cloneDraftState(s.OriginalDraft)
+		s.PreviewDraft = cloneDraftState(s.fallbackDraft)
 	default:
 		s.Status = HistorySearchNoMatch
-		s.PreviewDraft = cloneDraftState(s.OriginalDraft)
+		s.PreviewDraft = cloneDraftState(s.fallbackDraft)
 	}
 	return cloneDraftState(s.PreviewDraft)
 }
@@ -241,9 +255,36 @@ func (s *HistorySearchSession) FooterLine() (string, bool) {
 	case HistorySearchSearching:
 		line += "  searching"
 	case HistorySearchMatch:
-		line += "  enter accept | esc cancel"
+		line += "  enter accept \u00b7 esc cancel"
 	case HistorySearchNoMatch:
 		line += "  no match"
+	}
+	return line, true
+}
+
+// FooterStyledLine renders the footer with Rust's contrasting spans: the
+// prompt and action words are dim, the query is cyan, action keys are bold, and
+// a no-match result is red.
+func (s *HistorySearchSession) FooterStyledLine() (string, bool) {
+	if s == nil || !s.Active {
+		return "", false
+	}
+	const (
+		dim   = "\x1b[2m"
+		bold  = "\x1b[1m"
+		cyan  = "\x1b[36m"
+		red   = "\x1b[31m"
+		reset = "\x1b[0m"
+	)
+	line := dim + "reverse-i-search: " + reset + cyan + s.DisplayQuery() + reset
+	switch s.Status {
+	case HistorySearchSearching:
+		line += dim + "  searching" + reset
+	case HistorySearchMatch:
+		line += dim + "  " + reset + bold + "enter" + reset +
+			dim + " accept \u00b7 " + reset + bold + "esc" + reset + dim + " cancel" + reset
+	case HistorySearchNoMatch:
+		line += "  " + red + "no match" + reset
 	}
 	return line, true
 }

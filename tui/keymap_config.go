@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"codex_go/keymapschema"
 )
@@ -71,10 +72,33 @@ func (c *KeymapConfig) Set(context string, action string, bindings []string) err
 			return fmt.Errorf("duplicate keybinding `%s` for %s.%s", value, context, action)
 		}
 		seen[value] = true
+		if isPermissionModeShortcut(context, action) && permissionShortcutUsesPrintableKey(value) {
+			return fmt.Errorf("tui.keymap.chat.%s: printable keys are reserved for text input", action)
+		}
 		normalized = append(normalized, value)
 	}
 	c.setRaw(context, action, normalized)
 	return nil
+}
+
+func isPermissionModeShortcut(context string, action string) bool {
+	return context == "chat" && (action == "previous_permission_mode" || action == "next_permission_mode")
+}
+
+func permissionShortcutUsesPrintableKey(binding string) bool {
+	parts := strings.Split(binding, "-")
+	key := parts[len(parts)-1]
+	for _, modifier := range parts[:len(parts)-1] {
+		switch modifier {
+		case "ctrl", "alt", "super", "cmd", "command":
+			return false
+		}
+	}
+	if key == "space" {
+		return true
+	}
+	runes := []rune(key)
+	return len(runes) == 1 && unicode.IsPrint(runes[0])
 }
 
 func (c *KeymapConfig) Unset(context string, action string) error {
@@ -185,9 +209,9 @@ func (c *KeymapConfig) Validate() error {
 			}
 		}
 	}
-	for context := range knownKeymapConfigContexts() {
+	for _, context := range orderedKeymapActionContexts() {
 		seen := map[string]string{}
-		for action := range knownKeymapConfigActions(context) {
+		for _, action := range orderedKeymapActions(context) {
 			bindings, _, _ := ResolvedKeymapBindings(c, context, action)
 			for _, binding := range bindings {
 				if previous := seen[binding]; previous != "" && previous != action {
@@ -203,6 +227,48 @@ func (c *KeymapConfig) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// orderedKeymapActionContexts follows the shared action registry's declaration
+// order so the first conflict reported is stable (Rust #41285). Any context
+// present only in the compatibility schema is appended alphabetically.
+func orderedKeymapActionContexts() []string {
+	contexts := []string{}
+	seen := map[string]bool{}
+	for _, action := range KeymapActions(KeymapActionFilter{FastModeEnabled: true}) {
+		if !seen[action.Context] {
+			seen[action.Context] = true
+			contexts = append(contexts, action.Context)
+		}
+	}
+	extra := []string{}
+	for context := range knownKeymapConfigContexts() {
+		if !seen[context] {
+			extra = append(extra, context)
+		}
+	}
+	sort.Strings(extra)
+	return append(contexts, extra...)
+}
+
+func orderedKeymapActions(context string) []string {
+	actions := []string{}
+	seen := map[string]bool{}
+	for _, descriptor := range KeymapActions(KeymapActionFilter{FastModeEnabled: true}) {
+		if descriptor.Context != context || seen[descriptor.Action] {
+			continue
+		}
+		seen[descriptor.Action] = true
+		actions = append(actions, descriptor.Action)
+	}
+	extra := []string{}
+	for action := range knownKeymapConfigActions(context) {
+		if !seen[action] {
+			extra = append(extra, action)
+		}
+	}
+	sort.Strings(extra)
+	return append(actions, extra...)
 }
 
 func validateDistinctKeymapBindings(context string, action string, bindings []string) error {
@@ -225,12 +291,6 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 			if bindings, ok := config.Binding("global", action); ok {
 				return bindings, "custom global", true
 			}
-		}
-		// Rust: the default alt-a binding for the agents dashboard is disabled
-		// when the user configures alt-a for another main-surface action so the
-		// new default never shadows an existing custom binding.
-		if context == "global" && action == "open_agents" && config.altACustomBindingExists() {
-			return nil, "default", false
 		}
 		// Rust #52273: voice mute moved from ctrl-x to f9 because ctrl-x is now
 		// the default leader prefix; the f9 default yields to a main-surface f9
@@ -278,24 +338,6 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		return append([]string(nil), descriptor.DefaultBindings...), "default", false
 	}
 	return nil, "unknown", false
-}
-
-// altACustomBindingExists reports whether any configured keymap action binds
-// alt-a, which would shadow the default agents-dashboard shortcut.
-func (c *KeymapConfig) altACustomBindingExists() bool {
-	if c == nil || c.bindings == nil {
-		return false
-	}
-	for _, actions := range c.bindings {
-		for _, bindings := range actions {
-			for _, binding := range bindings {
-				if binding == "alt-a" {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // mainSurfaceBindingExists reports whether any configured main-surface action
@@ -439,7 +481,7 @@ func normalizeKeybindingStroke(raw string) (string, error) {
 		return "", fmt.Errorf("invalid keybinding `%s`. Use values like `ctrl-a`, `shift-enter`, or `page-down`", original)
 	}
 
-	modifiers := map[string]bool{"ctrl": false, "alt": false, "shift": false}
+	modifiers := map[string]bool{"ctrl": false, "alt": false, "shift": false, "super": false}
 	keySegments := []string{}
 	sawKey := false
 	for _, segment := range filtered {
@@ -451,6 +493,8 @@ func normalizeKeybindingStroke(raw string) (string, error) {
 			modifier = "alt"
 		case "shift":
 			modifier = "shift"
+		case "super", "cmd", "command":
+			modifier = "super"
 		}
 		if !sawKey && modifier != "" {
 			if modifiers[modifier] {
@@ -467,7 +511,7 @@ func normalizeKeybindingStroke(raw string) (string, error) {
 	}
 	for _, segment := range keySegments {
 		switch segment {
-		case "ctrl", "control", "alt", "option", "shift":
+		case "ctrl", "control", "alt", "option", "shift", "super", "cmd", "command":
 			return "", fmt.Errorf("invalid keybinding `%s`: modifiers must come before the key", original)
 		}
 	}
@@ -476,7 +520,7 @@ func normalizeKeybindingStroke(raw string) (string, error) {
 		return "", err
 	}
 	out := []string{}
-	for _, modifier := range []string{"ctrl", "alt", "shift"} {
+	for _, modifier := range []string{"ctrl", "alt", "shift", "super"} {
 		if modifiers[modifier] {
 			out = append(out, modifier)
 		}

@@ -9,6 +9,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/session"
+	chatwidget "codex_go/tui/chatwidget"
 	codextea "codex_go/tui/tea"
 )
 
@@ -61,8 +62,8 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 	if effort := strings.TrimSpace(params.ReasoningEffort); effort != "" {
 		configValues["model_reasoning_effort"] = effort
 	}
-	if personality := strings.TrimSpace(params.Personality); personality != "" {
-		configValues["personality"] = personality
+	if personality := chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(params.Personality)))); personality != "" {
+		configValues["personality"] = string(personality)
 	}
 	if len(configValues) == 0 {
 		configValues = nil

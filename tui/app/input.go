@@ -51,6 +51,32 @@ func AllowAgentWordMotionFallback(enhancedKeysSupported bool, composerText strin
 	return !enhancedKeysSupported && composerText == ""
 }
 
+// ShouldRecoverVimInsertEscape reports whether an Alt+character event may
+// actually be Esc followed by the character, as legacy terminals encode it.
+// The recovery only applies when Vim can consume the Esc and no active binding,
+// chord, image paste, or agent-navigation fallback claims the Alt stroke.
+func ShouldRecoverVimInsertEscape(
+	unix bool,
+	enhancedKeysSupported bool,
+	overlayActive bool,
+	modalOrPopupActive bool,
+	altCharacter bool,
+	vimCanConsumeEscape bool,
+	imagePaste bool,
+	agentNavigation bool,
+	altBindingMatches bool,
+) bool {
+	return unix &&
+		!enhancedKeysSupported &&
+		!overlayActive &&
+		!modalOrPopupActive &&
+		altCharacter &&
+		vimCanConsumeEscape &&
+		!imagePaste &&
+		!agentNavigation &&
+		!altBindingMatches
+}
+
 func AgentSwitchShortcutsAvailable(overlayActive bool, modalOrPopupActive bool, composerText string) bool {
 	return !overlayActive && !modalOrPopupActive && composerText == ""
 }

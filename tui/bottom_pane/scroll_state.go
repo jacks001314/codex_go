@@ -19,18 +19,20 @@ const (
 // VerticalActionFor centralizes list navigation bindings shared by the bottom
 // pane views (Rust #54081 ListKeymap::vertical_action_for).
 func VerticalActionFor(key string) (ListAction, bool) {
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "up", "ctrl+p":
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "ctrl+", "ctrl-")
+	switch key {
+	case "up", "ctrl-p":
 		return ListActionMoveUp, true
-	case "down", "ctrl+n":
+	case "down", "ctrl-n":
 		return ListActionMoveDown, true
-	case "pageup", "pgup", "ctrl+u":
+	case "pageup", "pgup", "ctrl-u":
 		return ListActionPageUp, true
-	case "pagedown", "pgdown", "ctrl+d":
+	case "pagedown", "pgdown", "ctrl-d":
 		return ListActionPageDown, true
-	case "home", "ctrl+a":
+	case "home", "ctrl-a":
 		return ListActionJumpTop, true
-	case "end", "ctrl+e":
+	case "end", "ctrl-e":
 		return ListActionJumpBottom, true
 	default:
 		return "", false

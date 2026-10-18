@@ -18,6 +18,7 @@ func NormalizeCompletedAssistantMarkdown(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = FollowupLabels(text)
 	lines := strings.Split(text, "\n")
 	// `str::lines()` treats the final line ending as optional: a trailing '\n'
 	// terminates the last line instead of starting a new empty one.

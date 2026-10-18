@@ -5,9 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
+	"codex_go/features"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
@@ -778,6 +781,7 @@ func (m *Model) renderStatusHeader() string {
 	if m == nil {
 		return ""
 	}
+	base := ""
 	result := m.refreshStatusControls()
 	if m.statusLineConfiguredByUser && m.statusControls != nil && m.statusControls.StatusLineConfigured && result.StatusLineRendered && strings.TrimSpace(result.StatusLineText) != "" {
 		if m.statusLineUseColors {
@@ -785,17 +789,77 @@ func (m *Model) renderStatusHeader() string {
 			if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
 				threadColor = codextui.ThreadColorSGR(codextui.ThreadColorForTheme(threadID, m.tuiTheme))
 			}
-			return result.StatusLine.RenderStyled(threadColor, func(accent bottompane.StatusLineAccent) string {
+			base = result.StatusLine.RenderStyled(threadColor, func(accent bottompane.StatusLineAccent) string {
 				return statusLineAccentSGR(m.tuiTheme, accent)
 			}, true)
+		} else {
+			base = result.StatusLineText
 		}
-		return result.StatusLineText
-	}
-	if m.State != nil {
+	} else if m.State != nil {
 		// Rust's status line shows the model's catalog display name.
-		return m.State.RenderStatusLineWithModelName(m.modelDisplayName(m.State.Model))
+		base = m.State.RenderStatusLineWithModelName(m.modelDisplayName(m.State.Model))
 	}
-	return ""
+	return m.attachPlanModeStatusIndicator(base)
+}
+
+// attachPlanModeStatusIndicator mirrors Rust #49037's fullscreen status
+// surface: an idle, editable composer keeps the mode's cycle hint at the far
+// right while it fits, then degrades to the compact "Plan mode" label.
+func (m *Model) attachPlanModeStatusIndicator(base string) string {
+	if m == nil || m.State == nil || !m.State.PlanMode {
+		return base
+	}
+	if !features.Enabled(m.featureSettings, "collaboration_modes") {
+		return base
+	}
+	if !m.planModeCycleHintAvailable() {
+		return rightAlignStatusLine(base, []string{bottompane.CollaborationModeLabel(bottompane.CollaborationModePlan, false)}, m.width)
+	}
+	return rightAlignStatusLine(base, []string{
+		bottompane.CollaborationModeLabel(bottompane.CollaborationModePlan, true),
+		bottompane.CollaborationModeLabel(bottompane.CollaborationModePlan, false),
+	}, m.width)
+}
+
+func (m *Model) planModeCycleHintAvailable() bool {
+	if m == nil || m.readOnlyThread || m.misalignmentPolicyStopped || m.isTaskRunning() {
+		return false
+	}
+	if m.modal != nil || m.slashPopup.Active || m.skillPopup.Active || m.mentionPopup != nil || m.vimSearchMode {
+		return false
+	}
+	if m.editorActive || m.windowsSandboxSetupActive || m.warningsView != nil || m.quickDialMenu {
+		return false
+	}
+	if m.mainFind.active() || m.activityFocus.active || m.escBacktrackHint || m.asyncQuestions.Expanded() {
+		return false
+	}
+	return true
+}
+
+func rightAlignStatusLine(base string, labels []string, width int) string {
+	if len(labels) == 0 {
+		return base
+	}
+	if width <= 0 {
+		return strings.TrimSpace(base + " " + labels[0])
+	}
+	baseWidth := lipgloss.Width(base)
+	for _, label := range labels {
+		labelWidth := lipgloss.Width(label)
+		if labelWidth > width {
+			continue
+		}
+		if base == "" || baseWidth+2+labelWidth <= width {
+			return base + strings.Repeat(" ", max(width-baseWidth-labelWidth, 0)) + label
+		}
+	}
+	compact := labels[len(labels)-1]
+	compactWidth := lipgloss.Width(compact)
+	if compactWidth <= width {
+		return strings.Repeat(" ", width-compactWidth) + compact
+	}
+	return fitTerminalLine(compact, width)
 }
 
 func (m *Model) refreshStatusControls() chatwidget.StatusSurfaceRefreshResult {
@@ -812,6 +876,79 @@ func (m *Model) refreshStatusControlsCmd() bubbletea.Cmd {
 		return nil
 	}
 	return m.applyTerminalTitleResult(result)
+}
+
+// terminalTitleStatusCmd updates the animated terminal-title pieces. Rust
+// gates the spinner with `animations && effects.progress` and the
+// action-required blink with `animations && effects.title`, while a blocked
+// request keeps the static action-required prefix when either effect is off.
+func (m *Model) terminalTitleStatusCmd() bubbletea.Cmd {
+	if m == nil || m.statusControls == nil || m.terminalTitleWriter == nil {
+		return nil
+	}
+	if !m.statusControls.TerminalTitleConfigured && !m.statusControls.TerminalTitleSetupActive {
+		return nil
+	}
+	if !m.terminalTitleUsesActivity() {
+		return nil
+	}
+
+	status := m.desiredProgramStatus()
+	blocked := status.State == codextui.ProgramStatusBlocked
+	spinner := ""
+	if !blocked && m.isTaskRunning() && m.animationsEnabled && m.effects.Progress {
+		spinner = chatwidget.TerminalTitleSpinnerFrame(m.animEngineTick() / 2)
+	}
+
+	now := m.currentTime()
+	if m.terminalTitleAnimationOrigin.IsZero() {
+		m.terminalTitleAnimationOrigin = now
+	}
+	hidden := false
+	if blocked && m.animationsEnabled && m.effects.Title {
+		elapsed := now.Sub(m.terminalTitleAnimationOrigin)
+		hidden = (elapsed/time.Second)%2 == 1
+	}
+
+	forceRefresh := !m.terminalTitleAnimationReady
+	if !forceRefresh &&
+		blocked == m.terminalTitleActionRequired &&
+		spinner == m.terminalTitleSpinnerText &&
+		hidden == m.terminalTitleActionHidden {
+		return nil
+	}
+	m.terminalTitleAnimationReady = true
+	m.terminalTitleActionRequired = blocked
+	m.terminalTitleSpinnerText = spinner
+	m.terminalTitleActionHidden = hidden
+	m.statusControls.TerminalTitleActionRequired = blocked
+	m.statusControls.TerminalTitleSpinnerText = spinner
+	m.statusControls.TerminalTitleActionHidden = hidden
+	return m.applyTerminalTitleResult(m.statusControls.RefreshTerminalTitle())
+}
+
+// terminalTitleUsesActivity reports whether the configured title includes the
+// spinner/activity item (Rust terminal_title_uses_activity).
+func (m *Model) terminalTitleUsesActivity() bool {
+	if m == nil || m.statusControls == nil {
+		return false
+	}
+	selections := chatwidget.NewStatusSurfaceSelections(nil, m.statusControls.ConfiguredTerminalTitleItems())
+	for _, item := range selections.TerminalTitleItems {
+		if item == chatwidget.TerminalTitleSpinner {
+			return true
+		}
+	}
+	return false
+}
+
+// animEngineTick returns the shared animation tick, defaulting to zero when the
+// engine is absent (tests and embedded models).
+func (m *Model) animEngineTick() int {
+	if m == nil || m.animEngine == nil {
+		return 0
+	}
+	return m.animEngine.CurrentTick()
 }
 
 func (m *Model) applyTerminalTitleResult(result chatwidget.StatusSurfaceRefreshResult) bubbletea.Cmd {

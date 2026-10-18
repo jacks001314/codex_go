@@ -188,6 +188,50 @@ func TestAsyncQuestionsSetExpandedRefusesEmptyState(t *testing.T) {
 	}
 }
 
+// TestAsyncQuestionsTakePendingDraftsMatchesRust covers #47424's recovery
+// format: answers are trimmed, quoted question titles are sanitized and
+// multiline-safe, blank drafts are omitted, and pending questions are consumed.
+func TestAsyncQuestionsTakePendingDraftsMatchesRust(t *testing.T) {
+	state := NewAsyncQuestions()
+	state.Append("message", []AsyncUserInputQuestion{
+		{Title: "First\r\n\r\n\x1b[31mLast\x07"},
+		{Title: "Second?"},
+		{Title: "Blank?"},
+	})
+	state.SetExpanded(true, "  first answer  ")
+	state.Navigate(true, "first answer")
+	state.SetExpanded(false, "second answer")
+
+	got := state.TakePendingDrafts()
+	want := []string{
+		"> First\n>\n> Last\n\nfirst answer",
+		"> Second?\n\nsecond answer",
+	}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("drafts = %#v, want %#v", got, want)
+	}
+	if state.UnansweredCount() != 0 || state.Expanded() {
+		t.Fatalf("state after recovery = %+v, want empty and collapsed", state)
+	}
+	if !state.HasSeen("message") {
+		t.Fatal("recovery must retain seen message IDs")
+	}
+}
+
+func TestAsyncQuestionsTakePendingDraftsBoundsUTF8Title(t *testing.T) {
+	const retainedRunes = 170
+	title := strings.Repeat("界", 200)
+	state := NewAsyncQuestions()
+	state.Append("message", []AsyncUserInputQuestion{{Title: title}})
+	state.SetExpanded(true, "answer")
+
+	got := state.TakePendingDrafts()
+	want := "> " + strings.Repeat("界", retainedRunes) + "…\n\nanswer"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("draft = %#v, want %q", got, want)
+	}
+}
+
 func TestBuildAsyncQuestionAnswerFramesAndBoundsTheAnswer(t *testing.T) {
 	question := AsyncUserInputQuestion{Title: "Which database?"}
 	reply, ready, tooLong := BuildAsyncQuestionAnswer("question-id", question, "  Postgres  ")

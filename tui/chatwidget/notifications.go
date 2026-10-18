@@ -130,6 +130,16 @@ type NotificationState struct {
 	Pending *Notification
 }
 
+// ClearKind drops the pending notification when it has the given kind. Higher
+// priority notifications are retained, mirroring Rust's targeted
+// `AsyncQuestion` cleanup at turn end.
+func (s *NotificationState) ClearKind(kind NotificationKind) {
+	if s == nil || s.Pending == nil || s.Pending.Kind != kind {
+		return
+	}
+	s.Pending = nil
+}
+
 func (s *NotificationState) Notify(notification Notification, setting NotificationsSetting) bool {
 	if s == nil || !notification.AllowedFor(setting) {
 		return false

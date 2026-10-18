@@ -86,7 +86,7 @@ func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFl
 	if resolved != nil && resolved.Auth.Mode() != "unknown" {
 		return nil, false, nil
 	}
-	noAltScreen := root != nil && root.Shared.NoAltScreen
+	noAltScreen := interactiveNoAltScreenFromValues(root, loaded.Values)
 	options := &onboarding.AuthFlowOptions{
 		CodexHome:        codexHome,
 		StoreOptions:     storeOptions,

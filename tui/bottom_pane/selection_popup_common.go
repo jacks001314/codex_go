@@ -44,10 +44,19 @@ const (
 type ColumnWidthConfig struct {
 	Mode            ColumnWidthMode
 	NameColumnWidth *int
+	// FullWidthSelection pads the selected row to the popup width (Rust #46680
+	// opt-in picker presentation).
+	FullWidthSelection bool
 	// DescriptionLayout controls whether a narrow description column is hidden;
 	// measurement and rendering must share it or the popup reserves the wrong
 	// number of lines (Rust #46691 keeps it on the config for that reason).
 	DescriptionLayout SelectionDescriptionLayout
+}
+
+// WithFullWidthSelection enables the keymap picker's full-width selected row.
+func (c ColumnWidthConfig) WithFullWidthSelection() ColumnWidthConfig {
+	c.FullWidthSelection = true
+	return c
 }
 
 func NewColumnWidthConfig(mode ColumnWidthMode, nameColumnWidth *int) ColumnWidthConfig {
@@ -206,7 +215,11 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 				// render as terminal hyperlinks with complete destinations.
 				line = tui.AnnotateCompleteWebURLsInLine(line)
 				if state.HasSelection && state.SelectedIdx == actualIdx && !row.IsDisabled {
-					line = tui.RenderSelectedRow(line)
+					if config.FullWidthSelection {
+						line = tui.RenderSelectedRowFilled(line, width)
+					} else {
+						line = tui.RenderSelectedRow(line)
+					}
 				}
 				out = append(out, line)
 			}
@@ -225,7 +238,11 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 			line = tui.AnnotateCompleteWebURLsInLine(line)
 		}
 		if state.HasSelection && state.SelectedIdx == actualIdx && !row.IsDisabled {
-			line = tui.RenderSelectedRow(line)
+			if config.FullWidthSelection {
+				line = tui.RenderSelectedRowFilled(line, width)
+			} else {
+				line = tui.RenderSelectedRow(line)
+			}
 		}
 		out = append(out, line)
 	}
@@ -236,6 +253,11 @@ func wrapGenericDisplayLine(row GenericDisplayRow, line string, descCol int, wid
 	// Rust #46691 wraps a name inside its own column only when that column exists.
 	if descCol > 0 && shouldWrapNameInColumn(row) {
 		if lines := wrapTwoColumnSelectionRow(row, descCol, width); len(lines) > 0 {
+			return lines
+		}
+	}
+	if descCol > 0 && row.CategoryTag == "" && tui.DisplayWidth(line) > width {
+		if lines := wrapDescriptionColumnSelectionRow(row, descCol, width); len(lines) > 0 {
 			return lines
 		}
 	}
@@ -261,6 +283,49 @@ func wrapGenericDisplayLine(row GenericDisplayRow, line string, descCol int, wid
 		SubsequentIndent: strings.Repeat(" ", indent),
 		BreakWords:       true,
 	})
+}
+
+// wrapDescriptionColumnSelectionRow wraps only the description column. The
+// previous fallback re-tokenized the flattened two-column line, collapsing the
+// gap and moving the following choice at a wrap boundary (#46694).
+func wrapDescriptionColumnSelectionRow(row GenericDisplayRow, descCol int, width int) []string {
+	description := combinedSelectionDescription(row, SelectionDescriptionLayout{})
+	if description == "" {
+		return nil
+	}
+	nameLimit := max(descCol-lenColumnsSelection(row.NamePrefix)-2, 0)
+	name := row.NamePrefix + truncateSelectionName(row.Name, nameLimit)
+	if row.DisabledReason != "" {
+		name += " (disabled)"
+	}
+	if row.DisplayShortcut != "" {
+		name += " (" + row.DisplayShortcut + ")"
+	}
+	nameWidth := lenColumnsSelection(name)
+	if nameWidth >= width {
+		return nil
+	}
+	column := descCol
+	if column <= nameWidth {
+		column = min(nameWidth+2, width-1)
+	}
+	rightWidth := width - column
+	if rightWidth <= 0 {
+		return nil
+	}
+	descriptionLines := tui.AdaptiveWrapLine(description, tui.WrapOptions{
+		Width:      rightWidth,
+		BreakWords: true,
+	})
+	if len(descriptionLines) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(descriptionLines))
+	out = append(out, name+strings.Repeat(" ", max(column-nameWidth, 2))+descriptionLines[0])
+	for _, line := range descriptionLines[1:] {
+		out = append(out, strings.Repeat(" ", column)+line)
+	}
+	return out
 }
 
 func wrapSelectionRowLines(row GenericDisplayRow, descCol int, width int) []string {

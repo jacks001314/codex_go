@@ -150,6 +150,33 @@ func (s *ChatStreamingState) FinalizeCompletedAssistantMessage(message string) {
 	s.HandleStreamFinished()
 }
 
+// FlushAnswerAndPlanStreams preserves received answer and plan source before an
+// ordinary turn termination (Rust #45549). It is also the normal-completion
+// path, so interrupted, failed, policy-terminated, and completed turns all keep
+// the same reflowable source.
+func (s *ChatStreamingState) FlushAnswerAndPlanStreams() {
+	if s == nil {
+		return
+	}
+	s.FlushAnswerStreamWithSeparator()
+	if s.PlanStreamController == nil {
+		return
+	}
+	controller := s.PlanStreamController
+	hadLiveTail := controller.HasLiveTail()
+	s.PlanStreamController = nil
+	s.ClearActiveStreamTail()
+	cell, source := controller.Finalize()
+	if !hadLiveTail && cell != nil {
+		s.addHistory(cell)
+	}
+	if source != "" {
+		s.FinalizedPlanSource = source
+		s.LatestProposedPlan = source
+	}
+	s.UsageInsertionRequests++
+}
+
 func (s *ChatStreamingState) FlushAnswerStreamWithSeparator() {
 	if s == nil {
 		return

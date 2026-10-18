@@ -60,7 +60,7 @@ func (p *SkillPopup) CalculateRequiredHeight(width int) int {
 	}
 	visible := len(p.filteredItems())
 	visible = min(MaxPopupRows, max(visible, 1))
-	return visible + 2
+	return visible + 3
 }
 
 func (p *SkillPopup) MoveUp() {
@@ -98,7 +98,7 @@ func (p *SkillPopup) Rows(width int) []string {
 	}
 	matches := p.filtered()
 	if len(matches) == 0 {
-		return []string{"  no matches", "", SkillPopupHintLine()}
+		return []string{"  no matches", "", "", tui.TruncateWithEllipsis(SkillPopupHintLine(), width)}
 	}
 	p.State.ClampSelection(len(matches))
 	p.State.EnsureVisible(len(matches), min(MaxPopupRows, len(matches)))
@@ -109,18 +109,27 @@ func (p *SkillPopup) Rows(width int) []string {
 		idx := matches[visibleIdx].Index
 		selected := p.State.HasSelection && visibleIdx == p.State.SelectedIdx
 		row := tui.SelectionPrefix(selected) + truncateMentionName(p.Mentions[idx].DisplayName)
-		if desc := mentionDescription(p.Mentions[idx]); desc != "" {
-			available := max(width-tui.DisplayWidth(row)-3, 0)
-			if text := truncateSkillDescription(desc, available); text != "" {
-				row += " - " + text
+		tag, desc := mentionCategoryAndDescription(p.Mentions[idx])
+		tagWidth := tui.DisplayWidth(tag)
+		descriptionWidth := width - tui.DisplayWidth(row) - tagWidth - 2
+		if tagWidth > 0 {
+			descriptionWidth--
+		}
+		if desc != "" && descriptionWidth >= 24 {
+			row += " - " + truncateSkillDescription(desc, descriptionWidth)
+		}
+		if tag != "" && tui.DisplayWidth(row)+tagWidth+1 <= width {
+			if padding := width - tagWidth - tui.DisplayWidth(row); padding > 0 {
+				row += strings.Repeat(" ", padding)
 			}
+			row += tag
 		}
 		if selected {
-			row = tui.RenderSelectedRow(row)
+			row = tui.RenderSelectedRowFilled(row, width)
 		}
 		rows = append(rows, row)
 	}
-	rows = append(rows, "", SkillPopupHintLine())
+	rows = append(rows, "", "", tui.TruncateWithEllipsis(SkillPopupHintLine(), width))
 	return rows
 }
 
@@ -202,14 +211,7 @@ func (p *SkillPopup) filtered() []skillPopupMatch {
 }
 
 func mentionDescription(mention MentionItem) string {
-	tag := ""
-	if mention.CategoryTag != nil {
-		tag = strings.TrimSpace(*mention.CategoryTag)
-	}
-	desc := ""
-	if mention.Description != nil {
-		desc = strings.TrimSpace(*mention.Description)
-	}
+	tag, desc := mentionCategoryAndDescription(mention)
 	switch {
 	case tag != "" && desc != "":
 		return tag + " " + desc
@@ -220,10 +222,22 @@ func mentionDescription(mention MentionItem) string {
 	}
 }
 
+func mentionCategoryAndDescription(mention MentionItem) (string, string) {
+	tag := ""
+	if mention.CategoryTag != nil {
+		tag = strings.TrimSpace(*mention.CategoryTag)
+	}
+	desc := ""
+	if mention.Description != nil {
+		desc = strings.TrimSpace(*mention.Description)
+	}
+	return tag, desc
+}
+
 func truncateMentionName(name string) string {
 	return truncateSkillDescription(name, MentionNameTruncateLen)
 }
 
 func SkillPopupHintLine() string {
-	return "Press enter to insert or esc to close"
+	return "enter insert \u00b7 esc close"
 }

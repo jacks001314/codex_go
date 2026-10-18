@@ -45,20 +45,24 @@ func (m *Model) commandCenterAvailable() bool {
 }
 
 // agentsNavigationKeyAvailable mirrors Rust BottomPane::agents_navigation_key_available
-// (#48132): `Left` must still move the composer's cursor for the active
-// editor/Vim keymap, no global/chat/voice action may claim it, and no chord may
-// start with it (Go's keymap has no configurable chord prefixes, so that last
-// exclusion has no counterpart here).
+// (#48132/#41917): `Left` must still move the composer's cursor for the active
+// editor/Vim keymap, and no global/chat/voice action may claim it. Go's keymap
+// has no configurable chord prefixes, so Rust's chord-prefix exclusion has no
+// counterpart here.
 func (m *Model) agentsNavigationKeyAvailable() bool {
 	if m == nil {
 		return false
 	}
 	// Rust resolves the composer's move_left binding for the active keymap.
-	// Go's keymap catalog only exposes Vim normal mode's movement actions; the
-	// plain composer's cursor movement is not remappable, so Left stays available
-	// there unless another action claims it.
+	// Vim normal mode uses its own keymap; insert mode and the plain composer
+	// use the editor keymap, so an explicit editor remap keeps Left local.
 	if m.vimMode && !m.vimInsert {
 		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "vim_normal", "move_left")
+		if !keymapBindingsContainKey(bindings, "left") {
+			return false
+		}
+	} else {
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "editor", "move_left")
 		if !keymapBindingsContainKey(bindings, "left") {
 			return false
 		}
@@ -158,8 +162,9 @@ func (m *Model) retryReadOnlyThread() bubbletea.Cmd {
 		return nil
 	}
 	response, err := m.onResumeSession(codextui.SessionSelection{
-		Kind:   codextui.SessionSelectionResume,
-		Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID},
+		Kind:      codextui.SessionSelectionResume,
+		Target:    codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID, CWD: m.State.CWD},
+		ResumeCWD: m.State.CWD,
 	})
 	if err != nil {
 		m.notice = "Retry failed: " + strings.TrimSpace(err.Error())

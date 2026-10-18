@@ -40,7 +40,7 @@ func TestModelKeymapActionMenuResponsiveWidthsMatchRust(t *testing.T) {
 			if strings.Contains(rendered, "Capture a replacement key") {
 				t.Fatalf("row width 48 should hide the narrow description column:\n%s", rendered)
 			}
-			if !strings.Contains(rendered, "\u203a 1. Replace binding") || !strings.Contains(rendered, "  4. Back to shortcuts") {
+			if !strings.Contains(rendered, "\u203a 1. Replace binding") || !strings.Contains(rendered, "  6. Back to shortcuts") {
 				t.Fatalf("row width 48 option rows mismatch:\n%s", rendered)
 			}
 			continue

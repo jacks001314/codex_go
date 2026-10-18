@@ -1,4 +1,4 @@
-﻿package model
+package model
 
 import (
 	"context"
@@ -63,10 +63,10 @@ func TestComposeGatewayAuthHeaderAndCookieLikeRust(t *testing.T) {
 func TestComposeGatewayAuthFailuresLikeRust(t *testing.T) {
 	primary := BearerAuthHeaders("primary-token", "", false)
 	cases := []struct {
-		name    string
-		config  *GatewayOAuthConfig
+		name     string
+		config   *GatewayOAuthConfig
 		provider gatewayAuthTokenProvider
-		want    string
+		want     string
 	}{
 		{
 			name:     "empty token",

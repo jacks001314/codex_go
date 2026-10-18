@@ -10,8 +10,27 @@ import (
 	historycell "codex_go/tui/history_cell"
 )
 
+const reviewBusyMessage = "'/review' is disabled while a task is in progress."
+
+func (m *Model) reviewBlockedDuringForegroundWork() bool {
+	return m != nil && (m.isUserTurnPendingOrRunning() || len(m.queued) > 0 || len(m.pendingSteers) > 0)
+}
+
+func (m *Model) showReviewBusyError() {
+	if m == nil || m.State == nil {
+		return
+	}
+	m.State.AddHistoryLines([]string{reviewBusyMessage}, []string{reviewBusyMessage})
+	m.notice = reviewBusyMessage
+	m.refreshTranscript()
+}
+
 func (m *Model) startReview(target chatwidget.ReviewTarget) bubbletea.Cmd {
 	if m == nil || m.State == nil {
+		return nil
+	}
+	if m.reviewBlockedDuringForegroundWork() {
+		m.showReviewBusyError()
 		return nil
 	}
 	if m.onStartReviewCommand == nil && m.onStartReview == nil {

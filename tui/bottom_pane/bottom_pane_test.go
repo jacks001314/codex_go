@@ -67,12 +67,18 @@ func TestVerticalActionForAndApplySharedLikeRust(t *testing.T) {
 	cases := map[string]ListAction{
 		"up":       ListActionMoveUp,
 		"ctrl+p":   ListActionMoveUp,
+		"ctrl-p":   ListActionMoveUp,
 		"down":     ListActionMoveDown,
 		"ctrl+n":   ListActionMoveDown,
+		"ctrl-n":   ListActionMoveDown,
 		"pageup":   ListActionPageUp,
+		"ctrl-u":   ListActionPageUp,
 		"pagedown": ListActionPageDown,
+		"ctrl-d":   ListActionPageDown,
 		"home":     ListActionJumpTop,
+		"ctrl-a":   ListActionJumpTop,
 		"end":      ListActionJumpBottom,
+		"ctrl-e":   ListActionJumpBottom,
 	}
 	for key, want := range cases {
 		got, ok := VerticalActionFor(key)

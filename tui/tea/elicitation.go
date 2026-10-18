@@ -85,6 +85,9 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cm
 				{ID: "cancel", Label: "Cancel", Shortcut: "c"},
 			},
 		})
+		if m.modal != nil {
+			m.modal.userVerification = true
+		}
 		return m.queueNotification(chatwidget.ElicitationRequestedNotification(message.ServerName))
 	}
 	if strings.TrimSpace(message.URL) != "" {

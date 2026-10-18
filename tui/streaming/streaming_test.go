@@ -31,6 +31,18 @@ func TestTableHoldbackScannerParity(t *testing.T) {
 	}
 }
 
+func TestStreamingPreviewHidesUnfinishedFollowupDirective(t *testing.T) {
+	core := newStreamCore(80)
+	core.pushDelta("Before :codex-followup[Add **charts**")
+	preview := strings.Join(core.preview.lines, "\n")
+	if strings.Contains(preview, "codex-followup") {
+		t.Fatalf("unfinished directive leaked into preview: %q", preview)
+	}
+	if !strings.Contains(preview, "Before") {
+		t.Fatalf("preview lost preceding prose: %q", preview)
+	}
+}
+
 func TestIncrementalHoldbackMatchesStatelessScan(t *testing.T) {
 	chunks := []string{
 		"status | owner\n",

@@ -532,16 +532,40 @@ func (s *remoteAgentsDashboardSource) Stop(ctx context.Context, threadID string)
 	if threadID == "" {
 		return errors.New("agent thread id is required to stop")
 	}
-	thread, err := remoteThreadRead(ctx, s.client, threadID, true)
+	thread, err := remoteThreadRead(ctx, s.client, threadID, false)
 	if err != nil {
 		return err
 	}
-	for i := range thread.Turns {
-		if thread.Turns[i].Status == appserver.TurnStatusInProgress {
+	turns := thread.Turns
+	if thread.HistoryMode == appserver.ThreadHistoryPaginated {
+		var page appserver.TurnsPage
+		pageErr := remoteSessionRequest(ctx, s.client, appserver.MethodThreadTurnsList, appserver.ThreadTurnsListParams{
+			ThreadID: threadID,
+		}, &page)
+		if pageErr == nil {
+			turns = page.Data
+		} else {
+			// Servers that predate paginated history reject turns/list; fall
+			// back to the embedded turn history used by legacy threads.
+			legacy, legacyErr := remoteThreadRead(ctx, s.client, threadID, true)
+			if legacyErr != nil {
+				return pageErr
+			}
+			turns = legacy.Turns
+		}
+	} else {
+		legacy, err := remoteThreadRead(ctx, s.client, threadID, true)
+		if err != nil {
+			return err
+		}
+		turns = legacy.Turns
+	}
+	for i := range turns {
+		if turns[i].Status == appserver.TurnStatusInProgress {
 			var response turn.TurnInterruptResponse
 			return remoteSessionRequest(ctx, s.client, appserver.MethodTurnInterrupt, turn.TurnInterruptParams{
 				ThreadID: threadID,
-				TurnID:   strings.TrimSpace(thread.Turns[i].ID),
+				TurnID:   strings.TrimSpace(turns[i].ID),
 			}, &response)
 		}
 	}

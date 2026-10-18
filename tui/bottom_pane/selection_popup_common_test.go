@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codex_go/tui"
+	"codex_go/utils"
 )
 
 func TestGenericDisplayLineRustNameTruncation(t *testing.T) {
@@ -26,6 +27,21 @@ func TestGenericDisplayLineRustNameTruncation(t *testing.T) {
 	want = "abcdef  tag"
 	if got != want {
 		t.Fatalf("name without description should not truncate: %q", got)
+	}
+}
+
+// Rust #46680: the keymap picker opts into a selected row that fills the popup
+// width while ordinary pickers keep their compact selection.
+func TestGenericRowsFullWidthSelectionLikeRust(t *testing.T) {
+	rows := []GenericDisplayRow{{Name: "alpha"}}
+	state := ScrollState{SelectedIdx: 0, HasSelection: true}
+	full := RenderGenericRows(rows, state, 1, "", 40, ColumnWidthConfig{}.WithFullWidthSelection())
+	if len(full) != 1 || tui.DisplayWidth(utils.StripANSI(full[0])) != 40 {
+		t.Fatalf("full-width selection = %#v", full)
+	}
+	compact := RenderGenericRows(rows, state, 1, "", 40, ColumnWidthConfig{})
+	if len(compact) != 1 || tui.DisplayWidth(utils.StripANSI(compact[0])) >= 40 {
+		t.Fatalf("compact selection = %#v", compact)
 	}
 }
 

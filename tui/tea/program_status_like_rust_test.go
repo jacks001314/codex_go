@@ -139,6 +139,62 @@ func TestProgramStatusClearsOnExitLikeRust(t *testing.T) {
 	}
 }
 
+func TestClearTerminalProgramStatusBeforeExternalProgramLikeRust(t *testing.T) {
+	restore := codextui.SetTerminalProgramStatusSupportForTest(true, false)
+	defer restore()
+	var writes []string
+	model := NewModel(nil, Options{
+		OnWriteProgramStatus: func(sequence string) bubbletea.Cmd {
+			writes = append(writes, sequence)
+			return nil
+		},
+		OnExternalEditor: func(string) bubbletea.Cmd {
+			return func() bubbletea.Msg { return ExternalEditorFinishedMsg{} }
+		},
+	})
+	if got := codextui.SetTerminalProgramStatus(codextui.ProgramStatus{State: codextui.ProgramStatusWorking}, ""); got == "" {
+		t.Fatal("initial program status was suppressed")
+	}
+	if cmd := model.openExternalEditor(); cmd == nil {
+		t.Fatal("external editor did not produce a command")
+	}
+	wantClear := "\x1b]7501;state=clear\x1b\\"
+	if len(writes) != 1 || writes[0] != wantClear {
+		t.Fatalf("clear writes = %#v, want %q", writes, wantClear)
+	}
+	if got := codextui.SetTerminalProgramStatus(codextui.ProgramStatus{State: codextui.ProgramStatusWorking}, ""); got == "" {
+		t.Fatal("program status was not re-emitted after the external command")
+	}
+}
+
+// TestITermSessionDetailUsesForegroundActivityLikeRust mirrors #52226: only a
+// foreground Working state carries the status header, and the generic header is
+// omitted.
+func TestITermSessionDetailUsesForegroundActivityLikeRust(t *testing.T) {
+	model := NewModel(nil, Options{})
+	working := codextui.ProgramStatus{State: codextui.ProgramStatusWorking}
+	if got := model.itermSessionDetail(working); got != "" {
+		t.Fatalf("idle detail = %q", got)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "turn.started"}})
+	if got := model.itermSessionDetail(working); got != "" {
+		t.Fatalf("generic Working detail = %q", got)
+	}
+	model.setWorkingStatusHeader("Reading source")
+	if got := model.itermSessionDetail(working); got != "Reading source" {
+		t.Fatalf("working detail = %q, want Reading source", got)
+	}
+	if got := model.itermSessionDetail(codextui.BlockedProgramStatus(codextui.ProgramStatusKindQuestion)); got != "" {
+		t.Fatalf("waiting detail = %q", got)
+	}
+
+	model.Update(TurnCompletedMsg{})
+	if got := model.itermSessionDetail(working); got != "" {
+		t.Fatalf("background detail = %q", got)
+	}
+}
+
 func TestProgramStatusReemitsAfterFocusAndResizeLikeRust(t *testing.T) {
 	restore := codextui.SetTerminalProgramStatusSupportForTest(true, false)
 	defer restore()

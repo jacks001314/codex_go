@@ -48,6 +48,82 @@ func TestTurnRuntimeTaskStartedMatchesRustStateReset(t *testing.T) {
 	}
 }
 
+func turnRuntimeWithStreaming() TurnRuntimeState {
+	streaming := NewChatStreamingState(40)
+	streaming.PlanMode = true
+	return TurnRuntimeState{Streaming: *streaming, SessionConfigured: true}
+}
+
+// Rust #45549: finalizing an interrupted turn must preserve the received answer
+// and plan source instead of dropping the stream controllers.
+func TestTurnRuntimeFinalizeTurnPreservesStreamedAnswerAndPlanLikeRust(t *testing.T) {
+	state := turnRuntimeWithStreaming()
+	state.OnTaskStarted("turn-1")
+	state.Streaming.OnAgentMessageDelta("answer with $x +")
+	state.Streaming.OnPlanDelta("plan with $y -")
+
+	state.FinalizeTurn()
+
+	if got := state.Streaming.FinalizedAnswerSource; got != "answer with $x +" {
+		t.Fatalf("finalized answer source = %q", got)
+	}
+	if got := state.Streaming.FinalizedPlanSource; got != "plan with $y -" {
+		t.Fatalf("finalized plan source = %q", got)
+	}
+	if got := state.latestProposedPlan(); got != "plan with $y -" {
+		t.Fatalf("latest plan = %q", got)
+	}
+	if state.Streaming.StreamController != nil || state.Streaming.PlanStreamController != nil {
+		t.Fatal("turn finalization left a stream controller active")
+	}
+	if state.UsageInsertionRequests == 0 {
+		t.Fatal("turn finalization did not request usage insertion after stream shutdown")
+	}
+	if len(state.Streaming.History) < 2 {
+		t.Fatalf("finalized history = %d cells, want answer and plan", len(state.Streaming.History))
+	}
+}
+
+func TestTurnRuntimeErrorPreservesStreamedPlanLikeRust(t *testing.T) {
+	state := turnRuntimeWithStreaming()
+	state.OnTaskStarted("turn-1")
+	state.Streaming.OnPlanDelta("plan before failure $z")
+
+	state.OnError("boom")
+
+	if got := state.Streaming.FinalizedPlanSource; got != "plan before failure $z" {
+		t.Fatalf("finalized plan source = %q", got)
+	}
+	if got := state.latestProposedPlan(); got != "plan before failure $z" {
+		t.Fatalf("latest plan = %q", got)
+	}
+	if state.Streaming.PlanStreamController != nil {
+		t.Fatal("failed turn left the plan stream active")
+	}
+	if state.LastErrorOutcome != TurnRuntimeErrorGeneric {
+		t.Fatalf("error outcome = %q", state.LastErrorOutcome)
+	}
+}
+
+func TestTurnRuntimePolicyErrorPreservesAnswerAndPlanLikeRust(t *testing.T) {
+	state := turnRuntimeWithStreaming()
+	state.OnTaskStarted("turn-1")
+	state.Streaming.OnAgentMessageDelta("answer $a")
+	state.Streaming.OnPlanDelta("plan $b")
+
+	state.OnCyberPolicyError()
+
+	if got := state.Streaming.FinalizedAnswerSource; got != "answer $a" {
+		t.Fatalf("finalized answer source = %q", got)
+	}
+	if got := state.Streaming.FinalizedPlanSource; got != "plan $b" {
+		t.Fatalf("finalized plan source = %q", got)
+	}
+	if state.LastErrorOutcome != TurnRuntimeErrorCyberPolicy {
+		t.Fatalf("error outcome = %q", state.LastErrorOutcome)
+	}
+}
+
 func TestTurnRuntimeTaskStartedPreservesMCPStartupHeader(t *testing.T) {
 	state := TurnRuntimeState{
 		MCPStartupActive: true,

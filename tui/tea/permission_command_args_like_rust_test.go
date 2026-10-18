@@ -208,7 +208,7 @@ func TestPermissionsCommandRejectsUnknownAndDisabledProfilesLikeRust(t *testing.
 		AllowedProfiles: map[string]bool{chatwidget.ReadOnlyProfile: false},
 	})
 	runPermissionsCommand(t, model, ":read-only")
-	if model.notice != "Permission profile `:read-only` is unavailable: Disabled by requirements." {
+	if model.notice != "Permission profile `:read-only` is unavailable: Disabled by requirements" {
 		t.Fatalf("disabled profile notice = %q", model.notice)
 	}
 	if model.State.Sandbox != chatwidget.WorkspaceProfile {
@@ -221,7 +221,7 @@ func TestPermissionsCommandRejectsUnknownAndDisabledProfilesLikeRust(t *testing.
 		AllowedApprovalPolicies: []chatwidget.ApprovalPolicy{chatwidget.ApprovalOnRequest},
 	})
 	runPermissionsCommand(t, model, chatwidget.DangerFullAccessProfile)
-	if model.notice != "Permission profile `:danger-full-access` is unavailable: Disabled by requirements." {
+	if model.notice != "Permission profile `:danger-full-access` is unavailable: Disabled by requirements" {
 		t.Fatalf("policy-disabled profile notice = %q", model.notice)
 	}
 }

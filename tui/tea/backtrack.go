@@ -55,7 +55,7 @@ func (m *Model) shouldHandleBacktrackEsc() bool {
 	if m == nil {
 		return false
 	}
-	return tuiapp.ShouldHandleBacktrackEsc(m.inSideConversation(), m.normalBacktrackMode(), m.backtrackComposerEmpty(), false)
+	return tuiapp.ShouldHandleBacktrackEsc(m.inSideConversation(), m.normalBacktrackMode(), m.backtrackComposerEmpty(), m.shouldHandleVimInsertEscape())
 }
 
 // shouldRejectSideBacktrackEsc mirrors Rust should_reject_side_backtrack_esc.
@@ -63,7 +63,7 @@ func (m *Model) shouldRejectSideBacktrackEsc() bool {
 	if m == nil {
 		return false
 	}
-	return tuiapp.ShouldRejectSideBacktrackEsc(m.inSideConversation(), m.normalBacktrackMode(), m.backtrackComposerEmpty(), false)
+	return tuiapp.ShouldRejectSideBacktrackEsc(m.inSideConversation(), m.normalBacktrackMode(), m.backtrackComposerEmpty(), m.shouldHandleVimInsertEscape())
 }
 
 // handleBacktrackEscKey mirrors Rust handle_backtrack_esc_key.
@@ -289,21 +289,24 @@ func (m *Model) restoreComposerPrompt(prompt chatwidget.ThreadComposerState) {
 		m.attachments = append(m.attachments, bottompane.ComposerAttachment{Kind: bottompane.AttachmentRemoteImage, URL: url})
 	}
 	m.composerElements = nil
+	elements := make([]ComposerTextElement, 0, len(prompt.TextElements))
 	for _, element := range prompt.TextElements {
 		start := int(element.ByteRange.Start)
 		end := int(element.ByteRange.End)
-		placeholder := prompt.Text
-		if element.Placeholder != nil {
-			placeholder = *element.Placeholder
-		}
 		if start < 0 || end > len(prompt.Text) || start >= end {
 			continue
 		}
-		if placeholder != "" && prompt.Text[start:end] != placeholder {
-			continue
+		placeholder := prompt.Text[start:end]
+		if element.Placeholder != nil {
+			placeholder = *element.Placeholder
 		}
-		m.composerElements = append(m.composerElements, ComposerTextElement{Start: start, End: end, Placeholder: prompt.Text[start:end]})
+		elements = append(elements, ComposerTextElement{
+			Start:       start,
+			End:         end,
+			Placeholder: placeholder,
+		})
 	}
+	m.restoreComposerTextElements(prompt.Text, elements)
 	m.extendComposerPasteWindow(m.currentTime())
 	m.refreshSlashPopup()
 }

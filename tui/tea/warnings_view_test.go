@@ -75,7 +75,7 @@ func TestWarningsViewerKeepAndCopyLikeRust(t *testing.T) {
 	if got := model.warningsView.CurrentIndex(); got != 1 {
 		t.Fatalf("keep did not advance the viewer: index %d", got)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlO})
+	updateAndRunClipboard(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyCtrlO})
 	if len(copied) != 1 || copied[0] != "Second warning" {
 		t.Fatalf("copy = %#v, want the current diagnostic", copied)
 	}
@@ -186,5 +186,30 @@ func TestWarningsFooterNoticeYieldsToPopupsLikeRust(t *testing.T) {
 	typeText(t, model, "/")
 	if view := utils.StripANSI(model.View()); hasWarningNotice(view) {
 		t.Fatalf("notice rendered while the slash popup is open:\n%s", view)
+	}
+}
+
+func TestWarningsDismissalResetsWithTranscriptLikeRust(t *testing.T) {
+	enabled := true
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:        100,
+		Height:       30,
+		ShowTooltips: &enabled,
+	})
+	model.Update(StatusMsg{Status: "warning: repeated diagnostic"})
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	model.View()
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	if got := model.warningDisplay.WarningCount(); got != 0 {
+		t.Fatalf("dismissed warning count = %d, want 0", got)
+	}
+
+	model.resetThreadScopedState()
+	if len(model.warningCells) != 0 || model.warningsView != nil {
+		t.Fatalf("warning state survived transcript reset: cells=%d viewer=%v", len(model.warningCells), model.warningsView)
+	}
+	model.Update(StatusMsg{Status: "warning: repeated diagnostic"})
+	if got := model.warningDisplay.VisibleEntries([]historycell.WarningCell{model.warningCells[0]}); len(got) != 1 {
+		t.Fatalf("same warning after reset = %#v, want visible", got)
 	}
 }

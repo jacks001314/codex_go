@@ -68,6 +68,7 @@ type FooterGoalStatusIndicator struct {
 }
 
 type FooterKeyHints struct {
+	Agents          string
 	ToggleShortcuts string
 	Queue           string
 	InsertNewline   string
@@ -186,8 +187,11 @@ func footerLinesFromProps(props FooterProps, showShortcuts bool, showQueue bool)
 		return []string{CollaborationModeLabel(props.CollaborationModeIndicator, props.ShowCycleHint)}
 	default:
 		left := ""
+		if showShortcuts && props.KeyHints.Agents != "" {
+			left = props.KeyHints.Agents + " for agents"
+		}
 		if showShortcuts && props.KeyHints.ToggleShortcuts != "" {
-			left = props.KeyHints.ToggleShortcuts + " for shortcuts"
+			left = joinFooterParts(left, props.KeyHints.ToggleShortcuts+" for shortcuts")
 		}
 		mode := CollaborationModeLabel(props.CollaborationModeIndicator, props.ShowCycleHint)
 		if mode != "" {
@@ -249,6 +253,9 @@ func FooterShortcutOverlayLines(props FooterProps) []string {
 		lines = append(lines, tui.ModifierLabelPrefix(tui.ShiftKeyLabel())+"tab to change mode")
 	}
 	lines = append(lines, props.KeyHints.ShowTranscript+" to view transcript")
+	if props.KeyHints.Agents != "" {
+		lines = append(lines, props.KeyHints.Agents+" for agents (empty prompt)")
+	}
 	lines = append(lines, "")
 	lines = append(lines, "customize shortcuts with /keymap")
 	return lines
@@ -268,6 +275,9 @@ func PassiveFooterStatusLine(props FooterProps) string {
 	}
 	if props.ActiveAgentLabel != "" {
 		parts = append(parts, props.ActiveAgentLabel)
+	}
+	if props.Mode == FooterModeComposerEmpty && props.KeyHints.Agents != "" && len(parts) > 0 {
+		parts = append(parts, props.KeyHints.Agents+" for agents")
 	}
 	return strings.Join(parts, FooterContextJoiner)
 }
@@ -409,6 +419,17 @@ func ComputeSingleLineFooterLayout(width int, contextWidth int, props FooterProp
 			}
 		}
 	}
+	// Rust #41917: when the agents hint is present, prefer a compact line that
+	// drops the shortcuts hint so `← for agents` can still fit beside the
+	// context indicator.
+	if showShortcutsHint && props.KeyHints.Agents != "" {
+		compactProps := props
+		compactProps.KeyHints.ToggleShortcuts = ""
+		compactLine := footerSummaryLeft(compactProps, true, showQueueHint, true)
+		if footerFitsWithContext(width, compactLine, contextWidth) {
+			return SingleLineFooterLayout{LeftKind: SummaryLeftCustom, Left: compactLine, ShowContext: true}
+		}
+	}
 	modeWithCycle := CollaborationModeLabel(props.CollaborationModeIndicator, true)
 	modeOnly := CollaborationModeLabel(props.CollaborationModeIndicator, false)
 	for _, left := range []string{modeWithCycle, modeOnly} {
@@ -452,8 +473,13 @@ func footerSummaryLeft(props FooterProps, showShortcutsHint bool, showQueueHint 
 	left := ""
 	if showQueueHint && props.KeyHints.Queue != "" {
 		left = props.KeyHints.Queue + " to queue message"
-	} else if showShortcutsHint && props.KeyHints.ToggleShortcuts != "" {
-		left = props.KeyHints.ToggleShortcuts + " for shortcuts"
+	} else if showShortcutsHint {
+		if props.KeyHints.Agents != "" {
+			left = props.KeyHints.Agents + " for agents"
+		}
+		if props.KeyHints.ToggleShortcuts != "" {
+			left = joinFooterParts(left, props.KeyHints.ToggleShortcuts+" for shortcuts")
+		}
 	}
 	mode := CollaborationModeLabel(props.CollaborationModeIndicator, showCycleHint && props.ShowCycleHint)
 	return joinFooterParts(left, mode)

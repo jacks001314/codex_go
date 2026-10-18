@@ -23,6 +23,7 @@ type skillPopupItem struct {
 	DisplayName string
 	Description string
 	Path        string
+	CategoryTag string
 }
 
 type skillPopupState struct {
@@ -662,6 +663,7 @@ func skillPopupItemsFromResponse(response appserver.SkillsListResponse, cwd stri
 			DisplayName: firstNonEmpty(chatwidget.SkillDisplayName(skill), name),
 			Description: chatwidget.SkillDescription(skill),
 			Path:        strings.TrimSpace(skill.Path),
+			CategoryTag: "[Skill]",
 		})
 	}
 	return items
@@ -703,19 +705,42 @@ func skillPopupNameWidth(items []skillPopupItem) int {
 
 func skillPopupRenderLine(item skillPopupItem, selected bool, nameWidth int, width int) string {
 	prefix := codextui.SelectionPrefix(selected)
-	availableDescription := width - codextui.DisplayWidth(prefix) - nameWidth - 1
-	if availableDescription < 0 {
-		availableDescription = 0
-	}
 	name := codextui.TruncateWithEllipsis(item.DisplayName, nameWidth)
-	description := codextui.TruncateWithEllipsis(item.Description, availableDescription)
 	rawName := padRightDisplay(name, nameWidth)
+	tag := strings.TrimSpace(item.CategoryTag)
+	tagWidth := codextui.DisplayWidth(tag)
+	descriptionWidth := width - codextui.DisplayWidth(prefix) - nameWidth - 2
+	if tagWidth > 0 {
+		descriptionWidth -= tagWidth + 1
+	}
+	description := ""
+	if descriptionWidth >= 24 {
+		description = codextui.TruncateWithEllipsis(strings.TrimSpace(item.Description), descriptionWidth)
+	}
+	plain := prefix + rawName
+	if description != "" {
+		plain += " " + description
+	}
+	tagPadding := 0
+	if tag != "" {
+		tagPadding = max(width-tagWidth-codextui.DisplayWidth(plain), 0)
+		plain += strings.Repeat(" ", tagPadding)
+		plain += tag
+	}
 	if selected {
-		return codextui.RenderSelectedRow(prefix + rawName + " " + description)
+		return codextui.RenderSelectedRowFilled(plain, width)
 	}
 	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	descriptionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	return prefix + nameStyle.Render(rawName) + " " + descriptionStyle.Render(description)
+	line := prefix + nameStyle.Render(rawName)
+	if description != "" {
+		line += " " + descriptionStyle.Render(description)
+	}
+	if tag != "" {
+		line += strings.Repeat(" ", tagPadding)
+		line += descriptionStyle.Render(tag)
+	}
+	return line
 }
 
 func skillPopupItemKey(item skillPopupItem) string {

@@ -1,11 +1,13 @@
 package tea
 
 import (
+	"os"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/appserver"
+	codextui "codex_go/tui"
 )
 
 // ThreadSettingsUpdatedMsg carries the app server's authoritative settings for
@@ -46,6 +48,10 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 		m.State.CWD = cwd
 		m.sessionCWD = cwd
 		cwdChanged = true
+	}
+	if settings.InstructionSourcesSet || settings.InstructionSources != nil {
+		home, _ := os.UserHomeDir()
+		m.State.AgentsSummary = codextui.FormatInstructionSources(settings.InstructionSources, m.State.CWD, home)
 	}
 	// Rust #46494: the server's settings carry the thread's runtime workspace
 	// roots. Track them so a Session-sourced fork (a side conversation) can

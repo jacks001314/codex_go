@@ -36,8 +36,8 @@ import (
 // slip past this file. T-b14 added agents.fork (#49517) and global.find_transcript
 // (#46734), and moved agents.search to the upstream f3// pair, taking the pinned
 // size from 152 to 154, and T-b15 added global.focus_activity (#46734),
-// taking it to 155.
-const keymapCatalogEntryCount = 155
+// taking it to 155. #54381 added chat.open_presets, taking it to 156.
+const keymapCatalogEntryCount = 156
 
 // rustOnlyKeymapActions: Rust actions this Go tree does not register and whose
 // behavior is genuinely missing (still blocked). T-b14 landed agents.fork and
@@ -45,9 +45,7 @@ const keymapCatalogEntryCount = 155
 //
 // T-b12 §T12 originally listed 14; T-b13 accepted 9 as renames and T-b14 landed 3
 // (pager.find, agents.fork, global.find_transcript).
-var rustOnlyKeymapActions = map[string]string{
-	"chat.open_presets": "111362a6a0 (#54381) actions.rs:139 - blocked_precondition: /presets + quick dials is #54380/#54381, not implemented in Go",
-}
+var rustOnlyKeymapActions = map[string]string{}
 
 // goOnlyKeymapActions are catalog entries upstream does not declare. Keep them:
 // they back Go-side behavior whose consumers already ask for these names.

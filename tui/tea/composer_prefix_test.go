@@ -171,6 +171,63 @@ func TestComposerPromptImportAbsorbsPrefix(t *testing.T) {
 	}
 }
 
+// TestComposerSlashPromptKeepsTextElementOffsetsLikeRust pins #54742's
+// structured-element half: the prompt prefix is part of canonical text, while
+// the tracked range stays relative to the editable body.
+func TestComposerSlashPromptKeepsTextElementOffsetsLikeRust(t *testing.T) {
+	model := prefixTestModel(t)
+	model.setComposerPrompt("/tmp/$imagegen file")
+	model.registerComposerElement(model.composer.Value(), len("tmp/"), len("tmp/$imagegen"))
+	if got := model.composerText(); got != "/tmp/$imagegen file" {
+		t.Fatalf("draft = %q, want /tmp/$imagegen file", got)
+	}
+	if model.readOnlyThread {
+		t.Fatal("test model unexpectedly read-only")
+	}
+
+	model.submitComposer()
+	requests := model.SubmittedRequests()
+	if len(requests) != 1 {
+		t.Fatalf("submitted requests = %#v, want one", requests)
+	}
+	request := requests[0]
+	if request.Prompt != "/tmp/$imagegen file" {
+		t.Fatalf("prompt = %q, want /tmp/$imagegen file", request.Prompt)
+	}
+	if len(request.TextElements) != 1 {
+		t.Fatalf("text elements = %#v, want one", request.TextElements)
+	}
+	element := request.TextElements[0]
+	wantStart := len("/tmp/")
+	if element.Start != wantStart || element.End != wantStart+len("$imagegen") || element.Placeholder != "$imagegen" {
+		t.Fatalf("text element = %#v, want canonical range %d..%d", element, wantStart, wantStart+len("$imagegen"))
+	}
+}
+
+// TestComposerHistoryRecallRestoresTextElementsLikeRust covers the history
+// round trip required by #54742: recalling a slash-command prompt restores the
+// marker and keeps structured ranges aligned with the body.
+func TestComposerHistoryRecallRestoresTextElementsLikeRust(t *testing.T) {
+	model := prefixTestModel(t)
+	model.setComposerPrompt("/tmp/$imagegen file")
+	model.registerComposerElement(model.composer.Value(), len("tmp/"), len("tmp/$imagegen"))
+
+	model.submitComposer()
+	updated, _ := model.Update(key(bubbletea.KeyUp))
+	model = updated.(*Model)
+
+	if model.composerPrefix != composerPrefixSlash || model.composer.Value() != "tmp/$imagegen file" {
+		t.Fatalf("recalled prefix=%v body=%q", model.composerPrefix, model.composer.Value())
+	}
+	if len(model.composerElements) != 1 {
+		t.Fatalf("recalled elements = %#v, want one", model.composerElements)
+	}
+	element := model.composerElements[0]
+	if element.Start != len("tmp/") || element.End != len("tmp/$imagegen") || element.Placeholder != "$imagegen" {
+		t.Fatalf("recalled element = %#v", element)
+	}
+}
+
 // TestComposerPrefixCountsAsNonEmpty pins is_empty: a bare marker is a draft,
 // so the passive warning row and queued-message restore must not treat it as
 // an empty composer.

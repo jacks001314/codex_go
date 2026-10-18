@@ -18,6 +18,8 @@ const (
 	KeymapActionOpenActionMenu UsageMenuAction = "keymap_open_action_menu"
 	KeymapActionSetBinding     UsageMenuAction = "keymap_set_binding"
 	KeymapActionAddBinding     UsageMenuAction = "keymap_add_binding"
+	KeymapActionSetChord       UsageMenuAction = "keymap_set_chord"
+	KeymapActionAddChord       UsageMenuAction = "keymap_add_chord"
 	KeymapActionReplaceBinding UsageMenuAction = "keymap_replace_binding"
 	KeymapActionUnsetBinding   UsageMenuAction = "keymap_unset_binding"
 	KeymapActionDebug          UsageMenuAction = "keymap_debug"
@@ -131,6 +133,7 @@ func NewKeymapPickerView(config KeymapPickerConfig) SelectionView {
 		SearchPlaceholder:    "Type to search actions",
 		Items:                items,
 		InitialSelectedIndex: initialSelectedIndex,
+		ColumnWidth:          bottompane.NewColumnWidthConfig(bottompane.ColumnWidthAutoAllRows, nil).WithFullWidthSelection(),
 	}
 }
 
@@ -144,17 +147,24 @@ func NewKeymapActionMenuView(item KeymapActionItem) SelectionView {
 	currentBinding := strings.Join(item.Bindings, ", ")
 	switch len(item.Bindings) {
 	case 0:
-		items = append(items, SelectionItem{ID: "set", Name: "Set key", Description: "Capture a key for this unbound action.", Action: KeymapActionSetBinding, DismissOnSelect: true})
+		items = append(items,
+			SelectionItem{ID: "set", Name: "Set key", Description: "Capture a key for this unbound action.", Action: KeymapActionSetBinding, DismissOnSelect: true},
+			SelectionItem{ID: "set_chord", Name: "Set key chord", Description: "Capture two consecutive keys for this action", Action: KeymapActionSetChord, DismissOnSelect: true},
+		)
 	case 1:
 		items = append(items,
 			SelectionItem{ID: "set", Name: "Replace binding", Description: "Capture a replacement key for `" + currentBinding + "`.", Action: KeymapActionSetBinding, DismissOnSelect: true},
 			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep `" + currentBinding + "` and add another key.", Action: KeymapActionAddBinding, DismissOnSelect: true},
+			SelectionItem{ID: "set_chord", Name: "Replace with key chord", Description: "Replace `" + currentBinding + "` with a two-stroke key chord", Action: KeymapActionSetChord, DismissOnSelect: true},
+			SelectionItem{ID: "add_chord", Name: "Add alternate key chord", Description: "Keep `" + currentBinding + "` and add a two-stroke key chord", Action: KeymapActionAddChord, DismissOnSelect: true},
 		)
 	default:
 		items = append(items,
 			SelectionItem{ID: "replace_one", Name: "Replace one binding...", Description: "Choose which existing binding to replace.", Action: KeymapActionReplaceBinding},
 			SelectionItem{ID: "set", Name: "Replace all bindings", Description: "Replace `" + currentBinding + "` with one key.", Action: KeymapActionSetBinding, DismissOnSelect: true},
 			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep `" + currentBinding + "` and add another key.", Action: KeymapActionAddBinding, DismissOnSelect: true},
+			SelectionItem{ID: "set_chord", Name: "Replace with key chord", Description: "Replace `" + currentBinding + "` with a two-stroke key chord", Action: KeymapActionSetChord, DismissOnSelect: true},
+			SelectionItem{ID: "add_chord", Name: "Add alternate key chord", Description: "Keep `" + currentBinding + "` and add a two-stroke key chord", Action: KeymapActionAddChord, DismissOnSelect: true},
 		)
 	}
 	items = append(items, leaderActionMenuItems(item)...)
@@ -178,7 +188,7 @@ func NewKeymapActionMenuView(item KeymapActionItem) SelectionView {
 		FooterNote:  "Changes write the root `tui.keymap.*` override.",
 		FooterHint:  standardPopupHintLine,
 		AllowCancel: true,
-		ColumnWidth: bottompane.NewColumnWidthConfig(bottompane.ColumnWidthAutoAllRows, nil),
+		ColumnWidth: bottompane.NewColumnWidthConfig(bottompane.ColumnWidthAutoAllRows, nil).WithFullWidthSelection(),
 		// Rust's picker preset hides the description column below this width
 		// (#46691 replaced stacking with hiding).
 		DescriptionLayout: bottompane.NewHideWhenNarrowDescriptionLayout(keymapActionMenuMinDescriptionWidth),
@@ -210,6 +220,7 @@ func NewKeymapReplaceBindingMenuView(item KeymapActionItem) SelectionView {
 		FooterHint:  standardPopupHintLine,
 		AllowCancel: true,
 		Items:       items,
+		ColumnWidth: bottompane.NewColumnWidthConfig(bottompane.ColumnWidthAutoAllRows, nil).WithFullWidthSelection(),
 	}
 }
 

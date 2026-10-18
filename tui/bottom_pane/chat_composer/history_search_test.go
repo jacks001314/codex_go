@@ -2,6 +2,7 @@ package chatcomposer
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +96,30 @@ func TestHistorySearchSessionCancelAcceptNoMatchAndQueryEditingMatchRustCore(t *
 	}
 }
 
+func TestHistorySearchSavedDraftRecoveryKeepsPreviewFrozenLikeRust(t *testing.T) {
+	original := *NewDraftState()
+	original.SetText("main draft")
+	session := BeginHistorySearch(original, []string{"earlier prompt"})
+	session.UpdateQuery("earlier")
+
+	session.EditSavedDraft(func(draft *DraftState) {
+		draft.Text += "\n\n> Which way?\n\nanswer"
+		draft.Cursor = len(draft.Text)
+	})
+	if session.OriginalDraft.Text != "main draft\n\n> Which way?\n\nanswer" {
+		t.Fatalf("saved draft = %q", session.OriginalDraft.Text)
+	}
+
+	preview, result := session.UpdateQuery("missing")
+	if result.Kind != HistorySearchResultNotFound || preview.Text != "main draft" {
+		t.Fatalf("post-recovery preview = %#v result=%#v", preview, result)
+	}
+	cancelled := session.Cancel()
+	if cancelled.Text != "main draft\n\n> Which way?\n\nanswer" {
+		t.Fatalf("cancel restored = %q", cancelled.Text)
+	}
+}
+
 func TestHistorySearchFooterCursorCompatibilityAndCaseInsensitiveRangesMatchRustCore(t *testing.T) {
 	entries := []string{"git status", "cargo test", "git status", "Git commit"}
 	if got := SearchHistory(entries, "git"); !reflect.DeepEqual(got, []string{"Git commit", "git status"}) {
@@ -103,8 +128,13 @@ func TestHistorySearchFooterCursorCompatibilityAndCaseInsensitiveRangesMatchRust
 
 	session := BeginHistorySearch(DraftState{}, entries)
 	session.UpdateQuery("Git")
-	if line, ok := session.FooterLine(); !ok || line != "reverse-i-search: Git  enter accept | esc cancel" {
+	if line, ok := session.FooterLine(); !ok || line != "reverse-i-search: Git  enter accept · esc cancel" {
 		t.Fatalf("match footer = %q ok=%v", line, ok)
+	}
+	styled, ok := session.FooterStyledLine()
+	if !ok || !strings.Contains(styled, "\x1b[36mGit\x1b[0m") ||
+		!strings.Contains(styled, "\x1b[1menter\x1b[0m") || !strings.Contains(styled, "\x1b[1mesc\x1b[0m") {
+		t.Fatalf("styled match footer = %q ok=%v", styled, ok)
 	}
 	if col, ok := session.CursorColumn(2, 80); !ok || col != 2+len("reverse-i-search: ")+len("Git") {
 		t.Fatalf("cursor column = %d ok=%v", col, ok)
@@ -119,6 +149,10 @@ func TestHistorySearchFooterCursorCompatibilityAndCaseInsensitiveRangesMatchRust
 
 	if got := CaseInsensitiveMatchRanges("git status GIT", "GIT"); !reflect.DeepEqual(got, []TextRange{{Start: 0, End: 3}, {Start: 11, End: 14}}) {
 		t.Fatalf("case ranges = %#v", got)
+	}
+	session.UpdateQuery("does-not-exist")
+	if styled, ok := session.FooterStyledLine(); !ok || !strings.Contains(styled, "\x1b[31mno match\x1b[0m") {
+		t.Fatalf("styled no-match footer = %q ok=%v", styled, ok)
 	}
 	if got := CaseInsensitiveMatchRanges("a\u0130 i", "i"); !reflect.DeepEqual(got, []TextRange{{Start: 1, End: 3}, {Start: 4, End: 5}}) {
 		t.Fatalf("turkish dotted-I ranges = %#v", got)

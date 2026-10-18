@@ -300,24 +300,13 @@ func (s *TurnRuntimeState) OnTaskComplete(params TurnCompleteRuntimeParams) Turn
 	s.SawCopySourceThisTurn = false
 	result.NotificationResponse = notificationResponse
 
-	s.Streaming.FlushAnswerStreamWithSeparator()
+	s.Streaming.FlushAnswerAndPlanStreams()
+	if source := strings.TrimSpace(s.Streaming.FinalizedPlanSource); source != "" {
+		s.LatestProposedPlan = source
+	}
 	if s.Streaming.UsageInsertionRequests > 0 {
 		s.UsageInsertionRequests += s.Streaming.UsageInsertionRequests
 		s.Streaming.UsageInsertionRequests = 0
-	}
-	if s.Streaming.PlanStreamController != nil {
-		hadLiveTail := s.Streaming.PlanStreamController.HasLiveTail()
-		s.Streaming.ClearActiveStreamTail()
-		cell, source := s.Streaming.PlanStreamController.Finalize()
-		s.Streaming.PlanStreamController = nil
-		if !hadLiveTail && cell != nil {
-			s.addHistory(cell)
-		}
-		if source != "" {
-			s.Streaming.FinalizedPlanSource = source
-			s.LatestProposedPlan = source
-		}
-		s.UsageInsertionRequests++
 	}
 
 	if !params.FromReplay {
@@ -467,6 +456,14 @@ func (s *TurnRuntimeState) FinalizeTurn() {
 	if s == nil {
 		return
 	}
+	s.Streaming.FlushAnswerAndPlanStreams()
+	if source := strings.TrimSpace(s.Streaming.FinalizedPlanSource); source != "" {
+		s.LatestProposedPlan = source
+	}
+	if s.Streaming.UsageInsertionRequests > 0 {
+		s.UsageInsertionRequests += s.Streaming.UsageInsertionRequests
+		s.Streaming.UsageInsertionRequests = 0
+	}
 	s.SafetyBuffering.Clear()
 	s.Streaming.ClearActiveStreamTail()
 	s.Tools.Active = nil
@@ -477,11 +474,6 @@ func (s *TurnRuntimeState) FinalizeTurn() {
 	s.SuppressedExecCalls = nil
 	if s.Streaming.AdaptiveChunking != nil {
 		s.Streaming.AdaptiveChunking.Reset()
-	}
-	if s.Streaming.StreamController != nil || s.Streaming.PlanStreamController != nil {
-		s.Streaming.StreamController = nil
-		s.Streaming.PlanStreamController = nil
-		s.UsageInsertionRequests++
 	}
 	s.PendingStatusRestore = false
 	s.RequestStatusLineBranchRefresh()
@@ -511,7 +503,6 @@ func (s *TurnRuntimeState) OnError(message string) {
 		return
 	}
 	s.InputQueue.SubmitPendingSteersAfterInterrupt = false
-	s.Streaming.FlushAnswerStreamWithSeparator()
 	s.FinalizeTurn()
 	message = strings.TrimSpace(message)
 	s.LastErrorOutcome = TurnRuntimeErrorGeneric

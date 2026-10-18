@@ -21,6 +21,11 @@ func (m *Model) applySafetyBufferingUpdate(msg ModelSafetyBufferingMsg) {
 	if turnID == "" {
 		return
 	}
+	if activeThreadID := strings.TrimSpace(m.State.ThreadID); activeThreadID != "" &&
+		strings.TrimSpace(msg.ThreadID) != "" &&
+		activeThreadID != strings.TrimSpace(msg.ThreadID) {
+		return
+	}
 	if !msg.ShowBufferingUI {
 		m.clearSafetyBuffering()
 		return
@@ -38,8 +43,10 @@ func (m *Model) applySafetyBufferingUpdate(msg ModelSafetyBufferingMsg) {
 			CanRetry:        fasterModel != "",
 		},
 		chatwidget.SafetyBufferingContext{
-			ThreadID:    strings.TrimSpace(m.State.ThreadID),
-			EnforceTurn: false,
+			AgentTurnRunning: m.isTaskRunning(),
+			LastTurnID:       strings.TrimSpace(m.currentTurnID),
+			ThreadID:         strings.TrimSpace(m.State.ThreadID),
+			EnforceTurn:      true,
 		},
 	)
 	if result.Prompt != nil {
@@ -76,8 +83,23 @@ func (m *Model) applySafetyBufferingModalOption(optionID string) bubbletea.Cmd {
 	}
 	switch strings.TrimSpace(optionID) {
 	case "retry":
-		m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewSafetyBufferingConfirmationView(m.safetyBufferingFasterModel))
+		m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewSafetyBufferingConfirmationView(m.modelDisplayName(m.safetyBufferingFasterModel)))
 		return nil
+	case "wait":
+		// Dismissing the prompt keeps the buffered turn running and waiting.
+		if m.modal != nil && m.modal.id == chatwidget.SafetyBufferingPromptViewID {
+			m.modal = nil
+		}
+		return nil
+	case "learn-more":
+		m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewSafetyBufferingPromptView(
+			m.safetyBufferingFasterModel,
+			strings.TrimSpace(m.safetyBufferingFasterModel) != "",
+		))
+		if m.onAppLinkAction == nil {
+			return nil
+		}
+		return m.onAppLinkAction(AppLinkAction{Kind: AppLinkActionOpenURL, URL: chatwidget.SafetyBufferingLearnMoreURL})
 	case "stop-retry":
 		threadID := m.safetyBufferingThreadID
 		turnID := strings.TrimSpace(m.safetyBuffering.ActiveTurnID)
@@ -92,8 +114,19 @@ func (m *Model) applySafetyBufferingModalOption(optionID string) bubbletea.Cmd {
 		}
 		return m.onSafetyBufferingRetry(threadID, turnID, model, prompt)
 	default:
-		m.clearSafetyBuffering()
 		return nil
+	}
+}
+
+// markSafetyBufferingAgentMessageStarted dismisses the buffering prompt on the
+// first visible response text and retains only enough state to reject stale
+// buffering notifications until the turn ends (Rust #42380).
+func (m *Model) markSafetyBufferingAgentMessageStarted() {
+	if m == nil || !m.safetyBuffering.MarkAgentMessageStarted() {
+		return
+	}
+	if m.modal != nil && m.modal.id == chatwidget.SafetyBufferingPromptViewID {
+		m.modal = nil
 	}
 }
 

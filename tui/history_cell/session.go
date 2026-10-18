@@ -124,6 +124,27 @@ func NewSessionInfo(header SessionHeaderHistoryCell, isFirstEvent bool, tooltip 
 	return SessionInfoCell{Parts: parts}
 }
 
+// NewSessionInfoWithTooltipLines inserts an already rendered, width-aware
+// tooltip beneath the session header. The rendered lines may carry ANSI styling
+// and OSC 8 hyperlinks, so the transcript must not re-wrap them.
+func NewSessionInfoWithTooltipLines(header SessionHeaderHistoryCell, isFirstEvent bool, tooltipLines []string) SessionInfoCell {
+	parts := []HistoryCell{header}
+	if isFirstEvent {
+		parts = append(parts, NewPlainHistoryCell([]string{
+			"  To get started, describe a task or try one of these commands:",
+			"",
+			"  /init - create an AGENTS.md file with instructions for Codex",
+			"  /status - show current session configuration",
+			"  /permissions - choose what Codex is allowed to do",
+			"  /model - choose what model and reasoning effort to use",
+			"  /review - review any changes and find issues",
+		}))
+	} else if len(tooltipLines) > 0 {
+		parts = append(parts, NewPlainHistoryCell(tooltipLines))
+	}
+	return SessionInfoCell{Parts: parts}
+}
+
 func (c SessionInfoCell) DisplayLines(width int) []string {
 	return joinCellLines(c.Parts, width, false)
 }

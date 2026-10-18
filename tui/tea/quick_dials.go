@@ -403,6 +403,10 @@ func (m *Model) recallQuickDial(slot byte) bubbletea.Cmd {
 	}
 	input := preset.Input
 	if invocation, ok := codextui.ParseCommand(input); ok && slashInvocationDispatchable(invocation) {
+		if invocation.Command == codextui.CommandReview && m.reviewBlockedDuringForegroundWork() {
+			m.showReviewBusyError()
+			return nil
+		}
 		if m.isTaskRunning() && !commandAvailableDuringTask(invocation.Command) {
 			message := "'" + strings.TrimSpace(invocation.Name) + "' is disabled while a task is in progress."
 			m.State.AddHistoryLines([]string{message}, []string{message})

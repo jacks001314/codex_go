@@ -7,6 +7,7 @@ import (
 
 	"codex_go/filesearch"
 	codextui "codex_go/tui"
+	"codex_go/utils"
 )
 
 func TestSearchModeCycleLabelsAndAcceptsMatchRust(t *testing.T) {
@@ -219,14 +220,21 @@ func TestPopupFileSearchSelectionModesAndRenderingMatchRustCore(t *testing.T) {
 		t.Fatalf("new popup should not preselect before query sync: selected=%d ok=%v", popup.Selected, ok)
 	}
 	popup.SetQuery("")
-	rows := RenderPopup(popup, 48, 5)
-	if len(rows) != 3 {
+	if got := popup.CalculateRequiredHeight(48); got != PopupHeight {
+		t.Fatalf("required height = %d, want %d", got, PopupHeight)
+	}
+	rows := RenderPopup(popup, 48, PopupHeight)
+	if len(rows) != PopupHeight {
 		t.Fatalf("rendered rows len = %d rows=%#v", len(rows), rows)
 	}
-	if !strings.Contains(rows[0], "\x1b[") || !strings.Contains(rows[0], "> MCP Search") || !strings.Contains(rows[0], "Plugin") {
-		t.Fatalf("selected rendered row = %q", rows[0])
+	plain := utils.StripANSI(strings.Join(rows, "\n"))
+	if !strings.Contains(plain, "› MCP Search") || !strings.Contains(plain, "Plugin") {
+		t.Fatalf("selected rendered row missing:\n%s", plain)
 	}
-	if !strings.Contains(rows[len(rows)-1], "[All Results]") {
+	if !strings.Contains(plain, "All Results") || !strings.Contains(plain, "Filesystem Only") || !strings.Contains(plain, "Plugins") {
+		t.Fatalf("filter tabs missing:\n%s", plain)
+	}
+	if !strings.Contains(rows[len(rows)-1], "enter/tab insert") {
 		t.Fatalf("footer row = %q", rows[len(rows)-1])
 	}
 	if got := RenderRows(nil, -1, 0, 20, 4, "no matches"); !reflect.DeepEqual(got, []string{"  no matches"}) {
@@ -240,12 +248,100 @@ func TestMentionRenderUsesDisplayWidthTruncationMatchRust(t *testing.T) {
 		MentionType: MentionTypeSkill,
 		Selection:   ToolSelection("$wide", "skills/wide/SKILL.md"),
 	}
-	line := BuildLine(row, false, 12, primaryTextWidth(row))
-	if width := codextui.DisplayWidth(line); width > 12 {
+	if got := primaryTextWidth(row); got != 14 {
+		t.Fatalf("primary display width = %d, want 14", got)
+	}
+	line := BuildLine(row, false, 20, primaryTextWidth(row))
+	if width := codextui.DisplayWidth(utils.StripANSI(line)); width > 20 {
 		t.Fatalf("line exceeds display width: %q width=%d", line, width)
 	}
 	if !strings.Contains(line, "\u2026") || strings.Contains(line, "...") {
 		t.Fatalf("line should use Rust ellipsis truncation: %q", line)
+	}
+}
+
+func TestMentionRenderStylesNamesTagsAndMatchesLikeRust(t *testing.T) {
+	rows := []SearchResult{
+		{
+			DisplayName:  "Plugin",
+			MentionType:  MentionTypePlugin,
+			Selection:    ToolSelection("@Plugin", "plugin://plugin"),
+			MatchIndices: []int{0, 1},
+		},
+		{
+			DisplayName: "Skill",
+			MentionType: MentionTypeSkill,
+			Selection:   ToolSelection("$Skill", "skill://skill"),
+		},
+		{
+			DisplayName: "Task",
+			MentionType: MentionTypeTask,
+			Selection:   ToolSelection("@Task", "thread://task"),
+		},
+		{
+			DisplayName: "src/main.go",
+			MentionType: MentionTypeFile,
+			Selection:   FileSelection("src/main.go"),
+		},
+	}
+	lines := RenderRows(rows, -1, 0, 80, 4, "no matches")
+	if len(lines) != 4 {
+		t.Fatalf("lines = %#v", lines)
+	}
+	if !strings.Contains(lines[0], accentSGR) || !strings.Contains(lines[0], ansiBold) {
+		t.Fatalf("plugin name/match style = %q", lines[0])
+	}
+	if !strings.Contains(lines[1], ansiDim) {
+		t.Fatalf("skill style = %q", lines[1])
+	}
+	if !strings.Contains(lines[2], ansiCyan) || !strings.Contains(lines[3], ansiCyan) {
+		t.Fatalf("task/file cyan styles = %q %q", lines[2], lines[3])
+	}
+}
+
+// TestMentionRenderBoundedPrimaryColumnKeepsFileIdentityLikeRust mirrors
+// #46694's long_mentions_leave_room_for_distinguishing_parent_paths: a long
+// off-screen name may size the primary column, but build_line caps it at half
+// the content width so every file row keeps its distinguishing parent path.
+func TestMentionRenderBoundedPrimaryColumnKeepsFileIdentityLikeRust(t *testing.T) {
+	rows := []SearchResult{
+		{
+			DisplayName: "src/界.rs",
+			MentionType: MentionTypeFile,
+			Selection:   FileSelection("src/界.rs"),
+		},
+		{
+			DisplayName: "tests/界.rs",
+			MentionType: MentionTypeFile,
+			Selection:   FileSelection("tests/界.rs"),
+		},
+		{
+			DisplayName: "deep/a_very_long_filename_that_exceeds_the_column.rs",
+			MentionType: MentionTypeFile,
+			Selection:   FileSelection("deep/a_very_long_filename_that_exceeds_the_column.rs"),
+		},
+	}
+	lines := RenderRows(rows, 0, 0, 40, 3, "no matches")
+	if len(lines) != 3 {
+		t.Fatalf("lines = %#v", lines)
+	}
+	for _, want := range []struct {
+		line string
+		text []string
+	}{
+		{line: lines[0], text: []string{"›", "界.rs", "src/", "File"}},
+		{line: lines[1], text: []string{"界.rs", "tests/", "File"}},
+		{line: lines[2], text: []string{"…", "deep/", "File"}},
+	} {
+		plain := utils.StripANSI(want.line)
+		if width := codextui.DisplayWidth(plain); width != 40 {
+			t.Fatalf("line width = %d, want 40: %q", width, plain)
+		}
+		for _, text := range want.text {
+			if !strings.Contains(plain, text) {
+				t.Fatalf("line %q missing %q", plain, text)
+			}
+		}
 	}
 }
 
@@ -273,7 +369,7 @@ func TestMentionRenderFileNameSplitMatchesRust(t *testing.T) {
 func TestMentionFooterMatchesRustTextAndWidth(t *testing.T) {
 	line := RenderFooter(80, SearchModeResults)
 	// Rust's mentions footer renders the compact key labels (#46680).
-	if !strings.Contains(line, "enter/tab insert") || !strings.Contains(line, "\u00b7") || !strings.Contains(line, "[All Results]") {
+	if !strings.Contains(line, "enter/tab insert") || !strings.Contains(line, "\u00b7") || strings.Contains(line, "[All Results]") {
 		t.Fatalf("footer line = %q", line)
 	}
 	if width := codextui.DisplayWidth(line); width > 80 {
@@ -283,6 +379,118 @@ func TestMentionFooterMatchesRustTextAndWidth(t *testing.T) {
 	narrow := RenderFooter(10, SearchModeResults)
 	if width := codextui.DisplayWidth(narrow); width > 10 {
 		t.Fatalf("narrow footer exceeds width: %q width=%d", narrow, width)
+	}
+}
+
+func mentionFrameRows() []SearchResult {
+	rows := make([]SearchResult, 0, 12)
+	for index := 0; index < 10; index++ {
+		rows = append(rows, SearchResult{
+			DisplayName: "Plugin " + twoDigits(index),
+			Description: "Tools and workflows",
+			MentionType: MentionTypePlugin,
+			Selection:   ToolSelection("plugin-"+formatInt(index), ""),
+		})
+	}
+	for _, name := range []string{"src/界.rs", "src/plain.rs"} {
+		rows = append(rows, SearchResult{
+			DisplayName: name,
+			MentionType: MentionTypeFile,
+			Selection:   FileSelection(name),
+		})
+	}
+	return rows
+}
+
+func twoDigits(value int) string {
+	if value < 10 {
+		return "0" + formatInt(value)
+	}
+	return formatInt(value)
+}
+
+func TestMentionPopupFixedFrameMatchesRust(t *testing.T) {
+	results := mentionFrameRows()
+	rows := renderPopupRows(results, 0, 0, "no matches", SearchModeResults, "", 80, PopupHeight)
+	if len(rows) != PopupHeight {
+		t.Fatalf("rows = %d, want %d", len(rows), PopupHeight)
+	}
+	plain := make([]string, len(rows))
+	for index, row := range rows {
+		plain[index] = utils.StripANSI(row)
+	}
+	if plain[0] != "  Mentions" || plain[1] != "  Files, directories, plugins, skills and tasks" {
+		t.Fatalf("header = %#v", plain[:2])
+	}
+	if !strings.Contains(plain[3], "All Results") || !strings.Contains(plain[3], "Filesystem Only") || !strings.Contains(plain[3], "Plugins") {
+		t.Fatalf("tabs = %q", plain[3])
+	}
+	if plain[5] != "  Type to search mentions" {
+		t.Fatalf("query = %q", plain[5])
+	}
+	if !strings.Contains(plain[7], "› Plugin 00") {
+		t.Fatalf("first result = %q", plain[7])
+	}
+	if plain[15] != "\u2193" {
+		t.Fatalf("below indicator = %q", plain[15])
+	}
+	if !strings.HasPrefix(plain[16], "  enter/tab insert") {
+		t.Fatalf("footer = %q", plain[16])
+	}
+
+	narrow := renderPopupRows(results, len(results)-1, 0, "no matches", SearchModeResults, "", 40, PopupHeight)
+	plainNarrow := make([]string, len(narrow))
+	for index, row := range narrow {
+		plainNarrow[index] = utils.StripANSI(row)
+	}
+	if plainNarrow[6] != "\u2191" {
+		t.Fatalf("above indicator = %q", plainNarrow[6])
+	}
+	if !strings.Contains(plainNarrow[14], "› plain.rs") || !strings.Contains(plainNarrow[14], "src/") {
+		t.Fatalf("last result = %q frame=%#v", plainNarrow[14], plainNarrow)
+	}
+	if !strings.Contains(plainNarrow[16], "enter/tab insert") || !strings.Contains(plainNarrow[16], "\u2026") {
+		t.Fatalf("narrow footer = %q", plainNarrow[16])
+	}
+
+	short := renderPopupRows(results, len(results)-1, 0, "no matches", SearchModeResults, "", 40, 7)
+	if len(short) != 7 {
+		t.Fatalf("short rows = %#v", short)
+	}
+	shortPlain := make([]string, len(short))
+	for index, row := range short {
+		shortPlain[index] = utils.StripANSI(row)
+	}
+	if shortPlain[0] != "  Mentions" || shortPlain[2] == "" || shortPlain[3] != "  Type to search mentions" {
+		t.Fatalf("short frame = %#v", shortPlain)
+	}
+	if !strings.Contains(shortPlain[5], "› plain.rs") || !strings.HasPrefix(shortPlain[6], "  enter/tab insert") {
+		t.Fatalf("short frame rows = %#v", shortPlain)
+	}
+}
+
+func TestMentionPopupEmptyFilterClearsResultsAndKeepsFrame(t *testing.T) {
+	rows := renderPopupRows(nil, -1, 0, "loading...", SearchModeFilesystemOnly, "new-query", 80, PopupHeight)
+	if len(rows) != PopupHeight {
+		t.Fatalf("rows = %d, want %d", len(rows), PopupHeight)
+	}
+	plain := make([]string, len(rows))
+	for index, row := range rows {
+		plain[index] = utils.StripANSI(row)
+	}
+	if plain[5] != "  new-query" {
+		t.Fatalf("query = %q", plain[5])
+	}
+	if plain[7] != "  loading..." {
+		t.Fatalf("empty message = %q", plain[7])
+	}
+	for index := 8; index < 16; index++ {
+		if plain[index] != "" {
+			t.Fatalf("stale result at row %d: %q", index, plain[index])
+		}
+	}
+	if !strings.HasPrefix(plain[16], "  enter/tab insert") {
+		t.Fatalf("footer = %q", plain[16])
 	}
 }
 

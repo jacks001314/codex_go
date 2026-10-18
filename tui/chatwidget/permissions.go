@@ -5,7 +5,7 @@ import "strings"
 const (
 	AskForApprovalLabel     = "Ask for approval"
 	ApproveForMeLabel       = "Approve for me"
-	AutoReviewDescription   = "Only ask for actions detected as potentially unsafe."
+	AutoReviewDescription   = "Only ask for actions detected as potentially unsafe"
 	DangerFullAccessProfile = ":danger-full-access"
 	ReadOnlyProfile         = ":read-only"
 	WorkspaceProfile        = ":workspace"
@@ -158,7 +158,7 @@ func NewPermissionsPopupView(config PermissionMenuConfig) PermissionMenuView {
 		} else if preset.ID == "auto" {
 			baseName = AskForApprovalLabel
 		}
-		description := strings.ReplaceAll(preset.Description, " (Identical to Agent mode)", "")
+		description := PermissionPresetDescription(preset)
 		if preset.ID == "auto" {
 			items = append(items, permissionPresetItem(config, preset, baseName, description, ApprovalsReviewerUser))
 			if config.GuardianApprovalEnabled {
@@ -185,17 +185,17 @@ func NewPermissionProfilesPopupView(config PermissionMenuConfig) PermissionMenuV
 	presets := approvalPresetsByID()
 	items := []PermissionMenuItem{}
 	if preset, ok := presets["auto"]; ok {
-		description := strings.ReplaceAll(preset.Description, " (Identical to Agent mode)", "")
+		description := PermissionPresetDescription(preset)
 		items = append(items, builtinPermissionModeSelectionItem(config, preset, WorkspaceProfile, AskForApprovalLabel, description, ApprovalOnRequest, ApprovalsReviewerUser))
 		if config.GuardianApprovalEnabled {
 			items = append(items, builtinPermissionModeSelectionItem(config, preset, WorkspaceProfile, ApproveForMeLabel, AutoReviewDescription, ApprovalOnRequest, ApprovalsReviewerAutoReview))
 		}
 	}
 	if preset, ok := presets["full-access"]; ok {
-		items = append(items, builtinPermissionModeSelectionItem(config, preset, DangerFullAccessProfile, preset.Label, preset.Description, preset.Approval, ApprovalsReviewerUser))
+		items = append(items, builtinPermissionModeSelectionItem(config, preset, DangerFullAccessProfile, preset.Label, PermissionPresetDescription(preset), preset.Approval, ApprovalsReviewerUser))
 	}
 	if preset, ok := presets["read-only"]; ok {
-		items = append(items, builtinPermissionModeSelectionItem(config, preset, ReadOnlyProfile, preset.Label, preset.Description, preset.Approval, ApprovalsReviewerUser))
+		items = append(items, builtinPermissionModeSelectionItem(config, preset, ReadOnlyProfile, preset.Label, PermissionPresetDescription(preset), preset.Approval, ApprovalsReviewerUser))
 	}
 	for _, profile := range config.CustomProfiles {
 		// Rust PermissionDiscovery::disabled_reason: a named profile is disabled
@@ -208,7 +208,7 @@ func NewPermissionProfilesPopupView(config PermissionMenuConfig) PermissionMenuV
 		items = append(items, PermissionMenuItem{
 			ID:              profile.ID,
 			Name:            profile.ID,
-			Description:     firstNonEmptyPermission(profile.Description, "Configured permission profile."),
+			Description:     firstNonEmptyPermission(profile.Description, "Configured permission profile"),
 			Current:         config.CurrentProfileID == profile.ID,
 			DisabledReason:  disabled,
 			DismissOnSelect: true,
@@ -322,7 +322,7 @@ const (
 	inlineApproveForMeUnavailableMessage = "Approve for me is unavailable. Run `/permissions` to see available profiles."
 	// inlineDisabledByRequirementsReason mirrors PermissionDiscovery::disabled_reason's
 	// reason string (permission_discovery.rs:76); the caller wraps it as
-	// "Permission profile `<id>` is unavailable: Disabled by requirements."
+	// "Permission profile `<id>` is unavailable: Disabled by requirements"
 	inlineDisabledByRequirementsReason = "Disabled by requirements"
 )
 
@@ -380,7 +380,7 @@ func InlinePermissionProfileSelection(config PermissionMenuConfig, profileID str
 		return PermissionMenuItem{}, inlineApproveForMeUnavailableMessage
 	}
 	if reason := inlinePermissionDisabledReason(config, profile, approvalPolicy, approvalsReviewer); reason != "" {
-		return PermissionMenuItem{}, "Permission profile `" + profileID + "` is unavailable: " + reason + "."
+		return PermissionMenuItem{}, "Permission profile `" + profileID + "` is unavailable: " + reason
 	}
 	item := PermissionMenuItem{
 		ID:              profile.id,
@@ -432,7 +432,7 @@ func inlinePermissionProfileCatalogEntry(config PermissionMenuConfig, profileID 
 		}
 		return inlinePermissionProfile{
 			id:          profile.ID,
-			description: firstNonEmptyPermission(profile.Description, "Configured permission profile."),
+			description: firstNonEmptyPermission(profile.Description, "Configured permission profile"),
 			allowed:     profile.Allowed,
 		}, nil, true
 	}
@@ -441,7 +441,7 @@ func inlinePermissionProfileCatalogEntry(config PermissionMenuConfig, profileID 
 
 // inlinePermissionPresetDescription mirrors the preset copy the picker shows.
 func inlinePermissionPresetDescription(preset ApprovalPreset) string {
-	return strings.ReplaceAll(preset.Description, " (Identical to Agent mode)", "")
+	return PermissionPresetDescription(preset)
 }
 
 // inlinePermissionDisabledReason mirrors PermissionDiscovery::disabled_reason
@@ -481,18 +481,18 @@ func disabledReasonForAllowed(allowed bool) string {
 	if allowed {
 		return ""
 	}
-	return "Disabled by requirements."
+	return "Disabled by requirements"
 }
 
 func permissionRequirementsDisabledReason(requirements PermissionRequirements, profileID string, approval ApprovalPolicy, reviewer ApprovalsReviewer) string {
 	if !approvalPolicyAllowed(requirements.AllowedApprovalPolicies, approval) {
-		return "Disabled by requirements."
+		return "Disabled by requirements"
 	}
 	if !reviewerAllowed(requirements.AllowedReviewers, reviewer) {
-		return "Disabled by requirements."
+		return "Disabled by requirements"
 	}
 	if !permissionProfileAllowed(requirements.AllowedProfiles, profileID) {
-		return "Disabled by requirements."
+		return "Disabled by requirements"
 	}
 	return ""
 }

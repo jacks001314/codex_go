@@ -43,6 +43,7 @@ func (m *Model) applyResumeCommand(args string) bubbletea.Cmd {
 			BackendID: m.backendID,
 			Path:      item.Path,
 			ThreadID:  item.ThreadID,
+			CWD:       item.CWD,
 		},
 	}
 	decision, notice, _ := m.applySessionSelection(selection)
@@ -225,6 +226,9 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 		body = "Cannot be undone. Subagent threads will also be deleted."
 		confirmLabel = "Yes, delete and exit"
 		confirmDescription = "Permanently delete this session now"
+		if m.sharedServerCommandCenterAvailable() {
+			confirmLabel = "Yes, delete and return to command center"
+		}
 	}
 	m.modal = &modalState{
 		id:                     "current-session-action-" + string(kind),
@@ -239,6 +243,10 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 		},
 	}
 	m.notice = ""
+}
+
+func (m *Model) sharedServerCommandCenterAvailable() bool {
+	return m != nil && !m.agentsOverviewEmbedded && (m.localDaemonSession || m.remoteAppServer)
 }
 
 func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
@@ -290,6 +298,15 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			return decision, "Resume failed: missing thread id", true
 		}
 		if m.onResumeSession != nil {
+			resolved, needsPrompt, resolveNotice := m.resolveResumeSelectionCWD(selection)
+			if strings.TrimSpace(resolveNotice) != "" {
+				return nil, resolveNotice, true
+			}
+			if needsPrompt {
+				m.openResumeCWDPromptForSelection(resolved)
+				return nil, "", false
+			}
+			selection = resolved
 			response, err := m.onResumeSession(selection)
 			if err != nil {
 				// Rust session_start.rs: an archived conversation is offered for
@@ -309,12 +326,24 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 					decision.Value = strings.TrimSpace(response.Summary.ThreadID)
 				}
 			}
-			m.applyResumeResponse(threadID, response)
+			resolvedCWD := selection.ResumeCWD
+			// A session-directory choice should prefer the handler's freshly
+			// read summary over a possibly stale picker row. An explicit
+			// Current choice stays authoritative.
+			if response.Summary != nil &&
+				strings.TrimSpace(selection.Target.CWD) != "" &&
+				sameResumeCWD(selection.ResumeCWD, selection.Target.CWD) {
+				if summaryCWD := strings.TrimSpace(response.Summary.CWD); summaryCWD != "" {
+					resolvedCWD = summaryCWD
+				}
+			}
+			m.applyResumeResponseWithResolvedCWD(threadID, response, resolvedCWD)
 		} else if m.State != nil {
 			m.deactivateSideConversation()
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
 			m.State.BumpMessagesRevision()
+			m.insertSessionHeader()
 			m.setStatus("idle")
 			m.refreshTranscript()
 			m.transcript.GotoBottom()
@@ -382,9 +411,50 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 }
 
 func (m *Model) applyResumeResponse(threadID string, response SessionResumeResponse) {
+	if m == nil {
+		return
+	}
+	sessionCWD := ""
+	if response.Summary != nil {
+		sessionCWD = strings.TrimSpace(response.Summary.CWD)
+	}
+	currentCWD := strings.TrimSpace(m.sessionCWD)
+	switch normalizeResumeCWD(m.resumeCWD) {
+	case "current":
+		if currentCWD == "" {
+			currentCWD = sessionCWD
+		}
+		m.applyResumeResponseWithCWD(threadID, response, currentCWD)
+	case "session":
+		m.applyResumeResponseWithCWD(threadID, response, sessionCWD)
+	default:
+		if sessionCWD != "" && currentCWD != "" && !sameResumeCWD(currentCWD, sessionCWD) {
+			m.openResumeCWDPrompt(threadID, response, currentCWD, sessionCWD)
+			return
+		}
+		m.applyResumeResponseWithCWD(threadID, response, sessionCWD)
+	}
+}
+
+// applyResumeResponseWithResolvedCWD applies a resume whose working directory
+// was already resolved before the request. The legacy post-response prompt is
+// reserved for responses that arrive without a selection-time cwd.
+func (m *Model) applyResumeResponseWithResolvedCWD(threadID string, response SessionResumeResponse, cwd string) {
+	if m == nil {
+		return
+	}
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		m.applyResumeResponseWithCWD(threadID, response, cwd)
+		return
+	}
+	m.applyResumeResponse(threadID, response)
+}
+
+func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResumeResponse, cwd string) {
 	if m == nil || m.State == nil {
 		return
 	}
+	previousThreadID := m.currentThreadID()
 	m.invalidateAppsScope()
 	if response.Summary != nil && strings.TrimSpace(response.Summary.ThreadID) != "" {
 		threadID = strings.TrimSpace(response.Summary.ThreadID)
@@ -397,7 +467,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	m.seedRecapProgress(response.CompletedTurns)
 	if response.Summary != nil {
 		m.State.SetThreadName(response.Summary.Title)
-		if cwd := strings.TrimSpace(response.Summary.CWD); cwd != "" {
+		if cwd = strings.TrimSpace(cwd); cwd != "" {
 			m.State.CWD = cwd
 			m.sessionCWD = cwd
 		}
@@ -426,6 +496,10 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	m.setReadOnlyThread(response.ReadOnly)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	m.State.BumpMessagesRevision()
+	m.insertSessionHeader()
+	if previousThreadID != threadID {
+		m.prependDaybreakNewTurnNotice()
+	}
 	if response.TokenUsage != nil {
 		m.applyTokenUsage(response.TokenUsage)
 	}
@@ -456,6 +530,11 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	// in-process restore re-applies what the user selected with /title and
 	// /statusline instead of falling back to the saved layout.
 	m.restoreStatusSurfaceOverrides(threadID)
+	// The initial empty thread is a fresh task even when it arrives through
+	// the session-configured/resume path; resumed threads keep their replay.
+	if previousThreadID == "" && len(response.Messages) == 0 {
+		m.markFreshAstraSparkle()
+	}
 	m.refreshTranscript()
 	m.transcript.GotoBottom()
 }

@@ -383,7 +383,7 @@ func TestFinalMessageSeparatorCompletionTimestampLikeRust(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cell := NewFinalMessageSeparator(nil, nil).WithCompletedAt(tc.completedAt)
+			cell := NewFinalMessageSeparator(nil, nil).WithCompletedAt(tc.completedAt).WithClockFormat(tui.ClockFormatTwelveHour)
 			cell.DisplayDate = today
 			lines := cell.DisplayLines(80)
 			if len(lines) != 1 || !strings.Contains(lines[0], tc.want) {
@@ -407,7 +407,7 @@ func TestFinalMessageSeparatorWrapsMetadataOnNarrowTerminals(t *testing.T) {
 		ToolCalls: RuntimeMetricCountDuration{Count: 3, DurationMS: 4200},
 	})
 	cell.DisplayDate = time.Date(2026, 9, 12, 0, 0, 0, 0, time.Local)
-	cell = cell.WithCompletedAt(time.Date(2026, 9, 12, 14, 32, 0, 0, time.Local))
+	cell = cell.WithCompletedAt(time.Date(2026, 9, 12, 14, 32, 0, 0, time.Local)).WithClockFormat(tui.ClockFormatTwelveHour)
 
 	lines := cell.DisplayLines(28)
 	if len(lines) < 2 {

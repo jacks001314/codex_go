@@ -174,6 +174,13 @@ type StatusControlsState struct {
 
 	LastTerminalTitle         string
 	LastTerminalTitleRendered bool
+	// TerminalTitleSpinnerText / TerminalTitleActionRequired / ActionHidden
+	// carry the time-varying terminal-title animation state (Rust #46832):
+	// progress controls the spinner frame, title controls the action-required
+	// blink, and a blocked request always keeps the static prefix.
+	TerminalTitleSpinnerText    string
+	TerminalTitleActionRequired bool
+	TerminalTitleActionHidden   bool
 
 	StatusLineBranchCWD            string
 	StatusLineBranch               string
@@ -674,7 +681,11 @@ func (s *StatusControlsState) refreshStatusLineFromSelections(selections StatusS
 }
 
 func (s *StatusControlsState) refreshTerminalTitleFromSelections(selections StatusSurfaceSelections, result *StatusSurfaceRefreshResult) {
-	title, ok := TerminalTitleText(selections.TerminalTitleItems, s.TerminalTitlePreviewData(), TerminalTitleRenderOptions{})
+	title, ok := TerminalTitleText(selections.TerminalTitleItems, s.TerminalTitlePreviewData(), TerminalTitleRenderOptions{
+		SpinnerText:    s.TerminalTitleSpinnerText,
+		ActionRequired: s.TerminalTitleActionRequired,
+		ActionHidden:   s.TerminalTitleActionHidden,
+	})
 	s.LastTerminalTitle = title
 	s.LastTerminalTitleRendered = ok
 	result.TerminalTitleText = title
@@ -1175,7 +1186,7 @@ func NewStatusLineSetupView(configured []bottompane.StatusLineItem, useThemeColo
 	}
 	return StatusLineSetupView{
 		Title:          "Status line setup",
-		FooterHint:     "Space toggle | Enter save | Esc cancel",
+		FooterHint:     "space toggle \u00b7 enter save \u00b7 esc cancel",
 		Items:          items,
 		UseThemeColors: useThemeColors,
 		PreviewText:    previewText,
@@ -1221,7 +1232,7 @@ func NewTerminalTitleSetupView(configured []TerminalTitleItem, previewData Statu
 	previewText, _ := PreviewLineForTitleItems(configured, previewData)
 	return TerminalTitleSetupView{
 		Title:       "Terminal title setup",
-		FooterHint:  "Space toggle | Enter save | Esc cancel",
+		FooterHint:  "space toggle \u00b7 enter save \u00b7 esc cancel",
 		Items:       items,
 		PreviewText: previewText,
 	}

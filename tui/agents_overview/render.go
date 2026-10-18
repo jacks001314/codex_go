@@ -32,7 +32,14 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 
 	lines := make([]string, 0, termHeight)
 	// header
-	lines = append(lines, renderLine(inset, []span{{text: "Agent command center", style: spanBold}}, maxWidth, styled))
+	grouping := "Group: " + v.State.Grouping.DisplayLabel()
+	if key, ok := v.shortcutHint(ShortcutHintToggleGrouping, "g"); ok && key != "" {
+		grouping += "  " + key
+	}
+	lines = append(lines, renderLine(inset, []span{
+		{text: "Agent command center", style: spanBold},
+		{text: "  " + grouping, style: spanDim},
+	}, maxWidth, styled))
 	// summary: worktree creation reports progress in place of the counts
 	// (Rust #45276).
 	if v.State.CreatingWorktree {
@@ -65,19 +72,8 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		bodyWidth = 0
 	}
 
-	if bodyWidth >= 90 {
-		listWidth := bodyWidth - 3 - 38
-		if listWidth < 46 {
-			listWidth = 46
-		}
-		lines = append(lines, v.renderRows(bodyHeight, listWidth, styled)...)
-		lines = append(lines, v.renderDetails(38, bodyHeight, styled)...)
-	} else {
-		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled)...)
-	}
-
-	// metadata editor (search or rename); browsing renders no editor row
-	// (Rust agents_overview_render.rs after #45255)
+	// metadata editor (search or rename) above the task list; browsing shows
+	// the search hint in the same row (Rust #46838).
 	label, input, placeholder := v.Prompt()
 	if label != "" || input != "" || placeholder != "" {
 		if v.State.Renaming && input != "" {
@@ -94,10 +90,35 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 			prompt = append(prompt, span{text: placeholder, style: spanDim})
 		}
 		lines = append(lines, renderLine(inset, prompt, maxWidth, styled))
+	} else {
+		searchHint := "Search unavailable"
+		if key, ok := v.shortcutHint(ShortcutHintSearch, "f3"); ok && key != "" {
+			searchHint = "Search tasks \u00b7 " + key
+		}
+		lines = append(lines, renderLine(inset, []span{{text: searchHint, style: spanDim}}, maxWidth, styled))
 	}
+
+	if bodyWidth >= 90 {
+		listWidth := bodyWidth - 3 - 38
+		if listWidth < 46 {
+			listWidth = 46
+		}
+		lines = append(lines, v.renderRows(bodyHeight, listWidth, styled)...)
+		lines = append(lines, v.renderDetails(38, bodyHeight, styled)...)
+	} else {
+		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled)...)
+	}
+
 	// footer
-	for _, row := range footerRows {
-		lines = append(lines, renderLine(inset, row, maxWidth, styled))
+	if v.Notice != "" {
+		lines = append(lines, renderLine(inset, []span{{text: v.Notice, style: spanDim}}, maxWidth, styled))
+		for range max(len(footerRows)-1, 0) {
+			lines = append(lines, "")
+		}
+	} else {
+		for _, row := range footerRows {
+			lines = append(lines, renderLine(inset, row, maxWidth, styled))
+		}
 	}
 	return lines
 }
@@ -293,7 +314,14 @@ func itoa(value int) string {
 func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	visible := v.VisibleIndices()
 	if len(visible) == 0 {
-		return nil
+		message := "No matching tasks"
+		switch {
+		case v.Loading && len(v.Rows) == 0:
+			message = "Loading tasks\u2026"
+		case len(v.Rows) == 0:
+			message = "No tasks yet"
+		}
+		return []string{renderLine("", []span{{text: message, style: spanDim}}, listWidth, styled)}
 	}
 	grouping := v.State.Grouping
 	selPos := 0

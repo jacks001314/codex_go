@@ -296,7 +296,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1cc7dc8f2acc63ce6c1cb72271e6b90a76136c2b	54945	Share additional tool declarations across response item clones (#54945)	2026-10-17	core	0	0		0	0	not_applicable	none
 1cc7e2361237ce7244430ee1d581c77f95c57ac8	48830	Show a short, neutral TUI interruption notice (#48830)	2026-09-28	tui	0	0		0	0	not_applicable	
 1cc81ca89a0b7660bcb332da09d1c3e966cf0298	41357	Support compression for shared rollout lineages (#41357)	2026-08-28	persistence	5	3	0.60	0	0	audit_pending	RolloutCompressionMode,rollout_contains_prefix
-1cc9917508ab791e0bf996e6ada8d91eb3edfe33	50045	Keep transcript Find expansion scoped to the current match (#50045)	2026-10-01	tui	7	0	0.00	0	0	implementation_pending	base_layout,entry_layout,install_search_match,is_search_expanded,match_anchor,search_layout,sync_search_live_tail
+1cc9917508ab791e0bf996e6ada8d91eb3edfe33	50045	Keep transcript Find expansion scoped to the current match (#50045)	2026-10-01	tui	7	0	0.00	0	0	complete	base_layout,entry_layout,install_search_match,is_search_expanded,match_anchor,search_layout,sync_search_live_tail
 1cd253c98750c257b7601a7362f260bc715fc9e3	47811	Preserve explicit user goal updates in Guardian authorization (#47811)	2026-09-24	guardian	5	4	0.80	0	0	complete	is_guardian_context_message
 1cd78651e24016236b7e35c4ca77b9e34f58f9f5	42752	Preserve response IDs for fast collaborator tool events (#42752)	2026-09-04	telemetry	0	0		0	0	not_applicable	
 1d516d8b3d3b581e6d4c403792982862fdb16840	47688	Remove legacy Guardian authorization evidence paths (#47688)	2026-09-23	guardian	0	0		0	0	not_applicable	
@@ -559,7 +559,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 37a5149822296c52414ccf8ad3ca00bfb7424260	40983	Record Windows world-writable scan telemetry (#40983)	2026-08-26	tui	1	0	0.00	0	0	implementation_pending	record_world_writable_scan_result
 37eaae6eeb71c3bd3d165f52515086db8f5e7dee	51650	Require hostname authorization before proxy DNS lookups (#51650)	2026-10-07	sandbox	1	1	1.00	0	0	complete	
 37f4bb94c9f4e180535a12e3f2c2f93f4a773df0	40787	Respect paginated history when stopping background tasks (#40787)	2026-08-26	tui	1	0	0.00	0	0	implementation_pending	supports_paginated_history
-37f53199a6b2450b94bf4c7ea41c261bbdb39742	50216	Use the shared text editor for command-center task renaming (#50216)	2026-10-02	tui	6	0	0.00	0	0	partial	composer_is_vim_enabled,filter_line_breaks,new_single_line,rename_key,set_rename_input,single_line_viewport
+37f53199a6b2450b94bf4c7ea41c261bbdb39742	50216	Use the shared text editor for command-center task renaming (#50216)	2026-10-02	tui	6	0	0.00	0	0	complete	composer_is_vim_enabled,filter_line_breaks,new_single_line,rename_key,set_rename_input,single_line_viewport
 3801fc8deaaffab2a7a90c378a5db9b03b377f86	46660	Make local child process launch settings explicit (#46660)	2026-09-19	mcp	13	13	1.00	0	0	complete	
 387bc6ba597fb38f73d8b1af73138c279e440c3c	42821	Report managed filesystem policy in `codex doctor` (#42821)	2026-09-04	sandbox	0	0		0	0	not_applicable	
 3882ced09c4917b0bb528f597abd87f3c905fe47	39957	Add in-memory shell snapshots to unified exec (#39957)	2026-08-21	execserver	1	1	1.00	0	0	complete	
@@ -688,7 +688,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 447eac3b81183b32c1a09f5fba9617abfacbebe3	50720	Decode Windows Terminal's mapped Shift+Enter sequence (#50720)	2026-10-03	tui	2	0	0.00	0	0	implementation_pending	CrosstermEventSource,WindowsKeySequence
 4491caf1ad063f753381500454b599d750e50848	54639	Stream rollout records during thread history materialization (#54639)	2026-10-16	persistence	0	0		0	0	complete	
 44984d20817fc58026a8bbccf053e288c6897c8f	51460	Retry realtime sideband attachment while an existing call activates (#51460)	2026-10-06	realtime	0	0		0	0	not_applicable	
-449d42ced99c23c774b79843d4a121e019fbfe65	48626	Stop showing previous-session summaries when switching TUI sessions (#48626)	2026-09-27	tui	1	0	0.00	0	0	implementation_pending	start_fresh_session
+449d42ced99c23c774b79843d4a121e019fbfe65	48626	Stop showing previous-session summaries when switching TUI sessions (#48626)	2026-09-27	tui	1	0	0.00	0	0	not_applicable	start_fresh_session
 44a9bfa1456e51269fa824fa2f93b435e3e800ed	48174	Preserve usage limit windows in turn and compaction analytics (#48174)	2026-09-25	appserver	0	0		0	0	not_applicable	
 44ab72674e0f0d8fc5f87a01389912d617793206	43870	Close MCP stderr readers on client teardown (#43870)	2026-09-08	mcp	0	0		0	0	not_applicable	
 44b857c00e5803adedbc5b2e94c4a33574a157fe	47303	Clean up legacy Guardian thread metadata in SQLite (#47303)	2026-09-22	guardian	0	0		0	0	not_applicable	
@@ -733,7 +733,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 47c27cbffa6e17bce3548d87440484e36e1cbfc3	46027	Document and test `?` wildcards in network proxy domain patterns (#46027)	2026-09-16	core	0	0		0	0	not_applicable	
 47ca4619be10c20c1cec6ee9944738c5b961fa1d	43102	Include GIO in voice SDKs and native runtimes (#43102)	2026-09-05	realtime	0	0		0	0	not_applicable	
 47fc8d661e425e79f93c03f6aa6dbd3dc76f2252	46293	Route skill discovery and loading through `EnvironmentAccess` (#46293)	2026-09-17	plugins	0	0		0	0	not_applicable	
-4854cfa64343bc507c9bc28faa6612e68ead5a10	51471	Preserve clickable URLs in pending input previews (#51471)	2026-10-06	tui	1	0	0.00	0	0	implementation_pending	HyperlinkRows
+4854cfa64343bc507c9bc28faa6612e68ead5a10	51471	Preserve clickable URLs in pending input previews (#51471)	2026-10-06	tui	1	0	0.00	0	0	complete	HyperlinkRows
 4875084025582f9443afeb907e2aa20644241dda	43423	Remove the app-server docs update requirement from `AGENTS.md` (#43423)	2026-09-07	core	0	0		0	0	not_applicable	
 4878401e8fbd205c683255b0d224a4592ff95a09	41392	Add shared Guardian context primitives (#41392)	2026-08-28	guardian	14	6	0.43	0	0	audit_pending	ContextSection,ContextTarget,ConversationTranscriptEntry,ConversationTranscriptEntryKind,SectionContributor,SectionInput,SectionRegistry,SectionScope
 4891c4e35fe8b306433f6c0f04dd74bd9e4257e9	47712	Update unified exec output buffers atomically (#47712)	2026-09-24	core	2	1	0.50	0	0	complete	OutputBuffers
@@ -884,7 +884,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 54a4077c8b010bd36720804adb8301c1e6883650	42399	Preserve restored input after resolved misalignment errors (#42399)	2026-09-02	tui	2	0	0.00	0	0	implementation_pending	omit_resolved_misalignment_errors,set_active_turn_id
 54dd21741d52cc8a25f44a518a2699c60f25928d	51198	Allow concurrent release builds while serializing publication (#51198)	2026-10-05	core	0	0		0	0	not_applicable	
 54e04f25dbfe342bf84809d1880dbca32cb43cf6	43702	Add a TUI user verification prompt component (#43702)	2026-09-08	tui	4	0	0.00	0	0	implementation_pending	UserVerificationDecision,UserVerificationRequest,UserVerificationView,prompt_header
-5505a80f3887e7f06a563634aa9ccdee1da4389f	52228	Honor API-key feature gates in TUI Daybreak selection (#52228)	2026-10-08	tui	1	0	0.00	0	0	implementation_pending	daybreak_account_eligible
+5505a80f3887e7f06a563634aa9ccdee1da4389f	52228	Honor API-key feature gates in TUI Daybreak selection (#52228)	2026-10-08	tui	1	0	0.00	0	0	complete	daybreak_account_eligible
 550eb50545a78468a09ce86b82426338640ef22d	50741	Keep environment-backed tools exposed across readiness changes (#50741)	2026-10-03	sandbox	0	0		0	0	not_applicable	
 551844b3efc426c563128b0e011e36dad95a865b	46739	Add compact transcript browsing and prompt navigation to the TUI (#46739)	2026-09-20	tui	22	3	0.14	0	0	audit_pending	BrowsingOrigin,SuppressedHeader,TranscriptBookmark,bookmark,browsing_details,browsing_needs_history,cancel_primed_browsing_for_event,cancel_transcript_browsing,composer_tip,handle_owned_backtrack_event
 551bd409ebf03fc6ea0dcad0915368d8a493f012	51402	Preserve turn attribution across recovery and compaction (#51402)	2026-10-06	tui	6	4	0.67	0	0	audit_pending	emit_turn_started,record_started_turn
@@ -937,8 +937,8 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 596f8c5c3c855b78eae3222c5ee0aad3a91f4b43	48775	Match pinned transcript headers to the original prompt style (#48775)	2026-09-27	tui	0	0		0	0	not_applicable	
 5971d42847aae04db0e3c70146e0b189fc9a6803	42293	Preserve verified answers across history compaction (#42293)	2026-09-02	tui	13	11	0.85	0	0	audit_pending	remove_turns,restore_retained_context
 59f18e8133f2c1d3427677658752ac46697d41b7	50099	Add opt-in Decisions comparison for Guardian V2 (#50099)	2026-10-01	guardian	5	1	0.20	0	0	not_applicable	decisions_failure_reason,decisions_sampler,finish_and_record_outcome,record_decisions_comparison_outcome
-5a0419edb5ad720ae31fa1adf8b3b24c8f0c52c5	42194	Add Vim replace mode to the TUI composer (#42194)	2026-09-02	tui	6	0	0.00	0	0	partial	apply_vim_insert_action,clear_vim_replace_recovery,is_vim_replace_mode,replace_vim_text,restore_vim_replaced_character,retract_paste_burst
-5a11c456060c2ce131de1ba195fc7729f7d7db66	47322	Render TUI Markdown lists with Unicode bullets and checkboxes (#47322)	2026-09-22	tui	1	0	0.00	0	0	implementation_pending	task_list_marker
+5a0419edb5ad720ae31fa1adf8b3b24c8f0c52c5	42194	Add Vim replace mode to the TUI composer (#42194)	2026-09-02	tui	6	0	0.00	0	0	complete	apply_vim_insert_action,clear_vim_replace_recovery,is_vim_replace_mode,replace_vim_text,restore_vim_replaced_character,retract_paste_burst
+5a11c456060c2ce131de1ba195fc7729f7d7db66	47322	Render TUI Markdown lists with Unicode bullets and checkboxes (#47322)	2026-09-22	tui	1	0	0.00	0	0	complete	task_list_marker
 5a3140176e668a2f72f3c098490eb7f7052d9d85	51575	Expose package assembly helpers and support gzip DotSlash artifacts (#51575)	2026-10-07	core	0	0		0	0	not_applicable	
 5a51caf04d05d6afb15db2b01e477ceb2fd48882	40495	Suggest conversation-based thread titles in `/rename` (#40495)	2026-08-24	tui	6	0	0.00	0	0	implementation_pending	apply_text_suggestion,apply_thread_name_suggestion,recent_conversation_messages,recent_conversation_thread_title_prompt,suggest_thread_name,with_text_suggestion
 5a5a4aa79696a4c8a46dea1c9c04066b22559332	49067	Keep configuration values out of Windows sandbox policy events (#49067)	2026-09-28	sandbox	0	0		0	0	not_applicable	
@@ -1400,7 +1400,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 84aa75204ad604bcf498df180d128181c89b2f0b	42109	Format Python scripts across the repository (#42109)	2026-09-01	appserver	0	0		0	0	not_applicable	
 84c989acf9af93f35c2f3c36b297cd4dc0f830b3	40296	Annotate Responses Lite base instructions (#40296)	2026-08-23	core	1	1	1.00	0	0	complete	
 84cc4b3fb5240d3774cbec24c99fc021a3257f7f	48824	Keep voice RTP timestamps aligned to 20 ms packets (#48824)	2026-09-28	realtime	0	0		0	0	not_applicable	
-84d5437b6e558f5159551949a35aedb84ddb89be	50345	Keep the subagent picker consistent with thread archive state (#50345)	2026-10-02	tui	10	0	0.00	0	0	partial	AgentPickerRefreshState,AgentPickerThreadRefresh,AgentPickerThreadVisibility,finish_picker_refresh,handle_agent_picker_visibility_notification,prune_untracked_picker_exclusions,queue_picker_refresh,set_agent_picker_thread_visibility,set_picker_thread_visibility,visible_threads
+84d5437b6e558f5159551949a35aedb84ddb89be	50345	Keep the subagent picker consistent with thread archive state (#50345)	2026-10-02	tui	10	0	0.00	0	0	complete	AgentPickerRefreshState,AgentPickerThreadRefresh,AgentPickerThreadVisibility,finish_picker_refresh,handle_agent_picker_visibility_notification,prune_untracked_picker_exclusions,queue_picker_refresh,set_agent_picker_thread_visibility,set_picker_thread_visibility,visible_threads
 84e7d4a1fefd0c595c29cdb9af6c065fc7277d98	44746	Check folder trust after resolving the startup destination (#44746)	2026-09-11	tui	4	2	0.50	0	0	audit_pending	check_directory_trust,normalized_project_trust_keys
 84ed5744d95418fc976114cc2381ddab401b7a23	44661	Trace tool call receipt, result readiness, and code-mode dispatch (#44661)	2026-09-10	telemetry	7	4	0.57	0	0	audit_pending	DispatchInterruption,NestedToolDispatchTrace,result_ready
 8519cde1badf7cf9d6788cfe42f67ac71acd1c95	51470	Raise the managed app-server file descriptor limit on Unix (#51470)	2026-10-06	appserver	1	1	1.00	0	0	complete	
@@ -2072,7 +2072,7 @@ c248f6d48b97eb4a2aa56147a0b11b7d763278b9	49171	Fix model provider lookup for TUI
 c2617273706f142ea1cc7196a2d423893b0767e4	52685	Preserve code mode cancellation during output serialization (#52685)	2026-10-09	core	0	0		0	0	not_applicable	
 c2837d8ecefacc1c1ad59039809ea42a3a976341	49305	Batch metadata reads when resolving thread names (#49305)	2026-09-29	persistence	1	0	0.00	0	0	not_applicable	get_threads
 c2904b9c5afbf7c32b2219d92a0b03c60d80b014	40465	Record Guardian classifier input truncation metrics (#40465)	2026-08-24	guardian	10	2	0.20	0	0	not_applicable	CLASSIFICATION_TRUNCATION_BYTES_METRIC,CLASSIFICATION_TRUNCATION_METRIC,ClassificationTruncations,RenderedImages,RenderedReviewEvidence,RenderedTranscript,TruncationObservation,render_review_evidence
-c29bc99949f90687171611bb845c4c289fa85dde	41192	Preserve restored permission profiles in TUI sessions (#41192)	2026-08-27	tui	1	0	0.00	0	0	implementation_pending	permission_profile_is_safely_represented_by_sandbox_mode
+c29bc99949f90687171611bb845c4c289fa85dde	41192	Preserve restored permission profiles in TUI sessions (#41192)	2026-08-27	tui	1	0	0.00	0	0	complete	permission_profile_is_safely_represented_by_sandbox_mode
 c2a924fc4a3970198679d24c9fa5df5643af5041	46560	Fix stale environment config in the network approval test (#46560)	2026-09-18	core	0	0		0	0	not_applicable	
 c2abf869d539a6326a6e5a125dfdb8a5dc488ab4	41432	Run executor hooks for interrupted turns (#41432)	2026-08-28	plugins	3	0	0.00	0	0	complete	into_matcher_groups,matcher_groups_mut,run_turn_interrupt_hooks
 c2ae67d76931fcfac287d0bacf94f2b055b57da3	51332	Record multi-agent wait duration by outcome (#51332)	2026-10-06	core	0	0		0	0	not_applicable	
@@ -2086,7 +2086,7 @@ c333d755d44d4eb764cffd2bd862d86d790e91e6	51890	Add the missing `mxc-sdk` UTF-8 r
 c3733756a969aa20e23a2a90e0da16646b4c100c	53816	Reject Guardian review threads during interactive CLI resume (#53816)	2026-10-14	tui	1	1	1.00	0	0	complete	
 c379459bba59243aa8732d0d0b93cc2f326f87e4	45176	Wire the Windows MXC sandbox into command execution (#45176)	2026-09-13	appserver	0	0		0	0	not_applicable	
 c37b7307db57ab8510af14426f739a23e8186679	47086	Format analytics credit usage with consistent decimal precision (#47086)	2026-09-21	tui	0	0		0	0	not_applicable	
-c3953649156e15b67e572cb9e38bc825a811c24e	40622	Keep the active goal clock current in the TUI (#40622)	2026-08-25	tui	1	0	0.00	0	0	implementation_pending	refresh_goal_status_indicator_for_time_tick
+c3953649156e15b67e572cb9e38bc825a811c24e	40622	Keep the active goal clock current in the TUI (#40622)	2026-08-25	tui	1	0	0.00	0	0	complete	refresh_goal_status_indicator_for_time_tick
 c39bfa4c8ff9a57c46a9d3766676d6435e262691	50177	Enable writable file streaming in exec-server (#50177)	2026-10-02	execserver	3	3	1.00	0	0	complete	
 c3d3b142d10f4316b46e35aad7e5317e7e506cb7	52778	Make pinned transcript prompts clickable (#52778)	2026-10-10	tui	0	0		0	0	blocked_precondition	
 c3d5e4418f05908ffeb68f6257fbacbb1e65e607	40466	Add credential brokering to network proxy feature config (#40466)	2026-08-24	appserver	2	1	0.50	0	0	audit_pending	credential_broker_provider_context_env_keys
@@ -2140,7 +2140,7 @@ c8a8295e798af970ef5a2bcd9ce2229db87edb6b	44656	Attribute turn metrics to the mod
 c8c1ee5da8af5c79ec8433ee88d3d4ebdcfd80fd	47919	Transport large Windows sandbox launch payloads through the environment (#47919)	2026-09-24	sandbox	6	6	1.00	0	0	complete
 c9253c4977e485d6a098282ad583a6db9585d7ff	51156	Send base instructions as Responses input messages (#51156)	2026-10-05	tui	0	0		0	0	not_applicable	
 c941572917b9295c7318b28aab27709202a645c7	40491	Honor response budgets when reading skill resources (#40491)	2026-08-24	appserver	1	1	1.00	0	0	complete	
-c977cc0c19e704aa60e6c9b85107869f87b8b46f	43619	Add a stable TUI/app-server version comparison helper (#43619)	2026-09-07	tui	1	0	0.00	0	0	implementation_pending	is_official_server_older
+c977cc0c19e704aa60e6c9b85107869f87b8b46f	43619	Add a stable TUI/app-server version comparison helper (#43619)	2026-09-07	tui	1	0	0.00	0	0	not_applicable	is_official_server_older
 c9870d01577d2ddb39b55672e66f8fe6844a6a0d	51482	Use PathUri for skill identity and path matching (#51482)	2026-10-06	tui	4	1	0.25	0	0	audit_pending	skill_discovery_path_for_path,skill_root_for_path,with_disabled_paths
 c98e263fb5365a512bb997a103d6ee8aa14c23e6	48078	Replay exec-server shell snapshots through unnamed files (#48078)	2026-09-25	execserver	2	2	1.00	0	0	complete	
 c9b19deb09c1841ce7acc33ddb96276030936a29	40221	Distinguish Guardian review threads from subagents (#40221)	2026-08-23	guardian	0	0		0	0	not_applicable	
@@ -2187,7 +2187,7 @@ cd8bd62c6e289b96d5f8eb0443c6d8561c2e8c54	42146	Resolve permission requests in th
 cd8d61b223d95fd540bb646d627e7f0e7cfa6146	54087	Upgrade Bazel's `rules_python` to 2.4.2 (#54087)	2026-10-14	core	0	0		0	0	not_applicable	
 cda82a2c6853b484e0ba56d38f13902adfb2a6a1	49819	Recover daemon startup and updater re-exec after cwd deletion (#49819)	2026-10-01	appserver	2	2	1.00	0	0	complete	
 cdfda82386f99c28e34f34adb5b5334bebde170b	46518	Handle delayed process startup in the Guardian network approval test (#46518)	2026-09-18	core	0	0		0	0	not_applicable	
-ce0323f2f2d3b25e82806cd555237da3db4e1897	54776	Support typed content in contextual prompt fragments (#54776)	2026-10-17	tui	5	4	0.80	0	0	partial	into_text
+ce0323f2f2d3b25e82806cd555237da3db4e1897	54776	Support typed content in contextual prompt fragments (#54776)	2026-10-17	tui	5	4	0.80	0	0	complete	into_text
 ce03f22af6d37572c45ed2a6a79862ddef140944	46071	Add a configurable F8 shortcut for voice conversations (#46071)	2026-09-17	tui	0	0		0	0	not_applicable	
 ce254df05a3162a93d8f3357ff4dd86582c534b7	43853	Add canonical permission translation for MXC execution requests (#43853)	2026-09-08	sandbox	2	2	1.00	0	0	complete	
 ce2c2759ebee2d64565922f6f7365082284f9570	44183	Release persistent writers when session startup is cancelled (#44183)	2026-09-09	core	0	0		0	0	not_applicable	
@@ -2213,7 +2213,7 @@ d04b0561d35487c84817491060d10f294c2c60a4	47703	Preserve account network policy f
 d05e6d5f46505976ec4a195f0a3bb6d6e617851e	42900	Establish root turn identity for independent tasks and memory requests (#42900)	2026-09-05	appserver	0	0		0	0	not_applicable	
 d0759639f20af955a5c6447f4683e99bf42ab6cf	50782	Retry Windows daemon release publication on transient file locks (#50782)	2026-10-04	appserver	1	1	1.00	0	0	complete	
 d086e2752dadd044213dc617f4e4fe99f3d9b2fa	46659	Move local child-process spawning into `codex-utils-pty` (#46659)	2026-09-19	mcp	4	4	1.00	0	0	complete	
-d0a64e91ae6b64550ca8bed14f1e7248f3e3d972	48015	Validate tool suggestion install URLs before showing the app link (#48015)	2026-09-25	tui	1	0	0.00	0	0	implementation_pending	validate_external_url
+d0a64e91ae6b64550ca8bed14f1e7248f3e3d972	48015	Validate tool suggestion install URLs before showing the app link (#48015)	2026-09-25	tui	1	0	0.00	0	0	complete	validate_external_url
 d0a8dcd15721adb02a3227d08d3cde888e5546e5	43494	Limit archive rollout reads to requested threads (#43494)	2026-09-07	persistence	1	0	0.00	0	0	implementation_pending	scan_unarchived_threads
 d1092865f8ec63735006211f65ee109ce91c30b9	47185	Allow forking conversations locked by another app in the TUI (#47185)	2026-09-22	tui	0	0		0	0	not_applicable	
 d117c2eb02bb808cddc13f0a44767549b5577853	44289	Expand MXC volume grants and resolve deny globs (#44289)	2026-09-09	sandbox	0	0		0	0	not_applicable	
@@ -2340,7 +2340,7 @@ dc08ace7821614a702b1214c9d08ae0db2634d82	40742	Prepare isolated Guardian reviewe
 dc0dc4f15d2a5be395b6fa3deb2aca898f8a94d5	42332	Package prepared runtimes with the voice host (#42332)	2026-09-02	realtime	0	0		0	0	not_applicable	
 dc2ccc6843abb09c9d297862dc10b6bd12a3935d	41308	Make subagents follow the root service tier (#41308)	2026-08-28	core	2	0	0.00	0	0	implementation_pending	root_service_tier,set_root_service_tier
 dc5527481827bffec04b754bad3d12d2b4f6b5dd	44694	Include the Windows sandbox service in release artifacts (#44694)	2026-09-11	config	0	0		0	0	not_applicable	
-dcd9e954598cd5e9f80570204896d779c60c1ecd	54380	Add `/presets` for reusable prompts and slash commands (#54380)	2026-10-15	tui	12	0	0.00	0	0	partial	QuickDialEditorTarget,QuickDialPickerMode,confirm_quick_dial,current_model_quick_dial,open_quick_dial_editor,open_quick_dial_prefills,open_quick_dial_save_picker,open_quick_dials_picker,preserve_whitespace,recall_quick_dial
+dcd9e954598cd5e9f80570204896d779c60c1ecd	54380	Add `/presets` for reusable prompts and slash commands (#54380)	2026-10-15	tui	12	0	0.00	0	0	complete	QuickDialEditorTarget,QuickDialPickerMode,confirm_quick_dial,current_model_quick_dial,open_quick_dial_editor,open_quick_dial_prefills,open_quick_dial_save_picker,open_quick_dials_picker,preserve_whitespace,recall_quick_dial
 dce62a50a23c4006b7d0e81e331889f05c30fc36	47633	Route message board agent resolution through the selected controller (#47633)	2026-09-23	core	0	0		0	0	not_applicable	
 dcfcb570b2cd0a2500b1d47a7b04a7cb1b0a0bd2	42337	Add an authenticated Windows sandbox provisioning client (#42337)	2026-09-02	sandbox	7	3	0.43	0	0	audit_pending	WindowsSandboxProvisioningOutcome,WindowsSandboxProxyListeners,provision_windows_sandbox_via_service,wait_for_complete_frame
 dd112a9fd56dd18a73e593edaa9c2faddcec1106	43912	Keep Guardian reviewers on summary-based compaction (#43912)	2026-09-08	guardian	0	0		0	0	not_applicable	
@@ -2378,7 +2378,7 @@ df3e439c02efc90f29a26d2d602a54eea2e8a91e	49058	Fix Windows sandbox ACL repair fo
 df3ecee6f0a7dee6d5aa7ab5c9ba0c1e3c856531	47612	Launch Linux pipe processes through a fresh setup helper (#47612)	2026-09-23	appserver	7	2	0.29	0	0	audit_pending	HELPER_ARG,MAX_ENV_BYTES,REPORT_PREFIX,child_fd,init_spawn_helper
 df522cae16b4f4350d6a9e13bc10cbe9650b0f9b	43790	Limit app-server storage metrics to session directories (#43790)	2026-09-08	appserver	0	0		0	0	not_applicable	
 df6a54ee851129447290b5684b8c2d2df10a5cd5	39997	Add a response target picker to `/copy` (#39997)	2026-08-21	tui	7	2	0.29	0	0	audit_pending	copy_selection,copy_selection_with,extract_copy_targets,show_copy_picker,strip_line_directives
-df7f717c856e0634b04a12f7d4fc9e8ecb3e65be	46734	Add transcript search and per-activity detail controls (#46734)	2026-09-19	tui	52	10	0.19	0	0	audit_pending	ActivityTranscriptLines,KEY_CHORD_TIMEOUT,KeymapContextSet,active_activity_ids,active_cell_hyperlink_lines_with,active_cell_owned_transcript_lines,activity_ids,activity_layout,advance_search,canonical_activity_index
+df7f717c856e0634b04a12f7d4fc9e8ecb3e65be	46734	Add transcript search and per-activity detail controls (#46734)	2026-09-19	tui	52	10	0.19	0	0	partial	ActivityTranscriptLines,KEY_CHORD_TIMEOUT,KeymapContextSet,active_activity_ids,active_cell_hyperlink_lines_with,active_cell_owned_transcript_lines,activity_ids,activity_layout,advance_search,canonical_activity_index
 df8990e2614c8834ae9dc0327eb4834c821e34cc	54761	Upgrade `zip` to 9.0.0 and update plugin archive extraction (#54761)	2026-10-17	plugins	0	0		0	0	not_applicable	
 df9f537a6e105ac7e457f2e4ebc7431d8614393e	41150	Remove locking from trusted skill collection (#41150)	2026-08-27	guardian	3	1	0.33	0	0	audit_pending	TrustedSkillInvocations,into_paths
 dfaf451426868c22e6859f5494150fd6338c3257	45169	Extract Windows sandbox setup and installation storage into the library (#45169)	2026-09-13	sandbox	6	3	0.50	0	0	audit_pending	ClientIdentity,DesktopInstallation,InstallationRecord
@@ -2684,7 +2684,7 @@ fdbce2080c6681c57ecd66aad001d6504251650d	48772	Fix Unix socket connections throu
 fdbe23da4556dcce488e5392a9f187734ba850da	47808	Allow hosts to provide agent controllers through ThreadManager (#47808)	2026-09-24	guardian	1	0	0.00	0	0	not_applicable	with_agent_control_factory
 fdd89e78ac33f02e65dabe60567cdfeba2e954d4	47252	Return agent snapshots from `close_agent` (#47252)	2026-09-22	core	1	1	1.00	0	0	complete	
 fdeaa6c1ecad21ae5e154e5873d166488b1fbd5e	47625	Allow history and notes without experimental context capability (#47625)	2026-09-23	appserver	0	0		0	0	not_applicable	
-fdf23b4097bf19adf2286c64316da2d2a9fedae6	42410	Allow reviewing and continuing misalignment-paused chats (#42410)	2026-09-03	tui	9	0	0.00	0	0	partial	MisalignmentReview,MisalignmentViolation,clear_misalignment_for_new_turn,continuation_message,continue_misalignment,is_current_misalignment_review,on_misalignment_error,open_misalignment_review,show_misalignment_review_confirmation
+fdf23b4097bf19adf2286c64316da2d2a9fedae6	42410	Allow reviewing and continuing misalignment-paused chats (#42410)	2026-09-03	tui	9	0	0.00	0	0	complete	MisalignmentReview,MisalignmentViolation,clear_misalignment_for_new_turn,continuation_message,continue_misalignment,is_current_misalignment_review,on_misalignment_error,open_misalignment_review,show_misalignment_review_confirmation
 fe140d4c8e7d47950d4d2e35ff7c58e55b744f65	42391	Authorize `apply_patch` in the executor path context (#42391)	2026-09-02	sandbox	4	1	0.25	0	0	audit_pending	PatchSandboxRoute,has_configured_writable_roots,has_full_disk_write_access_with_context
 fe50d010e203a9b8dda2c7737d7d8e4a80e6ab44	49079	Update and centralize TUI subscription labels (#49079)	2026-09-28	tui	2	2	1.00	0	0	complete	
 fe52d795c95321429c24f64be684856557491b47	44028	Add AWS credential export commands for Amazon Bedrock (#44028)	2026-09-09	tui	11	7	0.64	0	0	audit_pending	AwsCredentialExportConfig,CREDENTIAL_EXPORT_CONFIG_ERROR_PREFIX,CredentialExportRefresh,credentials_provider_error

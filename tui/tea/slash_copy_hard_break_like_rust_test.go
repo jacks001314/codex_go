@@ -32,7 +32,7 @@ func TestSlashCopyPreservesCompletedResponseTrailingHardBreak(t *testing.T) {
 	if !strings.Contains(model.View(), "Copy to clipboard") {
 		t.Fatalf("/copy should open a target picker:\n%s", model.View())
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 
 	if copied != markdown {
 		t.Fatalf("copied = %q, want %q", copied, markdown)
@@ -68,7 +68,7 @@ func TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge(t *testing.T) {
 	model.clipboardWriteRich = nil
 	typeText(t, model, "/copy")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
 
 	if copied != "Intro  \nlast line  " {
 		t.Fatalf("copied = %q, want %q", copied, "Intro  \nlast line  ")

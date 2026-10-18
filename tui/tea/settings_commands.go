@@ -23,6 +23,8 @@ const (
 	settingsWriteKindApprovalsReviewer      = "approvals_reviewer"
 	settingsWriteKindAgentsOverviewGrouping = "agents_overview_grouping"
 	settingsWriteKindQuickDial              = "quick_dial"
+	settingsWriteKindTUIMode                = "tui_mode"
+	settingsWriteKindConfig                 = "config"
 )
 
 // initialPersonality carries the configured personality into the model's
@@ -393,10 +395,22 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			} else {
 				m.notice = "Failed to save memory settings: " + msg.Err.Error()
 			}
+		} else if msg.Kind == settingsWriteKindTUIMode {
+			m.applyTUIModeWriteResult(false, msg.Err.Error())
+			return
+		} else if msg.Kind == settingsWriteKindConfig {
+			m.notice = "Failed to save configuration: " + msg.Err.Error() +
+				"\nThe task can continue. Resolve the error above and try again."
+			m.pendingConfigPanelSave = nil
+			m.setConfigPanelNotice(strings.SplitN(m.notice, "\n", 2)[0])
 		} else {
 			m.notice = "Failed to save settings: " + msg.Err.Error()
 		}
 		m.refreshTranscript()
+		return
+	}
+	if msg.Kind == settingsWriteKindTUIMode {
+		m.applyTUIModeWriteResult(true, "")
 		return
 	}
 	// Rust #51510: only a reload that actually succeeded may stage its result
@@ -410,6 +424,14 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	// LocalSettings::reloaded + App::local_settings). A failed reload never
 	// reaches this point, so the staged record keeps the live settings.
 	m.applyLocalSettings(m.localSettings.Reloaded(msg.Result))
+	if msg.Kind == settingsWriteKindConfig {
+		if notice, ok := m.finishConfigPanelSave(msg.Result); ok {
+			m.notice = notice
+			m.setConfigPanelNotice(notice)
+			m.refreshTranscript()
+			return
+		}
+	}
 	// Rust experimental_features::write readback: a saved value that differs from
 	// the selection (or a higher-priority setting winning) warns instead of
 	// reporting a plain save.
@@ -541,8 +563,27 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 	if result.ShowTooltips != nil {
 		m.showTooltips = *result.ShowTooltips
 	}
+	if result.ShowServerVersionNotice != nil {
+		m.showServerVersionNotice = *result.ShowServerVersionNotice
+		m.applyServerVersionNotice()
+	}
+	if result.FullscreenTranscript != nil {
+		m.fullscreenTranscript = *result.FullscreenTranscript
+	}
 	if result.RightClickPaste != nil {
 		m.setRightClickPasteMode(*result.RightClickPaste)
+	}
+	if result.CopyOnSelect != nil {
+		m.copyOnSelectMode = normalizeCopyOnSelectMode(*result.CopyOnSelect)
+	}
+	if result.CopyOnSelectClearSelection != nil {
+		m.copyOnSelectClear = *result.CopyOnSelectClearSelection
+	}
+	if result.StartInVimMode != nil {
+		m.vimModeDefault = *result.StartInVimMode
+	}
+	if result.ResumeCWD != nil {
+		m.resumeCWD = normalizeResumeCWD(*result.ResumeCWD)
 	}
 	if result.Rendering != nil {
 		// Rust refreshes the Markdown rendering preferences when the resolved

@@ -76,7 +76,7 @@ func TestInlinePermissionProfileSelectionMatchesRust(t *testing.T) {
 		},
 		{
 			name: "profile disabled by the server", config: guardian, profileID: "web-enabled",
-			failure: "Permission profile `web-enabled` is unavailable: Disabled by requirements.",
+			failure: "Permission profile `web-enabled` is unavailable: Disabled by requirements",
 		},
 		{
 			name: "automatic reviewer unavailable", config: PermissionMenuConfig{IncludeReadOnly: true},
@@ -96,7 +96,7 @@ func TestInlinePermissionProfileSelectionMatchesRust(t *testing.T) {
 				Requirements:            PermissionRequirements{AllowedApprovalPolicies: []ApprovalPolicy{ApprovalOnRequest}},
 			},
 			profileID: DangerFullAccessProfile,
-			failure:   "Permission profile `:danger-full-access` is unavailable: Disabled by requirements.",
+			failure:   "Permission profile `:danger-full-access` is unavailable: Disabled by requirements",
 		},
 		{
 			name: "requested reviewer disabled by requirements",
@@ -106,7 +106,7 @@ func TestInlinePermissionProfileSelectionMatchesRust(t *testing.T) {
 				Requirements:            PermissionRequirements{AllowedReviewers: []ApprovalsReviewer{ApprovalsReviewerUser}},
 			},
 			profileID: WorkspaceProfile, reviewer: inlineReviewer(ApprovalsReviewerAutoReview),
-			failure: "Permission profile `:workspace` is unavailable: Disabled by requirements.",
+			failure: "Permission profile `:workspace` is unavailable: Disabled by requirements",
 		},
 	}
 	for _, vector := range vectors {

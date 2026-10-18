@@ -134,9 +134,15 @@ func TestTaskDetailsShowModelAndReasoningLikeRust(t *testing.T) {
 	details := strings.Join(New(rows, "t-1", false).Render(140, 40), "\n")
 	modelIndex := strings.Index(details, "Model: gpt-5.4")
 	reasoningIndex := strings.Index(details, "Reasoning: high")
-	projectIndex := strings.Index(details, "Project")
-	if modelIndex < 0 || reasoningIndex < 0 || projectIndex < 0 {
-		t.Fatalf("details missing model/reasoning/project:\n%s", details)
+	if modelIndex < 0 || reasoningIndex < 0 {
+		t.Fatalf("details missing model/reasoning:\n%s", details)
+	}
+	projectIndex := strings.Index(details[modelIndex:], "Project")
+	if projectIndex >= 0 {
+		projectIndex += modelIndex
+	}
+	if projectIndex < 0 {
+		t.Fatalf("details missing project:\n%s", details)
 	}
 	if !(modelIndex < reasoningIndex && reasoningIndex < projectIndex) {
 		t.Fatalf("details order model=%d reasoning=%d project=%d, want model then reasoning then project", modelIndex, reasoningIndex, projectIndex)

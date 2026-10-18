@@ -196,17 +196,7 @@ func (m *Model) renderMainTranscriptFindContent() (string, int) {
 		expanded = map[int]bool{}
 	}
 	expanded[match.message] = true
-	content, ranges := renderTranscriptWithExpandedMessages(
-		&m.transcriptMessages,
-		m.State,
-		m.rawOutput,
-		width,
-		m.activeTUITheme(),
-		false,
-		expanded,
-		m.sessionCWD,
-		m.showRawReasoning,
-	)
+	content, ranges := m.renderTranscriptWithExpandedMessages(m.State, width, expanded, false)
 	if match.message >= len(ranges) {
 		return content, -1
 	}
@@ -315,12 +305,24 @@ func (m *Model) updateMainTranscriptFindKey(msg bubbletea.KeyMsg) (bool, bubblet
 		return false, nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+	case bubbletea.KeyCtrlC:
+		m.cancelMainTranscriptFind()
+		return true, nil
+	case bubbletea.KeyEsc:
 		if m.mainFind.accepted {
 			m.clearMainTranscriptFind(true)
-		} else {
-			m.cancelMainTranscriptFind()
+			return true, nil
 		}
+		if m.mainFind.query == "" {
+			m.cancelMainTranscriptFind()
+			return true, nil
+		}
+		// Rust #50039: closing a nonempty query keeps the match and its
+		// surrounding expanded context readable. A second Esc returns to the
+		// latest output; Ctrl+C cancels and restores the pre-search view.
+		m.mainFind.editing = false
+		m.mainFind.accepted = true
+		m.refreshTranscript()
 		return true, nil
 	case bubbletea.KeyCtrlN:
 		m.stepMainTranscriptFind(1)

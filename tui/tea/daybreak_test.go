@@ -11,15 +11,16 @@ func TestModelCyberPolicyErrorRendersDaybreakRefusalCell(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-1")
 	state.Model = "gpt-5.6-sol"
+	state.Provider = "openai"
+	state.HasChatGPTAccount = true
 	model := NewModel(state, Options{
-		Width:  80,
-		Height: 24,
-		OnDaybreakNotice: func(model string) codextui.DaybreakNotice {
-			if model != "gpt-5.6-sol" {
-				t.Fatalf("model = %q", model)
-			}
-			return codextui.DaybreakNoticeApply
-		},
+		Width:             80,
+		Height:            24,
+		HasChatGPTAccount: true,
+		ModelPickerOptions: []codextui.ModelPickerOption{{
+			ID:                     "gpt-5.6-sol",
+			AvailableCyberPrograms: []string{"standard"},
+		}},
 	})
 
 	model.Update(CyberPolicyErrorMsg{ThreadID: "thread-1"})
@@ -32,7 +33,7 @@ func TestModelCyberPolicyErrorRendersDaybreakRefusalCell(t *testing.T) {
 	}
 }
 
-func TestModelCyberPolicyErrorDefaultsToLimitedCopy(t *testing.T) {
+func TestModelCyberPolicyErrorDefaultsToApplicationCopy(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-1")
 	model := NewModel(state, Options{Width: 80, Height: 24})
@@ -40,13 +41,66 @@ func TestModelCyberPolicyErrorDefaultsToLimitedCopy(t *testing.T) {
 	model.Update(CyberPolicyErrorMsg{ThreadID: "thread-1"})
 
 	text := modelRawMessageText(model)
-	// Pending or failed Daybreak discovery uses the neutral copy, which never
-	// offers the Daybreak application.
-	if !strings.Contains(text, "We take extra care with some cybersecurity requests.") {
-		t.Fatalf("missing limited refusal cell:\n%s", text)
+	if !strings.Contains(text, "apply for Daybreak to get broader access") {
+		t.Fatalf("missing application refusal cell:\n%s", text)
 	}
-	if strings.Contains(text, "Apply for Daybreak:") {
-		t.Fatalf("the limited copy must not offer the Daybreak application:\n%s", text)
+}
+
+func TestModelCyberPolicyNoticeUsesOnlyCurrentModelProgramsLikeRust(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		programs   []string
+		wantNotice codextui.DaybreakNotice
+		wantText   string
+	}{
+		{
+			name:       "astra standard",
+			model:      "gpt-6-astra",
+			programs:   []string{"standard"},
+			wantNotice: codextui.DaybreakNoticeAstra,
+			wantText:   "Daybreak isn\u2019t available for Astra",
+		},
+		{
+			name:       "astra with daybreak",
+			model:      "gpt-6-astra",
+			programs:   []string{"standard", "daybreak_blue"},
+			wantNotice: codextui.DaybreakNoticeLimited,
+			wantText:   "We take extra care with some cybersecurity requests.",
+		},
+		{
+			name:       "sol standard",
+			model:      "gpt-5.6-sol",
+			programs:   []string{"standard"},
+			wantNotice: codextui.DaybreakNoticeApply,
+			wantText:   "apply for Daybreak to get broader access",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			state := codextui.NewState(nil)
+			state.SetThreadID("thread-catalog")
+			state.Model = tc.model
+			state.Provider = "openai"
+			state.HasChatGPTAccount = true
+			model := NewModel(state, Options{
+				Width:             80,
+				Height:            24,
+				HasChatGPTAccount: true,
+				ModelPickerOptions: []codextui.ModelPickerOption{
+					{ID: tc.model, AvailableCyberPrograms: tc.programs},
+					{ID: "other-model", AvailableCyberPrograms: []string{"daybreak_red"}},
+				},
+			})
+			gotNotice := model.cyberPolicyNotice()
+			if gotNotice != tc.wantNotice {
+				t.Fatalf("notice = %v, want %v", gotNotice, tc.wantNotice)
+			}
+			model.Update(CyberPolicyErrorMsg{ThreadID: "thread-catalog"})
+			if text := modelRawMessageText(model); !strings.Contains(text, tc.wantText) {
+				t.Fatalf("refusal copy missing %q:\n%s", tc.wantText, text)
+			}
+		})
 	}
 }
 

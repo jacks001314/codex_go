@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -23,6 +24,17 @@ func RenderSelectedRow(line string) string {
 		return sgr + line + "\x1b[0m"
 	}
 	return line
+}
+
+// RenderSelectedRowFilled pads a selected row with spaces to the popup width
+// before applying the selection style (Rust #46680 full-width selection).
+func RenderSelectedRowFilled(line string, width int) string {
+	if width > 0 {
+		if pad := width - DisplayWidth(line); pad > 0 {
+			line += strings.Repeat(" ", pad)
+		}
+	}
+	return RenderSelectedRow(line)
 }
 
 func ForcedColorStyle() lipgloss.Style {

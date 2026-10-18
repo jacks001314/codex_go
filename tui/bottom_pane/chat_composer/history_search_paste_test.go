@@ -31,7 +31,7 @@ func TestHistorySearchPasteAppendsQueryAndAcceptsMatch(t *testing.T) {
 	if result.Kind != HistorySearchResultFound || result.Entry != "git status" || draft.Text != "git status" {
 		t.Fatalf("second paste = result %#v draft %#v", result, draft)
 	}
-	if line, ok := session.FooterLine(); !ok || line != "reverse-i-search: git status  enter accept | esc cancel" {
+	if line, ok := session.FooterLine(); !ok || line != "reverse-i-search: git status  enter accept · esc cancel" {
 		t.Fatalf("footer = %q ok=%v", line, ok)
 	}
 

@@ -700,7 +700,7 @@ func (s *VoiceConversationState) VoiceCaptionDelta(role VoiceTranscriptRole, del
 		if interrupted {
 			s.InterruptionAcknowledgedUntil = now.Add(VoiceInterruptionAcknowledgment)
 		}
-		return s.suppressVoiceSpeaker()
+		return s.suppressActiveVoiceSpeaker(now)
 	}
 	if active && role == VoiceTranscriptAssistant && hasText && s.AssistantTranscriptGeneration == nil {
 		generation := s.InputGeneration
@@ -752,7 +752,7 @@ func (s *VoiceConversationState) VoiceCaptionDone(role VoiceTranscriptRole, text
 	}
 	s.InputGeneration++
 	s.LatestInputWasVoice = true
-	return s.suppressVoiceSpeaker()
+	return s.suppressActiveVoiceSpeaker(now)
 }
 
 // InvalidateVoiceInputForTyping reports that typed input supersedes the current
@@ -773,6 +773,24 @@ func (s *VoiceConversationState) suppressVoiceSpeaker() VoiceSpeakerAction {
 	s.SpeakerLevel = 0
 	s.SpeakerActiveUntil = time.Time{}
 	return VoiceSpeakerMute
+}
+
+// suppressActiveVoiceSpeaker interrupts only output that may belong to an older
+// turn (Rust #44925). Quiet turns keep the speaker ready so response audio that
+// arrives before captions is accepted.
+func (s *VoiceConversationState) suppressActiveVoiceSpeaker(now time.Time) VoiceSpeakerAction {
+	if s == nil {
+		return VoiceSpeakerNone
+	}
+	active := s.AssistantTranscriptGeneration != nil ||
+		len(s.PendingSpeech) > 0 ||
+		s.SpeakerLevel > 0 ||
+		now.Before(s.SpeakerActiveUntil) ||
+		s.SpeakerSuppressionGeneration != nil
+	if !active {
+		return VoiceSpeakerNone
+	}
+	return s.suppressVoiceSpeaker()
 }
 
 // releaseVoiceSpeaker clears the suppression.

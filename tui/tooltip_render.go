@@ -150,6 +150,8 @@ func keybindingKeyLabel(part string) string {
 			modifiers["alt"] = true
 		case "shift":
 			modifiers["shift"] = true
+		case "super", "cmd", "command":
+			modifiers["super"] = true
 		default:
 			if key == "" {
 				key = segment
@@ -162,7 +164,7 @@ func keybindingKeyLabel(part string) string {
 	for _, modifier := range []struct {
 		name  string
 		label string
-	}{{"ctrl", ControlKeyLabel()}, {"shift", ShiftKeyLabel()}, {"alt", AltKeyLabel()}} {
+	}{{"ctrl", ControlKeyLabel()}, {"shift", ShiftKeyLabel()}, {"alt", AltKeyLabel()}, {"super", SuperKeyLabel()}} {
 		if modifiers[modifier.name] {
 			// Rust #49136: glyph modifier labels attach without a `+`.
 			label.WriteString(ModifierLabelPrefix(modifier.label))

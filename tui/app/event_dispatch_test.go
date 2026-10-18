@@ -86,7 +86,7 @@ func TestAppExitInfoFormatsDisconnectGuidance(t *testing.T) {
 	info := &AppExitInfo{
 		ThreadID:   "thread-1",
 		ExitReason: ExitReasonTurnInterrupted,
-		ResumeHint: "resume: codex resume thread-1",
+		ResumeHint: &ResumableThread{ThreadID: "thread-1"},
 		Disconnect: &DisconnectInfo{Command: []string{"codex", "--remote", "wss://host:443"}, StopHint: "press esc"},
 	}
 	lines := info.FormatExitMessages()
@@ -94,4 +94,63 @@ func TestAppExitInfoFormatsDisconnectGuidance(t *testing.T) {
 	if !strings.Contains(joined, "The active turn was interrupted") || !strings.Contains(joined, "To reconnect, run:") || !strings.Contains(joined, "|  codex --remote wss://host:443|") || !strings.Contains(joined, "Stop the running turn: press esc") {
 		t.Fatalf("exit summary = %q", joined)
 	}
+}
+
+func TestAppExitInfoFormatsResumeGuidanceLikeRust(t *testing.T) {
+	const threadID = "123e4567-e89b-12d3-a456-426614174000"
+	for _, testCase := range []struct {
+		name       string
+		threadName *string
+		want       []string
+	}{
+		{
+			name: "unnamed",
+			want: []string{
+				"Session ended",
+				"To continue this session, run:",
+				"  codex resume " + threadID,
+			},
+		},
+		{
+			name:       "empty name",
+			threadName: stringPointerForAppExit(""),
+			want: []string{
+				"Session ended",
+				"To continue this session, run:",
+				"  codex resume " + threadID,
+			},
+		},
+		{
+			name:       "named",
+			threadName: stringPointerForAppExit("my-thread"),
+			want: []string{
+				"Session ended",
+				"To continue this session, run:",
+				"  codex resume " + threadID,
+				"Or run codex resume and select my-thread.",
+			},
+		},
+	} {
+		info := &AppExitInfo{ResumeHint: &ResumableThread{ThreadID: threadID, ThreadName: testCase.threadName}}
+		if got := info.FormatExitMessages(); strings.Join(got, "\n") != strings.Join(testCase.want, "\n") {
+			t.Fatalf("%s resume guidance = %#v, want %#v", testCase.name, got, testCase.want)
+		}
+	}
+
+	named := "my-thread"
+	info := &AppExitInfo{ResumeHint: &ResumableThread{ThreadID: threadID, ThreadName: &named}}
+	colored := info.FormatExitMessagesWithColor(true)
+	wantColored := []string{
+		"Session ended",
+		"To continue this session, run:",
+		"  \x1b[36mcodex resume " + threadID + "\x1b[39m",
+		"Or run \x1b[36mcodex resume\x1b[39m and select \x1b[36mmy-thread\x1b[39m.",
+	}
+	if strings.Join(colored, "\n") != strings.Join(wantColored, "\n") {
+		t.Fatalf("colored resume guidance = %#v, want %#v", colored, wantColored)
+	}
+}
+
+func stringPointerForAppExit(value string) *string {
+	return &value
 }

@@ -13,8 +13,8 @@ package tui
 // during a task. /archive is deliberately absent, so it stays available while a
 // turn runs (Rust #50764).
 //
-// Upstream also blocks /tui (:260) and /config (:312); neither has a Go carrier
-// yet, so they cannot appear here (see section T5.11).
+// Upstream also blocks /config (:312); the Go settings panel is read-only for
+// some rows but still owns the command surface.
 func (c Command) AvailableDuringTask() bool {
 	switch c {
 	case CommandNew,
@@ -27,6 +27,7 @@ func (c Command) AvailableDuringTask() bool {
 		CommandExport,
 		CommandKeymap,
 		CommandVim,
+		CommandTUI,
 		CommandElevateSandbox,
 		CommandExperimental,
 		CommandMemories,
@@ -39,7 +40,8 @@ func (c Command) AvailableDuringTask() bool {
 		CommandMemoryDrop,
 		CommandMemoryUpdate,
 		CommandTheme,
-		CommandPets:
+		CommandPets,
+		CommandConfig:
 		return false
 	default:
 		return true

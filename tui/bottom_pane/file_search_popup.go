@@ -1,6 +1,12 @@
 package bottompane
 
-import "codex_go/tui"
+import (
+	"path/filepath"
+	"strings"
+
+	"codex_go/filesearch"
+	"codex_go/tui"
+)
 
 // Rust parity: codex-rs/tui/src/bottom_pane/file_search_popup.rs.
 
@@ -90,10 +96,7 @@ func (p *FileSearchPopup) CalculateRequiredHeight() int {
 	if p == nil {
 		return 0
 	}
-	if len(p.Matches) == 0 {
-		return 1
-	}
-	return min(MaxPopupRows, len(p.Matches))
+	return min(max(len(p.Matches), 1), MaxPopupRows) + 2
 }
 
 func (p *FileSearchPopup) Rows(width int) []string {
@@ -112,18 +115,78 @@ func (p *FileSearchPopup) Rows(width int) []string {
 	start := p.State.ScrollTop
 	end := min(start+MaxPopupRows, length)
 	rows := make([]string, 0, end-start)
+	nameWidth := max(width-2, 1)
 	for idx := start; idx < end; idx++ {
-		wrapped := tui.AdaptiveWrapLine(p.Matches[idx].Path, tui.WrapOptions{
-			Width:      max(width-2, 1),
-			BreakWords: true,
-		})
-		for _, part := range wrapped {
-			row := "  " + part
-			if p.State.HasSelection && idx == p.State.SelectedIdx {
-				row = tui.RenderSelectedRow(row)
+		match := p.Matches[idx]
+		name := fileSearchDisplayPath(match.Path, nameWidth)
+		indices := match.Indices
+		if name != match.Path {
+			if fuzzy, ok := filesearch.FuzzyMatch(name, p.DisplayQuery); ok {
+				indices = fuzzy.Indices
 			}
-			rows = append(rows, row)
 		}
+		selected := p.State.HasSelection && idx == p.State.SelectedIdx
+		text := name
+		if !selected {
+			text = highlightFileSearchMatch(name, indices)
+		}
+		row := tui.SelectionPrefix(selected) + text
+		if selected {
+			row = tui.RenderSelectedRowFilled(row, width)
+		}
+		rows = append(rows, row)
 	}
 	return rows
+}
+
+// fileSearchDisplayPath keeps the filename visible when a long parent path does
+// not fit, mirroring Rust center_truncate_path/parent shortening (#46694).
+func fileSearchDisplayPath(path string, width int) string {
+	if width <= 0 || tui.DisplayWidth(path) <= width {
+		return path
+	}
+	filename := filepath.Base(path)
+	if filename == "." || filename == string(filepath.Separator) {
+		filename = path
+	}
+	filenameWidth := tui.DisplayWidth(filename)
+	if filenameWidth+2 > width {
+		return tui.CenterTruncatePath(filename, width)
+	}
+	parent := filepath.Dir(path)
+	if parent == "." || parent == "" {
+		return filename
+	}
+	parent = tui.TruncateWithEllipsis(parent, width-filenameWidth-1)
+	separator := string(filepath.Separator)
+	if strings.HasSuffix(parent, separator) {
+		return parent + filename
+	}
+	return parent + separator + filename
+}
+
+func highlightFileSearchMatch(text string, indices []int) string {
+	if text == "" || len(indices) == 0 {
+		return text
+	}
+	matched := make(map[int]bool, len(indices))
+	for _, index := range indices {
+		matched[index] = true
+	}
+	var out strings.Builder
+	bold := false
+	for index, r := range []rune(text) {
+		if matched[index] && !bold {
+			out.WriteString("\x1b[1m")
+			bold = true
+		} else if !matched[index] && bold {
+			out.WriteString("\x1b[22m")
+			bold = false
+		}
+		out.WriteRune(r)
+	}
+	if bold {
+		out.WriteString("\x1b[22m")
+	}
+	return out.String()
 }

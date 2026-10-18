@@ -26,18 +26,25 @@ func (m *Model) openExternalEditor() bubbletea.Cmd {
 		return nil
 	}
 	runner := m.onExternalEditor
+	var cmd bubbletea.Cmd
 	if runner == nil {
-		return m.defaultExternalEditor()
+		cmd = m.defaultExternalEditor()
+	} else {
+		m.editorActive = true
+		m.notice = ""
+		seed := m.composerText()
+		cmd = runner(seed)
 	}
-	m.editorActive = true
-	m.notice = ""
-	seed := m.composerText()
-	cmd := runner(seed)
 	if cmd == nil {
 		m.editorActive = false
 		m.notice = "Failed to open editor: editor command did not start"
+		return nil
 	}
-	return cmd
+	// Rust #52725 clears the terminal program status before handing the
+	// terminal to an external program. Bubble Tea sequences the clear write
+	// before entering its Exec command, while the completion message is handled
+	// after return where the normal update path re-emits the current status.
+	return bubbletea.Sequence(m.clearTerminalProgramStatusCmd(), cmd)
 }
 
 // defaultExternalEditor resolves a protected editor directory (Rust #38830)

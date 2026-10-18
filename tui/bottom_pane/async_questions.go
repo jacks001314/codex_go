@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"codex_go/context"
+	"codex_go/tui/history_cell"
 	"codex_go/turn"
 )
 
@@ -35,6 +36,9 @@ const (
 	// otherOptionLabel is the editable free-text choice appended to a question
 	// with suggestions (Rust #42897).
 	otherOptionLabel = "Other"
+	// maxRecoveredQuestionTitleBytes bounds the quoted question when an unsent
+	// answer is recovered into the main composer (Rust #47424).
+	maxRecoveredQuestionTitleBytes = 512
 	// asyncQuestionAutoResolveWindow is how long a newly arrived collapsed
 	// question shows its countdown (Rust #42903).
 	asyncQuestionAutoResolveWindow = 30 * time.Second
@@ -637,6 +641,66 @@ func (q *AsyncQuestions) ClearPending() {
 	q.pending = nil
 	q.current = 0
 	q.expanded = false
+}
+
+// TakePendingDrafts recovers non-empty unsent answers with their quoted
+// questions, clears every pending question, and returns the drafts in question
+// order. Seen IDs are retained so replay cannot restore the completed turn's
+// questions.
+func (q *AsyncQuestions) TakePendingDrafts() []string {
+	if q == nil {
+		return nil
+	}
+	drafts := make([]string, 0, len(q.pending))
+	for _, question := range q.pending {
+		if draft, ok := recoveredQuestionDraft(question); ok {
+			drafts = append(drafts, draft)
+		}
+	}
+	q.ClearPending()
+	return drafts
+}
+
+func recoveredQuestionDraft(question PendingAsyncQuestion) (string, bool) {
+	answer := strings.TrimSpace(question.Draft)
+	if answer == "" {
+		return "", false
+	}
+	title := question.Question.Title
+	prefix := takeBytesAtCharBoundary(title, maxRecoveredQuestionTitleBytes)
+	sanitized := historycell.SanitizeUserText(prefix)
+	lines := strings.Split(sanitized, "\n")
+	for index, line := range lines {
+		if line == "" {
+			lines[index] = ">"
+			continue
+		}
+		lines[index] = "> " + line
+	}
+	quoted := strings.Join(lines, "\n")
+	if quoted == "" {
+		quoted = "> "
+	}
+	if len(prefix) < len(title) {
+		quoted += "…"
+	}
+	return quoted + "\n\n" + answer, true
+}
+
+// takeBytesAtCharBoundary returns at most limit bytes without splitting a
+// UTF-8 code point.
+func takeBytesAtCharBoundary(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
 }
 
 // AcceptAnswer removes the focused question, mirroring Rust's

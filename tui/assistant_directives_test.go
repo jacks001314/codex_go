@@ -68,6 +68,42 @@ func TestParseAssistantDirectivePreservesSingleQuotedValues(t *testing.T) {
 	}
 }
 
+func TestParseAssistantDirectiveFollowupLabelsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		raw   string
+		label string
+	}{
+		{`:codex-followup[Add **revenue charts**]{prompt="Add a chart"}`, `Add **revenue charts**`},
+		{`:codex-followup[Inspect [nested [labels]]]{prompt=action}`, `Inspect [nested [labels]]`},
+		{":codex-followup[Format `Sheet1`]{prompt=format}", "Format `Sheet1`"},
+		{`:codex-followup[Inspect \] and \[ brackets]{prompt=action}`, `Inspect \] and \[ brackets`},
+		{":codex-followup[Type a ` character]{prompt=action}", "Type a ` character"},
+	} {
+		directive, ok := ParseAssistantDirective(testCase.raw, QuoteEscapingBackslash)
+		if !ok {
+			t.Fatalf("follow-up did not parse: %q", testCase.raw)
+		}
+		if directive.Name != "codex-followup" || directive.Label != testCase.label || directive.Raw != testCase.raw {
+			t.Fatalf("directive = %#v, want label %q", directive, testCase.label)
+		}
+		if directive.Attributes["prompt"] == "" {
+			t.Fatalf("directive attributes = %#v, want prompt", directive.Attributes)
+		}
+	}
+}
+
+func TestParseAssistantDirectiveRejectsLabelsOutsideFollowups(t *testing.T) {
+	for _, source := range []string{
+		`:git-push[label]{cwd="/repo"}`,
+		":codex-followup[unfinished",
+		":codex-followup[line\nbreak]{prompt=action}",
+	} {
+		if directive, ok := ParseAssistantDirective(source, QuoteEscapingBackslash); ok {
+			t.Fatalf("parse(%q) = %#v, want rejection", source, directive)
+		}
+	}
+}
+
 func TestParseAssistantDirectiveRejectsAmbiguousOrIncomplete(t *testing.T) {
 	for _, source := range []string{
 		`::git-push{cwd="/repo" cwd="/other"}`,

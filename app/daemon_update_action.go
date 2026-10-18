@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"codex_go/appserverdaemon"
+	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/doctor"
 	"codex_go/install"
@@ -93,6 +94,17 @@ func interactiveDaemonVersionForEndpoint(endpoint *appserverdaemon.RemoteAppServ
 		return ""
 	}
 	return version
+}
+
+// interactiveManagedDaemonForEndpoint verifies that the running local socket is
+// backed by this installation's managed daemon, so the TUI may offer restart.
+func interactiveManagedDaemonForEndpoint(endpoint *appserverdaemon.RemoteAppServerEndpoint) bool {
+	if endpoint == nil || endpoint.Kind != appserverdaemon.RemoteEndpointUnixSocket {
+		return false
+	}
+	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
+	output, err := runner.Run(appserverdaemon.LifecycleVersion)
+	return err == nil && output != nil && output.Backend != nil
 }
 
 // interactiveRemoteEndpointIsExplicitRemote reports an explicit `--remote` app

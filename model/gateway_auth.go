@@ -189,4 +189,3 @@ func validCookieOAuthToken(token string) bool {
 	}
 	return true
 }
-
