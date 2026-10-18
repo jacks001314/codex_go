@@ -7,7 +7,6 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
-	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/session"
 	codextui "codex_go/tui"
@@ -16,15 +15,10 @@ import (
 )
 
 // interactiveRemotePromptEditHandler implements the backtrack "edit an earlier
-// prompt" flow against the app server (Rust ForkSessionForPromptEdit): read the
-// thread's persisted turns so the selected transcript ordinal maps onto a turn,
-// fork before it (or start a fresh thread for the first prompt), then attach the
-// TUI to the branched conversation.
-func interactiveRemotePromptEditHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, state *codextui.State, hosts ...*taskToolsMCPHost) codextea.PromptEditFunc {
-	var taskToolsHost *taskToolsMCPHost
-	if len(hosts) > 0 {
-		taskToolsHost = hosts[0]
-	}
+// prompt" flow against the app server (Rust #45845): read the thread's persisted
+// turns, resolve the selected transcript ordinal, and revert the current thread
+// before that turn so the prompt can be edited without creating a fork.
+func interactiveRemotePromptEditHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, _ *cli.RootOptions, _ *codextui.State, _ ...*taskToolsMCPHost) codextea.PromptEditFunc {
 	return func(selection tuiapp.PromptEditSelection) (codextea.SessionResumeResponse, error) {
 		threadID := strings.TrimSpace(selection.ThreadID)
 		if threadID == "" {
@@ -35,75 +29,35 @@ func interactiveRemotePromptEditHandler(ctx context.Context, endpoint *appserver
 			return codextea.SessionResumeResponse{}, err
 		}
 		defer client.close()
-		// The branched thread must carry the session's task-tools namespace, so
-		// this client joins the hosted MCP server for the duration of the edit.
-		if taskToolsHost != nil {
-			if template, err := remoteThreadStartParams(root, state); err == nil {
-				client.taskTools = taskToolsHost
-				taskToolsHost.attach(client, template, client.registerDynamicToolThread)
-				defer taskToolsHost.suspend()
-			}
-		}
-
 		sourceThread, err := remoteTUIReadThread(ctx, client, threadID, true)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
 		source := tuiapp.ThreadSessionState{ThreadID: threadID, CWD: strings.TrimSpace(sourceThread.CWD)}
-		result := tuiapp.ApplyPromptEdit(ctx, remotePromptEditClient{client: client, root: root, state: state}, source, sourceThread.Turns, selection)
+		result := tuiapp.ApplyPromptEdit(ctx, remotePromptEditClient{client: client}, source, sourceThread.Turns, selection)
 		if message := strings.TrimSpace(result.ErrorMessage); message != "" {
-			return codextea.SessionResumeResponse{}, errors.New(strings.TrimPrefix(message, "Failed to branch before the selected prompt: "))
+			return codextea.SessionResumeResponse{}, errors.New(strings.TrimPrefix(message, "Failed to revert before the selected prompt: "))
 		}
-		branchedThreadID := strings.TrimSpace(result.Session.ThreadID)
-		if branchedThreadID == "" {
-			branchedThreadID = threadID
-		}
-		// Attach the branched thread's committed history so the transcript shows
-		// the prompts before the edit point.
-		branched, err := remoteTUIReadThread(ctx, client, branchedThreadID, true)
+		reverted, err := remoteTUIReadThread(ctx, client, threadID, true)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
-		return remoteTUIResumeResponseFromThread(branched), nil
+		return remoteTUIResumeResponseFromThread(reverted), nil
 	}
 }
 
 // remotePromptEditClient adapts the app-server websocket client to the prompt
-// edit fork operations.
+// edit history rewrite.
 type remotePromptEditClient struct {
 	client *remoteAppServerTUIClient
-	root   *cli.RootOptions
-	state  *codextui.State
 }
 
-func (c remotePromptEditClient) ForkThread(ctx context.Context, params appserver.ThreadForkParams) (*appserver.ThreadForkResponse, error) {
-	// A fork keeps the session's task-tools namespace (Rust
-	// ThreadToolTransport::configure_mcp on ThreadForkParams.config).
-	mergeTaskToolsMCPConfig(&params.Config, c.client.taskTools)
-	var response appserver.ThreadForkResponse
-	if err := remoteSessionRequest(ctx, c.client, appserver.MethodThreadFork, params, &response); err != nil {
+func (c remotePromptEditClient) RevertThread(ctx context.Context, params appserver.ThreadRevertParams) (*appserver.Thread, error) {
+	var response appserver.ThreadRevertResponse
+	if err := remoteSessionRequest(ctx, c.client, appserver.MethodThreadRevert, params, &response); err != nil {
 		return nil, err
 	}
-	return &response, nil
-}
-
-func (c remotePromptEditClient) StartFreshThread(ctx context.Context, _ tuiapp.ThreadSessionState) (*appserver.ThreadStartResponse, error) {
-	params, err := remoteThreadStartParams(c.root, c.state)
-	if err != nil {
-		return nil, err
-	}
-	c.client.applyTaskToolTransport(&params)
-	var response appserver.ThreadStartResponse
-	if err := remoteSessionRequest(ctx, c.client, appserver.MethodThreadStart, params, &response); err != nil {
-		return nil, err
-	}
-	// Only the hosted MCP server survives this request; the callback transport
-	// would register the namespace on a connection that closes with the edit, so
-	// the fresh thread is advertised as task-tools capable only for the former.
-	if response.Thread != nil && c.client.hasTaskToolsMCP() {
-		rememberRemoteTaskToolThread(auth.DefaultCodexHome(), strings.TrimSpace(response.Thread.ID))
-	}
-	return &response, nil
+	return remoteTUIReadThread(ctx, c.client, strings.TrimSpace(params.ThreadID), true)
 }
 
 // interactivePromptEditHandler implements the same flow for the embedded TUI,
@@ -127,59 +81,35 @@ func interactivePromptEditHandler(root *cli.RootOptions) codextea.PromptEditFunc
 		}
 		result := tuiapp.ApplyPromptEdit(context.Background(), localPromptEditClient{store: store}, source, sourceThread.Turns, selection)
 		if message := strings.TrimSpace(result.ErrorMessage); message != "" {
-			return codextea.SessionResumeResponse{}, errors.New(strings.TrimPrefix(message, "Failed to branch before the selected prompt: "))
+			return codextea.SessionResumeResponse{}, errors.New(strings.TrimPrefix(message, "Failed to revert before the selected prompt: "))
 		}
-		branchedThreadID := strings.TrimSpace(result.Session.ThreadID)
-		if branchedThreadID == "" {
-			branchedThreadID = threadID
-		}
-		branched, err := localThreadReadTurns(store, branchedThreadID)
+		reverted, err := localThreadReadTurns(store, threadID)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
-		return remoteTUIResumeResponseFromThread(branched), nil
+		return remoteTUIResumeResponseFromThread(reverted), nil
 	}
 }
 
 // localPromptEditClient adapts the in-process app-server router to the prompt
-// edit fork operations.
+// edit history rewrite.
 type localPromptEditClient struct {
 	store *session.Store
 }
 
-func (c localPromptEditClient) ForkThread(_ context.Context, params appserver.ThreadForkParams) (*appserver.ThreadForkResponse, error) {
-	result, closeRuntime, err := localSessionRouterRequest(c.store, appserver.MethodThreadFork, params)
+func (c localPromptEditClient) RevertThread(_ context.Context, params appserver.ThreadRevertParams) (*appserver.Thread, error) {
+	result, closeRuntime, err := localSessionRouterRequest(c.store, appserver.MethodThreadRevert, params)
 	if closeRuntime != nil {
 		defer closeRuntime()
 	}
 	if err != nil {
 		return nil, err
 	}
-	response, ok := result.(*appserver.ThreadForkResponse)
-	if !ok || response == nil {
-		return nil, errors.New("thread/fork returned no response")
+	response, ok := result.(*appserver.ThreadRevertResponse)
+	if !ok || response == nil || response.Thread == nil {
+		return nil, errors.New("thread/revert returned no thread")
 	}
-	return response, nil
-}
-
-func (c localPromptEditClient) StartFreshThread(_ context.Context, source tuiapp.ThreadSessionState) (*appserver.ThreadStartResponse, error) {
-	params := appserver.ThreadStartParams{
-		CWD:           strings.TrimSpace(source.CWD),
-		Model:         strings.TrimSpace(source.Model),
-		ModelProvider: strings.TrimSpace(source.ModelProviderID),
-	}
-	result, closeRuntime, err := localSessionRouterRequest(c.store, appserver.MethodThreadStart, params)
-	if closeRuntime != nil {
-		defer closeRuntime()
-	}
-	if err != nil {
-		return nil, err
-	}
-	response, ok := result.(*appserver.ThreadStartResponse)
-	if !ok || response == nil {
-		return nil, errors.New("thread/start returned no response")
-	}
-	return response, nil
+	return localThreadReadTurns(c.store, strings.TrimSpace(params.ThreadID))
 }
 
 // localThreadReadTurns reads a local thread with its turns for the prompt-edit

@@ -14261,9 +14261,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: HistoryHydrationScope, backtrack_revert_before_turn_id, reset_after_prompt_revert, restore_backtrack_prompt_after_revert_error, revert_thread"
+        "Aligned upstream ffae979216 (#45845): prompt editing now calls thread/revert before the selected turn and keeps the current thread instead of forking or starting a fresh thread. Remote and embedded clients resolve the same transcript ordinal, read back the retained turns, restore the selected prompt/attachments, and show 'Conversation reverted to this point. File changes are unchanged.' Steers and in-progress turns remain rejected. Tests: go test ./tui/app -run PromptEdit -count=1; go test ./tui/tea -run Backtrack -count=1; go test ./app -run TestInteractiveRemotePromptEdit -count=1."
       ]
     },
     {

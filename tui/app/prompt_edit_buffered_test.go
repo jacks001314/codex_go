@@ -69,8 +69,7 @@ func TestTurnsIncludingBufferedAvoidsDuplicates(t *testing.T) {
 }
 
 func TestApplyPromptEditWithStoreFindsBufferedPrompt(t *testing.T) {
-	forkedFrom := "source"
-	client := &promptEditClient{forked: &appserver.ThreadForkResponse{Thread: &appserver.Thread{ID: "forked", ForkedFromID: &forkedFrom, CWD: "/repo"}}}
+	client := &promptEditClient{reverted: &appserver.Thread{ID: "source", CWD: "/repo"}}
 	store := NewThreadEventStore(64)
 	store.SetTurns([]appserver.Turn{
 		{ID: "turn-1", Items: []appserver.ThreadItem{
@@ -93,11 +92,11 @@ func TestApplyPromptEditWithStoreFindsBufferedPrompt(t *testing.T) {
 	if result.ErrorMessage != "" {
 		t.Fatalf("ErrorMessage = %q, want empty (buffered prompt found)", result.ErrorMessage)
 	}
-	if !result.Branched {
-		t.Fatalf("Branched = false, want true")
+	if !result.Reverted {
+		t.Fatalf("Reverted = false, want true")
 	}
-	if client.forkParams.BeforeTurnID != "turn-2" {
-		t.Fatalf("forkParams.BeforeTurnID = %q, want turn-2", client.forkParams.BeforeTurnID)
+	if client.revertParams.BeforeTurnID != "turn-2" {
+		t.Fatalf("revertParams.BeforeTurnID = %q, want turn-2", client.revertParams.BeforeTurnID)
 	}
 }
 

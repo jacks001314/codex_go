@@ -66,13 +66,13 @@ func TestModelBacktrackEscPrimesThenOpensHighlightedPreview(t *testing.T) {
 	}
 }
 
-func TestModelBacktrackOverlayStepsAndConfirmsFork(t *testing.T) {
+func TestModelBacktrackOverlayStepsAndConfirmsRevert(t *testing.T) {
 	var selection tuiapp.PromptEditSelection
 	calls := 0
 	onPromptEdit := func(prompt tuiapp.PromptEditSelection) (SessionResumeResponse, error) {
 		calls++
 		selection = prompt
-		return SessionResumeResponse{Summary: &codextui.SessionSummary{ThreadID: "thread-forked"}}, nil
+		return SessionResumeResponse{Summary: &codextui.SessionSummary{ThreadID: "thread-reverted"}}, nil
 	}
 	model := backtrackTestModel(t, onPromptEdit, backtrackTestMessages()...)
 
@@ -116,8 +116,11 @@ func TestModelBacktrackOverlayStepsAndConfirmsFork(t *testing.T) {
 	if got := model.composer.Value(); got != "second" {
 		t.Fatalf("composer = %q, want the selected prompt", got)
 	}
-	if model.State.ThreadID != "thread-forked" {
-		t.Fatalf("thread = %q, want thread-forked", model.State.ThreadID)
+	if model.State.ThreadID != "thread-reverted" {
+		t.Fatalf("thread = %q, want thread-reverted", model.State.ThreadID)
+	}
+	if text := modelMessageText(model); !strings.Contains(text, "Conversation reverted to this point. File changes are unchanged.") {
+		t.Fatalf("missing revert notice:\n%s", text)
 	}
 }
 
@@ -125,7 +128,7 @@ func TestModelBacktrackConfirmFromMainRestoresPrompt(t *testing.T) {
 	var selection tuiapp.PromptEditSelection
 	onPromptEdit := func(prompt tuiapp.PromptEditSelection) (SessionResumeResponse, error) {
 		selection = prompt
-		return SessionResumeResponse{Summary: &codextui.SessionSummary{ThreadID: "thread-forked"}}, nil
+		return SessionResumeResponse{Summary: &codextui.SessionSummary{ThreadID: "thread-reverted"}}, nil
 	}
 	model := backtrackTestModel(t, onPromptEdit, backtrackTestMessages()...)
 
@@ -141,7 +144,7 @@ func TestModelBacktrackConfirmFromMainRestoresPrompt(t *testing.T) {
 
 func TestModelBacktrackFailureRestoresPromptAndReportsError(t *testing.T) {
 	onPromptEdit := func(tuiapp.PromptEditSelection) (SessionResumeResponse, error) {
-		return SessionResumeResponse{}, assertError("branch unavailable")
+		return SessionResumeResponse{}, assertError("revert unavailable")
 	}
 	model := backtrackTestModel(t, onPromptEdit, backtrackTestMessages()...)
 
@@ -150,13 +153,13 @@ func TestModelBacktrackFailureRestoresPromptAndReportsError(t *testing.T) {
 	model.Update(key(bubbletea.KeyEnter))
 
 	if model.State.ThreadID != "thread-1" {
-		t.Fatalf("a failed branch must keep the source thread, got %q", model.State.ThreadID)
+		t.Fatalf("a failed revert must keep the source thread, got %q", model.State.ThreadID)
 	}
 	if model.composer.Value() != "second" {
 		t.Fatalf("composer = %q, want the restored prompt", model.composer.Value())
 	}
-	if text := modelMessageText(model); !strings.Contains(text, "Failed to branch before the selected prompt: branch unavailable") {
-		t.Fatalf("missing branch failure message:\n%s", text)
+	if text := modelMessageText(model); !strings.Contains(text, "Failed to revert before the selected prompt: revert unavailable") {
+		t.Fatalf("missing revert failure message:\n%s", text)
 	}
 }
 
@@ -206,7 +209,7 @@ func TestModelBacktrackRestoresPromptInsteadOfRenderedAttachmentListing(t *testi
 	var selection tuiapp.PromptEditSelection
 	onPromptEdit := func(prompt tuiapp.PromptEditSelection) (SessionResumeResponse, error) {
 		selection = prompt
-		return SessionResumeResponse{Summary: &codextui.SessionSummary{ThreadID: "thread-forked"}}, nil
+		return SessionResumeResponse{Summary: &codextui.SessionSummary{ThreadID: "thread-reverted"}}, nil
 	}
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-1")

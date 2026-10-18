@@ -9,20 +9,21 @@ import (
 	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	historycell "codex_go/tui/history_cell"
 )
 
 // This file wires the backtrack ("edit an earlier prompt") state machine ported
 // from Rust tui/src/app_backtrack.rs into the bubbletea model: the first Esc
 // primes the feature, the second opens the transcript overlay with the newest
 // user message highlighted, Esc/Left and Right step the selection, and Enter
-// branches before the selected turn and restores its prompt in the composer.
+// reverts before the selected turn and restores its prompt in the composer.
 
 // NoPreviousMessageToEdit mirrors Rust NO_PREVIOUS_MESSAGE_TO_EDIT.
 const NoPreviousMessageToEdit = "No previous message to edit."
 
-// PromptEditFunc branches before a selected transcript prompt and returns the
-// branched conversation so the model can attach to it (Rust
-// ForkSessionForPromptEdit). The model restores the selection into the composer.
+// PromptEditFunc reverts before a selected transcript prompt and returns the
+// retained conversation so the model can attach to it (Rust
+// RevertSessionForPromptEdit). The model restores the selection into the composer.
 type PromptEditFunc func(selection tuiapp.PromptEditSelection) (SessionResumeResponse, error)
 
 // backtrackComposerEmpty mirrors Rust composer_is_empty for the backtrack gate:
@@ -217,9 +218,9 @@ func (m *Model) confirmOverlayBacktrack() bubbletea.Cmd {
 	return m.applyBacktrackSelection(selection)
 }
 
-// applyBacktrackSelection branches before the selected prompt and restores it in
+// applyBacktrackSelection reverts before the selected prompt and restores it in
 // the composer (Rust apply_backtrack_selection /
-// restore_backtrack_prompt_after_branch_error).
+// restore_backtrack_prompt_after_revert_error).
 func (m *Model) applyBacktrackSelection(selection tuiapp.PromptEditSelection) bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -234,7 +235,7 @@ func (m *Model) applyBacktrackSelection(selection tuiapp.PromptEditSelection) bu
 		return nil
 	}
 	if m.onPromptEdit == nil {
-		m.restoreBacktrackPromptAfterBranchError(selection.Prompt, "prompt editing is unavailable")
+		m.restoreBacktrackPromptAfterRevertError(selection.Prompt, "prompt editing is unavailable")
 		return nil
 	}
 	response, err := m.onPromptEdit(selection)
@@ -243,7 +244,7 @@ func (m *Model) applyBacktrackSelection(selection tuiapp.PromptEditSelection) bu
 		if message == "" {
 			message = "unknown error"
 		}
-		m.restoreBacktrackPromptAfterBranchError(selection.Prompt, message)
+		m.restoreBacktrackPromptAfterRevertError(selection.Prompt, message)
 		return nil
 	}
 	threadID := strings.TrimSpace(selection.ThreadID)
@@ -251,19 +252,20 @@ func (m *Model) applyBacktrackSelection(selection tuiapp.PromptEditSelection) bu
 		threadID = strings.TrimSpace(response.Summary.ThreadID)
 	}
 	m.applyResumeResponse(threadID, response)
+	m.applyHistoryCell(historycell.NewInfoEvent("Conversation reverted to this point. File changes are unchanged.", ""))
 	m.restoreComposerPrompt(selection.Prompt)
 	m.refreshTranscript()
 	return nil
 }
 
-// restoreBacktrackPromptAfterBranchError restores the selected prompt and
-// surfaces the branch failure (Rust restore_backtrack_prompt_after_branch_error).
-func (m *Model) restoreBacktrackPromptAfterBranchError(prompt chatwidget.ThreadComposerState, err string) {
+// restoreBacktrackPromptAfterRevertError restores the selected prompt and
+// surfaces the revert failure (Rust restore_backtrack_prompt_after_revert_error).
+func (m *Model) restoreBacktrackPromptAfterRevertError(prompt chatwidget.ThreadComposerState, err string) {
 	if m == nil {
 		return
 	}
 	m.restoreComposerPrompt(prompt)
-	m.addErrorHistoryMessage("Failed to branch before the selected prompt: " + err)
+	m.addErrorHistoryMessage("Failed to revert before the selected prompt: " + err)
 	m.refreshTranscript()
 }
 

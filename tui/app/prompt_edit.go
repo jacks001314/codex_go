@@ -17,9 +17,10 @@ type PromptEditSelection struct {
 	PreviousDraft chatwidget.ThreadComposerState
 }
 
-type PromptEditForkClient interface {
-	ForkThread(ctx context.Context, params appserver.ThreadForkParams) (*appserver.ThreadForkResponse, error)
-	StartFreshThread(ctx context.Context, source ThreadSessionState) (*appserver.ThreadStartResponse, error)
+// PromptEditClient applies the destructive history rewrite used by prompt
+// editing. The returned thread must include its retained turns.
+type PromptEditClient interface {
+	RevertThread(ctx context.Context, params appserver.ThreadRevertParams) (*appserver.Thread, error)
 }
 
 type PromptEditResult struct {
@@ -27,20 +28,19 @@ type PromptEditResult struct {
 	Turns             []appserver.Turn
 	Composer          chatwidget.ThreadComposerState
 	RestoredSelection *PromptEditSelection
-	Branched          bool
-	FreshThread       bool
+	Reverted          bool
 	ErrorMessage      string
 }
 
-func ApplyPromptEdit(ctx context.Context, client PromptEditForkClient, source ThreadSessionState, turns []appserver.Turn, selection PromptEditSelection) PromptEditResult {
+func ApplyPromptEdit(ctx context.Context, client PromptEditClient, source ThreadSessionState, turns []appserver.Turn, selection PromptEditSelection) PromptEditResult {
 	failure := func(err error) PromptEditResult {
 		return PromptEditResult{
 			Session: source.Clone(), Turns: append([]appserver.Turn(nil), turns...), Composer: clonePromptEditComposer(selection.Prompt),
-			RestoredSelection: clonePromptEditSelection(&selection), ErrorMessage: "Failed to branch before the selected prompt: " + err.Error(),
+			RestoredSelection: clonePromptEditSelection(&selection), ErrorMessage: "Failed to revert before the selected prompt: " + err.Error(),
 		}
 	}
 	if client == nil {
-		return failure(fmt.Errorf("thread fork is unavailable"))
+		return failure(fmt.Errorf("thread revert is unavailable"))
 	}
 	if strings.TrimSpace(selection.ThreadID) == "" || selection.ThreadID != source.ThreadID {
 		return failure(fmt.Errorf("selected prompt no longer belongs to the active thread"))
@@ -49,30 +49,28 @@ func ApplyPromptEdit(ctx context.Context, client PromptEditForkClient, source Th
 	if err != nil {
 		return failure(err)
 	}
-	if selection.UserOrdinal == 0 {
-		started, err := client.StartFreshThread(ctx, source.Clone())
-		if err != nil || started == nil || started.Thread == nil {
-			if err == nil {
-				err = fmt.Errorf("fresh thread did not return a session")
-			}
-			return failure(err)
-		}
-		return PromptEditResult{Session: threadSessionStateFromPromptEditResponse(started.Thread, source), Turns: []appserver.Turn{}, Composer: clonePromptEditComposer(selection.Prompt), Branched: true, FreshThread: true}
-	}
-	forked, err := client.ForkThread(ctx, appserver.ThreadForkParams{ThreadID: source.ThreadID, BeforeTurnID: beforeTurnID})
-	if err != nil || forked == nil || forked.Thread == nil {
+	reverted, err := client.RevertThread(ctx, appserver.ThreadRevertParams{
+		ThreadID:     source.ThreadID,
+		BeforeTurnID: beforeTurnID,
+	})
+	if err != nil || reverted == nil {
 		if err == nil {
-			err = fmt.Errorf("thread fork did not return a session")
+			err = fmt.Errorf("thread revert did not return a session")
 		}
 		return failure(err)
 	}
-	return PromptEditResult{Session: threadSessionStateFromPromptEditResponse(forked.Thread, source), Turns: append([]appserver.Turn(nil), forked.Thread.Turns...), Composer: clonePromptEditComposer(selection.Prompt), Branched: true}
+	return PromptEditResult{
+		Session:  threadSessionStateFromPromptEditResponse(reverted, source),
+		Turns:    append([]appserver.Turn(nil), reverted.Turns...),
+		Composer: clonePromptEditComposer(selection.Prompt),
+		Reverted: true,
+	}
 }
 
 // ApplyPromptEditWithStore applies a prompt edit using the store's snapshot
 // turns plus buffered live turns reconstructed from turn/item notifications
 // (Rust 266c6920d9: buffered turns must be visible to prompt-edit lookups).
-func ApplyPromptEditWithStore(ctx context.Context, client PromptEditForkClient, source ThreadSessionState, store *ThreadEventStore, selection PromptEditSelection) PromptEditResult {
+func ApplyPromptEditWithStore(ctx context.Context, client PromptEditClient, source ThreadSessionState, store *ThreadEventStore, selection PromptEditSelection) PromptEditResult {
 	turns := append([]appserver.Turn(nil), sourceTurns(store)...)
 	if store != nil {
 		turns = store.TurnsIncludingBuffered()
@@ -117,7 +115,7 @@ func promptEditBeforeTurnID(turns []appserver.Turn, ordinal int) (string, error)
 			}
 			if seen == ordinal {
 				if isSteer {
-					return "", fmt.Errorf("the selected prompt is a steer and cannot be branched independently")
+					return "", fmt.Errorf("the selected prompt is a steer and cannot be edited independently")
 				}
 				if strings.EqualFold(strings.TrimSpace(string(turn.Status)), string(appserver.TurnStatusInProgress)) {
 					return "", fmt.Errorf("the selected prompt belongs to a turn that is still in progress")
