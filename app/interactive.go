@@ -1458,7 +1458,6 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
 	threadStart := appserver.ThreadStartParams{
 		CWD:            strings.TrimSpace(state.CWD),
 		Model:          strings.TrimSpace(state.Model),
-		ModelProvider:  strings.TrimSpace(state.Provider),
 		ApprovalPolicy: strings.TrimSpace(state.ApprovalPolicy),
 		Sandbox:        strings.TrimSpace(state.Sandbox),
 	}
@@ -1466,7 +1465,9 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
 		threadStart.Sandbox = string(defaults.SandboxMode)
 		threadStart.ApprovalPolicy = projectlessApprovalPolicyParam(defaults)
 	}
-	if defaults, layers, ok := localNewThreadModelDefaults(auth.DefaultCodexHome()); ok {
+	defaults, layers, hasManagedDefaults := localNewThreadModelDefaults(root, threadStart.CWD)
+	threadStart.ModelProvider = interactiveThreadStartModelProvider(root, state, layers)
+	if hasManagedDefaults {
 		applyManagedDefaultsToThreadStartParams(&threadStart, state, defaults, layers,
 			remoteCLIConfigOverrideKeys(root),
 			root != nil && strings.TrimSpace(root.Shared.Model) != "",
@@ -1482,6 +1483,25 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
 		threadStart.DaybreakEnabled = &enabled
 	}
 	return threadStart
+}
+
+// interactiveThreadStartModelProvider mirrors Rust #49161: only an explicit
+// CLI/profile provider selection is forwarded to thread/start. A provider
+// resolved from ordinary user or project configuration must be left unset so
+// the app server can resolve its own default.
+func interactiveThreadStartModelProvider(root *cli.RootOptions, state *codextui.State, layers []config.Layer) string {
+	if state == nil {
+		return ""
+	}
+	if root != nil {
+		if provider := strings.TrimSpace(root.Shared.OSSProvider); provider != "" {
+			return provider
+		}
+	}
+	if !config.HasLaunchSetting(layers, remoteCLIConfigOverrideKeys(root), "model_provider") {
+		return ""
+	}
+	return strings.TrimSpace(state.Provider)
 }
 
 // interactiveProjectlessThreadDefaults reports the implicit workspace-write /
@@ -3254,6 +3274,7 @@ func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSumm
 	items, err := codextui.LoadSessionSummariesFromStore(newSessionStore(), codextui.SessionSourceOptions{
 		CWD:             interactiveSessionPickerCWD(root),
 		IncludeArchived: true,
+		ModelProvider:   interactiveHistoryModelProvider(root),
 		// Rust #54175: local session discovery always groups linked checkouts;
 		// the retired `worktrees` flag no longer gates it.
 		WorktreesEnabled: true,
@@ -3262,6 +3283,20 @@ func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSumm
 		return nil
 	}
 	return items
+}
+
+// interactiveHistoryModelProvider mirrors Rust #49161's history provider:
+// the effective local provider is used for local discovery, defaulting to the
+// built-in OpenAI provider when configuration omits one.
+func interactiveHistoryModelProvider(root *cli.RootOptions) string {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return ""
+	}
+	if provider := interactiveStringFromConfig(loaded.Values, "model_provider"); provider != "" {
+		return provider
+	}
+	return "openai"
 }
 
 func interactiveSessionActionHandler(root *cli.RootOptions) codextea.SessionActionFunc {

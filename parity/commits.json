@@ -23208,9 +23208,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: explicit_model_provider, explicit_provider, history_model_provider"
+        "Aligned upstream 3226512d47 (#49161): fresh local thread/start forwards modelProvider only for explicit CLI/profile/OSS selections and leaves ordinary configured defaults for the app server. Local and remote session pickers filter history by the effective provider, remote history reads the server config when no explicit provider is set, and remote side forks preserve the active session provider. Tests: TestLocalThreadStartForwardsOnlyExplicitModelProviderLikeRust, TestInteractiveSessionPickerFiltersByConfiguredProviderLikeRust, TestInteractiveRemoteSessionPickerItemsLoadFromAppServer, TestRemoteSideForkPreservesSessionProviderLikeRust."
       ]
     },
     {

@@ -271,9 +271,13 @@ func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaults(ctx context.Cont
 // the TUI's managed defaults (nil when no model defaults are configured).
 // localNewThreadModelDefaults reads the same managed defaults and layers from
 // the local config service for the embedded TUI bootstrap path.
-func localNewThreadModelDefaults(codexHome string) (*codextui.ManagedNewThreadDefaults, []config.Layer, bool) {
-	service := config.NewConfigService(strings.TrimSpace(codexHome))
-	read, err := service.Read(&config.ConfigReadParams{IncludeLayers: true})
+func localNewThreadModelDefaults(root *cli.RootOptions, cwd string) (*codextui.ManagedNewThreadDefaults, []config.Layer, bool) {
+	service := interactiveConfigService(root)
+	params := &config.ConfigReadParams{IncludeLayers: true}
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		params.CWD = &cwd
+	}
+	read, err := service.Read(params)
 	if err != nil || read == nil {
 		return nil, nil, false
 	}

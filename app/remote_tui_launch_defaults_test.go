@@ -147,3 +147,14 @@ func TestRemoteNewThreadPreservesLaunchAndLaterPermissionsLikeRust(t *testing.T)
 		t.Fatalf("updated permissions = approval:%#v sandbox:%#v", params.ApprovalPolicy, params.Sandbox)
 	}
 }
+
+func TestRemoteSideForkPreservesSessionProviderLikeRust(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Provider: "ollama"})
+	params, err := remoteSideThreadForkParams(&cli.RootOptions{}, state, "thread-parent", nil)
+	if err != nil {
+		t.Fatalf("remoteSideThreadForkParams() error = %v", err)
+	}
+	if params.ModelProvider == nil || *params.ModelProvider != "ollama" {
+		t.Fatalf("fork modelProvider = %#v, want ollama", params.ModelProvider)
+	}
+}

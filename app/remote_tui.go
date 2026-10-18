@@ -1532,9 +1532,13 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 		return nil
 	}
 	defer client.close()
+	provider := remoteTUIHistoryModelProvider(ctx, client, root)
 	items := []codextui.SessionSummary{}
 	for _, archived := range []bool{false, true} {
 		params := remoteTUIThreadListParams(root, archived)
+		if provider != "" {
+			params.ModelProviders = []string{provider}
+		}
 		response, err := remoteThreadListWithCwdFallback(ctx, client, params)
 		if err != nil {
 			return nil
@@ -1552,6 +1556,39 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 	return items
+}
+
+// remoteTUIHistoryModelProvider mirrors Rust #49161: an explicit CLI/profile
+// provider wins, otherwise the connected server's effective configuration
+// supplies the provider for history discovery.
+func remoteTUIHistoryModelProvider(ctx context.Context, client *remoteAppServerTUIClient, root *cli.RootOptions) string {
+	cwd := interactiveSessionPickerCWD(root)
+	service := interactiveConfigService(root)
+	localParams := &config.ConfigReadParams{IncludeLayers: true}
+	if cwd != "" {
+		localParams.CWD = &cwd
+	}
+	if local, err := service.Read(localParams); err == nil && local != nil {
+		provider := interactiveStringFromConfig(local.Config, "model_provider")
+		if config.HasLaunchSetting(local.Layers, remoteCLIConfigOverrideKeys(root), "model_provider") {
+			if provider == "" {
+				provider = "openai"
+			}
+			return provider
+		}
+	}
+	var read config.ConfigReadResponse
+	params := config.ConfigReadParams{}
+	if cwd != "" {
+		params.CWD = &cwd
+	}
+	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, params, &read); err != nil {
+		return ""
+	}
+	if provider := interactiveStringFromConfig(read.Config, "model_provider"); provider != "" {
+		return provider
+	}
+	return "openai"
 }
 
 func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, backendID codextui.BackendID) codextea.SessionActionFunc {
@@ -5121,6 +5158,11 @@ func remoteSideThreadForkParams(root *cli.RootOptions, state *codextui.State, pa
 	}
 	if model := strings.TrimSpace(shared.Model); model != "" {
 		params.Model = &model
+	}
+	if state != nil {
+		if provider := strings.TrimSpace(state.Provider); provider != "" {
+			params.ModelProvider = &provider
+		}
 	}
 	// Rust #46494 ForkConfigSource::Session: an active-session fork does not
 	// restore saved roots when omitted, and the CWD override above would

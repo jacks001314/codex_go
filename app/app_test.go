@@ -4686,6 +4686,14 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 			switch req.Method {
 			case string(appserver.MethodInitialize):
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodConfigRead):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{"config": map[string]any{
+						"model_provider": "server-provider",
+					}},
+				})
 			case string(appserver.MethodThreadList):
 				var params appserver.ThreadListParams
 				if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -4695,6 +4703,10 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 				archived := params.Archived != nil && *params.Archived
 				if params.CWD == nil || len(params.CWD.Values) != 1 || params.CWD.Values[0] != `D:\repo` {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/list cwd params = %#v", params.CWD))
+					return
+				}
+				if len(params.ModelProviders) != 1 || params.ModelProviders[0] != "server-provider" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/list providers = %#v", params.ModelProviders))
 					return
 				}
 				active := remoteSessionTestThread("thread-active", "Remote Active", false, 0)
@@ -4719,15 +4731,51 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 		t.Fatalf("remote session items = %#v", items)
 	}
 	initialize := remoteTUITestReadCapturedRequest(t, requests)
+	configRead := remoteTUITestReadCapturedRequest(t, requests)
 	activeList := remoteTUITestReadCapturedRequest(t, requests)
 	archivedList := remoteTUITestReadCapturedRequest(t, requests)
-	if initialize.Method != string(appserver.MethodInitialize) || activeList.Method != string(appserver.MethodThreadList) || archivedList.Method != string(appserver.MethodThreadList) {
-		t.Fatalf("methods = %q, %q, %q", initialize.Method, activeList.Method, archivedList.Method)
+	if initialize.Method != string(appserver.MethodInitialize) ||
+		configRead.Method != string(appserver.MethodConfigRead) ||
+		activeList.Method != string(appserver.MethodThreadList) ||
+		archivedList.Method != string(appserver.MethodThreadList) {
+		t.Fatalf("methods = %q, %q, %q, %q", initialize.Method, configRead.Method, activeList.Method, archivedList.Method)
 	}
 	select {
 	case err := <-serverErrs:
 		t.Fatalf("server error: %v", err)
 	default:
+	}
+}
+
+func TestInteractiveSessionPickerFiltersByConfiguredProviderLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"ollama\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	store := newSessionStore()
+	for _, record := range []*session.Record{
+		{
+			ID:        "thread-ollama",
+			SessionID: "session-ollama",
+			Preview:   "ollama task",
+			Metadata:  session.Metadata{CWD: cwd, Source: "cli", ModelProvider: "ollama", HistoryMode: "legacy"},
+		},
+		{
+			ID:        "thread-openai",
+			SessionID: "session-openai",
+			Preview:   "openai task",
+			Metadata:  session.Metadata{CWD: cwd, Source: "cli", ModelProvider: "openai", HistoryMode: "legacy"},
+		},
+	} {
+		if err := store.Create(record); err != nil {
+			t.Fatalf("create %s: %v", record.ID, err)
+		}
+	}
+	items := interactiveSessionPickerItems(&cli.RootOptions{Shared: cli.SharedOptions{CWD: cwd}})
+	if len(items) != 1 || items[0].ThreadID != "thread-ollama" || items[0].Provider != "ollama" {
+		t.Fatalf("session picker items = %#v", items)
 	}
 }
 
@@ -6365,6 +6413,41 @@ func TestLocalThreadStartStagesDaybreakDefaultLikeRust(t *testing.T) {
 	params = interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))
 	if params.DaybreakEnabled != nil {
 		t.Fatalf("thread/start daybreakEnabled = %v, want unset", params.DaybreakEnabled)
+	}
+}
+
+// TestLocalThreadStartForwardsOnlyExplicitModelProviderLikeRust covers Rust
+// #49161: ordinary configured provider defaults are left for the app server to
+// resolve, while CLI/profile/OSS selections remain explicit launch overrides.
+func TestLocalThreadStartForwardsOnlyExplicitModelProviderLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"ollama\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	state := codextui.NewState(&codextui.Options{Provider: "ollama"})
+	if got := interactiveLocalThreadStartParams(&cli.RootOptions{}, state).ModelProvider; got != "" {
+		t.Fatalf("implicit provider = %q, want empty", got)
+	}
+
+	override := &cli.RootOptions{ConfigOverrides: []string{`model_provider="ollama"`}}
+	if got := interactiveLocalThreadStartParams(override, state).ModelProvider; got != "ollama" {
+		t.Fatalf("CLI provider = %q, want ollama", got)
+	}
+
+	if err := os.WriteFile(config.ConfigPath(home), []byte("profile = \"work\"\n\n[profiles.work]\nmodel_provider = \"ollama\"\n"), 0o600); err != nil {
+		t.Fatalf("write profile config: %v", err)
+	}
+	profile := &cli.RootOptions{}
+	profile.Shared.Profile = "work"
+	if got := interactiveLocalThreadStartParams(profile, state).ModelProvider; got != "ollama" {
+		t.Fatalf("profile provider = %q, want ollama", got)
+	}
+
+	oss := &cli.RootOptions{}
+	oss.Shared.OSSProvider = "ollama"
+	if got := interactiveLocalThreadStartParams(oss, state).ModelProvider; got != "ollama" {
+		t.Fatalf("OSS provider = %q, want ollama", got)
 	}
 }
 
