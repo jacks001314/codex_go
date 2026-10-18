@@ -4104,9 +4104,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: cached_tools_or, current_tools_or"
+        "Round 453 (audit): N/A by architecture - the stale fallback window exists because Rust's async binding waits for one server while peers update a shared catalog. Go's MCPService.CaptureBinding snapshots the statuses passed at model-step capture synchronously, so there is no wait/fallback window to refresh. Catalog opt-out/eligibility remains governed by retainedToolCatalogUsable and mcpToolCatalogCacheEligible. Tests: go test ./mcp -run 'Binding|StartupReadiness|ToolCatalogCache' -count=1"
       ]
     },
     {
