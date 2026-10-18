@@ -20647,9 +20647,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: CONTEXT_FRAGMENT_BYTES_BUCKETS, THREAD_TOOLS_FRAGMENT_BYTES_METRIC, THREAD_TOOLS_NAMESPACES_TOTAL_METRIC"
+        "Round 515 (audit): already implemented. context/tools_state.go measures the complete <tools> fragment before the 4 KiB cap and the retained bytes after it. appserver/deferred_tools_metrics.go records codex.thread.tools.fragment_bytes and codex.thread.tools.namespaces_total with stage before/after and kind snapshot/delta tags. Tests: go test ./appserver -run 'TestDeferredToolsFragmentMetricsLikeRust' -count=1; go test ./context -run 'Tools|Snapshot|Fragment' -count=1"
       ]
     },
     {
