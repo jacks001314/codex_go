@@ -27877,9 +27877,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Equivalent implementation present: ThreadListParams.excludedThreadIds is optional, limited to 100 unique valid thread IDs, and applied before the result limit on both rollout and state-DB-only paths. Null/empty values mean no exclusions. Tests cover page-size behavior, both storage paths, the bound, duplicate rejection, and malformed IDs."
       ]
     },
     {
