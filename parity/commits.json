@@ -25331,9 +25331,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/12; needs review: PENDING_MAILBOX_MESSAGES, PendingMailboxCommunication, drain_mailbox, mailbox_updates, with_controller"
+        "Round 626 (parity backfill): queue-only agent mail lives in the router's thread-keyed agentMessages map independent of loaded-session residency; unload preserves order, follow-up delivery drains retained mail first, and thread deletion/tree close/runtime shutdown discard retained mail. Tests: go test ./appserver -run 'RuntimeAgentMailbox|CloseAgent|AgentController' -count=1"
       ]
     },
     {
@@ -25355,9 +25355,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/6; needs review: ListThreadAttachmentThreadsParams, thread_attachment_owner_list"
+        "Round 627 (parity backfill): thread/attachmentOwner/list is an experimental RPC with attachment type, identity key, archive filter, limit, and opaque cursor; it returns stable owner pages and validates unavailable state and cursors. Tests: go test ./appserver -run 'ThreadAttachmentOwner|ThreadAttachment' -count=1"
       ]
     },
     {
@@ -25811,9 +25811,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: into_persisted_rollout_items"
+        "Round 628 (parity backfill): the shared persisted-item projection caps paginated command output at 64 KiB including its marker, uses UTF-8-safe middle truncation, and applies before durable append. Tests: go test ./rollout -run 'Persist|Persistence|Truncat' -count=1"
       ]
     },
     {
@@ -25884,9 +25884,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/16; needs review: FragmentSectionTestExt, SectionTransition, WorldStateUpdateContent, boxed_fragment, expect_fragments"
+        "Round 629 (parity backfill): session.WorldStateUpdate preserves ordered mergeable/prefix transitions and typed text/image/audio content; merge, fragment hashing, and diff rendering keep one positional content kind per emitted item. Tests: go test ./session -count=1"
       ]
     },
     {
@@ -26677,9 +26677,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: CheckpointRecovery, GuardianTranscriptHistory"
+        "Round 630 (parity backfill): the reviewer resets/seeds after parent compaction from a reusable checkpoint response ID, drops incompatible or over-budget checkpoints, and preserves the existing reviewer when no reusable checkpoint exists. Tests: go test ./appserver -run 'Guardian.*Compaction|ResetAfterParentCompaction' -count=1"
       ]
     },
     {
