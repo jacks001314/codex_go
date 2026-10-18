@@ -4176,9 +4176,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 500 (audit): tool/send_user_message_async.go uses the revised guidance: the message parameter is a concise question and the description restricts the tool to missing information, preferences, constraints, clarification, or approval with user/task-appropriate abstraction. TestSendUserMessageAsyncHandlerRestrictsToQuestionsLikeRust pins the behavior. Tests: go test ./tool ./appserver -run 'Async|RequestUserInputAsync|SendMessageToUserAsync' -count=1"
       ]
     },
     {
