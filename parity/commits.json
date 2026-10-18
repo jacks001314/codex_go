@@ -22004,9 +22004,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 522 (audit): already implemented. Piped Windows helpers set CREATE_NO_WINDOW through envutil, appserver, and shared spawn paths, preventing transient console windows. Dedicated envutil/appserver console tests pass; the execserver PowerShell fallback baseline failure is unrelated. Tests: go test ./envutil -run 'TestSuppressConsoleWindowSetsCreateNoWindow' -count=1; go test ./appserver -run 'Console|Window' -count=1"
       ]
     },
     {
@@ -26521,9 +26521,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 521 (audit): already implemented. stable_environment_tools gates environment-backed tool advertisement; turn readiness facts flow into command, apply_patch, request_permissions, view_image, and write_stdin executors; selectors remain stable as readiness changes. Tests: go test ./turn ./tool -run 'Environment|Gates|Exposure' -count=1"
       ]
     },
     {
@@ -27265,9 +27265,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/6; needs review: emit_turn_started, record_started_turn"
+        "Round 523 (audit): already implemented. Regular turn_started events persist turn attribution, recovery reconstructs it from rollout items, and root-turn lineage plus compaction resume metadata survive checkpoints. Tests: go test ./rollout ./session ./appserver -run 'Attribution|RootTurn|CompactionResume' -count=1"
       ]
     },
     {
