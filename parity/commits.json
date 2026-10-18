@@ -2365,9 +2365,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/9; needs review: RecapRequest, handle_recap_started, schedule_check"
+        "tui/tea schedules automatic recap checks on focus loss and completed turns, cancels stale checks on focus gain/thread replacement, rejects stale results by thread/turn revision, retries once per revision, bounds and normalizes recap output, and renders recap history cells. app/recap.go starts an isolated temporary structured thread after reading effective config and disables MCP servers/tools/skills per Rust. Tests: go test ./tui/tea -run 'Recap' -count=1; go test ./app -run 'Recap' -count=1"
       ]
     },
     {
@@ -2377,9 +2377,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Manual /recap and automatic recaps use the shared tui/tea recap state machine; app/recap.go builds a temporary structured thread with effective config, disabled MCP servers, read-only sandbox, and bounded prompt/output handling. Tests: go test ./tui/tea -run 'Recap' -count=1; go test ./app -run 'Recap' -count=1"
       ]
     },
     {
@@ -2389,9 +2389,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "auth.BedrockAPIKeyAuth implements fmt.Formatter so %v/%+v/%#v redact the managed API key while preserving the region; TestBedrockAPIKeyAuthDebugRedactsSecretLikeRust covers all verbs. Tests: go test ./auth -run 'Bedrock' -count=1"
       ]
     },
     {
@@ -2401,9 +2401,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Go's host-instruction payload is config.Instructions carried by LoadedUserInstructions.Instructions; there is no UserInstructions payload type to rename, and the provider/loading contract is unchanged. Tests: go test ./config -run 'Instructions' -count=1"
       ]
     },
     {
