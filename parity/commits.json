@@ -8345,9 +8345,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: overlay_new_session_defaults, prepare_fresh_startup_config, read_new_session_defaults, startup_model"
+        "Audited upstream 9587c9ef36 (#43177): already implemented. app/remote_tui_managed_defaults.go reads config/read from the embedded or remote server working directory, overlays server model/reasoning-effort defaults unless an explicit CLI/profile launch setting wins, applies managed new-thread defaults, and clears implicit client settings when the server has no model or config/read is unsupported. Tests: TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestApplyServerEffectiveLaunchDefaults, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust."
       ]
     },
     {
