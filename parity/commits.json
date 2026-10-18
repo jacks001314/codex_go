@@ -27553,9 +27553,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: TRANSCRIPT_JSON_INSTRUCTIONS, TranscriptFormat, truncate_record"
+        "Equivalent implementation already present: [features.guardianv2].transcript_mode selects line or json, JSON records keep host-assigned author/index/label/retained_source_order while escaping entry text, and JSON provenance instructions are prepended ahead of configured policy. Per-entry truncation is applied to text before JSON encoding, preserving the metadata-only truncation contract; native encrypted agent messages bypass text rendering."
       ]
     },
     {
