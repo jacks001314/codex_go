@@ -27301,9 +27301,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: reserve_pending_work_turn"
+        "Round 306 (audit): N/A - Go's multi-agent runtime has no durable-sleep state or sleeping-session wake path. Queue-only mail is retained independently of a loaded session, while task-triggering followup mail starts a turn with explicit parent/root/trigger/initiating-agent attribution. There is no queue-only durable-sleep wake that would need to inherit a previous turn's attribution."
       ]
     },
     {

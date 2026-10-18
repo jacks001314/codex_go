@@ -2563,7 +2563,7 @@ f16c2237a561c008375f10e3ae64600654ebd758	45089	Delay automatic recaps and compac
 f1a6f7c9b3de46202e0d7529828176dab27146bd	40679	Add Amazon Bedrock setup to TUI onboarding (#40679)	2026-08-25	tui	9	1	0.11	0	0	audit_pending	BedrockState,SELECT_FOURTH,handle_bedrock_key_event,handle_bedrock_paste,is_text_entry_active,onboarding_request_id,should_suppress_printable_quit,start_bedrock_discovery
 f1aac1e885f676a1129f2da0c46a3dba86392fc6	42833	Preserve SystemRoot for Windows sandbox wrapper setup (#42833)	2026-09-04	sandbox	0	0		0	0	not_applicable	
 f1bb4c168d7b7bcfab8083d8cb34996bf2332c3a	41235	Sanitize history notes backend errors (#41235)	2026-08-28	core	0	0		0	0	not_applicable	
-f1dd04959cd61a0ea4b065f48a4925b6c0d5bd77	51419	Preserve turn attribution when queued mail wakes durable sleep (#51419)	2026-10-06	core	1	0	0.00	0	0	implementation_pending	reserve_pending_work_turn
+f1dd04959cd61a0ea4b065f48a4925b6c0d5bd77	51419	Preserve turn attribution when queued mail wakes durable sleep (#51419)	2026-10-06	core	1	0	0.00	0	0	not_applicable	reserve_pending_work_turn
 f1feda2299990ab3678e715fe9d39d75a02f0491	46733	Integrate the interactive transcript into the alternate-screen TUI (#46733)	2026-09-19	tui	30	2	0.07	0	0	audit_pending	ComposerRenderOptions,CopyFeedback,FollowControl,SessionStartConfig,TranscriptFooter,active_cell_hyperlink_lines_with,active_keymap_contexts,as_renderable_with_options,bottom_pane_renderable,contains_action
 f252c23b884eb1a30afec05275d75aa1361e3fb9	42316	Refactor exec-server startup futures (#42316)	2026-09-02	core	0	0		0	0	not_applicable	
 f2654ea6c9a33d5e224d35e8503bca209c963608	47670	Support model-specific descriptions for agent message board tools (#47670)	2026-09-23	model	3	3	1.00	0	0	complete	
