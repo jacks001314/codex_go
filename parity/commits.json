@@ -18201,9 +18201,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/6; needs review: ExecServerRemoteTransport, ExecServerSubcommand, is_supported_exec_server_remote_auth, validate_api_key_remote_host, validate_remote_transport"
+        "N/A by architecture: the upstream commit only moves Rust CLI startup code into cli/src/exec_server_command.rs without changing behavior. Go already keeps exec-server startup in dedicated packages and has no equivalent monolithic cli/src/main.rs to extract."
       ]
     },
     {
@@ -19077,9 +19077,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: ChatGptTestAuth, base_url_for, default_http_client_pool"
+        "LocalOpenAIFileUploader.uploadBlob implements the 5-minute whole-upload deadline, bounded retries, transient transport/502/503/504 classification, Azure x-ms-retry-after-ms and Retry-After handling, stable client request ids, and non-retryable read/status failures. TestOpenAIFileBlobUploadRetryBehaviorLikeRust covers the path. Tests: go test ./mcp -run 'OpenAIFileBlobUploadRetry' -count=1"
       ]
     },
     {
@@ -19425,9 +19425,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: RetainedMessageSource"
+        "retainedctx records ordered assistant messages, source ids, incompleteness, and delivered-assistant metadata. state/guardian_retained_context.go renders them as untrusted assistant-context sections with omission notices, legacy ordering, and checkpoint recovery. Tests: go test ./retainedctx -count=1; go test ./state -run 'Guardian|Retained' -count=1"
       ]
     },
     {

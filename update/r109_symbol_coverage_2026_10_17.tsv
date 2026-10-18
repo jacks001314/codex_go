@@ -412,7 +412,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 29260140756277f4cd3e8ae3db9587f96dc9da41	41001	Make filesystem policy matching URI-native (#41001)	2026-08-26	sandbox	6	6	1.00	0	0	complete	
 293de27177a63b02da006ba773bee3a9ed58504b	46966	Add SQLite storage for local agent message boards (#46966)	2026-09-21	core	6	6	1.00	0	0	complete	
 29a57861e31aecb97c7d2d8420bc3ed234d58e8c	46578	Fix standalone network proxy policy initialization (#46578)	2026-09-19	core	0	0		0	0	not_applicable	
-29aa1df62ea188036a3219f6a6a0dd6063badae9	47582	Retain assistant context for Guardian authorization reviews (#47582)	2026-09-23	guardian	6	5	0.83	0	0	audit_pending	RetainedMessageSource
+29aa1df62ea188036a3219f6a6a0dd6063badae9	47582	Retain assistant context for Guardian authorization reviews (#47582)	2026-09-23	guardian	6	5	0.83	0	0	complete	RetainedMessageSource
 29e6bc814ef2173fb99a8c6a64eed9bccbc89b1c	46033	Preserve orchestrator skill caches across MCP runtime updates (#46033)	2026-09-16	mcp	4	4	1.00	0	0	complete	
 29f056c26c09b51db123069ed3ec2095b227d6db	47773	Honor catalog schemas for asynchronous user input (#47773)	2026-09-24	model	1	1	1.00	0	0	complete	
 2a34aef79484bf769b4b225f3f595755f2962170	49369	Update Bedrock GPT-6 Sol catalog tests to expect multi-agent V2 (#49369)	2026-09-29	model	0	0		0	0	not_applicable	
@@ -432,7 +432,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2c087a0cc2ef1d731086a1d0cb0081bdd792cc4d	47320	Fix Escape navigation in read-only agent sessions (#47320)	2026-09-22	tui	0	0		0	0	not_applicable	
 2c2a42e65de077c5518ea5b4c3999633ef6a12fc	47326	Restrict MCP OAuth authorization endpoints to HTTP(S) (#47326)	2026-09-22	guardian	0	0		0	0	not_applicable	
 2c3156adf4c9454f0e01c839669255c6a32b5416	52278	Honor custom OTLP metrics exporters when analytics is disabled (#52278)	2026-10-08	appserver	0	0		0	0	complete
-2c3295306f9f70531841cf9bb674bfd386a52735	47393	Retry transient OpenAI file blob upload failures (#47393)	2026-09-22	mcp	5	2	0.40	0	0	audit_pending	ChatGptTestAuth,base_url_for,default_http_client_pool
+2c3295306f9f70531841cf9bb674bfd386a52735	47393	Retry transient OpenAI file blob upload failures (#47393)	2026-09-22	mcp	5	2	0.40	0	0	complete	ChatGptTestAuth,base_url_for,default_http_client_pool
 2c3565ebd80a328e81bdb25319211fadc1ab83a3	51421	Include root turn IDs in host-owned Apps tool calls (#51421)	2026-10-06	mcp	0	0		0	0	complete
 2c3bf4ea793aa5c590932553d242a287380e9cec	41929	Open the agents overview directly in the reconnect test (#41929)	2026-08-31	tui	0	0		0	0	not_applicable	
 2c4a95736bea64256a50f7b8506bd33c181cc85a	41087	Expose response usage metadata in completion events (#41087)	2026-08-27	appserver	1	1	1.00	0	0	complete	
@@ -843,7 +843,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 515530d9b274f82c0da03de856c22c5ecfafb3ca	46040	Default TUI animations off when a screen reader is detected (#46040)	2026-09-16	tui	3	1	0.33	0	0	audit_pending	animation_default,narrator_running
 515c291d875e07faa64e3fa43dc9bbffed8db31f	52268	Preserve large arguments in executed tool call metadata (#52268)	2026-10-08	model	1	0	0.00	0	0	complete	normalize_executed_tool_call_completeness
 516f2780fd227a80cd9fe89488f5039245090b71	45255	Open new sessions directly from the command center (#45255)	2026-09-13	tui	4	3	0.75	0	0	audit_pending	layout_areas
-517f51a6f7101e2bda4c96cbd0605f8c55aba20b	47143	Extract exec-server CLI startup into a dedicated module (#47143)	2026-09-22	core	6	1	0.17	0	0	audit_pending	ExecServerRemoteTransport,ExecServerSubcommand,is_supported_exec_server_remote_auth,validate_api_key_remote_host,validate_remote_transport
+517f51a6f7101e2bda4c96cbd0605f8c55aba20b	47143	Extract exec-server CLI startup into a dedicated module (#47143)	2026-09-22	core	6	1	0.17	0	0	not_applicable	ExecServerRemoteTransport,ExecServerSubcommand,is_supported_exec_server_remote_auth,validate_api_key_remote_host,validate_remote_transport
 51c30ad800a16502dc18ac0019af253670cb9c64	46043	Repair expired Windows sandbox account passwords during setup (#46043)	2026-09-16	sandbox	0	0		0	0	not_applicable	
 51c97f3a67621aab788fb83d6ef90cf795f12177	43074	Show a retryable error when the apps popup fails to load (#43074)	2026-09-05	tui	0	0		0	0	not_applicable	
 51d221a9b77ad4810608f148e90231f0e48b5c82	47064	Stop redundant message-board reads when limits reach one (#47064)	2026-09-21	core	0	0		0	0	not_applicable	
