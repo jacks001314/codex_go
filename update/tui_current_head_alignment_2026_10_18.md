@@ -2017,9 +2017,9 @@ green.
 - `#47319` is complete: the selected agents-overview row applies its cyan/bold
   selection style to the status symbol, while unselected symbols keep group
   colors.
-- `#47382` remains partial: a root task owning the voice conversation now shows
-  a styled `voice` badge that clears on shutdown, but child-owned voice is not
-  mapped to its root task because overview rows lack session/parent identity.
+- `#47382` is complete: the owning root task shows a styled `voice` badge that
+  clears on shutdown, and refresh folds descendant thread ids so a child-owned
+  voice conversation badges its root task.
 - `#47441` is not applicable: the live tea footer has no appended shortcut-hint
   suffix to style.
 - `#48623` is complete: empty ordered/nested/blockquoted list markers are

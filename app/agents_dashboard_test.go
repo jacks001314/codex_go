@@ -54,6 +54,12 @@ func TestAgentsOverviewRowsFromThreadsLikeRust(t *testing.T) {
 	if root1.Model != "gpt-5.4" || root1.ReasoningEffort != "high" {
 		t.Fatalf("root-1 model/reasoning = %#v", root1)
 	}
+	if len(root1.ChildThreadIDs) != 1 || root1.ChildThreadIDs[0] != "sub-1" {
+		t.Fatalf("root-1 child threads = %#v, want sub-1", root1.ChildThreadIDs)
+	}
+	if len(byID["root-2"].ChildThreadIDs) != 0 {
+		t.Fatalf("root-2 child threads = %#v, want none", byID["root-2"].ChildThreadIDs)
+	}
 	if byID["root-2"].Group != agentsoverview.GroupReady || byID["root-2"].StatusActive {
 		t.Fatalf("root-2 row = %#v", byID["root-2"])
 	}

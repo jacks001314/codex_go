@@ -214,6 +214,9 @@ type Row struct {
 	// HasVoice marks the task whose session owns the running voice
 	// conversation (Rust #47382).
 	HasVoice bool
+	// ChildThreadIDs lists descendant subagent threads folded into this root
+	// row, so a child-owned voice conversation can badge its task.
+	ChildThreadIDs []string
 	// Source is the task's thread source (Rust SessionSource). The dashboard
 	// uses it to decide whether the task may be pinned in the shared section
 	// (Rust #51500 supports_shared_pinning). The host maps

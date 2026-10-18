@@ -355,8 +355,9 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	voiceOwner := strings.TrimSpace(m.VoiceConversation.ThreadID)
 	voiceRunning := voiceOwner != "" && m.VoiceConversation.Running()
 	for index := range message.rows {
-		message.rows[index].HasVoice = voiceRunning &&
-			strings.TrimSpace(message.rows[index].ThreadID) == voiceOwner
+		row := &message.rows[index]
+		row.HasVoice = voiceRunning && (strings.TrimSpace(row.ThreadID) == voiceOwner ||
+			agentsOverviewThreadContains(row.ChildThreadIDs, voiceOwner))
 	}
 	m.agentsOverview.ApplyRefresh(message.rows, m.agentsOverview.SelectedThreadID())
 	m.syncAgentsOverviewUsageLines()
@@ -366,6 +367,19 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		return bubbletea.Batch(m.refreshAgentsOverviewCmd(), usageCmd)
 	}
 	return usageCmd
+}
+
+func agentsOverviewThreadContains(threadIDs []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for _, threadID := range threadIDs {
+		if strings.TrimSpace(threadID) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // updateAgentsOverviewKey routes keys to the dashboard while it is active.

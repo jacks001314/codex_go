@@ -19101,9 +19101,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Go now carries HasVoice on agents-overview rows, marks the row whose thread id owns the running VoiceConversationState on refresh, renders a 'voice' badge with selection styling, and clears it when voice is no longer running; TestAgentsOverviewMarksVoiceOwnerLikeRust and TestVoiceBadgeRendersLikeRust cover the root-owner path. Rust also maps a child-thread voice owner to its root task session; Go's overview rows carry no session/parent identity for that mapping, so child-owned voice does not yet badge the root row."
+        "Agents-overview rows now carry HasVoice plus the descendant thread ids folded into each root. Refresh marks the root when either the root itself or a descendant owns the running VoiceConversationState, renders a selection-aware 'voice' badge, and clears it on voice shutdown. Tests cover root ownership, child ownership mapped to the root, unrelated rows, and badge styling."
       ]
     },
     {

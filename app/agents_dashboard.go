@@ -64,6 +64,7 @@ var newAgentsDashboardStore = newSessionStore
 // folded into the root's group).
 func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID string) []agentsoverview.Row {
 	currentThreadID = strings.TrimSpace(currentThreadID)
+	childrenByRoot := agentsOverviewChildrenByRoot(threads)
 	rows := make([]agentsoverview.Row, 0, len(threads))
 	for _, thread := range threads {
 		if thread == nil || strings.TrimSpace(thread.ID) == "" {
@@ -79,7 +80,8 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 			// Rust #51500: the command center decides whether a task can be
 			// pinned in the shared section from its thread source
 			// (agents_overview_discovery::supports_shared_pinning).
-			Source: agentsOverviewRowSource(string(thread.Source)),
+			Source:         agentsOverviewRowSource(string(thread.Source)),
+			ChildThreadIDs: append([]string(nil), childrenByRoot[strings.TrimSpace(thread.ID)]...),
 		}
 		if thread.Model != nil {
 			row.Model = strings.TrimSpace(*thread.Model)
@@ -125,6 +127,20 @@ func agentsOverviewRowSource(source string) string {
 // persisted rollout turn or the archived flag.
 func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID string) []agentsoverview.Row {
 	currentThreadID = strings.TrimSpace(currentThreadID)
+	childrenByRoot := map[string][]string{}
+	parentOf := map[string]string{}
+	for index := range records {
+		id := strings.TrimSpace(string(records[index].ID))
+		parent := strings.TrimSpace(string(records[index].ParentThreadID))
+		if id != "" && parent != "" {
+			parentOf[id] = parent
+		}
+	}
+	for id := range parentOf {
+		if root := agentsOverviewRootThread(id, parentOf); root != id {
+			childrenByRoot[root] = append(childrenByRoot[root], id)
+		}
+	}
 	rows := make([]agentsoverview.Row, 0, len(records))
 	for i := range records {
 		record := &records[i]
@@ -144,7 +160,8 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 			// thread source (session.Metadata.Source), which is the same field
 			// the app server maps with SessionSourceFromString, so the pin
 			// rules see a real source instead of "unknown".
-			Source: agentsOverviewRowSource(record.Metadata.Source),
+			Source:         agentsOverviewRowSource(record.Metadata.Source),
+			ChildThreadIDs: append([]string(nil), childrenByRoot[strings.TrimSpace(string(record.ID))]...),
 		}
 		if branch, ok := record.Metadata.Git["branch"]; ok {
 			row.GitBranch = strings.TrimSpace(branch)
@@ -157,6 +174,46 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// agentsOverviewChildrenByRoot folds every descendant thread under its root so
+// a root row can recognize a voice conversation owned by a child.
+func agentsOverviewChildrenByRoot(threads []*appserver.Thread) map[string][]string {
+	parentOf := map[string]string{}
+	for _, thread := range threads {
+		if thread == nil {
+			continue
+		}
+		id := strings.TrimSpace(thread.ID)
+		if id == "" || thread.ParentThreadID == nil {
+			continue
+		}
+		if parent := strings.TrimSpace(*thread.ParentThreadID); parent != "" {
+			parentOf[id] = parent
+		}
+	}
+	childrenByRoot := map[string][]string{}
+	for id := range parentOf {
+		if root := agentsOverviewRootThread(id, parentOf); root != id {
+			childrenByRoot[root] = append(childrenByRoot[root], id)
+		}
+	}
+	return childrenByRoot
+}
+
+func agentsOverviewRootThread(id string, parentOf map[string]string) string {
+	seen := map[string]bool{}
+	for {
+		if seen[id] {
+			return id
+		}
+		seen[id] = true
+		parent := strings.TrimSpace(parentOf[id])
+		if parent == "" {
+			return id
+		}
+		id = parent
+	}
 }
 
 func localAgentGroupForRecord(record *session.Record) (agentsoverview.Group, bool) {
