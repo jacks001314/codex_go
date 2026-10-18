@@ -9,7 +9,7 @@
 //
 // Upstream re-exports the library surface from codex-sandboxing/src/lib.rs
 // (`FileContentsChecker`, `IntegrityFinding`, `IntegrityFindingDetails`) and lets
-// the caller own the dependency inventory, reporting, enforcement, and the
-// sandbox integrity runner that consumes it (#51842). This package keeps the
-// same split: it is the library half, with no production caller wired yet.
+// the caller own the dependency inventory, reporting, and enforcement. This
+// package also provides the observational runner from #51842; production
+// callers can invoke RunIntegrityChecks without changing the launch result.
 package integrity

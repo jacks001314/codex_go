@@ -28278,9 +28278,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "blocked-precondition (verified by lane B batch B-b6 reconnaissance, no code changed): the commit is an orchestration + telemetry layer over facts that all live in four unimplemented upstream commits (#51828 FileContentsChecker/IntegrityFinding, #51831 MXC prepare_policy, #51840 bubblewrap, #51841 Seatbelt). Go has 0 hits for sandbox_integrity / run_integrity_checks / IntegrityFinding / FileContentsChecker / critical_dependencies / prepare_policy / SandboxExecRequest / sandbox.sandbox_integrity.check, while the reusable pieces exist (SandboxType, HasFullDiskWriteAccess sandbox/policy.go:284, Es"
+        "Round 675 (implementation): exported integrity.RunIntegrityChecks with a five-second observational wait, platform/override/full-disk eligibility filtering, codex+launcher dependency checks, and bounded metrics for outcomes, preparation and total duration without paths. Windows tests cover finding/clean/skip/timeout and metric redaction. Tests: go test ./sandbox/integrity -count=1; go vet ./sandbox/integrity"
       ]
     },
     {
