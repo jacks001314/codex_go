@@ -355,11 +355,12 @@ func (p *EnvironmentInfoParams) Validate() error {
 }
 
 type EnvironmentInfoResponse struct {
-	Shell        EnvironmentShellInfo                     `json:"shell"`
-	CWD          *string                                  `json:"cwd"`
-	PlatformOS   string                                   `json:"platformOs,omitempty"`
-	UserHomeDir  string                                   `json:"userHomeDir,omitempty"`
-	Capabilities execserverclient.EnvironmentCapabilities `json:"capabilities"`
+	Shell                EnvironmentShellInfo                     `json:"shell"`
+	CWD                  *string                                  `json:"cwd"`
+	PlatformOS           string                                   `json:"platformOs,omitempty"`
+	UserHomeDir          string                                   `json:"userHomeDir,omitempty"`
+	TemporaryDirectories []string                                 `json:"temporaryDirectories,omitempty"`
+	Capabilities         execserverclient.EnvironmentCapabilities `json:"capabilities"`
 }
 
 type EnvironmentStatusParams struct {
@@ -795,6 +796,7 @@ func cloneEnvironmentInfoResponse(info *EnvironmentInfoResponse) *EnvironmentInf
 	}
 	clone := *info
 	clone.CWD = cloneString(info.CWD)
+	clone.TemporaryDirectories = append([]string(nil), info.TemporaryDirectories...)
 	return &clone
 }
 
@@ -1227,7 +1229,13 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 	if home, err := os.UserHomeDir(); err == nil {
 		userHomeDir = home
 	}
-	info := &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd), PlatformOS: runtime.GOOS, UserHomeDir: userHomeDir}
+	info := &EnvironmentInfoResponse{
+		Shell:                shell,
+		CWD:                  cloneString(cwd),
+		PlatformOS:           runtime.GOOS,
+		UserHomeDir:          userHomeDir,
+		TemporaryDirectories: execserverclient.LocalTemporaryDirectories(stringPtrValue(cwd)),
+	}
 	m.cacheEnvironmentInfo(params.EnvironmentID, info)
 	return info, nil
 }
@@ -1457,11 +1465,12 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord, 
 			return nil, err
 		}
 		response := &EnvironmentInfoResponse{
-			Shell:        EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
-			CWD:          cloneString(info.CWD),
-			PlatformOS:   info.PlatformOS,
-			UserHomeDir:  strings.TrimSpace(info.UserHomeDir),
-			Capabilities: info.Capabilities,
+			Shell:                EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
+			CWD:                  cloneString(info.CWD),
+			PlatformOS:           info.PlatformOS,
+			UserHomeDir:          strings.TrimSpace(info.UserHomeDir),
+			TemporaryDirectories: append([]string(nil), info.TemporaryDirectories...),
+			Capabilities:         info.Capabilities,
 		}
 		if err := response.Shell.Validate(); err != nil {
 			return nil, err
@@ -1482,11 +1491,12 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord, 
 			return nil, err
 		}
 		response := &EnvironmentInfoResponse{
-			Shell:        EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
-			CWD:          cloneString(info.CWD),
-			PlatformOS:   info.PlatformOS,
-			UserHomeDir:  strings.TrimSpace(info.UserHomeDir),
-			Capabilities: info.Capabilities,
+			Shell:                EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
+			CWD:                  cloneString(info.CWD),
+			PlatformOS:           info.PlatformOS,
+			UserHomeDir:          strings.TrimSpace(info.UserHomeDir),
+			TemporaryDirectories: append([]string(nil), info.TemporaryDirectories...),
+			Capabilities:         info.Capabilities,
 		}
 		if err := response.Shell.Validate(); err != nil {
 			return nil, err

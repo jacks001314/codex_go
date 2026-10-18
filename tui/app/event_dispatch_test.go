@@ -62,11 +62,30 @@ func TestCurrentThreadMutationPreflightMatchesRust(t *testing.T) {
 
 func TestExitReasonDistinctionsMatchRust(t *testing.T) {
 	// Rust #40629 distinguishes disconnects, interrupted turns, and removed threads.
-	if ExitReasonUserRequested == ExitReasonFatal || ExitReasonFatal == ExitReasonTurnInterrupted || ExitReasonTurnInterrupted == ExitReasonThreadRemoved {
+	if ExitReasonUserRequested == ExitReasonFatal || ExitReasonFatal == ExitReasonTurnInterrupted || ExitReasonTurnInterrupted == ExitReasonThreadRemoved || ExitReasonArchived == ExitReasonThreadRemoved {
 		t.Fatal("exit reasons must be distinct")
 	}
 	if ExitReasonTurnInterrupted != "turn_interrupted" || ExitReasonThreadRemoved != "thread_removed" {
 		t.Fatalf("turn/thread exit reason wire values = %q/%q", ExitReasonTurnInterrupted, ExitReasonThreadRemoved)
+	}
+}
+
+func TestAppExitInfoFormatsSessionIDAndArchiveConfirmationLikeRust(t *testing.T) {
+	const threadID = "123e4567-e89b-12d3-a456-426614174000"
+	info := &AppExitInfo{ThreadID: threadID, ExitReason: ExitReasonUserRequested}
+	if got, want := strings.Join(info.FormatExitMessages(), "\n"), "Session ended\nSession ID: "+threadID; got != want {
+		t.Fatalf("session id summary = %q, want %q", got, want)
+	}
+
+	archived := &AppExitInfo{
+		ThreadID:         threadID,
+		ArchivedThreadID: threadID,
+		ExitReason:       ExitReasonArchived,
+		ResumeHint:       &ResumableThread{ThreadID: threadID},
+	}
+	want := "Session archived: " + threadID
+	if got := strings.Join(archived.FormatExitMessages(), "\n"); got != want {
+		t.Fatalf("archive summary = %q, want %q", got, want)
 	}
 }
 

@@ -2124,9 +2124,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/7; needs review: TurnSettingsUpdateOutcome, apply_turn_settings, constrained_approval_policy"
+        "turn/settings/update supports sparse model/effort/summary/service-tier/approvals-reviewer/environments updates for the named live turn without changing future thread settings; runtimeStep capability snapshots and the agent loop apply updates to following steps only. Managed model/approval/Guardian constraints are revalidated before publication, and the response reports applied vs targetUnavailable. Tests: go test ./appserver -run 'TurnSettingsUpdate|TurnStepSettings' -count=1; go test ./turn -run 'TurnSettings' -count=1"
       ]
     },
     {
@@ -2148,9 +2148,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "state.persistSlogRecord now excludes every sqlx, sqlx_core, and sqlx_sqlite target prefix locally in the SQLite sink, while sqlx_application remains eligible; Go trace export only emits explicit safe events and does not auto-export h2 transport spans. TestLogDBHandlerDropsFilteredRecords covers the broadened exclusion and unrelated target. Tests: go test ./state -run 'LogDBHandler' -count=1"
       ]
     },
     {
@@ -2160,9 +2160,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: FileSystemSandboxPolicyContext, policy_context"
+        "execserver.FileSystemSandboxContext now carries temporaryDirectories with URI validation and normalization; EnvironmentInfoResponse preserves executor-reported temporary directories, and executor skill sandbox contexts propagate local or cached remote directories. Execution-time :tmpdir resolution still runs in the owning execserver, using its own TMPDIR/TEMP. Tests: TestNormalizeFSSandboxForWireIncludesTemporaryDirectoriesLikeRust, TestManagerInfoFetchesRemoteExecServer, TestExecutorSkillSandboxContextsCarryRemoteTemporaryDirectoriesLikeRust"
       ]
     },
     {
@@ -2197,9 +2197,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "features.Registry already marks content_item_kinds as StageStable with DefaultEnabled true, matching the upstream promotion and the removal of test-harness overrides; appserver wires the feature into agent ContentItemKindsEnabled. Tests: go test ./appserver -run 'ContentItemKinds|RenderedMessage' -count=1"
       ]
     },
     {
@@ -2209,9 +2209,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "tui/app exit summaries now distinguish archived sessions with a dedicated ExitReasonArchived/ArchivedThreadID and print Session archived: <id>, while non-resume exits print Session ID: <id>; deleted-thread exits remain the separate thread_removed reason. TestAppExitInfoFormatsSessionIDAndArchiveConfirmationLikeRust covers both. Tests: go test ./tui/app -run 'ExitReason|AppExitInfo|DescribeExitReason' -count=1"
       ]
     },
     {

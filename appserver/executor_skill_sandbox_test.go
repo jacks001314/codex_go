@@ -91,6 +91,36 @@ func TestExecutorSkillSandboxContextsPreserveRestrictedProfileAndWorkspaceRoots(
 	}
 }
 
+func TestExecutorSkillSandboxContextsCarryRemoteTemporaryDirectoriesLikeRust(t *testing.T) {
+	hostCWD := t.TempDir()
+	cfg := &config.Config{Values: map[string]any{
+		"default_permissions": "restricted",
+		"permissions": map[string]any{
+			"restricted": map[string]any{
+				"filesystem": map[string]any{":minimal": "read"},
+			},
+		},
+	}}
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, hostCWD)
+	manager.cacheEnvironmentInfo("remote", &EnvironmentInfoResponse{
+		TemporaryDirectories: []string{"file:///tmp/remote"},
+	})
+	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: hostCWD, Environment: manager})
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, hostCWD, &turn.TurnStartParams{
+		Environments: []map[string]any{{"environmentId": "remote", "cwd": "/remote/project"}},
+	})
+	if err != nil {
+		t.Fatalf("executorSkillSandboxContextsForTurn() error = %v", err)
+	}
+	contextValue := contexts["remote"]
+	if contextValue == nil {
+		t.Fatal("remote sandbox context is missing")
+	}
+	if got := contextValue.TemporaryDirectories; len(got) != 1 || got[0] != "file:///tmp/remote" {
+		t.Fatalf("temporary directories = %#v, want [file:///tmp/remote]", got)
+	}
+}
+
 func TestExecutorSkillLocalContextUsesLocalSelectionNotRemotePrimaryLikeRust(t *testing.T) {
 	hostCWD := t.TempDir()
 	localCWD := t.TempDir()

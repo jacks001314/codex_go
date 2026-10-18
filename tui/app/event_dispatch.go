@@ -25,6 +25,7 @@ const (
 	ExitReasonUserRequested   ExitReason = "user_requested"
 	ExitReasonFatal           ExitReason = "fatal"
 	ExitReasonTurnInterrupted ExitReason = "turn_interrupted"
+	ExitReasonArchived        ExitReason = "archived"
 	ExitReasonThreadRemoved   ExitReason = "thread_removed"
 )
 
@@ -45,6 +46,9 @@ type AppRunControl struct {
 // removed thread (Rust #40629).
 func DescribeExitReason(reason ExitReason) string {
 	switch reason {
+	case ExitReasonArchived:
+		// The archived thread id is rendered as a dedicated confirmation line.
+		return ""
 	case ExitReasonTurnInterrupted:
 		return "The active turn was interrupted"
 	case ExitReasonThreadRemoved:
@@ -72,11 +76,12 @@ type ResumableThread struct {
 // AppExitInfo summarizes the terminal exit output, distinguishing a
 // disconnect from an interrupted turn or a removed thread.
 type AppExitInfo struct {
-	ThreadID       string
-	ExitReason     ExitReason
-	ResumeHint     *ResumableThread
-	TokenUsageLine string
-	Disconnect     *DisconnectInfo
+	ThreadID         string
+	ArchivedThreadID string
+	ExitReason       ExitReason
+	ResumeHint       *ResumableThread
+	TokenUsageLine   string
+	Disconnect       *DisconnectInfo
 }
 
 // FormatExitMessages renders the exit summary lines.
@@ -94,10 +99,11 @@ func (i *AppExitInfo) FormatExitMessagesWithColor(colorEnabled bool) []string {
 	if summary := DescribeExitReason(i.ExitReason); summary != "" {
 		lines = append(lines, summary)
 	}
-	if i.ThreadID != "" {
-		lines = append(lines, "Thread: "+i.ThreadID)
-	}
-	if thread := i.ResumeHint; thread != nil && strings.TrimSpace(thread.ThreadID) != "" {
+	if archived := strings.TrimSpace(i.ArchivedThreadID); archived != "" {
+		// Rust #40670: distinguish a successful current-session archive from a
+		// deleted thread and confirm the exact archived session.
+		lines = append(lines, "Session archived: "+archived)
+	} else if thread := i.ResumeHint; thread != nil && strings.TrimSpace(thread.ThreadID) != "" {
 		lines = append(lines, "To continue this session, run:")
 		lines = append(lines, "  "+colorExitCommand("codex resume "+thread.ThreadID, colorEnabled))
 		if thread.ThreadName != nil {
@@ -106,6 +112,9 @@ func (i *AppExitInfo) FormatExitMessagesWithColor(colorEnabled bool) []string {
 					" and select "+colorExitCommand(name, colorEnabled)+".")
 			}
 		}
+	} else if threadID := strings.TrimSpace(i.ThreadID); threadID != "" {
+		// Without resume guidance the session id is the only way back.
+		lines = append(lines, "Session ID: "+threadID)
 	}
 	if i.Disconnect != nil {
 		if len(i.Disconnect.Command) > 0 {

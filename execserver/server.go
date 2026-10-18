@@ -611,6 +611,7 @@ type FileSystemSandboxContext struct {
 	SandboxOverride                 SandboxOverride                 `json:"sandboxOverride,omitempty"`
 	CWD                             string                          `json:"cwd,omitempty"`
 	WorkspaceRoots                  []string                        `json:"workspaceRoots,omitempty"`
+	TemporaryDirectories            []string                        `json:"temporaryDirectories,omitempty"`
 	UserHomeDir                     string                          `json:"userHomeDir,omitempty"`
 	WindowsSandboxLevel             string                          `json:"windowsSandboxLevel"`
 	WindowsSandboxPrivateDesktop    bool                            `json:"windowsSandboxPrivateDesktop,omitempty"`
@@ -3931,6 +3932,13 @@ func prependPathDirsFromInstallContext(ctx *install.InstallContext) []string {
 	return []string{uri.String()}
 }
 
+// LocalTemporaryDirectories returns the executor-local directories used to
+// resolve `:tmpdir` in filesystem sandbox policies. cwd is used to resolve
+// relative TMPDIR values on Unix.
+func LocalTemporaryDirectories(cwd string) []string {
+	return localTemporaryDirectories(cwd)
+}
+
 // localTemporaryDirectories mirrors Rust 92fb33b758: executor-local default
 // directories for resolving `:tmpdir`, populated from TMPDIR on Unix and
 // TEMP/TMP on Windows, deduplicated as file URIs.
@@ -4195,6 +4203,11 @@ func validateFSWirePath(field string, raw string, sandboxContext *FileSystemSand
 			return requestError(-32602, fmt.Sprintf("invalid params: sandbox.workspaceRoots[%d] must be an absolute file URI: %v", index, err))
 		}
 	}
+	for index, dir := range sandboxContext.TemporaryDirectories {
+		if err := validateWirePathURI(dir); err != nil {
+			return requestError(-32602, fmt.Sprintf("invalid params: sandbox.temporaryDirectories[%d] must be an absolute file URI: %v", index, err))
+		}
+	}
 	return nil
 }
 
@@ -4264,6 +4277,14 @@ func normalizeFSSandboxForWire(sandboxContext *FileSystemSandboxContext) (*FileS
 			return nil, fmt.Errorf("sandbox workspace root %d: %w", index, err)
 		}
 		normalized.WorkspaceRoots[index] = normalizedRoot
+	}
+	normalized.TemporaryDirectories = make([]string, len(sandboxContext.TemporaryDirectories))
+	for index, dir := range sandboxContext.TemporaryDirectories {
+		normalizedDir, err := normalizeFSPathForWire(dir)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox temporary directory %d: %w", index, err)
+		}
+		normalized.TemporaryDirectories[index] = normalizedDir
 	}
 	return &normalized, nil
 }

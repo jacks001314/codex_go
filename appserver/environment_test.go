@@ -106,8 +106,9 @@ func TestEnvironmentManagerAddsNoiseEnvironmentWithoutURL(t *testing.T) {
 
 func TestManagerInfoFetchesRemoteExecServer(t *testing.T) {
 	execServerURL, done := newEnvironmentInfoExecServerForTest(t, map[string]any{
-		"shell": map[string]any{"name": "zsh", "path": "/bin/zsh"},
-		"cwd":   "file:///workspace",
+		"shell":                map[string]any{"name": "zsh", "path": "/bin/zsh"},
+		"cwd":                  "file:///workspace",
+		"temporaryDirectories": []any{"file:///tmp/remote"},
 	})
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
 	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "remote", ExecServerURL: execServerURL}); err != nil {
@@ -119,6 +120,9 @@ func TestManagerInfoFetchesRemoteExecServer(t *testing.T) {
 	}
 	if info.Shell.Name != "zsh" || info.Shell.Path != "/bin/zsh" || info.CWD == nil || *info.CWD != "file:///workspace" {
 		t.Fatalf("Info() = %+v", info)
+	}
+	if len(info.TemporaryDirectories) != 1 || info.TemporaryDirectories[0] != "file:///tmp/remote" {
+		t.Fatalf("temporary directories = %#v", info.TemporaryDirectories)
 	}
 	waitEnvironmentInfoExecServerForTest(t, done)
 }

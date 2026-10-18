@@ -208,6 +208,14 @@ func (h *LogDBHandler) entry(record slog.Record) *LogEntry {
 }
 
 func persistSlogRecord(target string, level slog.Level) bool {
+	// Rust #40658: SQLx diagnostics can be emitted while the log sink writes to
+	// SQLite, so the sink itself must exclude every sqlx crate even when no
+	// external subscriber filter is installed. Similar names such as
+	// sqlx_application remain eligible.
+	switch strings.SplitN(target, "::", 2)[0] {
+	case "sqlx", "sqlx_core", "sqlx_sqlite":
+		return false
+	}
 	switch target {
 	case "log", "codex_otel.log_only", "codex_otel.trace_safe", "codex_api::responses_websocket_timing", "codex_core::post_sampling_token_estimate":
 		return false

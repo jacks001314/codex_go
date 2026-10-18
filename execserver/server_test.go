@@ -1303,8 +1303,9 @@ func TestFilesystemWireSandboxPathsRequirePathURIsLikeRust(t *testing.T) {
 	path := pathToURI(filepath.Join(t.TempDir(), "value.txt"))
 	native := t.TempDir()
 	for name, sandboxContext := range map[string]*FileSystemSandboxContext{
-		"cwd":            {CWD: native},
-		"workspace root": {WorkspaceRoots: []string{native}},
+		"cwd":                 {CWD: native},
+		"workspace root":      {WorkspaceRoots: []string{native}},
+		"temporary directory": {TemporaryDirectories: []string{native}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NewServer().handleRequest(context.Background(), &request{
@@ -1316,6 +1317,18 @@ func TestFilesystemWireSandboxPathsRequirePathURIsLikeRust(t *testing.T) {
 				t.Fatalf("handleRequest() error = %#v", err)
 			}
 		})
+	}
+}
+
+func TestNormalizeFSSandboxForWireIncludesTemporaryDirectoriesLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	normalized, err := normalizeFSSandboxForWire(&FileSystemSandboxContext{TemporaryDirectories: []string{dir}})
+	if err != nil {
+		t.Fatalf("normalizeFSSandboxForWire() error = %v", err)
+	}
+	want := pathToURI(dir)
+	if len(normalized.TemporaryDirectories) != 1 || normalized.TemporaryDirectories[0] != want {
+		t.Fatalf("temporary directories = %#v, want [%q]", normalized.TemporaryDirectories, want)
 	}
 }
 

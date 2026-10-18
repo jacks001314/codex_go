@@ -52,6 +52,13 @@ func TestLogDBHandlerDropsFilteredRecords(t *testing.T) {
 	logger.Debug("drop websocket", "target", "codex_api::responses_websocket_timing")
 	logger.Info("drop log-only audit", "target", "codex_otel.log_only")
 	logger.Info("retain audit", "target", "codex_otel.network_proxy")
+	// Rust #40658: every SQLx diagnostic is excluded so SQLite writes cannot
+	// generate more log writes, while a similarly named target stays eligible.
+	logger.Warn("drop sqlx query", "target", "sqlx::query")
+	logger.Warn("drop sqlx other", "target", "sqlx::other")
+	logger.Warn("drop sqlx core", "target", "sqlx_core::connection")
+	logger.Warn("drop sqlx sqlite", "target", "sqlx_sqlite::statement")
+	logger.Info("retain sqlx application", "target", "sqlx_application")
 	// Rust #49414: guard/trigger TRACE events are dropped while their DEBUG events
 	// survive, and the shutdown target keeps its TRACE events.
 	logger.Log(context.Background(), slog.Level(-8), "drop guard trace", "target", "tokio_graceful::guard")
@@ -66,17 +73,32 @@ func TestLogDBHandlerDropsFilteredRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 5 {
+	if len(rows) != 6 {
 		t.Fatalf("filtered rows = %#v", rows)
 	}
 	for _, row := range rows {
 		if row.Target == "codex_otel.log_only" || row.Target == "codex_api::responses_websocket_timing" || (row.Target == "opentelemetry_sdk" && row.Level == "DEBUG") {
 			t.Fatalf("filtered row persisted: %#v", row)
 		}
+		if strings.HasPrefix(row.Target, "sqlx::") || strings.HasPrefix(row.Target, "sqlx_core::") || strings.HasPrefix(row.Target, "sqlx_sqlite::") {
+			t.Fatalf("SQLx diagnostic persisted: %#v", row)
+		}
 		if (row.Target == "tokio_graceful::guard" || row.Target == "tokio_graceful::trigger") && row.Level != "DEBUG" {
 			t.Fatalf("guard/trigger trace persisted: %#v", row)
 		}
 	}
+	if !logRowsContainTarget(rows, "sqlx_application") {
+		t.Fatalf("sqlx_application log was dropped: %#v", rows)
+	}
+}
+
+func logRowsContainTarget(rows []LogRow, target string) bool {
+	for _, row := range rows {
+		if row.Target == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestInstallLogDBHandlerRestoresPreviousLogger(t *testing.T) {

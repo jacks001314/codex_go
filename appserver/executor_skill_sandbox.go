@@ -75,11 +75,21 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 		for i := range workspaceRoots {
 			workspaceRoots[i] = executorEnvironmentNativePath(workspaceRoots[i])
 		}
+		temporaryDirectories := execserverclient.LocalTemporaryDirectories(environmentCWD)
+		if environmentID != execserverclient.LocalEnvironmentID && r != nil && r.services.Environment != nil {
+			if info, ok := r.services.Environment.CachedInfo(environmentID); ok && info != nil {
+				temporaryDirectories = append([]string(nil), info.TemporaryDirectories...)
+			}
+		}
+		for i := range temporaryDirectories {
+			temporaryDirectories[i] = executorEnvironmentNativePath(temporaryDirectories[i])
+		}
 		context, contextErr := tool.NewFileSystemSandboxContext(tool.FileSystemSandboxContextOptions{
 			PermissionProfile:            profile,
 			PermissionProfileJSON:        profileJSON,
 			CWD:                          environmentCWD,
 			WorkspaceRoots:               workspaceRoots,
+			TemporaryDirectories:         temporaryDirectories,
 			WindowsSandboxLevel:          windowsLevel,
 			WindowsSandboxPrivateDesktop: privateDesktop,
 			UseLegacyLandlock:            useLegacyLandlock,

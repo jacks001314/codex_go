@@ -991,6 +991,7 @@ type FileSystemSandboxContextOptions struct {
 	PermissionProfileJSON           string
 	CWD                             string
 	WorkspaceRoots                  []string
+	TemporaryDirectories            []string
 	UserHomeDir                     string
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
 	WindowsSandboxPrivateDesktop    bool
@@ -1038,6 +1039,18 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		}
 		workspaceRoots = append(workspaceRoots, uri)
 	}
+	temporaryDirectories := make([]string, 0, len(options.TemporaryDirectories))
+	for _, dir := range options.TemporaryDirectories {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		uri, uriErr := unifiedExecPathURI(dir)
+		if uriErr != nil {
+			return nil, uriErr
+		}
+		temporaryDirectories = append(temporaryDirectories, uri)
+	}
 	userHomeDir := ""
 	if home := strings.TrimSpace(options.UserHomeDir); home != "" {
 		uri, uriErr := unifiedExecPathURI(home)
@@ -1059,6 +1072,7 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		Permissions:                     json.RawMessage(portableJSON),
 		CWD:                             cwd,
 		WorkspaceRoots:                  workspaceRoots,
+		TemporaryDirectories:            temporaryDirectories,
 		UserHomeDir:                     userHomeDir,
 		WindowsSandboxLevel:             string(windowsSandboxLevel),
 		WindowsSandboxPrivateDesktop:    options.WindowsSandboxPrivateDesktop,
