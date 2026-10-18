@@ -12617,9 +12617,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 3/6; needs review: ClientIdentity, DesktopInstallation, InstallationRecord"
+        "N/A by architecture: Rust moves sandbox setup/installation-record code into the windows-sandbox library. Go already exposes setup and installation-record helpers from sandbox/windowssandbox and appserverdaemon as library code."
       ]
     },
     {
@@ -12653,9 +12653,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 3/12; needs review: EnvironmentNetworkConfigError, NetworkConfigInputs, build_config_state_for_spec, build_environment_policy, from_configured_with_warnings"
+        "N/A by architecture: the upstream commit only extracts Rust network configuration/environment policy helpers into shared modules. Go already keeps network config resolution in network/ and environment policy in config/appserver with shared call sites."
       ]
     },
     {
