@@ -20611,9 +20611,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: resolved_entries"
+        "Round 514 (audit): already implemented. sandbox/permission_prompt_executor.go resolves entries with the selected executor's cwd/home/platform facts and native separators; appserver permissions_world_state passes those facts into the renderer. Display-budget omissions drop complete entries and report the warning. Tests: go test ./sandbox -run 'PermissionPromptRemoteWindowsPaths|PermissionPromptRemote|PermissionPrompt' -count=1; go test ./appserver -run 'PermissionsInstructionsUseRemoteExecutorPaths' -count=1"
       ]
     },
     {
