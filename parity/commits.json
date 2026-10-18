@@ -23685,9 +23685,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: HookMatcher, matches_matcher"
+        "Already implemented in f56c3b5b. Discovery validates the original pattern spelling and stores compiledMatcher for regex handlers; dispatch reuses it through hookMatches, while match-all and exact-name/pipe-alternative handlers keep their direct semantics. Invalid regexes are still rejected during discovery."
       ]
     },
     {
