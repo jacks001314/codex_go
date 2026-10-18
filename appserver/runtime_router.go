@@ -5393,6 +5393,9 @@ func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams)
 	if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
+		return nil, err
+	}
 	// Rust #46328: a directory where discovery found no project-root marker,
 	// Git checkout or project-local config directory is projectless, so
 	// thread/start must not persist implicit trust there.

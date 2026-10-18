@@ -558,7 +558,10 @@ type ConfigRequirements struct {
 	// `windows.sandbox = "mxc"` is rejected at load and automatic MXC selection
 	// is disabled. It is internal, like Permissions/GuardianPolicyConfig, and
 	// stays off the app-server wire schema.
-	AllowMXC                  *bool           `json:"-"`
+	AllowMXC *bool `json:"-"`
+	// RequireMXC is the managed `windows.require_mxc` requirement (Rust
+	// #52193). When true, Windows hosts must select the MXC backend.
+	RequireMXC                *bool           `json:"-"`
 	AllowedPermissionProfiles map[string]bool `json:"allowedPermissionProfiles,omitempty"`
 	DefaultPermissions        *string         `json:"defaultPermissions,omitempty"`
 	// Permissions carries the managed [permissions] profile catalog from
@@ -3767,6 +3770,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AllowedSandboxModes = cloneSlice(requirements.AllowedSandboxModes)
 	clone.AllowedWindowsSandboxImplementations = cloneSlice(requirements.AllowedWindowsSandboxImplementations)
 	clone.AllowMXC = cloneBoolPtr(requirements.AllowMXC)
+	clone.RequireMXC = cloneBoolPtr(requirements.RequireMXC)
 	clone.AllowedPermissionProfiles = cloneBoolMap(requirements.AllowedPermissionProfiles)
 	clone.Permissions = cloneMap(requirements.Permissions)
 	clone.AllowedWebSearchModes = cloneSlice(requirements.AllowedWebSearchModes)

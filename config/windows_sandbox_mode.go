@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 )
 
@@ -145,4 +146,22 @@ func WindowsAutomaticMXCAllowedWithRequirements(values map[string]any, requireme
 		return false
 	}
 	return WindowsAutomaticMXCAllowed(values)
+}
+
+// ValidateWindowsMXCRequirement mirrors Rust #52193's
+// Config::validate_windows_mxc_requirement. Managed `windows.require_mxc =
+// true` is enforced only on Windows and requires the MXC backend to be selected
+// either explicitly or through the startup `features.prefer_mxc` preference.
+func (c *Config) ValidateWindowsMXCRequirement() error {
+	if runtime.GOOS != "windows" || c == nil || c.Requirements == nil ||
+		c.Requirements.RequireMXC == nil || !*c.Requirements.RequireMXC {
+		return nil
+	}
+	if mode, ok := WindowsSandboxModeFromValues(c.Values); ok && mode == WindowsSandboxModeMxc {
+		return nil
+	}
+	if c.FeatureSettings()["prefer_mxc"] {
+		return nil
+	}
+	return errors.New("windows.require_mxc = true requires MXC to be selected on this Windows host")
 }

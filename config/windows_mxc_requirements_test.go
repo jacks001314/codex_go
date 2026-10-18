@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,44 @@ func TestManagedWindowsMXCRequirementRejectsExplicitMXCConfigLikeRust(t *testing
 				t.Fatalf("resolved mode = %q, want %q", mode, testCase.wantMode)
 			}
 		})
+	}
+}
+
+// Mirrors Rust #52193: managed `windows.require_mxc = true` fails closed when
+// the effective local backend is not MXC, but accepts an explicit MXC mode or
+// the startup prefer_mxc preference.
+func TestManagedWindowsRequireMXCValidatesSelectedBackendLikeRust(t *testing.T) {
+	requirements := ConfigRequirementsFromMap(map[string]any{
+		"windows": map[string]any{"require_mxc": true},
+	})
+	if requirements == nil || requirements.RequireMXC == nil || !*requirements.RequireMXC {
+		t.Fatalf("RequireMXC = %#v, want true", requirements)
+	}
+	if configRequirementsEmpty(requirements) {
+		t.Fatal("a windows.require_mxc-only requirements value must not be considered empty")
+	}
+	if cloned := cloneRequirements(requirements); cloned.RequireMXC == nil || !*cloned.RequireMXC {
+		t.Fatalf("cloneRequirements() RequireMXC = %v, want true", cloned.RequireMXC)
+	}
+
+	nonMXC := &Config{Values: map[string]any{}, Requirements: requirements}
+	err := nonMXC.ValidateWindowsMXCRequirement()
+	if runtime.GOOS == "windows" {
+		if err == nil || err.Error() != "windows.require_mxc = true requires MXC to be selected on this Windows host" {
+			t.Fatalf("non-MXC validation error = %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("non-Windows validation error = %v", err)
+	}
+
+	for name, values := range map[string]map[string]any{
+		"explicit mode": {"windows": map[string]any{"sandbox": "mxc"}},
+		"preference":    {"features": map[string]any{"prefer_mxc": true}},
+	} {
+		cfg := &Config{Values: values, Requirements: requirements}
+		if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
+			t.Fatalf("%s validation error = %v", name, err)
+		}
 	}
 }
 

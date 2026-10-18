@@ -386,12 +386,16 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := applyManagedConstrainedOverrides(values, requirements); err != nil {
 		return nil, err
 	}
-	return &Config{
+	cfg := &Config{
 		Values:             values,
 		Requirements:       requirements,
 		isProjectless:      isProjectless,
 		cloudConfigBinding: cloudConfigBinding,
-	}, nil
+	}
+	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // IsProjectless reports whether configuration discovery found no project-root

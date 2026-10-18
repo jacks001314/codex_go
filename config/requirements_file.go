@@ -340,6 +340,9 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		if value, ok := boolAnyKey(nested, "allow_mxc", "allowMxc"); ok {
 			out.AllowMXC = &value
 		}
+		if value, ok := boolAnyKey(nested, "require_mxc", "requireMxc"); ok {
+			out.RequireMXC = &value
+		}
 	}
 	if values, ok := boolMapAnyKey(values, "allowed_permission_profiles", "allowedPermissionProfiles"); ok {
 		out.AllowedPermissionProfiles = values
@@ -1125,6 +1128,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowedSandboxModes == nil &&
 			value.AllowedWindowsSandboxImplementations == nil &&
 			value.AllowMXC == nil &&
+			value.RequireMXC == nil &&
 			value.AllowedPermissionProfiles == nil &&
 			value.DefaultPermissions == nil &&
 			value.AdditionalDeveloperInstructions == nil &&

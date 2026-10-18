@@ -28755,9 +28755,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: validate_windows_mxc_requirement, validate_windows_mxc_requirement_from"
+        "Implemented managed windows.require_mxc parsing and validation. On Windows, startup/effective config rejects a non-MXC local selection with Rust's require_mxc error unless windows.sandbox=mxc or features.prefer_mxc=true is selected; non-Windows hosts ignore the requirement."
       ]
     },
     {
