@@ -13191,9 +13191,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: spawn_command"
+        "Round 510 (audit): already implemented. sandbox/windowssandbox/conpty releases the creation handles after a console client attaches, so the exec-server output reader observes EOF after the child exits without closing the PTY. TestExecServerTTYOutputReachesEOFWithoutClosingThePTY covers the Windows lifecycle. Tests: go test ./execserver -run 'TestExecServerTTYOutputReachesEOFWithoutClosingThePTY' -count=1 -v"
       ]
     },
     {
@@ -13563,9 +13563,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: copy_thread_attachments"
+        "Round 511 (audit): already implemented. applyThreadForkAttachments copies the source thread's current attachments before publishing a non-ephemeral fork, assigning fresh IDs and creation timestamps; fork and source membership diverge independently, and ephemeral forks inherit none. TestThreadForkCopiesAttachmentsLikeRust covers the copy, fresh IDs, independent removal, and ephemeral case. Tests: go test ./appserver -run 'TestThreadForkCopiesAttachmentsLikeRust' -count=1"
       ]
     },
     {
