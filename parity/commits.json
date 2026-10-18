@@ -24227,9 +24227,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: find_map, scan_lines"
+        "Round 309 (audit): N/A - Go has no compressed rollout snippet-search worker. The available rollout helpers read and parse synchronously on the caller goroutine, and app-server thread-history search uses indexed state rows rather than a per-line blocking-task hand-off."
       ]
     },
     {
@@ -24251,9 +24251,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: collect_dirs_desc, collect_files_by_updated_at, collect_flat_files_by_updated_at, collect_flat_rollout_files, collect_rollout_day_files"
+        "Round 309 (audit): N/A - Go's rollout listing helpers are synchronous filesystem walks without async blocking-worker scheduling. App-server thread listing uses the state database/indexed thread store rather than an async rollout-directory scan, so Rust's per-scan blocking-task batching and cancellation hand-off have no carrier."
       ]
     },
     {
