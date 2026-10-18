@@ -14571,9 +14571,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ReviewSessionResult, ReviewTurnResult"
+        "Round 504 (audit): N/A by architecture. The Rust change is a private tuple-to-named-struct refactor. Go's Guardian review attempts return decision/rationale/error directly, and reviewer reuse is managed by guardianSessionRunner history checkpoints, rollbackReviewHistory, and completeReview rather than positional tuple access or a keep-session boolean. No observable behavior is missing. Tests: go test ./appserver -run 'Guardian' -count=1"
       ]
     },
     {
