@@ -5220,9 +5220,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: guardian_review_failures_attachment, record_failed_review, record_guardian_review_failure"
+        "Round 459 (audit): appserver.guardian_feedback captures bounded failed-review records only when feedback collection is enabled and the thread is non-ephemeral, persists per-thread records in the state runtime, and attaches them as auto-review-failures.jsonl with per-thread/global size and count bounds. Tests: go test ./appserver -run 'GuardianFeedback|Feedback' -count=1"
       ]
     },
     {
