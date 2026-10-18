@@ -57,6 +57,7 @@ type remoteInstalledPlugin struct {
 		BundleDownloadURL *string         `json:"bundle_download_url"`
 		AppManifest       json.RawMessage `json:"app_manifest"`
 	} `json:"release"`
+	Extensions json.RawMessage `json:"extensions"`
 }
 
 func (r *RuntimeRouter) startInstalledRemotePluginSync() {
@@ -164,6 +165,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 			query := endpoint.Query()
 			query.Set("scope", scope)
 			query.Set("includeDownloadUrls", "true")
+			query.Set("includeExtensions", "true")
 			if pageToken != "" {
 				query.Set("pageToken", pageToken)
 			}
@@ -253,6 +255,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 				Installed:         true,
 				InstalledAt:       installedAt,
 				Enabled:           true,
+				Extensions:        plugin.ParsePluginExtensions(candidate.Extensions),
 			},
 		})
 	}

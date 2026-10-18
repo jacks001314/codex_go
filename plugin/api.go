@@ -466,6 +466,7 @@ type PluginSummary struct {
 	InstallSuggestion                bool                       `json:"installSuggestion,omitempty"`
 	PluginDisplayNameTag             string                     `json:"pluginDisplayNameTag,omitempty"`
 	Keywords                         []string                   `json:"keywords"`
+	Extensions                       *PluginExtensions          `json:"extensions"`
 }
 
 func (s PluginSummary) MarshalJSON() ([]byte, error) {
@@ -493,6 +494,7 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 		InstalledAt                      *int64                     `json:"installedAt"`
 		Enabled                          bool                       `json:"enabled"`
 		Keywords                         []string                   `json:"keywords"`
+		Extensions                       *PluginExtensions          `json:"extensions"`
 	}{
 		ID:                               s.ID,
 		Name:                             s.Name,
@@ -513,6 +515,7 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 		InstalledAt:                      cloneInt64Ptr(s.InstalledAt),
 		Enabled:                          s.Enabled,
 		Keywords:                         keywords,
+		Extensions:                       clonePluginExtensions(s.Extensions),
 	})
 }
 
@@ -3506,6 +3509,7 @@ func cloneDetail(detail PluginDetail) PluginDetail {
 }
 
 func cloneSummary(summary PluginSummary) PluginSummary {
+	summary.Extensions = clonePluginExtensions(summary.Extensions)
 	summary.MCPServers = append([]string(nil), summary.MCPServers...)
 	summary.AppConnectors = append([]string(nil), summary.AppConnectors...)
 	summary.Source = clonePluginSource(summary.Source)

@@ -18569,9 +18569,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/9); candidate gap: PluginEntrypoint, PluginEntrypointPresentation, PluginExtensions, PluginIcon, PluginQuickAction"
+        "Round 660 (implementation): installed-plugin discovery requests includeExtensions=true and carries typed hosted plugin extensions into PluginSummary. Global/settings/thread/file entrypoints, quick actions, settings tools, icons, and search mention providers accept snake_case aliases and emit camelCase; unsupported entrypoint/action declarations discard the extensions object without dropping the installed plugin. Tests: go test ./plugin -run 'PluginExtensions|SummaryMarshalsExtensions' -count=1; go test ./appserver -run 'Plugin' -count=1; go vet ./plugin ./appserver"
       ]
     },
     {

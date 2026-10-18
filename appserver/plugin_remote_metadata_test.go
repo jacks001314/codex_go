@@ -30,8 +30,12 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 			http.NotFound(w, request)
 			return
 		}
+		if request.URL.Query().Get("includeExtensions") != "true" {
+			http.Error(w, "missing includeExtensions", http.StatusBadRequest)
+			return
+		}
 		mu.Lock()
-		body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_demo","name":"demo-plugin","scope":"GLOBAL","enabled":true,"status":%q,"release":{"display_name":%q,"description":"Demo plugin"}}],"pagination":{"next_page_token":null}}`, status, displayName)
+		body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_demo","name":"demo-plugin","scope":"GLOBAL","enabled":true,"status":%q,"release":{"display_name":%q,"description":"Demo plugin"},"extensions":{"entrypoints":[{"type":"global","app_id":"demo-app","tool_name":"demo.open","title":"Demo","resource_uri":"ui://demo","icons":[],"quick_action":{"title":"Open demo","icons":[],"target":{"type":"tool","name":"demo.open","arguments":{}}}}],"settings":[{"app_id":"demo-app","read_tool_name":"demo.read","update_tool_name":"demo.update"}]}}],"pagination":{"next_page_token":null}}`, status, displayName)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
@@ -66,6 +70,17 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 	}
 	if installedRemoteMetadataDisplayName(t, plugins, "plugins~Plugin_demo") != "Demo plugin" {
 		t.Fatal("initial reconcile did not publish the installed plugin")
+	}
+	extensions := installedRemoteMetadataExtensions(t, plugins, "plugins~Plugin_demo")
+	if extensions == nil || extensions.Entrypoints == nil || len(*extensions.Entrypoints) != 1 {
+		t.Fatalf("installed extensions = %#v, want one global entrypoint", extensions)
+	}
+	entrypoint := (*extensions.Entrypoints)[0]
+	if entrypoint.Type != "global" || entrypoint.AppID != "demo-app" || entrypoint.QuickAction == nil || entrypoint.QuickAction.Target.Name != "demo.open" {
+		t.Fatalf("global entrypoint = %#v", entrypoint)
+	}
+	if len(extensions.Settings) != 1 || extensions.Settings[0].ReadToolName != "demo.read" {
+		t.Fatalf("settings extensions = %#v", extensions.Settings)
 	}
 
 	seed := func() {
@@ -123,4 +138,15 @@ func installedRemoteMetadataDisplayName(t *testing.T, plugins *plugin.PluginServ
 	}
 	t.Fatalf("installed remote plugin %q was not found", remotePluginID)
 	return ""
+}
+
+func installedRemoteMetadataExtensions(t *testing.T, plugins *plugin.PluginService, remotePluginID string) *plugin.PluginExtensions {
+	t.Helper()
+	for _, detail := range plugins.InstalledDetails() {
+		if detail.Summary.RemotePluginID == remotePluginID {
+			return detail.Summary.Extensions
+		}
+	}
+	t.Fatalf("installed remote plugin %q was not found", remotePluginID)
+	return nil
 }
