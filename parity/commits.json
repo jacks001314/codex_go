@@ -11873,9 +11873,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: PLUGIN_DIRECTORIES, plugin_directory"
+        "N/A by architecture (audit): upstream da20788df9 (#44714) bundles the Rust Linux voice-host native runtime and resolves its shared-library plugin directory. Go's voicehost is a Go/miniaudio implementation selected through the Go runtime/toolchain and has no Rust plugin bundle directory to discover or load; the user-visible audio reliability paths are covered by the Go voicehost tests."
       ]
     },
     {
