@@ -29477,9 +29477,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Equivalent implementation present: TurnToolOutput carries an optional retain annotation, and retained standalone tool outputs are recorded as client-authored harness metadata so they survive ordinary non-retained history filtering. The field participates in turn input serialization without enabling retention by default. App-server retention regression tests pass."
       ]
     },
     {
