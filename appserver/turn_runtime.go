@@ -6379,6 +6379,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 			compactedItems = retainGoalInstructionsAcrossCompaction(compactedItems, latest.Items, userGoalInstructionIDs(history))
 		}
 	}
+	r.captureGuardianReviewHistory(request.ThreadID, record.Items)
 	record.Items = compactedItems
 	compactionItem.CreatedAt = now
 	record.Items = append(record.Items, compactionItem)

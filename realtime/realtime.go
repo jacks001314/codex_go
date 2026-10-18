@@ -1886,6 +1886,7 @@ type Event struct {
 	ItemID            string
 	InputTranscript   string
 	ActiveTranscript  []TranscriptEntry
+	transcriptFrame   *realtimeTranscriptFrame
 }
 
 type TranscriptEntry struct {

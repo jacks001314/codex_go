@@ -416,7 +416,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 29e6bc814ef2173fb99a8c6a64eed9bccbc89b1c	46033	Preserve orchestrator skill caches across MCP runtime updates (#46033)	2026-09-16	mcp	4	4	1.00	0	0	complete	
 29f056c26c09b51db123069ed3ec2095b227d6db	47773	Honor catalog schemas for asynchronous user input (#47773)	2026-09-24	model	1	1	1.00	0	0	complete	
 2a34aef79484bf769b4b225f3f595755f2962170	49369	Update Bedrock GPT-6 Sol catalog tests to expect multi-agent V2 (#49369)	2026-09-29	model	0	0		0	0	not_applicable	
-2a6ecbb93c42c3eea835126c0c332517968ab2f4	54257	Preserve recent speech when trimming realtime transcripts (#54257)	2026-10-15	appserver	0	0		0	0	blocked_precondition	
+2a6ecbb93c42c3eea835126c0c332517968ab2f4	54257	Preserve recent speech when trimming realtime transcripts (#54257)	2026-10-15	appserver	0	0		0	0	complete
 2aaefa32b0762491d1340675a6082fad26bbb57f	39873	Add keybindings for cycling TUI permission modes (#39873)	2026-08-21	tui	4	0	0.00	0	0	implementation_pending	apply_permission_shortcut,complete_permission_shortcut,handle_permission_shortcut,permission_mode_disabled_reason
 2aff7208fe95f331d9bb966bbd265c36ee5ecebf	45900	Add a hidden HTTP/3 TCP tunnel command (#45900)	2026-09-16	core	7	7	1.00	0	0	complete	
 2b21129c6b8120e63f9ac510fe99e8b02ef43292	54053	Add Responses API client metadata patches for turn start and steer (#54053)	2026-10-14	tui	3	2	0.67	0	0	complete	with_responses_metadata_patch
@@ -1694,7 +1694,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9f22ba8039948033ec53598f60cce20b988d7520	47158	Harden gateway OAuth credential persistence and error redaction (#47158)	2026-09-22	core	0	0		0	0	not_applicable	
 9f3d25588b3f0bdf452d4eda919f2c2365a89bba	53201	Keep agents navigation available after a thread is archived (#53201)	2026-10-11	tui	1	0	0.00	0	0	blocked_precondition	handle_agents_navigation
 9f70e348e0227980de97e361cce830236fb18317	43495	Allow internal sessions to fork from selected history (#43495)	2026-09-07	core	1	0	0.00	0	0	not_applicable	fork_internal_session
-9f97cb79eb15b38d24c552c56fe24e211ff9cf3a	41879	Preserve Guardian review evidence across compaction (#41879)	2026-08-31	guardian	1	0	0.00	0	0	implementation_pending	build_snapshot
+9f97cb79eb15b38d24c552c56fe24e211ff9cf3a	41879	Preserve Guardian review evidence across compaction (#41879)	2026-08-31	guardian	1	1	1.00	0	0	complete
 9fcb1f5ed49c938b6fa5a9b4c8f897f3ddfd734c	54419	Support line breaks in Mermaid flowchart node labels (#54419)	2026-10-15	tui	0	0		0	0	complete	
 9fdff739ea0eca7881f180858dfd71b7bd1fa483	46884	Enable plain clicks on transcript links and style bare URLs (#46884)	2026-09-20	tui	1	0	0.00	0	0	implementation_pending	style_bare_web_urls
 a06545b311fe01e51ce855c7aa5d8da21e9e7aaf	52535	Add opt-in history prefix preservation for full agent forks (#52535)	2026-10-09	guardian	2	1	0.50	0	0	complete	fork_history_from_snapshot

@@ -992,8 +992,8 @@ func TestGuardianReviewTranscriptRendersStandaloneFunctionCallOutputLikeRust(t *
 	if !strings.Contains(joined, "tool drive.read result: ok") {
 		t.Fatalf("transcript missing standalone tool result: %q", joined)
 	}
-	if strings.Contains(joined, "tool  result: paired") || strings.Contains(joined, "tool result: paired") {
-		t.Fatalf("paired function call output rendered as standalone tool result: %q", joined)
+	if !strings.Contains(joined, "tool result: paired") {
+		t.Fatalf("orphaned paired output did not use the generic tool result label: %q", joined)
 	}
 }
 

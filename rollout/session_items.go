@@ -918,6 +918,26 @@ func sessionItemsFromRolloutLines(lines []Line, fallback time.Time) ([]session.I
 	return builder.finish()
 }
 
+// ReviewHistoryItems reconstructs the original review evidence from a rollout,
+// ignoring compaction replacements while still applying later rollback
+// markers. Guardian reviews need the tool and user evidence that compaction
+// removed from the model-facing history; the model window itself is reconstructed
+// by sessionItemsFromRolloutLines, which intentionally resets at each checkpoint.
+func ReviewHistoryItems(lines []Line, fallback time.Time) []session.Item {
+	if len(lines) == 0 {
+		return nil
+	}
+	reviewLines := make([]Line, 0, len(lines))
+	for i := range lines {
+		if lines[i].Type == "compacted" {
+			continue
+		}
+		reviewLines = append(reviewLines, lines[i])
+	}
+	items, _ := sessionItemsFromRolloutLines(reviewLines, fallback)
+	return items
+}
+
 type rolloutReplayBuilder struct {
 	items          []session.Item
 	turns          []session.TurnSnapshot
@@ -1692,6 +1712,9 @@ func normalizeRolloutToolCall(out *session.Item, raw map[string]any) {
 	if out.CallID == "" {
 		out.CallID = firstNonEmptyString(stringFromMap(out.Data, "call_id"), stringFromMap(out.Data, "callId"), stringFromMap(raw, "call_id"), stringFromMap(raw, "callId"), out.ID)
 	}
+	if strings.TrimSpace(out.Text) == "" {
+		out.Text = rolloutResponseValueText(firstAny(raw, "arguments", "input", "rawArguments", "raw_arguments"))
+	}
 	if rawType := normalizeRolloutItemType(stringFromMap(raw, "type")); rawType == "mcpToolCall" || rawType == "mcp_tool_call" {
 		markRolloutMCPItem(out, raw)
 		return
@@ -1721,6 +1744,9 @@ func normalizeRolloutToolCall(out *session.Item, raw map[string]any) {
 func normalizeRolloutToolOutput(out *session.Item, raw map[string]any) {
 	if out.CallID == "" {
 		out.CallID = firstNonEmptyString(stringFromMap(out.Data, "call_id"), stringFromMap(out.Data, "callId"), stringFromMap(raw, "call_id"), stringFromMap(raw, "callId"), out.ID)
+	}
+	if strings.TrimSpace(out.Text) == "" {
+		out.Text = rolloutResponseValueText(firstAny(raw, "output", "body"))
 	}
 	if rolloutBoolFromAny(firstPresentAny(raw, out.Data, "mcpToolCall", "mcp_tool_call")) {
 		markRolloutMCPItem(out, raw)
@@ -1753,6 +1779,42 @@ func normalizeRolloutToolOutput(out *session.Item, raw map[string]any) {
 				out.Data["_meta"] = meta
 			}
 		}
+	}
+}
+
+func rolloutResponseValueText(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case []ContentPart:
+		return textFromRolloutContent(typed)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			if text := rolloutResponseValueText(entry); strings.TrimSpace(text) != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		for _, key := range []string{"body", "text", "content", "output"} {
+			if text := rolloutResponseValueText(typed[key]); strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
 	}
 }
 

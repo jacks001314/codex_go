@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -79,8 +80,7 @@ type realtimeTransportSession struct {
 	writeMu               sync.Mutex
 	closeOnce             sync.Once
 	stateMu               sync.Mutex
-	transcript            []TranscriptEntry
-	lastHandoffEntryCount int
+	transcript            activeRealtimeTranscript
 	newInputEntry         bool
 	newOutputEntry        bool
 	tailFlushed           bool
@@ -634,9 +634,16 @@ func (s *realtimeTransportSession) updateTranscript(event Event) (Event, string,
 	steerHandoffID := ""
 	sendDeferredResponse := false
 	var audioTruncate *realtimeAudioTruncate
+	frameSequence, hasFrameSequence := uint64(0), false
+	if s.config.Version == VersionV3 &&
+		(event.Type == "input_transcript.delta" || event.Type == "output_transcript.delta") {
+		frameSequence, hasFrameSequence = s.transcript.advanceFrame(event.transcriptFrame)
+	}
 	switch event.Type {
 	case "input_audio_buffer.speech_started":
 		s.newInputEntry = true
+		s.transcript.inputLastRawFrame = 0
+		s.transcript.hasInputLastRawFrame = false
 		if s.config.Version == VersionV2 && s.outputAudioItemID != "" && (event.ItemID == "" || event.ItemID == s.outputAudioItemID) {
 			audioTruncate = &realtimeAudioTruncate{itemID: s.outputAudioItemID, audioEndMS: s.outputAudioEndMS}
 			s.outputAudioItemID = ""
@@ -647,19 +654,47 @@ func (s *realtimeTransportSession) updateTranscript(event Event) (Event, string,
 			s.updateOutputAudioState(event.Audio)
 		}
 	case "input_transcript.delta":
-		s.transcript = appendRealtimeTranscriptDelta(s.transcript, "user", event.Delta, s.newInputEntry)
-		s.newInputEntry = false
+		s.transcript.appendDelta("user", event.Delta, s.newInputEntry, s.config.Version == VersionV3, frameSequence, hasFrameSequence)
+		if event.Delta != "" || s.config.Version != VersionV3 {
+			s.newInputEntry = false
+			s.transcript.inputLastRawFrame = frameSequence
+			s.transcript.hasInputLastRawFrame = hasFrameSequence
+		}
 	case "output_transcript.delta":
-		s.transcript = appendRealtimeTranscriptDelta(s.transcript, "assistant", event.Delta, s.newOutputEntry)
-		s.newOutputEntry = false
+		s.transcript.appendDelta("assistant", event.Delta, s.newOutputEntry, s.config.Version == VersionV3, frameSequence, hasFrameSequence)
+		if event.Delta != "" || s.config.Version != VersionV3 {
+			s.newOutputEntry = false
+			s.transcript.outputLastRawFrame = frameSequence
+			s.transcript.hasOutputLastRawFrame = hasFrameSequence
+		}
 	case "input_transcript.done":
-		s.transcript = applyRealtimeTranscriptDone(s.transcript, "user", event.Text, s.newInputEntry)
-		s.newInputEntry = false
+		s.transcript.applyDone(
+			"user",
+			event.Text,
+			s.newInputEntry,
+			s.config.Version == VersionV3,
+			s.transcript.inputLastRawFrame,
+			s.transcript.hasInputLastRawFrame,
+		)
+		s.newInputEntry = s.config.Version == VersionV3
+		s.transcript.inputLastRawFrame = 0
+		s.transcript.hasInputLastRawFrame = false
 	case "output_transcript.done":
-		s.transcript = applyRealtimeTranscriptDone(s.transcript, "assistant", event.Text, s.newOutputEntry)
-		s.newOutputEntry = false
+		s.transcript.applyDone(
+			"assistant",
+			event.Text,
+			s.newOutputEntry,
+			s.config.Version == VersionV3,
+			s.transcript.outputLastRawFrame,
+			s.transcript.hasOutputLastRawFrame,
+		)
+		s.newOutputEntry = s.config.Version == VersionV3
+		s.transcript.outputLastRawFrame = 0
+		s.transcript.hasOutputLastRawFrame = false
 	case "response.created":
 		s.newOutputEntry = true
+		s.transcript.outputLastRawFrame = 0
+		s.transcript.hasOutputLastRawFrame = false
 		s.responseActive = true
 	case "response.done", "response.cancelled":
 		s.outputAudioItemID = ""
@@ -673,10 +708,7 @@ func (s *realtimeTransportSession) updateTranscript(event Event) (Event, string,
 	case "handoff.requested":
 		s.outputAudioItemID = ""
 		s.outputAudioEndMS = 0
-		s.transcript = appendRealtimeHandoffInput(s.transcript, event.InputTranscript)
-		s.trimActiveTranscriptLocked()
-		event.ActiveTranscript = append([]TranscriptEntry(nil), s.transcript[s.lastHandoffEntryCount:]...)
-		s.lastHandoffEntryCount = len(s.transcript)
+		event.ActiveTranscript = s.transcript.takeHandoff(event.InputTranscript)
 		s.newInputEntry = true
 		s.newOutputEntry = true
 		if s.config.Version == VersionV2 && s.activeHandoffID != "" {
@@ -690,11 +722,14 @@ func (s *realtimeTransportSession) updateTranscript(event Event) (Event, string,
 		s.outputAudioItemID = ""
 		s.outputAudioEndMS = 0
 	}
-	// Rust runs the active-transcript budget after every transcript update and
-	// falls back to FIFO eviction when the event carries no frame timestamp
-	// (methods.rs:777-788). Go never has a frame timestamp, so this is always
-	// that fallback.
-	s.trimActiveTranscriptLocked()
+	// Rust defers cross-frame eviction until the frame advances, bounding only
+	// the entries updated by the current frame. Events without timing still use
+	// the legacy full-transcript trimming path.
+	if hasFrameSequence {
+		s.transcript.truncateFrame(frameSequence)
+	} else {
+		s.transcript.trim()
+	}
 	return event, steerHandoffID, sendDeferredResponse, audioTruncate
 }
 
@@ -739,39 +774,164 @@ func (s *realtimeTransportSession) updateOutputAudioState(frame *AudioChunk) {
 	s.outputAudioEndMS = uint32(duration)
 }
 
-func appendRealtimeTranscriptDelta(entries []TranscriptEntry, role, delta string, forceNew bool) []TranscriptEntry {
+type realtimeTranscriptFrame struct {
+	startMS uint64
+	endMS   uint64
+}
+
+type activeRealtimeTranscriptEntry struct {
+	transcript           TranscriptEntry
+	lastRawFrame         uint64
+	hasLastRawFrame      bool
+	truncatedPrefixBytes int
+}
+
+func (e *activeRealtimeTranscriptEntry) retainedText() string {
+	if e == nil {
+		return ""
+	}
+	if e.truncatedPrefixBytes == 0 {
+		return e.transcript.Text
+	}
+	if len(truncatedRealtimeTranscriptPrefix) >= len(e.transcript.Text) {
+		return ""
+	}
+	return e.transcript.Text[len(truncatedRealtimeTranscriptPrefix):]
+}
+
+type activeRealtimeTranscript struct {
+	entries               []activeRealtimeTranscriptEntry
+	lastFrame             *realtimeTranscriptFrame
+	frameSequence         uint64
+	inputLastRawFrame     uint64
+	hasInputLastRawFrame  bool
+	outputLastRawFrame    uint64
+	hasOutputLastRawFrame bool
+}
+
+func (t *activeRealtimeTranscript) advanceFrame(frame *realtimeTranscriptFrame) (uint64, bool) {
+	if t == nil || frame == nil {
+		return 0, false
+	}
+	if t.lastFrame == nil || *t.lastFrame != *frame {
+		t.trim()
+		t.frameSequence++
+		cloned := *frame
+		t.lastFrame = &cloned
+	}
+	return t.frameSequence, true
+}
+
+func (t *activeRealtimeTranscript) findEntry(role string, frameless bool) *activeRealtimeTranscriptEntry {
+	if t == nil {
+		return nil
+	}
+	if frameless {
+		for index := len(t.entries) - 1; index >= 0; index-- {
+			if t.entries[index].transcript.Role == role {
+				return &t.entries[index]
+			}
+		}
+		return nil
+	}
+	if len(t.entries) == 0 || t.entries[len(t.entries)-1].transcript.Role != role {
+		return nil
+	}
+	return &t.entries[len(t.entries)-1]
+}
+
+func (t *activeRealtimeTranscript) appendDelta(
+	role string,
+	delta string,
+	forceNew bool,
+	frameless bool,
+	frameSequence uint64,
+	hasFrameSequence bool,
+) {
 	if delta == "" {
-		return entries
+		return
 	}
-	if !forceNew && len(entries) > 0 && entries[len(entries)-1].Role == role {
-		entries[len(entries)-1].Text += delta
-		return entries
+	if entry := t.findEntry(role, frameless); !forceNew && entry != nil {
+		entry.transcript.Text += delta
+		entry.lastRawFrame = frameSequence
+		entry.hasLastRawFrame = hasFrameSequence
+		return
 	}
-	return append(entries, TranscriptEntry{Role: role, Text: delta})
+	t.entries = append(t.entries, activeRealtimeTranscriptEntry{
+		transcript:      TranscriptEntry{Role: role, Text: delta},
+		lastRawFrame:    frameSequence,
+		hasLastRawFrame: hasFrameSequence,
+	})
 }
 
-func applyRealtimeTranscriptDone(entries []TranscriptEntry, role, value string, forceNew bool) []TranscriptEntry {
+func (t *activeRealtimeTranscript) applyDone(
+	role string,
+	value string,
+	forceNew bool,
+	frameless bool,
+	lastRawFrame uint64,
+	hasLastRawFrame bool,
+) {
 	if value == "" {
-		return entries
+		return
 	}
-	if !forceNew && len(entries) > 0 && entries[len(entries)-1].Role == role {
-		entries[len(entries)-1].Text = value
-		return entries
+	if entry := t.findEntry(role, frameless); !forceNew && entry != nil {
+		if !frameless ||
+			(len(value) >= entry.truncatedPrefixBytes &&
+				strings.HasPrefix(value[entry.truncatedPrefixBytes:], entry.retainedText())) {
+			entry.transcript.Text = value
+			entry.truncatedPrefixBytes = 0
+		}
+		return
 	}
-	return append(entries, TranscriptEntry{Role: role, Text: value})
+	if forceNew {
+		lastRawFrame = 0
+		hasLastRawFrame = false
+	}
+	t.entries = append(t.entries, activeRealtimeTranscriptEntry{
+		transcript:      TranscriptEntry{Role: role, Text: value},
+		lastRawFrame:    lastRawFrame,
+		hasLastRawFrame: hasLastRawFrame,
+	})
 }
 
-func appendRealtimeHandoffInput(entries []TranscriptEntry, input string) []TranscriptEntry {
+func (t *activeRealtimeTranscript) appendHandoffInput(input string) {
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return entries
+		return
 	}
-	for _, entry := range entries {
-		if entry.Role == "user" && strings.TrimSpace(entry.Text) == input {
-			return entries
+	for _, entry := range t.entries {
+		if entry.transcript.Role == "user" && strings.TrimSpace(entry.transcript.Text) == input {
+			return
 		}
 	}
-	return append(entries, TranscriptEntry{Role: "user", Text: input})
+	t.entries = append(t.entries, activeRealtimeTranscriptEntry{
+		transcript: TranscriptEntry{Role: "user", Text: input},
+	})
+}
+
+func (t *activeRealtimeTranscript) plainEntries() []TranscriptEntry {
+	if t == nil {
+		return nil
+	}
+	entries := make([]TranscriptEntry, 0, len(t.entries))
+	for _, entry := range t.entries {
+		entries = append(entries, entry.transcript)
+	}
+	return entries
+}
+
+func (t *activeRealtimeTranscript) takeEntries() []TranscriptEntry {
+	if t == nil {
+		return nil
+	}
+	entries := t.plainEntries()
+	t.entries = nil
+	t.inputLastRawFrame = 0
+	t.hasInputLastRawFrame = false
+	t.outputLastRawFrame = 0
+	t.hasOutputLastRawFrame = false
+	return entries
 }
 
 // maxActiveRealtimeTranscriptBytes mirrors Rust's MAX_ACTIVE_TRANSCRIPT_BYTES
@@ -793,87 +953,139 @@ func realtimeTranscriptEntryBytes(entry TranscriptEntry) int {
 // that came from a realtime transport (#54257,
 // `truncate_active_transcript`, methods.rs:800-839).
 //
-// Rust evicts by raw frame recency and only falls back to FIFO removal when
-// timing is unavailable (methods.rs:803-814). The Go wire layer never parses
-// frame timestamps, so every utterance has no timing and this is always that
-// legacy FIFO path: whole utterances are dropped from the head until the
-// transcript fits, and a single utterance that still exceeds the budget keeps
-// its tail behind the marker. The frame-recency half of the upstream change is
-// not represented here because Go has no frame-timestamp carrier.
+// Entries without frame timing preserve the legacy FIFO policy: whole
+// utterances are dropped from the head until the transcript fits, and a single
+// utterance that still exceeds the budget keeps its tail behind the marker.
 func TrimRealtimeTranscript(entries []TranscriptEntry) []TranscriptEntry {
-	trimmed := append([]TranscriptEntry(nil), entries...)
-	trimmed, _ = trimRealtimeTranscriptEntries(trimmed)
-	return trimmed
-}
-
-// trimRealtimeTranscriptEntries trims in place and reports how many leading
-// utterances were evicted so callers can keep their own cursors aligned.
-func trimRealtimeTranscriptEntries(entries []TranscriptEntry) ([]TranscriptEntry, int) {
-	total := 0
+	transcript := activeRealtimeTranscript{
+		entries: make([]activeRealtimeTranscriptEntry, 0, len(entries)),
+	}
 	for _, entry := range entries {
-		total += realtimeTranscriptEntryBytes(entry)
+		transcript.entries = append(transcript.entries, activeRealtimeTranscriptEntry{
+			transcript: entry,
+		})
 	}
-	dropped := 0
-	for total > maxActiveRealtimeTranscriptBytes && len(entries) > 1 {
-		// "preserving the legacy FIFO policy without timing" (methods.rs:804).
-		total -= realtimeTranscriptEntryBytes(entries[0])
-		entries = entries[1:]
-		dropped++
-	}
-	if len(entries) > 0 {
-		truncateRealtimeTranscriptEntry(&entries[0], maxActiveRealtimeTranscriptBytes)
-	}
-	return entries, dropped
+	transcript.trim()
+	return transcript.plainEntries()
 }
 
-// truncateRealtimeTranscriptEntry mirrors Rust's `truncate_transcript_entry`
+func (t *activeRealtimeTranscript) trim() {
+	if t == nil {
+		return
+	}
+	total := 0
+	for _, entry := range t.entries {
+		total += realtimeTranscriptEntryBytes(entry.transcript)
+	}
+	for total > maxActiveRealtimeTranscriptBytes && len(t.entries) > 1 {
+		oldest := 0
+		allTimed := true
+		for index := range t.entries {
+			if !t.entries[index].hasLastRawFrame {
+				allTimed = false
+				break
+			}
+			if t.entries[index].lastRawFrame < t.entries[oldest].lastRawFrame {
+				oldest = index
+			}
+		}
+		if allTimed {
+			frame := t.entries[oldest].lastRawFrame
+			allSameFrame := true
+			for index := range t.entries {
+				if t.entries[index].lastRawFrame != frame {
+					allSameFrame = false
+					break
+				}
+			}
+			if allSameFrame {
+				t.truncateTiedFrame()
+				return
+			}
+		} else {
+			oldest = 0
+		}
+		total -= realtimeTranscriptEntryBytes(t.entries[oldest].transcript)
+		t.entries = append(t.entries[:oldest], t.entries[oldest+1:]...)
+	}
+	if len(t.entries) > 0 {
+		t.truncateEntry(&t.entries[0], maxActiveRealtimeTranscriptBytes)
+	}
+}
+
+func (t *activeRealtimeTranscript) truncateFrame(frameSequence uint64) {
+	if t == nil {
+		return
+	}
+	for index := range t.entries {
+		if t.entries[index].hasLastRawFrame && t.entries[index].lastRawFrame == frameSequence {
+			t.truncateEntry(&t.entries[index], maxActiveRealtimeTranscriptBytes)
+		}
+	}
+}
+
+func (t *activeRealtimeTranscript) truncateTiedFrame() {
+	remainingBytes := maxActiveRealtimeTranscriptBytes
+	remainingEntries := len(t.entries)
+	order := make([]int, 0, len(t.entries))
+	for index := range t.entries {
+		order = append(order, index)
+	}
+	sort.Slice(order, func(left, right int) bool {
+		return realtimeTranscriptEntryBytes(t.entries[order[left]].transcript) <
+			realtimeTranscriptEntryBytes(t.entries[order[right]].transcript)
+	})
+	for _, index := range order {
+		entryBudget := remainingBytes / remainingEntries
+		t.truncateEntry(&t.entries[index], entryBudget)
+		remainingBytes -= realtimeTranscriptEntryBytes(t.entries[index].transcript)
+		remainingEntries--
+	}
+}
+
+// truncateEntry mirrors Rust's `truncate_transcript_entry`
 // (methods.rs:841-865): keep the newest byte tail inside the budget, move the
 // cut forward to a UTF-8 boundary, and keep exactly one marker in front of it.
-func truncateRealtimeTranscriptEntry(entry *TranscriptEntry, maxBytes int) {
+func (t *activeRealtimeTranscript) truncateEntry(entry *activeRealtimeTranscriptEntry, maxBytes int) {
 	if entry == nil {
 		return
 	}
-	maxTextBytes := maxBytes - (len(entry.Role) + 3)
+	maxTextBytes := maxBytes - (len(entry.transcript.Role) + 3)
 	if maxTextBytes < 0 {
 		maxTextBytes = 0
 	}
-	if len(entry.Text) <= maxTextBytes {
+	if len(entry.transcript.Text) <= maxTextBytes {
 		return
 	}
 	inner := maxTextBytes - len(truncatedRealtimeTranscriptPrefix)
 	if inner < 0 {
 		inner = 0
 	}
-	start := len(entry.Text) - inner
+	start := len(entry.transcript.Text) - inner
 	if start < 0 {
 		start = 0
 	}
-	if start > len(entry.Text) {
-		start = len(entry.Text)
+	if start > len(entry.transcript.Text) {
+		start = len(entry.transcript.Text)
 	}
-	for start < len(entry.Text) && !utf8.RuneStart(entry.Text[start]) {
+	for start < len(entry.transcript.Text) && !utf8.RuneStart(entry.transcript.Text[start]) {
 		start++
 	}
-	entry.Text = truncatedRealtimeTranscriptPrefix + entry.Text[start:]
+	previousMarkerBytes := 0
+	if entry.truncatedPrefixBytes > 0 {
+		previousMarkerBytes = len(truncatedRealtimeTranscriptPrefix)
+	}
+	entry.truncatedPrefixBytes += start - previousMarkerBytes
+	entry.transcript.Text = truncatedRealtimeTranscriptPrefix + entry.transcript.Text[start:]
 }
 
-// trimActiveTranscriptLocked applies the budget to the accumulator, mirroring
-// Rust's `truncate_active_transcript` call for events without a frame
-// (methods.rs:786-788), and keeps the handoff cursor on the same conversation
-// position when leading utterances are evicted.
-func (s *realtimeTransportSession) trimActiveTranscriptLocked() {
-	if s == nil {
-		return
+func (t *activeRealtimeTranscript) takeHandoff(input string) []TranscriptEntry {
+	if t == nil {
+		return nil
 	}
-	trimmed, dropped := trimRealtimeTranscriptEntries(s.transcript)
-	s.transcript = trimmed
-	if dropped == 0 {
-		return
-	}
-	s.lastHandoffEntryCount -= dropped
-	if s.lastHandoffEntryCount < 0 {
-		s.lastHandoffEntryCount = 0
-	}
+	t.trim()
+	t.appendHandoffInput(input)
+	return t.takeEntries()
 }
 
 func (s *realtimeTransportSession) takeTranscriptTail() []TranscriptEntry {
@@ -888,10 +1100,8 @@ func (s *realtimeTransportSession) takeTranscriptTail() []TranscriptEntry {
 	s.tailFlushed = true
 	// Rust bounds the active transcript before draining the tail
 	// (methods.rs:792-797).
-	s.trimActiveTranscriptLocked()
-	tail := append([]TranscriptEntry(nil), s.transcript[s.lastHandoffEntryCount:]...)
-	s.lastHandoffEntryCount = len(s.transcript)
-	return tail
+	s.transcript.trim()
+	return s.transcript.takeEntries()
 }
 
 func (m *Manager) flushRealtimeTranscriptTail(connection *realtimeTransportSession) {

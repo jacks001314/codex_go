@@ -654,7 +654,7 @@ func parseRealtimeV3Event(typeName string, value map[string]any) (Event, bool) {
 		if typeName == "output_transcript.added" {
 			role = "output_transcript.delta"
 		}
-		return Event{Type: role, Delta: delta}, true
+		return Event{Type: role, Delta: delta, transcriptFrame: parseRealtimeTranscriptFrame(value)}, true
 	case "turn.done":
 		turn, _ := value["turn"].(map[string]any)
 		role, roleOK := turn["role"].(string)
@@ -681,6 +681,15 @@ func parseRealtimeV3Event(typeName string, value map[string]any) (Event, bool) {
 		return Event{Type: "handoff.requested", HandoffID: id, ItemID: id, InputTranscript: joinedInputText(content)}, true
 	}
 	return Event{}, false
+}
+
+func parseRealtimeTranscriptFrame(value map[string]any) *realtimeTranscriptFrame {
+	startMS, startOK := mapUintOK(value["start_ms"], math.MaxUint64)
+	endMS, endOK := mapUintOK(value["end_ms"], math.MaxUint64)
+	if !startOK || !endOK {
+		return nil
+	}
+	return &realtimeTranscriptFrame{startMS: startMS, endMS: endMS}
 }
 
 func parseRealtimeLegacyEvent(version Version, typeName string, value map[string]any) (Event, bool) {

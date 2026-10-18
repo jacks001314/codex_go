@@ -1348,19 +1348,20 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 	if err != nil || record == nil {
 		return guardianTranscriptSelection{}
 	}
+	items := r.guardianReviewHistoryItems(threadID, record)
 	toolCalls := map[string]session.Item{}
-	for _, item := range record.Items {
+	for _, item := range items {
 		switch strings.ToLower(strings.TrimSpace(item.Type)) {
-		case "function_call", "custom_tool_call":
+		case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call", "web_search_call":
 			if callID := strings.TrimSpace(item.CallID); callID != "" {
 				toolCalls[callID] = item
 			}
 		}
 	}
-	entries := make([]state.GuardianTranscriptEntry, 0, len(record.Items))
-	evidence := make([]state.TranscriptEvidenceEntry, 0, len(record.Items))
-	for i := range record.Items {
-		item := record.Items[i]
+	entries := make([]state.GuardianTranscriptEntry, 0, len(items))
+	evidence := make([]state.TranscriptEvidenceEntry, 0, len(items))
+	for i := range items {
+		item := items[i]
 		// Rust #54316 (guardian-context/src/history.rs): compaction summaries are
 		// excluded from the transcript while the surrounding user messages
 		// survive, including a message whose text matches the summary.
@@ -1398,41 +1399,6 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 			}
 			continue
 		}
-		// Rust #39791: standalone function_call_output items (no call id) are
-		// external context; render them as tool results with the namespaced
-		// tool name and a placeholder for non-text content.
-		if strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") && strings.TrimSpace(item.CallID) == "" {
-			name := strings.TrimSpace(item.Name)
-			if namespace := strings.TrimSpace(item.Namespace); namespace != "" {
-				name = namespace + "." + name
-			}
-			if name == "" {
-				name = "tool"
-			}
-			text := strings.TrimSpace(item.Text)
-			if text == "" {
-				text = "[non-text output]"
-			}
-			tokenLimit := profile.Transcript.EntryLimits.ToolTokens
-			if mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Namespace)) ||
-				mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Name)) {
-				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
-			}
-			limited, _ := truncateGuardianTranscriptEntry(text, tokenLimit)
-			entries = append(entries, state.GuardianTranscriptEntry{
-				Author:   "tool",
-				Label:    name,
-				LineRole: "tool " + name + " result",
-				Text:     limited,
-			})
-			evidence = append(evidence, state.TranscriptEvidenceEntry{
-				Kind:          state.GuardianTranscriptTool,
-				Role:          "tool " + name + " result",
-				Text:          limited,
-				OriginalBytes: len(text),
-			})
-			continue
-		}
 		text := strings.TrimSpace(item.Text)
 		if text == "" && len(item.Content) > 0 {
 			for _, part := range item.Content {
@@ -1443,6 +1409,40 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 			}
 		}
 		if text == "" {
+			itemType := strings.ToLower(strings.TrimSpace(item.Type))
+			if strings.HasSuffix(itemType, "_output") {
+				text = "[non-text output]"
+			} else if itemType == "local_shell_call" || itemType == "web_search_call" || itemType == "tool_search_call" {
+				if encoded, err := json.Marshal(item.Data); err == nil {
+					text = string(encoded)
+				}
+			}
+		}
+		if text == "" {
+			continue
+		}
+		if lineRole, label, include, isTool := guardianToolTranscriptRole(&item, toolCalls); isTool {
+			if !include {
+				continue
+			}
+			tokenLimit := profile.Transcript.EntryLimits.ToolTokens
+			if mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Namespace)) ||
+				mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Name)) {
+				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
+			}
+			limited, _ := truncateGuardianTranscriptEntry(text, tokenLimit)
+			entries = append(entries, state.GuardianTranscriptEntry{
+				Author:   "tool",
+				Label:    label,
+				LineRole: lineRole,
+				Text:     limited,
+			})
+			evidence = append(evidence, state.TranscriptEvidenceEntry{
+				Kind:          state.GuardianTranscriptTool,
+				Role:          lineRole,
+				Text:          limited,
+				OriginalBytes: len(text),
+			})
 			continue
 		}
 		role := strings.TrimSpace(item.Role)
@@ -1540,6 +1540,77 @@ func guardianTranscriptKindForItem(item *session.Item, role string) state.Guardi
 	default:
 		return state.GuardianTranscriptMessage
 	}
+}
+
+// guardianToolTranscriptRole mirrors the shared Guardian transcript
+// collector's tool attribution (#41879): calls use "tool <name> call", paired
+// outputs inherit the source call's name, and an output whose call is no
+// longer present remains a generic "tool result" instead of disappearing.
+func guardianToolTranscriptRole(item *session.Item, toolCalls map[string]session.Item) (lineRole, label string, include, isTool bool) {
+	if item == nil {
+		return "", "", false, false
+	}
+	itemType := strings.ToLower(strings.TrimSpace(item.Type))
+	switch itemType {
+	case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call", "web_search_call":
+		name := guardianToolTranscriptName(item)
+		if name == "" {
+			return "", "", false, true
+		}
+		return "tool " + name + " call", name, true, true
+	case "function_call_output", "custom_tool_call_output", "tool_search_output", "tool_output":
+		name := ""
+		if callID := strings.TrimSpace(item.CallID); callID != "" {
+			if call, ok := toolCalls[callID]; ok {
+				name = guardianToolTranscriptName(&call)
+			}
+			if name == "" {
+				return "tool result", "tool", true, true
+			}
+		} else {
+			name = guardianToolTranscriptName(item)
+			if name == "" {
+				return "", "", false, true
+			}
+		}
+		return "tool " + name + " result", name, true, true
+	default:
+		return "", "", false, false
+	}
+}
+
+func guardianToolTranscriptName(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		name = firstNonEmpty(
+			stringFromAny(item.Data["name"]),
+			stringFromAny(item.Data["tool"]),
+		)
+	}
+	namespace := strings.TrimSpace(item.Namespace)
+	if namespace == "" {
+		namespace = stringFromAny(item.Data["namespace"])
+	}
+	if name == "" {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "local_shell_call":
+			name = "shell"
+		case "web_search_call":
+			name = "web_search"
+		case "tool_search_call", "tool_search_output":
+			name = "tool_search"
+		}
+	}
+	if name == "" {
+		return ""
+	}
+	if namespace != "" && !strings.HasPrefix(name, namespace+".") {
+		name = namespace + "." + name
+	}
+	return name
 }
 
 // truncateGuardianTranscriptEntry applies the profile's per-entry token cap

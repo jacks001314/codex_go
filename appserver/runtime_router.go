@@ -550,17 +550,23 @@ type RuntimeRouter struct {
 	// prompt renders (Rust's session-owned `RetainedContext`). It is seeded from
 	// the thread's newest compaction checkpoint and then kept current from the
 	// thread's accepted user messages.
-	retainedContextsMu     sync.Mutex
-	retainedContexts       map[string]*retainedctx.RetainedContext
-	rolloutBudgetOnce      sync.Once
-	rolloutBudget          *runtimeutil.Budget
-	rolloutBudgetCharged   atomic.Bool
-	rolloutBudgetExhausted atomic.Bool
-	reasoningEffortMu      sync.Mutex
-	reasoningEffortPins    map[string]reasoningEffortPin
-	closeOnce              sync.Once
-	closeErr               error
-	codexHomeScanCancel    func()
+	retainedContextsMu sync.Mutex
+	retainedContexts   map[string]*retainedctx.RetainedContext
+	// guardianReviewHistory keeps the original conversation evidence in memory
+	// after model-facing history is compacted. Rust's ContextManager owns the
+	// same independent review transcript (#41879); the persisted checkpoint is
+	// a separate concern (#42065).
+	guardianReviewHistoryMu sync.Mutex
+	guardianReviewHistory   map[string]*guardianReviewHistoryState
+	rolloutBudgetOnce       sync.Once
+	rolloutBudget           *runtimeutil.Budget
+	rolloutBudgetCharged    atomic.Bool
+	rolloutBudgetExhausted  atomic.Bool
+	reasoningEffortMu       sync.Mutex
+	reasoningEffortPins     map[string]reasoningEffortPin
+	closeOnce               sync.Once
+	closeErr                error
+	codexHomeScanCancel     func()
 	// daemonRecoverySink is the daemon-scoped slot a managed daemon shares
 	// between the per-connection routers; nil for every other server, so an
 	// unmanaged app-server never contributes or writes a recovery snapshot.
@@ -3794,6 +3800,7 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 	if !ok {
 		return nil, fmt.Errorf("%w: unexpected thread/revert response %T", ErrInvalidRequest, result)
 	}
+	r.truncateGuardianReviewHistoryBefore(params.ThreadID, params.BeforeTurnID)
 	r.clearNodeReplReviewEvidence(params.ThreadID)
 	r.notify(NotificationThreadReverted, &ThreadIDNotification{ThreadID: params.ThreadID})
 	if receiptRevision != "" && r.services.StateRuntime != nil {
@@ -6093,6 +6100,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	// Rust drops the thread's retained context with its in-memory runtime; the
 	// durable checkpoint keeps the evidence a resumed thread needs.
 	r.forgetThreadRetainedContext(threadID)
+	r.forgetGuardianReviewHistory(threadID)
 	r.forgetThreadSessionState(threadID)
 	r.closeThreadShellSnapshots(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
@@ -10361,6 +10369,7 @@ func (r *RuntimeRouter) runtimeAppendItem(threadID session.ThreadID, item sessio
 func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []session.Item) (*session.Record, error) {
 	r.markThreadMemoryPollutedOnExternalContext(string(threadID), items)
 	if record, ok := r.appendEphemeralThreadItems(threadID, items); ok {
+		r.recordGuardianReviewHistoryAppend(string(threadID), items)
 		return record, nil
 	}
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
@@ -10383,11 +10392,17 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 		if err == nil && hasMcpCheckpoint {
 			r.markMcpAttributionPersisted(string(threadID), mcpRevision)
 		}
+		if err == nil {
+			r.recordGuardianReviewHistoryAppend(string(threadID), items)
+		}
 		return record, err
 	}
 	record, err := r.services.ThreadRouter.store.AppendItems(threadID, items)
 	if err == nil && hasMcpCheckpoint {
 		r.markMcpAttributionPersisted(string(threadID), mcpRevision)
+	}
+	if err == nil {
+		r.recordGuardianReviewHistoryAppend(string(threadID), items)
 	}
 	return record, err
 }
