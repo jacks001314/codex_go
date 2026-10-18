@@ -2230,9 +2230,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: TURN_TRIGGER_KEY, set_turn_trigger"
+        "Round 404 (audit): TurnStartParams.turnTrigger reaches Responses metadata as turn_trigger and persisted turn attribution; queue, goal, delegated, Guardian, memory, realtime, and recovery paths carry their expected classifications, while steering ignores the field. Tests: go test ./appserver -run 'TurnTrigger|Attribution' -count=1"
       ]
     },
     {
