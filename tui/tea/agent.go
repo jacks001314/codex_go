@@ -315,7 +315,8 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// frozen history is not rewritten by events observed while another app
 		// owns the task.
 		if len(messages) == 0 && !message.Response.ReadOnly {
-			for _, event := range buffered {
+			replayEvents := filterResolvedMisalignmentReplayEvents(buffered)
+			for _, event := range replayEvents {
 				messages = applyBufferedThreadEventToMessages(messages, event)
 			}
 			// Rust #42903: buffered live notifications can introduce async

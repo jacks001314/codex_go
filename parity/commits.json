@@ -6701,9 +6701,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: omit_resolved_misalignment_errors, set_active_turn_id"
+        "Aligned upstream 54a4077c8b (#42399): buffered thread replay now derives the latest turn identity and omits turn.failed/error events from older turns whose message is a misalignment-policy violation, while keeping the latest turn's error. Unidentified errors are retained rather than guessed away. Tests: TestBufferedReplayOmitsResolvedMisalignmentErrorsLikeRust and TestBufferedReplayKeepsUnidentifiedErrorsLikeRust."
       ]
     },
     {
@@ -6785,9 +6785,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/9); candidate gap: MisalignmentReview, MisalignmentViolation, clear_misalignment_for_new_turn, continuation_message, continue_misalignment"
+        "Audited upstream fdf23b4097 (#42410): already implemented. misalignment_policy.go parses the resumable review, exposes continue only when a steer message exists, shows the precaution/review modal chain, submits the exact continuation with misalignment_override metadata, rejects stale review identities, and clears state on a different new turn. Tests: TestMisalignmentReviewContinueLikeRust, TestMisalignmentReviewDisablesContinueWithoutSteerLikeRust, TestMisalignmentClearsForDifferentNewTurnLikeRust, TestMisalignmentReviewRejectsStaleCurrentTurnLikeRust."
       ]
     },
     {

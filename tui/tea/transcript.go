@@ -380,6 +380,34 @@ func applyBufferedThreadEventToMessages(messages []codextui.Message, event proto
 	return messages
 }
 
+// filterResolvedMisalignmentReplayEvents mirrors Rust #42399: an earlier turn's
+// misalignment violation is resolved once a later turn exists. Keep the latest
+// turn's error so a currently stopped chat is still reported.
+func filterResolvedMisalignmentReplayEvents(events []protocol.ThreadEvent) []protocol.ThreadEvent {
+	latestTurnID := ""
+	for index := len(events) - 1; index >= 0; index-- {
+		if turnID := strings.TrimSpace(events[index].TurnID); turnID != "" {
+			latestTurnID = turnID
+			break
+		}
+	}
+	if latestTurnID == "" {
+		return events
+	}
+	filtered := make([]protocol.ThreadEvent, 0, len(events))
+	for _, event := range events {
+		if (event.Type == "turn.failed" || event.Type == "error") &&
+			strings.TrimSpace(event.TurnID) != "" &&
+			strings.TrimSpace(event.TurnID) != latestTurnID &&
+			event.Error != nil &&
+			chatwidget.IsMisalignmentPolicyViolationMessage(event.Error.Message) {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
+}
+
 func applyBufferedThreadItemToMessages(messages []codextui.Message, item *protocol.ThreadItem) []codextui.Message {
 	if item == nil {
 		return messages
