@@ -5028,9 +5028,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: TokenUsageRecord, clear_pending_turn_start_options, record_observed_response_completed, record_token_usage"
+        "Round 451 (audit): Go already persists cumulative turn/thread usage in thread-record metadata (token_usage_info/total_token_usage/last_token_usage) and restores it for forks; the fork restored-usage notification is covered. Missing: the durable token_usage_record rollout line with response/turn/session/root-turn attribution, compaction checkpoint fields (compaction_response_id/latest_token_usage_record), and reconciling fork restored-display usage with the child's fresh active totals. rg finds no TokenUsageRecord carrier. Tests: go test ./appserver -run 'TestRuntimeRouterThreadForkRestoredTokenUsagePrecedesStarted' -count=1"
       ]
     },
     {
