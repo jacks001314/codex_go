@@ -2672,7 +2672,11 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 	if mode != fsOpenModeRead && mode != fsOpenModeReplace {
 		return nil, requestError(-32600, fmt.Sprintf("unsupported fs/open mode `%s`", params.Mode))
 	}
-	if required, _, _, _, _, err := prepareFSSandbox(params.Sandbox); err != nil {
+	openOperation := MethodFSReadFile
+	if mode == fsOpenModeReplace {
+		openOperation = MethodFSWriteFile
+	}
+	if required, _, _, _, _, err := prepareFSSandboxForOperation(params.Sandbox, openOperation); err != nil {
 		return nil, err
 	} else if required {
 		if mode == fsOpenModeReplace {

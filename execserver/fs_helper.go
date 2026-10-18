@@ -185,7 +185,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 }
 
 func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, params any, target any) (bool, error) {
-	required, profile, profileJSON, cwd, workspaceRoots, err := prepareFSSandbox(ctx)
+	required, profile, profileJSON, cwd, workspaceRoots, err := prepareFSSandboxForOperation(ctx, operation)
 	if err != nil || !required {
 		return required, err
 	}
@@ -278,6 +278,10 @@ func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, pa
 }
 
 func prepareFSSandbox(ctx *FileSystemSandboxContext) (bool, *sandbox.PermissionProfile, string, string, []string, error) {
+	return prepareFSSandboxForOperation(ctx, "")
+}
+
+func prepareFSSandboxForOperation(ctx *FileSystemSandboxContext, operation string) (bool, *sandbox.PermissionProfile, string, string, []string, error) {
 	if ctx == nil {
 		return false, nil, "", "", nil, nil
 	}
@@ -295,7 +299,13 @@ func prepareFSSandbox(ctx *FileSystemSandboxContext) (bool, *sandbox.PermissionP
 	if err != nil {
 		return true, nil, "", "", nil, requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
 	}
-	if profile.Disabled || profile.LegacySandboxPolicy().HasFullDiskWriteAccess() {
+	if profile.Disabled {
+		return false, profile, profileJSON, "", nil, nil
+	}
+	if operation != "" && !fsOperationRequiresSandbox(operation, profile) {
+		return false, profile, profileJSON, "", nil, nil
+	}
+	if operation == "" && profile.LegacySandboxPolicy().HasFullDiskWriteAccess() {
 		return false, profile, profileJSON, "", nil, nil
 	}
 	cwd := ""
@@ -328,6 +338,27 @@ func prepareFSSandbox(ctx *FileSystemSandboxContext) (bool, *sandbox.PermissionP
 		workspaceRoots = []string{cwd}
 	}
 	return true, profile, profileJSON, cwd, workspaceRoots, nil
+}
+
+// fsOperationRequiresSandbox selects sandboxing independently for reads and
+// writes (Rust #46122). A full-disk-write policy may still carry deny-read
+// entries, so read operations cannot skip enforcement merely because writes are
+// unrestricted. Copy is a write operation in Rust's routing.
+func fsOperationRequiresSandbox(operation string, profile *sandbox.PermissionProfile) bool {
+	if profile == nil || profile.Disabled {
+		return false
+	}
+	policy := profile.LegacySandboxPolicy()
+	writeRestricted := !policy.HasFullDiskWriteAccess()
+	readRestricted := profile.HasDenyReadEntries() || !policy.HasFullDiskReadAccess()
+	switch strings.TrimSpace(operation) {
+	case MethodFSReadFile, MethodFSGetMetadata, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk:
+		return readRestricted
+	case MethodFSWriteFile, MethodFSCreateDirectory, MethodFSRemove, MethodFSCopy:
+		return writeRestricted
+	default:
+		return writeRestricted
+	}
 }
 
 func fsPermissionsDependOnCWD(raw json.RawMessage) bool {
