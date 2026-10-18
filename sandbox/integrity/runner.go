@@ -32,6 +32,7 @@ type RunnerRequest struct {
 	Entries         []sandbox.FileSystemSandboxEntry
 	CWD             string
 	Command         []string
+	Env             map[string]string
 }
 
 // RunnerMetrics is the bounded telemetry surface used by the runner.
@@ -113,7 +114,7 @@ type dependencyTarget struct {
 func executeIntegrityChecks(request *RunnerRequest) runnerResult {
 	startedAt := time.Now()
 	result := runnerResult{}
-	policy, err := PreparePolicy(request.Entries, request.CWD)
+	policy, err := PreparePolicyWithEnvironment(request.Entries, request.CWD, request.Env)
 	if err != nil {
 		result.preparation = time.Since(startedAt)
 		result.checks = []runnerCheck{{dependency: "preparation", outcome: "error", errorKind: "preparation"}}
@@ -133,31 +134,8 @@ func executeIntegrityChecks(request *RunnerRequest) runnerResult {
 	result.preparationOK = true
 	result.preparation = time.Since(startedAt)
 
-	dependencies := []struct {
-		name string
-		path string
-		err  error
-	}{}
-	if executable, err := os.Executable(); err != nil {
-		dependencies = append(dependencies, struct {
-			name string
-			path string
-			err  error
-		}{"codex", "", err})
-	} else {
-		dependencies = append(dependencies, struct {
-			name string
-			path string
-			err  error
-		}{"codex", executable, nil})
-	}
-	if (runtime.GOOS == "linux" || runtime.GOOS == "windows") && len(request.Command) > 0 {
-		dependencies = append(dependencies, struct {
-			name string
-			path string
-			err  error
-		}{"sandbox_launcher", request.Command[0], nil})
-	}
+	dependencies := baseIntegrityDependencies(request)
+	dependencies = append(dependencies, platformIntegrityDependencies(request, policy)...)
 	for _, dependency := range dependencies {
 		check := runnerCheck{dependency: dependency.name}
 		if dependency.err != nil {
@@ -188,6 +166,25 @@ func executeIntegrityChecks(request *RunnerRequest) runnerResult {
 		result.checks = append(result.checks, check)
 	}
 	return result
+}
+
+type integrityDependency struct {
+	name string
+	path string
+	err  error
+}
+
+func baseIntegrityDependencies(request *RunnerRequest) []integrityDependency {
+	dependencies := []integrityDependency{}
+	if executable, err := os.Executable(); err != nil {
+		dependencies = append(dependencies, integrityDependency{name: "codex", err: err})
+	} else {
+		dependencies = append(dependencies, integrityDependency{name: "codex", path: executable})
+	}
+	if (runtime.GOOS == "linux" || runtime.GOOS == "windows") && len(request.Command) > 0 {
+		dependencies = append(dependencies, integrityDependency{name: "sandbox_launcher", path: request.Command[0]})
+	}
+	return dependencies
 }
 
 func inspectDependency(path string) (dependencyTarget, error) {

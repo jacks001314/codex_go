@@ -10,7 +10,7 @@ import (
 // runSandboxIntegrityChecks wires the observational integrity runner into
 // exec-server preparation (Rust #51843). Checker failures and timeouts only
 // affect telemetry; the prepared command is never changed.
-func runSandboxIntegrityChecks(plan *sandbox.CommandRunPlan, sandboxOverride, cwd string, command []string) {
+func runSandboxIntegrityChecks(plan *sandbox.CommandRunPlan, sandboxOverride, cwd string, command []string, env map[string]string) {
 	if plan == nil || plan.PermissionProfile == nil || plan.PermissionProfile.Disabled {
 		return
 	}
@@ -20,5 +20,6 @@ func runSandboxIntegrityChecks(plan *sandbox.CommandRunPlan, sandboxOverride, cw
 		Entries:         plan.PermissionProfile.RuntimeFileSystemEntries(),
 		CWD:             cwd,
 		Command:         command,
+		Env:             env,
 	})
 }

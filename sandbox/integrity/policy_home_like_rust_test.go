@@ -35,6 +35,64 @@ func TestPreparePolicyExpandsHomeGlobLikeRust(t *testing.T) {
 	}
 }
 
+func TestPreparePolicyUsesCommandEnvironmentLikeRust(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "command")
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(home, "secret.key")
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries := []sandbox.FileSystemSandboxEntry{
+		{
+			Path:   sandbox.FileSystemPath{Type: "special", Value: &sandbox.FileSystemSpecialPath{Kind: "tmpdir"}},
+			Access: sandbox.FileSystemAccessWrite,
+		},
+		{
+			Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: "~/secret.*"},
+			Access: sandbox.FileSystemAccessDeny,
+		},
+	}
+	policy, err := PreparePolicyWithEnvironment(entries, cwd, map[string]string{
+		"HOME":   home,
+		"TMPDIR": "scratch",
+	})
+	if err != nil {
+		t.Fatalf("PreparePolicyWithEnvironment() error = %v", err)
+	}
+	wantRoot := filepath.Join(cwd, "scratch")
+	if len(policy.Roots) != 1 || policy.Roots[0].Root != wantRoot {
+		t.Fatalf("writable roots = %#v, want %q", policy.Roots, wantRoot)
+	}
+	if policy.GlobDenials == nil || !policy.GlobDenials.IsLocalPathReadDenied(secret) {
+		t.Fatalf("HOME deny glob was not applied: %#v", policy.GlobDenials)
+	}
+	homeRelative, err := PreparePolicyWithEnvironment(entries, cwd, map[string]string{
+		"HOME":   home,
+		"TMPDIR": "~/scratch",
+	})
+	if err != nil {
+		t.Fatalf("PreparePolicyWithEnvironment(home-relative TMPDIR) error = %v", err)
+	}
+	if want := filepath.Join(home, "scratch"); len(homeRelative.Roots) != 1 || homeRelative.Roots[0].Root != want {
+		t.Fatalf("home-relative TMPDIR roots = %#v, want %q", homeRelative.Roots, want)
+	}
+
+	emptyTemp, err := PreparePolicyWithEnvironment(entries[:1], cwd, map[string]string{"TMPDIR": ""})
+	if err != nil {
+		t.Fatalf("PreparePolicyWithEnvironment(empty TMPDIR) error = %v", err)
+	}
+	if len(emptyTemp.Roots) != 0 {
+		t.Fatalf("empty TMPDIR roots = %#v, want none", emptyTemp.Roots)
+	}
+}
+
 // Mirrors Rust #41209: a walker-provided canonical location is checked in
 // addition to the alias, so denying either spelling denies the contents.
 func TestReadDenyMatcherChecksAliasAndCanonicalLikeRust(t *testing.T) {

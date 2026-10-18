@@ -40,6 +40,10 @@ var bundledBwrapSHA256 = ""
 // BwrapUnavailableMessage mirrors Rust's panic text when neither launcher works.
 const BwrapUnavailableMessage = "bubblewrap is unavailable: no system bwrap was found on PATH and no bundled codex-resources/bwrap binary was found next to the Codex executable"
 
+// GlobScanProgram is the external deny-glob scanner inventoried by sandbox
+// integrity checks (Rust #51840).
+const GlobScanProgram = "rg"
+
 // bwrapCapabilities are the launcher features probed from `bwrap --help`.
 type bwrapCapabilities struct {
 	SupportsArgv0    bool
@@ -217,6 +221,40 @@ func bundledBwrapCandidates() []string {
 		candidates = append(candidates, filepath.Join(filepath.Dir(executable), "codex-resources", "bwrap"))
 	}
 	return candidates
+}
+
+// FindBundledBwrapForExecutable resolves the packaged bubblewrap relative to an
+// explicit launcher executable rather than the running process. The integrity
+// backend uses this to inventory the same bundled candidate the command's
+// sandbox would probe (Rust #51840).
+func FindBundledBwrapForExecutable(executable, commandCWD string) (string, bool) {
+	executable = strings.TrimSpace(executable)
+	if executable == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(executable) {
+		executable = filepath.Join(commandCWD, executable)
+	}
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		resolved = executable
+	}
+	var candidates []string
+	if context := install.FromExe(false, resolved, false, false, false, false, ""); context != nil {
+		if resource := context.BundledResource("bwrap"); resource != nil && strings.TrimSpace(*resource) != "" {
+			candidates = append(candidates, *resource)
+		}
+	}
+	candidates = append(candidates,
+		filepath.Join(filepath.Dir(resolved), "codex-resources", "bwrap"),
+		filepath.Join(filepath.Dir(resolved), "bwrap"),
+	)
+	for _, candidate := range candidates {
+		if isExecutableFile(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func isExecutableFile(path string) bool {

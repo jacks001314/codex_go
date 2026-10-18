@@ -42,7 +42,7 @@ func TestRunSandboxIntegrityChecksObservesPreparationLikeRust(t *testing.T) {
 		CWD:               cwd,
 		Command:           []string{"echo", "integrity-ok"},
 	}
-	runSandboxIntegrityChecks(plan, "", cwd, plan.Command)
+	runSandboxIntegrityChecks(plan, "", cwd, plan.Command, nil)
 	if len(capture.durations) == 0 && len(capture.counters) == 0 {
 		t.Fatalf("integrity runner emitted no metrics; counters=%v durations=%v", capture.counters, capture.durations)
 	}
@@ -61,7 +61,7 @@ func TestRunSandboxIntegrityChecksSkipsFullAccessLikeRust(t *testing.T) {
 		CWD:               cwd,
 		Command:           []string{"echo", "integrity-ok"},
 	}
-	runSandboxIntegrityChecks(plan, "", cwd, plan.Command)
+	runSandboxIntegrityChecks(plan, "", cwd, plan.Command, nil)
 	if len(capture.durations) != 0 || len(capture.counters) != 0 {
 		t.Fatalf("full-access request emitted metrics: %#v", capture)
 	}

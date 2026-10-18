@@ -90,8 +90,47 @@ func (m *ReadDenyMatcher) IsLocalPathReadDeniedWithCanonical(path, canonicalPath
 // entries are kept for the read-deny matcher; there they are checked against the
 // resolved contents instead of against the alias that names them.
 func PreparePolicy(entries []sandbox.FileSystemSandboxEntry, cwd string) (*PreparedPolicy, error) {
-	globEntries := make([]sandbox.FileSystemSandboxEntry, 0, len(entries))
-	for _, entry := range entries {
+	return PreparePolicyWithEnvironment(entries, cwd, nil)
+}
+
+// PreparePolicyWithEnvironment resolves executor-symbolic entries using the
+// command's explicit environment. In particular, `:tmpdir` uses TMPDIR (and is
+// removed when empty), while `~` deny globs use HOME before the account
+// fallback, matching Rust #51840.
+func PreparePolicyWithEnvironment(entries []sandbox.FileSystemSandboxEntry, cwd string, env map[string]string) (*PreparedPolicy, error) {
+	normalizedEntries := append([]sandbox.FileSystemSandboxEntry(nil), entries...)
+	globEntries := make([]sandbox.FileSystemSandboxEntry, 0, len(normalizedEntries))
+	for index := 0; index < len(normalizedEntries); index++ {
+		entry := &normalizedEntries[index]
+		if entry.Path.Type == "special" && entry.Path.Value != nil &&
+			strings.EqualFold(strings.TrimSpace(entry.Path.Value.Kind), "tmpdir") {
+			tmpdir := ""
+			if env != nil {
+				tmpdir = strings.TrimSpace(env["TMPDIR"])
+			}
+			if tmpdir == "" {
+				normalizedEntries = append(normalizedEntries[:index], normalizedEntries[index+1:]...)
+				index--
+				continue
+			}
+			if strings.HasPrefix(tmpdir, "~/") || strings.HasPrefix(tmpdir, `~\`) {
+				home := ""
+				if env != nil {
+					home = strings.TrimSpace(env["HOME"])
+				}
+				if home == "" {
+					home, _ = os.UserHomeDir()
+				}
+				if home == "" {
+					return nil, fmt.Errorf("%w: unable to resolve TMPDIR %q without executor home", ErrInvalidPolicy, tmpdir)
+				}
+				tmpdir = filepath.Join(home, tmpdir[2:])
+			}
+			if !filepath.IsAbs(tmpdir) {
+				tmpdir = filepath.Join(cwd, tmpdir)
+			}
+			entry.Path = sandbox.FileSystemPath{Type: "path", Path: filepath.Clean(tmpdir)}
+		}
 		if entry.Path.Type != "glob_pattern" || entry.Access != sandbox.FileSystemAccessDeny {
 			// Upstream keeps non-deny entries in glob_policy but its deny matcher
 			// only consumes deny entries (permissions.rs:1185-1191).
@@ -102,8 +141,17 @@ func PreparePolicy(entries []sandbox.FileSystemSandboxEntry, cwd string) (*Prepa
 			// Rust #41209 resolves `~` against the executor home and fails
 			// closed when it cannot (permissions.rs:1194-1210). Local integrity
 			// checks run with the executor's own home.
-			home, err := os.UserHomeDir()
-			if err != nil || strings.TrimSpace(home) == "" {
+			home := ""
+			if env != nil {
+				home = strings.TrimSpace(env["HOME"])
+			}
+			if home == "" {
+				resolvedHome, err := os.UserHomeDir()
+				if err == nil {
+					home = resolvedHome
+				}
+			}
+			if strings.TrimSpace(home) == "" {
 				return nil, fmt.Errorf("%w: unable to resolve deny-read glob pattern %q without executor home", ErrInvalidPolicy, pattern)
 			}
 			entry.Path.Pattern = filepath.Join(home, pattern[2:])
@@ -113,7 +161,7 @@ func PreparePolicy(entries []sandbox.FileSystemSandboxEntry, cwd string) (*Prepa
 		if materialized == "" || !doublestar.ValidatePattern(filepath.ToSlash(materialized)) {
 			return nil, fmt.Errorf("%w: invalid deny-read glob pattern %q", ErrInvalidPolicy, pattern)
 		}
-		globEntries = append(globEntries, entry)
+		globEntries = append(globEntries, *entry)
 	}
 	var globDenials *ReadDenyMatcher
 	if len(globEntries) > 0 {
@@ -121,7 +169,7 @@ func PreparePolicy(entries []sandbox.FileSystemSandboxEntry, cwd string) (*Prepa
 		convention, _ := legacy.InferAbsolutePathConvention()
 		globDenials = &ReadDenyMatcher{entries: globEntries, cwd: cwd, convention: convention}
 	}
-	roots := writableRoots(entries, cwd)
+	roots := writableRoots(normalizedEntries, cwd)
 	return &PreparedPolicy{Roots: roots, GlobDenials: globDenials}, nil
 }
 

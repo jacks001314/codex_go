@@ -31,3 +31,7 @@ func ResolveSID(name string) ([]byte, error) {
 func LookupAccountNameForSID(sidString string) (string, error) {
 	return "", windowssandbox.Unsupported("bin.setup_main.win.sandbox_users.lookup_account_name_for_sid")
 }
+
+func resolveSIDString(name string) (string, error) {
+	return "", windowssandbox.Unsupported("bin.setup_main.win.sandbox_users.resolve_sid_string")
+}
