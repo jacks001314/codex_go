@@ -292,7 +292,7 @@ func TestBuildToolRegistryWiresRequestPermissionsEnvironmentLikeRust(t *testing.
 	arguments, err := json.Marshal(map[string]any{
 		"reason":         "need the environment",
 		"environment_id": "remote-x",
-		"permissions":    map[string]any{"network": true},
+		"permissions":    map[string]any{"network": map[string]any{"enabled": true}},
 	})
 	if err != nil {
 		t.Fatalf("marshal arguments: %v", err)

@@ -437,6 +437,24 @@ func (r *Registry) Spec(name ToolName) (Spec, bool) {
 	return spec, ok
 }
 
+// SetExposure replaces one registered tool's exposure. It backs Rust's
+// direct-only namespace post-pass (spec_plan.rs
+// apply_direct_model_only_namespace_overrides).
+func (r *Registry) SetExposure(name ToolName, exposure Exposure) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	spec, ok := r.specs[name.Key()]
+	if !ok {
+		return false
+	}
+	spec.Exposure = exposure
+	r.specs[name.Key()] = spec
+	return true
+}
+
 func (r *Registry) ModelVisibleSpecs() []Spec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

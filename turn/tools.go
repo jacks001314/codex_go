@@ -155,6 +155,11 @@ type ToolRegistryOptions struct {
 	// features.code_mode_tool_description_first (#51690/#51704): nested tool
 	// definitions put the tool description before the namespace description.
 	CodeModeToolDescriptionFirst bool
+	// DirectOnlyToolNamespaces mirrors Rust
+	// features.code_mode.direct_only_tool_namespaces: exact namespaces exposed
+	// only as direct model tools, bypassing deferral and the nested Code Mode
+	// surface.
+	DirectOnlyToolNamespaces []string
 	// CodeModeOnlyStrictThirdPartyTools defers eligible MCP/app and dynamic
 	// tools in Code Mode Only (Rust #50687).
 	CodeModeOnlyStrictThirdPartyTools bool
@@ -743,6 +748,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 		indirectPrefixes = resolved
 	}
+	applyDirectOnlyToolNamespaceOverrides(registry, options.DirectOnlyToolNamespaces)
 	if options.CodeModeOnlyStrictThirdPartyTools && options.ToolMode == model.ToolModeCodeModeOnly {
 		registry.EnforceStrictThirdPartyTools()
 	}
@@ -795,6 +801,42 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		return nil, err
 	}
 	return registry, nil
+}
+
+// applyDirectOnlyToolNamespaceOverrides mirrors Rust
+// apply_direct_model_only_namespace_overrides (spec_plan.rs): every code-mode
+// available tool in an exact configured namespace becomes a direct model tool,
+// so it bypasses deferral and is omitted from the nested Code Mode surface.
+// Hidden tools stay hidden, and the later strict third-party pass may defer
+// eligible third-party tools again, exactly as upstream orders the two passes.
+func applyDirectOnlyToolNamespaceOverrides(registry *tool.Registry, namespaces []string) {
+	if registry == nil || len(namespaces) == 0 {
+		return
+	}
+	directOnly := make(map[string]bool, len(namespaces))
+	for _, namespace := range namespaces {
+		if namespace = strings.TrimSpace(namespace); namespace != "" {
+			directOnly[namespace] = true
+		}
+	}
+	if len(directOnly) == 0 {
+		return
+	}
+	for _, name := range registry.Names() {
+		spec, ok := registry.Spec(name)
+		if !ok || !tool.IsCodeModeAvailable(spec.Exposure) {
+			continue
+		}
+		// Rust's with_default_namespace gives plain built-in tools the
+		// "functions" namespace.
+		namespace := strings.TrimSpace(name.Namespace)
+		if namespace == "" {
+			namespace = "functions"
+		}
+		if directOnly[namespace] {
+			registry.SetExposure(name, tool.ExposureDirectModelOnly)
+		}
+	}
 }
 
 // SupportsLegacyShellCommand matches Rust's single-local-environment gate.

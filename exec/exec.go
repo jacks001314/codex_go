@@ -520,6 +520,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		CodeModeDefaultExecYieldTime:      cfg.CodeModeDefaultExecYieldTime(),
 		CodeModeShowCellOverhead:          cfg.CodeModeExperimentalShowCellOverhead(),
 		CodeModeToolDescriptionFirst:      cfg.CodeModeToolDescriptionFirst(),
+		DirectOnlyToolNamespaces:          cfg.CodeModeDirectOnlyToolNamespaces(),
 		CodeModeOnlyStrictThirdPartyTools: cfg.CodeModeOnlyStrictThirdPartyTools(),
 		ProviderID:                        providerID,
 		CyberAccessProgram:                cyberAccessProgram,
@@ -750,6 +751,7 @@ type agentRunConfig struct {
 	CodeModeDefaultExecYieldTime      time.Duration
 	CodeModeShowCellOverhead          bool
 	CodeModeToolDescriptionFirst      bool
+	DirectOnlyToolNamespaces          []string
 	CodeModeOnlyStrictThirdPartyTools bool
 	CodeModeProvider                  tool.CodeModeRemoteProvider
 	CodeModeRuntime                   *tool.CodeModeRuntime
@@ -1431,6 +1433,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.CodeModeDefaultExecYieldTime = run.CodeModeDefaultExecYieldTime
 		options.CodeModeShowCellOverhead = run.CodeModeShowCellOverhead
 		options.CodeModeToolDescriptionFirst = run.CodeModeToolDescriptionFirst
+		options.DirectOnlyToolNamespaces = append([]string(nil), run.DirectOnlyToolNamespaces...)
 		options.CodeModeOnlyStrictThirdPartyTools = run.CodeModeOnlyStrictThirdPartyTools
 		options.DisableCodeModeFallback = run.DisableCodeModeFallback
 		options.ToolMode = run.ToolMode
