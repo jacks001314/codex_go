@@ -2104,9 +2104,10 @@ green.
   that can index past the flattened source.
 - `#52557` remains partial: Go lacks OSC-52 terminal clipboard forwarding, so
   Herdr/tmux/SSH forwarding is not available.
-- `#51207` remains partial: `cli_daybreak` now defaults off and gates TUI
-  behavior plus thread/start staging, but the slash catalog still exposes
-  `/daybreak` when disabled.
+- `#51207` is complete: `cli_daybreak` defaults off, gates live preference and
+  thread/start staging, hides `/daybreak` from the slash catalog when disabled
+  or account-ineligible, and keeps typed dispatch resolvable with a silent
+  no-op under the gate.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

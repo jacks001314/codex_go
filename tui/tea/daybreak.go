@@ -76,15 +76,73 @@ func (m *Model) daybreakModelSupport() (supported bool, known bool) {
 	if !ok {
 		return false, false
 	}
-	if len(option.AvailableCyberPrograms) == 0 {
+	if option.AvailableCyberPrograms == nil {
 		return false, false
 	}
-	for _, program := range option.AvailableCyberPrograms {
-		if strings.EqualFold(strings.TrimSpace(program), "daybreak_blue") {
-			return true, true
+	return daybreakProgram(option.AvailableCyberPrograms) != "", true
+}
+
+// daybreakProgram selects the catalog's preferred Daybreak program. Rust
+// ModelAccessPrograms::daybreak prefers daybreak_blue and falls back to
+// daybreak_red.
+func daybreakProgram(programs []string) string {
+	for _, want := range []string{"daybreak_blue", "daybreak_red"} {
+		for _, program := range programs {
+			if strings.EqualFold(strings.TrimSpace(program), want) {
+				return want
+			}
 		}
 	}
-	return false, true
+	return ""
+}
+
+// daybreakCatalogAvailability mirrors Rust daybreak::availability: any model
+// advertising Daybreak proves availability, while absence is conclusive only
+// when every catalog entry carries program metadata.
+func (m *Model) daybreakCatalogAvailability() (available bool, known bool) {
+	if m == nil {
+		return false, false
+	}
+	options := m.modelCatalogOpts
+	if len(options) == 0 {
+		options = m.modelPickerOpts
+	}
+	if len(options) == 0 {
+		return false, false
+	}
+	allKnown := true
+	for _, option := range options {
+		if daybreakProgram(option.AvailableCyberPrograms) != "" {
+			return true, true
+		}
+		if option.AvailableCyberPrograms == nil {
+			allKnown = false
+		}
+	}
+	return false, allKnown
+}
+
+// daybreakCommandDescription mirrors Rust ChatWidget::daybreak_command_description.
+// The bool is false when the /daybreak row must be hidden.
+func (m *Model) daybreakCommandDescription() (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	if m.daybreakEnabled && m.daybreakFeatureEnabled() {
+		return "Disable broader access for cybersecurity work", true
+	}
+	if !m.daybreakAccountEligible() {
+		return "", false
+	}
+	available, known := m.daybreakCatalogAvailability()
+	switch {
+	case available:
+		return "Enable broader access for cybersecurity work", true
+	case known:
+		return "Learn about broader access for cybersecurity work", true
+	default:
+		return "Manage broader access for cybersecurity work", true
+	}
 }
 
 // applyDaybreakCommand toggles the thread's Daybreak preference and persists it
@@ -94,7 +152,6 @@ func (m *Model) applyDaybreakCommand() bubbletea.Cmd {
 		return nil
 	}
 	if !m.daybreakFeatureEnabled() {
-		m.addErrorHistoryMessage("Daybreak is unavailable.")
 		return nil
 	}
 	if !m.daybreakEnabled {
@@ -136,7 +193,7 @@ func (m *Model) setDaybreakPreference(enabled bool) bubbletea.Cmd {
 			return nil
 		}
 	}
-	m.daybreakEnabled = enabled
+	m.daybreakEnabled = enabled && m.daybreakFeatureEnabled()
 	if enabled {
 		m.notice = "Daybreak is on for new turns."
 	} else {
@@ -144,4 +201,14 @@ func (m *Model) setDaybreakPreference(enabled bool) bubbletea.Cmd {
 	}
 	m.refreshTranscript()
 	return m.refreshStatusControlsCmd()
+}
+
+// syncDaybreakFeatureGate re-applies cli_daybreak to the live thread
+// preference after a feature toggle or configuration reload (Rust
+// ChatWidget::set_daybreak_enabled).
+func (m *Model) syncDaybreakFeatureGate() {
+	if m == nil {
+		return
+	}
+	m.daybreakEnabled = m.daybreakEnabled && m.daybreakFeatureEnabled()
 }

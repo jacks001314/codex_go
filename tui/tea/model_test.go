@@ -4643,7 +4643,14 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 			state := codextui.NewState(nil)
 			state.SetThreadID("thread-visible")
 			state.AddMessage(codextui.RoleAssistant, "last response")
-			model := NewModel(state, Options{Width: 100, Height: 30})
+			options := Options{Width: 100, Height: 30}
+			if frame.Name == "daybreak" {
+				// Rust #51207 dispatches /daybreak silently when the feature is
+				// off; enable it here so this inventory test still observes the
+				// account-eligibility error.
+				options.FeatureSettings = map[string]bool{"cli_daybreak": true}
+			}
+			model := NewModel(state, options)
 			beforeView := utils.StripANSI(model.View())
 			beforeNotice := model.notice
 			beforeModal := model.modal

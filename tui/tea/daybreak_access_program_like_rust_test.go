@@ -46,6 +46,21 @@ func TestCyberAccessProgramForTurnLikeRust(t *testing.T) {
 	if _, err := unsupported.cyberAccessProgramForTurn(); err == nil {
 		t.Fatal("daybreak on unsupported model did not error")
 	}
+	red := cyberProgramTestModel(t, true, []string{"standard", "daybreak_red"})
+	if got, err := red.cyberAccessProgramForTurn(); err != nil || got != "daybreak_red" {
+		t.Fatalf("daybreak_red program = %q err=%v", got, err)
+	}
+}
+
+// Rust ModelAccessPrograms::daybreak also accepts daybreak_red, so the toggle
+// validates against either supported program.
+func TestDaybreakCommandAcceptsRedProgramLikeRust(t *testing.T) {
+	model := cyberProgramTestModel(t, false, []string{"standard", "daybreak_red"})
+	model.State.SetThreadID("thread-red")
+	model.applyDaybreakCommand()
+	if !model.daybreakEnabled {
+		t.Fatal("daybreak_red catalog did not enable Daybreak")
+	}
 }
 
 func TestCyberAccessProgramAPIKeyGateLikeRust(t *testing.T) {

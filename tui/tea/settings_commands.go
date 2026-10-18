@@ -164,12 +164,14 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 	edits := make([]SettingsEdit, 0, len(items))
 	changed := 0
 	serviceTierPolicyChanged := false
+	daybreakFeatureChanged := false
 	for _, item := range items {
 		key := strings.TrimSpace(item.Key)
 		if key == "" {
 			continue
 		}
-		if features.Enabled(m.featureSettings, key) != item.Enabled {
+		wasEnabled := features.Enabled(m.featureSettings, key)
+		if wasEnabled != item.Enabled {
 			changed++
 		}
 		previous := m.featureSettings[key]
@@ -177,12 +179,22 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 		if (key == codextui.FeatureKeyFastMode || key == codextui.FeatureKeyUltrafastMode) && previous != item.Enabled {
 			serviceTierPolicyChanged = true
 		}
+		if key == "cli_daybreak" && wasEnabled != features.Enabled(m.featureSettings, key) {
+			daybreakFeatureChanged = true
+		}
 		edits = append(edits, experimentalFeatureEdit(item))
 	}
 	if serviceTierPolicyChanged {
 		// Rust #51253 (chatwidget/settings.rs set_feature_enabled): changing the
 		// Fast or Ultra Fast policy re-syncs the service-tier commands.
 		m.refreshServiceTierCommands()
+	}
+	var statusCmd bubbletea.Cmd
+	if daybreakFeatureChanged {
+		// Rust #51207 set_feature_enabled: toggling cli_daybreak re-applies the
+		// live Daybreak preference and refreshes the status surfaces.
+		m.syncDaybreakFeatureGate()
+		statusCmd = m.refreshStatusControlsCmd()
 	}
 	switch {
 	case len(items) == 1:
@@ -198,6 +210,7 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 		m.notice = "Experimental features saved."
 	}
 	m.refreshTranscript()
+	var writeCmd bubbletea.Cmd
 	if m.onWriteSettings != nil && len(edits) > 0 {
 		requested := make(map[string]bool, len(items))
 		for _, item := range items {
@@ -206,9 +219,9 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 			}
 		}
 		m.pendingExperimentalFeatureUpdates = requested
-		return m.writeSettings(settingsWriteKindExperimental, edits)
+		writeCmd = m.writeSettings(settingsWriteKindExperimental, edits)
 	}
-	return nil
+	return bubbletea.Batch(writeCmd, statusCmd)
 }
 
 func experimentalModalOptions(items []chatwidget.ExperimentalFeatureOption) []ModalOption {
@@ -529,6 +542,12 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 			// Rust #51253: a Fast or Ultra Fast policy change re-syncs the
 			// service-tier commands.
 			m.refreshServiceTierCommands()
+		}
+		if features.Enabled(previousFeatures, "cli_daybreak") != features.Enabled(m.featureSettings, "cli_daybreak") {
+			// Rust #51207: a configuration reload carries the same live
+			// cli_daybreak gate as an in-place experimental toggle.
+			m.syncDaybreakFeatureGate()
+			m.refreshStatusControls()
 		}
 	}
 	if result.UseMemories != nil {

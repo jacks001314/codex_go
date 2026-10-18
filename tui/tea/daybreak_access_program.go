@@ -15,12 +15,9 @@ func (m *Model) cyberAccessProgramForTurn() (string, error) {
 		return "", nil
 	}
 	modelID := strings.TrimSpace(m.State.Model)
-	programs := []string{}
-	for _, option := range m.modelPickerOpts {
-		if strings.EqualFold(strings.TrimSpace(option.ID), modelID) {
-			programs = option.AvailableCyberPrograms
-			break
-		}
+	programs := []string(nil)
+	if option, ok := m.currentModelCatalogOption(modelID); ok {
+		programs = option.AvailableCyberPrograms
 	}
 	contains := func(want string) bool {
 		for _, program := range programs {
@@ -31,8 +28,8 @@ func (m *Model) cyberAccessProgramForTurn() (string, error) {
 		return false
 	}
 	if m.daybreakEnabled {
-		if contains("daybreak_blue") {
-			return "daybreak_blue", nil
+		if program := daybreakProgram(programs); program != "" {
+			return program, nil
 		}
 		return "", fmt.Errorf("Daybreak is unavailable for model %s", modelID)
 	}

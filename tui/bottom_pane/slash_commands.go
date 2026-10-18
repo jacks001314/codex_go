@@ -103,9 +103,13 @@ type BuiltinCommandFlags struct {
 	PluginsCommandEnabled       bool
 	TokenActivityCommandEnabled bool
 	ServiceTierCommandsEnabled  bool
-	GoalCommandEnabled          bool
-	AllowElevateSandbox         bool
-	SideConversationActive      bool
+	// DaybreakCommandDescription gates /daybreak in the popup and overrides its
+	// row text. A nil value hides the command (Rust
+	// BuiltinCommandFlags::daybreak_command_description).
+	DaybreakCommandDescription *string
+	GoalCommandEnabled         bool
+	AllowElevateSandbox        bool
+	SideConversationActive     bool
 }
 
 func BuiltinsForInput(flags BuiltinCommandFlags) []SlashCommandItem {
@@ -158,6 +162,10 @@ func FindBuiltinCommand(name string, flags BuiltinCommandFlags) (SlashCommandIte
 	lookupFlags := flags
 	lookupFlags.TokenActivityCommandEnabled = true
 	lookupFlags.SideConversationActive = false
+	// Rust find_builtin_command keeps a typed /daybreak dispatchable even while
+	// the popup hides it, so dispatch can produce the feature-specific result.
+	daybreakDescription := ""
+	lookupFlags.DaybreakCommandDescription = &daybreakDescription
 	for _, frame := range codextui.SlashCommandFrames() {
 		isAlias := false
 		matches := frame.Name == name
@@ -178,7 +186,7 @@ func FindBuiltinCommand(name string, flags BuiltinCommandFlags) (SlashCommandIte
 			Name:        frame.Name,
 			Command:     frame.Command,
 			Aliases:     append([]string(nil), frame.Aliases...),
-			Description: slashCommandDescription(frame),
+			Description: builtinFrameDescription(frame, lookupFlags),
 			IsAlias:     isAlias,
 		}
 		if isAlias {
@@ -238,7 +246,7 @@ func appendBuiltinFrameIfAvailable(out []SlashCommandItem, frame codextui.SlashC
 		Name:        frame.Name,
 		Command:     frame.Command,
 		Aliases:     append([]string(nil), frame.Aliases...),
-		Description: slashCommandDescription(frame),
+		Description: builtinFrameDescription(frame, flags),
 		IsAlias:     isAlias,
 	})
 }
@@ -269,6 +277,10 @@ func builtinFrameAvailable(frame codextui.SlashCommandFrame, flags BuiltinComman
 		if !flags.TokenActivityCommandEnabled {
 			return false
 		}
+	case codextui.CommandDaybreak:
+		if flags.DaybreakCommandDescription == nil {
+			return false
+		}
 	case codextui.CommandGoal:
 		if !flags.GoalCommandEnabled {
 			return false
@@ -278,6 +290,15 @@ func builtinFrameAvailable(frame codextui.SlashCommandFrame, flags BuiltinComman
 		return false
 	}
 	return true
+}
+
+func builtinFrameDescription(frame codextui.SlashCommandFrame, flags BuiltinCommandFlags) string {
+	if frame.Command == codextui.CommandDaybreak && flags.DaybreakCommandDescription != nil {
+		if description := *flags.DaybreakCommandDescription; description != "" {
+			return description
+		}
+	}
+	return slashCommandDescription(frame)
 }
 
 func slashCommandFramesByName() map[string]codextui.SlashCommandFrame {

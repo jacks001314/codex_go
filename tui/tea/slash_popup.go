@@ -149,6 +149,7 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		return nil
 	}
 	sideConversationActive := m.inSideConversation()
+	daybreakDescription, daybreakVisible := m.daybreakCommandDescription()
 	flags := bottompane.BuiltinCommandFlags{
 		CollaborationModesEnabled:   features.Enabled(m.featureSettings, "collaboration_modes"),
 		ConnectorsEnabled:           features.Enabled(m.featureSettings, "apps") && m.hasChatGPTAccount,
@@ -164,6 +165,9 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		// can be carried as disabled rows instead of being dropped, and mark
 		// them here.
 		SideConversationActive: false,
+	}
+	if daybreakVisible {
+		flags.DaybreakCommandDescription = &daybreakDescription
 	}
 	commands := bottompane.CommandsForInput(flags, m.serviceTierCommands)
 	items := make([]slashCommandPopupItem, 0, len(commands))

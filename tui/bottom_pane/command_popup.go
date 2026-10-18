@@ -69,6 +69,7 @@ type CommandPopupFlags struct {
 	PluginsCommandEnabled        bool
 	TokenActivityCommandEnabled  bool
 	ServiceTierCommandsEnabled   bool
+	DaybreakCommandDescription   *string
 	GoalCommandEnabled           bool
 	WindowsDegradedSandboxActive bool
 	SideConversationActive       bool
@@ -90,6 +91,7 @@ func NewCommandPopup(flags CommandPopupFlags, serviceTierCommands []ServiceTierC
 		PluginsCommandEnabled:       flags.PluginsCommandEnabled,
 		TokenActivityCommandEnabled: flags.TokenActivityCommandEnabled,
 		ServiceTierCommandsEnabled:  flags.ServiceTierCommandsEnabled,
+		DaybreakCommandDescription:  flags.DaybreakCommandDescription,
 		GoalCommandEnabled:          flags.GoalCommandEnabled,
 		AllowElevateSandbox:         flags.WindowsDegradedSandboxActive,
 		SideConversationActive:      flags.SideConversationActive,

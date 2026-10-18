@@ -24903,9 +24903,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: daybreak_command_description, persist_daybreak_selection, program_for_turn, set_daybreak_command_description, set_daybreak_enabled"
+        "Round 681 (progress): /daybreak persists the thread preference without starting a turn, program_for_turn selects standard when off and prefers daybreak_blue over daybreak_red when on, and the popup description/visibility now follows daybreak_command_description. The live preference is re-gated by set_daybreak_enabled semantics on feature toggles and settings reloads. Remaining: complete the seven-symbol audit against Rust's app-event persistence and background-task paths."
       ]
     },
     {
@@ -26909,9 +26909,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Go's cli_daybreak feature is now disabled by default, the TUI's Daybreak behavior/update controls are gated by it, and local thread/start only stages daybreak_enabled when the feature is enabled. The slash-command catalog still lists /daybreak regardless of the feature, so Rust's hide-when-disabled presentation remains missing."
+        "Round 681 (implementation): cli_daybreak defaults off and gates the TUI's live Daybreak preference, resumes, status surfaces, background/system dispatch, and local thread/start staging. The slash catalog now mirrors Rust's daybreak_command_description flag: nil hides /daybreak when the feature is off or the account is ineligible, a set value supplies the enable/disable/learn/manage row text, and find_builtin_command keeps a typed /daybreak dispatchable so dispatch returns silently under the feature gate. Toggling the feature in /experimental or reloading settings clears the live preference and refreshes status surfaces. Tests: go test ./tui/... -count=1; go vet ./tui/..."
       ]
     },
     {
