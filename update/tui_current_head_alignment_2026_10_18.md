@@ -2050,3 +2050,6 @@ green.
 - `#47975` is complete: pending voice speech carries its input generation and
   awaiting-turn fallback, so recovery drops answers superseded by newer input
   while retaining unspoken text for an unsettled turn.
+- `#48775` remains partial: pinned headers have the `› ` prefix and display-width
+  truncation, but Go has no spoken-prompt flag/style to mirror Rust's bold red
+  spoken header and prefix reservation.

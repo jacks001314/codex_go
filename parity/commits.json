@@ -22428,9 +22428,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's pinned prompt header already adds the '› ' prefix, sanitizes/collapses the prompt, truncates by display width, and jumps back to the source row. It does not distinguish spoken prompts: Message has no spoken flag and the header uses one style for every prompt, whereas Rust uses bold red for spoken prompts and reserves an extra column for the prefix. Spoken prompt styling remains missing."
       ]
     },
     {
