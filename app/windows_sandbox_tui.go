@@ -33,9 +33,22 @@ func interactiveWindowsSandboxStartupPrompt(root *cli.RootOptions, requirements 
 	if err != nil || loaded == nil {
 		return nil
 	}
-	level := interactiveWindowsSandboxLevel(loaded.Values)
 	setupComplete, _ := windowssandbox.SandboxSetupIsComplete(codexHome)
 	requirementsSourcePresent := loaded.Requirements != nil && loaded.Requirements.AllowedWindowsSandboxImplementations != nil
+	return interactiveWindowsSandboxPromptFromValues(root, loaded.Values, requirements, requirementsSourcePresent, setupComplete)
+}
+
+// interactiveWindowsSandboxPromptFromValues derives the startup prompt from the
+// authoritative configuration values and requirements. For a connected app
+// server those values come from config/read and configRequirements/read.
+func interactiveWindowsSandboxPromptFromValues(
+	root *cli.RootOptions,
+	values map[string]any,
+	requirements *chatwidget.PermissionRequirements,
+	requirementsSourcePresent bool,
+	setupComplete bool,
+) *codextea.WindowsSandboxStartupPrompt {
+	level := interactiveWindowsSandboxLevel(values)
 	elevatedSetupRequired := chatwidget.ElevatedWindowsSandboxSetupRequired(level, requirementsSourcePresent, setupComplete)
 	// Rust tui/src/lib.rs: the startup NUX fires only when the session made a
 	// directory trust decision (a fresh/untrusted cwd) while the sandbox
@@ -54,18 +67,21 @@ func interactiveWindowsSandboxStartupPrompt(root *cli.RootOptions, requirements 
 			cwd = strings.TrimSpace(resolved)
 		}
 	}
-	trustDecisionContext := !config.ProjectConfigEnabled(loaded.Values, cwd)
+	trustDecisionContext := !config.ProjectConfigEnabled(values, cwd)
 	showNow := (trustDecisionContext && level == chatwidget.WindowsSandboxLevelDisabled) || elevatedSetupRequired
 	decision := chatwidget.MaybePromptWindowsSandboxEnable(showNow, level, elevatedSetupRequired, true)
 	if !decision.OpenEnablePrompt {
 		return nil
 	}
 	allowUnelevated := true
+	allowElevated := true
 	if requirements != nil {
 		allowUnelevated = chatwidget.WindowsSandboxModeAllowed(*requirements, chatwidget.WindowsSandboxModeUnelevated)
+		allowElevated = chatwidget.WindowsSandboxModeAllowed(*requirements, chatwidget.WindowsSandboxModeElevated)
 	}
 	return &codextea.WindowsSandboxStartupPrompt{
 		AllowUnelevated:     allowUnelevated,
+		AllowElevated:       allowElevated,
 		SetupChoiceRequired: !allowUnelevated || elevatedSetupRequired,
 	}
 }
@@ -80,7 +96,49 @@ func interactiveRemoteWindowsSandboxStartupPrompt(ctx context.Context, root *cli
 	if interactiveRemoteWindowsSandboxReady(ctx, endpoint) {
 		return nil
 	}
-	return interactiveWindowsSandboxStartupPrompt(root, requirements)
+	values, requirementsSourcePresent, remoteRequirements, err := interactiveRemoteWindowsSandboxState(ctx, root, endpoint)
+	if err != nil {
+		return nil
+	}
+	if requirements != nil {
+		remoteRequirements = requirements
+	}
+	return interactiveWindowsSandboxPromptFromValues(root, values, remoteRequirements, requirementsSourcePresent, false)
+}
+
+// interactiveRemoteWindowsSandboxState reads the connected app server's
+// effective config and requirements for the current working directory
+// (Rust #45821 refresh_windows_sandbox_config).
+func interactiveRemoteWindowsSandboxState(
+	ctx context.Context,
+	root *cli.RootOptions,
+	endpoint *appserverdaemon.RemoteAppServerEndpoint,
+) (map[string]any, bool, *chatwidget.PermissionRequirements, error) {
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client, err := openRemoteSessionClient(callCtx, endpoint)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	defer client.close()
+	params := config.ConfigReadParams{}
+	if root != nil {
+		if cwd := strings.TrimSpace(root.Shared.CWD); cwd != "" {
+			params.CWD = &cwd
+		}
+	}
+	var read config.ConfigReadResponse
+	if err := remoteSessionRequest(callCtx, client, appserver.MethodConfigRead, params, &read); err != nil {
+		return nil, false, nil, err
+	}
+	var requirements config.ConfigRequirementsReadResponse
+	sourcePresent := false
+	var permissionRequirements *chatwidget.PermissionRequirements
+	if err := remoteSessionRequest(callCtx, client, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err == nil {
+		sourcePresent = requirements.Requirements != nil && requirements.Requirements.AllowedWindowsSandboxImplementations != nil
+		permissionRequirements = interactivePermissionRequirementsFromConfigRequirements(requirements.Requirements)
+	}
+	return read.Config, sourcePresent, permissionRequirements, nil
 }
 
 // windowsSandboxReadyViaClient queries the connected app server's
@@ -177,6 +235,71 @@ func interactiveWindowsSandboxSetupHandler(root *cli.RootOptions) codextea.Windo
 		})
 		defer router.Close()
 		return interactiveRunWindowsSandboxSetup(router, mode, cwd)
+	}
+}
+
+// interactiveLocalWindowsSandboxStateHandler reads the embedded app-server
+// config for the requested directory (Rust #45821).
+func interactiveLocalWindowsSandboxStateHandler(root *cli.RootOptions) codextea.WindowsSandboxStateReaderFunc {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	return func(cwd string) (codextea.WindowsSandboxState, error) {
+		service := interactiveConfigService(root)
+		params := &config.ConfigReadParams{}
+		if cwd = strings.TrimSpace(cwd); cwd != "" {
+			params.CWD = &cwd
+		}
+		read, err := service.Read(params)
+		if err != nil {
+			return codextea.WindowsSandboxState{}, err
+		}
+		requirements := chatwidget.PermissionRequirements{}
+		if response := service.Requirements(); response != nil {
+			if parsed := interactivePermissionRequirementsFromConfigRequirements(response.Requirements); parsed != nil {
+				requirements = *parsed
+			}
+		}
+		return codextea.WindowsSandboxState{
+			Level:        interactiveWindowsSandboxLevel(read.Config),
+			Requirements: requirements,
+		}, nil
+	}
+}
+
+// interactiveRemoteWindowsSandboxStateHandler reads config/read and
+// configRequirements/read from a local app server (Rust #45821).
+func interactiveRemoteWindowsSandboxStateHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.WindowsSandboxStateReaderFunc {
+	if runtime.GOOS != "windows" || !interactiveRemoteEndpointIsLocal(endpoint) {
+		return nil
+	}
+	return func(cwd string) (codextea.WindowsSandboxState, error) {
+		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		client, err := openRemoteSessionClient(callCtx, endpoint)
+		if err != nil {
+			return codextea.WindowsSandboxState{}, err
+		}
+		defer client.close()
+		params := config.ConfigReadParams{}
+		if cwd = strings.TrimSpace(cwd); cwd != "" {
+			params.CWD = &cwd
+		}
+		var read config.ConfigReadResponse
+		if err := remoteSessionRequest(callCtx, client, appserver.MethodConfigRead, params, &read); err != nil {
+			return codextea.WindowsSandboxState{}, err
+		}
+		requirements := chatwidget.PermissionRequirements{}
+		var response config.ConfigRequirementsReadResponse
+		if err := remoteSessionRequest(callCtx, client, appserver.MethodConfigRequirementsRead, map[string]any{}, &response); err == nil {
+			if parsed := interactivePermissionRequirementsFromConfigRequirements(response.Requirements); parsed != nil {
+				requirements = *parsed
+			}
+		}
+		return codextea.WindowsSandboxState{
+			Level:        interactiveWindowsSandboxLevel(read.Config),
+			Requirements: requirements,
+		}, nil
 	}
 }
 

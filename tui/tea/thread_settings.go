@@ -49,6 +49,10 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 		m.State.CWD = cwd
 		m.sessionCWD = cwd
 		cwdChanged = true
+		if m.onReadWindowsSandboxState != nil {
+			// Rust #45821: Windows sandbox requirements are directory-scoped.
+			m.windowsSandboxRefreshPending = true
+		}
 	}
 	if settings.InstructionSourcesSet || settings.InstructionSources != nil {
 		home, _ := os.UserHomeDir()

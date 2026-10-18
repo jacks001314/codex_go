@@ -23,3 +23,31 @@ func TestInteractiveWindowsSandboxLevelSelectsMxcLikeRust(t *testing.T) {
 		t.Fatalf("interactiveWindowsSandboxLevel(unset) = %q, want disabled", got)
 	}
 }
+
+// TestInteractiveWindowsSandboxPromptUsesServerRequirementsLikeRust covers
+// Rust #45821: the prompt hides setup choices the authoritative requirements
+// disallow.
+func TestInteractiveWindowsSandboxPromptUsesServerRequirementsLikeRust(t *testing.T) {
+	values := map[string]any{"windows": map[string]any{"sandbox": "elevated"}}
+	requirements := &chatwidget.PermissionRequirements{
+		AllowedWindowsSandboxModes: []chatwidget.WindowsSandboxMode{chatwidget.WindowsSandboxModeUnelevated},
+	}
+	prompt := interactiveWindowsSandboxPromptFromValues(nil, values, requirements, true, false)
+	if prompt == nil {
+		t.Fatal("elevated sandbox with pending setup should produce a prompt")
+	}
+	if prompt.AllowElevated {
+		t.Fatal("prompt offered an elevated setup disallowed by requirements")
+	}
+	if !prompt.AllowUnelevated || !prompt.SetupChoiceRequired {
+		t.Fatalf("prompt = %#v", prompt)
+	}
+
+	elevatedAllowed := &chatwidget.PermissionRequirements{
+		AllowedWindowsSandboxModes: []chatwidget.WindowsSandboxMode{chatwidget.WindowsSandboxModeElevated},
+	}
+	prompt = interactiveWindowsSandboxPromptFromValues(nil, values, elevatedAllowed, true, false)
+	if !prompt.AllowElevated || prompt.AllowUnelevated {
+		t.Fatalf("elevated-only prompt = %#v", prompt)
+	}
+}

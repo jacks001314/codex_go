@@ -1352,18 +1352,21 @@ type Options struct {
 	// OnEnsureThread starts the session thread for a command that needs a
 	// thread id before the first turn (see EnsureThreadFunc). Nil leaves the
 	// command waiting for the thread that its own submission starts.
-	OnEnsureThread              EnsureThreadFunc
-	OnGoalEditText              GoalEditTextFunc
-	OnGoalDraftMaterialize      GoalDraftMaterializeFunc
-	OnGoalContinuation          GoalContinuationFunc
-	OnWriteSettings             SettingsWriteFunc
-	OnUpdateCollaborationMode   CollaborationModeUpdateFunc
-	OnWriteMemorySettings       MemorySettingsWriteFunc
-	OnResetMemories             MemoryResetFunc
-	OnSubmitFeedback            FeedbackSubmitFunc
-	OnReadIDEContext            IDEContextReaderFunc
-	OnApproveAutoReviewDenial   AutoReviewDenialApproveFunc
-	OnStartWindowsSandboxSetup  WindowsSandboxSetupFunc
+	OnEnsureThread             EnsureThreadFunc
+	OnGoalEditText             GoalEditTextFunc
+	OnGoalDraftMaterialize     GoalDraftMaterializeFunc
+	OnGoalContinuation         GoalContinuationFunc
+	OnWriteSettings            SettingsWriteFunc
+	OnUpdateCollaborationMode  CollaborationModeUpdateFunc
+	OnWriteMemorySettings      MemorySettingsWriteFunc
+	OnResetMemories            MemoryResetFunc
+	OnSubmitFeedback           FeedbackSubmitFunc
+	OnReadIDEContext           IDEContextReaderFunc
+	OnApproveAutoReviewDenial  AutoReviewDenialApproveFunc
+	OnStartWindowsSandboxSetup WindowsSandboxSetupFunc
+	// OnReadWindowsSandboxState refreshes the app-server-owned Windows sandbox
+	// level and requirements for a working directory (Rust #45821).
+	OnReadWindowsSandboxState   WindowsSandboxStateReaderFunc
 	WindowsSandboxStartupPrompt *WindowsSandboxStartupPrompt
 	OnOpenDesktopThread         DesktopThreadOpenFunc
 	OnDetectExternalAgent       ExternalAgentDetectFunc
@@ -2223,6 +2226,9 @@ type Model struct {
 	generateMemories                  bool
 	feedbackEnabled                   bool
 	windowsSandboxSetup               WindowsSandboxSetupFunc
+	onReadWindowsSandboxState         WindowsSandboxStateReaderFunc
+	windowsSandboxLevel               chatwidget.WindowsSandboxLevel
+	windowsSandboxRefreshPending      bool
 	windowsSandboxSetupChoiceRequired bool
 	onOpenDesktopThread               DesktopThreadOpenFunc
 	appsScopeGeneration               uint64
@@ -2715,6 +2721,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		generateMemories:                boolPtrValueTeaDefault(options.GenerateMemories, true),
 		feedbackEnabled:                 boolPtrValueTeaDefault(options.FeedbackEnabled, true),
 		windowsSandboxSetup:             options.OnStartWindowsSandboxSetup,
+		onReadWindowsSandboxState:       options.OnReadWindowsSandboxState,
 		onOpenDesktopThread:             options.OnOpenDesktopThread,
 		onDetectExternalAgent:           options.OnDetectExternalAgent,
 		onImportExternalAgent:           options.OnImportExternalAgent,
@@ -3322,7 +3329,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyWorktreeBrowserRemoved(msg)
 		return m, nil
 	case ThreadSettingsUpdatedMsg:
-		return m, m.applyThreadSettingsUpdated(msg)
+		cmd := m.applyThreadSettingsUpdated(msg)
+		if m.windowsSandboxRefreshPending {
+			return m, bubbletea.Batch(cmd, m.refreshWindowsSandboxStateCmd())
+		}
+		return m, cmd
 	case HookRunMsg:
 		return m, m.applyHookRun(msg)
 	case hookStatusTickMsg:
@@ -3416,11 +3427,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyAutoReviewDenialApproveResult(msg)
 		return m, nil
 	case WindowsSandboxSetupResultMsg:
-		m.applyWindowsSandboxSetupResult(msg)
-		return m, nil
+		return m, m.applyWindowsSandboxSetupResult(msg)
 	case WindowsSandboxSetupCompletedMsg:
-		m.applyWindowsSandboxSetupCompleted(msg.Completion)
-		return m, nil
+		return m, m.applyWindowsSandboxSetupCompleted(msg.Completion)
+	case WindowsSandboxSetupValidatedMsg:
+		return m, m.applyWindowsSandboxSetupValidated(msg)
+	case WindowsSandboxStateMsg:
+		return m, m.applyWindowsSandboxStateMsg(msg)
 	case HooksListResultMsg:
 		m.applyHooksListResult(msg)
 		return m, nil

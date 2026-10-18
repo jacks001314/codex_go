@@ -1281,6 +1281,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadIDEContext:           interactiveIDEContextReader,
 		OnApproveAutoReviewDenial:  interactiveApproveAutoReviewDenialHandler(),
 		OnStartWindowsSandboxSetup: interactiveWindowsSandboxSetupHandler(root),
+		OnReadWindowsSandboxState:  interactiveLocalWindowsSandboxStateHandler(root),
 		FeatureSettings:            settings.FeatureSettings,
 		// Rust #49861: a fresh session starts from the configured Daybreak
 		// preference before any thread/resume reports the stored one.

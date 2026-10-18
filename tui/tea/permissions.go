@@ -175,13 +175,15 @@ const permissionsRetryOptionID = "permissions-retry"
 // try_select_permission_profile).
 func (m *Model) permissionMenuConfig(explicit bool) chatwidget.PermissionMenuConfig {
 	config := chatwidget.PermissionMenuConfig{
-		IncludeReadOnly:        true,
-		HideFullAccessWarning:  m.hideFullAccessWarning,
-		CurrentApprovalPolicy:  currentPermissionApprovalPolicy(m),
-		CurrentReviewer:        currentApprovalsReviewer(m),
-		CurrentProfileID:       strings.TrimSpace(m.State.Sandbox),
-		Requirements:           m.permissionRequirements,
-		WindowsDegradedSandbox: false,
+		IncludeReadOnly:       true,
+		HideFullAccessWarning: m.hideFullAccessWarning,
+		CurrentApprovalPolicy: currentPermissionApprovalPolicy(m),
+		CurrentReviewer:       currentApprovalsReviewer(m),
+		CurrentProfileID:      strings.TrimSpace(m.State.Sandbox),
+		Requirements:          m.permissionRequirements,
+		// Rust #45821: the app-server-owned sandbox level decides whether the
+		// permission menu advertises the non-admin degraded sandbox.
+		WindowsDegradedSandbox: m.windowsSandboxLevel == chatwidget.WindowsSandboxLevelUnelevated,
 		// Rust #54383 gates the approve-for-me row and the automatic reviewer
 		// on Feature::GuardianApproval (chatwidget/permissions_menu.rs:61-68).
 		GuardianApprovalEnabled: guardianApprovalEnabled(m),

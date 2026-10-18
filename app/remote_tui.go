@@ -605,7 +605,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			}
 			return interactiveRemoteStartWindowsSandboxSetup(ctx, endpoint, mode, setupCWD)
 		},
-		OnOpenDesktopThread: interactiveOpenDesktopThread,
+		OnReadWindowsSandboxState: interactiveRemoteWindowsSandboxStateHandler(ctx, endpoint),
+		OnOpenDesktopThread:       interactiveOpenDesktopThread,
 		OnVoiceConversationStart: func(threadID string, attemptID uint64) bubbletea.Cmd {
 			return voice.startCmd(threadID, attemptID)
 		},

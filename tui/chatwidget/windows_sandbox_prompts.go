@@ -48,7 +48,8 @@ type WindowsSandboxPromptDecision struct {
 	OpenEnablePrompt bool
 }
 
-func NewWindowsSandboxEnablePromptView(allowUnelevated bool, setupChoiceRequired bool) SelectionView {
+func NewWindowsSandboxEnablePromptView(allowUnelevated bool, setupChoiceRequired bool, allowElevated ...bool) SelectionView {
+	showElevated := len(allowElevated) == 0 || allowElevated[0]
 	header := []string{}
 	if allowUnelevated {
 		header = append(header, "Set up the Codex agent sandbox to protect your files and control network access. Learn more <https://developers.openai.com/codex/windows>")
@@ -59,11 +60,14 @@ func NewWindowsSandboxEnablePromptView(allowUnelevated bool, setupChoiceRequired
 		)
 	}
 	header = annotateWindowsSandboxHelpLinks(header)
-	items := []SelectionItem{{
-		Name:            "Set up default sandbox (requires Administrator permissions)",
-		Action:          WindowsSandboxActionSetupElevated,
-		DismissOnSelect: true,
-	}}
+	items := []SelectionItem{}
+	if showElevated {
+		items = append(items, SelectionItem{
+			Name:            "Set up default sandbox (requires Administrator permissions)",
+			Action:          WindowsSandboxActionSetupElevated,
+			DismissOnSelect: true,
+		})
+	}
 	if allowUnelevated {
 		items = append(items, SelectionItem{
 			Name:            "Use non-admin sandbox (higher risk if prompt injected)",
@@ -85,7 +89,8 @@ func NewWindowsSandboxEnablePromptView(allowUnelevated bool, setupChoiceRequired
 	}
 }
 
-func NewWindowsSandboxFallbackPromptView(allowUnelevated bool, setupChoiceRequired bool) SelectionView {
+func NewWindowsSandboxFallbackPromptView(allowUnelevated bool, setupChoiceRequired bool, allowElevated ...bool) SelectionView {
+	showElevated := len(allowElevated) == 0 || allowElevated[0]
 	header := []string{"Couldn't set up your sandbox with Administrator permissions", ""}
 	if allowUnelevated {
 		header = append(header, "You can still use Codex in a non-admin sandbox. It carries greater risk if prompt injected.")
@@ -94,11 +99,14 @@ func NewWindowsSandboxFallbackPromptView(allowUnelevated bool, setupChoiceRequir
 	}
 	header = append(header, "Learn more <https://developers.openai.com/codex/windows>")
 	header = annotateWindowsSandboxHelpLinks(header)
-	items := []SelectionItem{{
-		Name:            "Try setting up admin sandbox again",
-		Action:          WindowsSandboxActionSetupElevated,
-		DismissOnSelect: true,
-	}}
+	items := []SelectionItem{}
+	if showElevated {
+		items = append(items, SelectionItem{
+			Name:            "Try setting up admin sandbox again",
+			Action:          WindowsSandboxActionSetupElevated,
+			DismissOnSelect: true,
+		})
+	}
 	if allowUnelevated {
 		items = append(items, SelectionItem{
 			Name:            "Use Codex with non-admin sandbox",
