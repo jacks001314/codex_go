@@ -890,7 +890,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 551bd409ebf03fc6ea0dcad0915368d8a493f012	51402	Preserve turn attribution across recovery and compaction (#51402)	2026-10-06	tui	6	4	0.67	0	0	audit_pending	emit_turn_started,record_started_turn
 5533375287179260650fff35479c3f973b18fb9a	42814	Support custom report event titles (#42814)	2026-09-04	core	0	0		0	0	not_applicable	
 553df1c691fe8bf7747e50da22f1342984495ae0	43813	Add dedicated memory v2 consolidation and read prompts (#43813)	2026-09-08	appserver	3	2	0.67	0	0	complete	get_prompt
-55543d87724bb66bdd51bde65254feb9b4c9ed10	48123	Add early yielding for code-mode observations (#48123)	2026-09-25	core	14	8	0.57	0	0	audit_pending	reserve_execution,retire_execution_observation,spawn_watcher,with_yield_signal,yield_execution,yield_wait
+55543d87724bb66bdd51bde65254feb9b4c9ed10	48123	Add early yielding for code-mode observations (#48123)	2026-09-25	core	14	14	1.00	0	0	complete
 555b82afa9b6dab81ca034ac61a2c8892844d670	43352	Add opt-in MCP user-verification transport (#43352)	2026-09-07	tui	15	3	0.20	0	0	audit_pending	disconnect_user_verification_connection,enable_user_verification_connection,filter_json,filter_ts,from_client_result,notify_client_error,notify_client_response,process_error,process_response,verification_auth_revision
 55922b79845bfa355d3afc03ded33b05444ebf96	50499	Include installer stderr in daemon update failures (#50499)	2026-10-03	appserver	1	1	1.00	0	0	complete	
 559264d92e4462e887d7508c705599f33daf4f1e	47353	Preserve `invalid_prompt` as a distinct error classification (#47353)	2026-09-22	guardian	0	0		0	0	not_applicable	

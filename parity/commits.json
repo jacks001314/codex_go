@@ -21560,9 +21560,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 8/14; needs review: reserve_execution, retire_execution_observation, spawn_watcher, with_yield_signal, yield_execution"
+        "Equivalent implementation: Code Mode execute and wait accept a YieldSignal that ends only the observation while the cell stays running; exec/wait return yielded cell IDs for later waits. The in-process/remote runtime paths, yield_control, step preemption, and instant-interrupt tests cover early execute and wait yielding followed by completion."
       ]
     },
     {
