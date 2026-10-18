@@ -12077,9 +12077,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: background_terminals_blocker"
+        "Aligned upstream 68bc5369ba (#44870): Go registers worktrees as stable/default-on, hides it from the experimental menu, and keeps managed worktrees available for local sessions. The old local-daemon background-terminal RPC warning has no Go carrier because the local TUI tracks background processes in-session instead of probing thread/backgroundTerminals/list. Tests: go test ./features -run Worktree -count=1; go test ./tui/tea -run 'Worktree|Experimental' -count=1."
       ]
     },
     {
@@ -15726,9 +15726,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: requires_dispatch_validation"
+        "Aligned upstream 35b746a3e3 (#46493): the Go TUI opens the review picker and submits inline /review while MCP startup is active. The foreground-work guard still rejects review during a running turn, active review, queued follow-up, or pending steer, preserving the draft and attachments. Tests: TestReviewPickerOpensDuringMCPStartupLikeRust, TestInlineReviewSubmitsDuringMCPStartupLikeRust, TestReviewBlockedDuringForegroundWorkPreservesDraftLikeRust, TestReviewBlockedByQueuedFollowUpPreservesDraftLikeRust."
       ]
     },
     {
