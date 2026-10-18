@@ -12051,9 +12051,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: list_available_server_capabilities"
+        "Round 471 (audit): MCPServerStatus.ServerCapabilities carries the initialized server's advertised capabilities, status responses preserve them (or null/empty when unavailable), a failed attempt clears them, and retained tool-list state keeps the latest capabilities. Tests: go test ./mcp -run 'ServerCapabilities|ToolList' -count=1"
       ]
     },
     {
