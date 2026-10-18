@@ -83,6 +83,10 @@ func (m *SetupMarker) RequestMismatchReason(networkIdentity SandboxNetworkIdenti
 type SandboxUserRecord struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// SID records the account identity captured by setup. Provisioning uses it
+	// to refuse password rotation after an account has been deleted and recreated
+	// under the same name (Rust #47695).
+	SID string `json:"sid,omitempty"`
 }
 
 type SandboxUsersFile struct {

@@ -14,6 +14,8 @@ const (
 	SandboxUsersGroupComment = "Codex sandbox internal group (managed)"
 )
 
+var resolveSIDStringForSecrets = resolveSIDString
+
 type SandboxUser struct {
 	Name string
 	SID  string
@@ -67,6 +69,14 @@ func RandomSandboxPassword() (string, error) {
 }
 
 func WriteSandboxUserSecrets(codexHome string, offlineUser string, offlinePassword string, onlineUser string, onlinePassword string) error {
+	offlineSID, err := resolveSIDStringForSecrets(offlineUser)
+	if err != nil {
+		return fmt.Errorf("resolve offline sandbox account SID: %w", err)
+	}
+	onlineSID, err := resolveSIDStringForSecrets(onlineUser)
+	if err != nil {
+		return fmt.Errorf("resolve online sandbox account SID: %w", err)
+	}
 	offlineBlob, err := windowssandbox.DPAPIProtect([]byte(offlinePassword))
 	if err != nil {
 		return fmt.Errorf("dpapi protect failed for offline user: %w", err)
@@ -80,10 +90,12 @@ func WriteSandboxUserSecrets(codexHome string, offlineUser string, offlinePasswo
 		Offline: windowssandbox.SandboxUserRecord{
 			Username: offlineUser,
 			Password: base64.StdEncoding.EncodeToString(offlineBlob),
+			SID:      offlineSID,
 		},
 		Online: windowssandbox.SandboxUserRecord{
 			Username: onlineUser,
 			Password: base64.StdEncoding.EncodeToString(onlineBlob),
+			SID:      onlineSID,
 		},
 	})
 }

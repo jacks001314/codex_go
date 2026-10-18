@@ -231,11 +231,81 @@ func TestRequireLogonSandboxCredsDisallowsImplicitElevation(t *testing.T) {
 		false,
 		ProxySettingsReconcile,
 		false,
+		false,
 	)
 	if !errors.Is(err, ErrSetupElevationDisallowed) {
 		t.Fatalf("error = %v, want ErrSetupElevationDisallowed", err)
 	}
 	if setupCalled || refreshCalled {
 		t.Fatalf("implicit setup/refresh called = %t/%t", setupCalled, refreshCalled)
+	}
+}
+
+func TestRequireLogonSandboxCredsRepairsRejectedPasswordLikeRust(t *testing.T) {
+	oldSetup := runElevatedSetupForCredentials
+	oldRefresh := runSetupRefreshForCredentials
+	oldSelect := selectSandboxCredentialsForCredentials
+	oldRepairCheck := storedCredentialsNeedRepairForCredentials
+	defer func() {
+		runElevatedSetupForCredentials = oldSetup
+		runSetupRefreshForCredentials = oldRefresh
+		selectSandboxCredentialsForCredentials = oldSelect
+		storedCredentialsNeedRepairForCredentials = oldRepairCheck
+	}()
+
+	setupCalls := 0
+	refreshCalls := 0
+	probeCalls := 0
+	runElevatedSetupForCredentials = func(*SandboxSetupRequest) error {
+		setupCalls++
+		return nil
+	}
+	runSetupRefreshForCredentials = func(*SandboxSetupRequest) error {
+		refreshCalls++
+		return nil
+	}
+	selectSandboxCredentialsForCredentials = func(string, SandboxNetworkIdentity) (*SandboxCredentials, error) {
+		return &SandboxCredentials{Username: OfflineUsername, Password: "pw", Domain: "."}, nil
+	}
+	storedCredentialsNeedRepairForCredentials = func(string) (bool, error) {
+		probeCalls++
+		return true, nil
+	}
+
+	home := t.TempDir()
+	if err := WriteSetupMarker(home, &SetupMarker{
+		Version:           SetupVersion,
+		OfflineUsername:   OfflineUsername,
+		OnlineUsername:    OnlineUsername,
+		ProxyPorts:        []uint16{8080},
+		AllowLocalBinding: false,
+	}); err != nil {
+		t.Fatalf("WriteSetupMarker() error = %v", err)
+	}
+	profile := coresandbox.ReadOnlyPermissionProfile()
+	permissions, err := ResolvePermissions(&profile, []string{`C:\repo`})
+	if err != nil {
+		t.Fatalf("ResolvePermissions() error = %v", err)
+	}
+	_, err = RequireLogonSandboxCredsForPermissions(
+		permissions,
+		`C:\repo`,
+		map[string]string{"HTTP_PROXY": "http://127.0.0.1:8080"},
+		home,
+		nil,
+		false,
+		false,
+		nil,
+		false,
+		nil,
+		nil,
+		false,
+		ProxySettingsPreserve,
+	)
+	if err != nil {
+		t.Fatalf("RequireLogonSandboxCredsForPermissions() error = %v", err)
+	}
+	if probeCalls != 1 || setupCalls != 1 || refreshCalls != 1 {
+		t.Fatalf("probe/setup/refresh calls = %d/%d/%d, want 1/1/1", probeCalls, setupCalls, refreshCalls)
 	}
 }

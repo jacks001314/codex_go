@@ -54,6 +54,7 @@ func RequireLogonSandboxCredsForPermissions(
 		proxyEnforced,
 		proxySettingsMode,
 		true,
+		true,
 	)
 }
 
@@ -72,6 +73,7 @@ func requireLogonSandboxCredsForPermissions(
 	proxyEnforced bool,
 	proxySettingsMode ProxySettingsMode,
 	allowSetupElevation bool,
+	verifyStoredCredentials bool,
 ) (*SandboxCredentials, error) {
 	if permissions == nil || codexHome == "" {
 		return nil, ErrInvalidRequest
@@ -96,14 +98,27 @@ func requireLogonSandboxCredsForPermissions(
 		if reason := marker.RequestMismatchReason(networkIdentity, desiredProxySettings); reason != "" {
 			setupReason = reason
 		} else {
-			selected, err := selectSandboxCredentialsForCredentials(codexHome, networkIdentity)
-			if err != nil {
-				return nil, err
+			if verifyStoredCredentials {
+				needsRepair, err := storedCredentialsNeedRepairForCredentials(codexHome)
+				if err != nil {
+					return nil, err
+				}
+				if needsRepair {
+					setupReason = "stored sandbox account credentials were rejected"
+				}
 			}
-			if selected == nil {
-				setupReason = "sandbox users missing or incompatible with marker version"
+			if setupReason != "" {
+				// Full setup rotates both accounts after ownership validation.
+			} else {
+				selected, err := selectSandboxCredentialsForCredentials(codexHome, networkIdentity)
+				if err != nil {
+					return nil, err
+				}
+				if selected == nil {
+					setupReason = "sandbox users missing or incompatible with marker version"
+				}
+				identity = selected
 			}
-			identity = selected
 		}
 	} else {
 		setupReason = "sandbox setup marker missing or incompatible"
@@ -219,6 +234,7 @@ func refreshLogonSandboxCredsForPermissions(
 		proxyEnforced,
 		proxySettingsMode,
 		allowSetupElevation,
+		false,
 	)
 }
 

@@ -360,6 +360,7 @@ func PrepareElevatedSpawnContextForPermissions(
 		proxyEnforced,
 		proxySettingsMode,
 		!disallowSetupElevation,
+		true,
 	)
 	if err != nil {
 		return nil, err

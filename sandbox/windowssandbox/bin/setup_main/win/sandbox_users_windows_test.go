@@ -26,6 +26,11 @@ func TestResolveWellKnownSID(t *testing.T) {
 }
 
 func TestWriteSandboxUserSecrets(t *testing.T) {
+	originalResolve := resolveSIDStringForSecrets
+	resolveSIDStringForSecrets = func(username string) (string, error) {
+		return "S-1-5-21-" + username, nil
+	}
+	defer func() { resolveSIDStringForSecrets = originalResolve }()
 	home := t.TempDir()
 	if err := WriteSandboxUserSecrets(home, "offline", "offline-password", "online", "online-password"); err != nil {
 		t.Fatalf("WriteSandboxUserSecrets() error = %v", err)
@@ -36,6 +41,9 @@ func TestWriteSandboxUserSecrets(t *testing.T) {
 	}
 	if users.Offline.Username != "offline" || users.Online.Username != "online" {
 		t.Fatalf("users = %#v", users)
+	}
+	if users.Offline.SID != "S-1-5-21-offline" || users.Online.SID != "S-1-5-21-online" {
+		t.Fatalf("user SIDs = %#v", users)
 	}
 	offline, err := windowssandbox.DecodeSandboxUserPassword(users.Offline)
 	if err != nil {
