@@ -3638,9 +3638,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/7; needs review: DirectoryScanMode, ScoreAuthorization, collect_existing_glob_directory_matches, guardian_authorization_version, is_read_denied_with_canonical_path"
+        "Windows deny-read glob resolution walks protected roots, preserves fail-closed behavior for unbounded root globs, and applies deny ACLs. app-server preserves MCP protocol code/message/data in JSON-RPC errors while isError tool results remain results. Go has no cached-score Guardian approval path, so stale classifications cannot approve actions; required-model and token-budget review guards cover the remaining fast-path risk. Tests: go test ./appserver -run 'MCPRemoteError|JSONRPCErrorData|MCP.*Error|StructuredMCP' -count=1; go test ./sandbox/windowssandbox -run 'DenyRead|Glob|ResolvedPermissions|Walker' -count=1; go test ./appserver -run 'RequiresFullReviewForProtectedModel|GuardianTokenBudgetRollover' -count=1"
       ]
     },
     {
@@ -23688,9 +23688,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/9; needs review: ResolvedOAuthCredentialStore, record_secure_error, save_with_refresh_telemetry"
+        "MCP OAuth load/save/delete emit bounded codex.auth_storage.operation and duration metrics with credential_kind=mcp, store mode/selected/actual store, operation, secure/overall outcome, fallback reason, secure error class, storage phase, and originator. Auto-mode keyring errors and missing entries report file fallback without credentials or raw errors. Tests: go test ./mcp -count=1; go test ./appserver -run 'OAuthStorageTelemetry|OAuth|MCP' -count=1"
       ]
     },
     {

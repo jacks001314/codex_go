@@ -834,6 +834,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		})
 	}
 	router.captureStartupModelProviderRoute()
+	router.configureOAuthStorageTelemetry()
 	return router
 }
 

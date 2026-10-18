@@ -50,7 +50,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0588fc941c3bd5abd0cb8cd38c51cd6e72e9eb16	42380	Require confirmation for safety-buffered retries (#42380)	2026-09-02	tui	1	0	0.00	0	0	implementation_pending	confirm_safety_buffered_retry
 05a93a8a1d739b85c07928603473a9dab592e51f	46511	Avoid cloning excluded turn items during thread resume (#46511)	2026-09-18	appserver	2	2	1.00	0	0	complete	
 05de93520542d5d1a3f3af76ad446607a12d98fd	46544	Expose declared onboarding skills in plugin details (#46544)	2026-09-18	tui	0	0		0	0	not_applicable	
-05ea5f757e2d696b13a2da0f660c694e381a1a8d	49392	Add attributed MCP OAuth credential storage telemetry (#49392)	2026-09-29	appserver	9	6	0.67	0	0	audit_pending	ResolvedOAuthCredentialStore,record_secure_error,save_with_refresh_telemetry
+05ea5f757e2d696b13a2da0f660c694e381a1a8d	49392	Add attributed MCP OAuth credential storage telemetry (#49392)	2026-09-29	appserver	9	6	0.67	0	0	complete	ResolvedOAuthCredentialStore,record_secure_error,save_with_refresh_telemetry
 05f39d7346e6b6e1f9c7908ebf96a4353dea87a6	46929	Remove the `Error` prefix from TUI `config.toml` load errors (#46929)	2026-09-21	tui	0	0		0	0	not_applicable	
 062439b2f855e7c41e2dfbfe370ccc966f095263	51188	Record base instructions in incremental tool history (#51188)	2026-10-05	guardian	5	5	1.00	0	0	complete	
 064e701b0fa4f5c0dcaf195a565d088f99bb6af8	47207	Add explicit gateway OAuth sign-in to app-server (#47207)	2026-09-22	tui	13	8	0.62	0	0	audit_pending	cancel_gateway_login,gateway_oauth_cancel,gateway_oauth_login,gateway_oauth_read,status_fields

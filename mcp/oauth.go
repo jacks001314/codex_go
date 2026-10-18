@@ -138,33 +138,50 @@ func (s *OAuthStore) KeyringUnavailable() bool {
 	return s != nil && s.effectiveMode() == OAuthCredentialsStoreKeyring && !MCPOAuthKeyringAvailable
 }
 
-func (s *OAuthStore) Load(serverName string, serverURL string) (*OAuthTokenSet, error) {
+func (s *OAuthStore) Load(serverName string, serverURL string) (tokens *OAuthTokenSet, err error) {
 	if s == nil {
 		return nil, errors.New("MCP OAuth store is nil")
 	}
+	attempt := newOAuthStorageAttempt(s.configuredMode(), "load")
+	actualStore := string(s.effectiveMode())
+	secureOutcome := "not_attempted"
+	secureError := "none"
+	defer func() {
+		attempt.finish(actualStore, oauthStorageOutcome(tokens, err), secureOutcome, secureError)
+	}()
 	if err := s.keyringUnavailable(); err != nil {
+		secureOutcome = "error"
+		secureError = classifyOAuthStorageError(err)
 		return nil, err
 	}
 	mode := s.effectiveMode()
 	configured := s.configuredMode()
 	if mode == OAuthCredentialsStoreFile {
+		actualStore = "file"
 		return s.loadFromFile(serverName, serverURL)
 	}
-	tokens, err := s.loadFromKeyring(serverName, serverURL)
+	tokens, err = s.loadFromKeyring(serverName, serverURL)
 	if err != nil {
+		secureOutcome = "error"
+		secureError = classifyOAuthStorageError(err)
 		if configured == OAuthCredentialsStoreKeyring {
 			return nil, fmt.Errorf("failed to load OAuth tokens from keyring: %w", err)
 		}
 		// Auto falls back to the credentials file on a keyring error.
-		return s.loadFromFile(serverName, serverURL)
+		actualStore = "file"
+		tokens, err = s.loadFromFile(serverName, serverURL)
+		return tokens, err
 	}
 	if tokens != nil {
+		secureOutcome = "success"
 		return tokens, nil
 	}
+	secureOutcome = "not_found"
 	// Keyring mode reads only the keyring; auto falls back to the file.
 	if configured == OAuthCredentialsStoreKeyring {
 		return nil, nil
 	}
+	actualStore = "file"
 	return s.loadFromFile(serverName, serverURL)
 }
 
@@ -218,11 +235,20 @@ func (s *OAuthStore) loadFromFile(serverName string, serverURL string) (*OAuthTo
 	return nil, nil
 }
 
-func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
+func (s *OAuthStore) Save(tokens *OAuthTokenSet) (err error) {
 	if s == nil {
 		return errors.New("MCP OAuth store is nil")
 	}
+	attempt := newOAuthStorageAttempt(s.configuredMode(), "save")
+	actualStore := string(s.effectiveMode())
+	secureOutcome := "not_attempted"
+	secureError := "none"
+	defer func() {
+		attempt.finish(actualStore, oauthStorageSaveOutcome(err), secureOutcome, secureError)
+	}()
 	if err := s.keyringUnavailable(); err != nil {
+		secureOutcome = "error"
+		secureError = classifyOAuthStorageError(err)
 		return err
 	}
 	if tokens == nil {
@@ -246,16 +272,21 @@ func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
 	defer lock.Release()
 	configured := s.configuredMode()
 	if s.effectiveMode() == OAuthCredentialsStoreFile {
+		actualStore = "file"
 		return s.saveWithLockHeld(tokens)
 	}
 	if err := s.saveToKeyring(tokens); err != nil {
+		secureOutcome = "error"
+		secureError = classifyOAuthStorageError(err)
 		if configured == OAuthCredentialsStoreKeyring {
 			return err
 		}
 		// Auto falls back to the credentials file (Rust
 		// save_oauth_tokens_with_keyring_with_fallback_to_file).
+		actualStore = "file"
 		return s.saveWithLockHeld(tokens)
 	}
+	secureOutcome = "success"
 	// Best-effort legacy cleanup; a failure must not fail the save.
 	_, _ = s.deleteWithLockHeld(tokens.ServerName, tokens.ServerURL)
 	return nil
@@ -369,11 +400,23 @@ func sameMCPOAuthScopes(current []string, expected []string) bool {
 	return true
 }
 
-func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
+func (s *OAuthStore) Delete(serverName string, serverURL string) (removed bool, err error) {
 	if s == nil {
 		return false, errors.New("MCP OAuth store is nil")
 	}
+	attempt := newOAuthStorageAttempt(s.configuredMode(), "delete")
+	actualStore := "multiple"
+	if s.effectiveMode() == OAuthCredentialsStoreFile {
+		actualStore = "file"
+	}
+	secureOutcome := "not_attempted"
+	secureError := "none"
+	defer func() {
+		attempt.finish(actualStore, oauthStorageDeleteOutcome(removed, err), secureOutcome, secureError)
+	}()
 	if err := s.keyringUnavailable(); err != nil {
+		secureOutcome = "error"
+		secureError = classifyOAuthStorageError(err)
 		return false, err
 	}
 	// Serialize credential mutations across processes (Rust delete_oauth_tokens
@@ -386,6 +429,8 @@ func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 	mode := s.effectiveMode()
 	keyringRemoved := false
 	if removed, keyringErr := s.deleteKeyringEntry(serverName, serverURL); keyringErr != nil {
+		secureOutcome = "error"
+		secureError = classifyOAuthStorageError(keyringErr)
 		// Rust swallows a keyring delete failure in file mode but propagates it
 		// for auto/keyring.
 		if mode != OAuthCredentialsStoreFile {
@@ -393,6 +438,11 @@ func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 		}
 	} else {
 		keyringRemoved = removed
+		if keyringRemoved {
+			secureOutcome = "success"
+		} else {
+			secureOutcome = "not_found"
+		}
 	}
 	fileRemoved, err := s.deleteWithLockHeld(serverName, serverURL)
 	if err != nil {
