@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"codex_go/model"
 	"codex_go/tool"
 )
 
@@ -238,19 +239,38 @@ func BuildExecTool(definitions []ToolDefinition, namespaces map[string]Namespace
 }
 
 func BuildWaitTool() WaitSpec {
-	return WaitSpec{
-		Name:        WaitToolName,
-		Description: fmt.Sprintf("Waits on a yielded `%s` cell and returns new output or completion.\n%s", PublicToolName, BuildWaitToolDescription()),
-		Parameters: map[string]any{
-			"required": []string{"cell_id"},
-			"properties": map[string]any{
-				"cell_id":       "Identifier of the running exec cell.",
-				"yield_time_ms": "Wait before yielding more output. Defaults to 10000 ms.",
-				"max_tokens":    "Output token budget for this wait call. Defaults to 10000 tokens.",
-				"terminate":     "True stops the running exec cell; false or omitted waits for output.",
-			},
+	return BuildWaitToolWithMessages(nil)
+}
+
+// BuildWaitToolWithMessages applies the catalog's wait description and
+// parameter schema. Invalid or unsupported schemas retain the bundled shape.
+func BuildWaitToolWithMessages(messages *model.CodeModeToolMessages) WaitSpec {
+	parameters := map[string]any{
+		"required": []string{"cell_id"},
+		"properties": map[string]any{
+			"cell_id":       "Identifier of the running exec cell.",
+			"yield_time_ms": "Wait before yielding more output. Defaults to 10000 ms.",
+			"max_tokens":    "Output token budget for this wait call. Defaults to 10000 tokens.",
+			"terminate":     "True stops the running exec cell; false or omitted waits for output.",
 		},
 	}
+	if messages != nil && messages.Wait != nil && messages.Wait.Parameters != nil {
+		if parsed, err := tool.ParseCatalogParameters(*messages.Wait.Parameters); err == nil {
+			parameters = parsed
+		}
+	}
+	return WaitSpec{
+		Name:        WaitToolName,
+		Description: WaitToolDescription(messages),
+		Parameters:  parameters,
+	}
+}
+
+func WaitToolDescription(messages *model.CodeModeToolMessages) string {
+	if messages != nil && messages.Wait != nil && messages.Wait.Description != nil {
+		return *messages.Wait.Description
+	}
+	return fmt.Sprintf("Waits on a yielded `%s` cell and returns new output or completion.\n%s", PublicToolName, BuildWaitToolDescription())
 }
 
 func BuildToolSurface(registry *tool.Registry, namespaces map[string]NamespaceDescription, codeModeOnly bool) *ToolSurface {
@@ -282,9 +302,33 @@ func BuildExecToolDescription(definitions []ToolDefinition, namespaces map[strin
 }
 
 func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferredDefinitions []ToolDefinition, namespaces map[string]NamespaceDescription, codeModeOnly bool, deferredToolsAvailable bool) string {
+	return BuildExecToolDescriptionWithOptions(definitions, deferredDefinitions, namespaces, codeModeOnly, deferredToolsAvailable, nil, 10000, "")
+}
+
+// BuildExecToolDescriptionWithOptions applies model-catalog Code Mode messages
+// to the exec description. Catalog exec text supports the literal
+// {{ default_exec_yield_time_ms }} and {{ image_helper }} placeholders; empty
+// guidance strings suppress those sections.
+func BuildExecToolDescriptionWithOptions(definitions []ToolDefinition, deferredDefinitions []ToolDefinition, namespaces map[string]NamespaceDescription, codeModeOnly bool, deferredToolsAvailable bool, messages *model.CodeModeToolMessages, defaultExecYieldTimeMS int, imageHelper string) string {
 	// Rust #50562: the discovery guidance is always present so the `exec`
 	// description stays stable as the deferred-tool catalog changes.
-	sections := []string{execDescriptionTemplate, deferredNestedToolsGuidance}
+	template := execDescriptionTemplate
+	if messages != nil && messages.Exec != nil && messages.Exec.Description != nil {
+		template = *messages.Exec.Description
+	}
+	template = strings.ReplaceAll(template, "{{ default_exec_yield_time_ms }}", strconv.Itoa(defaultExecYieldTimeMS))
+	template = strings.ReplaceAll(template, "{{ image_helper }}", imageHelper)
+	guidance := deferredNestedToolsGuidance
+	if messages != nil && messages.DeferredNestedToolsGuidance != nil {
+		guidance = *messages.DeferredNestedToolsGuidance
+	}
+	sections := make([]string, 0, 4)
+	if template != "" {
+		sections = append(sections, template)
+	}
+	if guidance != "" {
+		sections = append(sections, guidance)
+	}
 	if !codeModeOnly {
 		return strings.Join(sections, "\n\n")
 	}
@@ -292,8 +336,12 @@ func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferred
 	// Rust #50536: include the shared MCP TypeScript preamble whenever
 	// code_mode_only is enabled, regardless of the available tools' output
 	// schemas, so the generated declarations always resolve.
-	if mcpTypescriptPreamble != "" {
-		sections = append(sections, "Shared MCP Types:\n```ts\n"+mcpTypescriptPreamble+"\n```")
+	preamble := mcpTypescriptPreamble
+	if messages != nil && messages.McpTypescriptPreamble != nil {
+		preamble = *messages.McpTypescriptPreamble
+	}
+	if preamble != "" {
+		sections = append(sections, "Shared MCP Types:\n```ts\n"+preamble+"\n```")
 	}
 
 	definitions = SortDefinitions(definitions)
@@ -330,6 +378,36 @@ func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferred
 
 func BuildWaitToolDescription() string {
 	return "Use it after an exec call yields a cell id. Set terminate to stop a still-running cell."
+}
+
+// BuildWaitToolDescriptionWithMessages applies the model catalog's wait
+// description. A present empty override suppresses the bundled sentence.
+func BuildWaitToolDescriptionWithMessages(messages *model.CodeModeToolMessages) string {
+	if messages != nil && messages.Wait != nil && messages.Wait.Description != nil {
+		return *messages.Wait.Description
+	}
+	return BuildWaitToolDescription()
+}
+
+// WaitToolInputSchema returns the bundled wait schema, or the catalog override
+// when it parses as a supported object schema.
+func WaitToolInputSchema(messages *model.CodeModeToolMessages) map[string]any {
+	bundled := map[string]any{
+		"type":     "object",
+		"required": []string{"cell_id"},
+		"properties": map[string]any{
+			"cell_id":       map[string]any{"type": "string"},
+			"yield_time_ms": map[string]any{"type": "integer"},
+			"max_tokens":    map[string]any{"type": "integer"},
+			"terminate":     map[string]any{"type": "boolean"},
+		},
+	}
+	if messages != nil && messages.Wait != nil && messages.Wait.Parameters != nil {
+		if parsed, err := tool.ParseCatalogParameters(*messages.Wait.Parameters); err == nil {
+			return parsed
+		}
+	}
+	return bundled
 }
 
 func AugmentToolDefinition(definition ToolDefinition) ToolDefinition {

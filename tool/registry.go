@@ -334,6 +334,40 @@ func (r *Registry) Prepend(executor Executor) error {
 	return err
 }
 
+// SetCodeModeMessages refreshes the registered exec/wait specs after a model
+// catalog change. Registry stores spec snapshots, so updating only the
+// executors would leave the next request with stale descriptions.
+func (r *Registry) SetCodeModeMessages(messages *CodeModeToolMessages) {
+	if r == nil {
+		return
+	}
+	execName := PlainName(CodeModeExecToolName)
+	waitName := PlainName(CodeModeWaitToolName)
+	r.mu.Lock()
+	executor := r.executors[execName.Key()]
+	waitExecutor := r.executors[waitName.Key()]
+	r.mu.Unlock()
+	if setter, ok := executor.(interface{ SetCodeModeMessages(*CodeModeToolMessages) }); ok {
+		setter.SetCodeModeMessages(messages)
+	}
+	var execSpec Spec
+	if executor != nil {
+		execSpec = executor.Spec()
+	}
+	var waitSpec Spec
+	if waitExecutor != nil {
+		waitSpec = waitExecutor.Spec()
+	}
+	r.mu.Lock()
+	if executor != nil && execSpec.Name.Key() != "" {
+		r.specs[execSpec.Name.Key()] = execSpec
+	}
+	if waitExecutor != nil && waitSpec.Name.Key() != "" {
+		r.specs[waitSpec.Name.Key()] = waitSpec
+	}
+	r.mu.Unlock()
+}
+
 func (r *Registry) register(executor Executor, skipDuplicate bool, prepend bool) (bool, error) {
 	if executor == nil {
 		return false, fmt.Errorf("%w: executor is nil", ErrToolInvalidCall)
@@ -585,8 +619,12 @@ func (r *Registry) Names() []ToolName {
 }
 
 type Router struct {
-	registry *Registry
-	now      func() time.Time
+	registry             *Registry
+	now                  func() time.Time
+	toolMode             string
+	plannedCodeModeNames map[string]CodeModeToolNameMetadata
+	toolNamespacesInfo   ToolNamespacesInfo
+	canManageChildren    bool
 }
 
 func NewRouter(registry *Registry) *Router {
@@ -602,6 +640,109 @@ func (r *Router) SetClock(clock func() time.Time) {
 		return
 	}
 	r.now = clock
+}
+
+// SetToolPlan freezes the finalized model-specific tool plan on the router.
+func (r *Router) SetToolPlan(toolMode string, codeModeNames map[string]CodeModeToolNameMetadata, info ToolNamespacesInfo) {
+	if r == nil {
+		return
+	}
+	r.toolMode = strings.TrimSpace(toolMode)
+	r.plannedCodeModeNames = cloneCodeModeToolNames(codeModeNames)
+	r.toolNamespacesInfo = cloneToolNamespacesInfo(info)
+	r.canManageChildren = r.registryExposesChildManagementTools()
+}
+
+// SetToolMode updates the effective mode after code-mode availability is
+// resolved, without rebuilding the finalized tool inventory.
+func (r *Router) SetToolMode(toolMode string) {
+	if r != nil {
+		r.toolMode = strings.TrimSpace(toolMode)
+	}
+}
+
+func (r *Router) ToolMode() string {
+	if r == nil {
+		return ""
+	}
+	return r.toolMode
+}
+
+func (r *Router) RequiresCodeModeWorker() bool {
+	if r == nil {
+		return false
+	}
+	return r.toolMode == "code_mode" || r.toolMode == "code_mode_only"
+}
+
+func (r *Router) ToolNamespacesInfo() ToolNamespacesInfo {
+	if r == nil {
+		return nil
+	}
+	return cloneToolNamespacesInfo(r.toolNamespacesInfo)
+}
+
+func (r *Router) HasTerminalControls() bool {
+	if r == nil || r.registry == nil {
+		return false
+	}
+	return r.registryHasBaseName("exec_command") && r.registryHasBaseName("write_stdin")
+}
+
+func (r *Router) CanManageChildren() bool {
+	return r != nil && r.canManageChildren
+}
+
+func (r *Router) registryHasBaseName(name string) bool {
+	if r == nil || r.registry == nil {
+		return false
+	}
+	for _, candidate := range r.registry.Names() {
+		if strings.TrimSpace(candidate.Name) == strings.TrimSpace(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Router) registryExposesChildManagementTools() bool {
+	v1 := []string{"spawn_agent", "send_input", "wait_agent"}
+	v2 := []string{"spawn_agent", "send_message", "followup_task", "wait_agent"}
+	hasAll := func(names []string) bool {
+		for _, name := range names {
+			if !r.registryHasBaseName(name) {
+				return false
+			}
+		}
+		return true
+	}
+	return hasAll(v1) || hasAll(v2)
+}
+
+func cloneCodeModeToolNames(values map[string]CodeModeToolNameMetadata) map[string]CodeModeToolNameMetadata {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]CodeModeToolNameMetadata, len(values))
+	for key, value := range values {
+		if value.Namespace != nil {
+			namespace := *value.Namespace
+			value.Namespace = &namespace
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func cloneToolNamespacesInfo(values ToolNamespacesInfo) ToolNamespacesInfo {
+	if values == nil {
+		return nil
+	}
+	out := make(ToolNamespacesInfo, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func (r *Router) RegisterIfAbsent(executor Executor) error {
@@ -746,6 +887,15 @@ func (r *Router) CodeModeToolSpecs() []Spec {
 		return nil
 	}
 	return provider.CodeModeToolSpecs()
+}
+
+// SetCodeModeMessages updates the active model's Code Mode catalog overrides
+// on the registered exec/wait executors (Rust #47118 mid-turn model changes).
+func (r *Router) SetCodeModeMessages(messages *CodeModeToolMessages) {
+	if r == nil || r.registry == nil {
+		return
+	}
+	r.registry.SetCodeModeMessages(messages)
 }
 
 func (r *Router) CodeModeAvailability() error {

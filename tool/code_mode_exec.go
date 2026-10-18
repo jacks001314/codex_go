@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,23 @@ const CodeModeExecToolName = "exec"
 // CodeModeWaitToolName names the wait tool Rust's code-mode analytics report for a
 // resumed cell.
 const CodeModeWaitToolName = "wait"
+
+// CodeModeToolMessage mirrors the model-catalog tool message shape used by
+// Code Mode. The type lives here so both tool and model can consume it without
+// importing each other.
+type CodeModeToolMessage struct {
+	Description *string `json:"description,omitempty"`
+	Parameters  *string `json:"parameters,omitempty"`
+}
+
+// CodeModeToolMessages carries model-catalog overrides for exec, wait, deferred
+// guidance, and the shared MCP TypeScript preamble (Rust #47118).
+type CodeModeToolMessages struct {
+	Exec                        *CodeModeToolMessage `json:"exec,omitempty"`
+	Wait                        *CodeModeToolMessage `json:"wait,omitempty"`
+	DeferredNestedToolsGuidance *string              `json:"deferred_nested_tools_guidance,omitempty"`
+	McpTypescriptPreamble       *string              `json:"mcp_typescript_preamble,omitempty"`
+}
 
 // CodeModeDefaultExecYieldTime is the `exec` default yield time. It mirrors
 // Rust's config-level default, DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS
@@ -83,6 +101,7 @@ type codeModeExecExecutor struct {
 	cells           map[string]*codeModeCell
 	remote          CodeModeRemoteSession
 	provider        CodeModeRemoteProvider
+	messages        *CodeModeToolMessages
 	disableFallback bool
 	warningEmitted  atomic.Bool
 	remoteCellsMu   sync.RWMutex
@@ -349,6 +368,32 @@ func (r *CodeModeRuntime) Prewarm(ctx context.Context) error {
 		return nil
 	}
 	return prewarmer.Prewarm(ctx)
+}
+
+// SetCodeModeMessages installs the active model catalog's Code Mode overrides.
+func (r *CodeModeRuntime) SetCodeModeMessages(messages *CodeModeToolMessages) {
+	if r == nil || r.exec == nil {
+		return
+	}
+	r.exec.SetCodeModeMessages(messages)
+}
+
+func (e *codeModeExecExecutor) SetCodeModeMessages(messages *CodeModeToolMessages) {
+	if e == nil {
+		return
+	}
+	e.bindingMu.Lock()
+	e.messages = messages
+	e.bindingMu.Unlock()
+}
+
+func (e *codeModeExecExecutor) codeModeMessages() *CodeModeToolMessages {
+	if e == nil {
+		return nil
+	}
+	e.bindingMu.RLock()
+	defer e.bindingMu.RUnlock()
+	return e.messages
 }
 
 // SetTurnWindowID binds the current turn's conversation window identity, which
@@ -638,13 +683,13 @@ func (e *codeModeExecExecutor) Spec() Spec {
 	registry, nestedCommandTool := e.binding()
 	return Spec{
 		Name:        PlainName(CodeModeExecToolName),
-		Description: codeModeExecDescription(registry, nestedCommandTool, e.defaultExecYieldTimeMS()),
+		Description: codeModeExecDescription(registry, nestedCommandTool, e.defaultExecYieldTimeMS(), e.codeModeMessages()),
 		Freeform:    &FreeformSpec{Syntax: "lark", Definition: codeModeExecGrammar},
 	}
 }
 
-func codeModeExecDescription(registry *Registry, preferredCommandTool ToolName, defaultYieldTimeMS int) string {
-	description := `Run JavaScript code to orchestrate/compose tool calls
+func codeModeExecDescription(registry *Registry, preferredCommandTool ToolName, defaultYieldTimeMS int, messages *CodeModeToolMessages) string {
+	template := `Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh isolate as an async module.
 - All nested tools are available on the global tools object. Tool names are exposed as normalized JavaScript identifiers.
 - Nested tool methods take either a string or an object as their input argument.
@@ -667,10 +712,20 @@ Global helpers:
 - setTimeout(callback, delayMs) and clearTimeout(id): Schedule or cancel timers.
 - ALL_TOOLS: Metadata for enabled nested tools as { name, description } entries.
 - yield_control(): Yields accumulated output while the script keeps running.`
+	if messages != nil && messages.Exec != nil && messages.Exec.Description != nil {
+		template = *messages.Exec.Description
+	}
+	template = strings.ReplaceAll(template, "{{ default_exec_yield_time_ms }}", strconv.Itoa(defaultYieldTimeMS))
+	template = strings.ReplaceAll(template, "{{ image_helper }}", "image(value), audio(value), generatedImage(value): Append supported media results.")
+	description := template
 	description = strings.Replace(description, "Defaults to 10000 ms.", fmt.Sprintf("Defaults to %d ms.", defaultYieldTimeMS), 1)
 	// Rust #50562: emit the discovery guidance unconditionally so the exec
 	// description does not change as the deferred-tool catalog changes.
-	description += "\n\n" + codeModeDeferredNestedToolsGuidance
+	if messages == nil || messages.DeferredNestedToolsGuidance == nil {
+		description += "\n\n" + codeModeDeferredNestedToolsGuidance
+	} else if *messages.DeferredNestedToolsGuidance != "" {
+		description += "\n\n" + *messages.DeferredNestedToolsGuidance
+	}
 
 	if registry == nil {
 		return description
@@ -1820,7 +1875,19 @@ func (e *codeModeExecExecutor) cellContentDelta(cell *codeModeCell) []map[string
 type codeModeWaitExecutor struct{ exec *codeModeExecExecutor }
 
 func (e *codeModeWaitExecutor) Spec() Spec {
-	return Spec{Name: PlainName("wait"), Description: "Waits on a yielded exec cell and returns new output or completion.", InputSchema: map[string]any{"type": "object", "required": []string{"cell_id"}, "properties": map[string]any{"cell_id": map[string]any{"type": "string"}, "yield_time_ms": map[string]any{"type": "integer"}, "max_tokens": map[string]any{"type": "integer"}, "terminate": map[string]any{"type": "boolean"}}}}
+	description := "Waits on a yielded exec cell and returns new output or completion."
+	schema := map[string]any{"type": "object", "required": []string{"cell_id"}, "properties": map[string]any{"cell_id": map[string]any{"type": "string"}, "yield_time_ms": map[string]any{"type": "integer"}, "max_tokens": map[string]any{"type": "integer"}, "terminate": map[string]any{"type": "boolean"}}}
+	if messages := e.exec.codeModeMessages(); messages != nil && messages.Wait != nil {
+		if messages.Wait.Description != nil {
+			description = *messages.Wait.Description
+		}
+		if messages.Wait.Parameters != nil {
+			if parsed, err := ParseCatalogParameters(*messages.Wait.Parameters); err == nil {
+				schema = parsed
+			}
+		}
+	}
+	return Spec{Name: PlainName("wait"), Description: description, InputSchema: schema}
 }
 
 func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {

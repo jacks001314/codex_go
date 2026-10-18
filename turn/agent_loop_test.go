@@ -126,6 +126,42 @@ func TestAgentLoopReportsCompletedResponseItemsLikeRust(t *testing.T) {
 	}
 }
 
+func TestAgentLoopRebuildsToolsForLaterModelStepsLikeRust(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+		MaxTurns:   3,
+	})
+	var rebuiltFor []string
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run echo",
+		Model:  "first-model",
+		Tools:  []any{"initial-tools"},
+		StepSettings: func() *AgentStepSettings {
+			return &AgentStepSettings{Model: "second-model"}
+		},
+		ToolsForStep: func(modelID string) []any {
+			rebuiltFor = append(rebuiltFor, modelID)
+			return []any{"rebuilt-" + modelID}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rebuiltFor) == 0 || rebuiltFor[0] != "second-model" {
+		t.Fatalf("ToolsForStep models = %#v", rebuiltFor)
+	}
+	if len(agent.requests) < 2 || len(agent.requests[1].Tools) != 1 || agent.requests[1].Tools[0] != "rebuilt-second-model" {
+		t.Fatalf("second-step tools = %#v", agent.requests[len(agent.requests)-1].Tools)
+	}
+}
+
 func TestAgentLoopMidTurnCompactionRollsOverLikeRust(t *testing.T) {
 	agent := &rollOverLoopAgent{}
 	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, MaxTurns: 3})

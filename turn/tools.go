@@ -148,6 +148,9 @@ type ToolRegistryOptions struct {
 	CodeModeProvider             tool.CodeModeRemoteProvider
 	CodeModeRuntime              *tool.CodeModeRuntime
 	CodeModeDefaultExecYieldTime time.Duration
+	// CodeModeMessages carries the active model catalog's exec/wait/deferred
+	// guidance and MCP TypeScript overrides (Rust #47118).
+	CodeModeMessages *model.CodeModeToolMessages
 	// CodeModeShowCellOverhead mirrors features.code_mode.experimental_show_cell_overhead
 	// (#46288): code-mode cell responses report the host duration and overhead.
 	CodeModeShowCellOverhead bool
@@ -780,6 +783,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		var execExecutor, waitExecutor tool.Executor
 		if options.CodeModeRuntime != nil {
 			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
+			options.CodeModeRuntime.SetCodeModeMessages(options.CodeModeMessages)
 			options.CodeModeRuntime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
 			options.CodeModeRuntime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
 			options.CodeModeRuntime.SetExcludedToolNamespaces(options.ExcludedToolNamespaces)
@@ -791,6 +795,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		} else {
 			runtime := tool.NewCodeModeRuntime(options.CodeModeProvider, options.DisableCodeModeFallback)
 			runtime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
+			runtime.SetCodeModeMessages(options.CodeModeMessages)
 			runtime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
 			runtime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
 			runtime.SetExcludedToolNamespaces(options.ExcludedToolNamespaces)
@@ -872,7 +877,13 @@ func BuildToolRouter(options *ToolRegistryOptions) (*tool.Router, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tool.NewRouter(registry), nil
+	router := tool.NewRouter(registry)
+	router.SetToolPlan(
+		options.ToolMode,
+		router.CodeModeToolNames(),
+		tool.CollectToolNamespacesInfo(registry, router.CodeModeToolNames(), router.ModelVisibleSpecs()),
+	)
+	return router, nil
 }
 
 func registerMCPTools(registry *tool.Registry, options *ToolRegistryOptions) error {

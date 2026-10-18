@@ -14833,11 +14833,34 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 	if err != nil {
 		return nil, err
 	}
+	var codeModeMessages *model.CodeModeToolMessages
+	codeModeYieldTime := tool.CodeModeDefaultExecYieldTime
+	resolveCodeModeMessages := func(string) *model.CodeModeToolMessages { return nil }
+	if turnConfig != nil {
+		modelID := ""
+		if params != nil {
+			modelID = strings.TrimSpace(params.Model)
+		}
+		modelID = firstNonEmpty(modelID, stringConfigValue(turnConfig, "model"))
+		resolveCodeModeMessages = func(requestedModel string) *model.CodeModeToolMessages {
+			requestedModel = firstNonEmpty(strings.TrimSpace(requestedModel), modelID)
+			info := r.modelInfoForRuntimeWithConfig(requestedModel, turnConfig)
+			if info == nil || info.ModelMessages == nil {
+				return nil
+			}
+			return info.ModelMessages.CodeMode()
+		}
+		codeModeMessages = resolveCodeModeMessages(modelID)
+		codeModeYieldTime = turnConfig.CodeModeDefaultExecYieldTime()
+	}
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
 		Router:                       router,
 		ToolRegistrationMetrics:      r.services.TurnMetrics,
 		ToolMetadataMetrics:          r.services.TurnMetrics,
+		CodeModeMessages:             codeModeMessages,
+		CodeModeMessagesForModel:     resolveCodeModeMessages,
+		CodeModeDefaultExecYieldTime: codeModeYieldTime,
 		Hooks:                        hooks,
 		SteerMailbox:                 r.requireSteerMailbox(),
 		ExecutedToolCalls:            r.executedToolCallRecorder(params.ThreadID),
@@ -15280,6 +15303,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			// Rust #47677: the built-in MCP resource helpers take the catalog's
 			// `mcp_resources` entries.
 			options.MCPResourceMessages = turnModelInfo.ModelMessages.MCPResources()
+			options.CodeModeMessages = turnModelInfo.ModelMessages.CodeMode()
 		}
 	}
 	if requestUserInputAsyncAvailable(freeformAsyncRootAgent, requestUserInputEnabled, catalogTools) {

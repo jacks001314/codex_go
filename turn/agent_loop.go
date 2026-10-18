@@ -144,12 +144,16 @@ type AgentLoopRequest struct {
 	PostPromptInputItems []any
 	SteerMailbox         *SteerMailbox
 	Tools                []any
-	HostedTools          []any
-	Store                bool
-	PreviousResponseID   string
-	ParallelToolCalls    bool
-	ReasoningEffort      string
-	ReasoningSummary     string
+	// ToolsForStep rebuilds the tool list when a later sampling step selects a
+	// different model. It lets model-catalog Code Mode messages follow mid-turn
+	// model changes (Rust #47118).
+	ToolsForStep       func(model string) []any
+	HostedTools        []any
+	Store              bool
+	PreviousResponseID string
+	ParallelToolCalls  bool
+	ReasoningEffort    string
+	ReasoningSummary   string
 	// DropReasoningEffortUpdates removes saved configuration_update items from
 	// the request copy when the effective model/provider does not support them
 	// (Rust #46530).
@@ -470,12 +474,16 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			toolRegistrationCounts = l.toolRegistrationCounts()
 		}
 		recordToolRegistrationMetrics(l.toolRegistrationMetrics, toolRegistrationCounts, request.ToolMode)
+		stepTools := request.Tools
+		if iteration > 0 && request.ToolsForStep != nil {
+			stepTools = request.ToolsForStep(stepModel)
+		}
 		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,
 			InputItems:                   inputItems,
 			PostPromptInputItems:         postPromptInputItemsForIteration(postPromptItems, iteration),
-			Tools:                        append([]any(nil), request.Tools...),
+			Tools:                        append([]any(nil), stepTools...),
 			Model:                        stepModel,
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,

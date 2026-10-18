@@ -24,6 +24,15 @@ type RuntimeOptions struct {
 	// ToolMetadataMetrics receives the `codex.tool_metadata.shed_bytes`
 	// histogram from retention and outgoing-message budgets (Rust #47758).
 	ToolMetadataMetrics model.ToolMetadataMetricSink
+	// CodeModeMessages carries the active model catalog's Code Mode overrides
+	// for code_mode_only exec descriptions (Rust #47118).
+	CodeModeMessages *model.CodeModeToolMessages
+	// CodeModeMessagesForModel resolves the catalog overrides for a model so a
+	// mid-turn model change can refresh exec/wait descriptions (Rust #47118).
+	CodeModeMessagesForModel func(model string) *model.CodeModeToolMessages
+	// CodeModeDefaultExecYieldTime substitutes
+	// {{ default_exec_yield_time_ms }} in catalog exec text.
+	CodeModeDefaultExecYieldTime time.Duration
 	// TurnMetadataIncludesToolInfo mirrors the
 	// features.tool_registry.turn_metadata_includes_tool_info gate: when set,
 	// a Responses Lite request's turn metadata carries the model-visible tool
@@ -74,6 +83,9 @@ type Runtime struct {
 	instantInterrupt             bool
 	deferMailboxPreemption       bool
 	indirectDescriptionPrefixes  *tool.IndirectNamespacePrefixes
+	codeModeMessages             *model.CodeModeToolMessages
+	codeModeMessagesForModel     func(model string) *model.CodeModeToolMessages
+	codeModeDefaultExecYieldTime time.Duration
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -105,6 +117,9 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		instantInterrupt:             options.InstantInterrupt,
 		deferMailboxPreemption:       options.DeferMailboxPreemption,
 		indirectDescriptionPrefixes:  options.IndirectDescriptionPrefixes,
+		codeModeMessages:             options.CodeModeMessages,
+		codeModeMessagesForModel:     options.CodeModeMessagesForModel,
+		codeModeDefaultExecYieldTime: options.CodeModeDefaultExecYieldTime,
 	}
 }
 
@@ -156,6 +171,7 @@ func (r *Runtime) PrepareToolMode(requestedToolMode string, disableCodeModeFallb
 	if codeModeErr != nil && requestedToolMode == model.ToolModeCodeMode && !disableCodeModeFallback {
 		effectiveToolMode = model.ToolModeDirect
 	}
+	r.router.SetToolMode(effectiveToolMode)
 	if codeModeErr == nil || (requestedToolMode != model.ToolModeCodeMode && requestedToolMode != model.ToolModeCodeModeOnly) {
 		return effectiveToolMode, ""
 	}
@@ -282,10 +298,20 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		loopRequest.OnWarning(warning)
 	}
 	loopRequest.ToolMode = effectiveToolMode
+	buildTools := func() []any {
+		specs := r.modelVisibleSpecsForRequest(effectiveToolMode)
+		return MergeHostedTools(MergeHostedTools(model.ResponsesToolsFromSpecs(specs), r.hostedTools), request.HostedTools)
+	}
 	var visibleSpecs []tool.Spec
 	if len(loopRequest.Tools) == 0 {
 		visibleSpecs = r.modelVisibleSpecsForRequest(effectiveToolMode)
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
+	}
+	if r.codeModeMessagesForModel != nil {
+		loopRequest.ToolsForStep = func(modelID string) []any {
+			r.applyCodeModeMessagesForModel(modelID)
+			return buildTools()
+		}
 	}
 	if effectiveToolMode == model.ToolModeCodeMode || effectiveToolMode == model.ToolModeCodeModeOnly {
 		loopRequest.ClientMetadataTransform = newCodeModeClientMetadataTransform(loopRequest.ClientMetadata, r.router, visibleSpecs, r.turnMetadataIncludesToolInfo)
@@ -312,7 +338,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ThreadID:                    request.ThreadID,
 			TurnID:                      request.TurnID,
 			ExecutedToolCalls:           executedToolCalls,
-			ToolMode:                    loopRequest.ToolMode,
+			ToolMode:                    firstNonEmpty(r.router.ToolMode(), loopRequest.ToolMode),
 			InstantInterrupt:            r.instantInterrupt,
 			Truncation:                  r.truncationPolicy(loopRequest.Model),
 			TruncationForModel:          r.truncationPolicy,
@@ -345,12 +371,23 @@ func (r *Runtime) modelVisibleSpecsForRequest(effectiveToolMode string) []tool.S
 		visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 	} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
-		visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs(), r.indirectDescriptionPrefixes)
+		visibleSpecs = codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, r.router.CodeModeToolSpecs(), r.indirectDescriptionPrefixes, r.codeModeMessages, r.codeModeDefaultExecYieldTime)
 	}
 	if codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 	}
 	return visibleSpecs
+}
+
+func (r *Runtime) applyCodeModeMessagesForModel(modelID string) {
+	if r == nil || r.codeModeMessagesForModel == nil {
+		return
+	}
+	messages := r.codeModeMessagesForModel(modelID)
+	r.codeModeMessages = messages
+	if r.router != nil {
+		r.router.SetCodeModeMessages(messages)
+	}
 }
 
 // effectiveToolModeForRequest mirrors PrepareToolMode's code-mode downgrade
@@ -457,6 +494,10 @@ func codeModeOnlyVisibleSpecs(specs []tool.Spec) []tool.Spec {
 }
 
 func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec, indirectPrefixes *tool.IndirectNamespacePrefixes) []tool.Spec {
+	return codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, nestedSpecs, indirectPrefixes, nil, 0)
+}
+
+func codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec, indirectPrefixes *tool.IndirectNamespacePrefixes, messages *model.CodeModeToolMessages, defaultYieldTime time.Duration) []tool.Spec {
 	enabledSpecs := make([]tool.Spec, 0, len(nestedSpecs))
 	deferredSpecs := make([]tool.Spec, 0)
 	namespaces := map[string]codemode.NamespaceDescription{}
@@ -481,12 +522,19 @@ func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Sp
 			namespaces[""] = codemode.NamespaceDescription{Name: "functions", Description: prefix}
 		}
 	}
-	description := codemode.BuildExecToolDescriptionWithDeferred(
+	defaultYieldMS := int(defaultYieldTime / time.Millisecond)
+	if defaultYieldMS <= 0 {
+		defaultYieldMS = 10000
+	}
+	description := codemode.BuildExecToolDescriptionWithOptions(
 		codemode.CollectPromptDefinitions(enabledSpecs),
 		codemode.CollectPromptDefinitions(deferredSpecs),
 		namespaces,
 		true,
 		len(deferredSpecs) > 0,
+		messages,
+		defaultYieldMS,
+		"image(value), audio(value), generatedImage(value): Append supported media results.",
 	)
 	out := append([]tool.Spec(nil), visibleSpecs...)
 	for index := range out {
@@ -507,19 +555,16 @@ func newCodeModeClientMetadataTransform(base map[string]string, router *tool.Rou
 	baseTurnMetadata := strings.TrimSpace(base[codexapi.ClientCodexTurnMetadataHeader])
 	toolInventory := tool.ToolNamespacesInfo(nil)
 	if lite && includeToolInfo {
-		registry := (*tool.Registry)(nil)
 		if router != nil {
-			registry = router.Registry()
+			toolInventory = router.ToolNamespacesInfo()
 		}
-		specs := modelVisibleSpecs
-		if len(specs) == 0 && router != nil {
-			specs = router.ModelVisibleSpecs()
+		if toolInventory == nil && router != nil {
+			specs := modelVisibleSpecs
+			if len(specs) == 0 {
+				specs = router.ModelVisibleSpecs()
+			}
+			toolInventory = tool.CollectToolNamespacesInfo(router.Registry(), router.CodeModeToolNames(), specs)
 		}
-		codeModeToolNames := map[string]tool.CodeModeToolNameMetadata(nil)
-		if router != nil {
-			codeModeToolNames = router.CodeModeToolNames()
-		}
-		toolInventory = tool.CollectToolNamespacesInfo(registry, codeModeToolNames, specs)
 	}
 	return func(metadata map[string]string) map[string]string {
 		out := cloneStringMap(metadata)

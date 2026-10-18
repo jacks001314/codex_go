@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex_go/features"
+	"codex_go/tool"
 )
 
 // BaseInstructions is Rust models-manager/prompt.md (BASE_INSTRUCTIONS): the
@@ -237,7 +238,19 @@ type ToolMessages struct {
 	// McpResources carries the built-in MCP resource helpers' overrides
 	// (Rust #47677).
 	McpResources *McpResourceToolMessages `json:"mcp_resources,omitempty"`
+	// CodeMode carries the exec/wait/deferred-guidance and shared MCP type
+	// overrides for Code Mode (Rust #47118).
+	CodeMode *CodeModeToolMessages `json:"code_mode,omitempty"`
 }
+
+// CodeModeToolMessages mirrors Rust protocol::openai_models::
+// CodeModeToolMessages. Exec descriptions may use the literal
+// {{ default_exec_yield_time_ms }} and {{ image_helper }} placeholders; wait
+// descriptions and parameter schemas are selected independently; empty literal
+// guidance suppresses the corresponding section. The concrete type lives in
+// tool so the tool runtime can consume it without a model dependency cycle.
+type CodeModeToolMessages = tool.CodeModeToolMessages
+type CodeModeToolMessage = tool.CodeModeToolMessage
 
 // IndirectDescriptionPrefixes mirrors Rust's model-owned indirect tool guidance.
 // Namespace keys are exact rendered namespaces (including `functions` for plain
@@ -337,6 +350,14 @@ func (m *ModelMessages) MCPResources() *McpResourceToolMessages {
 		return nil
 	}
 	return m.Tools.McpResources
+}
+
+// CodeMode returns the active model's Code Mode tool-message overrides.
+func (m *ModelMessages) CodeMode() *CodeModeToolMessages {
+	if m == nil || m.Tools == nil {
+		return nil
+	}
+	return m.Tools.CodeMode
 }
 
 // MultiAgentToolParametersOverride returns a V2 tool's complete parameter schema
@@ -1941,6 +1962,7 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 			tools.FunctionsNamespaceFunctionsDescriptionPrefixes = cloneStringMap(tools.FunctionsNamespaceFunctionsDescriptionPrefixes)
 			tools.MultiAgent = cloneMultiAgentToolMessages(tools.MultiAgent)
 			tools.McpResources = cloneMcpResourceToolMessages(tools.McpResources)
+			tools.CodeMode = cloneCodeModeToolMessages(tools.CodeMode)
 			messages.Tools = &tools
 		}
 		out.ModelMessages = &messages
@@ -1950,6 +1972,28 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 }
 
 func cloneToolMessage(in *ToolMessage) *ToolMessage {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Description = cloneStringPointer(in.Description)
+	out.Parameters = cloneStringPointer(in.Parameters)
+	return &out
+}
+
+func cloneCodeModeToolMessages(in *CodeModeToolMessages) *CodeModeToolMessages {
+	if in == nil {
+		return nil
+	}
+	return &CodeModeToolMessages{
+		Exec:                        cloneCodeModeToolMessage(in.Exec),
+		Wait:                        cloneCodeModeToolMessage(in.Wait),
+		DeferredNestedToolsGuidance: cloneStringPointer(in.DeferredNestedToolsGuidance),
+		McpTypescriptPreamble:       cloneStringPointer(in.McpTypescriptPreamble),
+	}
+}
+
+func cloneCodeModeToolMessage(in *tool.CodeModeToolMessage) *tool.CodeModeToolMessage {
 	if in == nil {
 		return nil
 	}

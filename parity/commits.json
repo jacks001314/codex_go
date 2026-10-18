@@ -3626,9 +3626,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/10; needs review: can_manage_children, has_terminal_controls, requires_code_mode_worker"
+        "ToolRouter now freezes the finalized model-specific tool mode, Code Mode name map, namespace inventory and child-management capability. It exposes RequiresCodeModeWorker, HasTerminalControls and CanManageChildren; PrepareToolMode updates the effective mode on the router, dispatcher records the router mode, and Responses metadata uses the router's finalized namespace inventory instead of recomputing from candidate planning. Tests: go test ./tool -run 'RouterFinalizedPlan|CodeModeToolNames|ToolNamespacesInfo' -count=1; go test ./turn -run 'ToolMode|ToolNamespaces|CodeMode|StepInputItems' -count=1; go test ./appserver -run 'ToolRouter|ToolNamespaces|ResponsesLite|MCPTurnMetadata' -count=1"
       ]
     },
     {
@@ -18093,9 +18093,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: CodeModeToolMessages, CodeModeWaitHandler, code_mode_wait_description_override, code_mode_wait_parameters_override, create_wait_tool"
+        "tools.code_mode now drives exec/wait descriptions, deferred guidance, and the shared MCP TypeScript preamble. Exec templates substitute {{ default_exec_yield_time_ms }} and {{ image_helper }}; wait schemas fall back on invalid input; empty guidance suppresses its section. Mid-turn model changes rebuild ToolsForStep and refresh registered exec/wait spec snapshots. Tests: go test ./model ./codemode -run 'CodeMode|WaitTool|ExecDescription' -count=1; go test ./tool -run 'CodeModeExecAndWaitCatalog|CodeModeWaitCatalog|CodeMode' -count=1; go test ./turn -run 'CodeMode|RebuildsToolsForLaterModel' -count=1; go test ./appserver -run 'CodeMode|Tool' -count=1"
       ]
     },
     {
