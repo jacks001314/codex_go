@@ -19594,9 +19594,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: HELPER_ARG, MAX_ENV_BYTES, REPORT_PREFIX, child_fd, init_spawn_helper"
+        "N/A by architecture: the upstream change introduces a Rust spawn-helper process for pipe launches and exec-server local_process wiring. Go starts pipe processes directly with os/exec and explicit pipe/Wait lifecycle management, so there is no helper entrypoint to add."
       ]
     },
     {
@@ -19618,9 +19618,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: configure_child_terminal, is_available"
+        "N/A by architecture: the upstream change adds Rust spawn-helper indirection for PTY children. Go launches PTYs through os/exec + creack/pty in tool/unified_exec_process_unix.go and execserver/tty_unix.go, with no Rust ChildCommand/spawn-helper layer to route."
       ]
     },
     {
@@ -20602,9 +20602,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/9; needs review: LocalPolicyContext, PatchPolicyMatcher, as_context, normalize_system_aliases, prepare_local_matching"
+        "Patch permission checks use executor path conventions, normalize only depth-one macOS system aliases, and check alias plus canonical paths. Tests cover case-insensitive filesystem variants when available. Tests: go test ./tool -run 'ApplyPatch.*Alias|CaseVariant|SystemAlias' -count=1; go test ./sandbox -run 'Seatbelt|Alias' -count=1"
       ]
     },
     {

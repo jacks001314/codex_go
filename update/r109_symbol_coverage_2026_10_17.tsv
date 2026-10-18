@@ -875,7 +875,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 53ba408a2f5502313792e46e5730a056e233bcab	43533	Fix jemalloc tools and compiler flags for Bazel musl builds (#43533)	2026-09-07	core	0	0		0	0	not_applicable	
 53c542d944c705f3a66780a19223223bee57cbb6	45039	Use gzip compression level 6 for Codex package archives (#45039)	2026-09-12	core	0	0		0	0	not_applicable	
 53ff712a48379ce8df605e292afd6046ca88ae9b	44957	Add model grouping to the agent command center (#44957)	2026-09-12	tui	3	3	1.00	0	0	complete	
-54487a5b614b798bb454122a777623336c6a9845	47362	Bound inbound exec-server requests across client transports (#47362)	2026-09-22	execserver	7	2	0.29	0	0	audit_pending	ClientJsonRpcMessageDecoder,MAX_CLIENT_INBOUND_NOTIFICATION_LEN,MAX_CLIENT_INBOUND_REQUEST_LEN,client_from_stdio,client_inbound_message_exceeded_limit
+54487a5b614b798bb454122a777623336c6a9845	47362	Bound inbound exec-server requests across client transports (#47362)	2026-09-22	execserver	7	2	0.29	0	0	complete	ClientJsonRpcMessageDecoder,MAX_CLIENT_INBOUND_NOTIFICATION_LEN,MAX_CLIENT_INBOUND_REQUEST_LEN,client_from_stdio,client_inbound_message_exceeded_limit
 54685110a730ff2186f27c9f36d40ed83bae3071	52234	Support request IDs in exec-server WebSocket handshakes (#52234)	2026-10-08	appserver	0	0		0	0	complete
 546eed94ac73e83abea237c128e5ec05257b6372	40177	Require content kinds for extension prompt fragments (#40177)	2026-08-23	guardian	3	1	0.33	0	0	audit_pending	developer_capability,developer_policy
 547c9a1aad9fecf24d49fd835f11d90349828c6d	46503	Use catalog model display names throughout the TUI (#46503)	2026-09-18	tui	3	2	0.67	0	0	audit_pending	show_model_selection_view
@@ -1152,7 +1152,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6eecd04fc165cd4573fcbc220fb0b49d3dee7fa5	44249	Normalize image detail for the receiving model (#44249)	2026-09-09	appserver	0	0		0	0	not_applicable	
 6f39a47bb3b04de4c804187bfbf55edc56939aab	45276	Add worktree session creation to the agents overview (#45276)	2026-09-13	tui	4	3	0.75	0	0	audit_pending	start_agents_overview_session
 6f47fcb0bea40155ba00a352fd833c2df2738076	53436	Route TUI request replies to their originating connection and thread (#53436)	2026-10-12	tui	10	3	0.30	0	0	audit_pending	BufferedServerRequest,PendingResolution,ResolvedThreadAppServerRequest,buffered_request,handle_server_request_event,note_buffered_request,take_resolution_record
-6f51c65958ebdd5a57708e012d045f172fc9aab4	47879	Fix macOS system-alias matching in patch permission checks (#47879)	2026-09-24	execserver	9	3	0.33	0	0	audit_pending	LocalPolicyContext,PatchPolicyMatcher,as_context,normalize_system_aliases,prepare_local_matching,prepare_matching
+6f51c65958ebdd5a57708e012d045f172fc9aab4	47879	Fix macOS system-alias matching in patch permission checks (#47879)	2026-09-24	execserver	9	3	0.33	0	0	complete	LocalPolicyContext,PatchPolicyMatcher,as_context,normalize_system_aliases,prepare_local_matching,prepare_matching
 6f6af0fce4381233fa2e83dc24641167e68dfcb5	47568	Record sandbox backends in command execution analytics (#47568)	2026-09-23	tui	1	1	1.00	0	0	complete	
 6f6e80bcddab56a4e6518eb5adef0079ed30bb2b	52176	Show AWS GovCloud guidance at startup and remember acknowledgment (#52176)	2026-10-08	tui	4	1	0.25	0	0	partial	check_gov_cloud,handle_guidance_key_event,run_gov_cloud_guidance
 6fa3bcaae8aaa7c90735816191c3bda0ae5654e4	47680	Add exec-server RPC timing and process startup tracing (#47680)	2026-09-23	execserver	3	3	1.00	0	0	complete	none
@@ -1438,7 +1438,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 888be42a20c5a727214d898c4e335ac2e27161af	46561	Support explicit provider model catalog URLs (#46561)	2026-09-18	guardian	2	2	1.00	0	0	complete	
 888e02db34bc6fe226e2131448413c051491f5b8	47389	Enforce network policy throughout HTTP and WebSocket requests (#47389)	2026-09-22	tui	44	25	0.57	0	0	audit_pending	ConnectionInner,HttpClientBackend,ProxyRouting,RequestBuilder,StartupSyncHttpClient,TransportClient,apply_default_headers,bearer_auth,body_stream,build_with_custom_ca_fallback
 88912c04cd1180becf77f7a74e3b10351f0779bb	42413	Enable coordinated MCP OAuth refresh (#42413)	2026-09-03	mcp	7	2	0.29	0	0	audit_pending	OAuthRuntime,PROACTIVE_REFRESH_TIMEOUT,REFRESH_REQUEST_TIMEOUT,acquire_transaction_guard,refresh_if_needed
-88b498ded45c7a7ce6c57b4d8cd48ce9639c0a3e	47617	Route Linux PTY launches through the process setup helper (#47617)	2026-09-23	core	4	2	0.50	0	0	audit_pending	configure_child_terminal,is_available
+88b498ded45c7a7ce6c57b4d8cd48ce9639c0a3e	47617	Route Linux PTY launches through the process setup helper (#47617)	2026-09-23	core	4	2	0.50	0	0	not_applicable	configure_child_terminal,is_available
 88e9a8329d17bd141e4f3f0e7c78d07a7baa8b23	49084	Track app-server running turns incrementally (#49084)	2026-09-28	appserver	0	0		0	0	not_applicable	
 88ef37c64974e1209411f6d449b0db942b3eb731	46905	Identify local background servers in `/status` (#46905)	2026-09-20	tui	0	0		0	0	not_applicable	
 88f776588f5e73467e7659c268f8358a9a2378b6	41683	Set working directories for environment MCP tests (#41683)	2026-08-30	guardian	0	0		0	0	not_applicable	
@@ -2375,7 +2375,7 @@ dee21ec1bc26cdf9f3c4d77a17706cd19dcf05de	43002	Replace Guardian tickets with par
 df06bb054cc1259c64790433a8da2f2cdd8aeed8	47856	Initialize media estimates outside the global cache lock (#47856)	2026-09-24	core	1	1	1.00	0	0	complete	
 df3094107210471940bd15fee00629f87283d04b	47347	Add GPT-6 Sol and Luna to Amazon Bedrock catalogs (#47347)	2026-09-22	tui	2	2	1.00	0	0	complete	
 df3e439c02efc90f29a26d2d602a54eea2e8a91e	49058	Fix Windows sandbox ACL repair for long runtime paths (#49058)	2026-09-28	sandbox	0	0		0	0	not_applicable	
-df3ecee6f0a7dee6d5aa7ab5c9ba0c1e3c856531	47612	Launch Linux pipe processes through a fresh setup helper (#47612)	2026-09-23	appserver	7	2	0.29	0	0	audit_pending	HELPER_ARG,MAX_ENV_BYTES,REPORT_PREFIX,child_fd,init_spawn_helper
+df3ecee6f0a7dee6d5aa7ab5c9ba0c1e3c856531	47612	Launch Linux pipe processes through a fresh setup helper (#47612)	2026-09-23	appserver	7	2	0.29	0	0	not_applicable	HELPER_ARG,MAX_ENV_BYTES,REPORT_PREFIX,child_fd,init_spawn_helper
 df522cae16b4f4350d6a9e13bc10cbe9650b0f9b	43790	Limit app-server storage metrics to session directories (#43790)	2026-09-08	appserver	0	0		0	0	not_applicable	
 df6a54ee851129447290b5684b8c2d2df10a5cd5	39997	Add a response target picker to `/copy` (#39997)	2026-08-21	tui	7	2	0.29	0	0	audit_pending	copy_selection,copy_selection_with,extract_copy_targets,show_copy_picker,strip_line_directives
 df7f717c856e0634b04a12f7d4fc9e8ecb3e65be	46734	Add transcript search and per-activity detail controls (#46734)	2026-09-19	tui	52	10	0.19	0	0	partial	ActivityTranscriptLines,KEY_CHORD_TIMEOUT,KeymapContextSet,active_activity_ids,active_cell_hyperlink_lines_with,active_cell_owned_transcript_lines,activity_ids,activity_layout,advance_search,canonical_activity_index
