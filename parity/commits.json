@@ -14249,9 +14249,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: WSLG_DISTRO_ROOT, ensure_supported_path, is_duplicate_root"
+        "Round 704 (implementation): restricted Linux sandboxes detect the WSLg duplicate root by device/inode identity, reject readable/writable grants, working directories, and absolute command paths under /mnt/wslg/distro, and mask the duplicate view after filesystem grants. Masking uses --perms 000 --tmpfs --remount-ro, skips when an existing deny-read ancestor already hides it, and hides host /proc when no fresh procfs is mounted. Tests compile for linux: TestEnsureNoWSLGDistroAliasLikeRust and TestWSLGMaskArgsOrderingLikeRust; GOOS=linux go build ./... and linuxsandbox test binary compile."
       ]
     },
     {

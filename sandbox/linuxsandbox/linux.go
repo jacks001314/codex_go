@@ -997,6 +997,29 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		args = append(args, "--unshare-net")
 	}
 	fs := cmd.PermissionProfile.Filesystem
+	wslgMask := false
+	if fs != nil && !fs.hasFullDiskWriteAccess() {
+		duplicate, err := wslgDuplicateRootPresent()
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			wslgMask = true
+			paths := []string{cmd.SandboxPolicyCWD, cmd.CommandCWD}
+			paths = append(paths, fs.readableRoots(cmd.SandboxPolicyCWD)...)
+			paths = append(paths, fs.writableRoots(cmd.SandboxPolicyCWD)...)
+			if len(cmd.Command) > 0 && strings.Contains(cmd.Command[0], "/") {
+				executable := cmd.Command[0]
+				if !filepath.IsAbs(executable) {
+					executable = filepath.Join(cmd.CommandCWD, executable)
+				}
+				paths = append(paths, executable)
+			}
+			if err := ensureNoWSLGDistroAlias(paths...); err != nil {
+				return err
+			}
+		}
+	}
 	if fs == nil || fs.hasFullDiskWriteAccess() {
 		args = append(args, "--bind", "/", "/")
 		args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
@@ -1059,6 +1082,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		}
 		args = append(args, "--ro-bind", path, path)
 	}
+	wslgMaskedByAncestor := false
 	if fs != nil {
 		unreadableRoots, err := fs.unreadableRoots(cmd.SandboxPolicyCWD)
 		if err != nil {
@@ -1072,7 +1096,13 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 			if fd >= 0 {
 				dataFDs = append(dataFDs, fd)
 			}
+			if wslgMask && pathWithinRoot(wslgDistroRoot, path) {
+				wslgMaskedByAncestor = true
+			}
 		}
+	}
+	if wslgMask {
+		args = append(args, wslgMaskArgs(wslgMaskedByAncestor, cmd.NoProc, pathIsDirectory(wslInteropDir))...)
 	}
 	// Rust #45984: filesystem-restricted sandboxes must not reach the
 	// privileged app-server control sockets. Mask the fixed user-owned
