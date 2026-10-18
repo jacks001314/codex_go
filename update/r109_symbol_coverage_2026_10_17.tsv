@@ -2408,7 +2408,7 @@ e1f3fafad8ccec5983a509d0c771102d490d6ffe	47629	Route V2 child loading through `A
 e21bc763a72adb982522032ce1be725b691dc342	40273	Normalize compacted user message annotations (#40273)	2026-08-23	core	0	0		0	0	not_applicable	
 e22e6523eb5b87f1872e823fa6c97906c2fc671a	46067	Remove the `done` prefix from TUI completion timestamps (#46067)	2026-09-17	tui	0	0		0	0	not_applicable	
 e24190caa9ee355044a7d70177d48a556d766d35	40771	Use turn environment settings for sandbox execution (#40771)	2026-08-26	mcp	0	0		0	0	not_applicable	
-e24ac448b37bc6a29e6f2ce8dad61ddaaabf09dc	46577	Allow thread instruction providers to share updates with subagents (#46577)	2026-09-19	guardian	4	0	0.00	0	0	implementation_pending	SharedThreadInstructionsProviders,for_root,root_thread_instructions_provider,shared_thread_instructions_provider
+e24ac448b37bc6a29e6f2ce8dad61ddaaabf09dc	46577	Allow thread instruction providers to share updates with subagents (#46577)	2026-09-19	guardian	4	0	0.00	0	0	not_applicable	SharedThreadInstructionsProviders,for_root,root_thread_instructions_provider,shared_thread_instructions_provider
 e25bedc166b54acadb505b587a387091097b2393	44639	Block non-loopback inbound traffic for the Windows offline sandbox (#44639)	2026-09-10	sandbox	1	0	0.00	0	0	implementation_pending	ensure_offline_network_blocks
 e269f2164cbb9f499e4f22301c393500e2a831f3	46179	Include sender user messages in Guardian delegation reviews (#46179)	2026-09-17	guardian	7	7	1.00	0	0	complete	
 e28fa3e7a4481e1b196dd43c57bff96809f22b60	46694	Unify TUI completion popup styling and preserve result identity (#46694)	2026-09-19	tui	3	2	0.67	0	0	audit_pending	POPUP_HEIGHT
