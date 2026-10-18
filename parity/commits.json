@@ -2929,9 +2929,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "TurnError carries optional MisalignmentErrorDetails with errorType, detailedExplanation and steer.message, plus the later reviewTarget field. Details survive API error decoding, turn failure notifications, resume/thread responses and app-server JSON. Tests: go test ./appserver -run 'MisalignmentDetails|MisalignmentJSON|MisalignmentPolicy|ReviewTarget' -count=1"
       ]
     },
     {
