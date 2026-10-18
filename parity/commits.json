@@ -30858,9 +30858,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: DaemonSocketFileGuard, bind_private_daemon_socket"
+        "Equivalent implementation present: Unix updater sockets use a private target for long advertised paths and refuse to overwrite a regular file; managed updater readiness checks both the updater process and its socket; lifecycle bootstrap/restart distinguish managed sockets from unmanaged endpoints, and readiness includes backend stderr tail. Unix updater/lifecycle regression suites pass."
       ]
     },
     {
