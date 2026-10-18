@@ -22652,9 +22652,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: is_empty_except_updated_at"
+        "Round 304 (audit): already implemented. state.upsertRolloutThread compares the stored row with the intended rebuild and, when only timestamps differ and the rollout path is unchanged, calls touchThreadUpdatedAt to update updated_at/updated_at_ms without rewriting metadata or indexes. Missing rows, changed rollout paths, and any metadata difference retain the full repair path. TestRolloutTimestampOnlyUpdateUsesNarrowSQLiteWriteLikeRust verifies timestamp/full-row triggers, metadata preservation, metadata changes, and missing-row reconstruction. Tests: go test ./state -run TimestampOnly -count=1"
       ]
     },
     {

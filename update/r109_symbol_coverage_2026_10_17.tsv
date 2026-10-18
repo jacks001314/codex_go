@@ -2050,7 +2050,7 @@ c098f97e5305394c7f30a876c1393cf34a3eedca	47799	Enable terminal input approval by
 c0b6285711f788cfb65c6e46c6f23fa0f2a8b3ec	43444	Pin V8 release manifests and prevent published release replacement (#43444)	2026-09-07	core	0	0		0	0	not_applicable	
 c0c230e6730b3b3c9101b8aff4b9aea4027cea5b	51355	Add bounded diagnostics for agent spawn failures (#51355)	2026-10-06	telemetry	3	3	1.00	0	0	complete	
 c0cfbfbb989ff80c4027c8ea86a15d411d1d5214	54033	Extend memory extension resource retention to 14 days (#54033)	2026-10-14	core	1	1	1.00	0	0	complete	
-c0d26949be4144c751894ae96e28d3db2208b764	48983	Avoid full metadata rewrites for thread timestamp updates (#48983)	2026-09-28	persistence	1	0	0.00	0	0	implementation_pending	is_empty_except_updated_at
+c0d26949be4144c751894ae96e28d3db2208b764	48983	Avoid full metadata rewrites for thread timestamp updates (#48983)	2026-09-28	persistence	1	0	0.00	0	0	complete	is_empty_except_updated_at
 c0e1b782532d8a7ce902d043315fcbd7f94de4b8	46495	Preserve the provisioned macOS CLI's code-signing identity (#46495)	2026-09-18	core	0	0		0	0	not_applicable	
 c114f232f9bfff435d8c243f4e28774a7f1e0788	47596	Refresh realtime context for each model request (#47596)	2026-09-23	realtime	2	1	0.50	0	0	complete	RealtimeConversationSnapshot
 c117207a6f1f948ac7fcdd5e784d75fc4e9d13e1	47249	Drop descendant channel posts from retained remote compaction v2 history (#47249)	2026-09-22	core	0	0		0	0	not_applicable	
