@@ -9819,9 +9819,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: WindowsDenyReadGlobScan, windows_deny_read_glob_scan"
+        "Round 445 (audit): sandbox.WindowsDenyReadGlobScanForPattern already provides the shared lexical scan bounds (literal root including drive/leading separator, glob suffix, configured depth, and '**' inheritance), and sandbox/windowssandbox.GlobScanPlanForPattern consumes it for native ACL expansion. Tests: go test ./sandbox ./sandbox/windowssandbox -run 'GlobScan|DenyReadGlob' -count=1"
       ]
     },
     {
