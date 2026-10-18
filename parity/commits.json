@@ -1020,9 +1020,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 15/16 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "The TUI task catalog, disabled-by-default capability gate, debounced search, multi-word/escaped link codec, draft mention bindings, task-reference context injection, transcript decoding and history round-trip are implemented. Tests: go test ./tui/bottom_pane ./tui/chatwidget ./tui/tea -run 'TaskMention|TaskReference|TaskLink|TaskSearch|TaskCandidates|TaskTools' -count=1"
       ]
     },
     {
