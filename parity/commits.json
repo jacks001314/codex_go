@@ -2749,9 +2749,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: drain_helper_stderr, reap_helper_after_response"
+        "execserver.fs_helper reads newline-delimited helper responses, drains stderr concurrently into a bounded buffer, reaps with a bounded timeout and kills a stuck helper; the Windows command runner terminates its elevated job/process when the control pipe closes. Tests: go test ./execserver -run 'Helper|FSHelper' -count=1"
       ]
     },
     {
@@ -2857,9 +2857,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust-only guardian-v2 async_scorer persistence of security risk scores; Go has no async scorer/classifier extension (the synchronous reviewer path records decisions without that score model)."
       ]
     },
     {
@@ -2881,9 +2881,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "The persist_scores switch belongs to Rust's guardian-v2 async scorer; Go parses the opt-in config value but has no async score store to gate."
       ]
     },
     {
@@ -3218,9 +3218,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 3/10; needs review: GuardianTrustedSkillsFragment, TrustedSkillInvocations, TrustedSkillRoots, emit_explicit_skill_invocations, insert_superseded_path"
+        "Rust-only guardian-v2 async_scorer trusted-skill fragment/invocation path; Go's synchronous Guardian reviewer does not carry an async scorer trusted-skill context."
       ]
     },
     {
