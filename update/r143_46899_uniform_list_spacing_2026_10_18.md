@@ -12,10 +12,15 @@
 - 同一列表项内的多个段落通过内部标题标记保留空行：渲染前在段落边界插入
   私用区字符标题，渲染后替换为分隔行，再由 uniform 间距统一处理。
 
-剩余差异：
+reader position：
 
-- streamed cell consolidation 时的 reader position 保持尚未验证。
-- native scrollback 的 `AfterMultiline` 策略尚未有 Go carrier。
+- 完成/中断重绘前记录 viewport 顶部第一个非空可见行及其相对偏移；重绘后
+  在新内容中寻找最近的相同行并恢复偏移。找不到锚点时回退到旧 `YOffset`。
+- 测试覆盖插入行后顶部可见文本不变，以及空行/缺失锚点回退。
+
+结论：native scrollback 的 `AfterMultiline` 不适用。Go 的 inline transcript
+仍由 app 重绘，没有 Rust 那种 terminal-owned markdown cell 渲染路径；
+per-message cache key 已包含 text/width，列表间距策略按 surface 固定。
 
 验证：
 

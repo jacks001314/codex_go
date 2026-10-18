@@ -1974,13 +1974,12 @@ green.
   write; failures retain it. Ctrl+C now also retains the selection, matching
   Rust. Transcript right-click copy has no carrier because transcript selection
   remains terminal-owned.
-- `#46899` remains partial but now implements the core spacing policy:
-  streaming lists stay compact, completed assistant/reasoning/plan lists
-  separate every sibling when any item wraps, nested/quoted/code-item groups
-  are handled independently, list-item paragraphs keep their blank separator,
-  and resizing recomputes separators. Remaining: reader-position preservation
-  during streamed-cell consolidation is unverified, and native scrollback still
-  has no AfterMultiline carrier.
+- `#46899` is complete: streaming lists stay compact; completed
+  assistant/reasoning/plan lists separate every sibling when any item wraps;
+  nested/quoted/code-item groups and list-item paragraphs retain their
+  structure; resizing recomputes separators; and completion redraws anchor the
+  reader's top visible line. Native-scrollback AfterMultiline is not applicable
+  because Go's inline transcript still repaints app-owned rows.
 - `#46902` is not applicable: Go has no rendered "Back to bottom" follow
   control; transcript navigation is key-driven and following is tracked by the
   viewport's bottom state.

@@ -9210,14 +9210,19 @@ func (m *Model) refreshTranscript() {
 		m.lastTranscriptHeight = m.transcript.Height
 		return
 	}
-	m.lastTranscriptContent = content
 	wasAtBottom := m.activityFollow || m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset
+	var anchor transcriptScrollAnchor
+	if !wasAtBottom {
+		anchor = captureTranscriptScrollAnchor(m.lastTranscriptContent, yOffset, m.transcript.Height)
+	}
+	m.lastTranscriptContent = content
 	m.transcript.SetContent(content)
 	if wasAtBottom {
 		m.transcript.GotoBottom()
 	} else {
-		m.transcript.SetYOffset(yOffset)
+		maxOffset := max(strings.Count(content, "\n")+1-m.transcript.Height, 0)
+		m.transcript.SetYOffset(restoreTranscriptScrollAnchor(content, anchor, maxOffset))
 	}
 	m.lastTranscriptHeight = m.transcript.Height
 }

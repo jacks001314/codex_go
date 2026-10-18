@@ -17373,9 +17373,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 681 (implementation): streaming assistant and plan markdown stays compact, while completed assistant, reasoning, and proposed-plan markdown renders through a per-list uniform policy: if any sibling item spans multiple rendered rows, every sibling is separated, with nested single-line lists, quoted lists, and code-block items handled as their own groups. Multiple paragraphs inside one list item retain a blank separator via an internal heading marker that is replaced after rendering. The policy is applied after rendering, so resizing re-wraps and recomputes separators, and OSC 8 links survive insertion. Remaining: reader-position preservation when a streamed cell consolidates is not verified, and the native-scrollback AfterMultiline policy has no Go carrier. Tests: go test ./tui/... -count=1; go vet ./tui/..."
+        "Round 682 (implementation): streaming assistant and plan markdown stays compact, while completed assistant, reasoning, and proposed-plan markdown renders through a per-list uniform policy: if any sibling item spans multiple rendered rows, every sibling is separated, with nested single-line lists, quoted lists, and code-block items handled as their own groups. Multiple paragraphs inside one list item retain a blank separator via an internal heading marker that is replaced after rendering. The policy is applied after rendering, so resizing re-wraps and recomputes separators, and OSC 8 links survive insertion. Completion redraws anchor the reader's top visible transcript line, so inserted separators do not shift content while the user is scrolled up. Native-scrollback AfterMultiline is not applicable: Go's inline transcript still repaints app-owned rows and has no terminal-owned markdown cell policy; the per-message render cache is keyed by text and width, and list spacing is fixed per surface. Tests: TestUniformListSpacingMatchesRust, TestUniformListSpacingKeepsSingleLineListsCompact, TestUniformListSpacingPreservesRenderedLinks, TestCompletedAssistantListsUseUniformSpacingLikeRust, TestTranscriptScrollAnchorFollowsVisibleLineLikeRust, TestCompletedStreamKeepsReaderTopLineLikeRust; go test ./tui/... -count=1."
       ]
     },
     {
