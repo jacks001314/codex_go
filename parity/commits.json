@@ -5892,9 +5892,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: has_full_access"
+        "Round 410 (audit): Guardian treats Full Access as approval never plus unrestricted ready selected environments, returning approved without reviewer sampling; pending/failed/restricted environments do not qualify, and on-request restores normal review. Tests: go test ./appserver -run 'Guardian.*FullAccess|FullAccess.*Guardian|GuardianDecisionDuration' -count=1"
       ]
     },
     {
