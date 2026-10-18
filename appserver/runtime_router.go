@@ -7256,7 +7256,15 @@ func (r *RuntimeRouter) persistTurnStartRuntimeWorkspaceRoots(params *turn.TurnS
 	if params == nil {
 		return nil
 	}
-	return r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, threadRuntimeWorkspaceRoots(params.CWD, params.RuntimeWorkspaceRoots))
+	if params.RuntimeWorkspaceRoots != nil {
+		return r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, threadRuntimeWorkspaceRoots(params.CWD, params.RuntimeWorkspaceRoots))
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
+	if err != nil {
+		return err
+	}
+	roots := threadRecordRuntimeWorkspaceRoots(record, firstNonEmpty(strings.TrimSpace(params.CWD), record.Metadata.CWD), nil)
+	return r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, roots)
 }
 
 func (r *RuntimeRouter) applyThreadResumeRuntimeWorkspaceRoots(result any, request *Request) {
@@ -7268,11 +7276,11 @@ func (r *RuntimeRouter) applyThreadResumeRuntimeWorkspaceRoots(result any, reque
 	if err := request.DecodeParams(&params); err != nil {
 		return
 	}
-	if params.CWD == nil && len(params.RuntimeWorkspaceRoots) == 0 {
+	if params.CWD == nil && params.RuntimeWorkspaceRoots == nil {
 		return
 	}
 	roots := append([]string(nil), response.RuntimeWorkspaceRoots...)
-	if len(roots) == 0 {
+	if params.RuntimeWorkspaceRoots != nil && len(roots) == 0 {
 		roots = threadRuntimeWorkspaceRoots(response.CWD, params.RuntimeWorkspaceRoots)
 	}
 	_ = r.persistThreadRecordRuntimeWorkspaceRoots(response.Thread.ID, roots)
@@ -7911,7 +7919,7 @@ func applyThreadSettingsEnvironmentConfigToTurnStartParams(params *turn.TurnStar
 	if !turnStartSandboxPolicyPresent(params.SandboxPolicy) && strings.TrimSpace(settings.SandboxPolicy) != "" {
 		params.SandboxPolicy = settings.SandboxPolicy
 	}
-	if len(params.RuntimeWorkspaceRoots) == 0 && len(settings.RuntimeWorkspaceRoots) > 0 {
+	if params.RuntimeWorkspaceRoots == nil && len(settings.RuntimeWorkspaceRoots) > 0 {
 		params.RuntimeWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
 	}
 }

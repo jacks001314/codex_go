@@ -1855,15 +1855,52 @@ func cleanRuntimeWorkspaceRoot(value string) string {
 }
 
 func threadRecordRuntimeWorkspaceRoots(record *session.Record, cwd string, roots []string) []string {
-	if len(roots) > 0 {
+	if roots != nil {
 		return threadRuntimeWorkspaceRoots(cwd, roots)
 	}
 	if record != nil {
 		if stored := stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"]); len(stored) > 0 {
-			return threadRuntimeWorkspaceRoots(cwd, stored)
+			return retargetRuntimeWorkspaceRoots(stored, record.Metadata.CWD, cwd)
 		}
 	}
 	return threadRuntimeWorkspaceRoots(cwd, nil)
+}
+
+// retargetRuntimeWorkspaceRoots mirrors Rust #43848's
+// replace_path_and_deduplicate: a cwd-only update replaces the saved cwd root
+// while preserving additional roots, and the result is deduplicated.
+func retargetRuntimeWorkspaceRoots(stored []string, oldCWD string, newCWD string) []string {
+	if len(stored) == 0 {
+		return threadRuntimeWorkspaceRoots(newCWD, nil)
+	}
+	target := strings.TrimSpace(newCWD)
+	if target == "" {
+		target = oldCWD
+	}
+	out := make([]string, 0, len(stored)+1)
+	for _, root := range stored {
+		if oldCWD != "" && sameAppPath(root, oldCWD) {
+			root = target
+		}
+		cleaned := cleanRuntimeWorkspaceRoot(root)
+		if cleaned == "" {
+			continue
+		}
+		seen := false
+		for _, existing := range out {
+			if sameAppPath(existing, cleaned) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, cleaned)
+		}
+	}
+	if len(out) == 0 {
+		return threadRuntimeWorkspaceRoots(target, nil)
+	}
+	return out
 }
 
 func setThreadRecordRuntimeWorkspaceRoots(record *session.Record, roots []string) {
@@ -2309,8 +2346,9 @@ func applyThreadForkOverrides(record *session.Record, params *ThreadForkParams) 
 		record.Metadata.Extra["permissions"] = stringPtrValue(params.Permissions)
 	}
 	runtimeWorkspaceRoots := threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil)
-	if params.CWD != nil || len(params.RuntimeWorkspaceRoots) > 0 {
-		runtimeWorkspaceRoots = threadRuntimeWorkspaceRoots(record.Metadata.CWD, params.RuntimeWorkspaceRoots)
+	if params.CWD != nil || params.RuntimeWorkspaceRoots != nil {
+		updatedCWD := firstNonEmpty(stringPtrValue(params.CWD), record.Metadata.CWD)
+		runtimeWorkspaceRoots = threadRuntimeWorkspaceRoots(updatedCWD, params.RuntimeWorkspaceRoots)
 	}
 	setThreadRecordRuntimeWorkspaceRoots(record, runtimeWorkspaceRoots)
 	if params.Config != nil {

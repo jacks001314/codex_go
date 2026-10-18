@@ -9691,7 +9691,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 456 (audit): Go persists runtime_workspace_roots in record metadata, restores them on resume, applies explicit fork roots, and deduplicates/cleans paths (TestRouterResumeAndForkRuntimeWorkspaceRootsUseEffectiveRoots). Missing full parity: the protocol cannot distinguish an omitted override from an explicit empty list, so empty selections fall back to cwd/stored roots; cwd changes do not retarget the old cwd entry; and restored-host path validation/checkpointing semantics are not fully covered. Tests: go test ./appserver -run 'RuntimeWorkspaceRoots' -count=1"
+        "Round 690 (partial): Go persists runtime_workspace_roots in record metadata, restores them on resume, deduplicates/cleans paths, now distinguishes an omitted override (nil) from an explicit empty list, and retargets the saved cwd root when resume/settings update changes cwd while preserving additional roots. Settings inheritance and turn/start persistence follow the same nil-vs-empty rule. Remaining: full restored-host path validation and resume/revert checkpoint semantics. Tests: go test ./appserver -run 'RuntimeWorkspaceRoots|RuntimeWorkspaceRootsEmptyVsOmitted' -count=1"
       ]
     },
     {
