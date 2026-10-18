@@ -1431,7 +1431,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 87cf20ee491a035036f2d905926df4a0d35951cc	44297	Isolate the hook pipe I/O timeout test from shell startup files (#44297)	2026-09-09	core	0	0		0	0	not_applicable	
 87d3e068478cb299cb25937e9793b5e5d5a7c668	49401	Preserve live tool-call metadata across request windows (#49401)	2026-09-29	model	2	0	0.00	0	0	implementation_pending	assign_missing_response_item_id,normalize_executed_tool_call_arguments
 8813bd4b00c0aed7ffe3e86d06503c075cc775f8	42204	Add macOS voice runtime projection (#42204)	2026-09-02	realtime	0	0		0	0	not_applicable	
-88235f881d4e222cf779df785e747d8c8b935768	48725	Retain confirmed Code Mode messages for Guardian reviews (#48725)	2026-09-27	guardian	10	0	0.00	0	0	implementation_pending	CodeModeMessageTasks,admit_code_mode_send,capture_delivery,drain_code_mode_messages,pending_code_mode_message_recordings,record_confirmed_code_mode_send,record_delivered_assistant_message,render_retained_assistant_context,root_review_version,track_code_mode_message
+88235f881d4e222cf779df785e747d8c8b935768	48725	Retain confirmed Code Mode messages for Guardian reviews (#48725)	2026-09-27	guardian	10	10	1.00	0	0	complete
 883af106b957d21cba92121f70ce68bf58ecea50	45809	Retire the personality feature flag and document deprecated settings (#45809)	2026-09-15	appserver	0	0		0	0	not_applicable	
 885113aa1d68ccbc567b83698feac3cd42163088	44288	Prevent command hooks from hanging on blocked stdin (#44288)	2026-09-09	core	0	0		0	0	not_applicable	
 888948e5229d094021b2329347098bf376141921	48197	Optimize `blake3` in Bazel fastbuilds (#48197)	2026-09-25	core	0	0		0	0	not_applicable	

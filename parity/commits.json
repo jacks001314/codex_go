@@ -22328,9 +22328,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/10); candidate gap: CodeModeMessageTasks, admit_code_mode_send, capture_delivery, drain_code_mode_messages, pending_code_mode_message_recordings"
+        "Equivalent implementation: successful User Messaging outputs carry delivered_assistant_message metadata, which the retained-context recorder turns into a bounded assistant entry at the originating call position. Inherited calls are excluded for workers, the entry persists through rollout/replay, and retained assistant context is rendered into Guardian reviews as non-authorizing evidence. Tests cover root retention, worker inheritance, and review-context change detection."
       ]
     },
     {
