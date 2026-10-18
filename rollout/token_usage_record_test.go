@@ -31,7 +31,7 @@ func TestCompactionCheckpointCarriesTokenUsageRecordLikeRust(t *testing.T) {
 		t.Fatalf("AppendTokenUsageRecord() error = %v", err)
 	}
 	window := uint64(2)
-	if err := recorder.AppendCompactedWithCheckpoint("summary", nil, nil, nil, &window, "compact-response-1", &usage, now.Add(time.Second)); err != nil {
+	if err := recorder.AppendCompactedWithCheckpoint("summary", nil, nil, nil, &window, "compact-response-1", &usage, nil, now.Add(time.Second)); err != nil {
 		t.Fatalf("AppendCompactedWithCheckpoint() error = %v", err)
 	}
 

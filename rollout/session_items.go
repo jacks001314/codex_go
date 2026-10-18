@@ -938,6 +938,45 @@ func ReviewHistoryItems(lines []Line, fallback time.Time) []session.Item {
 	return items
 }
 
+// CompactedGuardianHistory returns the review transcript stored on the newest
+// compaction checkpoint (Rust #42065). Older rollouts omit the optional field.
+func CompactedGuardianHistory(lines []Line, fallback time.Time) []session.Item {
+	rolledBackAfterCheckpoint := false
+	for index := len(lines) - 1; index >= 0; index-- {
+		if lines[index].ThreadRolledBack != nil {
+			// A rollback after the checkpoint may have removed the checkpoint's
+			// turn. Without the live review state, fail closed instead of
+			// restoring evidence the user already reverted.
+			rolledBackAfterCheckpoint = true
+			continue
+		}
+		if lines[index].Type != "compacted" {
+			continue
+		}
+		event := compactedEventFromPayload(lines[index].Payload)
+		if event == nil || len(event.GuardianHistory) == 0 {
+			continue
+		}
+		if rolledBackAfterCheckpoint {
+			return nil
+		}
+		var rawItems []json.RawMessage
+		if err := json.Unmarshal(event.GuardianHistory, &rawItems); err != nil {
+			continue
+		}
+		items := make([]session.Item, 0, len(rawItems))
+		for itemIndex, raw := range rawItems {
+			item, ok := ItemFromLine(&Line{Type: "item", Item: raw})
+			if !ok {
+				continue
+			}
+			items = append(items, SessionItemFromRolloutItem(item, fallback, itemIndex))
+		}
+		return items
+	}
+	return nil
+}
+
 type rolloutReplayBuilder struct {
 	items          []session.Item
 	turns          []session.TurnSnapshot

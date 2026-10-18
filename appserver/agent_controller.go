@@ -251,6 +251,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if c.router.services.ThreadRouter != nil {
 		c.router.services.ThreadRouter.setHistoryInitialization(threadID, session.HistoryInitializationFromExtra(extra))
 	}
+	// Rust #42065 spawn.rs: inherited parent review evidence must not become the
+	// child's authorization. Keep an empty independent history so later child
+	// items are recorded while the fallback cannot re-read the forked parent.
+	c.router.captureGuardianReviewHistory(string(threadID), nil)
 	if err := c.router.runtimeSaveThreadRecord(record); err != nil {
 		_ = c.router.services.ThreadRouter.store.Delete(threadID)
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)

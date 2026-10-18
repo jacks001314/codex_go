@@ -5067,6 +5067,7 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
 	}
+	r.forkGuardianReviewHistory(sourceRecord, string(record.ID), params.BeforeTurnID, params.LastTurnID, params.LastN)
 	if !params.Ephemeral {
 		if err := r.services.ThreadRouter.retainLiveThread(record); err != nil {
 			_ = r.services.ThreadRouter.store.Delete(record.ID)
@@ -6610,6 +6611,7 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
 	}
+	r.forkGuardianReviewHistory(sourceRecord, string(record.ID), params.BeforeTurnID, params.LastTurnID, params.LastN)
 	if !params.Ephemeral {
 		if err := r.services.ThreadRouter.retainLiveThread(record); err != nil {
 			_ = r.services.ThreadRouter.store.Delete(record.ID)

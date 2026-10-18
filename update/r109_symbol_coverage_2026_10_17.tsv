@@ -393,7 +393,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 27c05a52e0cdf93ef7db5a96ccaf88d6b9095472	39847	Include context window IDs in response metadata (#39847)	2026-08-21	appserver	3	3	1.00	0	0	complete	
 27e6192e84fa8a2969d9d56c2fbe05754205958b	53389	Use cached login credentials for Guardian decisions (#53389)	2026-10-12	guardian	1	0	0.00	0	0	not_applicable	decisions_api_key
 2808a9c348ee90a6fc94aee1570dd3fdf2c0b021	44328	Clear pending TUI questions when accepting a new prompt (#44328)	2026-09-09	tui	7	3	0.43	0	0	audit_pending	UserMessageSource,clear_pending_questions,on_review_started,queue_user_message_with_options_and_source
-28097e98ebcb5e7eaa2e14534e60337f209a8a80	42065	Preserve Guardian history across thread reconstruction (#42065)	2026-09-01	tui	4	0	0.00	0	0	implementation_pending	GuardianHistoryCheckpoint,guardian_history_checkpoint,restore_guardian_history,truncate_before
+28097e98ebcb5e7eaa2e14534e60337f209a8a80	42065	Preserve Guardian history across thread reconstruction (#42065)	2026-09-01	tui	4	4	1.00	0	0	complete
 280ae8b9fcd35a54704dc2c78027b89bd51369fd	42624	Centralize prompt image detail modes (#42624)	2026-09-03	core	2	2	1.00	0	0	complete	
 280c7e1e5649cd79ddab629fbc4db37422a4bbb1	45517	Use a dedicated mock server in the provider enforcement test (#45517)	2026-09-14	appserver	0	0		0	0	not_applicable	
 282cd7b019378746cb87bd91a95d8b4bcae12aa3	47832	Stabilize Rosetta test timing and retry delay telemetry (#47832)	2026-09-24	core	0	0		0	0	not_applicable	
@@ -1946,7 +1946,7 @@ b56a579fc6f5ca54a690c0e463e0a33f5c276d63	53781	Remove the product-gating TODO fr
 b588812e8cc82f88a3141ab6bcdf654cbb18361d	49472	Use server-authoritative permissions in the TUI (#49472)	2026-09-30	tui	3	0	0.00	0	0	implementation_pending	adopt_inherited_server_selection,adopt_server_permissions,selected_server_profile
 b58b05e062b8ce7354f641f1e0ee059cfc5b7e01	47236	Suppress agent message board notifications to the post author (#47236)	2026-09-22	core	0	0		0	0	not_applicable	
 b592a0bfed439386fadc69327bd49eccb074cdc6	41072	Forward model confirmation policies to actor MCP tools (#41072)	2026-08-27	guardian	2	2	1.00	0	0	complete	
-b5c37c35fd517bf6d1d1515a5f7552c221d2ffe3	51841	Add a macOS Seatbelt backend for sandbox integrity (#51841)	2026-10-07	execserver	4	3	0.75	0	0	blocked_precondition	critical_dependencies
+b5c37c35fd517bf6d1d1515a5f7552c221d2ffe3	51841	Add a macOS Seatbelt backend for sandbox integrity (#51841)	2026-10-07	execserver	4	4	1.00	0	0	complete
 b6130e72f3e4b360f7a3bf97ea62d0eeeb39ffca	52299	Make Bazel release jobs advisory (#52299)	2026-10-08	core	0	0		0	0	not_applicable	
 b62fcd3c4b4126e8dc619ab5334f5658c4d84657	47935	Allow cached catalogs to satisfy MCP startup readiness (#47935)	2026-09-24	mcp	3	0	0.00	0	0	implementation_pending	McpStartupReadiness,current_revision_if,record_startup_readiness
 b6333bb1bb7d9dd7aa9c5c6a7b6936041bacc144	40464	Enforce subagent ownership across app-server inputs (#40464)	2026-08-24	appserver	3	3	1.00	0	0	complete
@@ -2078,7 +2078,7 @@ c2abf869d539a6326a6e5a125dfdb8a5dc488ab4	41432	Run executor hooks for interrupte
 c2ae67d76931fcfac287d0bacf94f2b055b57da3	51332	Record multi-agent wait duration by outcome (#51332)	2026-10-06	core	0	0		0	0	not_applicable	
 c2d2f422e63e5d4db83e0da93858b5a3e2ad12e1	49102	Preserve SQLite vacuum modes and surface pool initialization errors (#49102)	2026-09-28	persistence	0	0		0	0	not_applicable	
 c2e5692e2c923ed222c77487b3141829881757cd	41946	Expand extension permission regression coverage (#41946)	2026-09-01	sandbox	0	0		0	0	not_applicable	
-c2eb1f42a0914bf7a204fccb54797c17badacd5a	51842	Add a sandbox integrity runner with outcome and timing metrics (#51842)	2026-10-07	execserver	7	2	0.29	0	0	blocked_precondition	DependencyTarget,IntegrityMetrics,record_check,record_preparation,run_integrity_checks
+c2eb1f42a0914bf7a204fccb54797c17badacd5a	51842	Add a sandbox integrity runner with outcome and timing metrics (#51842)	2026-10-07	execserver	7	7	1.00	0	0	complete
 c2f7fe89d87ce853900d0b5cb1f5dc4863e44d73	50913	Use server model defaults for connected TUI fresh starts (#50913)	2026-10-04	tui	3	2	0.67	0	0	audit_pending	bootstrap_for_new_thread
 c308e127e0e8cd040f670ca0e0496ae1c7519d3f	53444	Suppress repeated turn diffs in `codex exec` human output (#53444)	2026-10-12	core	0	0		0	0	complete	
 c313eb75fd932f9a3b05461a2a227d7a7f7f06f0	54365	Prevent duplicate assistant messages around interleaved commands (#54365)	2026-10-15	tui	0	0		0	0	not_applicable	
@@ -2312,7 +2312,7 @@ d9487a29308c378ff65ee049a68cb2c0d06a98e1	48805	Allow transcript wheel scrolling 
 d9511fb7888d98f89526d4ae019dd9be2f14199e	41400	Refresh MCP HTTP helper headers after authorization failures (#41400)	2026-08-28	mcp	2	0	0.00	0	0	implementation_pending	InsufficientScopeChallenge,insufficient_scope_challenge
 d979df154cf60e13eafb5453e75b6d84f21c67bf	42631	Initialize the packaged GStreamer runtime in the voice host (#42631)	2026-09-03	realtime	4	4	1.00	0	0	complete	
 d99213289f9abe6daeefa50cde67634d9ea6eeed	46897	Honor the effective terminal color level in activity charts (#46897)	2026-09-20	tui	0	0		0	0	not_applicable	
-d9960e12bb178bae15d25bde5916642a94675466	51840	Add a bubblewrap backend for sandbox integrity checks (#51840)	2026-10-07	execserver	10	4	0.40	0	0	blocked_precondition	GLOB_SCAN_PROGRAM,critical_dependencies,expand_unreadable_globs_in_environment,find_bundled_bwrap_for_exe,find_executable_in_search_paths,get_user_home_path
+d9960e12bb178bae15d25bde5916642a94675466	51840	Add a bubblewrap backend for sandbox integrity checks (#51840)	2026-10-07	execserver	10	4	0.40	0	0	partial	GLOB_SCAN_PROGRAM,expand_unreadable_globs_in_environment,find_bundled_bwrap_for_exe,find_executable_in_search_paths
 d996b4f02a204b36060de4711e106e8ecc7be9ac	44359	Report OAuth authentication failures in MCP status snapshots (#44359)	2026-09-10	mcp	0	0		0	0	not_applicable	
 d9ac1f02edd27c45bf955105389253f7bf3b9606	47287	Update the Guardian extra-policy snapshot for retained instructions (#47287)	2026-09-22	guardian	0	0		0	0	not_applicable	
 d9cf203890663ee27969b8e0735e08cf35010bbf	50054	Check token estimate filtering directly on the tracing subscriber (#50054)	2026-10-01	core	0	0		0	0	not_applicable	

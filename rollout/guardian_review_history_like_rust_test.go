@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,81 @@ func TestGuardianReviewHistoryPreservesCompactedToolEvidenceAndRollbackLikeRust(
 	}
 	if joined = reviewHistoryText(ReviewHistoryItems(lines, now)); strings.Contains(joined, "Only publish privately.") {
 		t.Fatalf("rolled-back tool evidence survived:\n%s", joined)
+	}
+}
+
+func TestCompactedGuardianHistoryRoundTripsLikeRust(t *testing.T) {
+	now := time.Date(2026, 10, 19, 2, 3, 4, 0, time.UTC)
+	home := t.TempDir()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome: home, ThreadID: "thread-guardian-checkpoint", SessionID: "thread-guardian-checkpoint",
+		Source: "cli", CWD: home, ModelProvider: "openai", HistoryMode: "paginated", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	path := recorder.Path()
+	items := []session.Item{
+		{ID: "user", Type: "message", Role: "user", Text: "Keep the release private.", CreatedAt: now},
+		{ID: "call", Type: "function_call", Name: "publish", CallID: "call-1", Text: `{"id":"release"}`, CreatedAt: now},
+		{ID: "output", Type: "function_call_output", CallID: "call-1", Text: `{"private":true}`, CreatedAt: now},
+	}
+	rawItems := make([]json.RawMessage, 0, len(items))
+	for index := range items {
+		line, err := LineFromItem(ItemFromSessionItem(&items[index]), now)
+		if err != nil {
+			t.Fatalf("LineFromItem() error = %v", err)
+		}
+		rawItems = append(rawItems, line.Item)
+	}
+	guardianHistory, err := json.Marshal(rawItems)
+	if err != nil {
+		t.Fatalf("marshal guardian history: %v", err)
+	}
+	if err := recorder.AppendCompactedWithCheckpoint(
+		"summary",
+		nil,
+		nil,
+		nil,
+		nil,
+		"",
+		nil,
+		guardianHistory,
+		now.Add(time.Second),
+	); err != nil {
+		t.Fatalf("AppendCompactedWithCheckpoint() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	lines, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	restored := CompactedGuardianHistory(lines, now)
+	if joined := reviewHistoryText(restored); !strings.Contains(joined, "Keep the release private.") ||
+		!strings.Contains(joined, `{"private":true}`) {
+		t.Fatalf("restored guardian history = %q", joined)
+	}
+	if legacy := CompactedGuardianHistory([]Line{{Type: "compacted", Payload: json.RawMessage(`{"message":"summary"}`)}}, now); legacy != nil {
+		t.Fatalf("legacy compacted history = %#v, want nil", legacy)
+	}
+	recorder, err = Resume(path)
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if err := recorder.AppendThreadRolledBack(1, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("AppendThreadRolledBack() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() after rollback error = %v", err)
+	}
+	lines, _, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load() after rollback error = %v", err)
+	}
+	if restored := CompactedGuardianHistory(lines, now); restored != nil {
+		t.Fatalf("rolled-back checkpoint restored evidence: %#v", restored)
 	}
 }
 

@@ -253,6 +253,9 @@ type RollbackEvent struct {
 type CompactedEvent struct {
 	Message            string          `json:"message"`
 	ReplacementHistory json.RawMessage `json:"replacement_history,omitempty"`
+	// GuardianHistory is the model-invisible bounded review transcript stored
+	// beside compacted model history (Rust #42065).
+	GuardianHistory json.RawMessage `json:"guardian_history,omitempty"`
 	// ReplacementHistoryMetadata is an aligned sidecar for the replacement
 	// history's harness metadata (Rust CompactedItemWire
 	// replacement_history_metadata, #38058). It is optional; legacy payloads
@@ -1121,12 +1124,12 @@ func (r *Recorder) AppendCompactedWithContext(message string, replacement []Item
 // (`selectAttributionCheckpoint`), so the window number is part of the contract,
 // not decoration.
 func (r *Recorder) AppendCompactedWithResumeMetadata(message string, replacement []Item, retained *retainedctx.RetainedContext, resume *CompactionResumeMetadata, windowNumber *uint64, now time.Time) error {
-	return r.AppendCompactedWithCheckpoint(message, replacement, retained, resume, windowNumber, "", nil, now)
+	return r.AppendCompactedWithCheckpoint(message, replacement, retained, resume, windowNumber, "", nil, nil, now)
 }
 
 // AppendCompactedWithCheckpoint also persists the compaction response identity
 // and latest response usage record (Rust #41912).
-func (r *Recorder) AppendCompactedWithCheckpoint(message string, replacement []Item, retained *retainedctx.RetainedContext, resume *CompactionResumeMetadata, windowNumber *uint64, compactionResponseID string, latestTokenUsage *TokenUsageRecord, now time.Time) error {
+func (r *Recorder) AppendCompactedWithCheckpoint(message string, replacement []Item, retained *retainedctx.RetainedContext, resume *CompactionResumeMetadata, windowNumber *uint64, compactionResponseID string, latestTokenUsage *TokenUsageRecord, guardianHistory json.RawMessage, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -1164,6 +1167,7 @@ func (r *Recorder) AppendCompactedWithCheckpoint(message string, replacement []I
 	payloadValues := struct {
 		Message                    string                       `json:"message"`
 		ReplacementHistory         []json.RawMessage            `json:"replacement_history,omitempty"`
+		GuardianHistory            json.RawMessage              `json:"guardian_history,omitempty"`
 		ReplacementHistoryMetadata []json.RawMessage            `json:"replacement_history_metadata,omitempty"`
 		RetainedContext            *retainedctx.RetainedContext `json:"retained_context,omitempty"`
 		WindowNumber               *uint64                      `json:"window_number,omitempty"`
@@ -1173,6 +1177,7 @@ func (r *Recorder) AppendCompactedWithCheckpoint(message string, replacement []I
 	}{
 		Message:                    strings.TrimSpace(message),
 		ReplacementHistory:         history,
+		GuardianHistory:            guardianHistory,
 		ReplacementHistoryMetadata: historyMetadata,
 		RetainedContext:            retained,
 		WindowNumber:               windowNumber,

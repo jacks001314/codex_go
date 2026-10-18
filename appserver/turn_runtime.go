@@ -4203,7 +4203,8 @@ func (r *RuntimeRouter) appendRuntimeCompactedWithResponse(threadID string, turn
 		if lines, _, loadErr := rollout.Load(recorder.Path()); loadErr == nil {
 			latest = rollout.LatestTokenUsageRecord(lines)
 		}
-		return recorder.AppendCompactedWithCheckpoint(message, items, retained, resume, windowNumber, compactionResponseID, latest, now)
+		guardianHistory := r.guardianReviewHistoryCheckpointWire(threadID, now)
+		return recorder.AppendCompactedWithCheckpoint(message, items, retained, resume, windowNumber, compactionResponseID, latest, guardianHistory, now)
 	})
 }
 
