@@ -175,8 +175,10 @@ func TestResponsesHTTPOverloadKeepsRetryAdviceLikeRust(t *testing.T) {
 			if advised != testCase.wantAdvice {
 				t.Fatalf("%s: retry advice present = %t, want %t", testCase.code, advised, testCase.wantAdvice)
 			}
-			if advised && delay != 6*time.Second {
-				t.Fatalf("%s: retry advice = %s, want 6s", testCase.code, delay)
+			// RemainingDelay measures from the parsed Retry-After deadline, so a
+			// few microseconds of wall-clock time elapse before the assertion.
+			if advised && (delay <= 5*time.Second || delay > 6*time.Second) {
+				t.Fatalf("%s: retry advice = %s, want ~6s", testCase.code, delay)
 			}
 		})
 	}

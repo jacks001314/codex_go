@@ -31,7 +31,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "auto_env", Owner: "appserver, execserver", Focus: "auto environment selection"},
 		{Module: "bedrock_setup", Owner: "model-provider, appserver", Focus: "Amazon Bedrock account discovery and setup"},
 		{Module: "bedrock_gov_cloud", Owner: "model-provider, appserver", Focus: "advisory Bedrock GovCloud managed requirements check (#49817)"},
-		{Module: "bedrock_service_tier", Owner: "model-provider, appserver", Focus: "Ultrafast service tiers for Bedrock Astra models (#50472)"},
+		{Module: "bedrock_service_tier", Owner: "model-provider, appserver", Focus: "Ultrafast service tiers for Bedrock Astra and GPT-6.1 Sol models (#50472/#51794)"},
 		{Module: "client_metadata", Owner: "model", Focus: "Responses API client metadata propagation"},
 		{Module: "code_mode_host", Owner: "codemode", Focus: "code mode host lifecycle and tool dispatch"},
 		{Module: "collaboration_mode_list", Owner: "appserver", Focus: "collaborationMode/list presets"},

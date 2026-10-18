@@ -2027,7 +2027,8 @@ func TestAmazonBedrockModelCatalogLikeRust(t *testing.T) {
 // `bedrock_models_do_not_enable_priority_or_explicit_default_tiers` in
 // codex-rs/model-provider/src/amazon_bedrock/catalog.rs: the bundled Bedrock
 // Mantle catalog clears every inherited speed/service tier and the default
-// tier, except that the GPT-6 Astra entry advertises `ultrafast`.
+// tier, except that the GPT-6 Astra and GPT-6.1 Sol entries advertise
+// `ultrafast` (Rust #51794).
 func TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust(t *testing.T) {
 	catalog := AmazonBedrockModelCatalog()
 	for _, model := range catalog.Models {
@@ -2038,7 +2039,7 @@ func TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust(t *testing.T) {
 			t.Fatalf("%s AdditionalSpeedTiers = %#v, want none", model.Slug, model.AdditionalSpeedTiers)
 		}
 		want := []string(nil)
-		if model.Slug == AmazonBedrockGPT6AstraModelID {
+		if model.Slug == AmazonBedrockGPT6AstraModelID || model.Slug == AmazonBedrockGPT61SolModelID {
 			want = []string{"ultrafast"}
 		}
 		if len(model.ServiceTiers) != len(want) {
@@ -2103,11 +2104,14 @@ func TestAmazonBedrockRuntimeModelCatalogLikeRust(t *testing.T) {
 		if model.WebSearchToolType != "text" {
 			t.Fatalf("%s WebSearchToolType = %q, want text", model.Slug, model.WebSearchToolType)
 		}
-		// Rust #50472 advertises `ultrafast` for the Runtime Astra variants only.
+		// Rust #50472/#51794 advertise `ultrafast` for the Runtime Astra and
+		// GPT-6.1 Sol variants.
 		wantTiers := []string(nil)
 		switch model.Slug {
 		case bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6AstraModelID,
-			bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6AstraModelID:
+			bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6AstraModelID,
+			bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61SolModelID,
+			bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT61SolModelID:
 			wantTiers = []string{bedrockUltrafastServiceTierID}
 		}
 		if len(model.ServiceTiers) != len(wantTiers) {

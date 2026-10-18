@@ -1308,19 +1308,23 @@ const (
 // normalizeBundledBedrockCatalog mirrors Rust #50472's
 // normalize_bundled_bedrock_catalog for the bundled catalog: the bundled
 // defaults must not inherit OpenAI-only speed/service tiers or opt into a
-// premium default, except that the GPT-6 Astra entry advertises the
-// `ultrafast` tier. Rust advertises it for the Mantle slug and for the Runtime
-// endpoint's `global.openai.gpt-6-astra` / `us.openai.gpt-6-astra` variants.
+// premium default, except that the GPT-6 Astra and GPT-6.1 Sol entries advertise
+// the `ultrafast` tier. Rust advertises it for the Mantle slugs and for the
+// Runtime endpoint's `global.` / `us.` Astra and Sol 6.1 variants (#50472,
+// #51794).
 func normalizeBundledBedrockCatalog(catalog ModelsResponse, endpoint bedrockEndpoint) ModelsResponse {
 	for i := range catalog.Models {
 		model := &catalog.Models[i]
 		model.AdditionalSpeedTiers = nil
 		model.ServiceTiers = nil
 		model.DefaultServiceTier = ""
-		advertisesUltrafast := (endpoint == bedrockEndpointMantle && model.Slug == AmazonBedrockGPT6AstraModelID) ||
+		advertisesUltrafast := (endpoint == bedrockEndpointMantle &&
+			(model.Slug == AmazonBedrockGPT6AstraModelID || model.Slug == AmazonBedrockGPT61SolModelID)) ||
 			(endpoint == bedrockEndpointRuntime &&
 				(model.Slug == bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT6AstraModelID ||
-					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT6AstraModelID))
+					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT6AstraModelID ||
+					model.Slug == bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT61SolModelID ||
+					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT61SolModelID))
 		if advertisesUltrafast {
 			model.ServiceTiers = []string{bedrockUltrafastServiceTierID}
 		}

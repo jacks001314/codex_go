@@ -768,9 +768,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 723 (implementation): the bundled Bedrock catalogs now advertise ultrafast for openai.gpt-6.1-sol on Mantle and global./us.openai.gpt-6.1-sol on Runtime, matching the existing Astra tier behavior while keeping the default tier empty and selection opt-in. Tests: TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust and TestAmazonBedrockRuntimeModelCatalogLikeRust; go test ./model -run 'Bedrock.*Ultrafast|BedrockCatalogAdvertises|AmazonBedrockRuntimeModelCatalog' -count=1."
       ]
     },
     {
