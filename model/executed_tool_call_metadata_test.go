@@ -130,6 +130,21 @@ func TestBoundExecutedToolCallsShedsMetadataBeforeSourcesAndCalls(t *testing.T) 
 	}
 }
 
+// Rust #49401 removes aggregate prompt metadata caps. Large live metadata is
+// retained until the actual outgoing message budget requires shedding.
+func TestResponsesInputItemsRetainLargeMetadataUntilMessageBoundLikeRust(t *testing.T) {
+	item := &AgentItem{Type: "function_call", Name: "tool", CallID: "call", Arguments: `{}`}
+	RecordExecutedToolCall(item)
+	calls := item.ExecutedToolCalls()
+	calls[0].SetToolResultMetadata(ToolResultMetadata{value: strings.Repeat("m", MaxExecutedToolCallMetadataBytes+1024)})
+	item.ReplaceExecutedToolCalls(calls)
+
+	items := responsesInputItemsWithStore(&AgentRequest{InputItems: []any{item}}, nil)
+	if got := ExecutedToolCallMetadataTotalBytes(items); got <= MaxExecutedToolCallMetadataBytes {
+		t.Fatalf("prompt metadata bytes = %d, want the aggregate prompt cap removed", got)
+	}
+}
+
 // Mirrors Rust's `shed_generic_result_metadata`: the largest snapshot is shed
 // first (so one large result cannot discard unrelated small results), and a
 // snapshot carrying the resource-access field keeps only that field instead of

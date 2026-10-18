@@ -23773,9 +23773,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: assign_missing_response_item_id, normalize_executed_tool_call_arguments"
+        "Round 665 (partial): Responses input construction no longer applies the aggregate 128KB prompt metadata cap; SanitizeExecutedToolCallsForPrompt still strips forged metadata, and the actual outgoing message budget plus per-call argument limits remain. Added TestResponsesInputItemsRetainLargeMetadataUntilMessageBoundLikeRust. Remaining: Go recorder lacks a separate live direct-call map keyed by response item ID and restore/prune across sampling/compaction retries; ToolResponseItem has no response item ID field. Tests: go test ./model -run 'ExecutedToolCall|ResponsesInputItemsRetainLarge' -count=1; go test ./turn -run 'ExecutedToolCall' -count=1"
       ]
     },
     {

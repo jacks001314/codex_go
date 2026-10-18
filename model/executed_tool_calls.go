@@ -429,6 +429,18 @@ func BoundExecutedToolCallsForPromptPrioritizingRecent(items []any) []any {
 	return boundExecutedToolCallsForPrompt(items, true)
 }
 
+// SanitizeExecutedToolCallsForPrompt clones request input and removes forged
+// executed-tool metadata without applying an aggregate prompt budget (Rust
+// #49401). The outgoing message size limit still bounds serialized metadata.
+func SanitizeExecutedToolCallsForPrompt(items []any) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		sanitized, _ := clonePromptItemWithoutForgedExecutedToolCalls(item)
+		out = append(out, sanitized)
+	}
+	return out
+}
+
 func boundExecutedToolCallsForPrompt(items []any, prioritizeRecent bool) []any {
 	out := make([]any, 0, len(items))
 	trusted := make([]ExecutedToolCallCarrier, 0)

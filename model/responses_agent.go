@@ -2421,7 +2421,7 @@ func responsesInputItemsWithStore(request *AgentRequest, store attachmentstore.S
 			items = append(items, request.PostPromptInputItems[i])
 		}
 	}
-	items = BoundExecutedToolCallsForPrompt(items)
+	items = SanitizeExecutedToolCallsForPrompt(items)
 	if request.DropReasoningEffortUpdates {
 		items = dropConfigurationUpdateItems(items)
 	}
