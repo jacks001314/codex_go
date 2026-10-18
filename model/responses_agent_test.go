@@ -144,16 +144,26 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 		t.Fatalf("text = %#v", recordedBody["text"])
 	}
 	inputs, ok := recordedBody["input"].([]any)
-	if !ok || len(inputs) != 2 {
+	if !ok || len(inputs) != 3 {
 		t.Fatalf("input = %#v", recordedBody["input"])
 	}
-	toolOutput, ok := inputs[0].(map[string]any)
-	if !ok || toolOutput["type"] != "function_call_output" || toolOutput["output"] != "done" {
-		t.Fatalf("tool output input = %#v", inputs[0])
+	instructionsInput, ok := inputs[0].(map[string]any)
+	if !ok || instructionsInput["type"] != "message" || instructionsInput["role"] != "developer" {
+		t.Fatalf("instruction input = %#v", inputs[0])
 	}
-	promptInput, ok := inputs[1].(map[string]any)
+	if id, _ := instructionsInput["id"].(string); !strings.HasPrefix(id, "msg_") {
+		t.Fatalf("instruction input id = %q", id)
+	}
+	if raw, exists := recordedBody["instructions"]; exists && raw != nil && raw != "" {
+		t.Fatalf("top-level instructions = %#v, want omitted", raw)
+	}
+	toolOutput, ok := inputs[1].(map[string]any)
+	if !ok || toolOutput["type"] != "function_call_output" || toolOutput["output"] != "done" {
+		t.Fatalf("tool output input = %#v", inputs[1])
+	}
+	promptInput, ok := inputs[2].(map[string]any)
 	if !ok || promptInput["type"] != "message" || promptInput["role"] != "user" {
-		t.Fatalf("prompt input = %#v", inputs[1])
+		t.Fatalf("prompt input = %#v", inputs[2])
 	}
 	tools, ok := recordedBody["tools"].([]any)
 	if !ok || len(tools) != 1 {
@@ -2321,13 +2331,25 @@ func TestResponsesAgentRunnerPreparesInputItemIDsLikeRust(t *testing.T) {
 			if !ok || len(inputs) == 0 {
 				t.Fatalf("input = %#v", recordedBody["input"])
 			}
-			first, ok := inputs[0].(map[string]any)
-			if !ok {
-				t.Fatalf("first input = %#v", inputs[0])
+			var legacyItem map[string]any
+			for _, raw := range inputs {
+				item, _ := raw.(map[string]any)
+				content, _ := item["content"].([]any)
+				if len(content) != 1 {
+					continue
+				}
+				part, _ := content[0].(map[string]any)
+				if part["text"] == "old" {
+					legacyItem = item
+					break
+				}
 			}
-			_, hasID := first["id"]
+			if legacyItem == nil {
+				t.Fatalf("legacy item not found in input = %#v", recordedBody["input"])
+			}
+			_, hasID := legacyItem["id"]
 			if hasID != tc.wantID {
-				t.Fatalf("input id present = %v, want %v; input=%#v", hasID, tc.wantID, first)
+				t.Fatalf("input id present = %v, want %v; input=%#v", hasID, tc.wantID, legacyItem)
 			}
 		})
 	}
@@ -2354,8 +2376,24 @@ func TestResponsesAgentRunnerUsesRequestInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run error = %v", err)
 	}
-	if recordedBody["instructions"] != "project instructions" {
-		t.Fatalf("instructions = %#v", recordedBody["instructions"])
+	if raw, exists := recordedBody["instructions"]; exists && raw != nil && raw != "" {
+		t.Fatalf("top-level instructions = %#v, want omitted", raw)
+	}
+	inputs, ok := recordedBody["input"].([]any)
+	if !ok || len(inputs) == 0 {
+		t.Fatalf("input = %#v", recordedBody["input"])
+	}
+	message, ok := inputs[0].(map[string]any)
+	if !ok || message["type"] != "message" || message["role"] != "developer" {
+		t.Fatalf("instruction input = %#v", inputs[0])
+	}
+	content, _ := message["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("instruction content = %#v", message["content"])
+	}
+	part, _ := content[0].(map[string]any)
+	if part["type"] != "input_text" || part["text"] != "project instructions" {
+		t.Fatalf("instruction part = %#v", part)
 	}
 }
 

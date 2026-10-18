@@ -843,9 +843,10 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		modelID = "gpt-5.5"
 	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
+		Model: modelID, Instructions: "", Input: r.gateContentItemKinds(responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
 	}
+	apiRequest.Input, _ = prependResponsesBaseInstructions(apiRequest.Input, responsesInstructions(request), request.ThreadID)
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
 	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
 	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
@@ -1086,6 +1087,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		// Rust #44249: downgrade `original` image detail for models that do not
 		// support it before sending the request over the websocket transport.
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
+		// Rust #51156: standard Responses requests carry base instructions as a
+		// stable developer input message instead of the top-level field.
+		inputItems, instructions = prependResponsesBaseInstructions(inputItems, instructions, request.ThreadID)
 	}
 	if !strings.EqualFold(strings.TrimSpace(r.providerName()), OpenAIProviderName) {
 		inputItems = clearInternalChatMessageMetadata(inputItems)
@@ -1603,6 +1607,9 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		// receiving model does not support it. Stored image details are left
 		// untouched so switching back to a supporting model retains `original`.
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
+		// Rust #51156: standard Responses requests carry base instructions as a
+		// stable developer input message instead of the top-level field.
+		inputItems, instructions = prependResponsesBaseInstructions(inputItems, instructions, request.ThreadID)
 	}
 	if !strings.EqualFold(strings.TrimSpace(r.providerName()), OpenAIProviderName) {
 		inputItems = clearInternalChatMessageMetadata(inputItems)
@@ -2807,6 +2814,34 @@ func responsesLiteInputItems(inputItems []any, tools []any, instructions string,
 		items = append(items, stripResponsesLiteImageDetails(inputItems[i]))
 	}
 	return items
+}
+
+// prependResponsesBaseInstructions mirrors Rust #51156: base instructions are a
+// developer input message with an ID hashed from the thread and instruction
+// text, and the top-level instructions field is cleared. The returned
+// instruction string is always empty when the item was prepended.
+func prependResponsesBaseInstructions(inputItems []any, instructions string, threadID string) ([]any, string) {
+	instructions = strings.TrimSpace(instructions)
+	if instructions == "" {
+		return inputItems, instructions
+	}
+	fragment := contextfrag.BaseInstructionsFragment{Text: instructions}
+	item := responsesInputMessage{
+		ID:   responsesLiteItemID("msg", []byte(instructions), threadID),
+		Type: "message",
+		Role: fragment.Role(),
+		Content: []responsesInputContent{{
+			Type: "input_text",
+			Text: fragment.Body(),
+		}},
+		Metadata: &responsesInputMessageMetadata{
+			ContentItemKinds: []string{fragment.ContentKind()},
+		},
+	}
+	out := make([]any, 0, len(inputItems)+1)
+	out = append(out, item)
+	out = append(out, inputItems...)
+	return out, ""
 }
 
 // responsesLiteDeclaredInputItems returns the request input for a
