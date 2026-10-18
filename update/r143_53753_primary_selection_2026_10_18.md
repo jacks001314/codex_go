@@ -9,10 +9,11 @@
 - 无修饰 middle-click 异步读取 PRIMARY 并插入 composer；modal/popup/
   read-only 状态下不触发。
 - helper 进程存活期间由其持有 PRIMARY ownership。
+- 成功发布后记录 ownership；focus loss 时通过 release command 清理，thread
+  resume 时异步 best-effort 清理，不阻塞 update loop。
 
 剩余：
 
-- focus loss/resume 时显式释放/清理 PRIMARY ownership。
 - 平台 helper 可用性与 ownership 的真实 Linux 集成测试。
 
 验证：

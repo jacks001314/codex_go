@@ -56,3 +56,24 @@ func WritePrimarySelection(text string) error {
 	}
 	return fmt.Errorf("primary selection unavailable: %s", strings.Join(errs, "; "))
 }
+
+// ReleasePrimarySelection clears the primary selection on focus loss/resume.
+func ReleasePrimarySelection() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	errs := []string{}
+	for _, candidate := range []struct {
+		name string
+		args []string
+	}{
+		{name: "wl-copy", args: []string{"--clear", "--primary"}},
+		{name: "xsel", args: []string{"--primary", "--clear"}},
+	} {
+		if err := exec.CommandContext(ctx, candidate.name, candidate.args...).Run(); err == nil {
+			return nil
+		} else {
+			errs = append(errs, candidate.name+": "+err.Error())
+		}
+	}
+	return fmt.Errorf("primary selection release unavailable: %s", strings.Join(errs, "; "))
+}

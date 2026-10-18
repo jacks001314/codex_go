@@ -1801,8 +1801,8 @@ green.
 - `#53753` is partial: composer/footer drag selections map wrapped rows to source
   ranges, retain editable highlights, and copy-on-select now also publishes
   plain text to X11/Wayland PRIMARY while explicit copies remain CLIPBOARD-only.
-  Middle-click reads PRIMARY into the composer. Remaining: release/clear PRIMARY
-  ownership on focus loss/resume and helper ownership tests.
+  Middle-click reads PRIMARY into the composer; ownership is released on focus
+  loss and thread resume. Remaining: real helper ownership integration tests.
 - `#39997` is complete: `/copy` offers the whole latest response plus fenced
   code blocks and nested blockquotes with labels/previews, and copies exact
   source text through the async clipboard path.

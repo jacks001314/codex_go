@@ -16,3 +16,8 @@ func ReadPrimarySelection() (string, error) {
 func WritePrimarySelection(text string) error {
 	return errors.New("primary selection is unavailable on " + runtime.GOOS)
 }
+
+// ReleasePrimarySelection is unavailable outside Linux/X11/Wayland.
+func ReleasePrimarySelection() error {
+	return nil
+}

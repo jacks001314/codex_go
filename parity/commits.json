@@ -23030,7 +23030,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 695 (progress): Linux copy-on-select now publishes to Wayland/X11 PRIMARY through wl-copy, xclip, or xsel, and an unmodified middle-click reads PRIMARY through wl-paste/xclip/xsel and inserts it into the composer. Explicit Ctrl+C/Ctrl+Insert copies remain CLIPBOARD-only. Helper processes retain selection ownership while alive. Remaining: explicit ownership release on focus loss/resume and platform helper availability/ownership tests; transcript selection remains terminal-owned."
+        "Round 696 (progress): Linux copy-on-select publishes to Wayland/X11 PRIMARY through wl-copy, xclip, or xsel; middle-click reads PRIMARY through wl-paste/xclip/xsel into the composer; explicit Ctrl+C/Ctrl+Insert remains CLIPBOARD-only. Publication success is tracked, and focus loss releases ownership while thread resume clears it asynchronously. Remaining: real Linux helper availability/ownership integration tests; transcript selection remains terminal-owned."
       ]
     },
     {
@@ -30611,7 +30611,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 695 (implementation): owned-screen composer and footer drag selections map to source ranges, copy on release through the shared clipboard writer, retain editable highlights, and support explicit Ctrl+C/Ctrl+Insert. Copy-on-select now also publishes plain text to Wayland/X11 PRIMARY while explicit copies stay CLIPBOARD-only; middle-click reads PRIMARY into the composer. Typing, paste, Enter, Backspace, and Delete replace selected text. Remaining: release/clear PRIMARY ownership on focus loss or resume and add platform-helper ownership tests."
+        "Round 696 (implementation): owned-screen composer and footer drag selections map to source ranges, retain editable highlights, and copy on release through the shared clipboard writer. Copy-on-select publishes plain text to Wayland/X11 PRIMARY while explicit copies stay CLIPBOARD-only; middle-click reads PRIMARY into the composer. Successful publication is tracked and released on focus loss, with asynchronous cleanup on thread resume. Typing, paste, Enter, Backspace, and Delete replace selected text. Remaining: real Linux helper ownership integration tests."
       ]
     },
     {

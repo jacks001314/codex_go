@@ -454,6 +454,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	if m == nil || m.State == nil {
 		return
 	}
+	m.releasePrimarySelectionOwnership()
 	previousThreadID := m.currentThreadID()
 	m.invalidateAppsScope()
 	if response.Summary != nil && strings.TrimSpace(response.Summary.ThreadID) != "" {

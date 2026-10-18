@@ -692,6 +692,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnOpenURL:                  auth.OpenBrowser,
 		OnPrimarySelectionWrite:    codextui.WritePrimarySelection,
 		OnPrimarySelectionRead:     codextui.ReadPrimarySelection,
+		OnPrimarySelectionRelease:  codextui.ReleasePrimarySelection,
 		OnFetchStartupAnnouncement: fetchStartupAnnouncementTip,
 		PluginUserMarketplaces:     settings.PluginUserMarketplaces,
 		PluginGitMarketplaces:      settings.PluginGitMarketplaces,

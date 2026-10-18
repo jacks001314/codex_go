@@ -1373,6 +1373,8 @@ type Options struct {
 	OnPrimarySelectionWrite func(string) error
 	// OnPrimarySelectionRead supplies middle-click paste text from PRIMARY.
 	OnPrimarySelectionRead func() (string, error)
+	// OnPrimarySelectionRelease releases/clears PRIMARY ownership on focus loss.
+	OnPrimarySelectionRelease func() error
 	// StartupAnnouncement is the host-supplied announcement tip preferred in
 	// the fullscreen composer gap until the first user turn (Rust #46931).
 	StartupAnnouncement *string
@@ -2208,6 +2210,8 @@ type Model struct {
 	onOpenURL                         func(string) error
 	onPrimarySelectionWrite           func(string) error
 	onPrimarySelectionRead            func() (string, error)
+	onPrimarySelectionRelease         func() error
+	primarySelectionPublished         bool
 	onFetchStartupAnnouncement        func() (string, bool)
 	pluginUserMarketplaces            map[string]bool
 	pluginGitMarketplaces             map[string]bool
@@ -2696,6 +2700,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onOpenURL:                       options.OnOpenURL,
 		onPrimarySelectionWrite:         options.OnPrimarySelectionWrite,
 		onPrimarySelectionRead:          options.OnPrimarySelectionRead,
+		onPrimarySelectionRelease:       options.OnPrimarySelectionRelease,
 		onFetchStartupAnnouncement:      options.OnFetchStartupAnnouncement,
 		pluginUserMarketplaces:          cloneBoolMapTea(options.PluginUserMarketplaces),
 		pluginGitMarketplaces:           cloneBoolMapTea(options.PluginGitMarketplaces),
@@ -3092,7 +3097,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.terminalFocused = false
 		m.composerSelection.clear()
 		m.renderedSelection.clear()
-		return m, m.noteRecapFocusLost()
+		return m, bubbletea.Batch(m.noteRecapFocusLost(), m.releasePrimarySelectionCmd())
 	case StatusMsg:
 		if warning, ok := warningMessageFromStatus(msg.Status); ok {
 			m.setStatus("warning")
@@ -3383,6 +3388,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case PrimarySelectionReadResultMsg:
 		m.applyPrimarySelectionRead(msg)
+		return m, nil
+	case PrimarySelectionWriteResultMsg:
+		m.applyPrimarySelectionWriteResult(msg)
 		return m, nil
 	case StartupAnnouncementMsg:
 		m.applyStartupAnnouncement(msg)
