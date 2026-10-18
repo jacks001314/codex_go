@@ -1991,14 +1991,14 @@ green.
 - `#46929` is not applicable: Go does not emit Rust's
   "Error loading config.toml:" startup message, so there is no prefix to
   remove.
-- `#46931` remains partial but the composer-gap layer is now implemented:
+- `#46931` is complete: the composer-gap layer is implemented:
   fullscreen idle/empty input selects a stable keymap-resolved catalog tip,
   Markdown-renders it with OSC 8 links, requires a single fitting row, and
   yields to usage notices, warnings, drafts, running turns, and interactions.
   Ctrl-click now resolves OSC 8 ranges and opens them through the app URL
   opener; Super-click is unavailable in Bubble Tea v1. A host-supplied startup
   announcement is preferred until the first user turn and then permanently
-  dismissed. Remaining: the app-side announcement fetch/cache.
+  dismissed, with the app prewarming and caching announcement_tip.toml.
   fullscreen composer-gap catalog rotation, announcement lifecycle, single-row
   fitting, and composer-gap link hit testing are not ported.
 - `#46910` is complete: settings pickers no longer disturb the reader's

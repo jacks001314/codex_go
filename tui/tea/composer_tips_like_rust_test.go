@@ -138,3 +138,26 @@ func TestComposerTipsPreferAnnouncementUntilFirstTurnLikeRust(t *testing.T) {
 		t.Fatalf("cleared history restored the announcement: %q ok=%v", line, ok)
 	}
 }
+
+func TestStartupAnnouncementFetchInjectsBeforeFirstTurnLikeRust(t *testing.T) {
+	model := composerTipTestModel(t, 100)
+	model.composerTips = newComposerTipState(42, nil)
+	model.onFetchStartupAnnouncement = func() (string, bool) {
+		return "Fetched **announcement**", true
+	}
+	cmd := model.startupAnnouncementCmd()
+	if cmd == nil {
+		t.Fatal("startup announcement command missing")
+	}
+	model.Update(cmd())
+	line, ok := model.composerTipLine()
+	if !ok || !strings.Contains(utils.StripANSI(line), "Fetched announcement") {
+		t.Fatalf("fetched announcement = %q ok=%v", line, ok)
+	}
+
+	model.State.AddMessage(codextui.RoleUser, "first turn")
+	line, ok = model.composerTipLine()
+	if !ok || strings.Contains(utils.StripANSI(line), "Fetched announcement") {
+		t.Fatalf("fetched announcement survived the first turn: %q ok=%v", line, ok)
+	}
+}

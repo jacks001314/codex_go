@@ -1370,13 +1370,16 @@ type Options struct {
 	OnOpenURL func(string) error
 	// StartupAnnouncement is the host-supplied announcement tip preferred in
 	// the fullscreen composer gap until the first user turn (Rust #46931).
-	StartupAnnouncement    *string
-	PluginUserMarketplaces map[string]bool
-	PluginGitMarketplaces  map[string]bool
-	OnReadSkills           SkillsListReaderFunc
-	OnWriteSkillEnabled    SkillEnabledWriteFunc
-	OnFuzzyFileSearch      FuzzyFileSearchReaderFunc
-	OnSearchTasks          TaskMentionSearchFunc
+	StartupAnnouncement *string
+	// OnFetchStartupAnnouncement loads the announcement asynchronously so the
+	// first frame is never delayed by network I/O (Rust #46931 prewarmed cache).
+	OnFetchStartupAnnouncement func() (string, bool)
+	PluginUserMarketplaces     map[string]bool
+	PluginGitMarketplaces      map[string]bool
+	OnReadSkills               SkillsListReaderFunc
+	OnWriteSkillEnabled        SkillEnabledWriteFunc
+	OnFuzzyFileSearch          FuzzyFileSearchReaderFunc
+	OnSearchTasks              TaskMentionSearchFunc
 	// OnReadExperimentalFeatures reads the app server's experimentalFeature/list
 	// catalog for the /experimental popup (Rust experimental_features::fetch).
 	OnReadExperimentalFeatures ExperimentalFeaturesReaderFunc
@@ -2198,6 +2201,7 @@ type Model struct {
 	onUpgradeMarketplace              MarketplaceUpgradeFunc
 	onOpenPluginURL                   PluginOpenURLFunc
 	onOpenURL                         func(string) error
+	onFetchStartupAnnouncement        func() (string, bool)
 	pluginUserMarketplaces            map[string]bool
 	pluginGitMarketplaces             map[string]bool
 	pluginRuntime                     chatwidget.PluginsRuntimeState
@@ -2683,6 +2687,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onUpgradeMarketplace:            options.OnUpgradeMarketplace,
 		onOpenPluginURL:                 options.OnOpenPluginURL,
 		onOpenURL:                       options.OnOpenURL,
+		onFetchStartupAnnouncement:      options.OnFetchStartupAnnouncement,
 		pluginUserMarketplaces:          cloneBoolMapTea(options.PluginUserMarketplaces),
 		pluginGitMarketplaces:           cloneBoolMapTea(options.PluginGitMarketplaces),
 		onReadSkills:                    options.OnReadSkills,
@@ -2958,6 +2963,9 @@ func (m *Model) Init() bubbletea.Cmd {
 		// Rust refresh_startup_skills: the initial skills refresh runs in the
 		// background so the first frame is not delayed.
 		commands = append(commands, m.startupSkillsCmd())
+	}
+	if m.onFetchStartupAnnouncement != nil {
+		commands = append(commands, m.startupAnnouncementCmd())
 	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
@@ -3363,6 +3371,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case OpenURLResultMsg:
 		m.applyOpenURLResult(msg)
+		return m, nil
+	case StartupAnnouncementMsg:
+		m.applyStartupAnnouncement(msg)
 		return m, nil
 	case MentionPluginInventoryResultMsg:
 		m.applyMentionPluginInventoryResult(msg)

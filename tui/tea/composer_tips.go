@@ -146,6 +146,35 @@ type OpenURLResultMsg struct {
 	Err error
 }
 
+// StartupAnnouncementMsg carries the asynchronously fetched announcement tip.
+type StartupAnnouncementMsg struct {
+	Text string
+	OK   bool
+}
+
+func (m *Model) startupAnnouncementCmd() bubbletea.Cmd {
+	if m == nil || m.onFetchStartupAnnouncement == nil || m.composerTips.announcement != "" {
+		return nil
+	}
+	fetch := m.onFetchStartupAnnouncement
+	return func() bubbletea.Msg {
+		text, ok := fetch()
+		return StartupAnnouncementMsg{Text: text, OK: ok}
+	}
+}
+
+func (m *Model) applyStartupAnnouncement(msg StartupAnnouncementMsg) {
+	if m == nil || !msg.OK || m.composerTips.announcementDismissed {
+		return
+	}
+	text := strings.TrimSpace(msg.Text)
+	if text == "" || text == m.composerTips.announcement {
+		return
+	}
+	m.composerTips.announcement = text
+	m.composerTips.announcementCacheKey = ""
+}
+
 func (m *Model) applyOpenURLResult(msg OpenURLResultMsg) {
 	if m == nil || msg.Err == nil {
 		return

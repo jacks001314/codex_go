@@ -688,10 +688,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnUpgradeMarketplace: func(params plugin.MarketplaceUpgradeParams) (plugin.MarketplaceUpgradeResponse, error) {
 			return interactiveRemotePluginCall[plugin.MarketplaceUpgradeResponse](ctx, endpoint, appserver.MethodMarketplaceUpgrade, params)
 		},
-		OnOpenPluginURL:        auth.OpenBrowser,
-		OnOpenURL:              auth.OpenBrowser,
-		PluginUserMarketplaces: settings.PluginUserMarketplaces,
-		PluginGitMarketplaces:  settings.PluginGitMarketplaces,
+		OnOpenPluginURL:            auth.OpenBrowser,
+		OnOpenURL:                  auth.OpenBrowser,
+		OnFetchStartupAnnouncement: fetchStartupAnnouncementTip,
+		PluginUserMarketplaces:     settings.PluginUserMarketplaces,
+		PluginGitMarketplaces:      settings.PluginGitMarketplaces,
 		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 			skillsCWD := strings.TrimSpace(cwd)
 			if skillsCWD == "" {
