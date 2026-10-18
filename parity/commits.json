@@ -31975,9 +31975,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/8; needs review: bind_credential_broker_environment, credential_snapshot_proxy, restore_fallback"
+        "Round 317 (implementation): exec-server credential-masking admission now accepts Zsh login launches backed by a trusted ShellSnapshot and continues to reject bare Zsh or Bash snapshots. The existing snapshot path captures the pre-virtualization environment, prepares per-call credential/dummy pairs, rewrites profile credentials and aliases before replay, preserves explicit overrides/proxy env, and uses the existing unsafe-replay fallback. Client warnings no longer claim Zsh snapshot launches are unprotected. Tests: go test ./execserver -run 'CredentialMaskingSupportedShell|RemoteCredentialMasking' -count=1; go test ./tool -run 'RemoteCredentialMaskingWarnings|ShellSnapshot' -count=1"
       ]
     },
     {

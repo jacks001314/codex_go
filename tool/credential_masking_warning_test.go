@@ -3,6 +3,8 @@ package tool
 import (
 	"strings"
 	"testing"
+
+	"codex_go/execserver"
 )
 
 func TestRemoteCredentialMaskingWarningsLikeRust(t *testing.T) {
@@ -22,7 +24,7 @@ func TestRemoteCredentialMaskingWarningsLikeRust(t *testing.T) {
 	warnings = nil
 	req.Shell.Shell.Type = ShellZsh
 	warnRemoteCredentialMaskingUnavailable(req, true, true)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "shell `zsh`") {
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "shell startup") {
 		t.Fatalf("shell warning = %#v", warnings)
 	}
 
@@ -39,5 +41,14 @@ func TestRemoteCredentialMaskingWarningsLikeRust(t *testing.T) {
 	warnRemoteCredentialMaskingUnavailable(req, true, true)
 	if len(warnings) != 0 {
 		t.Fatalf("supported launch warned: %#v", warnings)
+	}
+
+	warnings = nil
+	req.Shell.Shell.Type = ShellZsh
+	req.Shell.UseLoginShell = true
+	req.RemoteShellSnapshot = &execserver.ShellSnapshotRequest{ScopeID: "scope"}
+	warnRemoteCredentialMaskingUnavailable(req, true, true)
+	if len(warnings) != 0 {
+		t.Fatalf("zsh snapshot launch warned: %#v", warnings)
 	}
 }

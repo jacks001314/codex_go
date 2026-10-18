@@ -2290,10 +2290,23 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 }
 
 func credentialMaskingSupportedShell(params *ExecParams, env map[string]string) bool {
-	if params == nil || params.Arg0 != nil || params.ShellSnapshot != nil {
+	if params == nil || params.Arg0 != nil || len(params.Argv) != 3 {
 		return false
 	}
-	if len(params.Argv) != 3 || filepath.Base(strings.TrimSpace(params.Argv[0])) != "bash" || params.Argv[1] != "-c" {
+	shellName := filepath.Base(strings.TrimSpace(params.Argv[0]))
+	switch {
+	case shellName == "bash":
+		if params.ShellSnapshot != nil || params.Argv[1] != "-c" {
+			return false
+		}
+	case shellName == "zsh":
+		// Rust #54432: Zsh login commands can mask credentials when the
+		// executor replays a trusted shell snapshot. A bare Zsh launch is left
+		// unmasked because its startup files are not controlled here.
+		if params.ShellSnapshot == nil || params.Argv[1] != "-lc" {
+			return false
+		}
+	default:
 		return false
 	}
 	for _, key := range []string{"BASH_ENV", "ENV", "SSH_CLIENT", "SSH2_CLIENT"} {

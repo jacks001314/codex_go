@@ -291,7 +291,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1bff94edb6800974c3eed77e4716ba66804ed619	44341	Bind remote-control sessions to their authentication owner (#44341)	2026-09-09	appserver	32	15	0.47	0	0	audit_pending	RemoteControlAuth,RemoteControlHandle,RemoteControlPersistence,RemoteControlRecovery,RemoteControlWebsocket,RemoteControlWebsocketConfig,auth_change_receiver,disable_ephemeral,enable_ephemeral,ensure_current
 1c1e17782aeb51a5a253997067fa887a9d593cc9	41846	Preserve Guardian review evidence across compaction (#41846)	2026-08-31	guardian	5	5	1.00	0	0	complete	
 1c40ffe4275d178d6a88f593d263b29d5ca36ce2	43144	Add Windows MSVC Bazel targets for native voice libraries (#43144)	2026-09-06	realtime	0	0		0	0	not_applicable	
-1c5ca2a9791ded685e94233ee07832e619ec2af2	54432	Support remote credential masking with Zsh shell snapshots (#54432)	2026-10-15	execserver	8	5	0.62	0	0	audit_pending	bind_credential_broker_environment,credential_snapshot_proxy,restore_fallback
+1c5ca2a9791ded685e94233ee07832e619ec2af2	54432	Support remote credential masking with Zsh shell snapshots (#54432)	2026-10-15	execserver	8	5	0.62	0	0	complete	bind_credential_broker_environment,credential_snapshot_proxy,restore_fallback
 1c7c43cd856a1ef451cb7ff9dc1b701ac7942c9d	51819	Migrate the MXC sandbox to the 1.0.0 SDK (#51819)	2026-10-07	sandbox	0	0		0	0	blocked_precondition	
 1cc7dc8f2acc63ce6c1cb72271e6b90a76136c2b	54945	Share additional tool declarations across response item clones (#54945)	2026-10-17	core	0	0		0	0	not_applicable	none
 1cc7e2361237ce7244430ee1d581c77f95c57ac8	48830	Show a short, neutral TUI interruption notice (#48830)	2026-09-28	tui	0	0		0	0	not_applicable	

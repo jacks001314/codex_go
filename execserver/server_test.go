@@ -140,6 +140,13 @@ func TestCredentialMaskingSupportedShellLikeRust(t *testing.T) {
 	if !credentialMaskingSupportedShell(&ExecParams{Argv: argv, Env: map[string]string{}}, map[string]string{}) {
 		t.Fatal("plain non-login bash command should support masking")
 	}
+	zshSnapshot := &ShellSnapshotRequest{ScopeID: "scope", Shell: ShellInfo{Name: "zsh", Path: "/bin/zsh"}}
+	if !credentialMaskingSupportedShell(&ExecParams{
+		Argv:          []string{"/bin/zsh", "-lc", "echo hi"},
+		ShellSnapshot: zshSnapshot,
+	}, map[string]string{}) {
+		t.Fatal("zsh login command with a trusted snapshot should support masking")
+	}
 	for _, testCase := range []struct {
 		name   string
 		params *ExecParams
@@ -149,6 +156,8 @@ func TestCredentialMaskingSupportedShellLikeRust(t *testing.T) {
 		{name: "login", params: &ExecParams{Argv: []string{"/bin/bash", "-lc", "echo hi"}}},
 		{name: "arg0", params: &ExecParams{Argv: argv, Arg0: stringPtrForExecServerTest("codex")}},
 		{name: "snapshot", params: &ExecParams{Argv: argv, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope"}}},
+		{name: "zsh without snapshot", params: &ExecParams{Argv: []string{"/bin/zsh", "-lc", "echo hi"}}},
+		{name: "zsh non-login snapshot", params: &ExecParams{Argv: []string{"/bin/zsh", "-c", "echo hi"}, ShellSnapshot: zshSnapshot}},
 		{name: "startup profile", params: &ExecParams{Argv: argv}, env: map[string]string{"BASH_ENV": "profile"}},
 		{name: "ssh startup", params: &ExecParams{Argv: argv}, env: map[string]string{"SSH_CLIENT": "remote"}},
 	} {

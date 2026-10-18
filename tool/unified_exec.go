@@ -876,13 +876,16 @@ func warnRemoteCredentialMaskingUnavailable(req *ShellRequest, requested bool, e
 	switch {
 	case !executorSupports:
 		message = fmt.Sprintf("Credential masking is unavailable on environment `%s` because its exec-server does not support it. This command will run with unmasked credentials.", environmentID)
-	case req.Shell.Shell == nil || req.Shell.Shell.Type != ShellBash:
+	case req.Shell.Shell == nil:
 		shellName := ""
-		if req.Shell.Shell != nil {
-			shellName = string(req.Shell.Shell.Type)
-		}
 		message = fmt.Sprintf("Credential masking is unavailable for shell `%s` on environment `%s`. This command will run with unmasked credentials.", shellName, environmentID)
-	case req.Shell.UseLoginShell || req.RemoteShellSnapshot != nil:
+	case req.Shell.Shell.Type == ShellBash && (req.Shell.UseLoginShell || req.RemoteShellSnapshot != nil):
+		message = fmt.Sprintf("Credential masking is unavailable for this shell startup on environment `%s`. This command will run with unmasked credentials.", environmentID)
+	case req.Shell.Shell.Type == ShellZsh && req.Shell.UseLoginShell && req.RemoteShellSnapshot != nil:
+		return
+	case req.Shell.Shell.Type != ShellBash && req.Shell.Shell.Type != ShellZsh:
+		message = fmt.Sprintf("Credential masking is unavailable for shell `%s` on environment `%s`. This command will run with unmasked credentials.", req.Shell.Shell.Type, environmentID)
+	case req.Shell.Shell.Type == ShellZsh:
 		message = fmt.Sprintf("Credential masking is unavailable for this shell startup on environment `%s`. This command will run with unmasked credentials.", environmentID)
 	default:
 		return
