@@ -3122,9 +3122,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "turn.TurnToolOutput and standaloneToolOutputInputItem route a standalone named function-call output through turn start/steer without a user prompt, including Retain metadata and input-size validation. Tests: go test ./turn -run 'ToolOutput|Standalone' -count=1; go test ./appserver -run 'StandaloneToolOutput|TurnToolOutput' -count=1"
       ]
     },
     {
@@ -3158,9 +3158,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "features.Registry marks compaction_image_budget as stable and default-enabled; image reference budgeting charges retained images against the remote compaction context and trims older images when the feature is enabled. Tests: go test ./appserver -run 'Image.*Budget|ImageReference' -count=1"
       ]
     },
     {
@@ -3230,9 +3230,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "prompt.RenderAvailableSkillsWithOptions and RenderCombinedAvailableSkills evaluate aliased catalogs regardless of budget pressure and select aliases when inclusion/description preservation and total prompt cost improve; executor/orchestrator/host combined catalogs share the same selection. Tests: go test ./prompt -run 'Skill|Alias' -count=1"
       ]
     },
     {
@@ -3242,9 +3242,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "codemode.CodeModeTraceContext carries W3C traceparent/tracestate into gRPC code-mode execution requests and the remote provider forwards the active protocol trace context; tests cover present/absent carriers. Tests: go test ./codemode -run 'Trace' -count=1"
       ]
     },
     {
