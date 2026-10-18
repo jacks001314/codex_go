@@ -24903,9 +24903,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: apply_settings, from_bootstrap"
+        "Aligned upstream 7b88d09d61 (#49875) with Go's client-owned settings lifecycle: interactiveLocalSettings stages TUI preferences separately from execution configuration, interactiveNewThreadLocalSettings/ReloadedLocalSettings preserve live values on reload failure, trust checks replace the staged record only when a reload actually occurred, and applyLocalSettings reapplies presentation fields without pulling execution config into the model. Tests: TestInteractiveReloadLocalSettingsKeepsLiveSettingsLikeRust, TestInteractiveLocalSettingsAfterTrustCheckLikeRust, TestInteractiveNewThreadLocalSettingsLikeRust, TestReloadedLocalSettingsKeepsLiveSettingsLikeRust, TestApplyLocalSettingsKeepsLiveValuesLikeRust."
       ]
     },
     {
