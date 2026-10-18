@@ -15616,9 +15616,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 585 (audit): already implemented. Go records the previous turn's model/context hash and retries a failed compaction with the selected current model after interruption or budget stop. Tests: go test ./appserver ./compact ./rollout -run 'PreviousModel|CompactionFallback|CompHash' -count=1"
       ]
     },
     {
@@ -24383,9 +24383,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 586 (audit): already implemented. api_key_cyber_access_programs is independent of model discovery and admits only an OpenAI-provider program; the wire forwarding path and access-program tests pass. Tests: go test ./model -run 'CyberAccess|AccessProgram' -count=1"
       ]
     },
     {
@@ -27337,9 +27337,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 587 (audit): already implemented. The host-owned codex_apps registration receives the issuing turn's root turn id in MCP turn metadata, while user-configured Apps servers omit it. Tests: go test ./turn ./mcp ./appserver -run 'RootTurn|TurnMetadata|HostOwned' -count=1"
       ]
     },
     {
