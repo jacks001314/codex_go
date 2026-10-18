@@ -319,6 +319,11 @@ type RuntimeRouter struct {
 	// compare the thread's last turn against the current one (#46324).
 	turnContextMu sync.Mutex
 	turnContexts  map[string]json.RawMessage
+	// turnCosts tracks completed response IDs per running turn and emits the
+	// settled ChatGPT cost metric through TurnMetrics (Rust #41944).
+	turnCostMu    sync.Mutex
+	turnCosts     *turnCostTracker
+	turnCostQuery func(context.Context, string, []string) ([]chatgptapi.ChatgptThreadTurnCosts, error)
 	// otelProvider is the process OTEL provider built from config at startup.
 	// It forwards the task metrics, the exported log records, and the request
 	// spans, and is shut down with the router.
@@ -886,6 +891,7 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 	r.publishThreadReadAttention(notification)
 	r.requireRealtime().CompleteHandoff(notification.ThreadID)
 	r.notify(NotificationTurnCompleted, notification)
+	r.observeTurnCostCompletion(notification.ThreadID, notification.Turn.ID, notification.Turn.Status == TurnStatusInterrupted)
 	return true
 }
 

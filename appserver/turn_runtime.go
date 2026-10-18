@@ -1087,6 +1087,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			FasterModel:     fasterModel,
 		})
 	case model.ResponsesStreamEventCompleted:
+		r.recordTurnCostResponse(threadID, turnID, event.ResponseID)
 		if state.retrying {
 			state.retrying = false
 		}

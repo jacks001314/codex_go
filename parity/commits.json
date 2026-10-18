@@ -5280,9 +5280,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ChatgptThreadTurnCosts, ChatgptTurnCost, query_chatgpt_turn_costs"
+        "Round 484 (implementation): chatgptapi.CloudClient.GetTurnCosts queries thread-estimates with include_settled_response_ids=true on both /api/codex and /wham routes. Runtime tracks each completed response ID (4096 cap), then a best-effort worker polls with a 15s request timeout and five 150s retries for ChatGPT auth. codex.turn.cost_microusd is emitted only for nonnegative visible estimates whose settled IDs cover every observed response, with turn.id/conversation.id/turn.interrupted/auth_mode tags; worker logs carry status codes only. Tests: go test ./chatgptapi ./appserver -run 'TurnCost|SettledTurnCost|TurnCompletionStartsOneCostQuery' -count=1"
       ]
     },
     {
