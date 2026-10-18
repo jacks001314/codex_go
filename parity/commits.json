@@ -9701,9 +9701,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: last_rendered_buffer"
+        "Audited upstream 095da4b7e8 (#43889): already implemented. The chatwidget transcript pager rounds half-page movement up against the rendered content height (Rust-compatible rather than viewport-library round-down), and the tea transcript preserves/restores the scroll anchor and find offsets across redraws and content changes. Tests: TestTranscriptOverlayHalfPageRoundsUpLikeRust, restoreTranscriptScrollAnchor tests, and transcript find restoration coverage."
       ]
     },
     {
@@ -11213,9 +11213,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: AgentsOverviewAction, confirm_agents_overview_action, run_agents_overview_action"
+        "Audited upstream b348fc2667 (#44433): already implemented. The agents overview exposes archive/delete actions, confirmation dialogs with permanent-delete confirmation, host callbacks, in-flight blocking, failure notices, removal selection rules, and footer hints. Tests: TestArchiveAndDeleteSelectedLikeRust, TestArchiveAndDeleteWithoutRowsAreNoops, TestFooterAdvertisesArchiveAndDeleteLikeRust, and selection-after-removal coverage."
       ]
     },
     {
