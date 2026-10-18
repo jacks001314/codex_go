@@ -19385,9 +19385,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: with_launch_failure_events"
+        "Round 403 (audit): local pipe, local PTY, and remote unified-exec launch failures emit Begin plus terminal End without a process ID, with failed status, exitCode -1, duration 0, and launch diagnostics. Approval rejection stays on the declined path and sandbox retry semantics are unchanged. Tests: go test ./tool -run 'UnifiedExec.*Launch|LaunchFailure' -count=1; go test ./appserver -run 'UnifiedExecLaunchFailure|CommandExecutionNotifications' -count=1"
       ]
     },
     {
