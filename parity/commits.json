@@ -6255,9 +6255,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: omit_completed_agent_deltas, prepare_assistant_message"
+        "Audited upstream e6ff749506 (#42325): ClassifyReplayThreadItem routes agent_message/plan directly to the completed route during replay, and the tea transcript replay merges the completed final text without applying streamed deltas. Test: TestReplayThreadItemRoutesMatchRustCore plus the buffered-thread replay tests."
       ]
     },
     {
