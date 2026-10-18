@@ -2266,7 +2266,7 @@ d58d0e5841e0de08e251673db2d5af8cf3a1ad51	41803	Allow models to enable token budg
 d5afb62bb3d8f900530b49a1268cb110380bedfd	46574	Notify users when asynchronous questions arrive in the TUI (#46574)	2026-09-19	tui	0	0		0	0	not_applicable	
 d5b29951aca5205bc8415120b56dd4bc295f5c83	46540	Centralize retry decisions and delays in `CodexErr` (#46540)	2026-09-18	model	3	3	1.00	0	0	complete
 d5caceccb1ee5bf94c081b995575ce4860e0912b	41058	Track Code Mode tool call metadata completeness (#41058)	2026-08-27	model	4	3	0.75	0	0	complete	set_tool_call_cell_id
-d5cbfe1455a325684b71b6eaf4078b685ea6bdce	48109	Deduplicate retained instructions against Guardian transcripts (#48109)	2026-09-25	guardian	5	3	0.60	0	0	audit_pending	MAX_INSTRUCTION_TOKENS,RetainedTranscriptSource
+d5cbfe1455a325684b71b6eaf4078b685ea6bdce	48109	Deduplicate retained instructions against Guardian transcripts (#48109)	2026-09-25	guardian	5	5	1.00	0	0	complete
 d5e6526362f6efa322ca091b61eda495f16ffb30	49297	Scan the session index backwards for batch thread name lookups (#49297)	2026-09-29	persistence	0	0		0	0	not_applicable	
 d60560f14e6271da8ac8f680fcdfb9245d5b9413	41897	Add the voice helper lifecycle foundation (#41897)	2026-08-31	realtime	5	5	1.00	0	0	complete	
 d6093d32287bdcfed2b7f2bbc866ad4b544f8dff	47318	Offer explicit recovery for incompatible background servers (#47318)	2026-09-22	tui	5	3	0.60	0	0	audit_pending	CompatibilityError,restart_with_features_locked

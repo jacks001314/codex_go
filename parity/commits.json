@@ -21476,9 +21476,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: MAX_INSTRUCTION_TOKENS, RetainedTranscriptSource"
+        "Equivalent implementation: retained instructions carry source metadata and DeduplicateRetainedInstructions omits a fragment only when the transcript/reviewer history delivered its complete matching source revision. Transcript entries expose source-order labels, guidance redelivery is tracked, and retained-context tests cover complete, missing/incomplete metadata and delivery semantics."
       ]
     },
     {
