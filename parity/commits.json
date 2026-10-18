@@ -20783,9 +20783,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 679 (partial): the production local runtime installs a paginated default on its thread store, explicit legacy remains honored, in-memory ephemeral threads accept paginated mode, and thread/revert rejects ephemeral threads before touching history. Go has no persisted Guardian thread-store carrier (the reviewer session is in-process), and the TUI replay/attach guard belongs to the TUI lane. Tests: go test ./appserver -run 'DefaultsLocalThreadsToPaginated|RejectsEphemeralThreadRevert' -count=1; go test ./appserver -run 'ThreadResume|ThreadFork|AgentSpawn|Subagent|Guardian' -count=1"
+        "Round 696 (implementation): the production local runtime installs a paginated default, explicit legacy remains honored, in-memory ephemeral threads accept paginated mode, thread/revert rejects ephemeral threads, and remote agent-thread switch/attach reads metadata first and rejects ephemeral threads before thread/resume. Go has no persisted Guardian thread-store carrier (reviewer sessions are in-process). Tests: go test ./appserver -run 'DefaultsLocalThreadsToPaginated|RejectsEphemeralThreadRevert' -count=1; go test ./app -run 'InteractiveRemoteSwitchAgentThreadRejectsEphemeral|InteractiveRemoteSwitchAgentThread' -count=1; go test ./appserver -run 'ThreadResume|ThreadFork|AgentSpawn|Subagent|Guardian' -count=1"
       ]
     },
     {

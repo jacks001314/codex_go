@@ -10,11 +10,14 @@
 - Rust 的 `fork_legacy_thread` / `resume_legacy_thread_from_rollout` /
   `spawn_legacy_subagent` 等是内部 API 重命名，Go 没有同名载体。
 - Guardian reviewer 在 Go 中是进程内 session，没有 persisted thread-store
-  history-mode 入口；TUI 的 ephemeral replay/attach 防护属于 TUI lane。
+  history-mode 入口。
+- remote agent-thread switch/attach 先读取 thread metadata；ephemeral thread
+  在 `thread/resume` 前返回 not-yet-available 错误。
 
 验证：
 
 - `go test ./appserver -run 'DefaultsLocalThreadsToPaginated|RejectsEphemeralThreadRevert' -count=1`
+- `go test ./app -run 'InteractiveRemoteSwitchAgentThreadRejectsEphemeral|InteractiveRemoteSwitchAgentThread' -count=1`
 - `go test ./appserver -run 'ThreadResume|ThreadFork|AgentSpawn|Subagent|Guardian' -count=1`
 - `go build ./...`
 

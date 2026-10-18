@@ -2158,10 +2158,11 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	// task the resume fails with the active-writer conflict, so fall back to a
 	// frozen read-only history snapshot instead of refusing to open it.
 	resumeCWD := ""
-	if !interactiveRemoteEndpointIsExplicitRemote(root) {
-		if thread, readErr := remoteTUIReadThread(ctx, client, threadID, false); readErr == nil && thread != nil {
-			resumeCWD = strings.TrimSpace(thread.CWD)
+	if thread, readErr := remoteTUIReadThread(ctx, client, threadID, false); readErr == nil && thread != nil {
+		if thread.Ephemeral {
+			return codextea.AgentThreadSwitchResponse{}, fmt.Errorf("Agent thread %s is not yet available for replay or live attach.", threadID)
 		}
+		resumeCWD = strings.TrimSpace(thread.CWD)
 	}
 	resumeParams, err := remoteTUIResumeParams(root, threadID, resumeCWD)
 	if err != nil {
