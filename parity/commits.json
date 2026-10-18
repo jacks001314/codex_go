@@ -21404,9 +21404,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 535 (audit): already implemented. Runtime-owned filesystem grants are separated from user grants and do not trigger stdin approval; the credential-broker shell snapshot and plugin sidecar internal grants reach the command profile. Tests: go test ./appserver ./sandbox ./plugin -run 'InternalPermission|StdinApproval|Sidecar|RuntimeGrant' -count=1"
       ]
     },
     {
@@ -22184,9 +22184,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/8; needs review: local_runtime_paths, with_local_runtime_paths, with_proxy_private_ips_via_upstream, with_runtime_paths"
+        "Round 533 (audit): already implemented. The trusted CLI flag/environment is carried into executor startup routing, and the exec-server proxy applies the opt-in to permitted private upstreams while retaining request policy. Tests: go test ./cli ./execserver -run 'PrivateIP|Proxy|Upstream' -count=1"
       ]
     },
     {
@@ -23324,9 +23324,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/10; needs review: RuntimeConfigRefresh, mcp_server_refresh, refresh_mcp_config, refresh_runtime_config"
+        "Round 534 (audit): already implemented. Enterprise MCP admission is bound to the running registration/authority, and a refresh that no longer matches the enterprise authority fails closed instead of admitting the new configuration. Tests: go test ./appserver -run 'Enterprise|MCPConfigRefresh|MCPEnterprise' -count=1"
       ]
     },
     {
