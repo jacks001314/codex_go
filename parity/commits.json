@@ -3590,9 +3590,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: permission_profile_is_safely_represented_by_sandbox_mode"
+        "Aligned upstream c29bc99949 (#41192) through Go's fork-based working-directory change: `/cd` forks the session record and copies complete metadata, including ApprovalPolicy, SandboxPolicy, and ActivePermissionProfile, before replacing only the CWD. The replacement summary is then attached without rebuilding permissions from execution defaults. Test: TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD."
       ]
     },
     {

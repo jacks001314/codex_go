@@ -3596,8 +3596,14 @@ func TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		RecencyAt: now,
-		Metadata:  session.Metadata{CWD: sourceCWD, Source: "cli"},
-		Items:     []session.Item{{ID: "item-1", Type: "user_message", Text: "hello"}},
+		Metadata: session.Metadata{
+			CWD:                     sourceCWD,
+			Source:                  "cli",
+			ApprovalPolicy:          "never",
+			SandboxPolicy:           "workspace-write",
+			ActivePermissionProfile: "trusted",
+		},
+		Items: []session.Item{{ID: "item-1", Type: "user_message", Text: "hello"}},
 	}); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -3619,6 +3625,11 @@ func TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD(t *testing.T) {
 	}
 	if replacement.Metadata.CWD != targetCWD {
 		t.Fatalf("replacement metadata cwd = %q, want %q", replacement.Metadata.CWD, targetCWD)
+	}
+	if replacement.Metadata.ApprovalPolicy != "never" ||
+		replacement.Metadata.SandboxPolicy != "workspace-write" ||
+		replacement.Metadata.ActivePermissionProfile != "trusted" {
+		t.Fatalf("replacement permissions not preserved: %#v", replacement.Metadata)
 	}
 	if len(replacement.Items) != 1 || replacement.Items[0].Text != "hello" {
 		t.Fatalf("replacement history not preserved: %#v", replacement.Items)
