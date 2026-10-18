@@ -19289,9 +19289,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: ensure_configs_stay_owner_provided, snapshot_now, validate_environment_configs, validate_environment_ids_and_cwds"
+        "Equivalent implementation: TurnSettingsUpdateParams carries environments, validates them against the runtime before mutation, and updateActiveTurnRuntimeSettings applies model and environment changes in one active-turn update transaction. Subsequent steps use the replacement selection while persisted future-turn selections remain unchanged; tests cover active-turn workspace/permission settings and next-turn restoration."
       ]
     },
     {
