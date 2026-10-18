@@ -14,11 +14,12 @@ import (
 )
 
 type externalCommandMigration struct {
-	SourcePath  string
-	SourceName  string
-	Name        string
-	Description string
-	Body        string
+	SourcePath          string
+	SourceName          string
+	Name                string
+	Description         string
+	Body                string
+	FallbackDescription bool
 }
 
 type externalSubagentMigration struct {
@@ -376,7 +377,7 @@ func discoverExternalCommands(source string, target string) []externalCommandMig
 		}
 		frontmatter, body, ok := parseExternalFrontmatter(string(data))
 		description := strings.TrimSpace(frontmatter["description"])
-		if !ok || description == "" || externalUnsupportedTemplate(body) {
+		if externalUnsupportedTemplate(body) {
 			continue
 		}
 		relative, err := filepath.Rel(source, path)
@@ -389,12 +390,30 @@ func discoverExternalCommands(source string, target string) []externalCommandMig
 		if len([]rune(name)) > 64 || pathExists(filepath.Join(target, name)) {
 			continue
 		}
-		byName[name] = append(byName[name], externalCommandMigration{SourcePath: path, SourceName: sourceName, Name: name, Description: description, Body: body})
+		fallback := !ok || description == ""
+		if fallback {
+			description = "Migrated source command `" + sourceName + "`"
+		}
+		byName[name] = append(byName[name], externalCommandMigration{
+			SourcePath: path, SourceName: sourceName, Name: name,
+			Description: description, Body: body, FallbackDescription: fallback,
+		})
 	}
 	var out []externalCommandMigration
 	for _, name := range sortedExternalMapKeys(byName) {
-		if len(byName[name]) == 1 {
-			out = append(out, byName[name][0])
+		candidates := byName[name]
+		if len(candidates) == 1 {
+			out = append(out, candidates[0])
+			continue
+		}
+		described := make([]externalCommandMigration, 0, len(candidates))
+		for _, candidate := range candidates {
+			if !candidate.FallbackDescription {
+				described = append(described, candidate)
+			}
+		}
+		if len(described) == 1 {
+			out = append(out, described[0])
 		}
 	}
 	return out

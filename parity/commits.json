@@ -2052,9 +2052,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "config/external_tools_import.go discovers commands without frontmatter, derives `Migrated source command `<source-name>`` descriptions, and resolves normalized-name collisions by preferring a single described candidate while skipping fallback-only ambiguity; covered for user and repository scopes by config/external_commands_import_test.go"
       ]
     },
     {
