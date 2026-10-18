@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"codex_go/sandbox"
@@ -382,6 +383,11 @@ type AttestationGenerateResponse struct {
 	Token string `json:"token"`
 }
 
+// Format redacts the opaque attestation token from diagnostic output.
+func (r AttestationGenerateResponse) Format(f fmt.State, verb rune) {
+	fmt.Fprint(f, "appserver.AttestationGenerateResponse{Token:<redacted>}")
+}
+
 type CurrentTimeReadParams struct {
 	ThreadID string `json:"threadId"`
 }
@@ -394,6 +400,12 @@ type ChatGPTAuthTokensRefreshResponse struct {
 	AccessToken      string  `json:"accessToken"`
 	ChatGPTAccountID string  `json:"chatgptAccountId"`
 	ChatGPTPlanType  *string `json:"chatgptPlanType"`
+}
+
+// Format redacts the refreshed access token from diagnostic output.
+func (r ChatGPTAuthTokensRefreshResponse) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "appserver.ChatGPTAuthTokensRefreshResponse{AccessToken:<redacted>, ChatGPTAccountID:%q, ChatGPTPlanType:%v}",
+		r.ChatGPTAccountID, r.ChatGPTPlanType)
 }
 
 type ApplyPatchApprovalParams struct {

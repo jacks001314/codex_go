@@ -143,7 +143,7 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 			return nil
 		}
 		if err := json.Unmarshal(result.data, target); err != nil {
-			return err
+			return fmt.Errorf("%w: invalid server request response", ErrInvalidRequest)
 		}
 		return normalizeServerRequestResponse(method, params, target)
 	}
@@ -258,7 +258,9 @@ func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {
 	b.notifyResolved(entry.request)
 	b.notifyResolvedResponse(entry.request, response)
 	if response.Error != nil {
-		entry.ch <- &serverRequestResult{err: fmt.Errorf("server request failed: code=%d message=%s", response.Error.Code, response.Error.Message)}
+		// Error messages are client-supplied and can echo credentials. Keep only
+		// the structural code in the propagated error.
+		entry.ch <- &serverRequestResult{err: fmt.Errorf("server request failed: code=%d", response.Error.Code)}
 		return true, nil
 	}
 	data, err := json.Marshal(response.Result)

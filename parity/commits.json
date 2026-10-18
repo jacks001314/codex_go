@@ -418,9 +418,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: RedactedString, into_inner"
+        "Provider, API-provider, provider auth/credential-export/refresh-argument, attestation response, ChatGPT auth refresh response, and external refresh response diagnostics now use fmt.Formatter redaction so %v, %+v, %#v, and slog paths cannot expose bearer tokens, header/query values, command arguments, or token responses while JSON serialization and request behavior remain unchanged. Server-request broker errors retain only the client error code instead of its message, and malformed JSON-RPC responses are reported generically rather than echoing parser detail that may contain credentials. Tests cover all formatter paths, slog capture, broker error redaction, malformed response redaction, and existing provider/auth behavior."
       ]
     },
     {

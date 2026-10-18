@@ -275,6 +275,12 @@ type ExternalAuthRefreshResponse struct {
 	ChatGPTPlanType  *string
 }
 
+// Format redacts the refreshed access token from diagnostic output.
+func (r ExternalAuthRefreshResponse) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "model.ExternalAuthRefreshResponse{AccessToken:%s, ChatGPTAccountID:%q, ChatGPTPlanType:%v}",
+		redactedFormatValue, r.ChatGPTAccountID, r.ChatGPTPlanType)
+}
+
 type ExternalAuthRefreshFunc func(ctx context.Context, request *ExternalAuthRefreshRequest) (*ExternalAuthRefreshResponse, error)
 
 // WorkloadIdentityRefreshFunc re-exchanges workload identity tokens preserving

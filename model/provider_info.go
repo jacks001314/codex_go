@@ -111,6 +111,13 @@ type ProviderAuthInfo struct {
 	CWD               string   `json:"cwd,omitempty"`
 }
 
+// Format redacts provider authentication command arguments from diagnostic
+// output while preserving them for JSON serialization and execution.
+func (p ProviderAuthInfo) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "model.ProviderAuthInfo{Command:%q, Args:%s, TimeoutMS:%d, RefreshIntervalMS:%d, CWD:%q}",
+		p.Command, redactedFormatValue, p.TimeoutMS, p.RefreshIntervalMS, p.CWD)
+}
+
 type ProviderAWSAuthInfo struct {
 	Profile string `json:"profile,omitempty"`
 	Region  string `json:"region,omitempty"`
@@ -126,6 +133,12 @@ type ProviderCredentialExportInfo struct {
 	Command   string   `json:"command,omitempty"`
 	Args      []string `json:"args,omitempty"`
 	TimeoutMS uint64   `json:"timeout_ms,omitempty"`
+}
+
+// Format redacts credential-export arguments from diagnostic output.
+func (c ProviderCredentialExportInfo) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "model.ProviderCredentialExportInfo{Command:%q, Args:%s, TimeoutMS:%d}",
+		c.Command, redactedFormatValue, c.TimeoutMS)
 }
 
 // ValidateCredentialExport mirrors Rust ModelProviderInfo::validate (#44028):
@@ -151,6 +164,12 @@ type ProviderAuthRefreshInfo struct {
 	Command   string   `json:"command,omitempty"`
 	Args      []string `json:"args,omitempty"`
 	TimeoutMS uint64   `json:"timeout_ms,omitempty"`
+}
+
+// Format redacts auth-refresh arguments from diagnostic output.
+func (a ProviderAuthRefreshInfo) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "model.ProviderAuthRefreshInfo{Command:%q, Args:%s, TimeoutMS:%d}",
+		a.Command, redactedFormatValue, a.TimeoutMS)
 }
 
 // GatewayOAuthConfig mirrors Rust model-provider-info's GatewayOAuthConfig
@@ -405,6 +424,23 @@ type ProviderInfo struct {
 	IncludeInternalMetadata bool `json:"-"`
 }
 
+const redactedFormatValue = "<redacted>"
+
+// Format keeps provider credentials out of diagnostic output while preserving
+// the struct's JSON representation and request behavior.
+func (p ProviderInfo) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "model.ProviderInfo{Name:%q, BaseURL:%q, EnvKey:%q, ExperimentalBearerToken:%s, Auth:%s, QueryParams:%s, HTTPHeaders:%s, EnvHTTPHeaders:%s}",
+		p.Name,
+		p.BaseURL,
+		p.EnvKey,
+		redactedFormatValue,
+		redactedFormatValue,
+		redactedFormatValue,
+		redactedFormatValue,
+		redactedFormatValue,
+	)
+}
+
 type APIProvider struct {
 	Name              string
 	BaseURL           string
@@ -417,6 +453,17 @@ type APIProvider struct {
 	// IncludeInternalMetadata mirrors the provider definition's runtime-only grant
 	// (Rust `ModelProvider::include_internal_metadata`).
 	IncludeInternalMetadata bool
+}
+
+// Format redacts query, header, and command-auth credentials from diagnostics.
+func (p APIProvider) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "model.APIProvider{Name:%q, BaseURL:%q, QueryParams:%s, Headers:%s, Auth:%s}",
+		p.Name,
+		p.BaseURL,
+		redactedFormatValue,
+		redactedFormatValue,
+		redactedFormatValue,
+	)
 }
 
 func (p *ProviderInfo) Validate() error {

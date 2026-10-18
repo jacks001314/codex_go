@@ -453,6 +453,12 @@ type ChatGPTAuthTokensRefreshResponse struct {
 	ChatGPTPlanType  *string `json:"chatgptPlanType"`
 }
 
+// Format redacts the refreshed access token from diagnostic output.
+func (r ChatGPTAuthTokensRefreshResponse) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, "auth.ChatGPTAuthTokensRefreshResponse{AccessToken:<redacted>, ChatGPTAccountID:%q, ChatGPTPlanType:%v}",
+		r.ChatGPTAccountID, r.ChatGPTPlanType)
+}
+
 func (r *ChatGPTAuthTokensRefreshResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		AccessToken      string  `json:"accessToken"`
