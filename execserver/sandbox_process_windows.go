@@ -30,11 +30,11 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	// Rust deserializes windows_sandbox_level as a kebab-case enum, so an
 	// unrecognized level is an invalid-params error rather than a silent
 	// fallback; "mxc" then has its own launch restrictions (Rust #45176).
-	sandboxLevel, err := parseWindowsSandboxLevelValue(sandboxContext.WindowsSandboxLevel)
+	selection, err := selectWindowsSandboxForExecutor(sandboxContext.WindowsSandboxLevel, params.CWD)
 	if err != nil {
 		return nil, true, requestError(-32602, "invalid sandbox context: "+err.Error())
 	}
-	if sandboxLevel == windowsSandboxLevelMxc {
+	if selection == WindowsSandboxSelectionMXC {
 		if params.TTY || params.Arg0 != nil {
 			return nil, true, requestError(-32602, "MXC currently supports ordinary pipe launches only")
 		}
@@ -48,7 +48,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	if !hasJSONValue(sandboxContext.Permissions) {
 		return nil, true, requestError(-32602, "invalid sandbox context: permissions are required")
 	}
-	if params.EnforceManagedNetwork && sandboxLevel != windowsSandboxLevelElevated {
+	if params.EnforceManagedNetwork && selection != WindowsSandboxSelectionElevated {
 		return nil, true, fmt.Errorf("managed networking requires the elevated Windows sandbox backend")
 	}
 	if err := sandboxContext.WindowsSandboxProxySettingsMode.Validate(); err != nil {
@@ -84,7 +84,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		workspaceRoots = []string{cwd}
 	}
 	level := windowsunified.WindowsSandboxLevelLegacy
-	if sandboxLevel == windowsSandboxLevelElevated {
+	if selection == WindowsSandboxSelectionElevated {
 		level = windowsunified.WindowsSandboxLevelElevated
 	}
 	// Rust #49098: a remote controller cannot resolve a sandbox-compatible
@@ -92,7 +92,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	// fallback for the elevated/MXC Windows sandbox backends.
 	command := append([]string(nil), params.Argv...)
 	if len(command) > 0 {
-		command[0] = windowsSandboxPowerShellProgram(command[0], sandboxLevel)
+		command[0] = windowsSandboxPowerShellProgram(command[0], string(selection))
 	}
 	session, err := windowsunified.SpawnWindowsSandboxLiveSessionForLevel(&windowsunified.WindowsSandboxSessionRequest{
 		Capture: windowssandbox.CaptureRequest{

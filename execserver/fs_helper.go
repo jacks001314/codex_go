@@ -441,13 +441,17 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	if runtime.GOOS != "windows" {
 		return plan.Command, env, nil
 	}
-	level, err := windowssandbox.ParseWindowsSandboxLevel(ctx.WindowsSandboxLevel)
+	selection, err := selectWindowsSandboxForExecutor(ctx.WindowsSandboxLevel, cwd)
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
-	if level == windowssandbox.WindowsSandboxLevelDisabled {
+	if selection == WindowsSandboxSelectionMXC {
+		return nil, nil, requestError(-32602, "failed to prepare fs sandbox: native MXC is unavailable on this executor")
+	}
+	if selection == WindowsSandboxSelectionDisabled {
 		return helperCommand, env, nil
 	}
+	level := selection.restrictedTokenLevel()
 	args, err := windowssandbox.CreateWindowsSandboxCommandArgsForPermissionProfile(windowssandbox.WindowsSandboxCommandArgsRequest{
 		Command:                          helperCommand,
 		CommandCWD:                       cwd,

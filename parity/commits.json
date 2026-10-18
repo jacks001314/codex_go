@@ -13781,9 +13781,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 673 (partial): the windowsSandboxLevel wire field preserves disabled/restricted-token/elevated/mxc, and process launch explicitly handles MXC restrictions and rejects native MXC when no runner exists. Remaining: process and filesystem helpers parse the level independently instead of sharing WindowsSandboxSelection/select_sandbox; MXC FS-helper diagnostics differ, and capability discovery/skill reads do not share the typed selection. Tests: go test ./execserver -run 'WindowsMXC|SandboxOverride|WindowsSandboxLevel' -count=1"
+        "Round 685 (implementation): WindowsSandboxSelection separates disabled/restricted-token/elevated/MXC from the compatibility windowsSandboxLevel wire field. Process launch and filesystem helpers share selectWindowsSandboxForExecutor; MXC is a backend selection and filesystem helpers report the native-unavailable diagnostic. Non-Windows path conventions disable Windows sandbox selection, so capability discovery and skill reads share the same choice through their sandbox contexts. Tests: go test ./execserver -run 'SelectWindowsSandbox|RejectsMXC|UnknownWindowsSandbox|FSOperation' -count=1; go build ./..."
       ]
     },
     {
