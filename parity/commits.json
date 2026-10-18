@@ -1524,9 +1524,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 759: Go has provisional first-message thread titles and the bounded structured title helpers/schema/runtime added for /rename suggestions (#40495), but does not yet launch automatic background title generation after the first turn, apply it only while the provisional name is current, or suppress automatic rename notifications. These are the remaining #40492 pieces."
+        "Round 760: completed automatic titles. The first user_message completion sets an immediate provisional 36-rune title, persists it through the thread rename hook, and launches one bounded structured title request without tools/MCP. The generated title is applied only for the same active thread while the provisional name is still current; manual renames clear the pending automatic state and win the race. Automatic updates update state silently without transcript rename cells. Name/provider/cwd/permission and gpt-5.6-luna low-effort options reuse the /rename structured runtime. Tests: go test ./tui/tea -run 'AutomaticThreadTitle|ProvisionalThreadTitle' -count=1; go test ./tui/tea -count=1; go test ./app -run 'AutoThreadTitle|RemoteTUI|InteractiveRename' -count=1; go vet ./tui/tea ./app"
       ]
     },
     {

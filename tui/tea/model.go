@@ -2345,6 +2345,9 @@ type Model struct {
 	availableRateLimitResetCredits   *int64
 	nextUsageRequestID               uint64
 	nextThreadNameSuggestionID       uint64
+	automaticThreadTitlePending      bool
+	automaticThreadTitleThreadID     string
+	automaticThreadTitleExpected     string
 	pendingTokenActivityRequestID    uint64
 	pendingRateLimitResetRequestID   uint64
 	pendingRateLimitResetForPopup    bool
@@ -6282,6 +6285,10 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		if len(m.pendingSteers) > 0 && m.pendingSteers[0].ID == strings.TrimSpace(item.ID) {
 			m.commitPendingSteers(1)
 		}
+		// Rust #40492: an unnamed thread gets a provisional title from the first
+		// user message and starts one background title request.
+		userText, _ := idecontext.ExtractPromptRequestWithOffset(firstNonEmpty(item.Text, item.Message))
+		countdownCmd = bubbletea.Batch(countdownCmd, m.startAutomaticThreadTitle(userText))
 	case "agent_message":
 		// Rust #43055: an assistant response returns /copy to response copying.
 		m.statusCopyTargets = nil

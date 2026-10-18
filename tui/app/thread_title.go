@@ -29,6 +29,21 @@ type generatedThreadTitle struct {
 	Title string `json:"title"`
 }
 
+// ProvisionalThreadTitle derives the immediate first-message title: no slash
+// commands, normalized whitespace, bounded to the display limit.
+func ProvisionalThreadTitle(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" || strings.HasPrefix(prompt, "/") {
+		return ""
+	}
+	title := strings.Join(strings.Fields(prompt), " ")
+	runes := []rune(title)
+	if len(runes) > ThreadTitleMaxChars {
+		runes = runes[:ThreadTitleMaxChars]
+	}
+	return string(runes)
+}
+
 // ThreadTitleOutputSchema constrains the temporary structured title turn.
 func ThreadTitleOutputSchema() map[string]any {
 	return map[string]any{

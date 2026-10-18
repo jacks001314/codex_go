@@ -15,6 +15,7 @@ func (m *Model) resetThreadScopedState() {
 	if m == nil {
 		return
 	}
+	m.resetAutomaticThreadTitle()
 	// Rust #52184: navigation hides the current side conversation but keeps its
 	// listener, snapshots, and pending state so /side can reopen it later.
 	m.deactivateSideConversation()

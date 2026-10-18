@@ -317,6 +317,7 @@ func (m *Model) renameCurrentThread(name string) bubbletea.Cmd {
 		return nil
 	}
 	threadID := strings.TrimSpace(m.State.ThreadID)
+	m.resetAutomaticThreadTitle()
 	if threadID == "" {
 		m.State.SetThreadName(name)
 		m.pendingThreadName = true

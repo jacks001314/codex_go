@@ -15,10 +15,13 @@ const threadTitleSuggestionModel = "gpt-5.6-luna"
 // ThreadNameSuggestedMsg reports the result of a /rename title suggestion
 // (Rust #40495).
 type ThreadNameSuggestedMsg struct {
-	ThreadID   string
-	RequestID  uint64
-	Suggestion string
-	OK         bool
+	ThreadID      string
+	RequestID     uint64
+	Suggestion    string
+	OK            bool
+	Automatic     bool
+	ExpectedTitle string
+	RenameFailed  bool
 }
 
 // nextThreadNameSuggestionRequest returns a stable correlation id for the
@@ -122,6 +125,9 @@ func (m *Model) threadTitleMessages() []tuiapp.ThreadTitleMessage {
 func (m *Model) applyThreadNameSuggested(message ThreadNameSuggestedMsg) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
+	}
+	if message.Automatic {
+		return m.applyAutomaticThreadTitle(message)
 	}
 	if strings.TrimSpace(message.ThreadID) != strings.TrimSpace(m.State.ThreadID) {
 		return nil
