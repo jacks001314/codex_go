@@ -454,9 +454,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture (Round 717 audit): the Rust change is an Arc/copy-on-write allocation optimization for cloned ClaudeHooksEngine views; it has no wire or behavioral delta. Go's hook entries are cloned with deep-copied slices (TestCloneEntryPreservesRequiredLoadErrors), so cloned views already cannot mutate each other and there is no executor-hook Arc view to optimize."
       ]
     },
     {
@@ -30008,9 +30008,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: RegistrationResult"
+        "N/A by architecture (Round 716 audit): this changes codex-rs/windows-sandbox-service, a managed MSIX runtime package registration service that has no Go port. Go's Windows sandbox setup uses the standalone elevated helper/firewall/token paths, not Windows.Management.Deployment registration results, so RegistrationResult, AsyncStatus, and deployment activity-id diagnostics have no carrier."
       ]
     },
     {
