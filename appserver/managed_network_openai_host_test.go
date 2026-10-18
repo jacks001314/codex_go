@@ -84,3 +84,24 @@ func TestManagedNetworkConfiguredOpenAIHostRequiresEnabledProxy(t *testing.T) {
 		t.Fatalf("disabled hosted proxy set the configured OpenAI host = %q", got)
 	}
 }
+
+// Rust build_network_proxy_spec enables the built-in credential broker when
+// features.credential_masking is on, even if the network table leaves
+// credential_broker false. Enabling also turns on MITM for the local proxy.
+func TestManagedNetworkCredentialMaskingEnablesBrokerLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	router := &RuntimeRouter{services: RuntimeServices{
+		Config:     config.NewConfigService(home),
+		DefaultCWD: cwd,
+	}}
+	values := managedNetworkOpenAIHostValues(nil)
+	values["features"].(map[string]any)["credential_masking"] = true
+	proxyConfig, shouldStart, err := router.buildManagedNetworkProxyConfigForCWD(values, cwd)
+	if err != nil || !shouldStart {
+		t.Fatalf("build error = %v shouldStart = %v", err, shouldStart)
+	}
+	if !proxyConfig.Network.CredentialBroker || !proxyConfig.Network.MITM {
+		t.Fatalf("credential masking network settings = %#v", proxyConfig.Network)
+	}
+}

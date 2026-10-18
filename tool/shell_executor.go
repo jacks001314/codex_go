@@ -99,6 +99,8 @@ type ShellExecutorOptions struct {
 	// model switch while a background process runs cannot retarget the command's
 	// analytics attribution. Nil leaves the attribution absent.
 	ModelContext func() (modelSlug string, reasoningEffort string)
+	// WarningSink receives best-effort user-visible launch warnings.
+	WarningSink func(string)
 	// OneShot marks an executor as completion-only (Rust #41393): used when
 	// resumable unified execution is disabled, it runs an `exec_command` to
 	// completion (no PTY/session, no write_stdin), exposes a `timeout_ms`
@@ -137,6 +139,7 @@ type ShellExecutor struct {
 	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) SnapshotProviderResult
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	modelContext             func() (modelSlug string, reasoningEffort string)
+	warningSink              func(string)
 	oneShot                  bool
 	allowTTY                 bool
 }
@@ -212,6 +215,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.snapshotProvider = options.SnapshotProvider
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
 	executor.modelContext = options.ModelContext
+	executor.warningSink = options.WarningSink
 	executor.oneShot = options.OneShot
 	if options.AllowTTY != nil {
 		executor.allowTTY = *options.AllowTTY
@@ -648,6 +652,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	validation.Env = injectSessionIDEnv(validation.Env, e.sessionID)
 	// Rust #42395: expose the running harness version to shell commands.
 	validation.Env = injectCodexVersionEnv(validation.Env, e.codexVersion)
+	validation.WarningSink = e.warningSink
 	req, err := BuildShellRequest(args, sessionShell, validation)
 	if err != nil {
 		return nil, RespondToModel(err.Error())

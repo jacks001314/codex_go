@@ -101,3 +101,47 @@ func TestRemoteNetworkProxyConfigRejectsUnsupportedRustFeatures(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteCredentialMaskingCarriesOnlyBrokerActivationLikeRust(t *testing.T) {
+	settings := network.DefaultProxySettings()
+	settings.Enabled = true
+	settings.SetCredentialBrokerEnabled(true)
+	settings.CredentialBrokerOpenAIHost = "gateway.example"
+	remote, err := RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(network.ProxyConfig{Network: settings}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !remote.CredentialMasking || !remote.Enabled {
+		t.Fatalf("remote config = %#v", remote)
+	}
+	data, err := json.Marshal(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"credentialMasking":true`) || strings.Contains(string(data), "gateway.example") {
+		t.Fatalf("remote wire = %s", data)
+	}
+	roundTrip, err := remote.ProxyConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !roundTrip.Network.CredentialBroker || !roundTrip.Network.MITM {
+		t.Fatalf("round-trip broker settings = %#v", roundTrip.Network)
+	}
+	if _, err := RemoteNetworkProxyConfigFromProxyConfig(network.ProxyConfig{Network: settings}); err == nil {
+		t.Fatal("legacy conversion unexpectedly accepted credential brokerage")
+	}
+
+	// Configured providers are not transported, so the same launch falls back
+	// to an unmasked remote proxy instead of failing the command.
+	settings.CredentialProviders = map[string]network.CredentialProviderConfig{
+		"vendor": {Env: []string{"VENDOR_TOKEN"}},
+	}
+	fallback, err := RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(network.ProxyConfig{Network: settings}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.CredentialMasking {
+		t.Fatalf("configured providers were transported as masking: %#v", fallback)
+	}
+}

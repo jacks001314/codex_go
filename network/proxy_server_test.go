@@ -475,7 +475,7 @@ func TestProxyServerBlockedRequestObserverSnapshotAndDrainLikeRust(t *testing.T)
 	server := &ProxyServer{blocked: ProxyBlockedRequestObserverFunc(func(_ context.Context, request ProxyBlockedRequest) {
 		observed <- request
 	})}
-	policy, err := buildProxyRuntimePolicy(settings)
+	policy, err := buildProxyRuntimePolicy(settings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestProxyServerBlockedRequestBufferKeepsRustWindow(t *testing.T) {
 	settings := DefaultProxySettings()
 	settings.Enabled = false
 	server := &ProxyServer{}
-	policy, err := buildProxyRuntimePolicy(settings)
+	policy, err := buildProxyRuntimePolicy(settings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

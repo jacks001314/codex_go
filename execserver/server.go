@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -245,6 +246,7 @@ type Server struct {
 	environmentConfigReader EnvironmentConfigReader
 	v2Discovery             *v2DiscoveryManager
 	shellSnapshots          *shellSnapshotManager
+	credentialBrokers       network.RemoteCredentialBrokerCache
 }
 
 // SetPreferMXC records the startup CLI sandbox preference
@@ -491,6 +493,7 @@ type EnvironmentInfo struct {
 
 type EnvironmentCapabilities struct {
 	NetworkProxyLaunch         bool `json:"networkProxyLaunch"`
+	CredentialMasking          bool `json:"credentialMasking,omitempty"`
 	CapabilityDiscoverySandbox bool `json:"capabilityDiscoverySandbox"`
 	CapabilityDiscoveryV2      bool `json:"capabilityDiscoveryV2"`
 	// ShellSnapshotV2 advertises process/start.shellSnapshot support.
@@ -2167,6 +2170,12 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 	// remote controller launch) cannot enable it.
 	proxyConfig.PrivateIPsViaUpstream = s.proxyPrivateIPsViaUpstreamValue()
 	proxyConfig.EnvironmentID = stringValue(launch.EnvironmentID)
+	proxyConfig.CredentialBroker = s.credentialBrokers.BrokerIfEnabled(
+		proxyConfig.EnvironmentID,
+		launch.AuditMetadata.ConversationID,
+		proxyConfig.Network,
+		preparedParams.Env,
+	)
 	proxyConfig.AuditMetadata = network.ProxyAuditMetadata{
 		ConversationID: launch.AuditMetadata.ConversationID,
 		AppVersion:     launch.AuditMetadata.AppVersion,
@@ -2259,6 +2268,18 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 		return nil, nil, nil, requestError(-32603, "failed to start executor network proxy: "+err.Error())
 	}
 	preparedParams.Env = prepared.EnvSnapshot()
+	if launch.Proxy.CredentialMasking {
+		if credentialMaskingSupportedShell(params, preparedParams.Env) {
+			if err := prepared.HandleUnmaskedCredentials(preparedParams.Env, network.CredentialMaskingFailureWarn); err != nil {
+				_ = prepared.Close()
+				policyCancel()
+				return nil, nil, nil, requestError(-32602, err.Error())
+			}
+		} else {
+			slog.Warn("credential masking is unavailable for this shell startup; preserving shell profiles and snapshots and running with unmasked credentials")
+			prepared.RestoreUnbrokeredEnvironment(preparedParams.Env)
+		}
+	}
 	sandboxContext := prepared.SandboxContextSnapshot()
 	preparedParams.ManagedNetwork = &ManagedNetworkSandboxContext{
 		LoopbackPorts:     append([]uint16(nil), sandboxContext.LoopbackPorts...),
@@ -2266,6 +2287,21 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 	}
 	preparedParams.EnforceManagedNetwork = true
 	return &preparedParams, prepared, policyCancel, nil
+}
+
+func credentialMaskingSupportedShell(params *ExecParams, env map[string]string) bool {
+	if params == nil || params.Arg0 != nil || params.ShellSnapshot != nil {
+		return false
+	}
+	if len(params.Argv) != 3 || filepath.Base(strings.TrimSpace(params.Argv[0])) != "bash" || params.Argv[1] != "-c" {
+		return false
+	}
+	for _, key := range []string{"BASH_ENV", "ENV", "SSH_CLIENT", "SSH2_CLIENT"} {
+		if _, ok := env[key]; ok {
+			return false
+		}
+	}
+	return true
 }
 
 func stripManagedProxyEnv(env map[string]string) {
@@ -3711,6 +3747,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		TemporaryDirectories: localTemporaryDirectories(cwdPath),
 		Capabilities: EnvironmentCapabilities{
 			NetworkProxyLaunch:         true,
+			CredentialMasking:          (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && detected.ShellType == shell.ShellBash,
 			CapabilityDiscoverySandbox: true,
 			CapabilityDiscoveryV2:      true,
 			ShellSnapshotV2:            runtime.GOOS != "windows",

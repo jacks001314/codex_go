@@ -694,6 +694,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 			m.releaseProcessID(processID)
 			return nil, errors.New("selected exec-server does not support executor-local network proxy launches")
 		}
+		warnRemoteCredentialMaskingUnavailable(req, req.RemoteNetworkProxy.Proxy.CredentialMasking, environmentInfo.Capabilities.CredentialMasking)
 	}
 	// Rust #49467 (`Feature::LoginShellPackagePath`): login startup can reset
 	// PATH, so a POSIX login shell re-derives its argv with the directories the
@@ -861,6 +862,32 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	}
 	yield := clampUnifiedExecInitialYield(req.YieldTimeMS)
 	return m.collect(ctx, process, yield, req.MaxOutputTokens)
+}
+
+func warnRemoteCredentialMaskingUnavailable(req *ShellRequest, requested bool, executorSupports bool) {
+	if req == nil || req.WarningSink == nil || !requested {
+		return
+	}
+	environmentID := strings.TrimSpace(req.UnifiedExecEnvironmentID)
+	if environmentID == "" {
+		environmentID = execserver.LocalEnvironmentID
+	}
+	var message string
+	switch {
+	case !executorSupports:
+		message = fmt.Sprintf("Credential masking is unavailable on environment `%s` because its exec-server does not support it. This command will run with unmasked credentials.", environmentID)
+	case req.Shell.Shell == nil || req.Shell.Shell.Type != ShellBash:
+		shellName := ""
+		if req.Shell.Shell != nil {
+			shellName = string(req.Shell.Shell.Type)
+		}
+		message = fmt.Sprintf("Credential masking is unavailable for shell `%s` on environment `%s`. This command will run with unmasked credentials.", shellName, environmentID)
+	case req.Shell.UseLoginShell || req.RemoteShellSnapshot != nil:
+		message = fmt.Sprintf("Credential masking is unavailable for this shell startup on environment `%s`. This command will run with unmasked credentials.", environmentID)
+	default:
+		return
+	}
+	req.WarningSink(message)
 }
 
 // unifiedExecWireMetadata carries the originating launch labels to a remote

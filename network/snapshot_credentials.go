@@ -83,3 +83,22 @@ func RestoreSnapshotCredentials(env map[string]string, pairs []CredentialMaskPai
 	delete(env, CredentialBrokerActiveEnvKey)
 	delete(env, BrokeredCredentialsEnvKey)
 }
+
+// HandleUnmaskedCredentials checks a prepared child environment for real
+// credentials the broker could not virtualize.
+func (p *PreparedProxyManagedNetwork) HandleUnmaskedCredentials(env map[string]string, mode CredentialMaskingFailureMode) error {
+	if p == nil || p.server == nil {
+		return nil
+	}
+	return p.server.runtimePolicy().broker.HandleUnmaskedCredentials(env, mode)
+}
+
+// RestoreUnbrokeredEnvironment restores the executor's pre-virtualization
+// environment and removes broker activation for this child only. Existing
+// placeholders issued to earlier commands remain valid on the proxy.
+func (p *PreparedProxyManagedNetwork) RestoreUnbrokeredEnvironment(env map[string]string) {
+	if p == nil || p.server == nil || env == nil {
+		return
+	}
+	p.server.runtimePolicy().broker.RestoreAndDisableChildEnv(env)
+}

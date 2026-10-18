@@ -176,7 +176,10 @@ func (d *ExecServerNetworkPolicyDecision) UnmarshalJSON(data []byte) error {
 }
 
 type RemoteNetworkProxyConfig struct {
-	Enabled                        bool              `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// CredentialMasking carries only built-in broker activation. Credentials,
+	// destination hints, custom providers, CAs, and MITM hooks stay local.
+	CredentialMasking              bool              `json:"credentialMasking,omitempty"`
 	EnableSOCKS5                   bool              `json:"enableSocks5"`
 	EnableSOCKS5UDP                bool              `json:"enableSocks5Udp"`
 	AllowUpstreamProxy             bool              `json:"allowUpstreamProxy"`
@@ -188,8 +191,29 @@ type RemoteNetworkProxyConfig struct {
 }
 
 func RemoteNetworkProxyConfigFromProxyConfig(config network.ProxyConfig) (RemoteNetworkProxyConfig, error) {
+	return RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(config, false)
+}
+
+// RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking builds the
+// executor-visible proxy config. Credential masking may replace local broker
+// setup with a boolean activation when the broker is built-in and no
+// unsupported local-only features are present.
+func RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(config network.ProxyConfig, credentialMasking bool) (RemoteNetworkProxyConfig, error) {
 	settings := config.Network
-	if settings.Enabled && (settings.MITM || settings.CredentialBroker || settings.DangerouslyAllowPlaintextCredentialInjection || len(settings.MITMHooks) > 0) {
+	requestedMasking := credentialMasking
+	credentialMasking = credentialMasking &&
+		settings.Enabled &&
+		settings.CredentialBroker &&
+		len(settings.CredentialProviders) == 0
+	brokerOnlyMITM := requestedMasking &&
+		settings.CredentialBroker &&
+		!settings.DangerouslyAllowPlaintextCredentialInjection &&
+		len(settings.MITMHooks) == 0
+	if settings.Enabled && (settings.DangerouslyAllowPlaintextCredentialInjection || len(settings.MITMHooks) > 0 ||
+		(settings.MITM && !credentialMasking && !brokerOnlyMITM)) {
+		return RemoteNetworkProxyConfig{}, errors.New("remote exec-server network proxy does not support MITM, credential injection, or MITM hooks")
+	}
+	if settings.Enabled && settings.CredentialBroker && !credentialMasking && !settings.MITM {
 		return RemoteNetworkProxyConfig{}, errors.New("remote exec-server network proxy does not support MITM, credential injection, or MITM hooks")
 	}
 	domains := map[string]string(nil)
@@ -211,6 +235,7 @@ func RemoteNetworkProxyConfigFromProxyConfig(config network.ProxyConfig) (Remote
 	allowAllUnixSockets := settings.DangerouslyAllowAllUnixSockets != nil && *settings.DangerouslyAllowAllUnixSockets
 	return RemoteNetworkProxyConfig{
 		Enabled:                        settings.Enabled,
+		CredentialMasking:              credentialMasking,
 		EnableSOCKS5:                   settings.EnableSocks5,
 		EnableSOCKS5UDP:                settings.EnableSocks5UDP,
 		AllowUpstreamProxy:             settings.AllowUpstreamProxy,
@@ -225,6 +250,7 @@ func RemoteNetworkProxyConfigFromProxyConfig(config network.ProxyConfig) (Remote
 func (c RemoteNetworkProxyConfig) ProxyConfig() (network.ProxyConfig, error) {
 	settings := network.DefaultProxySettings()
 	settings.Enabled = c.Enabled
+	settings.SetCredentialBrokerEnabled(c.CredentialMasking)
 	settings.EnableSocks5 = c.EnableSOCKS5
 	settings.EnableSocks5UDP = c.EnableSOCKS5UDP
 	settings.AllowUpstreamProxy = c.AllowUpstreamProxy

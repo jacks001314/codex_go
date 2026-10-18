@@ -117,7 +117,7 @@ func cloneProxyEnv(values map[string]string) map[string]string {
 func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig ProxyRuntimeConfig, baseEnv map[string]string) (*ProxyServer, error) {
 	settings := config.Network
 	ctx, cancel := context.WithCancel(parent)
-	policy, err := buildProxyRuntimePolicy(settings)
+	policy, err := buildProxyRuntimePolicy(settings, config.CredentialBroker)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -271,7 +271,7 @@ func (s *ProxyServer) ReloadConfig(config ProxyConfig) error {
 	if settings.MITM && s.mitm == nil {
 		return fmt.Errorf("enabling MITM requires restarting the network proxy")
 	}
-	policy, err := buildProxyRuntimePolicy(settings)
+	policy, err := buildProxyRuntimePolicy(settings, s.runtimePolicy().broker)
 	if err != nil {
 		return err
 	}
@@ -279,7 +279,7 @@ func (s *ProxyServer) ReloadConfig(config ProxyConfig) error {
 	return nil
 }
 
-func buildProxyRuntimePolicy(settings ProxySettings) (*proxyRuntimePolicy, error) {
+func buildProxyRuntimePolicy(settings ProxySettings, broker *ProxyCredentialBroker) (*proxyRuntimePolicy, error) {
 	hooks, err := CompileProxyMITMHooks(ProxyConfig{Network: settings})
 	if err != nil {
 		return nil, err
@@ -295,16 +295,19 @@ func buildProxyRuntimePolicy(settings ProxySettings) (*proxyRuntimePolicy, error
 	// A disabled proxy must not activate brokerage even when the settings
 	// still carry credential_broker = true (Rust
 	// core/src/config/network_proxy_spec.rs:381-390).
+	if broker == nil || !CredentialBrokerEnabledForSettings(settings) {
+		broker = NewProxyCredentialBrokerWithOpenAIHost(
+			CredentialBrokerEnabledForSettings(settings),
+			ConfiguredCredentialProviders(settings.CredentialProviders),
+			settings.CredentialBrokerOpenAIHost,
+		)
+	}
 	return &proxyRuntimePolicy{
 		settings:     settings,
 		allowMatcher: allowMatcher,
 		denyMatcher:  denyMatcher,
 		mitmHooks:    hooks,
-		broker: NewProxyCredentialBrokerWithOpenAIHost(
-			CredentialBrokerEnabledForSettings(settings),
-			ConfiguredCredentialProviders(settings.CredentialProviders),
-			settings.CredentialBrokerOpenAIHost,
-		),
+		broker:       broker,
 	}, nil
 }
 

@@ -14708,7 +14708,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.Shell.ManagedNetworkResolver = func(environmentID string, remote bool) (*tool.ManagedNetworkResolution, error) {
 				if remote {
 					proxyConfig := managedNetwork.RemoteConfigSnapshot()
-					remoteConfig, err := execserver.RemoteNetworkProxyConfigFromProxyConfig(proxyConfig)
+					credentialMasking := cfg != nil && features.Enabled(cfg.FeatureSettings(), "credential_masking")
+					remoteConfig, err := execserver.RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(proxyConfig, credentialMasking)
 					if err != nil {
 						return nil, err
 					}
@@ -14771,6 +14772,15 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve
 		}
 		options.Shell.UnifiedExecEvents = r.runtimeUnifiedExecEventSink(threadID, strings.TrimSpace(turnID))
+		options.Shell.WarningSink = func(message string) {
+			if strings.TrimSpace(message) == "" {
+				return
+			}
+			r.notify(NotificationWarning, &WarningNotification{
+				ThreadID: stringPtrIfNotEmpty(threadID),
+				Message:  message,
+			})
+		}
 		// Rust #45505 traces each exec_command call; the executor opens the
 		// `unified_exec.exec_command` span itself so a call that runs outside the
 		// manager is traced too.

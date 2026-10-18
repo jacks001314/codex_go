@@ -135,6 +135,33 @@ func TestPrepareExecutorNetworkProxyWindowsNativeLaunchStripsControllerProxyLike
 
 func uint64PtrForExecServerTest(value uint64) *uint64 { return &value }
 
+func TestCredentialMaskingSupportedShellLikeRust(t *testing.T) {
+	argv := []string{"/bin/bash", "-c", "echo hi"}
+	if !credentialMaskingSupportedShell(&ExecParams{Argv: argv, Env: map[string]string{}}, map[string]string{}) {
+		t.Fatal("plain non-login bash command should support masking")
+	}
+	for _, testCase := range []struct {
+		name   string
+		params *ExecParams
+		env    map[string]string
+	}{
+		{name: "non bash", params: &ExecParams{Argv: []string{"/bin/zsh", "-c", "echo hi"}}},
+		{name: "login", params: &ExecParams{Argv: []string{"/bin/bash", "-lc", "echo hi"}}},
+		{name: "arg0", params: &ExecParams{Argv: argv, Arg0: stringPtrForExecServerTest("codex")}},
+		{name: "snapshot", params: &ExecParams{Argv: argv, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope"}}},
+		{name: "startup profile", params: &ExecParams{Argv: argv}, env: map[string]string{"BASH_ENV": "profile"}},
+		{name: "ssh startup", params: &ExecParams{Argv: argv}, env: map[string]string{"SSH_CLIENT": "remote"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if credentialMaskingSupportedShell(testCase.params, testCase.env) {
+				t.Fatal("unsupported shell startup accepted")
+			}
+		})
+	}
+}
+
+func stringPtrForExecServerTest(value string) *string { return &value }
+
 func TestExecServerFSHelperProcess(t *testing.T) {
 	found := false
 	for _, arg := range os.Args {

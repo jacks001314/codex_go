@@ -31675,9 +31675,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: CredentialMaskingFailureMode, RemoteCredentialBrokerCache, broker_if_enabled, handle_unmasked_credentials"
+        "Round 300 (implementation): exec-server advertises credential_masking on supported Linux/macOS Bash executors; remote proxy configs carry only broker activation and reconstruct MITM/broker locally. RemoteCredentialBrokerCache reuses mappings per environment + conversation + destination broker context + config. Unsupported shells, startup profiles, and snapshots restore the executor's unmasked credentials without clearing proxy env or other commands' mappings; configured providers fall back to unmasked transport. CredentialMaskingFailureMode implements warn/deny/error handling. Tests: go test ./network -count=1; go test ./execserver ./tool ./appserver -run 'Credential|RemoteNetworkProxy|Masking' -count=1; go build ./network ./execserver ./tool ./appserver; go vet ./network ./execserver ./tool ./appserver"
       ]
     },
     {

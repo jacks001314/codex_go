@@ -22,6 +22,9 @@ func (r *RuntimeRouter) buildManagedNetworkProxyConfigForCWD(values map[string]a
 	if err != nil {
 		return nil, false, err
 	}
+	if proxyConfig != nil && config.CredentialBrokerProjectStateForValues(values) == config.CredentialBrokerProjectEnabled {
+		proxyConfig.Network.SetCredentialBrokerEnabled(true)
+	}
 	hasRequirements := r != nil && r.services.ManagedNetworkRequirements != nil
 	if proxyConfig == nil {
 		settings := network.DefaultProxySettings()

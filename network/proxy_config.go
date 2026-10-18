@@ -95,6 +95,9 @@ type ProxyConfig struct {
 	// Unlike the settings table it is never serialized to remote executors and
 	// is never reloaded from the wire.
 	PrivateIPsViaUpstream bool
+	// CredentialBroker reuses an executor-session broker across proxy launches.
+	// It is internal-only and never serialized to or from remote configs.
+	CredentialBroker *ProxyCredentialBroker
 }
 
 type ProxySettings struct {
@@ -140,6 +143,18 @@ func DefaultProxySettings() ProxySettings {
 		MITM:               false,
 		CredentialBroker:   false,
 		Enabled:            false,
+	}
+}
+
+// SetCredentialBrokerEnabled turns credential brokerage on or off. Enabling
+// brokerage also turns on MITM, matching Rust NetworkProxyConfig.
+func (s *ProxySettings) SetCredentialBrokerEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.CredentialBroker = enabled
+	if enabled {
+		s.MITM = true
 	}
 }
 

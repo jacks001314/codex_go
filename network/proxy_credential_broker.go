@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/textproto"
 	"net/url"
@@ -37,6 +38,16 @@ type ProxyCredentialRecord struct {
 	RealValue   string
 	DummyValue  string
 }
+
+// CredentialMaskingFailureMode controls what happens when a prepared child
+// environment still contains recognized real credentials.
+type CredentialMaskingFailureMode string
+
+const (
+	CredentialMaskingFailureWarn  CredentialMaskingFailureMode = "warn"
+	CredentialMaskingFailureDeny  CredentialMaskingFailureMode = "deny"
+	CredentialMaskingFailureError CredentialMaskingFailureMode = "error"
+)
 
 type ProxyCredentialProvider struct {
 	ContextEnvVars []string
@@ -160,6 +171,128 @@ func (b *ProxyCredentialBroker) VirtualizeChildEnv(env map[string]string) {
 	}
 	b.virtualizeEmbeddedCredentials(env, resolvedEnv)
 	b.updateBrokeredCredentialsMarker(env)
+}
+
+// HandleUnmaskedCredentials reports recognized credentials that remain raw in
+// a prepared command environment. Warn keeps them, Deny removes the affected
+// variables, and Error rejects execution.
+func (b *ProxyCredentialBroker) HandleUnmaskedCredentials(env map[string]string, mode CredentialMaskingFailureMode) error {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	if !b.enabled {
+		b.mu.Unlock()
+		return errors.New("credential masking requires an enabled credential broker")
+	}
+	unmasked := make([]string, 0)
+	for key, value := range env {
+		if value == "" {
+			continue
+		}
+		leftover := b.isRawProviderCredentialKey(env, key, value)
+		for _, credential := range b.credentials {
+			if credential.RealValue != "" && strings.Contains(value, credential.RealValue) {
+				leftover = true
+				break
+			}
+		}
+		if !leftover {
+			leftover = b.containsKnownCredentialPattern(value)
+		}
+		if leftover {
+			unmasked = append(unmasked, key)
+		}
+	}
+	b.mu.Unlock()
+	if len(unmasked) == 0 {
+		return nil
+	}
+	switch mode {
+	case CredentialMaskingFailureDeny:
+		for _, key := range unmasked {
+			delete(env, key)
+		}
+		slog.Warn("credential masking could not protect some environment credentials; removed those variables before execution")
+	case CredentialMaskingFailureError:
+		return errors.New("credential masking left an unmasked credential in the command environment")
+	default:
+		slog.Warn("credential masking could not protect some environment credentials; continuing with those values unmasked")
+	}
+	return nil
+}
+
+func (b *ProxyCredentialBroker) isRawProviderCredentialKey(env map[string]string, key string, value string) bool {
+	if b.isDummyValue(value) {
+		return false
+	}
+	for _, provider := range b.providers {
+		if provider == nil {
+			continue
+		}
+		for _, source := range provider.Sources {
+			for _, envVar := range source.EnvVars {
+				if key == envVar && strings.TrimSpace(env[envVar]) != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// RestoreAndDisableChildEnv replaces brokered placeholders with their real
+// values for this child and removes broker activation. Mappings remain
+// registered for other commands in the same executor session.
+func (b *ProxyCredentialBroker) RestoreAndDisableChildEnv(env map[string]string) {
+	if b == nil || env == nil {
+		return
+	}
+	b.mu.Lock()
+	for key, value := range env {
+		for _, credential := range b.credentials {
+			if credential.DummyValue == "" || credential.RealValue == "" {
+				continue
+			}
+			if value == credential.DummyValue {
+				value = credential.RealValue
+			} else if strings.Contains(value, credential.DummyValue) {
+				value = strings.ReplaceAll(value, credential.DummyValue, credential.RealValue)
+			}
+		}
+		env[key] = value
+	}
+	b.mu.Unlock()
+	delete(env, CredentialBrokerActiveEnvKey)
+	delete(env, BrokeredCredentialsEnvKey)
+}
+
+// containsKnownCredentialPattern reports whether value contains a complete
+// token matching a configured provider pattern. Generated dummies do not count.
+func (b *ProxyCredentialBroker) containsKnownCredentialPattern(value string) bool {
+	for _, provider := range b.providers {
+		if provider == nil {
+			continue
+		}
+		for _, pattern := range provider.embeddedPatterns {
+			for _, indices := range pattern.matcher.FindAllStringIndex(value, -1) {
+				start, end := indices[0], indices[1]
+				if end-start < minEmbeddedCredentialLength && !pattern.distinctive {
+					continue
+				}
+				if start > 0 && isCredentialTokenByte(value[start-1]) {
+					continue
+				}
+				if end < len(value) && isCredentialTokenByte(value[end]) {
+					continue
+				}
+				if !b.isDummyValue(value[start:end]) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // pruneStaleCredentialBindings drops registrations whose provider now resolves a

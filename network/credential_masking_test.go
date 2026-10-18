@@ -15,7 +15,7 @@ func TestProxyRuntimePolicyKeepsBrokerInertWhenProxyDisabledLikeRust(t *testing.
 	if CredentialBrokerEnabledForSettings(settings) {
 		t.Fatal("CredentialBrokerEnabledForSettings must require an enabled proxy")
 	}
-	policy, err := buildProxyRuntimePolicy(settings)
+	policy, err := buildProxyRuntimePolicy(settings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestProxyRuntimePolicyKeepsBrokerInertWhenProxyDisabledLikeRust(t *testing.
 	if !CredentialBrokerEnabledForSettings(settings) {
 		t.Fatal("an enabled proxy with credential_broker must activate brokerage")
 	}
-	policy, err = buildProxyRuntimePolicy(settings)
+	policy, err = buildProxyRuntimePolicy(settings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

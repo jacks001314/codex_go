@@ -1303,7 +1303,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7cec3e110ce6dc5c14704dfa06f6db9c23a530fc	47079	Mask daemon socket paths exposed through ancestor bind mounts (#47079)	2026-09-21	sandbox	1	0	0.00	0	0	implementation_pending	daemon_socket_mask_paths
 7d0b91d5d686688893fecb356e27fdebaad66ee1	53709	Separate MCP sandbox policy from launcher metadata (#53709)	2026-10-13	mcp	6	6	1.00	0	0	complete	
 7d2c58e6e0811d326accdfe9913417a44893dd2f	43603	Recover missed tmux resize notifications in the TUI (#43603)	2026-09-07	tui	5	4	0.80	0	0	audit_pending	take_resize
-7d33d0d93f9c751281e0f5e8e9e76353eee87ea8	54309	Enable credential masking for remote exec-server commands (#54309)	2026-10-15	execserver	4	0	0.00	0	0	implementation_pending	CredentialMaskingFailureMode,RemoteCredentialBrokerCache,broker_if_enabled,handle_unmasked_credentials
+7d33d0d93f9c751281e0f5e8e9e76353eee87ea8	54309	Enable credential masking for remote exec-server commands (#54309)	2026-10-15	execserver	4	0	0.00	0	0	complete	CredentialMaskingFailureMode,RemoteCredentialBrokerCache,broker_if_enabled,handle_unmasked_credentials
 7d3e696c4c120d15ee51c5cfa10d74aa356c9e0f	50129	Preserve Windows environment variables for remote MCP servers (#50129)	2026-10-01	mcp	0	0		0	0	not_applicable	
 7d4c7a0767cdf81ff76c8fa5a05c22929568e3c6	49807	Enable API-key model discovery by default (#49807)	2026-09-30	tui	0	0		0	0	not_applicable	
 7d5f55bdad2d184019831f48a7c77d35af0fa1d5	50531	Persist realtime transcript tails before closure without inference (#50531)	2026-10-03	appserver	1	1	1.00	0	0	complete	

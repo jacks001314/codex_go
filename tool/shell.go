@@ -165,6 +165,10 @@ type ShellRequest struct {
 	RemoteShellSnapshot          *execserver.ShellSnapshotRequest
 	NetworkPolicyDecider         network.ProxyPolicyDecider
 	NetworkPolicyDecisionTimeout time.Duration
+	// WarningSink receives best-effort user-visible launch warnings. It is
+	// used when a requested protection such as credential masking is
+	// unavailable and execution falls back to unmasked credentials.
+	WarningSink func(string)
 }
 
 type UnifiedExecEnvironment struct {
@@ -310,6 +314,7 @@ type ShellValidationOptions struct {
 	RemoteNetworkProxy              *execserver.RemoteNetworkProxyLaunchConfig
 	NetworkPolicyDecider            network.ProxyPolicyDecider
 	NetworkPolicyDecisionTimeout    time.Duration
+	WarningSink                     func(string)
 }
 
 type ResolvedCommand struct {
@@ -675,6 +680,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		RemoteNetworkProxy:              opts.RemoteNetworkProxy,
 		NetworkPolicyDecider:            opts.NetworkPolicyDecider,
 		NetworkPolicyDecisionTimeout:    opts.NetworkPolicyDecisionTimeout,
+		WarningSink:                     opts.WarningSink,
 		LoginShellPackagePath:           opts.LoginShellPackagePath,
 		ApprovalRequired:                approvalRequired,
 		ApprovalReason:                  approvalReason,
