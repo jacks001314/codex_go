@@ -2905,9 +2905,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Responses streaming errors distinguish retryable rate_limit_exceeded/slow_down from terminal usage_limit_reached, preserve retry-after evidence, and report rate-limit snapshots on the matching 429s; appserver error info exposes the usage-limit classification. Tests: go test ./model -run 'UsageLimit|RateLimit' -count=1; go test ./appserver -run 'RateLimit|ErrorInfo' -count=1"
       ]
     },
     {
@@ -2977,9 +2977,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Responses Lite additional_tools and base-instruction prefix items derive deterministic at_/msg_ IDs from the thread and serialized payload; unchanged requests/resumes preserve IDs, while thread or payload changes produce new IDs. TestResponsesLitePrefixItemsUseStableDeterministicIDsLikeRust covers stability and sensitivity. Tests: go test ./model -run 'ResponsesLitePrefixItemsUseStable' -count=1"
       ]
     },
     {

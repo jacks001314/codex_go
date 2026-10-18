@@ -14,9 +14,7 @@ import (
 // configSchemaRustOnlyAllowlist lists Rust core/config.schema.json top-level
 // properties that Go intentionally does not recognize. Each entry carries the
 // reason so the list is auditable and can shrink as Go implements more keys.
-var configSchemaRustOnlyAllowlist = map[string]string{
-	"experimental_thread_store": "Rust experimental thread store; Go uses its own session store and app-server tests inject a store directly (Rust's ThreadStoreToml only has local/in_memory, and in_memory is schemars-skipped test plumbing)",
-}
+var configSchemaRustOnlyAllowlist = map[string]string{}
 
 // configSchemaGoOnlyAllowlist lists Go-recognized keys absent from Rust's
 // config.schema.json: legacy or Go-specific extensions.
@@ -66,12 +64,14 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	// Re-anchored to head 4eb4a65407 (round-90 pin advance):
 	// include_environment_context_time joins the Rust schema (count 102 -> 103);
 	// Go now recognizes it too (config.KnownTopLevelConfigFields + the
-	// IncludeEnvironmentContextTime accessor), so the Go count moves to 110.
+	// IncludeEnvironmentContextTime accessor). Go subsequently recognized
+	// another upstream top-level key, moving the pinned Go count to 111 while
+	// the Rust schema count stays 103.
 	if len(rustKeys) != 103 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 103 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 110 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 110 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 111 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 111 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)
