@@ -31026,9 +31026,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: local_selection, skills_load_input_for_environments"
+        "Equivalent implementation present: host MCP/plugin configuration is built from the local environment selection, so a remote primary executor cannot replace the host project config, cwd, or workspace roots. Host-relative stdio server cwd falls back to the local host path, while executor-specific servers retain their own environment carrier. Workspace-root changes participate in the MCP runtime fingerprint. Tests cover host project config selection, remote primary/local cwd separation, explicit vs relative server cwd, remote-only host fallback, and runtime fingerprint invalidation."
       ]
     },
     {
