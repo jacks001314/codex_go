@@ -1986,3 +1986,24 @@ green.
   transcript offset, while settings-write, model-selection, memory-reset, and
   keymap outcomes resume following so confirmations and errors are visible.
   Picker anchoring and failure visibility have regression coverage.
+- `#46938` is complete: Mermaid, math, tables, and lists have independent
+  rendering preferences, default to enabled, reload from live settings, and
+  preserve their Markdown source when disabled; coverage includes fence/table
+  source preservation and math gating.
+- `#46946` remains partial: Go tracks dynamic tool thread ids and refreshes an
+  open overview, but does not register fallback thread metadata from the tool
+  response or maintain removed-thread tombstones against delayed registrations.
+- `#47096` remains partial: Go paints status/activity and the working indicator
+  above the composer but leaves the footer help/reading-control row below it;
+  there is no shared hint row or short-terminal clipping order above the
+  composer yet.
+- `#41467` is complete: the model picker refreshes from the app server with
+  stale-request rejection, catalog constraints, in-place picker/reasoning
+  refresh, and fallback when the current model disappears.
+- `#42791` is not applicable: Go has no message-history metadata/log subsystem
+  whose app-server lifecycle response could disagree with local settings.
+- `#42847` is complete: whole-response copies provide Markdown plain text plus
+  rich HTML, and clipboard HTML now escapes raw HTML, keeps image alt text
+  without sources, and renders non-web link destinations as visible text.
+- `#47082` is not applicable: Go's live tea TUI has no shortcut-overlay mode;
+  the footer overlay helper is test-only.

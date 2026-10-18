@@ -4538,9 +4538,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/9; needs review: is_auto_model, model_popup_request_is_current, on_models_loaded, open_all_models_popup, set_available_models"
+        "Go refreshes the model picker asynchronously through onListModels/fetchModelsForPicker with a monotonically increasing request id; applyModelsResult ignores stale/failed/empty responses, applies server service-tier constraints, refreshes an open picker and reasoning submenu in place, preserves the highlighted row, and falls back when the selected model disappears. The chatwidget provides the all-models/reasoning hierarchy, and auto-model handling is covered by model_command_args tests. model popup tests cover stale refresh, catalog replacement, and service-tier requirements."
       ]
     },
     {
@@ -7589,9 +7589,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust threads LocalSettings through start/resume/fork so app-server lifecycle responses advertise metadata for the TUI's local message-history log. Go has no message-history log/metadata subsystem in its thread lifecycle; composer history/search is model-local and does not derive a log id or Codex-home history metadata from server configuration. There is no server-vs-local history metadata selection to correct."
       ]
     },
     {
@@ -7817,9 +7817,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: CopyFormat, copy_selection, copy_to_clipboard"
+        "Go copies whole assistant responses with the original Markdown as plain text plus a rendered HTML fragment through OnClipboardWriteRich, while code/blockquote/selection copies stay plain. RenderClipboardHTML unwraps Markdown fences, preserves headings/lists/tables/code/task lists through GFM, escapes raw HTML as text, reduces images to alt text without remote sources, and rewrites non-web link destinations to 'label (destination)'. Tests cover rich formatting, tables/code, raw HTML, images, and unsafe links; copy_rich_test verifies the Markdown plain-text payload alongside HTML and plain code-target copies."
       ]
     },
     {
@@ -17481,9 +17481,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: normalize_markdown_for_rendering"
+        "Go already has independent Mermaid, math, table, and list rendering preferences with all rich renderers enabled by default, live settings reload, and session propagation. The rendering pipeline gates Mermaid fences, math spans, table detection/fence unwrapping, and list markers separately; disabling a renderer preserves the Markdown source. TestMarkdownRenderingPreferences covers Mermaid and table source preservation, TestMathPreferenceGateLikeRust covers math, and rendering_settings/local_settings tests cover defaults and session updates. Rust's normalize_markdown_for_rendering helper has no direct Go symbol because the gating is applied at the corresponding pipeline stages."
       ]
     },
     {
@@ -17493,9 +17493,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's DynamicToolThreadStartedMsg records only a thread id plus task-tool capability and asks an open agents overview to refresh; it does not carry the created/forked/resumed thread metadata as a fallback when thread/started is missing. The overview also has hidden/row-removal state but no removed-thread tombstone set to block delayed tool registrations from restoring archived/deleted rows. Rust's fallback metadata registration and lifecycle removal precedence remain unimplemented."
       ]
     },
     {
@@ -17937,9 +17937,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust adds the configured toggle_voice binding to its live shortcut overlay. Go has a bottom_pane FooterShortcutOverlayLines helper used only by tests; the active tea TUI paints a single fixed footerHelpText and exposes no shortcut-overlay mode to show a Voice row in. Voice itself is enabled and keyed elsewhere, but there is no live shortcut-overlay surface to extend."
       ]
     },
     {
@@ -18045,9 +18045,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ComposerGap"
+        "Go has no dedicated owned-transcript hint row above the composer: status/activity and the working indicator are laid out above the composer, but the footer help/reading-control row is appended below it. There is no ComposerGap rendering/short-terminal clipping order, and usage notices that would share that row are not implemented. The specific 'hints immediately above the composer' ordering remains unported."
       ]
     },
     {
