@@ -11079,9 +11079,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: latest_disabled_plugin_ids"
+        "Equivalent implementation already present: thread settings replace disabled_plugin_ids on a supplied list, preserve it when omitted, and clear it with an empty list; turn admission snapshots the selection before runtime use, while resume/fork restore the persisted value. Tests cover replace/preserve/clear, JSON null versus [], notification snapshots, next-task activation, resume, fork, and clear persistence."
       ]
     },
     {
