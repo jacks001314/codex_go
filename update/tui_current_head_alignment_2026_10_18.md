@@ -1991,7 +1991,12 @@ green.
 - `#46929` is not applicable: Go does not emit Rust's
   "Error loading config.toml:" startup message, so there is no prefix to
   remove.
-- `#46931` remains partial: keymap-aware startup and turn tips exist, but the
+- `#46931` remains partial but the composer-gap layer is now implemented:
+  fullscreen idle/empty input selects a stable keymap-resolved catalog tip,
+  Markdown-renders it with OSC 8 links, requires a single fitting row, and
+  yields to usage notices, warnings, drafts, running turns, and interactions.
+  Remaining: startup-announcement preference/dismissal and Ctrl/Super-click
+  link hit testing.
   fullscreen composer-gap catalog rotation, announcement lifecycle, single-row
   fitting, and composer-gap link hit testing are not ported.
 - `#46910` is complete: settings pickers no longer disturb the reader's

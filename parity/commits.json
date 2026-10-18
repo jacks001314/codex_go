@@ -17471,7 +17471,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Go has keymap-aware startup/session tooltips and working/completion turn tips, but no stable fullscreen composer-gap catalog rotation: there is no ComposerTips selection state, single-row fit check, announcement-dismissal lifecycle, or composer-gap hyperlink hit testing. The expanded shared catalog and {key:context.action} substitution in the composer row remain unimplemented."
+        "Round 687 (progress): the fullscreen composer gap now selects a stable catalog tip seeded by session and user-turn count, uses ResolvedTooltips so {key:context.action} follows the current keymap, Markdown-renders the tip (preserving OSC 8 links), and accepts only a single rendered row that fits the available width. Tips yield to usage notices, retained warnings, drafts, running turns, popups/modals, selections, backtrack, backend banners, and non-following transcripts. Remaining: startup-announcement preference/dismissal lifecycle and Ctrl/Super-click composer-gap hyperlink hit testing."
       ]
     },
     {

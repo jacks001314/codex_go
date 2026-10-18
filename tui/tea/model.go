@@ -1770,6 +1770,9 @@ type Model struct {
 	// turnTips mirrors Rust's `App::turn_tips`: the foreground turn's tip
 	// cadence and exposure state (see turn_tips.go).
 	turnTips turnTips
+	// composerTips selects the stable, fitting fullscreen composer-gap tip
+	// (Rust #46931).
+	composerTips composerTipState
 	// warningsView hosts the retained-warnings viewer while it is open
 	// (#48205/#48206); warningsFlash shows a copy result in its footer.
 	warningsView  *bottompane.WarningsView
@@ -2794,6 +2797,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	// The initial refresh above ran before the terminal environment was
 	// installed. Re-render now so resumed image entries can reserve preview rows.
 	model.refreshTranscript()
+	model.composerTips = newComposerTipState(uint64(time.Now().UnixNano()))
 	return model
 }
 
@@ -4094,7 +4098,16 @@ func (m *Model) footerHelpLine() (string, bool) {
 			// Rust #48205/#48206: the passive hint row right-aligns the retained
 			// warning count (with its open-warnings shortcut) when it fits.
 			m.warningDisplay.SyncWarnings(m.retainedWarningCells())
-			if m.passiveWarningNoticeApplies() {
+			warningApplies := m.passiveWarningNoticeApplies()
+			if warningApplies && m.warningDisplay.WarningCount() > 0 {
+				footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
+			} else if tip, ok := m.composerTipLine(); ok {
+				// Rust #46931: a complete single-row catalog tip owns the
+				// fullscreen gap when no interaction, warning, or usage notice
+				// takes it.
+				footerLine = tip
+				footerAlreadyStyled = true
+			} else if warningApplies {
 				footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
 			}
 		}
