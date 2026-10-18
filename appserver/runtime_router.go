@@ -15181,6 +15181,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.CodeModeShowCellOverhead = cfg.CodeModeExperimentalShowCellOverhead()
 		options.CodeModeToolDescriptionFirst = cfg.CodeModeToolDescriptionFirst()
 		options.DirectOnlyToolNamespaces = cfg.CodeModeDirectOnlyToolNamespaces()
+		options.ExcludedToolNamespaces = cfg.CodeModeExcludedToolNamespaces()
 		options.CodeModeOnlyStrictThirdPartyTools = cfg.CodeModeOnlyStrictThirdPartyTools()
 		options.CodeModeToolInputSchemaMaxBytes = cfg.CodeModeToolInputSchemaMaxBytes()
 	}

@@ -80,3 +80,30 @@ func TestBuildToolRegistryAppliesDirectOnlyNamespacesLikeRust(t *testing.T) {
 		t.Fatalf("%q exposure = %q, want direct_model_only", candidate.Key(), spec.Exposure)
 	}
 }
+
+// Rust keeps excluded namespaces registered but removes them from the nested
+// Code Mode surface.
+func TestBuildToolRegistryAppliesExcludedNamespacesLikeRust(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.ExcludedToolNamespaces = []string{"functions"}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	executor, ok := registry.Lookup(tool.PlainName(tool.CodeModeExecToolName))
+	if !ok {
+		t.Fatal("code mode exec tool is not registered")
+	}
+	specProvider, ok := executor.(interface{ CodeModeToolSpecs() []tool.Spec })
+	if !ok {
+		t.Fatalf("code mode exec executor = %T, want CodeModeToolSpecs", executor)
+	}
+	for _, spec := range specProvider.CodeModeToolSpecs() {
+		if spec.Name.Namespace == "" {
+			t.Fatalf("excluded plain tool %q remained in the nested surface", spec.Name.Key())
+		}
+	}
+	if _, ok := registry.Spec(tool.PlainName("get_context_remaining")); !ok {
+		t.Fatal("plain tools must stay registered for direct access")
+	}
+}

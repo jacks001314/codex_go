@@ -22,3 +22,21 @@ func TestCodeModeDirectOnlyToolNamespacesLikeRust(t *testing.T) {
 		t.Fatalf("absent config = %#v, want nil", got)
 	}
 }
+
+// Rust also omits exact namespaces from the nested Code Mode surface while
+// keeping the tools registered for direct model access.
+func TestCodeModeExcludedToolNamespacesLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{
+		"features": map[string]any{
+			"code_mode": map[string]any{
+				"excluded_tool_namespaces": []any{" mcp__environment ", "", "functions"},
+			},
+		},
+	}}
+	if got, want := cfg.CodeModeExcludedToolNamespaces(), []string{"mcp__environment", "functions"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("CodeModeExcludedToolNamespaces() = %#v, want %#v", got, want)
+	}
+	if got := (&Config{}).CodeModeExcludedToolNamespaces(); got != nil {
+		t.Fatalf("absent config = %#v, want nil", got)
+	}
+}

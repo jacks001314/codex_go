@@ -108,6 +108,10 @@ type codeModeExecExecutor struct {
 	// toolDescriptionFirst mirrors features.code_mode_tool_description_first
 	// (#51690/#51704): order nested namespace descriptions after tool guidance.
 	toolDescriptionFirst bool
+	// excludedNamespaces mirrors features.code_mode.excluded_tool_namespaces:
+	// tools in these exact namespaces stay registered for direct model access
+	// but are omitted from the nested Code Mode surface.
+	excludedNamespaces map[string]struct{}
 	// windowID is the turn's conversation window identity (`{thread}:{n}`); it
 	// stamps a cell's retained origin when the cell starts.
 	windowID string
@@ -432,6 +436,26 @@ func (r *CodeModeRuntime) SetToolDescriptionFirst(enabled bool) {
 	}
 	r.exec.bindingMu.Lock()
 	r.exec.toolDescriptionFirst = enabled
+	r.exec.bindingMu.Unlock()
+}
+
+// SetExcludedToolNamespaces omits tools in the exact namespaces from the nested
+// Code Mode surface (Rust features.code_mode.excluded_tool_namespaces).
+func (r *CodeModeRuntime) SetExcludedToolNamespaces(namespaces []string) {
+	if r == nil || r.exec == nil {
+		return
+	}
+	excluded := make(map[string]struct{}, len(namespaces))
+	for _, namespace := range namespaces {
+		if namespace = strings.TrimSpace(namespace); namespace != "" {
+			excluded[namespace] = struct{}{}
+		}
+	}
+	if len(excluded) == 0 {
+		excluded = nil
+	}
+	r.exec.bindingMu.Lock()
+	r.exec.excludedNamespaces = excluded
 	r.exec.bindingMu.Unlock()
 }
 
@@ -916,6 +940,7 @@ func (e *codeModeExecExecutor) nestedToolsOrdered(orderDescriptions bool) []code
 	e.bindingMu.RLock()
 	indirectPrefixes := e.indirectPrefixes
 	toolDescriptionFirst := e.toolDescriptionFirst
+	excludedNamespaces := e.excludedNamespaces
 	e.bindingMu.RUnlock()
 	names := registry.Names()
 	out := make([]codeModeNestedTool, 0, len(names))
@@ -926,6 +951,9 @@ func (e *codeModeExecExecutor) nestedToolsOrdered(orderDescriptions bool) []code
 		}
 		spec, ok := registry.Spec(name)
 		if !ok || spec.Exposure == ExposureDirectModelOnly || spec.Exposure == ExposureDeferredModelOnly || (spec.Exposure == ExposureHidden && name.Key() != nestedCommandTool.Key()) {
+			continue
+		}
+		if _, excluded := excludedNamespaces[codeModeToolNamespace(name)]; excluded {
 			continue
 		}
 		globalName := codeModeIdentifier(ResponsesAPIName(name))
@@ -942,6 +970,15 @@ func (e *codeModeExecExecutor) nestedToolsOrdered(orderDescriptions bool) []code
 		out = append(out, codeModeNestedTool{globalName: globalName, name: name, spec: spec})
 	}
 	return out
+}
+
+// codeModeToolNamespace applies Rust's with_default_namespace: plain built-in
+// tools use the "functions" namespace.
+func codeModeToolNamespace(name ToolName) string {
+	if namespace := strings.TrimSpace(name.Namespace); namespace != "" {
+		return namespace
+	}
+	return "functions"
 }
 
 // OrderCodeModeToolDescriptions merges namespace guidance into each Code Mode

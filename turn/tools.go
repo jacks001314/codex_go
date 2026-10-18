@@ -160,6 +160,11 @@ type ToolRegistryOptions struct {
 	// only as direct model tools, bypassing deferral and the nested Code Mode
 	// surface.
 	DirectOnlyToolNamespaces []string
+	// ExcludedToolNamespaces mirrors Rust
+	// features.code_mode.excluded_tool_namespaces: matching namespaces stay
+	// registered for direct model access but are omitted from the nested Code
+	// Mode surface.
+	ExcludedToolNamespaces []string
 	// CodeModeOnlyStrictThirdPartyTools defers eligible MCP/app and dynamic
 	// tools in Code Mode Only (Rust #50687).
 	CodeModeOnlyStrictThirdPartyTools bool
@@ -777,6 +782,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			options.CodeModeRuntime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
 			options.CodeModeRuntime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
+			options.CodeModeRuntime.SetExcludedToolNamespaces(options.ExcludedToolNamespaces)
 			options.CodeModeRuntime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			// Rust #45409: a Code Mode cell retains the window it started in, so
 			// the nested MCP calls it issues keep reporting that window.
@@ -787,6 +793,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			runtime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			runtime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
 			runtime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
+			runtime.SetExcludedToolNamespaces(options.ExcludedToolNamespaces)
 			runtime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			execExecutor, waitExecutor = runtime.Executors(registry, codeModeCommandTool)
 		}

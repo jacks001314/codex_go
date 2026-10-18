@@ -2120,6 +2120,25 @@ func (c *Config) CodeModeDirectOnlyToolNamespaces() []string {
 	return stringListFromConfigValue(codeMode["direct_only_tool_namespaces"])
 }
 
+// CodeModeExcludedToolNamespaces returns the exact namespaces omitted from the
+// nested Code Mode tool surface (Rust
+// features.code_mode.excluded_tool_namespaces). The tools stay registered for
+// direct model access.
+func (c *Config) CodeModeExcludedToolNamespaces() []string {
+	if c == nil || c.Values == nil {
+		return nil
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	codeMode, ok := features["code_mode"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return stringListFromConfigValue(codeMode["excluded_tool_namespaces"])
+}
+
 // CodeModeOnlyStrictThirdPartyTools reports whether eligible MCP/app and
 // client-supplied dynamic tools stay deferred in Code Mode Only (Rust #50687).
 func (c *Config) CodeModeOnlyStrictThirdPartyTools() bool {
