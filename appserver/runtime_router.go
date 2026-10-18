@@ -410,6 +410,8 @@ type RuntimeRouter struct {
 	skillWarnings          map[string]map[string]struct{}
 	selectedSkillMu        sync.Mutex
 	selectedSkills         map[string]map[string]*runtimeSelectedSkillCatalog
+	skillTurnMetricsMu     sync.Mutex
+	skillTurnMetrics       map[string]*skillTurnMetricState
 	unifiedExecPersistMu   sync.Mutex
 	unifiedExecPendingMu   sync.Mutex
 	unifiedExecPending     map[string][]session.Item
@@ -888,6 +890,7 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 	if !r.threads.ClaimTerminal(notification.ThreadID, notification.Turn.ID) {
 		return false
 	}
+	r.finishSkillTurnMetrics(notification.ThreadID, notification.Turn.ID, notification.Turn.Status)
 	r.publishThreadReadAttention(notification)
 	r.requireRealtime().CompleteHandoff(notification.ThreadID)
 	r.notify(NotificationTurnCompleted, notification)

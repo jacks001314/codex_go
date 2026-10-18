@@ -52,6 +52,7 @@ type listedSkill struct {
 	Name         string              `json:"name"`
 	Description  string              `json:"description"`
 	MainResource string              `json:"main_resource"`
+	PluginID     string              `json:"-"`
 }
 
 type skillsListResponse struct {
@@ -97,6 +98,7 @@ type OrchestratorSkillMetadata struct {
 	Name         string
 	Description  string
 	MainResource string
+	PluginID     string
 }
 
 type OrchestratorSkillCatalog struct {
@@ -606,6 +608,7 @@ func orchestratorSkillMetadataFromResource(resource mcp.MCPResource) (Orchestrat
 		Name:         entry.Name,
 		Description:  entry.Description,
 		MainResource: entry.MainResource,
+		PluginID:     entry.PluginID,
 	}, true
 }
 
@@ -651,6 +654,7 @@ func listedSkillFromOrchestratorResource(resource mcp.MCPResource) (listedSkill,
 		Name:         name,
 		Description:  truncateCatalogSkillDescription(description),
 		MainResource: mainResource,
+		PluginID:     strings.TrimSpace(metaString(meta, "plugin_id")),
 	}, true
 }
 

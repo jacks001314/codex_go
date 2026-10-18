@@ -2603,9 +2603,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: ActiveSkillTurnMetrics, SkillTelemetry, SkillTurnMetrics, record_plugin, record_plugin_turn_usage"
+        "Round 503 (implementation): the private Rust contributors map to appserver skillTurnMetricState and RuntimeRouter lifecycle methods. Explicit and implicit codex.skill.injected metrics now carry plugin_id, model_slug, and reasoning_effort; explicit success uses Rust's ok status and missing attribution uses unattributed. RuntimeRouter records plugins per turn and emits codex.skill.turn.duration_seconds once per plugin on terminal completion with completed/aborted/error status and integer-second ceiling. turn.OrchestratorSkillMetadata preserves plugin_id from resource metadata. Tests: go test ./appserver -run 'TestSkillTurnDuration|TestImplicitSkillInjectionMetric|TestExplicitHostSkill|TestExplicitSkillInputItemsWarns|TestResourceBackedSkillInvocationTrackingLikeRust' -count=1; go test ./turn -count=1; go vet ./appserver ./turn"
       ]
     },
     {

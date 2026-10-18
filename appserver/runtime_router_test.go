@@ -15779,7 +15779,7 @@ func TestExplicitSkillInputItemsWarnsWhenHostReadFailsLikeRust(t *testing.T) {
 		t.Fatalf("warnings = %#v", warnings)
 	}
 	records := metrics.Records()
-	if len(records) != 1 || records[0].Name != "codex.skill.injected" || records[0].Tags["status"] != "error" || records[0].Tags["skill"] != "missing-skill" || records[0].Tags["invoke_type"] != telemetry.SkillInvocationTypeExplicit {
+	if len(records) != 1 || records[0].Name != "codex.skill.injected" || records[0].Tags["status"] != "error" || records[0].Tags["skill"] != "missing-skill" || records[0].Tags["invoke_type"] != telemetry.SkillInvocationTypeExplicit || records[0].Tags["plugin_id"] != "unattributed" || records[0].Tags["model_slug"] != "unknown" || records[0].Tags["reasoning_effort"] != "default" {
 		t.Fatalf("skill injection metrics = %#v", records)
 	}
 }
@@ -15793,14 +15793,17 @@ func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing
 	analytics := newRecordingTurnEventSink()
 	metrics := state.NewTaskMetrics()
 	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics, SkillInjectionMetrics: metrics}}
+	effort := "high"
 	items := router.explicitSkillInputItemsForTurn("thread-explicit", "turn-explicit", "model-explicit", &turn.TurnStartParams{
-		Input: []turn.TurnUserInput{{Type: "skill", Name: "tracked-skill", Path: skillPath}},
+		Input:  []turn.TurnUserInput{{Type: "skill", Name: "tracked-skill", Path: skillPath}},
+		Effort: &effort,
 	}, []promptctx.InstructionsSkillMetadata{{
 		Name:        "tracked-skill",
 		Path:        skillPath,
 		LocatorPath: filepath.ToSlash(skillPath),
 		LocatorKind: "file",
 		Scope:       "user",
+		PluginID:    "docs@market",
 	}})
 	if len(items) != 1 {
 		t.Fatalf("items = %#v, want one skill fragment", items)
@@ -15814,7 +15817,7 @@ func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing
 		t.Fatal("timed out waiting for explicit skill invocation analytics")
 	}
 	records := metrics.Records()
-	if len(records) != 1 || records[0].Name != "codex.skill.injected" || records[0].Tags["status"] != "success" || records[0].Tags["skill"] != "tracked-skill" || records[0].Tags["invoke_type"] != telemetry.SkillInvocationTypeExplicit {
+	if len(records) != 1 || records[0].Name != "codex.skill.injected" || records[0].Tags["status"] != "ok" || records[0].Tags["skill"] != "tracked-skill" || records[0].Tags["invoke_type"] != telemetry.SkillInvocationTypeExplicit || records[0].Tags["plugin_id"] != "docs_market" || records[0].Tags["model_slug"] != "model-explicit" || records[0].Tags["reasoning_effort"] != "high" {
 		t.Fatalf("skill injection metrics = %#v", records)
 	}
 }

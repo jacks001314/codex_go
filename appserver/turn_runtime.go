@@ -1553,6 +1553,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 		return
 	}
+	r.startSkillTurnMetrics(threadID, turnID, runConfig.Model, runConfig.ReasoningEffort, startedAt)
 	preparedToolMode, warning := runtime.PrepareToolMode(runConfig.ToolMode, runConfig.DisableCodeModeFallback)
 	runConfig.ToolMode = preparedToolMode
 	if warning != "" {
@@ -10619,6 +10620,7 @@ func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]
 			AuthorityID:   mcp.RuntimeCodexAppsMCPServerName,
 			PackageID:     skill.Package,
 			ResourceID:    skill.MainResource,
+			PluginID:      skill.PluginID,
 		})
 	}
 	warnings := append([]string(nil), cache.catalog.Warnings...)
@@ -11080,6 +11082,10 @@ func (r *RuntimeRouter) implicitSkillInvocationEventProvider(threadID string, tu
 	if params != nil {
 		productClientID = params.Originator
 	}
+	fallbackReasoningEffort := ""
+	if params != nil && params.Effort != nil {
+		fallbackReasoningEffort = strings.TrimSpace(*params.Effort)
+	}
 	seen := map[string]bool{}
 	for _, skill := range promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
 		Inputs: skillMentionInputsFromTurn(params),
@@ -11112,6 +11118,17 @@ func (r *RuntimeRouter) implicitSkillInvocationEventProvider(threadID string, tu
 		seen[key] = true
 		mu.Unlock()
 		r.trackSkillInvocationEvent(ctx, threadID, turnID, modelID, productClientID, *skill, telemetry.SkillInvocationTypeImplicit)
+		r.recordSkillTurnPluginUsage(threadID, turnID, skill.PluginID)
+		r.emitSkillInjectionMetric(
+			threadID,
+			turnID,
+			skill.Name,
+			"ok",
+			skill.PluginID,
+			modelID,
+			r.skillTurnReasoningEffort(threadID, turnID, fallbackReasoningEffort),
+			telemetry.SkillInvocationTypeImplicit,
+		)
 		return nil
 	}
 }
@@ -11338,10 +11355,11 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(ctx context.C
 	if params != nil && params.Effort != nil {
 		reasoningEffort = strings.TrimSpace(*params.Effort)
 	}
+	reasoningEffort = r.skillTurnReasoningEffort(threadID, turnID, reasoningEffort)
 	for _, skill := range selected {
 		item, truncated, err := r.skillInstructionsInputItemWithProvider(threadID, skill, executorProviders)
 		if err != nil {
-			r.emitExplicitSkillInjectionMetric(skill.Name, "error", skill.PluginID, modelID, reasoningEffort)
+			r.emitSkillInjectionMetric(threadID, turnID, skill.Name, "error", skill.PluginID, modelID, reasoningEffort, telemetry.SkillInvocationTypeExplicit)
 			if r != nil {
 				r.notify(NotificationWarning, &WarningNotification{
 					ThreadID: stringPtrIfNotEmpty(threadID),
@@ -11350,7 +11368,8 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(ctx context.C
 			}
 			continue
 		}
-		r.emitExplicitSkillInjectionMetric(skill.Name, "success", skill.PluginID, modelID, reasoningEffort)
+		r.emitSkillInjectionMetric(threadID, turnID, skill.Name, "ok", skill.PluginID, modelID, reasoningEffort, telemetry.SkillInvocationTypeExplicit)
+		r.recordSkillTurnPluginUsage(threadID, turnID, skill.PluginID)
 		if item != nil {
 			items = append(items, item)
 			if strings.EqualFold(strings.TrimSpace(skill.LocatorKind), "file") || strings.TrimSpace(skill.LocatorKind) == "" {
@@ -11372,27 +11391,6 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(ctx context.C
 	// thread's connector selection and is reported as a mention.
 	r.rememberSkillDerivedAppMentions(ctx, threadID, turnID, modelID, cfg, params, items, skills)
 	return items
-}
-
-func (r *RuntimeRouter) emitExplicitSkillInjectionMetric(skillName string, status string, pluginID string, modelID string, reasoningEffort string) {
-	if r == nil || r.services.SkillInjectionMetrics == nil {
-		return
-	}
-	tags := map[string]string{
-		"status":      status,
-		"skill":       sanitizeMetricTagValue(skillName),
-		"invoke_type": telemetry.SkillInvocationTypeExplicit,
-	}
-	if strings.TrimSpace(pluginID) != "" {
-		tags["plugin_id"] = sanitizeMetricTagValue(pluginID)
-	}
-	if strings.TrimSpace(modelID) != "" {
-		tags["model_slug"] = sanitizeMetricTagValue(modelID)
-	}
-	if strings.TrimSpace(reasoningEffort) != "" {
-		tags["reasoning_effort"] = sanitizeMetricTagValue(reasoningEffort)
-	}
-	r.services.SkillInjectionMetrics.Counter("codex.skill.injected", 1, tags)
 }
 
 func sanitizeMetricTagValue(value string) string {
