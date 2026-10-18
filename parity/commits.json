@@ -28899,9 +28899,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: spawn_child_thread"
+        "Equivalent implementation already present: runtime subagent spawning carries the parent controller's selected environment capability roots and disabled plugin IDs into child thread metadata independently of fork_turns. Explicit child overrides, including an explicit empty disabled-plugin list, take precedence. Tests cover capability-root inheritance for fork_turns=none/all and disabled-plugin inheritance/override for the same fork modes."
       ]
     },
     {
