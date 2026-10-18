@@ -10023,9 +10023,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: TurnStartAdmission, admit_turn_start, route_realtime_text_input, server_draining_error, turn_start_admission"
+        "Round 476 (audit): ThreadManager.BeginShutdown sets the closing bit, ReserveTurn/RegisterTurn reject new work with ErrServerDraining, runtime_router maps it to the server-draining RPC error, and active turns are cancelled/drained. Go has no extension admission registry, so the host-shutdown gate is the equivalent carrier. Tests: go test ./appserver -run 'ServerDraining|DaemonRecoverySnapshot|DaemonRecoveryRestore|DaemonSnapshot' -count=1"
       ]
     },
     {
@@ -10827,9 +10827,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: AppServerExit, persist_daemon_threads"
+        "Round 477 (audit): RuntimeRouter.close takes the daemon recovery snapshot while turns are still live, then cancels/drains work; ThreadRouter.Close -> ThreadManager.CloseLiveThreads flushes every managed live thread's persistence before exit. Tests: go test ./appserver -run 'DaemonRecoverySnapshot|DaemonRecoveryRestore|DaemonSnapshot' -count=1"
       ]
     },
     {
