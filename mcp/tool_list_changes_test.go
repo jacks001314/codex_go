@@ -238,7 +238,7 @@ func TestMCPToolListChangeRecordingCountsOnlyToolListChanges(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
-	if _, err := client.readRPCResponse(response, 7, ""); err != nil {
+	if _, err := client.readRPCResponse(context.Background(), response, 7, ""); err != nil {
 		t.Fatalf("readRPCResponse() error = %v", err)
 	}
 	if got := client.toolsListRevision(); got != 1 {

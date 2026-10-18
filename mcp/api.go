@@ -598,16 +598,19 @@ func (c *MCPResourceContent) MarshalJSON() ([]byte, error) {
 }
 
 type MCPToolCallParams struct {
-	ThreadID   string `json:"threadId,omitempty"`
-	TurnID     string `json:"turnId,omitempty"`
-	ItemID     string `json:"itemId,omitempty"`
-	Server     string `json:"server,omitempty"`
-	Tool       string `json:"tool,omitempty"`
-	ServerName string `json:"serverName,omitempty"`
-	ToolName   string `json:"toolName,omitempty"`
-	Arguments  any    `json:"arguments,omitempty"`
-	Meta       any    `json:"_meta,omitempty"`
-	CallID     string `json:"-"`
+	// Context carries the caller's trace context through the MCP transport and
+	// any nested server-request responses (Rust #47212).
+	Context    context.Context `json:"-"`
+	ThreadID   string          `json:"threadId,omitempty"`
+	TurnID     string          `json:"turnId,omitempty"`
+	ItemID     string          `json:"itemId,omitempty"`
+	Server     string          `json:"server,omitempty"`
+	Tool       string          `json:"tool,omitempty"`
+	ServerName string          `json:"serverName,omitempty"`
+	ToolName   string          `json:"toolName,omitempty"`
+	Arguments  any             `json:"arguments,omitempty"`
+	Meta       any             `json:"_meta,omitempty"`
+	CallID     string          `json:"-"`
 
 	// SessionID, WindowID and OriginItemID feed the request `_meta` only (Rust
 	// with_mcp_tool_call_ids_meta, #40866/#45409); the tools/call wire params
@@ -2571,7 +2574,11 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	effective, meta := s.prepareToolCallSandboxState(server, serverEnvironmentID, stdioTarget != nil, params, httpTarget.sandboxStateMetaNegotiated(), stdioTarget.sandboxStateMetaNegotiated())
 	roots := s.rootsForThread(effective.ThreadID)
 	if httpTarget != nil {
-		return callMCPHTTPToolWithClient(httpTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta)
+		ctx := params.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return callMCPHTTPToolWithClient(ctx, httpTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta)
 	}
 	if stdioTarget != nil {
 		return callMCPStdioToolWithClient(stdioTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta)

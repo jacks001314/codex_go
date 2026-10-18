@@ -1568,7 +1568,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 93b44c3a73ad9dfae709751c231a8b512d9eabf3	46882	Streamline agent command-center shortcuts and layout (#46882)	2026-09-20	tui	5	3	0.60	0	0	audit_pending	center_help_lines,group_lines
 93c54bca38996b56d344a2ca65f01627b1953b27	39926	Resolve HTTP MCP bearer tokens in executor environments (#39926)	2026-08-21	appserver	2	0	0.00	0	0	complete	ExecutorEnvironmentHttpClient,StreamableHttpBearerToken
 93f8e79fd21e3b96f19e1cbcae04d35eae11c788	51202	Distinguish namespace removals in incremental tool updates (#51202)	2026-10-05	persistence	0	0		0	0	not_applicable	
-94174e44cbc54cece45f6052328ca0c2cd7a8a2a	47212	Preserve MCP request trace context across transport workers (#47212)	2026-09-22	mcp	4	1	0.25	0	0	audit_pending	traced_custom_request,traced_pagination,with_current_trace
+94174e44cbc54cece45f6052328ca0c2cd7a8a2a	47212	Preserve MCP request trace context across transport workers (#47212)	2026-09-22	mcp	4	1	0.25	0	0	complete	traced_custom_request,traced_pagination,with_current_trace
 94311d447587411789533c47601fd8bc9d81eb48	41292	Forward history note images to the model (#41292)	2026-08-28	model	0	0		0	0	not_applicable	
 9442a175ba5224366406330117d38e46543d5224	47952	Prune expired in-memory message board registry entries (#47952)	2026-09-24	core	0	0		0	0	not_applicable	
 9445ef227e4007b0483ffe16938ab9479ec38d7c	40024	Honor granular sandbox approvals in unified exec (#40024)	2026-08-21	core	0	0		0	0	complete

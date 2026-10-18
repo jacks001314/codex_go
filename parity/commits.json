@@ -18381,9 +18381,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: traced_custom_request, traced_pagination, with_current_trace"
+        "MCPToolCallParams carries the caller context into the HTTP transport. tools/call requests inject traceparent/tracestate from the active span, and the response stream reuses the same context for nested server-request responses such as SSE elicitation. Tests: go test ./mcp -count=1; go test ./turn -run 'MCP|Tool' -count=1; go test ./appserver -run MCP -count=1"
       ]
     },
     {

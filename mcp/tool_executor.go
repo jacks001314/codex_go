@@ -400,6 +400,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		return denied, err
 	}
 	callParams := &MCPToolCallParams{
+		Context:    ctx,
 		ServerName: e.resolvedServerName(),
 		ToolName:   e.resolvedRemoteToolName(),
 		Arguments:  arguments,

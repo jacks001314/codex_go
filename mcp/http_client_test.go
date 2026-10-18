@@ -14,7 +14,46 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"codex_go/model"
 )
+
+type mcpTraceCarrierForTest struct {
+	traceparent string
+	tracestate  string
+}
+
+func (c mcpTraceCarrierForTest) End()                     {}
+func (c mcpTraceCarrierForTest) Record(map[string]string) {}
+func (c mcpTraceCarrierForTest) SetName(string)           {}
+func (c mcpTraceCarrierForTest) TraceContext() (string, string, bool) {
+	return c.traceparent, c.tracestate, c.traceparent != ""
+}
+
+func TestMCPHTTPRequestPropagatesTraceContextLikeRust(t *testing.T) {
+	var traceparent, tracestate string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		traceparent = request.Header.Get("traceparent")
+		tracestate = request.Header.Get("tracestate")
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	wantTraceparent := "00-00000000000000000000000000000001-0000000000000002-01"
+	wantTracestate := "vendor=value"
+	ctx := model.WithTelemetryTraceCarrier(context.Background(), mcpTraceCarrierForTest{
+		traceparent: wantTraceparent,
+		tracestate:  wantTracestate,
+	})
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true})
+	response, err := client.doHTTPRequestContext(ctx, server.URL, []byte(`{}`), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if traceparent != wantTraceparent || tracestate != wantTracestate {
+		t.Fatalf("MCP trace headers = %q/%q, want %q/%q", traceparent, tracestate, wantTraceparent, wantTracestate)
+	}
+}
 
 func TestMCPRedirectPolicySameOriginAllowed(t *testing.T) {
 	policy := mcpRedirectPolicy("https://mcp.example.com/v1")
@@ -1762,6 +1801,7 @@ func TestHTTPMCPRequiredServerStatusFailureBlocksToolCall(t *testing.T) {
 func TestHTTPMCPHandlesSSEElicitationRequest(t *testing.T) {
 	clientResponses := make(chan map[string]any, 1)
 	progressEvents := make(chan *MCPProgressNotification, 1)
+	responseTraceparent := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -1832,6 +1872,7 @@ func TestHTTPMCPHandlesSSEElicitationRequest(t *testing.T) {
 			}
 			_, _ = w.Write([]byte("data: " + string(finalPayload) + "\n\n"))
 		case "":
+			responseTraceparent = r.Header.Get("traceparent")
 			clientResponses <- raw
 			w.WriteHeader(http.StatusAccepted)
 		default:
@@ -1853,6 +1894,7 @@ func TestHTTPMCPHandlesSSEElicitationRequest(t *testing.T) {
 		progressEvents <- notification
 	}))
 	call, err := service.CallTool(&MCPToolCallParams{
+		Context:  model.WithTelemetryTraceCarrier(context.Background(), mcpTraceCarrierForTest{traceparent: "00-00000000000000000000000000000003-0000000000000004-01"}),
 		ThreadID: "thread-live",
 		TurnID:   "turn-live",
 		ItemID:   "item-live",
@@ -1864,6 +1906,9 @@ func TestHTTPMCPHandlesSSEElicitationRequest(t *testing.T) {
 	}
 	if len(call.Content) != 1 || call.Content[0].Text != "done" {
 		t.Fatalf("call = %#v", call)
+	}
+	if responseTraceparent != "00-00000000000000000000000000000003-0000000000000004-01" {
+		t.Fatalf("elicitation response traceparent = %q", responseTraceparent)
 	}
 	select {
 	case notification := <-progressEvents:

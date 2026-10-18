@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -92,7 +93,7 @@ func TestMCPReadOnlyToolsRequestMetadataLikeRust(t *testing.T) {
 					t.Fatalf("listMCPHTTPResources() error = %v", err)
 				}
 				callerMeta := map[string]any{mcpReadOnlyToolsMetaKey: false, "callId": "preserved"}
-				if _, err := callMCPHTTPToolWithClient(client, "write", "", "", "", nil, nil, nil, "write", map[string]any{"message": "hello"}, callerMeta); err != nil {
+				if _, err := callMCPHTTPToolWithClient(context.Background(), client, "write", "", "", "", nil, nil, nil, "write", map[string]any{"message": "hello"}, callerMeta); err != nil {
 					t.Fatalf("callMCPHTTPToolWithClient() error = %v", err)
 				}
 

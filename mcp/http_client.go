@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/model"
+
 	"golang.org/x/oauth2"
 )
 
@@ -311,13 +313,13 @@ func listMCPHTTPResourceTemplates(client *httpClient, options *httpClientCallOpt
 
 func callMCPHTTPTool(config *ServerConfig, serverName string, threadID string, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
 	client := newMCPHTTPClient(config)
-	return callMCPHTTPToolWithClient(client, serverName, threadID, "", "", nil, elicitation, progress, tool, arguments, meta)
+	return callMCPHTTPToolWithClient(context.Background(), client, serverName, threadID, "", "", nil, elicitation, progress, tool, arguments, meta)
 }
 
-func callMCPHTTPToolWithClient(client *httpClient, serverName string, threadID string, turnID string, itemID string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
+func callMCPHTTPToolWithClient(ctx context.Context, client *httpClient, serverName string, threadID string, turnID string, itemID string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
 	params := mcpToolCallParams(client.config, tool, arguments, meta)
 	var response MCPToolCallResponse
-	if err := client.CallWithOptions(&httpClientCallOptions{
+	if err := client.CallWithOptionsContext(ctx, &httpClientCallOptions{
 		ServerName:  serverName,
 		ThreadID:    threadID,
 		TurnID:      turnID,
@@ -573,6 +575,7 @@ func (c *httpClient) deleteSession(sessionID string) error {
 			return err
 		}
 	}
+	model.InjectTraceHeadersFromContext(request.Context(), request.Header)
 	response, err := c.client.Do(request)
 	if err != nil {
 		return err
@@ -649,7 +652,7 @@ func (c *httpClient) CallStream(ctx context.Context, options *httpClientCallOpti
 	if err != nil {
 		return err
 	}
-	rpc, readErr := c.readRPCResponseWithStreamHandler(response, requestID, c.sessionID, onNotification)
+	rpc, readErr := c.readRPCResponseWithStreamHandler(ctx, response, requestID, c.sessionID, onNotification)
 	_ = response.Body.Close()
 	if readErr != nil {
 		return readErr
@@ -660,7 +663,7 @@ func (c *httpClient) CallStream(ctx context.Context, options *httpClientCallOpti
 	return nil
 }
 
-func (c *httpClient) readRPCResponseWithStreamHandler(response *http.Response, id int64, sessionID string, onNotification func(envelope *stdioRPCEnvelope) error) (*httpRPCResponse, error) {
+func (c *httpClient) readRPCResponseWithStreamHandler(ctx context.Context, response *http.Response, id int64, sessionID string, onNotification func(envelope *stdioRPCEnvelope) error) (*httpRPCResponse, error) {
 	contentType := ""
 	if response != nil {
 		contentType = response.Header.Get("Content-Type")
@@ -668,7 +671,7 @@ func (c *httpClient) readRPCResponseWithStreamHandler(response *http.Response, i
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		return readMCPHTTPSSEWithLimit(response.Body, id, 0, c.trackingToolListNotifications(onNotification))
 	}
-	return c.readRPCResponse(response, id, sessionID)
+	return c.readRPCResponse(ctx, response, id, sessionID)
 }
 
 func (c *httpClient) applyCallOptions(options *httpClientCallOptions) {
@@ -702,7 +705,7 @@ func (c *httpClient) initialize(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer response.Body.Close()
-	rpc, err := c.readRPCResponse(response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
+	rpc, err := c.readRPCResponse(ctx, response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
 	if err != nil {
 		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
 		return "", err
@@ -740,7 +743,7 @@ func (c *httpClient) discover(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer response.Body.Close()
-	rpc, err := c.readRPCResponse(response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
+	rpc, err := c.readRPCResponse(ctx, response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
 	if err != nil {
 		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
 		return "", err
@@ -911,7 +914,7 @@ func (c *httpClient) callWithSession(ctx context.Context, method string, params 
 		if err != nil {
 			return err
 		}
-		rpc, readErr := c.readRPCResponse(response, requestID, sessionID)
+		rpc, readErr := c.readRPCResponse(ctx, response, requestID, sessionID)
 		_ = response.Body.Close()
 		if readErr != nil {
 			return readErr
@@ -1097,6 +1100,7 @@ func (c *httpClient) doHTTPRequestContext(ctx context.Context, endpoint string, 
 			return nil, err
 		}
 	}
+	model.InjectTraceHeadersFromContext(ctx, request.Header)
 	return c.client.Do(request)
 }
 
@@ -1145,12 +1149,12 @@ func (c *httpClient) trackingToolListNotifications(handler func(envelope *stdioR
 	}
 }
 
-func (c *httpClient) readRPCResponse(response *http.Response, id int64, sessionID string) (*httpRPCResponse, error) {
+func (c *httpClient) readRPCResponse(ctx context.Context, response *http.Response, id int64, sessionID string) (*httpRPCResponse, error) {
 	return readMCPHTTPRPCResponseWithHandlerAndLimit(response, id, modernMCPMessageLimit(c.protocolMode), func(envelope *stdioRPCEnvelope) error {
 		if envelope == nil {
 			return nil
 		}
-		ctx := contextWithMCPClientContextAndRoots(context.Background(), c.threadID, c.turnID, c.itemID, c.roots)
+		ctx := contextWithMCPClientContextAndRoots(ctx, c.threadID, c.turnID, c.itemID, c.roots)
 		if len(envelope.ID) == 0 {
 			// Rust #54656: a tools/list_changed notification invalidates this
 			// connection's catalog before a later response can be delivered.
@@ -1167,7 +1171,7 @@ func (c *httpClient) readRPCResponse(response *http.Response, id int64, sessionI
 		} else {
 			payload["result"] = result
 		}
-		return c.doClientResponse(payload, sessionID)
+		return c.doClientResponse(ctx, payload, sessionID)
 	})
 }
 
@@ -1273,7 +1277,7 @@ func decodeMCPHTTPSSEData(data []byte, id int64, requestHandler func(envelope *s
 	return &rpc, true, nil
 }
 
-func (c *httpClient) doClientResponse(payload map[string]any, sessionID string) error {
+func (c *httpClient) doClientResponse(ctx context.Context, payload map[string]any, sessionID string) error {
 	if c == nil || c.config == nil {
 		return errors.New("HTTP MCP client is nil")
 	}
@@ -1286,7 +1290,10 @@ func (c *httpClient) doClientResponse(payload map[string]any, sessionID string) 
 		return err
 	}
 	token, oauthToken := c.authorizationBearerToken(false)
-	response, err := c.doHTTPRequest(endpoint, data, sessionID, token)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	response, err := c.doHTTPRequestContext(ctx, endpoint, data, sessionID, token)
 	if err != nil {
 		return err
 	}
@@ -1294,7 +1301,7 @@ func (c *httpClient) doClientResponse(payload map[string]any, sessionID string) 
 		retryToken, retryOAuthToken := c.authorizationBearerToken(true)
 		if retryOAuthToken && strings.TrimSpace(retryToken) != "" {
 			_ = response.Body.Close()
-			response, err = c.doHTTPRequest(endpoint, data, sessionID, retryToken)
+			response, err = c.doHTTPRequestContext(ctx, endpoint, data, sessionID, retryToken)
 			if err != nil {
 				return err
 			}

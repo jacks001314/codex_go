@@ -278,7 +278,21 @@ func WithSpan(ctx context.Context, span *Span) context.Context {
 		return ctx
 	}
 	ctx = context.WithValue(ctx, sessionTelemetrySpanKey{}, span)
+	ctx = model.WithTelemetryTraceCarrier(ctx, spanTraceCarrier{span: span})
 	return withTracehookSpan(ctx, span)
+}
+
+// spanTraceCarrier adapts the telemetry Span's W3C carrier to the narrow
+// model interface read by lower-level HTTP transports.
+type spanTraceCarrier struct {
+	span *Span
+}
+
+func (spanTraceCarrier) End()                     {}
+func (spanTraceCarrier) Record(map[string]string) {}
+func (spanTraceCarrier) SetName(string)           {}
+func (c spanTraceCarrier) TraceContext() (string, string, bool) {
+	return c.span.W3CTraceContext()
 }
 
 // SpanFromContext returns the span carried by ctx, or nil.
