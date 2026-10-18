@@ -16372,9 +16372,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: StepInputs, background_environment_id, get_unreadable_roots_with_context"
+        "Round 328 (audit): already equivalent. Approval actions carry the tool payload's environment ID; Guardian environment resolution selects the owning environment and declines unavailable selections; step settings are captured separately and refresh at model-step boundaries while environment authority remains turn-scoped. Network approval tests cover remote/local isolation and re-approval semantics, and Guardian environment tests cover selected/missing/current profiles. Tests: go test ./appserver -run 'NetworkApproval|Guardian.*Environment|TurnStepSettings' -count=1"
       ]
     },
     {
