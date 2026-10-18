@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/rand"
 	"reflect"
@@ -127,6 +128,9 @@ type modelGuardianReviewer struct {
 	// warn surfaces a guardian warning notification (Rust's
 	// EventMsg::GuardianWarning) for a timeout or a failed review.
 	warn func(threadID string, message string)
+	// tracer opens the reviewer's debug span (Rust #52274's `guardian_review`
+	// span with review, thread, turn and tool-call identifiers).
+	tracer func() *telemetry.Tracer
 }
 
 // defaultGuardianMaxToolCallLag mirrors Rust
@@ -658,6 +662,19 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		return state.DecisionAborted, "", err
 	}
 	r.emit(threadID, event)
+	if r.tracer != nil {
+		if tracer := r.tracer(); tracer != nil {
+			span := tracer.StartSpan("guardian_review", map[string]string{
+				"review_id":    strings.TrimSpace(event.ID),
+				"thread_id":    strings.TrimSpace(threadID),
+				"turn_id":      strings.TrimSpace(turnID),
+				"tool_call_id": strings.TrimSpace(targetItemID),
+			})
+			if span != nil {
+				defer span.End()
+			}
+		}
+	}
 	timeout := r.timeout
 	if timeout <= 0 {
 		timeout = state.ReviewTimeout
@@ -969,8 +986,22 @@ reviewAttempt:
 		// the same attempt budget and pay the service backoff, honouring the
 		// server's Retry-After when it asks for a longer wait.
 		delay := guardianReviewRetryDelay(attempts)
-		if retryAfter := codexapi.RetryDelay(err); retryAfter > delay {
+		retryAfter := codexapi.RetryDelay(err)
+		if retryAfter > delay {
 			delay = retryAfter
+		}
+		if deadline, ok := reviewCtx.Deadline(); ok {
+			now := time.Now()
+			slog.Debug("Guardian review retry scheduled",
+				"attempt_count", attempts,
+				"next_attempt", attempts+1,
+				"max_attempts", guardianMaxReviewAttempts,
+				"failure_reason", "session",
+				"backoff_ms", delay.Milliseconds(),
+				"retry_not_before_ms", retryAfter.Milliseconds(),
+				"remaining_budget_ms", deadline.Sub(now).Milliseconds(),
+				"deadline_limited", now.Add(delay).After(deadline),
+			)
 		}
 		if waitErr := waitGuardianReviewRetry(reviewCtx, delay); waitErr != nil {
 			if errors.Is(waitErr, context.DeadlineExceeded) {
