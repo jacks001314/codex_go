@@ -28142,9 +28142,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: UserVerificationFailure, UserVerificationReason, from_meta, into_meta, verification_failure"
+        "Equivalent implementation present: MCP user verification carries a closed UserVerificationReason in bounded metadata, normalizes only recognized values, and rejects malformed action/reason combinations. App-server solicitation and callback paths preserve responseError, responseChannelClosed, interrupted, and approvalUnavailable reasons instead of collapsing every failure to a generic error. MCP normalization/round-trip tests and app-server reason-propagation tests pass."
       ]
     },
     {
