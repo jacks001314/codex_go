@@ -5388,9 +5388,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: UserMessageCost, UserMessageSelection, select_user_messages"
+        "Round 462 (audit): Go centralizes Guardian user-message retention in state.GuardianRootMessage/GuardianSenderMessages, including the 900-byte per-exchange sender budget, assistant context, persisted-history notice, missing-evidence notice, and ordered omission behavior. Tests: go test ./state -run 'GuardianRoot|GuardianSender' -count=1"
       ]
     },
     {
@@ -5472,9 +5472,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: GuardianHistoryCheckpoint, guardian_history_checkpoint, restore_guardian_history, truncate_before"
+        "Round 463 (audit): Go reconstructs normal thread history from rollout items, but has no GuardianHistoryCheckpoint/guardian_history rollout carrier (rg finds none). Reviewer conversation state remains in-memory, so reconstruction/truncation cannot restore Guardian-specific history checkpoints. Tests: go test ./rollout -run 'Reconstruct|Rollout' -count=1"
       ]
     },
     {
