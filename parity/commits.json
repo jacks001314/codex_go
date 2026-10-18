@@ -17897,9 +17897,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: daemon_socket_mask_paths"
+        "Round 325 (audit): N/A - Go's Linux sandbox has no app-server daemon socket ancestor bind-mount analyzer, synthetic-mount registry, or daemon socket mask destination model. Its bwrap path is constructed from policy roots directly and does not generate Rust daemon-mount aliases that require masking."
       ]
     },
     {
