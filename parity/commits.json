@@ -25888,9 +25888,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 732 (audit): Go's ProviderCapabilitiesReadResponse and ProviderCapabilities structures never exposed namespaceTools, namespace-aware tool serialization has no provider capability gate, and tool-search availability follows model/search settings rather than a namespace capability. Tests: go test ./model -run TestProviderCapabilities -count=1; go test ./appserver -run TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust -count=1; go test ./appserver -run TestRuntimeRouterModelProviderCapabilitiesReadUsesConfiguredProviderLikeRust -count=1"
       ]
     },
     {
@@ -26188,9 +26188,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 732 (audit): N/A by architecture. Go has no AbsolutePathBuf::relative_to_current_dir carrier; standard-library filepath.Abs checks filepath.IsAbs first and returns filepath.Clean(path) without calling os.Getwd, using the current directory only for relative paths. The Rust deleted-CWD regression is therefore already satisfied by Go's stdlib. Test: go test ./utils -count=1"
       ]
     },
     {
