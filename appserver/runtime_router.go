@@ -48,6 +48,7 @@ import (
 	"codex_go/review"
 	"codex_go/rollout"
 	"codex_go/runtimeutil"
+	"codex_go/safety"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/skillprovider"
@@ -16207,6 +16208,20 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 	if err != nil {
 		return err
 	}
+	// Rust #54119: retained authority outside the current grants needs a new
+	// sandbox approval. A scoped grant that is still active permits the review
+	// itself (never the input), while a stale grant, a changed filesystem
+	// grant set, or a lost network grant stays rejected by policy.
+	if permissions != sandbox.SandboxPermissionsUseDefault {
+		policy := r.terminalWriteSafetyPolicy(threadID, cfg)
+		preapproved := r.terminalWriteAdditionalPermissionsPreapproved(request, cfg)
+		skipSandboxOverrideRejection := preapproved && permissions == sandbox.SandboxPermissionsWithAdditionalPermissions && policy.Mode != safety.ApprovalNever
+		if !skipSandboxOverrideRejection && !(policy.Mode == safety.ApprovalNever && reviewer.RoutesToGuardian()) {
+			if reason, rejected := safety.PromptRejectedByPolicy(policy, false); rejected {
+				return errors.New(reason)
+			}
+		}
+	}
 	// Ordinary input that still matches the retained permissions needs no
 	// review unless the turn requires automatic review.
 	if permissions == sandbox.SandboxPermissionsUseDefault && !reviewer.RoutesToGuardian() {
@@ -16377,6 +16392,89 @@ func (r *RuntimeRouter) terminalWriteReviewRequirement(request *tool.WriteStdinA
 		return sandbox.SandboxPermissionsWithAdditionalPermissions, nil
 	}
 	return sandbox.SandboxPermissionsUseDefault, nil
+}
+
+// terminalWriteSafetyPolicy resolves the approval policy the terminal's thread
+// currently runs under (Rust review_context.turn.approval_policy()) in the
+// shape the shared rejection check expects.
+func (r *RuntimeRouter) terminalWriteSafetyPolicy(threadID string, cfg *config.Config) safety.ApprovalPolicy {
+	params := r.activeTurnParams(threadID)
+	if params == nil {
+		params = &turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID)}
+	}
+	policy := safety.ApprovalPolicy{}
+	switch turnApprovalPolicyForTurn(cfg, params) {
+	case sandbox.ApprovalNever:
+		policy.Mode = safety.ApprovalNever
+	case sandbox.ApprovalOnRequest:
+		policy.Mode = safety.ApprovalOnRequest
+	case sandbox.ApprovalUnlessTrusted:
+		policy.Mode = safety.ApprovalUnlessTrusted
+	case sandbox.ApprovalGranular:
+		policy.Mode = safety.ApprovalGranular
+		if granular := granularApprovalConfigForTurn(cfg, params); granular != nil {
+			policy.Rules = granular.Rules
+			policy.SandboxApproval = granular.SandboxApproval
+		}
+	}
+	return policy
+}
+
+// terminalWriteAdditionalPermissionsPreapproved mirrors Rust #54119's
+// additional_permissions_preapproved: a scoped request_permissions grant can
+// authorize the terminal's retained authority without permitting new sandbox
+// escalations. Only grants that are still active for this terminal's
+// environment count; filesystem grants must match exactly, including order,
+// and retained network access needs an active network grant.
+func (r *RuntimeRouter) terminalWriteAdditionalPermissionsPreapproved(request *tool.WriteStdinApprovalRequest, cfg *config.Config) bool {
+	if r == nil || request == nil || cfg == nil {
+		return false
+	}
+	if request.SandboxPermissions != sandbox.SandboxPermissionsWithAdditionalPermissions {
+		return false
+	}
+	policy := r.terminalWriteSafetyPolicy(strings.TrimSpace(request.ThreadID), cfg)
+	if policy.Mode != safety.ApprovalGranular || policy.SandboxApproval {
+		return false
+	}
+	retained := request.AdditionalPermissions
+	if retained == nil || retained.IsEmpty() {
+		return false
+	}
+	// Grants are recorded after normalization; compare the retained launch
+	// facts in the same shape.
+	retained = sandbox.MergePermissionProfiles(nil, retained)
+	// The current turn's grants are what Rust's granted_permissions() returns;
+	// the terminal may have launched in an earlier turn.
+	currentTurnID := strings.TrimSpace(request.TurnID)
+	if active := r.threads.ActiveTurn(strings.TrimSpace(request.ThreadID)); active != nil && strings.TrimSpace(active.TurnID) != "" {
+		currentTurnID = strings.TrimSpace(active.TurnID)
+	}
+	current := r.grantedPermissionsForEnvironment(request.ThreadID, currentTurnID, request.EnvironmentID)
+	if current == nil || current.IsEmpty() {
+		return false
+	}
+	if !equalStringsInOrder(retained.FileSystem, current.FileSystem) ||
+		!equalStringsInOrder(retained.ReadFileSystem, current.ReadFileSystem) {
+		return false
+	}
+	return !additionalPermissionNetworkEnabled(retained) || additionalPermissionNetworkEnabled(current)
+}
+
+func additionalPermissionNetworkEnabled(profile *sandbox.AdditionalPermissionProfile) bool {
+	return profile != nil && profile.Network != nil && *profile.Network
+}
+
+func equalStringsInOrder(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // sandboxAdditionalPermissionsBeyondInternal mirrors Rust's #48073 rule: the
