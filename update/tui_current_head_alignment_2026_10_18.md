@@ -2050,6 +2050,11 @@ green.
 - `#47975` is complete: pending voice speech carries its input generation and
   awaiting-turn fallback, so recovery drops answers superseded by newer input
   while retaining unspoken text for an unsettled turn.
-- `#48775` remains partial: pinned headers have the `› ` prefix and display-width
-  truncation, but Go has no spoken-prompt flag/style to mirror Rust's bold red
-  spoken header and prefix reservation.
+- `#48116` is complete: reasoning shortcuts raise through Max in normal and Plan
+  modes, while Ultra still routes to the explicit picker guidance.
+- `#48118` and `#48469` are complete: configurable right-click paste and
+  terminal-aware copy-on-select behavior are implemented with config,
+  eligibility, delivery/invalidations, and selection tests.
+- `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
+  already add `› ` and truncate by display width, while spoken user input is a
+  separate SpokenHistoryCell rather than a spoken RoleUser prompt.

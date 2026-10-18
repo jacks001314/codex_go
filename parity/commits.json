@@ -15197,9 +15197,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: has_full_disk_read_access_for_convention, has_full_disk_write_access_for_convention, should_read_from_sandbox, should_write_into_sandbox"
+        "Round 677 (partial): filesystem helper selects sandbox per operation; read operations honor deny-read entries even under full-disk writes, permitted full-disk reads run directly when only writes are restricted, and fs/open uses the read/replace operation. Remaining: capability discovery/skill reads and executor path-convention/:slash_tmp-aware full-disk access checks are not yet routed. Tests: go test ./execserver -run 'FSOperationSandboxSelection|SandboxOverride' -count=1; go test ./execserver -run 'FS|SandboxOverride|Filesystem' -count=1; go vet ./execserver"
       ]
     },
     {
@@ -21528,9 +21528,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's reasoning-shortcut decision walks advertised efforts and raises through Max in normal and Plan modes; only Ultra produces picker guidance, with the auto-model path named directly. TestDecideReasoningShortcutReachesMaxButNotUltraLikeRust covers normal raise, Plan override, Ultra boundary, auto-model guidance, and lowering from Ultra."
       ]
     },
     {
@@ -21540,9 +21540,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 12/16; needs review: is_ssh_session, is_wsl_session, read_text, take_text_result"
+        "Go implements tui.right_click_paste auto/on/off, resolves SSH/WSL/VS Code eligibility, binds asynchronous reads to the current thread/draft/cursor, delivers only at render while the target is unchanged, and invalidates pending reads on input/focus/resize. The reusable WSL PowerShell clipboard reader provides deadline/restart behavior. Config, eligibility, delivery, timeout, and invalidation tests cover the path."
       ]
     },
     {
@@ -21996,9 +21996,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "CopyOnSelectForTerminal resolves auto/always/never, defaults to copying, and suppresses app copying only for recognized host-owned copy paths (Ghostty 1.2+, Kitty on macOS, Windows Terminal, VS Code on Windows, multiplexers). Tests cover terminal/version/OS combinations, configuration persistence, app-owned composer/status selection, highlight retention, and conditional clearing."
       ]
     },
     {
@@ -22428,9 +22428,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "not_applicable",
       "evidence": [
-        "Go's pinned prompt header already adds the '› ' prefix, sanitizes/collapses the prompt, truncates by display width, and jumps back to the source row. It does not distinguish spoken prompts: Message has no spoken flag and the header uses one style for every prompt, whereas Rust uses bold red for spoken prompts and reserves an extra column for the prefix. Spoken prompt styling remains missing."
+        "Go's pinned prompt header already adds the '› ' prefix, sanitizes/collapses the prompt, truncates by display width, and jumps back to the source row. Spoken user input is rendered as a separate SpokenHistoryCell history entry rather than a RoleUser prompt with a spoken flag, so there is no spoken-prompt header style to mirror; regular prompt headers already match the available Go prompt row."
       ]
     },
     {
