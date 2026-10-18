@@ -14009,9 +14009,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: for_checkpoint"
+        "Independent Guardian authorization/review evidence is retained across checkpoint migration, including user authorization answers, tool/assistant context, and subagent isolation; migration validity and rollback behavior are covered by the guardian checkpoint/history suites. Tests: go test ./appserver -run 'Guardian.*Compaction|Guardian.*Checkpoint|Compaction.*Guardian' -count=1; go test ./rollout -run Guardian -count=1"
       ]
     },
     {
@@ -14021,9 +14021,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: for_checkpoint, replace_compacted"
+        "Guardian review history survives compaction and checkpoint replacement: rollout checkpoints carry guardian_history, app-server rebuilds retained evidence independently, migration skips replacement without losing history, and revert/rollback truncates it. Tests: go test ./appserver -run 'Guardian.*Compaction|Guardian.*Checkpoint|Compaction.*Guardian' -count=1; go test ./rollout -run Guardian -count=1"
       ]
     },
     {

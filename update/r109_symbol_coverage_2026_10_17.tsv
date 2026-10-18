@@ -114,7 +114,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0c02887a0c4d09a99eb8e078aa12ff3edc9eb331	54003	Include compressed rollouts in doctor storage statistics (#54003)	2026-10-14	core	0	0		0	0	complete	
 0c22ce8f2eb533c6e570ef173b5a83b1d3e3ad95	52700	Update the exec-server stable compatibility baseline to Codex 0.162.1 (#52700)	2026-10-09	execserver	0	0		0	0	not_applicable	
 0c329ad2c9d5a2592128a1d536c66e16f9397e46	53453	Prefer the Windows clipboard and bound copy attempts on WSL (#53453)	2026-10-12	tui	2	1	0.50	0	0	complete	native_clipboard
-0c3a14bbc20e1b55286d3fb89a3235c1e11d9cc1	45782	Preserve Guardian authorization evidence across checkpoint migration (#45782)	2026-09-15	guardian	2	1	0.50	0	0	audit_pending	for_checkpoint
+0c3a14bbc20e1b55286d3fb89a3235c1e11d9cc1	45782	Preserve Guardian authorization evidence across checkpoint migration (#45782)	2026-09-15	guardian	2	1	0.50	0	0	complete	for_checkpoint
 0c5720ea0fd2af84d7b6743a6686750fb8570ab7	54098	Keep environment tools stable across readiness changes (#54098)	2026-10-14	sandbox	0	0		0	0	complete	
 0c7362d121d1c7f69540262425fd4e2209fd8e8d	53382	Ignore the unsafe-libyaml advisory in dependency audits (#53382)	2026-10-12	core	0	0		0	0	not_applicable	
 0c992c305d361a2325dddcbbde4d5e616e20690d	40494	Hide ephemeral system threads from TUI routing (#40494)	2026-08-24	tui	0	0		0	0	not_applicable	
@@ -2101,7 +2101,7 @@ c4b434aae27d5e589c9129f0b7ea312ccc8cbacd	40184	Preserve context annotations in m
 c4c51c56e4f34729b5f6b3069974801a48bdd1a6	41208	Honor per-repository plugin configuration in catalog requests (#41208)	2026-08-27	appserver	10	1	0.10	0	0	audit_pending	PluginMarketplaceContext,PluginMarketplaceScope,list_marketplaces,list_marketplaces_for_context,load_marketplace_context,maybe_start_plugin_list_background_tasks,non_curated_cache_refresh_request,refresh_non_curated_plugin_cache_for_context,remote_plugins_enabled
 c4ea7294b989827862eed6972d130233459161f4	42344	Prepare managed policy validation for Windows sandbox provisioning (#42344)	2026-09-02	sandbox	3	0	0.00	0	0	not_applicable	cloud_config_bundle_loader_for_storage_without_cache,validate_provisioning_settings,without_cache
 c517cc6d8436f1e8f0b7879278d88aeb514a3bdc	39981	Bypass risk scoring for models that require automatic review (#39981)	2026-08-21	guardian	0	0		0	0	not_applicable	
-c51cb968e43fd52255aacf568220aed4654c3f97	45789	Preserve Guardian evidence during checkpoint migration (#45789)	2026-09-15	guardian	3	1	0.33	0	0	audit_pending	for_checkpoint,replace_compacted
+c51cb968e43fd52255aacf568220aed4654c3f97	45789	Preserve Guardian evidence during checkpoint migration (#45789)	2026-09-15	guardian	3	1	0.33	0	0	complete	for_checkpoint,replace_compacted
 c51e7b373647cf99208a1f391d05806ac4c3c9d7	40724	Add plugin-attributed skill telemetry (#40724)	2026-08-25	telemetry	5	0	0.00	0	0	complete	ActiveSkillTurnMetrics,SkillTelemetry,SkillTurnMetrics,record_plugin,record_plugin_turn_usage
 c51f5bfb821f813fa3591d4a4d03a764930cb982	49811	Handle unsupported `fs/writeBlock` requests in exec-server (#49811)	2026-09-30	execserver	2	2	1.00	0	0	complete	
 c530382cf38a5133dd1f7561f9c972e312dd0caa	47673	Clarify registered Windows sandbox setup errors (#47673)	2026-09-23	sandbox	0	0		0	0	not_applicable	
