@@ -82,9 +82,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Unified-exec output deltas now preserve split UTF-8 scalars across producer chunks, pass malformed bytes through, retain an incomplete trailing scalar for finish, cap every emitted frame at 8 KiB, stop at the 10,000-delta per-call quota, and flush the final incomplete bytes before the end event. The transcript continues to receive every producer byte independently of delta emission. Direct boundary tests, frame/quota tests, transcript preservation, lifecycle events, and the reusable TTY session test pass."
       ]
     },
     {
@@ -166,9 +166,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Symbol-name audit found the existing Go implementation: validateMCPOAuthAuthorizationServerEndpoints enforces issuer-bound callback requirements, issuer/authorization/token origin binding, exact provider compatibility triples, and the issuer-less token-origin rule before discovery reaches the browser hand-off. Issuer failures are fatal so login does not fall back to a guessed authorization URL. Tests cover mismatched/lookalike/HTTP-downgrade metadata, RFC 9207 callbacks, issuer-less same-origin and cross-origin metadata, exception lookalikes, and pre-registered login paths."
       ]
     },
     {

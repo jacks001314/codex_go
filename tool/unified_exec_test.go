@@ -1333,16 +1333,15 @@ func TestSplitUnifiedExecValidUTF8PrefixProgressesAcrossInvalidUTF8LikeRust(t *t
 	input = append(input, []byte(strings.Repeat("b", 4096))...)
 
 	first, rest, ok := splitUnifiedExecValidUTF8Prefix(input, 8192)
-	if !ok || string(first) != strings.Repeat("a", 4096) {
+	if !ok || len(first) != 8192 {
 		t.Fatalf("first prefix len = %d, ok = %v", len(first), ok)
 	}
-	second, rest, ok := splitUnifiedExecValidUTF8Prefix(rest, 8192)
-	if !ok || len(second) != 1 || second[0] != 0xff {
-		t.Fatalf("invalid prefix = %#v, ok = %v", second, ok)
+	if !bytes.Equal(first[:4096], bytes.Repeat([]byte("a"), 4096)) || first[4096] != 0xff {
+		t.Fatalf("first prefix did not preserve malformed bytes: %#v", first[4090:])
 	}
-	third, rest, ok := splitUnifiedExecValidUTF8Prefix(rest, 8192)
-	if !ok || string(third) != strings.Repeat("b", 4096) || len(rest) != 0 {
-		t.Fatalf("third prefix len = %d, rest len = %d, ok = %v", len(third), len(rest), ok)
+	second, rest, ok := splitUnifiedExecValidUTF8Prefix(rest, 8192)
+	if !ok || len(second) != 1 || second[0] != 'b' || len(rest) != 0 {
+		t.Fatalf("second prefix = %#v, rest len = %d, ok = %v", second, len(rest), ok)
 	}
 }
 
@@ -1355,6 +1354,131 @@ func TestSplitUnifiedExecValidUTF8PrefixReturnsViewsWithoutCopyingRemainder(t *t
 	if &prefix[0] != &input[0] || &rest[0] != &input[3] {
 		t.Fatal("split copied the prefix or remainder")
 	}
+}
+
+func TestUnifiedExecUTF8BoundaryMatchesRust(t *testing.T) {
+	if got := unifiedExecUTF8Boundary([]byte("hello")); got != 5 {
+		t.Fatalf("ASCII boundary = %d", got)
+	}
+	accented := []byte("ééé")
+	if got := unifiedExecUTF8Boundary(accented[:3]); got != 2 {
+		t.Fatalf("split scalar boundary = %d", got)
+	}
+	emoji := []byte("😀")
+	if got := unifiedExecUTF8Boundary(emoji); got != len(emoji) {
+		t.Fatalf("complete scalar boundary = %d", got)
+	}
+	for length := 1; length < len(emoji); length++ {
+		if got := unifiedExecUTF8Boundary(emoji[:length]); got != 0 {
+			t.Fatalf("incomplete scalar length %d boundary = %d", length, got)
+		}
+	}
+	for _, test := range []struct {
+		input []byte
+		want  int
+	}{
+		{[]byte{0xff, 'a', 'b'}, 3},
+		{[]byte{0xff, 0xc3}, 1},
+		{[]byte{0xff, 0xc3, 0xa9}, 3},
+		{[]byte{0xe0, 0x80}, 2},
+		{append(emoji, 0xc3), 4},
+	} {
+		if got := unifiedExecUTF8Boundary(test.input); got != test.want {
+			t.Fatalf("unifiedExecUTF8Boundary(%#v) = %d, want %d", test.input, got, test.want)
+		}
+	}
+}
+
+func TestUnifiedExecOutputDeltasPreserveMultibyteAcrossChunks(t *testing.T) {
+	var events []UnifiedExecEvent
+	process := &unifiedExecProcess{
+		callID:     "multibyte",
+		eventSink:  func(event UnifiedExecEvent) { events = append(events, event) },
+		output:     newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript: newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		done:       make(chan struct{}),
+		eventDone:  make(chan struct{}),
+	}
+	process.startEventStream(UnifiedExecEvent{Kind: UnifiedExecEventBegin, CallID: process.callID})
+	process.appendOutput([]byte{0xc3})
+	if got := unifiedExecOutputDeltaEvents(events); len(got) != 0 {
+		t.Fatalf("incomplete scalar emitted deltas: %#v", got)
+	}
+	process.appendOutput([]byte{0xa9})
+	got := unifiedExecOutputDeltaEvents(events)
+	if len(got) != 1 || got[0].Output != "é" {
+		t.Fatalf("multibyte deltas = %#v", got)
+	}
+	transcript, _ := process.transcript.Snapshot()
+	if string(transcript) != "é" {
+		t.Fatalf("transcript = %q", transcript)
+	}
+}
+
+func TestUnifiedExecOutputDeltasFlushIncompleteTrailingBytes(t *testing.T) {
+	var events []UnifiedExecEvent
+	process := &unifiedExecProcess{
+		callID:     "trailing",
+		eventSink:  func(event UnifiedExecEvent) { events = append(events, event) },
+		output:     newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript: newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		done:       make(chan struct{}),
+		eventDone:  make(chan struct{}),
+	}
+	process.startEventStream(UnifiedExecEvent{Kind: UnifiedExecEventBegin, CallID: process.callID})
+	process.appendOutput([]byte{0xc3})
+	if got := unifiedExecOutputDeltaEvents(events); len(got) != 0 {
+		t.Fatalf("incomplete scalar emitted before finish: %#v", got)
+	}
+	process.flushOutputDeltas()
+	got := unifiedExecOutputDeltaEvents(events)
+	if len(got) != 1 || !bytes.Equal([]byte(got[0].Output), []byte{0xc3}) {
+		t.Fatalf("final trailing delta = %#v", got)
+	}
+}
+
+func TestUnifiedExecOutputDeltasRespectQuotaAndKeepTranscript(t *testing.T) {
+	var events []UnifiedExecEvent
+	process := &unifiedExecProcess{
+		callID:        "bounded",
+		eventSink:     func(event UnifiedExecEvent) { events = append(events, event) },
+		output:        newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript:    newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		done:          make(chan struct{}),
+		eventDone:     make(chan struct{}),
+		emittedDeltas: unifiedExecMaxOutputDeltas - 1,
+	}
+	process.startEventStream(UnifiedExecEvent{Kind: UnifiedExecEventBegin, CallID: process.callID})
+	process.appendOutput(bytes.Repeat([]byte{0xff}, 20_000))
+	process.appendOutput([]byte{0xc3})
+	process.flushOutputDeltas()
+
+	deltas := unifiedExecOutputDeltaEvents(events)
+	if len(deltas) != 1 || len(deltas[0].Output) != unifiedExecOutputDeltaMaxBytes {
+		t.Fatalf("bounded deltas = %d lengths=%#v", len(deltas), unifiedExecDeltaLengths(deltas))
+	}
+	transcript, _ := process.transcript.Snapshot()
+	if len(transcript) != 20_001 {
+		t.Fatalf("transcript length = %d, want full producer output", len(transcript))
+	}
+}
+
+func unifiedExecOutputDeltaEvents(events []UnifiedExecEvent) []UnifiedExecEvent {
+	out := make([]UnifiedExecEvent, 0, len(events))
+	for _, event := range events {
+		if event.Kind == UnifiedExecEventOutputDelta {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func unifiedExecDeltaLengths(events []UnifiedExecEvent) []int {
+	out := make([]int, 0, len(events))
+	for _, event := range events {
+		out = append(out, len(event.Output))
+	}
+	return out
 }
 
 func TestUnifiedExecYieldClampsMatchRust(t *testing.T) {

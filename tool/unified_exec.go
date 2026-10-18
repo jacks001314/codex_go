@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -337,7 +336,7 @@ type unifiedExecProcess struct {
 	eventMu       sync.Mutex
 	output        *unifiedExecHeadTailBuffer
 	transcript    *unifiedExecHeadTailBuffer
-	eventPending  bytes.Buffer
+	eventPending  []byte
 	emittedDeltas int
 	exited        bool
 	exitCode      int
@@ -1618,6 +1617,7 @@ func (p *unifiedExecProcess) finishWithExit(err error, exitCode *int) {
 			defer close(p.eventDone)
 			time.Sleep(unifiedExecTrailingOutputGrace)
 			p.mu.Lock()
+			deltas := p.outputDeltasLocked(nil, true)
 			transcript, _ := p.transcript.Snapshot()
 			event := UnifiedExecEvent{
 				Kind:        UnifiedExecEventEnd,
@@ -1633,6 +1633,7 @@ func (p *unifiedExecProcess) finishWithExit(err error, exitCode *int) {
 				TimedOut:    p.timedOut,
 			}
 			p.mu.Unlock()
+			p.emitOutputDeltas(deltas)
 			p.emitEvent(event)
 		}()
 	})
@@ -1983,8 +1984,12 @@ func (p *unifiedExecProcess) appendOutput(data []byte) {
 		p.transcript = newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes)
 	}
 	_, _ = p.transcript.Write(data)
-	deltas := p.outputDeltasLocked(data)
+	deltas := p.outputDeltasLocked(data, false)
 	p.mu.Unlock()
+	p.emitOutputDeltas(deltas)
+}
+
+func (p *unifiedExecProcess) emitOutputDeltas(deltas []string) {
 	for _, delta := range deltas {
 		p.emitEvent(UnifiedExecEvent{
 			Kind:      UnifiedExecEventOutputDelta,
@@ -1995,23 +2000,72 @@ func (p *unifiedExecProcess) appendOutput(data []byte) {
 	}
 }
 
-func (p *unifiedExecProcess) outputDeltasLocked(data []byte) []string {
-	if p == nil || p.eventSink == nil || p.emittedDeltas >= unifiedExecMaxOutputDeltas || len(data) == 0 {
+func (p *unifiedExecProcess) flushOutputDeltas() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	deltas := p.outputDeltasLocked(nil, true)
+	p.mu.Unlock()
+	p.emitOutputDeltas(deltas)
+}
+
+func (p *unifiedExecProcess) outputDeltasLocked(data []byte, finish bool) []string {
+	if p == nil || p.eventSink == nil || (len(data) == 0 && !finish) {
 		return nil
 	}
-	_, _ = p.eventPending.Write(data)
+	if len(data) > 0 {
+		p.eventPending = append(p.eventPending, data...)
+	}
+	if p.emittedDeltas >= unifiedExecMaxOutputDeltas {
+		p.eventPending = nil
+		return nil
+	}
 	remaining := unifiedExecMaxOutputDeltas - p.emittedDeltas
 	deltas := make([]string, 0, min(remaining, 4))
-	for p.eventPending.Len() > 0 && len(deltas) < remaining {
-		prefix, _, ok := splitUnifiedExecValidUTF8Prefix(p.eventPending.Bytes(), unifiedExecOutputDeltaMaxBytes)
-		if !ok {
-			break
+	for len(p.eventPending) > 0 && len(deltas) < remaining {
+		limit := min(len(p.eventPending), unifiedExecOutputDeltaMaxBytes)
+		boundary := unifiedExecUTF8Boundary(p.eventPending[:limit])
+		if boundary == 0 {
+			if !finish {
+				break
+			}
+			// Malformed or incomplete trailing bytes are still delivered when the
+			// producer closes, matching Rust Buffer::finish.
+			boundary = limit
 		}
-		deltas = append(deltas, string(prefix))
-		p.eventPending.Next(len(prefix))
+		if boundary > limit {
+			boundary = limit
+		}
+		deltas = append(deltas, string(p.eventPending[:boundary]))
+		p.eventPending = p.eventPending[boundary:]
 		p.emittedDeltas++
 	}
+	if finish {
+		// Quota exhaustion drops any remaining frame candidates; the transcript is
+		// already complete independently of delta emission.
+		p.eventPending = nil
+	}
 	return deltas
+}
+
+// unifiedExecUTF8Boundary returns the longest prefix that ends on a complete
+// UTF-8 scalar. Malformed bytes advance like Rust's from_utf8 error path, while
+// an incomplete trailing scalar is retained for the next producer chunk.
+func unifiedExecUTF8Boundary(data []byte) int {
+	boundary := max(len(data)-utf8.UTFMax+1, 0)
+	for boundary < len(data) {
+		remaining := data[boundary:]
+		if !utf8.FullRune(remaining) {
+			break
+		}
+		_, size := utf8.DecodeRune(remaining)
+		if size <= 0 {
+			break
+		}
+		boundary += size
+	}
+	return boundary
 }
 
 func splitUnifiedExecValidUTF8Prefix(buffer []byte, maxBytes int) ([]byte, []byte, bool) {
@@ -2019,19 +2073,9 @@ func splitUnifiedExecValidUTF8Prefix(buffer []byte, maxBytes int) ([]byte, []byt
 		return nil, buffer, false
 	}
 	maxLen := min(len(buffer), maxBytes)
-	split := maxLen
-	if !utf8.Valid(buffer[:maxLen]) {
-		split = 0
-		for split < maxLen {
-			_, size := utf8.DecodeRune(buffer[split:maxLen])
-			if size == 0 || (size == 1 && buffer[split] >= utf8.RuneSelf) {
-				break
-			}
-			split += size
-		}
-		if split == 0 {
-			split = 1
-		}
+	split := unifiedExecUTF8Boundary(buffer[:maxLen])
+	if split == 0 {
+		return nil, buffer, false
 	}
 	return buffer[:split], buffer[split:], true
 }
