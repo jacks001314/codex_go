@@ -3458,9 +3458,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust-only guardian-v2 async_scorer extension change; Go has no async scorer/classifier extension (model/catalog.go explicitly notes classifier fields belong to Rust's async scorer). The synchronous Guardian reviewer path is unaffected."
       ]
     },
     {
@@ -3470,9 +3470,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: TrustedSkillInvocations, into_paths"
+        "Rust-only async_scorer trusted_skills change; Go has no guardian-v2 async scorer trusted-skill collection to unlock."
       ]
     },
     {
@@ -3494,9 +3494,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust-only async_scorer parent-compaction classification change; Go has no async classifier sampler. The synchronous Guardian reviewer still enforces max_parent_compaction_tokens through config validation/clamping."
       ]
     },
     {
