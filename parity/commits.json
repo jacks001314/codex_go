@@ -1740,9 +1740,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: image-generation analytics carries optional transparent_background from thread items (alias-normalized), emits true/false when present and omits it when unset. Tests: go test ./telemetry -run TransparentBackground -count=1; go test ./appserver -run 'ImageGeneration|Transparent' -count=1"
       ]
     },
     {
@@ -1776,9 +1776,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: generated Windows .bat aliases use %~dp0-relative executable paths on the same volume and fall back to absolute paths across volumes, preserving Unicode executable paths under legacy code pages. Tests: go test ./cli -run 'Dispatch|BatchAlias' -count=1"
       ]
     },
     {
@@ -1788,9 +1788,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: ToolCallAnalytics, handle_message_string_tool, set_receiver"
+        "Round 762: remaining tool-item analytics classifies send_message, followup_task, interrupt_agent, list_agents, wait_agent, and close_agent with receiver attribution and terminal outcomes. Tests: go test ./appserver -run 'RemainingTool|MultiAgent|Collab.*Analytics' -count=1"
       ]
     },
     {
@@ -1800,9 +1800,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: memory-consolidation threads use the memory-consolidation source, managed completion policy hooks, and executor cleanup; project/session/user stop hooks and legacy completion notifications are excluded, with managed rejection propagating as an agent error. Tests: go test ./appserver -run 'MemoryConsolidation|StopHook' -count=1"
       ]
     },
     {
@@ -1812,9 +1812,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: Guardian transcript selection uses the retained review-history/compaction context, including user evidence, tool attribution, compaction summaries, protected messages, and per-entry truncation. Tests: go test ./appserver -run 'GuardianReviewHistory|GuardianTranscript' -count=1"
       ]
     },
     {
@@ -1836,9 +1836,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/6; needs review: probe_default_colors_after_protected_startup, ready_for_terminal_color_probe"
+        "Round 762: the TUI defers the OSC 10/11 color probe until protected startup input/MCP work completes, preserves console input records around the probe, removes only valid color replies, and falls back to the console palette. Tests: go test ./tui/tea -run 'TerminalColor|Probe' -count=1; go test ./tui -run TerminalDefaultColors -count=1"
       ]
     },
     {
@@ -1956,9 +1956,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: Go's goal extension owns continuation prompts/steering; TUI local/remote continuation commands carry the goal trigger and internal input without duplicate prompt helper packages. Tests: go test ./app -run 'GoalContinuation|GoalThreadStart' -count=1; go test ./appserver -run 'GoalContinuation|Goal.*Lineage' -count=1"
       ]
     },
     {
@@ -1968,9 +1968,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: exit_info, sanitized_websocket_url"
+        "Round 762: exit/reconnect guidance distinguishes disconnect, interrupt, archived, deleted, daemon, remote, and embedded sessions; remote WebSocket commands are sanitized and configured auth env options are preserved. Tests: go test ./tui/tea -run 'Reconnect|Shutdown|ExitSummary' -count=1; go test ./app -run 'Exit|Reconnect' -count=1"
       ]
     },
     {
