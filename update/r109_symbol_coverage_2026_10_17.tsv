@@ -2043,7 +2043,7 @@ bfca0335fabd27b5f9907acc286349988473e309	44575	Tie network approval reviews to t
 bfdb1571780b326ce978696de12b1d81b5e978f2	49100	Reuse the HTTP connection pool for remote plugin requests (#49100)	2026-09-28	plugins	0	0		0	0	complete
 bfe0fb9bb9fa44f3d28125bfd9d6e2ef3b0e5f5b	52225	Fix config rebuild call in the Windows MXC preference test (#52225)	2026-10-08	config	0	0		0	0	not_applicable	
 c026e7a622ecae45f0af1939729e7baab9d1637b	46547	Expose a backend-independent agent control contract (#46547)	2026-09-18	guardian	24	6	0.25	0	0	not_applicable	AgentConfigUpdate,AgentExecutionGuard,AgentInfo,AgentInput,AgentMetadata,AgentPage,AgentQuery,AgentScope,AgentTarget,AgentTurnOutcome
-c0316291ca477b8355c0c4f20784f4863ee30f5a	45779	Use native process identities for PID-managed daemons (#45779)	2026-09-15	appserver	4	0	0.00	0	0	implementation_pending	ProcessIdentity,matches_process,promote_legacy_identity,read_process_details
+c0316291ca477b8355c0c4f20784f4863ee30f5a	45779	Use native process identities for PID-managed daemons (#45779)	2026-09-15	appserver	4	0	0.00	0	0	complete	ProcessIdentity,matches_process,promote_legacy_identity,read_process_details
 c03bbff4831a23a6dfc6f178838b73a50a9f554a	53689	Constrain API-key model access programs to server support (#53689)	2026-10-13	tui	2	0	0.00	0	0	implementation_pending	constrain_api_key_models,refresh_account_scoped_models
 c079352d8380316f748a9c88522589758d858c4f	52200	Allow plugin toggles while searching and preserve filters on refresh (#52200)	2026-10-08	tui	0	0		0	0	not_applicable	
 c098f97e5305394c7f30a876c1393cf34a3eedca	47799	Enable terminal input approval by default (#47799)	2026-09-24	core	0	0		0	0	not_applicable	

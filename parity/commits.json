@@ -13973,9 +13973,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "blocked_precondition",
+      "status": "complete",
       "evidence": [
-        "Round 758: PIDRecord carries native identities with Linux boot id/start ticks and macOS kinfo_proc start seconds/microseconds; launch recording, preferred matching, zombie handling, legacy promotion, and Windows access-error propagation are implemented and tested. Precondition missing: Rust additionally reads proc_uniqidentifierinfo.unique_id plus kern.bootsessionuuid via proc_pidinfo flavor 17. Go's non-cgo x/sys surface exposes kinfo_proc but not flavor 17, so the stronger identity cannot be obtained without cgo or a platform-specific syscall wrapper. Tests: go test ./appserverdaemon -run 'PID|Process|Updater' -count=1; GOOS=linux/darwin builds/tests previously recorded."
+        "Darwin now reads XNU flavor-17 proc_uniqidentifierinfo through SYS_PROC_INFO without cgo, plus kern.bootsessionuuid, and records unique id + boot id alongside start time. Matching prefers boot/unique identity, detects PID reuse and zombies, and legacy promotion double-reads the native identity. Tests: go test ./appserverdaemon -count=1; GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./appserverdaemon; GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c ./appserverdaemon; GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./appserverdaemon"
       ]
     },
     {
