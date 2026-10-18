@@ -1499,7 +1499,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8e23d1836fd22d1c920533f39851db1c7d795744	51433	Show hook status messages as titles in the hooks browser (#51433)	2026-10-06	tui	0	0		0	0	not_applicable	
 8e2afc09126c0cea4c282725fe68af43adad73d7	44636	Recover OAuth metadata discovery from 503 responses via OIDC (#44636)	2026-09-10	mcp	0	0		0	0	not_applicable	
 8e3b180d49951c3e53140710b2baad09791cc999	42298	Preserve retained answers across steer rollbacks (#42298)	2026-09-02	guardian	1	1	1.00	0	0	complete	
-8e44ad94b0519fbca39ed452bb2e1a6b43ad76a4	49814	Add coordinated shutdown for local agent trees (#49814)	2026-10-01	persistence	19	8	0.42	0	0	audit_pending	AgentTreeMembership,AgentTreeShutdown,AgentTreeTeardownGuard,SessionStartupGuard,clone_for_teardown,disarm,into_teardown_guard,record_shutdown_failure,release_membership,request_agent_tree_shutdown
+8e44ad94b0519fbca39ed452bb2e1a6b43ad76a4	49814	Add coordinated shutdown for local agent trees (#49814)	2026-10-01	persistence	19	19	1.00	0	0	complete
 8e4b7d31dede18adba90479cab2bbf75c258ad40	42850	Use jemalloc for Linux musl binaries (#42850)	2026-09-04	appserver	0	0		0	0	not_applicable	
 8e649e3afa5cdddfb09a1b85a090b94775045d9b	40150	Use thread source metadata for Guardian classifiers (#40150)	2026-08-22	guardian	0	0		0	0	not_applicable	
 8e694e955ae02ca737230a5468c55d5847074072	43604	Exclude base instructions from the bundled model catalog (#43604)	2026-09-07	model	0	0		0	0	not_applicable	

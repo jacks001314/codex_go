@@ -24695,9 +24695,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 8/19; needs review: AgentTreeMembership, AgentTreeShutdown, AgentTreeTeardownGuard, SessionStartupGuard, clone_for_teardown"
+        "Equivalent implementation: RuntimeRouter shutdown uses the spawn graph to enumerate the requested tree, cancels active turns and delegates, closes persistence/environment resources, and reports payload-free cleanup failures through AgentTreeShutdownReport. Spawn edges remain closed for the tree while other roots are unaffected. Tests cover clean/failed teardown, pending startup cancellation, delegate cancellation, and tree lifecycle isolation."
       ]
     },
     {
