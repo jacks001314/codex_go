@@ -4572,9 +4572,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: active_turn_root, inject_hook_context_if_running, invalidate_turn_lineage"
+        "Round 457 (audit): goal create anchors lineage to the active turn's root/parent, automatic continuations carry it (extendGoalTurnLineage), and external objective edits, clears, and externally injected context invalidate it. Tests cover active and buffered/external hook or response context. Tests: go test ./appserver -run 'Goal.*Lineage|GoalContinuationCarriesTurnLineage|GoalTurnLineage' -count=1"
       ]
     },
     {
