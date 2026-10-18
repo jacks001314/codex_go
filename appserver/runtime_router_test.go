@@ -24544,10 +24544,9 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationByDefaultLikeR
 			t.Fatalf("input missing imagegen skill context %q:\n%s", want, inputText)
 		}
 	}
-	instructions, _ := recordedBody["instructions"].(string)
 	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "open and read its `SKILL.md` completely"} {
-		if !strings.Contains(instructions, want) {
-			t.Fatalf("instructions missing skills protocol %q:\n%s", want, instructions)
+		if !strings.Contains(inputText, want) {
+			t.Fatalf("input missing skills protocol %q:\n%s", want, inputText)
 		}
 	}
 }
