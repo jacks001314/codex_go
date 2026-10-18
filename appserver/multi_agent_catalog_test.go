@@ -153,6 +153,45 @@ func TestFilterInheritedDeveloperFragmentsRealignsContentItemKindsLikeRust(t *te
 	}
 }
 
+// Rust #40266: filtering by developer text must realign annotations just like
+// filtering by content kind, otherwise the surviving part keeps the removed
+// part's positional classification.
+func TestFilterInheritedDeveloperFragmentsRealignsKindsAfterTextFilterLikeRust(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []any{
+			map[string]any{"type": "input_text", "text": "<multi_agent_role>parent role</multi_agent_role>"},
+			map[string]any{"type": "input_text", "text": "Preserved developer context."},
+		},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []any{"developer.instructions", "context.compaction_summary"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal text-filtered item error = %v", err)
+	}
+	items := []session.Item{{
+		ID:   "text-filtered",
+		Type: "message",
+		Role: "developer",
+		Raw:  raw,
+		Content: []session.ContentPart{
+			{Type: "input_text", Text: "<multi_agent_role>parent role</multi_agent_role>"},
+			{Type: "input_text", Text: "Preserved developer context."},
+		},
+	}}
+	filtered := filterInheritedCurrentTimeReminders(items)
+	if len(filtered) != 1 || len(filtered[0].Content) != 1 ||
+		filtered[0].Content[0].Text != "Preserved developer context." {
+		t.Fatalf("filtered = %#v, want only the preserved content item", filtered)
+	}
+	kinds := sessionItemContentItemKinds(&filtered[0])
+	if len(kinds) != 1 || kinds[0] != "context.compaction_summary" {
+		t.Fatalf("realigned kinds = %#v, want [context.compaction_summary]", kinds)
+	}
+}
+
 // Rust #51329 scopes the kind-based scrub to developer messages; other roles are
 // kept untouched even when they somehow carry a hint classification.
 func TestFilterInheritedDeveloperFragmentsKeepsNonDeveloperKindContentLikeRust(t *testing.T) {

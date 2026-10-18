@@ -1372,14 +1372,15 @@ func retainForkedDeveloperMessage(item *session.Item) bool {
 		return true
 	}
 	retained := item.Content[:0]
-	droppedByKind := false
+	contentChanged := false
 	retainedKinds := make([]string, 0, len(item.Content))
 	for index, part := range item.Content {
 		if forkExcludedContentItemKind(kinds, index) {
-			droppedByKind = true
+			contentChanged = true
 			continue
 		}
 		if part.Type == "input_text" && isForkExcludedDeveloperText(part.Text) {
+			contentChanged = true
 			continue
 		}
 		retained = append(retained, part)
@@ -1392,7 +1393,7 @@ func retainForkedDeveloperMessage(item *session.Item) bool {
 		}
 	}
 	item.Content = retained
-	if droppedByKind {
+	if contentChanged && kinds != nil {
 		rewriteSessionItemContentItemKinds(item, retainedKinds)
 	}
 	if len(retained) > 0 {

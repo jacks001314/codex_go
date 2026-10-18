@@ -898,9 +898,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 597 (fix): retainForkedDeveloperMessage now realigns content_item_kinds after any removed fragment, including text-marker removal, so surviving content parts keep their own positional classification. Added TestFilterInheritedDeveloperFragmentsRealignsKindsAfterTextFilterLikeRust. Tests: go test ./appserver -run 'FilterInheritedDeveloper|MultiAgentCatalog|Fork.*Content|ContentItemKinds' -count=1; go vet ./appserver"
       ]
     },
     {
