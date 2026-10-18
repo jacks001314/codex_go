@@ -2809,9 +2809,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust-only Bazel CI flag removal (.bazelrc); Go has no Bazel toolchain carrier."
       ]
     },
     {
@@ -2953,9 +2953,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "tui/tea jumpToVimBufferLine implements gg/G (and configured buffer-start/buffer-end chords) with grapheme-aware line boundaries and operator ranges; TestVimBufferJumpMotionsLikeRust covers the motions. Tests: go test ./tui/tea -run 'VimBufferJump' -count=1"
       ]
     },
     {
@@ -2965,9 +2965,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "seatbelt policy construction grants /tmp, /var/tmp, /private/tmp, and /private/var/tmp only to sandboxed process launches and routes them through normal exclusions; TestSeatbeltScratch... covers the protected/excluded ordering and implicit scratch grants. Tests: go test ./sandbox -run 'Seatbelt' -count=1"
       ]
     },
     {
@@ -3013,9 +3013,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Guardian scoring gates on model ComputerUseReviewRequired/guardian review modes rather than rejecting required computer-use models; model catalog tests cover adaptive/disabled/legacy policy resolution and appserver guardian tests cover the routed scoring path. Tests: go test ./model -run 'ComputerUse|Guardian' -count=1; go test ./appserver -run 'Guardian.*Computer|Guardian.*Score' -count=1"
       ]
     },
     {
