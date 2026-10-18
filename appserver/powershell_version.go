@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,12 +51,24 @@ func queryPowerShellVersion(ctx context.Context, path string) string {
 }
 
 // parsePowerShellVersion reduces "$PSVersionTable.PSVersion.ToString()" output
-// (for example "5.1.19041.1" or "7.4.0") to its major.minor form.
+// (for example "5.1.19041.1" or "7.4.0") to its major.minor form. Rust #41232
+// bounds the probe output to 64 bytes and requires numeric u16 components.
 func parsePowerShellVersion(output string) string {
+	if len(output) > 64 {
+		return ""
+	}
 	output = strings.TrimSpace(output)
 	parts := strings.SplitN(output, ".", 3)
 	if len(parts) < 2 {
 		return ""
 	}
-	return strings.TrimSpace(parts[0]) + "." + strings.TrimSpace(parts[1])
+	major, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil {
+		return ""
+	}
+	minor, err := strconv.ParseUint(parts[1], 10, 16)
+	if err != nil {
+		return ""
+	}
+	return strconv.FormatUint(major, 10) + "." + strconv.FormatUint(minor, 10)
 }

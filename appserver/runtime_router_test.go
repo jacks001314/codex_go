@@ -10003,15 +10003,56 @@ func TestTurnEnvironmentContextReportsSelectedPowerShellLikeRust(t *testing.T) {
 
 func TestParsePowerShellVersionLikeRust(t *testing.T) {
 	for input, want := range map[string]string{
-		"5.1.19041.1": "5.1",
-		"7.4.0":       "7.4",
-		"7.4":         "7.4",
-		"":            "",
-		"garbage":     "",
+		"5.1.19041.1":                  "5.1",
+		"7.4.0":                        "7.4",
+		"7.4":                          "7.4",
+		" 7.4 \n":                      "7.4",
+		"":                             "",
+		"garbage":                      "",
+		"7":                            "",
+		"7.x":                          "",
+		"7 .4":                         "",
+		"65536.1":                      "",
+		strings.Repeat("1", 65) + ".1": "",
 	} {
 		if got := parsePowerShellVersion(input); got != want {
 			t.Fatalf("parsePowerShellVersion(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+// TestPowerShellShellVersionGateLikeRust covers the feature gate and the
+// local-environment requirement: a remote executor's PowerShell path must not
+// be probed on the app-server host.
+func TestPowerShellShellVersionGateLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "bash"}, cwd)
+	if err := manager.SetInfo("local-ps", EnvironmentShellInfo{Name: "powershell", Path: "missing-powershell-for-test.exe"}, cwd); err != nil {
+		t.Fatalf("SetInfo(local) error = %v", err)
+	}
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "remote-ps", ExecServerURL: "ws://127.0.0.1:1"}); err != nil {
+		t.Fatalf("Add(remote) error = %v", err)
+	}
+	if err := manager.SetInfo("remote-ps", EnvironmentShellInfo{Name: "powershell", Path: "powershell.exe"}, `C:\workspace`); err != nil {
+		t.Fatalf("SetInfo(remote) error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager, DefaultCWD: cwd})
+	localParams := &turn.TurnStartParams{Environments: []map[string]any{{"environmentId": "local-ps"}}}
+	remoteParams := &turn.TurnStartParams{Environments: []map[string]any{{"environmentId": "remote-ps"}}}
+	disabled := &config.Config{Values: map[string]any{}}
+	enabled := &config.Config{Values: map[string]any{
+		"features": map[string]any{"powershell_shell_version": true},
+	}}
+	if got := router.powershellShellVersionForTurn(context.Background(), disabled, localParams); got != "" {
+		t.Fatalf("disabled feature version = %q", got)
+	}
+	if got := router.powershellShellVersionForTurn(context.Background(), enabled, remoteParams); got != "" {
+		t.Fatalf("remote environment version = %q", got)
+	}
+	// The enabled local probe runs the selected executable; a missing path
+	// yields an empty (cached) version rather than failing the turn.
+	if got := router.powershellShellVersionForTurn(context.Background(), enabled, localParams); got != "" {
+		t.Fatalf("missing local PowerShell version = %q", got)
 	}
 }
 

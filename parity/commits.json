@@ -3924,9 +3924,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: from_turn_context_with_environments"
+        "Round 442 (implementation): the powershell_shell_version feature already gated a cached 2s probe and rendered <shell_version>, and environment context is fully re-emitted each turn so a removed version is simply absent. Tightened parity: the probe now applies only to a single local environment (remote executor paths are not run on the host), and parsing bounds output to 64 bytes with numeric u16 major/minor components. Tests: go test ./appserver -run 'PowerShellShellVersionGate|ParsePowerShellVersion|RendersPowerShellVersion' -count=1"
       ]
     },
     {

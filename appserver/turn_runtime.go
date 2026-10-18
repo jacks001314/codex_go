@@ -8067,10 +8067,17 @@ func (r *RuntimeRouter) powershellShellVersionForTurn(ctx context.Context, cfg *
 		return ""
 	}
 	environments := r.unifiedExecEnvironmentsForTurn(params)
-	if len(environments) != 1 || environments[0].Shell == nil || environments[0].Shell.Type != tool.ShellPowerShell {
+	if len(environments) != 1 {
 		return ""
 	}
-	return queryPowerShellVersion(ctx, environments[0].Shell.Path)
+	environment := environments[0]
+	// Rust's single_local_environment: a remote executor's PowerShell path is
+	// not runnable on the app-server host, so the version probe only applies to
+	// a local environment.
+	if strings.TrimSpace(environment.ExecServerURL) != "" || environment.Shell == nil || environment.Shell.Type != tool.ShellPowerShell {
+		return ""
+	}
+	return queryPowerShellVersion(ctx, environment.Shell.Path)
 }
 
 func runtimeRouterClockTime(r *RuntimeRouter) time.Time {
