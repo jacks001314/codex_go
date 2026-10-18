@@ -5702,9 +5702,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 668 (partial): Go already performs remote install/uninstall orchestration in PluginService.Install/Uninstall; app-server only acquires the remote-installed cache mutation gate, calls the service, refreshes derived caches/MCP runtimes, and emits analytics. Remaining: the mutation gate and typed RemotePluginInstall/UninstallOutcome + OperationError APIs remain app-server-owned rather than living in the shared service. Tests: go test ./plugin -run 'Install|Uninstall' -count=1; go test ./appserver -run 'PluginInstall|PluginUninstall|PluginInstallRuntime' -count=1"
+        "Round 681 (implementation): the installed-plugin cache mutation gate now lives in the shared plugin package keyed by Codex home; PluginService.InstallWithOutcome/UninstallWithOutcome hold it across the cache/config mutation and return structured outcomes carrying the staged plugin detail and effective-plugin-change flag. App-server install, uninstall, and tool-driven install consume those outcomes for analytics and runtime refresh; reconciliation uses the same shared gate/generation. Go represents operation error classes with its existing sentinel errors plus errors.Is, preserving JSON-RPC mapping. Tests: go test ./plugin -run 'WithOutcome' -count=1; go test ./plugin -count=1; go test ./appserver -run 'PluginInstall|PluginUninstall|PluginRemote|PluginReconcile|PluginAnalytics' -count=1"
       ]
     },
     {

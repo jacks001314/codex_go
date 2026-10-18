@@ -11114,9 +11114,7 @@ func (r *RuntimeRouter) handlePluginInstall(request *Request) (*plugin.PluginIns
 		return nil, err
 	}
 	service := r.requirePlugins()
-	releaseMutation := acquireRemoteInstalledPluginCacheMutation(r.requireConfig().CodexHome())
-	response, err := service.Install(&params)
-	releaseMutation()
+	outcome, err := service.InstallWithOutcome(&params)
 	if err != nil {
 		r.emitPluginInstallFailedAnalyticsEvent(context.Background(), request.normalizedConnectionID(), &params, err)
 		return nil, err
@@ -11124,13 +11122,13 @@ func (r *RuntimeRouter) handlePluginInstall(request *Request) (*plugin.PluginIns
 	// Rust #42593: a successful install changes the effective plugin set, so
 	// refresh the plugin/skill caches and the MCP runtimes before the caller can
 	// use the plugin's servers from threads loaded before the install.
-	r.effectivePluginsChanged()
-	if response != nil {
-		if detail := pluginAnalyticsDetailByID(service, response.PluginID); detail != nil {
-			r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginInstalledEventType, detail)
-		}
+	if outcome.EffectivePluginsChanged {
+		r.effectivePluginsChanged()
 	}
-	return response, nil
+	if outcome.Detail != nil {
+		r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginInstalledEventType, outcome.Detail)
+	}
+	return outcome.Response, nil
 }
 
 func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginUninstallResponse, error) {
@@ -11139,20 +11137,19 @@ func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginU
 		return nil, err
 	}
 	service := r.requirePlugins()
-	detail := pluginAnalyticsDetailByID(service, params.PluginID)
-	releaseMutation := acquireRemoteInstalledPluginCacheMutation(r.requireConfig().CodexHome())
-	response, err := service.Uninstall(&params)
-	releaseMutation()
+	outcome, err := service.UninstallWithOutcome(&params)
 	if err != nil {
 		return nil, err
 	}
 	// Rust plugin_uninstall reloads the config and refreshes the plugin-derived
 	// caches, MCP runtimes, and hook runtimes.
-	r.effectivePluginsChanged()
-	if detail != nil {
-		r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginUninstalledEventType, detail)
+	if outcome.EffectivePluginsChanged {
+		r.effectivePluginsChanged()
 	}
-	return response, nil
+	if outcome.Detail != nil {
+		r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginUninstalledEventType, outcome.Detail)
+	}
+	return outcome.Response, nil
 }
 
 func (r *RuntimeRouter) handleModelList(request *Request) (*model.ModelListResponse, error) {

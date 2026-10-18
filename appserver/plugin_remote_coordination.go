@@ -1,12 +1,10 @@
 package appserver
 
 import (
-	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 
 	"codex_go/auth"
+	"codex_go/plugin"
 )
 
 // remoteInstalledPluginsAuthIdentity scopes remote plugin snapshots to the
@@ -47,57 +45,16 @@ func remoteInstalledPluginsAuthIdentityKey(identity remoteInstalledPluginsAuthId
 	}, "\x00")
 }
 
-type remoteInstalledPluginCoordinationState struct {
-	// gate serializes installed-plugin bundle reconciliation with direct remote
-	// plugin installs and uninstalls.
-	gate sync.Mutex
-	// generation changes whenever authentication changes. A sync captures it
-	// before fetching and may publish only if it is still current.
-	generation atomic.Uint64
-}
-
-var remoteInstalledPluginCoordinations = struct {
-	sync.Mutex
-	byCodexHome map[string]*remoteInstalledPluginCoordinationState
-}{byCodexHome: map[string]*remoteInstalledPluginCoordinationState{}}
-
-func remoteInstalledPluginCoordinator(codexHome string) *remoteInstalledPluginCoordinationState {
-	key := filepath.Clean(strings.TrimSpace(codexHome))
-	remoteInstalledPluginCoordinations.Lock()
-	defer remoteInstalledPluginCoordinations.Unlock()
-	state := remoteInstalledPluginCoordinations.byCodexHome[key]
-	if state == nil {
-		state = &remoteInstalledPluginCoordinationState{}
-		remoteInstalledPluginCoordinations.byCodexHome[key] = state
-	}
-	return state
-}
-
 func tryAcquireRemoteInstalledPluginSync(codexHome string) (generation uint64, release func(), ok bool) {
-	if strings.TrimSpace(codexHome) == "" {
-		return 0, func() {}, false
-	}
-	state := remoteInstalledPluginCoordinator(codexHome)
-	if !state.gate.TryLock() {
-		return 0, nil, false
-	}
-	return state.generation.Load(), state.gate.Unlock, true
+	return plugin.TryAcquireRemoteInstalledPluginSync(codexHome)
 }
 
 func acquireRemoteInstalledPluginCacheMutation(codexHome string) func() {
-	if strings.TrimSpace(codexHome) == "" {
-		return func() {}
-	}
-	state := remoteInstalledPluginCoordinator(codexHome)
-	state.gate.Lock()
-	return state.gate.Unlock
+	return plugin.AcquireRemoteInstalledPluginCacheMutation(codexHome)
 }
 
 func advanceRemoteInstalledPluginCacheGeneration(codexHome string) {
-	if strings.TrimSpace(codexHome) == "" {
-		return
-	}
-	remoteInstalledPluginCoordinator(codexHome).generation.Add(1)
+	plugin.AdvanceRemoteInstalledPluginCacheGeneration(codexHome)
 }
 
 func (r *RuntimeRouter) advanceRemoteInstalledPluginCacheGeneration() {
@@ -122,5 +79,5 @@ func (r *RuntimeRouter) clearRemoteInstalledPluginMetadataForAuthChange() {
 }
 
 func remoteInstalledPluginGenerationCurrent(codexHome string, generation uint64) bool {
-	return remoteInstalledPluginCoordinator(codexHome).generation.Load() == generation
+	return plugin.RemoteInstalledPluginGenerationCurrent(codexHome, generation)
 }

@@ -2703,6 +2703,54 @@ func (s *PluginService) EnabledSkillRoots() []EnabledSkillRoot {
 	return roots
 }
 
+// PluginInstallOutcome is the structured result of a plugin install performed
+// through the shared manager gate (Rust #42114).
+type PluginInstallOutcome struct {
+	Response                *PluginInstallResponse
+	Detail                  *PluginDetail
+	EffectivePluginsChanged bool
+}
+
+// PluginUninstallOutcome is the structured result of a plugin uninstall.
+type PluginUninstallOutcome struct {
+	Response                *PluginUninstallResponse
+	Detail                  *PluginDetail
+	EffectivePluginsChanged bool
+	CacheRemovalError       error
+}
+
+func (s *PluginService) detailByID(pluginID string) *PluginDetail {
+	pluginID = strings.TrimSpace(pluginID)
+	if s == nil || pluginID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	detail, ok := s.plugins[pluginID]
+	if !ok {
+		return nil
+	}
+	cloned := cloneDetail(detail)
+	return &cloned
+}
+
+// InstallWithOutcome holds the installed-plugin cache mutation gate while the
+// install mutates the cache and configuration, then returns the staged outcome
+// for the caller's analytics and runtime refresh work (Rust #42114).
+func (s *PluginService) InstallWithOutcome(params *PluginInstallParams) (*PluginInstallOutcome, error) {
+	release := AcquireRemoteInstalledPluginCacheMutation(s.CodexHome())
+	defer release()
+	response, err := s.Install(params)
+	if err != nil {
+		return nil, err
+	}
+	outcome := &PluginInstallOutcome{Response: response, EffectivePluginsChanged: true}
+	if response != nil {
+		outcome.Detail = s.detailByID(response.PluginID)
+	}
+	return outcome, nil
+}
+
 func (s *PluginService) Install(params *PluginInstallParams) (*PluginInstallResponse, error) {
 	if params == nil {
 		params = &PluginInstallParams{}
@@ -3020,6 +3068,27 @@ func marketplacePluginSubdirForMaterialization(pluginSubdir string, destination 
 		return pluginSubdir
 	}
 	return rel
+}
+
+// UninstallWithOutcome holds the installed-plugin cache mutation gate while
+// the uninstall mutates the cache and configuration (Rust #42114).
+func (s *PluginService) UninstallWithOutcome(params *PluginUninstallParams) (*PluginUninstallOutcome, error) {
+	pluginID := ""
+	if params != nil {
+		pluginID = strings.TrimSpace(params.PluginID)
+	}
+	detail := s.detailByID(pluginID)
+	release := AcquireRemoteInstalledPluginCacheMutation(s.CodexHome())
+	defer release()
+	response, err := s.Uninstall(params)
+	if err != nil {
+		return nil, err
+	}
+	return &PluginUninstallOutcome{
+		Response:                response,
+		Detail:                  detail,
+		EffectivePluginsChanged: true,
+	}, nil
 }
 
 func (s *PluginService) Uninstall(params *PluginUninstallParams) (*PluginUninstallResponse, error) {

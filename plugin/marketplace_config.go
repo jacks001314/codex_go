@@ -23,6 +23,17 @@ func (s *PluginService) SetCodexHome(codexHome string) {
 	s.SetMarketplaceConfigPath(filepath.Join(codexHome, ConfigTOMLFilename))
 }
 
+// CodexHome returns the Codex home this service mutates. Empty means the
+// service has no shared remote-plugin mutation gate.
+func (s *PluginService) CodexHome() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.codexHome
+}
+
 func (s *PluginService) SetMarketplaceConfigPath(path string) {
 	s.mu.Lock()
 	s.marketplaceConfigPath = strings.TrimSpace(path)
