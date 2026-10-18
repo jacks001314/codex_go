@@ -31303,9 +31303,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/12; needs review: OAuthLoginControl, OAuthSessionConfig, OAuthSessionError, OAuthSessionManager, OAuthSessionStatus"
+        "Round 401 (audit): auth/oauth_session.go exposes config, manager, status/change, login-control, storage, error, constructor, and status-subscription aliases over GatewayAuthManager while preserving redirect-free HTTP and encrypted-store behavior. Tests: go test ./auth -run 'OAuthSession|Gateway' -count=1; go vet ./auth"
       ]
     },
     {
