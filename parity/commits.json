@@ -27364,9 +27364,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555: websocket error events now read Retry-After from nested error.headers with a top-level headers fallback and map advised rate-limit/overload events to the shared retryable APIError carrying the server deadline; headerless rate limits and other codes stay on the generic terminal path. Tests: go test ./model -run WebSocketErrorHonorsRetryAfter -count=1; go test ./model -count=1"
       ]
     },
     {

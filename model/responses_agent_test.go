@@ -509,6 +509,73 @@ func TestResponsesAgentRunnerWebSocketRecordsContinuationMetricLikeRust(t *testi
 	}
 }
 
+// Rust #51440: a websocket rate-limit error event preserves nested
+// Retry-After advice so the caller can retry with the server's deadline.
+func TestResponsesAgentRunnerWebSocketErrorHonorsRetryAfterLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		event     string
+		want      time.Duration
+		retryable bool
+	}{
+		{
+			name:      "nested advice",
+			event:     `{"type":"error","error":{"code":"rate_limit_exceeded","message":"slow down","headers":{"retry-after":"2"}}}`,
+			want:      2 * time.Second,
+			retryable: true,
+		},
+		{
+			name:      "top-level fallback",
+			event:     `{"type":"error","error":{"code":"rate_limit_exceeded","message":"slow down"},"headers":{"retry-after":"3"}}`,
+			want:      3 * time.Second,
+			retryable: true,
+		},
+		{
+			name:  "headerless stays terminal",
+			event: `{"type":"error","error":{"code":"rate_limit_exceeded","message":"slow down"}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				conn, err := websocket.Accept(w, request, nil)
+				if err != nil {
+					t.Errorf("Accept() error = %v", err)
+					return
+				}
+				defer conn.Close(websocket.StatusNormalClosure, "done")
+				if _, _, err := conn.Read(request.Context()); err != nil {
+					t.Errorf("Read() error = %v", err)
+					return
+				}
+				_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"resp-retry"}}`))
+				_ = conn.Write(request.Context(), websocket.MessageText, []byte(test.event))
+			}))
+			defer server.Close()
+			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+				Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true, WebsocketConnectTimeout: time.Second,
+			})
+			_, err := runner.RunWebSocket(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+			if err == nil {
+				t.Fatal("RunWebSocket() = nil, want a retryable error")
+			}
+			var apiErr *codexapi.APIError
+			if !test.retryable {
+				if errors.As(err, &apiErr) {
+					t.Fatalf("error = %v, want the generic terminal path", err)
+				}
+				return
+			}
+			if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorRateLimitExceeded {
+				t.Fatalf("error = %v, want a rate-limit API error", err)
+			}
+			delay, ok := codexapi.RetryDelayInfo(err)
+			if !ok || delay < test.want-time.Second || delay > test.want {
+				t.Fatalf("retry delay = %v, %v, want about %v", delay, ok, test.want)
+			}
+		})
+	}
+}
+
 // The websocket payload carries the request's W3C trace context in its client
 // metadata, the way codex-api's response_create_client_metadata merges
 // request_trace (Rust's stream_responses_websocket).
