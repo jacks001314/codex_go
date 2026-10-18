@@ -21923,9 +21923,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: CatalogBudgetAllocation, metadata_cost"
+        "Selected executor catalogs are cached per thread and reused across turns even when the executor filesystem changes later; original descriptions remain stable, newly added skills are not admitted, and the extension byte budget is preserved without a core warning. Tests: go test ./appserver -run 'SelectedExecutorCatalogReusesThreadCache|ExecutorCatalogUsesExtensionByteBudget' -count=1"
       ]
     },
     {
