@@ -11295,9 +11295,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ExhaustedResponseRetry, session_with_error_info"
+        "Round 517 (audit): already implemented. Non-transient Guardian review failures fail closed without a retry, keep risk and authorization unset, and use the review-failure explanation; retryable rate limits honor the server delay. Tests: go test ./appserver -run 'GuardianReviewFailureLeavesAssessmentUnsetLikeRust|Guardian' -count=1"
       ]
     },
     {
@@ -13671,9 +13671,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: SynchronousReview, interrupt_turn_with_warning"
+        "Round 518 (audit): already implemented. An extension-requested Guardian circuit-breaker interruption cancels the still-active turn and emits the interrupted/idle thread lifecycle, with warning delivery covered by the extension-interruption regression. Tests: go test ./appserver -run 'GuardianExtension|InterruptTurnWithWarning|GuardianReviewFailure' -count=1"
       ]
     },
     {
