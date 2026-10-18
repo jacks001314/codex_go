@@ -28394,9 +28394,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: TOOL_REGISTRATIONS_METRIC, TOOL_REGISTRATIONS_METRIC_BUCKETS, record_registration_metrics"
+        "Equivalent implementation already present: tool registration counts are captured after the final router inventory is built and recorded once per sampling request, before transport retries. recordToolRegistrationMetrics emits codex.tools.registered with Rust's boundaries for every exposure (including zero counts) and the resolved tool_mode; hosted tools are excluded from the registered inventory. Tests cover empty exposures, exact histogram boundaries/tags, and one recording across a retry."
       ]
     },
     {
