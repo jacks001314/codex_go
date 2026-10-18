@@ -30546,9 +30546,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: discover_capabilities_v2, discover_with_recovery, registration_succeeded"
+        "Equivalent implementation present: exec-server advertises capabilities/discoverV2 and serves executor-owned plugin/skill inventories; Client.DiscoverCapabilitiesV2 retries transient failures, while ExecutorCapabilityDiscoveryV2Cache coalesces in-flight requests by environment instance, session, and caller-bound request key, retries only transient failures, preserves recovered-discovery signaling, separates contexts, and evicts FIFO. App-server consumes the V2 snapshots for executor capability roots, hooks, and model-step catalogs. Exec-server and app-server V2 discovery regression suites pass."
       ]
     },
     {
