@@ -13227,9 +13227,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: from_shared_spec, to_loadable_spec"
+        "Round 505 (implementation): ToolSearchHandler now retains deferred specs without eagerly cloning schemas while building the index; cloneSpecForSearchOutput still materializes independent copies for selected results. TestToolSearchHandlerSharesSpecsUntilSelectionLikeRust pins pre-selection sharing and result isolation. Tests: go test ./tool -run 'TestToolSearch' -count=1; go vet ./tool"
       ]
     },
     {

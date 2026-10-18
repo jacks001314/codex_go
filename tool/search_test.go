@@ -52,6 +52,31 @@ func TestToolSearchHandlerFindsDiscoverableTools(t *testing.T) {
 	}
 }
 
+func TestToolSearchHandlerSharesSpecsUntilSelectionLikeRust(t *testing.T) {
+	spec := Spec{
+		Name:        PlainName("calendar_search"),
+		Description: "Search calendar events.",
+		InputSchema: map[string]any{"type": "object", "marker": "original"},
+		Exposure:    ExposureDiscoverable,
+	}
+	handler := NewToolSearchHandler([]Spec{spec})
+
+	spec.InputSchema["marker"] = "shared"
+	results := handler.search("calendar", 1)
+	if len(results) != 1 {
+		t.Fatalf("search results = %#v, want one", results)
+	}
+	if got := results[0].InputSchema["marker"]; got != "shared" {
+		t.Fatalf("selected marker = %v, want shared catalog value", got)
+	}
+
+	results[0].InputSchema["marker"] = "result-local"
+	next := handler.search("calendar", 1)
+	if len(next) != 1 || next[0].InputSchema["marker"] != "shared" {
+		t.Fatalf("next search result = %#v, want an independent selected copy", next)
+	}
+}
+
 func TestToolSearchHandlerSupportsToolSearchPayload(t *testing.T) {
 	handler := NewToolSearchHandler([]Spec{{
 		Name:     PlainName("calendar_create"),

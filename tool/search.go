@@ -41,7 +41,10 @@ func NewToolSearchHandlerWithOptions(specs []Spec, omitSources bool) *ToolSearch
 		if !IsDeferred(spec.Exposure) {
 			continue
 		}
-		searchable = append(searchable, cloneSpec(spec))
+		// Keep the catalog snapshot alive without copying schemas that may never
+		// be selected; search results are cloned by cloneSpecForSearchOutput.
+		// Rust #45509 shares Arc<ToolSpec> the same way.
+		searchable = append(searchable, spec)
 	}
 	sortSpecs(searchable)
 	handler := &ToolSearchHandler{specs: searchable, omitSources: omitSources}
