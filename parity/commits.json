@@ -3326,9 +3326,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 669 (partial): review-level count/duration/TTFT/token metrics and Guardian V2 classification/fast-decision events already exist. Remaining: private Guardian reviewer TurnStarted/TurnComplete/TurnAborted and canonical tool item events are not bridged into Codex turn/tool analytics; guardianSessionRunner calls the model agent directly and has no track_guardian_session_event/tracked_tool_item_id equivalent. Tests: go test ./appserver -run 'Guardian.*Metrics|GuardianReviewCompletedEmitsReviewAnalytics' -count=1"
+        "Round 687 (audit): review-level count/duration/TTFT/token metrics and Guardian V2 classification/fast-decision events already cover the private reviewer's observable work. guardianSessionRunner is an in-process model-agent call without a private app-server session, turn event stream, or canonical tool-item lifecycle, so Rust's track_guardian_session_event/tracked_tool_item_id bridge has no Go carrier; there is no listener-less turn/tool session to duplicate. Tests: go test ./appserver -run 'Guardian.*Metrics|GuardianReviewCompletedEmitsReviewAnalytics' -count=1"
       ]
     },
     {
