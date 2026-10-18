@@ -819,8 +819,9 @@ type FSCopyParams struct {
 type FSCopyResponse struct{}
 
 type HTTPHeader struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name        string  `json:"name"`
+	Value       string  `json:"value"`
+	ValueEnvVar *string `json:"valueEnvVar,omitempty"`
 }
 
 type HTTPRequestParams struct {
@@ -3215,10 +3216,37 @@ func doHTTPRequest(ctx context.Context, params *HTTPRequestParams, configuredCli
 		if !validHTTPHeaderName(header.Name) {
 			return nil, requestError(-32602, "http/request header name is invalid")
 		}
-		if !validHTTPHeaderValue(header.Value) {
+		value := header.Value
+		if header.ValueEnvVar != nil {
+			envVar := *header.ValueEnvVar
+			if isProtectedHTTPHeaderEnvVar(envVar) {
+				return nil, requestError(-32602, fmt.Sprintf(
+					"http/request header %s cannot use executor environment variable %s",
+					header.Name,
+					envVar,
+				))
+			}
+			envValue, ok := os.LookupEnv(envVar)
+			if !ok {
+				return nil, requestError(-32602, fmt.Sprintf(
+					"http/request header %s requires executor environment variable %s",
+					header.Name,
+					envVar,
+				))
+			}
+			if envValue == "" {
+				return nil, requestError(-32602, fmt.Sprintf(
+					"http/request header %s requires a non-empty executor environment variable %s",
+					header.Name,
+					envVar,
+				))
+			}
+			value += envValue
+		}
+		if !validHTTPHeaderValue(value) {
 			return nil, requestError(-32602, fmt.Sprintf("http/request header value is invalid for %s", header.Name))
 		}
-		req.Header.Add(header.Name, header.Value)
+		req.Header.Add(header.Name, value)
 	}
 	var baseClient *http.Client
 	if len(configuredClient) > 0 {
@@ -3316,6 +3344,28 @@ func streamHTTPResponseBody(requestID string, body io.ReadCloser, notify process
 			return
 		}
 	}
+}
+
+var protectedHTTPHeaderEnvVars = map[string]struct{}{
+	envutil.CodexExecServerNoiseAuthTokenEnvVar: {},
+	"OPENAI_FEDERATION_RULE_ID":                 {},
+	"OPENAI_IDENTITY_TOKEN_FILE":                {},
+	"OPENAI_WORKLOAD_IDENTITY_CONTEXT":          {},
+	"OPENAI_API_KEY":                            {},
+	"CODEX_API_KEY":                             {},
+	"CODEX_ACCESS_TOKEN":                        {},
+	"CODEX_CONNECTORS_TOKEN":                    {},
+	"AWS_ACCESS_KEY_ID":                         {},
+	"AWS_SECRET_ACCESS_KEY":                     {},
+	"AWS_SESSION_TOKEN":                         {},
+	"AZURE_CLIENT_SECRET":                       {},
+	"AZURE_FEDERATED_TOKEN_FILE":                {},
+	"GOOGLE_APPLICATION_CREDENTIALS":            {},
+}
+
+func isProtectedHTTPHeaderEnvVar(name string) bool {
+	_, ok := protectedHTTPHeaderEnvVars[strings.ToUpper(name)]
+	return ok
 }
 
 func validHTTPHeaderName(name string) bool {

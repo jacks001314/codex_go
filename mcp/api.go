@@ -2104,25 +2104,6 @@ func mcpToolCatalogGraceKey(name string, config *ServerConfig, openAIForm bool, 
 		return "", false
 	}
 	key := mcpConnectionCacheKey(config, openAIForm)
-	// Rust #48143: an executor-only identity must never read host environment
-	// values for its cache identity - its credential resolution belongs to the
-	// executor - so the policy in the connection key identifies it instead.
-	if EffectiveCredentialPolicy(config.CredentialPolicy) == CredentialPolicyExecutorOnly {
-		return strings.TrimSpace(name) + "\x00" + key, true
-	}
-	envNames := make([]string, 0, 1+len(config.EnvHTTPHeaders))
-	if envVar := strings.TrimSpace(config.BearerTokenEnvVar); envVar != "" {
-		envNames = append(envNames, envVar)
-	}
-	for _, envVar := range config.EnvHTTPHeaders {
-		if envVar = strings.TrimSpace(envVar); envVar != "" {
-			envNames = append(envNames, envVar)
-		}
-	}
-	sort.Strings(envNames)
-	for _, envName := range envNames {
-		key += "\x1f" + envName + "=" + os.Getenv(envName)
-	}
 	if agentPlugin {
 		key += "|agentPlugin=1"
 	}
@@ -2946,7 +2927,51 @@ func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	if err != nil {
 		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", cloned, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
 	}
-	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", data, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
+	key := fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", data, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
+	for _, reference := range mcpReferencedEnvironmentVariables(config) {
+		key += "\x1f" + reference
+	}
+	return key
+}
+
+// mcpReferencedEnvironmentVariables returns the resolved environment values
+// that participate in a connection identity (Rust #39930). Remote HTTP header
+// variables remain host-sourced. A remote bearer value participates only when
+// the host may resolve it; executor-only declarations never read it.
+func mcpReferencedEnvironmentVariables(config *ServerConfig) []string {
+	if config == nil {
+		return nil
+	}
+	names := make([]string, 0)
+	if strings.TrimSpace(config.URL) != "" {
+		if envVar := strings.TrimSpace(config.BearerTokenEnvVar); envVar != "" {
+			_, hostHasBearer := os.LookupEnv(envVar)
+			if EffectiveCredentialPolicy(config.CredentialPolicy) != CredentialPolicyExecutorOnly &&
+				(config.IsLocalEnvironment() || hostHasBearer) {
+				names = append(names, envVar)
+			}
+		}
+		for _, envVar := range config.EnvHTTPHeaders {
+			if envVar = strings.TrimSpace(envVar); envVar != "" {
+				names = append(names, envVar)
+			}
+		}
+	} else if strings.TrimSpace(config.Command) != "" {
+		for _, envVar := range config.EnvVars {
+			if envVar.Source != "remote" && strings.TrimSpace(envVar.Name) != "" {
+				names = append(names, strings.TrimSpace(envVar.Name))
+			}
+		}
+	}
+	sort.Strings(names)
+	references := make([]string, 0, len(names))
+	for _, name := range names {
+		if len(references) > 0 && strings.HasPrefix(references[len(references)-1], name+"=") {
+			continue
+		}
+		references = append(references, name+"="+os.Getenv(name))
+	}
+	return references
 }
 
 func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *stdioClient {

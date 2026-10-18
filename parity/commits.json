@@ -70,9 +70,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "MCP connection/catalog identities now append resolved referenced environment values. Remote HTTP env_http_headers values remain part of the identity, while a bearer_token_env_var value participates only when the host may resolve it; executor-only declarations never read a host bearer value. Local stdio env_vars with the local source are tracked as well. Verified by TestMCPToolCatalogGraceKeyTracksRemoteHeadersButNotExecutorBearer and the existing credential-policy isolation test."
       ]
     },
     {
@@ -142,9 +142,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ExecutorEnvironmentHttpClient, StreamableHttpBearerToken"
+        "Executor-owned HTTP MCP bearer_token_env_var is now preserved instead of rejected. The per-server executor HTTP doer removes host/static Authorization values and delegates an Authorization prefix plus valueEnvVar to exec-server; exec-server resolves it in its own environment for each request, reapplies it across redirected requests, and rejects protected, missing, or empty variables with Rust's errors. The exec-server HTTPHeader wire now carries valueEnvVar. End-to-end coverage verifies executor HTTP MCP tool discovery with an executor-only bearer token. Verified with go test ./mcp -count=1, go test ./execserver -run HTTPRequest -count=1, go test ./appserver -run Executor -count=1, and go vet ./execserver ./mcp ./appserver."
       ]
     },
     {

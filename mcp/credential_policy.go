@@ -45,8 +45,9 @@ func SelectedPluginCredentialPolicy(sourceEnvironmentID string, config ServerCon
 
 // ValidateExecutorDiscoveryCredentialPolicy mirrors Rust's `make_rmcp_client`
 // gates for an executor-discovered declaration: it must be a remote HTTP
-// transport that needs no host environment headers or helpers, and it may not
-// fall back to a host bearer token. The returned message is Rust's.
+// transport that needs no host environment headers or helpers. A bearer-token
+// environment reference is allowed and is resolved by the executor when each
+// request is sent.
 func ValidateExecutorDiscoveryCredentialPolicy(name string, config *ServerConfig) error {
 	if config == nil || EffectiveCredentialPolicy(config.CredentialPolicy) != CredentialPolicyExecutorOnly {
 		return nil
@@ -58,9 +59,6 @@ func ValidateExecutorDiscoveryCredentialPolicy(name string, config *ServerConfig
 		len(config.EnvHTTPHeaders) > 0 ||
 		strings.TrimSpace(config.HTTPHeadersHelper) != "" {
 		return fmt.Errorf("executor-discovered MCP server '%s' requires a remote HTTP transport without host environment headers or helpers", name)
-	}
-	if strings.TrimSpace(config.BearerTokenEnvVar) != "" {
-		return fmt.Errorf("MCP server '%s' requires executor-side environment credential resolution; update the executor to a version that supports it (host fallback is disabled)", name)
 	}
 	return nil
 }

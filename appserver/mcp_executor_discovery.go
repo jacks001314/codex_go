@@ -216,7 +216,7 @@ func (s *runtimeCapabilityDiscoveryV2Cache) applyExecutorMCPServers(router *Runt
 	}
 }
 
-func executorHTTPMCPServers(response *execserverclient.EnvironmentConfigReadResponse, environmentID string, httpClient mcp.HTTPDoer) ([]executorMCPServer, error) {
+func executorHTTPMCPServers(response *execserverclient.EnvironmentConfigReadResponse, environmentID string, httpClient executorHTTPDoer) ([]executorMCPServer, error) {
 	if response == nil {
 		return nil, nil
 	}
@@ -248,18 +248,18 @@ func executorHTTPMCPServers(response *execserverclient.EnvironmentConfigReadResp
 		if serverConfig == nil || strings.TrimSpace(serverConfig.URL) == "" || strings.TrimSpace(serverConfig.Command) != "" {
 			continue
 		}
-		// Stdio is executor-local and is intentionally not projectable. HTTP
-		// headers that depend on executor environment lookup or a helper command
-		// are likewise unsupported by the host runtime.
+		// Stdio is executor-local and is intentionally not projectable. Generic
+		// HTTP environment headers and helper commands remain unsupported; bearer
+		// environment references are resolved by the executor per request.
 		if !serverConfig.IsLocalEnvironment() ||
 			strings.TrimSpace(serverConfig.HTTPHeadersHelper) != "" ||
-			len(serverConfig.EnvHTTPHeaders) > 0 ||
-			strings.TrimSpace(serverConfig.BearerTokenEnvVar) != "" {
+			len(serverConfig.EnvHTTPHeaders) > 0 {
 			continue
 		}
 		serverConfig.EnvironmentID = environmentID
 		serverConfig.Required = false
 		serverConfig.CredentialPolicy = mcp.CredentialPolicyExecutorOnly
+		httpClient.bearerTokenEnvVar = serverConfig.BearerTokenEnvVar
 		serverConfig.HTTPClient = httpClient
 		applyExecutorMCPRequirements(name, serverConfig, requirements)
 		servers = append(servers, executorMCPServer{name: name, config: *serverConfig})
@@ -310,7 +310,8 @@ func mergeExecutorTOMLValues(dst, src map[string]any) {
 }
 
 type executorHTTPDoer struct {
-	client *execserverclient.Client
+	client            *execserverclient.Client
+	bearerTokenEnvVar string
 }
 
 func (d executorHTTPDoer) Do(request *http.Request) (*http.Response, error) {
@@ -334,14 +335,26 @@ func (d executorHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 	}
 	headers := make([]execserverclient.HTTPHeader, 0, len(request.Header))
 	for name, values := range request.Header {
+		if d.bearerTokenEnvVar != "" && strings.EqualFold(name, "Authorization") {
+			continue
+		}
 		for _, value := range values {
 			headers = append(headers, execserverclient.HTTPHeader{Name: name, Value: value})
 		}
+	}
+	if d.bearerTokenEnvVar != "" {
+		envVar := d.bearerTokenEnvVar
+		headers = append(headers, execserverclient.HTTPHeader{
+			Name:        "Authorization",
+			Value:       "Bearer ",
+			ValueEnvVar: &envVar,
+		})
 	}
 	params := &execserverclient.HTTPRequestParams{
 		Method:         request.Method,
 		URL:            request.URL.String(),
 		Headers:        headers,
+		RedirectPolicy: "stop",
 		StreamResponse: true,
 	}
 	if len(body) > 0 {

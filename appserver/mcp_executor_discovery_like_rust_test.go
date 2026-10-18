@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -65,8 +66,8 @@ url = "http://executor-only.invalid/mcp"
 	for _, server := range servers {
 		byName[server.name] = server.config
 	}
-	if len(byName) != 2 {
-		t.Fatalf("discovered servers = %#v, want node_repl and policy_unlisted", byName)
+	if len(byName) != 3 {
+		t.Fatalf("discovered servers = %#v, want node_repl, bearer_env, and policy_unlisted", byName)
 	}
 	nodeRepl := byName["node_repl"]
 	if nodeRepl.EnvironmentID != "executor-1" || nodeRepl.Required || !nodeRepl.Enabled ||
@@ -76,6 +77,11 @@ url = "http://executor-only.invalid/mcp"
 	}
 	if nodeRepl.HTTPClient == nil {
 		t.Fatal("node_repl did not bind an executor HTTP client")
+	}
+	bearer := byName["bearer_env"]
+	if bearer.BearerTokenEnvVar != "TOKEN" || bearer.CredentialPolicy != mcp.CredentialPolicyExecutorOnly ||
+		bearer.HTTPClient == nil {
+		t.Fatalf("bearer_env = %#v", bearer)
 	}
 	unlisted := byName["policy_unlisted"]
 	if unlisted.Enabled || unlisted.DisabledReason != config.MCPDisabledByRequirements {
@@ -115,6 +121,124 @@ func TestExecutorHTTPDoerRoutesThroughExecServerLikeRust(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusCreated || response.Header.Get("X-Executor") != "yes" || string(body) != "executor response" {
 		t.Fatalf("executor response = %d %q %#v", response.StatusCode, body, response.Header)
+	}
+}
+
+func TestExecutorHTTPDoerResolvesBearerTokenInExecutorEnvironmentLikeRust(t *testing.T) {
+	t.Setenv("NODE_REPL_AUTH_TOKEN", "executor-only-http-token")
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer executor-only-http-token" {
+			http.Error(writer, "unexpected authorization: "+got, http.StatusUnauthorized)
+			return
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	server, client := startExecServerTestClient(t)
+	defer server.Close()
+	defer client.Close()
+
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, upstream.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The executor-owned environment value must replace any host-side placeholder
+	// or statically configured Authorization value.
+	request.Header.Set("Authorization", "Bearer host-placeholder")
+	response, err := (executorHTTPDoer{
+		client:            client,
+		bearerTokenEnvVar: "NODE_REPL_AUTH_TOKEN",
+	}).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("executor response = %d %q", response.StatusCode, body)
+	}
+}
+
+func TestExecutorHTTPMCPDiscoversToolsWithExecutorBearerTokenLikeRust(t *testing.T) {
+	t.Setenv("EXECUTOR_MCP_TOKEN", "executor-only-mcp-token")
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer executor-only-mcp-token" {
+			http.Error(writer, "unexpected authorization: "+got, http.StatusUnauthorized)
+			return
+		}
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch rpc.Method {
+		case "initialize":
+			writeMCPExecutorJSONRPCResult(t, writer, rpc.ID, map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "executor-auth", "version": "1"},
+			})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeMCPExecutorJSONRPCResult(t, writer, rpc.ID, map[string]any{
+				"tools": []any{map[string]any{
+					"name":        "executor_echo",
+					"inputSchema": map[string]any{"type": "object"},
+				}},
+			})
+		default:
+			writeMCPExecutorJSONRPCError(t, writer, rpc.ID, "unsupported method")
+		}
+	}))
+	defer upstream.Close()
+	server, client := startExecServerTestClient(t)
+	defer server.Close()
+	defer client.Close()
+
+	servers, err := executorHTTPMCPServers(&execserverclient.EnvironmentConfigReadResponse{
+		Config: execserverclient.EnvironmentConfigLayerStack{Layers: []execserverclient.EnvironmentConfigLayer{{
+			TOML: "[mcp_servers.executor_auth]\nurl = \"" + upstream.URL + "\"\nbearer_token_env_var = \"EXECUTOR_MCP_TOKEN\"\n",
+		}}},
+	}, "executor-1", executorHTTPDoer{client: client})
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("executorHTTPMCPServers() = %#v, %v", servers, err)
+	}
+	service := mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+		servers[0].name: {Config: servers[0].config},
+	}})
+	defer service.Close()
+	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
+		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+	})
+	if err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if response == nil || len(response.Data) != 1 || len(response.Data[0].Tools) != 1 ||
+		response.Data[0].Tools[0].Name != "executor_echo" {
+		t.Fatalf("MCP response = %#v", response)
+	}
+}
+
+func writeMCPExecutorJSONRPCResult(t *testing.T, writer http.ResponseWriter, id json.RawMessage, result any) {
+	t.Helper()
+	if err := json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result}); err != nil {
+		t.Errorf("encode JSON-RPC result: %v", err)
+	}
+}
+
+func writeMCPExecutorJSONRPCError(t *testing.T, writer http.ResponseWriter, id json.RawMessage, message string) {
+	t.Helper()
+	if err := json.NewEncoder(writer).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error":   map[string]any{"code": -32601, "message": message},
+	}); err != nil {
+		t.Errorf("encode JSON-RPC error: %v", err)
 	}
 }
 

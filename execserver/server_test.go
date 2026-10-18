@@ -2067,6 +2067,96 @@ func TestHTTPRequestRejectsInvalidHeadersLikeRust(t *testing.T) {
 	}
 }
 
+func TestHTTPRequestResolvesExecutorHeaderEnvironmentLikeRust(t *testing.T) {
+	gotHeaders := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotHeaders <- request.Header.Clone()
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	t.Setenv("NODE_REPL_AUTH_TOKEN", "executor-token")
+	t.Setenv("LINEAR_API_KEY", "linear-token")
+	authEnv := "NODE_REPL_AUTH_TOKEN"
+	linearEnv := "LINEAR_API_KEY"
+	if _, err := doHTTPRequest(context.Background(), &HTTPRequestParams{
+		Method: http.MethodGet,
+		URL:    upstream.URL,
+		Headers: []HTTPHeader{
+			{Name: "Authorization", Value: "Bearer ", ValueEnvVar: &authEnv},
+			{Name: "X-Linear-Authorization", Value: "Bearer ", ValueEnvVar: &linearEnv},
+		},
+	}); err != nil {
+		t.Fatalf("doHTTPRequest() error = %v", err)
+	}
+	got := <-gotHeaders
+	if got.Get("Authorization") != "Bearer executor-token" ||
+		got.Get("X-Linear-Authorization") != "Bearer linear-token" {
+		t.Fatalf("resolved headers = %#v", got)
+	}
+}
+
+func TestHTTPRequestRejectsInvalidExecutorHeaderEnvironmentLikeRust(t *testing.T) {
+	t.Setenv("EMPTY_EXECUTOR_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "host-secret")
+	tests := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{
+			name: "missing",
+			env:  "MISSING_EXECUTOR_TOKEN",
+			want: "requires executor environment variable MISSING_EXECUTOR_TOKEN",
+		},
+		{
+			name: "empty",
+			env:  "EMPTY_EXECUTOR_TOKEN",
+			want: "requires a non-empty executor environment variable EMPTY_EXECUTOR_TOKEN",
+		},
+		{
+			name: "protected",
+			env:  "openai_api_key",
+			want: "cannot use executor environment variable openai_api_key",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envVar := tt.env
+			_, err := doHTTPRequest(context.Background(), &HTTPRequestParams{
+				Method: http.MethodGet,
+				URL:    "http://127.0.0.1:1/",
+				Headers: []HTTPHeader{{
+					Name:        "Authorization",
+					Value:       "Bearer ",
+					ValueEnvVar: &envVar,
+				}},
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("doHTTPRequest() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPHeaderValueEnvVarWireShape(t *testing.T) {
+	envVar := "NODE_REPL_AUTH_TOKEN"
+	encoded, err := json.Marshal(HTTPHeader{Name: "Authorization", Value: "Bearer ", ValueEnvVar: &envVar})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"valueEnvVar":"NODE_REPL_AUTH_TOKEN"`)) {
+		t.Fatalf("encoded header = %s", encoded)
+	}
+	encoded, err = json.Marshal(HTTPHeader{Name: "X-Test", Value: "literal"})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if bytes.Contains(encoded, []byte("valueEnvVar")) {
+		t.Fatalf("literal header unexpectedly emitted valueEnvVar: %s", encoded)
+	}
+}
+
 func TestHTTPRequestValidatesMethodURLRedirectAndZeroTimeoutLikeRust(t *testing.T) {
 	for name, params := range map[string]HTTPRequestParams{
 		"empty-method":     {Method: "", URL: "http://127.0.0.1/"},

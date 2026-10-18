@@ -1739,6 +1739,46 @@ func TestMCPToolCatalogGraceKeySharesOnlyForEligibleServers(t *testing.T) {
 	}
 }
 
+func TestMCPToolCatalogGraceKeyTracksRemoteHeadersButNotExecutorBearer(t *testing.T) {
+	const bearerEnv = "CODEX_TEST_REMOTE_MCP_BEARER_NOT_SET"
+	_ = os.Unsetenv(bearerEnv)
+	t.Setenv("CODEX_TEST_REMOTE_MCP_HEADER", "header-a")
+	remote := &ServerConfig{
+		URL:               "https://example.test/mcp",
+		EnvironmentID:     "executor-1",
+		BearerTokenEnvVar: bearerEnv,
+		EnvHTTPHeaders:    map[string]string{"X-Test": "CODEX_TEST_REMOTE_MCP_HEADER"},
+	}
+	keyA, eligible := mcpToolCatalogGraceKey("docs", remote, false, false, false)
+	if !eligible {
+		t.Fatal("remote HTTP config should remain catalog-cache eligible")
+	}
+	t.Setenv("CODEX_TEST_REMOTE_MCP_HEADER", "header-b")
+	keyB, _ := mcpToolCatalogGraceKey("docs", remote, false, false, false)
+	if keyA == keyB {
+		t.Fatal("remote header environment value did not change the catalog identity")
+	}
+
+	t.Setenv(bearerEnv, "host-bearer")
+	keyWithHostBearer, _ := mcpToolCatalogGraceKey("docs", remote, false, false, false)
+	if keyWithHostBearer == keyB {
+		t.Fatal("a host-resolved remote bearer value should participate in the identity")
+	}
+	remote.CredentialPolicy = CredentialPolicyExecutorOnly
+	keyExecutorOnly, _ := mcpToolCatalogGraceKey("docs", remote, false, false, false)
+	if keyExecutorOnly == keyWithHostBearer {
+		t.Fatal("executor-only remote identity must not read host bearer values")
+	}
+
+	local := *remote
+	local.EnvironmentID = DefaultMCPServerEnvironmentID
+	local.CredentialPolicy = CredentialPolicyHostFallbackAllowed
+	localKey, _ := mcpToolCatalogGraceKey("docs", &local, false, false, false)
+	if localKey == keyExecutorOnly {
+		t.Fatal("local MCP identity should track its host bearer value")
+	}
+}
+
 func TestValidateMCPResourceOriginRejectsAmbiguousScope(t *testing.T) {
 	if err := validateMCPResourceOrigin(&MCPResourceReadParams{OriginCallID: "call-1", ConnectorID: "connector-1"}); err == nil {
 		t.Fatal("origin + connector should be rejected")

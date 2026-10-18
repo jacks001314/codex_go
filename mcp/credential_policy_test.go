@@ -80,10 +80,8 @@ func TestValidateExecutorDiscoveryCredentialPolicyMatchesRust(t *testing.T) {
 	}
 
 	bearer := ServerConfig{URL: "https://example.test/mcp", EnvironmentID: "sandbox-1", BearerTokenEnvVar: "MCP_TOKEN", CredentialPolicy: CredentialPolicyExecutorOnly}
-	err := ValidateExecutorDiscoveryCredentialPolicy("exec-server", &bearer)
-	if err == nil || !strings.Contains(err.Error(), "requires executor-side environment credential resolution") ||
-		!strings.Contains(err.Error(), "host fallback is disabled") {
-		t.Fatalf("bearer fallback error = %v", err)
+	if err := ValidateExecutorDiscoveryCredentialPolicy("exec-server", &bearer); err != nil {
+		t.Fatalf("executor-resolved bearer configuration must pass: %v", err)
 	}
 }
 
