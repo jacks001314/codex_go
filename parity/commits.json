@@ -17589,9 +17589,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: collab_v2_agent_error, inspect_agent"
+        "thread/read and stored thread records provide inspection without resuming an unloaded runtime. Resuming an unloaded multi-agent v2 child through its parent is rejected with the Rust guidance to use thread/read, while parent-owned resume works for loaded children. Tests: go test ./appserver -run 'ParentOwnedV2Resume|Unloaded|AgentInspection|Fork' -count=1"
       ]
     },
     {

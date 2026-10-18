@@ -1309,7 +1309,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7d5f55bdad2d184019831f48a7c77d35af0fa1d5	50531	Persist realtime transcript tails before closure without inference (#50531)	2026-10-03	appserver	1	1	1.00	0	0	complete	
 7d6f808b97e424da80271be8cc539e8c5437a229	41285	Drive keymap conflict checks from the action registry (#41285)	2026-08-28	tui	0	0		0	0	not_applicable	
 7d8e2dd6c5b29e1e80709cb051b163794edf2f27	43542	Make app-server daemon automatic updates configurable (#43542)	2026-09-07	appserver	5	5	1.00	0	0	complete	
-7d99ee82d74325cabf485ea1e2adbd0c2625ab19	47010	Add agent inspection without restoring unloaded runtimes (#47010)	2026-09-21	core	5	3	0.60	0	0	audit_pending	collab_v2_agent_error,inspect_agent
+7d99ee82d74325cabf485ea1e2adbd0c2625ab19	47010	Add agent inspection without restoring unloaded runtimes (#47010)	2026-09-21	core	5	3	0.60	0	0	complete	collab_v2_agent_error,inspect_agent
 7dae8c53d97e61cd774e4d6bcca5243c29ca615c	47717	Avoid recursive TUI event dispatch for model picker selections (#47717)	2026-09-24	tui	0	0		0	0	not_applicable	
 7db578fca663b3e0026996e9c50104784d420744	47360	Preserve user prompt URL destinations across terminal widths (#47360)	2026-09-22	tui	0	0		0	0	not_applicable	
 7dc7c7a7566a970f6d4d09e1384f854aebaf39e0	43090	Send processed microphone audio over RTP in voice-host (#43090)	2026-09-05	realtime	16	9	0.56	0	0	audit_pending	AudioTrack,CAPTURE_GAP_TOLERANCE,CaptureWorker,EncodedAudio,MAX_CALLBACK_FRAMES,MAX_PROCESSING_DELAY,validate_callback_timing
