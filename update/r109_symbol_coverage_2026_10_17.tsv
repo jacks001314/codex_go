@@ -1029,7 +1029,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 622e9e36962105af50b9c250902e8b8c66a950d8	51786	Preserve sandbox overrides across execution requests (#51786)	2026-10-07	execserver	3	2	0.67	0	0	complete	ensure_native_sandbox
 624b45c4dcdc43a64da0307ce59c4508ef2206e9	52061	Run Guardian conversation classifiers concurrently and preserve action order (#52061)	2026-10-08	guardian	0	0		0	0	not_applicable	
 624ccf794703e2d84e748fc3ef547d6191a8c0a4	44814	Test approved command execution with managed unified exec disabled (#44814)	2026-09-11	appserver	0	0		0	0	not_applicable	
-6288753b469615a0b62e8cf0dd65c6e893eb4849	49057	Add handoff-aware root context for Guardian reviews (#49057)	2026-09-28	guardian	1	0	0.00	0	0	implementation_pending	selected_message_indices
+6288753b469615a0b62e8cf0dd65c6e893eb4849	49057	Add handoff-aware root context for Guardian reviews (#49057)	2026-09-28	guardian	1	1	1.00	0	0	complete
 62aacbb2c9a784a4ac62aa8957a5ac6ebc211dfa	40736	Run exec-server compatibility tests under Bazel (#40736)	2026-08-25	execserver	0	0		0	0	not_applicable	
 62b458c93151595cdf2b5ef5e37aa3d8b5613aeb	41454	Block goals after repeated execution host failures (#41454)	2026-08-29	appserver	3	2	0.67	0	0	complete	current_active_goal_id_for_turn
 62bfa41a837a3c402ee1888ac0e25ea479083723	40723	Update the biology Trusted Access link (#40723)	2026-08-25	tui	0	0		0	0	not_applicable	

@@ -22784,9 +22784,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: selected_message_indices"
+        "Added guardianRootHandoffSelection behind the existing guardian_root_handoff_context feature. Recorded spawn_agent/send_message/followup_task calls, including nested executed_tool_calls, mark worker/ancestor boundaries; the selection keeps three preceding messages per boundary plus the three latest and unordered evidence, falling back to the existing last-eight root context when no usable window exists or the latest authorization message is a heartbeat."
       ]
     },
     {

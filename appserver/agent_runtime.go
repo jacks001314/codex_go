@@ -284,13 +284,22 @@ func (r *RuntimeRouter) guardianRootUserAuthorizationForTurn(threadID, turnID st
 			return nil
 		}
 	}
-	return r.guardianRootConversation(threadID)
+	handoffEnabled := features.Enabled(cfg.FeatureSettings(), "guardian_root_handoff_context")
+	toolNamespace := "collaboration"
+	if v2Config, v2Err := cfg.MultiAgentV2Config(0); v2Err == nil && v2Config != nil && strings.TrimSpace(v2Config.ToolNamespace) != "" {
+		toolNamespace = strings.TrimSpace(v2Config.ToolNamespace)
+	}
+	return r.guardianRootConversationWithHandoff(threadID, handoffEnabled, worker.Metadata.AgentPath, toolNamespace)
 }
 
 // guardianRootConversation returns the last eight root user/final-assistant
 // messages, each bounded to 900 tokens. User summaries, synthetic user-action
 // wrappers, contextual user fragments, and assistant commentary are excluded.
 func (r *RuntimeRouter) guardianRootConversation(workerThreadID string) []state.RootMessage {
+	return r.guardianRootConversationWithHandoff(workerThreadID, false, "", "collaboration")
+}
+
+func (r *RuntimeRouter) guardianRootConversationWithHandoff(workerThreadID string, handoffEnabled bool, workerPath string, toolNamespace string) []state.RootMessage {
 	if r == nil || strings.TrimSpace(workerThreadID) == "" {
 		return nil
 	}
@@ -315,7 +324,7 @@ func (r *RuntimeRouter) guardianRootConversation(workerThreadID string) []state.
 		return nil
 	}
 
-	messages := make([]state.RootMessage, 0, guardianMaxRootMessages)
+	candidates := make([]guardianRootCandidate, 0, guardianMaxRootMessages)
 	for i := range record.Items {
 		item := record.Items[i]
 		if guardianRootItemIsSummary(&item) {
@@ -330,7 +339,12 @@ func (r *RuntimeRouter) guardianRootConversation(workerThreadID string) []state.
 				continue
 			}
 			text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
-			messages = append(messages, state.RootMessage{Kind: state.RootMessageUser, Text: text})
+			order, hasOrder := guardianRootItemOrder(&item)
+			candidates = append(candidates, guardianRootCandidate{
+				message:  state.RootMessage{Kind: state.RootMessageUser, Text: text},
+				order:    order,
+				hasOrder: hasOrder,
+			})
 		case guardianRootItemIsAgentMessage(&item):
 			if phase := strings.ToLower(strings.TrimSpace(stringValueFromMap(item.Data, "phase"))); phase != "" && phase != "final_answer" {
 				continue
@@ -340,8 +354,22 @@ func (r *RuntimeRouter) guardianRootConversation(workerThreadID string) []state.
 				continue
 			}
 			text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
-			messages = append(messages, state.RootMessage{Kind: state.RootMessageAssistant, Text: text})
+			order, hasOrder := guardianRootItemOrder(&item)
+			candidates = append(candidates, guardianRootCandidate{
+				message:  state.RootMessage{Kind: state.RootMessageAssistant, Text: text},
+				order:    order,
+				hasOrder: hasOrder,
+			})
 		}
+	}
+	if handoffEnabled {
+		if selected := guardianRootHandoffSelection(record.Items, candidates, workerPath, toolNamespace); selected != nil {
+			candidates = selected
+		}
+	}
+	messages := make([]state.RootMessage, 0, len(candidates))
+	for _, candidate := range candidates {
+		messages = append(messages, candidate.message)
 	}
 	if len(messages) > guardianMaxRootMessages {
 		messages = messages[len(messages)-guardianMaxRootMessages:]
