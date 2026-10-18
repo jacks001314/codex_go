@@ -30774,9 +30774,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: wait_for_background_compaction_for_test"
+        "Equivalent implementation present: eligible completed turns launch background compaction from the captured turn checkpoint/prefix, cancellation prevents launch, async state deduplicates candidates, validates captured attempts before readiness, shares one pending result among waiters, and shutdown cancels/drains workers. Coverage includes eligibility, original-prefix capture, deduplication/latest candidate, auth-owner coalescing, readiness validation, shared waiting, cancellation, and turn-checkpoint launch."
       ]
     },
     {
