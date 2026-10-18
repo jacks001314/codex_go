@@ -21656,9 +21656,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: for_approved_command, get_unreadable_roots_with_cwd_preserving_symlinks"
+        "Equivalent implementation: PermissionProfileWithAdditionalPermissions grants approved read/write roots while preserving deny entries, and the Linux bwrap path rebuilds devices after writable-root binds then applies unreadable/deny masks. Existing sandbox tests cover approved-profile construction and denied-read masking."
       ]
     },
     {

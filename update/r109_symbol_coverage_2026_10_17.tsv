@@ -1046,7 +1046,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 63d213884daea50e4f74efc192cdc44f549b67d5	41586	Add Vim search motions to the composer (#41586)	2026-08-30	tui	22	8	0.36	0	0	audit_pending	SearchDirection,TuiVimSearchKeymap,VimSearchKeymap,configure_vim_search,enable_vim_search,handle_vim_search_key,is_vim_command_target,keymap_contexts,matching_ranges,vim_query
 63eb71c9da95a6e4deaf34ee9340c88a7cac9a65	48222	Preserve late result metadata for truncated code-mode calls (#48222)	2026-09-25	model	1	1	1.00	0	0	complete	
 64335d1afd83f3aaabd6a3a58ebbdf0bf7b994ff	52608	Upgrade `hyper` to 1.11.1 and test connection closure (#52608)	2026-10-09	core	0	0		0	0	not_applicable	
-645b683a9e712ae6d90a364e3cf597466e4146d0	48155	Preserve filesystem denials when preparing approved commands (#48155)	2026-09-25	execserver	3	1	0.33	0	0	audit_pending	for_approved_command,get_unreadable_roots_with_cwd_preserving_symlinks
+645b683a9e712ae6d90a364e3cf597466e4146d0	48155	Preserve filesystem denials when preparing approved commands (#48155)	2026-09-25	execserver	3	3	1.00	0	0	complete
 6478a751fde8884b2fdc76486fe23175a8e795d4	41477	Organize bundled Rust resources under asset directories (#41477)	2026-08-29	tui	2	2	1.00	0	0	complete	
 64b482500d00b331189beefd173a5e08b4060ff2	43100	Add bounded incoming Opus RTP handling to the voice host (#43100)	2026-09-05	realtime	6	5	0.83	0	0	complete	ReceivedRtp
 64bf4e7e629b0243f483db3e5cecd8e451707007	49037	Show the Plan mode cycling hint in the fullscreen status line (#49037)	2026-09-28	tui	1	0	0.00	0	0	implementation_pending	render_status_surface
