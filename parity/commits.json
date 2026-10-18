@@ -29553,9 +29553,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "TR-10 (same table): the whole mxc-sdk / appcontainer_common / learning_mode_windows / wxc_common / SecurityEnvironmentApi surface is 0 hits in Go, and the commit is a Cargo/Bazel crate split whose verification needs a Windows+MXC node. Shares its face with 51819 and 54363 (all three must serialise on the MXC face and are all blocked this round)."
+        "Round 676 (audit): N/A by architecture. Go has no mxc-sdk/appcontainer_common/learning_mode_windows/wxc_common integration or native MXC launcher; Rust crate split has no Go carrier. Tests: go test ./execserver -run MXC -count=1"
       ]
     },
     {
