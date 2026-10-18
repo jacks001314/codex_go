@@ -2158,9 +2158,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: new_turn_with_sub_id_if, prepare_update"
+        "Round 409 (implementation): RuntimeRouter turn starts and thread/settings/update now share turnAdmissionMu, making automatic admission and settings commits one transaction boundary. Validation, settings commit, and turn registration cannot interleave; live-turn settings remain turn-scoped. Tests: go test ./appserver -run 'TurnStart|ThreadSettings|Automatic|Spawn|AgentMessageWake|Queue' -count=1; go vet ./appserver"
       ]
     },
     {

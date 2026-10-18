@@ -255,7 +255,11 @@ type RuntimeRouter struct {
 	// agentWakeMu serializes the decision to drain queued agent mail and start
 	// its automatic root turn. Without it, concurrent deliveries could both
 	// observe an idle thread and race to consume the same queue.
-	agentWakeMu           sync.Mutex
+	agentWakeMu sync.Mutex
+	// turnAdmissionMu makes turn admission observe the same settings snapshot
+	// that a concurrent thread/settings/update commits. Automatic starts cannot
+	// validate against one mode and then run after another settings write.
+	turnAdmissionMu       sync.Mutex
 	emittedConfigWarnings map[string]bool
 	sink                  NotificationSink
 	requests              ServerRequestSink
@@ -6986,6 +6990,8 @@ func (r *RuntimeRouter) emitThreadConfigWarnings(cwd string) {
 }
 
 func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartResponse, error) {
+	r.turnAdmissionMu.Lock()
+	defer r.turnAdmissionMu.Unlock()
 	params, err := decodeTurnStartParams(request)
 	if err != nil {
 		return nil, err
@@ -8528,6 +8534,8 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		}
 		return r.clearThreadGoal(request, &params)
 	case MethodThreadSettingsUpdate:
+		r.turnAdmissionMu.Lock()
+		defer r.turnAdmissionMu.Unlock()
 		var params SettingsUpdateParams
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
