@@ -2027,3 +2027,10 @@ green.
 - `#47847` remains partial: clipboard writes are asynchronous, but Go lacks the
   session worker's busy rejection, setup expiry, bounded shutdown, and
   request-id matching against stale completions.
+- `#47360` remains partial: user prompts keep their gutter/background while
+  wrapping, but URL destinations are not annotated across adaptive/forced
+  splits.
+- `#47399` is not applicable: Go does not enable terminal mouse capture, so
+  tmux retains control of its mouse policy.
+- `#47717` is not applicable: Go's model picker resolves through modal state
+  rather than Rust's recursive AppEvent dispatch.
