@@ -2,8 +2,11 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"codex_go/sandbox"
 )
 
 func TestRequestPermissionsExecutorApprovesAndDeniesLikeRust(t *testing.T) {
@@ -17,7 +20,12 @@ func TestRequestPermissionsExecutorApprovesAndDeniesLikeRust(t *testing.T) {
 			reviewedEnvironment = environmentID
 			reviewedReason = reason
 			reviewedPermissions = permissions
-			return RequestPermissionsDecision{Approved: true, Reason: "approved by review"}, nil
+			enabled := true
+			return RequestPermissionsDecision{
+				Approved:    true,
+				Permissions: &sandbox.AdditionalPermissionProfile{Network: &enabled},
+				Scope:       "turn",
+			}, nil
 		},
 	}
 	output, err := executor.Execute(context.Background(), &Invocation{
@@ -29,8 +37,19 @@ func TestRequestPermissionsExecutorApprovesAndDeniesLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !output.Success || output.Body != "approved by review" {
+	if !output.Success {
 		t.Fatalf("output = %#v", output)
+	}
+	var response struct {
+		Permissions      sandbox.AdditionalPermissionProfile `json:"permissions"`
+		Scope            string                              `json:"scope"`
+		StrictAutoReview bool                                `json:"strictAutoReview"`
+	}
+	if err := json.Unmarshal([]byte(output.Body), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Scope != "turn" || response.Permissions.Network == nil || !*response.Permissions.Network {
+		t.Fatalf("response = %#v", response)
 	}
 	if reviewedThread != "thread-1" || reviewedTurn != "turn-1" || reviewedCall != "call-1" || reviewedEnvironment != "remote" || reviewedReason != "need network" {
 		t.Fatalf("review context = %q/%q/%q/%q/%q", reviewedThread, reviewedTurn, reviewedCall, reviewedEnvironment, reviewedReason)

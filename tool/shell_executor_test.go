@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -912,6 +914,55 @@ func TestShellExecutorHonorsPerEnvironmentConfigLikeRust(t *testing.T) {
 	}
 	if runner.request.PermissionProfile == nil || runner.request.PermissionProfileID != "read-only" {
 		t.Fatalf("request permission profile = %#v id=%q", runner.request.PermissionProfile, runner.request.PermissionProfileID)
+	}
+}
+
+func TestShellExecutorAppliesGrantedTurnPermissionsLikeRust(t *testing.T) {
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+	cwd := t.TempDir()
+	grantedPath := filepath.Join(cwd, "granted")
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy:   sandbox.ApprovalOnRequest,
+			CWD:              cwd,
+			DefaultTimeoutMS: 5000,
+		},
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{{ID: "primary", CWD: cwd}},
+		UnifiedExecTurnID:       "turn-grant",
+		GrantedPermissions: func(turnID, environmentID string) *sandbox.AdditionalPermissionProfile {
+			if turnID != "turn-grant" || environmentID != "primary" {
+				t.Fatalf("grant lookup = %q/%q", turnID, environmentID)
+			}
+			return &sandbox.AdditionalPermissionProfile{FileSystem: []string{grantedPath}}
+		},
+	})
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-grant",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi","environment_id":"primary"}`},
+		Context:  map[string]any{"thread_id": "thread-grant", "turn_id": "turn-grant"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !output.Success {
+		t.Fatalf("output = %#v", output)
+	}
+	if runner.request == nil || runner.request.SandboxPermissions != sandbox.SandboxPermissionsWithAdditionalPermissions ||
+		runner.request.AdditionalPermissions == nil ||
+		!slices.Contains(runner.request.AdditionalPermissions.FileSystem, grantedPath) {
+		t.Fatalf("request permissions = %#v", runner.request)
+	}
+	escalated, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-escalated",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi","environment_id":"primary","sandbox_permissions":"require_escalated"}`},
+		Context:  map[string]any{"thread_id": "thread-grant", "turn_id": "turn-grant"},
+	})
+	if err != nil || escalated == nil || escalated.Success {
+		t.Fatalf("cached grant bypassed escalation approval: %#v, %v", escalated, err)
 	}
 }
 

@@ -99,6 +99,10 @@ type ShellExecutorOptions struct {
 	// model switch while a background process runs cannot retarget the command's
 	// analytics attribution. Nil leaves the attribution absent.
 	ModelContext func() (modelSlug string, reasoningEffort string)
+	// GrantedPermissions resolves permissions already approved for this turn and
+	// executor environment, so later commands inherit them without repeating the
+	// profile (Rust #41928).
+	GrantedPermissions func(turnID, environmentID string) *sandbox.AdditionalPermissionProfile
 	// WarningSink receives best-effort user-visible launch warnings.
 	WarningSink func(string)
 	// OneShot marks an executor as completion-only (Rust #41393): used when
@@ -139,6 +143,7 @@ type ShellExecutor struct {
 	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) SnapshotProviderResult
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	modelContext             func() (modelSlug string, reasoningEffort string)
+	grantedPermissions       func(turnID, environmentID string) *sandbox.AdditionalPermissionProfile
 	warningSink              func(string)
 	oneShot                  bool
 	allowTTY                 bool
@@ -215,6 +220,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.snapshotProvider = options.SnapshotProvider
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
 	executor.modelContext = options.ModelContext
+	executor.grantedPermissions = options.GrantedPermissions
 	executor.warningSink = options.WarningSink
 	executor.oneShot = options.OneShot
 	if options.AllowTTY != nil {
@@ -578,7 +584,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if err != nil {
 		return nil, RespondToModel(err.Error())
 	}
+	grantEnvironmentID := ""
 	if environment != nil {
+		grantEnvironmentID = strings.TrimSpace(environment.ID)
 		environmentCWD := environment.CWD
 		remoteEnvironment := environment.Remote()
 		if remoteEnvironment {
@@ -611,6 +619,17 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		if environment.PermissionProfile != nil {
 			validation.PermissionProfile = environment.PermissionProfile
 			validation.PermissionProfileID = environment.PermissionProfileID
+		}
+	}
+	if e.grantedPermissions != nil {
+		if granted := e.grantedPermissions(e.unifiedExecTurnID, grantEnvironmentID); !granted.IsEmpty() {
+			if args.SandboxPermissions != sandbox.SandboxPermissionsRequireEscalated {
+				args.AdditionalPermissions = sandbox.MergePermissionProfiles(args.AdditionalPermissions, granted)
+				if args.SandboxPermissions == "" || args.SandboxPermissions == sandbox.SandboxPermissionsUseDefault {
+					args.SandboxPermissions = sandbox.SandboxPermissionsWithAdditionalPermissions
+				}
+				validation.AdditionalPermissionsPreapproved = true
+			}
 		}
 	}
 	if e.managedNetworkResolver != nil {

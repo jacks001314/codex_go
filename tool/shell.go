@@ -307,7 +307,11 @@ type ShellValidationOptions struct {
 	GranularSandboxApproval bool
 	GranularRules           bool
 	PermissionsPreapproved  bool
-	AllowLoginShell         bool
+	// AdditionalPermissionsPreapproved means a cached request_permissions grant
+	// already covers this profile. It must not bypass the separate escalation
+	// approval for require_escalated.
+	AdditionalPermissionsPreapproved bool
+	AllowLoginShell                  bool
 	// LoginShellPackagePath mirrors Rust's `Feature::LoginShellPackagePath`
 	// (#49467) for this turn's shell launches.
 	LoginShellPackagePath           bool
@@ -644,7 +648,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		opts.ApprovalPolicy,
 		sandboxPermissions,
 		args.AdditionalPermissions,
-		opts.PermissionsPreapproved,
+		opts.PermissionsPreapproved || opts.AdditionalPermissionsPreapproved,
 		cwd,
 	)
 	if err != nil {
@@ -662,7 +666,9 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		return nil, err
 	}
 	sandboxProfile := buildShellSandboxProfile(permissionProfile, additionalPermissions, cwd)
-	escalationApprovalRequired := RequestsSandboxOverride(sandboxPermissions) && !opts.PermissionsPreapproved
+	sandboxOverrideRequiresApproval := sandboxPermissions == sandbox.SandboxPermissionsRequireEscalated ||
+		(sandboxPermissions == sandbox.SandboxPermissionsWithAdditionalPermissions && !opts.AdditionalPermissionsPreapproved)
+	escalationApprovalRequired := sandboxOverrideRequiresApproval && !opts.PermissionsPreapproved
 	if escalationApprovalRequired {
 		// Rust #40024: use the shared policy rejection check so granular
 		// sandbox_approval controls whether escalation may prompt.

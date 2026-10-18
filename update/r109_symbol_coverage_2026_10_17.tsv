@@ -2093,7 +2093,7 @@ c3d5e4418f05908ffeb68f6257fbacbb1e65e607	40466	Add credential brokering to netwo
 c3eeaae9a3d401f7e7ade0817b7b27299af7d2a1	43959	Gate new app-server work during graceful shutdown (#43959)	2026-09-09	appserver	5	2	0.40	0	0	audit_pending	TurnPermit,begin_drain,subscribe_active
 c4017a87aacc7558002b7cb510025e967c1d765e	44976	Make context snapshot text rendering consistent (#44976)	2026-09-12	guardian	0	0		0	0	not_applicable	
 c41a72cd3f5886a6b367e93e28c4ef0662a54500	49856	Support Daybreak selection in `codex exec` (#49856)	2026-10-01	model	3	3	1.00	0	0	complete	
-c4350b4ca2a5af7dced6784e8c36f2f2cdab2dd6	41928	Use executor path context for permission preapproval (#41928)	2026-08-31	sandbox	1	0	0.00	0	0	implementation_pending	file_system_sandbox_policy_context_for_cwd
+c4350b4ca2a5af7dced6784e8c36f2f2cdab2dd6	41928	Use executor path context for permission preapproval (#41928)	2026-08-31	sandbox	1	1	1.00	0	0	complete
 c44deff7b1083e9660ac55d02122481f1cdf139b	47447	Extract WebSocket authentication into `codex-websocket-auth` (#47447)	2026-09-23	appserver	11	7	0.64	0	0	complete	WebsocketAuthConfig,WebsocketCapabilityTokenSource,authorize_upgrade,policy_from_settings
 c45ea25ffb72d5f7324489d824d0c677283aa0b4	46877	Allow subagents to request MCP elicitation input (#46877)	2026-09-20	appserver	0	0		0	0	not_applicable	
 c46aa58a7baaec125612523f27f931d1ad22f8cd	47244	Centralize agent resume handling in `LocalAgentControl` (#47244)	2026-09-22	core	1	1	1.00	0	0	complete	

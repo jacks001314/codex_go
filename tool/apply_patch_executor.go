@@ -37,6 +37,9 @@ type ApplyPatchExecutorOptions struct {
 	// EnvironmentFileSystems resolves the selected environment's filesystem so
 	// the patch is verified and applied through that environment (Rust #20647).
 	EnvironmentFileSystems EnvironmentFileSystemProvider
+	// GrantedPermissions resolves permissions already approved for this turn and
+	// environment (Rust #41928).
+	GrantedPermissions func(turnID, environmentID string) *sandbox.AdditionalPermissionProfile
 }
 
 type ApplyPatchExecutor struct {
@@ -50,6 +53,7 @@ type ApplyPatchExecutor struct {
 	allowedSymlinkedCodexHome string
 	environmentCheck          *UnifiedExecEnvironmentCheck
 	environmentFileSystems    EnvironmentFileSystemProvider
+	grantedPermissions        func(turnID, environmentID string) *sandbox.AdditionalPermissionProfile
 }
 
 type ApplyPatchApprovalDecision struct {
@@ -88,6 +92,7 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	executor.allowedSymlinkedCodexHome = options.AllowedSymlinkedCodexHome
 	executor.environmentCheck = options.EnvironmentCheck
 	executor.environmentFileSystems = options.EnvironmentFileSystems
+	executor.grantedPermissions = options.GrantedPermissions
 	if options.ToolName.Key() != "" {
 		executor.toolName = options.ToolName
 	}
@@ -151,12 +156,30 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	if resolvedCWD := strings.TrimSpace(fileSystem.CWD()); resolvedCWD != "" {
 		cwd = resolvedCWD
 	}
+	permissionProfile := e.permissionProfile
+	sandboxPolicy := e.sandboxPolicy
+	if e.grantedPermissions != nil {
+		turnID := strings.TrimSpace(invocationContextString(invocation, "turn_id"))
+		environmentID := strings.TrimSpace(action.EnvironmentID)
+		if granted := e.grantedPermissions(turnID, environmentID); !granted.IsEmpty() {
+			merged, mergeErr := sandbox.PermissionProfileWithAdditionalPermissionsForConvention(
+				permissionProfile,
+				granted,
+				PathConventionForPath(cwd),
+			)
+			if mergeErr != nil {
+				return nil, RespondToModel("apply_patch verification failed: " + mergeErr.Error())
+			}
+			permissionProfile = merged
+			sandboxPolicy = merged.LegacySandboxPolicy()
+		}
+	}
 	applyOptions := &applypatch.ApplyOptions{CWD: cwd, FS: newEnvironmentApplyPatchFileSystem(ctx, fileSystem)}
 	// Rust #39659: when an otherwise-required sandbox is bypassed, disable
 	// symlink traversal so a verified path cannot be swapped for a link to a
 	// different file.
-	applyOptions.NoFollowSymlinks = applyPatchSandboxBypassed(e.permissionProfile, e.sandboxPolicy)
-	if deniedPath := applyPatchDeniedPath(action, e.cwd(), e.permissionProfile, e.sandboxPolicy); deniedPath != "" {
+	applyOptions.NoFollowSymlinks = applyPatchSandboxBypassed(permissionProfile, sandboxPolicy)
+	if deniedPath := applyPatchDeniedPath(action, e.cwd(), permissionProfile, sandboxPolicy); deniedPath != "" {
 		body := fmt.Sprintf("apply_patch verification failed: path %s is outside of the project workspace roots", deniedPath)
 		sandbox.RecordFileSystemPolicyViolation(sandbox.PlatformSandboxType(), deniedPath, body)
 		return &Output{
@@ -168,9 +191,9 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		}, nil
 	}
 	if _, local := fileSystem.(localEnvironmentFileSystem); local {
-		policy := e.sandboxPolicy
-		if e.permissionProfile != nil {
-			policy = e.permissionProfile.LegacySandboxPolicy()
+		policy := sandboxPolicy
+		if permissionProfile != nil {
+			policy = permissionProfile.LegacySandboxPolicy()
 		}
 		if err := sandbox.ValidateWritableRootsForPolicy(cwd, policy, e.allowedSymlinkedCodexHome); err != nil {
 			body := "apply_patch verification failed: " + err.Error()

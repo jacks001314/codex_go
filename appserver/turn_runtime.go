@@ -3853,6 +3853,7 @@ func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
 	if _, ok := r.threads.ConsumeTurn(threadID, turnID, true); !ok {
 		return
 	}
+	r.clearTurnPermissionGrants(threadID, turnID)
 	if r.diagnosticsGauges != nil {
 		if v := r.diagnosticsGauges.gauge("app.turns.active"); v.Load() > 0 {
 			v.Add(^uint64(0))

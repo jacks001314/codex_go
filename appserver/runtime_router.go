@@ -382,15 +382,20 @@ type RuntimeRouter struct {
 	approvalSessionsMu     sync.RWMutex
 	commandApprovals       map[string]struct{}
 	fileApprovals          map[string]struct{}
-	serverRequestGuardsMu  sync.Mutex
-	serverRequestGuards    map[string]*ThreadStatusActiveGuard
-	executedToolCallsMu    sync.Mutex
-	executedToolCalls      map[string]*turn.ExecutedToolCallRecorder
-	newContextWindowMu     sync.Mutex
-	newContextWindowReq    map[string]bool
-	contextWindowMu        sync.Mutex
-	contextWindowIDs       map[string]string
-	windowNumbers          map[string]uint64
+	// permissionGrants holds request_permissions responses by thread,
+	// environment, and turn/session scope. Later shell and file operations merge
+	// these grants without asking the model to repeat the profile (Rust #41928).
+	permissionGrantsMu    sync.Mutex
+	permissionGrants      map[string]*permissionGrantState
+	serverRequestGuardsMu sync.Mutex
+	serverRequestGuards   map[string]*ThreadStatusActiveGuard
+	executedToolCallsMu   sync.Mutex
+	executedToolCalls     map[string]*turn.ExecutedToolCallRecorder
+	newContextWindowMu    sync.Mutex
+	newContextWindowReq   map[string]bool
+	contextWindowMu       sync.Mutex
+	contextWindowIDs      map[string]string
+	windowNumbers         map[string]uint64
 	// restoredWindows records the threads whose persisted window state was
 	// already loaded from their record (Rust restores the compacted item's
 	// window_number/window_ids when a thread resumes).
@@ -6102,6 +6107,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	// durable checkpoint keeps the evidence a resumed thread needs.
 	r.forgetThreadRetainedContext(threadID)
 	r.forgetGuardianReviewHistory(threadID)
+	r.forgetPermissionGrants(threadID)
 	r.forgetThreadSessionState(threadID)
 	r.closeThreadShellSnapshots(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
@@ -15285,6 +15291,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		// POSIX login shells only when the `login_shell_package_path` feature is
 		// enabled for this turn.
 		options.Shell.Validation.LoginShellPackagePath = features.Enabled(cfg.FeatureSettings(), "login_shell_package_path")
+		options.Shell.GrantedPermissions = func(callTurnID, callEnvironmentID string) *sandbox.AdditionalPermissionProfile {
+			return r.grantedPermissionsForEnvironment(threadID, firstNonEmpty(callTurnID, turnID), callEnvironmentID)
+		}
 		if r.commandApprovalForSession(threadID) {
 			options.Shell.Validation.PermissionsPreapproved = true
 		}
@@ -15308,6 +15317,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		// Patches the policy approves without a prompt report the same
 		// config-approved decision the shell executor reports.
 		options.ApplyPatch.DecisionSink = r.sessionTelemetryForThread(threadID)
+		options.ApplyPatch.GrantedPermissions = func(callTurnID, callEnvironmentID string) *sandbox.AdditionalPermissionProfile {
+			return r.grantedPermissionsForEnvironment(threadID, firstNonEmpty(callTurnID, turnID), callEnvironmentID)
+		}
 	}
 	options.EnableMCP = len(mcpTools) > 0
 	options.MCPService = mcpService
@@ -15713,33 +15725,89 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 		if strings.TrimSpace(reviewThreadID) != "" {
 			threadID = strings.TrimSpace(reviewThreadID)
 		}
+		requested, err := additionalPermissionProfileFromJSONMap(permissions)
+		if err != nil {
+			return tool.RequestPermissionsDecision{}, err
+		}
+		cwd := r.activeTurnEnvironmentCWD(threadID, turnID, environmentID)
+		active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+		var approvalPolicy sandbox.AskForApproval
+		if active != nil && active.Params != nil {
+			cfg, _ := r.effectiveConfigForTurn(active.Params)
+			approvalPolicy = turnApprovalPolicyForTurn(cfg, active.Params)
+			if approvalPolicy == sandbox.ApprovalNever {
+				return emptyRequestPermissionsDecision(), nil
+			}
+			if approvalPolicy == sandbox.ApprovalGranular {
+				granular := granularApprovalConfigForTurn(cfg, active.Params)
+				if granular == nil || !granular.AllowsRequestPermissions() {
+					return emptyRequestPermissionsDecision(), nil
+				}
+			}
+		}
 		// Rust Session::request_approval: PermissionRequest hooks decide before
 		// the Guardian review for a request_permissions call too.
 		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, callID, "request_permissions", nil, requestPermissionsHookToolInput(reason, permissions)); ok && verdict != nil {
 			switch verdict.Kind {
 			case HookPermissionRequestAllow:
-				return tool.RequestPermissionsDecision{Approved: true}, nil
+				return r.approvedRequestPermissionsDecision(threadID, turnID, environmentID, requested, cwd, PermissionGrantScopeTurn, false)
 			case HookPermissionRequestDeny:
 				denyReason := ""
 				if verdict.Message != nil {
 					denyReason = strings.TrimSpace(*verdict.Message)
 				}
-				return tool.RequestPermissionsDecision{Reason: denyReason}, nil
+				decision := emptyRequestPermissionsDecision()
+				decision.Reason = denyReason
+				return decision, nil
 			}
 		}
-		reviewer := r.ensureGuardianReviewer(r.services.Agent)
-		action := state.Action{
-			Type:          "request_permissions",
-			EnvironmentID: strings.TrimSpace(environmentID),
+		approvalReviewer := r.approvalsReviewerForTurn(threadID, turnID)
+		if approvalReviewer.RoutesToGuardian() {
+			reviewer := r.ensureGuardianReviewer(r.services.Agent)
+			action := state.Action{
+				Type:          "request_permissions",
+				EnvironmentID: strings.TrimSpace(environmentID),
+				TurnID:        strings.TrimSpace(turnID),
+				Reason:        strings.TrimSpace(reason),
+				Permissions:   permissions,
+			}
+			decision, reviewReason, err := reviewer.Review(ctx, threadID, turnID, callID, action)
+			if err != nil {
+				return tool.RequestPermissionsDecision{}, err
+			}
+			if decision == state.DecisionApproved {
+				return r.approvedRequestPermissionsDecision(threadID, turnID, environmentID, requested, cwd, PermissionGrantScopeTurn, false)
+			}
+			result := emptyRequestPermissionsDecision()
+			result.Reason = reviewReason
+			return result, nil
+		}
+
+		request := &PermissionsRequestApprovalParams{
+			ThreadID:      strings.TrimSpace(threadID),
 			TurnID:        strings.TrimSpace(turnID),
-			Reason:        strings.TrimSpace(reason),
+			ItemID:        strings.TrimSpace(callID),
+			EnvironmentID: stringPtrIfNotEmpty(strings.TrimSpace(environmentID)),
+			StartedAtMS:   uint64(time.Now().UTC().UnixMilli()),
+			CWD:           cwd,
+			Reason:        stringPtrIfNotEmpty(strings.TrimSpace(reason)),
 			Permissions:   permissions,
 		}
-		decision, reviewReason, err := reviewer.Review(ctx, threadID, turnID, callID, action)
-		if err != nil {
+		var response PermissionsRequestApprovalResponse
+		if err := r.requireServerRequests().Request(ctx, ServerRequestPermissionsApproval, request, &response); err != nil {
 			return tool.RequestPermissionsDecision{}, err
 		}
-		return tool.RequestPermissionsDecision{Approved: decision == state.DecisionApproved, Reason: reviewReason}, nil
+		granted := additionalPermissionProfileFromGranted(response.Permissions)
+		subset := intersectRequestedPermissions(requested, granted, cwd)
+		scope := response.Scope
+		if scope == "" {
+			scope = PermissionGrantScopeTurn
+		}
+		strict := response.StrictAutoReview != nil && *response.StrictAutoReview
+		if strict && scope == PermissionGrantScopeSession {
+			scope = PermissionGrantScopeTurn
+		}
+		return r.approvedRequestPermissionsDecision(threadID, turnID, environmentID, subset, cwd, scope, strict)
 	}
 }
 

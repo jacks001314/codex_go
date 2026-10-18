@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"codex_go/sandbox"
 )
 
 const RequestPermissionsToolName = "request_permissions"
@@ -18,6 +20,11 @@ const requestPermissionsUnavailableMessage = "request_permissions requires a pri
 type RequestPermissionsDecision struct {
 	Approved bool
 	Reason   string
+	// Permissions is the host-approved subset of the requested profile.
+	Permissions *sandbox.AdditionalPermissionProfile
+	// Scope is "turn" or "session"; an empty value is treated as turn-scoped.
+	Scope            string
+	StrictAutoReview bool
 }
 
 // RequestPermissionsReviewer reviews a request_permissions call through the
@@ -101,16 +108,32 @@ func (e *RequestPermissionsExecutor) Execute(ctx context.Context, invocation *In
 		}
 		return nil, RespondToModel(reason)
 	}
-	body := "The requested permissions were approved."
-	if reason := strings.TrimSpace(decision.Reason); reason != "" {
-		body = reason
+	granted := decision.Permissions
+	if granted == nil {
+		encoded, err := json.Marshal(args.Permissions)
+		if err != nil {
+			return nil, RespondToModel("request_permissions response could not be encoded")
+		}
+		var fallback sandbox.AdditionalPermissionProfile
+		if err := json.Unmarshal(encoded, &fallback); err != nil {
+			return nil, RespondToModel("request_permissions response could not be decoded")
+		}
+		granted = &fallback
 	}
-	data := map[string]any{"approved": true}
-	encoded, err := json.Marshal(args.Permissions)
-	if err == nil {
-		data["permissions"] = json.RawMessage(encoded)
+	scope := strings.TrimSpace(decision.Scope)
+	if scope == "" {
+		scope = "turn"
 	}
-	return &Output{Success: true, Body: body, Data: data}, nil
+	response := map[string]any{
+		"permissions":      granted,
+		"scope":            scope,
+		"strictAutoReview": decision.StrictAutoReview,
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return nil, RespondToModel("request_permissions response could not be encoded")
+	}
+	return &Output{Success: true, Body: string(encoded), Data: response}, nil
 }
 
 // requestPermissionsEnvironmentID reads the call's own environment selector, which is

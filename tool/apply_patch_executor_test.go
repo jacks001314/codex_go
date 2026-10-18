@@ -115,6 +115,35 @@ func TestApplyPatchExecutorWorkspacePolicyRejectsOutsideRootLikeRust(t *testing.
 	assertApplyPatchMissing(t, filepath.Join(parent, "outside.txt"))
 }
 
+func TestApplyPatchExecutorUsesGrantedPermissionsLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "granted.txt")
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	profile.SandboxPolicy.ExcludeTmpdirEnvVar = true
+	profile.SandboxPolicy.ExcludeSlashTmp = true
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD:               cwd,
+		PermissionProfile: &profile,
+		SandboxPolicy:     profile.SandboxPolicy,
+		GrantedPermissions: func(turnID, environmentID string) *sandbox.AdditionalPermissionProfile {
+			if turnID != "turn-grant" {
+				t.Fatalf("turn id = %q", turnID)
+			}
+			return &sandbox.AdditionalPermissionProfile{FileSystem: []string{outsideDir}}
+		},
+	})
+	patch := "*** Begin Patch\n*** Add File: " + filepath.ToSlash(outside) + "\n+granted\n*** End Patch"
+	output, err := executor.Execute(context.Background(), &Invocation{
+		Payload: Payload{Kind: PayloadCustom, Input: patch},
+		Context: map[string]any{"thread_id": "thread-grant", "turn_id": "turn-grant"},
+	})
+	if err != nil || output == nil || !output.Success {
+		t.Fatalf("granted patch output = %#v, %v", output, err)
+	}
+	assertApplyPatchFile(t, outside, "granted\n")
+}
+
 func TestApplyPatchExecutorCanonicalProfileWinsOverLegacyPolicyLikeRust(t *testing.T) {
 	cwd := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")

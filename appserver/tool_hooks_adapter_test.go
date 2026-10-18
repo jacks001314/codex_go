@@ -520,7 +520,7 @@ func TestRequestPermissionsRunsPermissionRequestHooksLikeRust(t *testing.T) {
 		t.Fatalf("hook allow did not approve request_permissions: %#v", allowed)
 	}
 	denied := run(t, hookRunnerPermissionRequestDenyCommand("permissions are not granted here"))
-	if denied.Approved || denied.Reason != "permissions are not granted here" {
+	if denied.Permissions == nil || !denied.Permissions.IsEmpty() || denied.Reason != "permissions are not granted here" {
 		t.Fatalf("hook deny = %#v", denied)
 	}
 }
