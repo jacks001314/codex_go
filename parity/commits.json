@@ -27769,9 +27769,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: is_local_volume_root, open_relative_to_volume, open_volume_root"
+        "Equivalent implementation: Go never performs the strict NT DOS-alias open that required the upstream volume-root fallback. Regular-file operations use Win32 CreateFile with FILE_FLAG_OPEN_REPARSE_POINT, no-follow walks every path component, the drive root is not treated as a reparse point, and junctions are rejected without traversal or creation through them."
       ]
     },
     {
