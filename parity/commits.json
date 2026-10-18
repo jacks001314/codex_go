@@ -20551,9 +20551,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/8; needs review: UserInputMetadata"
+        "Round 616 (parity backfill): heartbeat provenance comes from the exact user.heartbeat content kind; bounded envelopes coalesce only unchanged instructions per automation, while new heartbeat versions and ordinary human messages retain acceptance order. Tests: go test ./retainedctx ./appserver -run 'Heartbeat|Retained' -count=1"
       ]
     },
     {
@@ -20623,9 +20623,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: guardian_assessment_logging_enabled"
+        "Round 617 (parity backfill): otel.log_guardian_assessments requires an OTLP HTTP/gRPC log exporter; completed assessments emit codex.guardian_assessment with bounded rationale capped at 64 KiB on a UTF-8 boundary, while fail-closed, timeout, and in-progress events omit model outcome. Tests: go test ./config ./telemetry ./appserver -run Guardian -count=1"
       ]
     },
     {
@@ -23276,9 +23276,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: spawn_background"
+        "Round 618 (parity backfill): envutil.SuppressConsoleWindow ORs CREATE_NO_WINDOW into existing creation flags while preserving CREATE_SUSPENDED for Job Object containment; shared background, hook, and MCP launches use the helper. Tests: go test ./appserver ./mcp ./envutil -run 'ConsoleWindow|HookProcessTree|StdioCommand|StdioProcess' -count=1"
       ]
     },
     {
@@ -24407,9 +24407,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: FS_WRITE_BLOCK_METHOD"
+        "Round 619 (parity backfill): exec-server defines fs/writeBlock, handle/offset/base64 chunk params, 1 MiB chunk size, open modes, and client/server stream coverage. Tests: go test ./execserver -run 'FileWriteStream|WriteBlock|WritableFile|FSWriteBlock' -count=1"
       ]
     },
     {
@@ -24431,9 +24431,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: wait_for_exit"
+        "Round 620 (parity backfill): each snapshot capture owns its process group; failure, timeout, or cancellation terminates the group while successful captures preserve startup helpers. Tests: go test ./tool -run 'SnapshotCapture' -count=1"
       ]
     },
     {
