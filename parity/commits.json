@@ -18789,9 +18789,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: composer_gap_has_content, follow_control_label"
+        "N/A by architecture (audit): upstream 0a73d55b80 (#47331) conditionally reserves Rust's separate ComposerGap separator because the hint/follow-control/copy-status row can already separate activity from input. Go has no independent ComposerGap row: composer, footer, notices, voice strip, and follow/interrupt hints are individual sections joined directly, so there is no redundant separator component to conditionally remove. Existing short-terminal/composer geometry tests cover the resulting layout."
       ]
     },
     {
