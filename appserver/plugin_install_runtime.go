@@ -96,7 +96,13 @@ func (r *pluginInstallRuntime) RequestPluginInstall(ctx context.Context, request
 	if r.plugins == nil {
 		return result, nil
 	}
+	codexHome := ""
+	if r.config != nil {
+		codexHome = r.config.CodexHome()
+	}
+	releaseMutation := acquireRemoteInstalledPluginCacheMutation(codexHome)
 	installed, err := r.plugins.Install(&plugin.PluginInstallParams{PluginID: request.Tool.ID})
+	releaseMutation()
 	if err != nil || installed == nil || strings.TrimSpace(installed.PluginID) == "" {
 		return result, nil
 	}

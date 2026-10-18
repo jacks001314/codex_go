@@ -26,11 +26,6 @@ const (
 	remoteInstalledWorkspaceSharedMarketplace = "workspace-shared-with-me"
 )
 
-var remoteInstalledPluginSyncs = struct {
-	sync.Mutex
-	inFlight map[string]struct{}
-}{inFlight: map[string]struct{}{}}
-
 var remoteInstalledPluginSyncFailures = struct {
 	sync.Mutex
 	failedRemote                []string
@@ -97,6 +92,7 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 		return false, nil
 	}
 	snapshot := r.accountAuthSnapshot(codexHome)
+	authIdentity := remoteInstalledPluginsAuthIdentityFromSnapshot(snapshot)
 	token := appDirectoryAuthToken(snapshot)
 	if token == "" {
 		return false, nil
@@ -104,16 +100,21 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 	accountID := auth.AccountIDFromAuthForRestrictions(snapshot)
 	baseURL := strings.TrimRight(cfg.ChatGPTBaseURL(), "/")
 	client := r.accountHTTPClient()
-	if !markRemoteInstalledPluginSyncInFlight(codexHome) {
+	generation, releaseSync, ok := tryAcquireRemoteInstalledPluginSync(codexHome)
+	if !ok {
 		return false, nil
 	}
-	defer clearRemoteInstalledPluginSyncInFlight(codexHome)
+	defer releaseSync()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	detailsByMarketplace, err := fetchInstalledRemotePluginDetails(ctx, client, baseURL, token, accountID, codexHome)
 	if err != nil {
 		return false, err
+	}
+	if !remoteInstalledPluginGenerationCurrent(codexHome, generation) ||
+		remoteInstalledPluginsAuthIdentityFromSnapshot(r.accountAuthSnapshot(codexHome)) != authIdentity {
+		return false, nil
 	}
 	changed := false
 	for _, marketplaceName := range []string{
@@ -133,24 +134,6 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 		r.effectivePluginsChanged()
 	}
 	return true, nil
-}
-
-func markRemoteInstalledPluginSyncInFlight(codexHome string) bool {
-	key := filepath.Clean(codexHome)
-	remoteInstalledPluginSyncs.Lock()
-	defer remoteInstalledPluginSyncs.Unlock()
-	if _, ok := remoteInstalledPluginSyncs.inFlight[key]; ok {
-		return false
-	}
-	remoteInstalledPluginSyncs.inFlight[key] = struct{}{}
-	return true
-}
-
-func clearRemoteInstalledPluginSyncInFlight(codexHome string) {
-	key := filepath.Clean(codexHome)
-	remoteInstalledPluginSyncs.Lock()
-	delete(remoteInstalledPluginSyncs.inFlight, key)
-	remoteInstalledPluginSyncs.Unlock()
 }
 
 func (r *RuntimeRouter) accountAuthSnapshot(codexHome string) *auth.AuthDotJSON {
@@ -207,10 +190,16 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 				return nil, fmt.Errorf("fetch installed plugins: HTTP %d", response.StatusCode)
 			}
 			for _, candidate := range page.Plugins {
-				if strings.TrimSpace(candidate.ID) != "" && strings.TrimSpace(candidate.Name) != "" {
-					marketplaceName := remoteInstalledMarketplaceForPlugin(scope, candidate)
-					installed[marketplaceName+"\x00"+candidate.ID] = candidate
+				id := strings.TrimSpace(candidate.ID)
+				name := strings.TrimSpace(candidate.Name)
+				if id == "" || name == "" {
+					return nil, fmt.Errorf("installed plugins response contains an incomplete plugin snapshot")
 				}
+				if err := plugin.ValidatePluginSegment(name, "plugin name"); err != nil {
+					return nil, fmt.Errorf("installed plugin %q has an invalid local cache name: %w", id, err)
+				}
+				marketplaceName := remoteInstalledMarketplaceForPlugin(scope, candidate)
+				installed[marketplaceName+"\x00"+id] = candidate
 			}
 			if page.Pagination.NextPageToken == nil || strings.TrimSpace(*page.Pagination.NextPageToken) == "" {
 				break
@@ -238,7 +227,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 			if candidate.Enabled {
 				recordRemoteInstalledPluginMaterializationFailure(candidate.ID)
 			}
-			continue
+			root = firstNonEmpty(root, filepath.Join(codexHome, "plugins", "cache", marketplaceName, name))
 		}
 		if !candidate.Enabled {
 			continue

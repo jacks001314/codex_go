@@ -938,6 +938,8 @@ func (r *RuntimeRouter) noteAuthChanged() {
 	r.authChanged = make(chan struct{})
 	r.authRevisionMu.Unlock()
 	if ownerChanged {
+		r.advanceRemoteInstalledPluginCacheGeneration()
+		r.clearRemoteInstalledPluginMetadataForAuthChange()
 		// Credential changes keep the cached model client, but a new account
 		// owner must not reuse its websocket connection or routing state
 		// (Rust #44489).
@@ -10830,7 +10832,9 @@ func (r *RuntimeRouter) handlePluginInstall(request *Request) (*plugin.PluginIns
 		return nil, err
 	}
 	service := r.requirePlugins()
+	releaseMutation := acquireRemoteInstalledPluginCacheMutation(r.requireConfig().CodexHome())
 	response, err := service.Install(&params)
+	releaseMutation()
 	if err != nil {
 		r.emitPluginInstallFailedAnalyticsEvent(context.Background(), request.normalizedConnectionID(), &params, err)
 		return nil, err
@@ -10854,7 +10858,9 @@ func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginU
 	}
 	service := r.requirePlugins()
 	detail := pluginAnalyticsDetailByID(service, params.PluginID)
+	releaseMutation := acquireRemoteInstalledPluginCacheMutation(r.requireConfig().CodexHome())
 	response, err := service.Uninstall(&params)
+	releaseMutation()
 	if err != nil {
 		return nil, err
 	}

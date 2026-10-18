@@ -586,9 +586,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: RemoteInstalledPluginBundleSyncResult, RemoteInstalledPluginSyncGuard, acquire_remote_installed_plugin_sync_guard, reconcile_remote_installed_plugins, set_test_auth"
+        "Remote installed-plugin synchronization is now account-scoped: each pass captures the auth identity and cache generation, discards the result if the owner changes before publication, and auth-owner changes immediately clear remote installed metadata and advance the generation. A per-Codex-home gate serializes bundle reconciliation with direct app-server, install-runtime, and uninstall mutations. The complete installed snapshot is validated before any bundle download or stale-cache removal, materialization download failures retain valid installed metadata, and failed/cancelled passes release the gate so a later retry can publish. Tests cover incomplete snapshots, stale-account generations, direct-mutation exclusion, auth-owner metadata clearing, materialization metadata retention, and cancellation recovery."
       ]
     },
     {
