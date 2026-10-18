@@ -29310,9 +29310,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555: prepareTurnStartParams clears model_context_window and model_auto_compact_token_limit for subagent records when features.subagent_default_context_limits is enabled, so spawns, resumes and follow-up input use the model defaults; parent threads keep their overrides. Tests: go test ./appserver -run SubagentDefaultContextLimits -count=1; go test ./appserver -count=1"
       ]
     },
     {

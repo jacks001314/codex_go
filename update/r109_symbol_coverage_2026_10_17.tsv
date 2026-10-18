@@ -1456,7 +1456,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 89c8759d8c497b30629a2d67a51c163aa9ed3c44	52652	Bound local exec-server output draining after process exit (#52652)	2026-10-09	core	1	0	0.00	0	0	complete	OutputDrainPolicy
 89c8bcf37d64be69e4c8286f4541c1a84ed312a4	44948	Add context snapshots for async questions and plugin refresh (#44948)	2026-09-12	plugins	0	0		0	0	not_applicable	
 89d68bc8d2cdcaa1695cf55e9273208093153cb2	52220	Add configurable default plugin activation policy (#52220)	2026-10-08	appserver	6	4	0.67	0	0	complete	CachedPluginMetadata,refresh_hooks
-8a0437ff34c920af41dd83af71bc8474c452fb10	52659	Add an opt-in feature for subagent model context defaults (#52659)	2026-10-09	config	0	0		0	0	not_applicable	
+8a0437ff34c920af41dd83af71bc8474c452fb10	52659	Add an opt-in feature for subagent model context defaults (#52659)	2026-10-09	appserver	0	0		0	0	complete
 8a30bc31efcb942eddaed96f13c7858d75726482	45746	Explicitly gate DotSlash publishing on release success (#45746)	2026-09-15	core	0	0		0	0	not_applicable	
 8a3c4ea3b5a7c0e92cf24dae46ec87629a26bb7f	47428	Apply inherited environment settings at turn boundaries (#47428)	2026-09-23	mcp	5	0	0.00	0	0	complete	ThreadEnvironmentDefaults,for_selection,set_active_thread_defaults,set_snapshot_credential_broker,update_selections
 8a400e7812b0c7488a2bf7963741dceb1aa2e693	49956	Cache the placeholder regex for MCP hook argument expansion (#49956)	2026-10-01	mcp	0	0		0	0	not_applicable	

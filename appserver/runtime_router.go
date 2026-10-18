@@ -7902,6 +7902,11 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		// tool calls and escalations are denied within the delegate instead of
 		// being forwarded to the parent session.
 		params.ApprovalPolicy = sandbox.ApprovalNever
+		// Rust #52659 build_agent_shared_config: the opt-in feature clears
+		// inherited context-window and auto-compaction overrides so a subagent
+		// uses its model's defaults. Applying it at every subagent turn covers
+		// fresh spawns, resumes and follow-up input.
+		params.Config = r.applySubagentDefaultContextLimits(params)
 	}
 	settings := r.threadSettingsForTurn(params.ThreadID)
 	if strings.TrimSpace(params.CWD) == "" {
@@ -7948,6 +7953,27 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 	}
 	applyPersistedPermissionProfileToTurnParams(record, params)
 	return nil
+}
+
+// applySubagentDefaultContextLimits mirrors Rust #52659: when
+// features.subagent_default_context_limits is enabled, nil out the shared
+// model_context_window and model_auto_compact_token_limit overrides for a
+// subagent turn. A nil override reads back as the model default.
+func (r *RuntimeRouter) applySubagentDefaultContextLimits(params *turn.TurnStartParams) map[string]any {
+	if r == nil || params == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "subagent_default_context_limits") {
+		return params.Config
+	}
+	overrides := cloneAnyMap(params.Config)
+	if overrides == nil {
+		overrides = map[string]any{}
+	}
+	overrides["model_context_window"] = nil
+	overrides["model_auto_compact_token_limit"] = nil
+	return overrides
 }
 
 // activateThreadDisabledPluginIDs records the plugin selection the admitted task
