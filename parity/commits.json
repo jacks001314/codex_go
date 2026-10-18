@@ -2038,9 +2038,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: requires_host_skill_discovery"
+        "Round 487 (audit): features registers skip_host_skill_discovery; appserver requiresHostSkillDiscovery keeps host discovery when any SkillInvocationContributor asks for host-owned skills, and both BuildHostSkillsPromptContext and turn setup supply an empty host snapshot when the feature is on and no contributor requires it. Executor/orchestrator catalogs and base instructions remain available. Tests cover disabled, enabled, executor-only, requiring-contributor, and mixed-contributor behavior. Tests: go test ./appserver -run 'SkipHostSkill|SkipHostSkillDiscovery|HostSkills' -count=1"
       ]
     },
     {
