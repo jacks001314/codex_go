@@ -8609,9 +8609,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: read_session_cwd"
+        "Audited upstream 694b6319d3 (#43360): already implemented. Resume and agent-switch responses carry the app-server thread's CWD/model/provider; the tea model applies server model/provider from SessionSummary and AgentThreadSwitchResponse, and thread/read settings supply CWD, model, provider, and permission profile. Tests: TestResumeAppliesServerModelAndProvider, TestAgentSwitchAppliesServerModelAndProvider, TestApplyThreadSettingsUpdatesRestoredSessionLikeRust, and the resume-picker CWD restoration test."
       ]
     },
     {
@@ -8621,9 +8621,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: PendingWorkingDirectoryChange, finish_working_directory_change"
+        "Audited upstream 5ecb3afd1b (#43376): Go's equivalent is workingDirectoryChangePending with a deferred result recheck. A second /cd is rejected while the first is pending, results are dropped when the source thread or cwd changed, and the pending flag clears on completion. Tests: TestWorkingDirectoryChangeRejectsConcurrentRequests and TestWorkingDirectoryChangeRecheckDropsStaleResults."
       ]
     },
     {
@@ -29287,9 +29287,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 726 (audit): Go's daemon startup already considers only explicit launch overrides. daemonStartupServerFeatures extracts enabled shared-service flags, daemonServerFeatureDisabled detects explicit disables, and daemonRestartFeatureOverrides validates/replays only CLI toggles; config-file/default differences never trigger a compatibility warning or restart. Go has no daemon features/list compatibility RPC path, so the superseded-requirements filtering has no separate carrier. Tests: TestDaemonStartupServerFeaturesLikeRust, daemon_restart_features_test.go; go test ./app -run 'Daemon.*Feature|DaemonRestartFeature' -count=1."
       ]
     },
     {
