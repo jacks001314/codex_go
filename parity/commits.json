@@ -12303,9 +12303,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: legacy_personality_model_preset"
+        "Round 519 (audit): already implemented. Bundled GPT-5.4 and GPT-5.5 use fixed instructions, report no personality support, and ignore personality overrides. TestModelInstructionsFixedTemplateIgnoresPersonality and TestBundledCatalogFixedTemplatesReportNoPersonalitySupport cover the behavior. Tests: go test ./model -run 'Bundled|Personality|Instructions' -count=1"
       ]
     },
     {
