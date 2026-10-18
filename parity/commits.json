@@ -958,9 +958,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: content_item_token_count, estimate_image_bytes, truncate_message_to_token_budget"
+        "Round 485 (audit): compact.CompactionImageBudgetKey gates image charging for remote retained messages; the enabled path charges EstimateItemTokens, keeps images with adjacent labels atomic, truncates/keeps the boundary image as a unit, and stops backfilling older messages when it does not fit. Disabled behavior keeps text-only accounting, and client-authored developer messages retain their serialized estimate. Tests: go test ./compact -run 'RemoteRetention|ImageBudget|ResolveRetentionPolicy' -count=1"
       ]
     },
     {
