@@ -1680,9 +1680,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/14; needs review: VimAction, VimEdit, VimEditTarget, VimEditorEdit, VimInsertPosition"
+        "Round 762: Vim normal mode records find/operator/insert, replace, and delete-word changes and dispatches vim_normal.repeat_last_change; tests cover df and replace dot-repeat state. Tests: go test ./tui/tea -run 'Vim|DotRepeat|Repeat' -count=1"
       ]
     },
     {
@@ -1692,9 +1692,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: ResponsesAgentRunner tracks provider auth refresh intervals, retries unauthorized requests after refresh, refreshes Bedrock AWS auth commands/credential exports, and exposes external auth refresh with the unauthorized reason. Tests: go test ./model -run 'AuthRefresh|Unauthorized|Bedrock.*Refresh' -count=1"
       ]
     },
     {
@@ -1716,9 +1716,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: ContextWindowGuidance renders as a developer fragment with content kind token_budget.context_window_guidance and is tracked in world-state diffs; tests cover insertion/removal/transition. Tests: go test ./context -run ContextWindowGuidance -count=1; go test ./appserver -run ContextWindowGuidance -count=1"
       ]
     },
     {
@@ -1728,9 +1728,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: token-budget history notes validation, ingest/tool wiring, context-window guidance snapshots, hint status analytics, and model support checks are implemented. Tests: go test ./appserver -run 'HistoryNotes|ContextWindowGuidance' -count=1"
       ]
     },
     {
@@ -1764,9 +1764,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: features registers transcript_v2 (deprecated/default-off) and the daemon startup feature forwarding table includes it, with startup tests for true/false. Tests: go test ./app -run 'DaemonStartup|transcript_v2' -count=1"
       ]
     },
     {
@@ -1860,9 +1860,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: turn.failed/error clears safety buffering and terminal activity but only resets transcript failure state; the composer draft and queued input are not cleared, and error history/status are recorded. Tests: go test ./tui/tea -run 'TurnFailed|AsyncQuestionTurnEnd|PendingInput' -count=1"
       ]
     },
     {
@@ -1872,9 +1872,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: TurnStartParams carries ServiceTierForTurn; appServiceTierForTurn prioritizes it, constrains it to model support, and applies it to turn settings, spawning, and mid-turn settings refresh. Tests: go test ./appserver -run 'ServiceTierForTurn|AppServiceTierForTurn' -count=1"
       ]
     },
     {
@@ -1944,9 +1944,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: Go has no agent_navigation thread-closed lifecycle or inactive replay-only thread-event channel that can retain stale in-progress turns for directory-change checks. Precondition: the Rust-style agent navigation/channel replay subsystem."
       ]
     },
     {
