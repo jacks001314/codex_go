@@ -44,15 +44,14 @@ func TestGlobalFindTranscriptStartsOwnedFindLikeRust(t *testing.T) {
 		t.Fatalf("match count = %d, want 1", got)
 	}
 
-	// The first Esc closes query editing but keeps the result readable; the
-	// second returns to the compact transcript's latest output.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	// Enter accepts the readable result; Esc then returns to latest output.
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
 	if !model.mainFind.active() || !model.mainFind.accepted || model.mainFind.query != "needle" {
-		t.Fatalf("first Esc lost the readable result: %#v", model.mainFind)
+		t.Fatalf("Enter did not accept the readable result: %#v", model.mainFind)
 	}
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
 	if model.mainFind.active() {
-		t.Fatalf("second Esc left owned Find active")
+		t.Fatalf("Esc left accepted Find active")
 	}
 }
 

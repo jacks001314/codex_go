@@ -313,16 +313,9 @@ func (m *Model) updateMainTranscriptFindKey(msg bubbletea.KeyMsg) (bool, bubblet
 			m.clearMainTranscriptFind(true)
 			return true, nil
 		}
-		if m.mainFind.query == "" {
-			m.cancelMainTranscriptFind()
-			return true, nil
-		}
-		// Rust #50039: closing a nonempty query keeps the match and its
-		// surrounding expanded context readable. A second Esc returns to the
-		// latest output; Ctrl+C cancels and restores the pre-search view.
-		m.mainFind.editing = false
-		m.mainFind.accepted = true
-		m.refreshTranscript()
+		// Rust #50503: Escape cancels query editing and restores the pre-search
+		// presentation; after Enter acceptance it returns to latest output.
+		m.cancelMainTranscriptFind()
 		return true, nil
 	case bubbletea.KeyCtrlN:
 		m.stepMainTranscriptFind(1)

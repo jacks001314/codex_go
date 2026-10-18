@@ -2085,6 +2085,10 @@ green.
   success history entry.
 - `#50215` is complete: Bubble Tea's undecoded Ctrl+Insert sequence is mapped to
   app-owned selection copy, with confirmed composer copies clearing selection.
+- `#50359` is complete: hook system-message ANSI SGR is parsed into styled lines
+  with prefixes, indentation, combining characters, and trailing blanks intact.
+- `#50503` is complete: Enter accepts Find results, Ctrl+P/Ctrl+N navigate, and
+  Escape cancels editing or returns to latest after acceptance.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

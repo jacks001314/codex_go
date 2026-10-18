@@ -25695,9 +25695,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's HookRunCell parses ANSI SGR in hook system messages into styled lines, preserving prefixes, continuation indentation, combining characters, resets, and trailing blank lines. Tests cover multiline styled output and trailing-newline rendering."
       ]
     },
     {
@@ -26104,9 +26104,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's owned Find now accepts with Enter (including repeated presses), navigates matches with Ctrl+P/Ctrl+N, and Escape cancels editing to restore the pre-search compact view; after acceptance Escape clears Find and returns to latest output. Tests cover both cancel and accepted-result paths."
       ]
     },
     {

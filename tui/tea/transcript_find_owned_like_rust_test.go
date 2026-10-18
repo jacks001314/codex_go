@@ -80,26 +80,34 @@ func TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust(t *testing.T) {
 	if !model.mainFind.accepted || model.mainFind.editing {
 		t.Fatalf("accept left editing=%v accepted=%v", model.mainFind.editing, model.mainFind.accepted)
 	}
-	model.Update(agentsF3Event())
-	if !model.mainFind.editing || model.mainFind.query != "needle" {
-		t.Fatalf("reopening Find lost the query: editing=%v query=%q", model.mainFind.editing, model.mainFind.query)
-	}
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
-	if !model.mainFind.active() || !model.mainFind.accepted || model.mainFind.editing ||
-		model.mainFind.query != "needle" {
-		t.Fatalf("first Esc did not retain the query in reading mode: %#v", model.mainFind)
+	if model.mainFind.active() {
+		t.Fatal("Esc after acceptance did not clear Find")
 	}
 	view = utils.StripANSI(model.View())
-	if !strings.Contains(view, "hidden needle") || !strings.Contains(view, "esc latest") {
-		t.Fatalf("reading mode lost the selected match or hints:\n%s", view)
+	if strings.Contains(view, "hidden needle") {
+		t.Fatalf("cancelled Find left hidden output expanded:\n%s", view)
+	}
+}
+
+// Rust #50503: Escape while editing cancels Find and restores the pre-search
+// compact presentation.
+func TestOwnedTranscriptFindEscapeCancelsEditingLikeRust(t *testing.T) {
+	model := ownedFindFixture(t)
+	model.Update(agentsF3Event())
+	for _, r := range "needle" {
+		model.Update(findKeyRunes(string(r)))
 	}
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
 	if model.mainFind.active() {
-		t.Fatal("second Esc did not clear the accepted Find")
+		t.Fatalf("Escape left Find active: %#v", model.mainFind)
 	}
-	view = model.View()
+	view := utils.StripANSI(model.View())
 	if strings.Contains(view, "hidden needle") {
 		t.Fatalf("cancelled Find left hidden output expanded:\n%s", view)
+	}
+	if !strings.Contains(view, "ctrl+t to view transcript") {
+		t.Fatalf("cancelled Find did not restore compact output:\n%s", view)
 	}
 }
 
