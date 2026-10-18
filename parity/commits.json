@@ -4416,9 +4416,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: respond_to_terminal_queries"
+        "Round 452 (audit): tool/terminal_queries.go and execserver/terminal_queries.go implement the bounded responder (DSR 5n, window-size 18t, cursor 6n, DECRQM; chunk-split queries retained), filter handled queries from output, and are wired into both unified-exec TTY and exec-server TTY reads. Tests: go test ./tool ./execserver -run 'TerminalQuer|TerminalQuery' -count=1"
       ]
     },
     {
