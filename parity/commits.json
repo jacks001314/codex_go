@@ -12821,9 +12821,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: TranscriptCursor, TranscriptSelection"
+        "N/A by architecture: Guardian transcript selection is already owned by state/guardian_retained_context.go and appserver/guardian_review_history.go; there is no separate Rust prompt module to split."
       ]
     },
     {
@@ -14669,9 +14669,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 20/35; needs review: DANGER_FULL_ACCESS_TEMPLATE, GuardianClassifierInstructions, MultiAgentRoleInstructions, READ_ONLY_TEMPLATE, ResolvedApprovalMessages"
+        "N/A by architecture: Go resolves catalog messages in model/catalog.go and renders mode/role/permission/Guardian text in context, state, and appserver directly; there is no duplicated Rust prompt-module boundary to centralize."
       ]
     },
     {
