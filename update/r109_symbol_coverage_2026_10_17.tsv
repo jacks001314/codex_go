@@ -1779,7 +1779,7 @@ a6fdb11eda992b706c5e6a21ae5fd8c7376f8e06	46952	Preserve metadata in native user 
 a708fc683934d7d7ea7560354968fedd2be28581	47968	Handle Btrfs device mismatches when masking daemon sockets (#47968)	2026-09-24	sandbox	0	0		0	0	not_applicable	
 a70974c1a0837e17769e3c41f83ad5e592c703fb	40297	Preserve developer instruction annotations in subagent forks (#40297)	2026-08-23	core	1	1	1.00	0	0	complete	
 a73485dc76e5b2d31d28109a57f6876f4e1dcc24	40161	Allow exec callers to classify new threads (#40161)	2026-08-23	core	0	0		0	0	not_applicable	
-a73898c249b3cc95849ae1ea91231a0c9a9e29e2	49818	Use dedicated parameters for sandboxed file opens (#49818)	2026-10-01	execserver	1	0	0.00	0	0	implementation_pending	FsHelperOpenParams
+a73898c249b3cc95849ae1ea91231a0c9a9e29e2	49818	Use dedicated parameters for sandboxed file opens (#49818)	2026-10-01	execserver	1	0	0.00	0	0	not_applicable	FsHelperOpenParams
 a73bf25d17805b4169ba2a2dc4329a010a3bb120	41313	Decouple HTTP retry backoff from overload integration testing (#41313)	2026-08-28	core	0	0		0	0	not_applicable	
 a7475e74aae025272b4d0c03712f5437da2ee1c0	45112	Use blueberry in the realtime background-agent test fixture (#45112)	2026-09-12	appserver	0	0		0	0	not_applicable	
 a75987455a2879ca151cea5e118fa307be868583	50200	Report the configured TUI mode in `codex doctor` (#50200)	2026-10-02	core	0	0		0	0	not_applicable	

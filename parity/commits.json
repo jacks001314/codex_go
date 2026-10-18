@@ -24731,9 +24731,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: FsHelperOpenParams"
+        "Round 319 (audit): N/A - Go's fs helper request dispatcher has no fs/open operation. The exec-server handles FSOpenParams directly, so there is no helper-side reuse of FsReadFileParams or need for a dedicated path-only helper-open request type."
       ]
     },
     {
