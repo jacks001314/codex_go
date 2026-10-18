@@ -292,6 +292,92 @@ func StripOSC8(text string) string {
 	return out.String()
 }
 
+// OSC8LinksInLine returns the display-column ranges of OSC 8 hyperlinks in one
+// rendered line. Plain web URLs are included as a fallback when the line has no
+// OSC 8 links, so callers can hit-test both Markdown labels and bare URLs.
+func OSC8LinksInLine(line string) []TerminalHyperlink {
+	links := []TerminalHyperlink{}
+	column := 0
+	destination := ""
+	start := 0
+	for index := 0; index < len(line); {
+		if strings.HasPrefix(line[index:], "\x1b]8;;") {
+			rest := line[index+len("\x1b]8;;"):]
+			end, terminator := oscTerminator(rest)
+			if end < 0 {
+				break
+			}
+			value := rest[:end]
+			if value == "" {
+				if destination != "" {
+					links = append(links, TerminalHyperlink{Start: start, End: column, Destination: destination})
+				}
+				destination = ""
+			} else {
+				destination = value
+				start = column
+			}
+			index += len("\x1b]8;;") + end + terminator
+			continue
+		}
+		if line[index] == 0x1b {
+			next := skipANSISequence(line, index)
+			if next <= index {
+				next = index + 1
+			}
+			index = next
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[index:])
+		column += DisplayWidth(string(r))
+		index += size
+	}
+	if destination != "" {
+		links = append(links, TerminalHyperlink{Start: start, End: column, Destination: destination})
+	}
+	if len(links) > 0 {
+		return links
+	}
+	return WebLinksInText(utils.StripANSI(line))
+}
+
+func oscTerminator(text string) (int, int) {
+	for index := 0; index < len(text); index++ {
+		if text[index] == 0x07 {
+			return index, 1
+		}
+		if text[index] == 0x1b && index+1 < len(text) && text[index+1] == '\\' {
+			return index, 2
+		}
+	}
+	return -1, 0
+}
+
+func skipANSISequence(text string, start int) int {
+	if start+1 >= len(text) {
+		return start + 1
+	}
+	switch text[start+1] {
+	case '[':
+		index := start + 2
+		for index < len(text) && !(text[index] >= 0x40 && text[index] <= 0x7e) {
+			index++
+		}
+		if index < len(text) {
+			index++
+		}
+		return index
+	case ']':
+		rest := text[start+2:]
+		if end, terminator := oscTerminator(rest); end >= 0 {
+			return start + 2 + end + terminator
+		}
+		return len(text)
+	default:
+		return start + 2
+	}
+}
+
 func WebLinksInText(text string) []TerminalHyperlink {
 	links := []TerminalHyperlink{}
 	searchFrom := 0

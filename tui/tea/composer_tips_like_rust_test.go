@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
 	"codex_go/utils"
@@ -77,5 +79,38 @@ func TestComposerTipsYieldToUsageDraftAndRunningLikeRust(t *testing.T) {
 	footer, _ = model.footerHelpLine()
 	if footer == tip {
 		t.Fatalf("running turn kept a composer tip: %q", footer)
+	}
+}
+
+func TestComposerGapCtrlClickOpensOSC8LinkLikeRust(t *testing.T) {
+	model := composerTipTestModel(t, 100)
+	line := "Tip: " + codextui.OSC8Hyperlink("https://example.com/docs", "docs") + " end"
+	model.renderedSelection.regions[renderedRegionFooter] = renderedRegion{
+		kind: renderedRegionFooter,
+		y:    10,
+		x:    0,
+		h:    1,
+		text: []string{line},
+	}
+	opened := ""
+	model.onOpenURL = func(url string) error {
+		opened = url
+		return nil
+	}
+	handled, cmd := model.handleComposerGapLinkClick(bubbletea.MouseMsg{
+		X: 7, Y: 10, Ctrl: true, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	})
+	if !handled || cmd == nil {
+		t.Fatalf("Ctrl-click handled=%v cmd=%v", handled, cmd != nil)
+	}
+	model.Update(cmd())
+	if opened != "https://example.com/docs" {
+		t.Fatalf("opened = %q", opened)
+	}
+
+	if handled, _ := model.handleComposerGapLinkClick(bubbletea.MouseMsg{
+		X: 7, Y: 10, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	}); handled {
+		t.Fatal("plain click consumed a link hit test")
 	}
 }

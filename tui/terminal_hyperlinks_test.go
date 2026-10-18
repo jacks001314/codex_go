@@ -29,3 +29,22 @@ func TestStyleWebURLsInLineDeUnderlinesAutolinkPunctuationLikeRust(t *testing.T)
 		t.Fatalf("URL itself lost its underline: %q", got)
 	}
 }
+
+func TestOSC8LinksInLineRanges(t *testing.T) {
+	line := "Tip: " + OSC8Hyperlink("https://example.com/docs", "docs") + " end"
+	links := OSC8LinksInLine(line)
+	if len(links) != 1 {
+		t.Fatalf("links = %#v, want one", links)
+	}
+	if links[0].Start != DisplayWidth("Tip: ") || links[0].End != DisplayWidth("Tip: docs") {
+		t.Fatalf("link range = %#v, want columns 5..9", links[0])
+	}
+	if links[0].Destination != "https://example.com/docs" {
+		t.Fatalf("destination = %q", links[0].Destination)
+	}
+
+	bare := OSC8LinksInLine("Tip: visit https://example.com/a now")
+	if len(bare) != 1 || bare[0].Destination != "https://example.com/a" {
+		t.Fatalf("bare URL fallback = %#v", bare)
+	}
+}

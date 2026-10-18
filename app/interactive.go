@@ -1358,6 +1358,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnRemoveMarketplace:       interactiveMarketplaceRemover(pluginService),
 		OnUpgradeMarketplace:      interactiveMarketplaceUpgrader(pluginService),
 		OnOpenPluginURL:           auth.OpenBrowser,
+		OnOpenURL:                 auth.OpenBrowser,
 		PluginUserMarketplaces:    settings.PluginUserMarketplaces,
 		PluginGitMarketplaces:     settings.PluginGitMarketplaces,
 		OnReadSkills:              interactiveSkillsReader(root),

@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
 	codextui "codex_go/tui"
 	"codex_go/tui/markdown"
 )
@@ -93,4 +95,48 @@ func (m *Model) composerTipLine() (string, bool) {
 		}
 	}
 	return m.composerTips.selectTip(turnCount, max(m.width-2, 1), m.keymapConfig, m.activeTUITheme(), m.sessionCWD)
+}
+
+// OpenURLResultMsg reports an app-owned hyperlink open initiated by Ctrl-click.
+type OpenURLResultMsg struct {
+	URL string
+	Err error
+}
+
+func (m *Model) applyOpenURLResult(msg OpenURLResultMsg) {
+	if m == nil || msg.Err == nil {
+		return
+	}
+	m.notice = "Failed to open link: " + msg.Err.Error()
+	m.refreshTranscript()
+}
+
+// handleComposerGapLinkClick maps a Ctrl-click on the composer-gap footer row
+// to an OSC 8 destination. Bubble Tea v1 has no Super modifier, so Ctrl-click
+// is the available carrier for Rust's Ctrl/Super-click behavior.
+func (m *Model) handleComposerGapLinkClick(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
+	if m == nil || m.onOpenURL == nil || !msg.Ctrl ||
+		msg.Action != bubbletea.MouseActionPress || msg.Button != bubbletea.MouseButtonLeft {
+		return false, nil
+	}
+	region := m.renderedSelection.regions[renderedRegionFooter]
+	if region.h <= 0 || msg.Y < region.y || msg.Y >= region.y+region.h {
+		return false, nil
+	}
+	row := msg.Y - region.y
+	if row < 0 || row >= len(region.text) {
+		return false, nil
+	}
+	column := msg.X - region.x
+	for _, link := range codextui.OSC8LinksInLine(region.text[row]) {
+		if column < link.Start || column >= link.End {
+			continue
+		}
+		destination := link.Destination
+		opener := m.onOpenURL
+		return true, func() bubbletea.Msg {
+			return OpenURLResultMsg{URL: destination, Err: opener(destination)}
+		}
+	}
+	return false, nil
 }

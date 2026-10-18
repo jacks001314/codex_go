@@ -1365,12 +1365,15 @@ type Options struct {
 	OnRemoveMarketplace         MarketplaceRemoveFunc
 	OnUpgradeMarketplace        MarketplaceUpgradeFunc
 	OnOpenPluginURL             PluginOpenURLFunc
-	PluginUserMarketplaces      map[string]bool
-	PluginGitMarketplaces       map[string]bool
-	OnReadSkills                SkillsListReaderFunc
-	OnWriteSkillEnabled         SkillEnabledWriteFunc
-	OnFuzzyFileSearch           FuzzyFileSearchReaderFunc
-	OnSearchTasks               TaskMentionSearchFunc
+	// OnOpenURL opens a rendered terminal hyperlink from an app-owned row,
+	// used by Ctrl-click composer-gap tips (Rust #46931).
+	OnOpenURL              func(string) error
+	PluginUserMarketplaces map[string]bool
+	PluginGitMarketplaces  map[string]bool
+	OnReadSkills           SkillsListReaderFunc
+	OnWriteSkillEnabled    SkillEnabledWriteFunc
+	OnFuzzyFileSearch      FuzzyFileSearchReaderFunc
+	OnSearchTasks          TaskMentionSearchFunc
 	// OnReadExperimentalFeatures reads the app server's experimentalFeature/list
 	// catalog for the /experimental popup (Rust experimental_features::fetch).
 	OnReadExperimentalFeatures ExperimentalFeaturesReaderFunc
@@ -2191,6 +2194,7 @@ type Model struct {
 	onRemoveMarketplace               MarketplaceRemoveFunc
 	onUpgradeMarketplace              MarketplaceUpgradeFunc
 	onOpenPluginURL                   PluginOpenURLFunc
+	onOpenURL                         func(string) error
 	pluginUserMarketplaces            map[string]bool
 	pluginGitMarketplaces             map[string]bool
 	pluginRuntime                     chatwidget.PluginsRuntimeState
@@ -2675,6 +2679,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onRemoveMarketplace:             options.OnRemoveMarketplace,
 		onUpgradeMarketplace:            options.OnUpgradeMarketplace,
 		onOpenPluginURL:                 options.OnOpenPluginURL,
+		onOpenURL:                       options.OnOpenURL,
 		pluginUserMarketplaces:          cloneBoolMapTea(options.PluginUserMarketplaces),
 		pluginGitMarketplaces:           cloneBoolMapTea(options.PluginGitMarketplaces),
 		onReadSkills:                    options.OnReadSkills,
@@ -3353,6 +3358,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case PluginOpenURLResultMsg:
 		m.applyPluginOpenURLResult(msg)
 		return m, nil
+	case OpenURLResultMsg:
+		m.applyOpenURLResult(msg)
+		return m, nil
 	case MentionPluginInventoryResultMsg:
 		m.applyMentionPluginInventoryResult(msg)
 		return m, nil
@@ -3842,6 +3850,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.handlePinnedPromptClick(msg) {
 			return m, nil
+		}
+		if handled, cmd := m.handleComposerGapLinkClick(msg); handled {
+			return m, cmd
 		}
 		if handled, cmd := m.handleRenderedSelectionMouse(msg); handled {
 			return m, cmd

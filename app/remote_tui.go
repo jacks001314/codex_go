@@ -689,6 +689,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return interactiveRemotePluginCall[plugin.MarketplaceUpgradeResponse](ctx, endpoint, appserver.MethodMarketplaceUpgrade, params)
 		},
 		OnOpenPluginURL:        auth.OpenBrowser,
+		OnOpenURL:              auth.OpenBrowser,
 		PluginUserMarketplaces: settings.PluginUserMarketplaces,
 		PluginGitMarketplaces:  settings.PluginGitMarketplaces,
 		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
