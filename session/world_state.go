@@ -17,6 +17,7 @@ type WorldState struct {
 	RealtimeConversation    json.RawMessage `json:"realtimeConversation,omitempty"`
 	MultiAgentMode          json.RawMessage `json:"multiAgentMode,omitempty"`
 	MultiAgentUsageHint     json.RawMessage `json:"multiAgentUsageHint,omitempty"`
+	ModelCatalog            json.RawMessage `json:"modelCatalog,omitempty"`
 	Tools                   json.RawMessage `json:"tools,omitempty"`
 	// TopLevelTools carries the incremental Responses Lite tool catalog snapshot
 	// (Rust section id `top_level_tools`, #50540): the window it was recorded for
@@ -45,6 +46,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)
 	state.MultiAgentMode = append(json.RawMessage(nil), state.MultiAgentMode...)
 	state.MultiAgentUsageHint = append(json.RawMessage(nil), state.MultiAgentUsageHint...)
+	state.ModelCatalog = append(json.RawMessage(nil), state.ModelCatalog...)
 	state.Tools = append(json.RawMessage(nil), state.Tools...)
 	state.TopLevelTools = append(json.RawMessage(nil), state.TopLevelTools...)
 	state.BaseInstructions = append(json.RawMessage(nil), state.BaseInstructions...)

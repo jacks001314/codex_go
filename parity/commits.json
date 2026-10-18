@@ -24046,9 +24046,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ModelCatalogState, exposes_tool"
+        "Round 318 (implementation): the disabled-by-default model_catalog_in_context feature now appends a bounded <model_catalog> developer world-state section for V2 when spawn model overrides are exposed. Models are picker-visible V2-compatible choices sorted by model, capped at five, XML-escaped, with descriptions/reasoning efforts/service tiers and whole-model omission at 1,000 bytes. The session world-state hash suppresses unchanged refreshes and persists the latest listing. Go did not previously embed the model list in spawn_agent's description, so no tool-description rewrite was needed. Tests: go test ./appserver -run 'ModelCatalogWorldState|RenderModelCatalog' -count=1"
       ]
     },
     {

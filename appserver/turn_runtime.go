@@ -7636,6 +7636,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
+	if item, err := r.modelCatalogWorldStateInputItem(threadID, cfg); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+	}
 	if item, err := r.deferredToolsWorldStateInputItem(threadID, turnRuntime, features.Enabled(cfg.FeatureSettings(), "deferred_tool_world_state")); err != nil {
 		return nil, err
 	} else if item != nil {
