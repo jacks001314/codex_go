@@ -1740,6 +1740,11 @@ green.
   continuations, embedded ExecOptions and remote turn/start params;
   `/daybreak` validates and persists the thread preference; and cyber refusals
   offer a non-retrying Enable Daybreak picker for eligible live primary threads.
+- `#49858` is complete: `/daybreak` persists through local/remote metadata,
+  selects standard/daybreak_blue/daybreak_red correctly, follows
+  account/catalog eligibility and cli_daybreak gates, updates status/header
+  surfaces across resume/new/clear/agent switches, and both local and remote
+  fresh-thread starts carry the configured default when the feature is enabled.
 - `#46867` is complete: activity arriving during an assistant stream is
   deferred and flushed after the final answer or at error/interruption/turn end.
 - `#50109` is complete for the owned-screen TUI: the composer grows with the

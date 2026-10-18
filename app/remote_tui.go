@@ -30,6 +30,7 @@ import (
 	"codex_go/codexuds"
 	"codex_go/config"
 	"codex_go/doctor"
+	"codex_go/features"
 	"codex_go/mcp"
 	"codex_go/plugin"
 	"codex_go/prompt"
@@ -518,6 +519,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnReadIDEContext:              interactiveIDEContextReader,
 		OnApproveAutoReviewDenial:     interactiveRemoteApproveAutoReviewDenialHandler(ctx, endpoint),
 		FeatureSettings:               settings.FeatureSettings,
+		DaybreakDefault:               settings.DaybreakDefault,
 		UseMemories:                   settings.UseMemories,
 		GenerateMemories:              settings.GenerateMemories,
 		FeedbackEnabled:               settings.FeedbackEnabled,
@@ -5063,6 +5065,14 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 		Sandbox:               remoteStringAny(shared.Sandbox),
 		Config:                configValues,
 		ExperimentalRawEvents: true,
+	}
+	if settings, err := interactiveLoadSettings(root); err == nil &&
+		settings.DaybreakDefault && features.Enabled(settings.FeatureSettings, "cli_daybreak") {
+		// Rust #49858/#51207: a remote new-thread start carries the client's
+		// configured Daybreak default, but the preference is inert unless the
+		// CLI Daybreak feature is enabled.
+		enabled := true
+		params.DaybreakEnabled = &enabled
 	}
 	// The TUI hosts the codex_tui task-management dynamic tools for this app
 	// server (Rust dynamic_tools_mcp / ThreadToolTransport).

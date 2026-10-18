@@ -24903,9 +24903,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 681 (progress): /daybreak persists the thread preference without starting a turn, program_for_turn selects standard when off and prefers daybreak_blue over daybreak_red when on, and the popup description/visibility now follows daybreak_command_description. The live preference is re-gated by set_daybreak_enabled semantics on feature toggles and settings reloads. Remaining: complete the seven-symbol audit against Rust's app-event persistence and background-task paths."
+        "Round 686 (implementation): /daybreak persists the thread preference through local and remote metadata handlers without starting a turn; the slash row is gated by daybreak_command_description; program selection uses standard with Daybreak off and prefers daybreak_blue over daybreak_red with it on; account/provider/catalog eligibility, cyber-refusal prompting, status surfaces, session headers, resume/clear/agent-switch behavior, side-conversation availability, and cli_daybreak toggles/settings reloads are covered. Local and remote fresh-thread starts now carry the configured Daybreak default only when cli_daybreak is enabled. Rust's TUI-owned dynamic background-task program path has no Go carrier because Go resolves explicit programs through app-server turn params. Tests: TestDaybreakCommandTogglesAndPersistsLikeRust, TestCyberAccessProgramForTurnLikeRust, TestDaybreakSlashCatalogVisibilityAndDescriptionLikeRust, TestDaybreakCommandSilentWhenFeatureDisabledLikeRust, TestCliDaybreakFeatureToggleClearsPreferenceLikeRust, TestResumeRestoresDaybreakPreferenceLikeRust, TestDaybreakAccountEligibilityLikeRust, TestDaybreakNoticeOnNewThreadAndResumeLikeRust, TestRemoteThreadStartStagesDaybreakDefaultLikeRust."
       ]
     },
     {
