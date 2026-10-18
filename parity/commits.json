@@ -7767,9 +7767,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: GUARDIAN_MAX_ACTION_BYTES, format_guardian_action_compact"
+        "Round 464 (audit): Guardian actions carry CWD/file paths as raw strings and neither commandApprovalAction nor applyPatchApprovalAction converts them to host-absolute paths, so foreign executor conventions survive review and app-server serialization. The shared Guardian action limit rejects oversized payloads. Tests: go test ./state ./appserver -run 'GuardianActionLimit|GuardianAction|GuardianReview' -count=1"
       ]
     },
     {
