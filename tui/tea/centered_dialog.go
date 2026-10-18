@@ -16,6 +16,7 @@ func modalCenteredOverlayKind(kind ModalKind) bool {
 		ModalKindRunningTaskExit,
 		ModalKindMisalignment,
 		ModalKindRateLimitSwitch,
+		ModalKindPermissions,
 		ModalKindExperimental,
 		ModalKindStatusLine,
 		ModalKindTitle,
@@ -31,6 +32,7 @@ func modalCenteredOverlayKind(kind ModalKind) bool {
 		ModalKindHooksBrowser,
 		ModalKindAgent,
 		ModalKindAgents,
+		ModalKindUsage,
 		ModalKindWindowsSandbox,
 		ModalKindWorktree,
 		ModalKindExternalImport,
@@ -63,7 +65,17 @@ func overlayCenteredDialog(base, dialog string, width, height int) string {
 	if width <= 0 || height <= 0 || strings.TrimSpace(dialog) == "" {
 		return base
 	}
-	maxDialogWidth := max(width-4, 1)
+	maxDialogWidth := max(width-2, 1)
+	contentWidth := max(maxDialogWidth-2, 1)
+	wrapped := []string{}
+	for _, line := range strings.Split(dialog, "\n") {
+		if ansi.StringWidth(line) <= contentWidth {
+			wrapped = append(wrapped, line)
+			continue
+		}
+		wrapped = append(wrapped, strings.Split(ansi.Wrap(line, contentWidth, ""), "\n")...)
+	}
+	dialog = strings.Join(wrapped, "\n")
 	boxed := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
