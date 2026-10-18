@@ -13085,9 +13085,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: PendingImageSubmission, cancel_image_submission, on_images_prepared, prepare_image_submission, requeue_image_submission"
+        "Aligned upstream d38b5260a1 (#45499) for Go's remote submission path: remoteTurnStartParams now snapshots each localImage attachment into a self-contained data URL with detected image media type and sends it as an image input, so remote app servers no longer receive client-local filesystem paths. Read failures and unsupported media types fail before turn/start. Test: TestRemoteTurnStartSnapshotsLocalImagesLikeRust."
       ]
     },
     {

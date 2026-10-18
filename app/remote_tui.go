@@ -5180,7 +5180,10 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if threadID == "" {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires a thread id")
 	}
-	inputs := interactiveSubmitInputs(request)
+	inputs, err := remoteSubmitInputs(request)
+	if err != nil {
+		return turn.TurnStartParams{}, err
+	}
 	prompt := strings.TrimSpace(request.Prompt)
 	if prompt != "" {
 		textInput := turn.TurnUserInput{Type: "text", Text: prompt}

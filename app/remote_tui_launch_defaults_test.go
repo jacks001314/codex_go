@@ -1,12 +1,17 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/appserver"
 	"codex_go/cli"
 	"codex_go/config"
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
+	codextea "codex_go/tui/tea"
 )
 
 // TestApplyServerEffectiveLaunchDefaults covers Rust #43177's precedence: the
@@ -156,5 +161,26 @@ func TestRemoteSideForkPreservesSessionProviderLikeRust(t *testing.T) {
 	}
 	if params.ModelProvider == nil || *params.ModelProvider != "ollama" {
 		t.Fatalf("fork modelProvider = %#v, want ollama", params.ModelProvider)
+	}
+}
+
+func TestRemoteTurnStartSnapshotsLocalImagesLikeRust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.png")
+	data := append([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, []byte("image-data")...)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-image")
+	params, err := remoteTurnStartParams(&cli.RootOptions{}, state, "thread-image", codextea.SubmitRequest{
+		Attachments: []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: path}},
+	})
+	if err != nil {
+		t.Fatalf("remoteTurnStartParams() error = %v", err)
+	}
+	if len(params.Input) != 1 || params.Input[0].Type != "image" ||
+		!strings.HasPrefix(params.Input[0].URL, "data:image/png;base64,") ||
+		params.Input[0].Path != "" {
+		t.Fatalf("remote image input = %#v", params.Input)
 	}
 }
