@@ -1,6 +1,7 @@
 package execserver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -42,6 +43,48 @@ func (s *Server) webSocketAuthPolicy() *websocketauth.Policy {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.webSocketAuth
+}
+
+// websocketRequestIDWriter injects X-Request-ID before the WebSocket upgrade
+// writes its 101 response. It preserves Hijacker/Flusher so coder/websocket can
+// complete the upgrade.
+type websocketRequestIDWriter struct {
+	http.ResponseWriter
+	requestID string
+	injected  bool
+}
+
+func (w *websocketRequestIDWriter) inject() {
+	if w == nil || w.injected {
+		return
+	}
+	w.injected = true
+	w.Header().Set("X-Request-ID", w.requestID)
+}
+
+func (w *websocketRequestIDWriter) WriteHeader(statusCode int) {
+	w.inject()
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *websocketRequestIDWriter) Write(data []byte) (int, error) {
+	w.inject()
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *websocketRequestIDWriter) Flush() {
+	w.inject()
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *websocketRequestIDWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("http.ResponseWriter does not implement http.Hijacker")
+	}
+	return hijacker.Hijack()
 }
 
 type ListenKind string
@@ -136,7 +179,12 @@ func (s *Server) ServeWebSocket(ctx context.Context, address string, stdout io.W
 				return
 			}
 		}
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
+		acceptWriter := http.ResponseWriter(w)
+		if requestID := strings.TrimSpace(r.Header.Get("X-Request-ID")); requestID != "" {
+			// Rust #52234: echo the caller's request id on the upgrade response.
+			acceptWriter = &websocketRequestIDWriter{ResponseWriter: w, requestID: requestID}
+		}
+		conn, err := websocket.Accept(acceptWriter, r, &websocket.AcceptOptions{})
 		if err != nil {
 			return
 		}

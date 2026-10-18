@@ -123,6 +123,41 @@ func TestEnvironmentAddAuthBearerTokenLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #52234: websocketRequestId is forwarded as X-Request-ID for
+// secure or loopback executors and rejected on plain remote ws://.
+func TestEnvironmentAddWebsocketRequestIDLikeRust(t *testing.T) {
+	requestID := "caller-request-id"
+	for _, testCase := range []struct {
+		name    string
+		url     string
+		id      *string
+		wantErr bool
+		wantID  string
+	}{
+		{name: "wss accepts", url: "wss://executor.example/exec", id: &requestID, wantID: requestID},
+		{name: "loopback accepts", url: "ws://127.0.0.1:8080/exec", id: &requestID, wantID: requestID},
+		{name: "plain remote rejects", url: "ws://executor.example/exec", id: &requestID, wantErr: true},
+		{name: "blank omitted", url: "ws://executor.example/exec", id: stringPtr("   ")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			params := &EnvironmentAddParams{EnvironmentID: "remote", ExecServerURL: testCase.url, WebsocketRequestID: testCase.id}
+			err := params.Validate()
+			if testCase.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "websocketRequestId requires") {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if got := executorHeadersForEnvironment(params).Get("X-Request-ID"); got != testCase.wantID {
+				t.Fatalf("X-Request-ID = %q, want %q", got, testCase.wantID)
+			}
+		})
+	}
+}
+
 // TestEnvironmentAddRPCAcceptsAuthBearerTokenLikeRust drives the wire name and
 // proves the token reaches the executor connection.
 func TestEnvironmentAddRPCAcceptsAuthBearerTokenLikeRust(t *testing.T) {

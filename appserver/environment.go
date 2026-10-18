@@ -159,6 +159,10 @@ type EnvironmentAddParams struct {
 	// authentication, including reconnects (Rust #47648). It requires a secure
 	// transport or a loopback destination and is never echoed in diagnostics.
 	AuthBearerToken *string `json:"authBearerToken,omitempty"`
+	// WebsocketRequestID is sent as X-Request-ID on the executor WebSocket
+	// upgrade, including reconnects. It requires a secure transport or a
+	// loopback destination (Rust #52234).
+	WebsocketRequestID *string `json:"websocketRequestId,omitempty"`
 }
 
 // EnvironmentSkillsParams mirrors Rust EnvironmentSkillsParams (Rust #51157):
@@ -256,6 +260,9 @@ func (p *EnvironmentAddParams) Validate() error {
 	if token := environmentAuthBearerToken(p); token != "" && !execserverclient.HeadersAllowedForURL(strings.TrimSpace(p.ExecServerURL)) {
 		return fmt.Errorf("%w: authBearerToken requires a wss:// or loopback execServerUrl", ErrInvalidEnvironmentRequest)
 	}
+	if requestID := environmentWebsocketRequestID(p); requestID != "" && !execserverclient.HeadersAllowedForURL(strings.TrimSpace(p.ExecServerURL)) {
+		return fmt.Errorf("%w: websocketRequestId requires a wss:// or loopback execServerUrl", ErrInvalidEnvironmentRequest)
+	}
 	return nil
 }
 
@@ -276,6 +283,24 @@ func executorHeadersForToken(token string) http.Header {
 	}
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	return headers
+}
+
+func environmentWebsocketRequestID(params *EnvironmentAddParams) string {
+	if params == nil || params.WebsocketRequestID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*params.WebsocketRequestID)
+}
+
+func executorHeadersForEnvironment(params *EnvironmentAddParams) http.Header {
+	headers := executorHeadersForToken(environmentAuthBearerToken(params))
+	if requestID := environmentWebsocketRequestID(params); requestID != "" {
+		if headers == nil {
+			headers = http.Header{}
+		}
+		headers.Set("X-Request-ID", requestID)
+	}
 	return headers
 }
 
@@ -605,7 +630,7 @@ func (m *EnvironmentManager) Add(params *EnvironmentAddParams) (*EnvironmentAddR
 		InstanceID:        uuid.NewString(),
 		ExecServerURL:     strings.TrimSpace(params.ExecServerURL),
 		ConnectTimeoutMS:  cloneUint64Ptr(params.ConnectTimeoutMS),
-		ExecServerHeaders: executorHeadersForToken(environmentAuthBearerToken(params)),
+		ExecServerHeaders: executorHeadersForEnvironment(params),
 		Shell:             m.defaultShell,
 		CWD:               cloneString(m.defaultCWD),
 		HTTPClient:        m.httpClient,

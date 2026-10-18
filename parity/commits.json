@@ -178,9 +178,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 711 (implementation): environment/add accepts optional websocketRequestId, validates that it is only used with wss:// or a loopback executor, and forwards it as X-Request-ID on the executor WebSocket upgrade (including reconnect headers). exec-server echoes a supplied X-Request-ID on the 101 upgrade response via a Hijacker-preserving response writer. Tests: TestEnvironmentAddWebsocketRequestIDLikeRust, TestExecServerEchoesWebSocketRequestIDLikeRust; go test ./appserver -run 'EnvironmentAddWebsocketRequestIDLikeRust|EnvironmentAddAuthBearerTokenLikeRust' -count=1; go test ./execserver -run 'EchoesWebSocketRequestID' -count=1."
       ]
     },
     {
