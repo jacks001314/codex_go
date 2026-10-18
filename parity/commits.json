@@ -11333,9 +11333,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 9/16; needs review: FailedReviewFeedback, ReviewFeedbackContext, ReviewFeedbackSettings, ReviewMetadata, for_outcome"
+        "N/A by architecture: Go records Guardian reporting/denial metrics directly in appserver/state; it has no Guardian extension boundary that owns those counters."
       ]
     },
     {
@@ -12833,9 +12833,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 7/11; needs review: ConversationCheckpoint, GuardianReviewHistory, commit_snapshot, reset_transcript"
+        "N/A by architecture: Go Guardian conversation/review bookkeeping already lives in appserver/guardian_review_history.go and state/guardian_retained_context.go rather than a Rust reviewer extension crate."
       ]
     },
     {
@@ -13025,9 +13025,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: InternalSessionSpawnFuture, thread_extensions"
+        "N/A by architecture: Rust removes obsolete subagent-spawner plumbing from Guardian extensions. Go Guardian reviews run through the synchronous reviewer/agent controller without an extension spawner abstraction."
       ]
     },
     {
@@ -13229,9 +13229,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: InternalSessionParent, PreparedGuardianContext, to_builder"
+        "N/A by architecture: Go's inline Guardian reviewer runs against the parent record/session through appserver runtime helpers; there is no Rust ThreadManager extension routing boundary to introduce."
       ]
     },
     {
@@ -13265,9 +13265,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: PreparedGuardianContext, ReviewerRequest, prepare_prewarm"
+        "N/A by architecture: Rust moves Guardian reviewer startup into its extension reviewer pool. Go starts the synchronous Guardian reviewer through appserver guardianSessionRunner/agent runtime directly, with no extension pool boundary to move into."
       ]
     },
     {
@@ -13409,9 +13409,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 6/8; needs review: acquire_install_lock, installer_job"
+        "N/A by architecture: Rust relocates daemon packages within its CLI installation layout. Go already ships daemon code as first-class appserverdaemon modules and has no equivalent standalone CLI package tree to rearrange."
       ]
     },
     {

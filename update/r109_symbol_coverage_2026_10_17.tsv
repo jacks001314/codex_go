@@ -801,7 +801,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4e09b0c1f1134e918160cef043619898f462d9cc	43956	Increase the TUI thread capability test stack to 12 MiB (#43956)	2026-09-09	tui	0	0		0	0	not_applicable	
 4e48cd02da734b0dfb51726d264133e63951308d	42744	Honor model-provided Guardian review policies (#42744)	2026-09-04	guardian	21	11	0.52	0	0	audit_pending	UnscoredAction,disable_scoring,enforce_required_model,for_mcp_server,from_legacy,policy_for_model,review_scope,scores_tool,scoring_enabled,test_model
 4e6450bbfd60bdfa845182f30aaa9d6f068e8bbd	45559	Resume Windows sandbox registration refresh after service restarts (#45559)	2026-09-15	sandbox	2	1	0.50	0	0	audit_pending	can_resume_registration
-4e6d5c0a96bdc8a8ef3b571bcf2c173141f5e7ee	44544	Move Guardian reporting and denial accounting into the extension (#44544)	2026-09-10	guardian	16	9	0.56	0	0	audit_pending	FailedReviewFeedback,ReviewFeedbackContext,ReviewFeedbackSettings,ReviewMetadata,for_outcome,for_thread,started_event
+4e6d5c0a96bdc8a8ef3b571bcf2c173141f5e7ee	44544	Move Guardian reporting and denial accounting into the extension (#44544)	2026-09-10	guardian	16	9	0.56	0	0	not_applicable	FailedReviewFeedback,ReviewFeedbackContext,ReviewFeedbackSettings,ReviewMetadata,for_outcome,for_thread,started_event
 4e6ef3b4181931e97aefea1f510ea821b2333a27	39958	Stop advertising shell snapshots from local exec servers (#39958)	2026-08-21	execserver	0	0		0	0	not_applicable	
 4e7ef7d19d59c51ac04e62d062664bfd012d76da	53654	Keep spawned children provisional until the spawn result returns (#53654)	2026-10-13	core	0	0		0	0	not_applicable	
 4e883ce36e4b69aabdc9d56bf19586d2e40a0756	40645	Keep settings operations bound to their committed snapshot (#40645)	2026-08-25	core	2	0	0.00	0	0	complete	SessionSettingsCommit,emit_applied
@@ -1297,7 +1297,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7c3747941a6b664c30f1e6aa72a917fd74dc22d2	41011	Reduce skill catalog prompts with path aliases (#41011)	2026-08-27	appserver	0	0		0	0	not_applicable	
 7c6eb0eef113ddc16ae5b207ac9add364b489798	40587	Scope stop hooks for memory consolidation (#40587)	2026-08-25	core	0	0		0	0	not_applicable	
 7c709f0ffd5c7eea752737bad397a1585c2176a1	45817	Add a bounded Mermaid text renderer (#45817)	2026-09-16	core	13	13	1.00	0	0	complete	
-7c73903be2b5d810224c3d0ec1778281e3e2268c	45518	Route Guardian reviewers through ThreadManager for inline parents (#45518)	2026-09-14	guardian	4	1	0.25	0	0	audit_pending	InternalSessionParent,PreparedGuardianContext,to_builder
+7c73903be2b5d810224c3d0ec1778281e3e2268c	45518	Route Guardian reviewers through ThreadManager for inline parents (#45518)	2026-09-14	guardian	4	1	0.25	0	0	not_applicable	InternalSessionParent,PreparedGuardianContext,to_builder
 7c88f037d935b4e78311027c32da4f046fd84058	44299	Record thread recovery candidates on managed daemon shutdown (#44299)	2026-09-09	appserver	6	5	0.83	0	0	complete	daemon_recovery_candidates
 7c9bfb910ef65c8f4a957c53affbd43d5fac2882	53150	Restore thread-owned permissions on cold resume (#53150)	2026-10-11	guardian	0	0		0	0	complete
 7cec3e110ce6dc5c14704dfa06f6db9c23a530fc	47079	Mask daemon socket paths exposed through ancestor bind mounts (#47079)	2026-09-21	sandbox	1	0	0.00	0	0	not_applicable	daemon_socket_mask_paths
@@ -1555,7 +1555,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9212b3eca86e6eca061b15fe9f8971ca57ebe3c9	49389	Serialize tests that share Windows sandbox accounts (#49389)	2026-09-29	execserver	0	0		0	0	not_applicable	
 922510f4d7570b42838e015787ed53abfa8761a1	54351	Use the turn index for turn-scoped item pagination (#54351)	2026-10-15	persistence	0	0		0	0	complete	
 9228a3a4078b74733ec6c8e1d2d0baaa65c69291	40294	Classify internal model context by source (#40294)	2026-08-23	model	0	0		0	0	complete
-923c6028b69afc77e54bba78f78745ada1e46d2d	45546	Move daemon packages out of the standalone CLI installation (#45546)	2026-09-14	appserver	8	6	0.75	0	0	audit_pending	acquire_install_lock,installer_job
+923c6028b69afc77e54bba78f78745ada1e46d2d	45546	Move daemon packages out of the standalone CLI installation (#45546)	2026-09-14	appserver	8	6	0.75	0	0	not_applicable	acquire_install_lock,installer_job
 923f276f579c64251825ba767ff5bc36a28e36a0	53804	Keep the Agent command center visible during archive and delete (#53804)	2026-10-13	tui	1	0	0.00	0	0	complete	CenteredView
 929389f59696171f494e3105e56853ad2ec26c98	43953	Preserve per-image generation IDs in image generation analytics (#43953)	2026-09-09	tui	0	0		0	0	not_applicable	
 92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2	49600	Reuse unchanged history snapshots when resuming threads (#49600)	2026-09-30	guardian	3	2	0.67	0	0	not_applicable	load_from_rollout_path
@@ -1667,7 +1667,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9caddc5cf5bf4df5f114498e23bece90eaedb37b	44277	Surface environment startup failure reasons to the model (#44277)	2026-09-09	persistence	0	0		0	0	not_applicable	
 9cdc66904faef12340bc1aefb8236eabff16a69f	39999	Hide Fast mode status for unsupported models (#39999)	2026-08-21	tui	0	0		0	0	not_applicable	
 9ce35d337aac3a3b1d610e0e2e18295bd76bbe0f	50503	Use Enter to accept transcript Find results and Escape to cancel (#50503)	2026-10-03	tui	0	0		0	0	not_applicable	
-9d036249da5945e6b478f2c0b8b99b49f4a0d005	45418	Extract Guardian conversation bookkeeping into the reviewer crate (#45418)	2026-09-14	guardian	11	7	0.64	0	0	audit_pending	ConversationCheckpoint,GuardianReviewHistory,commit_snapshot,reset_transcript
+9d036249da5945e6b478f2c0b8b99b49f4a0d005	45418	Extract Guardian conversation bookkeeping into the reviewer crate (#45418)	2026-09-14	guardian	11	7	0.64	0	0	not_applicable	ConversationCheckpoint,GuardianReviewHistory,commit_snapshot,reset_transcript
 9d0eae74cd3d543c40dcdfa4e4007b43445e6543	42039	Include shared histories in rollout compression (#42039)	2026-09-01	persistence	5	3	0.60	0	0	audit_pending	reference_count,rollouts_for_thread
 9d19c7426ecc3fe0a384be57a33bcb5909715387	41853	Box the session startup future at its API boundary (#41853)	2026-08-31	core	1	1	1.00	0	0	complete	
 9d253c885cb7cc48aeb749a82e31e2070e14f73e	42741	Make the TUI symlink startup test Bazel-compatible (#42741)	2026-09-04	tui	0	0		0	0	not_applicable	
@@ -2474,7 +2474,7 @@ e7f5de0a6ac99ac2d194baa782fc8dea9e236b4f	43808	Move v2 extraction chunking into 
 e8098eb406170239aeef3ce63a1ce427f2b999ae	47939	Separate selected plugin identities from MCP contributions (#47939)	2026-09-24	mcp	5	1	0.20	0	0	not_applicable	SelectedPluginContribution,hosted_plugin_connectors,manifest_from_discovery,metadata_from_discovery
 e811c2832ad2d865f9bdfc9558f92cf324316ee0	46517	Stabilize the TUI exit interruption test (#46517)	2026-09-18	tui	0	0		0	0	not_applicable	
 e8271aa8b482f917b2e62dca0e51e29b8d5ec156	44934	Add scenario snapshots for remote compaction and Code Mode tools (#44934)	2026-09-11	core	0	0		0	0	not_applicable	
-e84a594636b47ecb1d9fb8db781915381c4a0e4b	45521	Move Guardian reviewer startup into the pool (#45521)	2026-09-14	guardian	5	2	0.40	0	0	audit_pending	PreparedGuardianContext,ReviewerRequest,prepare_prewarm
+e84a594636b47ecb1d9fb8db781915381c4a0e4b	45521	Move Guardian reviewer startup into the pool (#45521)	2026-09-14	guardian	5	2	0.40	0	0	not_applicable	PreparedGuardianContext,ReviewerRequest,prepare_prewarm
 e89b7c442c0433ad5167e72a5a25bb6d0712766a	54217	Apply syntax theme colors to Markdown prose in the TUI (#54217)	2026-10-15	tui	0	0		0	0	complete	
 e8b65624e0732c5e20f8604d4a81fa408760626c	42654	Update the stable exec-server test to Codex 0.153.1 (#42654)	2026-09-04	execserver	0	0		0	0	not_applicable	
 e8b938b02eb7e202675f33bae4a3ba82f084d5b9	41146	Use typed outcomes for Guardian V2 classification (#41146)	2026-08-27	guardian	0	0		0	0	not_applicable	
@@ -2569,7 +2569,7 @@ f252c23b884eb1a30afec05275d75aa1361e3fb9	42316	Refactor exec-server startup futu
 f2654ea6c9a33d5e224d35e8503bca209c963608	47670	Support model-specific descriptions for agent message board tools (#47670)	2026-09-23	model	3	3	1.00	0	0	complete	
 f2b2e5b2a96d845a16d649f0984c0bd06c15ef37	49696	Make exec-server file reads cancellable between chunks (#49696)	2026-09-30	execserver	4	2	0.50	0	0	complete	open_file_sync,open_sync
 f2b5b81f39fba7d1172e4a5e65a427f029a39479	45820	Continue interrupted work after managed daemon restarts (#45820)	2026-09-16	tui	4	3	0.75	0	0	audit_pending	record_started_turn
-f2d9bccbdef4f2dfa2a063c5e3f09f68ab8530a0	45491	Remove Guardian subagent-spawner plumbing (#45491)	2026-09-14	guardian	3	1	0.33	0	0	audit_pending	InternalSessionSpawnFuture,thread_extensions
+f2d9bccbdef4f2dfa2a063c5e3f09f68ab8530a0	45491	Remove Guardian subagent-spawner plumbing (#45491)	2026-09-14	guardian	3	1	0.33	0	0	not_applicable	InternalSessionSpawnFuture,thread_extensions
 f3037cafd32b2097dae718eb86bcc9182dc0a5d1	47074	Refresh host-supplied cloud skills at turn startup (#47074)	2026-09-21	tui	25	8	0.32	0	0	audit_pending	CLOUD_SKILLS_WORLD_STATE_ID,CachedExecutorCatalog,CachedExecutorDiscoveryCatalog,CloudResourceCache,CloudSkillGeneration,ExecutorCatalogSelection,SkillReadCacheKey,SkillsExtensionState,cloud_catalog_snapshot,cloud_skill_enabled
 f31bd3adffcf6c514193e0355429d56dea208d27	43897	Persist provider and auth identity with model catalog caches (#43897)	2026-09-08	appserver	2	2	1.00	0	0	complete	
 f326857cf405fb254cf6c8f38766daff074fca6e	43524	Restrict MCP user verification and add workspace-scoped identity (#43524)	2026-09-07	appserver	3	0	0.00	0	0	complete	get_chatgpt_account_user_id,parse_chatgpt_account_user_id,server_mcp_extensions
