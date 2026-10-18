@@ -30017,9 +30017,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Implemented together with #54739: PrepareArg0Aliases places helper state under codexHome/tmp/arg0-<GOOS>, so unrelated operating systems cannot share lock/helper directories. The alias guard holds a suggestion lock, startup janitor cleanup skips locked live sessions, and cleanup closes locks before removing directories (rename-then-remove on Unix). CLI dispatch tests cover OS isolation and lock lifetimes."
       ]
     },
     {
