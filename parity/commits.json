@@ -28190,9 +28190,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: PreparedToolInfo, from_binding_catalog"
+        "Round 301 (audit): N/A - Go's Binding captures server -> tool-name sets for validation and does not store or clone Rust ToolInfo entries. Prepared MCP calls therefore have no duplicated binding-catalog metadata object to share; hidden-tool and refreshed-catalog rejection behavior is already covered by TestBindingRejectsCatalogRefreshAndInvisibleTools and TestBindingPreservesCachedToolsForNonReadyServersLikeRust."
       ]
     },
     {

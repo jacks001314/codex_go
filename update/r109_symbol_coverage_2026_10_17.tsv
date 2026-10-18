@@ -2198,7 +2198,7 @@ cebdb732eacfeae9823be93aad273c242428b8a0	44945	Route TUI Windows sandbox setup t
 cec8c6fb876e90b20250ec740e970e3f33b7396f	54044	Keep fork lineage ahead of paginated transcript history (#54044)	2026-10-14	tui	2	0	0.00	0	0	not_applicable	ForkedThreadHistoryCell,is_session_history_prefix_cell
 ced02c5c3807db59d912733b09722bebceb9b785	45822	Add opt-in response body limits to the HTTP transport (#45822)	2026-09-16	guardian	1	0	0.00	0	0	implementation_pending	list_models_raw
 ceea67163f93b4317c9352d1cd2af9fee32537b9	49395	Remove randomized greetings from TUI session headers (#49395)	2026-09-29	tui	0	0		0	0	not_applicable	
-cef2a64531430e96efd69ceed18b8c34dc2cb98f	51823	Share MCP binding tool metadata with prepared calls (#51823)	2026-10-07	mcp	2	0	0.00	0	0	implementation_pending	PreparedToolInfo,from_binding_catalog
+cef2a64531430e96efd69ceed18b8c34dc2cb98f	51823	Share MCP binding tool metadata with prepared calls (#51823)	2026-10-07	mcp	2	0	0.00	0	0	not_applicable	PreparedToolInfo,from_binding_catalog
 cefa060695594cdeebfb4306170cc27487c8a088	41666	Approve the first Node REPL execution without a Guardian wait (#41666)	2026-08-30	guardian	0	0		0	0	not_applicable	
 cf0ed4c600161fcaa18eeac02b5fc715e1076955	53736	Acquire and cache opt-in executor capability inventories via V2 (#53736)	2026-10-13	execserver	9	9	1.00	0	0	complete	
 cf12c86dc569e383c419e821046a8e59b4c8614a	49295	Simplify configuration fingerprint canonicalization (#49295)	2026-09-29	config	0	0		0	0	not_applicable	
