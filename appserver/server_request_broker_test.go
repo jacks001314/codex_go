@@ -111,6 +111,39 @@ func TestServerRequestBrokerIntersectsPermissionsApprovalLikeRust(t *testing.T) 
 	}
 }
 
+// Mirrors Rust #41928: a Windows URI grant from a non-Windows host is
+// normalized and intersected using the executor convention carried by CWD.
+func TestServerRequestBrokerIntersectsURIPermissionsLikeRust(t *testing.T) {
+	broker := NewServerRequestBroker()
+	sent := make(chan *ServerRequest, 1)
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) { sent <- request }))
+	done := make(chan error, 1)
+	var response PermissionsRequestApprovalResponse
+	go func() {
+		done <- broker.Request(context.Background(), ServerRequestPermissionsApproval, &PermissionsRequestApprovalParams{
+			CWD: "file:///C:/workspace",
+			Permissions: map[string]any{
+				"fileSystem": map[string]any{"write": []string{"file:///C:/workspace/extra"}},
+			},
+		}, &response)
+	}()
+	request := <-sent
+	if ok, err := broker.Resolve(OK(request.ID, &PermissionsRequestApprovalResponse{
+		Permissions: &GrantedPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{
+			Write: []string{"c:/WORKSPACE/EXTRA"},
+		}},
+		Scope: PermissionGrantScopeTurn,
+	})); err != nil || !ok {
+		t.Fatalf("Resolve() ok=%v error=%v", ok, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Request() error = %v", err)
+	}
+	if response.Permissions == nil || response.Permissions.FileSystem == nil || len(response.Permissions.FileSystem.Entries) != 1 {
+		t.Fatalf("intersected response = %#v", response)
+	}
+}
+
 func TestServerRequestBrokerRejectsSessionScopedStrictAutoReviewLikeRust(t *testing.T) {
 	broker := NewServerRequestBroker()
 	sent := make(chan *ServerRequest, 1)

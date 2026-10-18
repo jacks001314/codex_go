@@ -15,6 +15,12 @@ import (
 // were actually requested. CWD-dependent entries are materialized so stored
 // grants cannot change meaning when reused from another working directory.
 func IntersectPermissionProfiles(requested, granted RequestPermissionProfile, cwd string) RequestPermissionProfile {
+	return IntersectPermissionProfilesWithConvention(requested, granted, cwd, utils.NativePathConvention())
+}
+
+// IntersectPermissionProfilesWithConvention applies the same grant/request
+// intersection using the executor's path convention (Rust #41928).
+func IntersectPermissionProfilesWithConvention(requested, granted RequestPermissionProfile, cwd string, convention utils.PathConvention) RequestPermissionProfile {
 	var result RequestPermissionProfile
 	if permissionNetworkEnabled(requested.Network) && permissionNetworkEnabled(granted.Network) {
 		enabled := true
@@ -28,16 +34,16 @@ func IntersectPermissionProfiles(requested, granted RequestPermissionProfile, cw
 	grantedEntries := permissionFileSystemEntries(granted.FileSystem)
 	accepted := make([]FileSystemSandboxEntry, 0, len(grantedEntries))
 	for _, entry := range grantedEntries {
-		if !grantedPermissionEntryWithinRequest(requestedEntries, entry, cwd) {
+		if !grantedPermissionEntryWithinRequest(requestedEntries, entry, cwd, convention) {
 			continue
 		}
-		entry = materializePermissionEntry(entry, cwd)
-		appendUniquePermissionEntry(&accepted, entry)
+		entry = materializePermissionEntryForConvention(entry, cwd, convention)
+		appendUniquePermissionEntryForConvention(&accepted, entry, convention)
 	}
 
 	entries := append([]FileSystemSandboxEntry(nil), accepted...)
-	requestedDenies := retainConstrainingPermissionDenies(requestedEntries, accepted, cwd, &entries)
-	grantedDenies := retainConstrainingPermissionDenies(grantedEntries, accepted, cwd, &entries)
+	requestedDenies := retainConstrainingPermissionDenies(requestedEntries, accepted, cwd, convention, &entries)
+	grantedDenies := retainConstrainingPermissionDenies(grantedEntries, accepted, cwd, convention, &entries)
 	if len(entries) == 0 {
 		return result
 	}
@@ -50,6 +56,71 @@ func IntersectPermissionProfiles(requested, granted RequestPermissionProfile, cw
 
 func permissionNetworkEnabled(network *AdditionalNetworkPermissions) bool {
 	return network != nil && network.Enabled != nil && *network.Enabled
+}
+
+// NormalizeRequestPermissionProfilePathsForConvention converts file-URI
+// permission paths into the executor's native spelling before intersection.
+// Foreign conventions and malformed URIs fail closed (Rust #41928).
+func NormalizeRequestPermissionProfilePathsForConvention(profile RequestPermissionProfile, convention utils.PathConvention) (RequestPermissionProfile, error) {
+	out := profile
+	if profile.FileSystem == nil {
+		return out, nil
+	}
+	fileSystem := *profile.FileSystem
+	fileSystem.Read = append([]string(nil), profile.FileSystem.Read...)
+	fileSystem.Write = append([]string(nil), profile.FileSystem.Write...)
+	fileSystem.Entries = append([]FileSystemSandboxEntry(nil), profile.FileSystem.Entries...)
+	normalize := func(raw string) (string, error) {
+		raw = strings.TrimSpace(raw)
+		if !strings.HasPrefix(strings.ToLower(raw), "file:") {
+			return raw, nil
+		}
+		uri, err := utils.Parse(raw)
+		if err != nil {
+			return "", err
+		}
+		inferred, ok := uri.InferConvention()
+		if !ok || (convention != "" && inferred != convention) {
+			return "", &utils.ParseError{Reason: "path URI uses a foreign path convention", Path: raw}
+		}
+		native, err := utils.LegacyAppPathStringFromURI(uri, inferred)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Clean(native.Value), nil
+	}
+	for index := range fileSystem.Read {
+		normalized, err := normalize(fileSystem.Read[index])
+		if err != nil {
+			return RequestPermissionProfile{}, err
+		}
+		fileSystem.Read[index] = normalized
+	}
+	for index := range fileSystem.Write {
+		normalized, err := normalize(fileSystem.Write[index])
+		if err != nil {
+			return RequestPermissionProfile{}, err
+		}
+		fileSystem.Write[index] = normalized
+	}
+	for index := range fileSystem.Entries {
+		switch fileSystem.Entries[index].Path.Type {
+		case "path", "":
+			normalized, err := normalize(fileSystem.Entries[index].Path.Path)
+			if err != nil {
+				return RequestPermissionProfile{}, err
+			}
+			fileSystem.Entries[index].Path.Path = normalized
+		case "glob_pattern":
+			normalized, err := normalize(fileSystem.Entries[index].Path.Pattern)
+			if err != nil {
+				return RequestPermissionProfile{}, err
+			}
+			fileSystem.Entries[index].Path.Pattern = normalized
+		}
+	}
+	out.FileSystem = &fileSystem
+	return out, nil
 }
 
 func permissionFileSystemEntries(fileSystem *AdditionalFileSystemPermissions) []FileSystemSandboxEntry {
@@ -69,15 +140,15 @@ func permissionFileSystemEntries(fileSystem *AdditionalFileSystemPermissions) []
 	return entries
 }
 
-func grantedPermissionEntryWithinRequest(requested []FileSystemSandboxEntry, granted FileSystemSandboxEntry, cwd string) bool {
-	if !permissionAccessCanRead(granted.Access) || !supportsSymbolicSlashTmp() && isSymbolicSlashTmpPath(granted.Path) {
+func grantedPermissionEntryWithinRequest(requested []FileSystemSandboxEntry, granted FileSystemSandboxEntry, cwd string, convention utils.PathConvention) bool {
+	if !permissionAccessCanRead(granted.Access) || convention == utils.ConventionWindows && isSymbolicSlashTmpPath(granted.Path) {
 		return false
 	}
-	if path := resolvePermissionPath(granted.Path, cwd); path != "" {
-		return permissionAccessCovers(resolveRequestedPermissionAccess(requested, path, cwd), granted.Access)
+	if path := resolvePermissionPathForConvention(granted.Path, cwd, convention); path != "" {
+		return permissionAccessCovers(resolveRequestedPermissionAccessForConvention(requested, path, cwd, convention), granted.Access)
 	}
 	for _, entry := range requested {
-		if permissionAccessCovers(entry.Access, granted.Access) && permissionPathsEqual(entry.Path, granted.Path) {
+		if permissionAccessCovers(entry.Access, granted.Access) && permissionPathsEqualForConvention(entry.Path, granted.Path, convention) {
 			return true
 		}
 	}
@@ -280,33 +351,55 @@ func materializePermissionEntry(entry FileSystemSandboxEntry, cwd string) FileSy
 	return entry
 }
 
-func retainConstrainingPermissionDenies(source, accepted []FileSystemSandboxEntry, cwd string, output *[]FileSystemSandboxEntry) []FileSystemSandboxEntry {
+func materializePermissionEntryForConvention(entry FileSystemSandboxEntry, cwd string, convention utils.PathConvention) FileSystemSandboxEntry {
+	if convention == "" {
+		return materializePermissionEntry(entry, cwd)
+	}
+	entry = clonePermissionEntry(entry)
+	if entry.Path.Type == "path" || entry.Path.Type == "" {
+		if path := resolvePermissionPathForConvention(entry.Path, cwd, convention); path != "" {
+			entry.Path.Path = path
+		}
+	} else if entry.Path.Type == "special" && entry.Path.Value != nil {
+		switch strings.ToLower(entry.Path.Value.Kind) {
+		case "project_roots", "current_working_directory":
+			if path := resolvePermissionPathForConvention(entry.Path, cwd, convention); path != "" {
+				entry.Path = FileSystemPath{Type: "path", Path: path}
+			}
+		}
+	} else if entry.Path.Type == "glob_pattern" {
+		entry.Path.Pattern = materializePermissionGlobForConvention(entry.Path.Pattern, cwd, convention)
+	}
+	return entry
+}
+
+func retainConstrainingPermissionDenies(source, accepted []FileSystemSandboxEntry, cwd string, convention utils.PathConvention, output *[]FileSystemSandboxEntry) []FileSystemSandboxEntry {
 	var retained []FileSystemSandboxEntry
 	for _, deny := range source {
-		if deny.Access != FileSystemAccessDeny || !permissionDenyConstrainsGrant(deny, accepted, cwd) {
+		if deny.Access != FileSystemAccessDeny || !permissionDenyConstrainsGrant(deny, accepted, cwd, convention) {
 			continue
 		}
-		deny = materializePermissionEntry(deny, cwd)
-		appendUniquePermissionEntry(output, deny)
-		appendUniquePermissionEntry(&retained, deny)
+		deny = materializePermissionEntryForConvention(deny, cwd, convention)
+		appendUniquePermissionEntryForConvention(output, deny, convention)
+		appendUniquePermissionEntryForConvention(&retained, deny, convention)
 	}
 	return retained
 }
 
-func permissionDenyConstrainsGrant(deny FileSystemSandboxEntry, accepted []FileSystemSandboxEntry, cwd string) bool {
+func permissionDenyConstrainsGrant(deny FileSystemSandboxEntry, accepted []FileSystemSandboxEntry, cwd string, convention utils.PathConvention) bool {
 	for _, grant := range accepted {
 		if !permissionAccessCanRead(grant.Access) {
 			continue
 		}
-		grantPath := resolvePermissionPath(grant.Path, cwd)
+		grantPath := resolvePermissionPathForConvention(grant.Path, cwd, convention)
 		if grantPath == "" {
 			continue
 		}
-		denyPath := resolvePermissionPath(deny.Path, cwd)
+		denyPath := resolvePermissionPathForConvention(deny.Path, cwd, convention)
 		if deny.Path.Type == "glob_pattern" {
-			denyPath = permissionGlobStaticPrefix(materializePermissionGlob(deny.Path.Pattern, cwd))
+			denyPath = permissionGlobStaticPrefixForConvention(materializePermissionGlobForConvention(deny.Path.Pattern, cwd, convention), convention)
 		}
-		if denyPath != "" && pathsMayOverlap(denyPath, grantPath) {
+		if denyPath != "" && pathsMayOverlapForConvention(denyPath, grantPath, convention) {
 			return true
 		}
 	}
@@ -334,6 +427,35 @@ func pathsMayOverlap(denyPath, grantPath string) bool {
 		return true
 	}
 	return overlap
+}
+
+func pathsMayOverlapForConvention(denyPath, grantPath string, convention utils.PathConvention) bool {
+	if convention == "" {
+		return pathsMayOverlap(denyPath, grantPath)
+	}
+	denyURI, err := uriFromPolicyPathForConvention(denyPath, convention)
+	if err != nil {
+		return true
+	}
+	grantURI, err := uriFromPolicyPathForConvention(grantPath, convention)
+	if err != nil {
+		return true
+	}
+	overlap, ok := denyURI.Overlaps(grantURI)
+	if !ok {
+		return true
+	}
+	return overlap
+}
+
+func uriFromPolicyPathForConvention(nativePath string, convention utils.PathConvention) (*utils.PathURI, error) {
+	if strings.TrimSpace(nativePath) == "" {
+		return nil, &utils.ParseError{Reason: "empty path"}
+	}
+	if convention == utils.ConventionWindows {
+		return utils.FromAbsoluteNativePath(filepath.ToSlash(nativePath), convention)
+	}
+	return utils.FromAbsoluteNativePath(nativePath, convention)
 }
 
 func uriFromPolicyPath(nativePath string) (*utils.PathURI, error) {
@@ -368,6 +490,24 @@ func permissionGlobStaticPrefix(pattern string) string {
 		prefix = filepath.Dir(prefix)
 	}
 	return cleanRunPath(prefix)
+}
+
+func permissionGlobStaticPrefixForConvention(pattern string, convention utils.PathConvention) string {
+	if convention == "" {
+		return permissionGlobStaticPrefix(pattern)
+	}
+	normalized := slashPathForConvention(pattern, convention)
+	firstGlob := len(normalized)
+	for _, marker := range []string{"*", "?", "[", "]"} {
+		if index := strings.Index(normalized, marker); index >= 0 && index < firstGlob {
+			firstGlob = index
+		}
+	}
+	prefix := normalized[:firstGlob]
+	if firstGlob < len(normalized) && !strings.HasSuffix(prefix, "/") {
+		prefix = pathpkg.Dir(prefix)
+	}
+	return pathpkg.Clean(prefix)
 }
 
 func mergePermissionGlobDepth(leftEntries []FileSystemSandboxEntry, leftDepth *uint32, rightEntries []FileSystemSandboxEntry, rightDepth *uint32) *uint32 {
@@ -455,9 +595,50 @@ func permissionPathsEqual(left, right FileSystemPath) bool {
 	}
 }
 
+func permissionPathsEqualForConvention(left, right FileSystemPath, convention utils.PathConvention) bool {
+	if convention == "" {
+		return permissionPathsEqual(left, right)
+	}
+	if left.Type != right.Type {
+		return false
+	}
+	switch left.Type {
+	case "path", "":
+		leftPath := utils.LexicalClean(strings.TrimSpace(left.Path), convention)
+		rightPath := utils.LexicalClean(strings.TrimSpace(right.Path), convention)
+		if convention == utils.ConventionWindows {
+			return strings.EqualFold(leftPath, rightPath)
+		}
+		return leftPath == rightPath
+	case "glob_pattern":
+		leftPattern := slashPathForConvention(left.Pattern, convention)
+		rightPattern := slashPathForConvention(right.Pattern, convention)
+		if convention == utils.ConventionWindows {
+			return strings.EqualFold(leftPattern, rightPattern)
+		}
+		return leftPattern == rightPattern
+	case "special":
+		if left.Value == nil || right.Value == nil || !strings.EqualFold(left.Value.Kind, right.Value.Kind) {
+			return false
+		}
+		return ptrStringValue(left.Value.Subpath) == ptrStringValue(right.Value.Subpath)
+	default:
+		return false
+	}
+}
+
 func appendUniquePermissionEntry(entries *[]FileSystemSandboxEntry, entry FileSystemSandboxEntry) {
 	for _, existing := range *entries {
 		if existing.Access == entry.Access && permissionPathsEqual(existing.Path, entry.Path) {
+			return
+		}
+	}
+	*entries = append(*entries, entry)
+}
+
+func appendUniquePermissionEntryForConvention(entries *[]FileSystemSandboxEntry, entry FileSystemSandboxEntry, convention utils.PathConvention) {
+	for _, existing := range *entries {
+		if existing.Access == entry.Access && permissionPathsEqualForConvention(existing.Path, entry.Path, convention) {
 			return
 		}
 	}

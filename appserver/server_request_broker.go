@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"codex_go/sandbox"
+	"codex_go/utils"
 )
 
 var ErrServerRequestNotFound = fmt.Errorf("%w: server request not found", ErrInvalidRequest)
@@ -225,7 +227,16 @@ func normalizeServerRequestResponse(method ServerRequestMethod, params any, targ
 	if err := json.Unmarshal(grantedJSON, &granted); err != nil {
 		return fmt.Errorf("%w: decode granted permissions: %v", ErrInvalidRequest, err)
 	}
-	intersected := sandbox.IntersectPermissionProfiles(requested, granted, request.CWD)
+	cwd, convention := permissionRequestPathContext(request.CWD)
+	requested, err = sandbox.NormalizeRequestPermissionProfilePathsForConvention(requested, convention)
+	if err != nil {
+		return fmt.Errorf("%w: normalize requested permissions: %v", ErrInvalidRequest, err)
+	}
+	granted, err = sandbox.NormalizeRequestPermissionProfilePathsForConvention(granted, convention)
+	if err != nil {
+		return fmt.Errorf("%w: normalize granted permissions: %v", ErrInvalidRequest, err)
+	}
+	intersected := sandbox.IntersectPermissionProfilesWithConvention(requested, granted, cwd, convention)
 	intersectedJSON, err := json.Marshal(intersected)
 	if err != nil {
 		return fmt.Errorf("%w: encode intersected permissions: %v", ErrInvalidRequest, err)
@@ -236,6 +247,20 @@ func normalizeServerRequestResponse(method ServerRequestMethod, params any, targ
 	}
 	response.Permissions = &permissions
 	return nil
+}
+
+func permissionRequestPathContext(raw string) (string, utils.PathConvention) {
+	raw = strings.TrimSpace(raw)
+	if uri, err := utils.Parse(raw); err == nil {
+		if convention, ok := uri.InferConvention(); ok {
+			if native, err := utils.LegacyAppPathStringFromURI(uri, convention); err == nil {
+				return filepath.Clean(native.Value), convention
+			}
+		}
+	}
+	legacy := utils.NewLegacyAppPathString(raw)
+	convention, _ := legacy.InferAbsolutePathConvention()
+	return filepath.Clean(raw), convention
 }
 
 func (b *ServerRequestBroker) notifyRequested(request *ServerRequest) {

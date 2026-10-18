@@ -47,3 +47,37 @@ func TestResolveFileSystemEntryAccessUsesExecutorConventionLikeRust(t *testing.T
 		}
 	}
 }
+
+// Mirrors Rust #41928: a Windows permission grant can be intersected from a
+// non-Windows host when the executor convention is explicit.
+func TestIntersectPermissionProfilesUsesExecutorConventionLikeRust(t *testing.T) {
+	requested := RequestPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{
+		Write: []string{`C:\workspace\extra`},
+	}}
+	granted := RequestPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{
+		Write: []string{`c:/WORKSPACE/EXTRA`},
+	}}
+	got := IntersectPermissionProfilesWithConvention(requested, granted, `C:\workspace`, utils.ConventionWindows)
+	if got.FileSystem == nil || len(got.FileSystem.Entries) != 1 {
+		t.Fatalf("intersection = %#v", got)
+	}
+	if path := got.FileSystem.Entries[0].Path.Path; path != `c:\WORKSPACE\EXTRA` {
+		t.Fatalf("intersected path = %q", path)
+	}
+}
+
+func TestNormalizeRequestPermissionProfileURIsLikeRust(t *testing.T) {
+	profile := RequestPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{
+		Write: []string{"file:///C:/workspace/extra"},
+	}}
+	normalized, err := NormalizeRequestPermissionProfilePathsForConvention(profile, utils.ConventionWindows)
+	if err != nil {
+		t.Fatalf("NormalizeRequestPermissionProfilePathsForConvention() error = %v", err)
+	}
+	if len(normalized.FileSystem.Write) != 1 || normalized.FileSystem.Write[0] != `C:\workspace\extra` {
+		t.Fatalf("normalized write roots = %#v", normalized.FileSystem.Write)
+	}
+	if _, err := NormalizeRequestPermissionProfilePathsForConvention(profile, utils.ConventionPosix); err == nil {
+		t.Fatal("foreign URI convention must fail closed")
+	}
+}
