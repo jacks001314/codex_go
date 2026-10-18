@@ -24263,9 +24263,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: open_file_sync, open_sync"
+        "fs/readFile now calls readFileContext, which validates the regular file, preserves symlink options and the 512 MiB limit, and drains the reader in bounded fileReadChunkSize blocks while checking ctx between chunks. Tests cover 4 MiB reads, cancellation after the first chunk, and cancellation before the first read."
       ]
     },
     {
