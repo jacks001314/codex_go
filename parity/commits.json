@@ -10659,9 +10659,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 588 (audit): already implemented. Cancellation state is scoped to one connection attempt, reset on reconnect, and a cancelled elicitation is consumed instead of waiting on an unused response. Tests: go test ./mcp -run 'Elicitation|Cancellation|Reconnect' -count=1"
       ]
     },
     {
@@ -15700,9 +15700,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: ready_environment_handles"
+        "Round 589 (audit): already implemented. MCP environment authority compares both the captured turn selections and the ready environment handles, so policy evaluation follows the turn snapshot. Tests: go test ./appserver ./mcp -run 'Environment|Policy|TurnEnvironment' -count=1"
       ]
     },
     {
@@ -27974,9 +27974,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 590 (audit): already implemented. Committed AGENTS.md/AGENTS.override.md edits and move destinations increment apply-patch metrics, including changes committed before a later patch failure. Tests: go test ./tool -run 'AgentsMD|ApplyPatchAgents|AgentsMetrics' -count=1"
       ]
     },
     {
