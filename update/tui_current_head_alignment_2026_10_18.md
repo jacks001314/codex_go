@@ -2060,6 +2060,9 @@ green.
 - `#48628` and `#48757` are complete: blank dashboard sessions are retained and
   cleaned up correctly, and working-header shimmer timing/settings match the
   desktop behavior.
+- `#49073` is complete: realtime voice catalog failures stop picker/startup,
+  close the helper before sending a start request, and report a saved-but-
+  unconfirmed preference without changing in-memory voice settings.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

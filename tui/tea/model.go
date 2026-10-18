@@ -716,6 +716,9 @@ type VoiceSettingsMsg struct {
 type VoiceSavedMsg struct {
 	Voice string
 	Err   error
+	// Saved reports that the preference reached disk even though its effective
+	// value could not be confirmed.
+	Saved bool
 }
 
 // VoiceHelperAttachedMsg reports that the local helper started and owns the
@@ -8723,6 +8726,10 @@ func (m *Model) applyVoiceSaved(msg VoiceSavedMsg) {
 		return
 	}
 	if msg.Err != nil {
+		if msg.Saved {
+			m.recordVoiceCommandResult("Voice preference was saved, but " + msg.Err.Error())
+			return
+		}
 		m.recordVoiceCommandResult("Failed to save voice: " + msg.Err.Error())
 		return
 	}

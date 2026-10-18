@@ -22872,9 +22872,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Remote voice catalog reads now propagate errors through an error-returning reader used by session startup and the voice-settings path; failed startup closes the helper without sending the realtime start request, and a failed settings read reports an error instead of opening the picker. Saving a voice still persists it, but a catalog failure reports 'Voice preference was saved, but...' and leaves the in-memory voice unchanged. Tests cover catalog-error propagation and saved-but-unconfirmed state."
       ]
     },
     {

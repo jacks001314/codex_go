@@ -236,16 +236,22 @@ func TestRealtimeSettingsFromConfigValues(t *testing.T) {
 func TestVoiceRuntimeResolvesVoice(t *testing.T) {
 	runtime := newVoiceRuntime(voiceRuntimeOptions{})
 	// An explicit preference wins when it names a known voice.
-	configured := runtime.resolveVoice(context.Background(), VoiceSettings{Voice: "cove", VoiceSet: true})
+	configured, err := runtime.resolveVoice(context.Background(), VoiceSettings{Voice: "cove", VoiceSet: true})
+	if err != nil {
+		t.Fatalf("resolve configured voice: %v", err)
+	}
 	if configured == nil || *configured != realtime.Voice("cove") {
 		t.Fatalf("configured voice = %#v", configured)
 	}
 	// An unknown name is dropped rather than sent.
-	if voice := runtime.resolveVoice(context.Background(), VoiceSettings{Voice: "not-a-voice", VoiceSet: true}); voice != nil {
+	if voice, err := runtime.resolveVoice(context.Background(), VoiceSettings{Voice: "not-a-voice", VoiceSet: true}); err != nil || voice != nil {
 		t.Fatalf("unknown voice = %#v", voice)
 	}
 	// An absent preference falls back to the builtin default for v1.
-	fallback := runtime.resolveVoice(context.Background(), VoiceSettings{})
+	fallback, err := runtime.resolveVoice(context.Background(), VoiceSettings{})
+	if err != nil {
+		t.Fatalf("resolve fallback voice: %v", err)
+	}
 	voices := realtime.BuiltinVoices()
 	builtin := voices.DefaultForVersion(realtime.VersionV1)
 	if fallback == nil || *fallback != builtin {
@@ -262,9 +268,23 @@ func TestVoiceRuntimeUsesServerVoiceList(t *testing.T) {
 	runtime := newVoiceRuntime(voiceRuntimeOptions{
 		listVoices: func(context.Context) realtime.VoicesList { return served },
 	})
-	fallback := runtime.resolveVoice(context.Background(), VoiceSettings{})
+	fallback, err := runtime.resolveVoice(context.Background(), VoiceSettings{})
+	if err != nil {
+		t.Fatalf("resolve served voice: %v", err)
+	}
 	if fallback == nil || *fallback != realtime.Voice("served-default") {
 		t.Fatalf("fallback voice = %#v", fallback)
+	}
+}
+
+func TestVoiceRuntimePropagatesCatalogFailure(t *testing.T) {
+	runtime := newVoiceRuntime(voiceRuntimeOptions{
+		listVoicesWithError: func(context.Context) (realtime.VoicesList, error) {
+			return realtime.VoicesList{}, errors.New("catalog unavailable")
+		},
+	})
+	if voice, err := runtime.resolveVoice(context.Background(), VoiceSettings{Voice: "cove", VoiceSet: true}); err == nil || voice != nil {
+		t.Fatalf("catalog failure = %#v/%v, want error", voice, err)
 	}
 }
 

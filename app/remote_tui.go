@@ -397,9 +397,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	voice := newVoiceRuntime(voiceRuntimeOptions{
 		// The packaged helper is stamped with the same version, so the
 		// same-build handshake succeeds in releases and in dev builds.
-		buildCommit:      doctor.Version(),
-		realtimeSettings: interactiveRemoteRealtimeSettings(endpoint),
-		listVoices:       interactiveRemoteRealtimeVoices(endpoint),
+		buildCommit:         doctor.Version(),
+		realtimeSettings:    interactiveRemoteRealtimeSettings(endpoint),
+		listVoicesWithError: interactiveRemoteRealtimeVoices(endpoint),
 		startSession: func(callCtx context.Context, params realtime.StartParams) error {
 			client, err := openRemoteSessionClient(callCtx, endpoint)
 			if err != nil {

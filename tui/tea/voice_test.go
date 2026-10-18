@@ -361,6 +361,25 @@ func TestModelVoiceSettingsReportsFailures(t *testing.T) {
 	if !strings.Contains(model.notice, "read-only config") {
 		t.Fatalf("notice = %q", model.notice)
 	}
+
+	before := model.voicePreference
+	model.onVoiceSaveVoice = func(string) bubbletea.Cmd {
+		return func() bubbletea.Msg {
+			return VoiceSavedMsg{
+				Voice: "cove",
+				Saved: true,
+				Err:   errors.New("the effective voice could not be confirmed: catalog unavailable"),
+			}
+		}
+	}
+	model.Update(model.applyVoicePickerOption(chatwidget.VoicePickerOptionPrefix + "cove")())
+	if !strings.Contains(model.notice, "Voice preference was saved, but") ||
+		!strings.Contains(model.notice, "catalog unavailable") {
+		t.Fatalf("saved-but-unconfirmed notice = %q", model.notice)
+	}
+	if model.voicePreference != before {
+		t.Fatalf("unconfirmed save changed in-memory voice: %q -> %q", before, model.voicePreference)
+	}
 }
 
 func TestModelVoicePickerRejectsUnknownOption(t *testing.T) {

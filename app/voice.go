@@ -40,6 +40,9 @@ type voiceRuntimeOptions struct {
 	realtimeSettings func(ctx context.Context) VoiceSettings
 	// listVoices asks the app-server which voices it supports.
 	listVoices func(ctx context.Context) realtime.VoicesList
+	// listVoicesWithError is the error-propagating catalog reader used by the
+	// remote TUI (#49073).
+	listVoicesWithError func(ctx context.Context) (realtime.VoicesList, error)
 	// startSession asks the app-server to start the thread's realtime session
 	// with the helper's offer.
 	startSession func(ctx context.Context, params realtime.StartParams) error
@@ -113,7 +116,12 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 		if err != nil {
 			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: err}
 		}
-		if err := r.options.startSession(ctx, r.startParams(ctx, threadID, started.OfferSDP, settings)); err != nil {
+		params, err := r.startParams(ctx, threadID, started.OfferSDP, settings)
+		if err != nil {
+			started.Handle.Close()
+			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: err}
+		}
+		if err := r.options.startSession(ctx, params); err != nil {
 			// The app-server never accepted the offer, so the helper is
 			// retired before the caller sees the failure.
 			started.Handle.Close()
@@ -137,7 +145,7 @@ func (r *voiceRuntime) voiceSettings(ctx context.Context) VoiceSettings {
 // startParams builds the app-server start request the TUI sends for a voice
 // session: a V3 WebRTC conversation with client-managed handoffs and no startup
 // context, carrying the configured model and voice.
-func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSDP string, settings VoiceSettings) realtime.StartParams {
+func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSDP string, settings VoiceSettings) (realtime.StartParams, error) {
 	clientManagedHandoffs := true
 	includeStartupContext := false
 	version := realtime.VersionV3
@@ -152,32 +160,42 @@ func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSD
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		params.Model = &model
 	}
-	if voice := r.resolveVoice(ctx, settings); voice != nil {
+	voice, err := r.resolveVoice(ctx, settings)
+	if err != nil {
+		return realtime.StartParams{}, err
+	}
+	if voice != nil {
 		params.Voice = voice
 	}
-	return params
+	return params, nil
 }
 
 // resolveVoice mirrors the Rust resolver: an explicit preference is used when
 // it names a known voice and is dropped when it does not parse; an absent or
 // null preference falls back to the version's default voice.
-func (r *voiceRuntime) resolveVoice(ctx context.Context, settings VoiceSettings) *realtime.Voice {
+func (r *voiceRuntime) resolveVoice(ctx context.Context, settings VoiceSettings) (*realtime.Voice, error) {
+	voices := realtime.BuiltinVoices()
+	if r.options.listVoicesWithError != nil {
+		listed, err := r.options.listVoicesWithError(ctx)
+		if err != nil {
+			return nil, err
+		}
+		voices = listed
+	} else if r.options.listVoices != nil {
+		voices = r.options.listVoices(ctx)
+	}
 	if settings.VoiceSet {
 		configured := realtime.Voice(strings.TrimSpace(settings.Voice))
 		if !realtime.IsKnownVoice(configured) {
-			return nil
+			return nil, nil
 		}
-		return &configured
-	}
-	voices := realtime.BuiltinVoices()
-	if r.options.listVoices != nil {
-		voices = r.options.listVoices(ctx)
+		return &configured, nil
 	}
 	fallback := voices.DefaultForVersion(realtime.VersionV1)
 	if fallback == "" {
-		return nil
+		return nil, nil
 	}
-	return &fallback
+	return &fallback, nil
 }
 
 // applyAnswerCmd applies the remote answer and reports the outcome.
@@ -406,21 +424,21 @@ func oneBasedChannel(raw any) (uint16, bool) {
 
 // interactiveRemoteRealtimeVoices asks the app-server which voices it supports.
 // A failure falls back to the builtin list, matching the Rust TUI.
-func interactiveRemoteRealtimeVoices(endpoint *appserverdaemon.RemoteAppServerEndpoint) func(context.Context) realtime.VoicesList {
-	return func(ctx context.Context) realtime.VoicesList {
+func interactiveRemoteRealtimeVoices(endpoint *appserverdaemon.RemoteAppServerEndpoint) func(context.Context) (realtime.VoicesList, error) {
+	return func(ctx context.Context) (realtime.VoicesList, error) {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
-			return realtime.BuiltinVoices()
+			return realtime.VoicesList{}, err
 		}
 		defer client.close()
 		var response realtime.ListVoicesResponse
 		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadRealtimeListVoices, realtime.ListVoicesParams{}, &response); err != nil {
-			return realtime.BuiltinVoices()
+			return realtime.VoicesList{}, err
 		}
 		if len(response.Voices.V1) == 0 && len(response.Voices.V2) == 0 {
-			return realtime.BuiltinVoices()
+			return realtime.VoicesList{}, errors.New("the server returned no realtime voices")
 		}
-		return response.Voices
+		return response.Voices, nil
 	}
 }
 
@@ -435,7 +453,10 @@ func interactiveRemoteVoiceSettings(endpoint *appserverdaemon.RemoteAppServerEnd
 		return func() bubbletea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), voiceSettingsTimeout)
 			defer cancel()
-			voices := interactiveRemoteRealtimeVoices(endpoint)(ctx)
+			voices, err := interactiveRemoteRealtimeVoices(endpoint)(ctx)
+			if err != nil {
+				return codextea.VoiceSettingsMsg{Err: err}
+			}
 			settings := interactiveRemoteRealtimeSettings(endpoint)(ctx)
 			current := settings.Voice
 			if !settings.VoiceSet {
@@ -485,12 +506,20 @@ func interactiveRemoteVoiceSaver(endpoint *appserverdaemon.RemoteAppServerEndpoi
 			if err != nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
+			if _, err := interactiveRemoteRealtimeVoices(endpoint)(ctx); err != nil {
+				return codextea.VoiceSavedMsg{
+					Voice: voice,
+					Saved: true,
+					Err:   fmt.Errorf("the effective voice could not be confirmed: %w", err),
+				}
+			}
 			// A managed layer can override the saved value, in which case the
 			// preference is stored but not applied.
 			settings := interactiveRemoteRealtimeSettings(endpoint)(ctx)
 			if settings.VoiceSet && strings.TrimSpace(settings.Voice) != voice {
 				return codextea.VoiceSavedMsg{
 					Voice: voice,
+					Saved: true,
 					Err:   errors.New("the saved voice is overridden by a managed setting"),
 				}
 			}
