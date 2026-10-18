@@ -1896,7 +1896,7 @@ b095b2ef236d8f45f85a9d5526bfbf2618ab2d63	54383	Support inline permission profile
 b0a5191bd6ac383313353d86b464859596c9ef39	51472	Preserve clickable URLs in TUI selection rows (#51472)	2026-10-06	tui	3	0	0.00	0	0	complete	full_hyperlink_row,wrap_row_lines,wrap_two_column_row
 b0a6b8d86f455d3db9dd869fc1178a5fbd865e7f	51463	Record resolved model and reasoning effort in sub-agent activity (#51463)	2026-10-06	tui	0	0		0	0	not_applicable	
 b0a9dcb843f60c52de9c5e2be37fa4ce0bdb12a6	47757	Refactor tool telemetry product SKU matching to use an allowlist (#47757)	2026-09-24	telemetry	0	0		0	0	not_applicable	
-b0af519c39766c173191fc39b341808619b51c74	45649	Add elicitation classification support to app and MCP analytics (#45649)	2026-09-15	mcp	5	2	0.40	0	0	audit_pending	McpToolCallElicitation,track_app_used,track_mcp_tool_call_elicitation
+b0af519c39766c173191fc39b341808619b51c74	45649	Add elicitation classification support to app and MCP analytics (#45649)	2026-09-15	mcp	5	2	0.40	0	0	complete	McpToolCallElicitation,track_app_used,track_mcp_tool_call_elicitation
 b0d95427c2443e90998f48065902309187564085	45526	Stage Python runtime wheels directly from package directories (#45526)	2026-09-14	core	0	0		0	0	not_applicable	
 b1205c12d584c36613ab24a49aaf351e7b3fdb9e	43519	Set `recursion_limit` to 256 for app-server, exec, and TUI (#43519)	2026-09-07	tui	0	0		0	0	not_applicable	
 b12ac84be9b5835259581c68dfc7cbe63d49e5f2	52040	Add regression coverage for cancelled agent reloads (#52040)	2026-10-08	core	0	0		0	0	not_applicable	

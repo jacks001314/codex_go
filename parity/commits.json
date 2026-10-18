@@ -13553,9 +13553,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: McpToolCallElicitation, track_app_used, track_mcp_tool_call_elicitation"
+        "Go classifies MCP tool-call elicitations for app/MCP analytics before the response rewrites the failure, carries the classified type into the pending request/analytics path, and covers the behavior in app-server elicitation tests. Tests: go test ./appserver -run 'Elicitation.*Classif|MCPToolCallElicitation' -count=1; go test ./mcp -run 'Elicitation|Analytics' -count=1"
       ]
     },
     {
