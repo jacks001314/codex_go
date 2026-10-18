@@ -1380,9 +1380,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: ApprovalAssessment, ApprovalReviewError, ApprovalReviewInput, fast_approval_decision, full_approval_review"
+        "N/A by architecture (Round 706 audit): the commit adds a structured full-approval contract to Rust's codex-extension-api host. Go has no extension API or host callback layer; Guardian decisions are produced synchronously by appserver.modelGuardianReviewer, and the equivalent fast/deny/allow outcomes already live in state.ReviewDecision."
       ]
     },
     {
@@ -3662,9 +3662,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: McpToolResultInput, process_mcp_tool_result"
+        "N/A by architecture (Round 706 audit): Go has no extension hook for MCP tool results. MCP tool output is consumed directly by the turn/tool pipeline and retained-context recorder; there is no extension callback that can rewrite or observe McpToolResultInput."
       ]
     },
     {
@@ -12845,9 +12845,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SamplingExecution"
+        "N/A by architecture (Round 706 audit): Rust extracts sampler execution into a module; Go's equivalent is already isolated inside modelGuardianReviewer/guardianSessionRunner, with no separate crate boundary to move."
       ]
     },
     {
@@ -13709,9 +13709,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ReviewerConfig, build_reviewer_config, reviewer_permission_profile"
+        "N/A by architecture (Round 706 audit): Go keeps Guardian reviewer configuration in appserver/model rather than a separate extension crate. Reviewer model, effort, permission profile, policy, and evidence are built by guardianSessionRunner; moving them into an extension boundary has no Go carrier."
       ]
     },
     {
@@ -19882,9 +19882,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ToolDispatchInput, ToolTimingBoundary, ToolTimingInput"
+        "N/A by architecture (Round 706 audit): Go has no extension API and therefore no extension-facing ToolDispatchInput/ToolTimingInput contract. Tool dispatch and timing are recorded internally by the turn runtime and telemetry."
       ]
     },
     {
