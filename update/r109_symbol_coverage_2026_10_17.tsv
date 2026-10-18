@@ -637,7 +637,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4021746a1568c764619e868c310a079d6c36079b	47873	Measure deferred tool namespace fragments before and after truncation (#47873)	2026-09-24	persistence	3	0	0.00	0	0	complete	CONTEXT_FRAGMENT_BYTES_BUCKETS,THREAD_TOOLS_FRAGMENT_BYTES_METRIC,THREAD_TOOLS_NAMESPACES_TOTAL_METRIC
 402f5b6fdf28a7a72c153dbe6fe01e252205d7d6	51119	Clarify incremental tool namespace updates in Responses Lite (#51119)	2026-10-05	persistence	0	0		0	0	not_applicable	
 404cd42aa5254af56a6080af1a775f730ac6b7d0	51422	Accept environment requests at thread and turn settings boundaries (#51422)	2026-10-06	guardian	3	3	1.00	0	0	complete
-40584fad87aa2cd63e03db4784ccfd5b50a59bed	46066	Keep MCP user interaction on the root thread (#46066)	2026-09-17	appserver	3	1	0.33	0	0	audit_pending	APPROVAL_KIND_BROWSER_AUTH,REQUIRES_USER_INPUT_KEY
+40584fad87aa2cd63e03db4784ccfd5b50a59bed	46066	Keep MCP user interaction on the root thread (#46066)	2026-09-17	appserver	3	3	1.00	0	0	complete
 406b0c44460cf71e90c21c7abe6e581add3a6421	51812	Enable instant interrupts by default (#51812)	2026-10-07	tui	0	0		0	0	not_applicable	
 406eb53c074a29bd65aa7a8bd21d574234faf315	51602	Distinguish thread listing failures from exhausted history (#51602)	2026-10-07	appserver	1	0	0.00	0	0	complete	repeat_list_threads_cursor_for_testing
 4083a68f88375bb0bc90a41b8c454d9e2d7c5281	47824	Allow four concurrent threads in the multi-agent resume test (#47824)	2026-09-24	core	0	0		0	0	not_applicable	

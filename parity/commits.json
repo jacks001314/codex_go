@@ -14967,9 +14967,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: APPROVAL_KIND_BROWSER_AUTH, REQUIRES_USER_INPUT_KEY"
+        "Already implemented in 4156b5ec. Subagent elicitation authority sets AllowUserInteraction=false, rejecting interactive elicitations and tool approvals with MCPElicitationHandoffMessage while automatic decisions remain available. Browser auth is recognized from codex_approval_kind=browser_auth and codex_requires_user_input, including empty form schemas, and auth failures preserve connector diagnostics alongside handoff guidance."
       ]
     },
     {
