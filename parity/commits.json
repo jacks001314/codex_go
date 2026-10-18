@@ -1248,9 +1248,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: this changes the Rust Bazel toolchain linker. The Go implementation does not use Bazel or rust-lld, so there is no equivalent build surface."
       ]
     },
     {
@@ -1272,9 +1272,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: expect_capability_roots_discover"
+        "Round 762: execserver.Client.DiscoverCapabilityRoots batches roots up to the executor limit, preserves request order, and covers empty requests; sandboxed file-system discovery uses the same host helper path with per-root fallback semantics. Tests: go test ./execserver -run 'CapabilityRoots|CapabilityDiscovery' -count=1"
       ]
     },
     {
@@ -1464,9 +1464,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/7; needs review: ResolvedAgentRoleFile, normalize_agent_role_description, normalize_agent_role_nickname_candidates"
+        "Round 762: Go has a dedicated agent role model/resolver (agent/role.go, role_controller.go) with configured roles, description validation, nickname candidate normalization, and malformed-role config warnings in the app server. Tests: go test ./agent ./appserver -run 'AgentRole|RoleConfig' -count=1"
       ]
     },
     {
@@ -1560,9 +1560,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: token-budget history/notes tools are registered for eligible sessions, async user messages are exposed only to root threads, and clock/control tools are classified separately from approval-requiring tools. Tests: go test ./appserver -run 'HistoryNotes|Async|ControlTool' -count=1"
       ]
     },
     {
@@ -1596,9 +1596,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 762: rollout migration uses the shared maintenance lock, journal/canonicalization safeguards, and background startup migration schedule; tests cover lock contention and dry-run/apply behavior. Tests: go test ./rollout -run 'Migrate|MaintenanceLock|Canonicalize' -count=1"
       ]
     },
     {
@@ -1644,9 +1644,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 18/30; needs review: ListTimelineParams, ThreadRealtimeBemItemPresentation, ThreadRealtimeItemContent, ThreadRealtimeSessionOutcome, ThreadRealtimeTranscriptRole"
+        "Round 762: thread/timeline/list, typed realtime item start/complete/transcript-delta notifications, canonical timeline ordering, realtime session boundaries, and pagination state are registered and tested. Tests: go test ./appserver -run 'Timeline|RealtimeItem' -count=1"
       ]
     },
     {
