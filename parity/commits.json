@@ -28442,9 +28442,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: has_complete_inventory, has_same_tool_call_inventory"
+        "Equivalent implementation already present: ExecutedToolCall.HasCompleteInventory ignores argument-only truncation and reports incomplete only when calls or tool names were omitted. The recorder preserves the full call inventory and marks a finished cell complete even when message budgeting later truncates argument bytes. Tests cover full inventories sharing one completeness decision and argument-truncated inventories remaining complete."
       ]
     },
     {
@@ -28947,9 +28947,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: normalize_executed_tool_call_completeness"
+        "Equivalent implementation already present: the recorder no longer has 8 KiB per-call or 32 KiB per-output argument caps and stores full normalized JSON arguments. Message-size bounding remains a separate operation; it truncates arguments to fit the actual message without clearing tool_calls_complete. TestExecutedToolCallRecorderPreservesLargeArgumentsAndCompletenessLikeRust verifies a 40 KiB nested argument survives without a truncation marker, while a lowered message budget truncates only the serialized copy and keeps the inventory complete."
       ]
     },
     {
