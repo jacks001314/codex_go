@@ -319,3 +319,33 @@ func TestGuardianReviewSessionRetryClassificationLikeRust(t *testing.T) {
 		t.Fatalf("agent calls = %d, want 2", calls)
 	}
 }
+
+// Mirrors Rust #41215: a reviewer session that exhausts its context is rolled
+// over to a fresh response chain before the retry, so the full transcript is
+// replayed instead of continuing an exhausted chain.
+func TestGuardianContextWindowErrorRollsOverReviewerSessionLikeRust(t *testing.T) {
+	calls := 0
+	var previousIDs []string
+	agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		calls++
+		previousIDs = append(previousIDs, request.PreviousResponseID)
+		if calls == 1 {
+			return nil, &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded}
+		}
+		return &model.AgentResponse{ResponseID: "fresh-review", Message: guardianDecisionDurationAssessment}, nil
+	})
+	session := &guardianSessionRunner{agent: agent, previous: "exhausted-review"}
+	reviewer := &modelGuardianReviewer{agent: session, store: state.NewReviewStore()}
+	decision, _, err := reviewer.Review(context.Background(), "thread-rollover", "turn-rollover", "call-rollover", state.Action{
+		Type: "command", Command: "ls", CWD: t.TempDir(),
+	})
+	if err != nil || decision != state.DecisionApproved {
+		t.Fatalf("decision = %s err = %v", decision, err)
+	}
+	if calls != 2 || len(previousIDs) != 2 {
+		t.Fatalf("calls = %d previousIDs = %#v", calls, previousIDs)
+	}
+	if previousIDs[0] != "exhausted-review" || previousIDs[1] != "" {
+		t.Fatalf("previous response ids = %#v, want exhausted then fresh", previousIDs)
+	}
+}

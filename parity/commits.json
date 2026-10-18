@@ -3818,9 +3818,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 501 (audit): partial. Go's guardianSessionRunner retains previous/seeded review history, prior-review state, evidence cursors, and parent-compaction reseeding, with Guardian tests green. It does not check reviewer context_window_token_status before a follow-up or submit Op::Compact; after a rollover it has no full-transcript detection to reset transcript/Node REPL evidence cursors, and no post-compaction reminder/policy re-injection equivalent. Remaining: add this reviewer-session rollover path."
+        "Round 697 (implementation): on a reviewer context-window-exceeded error, the Guardian session clears its previous/seeded response chain and retries under the same attempt budget; the next prompt rebuilds and replays the complete transcript, reminder, Node REPL policy, and evidence. Go has no separate reviewer-session Op::Compact/context-window status carrier because the reviewer is an in-process model-agent session with no persisted conversation store. Tests: go test ./appserver -run 'ContextWindowErrorRollsOver|Guardian.*Retry|Guardian' -count=1"
       ]
     },
     {

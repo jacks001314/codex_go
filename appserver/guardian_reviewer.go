@@ -549,6 +549,20 @@ func (r *guardianSessionRunner) DropStaleParentCompaction() {
 	r.mu.Unlock()
 }
 
+// RolloverForContext starts a fresh reviewer response chain after the review
+// model reports context exhaustion. The prompt builder replays the complete
+// transcript, so clearing the previous response restores the context that the
+// exhausted session can no longer carry.
+func (r *guardianSessionRunner) RolloverForContext() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.previous = ""
+	r.seeded = ""
+	r.mu.Unlock()
+}
+
 func (r *guardianSessionRunner) SeedForReview(request *model.AgentRequest) {
 	if r == nil || request == nil {
 		return
@@ -938,6 +952,17 @@ reviewAttempt:
 		emitReviewMetrics()
 		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, guardianReviewFailureMessage(message), nil
+	}
+	if err != nil && attempts < guardianMaxReviewAttempts && isContextWindowExceededError(err) {
+		// Rust #41215 rolls the reviewer over before the next review. Go has no
+		// reviewer-session compaction carrier, so start a fresh response chain;
+		// the next attempt replays the complete transcript and evidence.
+		if runner, ok := r.agent.(*guardianSessionRunner); ok {
+			runner.RolloverForContext()
+			contextChanged = true
+			runtime.Gosched()
+			goto reviewAttempt
+		}
 	}
 	if err != nil && attempts < guardianMaxReviewAttempts && guardianReviewRetryableError(err) {
 		// Rust should_retry_guardian_review: recoverable session failures keep
