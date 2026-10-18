@@ -226,9 +226,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 594 (audit): executor-discovered HTTP MCP servers retain required through parsing and selected-executor projection. Required startup waits for the live inventory while optional discovery remains best effort; the regression proves the required server is usable when optional grace expires before the executor's first startup request. Tests: go test ./appserver -run 'TestExecutorMCPProjectionPreservesExistingOwnershipLikeRust' -count=1; go vet ./appserver"
       ]
     },
     {
@@ -286,9 +286,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 595 (audit): Guardian reviewer turns skip executor MCP discovery and projection, so an unavailable required executor server cannot block approval review. TestGuardianTurnSkipsExecutorMCPDiscoveryLikeRust registers an unreachable required executor server and verifies the executor config reader is never called and the Guardian runtime validates. Tests: go test ./appserver -run 'TestGuardianTurnSkipsExecutorMCPDiscoveryLikeRust' -count=1; go vet ./appserver"
       ]
     },
     {
