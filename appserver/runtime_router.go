@@ -3077,6 +3077,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 			r.applyThreadResumeRuntimeWorkspaceRoots(result, request)
 			r.applyThreadResumeSettingsUpdate(result, request)
+			r.applyThreadResumePersistedPermissions(result, request)
 			r.applyThreadResumeCollaborationMode(result, resumeConfig)
 			if err := r.applyRunningThreadResumeSnapshot(result, request); err != nil {
 				return nil, err
@@ -7149,6 +7150,73 @@ func (r *RuntimeRouter) applyThreadResumeSettingsUpdate(result any, request *Req
 		return
 	}
 	r.applyTurnStartSettingsUpdate(settingsUpdate)
+}
+
+// applyThreadResumePersistedPermissions restores the thread-owned permission
+// selection in the resume response. Explicit request policies and named
+// profiles stay authoritative; an unnamed base profile is used only as the
+// fallback after managed requirements have had a chance to reject or narrow it
+// (Rust #53150).
+func (r *RuntimeRouter) applyThreadResumePersistedPermissions(result any, request *Request) {
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil || request == nil || r == nil {
+		return
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil || params.Sandbox != nil {
+		return
+	}
+	threadID := strings.TrimSpace(response.Thread.ID)
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return
+	}
+
+	settings := r.threadSettingsForTurn(threadID)
+	activeProfileID := ""
+	switch {
+	case params.Permissions != nil:
+		activeProfileID = strings.TrimSpace(*params.Permissions)
+	case hasExplicitPermissionConfigOverride(params.Config):
+		// A request-scoped policy override wins over the persisted named
+		// profile. The effective config below supplies the replacement.
+	case strings.TrimSpace(record.Metadata.ActivePermissionProfile) != "":
+		activeProfileID = strings.TrimSpace(record.Metadata.ActivePermissionProfile)
+	case settings != nil && settings.ActivePermissionProfile != nil:
+		activeProfileID = strings.TrimSpace(*settings.ActivePermissionProfile)
+	}
+	turnParams := &turn.TurnStartParams{
+		ThreadID:              threadID,
+		CWD:                   firstNonEmpty(stringPtrValue(params.CWD), response.CWD, record.Metadata.CWD),
+		Model:                 firstNonEmpty(stringPtrValue(params.Model), response.Model, record.Metadata.Model),
+		RuntimeWorkspaceRoots: append([]string(nil), response.RuntimeWorkspaceRoots...),
+		Config:                mergeTurnConfigOverrides(threadRecordConfigOverrides(record), params.Config),
+	}
+	if activeProfileID != "" {
+		turnParams.Permissions = &activeProfileID
+	} else {
+		applyPersistedPermissionProfileToTurnParams(record, turnParams)
+	}
+	cfg, err := r.effectiveConfigForTurn(turnParams)
+	if err != nil || cfg == nil {
+		return
+	}
+	resolution, err := threadDefaultSandboxPermissionProfile(cfg, turnParams.CWD, turnParams)
+	if err != nil || resolution == nil || resolution.Profile == nil {
+		return
+	}
+	if resolution.Profile.SandboxPolicy != nil {
+		response.Sandbox = resolution.Profile.SandboxPolicy
+	}
+	if response.ActivePermissionProfile == nil {
+		profileID := activeProfileID
+		if profileID == "" && hasPermissionProfileConfigOverride(params.Config) {
+			profileID = strings.TrimSpace(resolution.ID)
+		}
+		if profileID != "" {
+			response.ActivePermissionProfile = activePermissionProfileFromID(&profileID)
+		}
+	}
 }
 
 func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Request) error {

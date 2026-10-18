@@ -136,6 +136,24 @@ func TestResolveSandboxPermissionProfileWithWorkspaceRootsAnchorsProjectRootsLik
 	}
 }
 
+func TestResolveRequirementDefaultPermissionProfileHonorsAllowedSandboxModesLikeRust(t *testing.T) {
+	cfg := &Config{Requirements: &ConfigRequirements{
+		AllowedSandboxModes: []sandbox.SandboxMode{sandbox.SandboxReadOnly},
+	}}
+	for _, selected := range []string{":danger-full-access", ":workspace", ""} {
+		resolved, warning, err := cfg.resolveRequirementDefaultPermissionProfile(selected)
+		if err != nil {
+			t.Fatalf("resolveRequirementDefaultPermissionProfile(%q) error = %v", selected, err)
+		}
+		if resolved != ":read-only" {
+			t.Fatalf("resolveRequirementDefaultPermissionProfile(%q) = %q, want :read-only", selected, resolved)
+		}
+		if selected != "" && !strings.Contains(warning, "disallowed by requirements") {
+			t.Fatalf("resolveRequirementDefaultPermissionProfile(%q) warning = %q", selected, warning)
+		}
+	}
+}
+
 // Rust #48176: `.aws` joins `.git`/`.agents`/`.codex` as a default read-only
 // project-root metadata subpath, so a writable workspace root cannot modify the
 // AWS credential helpers an AWS profile may select.

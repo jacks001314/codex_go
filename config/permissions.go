@@ -206,10 +206,35 @@ func (c *Config) resolveRequirementDefaultPermissionProfile(selected string) (st
 		// Rust rejects this configuration at requirements load
 		// (default_permissions requires allowed_permission_profiles); direct
 		// in-memory requirements keep the managed default as the selection.
-		if strings.TrimSpace(selected) == "" && requirements.DefaultPermissions != nil {
+		selected = strings.TrimSpace(selected)
+		if len(requirements.AllowedSandboxModes) > 0 {
+			if mode, ok := permissionProfileSandboxMode(selected); ok && sandboxModeAllowed(requirements.AllowedSandboxModes, mode) {
+				return selected, "", nil
+			}
+			fallback := ""
+			if requirements.DefaultPermissions != nil {
+				candidate := strings.TrimSpace(*requirements.DefaultPermissions)
+				if mode, ok := permissionProfileSandboxMode(candidate); ok && sandboxModeAllowed(requirements.AllowedSandboxModes, mode) {
+					fallback = candidate
+				}
+			}
+			if fallback == "" {
+				fallback = permissionProfileForAllowedSandboxModes(requirements.AllowedSandboxModes)
+			}
+			if fallback != "" {
+				if selected == "" {
+					return fallback, "", nil
+				}
+				warning := fmt.Sprintf(
+					"Configured value for `permission_profile` is disallowed by requirements; falling back from `%s` to required value `%s`.",
+					selected, fallback,
+				)
+				return fallback, warning, nil
+			}
+		} else if selected == "" && requirements.DefaultPermissions != nil {
 			return strings.TrimSpace(*requirements.DefaultPermissions), "", nil
 		}
-		return strings.TrimSpace(selected), "", nil
+		return selected, "", nil
 	}
 	allowed := requirements.AllowedPermissionProfiles
 	fallback := ""
@@ -238,6 +263,52 @@ func (c *Config) resolveRequirementDefaultPermissionProfile(selected string) (st
 		"Configured value for `permission_profile` is disallowed by requirements; falling back from `%s` to required value `%s`.",
 		selected, fallback)
 	return fallback, warning, nil
+}
+
+func permissionProfileSandboxMode(profileID string) (sandbox.SandboxMode, bool) {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return "", false
+	}
+	profile, _, err := sandbox.ResolvePermissionProfile(profileID)
+	if err != nil || profile == nil {
+		return "", false
+	}
+	policy := profile.LegacySandboxPolicy()
+	if policy == nil {
+		return "", false
+	}
+	return policy.Kind, true
+}
+
+func sandboxModeAllowed(allowed []sandbox.SandboxMode, mode sandbox.SandboxMode) bool {
+	for _, candidate := range allowed {
+		if candidate == mode {
+			return true
+		}
+	}
+	return false
+}
+
+func permissionProfileForAllowedSandboxModes(allowed []sandbox.SandboxMode) string {
+	for _, mode := range []sandbox.SandboxMode{
+		sandbox.SandboxWorkspaceWrite,
+		sandbox.SandboxReadOnly,
+		sandbox.SandboxDangerFullAccess,
+	} {
+		if !sandboxModeAllowed(allowed, mode) {
+			continue
+		}
+		switch mode {
+		case sandbox.SandboxWorkspaceWrite:
+			return ":" + sandbox.BuiltInPermissionProfileWorkspace
+		case sandbox.SandboxReadOnly:
+			return ":" + sandbox.BuiltInPermissionProfileReadOnly
+		case sandbox.SandboxDangerFullAccess:
+			return ":" + sandbox.BuiltInPermissionProfileDangerFullAccess
+		}
+	}
+	return ""
 }
 
 // PermissionProfileRequirementWarning reports the startup warning for a

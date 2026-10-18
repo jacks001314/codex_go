@@ -29837,9 +29837,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 396 (implementation): thread/resume now restores the saved named profile or unnamed base profile into activePermissionProfile/sandbox, with request sandbox, permissions, and config overrides taking precedence. Managed deny-read stays intact; allowed_sandbox_modes narrows incompatible defaults. Tests: go test ./appserver -run 'ColdResumeRestoresThreadOwnedPermissions|ColdResumePermissionOverrides|PersistedPermission|PermissionProfile|ThreadResume|ColdResume' -count=1; go test ./config -count=1"
       ]
     },
     {
