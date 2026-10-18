@@ -4860,9 +4860,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: build_snapshot"
+        "Round 461 (audit): Go's synchronous reviewer builds a transcript from the current thread record, applies retained user-instruction context, and rollback naturally drops current-history evidence. It does not retain a pre-compaction review-history snapshot for original user/tool evidence, so tool outputs summarized away by compaction can disappear. The async-scorer transcript collector is absent. Tests: go test ./appserver -run 'Guardian.*Compaction|Guardian.*Retained|Guardian.*Evidence' -count=1"
       ]
     },
     {
