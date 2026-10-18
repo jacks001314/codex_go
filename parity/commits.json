@@ -7107,9 +7107,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: list_tools_with_errors, listed_tools"
+        "Round 411 (audit): MCPServerStatus.toolsError is set on startup/tool-list failure without a catalog, remains null for cached or empty catalogs, deep-copies safely, and always serializes as nullable; healthy servers in a mixed response are unaffected. Tests: go test ./mcp -run 'ToolsError|ServerStatus' -count=1; go test ./appserver -run 'MCP.*Status' -count=1"
       ]
     },
     {
