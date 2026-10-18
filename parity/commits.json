@@ -13419,9 +13419,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 17/60; needs review: APP_CORE_RUNNER_ALIAS, CORE_INSTALLATION_KEY, INSTALLATION_KEY, INSTALLATION_VALUE, PreparedRemoval"
+        "N/A - Go uses the direct setup helper and has no Windows sandbox service IPC, package identity/installation registry, runtime ownership transaction, package-scoped service names, retained logon management, or package cleanup finalizer. The matched symbols are Rust service/package infrastructure without a Go carrier."
       ]
     },
     {
