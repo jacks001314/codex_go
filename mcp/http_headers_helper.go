@@ -38,11 +38,19 @@ type mcpHTTPHeadersHelperTransport struct {
 	origin  string
 	command string
 	cwd     string
+	run     func(context.Context, string, string) (http.Header, error)
 
-	once    sync.Once
-	mu      sync.Mutex
-	headers http.Header
-	err     error
+	once sync.Once
+	mu   sync.Mutex
+	// headers is the last successful helper response. epoch advances after every
+	// refresh attempt (success, failure, or unchanged) so concurrent rejections
+	// from the same cohort share one helper invocation.
+	headers     http.Header
+	err         error
+	epoch       uint64
+	refreshing  bool
+	refreshDone chan struct{}
+	refreshErr  error
 }
 
 func newMCPHTTPHeadersHelperTransport(base http.RoundTripper, serverURL string, command string, cwd string) (*mcpHTTPHeadersHelperTransport, error) {
@@ -58,6 +66,7 @@ func newMCPHTTPHeadersHelperTransport(base http.RoundTripper, serverURL string, 
 		origin:  parsed.Scheme + "://" + parsed.Host,
 		command: command,
 		cwd:     cwd,
+		run:     runMCPHTTPHeadersHelperContext,
 	}, nil
 }
 
@@ -65,18 +74,36 @@ func (t *mcpHTTPHeadersHelperTransport) RoundTrip(request *http.Request) (*http.
 	if t == nil || request == nil || request.URL == nil {
 		return nil, fmt.Errorf("nil MCP HTTP headers helper request")
 	}
+	if request.URL.Scheme+"://"+request.URL.Host != t.origin {
+		return t.roundTrip(request, nil)
+	}
+	headers, epoch, err := t.headersForRequest()
+	if err != nil {
+		return nil, err
+	}
+	response, err := t.roundTrip(request, headers)
+	if err != nil || response == nil || request.Method != http.MethodPost || (response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusForbidden) {
+		return response, err
+	}
+	refreshed, nextEpoch, refreshErr := t.refreshHeaders(request.Context(), epoch)
+	if refreshErr != nil || nextEpoch == epoch || headersEqual(headers, refreshed) {
+		return response, err
+	}
+	_ = response.Body.Close()
+	return t.roundTrip(request, refreshed)
+}
+
+func (t *mcpHTTPHeadersHelperTransport) roundTrip(request *http.Request, headers http.Header) (*http.Response, error) {
 	cloned := request.Clone(request.Context())
 	cloned.Header = request.Header.Clone()
-	if request.URL.Scheme+"://"+request.URL.Host == t.origin {
-		headers, err := t.headersForRequest()
-		if err != nil {
-			return nil, err
+	explicitAuthorization := strings.TrimSpace(cloned.Header.Get("Authorization")) != ""
+	for name, values := range headers {
+		if explicitAuthorization && strings.EqualFold(name, "Authorization") {
+			continue
 		}
-		for name, values := range headers {
-			cloned.Header.Del(name)
-			for _, value := range values {
-				cloned.Header.Add(name, value)
-			}
+		cloned.Header.Del(name)
+		for _, value := range values {
+			cloned.Header.Add(name, value)
 		}
 	}
 	base := t.base
@@ -86,9 +113,9 @@ func (t *mcpHTTPHeadersHelperTransport) RoundTrip(request *http.Request) (*http.
 	return base.RoundTrip(cloned)
 }
 
-func (t *mcpHTTPHeadersHelperTransport) headersForRequest() (http.Header, error) {
+func (t *mcpHTTPHeadersHelperTransport) headersForRequest() (http.Header, uint64, error) {
 	t.once.Do(func() {
-		headers, err := runMCPHTTPHeadersHelper(t.command, t.cwd)
+		headers, err := t.run(context.Background(), t.command, t.cwd)
 		t.mu.Lock()
 		t.headers = headers
 		t.err = err
@@ -96,11 +123,78 @@ func (t *mcpHTTPHeadersHelperTransport) headersForRequest() (http.Header, error)
 	})
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.headers, t.err
+	return cloneHTTPHeaderForHelper(t.headers), t.epoch, t.err
+}
+
+func (t *mcpHTTPHeadersHelperTransport) refreshHeaders(ctx context.Context, rejectedEpoch uint64) (http.Header, uint64, error) {
+	t.mu.Lock()
+	if t.epoch != rejectedEpoch {
+		headers, epoch, err := cloneHTTPHeaderForHelper(t.headers), t.epoch, t.refreshErr
+		t.mu.Unlock()
+		return headers, epoch, err
+	}
+	if !t.refreshing {
+		t.refreshing = true
+		t.refreshDone = make(chan struct{})
+		t.refreshErr = nil
+		done := t.refreshDone
+		command, cwd := t.command, t.cwd
+		go func() {
+			headers, err := t.run(context.Background(), command, cwd)
+			t.mu.Lock()
+			if err == nil && headers != nil {
+				t.headers = headers
+			}
+			t.refreshErr = err
+			t.epoch = rejectedEpoch + 1
+			t.refreshing = false
+			close(done)
+			t.mu.Unlock()
+		}()
+	}
+	done := t.refreshDone
+	t.mu.Unlock()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, rejectedEpoch, ctx.Err()
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return cloneHTTPHeaderForHelper(t.headers), t.epoch, t.refreshErr
+}
+
+func headersEqual(left http.Header, right http.Header) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, values := range left {
+		other := right.Values(name)
+		if len(other) != len(values) {
+			return false
+		}
+		for index := range values {
+			if other[index] != values[index] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func cloneHTTPHeaderForHelper(header http.Header) http.Header {
+	if header == nil {
+		return nil
+	}
+	return header.Clone()
 }
 
 func runMCPHTTPHeadersHelper(command string, cwd string) (http.Header, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), mcpHTTPHeadersHelperTimeout)
+	return runMCPHTTPHeadersHelperContext(context.Background(), command, cwd)
+}
+
+func runMCPHTTPHeadersHelperContext(ctx context.Context, command string, cwd string) (http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, mcpHTTPHeadersHelperTimeout)
 	defer cancel()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

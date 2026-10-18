@@ -4284,9 +4284,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: InsufficientScopeChallenge, insufficient_scope_challenge"
+        "Round 497 (implementation): the MCP headers-helper transport reruns the helper after a same-origin POST returns 401/403, retries once only when effective headers changed, shares one in-flight refresh across concurrent rejections, retains the previous headers on failure/unchanged output, advances a refresh epoch to prevent repeated retries, and preserves explicit Authorization over helper-provided credentials. Tests: go test ./mcp -run 'HTTPHeadersHelper' -count=1; go test ./mcp -count=1"
       ]
     },
     {
