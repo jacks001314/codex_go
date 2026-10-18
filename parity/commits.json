@@ -11235,9 +11235,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 552 (audit): already implemented. api_key_model_discovery is exposed through app-server config, inference and live model discovery keep separate base URLs, a discovered API-key catalog is authoritative, and live setting changes require a restart. Tests: go test ./model ./features -run 'APIKey|Discovery|ApiKey' -count=1"
       ]
     },
     {
@@ -14091,9 +14091,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: UserMessageImageKind, has_complete_image_order, trim_trailing_default_image_details"
+        "Round 553 (audit): already implemented. File-backed image references flow through user inputs, session history, tool outputs, output truncation, dynamic tools, and image-generation windows without being mistaken for inline URLs. Tests: go test ./utils ./session ./turn -run 'FileImage|FileID|RecentImage' -count=1"
       ]
     },
     {
@@ -24287,9 +24287,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/8; needs review: open_read_write_pool"
+        "Round 554 (audit): already implemented. State startup runs SQLite quick-check validation, detects corruption, preserves recovery backups, and shares one validation manager across SQLite clones. Tests: go test ./state -run 'Recovery|Corruption|Sqlite' -count=1"
       ]
     },
     {
