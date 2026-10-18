@@ -24875,9 +24875,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: program_for_turn"
+        "Round 621 (parity backfill): daybreak_enabled is a validated optional top-level config value carried into non-interactive/local thread starts; app-server resolves the per-turn cyber access program from explicit selection or inherited core value and propagates it to responses, compaction, and subagents. Tests: go test ./config ./model ./app -run Daybreak -count=1"
       ]
     },
     {
@@ -24983,9 +24983,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: apply_granted_turn_permissions, for_review"
+        "Round 622 (parity backfill): state.TurnState owns granted permission maps per environment independently of SessionState; Guardian review and sandbox retries resolve the reviewed turn's own profile, so one turn's grant does not become session-wide authority. Tests: go test ./state -run 'GrantedPermissions|TurnState|SessionState' -count=1; go test ./appserver -run 'GuardianSandboxRetry|RequestPermissions|Guardian.*Permission' -count=1"
       ]
     },
     {
@@ -25103,9 +25103,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: ByteChunk"
+        "Round 623 (parity backfill): output chunks retain []byte buffers while JSON serialization preserves the base64 wire contract. Tests: go test ./execserver -run 'TestOutputChunkSharesBytesAndSerializesBase64LikeRust' -count=1"
       ]
     },
     {
@@ -25235,9 +25235,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: selected_plugins_for_step"
+        "Round 624 (parity backfill): runtimeStepCapabilitySnapshot freezes ready roots, disabled plugin IDs, plugin capabilities, and plugin skill roots for one sampling step; catalogs, executor skills, attribution, and discovery read the snapshot, and a new environment request applies on the next step. Tests: go test ./turn ./appserver -run 'StepCapabilitySnapshot|ExecutorSkillsList' -count=1"
       ]
     },
     {
@@ -25319,9 +25319,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: ThreadAttachmentArchiveFilter, ThreadAttachmentOwnerPage"
+        "Round 625 (parity backfill): the app-server owner lookup performs the reverse query by attachment type and identity key with archive filtering, stable ordering, limit, next cursor, and cursor validation at the persisted-session metadata boundary. Tests: go test ./appserver -run 'ThreadAttachmentOwner|ThreadAttachment' -count=1"
       ]
     },
     {
