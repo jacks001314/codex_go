@@ -16711,9 +16711,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: footer_tip_lines, picker_cursor_pos, picker_desired_height, picker_option_list, picker_option_row"
+        "Aligned upstream c9d13e8c75 (#46695) with Go's shared picker primitives: picker_rows.go owns shared columns, wrapped/single-line row rendering, selection markers and measured height; selection_picker_layout.go allocates header/tabs/search/rows/side regions without over-allocation; SelectionViewRows applies display-width truncation; custom prompt and request-user-input views use the shared prompt/footer geometry and narrow-screen behavior. Tests: TestPickerRowsUseSharedColumnsAndSelection, TestPickerAreasMatchesRustAllocation, TestPickerAreasNeverOverallocate, TestSelectionViewRowsTruncateByDisplayWidth, TestCustomPromptEmptySubmitCancelPasteAndRows."
       ]
     },
     {
