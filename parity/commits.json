@@ -682,9 +682,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 567 (audit): already implemented. Strict MCP elicitation reviews preserve canonical approved, denied, timed-out, and aborted outcomes instead of collapsing them into a generic decline. Tests: go test ./appserver -run 'MCPElicitation|StrictAutoReview|GuardianMCP' -count=1"
       ]
     },
     {
@@ -838,9 +838,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 568 (audit): already implemented. User message content kinds (user.text, user.image, user.audio) are attached to the model input item and contextual fragments. Tests: go test ./appserver -run 'ContentKinds|ContentItem|UserInput|Contextual' -count=1"
       ]
     },
     {
@@ -874,9 +874,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: is_node_repl_backed_tool"
+        "Round 569 (audit): already implemented. Go's Node-REPL-backed server check and namespace helper include cua_repl, including its namespaced form. Tests: go test ./appserver ./mcp -run 'NodeRepl|cua_repl|CuaRepl' -count=1"
       ]
     },
     {
