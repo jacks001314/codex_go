@@ -11907,9 +11907,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: LoadInstructionsFuture, ThreadInstructionsProvider, spawn_internal_session_with_history, with_instructions"
+        "Round 481 (audit): N/A by architecture - the change is the extension-api ThreadInstructionsProvider/UserInstructionsProvider hook exposed through StartThreadOptions. Go has no extension registry or host instruction-provider interface, and JSON-RPC ThreadStartParams has no provider carrier; baseInstructions is a static override, not a refreshable snapshot. Go's AGENTS.md equivalent is turnStepInstructionsProvider/refreshedThreadInstructionText (global refresh within a turn, subagents skip refresh and inherit the applied snapshot) plus turn-boundary project re-discovery, already covered by TestRuntimeRouterRefreshesGlobalInstructionsAtTurnBoundary and project-instruction tests. Guardian review has no reusable review-session key in Go; it restarts through compaction response ID/model hash, so the added thread-instructions reuse key has no carrier."
       ]
     },
     {
