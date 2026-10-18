@@ -11403,9 +11403,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: CodexAppsResourceListParams, latest_host_owned_codex_apps_connections, list_codex_apps_resources"
+        "Round 470 (implementation): added mcp.CodexAppsResourceListParams/MCPResourcePage and MCPService.ListCodexAppsResources. Every page sends the required top-level mimeType plus the optional cursor; only a host-owned codex_apps registration is accepted, and extension collisions are rejected before any request. Tests: go test ./mcp -run 'CodexAppsResource' -count=1"
       ]
     },
     {
