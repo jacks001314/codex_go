@@ -41,6 +41,31 @@ const (
 	McpOAuthRefreshCoordinated McpOAuthRefreshMode = "coordinated"
 )
 
+// MCPStartupReadiness controls what startup may use before exposing a server's
+// tools to the model (Rust McpStartupReadiness).
+type MCPStartupReadiness string
+
+const (
+	// MCPStartupReadinessConnection requires the live connection to complete.
+	MCPStartupReadinessConnection MCPStartupReadiness = "connection"
+	// MCPStartupReadinessCatalog accepts an eligible cached tool catalog while
+	// the live connection starts. Tool execution still requires that connection.
+	MCPStartupReadinessCatalog MCPStartupReadiness = "catalog"
+)
+
+// Effective returns the configured readiness, defaulting to connection.
+func (m MCPStartupReadiness) Effective() MCPStartupReadiness {
+	if m == MCPStartupReadinessCatalog {
+		return MCPStartupReadinessCatalog
+	}
+	return MCPStartupReadinessConnection
+}
+
+// String returns the effective readiness value.
+func (m MCPStartupReadiness) String() string {
+	return string(m.Effective())
+}
+
 // Effective returns the configured refresh mode, defaulting to legacy when the
 // field is unset (Rust McpOAuthRefreshMode::default is Legacy).
 func (m McpOAuthRefreshMode) Effective() McpOAuthRefreshMode {
@@ -90,6 +115,9 @@ type ServerConfig struct {
 	Enabled                        bool                `json:"enabled"`
 	DisabledReason                 string              `json:"disabled_reason,omitempty"`
 	Required                       bool                `json:"required,omitempty"`
+	// StartupReadiness selects whether required-server startup may accept an
+	// eligible cached catalog before the live connection is available.
+	StartupReadiness MCPStartupReadiness `json:"startup_readiness,omitempty"`
 	// SupportsParallelToolCalls advertises every tool from this server as safe
 	// for parallel execution (Rust McpServerConfig::supports_parallel_tool_calls).
 	SupportsParallelToolCalls bool                              `json:"supports_parallel_tool_calls,omitempty"`
@@ -583,6 +611,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 	if value, ok := values["required"].(bool); ok {
 		server.Required = value
 	}
+	server.StartupReadiness = MCPStartupReadiness(runtimeConfigStringAny(values, "startup_readiness", "startupReadiness"))
 	server.DisabledReason = runtimeConfigStringAny(values, "disabled_reason", "disabledReason")
 	server.Auth = runtimeConfigString(values, "auth")
 	server.EnvironmentID = runtimeConfigStringAny(values, "environment_id", "environmentId")

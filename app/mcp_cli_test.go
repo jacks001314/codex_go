@@ -846,6 +846,30 @@ func TestMCPCLIServerToolInputSchemaMaxBytesRoundTripsLikeRust(t *testing.T) {
 	}
 }
 
+func TestMCPCLIServerStartupReadinessRoundTripsLikeRust(t *testing.T) {
+	table := map[string]any{
+		"command":           "mcp-docs",
+		"startup_readiness": "catalog",
+	}
+	server := mcpServerFromConfigValue("docs", table)
+	if server == nil || server.StartupReadiness != string(mcp.MCPStartupReadinessCatalog) {
+		t.Fatalf("StartupReadiness = %#v", server)
+	}
+	runtimeConfig := mcpServerRuntimeConfig("docs", server, "")
+	if runtimeConfig.StartupReadiness.Effective() != mcp.MCPStartupReadinessCatalog {
+		t.Fatalf("runtime StartupReadiness = %#v", runtimeConfig.StartupReadiness)
+	}
+	out := mcpServerToConfigValue(server)
+	if out["startup_readiness"] != "catalog" {
+		t.Fatalf("round-tripped startup_readiness = %#v", out["startup_readiness"])
+	}
+
+	defaultServer := mcpServerFromConfigValue("default", map[string]any{"command": "mcp-default"})
+	if value, ok := mcpServerToConfigValue(defaultServer)["startup_readiness"]; ok {
+		t.Fatalf("default startup readiness should be omitted, got %#v", value)
+	}
+}
+
 func TestMCPLoginUsesConfiguredScopes(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

@@ -44,11 +44,33 @@ func validateMCPServerTransportFields(value any) error {
 		if err := validateMCPServerTransportTable(table); err != nil {
 			return fmt.Errorf("mcp_servers.%s: %w", name, err)
 		}
+		if err := validateMCPServerStartupReadiness(name, table); err != nil {
+			return err
+		}
 		if err := validateMCPServerNestedFields(name, table); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// validateMCPServerStartupReadiness rejects values the Rust enum cannot
+// deserialize. An absent or null value uses Rust's connection default.
+func validateMCPServerStartupReadiness(name string, table map[string]any) error {
+	value, ok := table["startup_readiness"]
+	if !ok || value == nil {
+		return nil
+	}
+	readiness, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("mcp_servers.%s: startup_readiness must be a string", name)
+	}
+	switch readiness {
+	case "connection", "catalog":
+		return nil
+	default:
+		return fmt.Errorf("mcp_servers.%s: invalid startup_readiness %q; expected \"connection\" or \"catalog\"", name, readiness)
+	}
 }
 
 // knownStrictMCPToolFields mirrors Rust's `McpServerToolConfig`

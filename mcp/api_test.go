@@ -519,7 +519,6 @@ func TestRequiredCachedMCPServerStaysDormantForSubagentCatalog(t *testing.T) {
 
 	response, err := service.ListStatusChecked(&MCPListServerStatusParams{
 		Detail:              &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
-		RequiredServers:     []string{"required-cached"},
 		NonBlockingOptional: true,
 	})
 	if err != nil {

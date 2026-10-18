@@ -662,6 +662,7 @@ func TestStrictConfigAcceptsRustMCPServerFields(t *testing.T) {
 		"tool_timeout_sec":             30.0,
 		"enabled":                      true,
 		"required":                     true,
+		"startup_readiness":            "catalog",
 		"supports_parallel_tool_calls": true,
 		"omit_tools_from":              []any{"model"},
 		"default_tools_approval_mode":  "prompt",

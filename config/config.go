@@ -1339,7 +1339,7 @@ var knownStrictMCPServerFields = map[string]bool{
 	// shared
 	"environment_id": true, "auth": true,
 	"startup_timeout_sec": true, "startup_timeout_ms": true, "tool_timeout_sec": true,
-	"enabled": true, "required": true, "supports_parallel_tool_calls": true,
+	"enabled": true, "required": true, "startup_readiness": true, "supports_parallel_tool_calls": true,
 	"omit_tools_from": true, "default_tools_approval_mode": true,
 	"enabled_tools": true, "disabled_tools": true, "scopes": true,
 	"oauth": true, "oauth_resource": true, "name": true, "tools": true,

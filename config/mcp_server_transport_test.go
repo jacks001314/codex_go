@@ -96,6 +96,24 @@ func TestValidateMCPServerTransportFieldsLikeRust(t *testing.T) {
 			table: map[string]any{"command": "mcp", "env_vars": []any{"PATH", map[string]any{"name": "TOKEN", "source": "remote"}}},
 		},
 		{
+			name:  "catalog startup readiness",
+			table: map[string]any{"command": "mcp", "startup_readiness": "catalog"},
+		},
+		{
+			name:  "connection startup readiness",
+			table: map[string]any{"command": "mcp", "startup_readiness": "connection"},
+		},
+		{
+			name:  "invalid startup readiness",
+			table: map[string]any{"command": "mcp", "startup_readiness": "live"},
+			want:  `invalid startup_readiness "live"; expected "connection" or "catalog"`,
+		},
+		{
+			name:  "non-string startup readiness",
+			table: map[string]any{"command": "mcp", "startup_readiness": true},
+			want:  "startup_readiness must be a string",
+		},
+		{
 			name:  "unknown env vars field",
 			table: map[string]any{"command": "mcp", "env_vars": []any{map[string]any{"name": "TOKEN", "sources": "local"}}},
 			want:  "unknown configuration field `mcp_servers.srv.env_vars.sources`",

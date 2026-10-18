@@ -1734,25 +1734,31 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
 			continue
 		}
-		// Rust #38217: a required server with cached tool definitions may stay
-		// dormant under the lazy startup policy. The cached tools satisfy
-		// catalog capture until one of the server's tools is called.
-		if params != nil && params.NonBlockingOptional &&
-			servers[i].State == MCPServerReady && len(servers[i].Tools) > 0 &&
-			(config.Required || required[name]) &&
-			// Rust #54656: never answer from a catalog the connection already
-			// invalidated with a tools/list_changed notification.
-			s.retainedToolCatalogUsable(name) {
-			// Rust #51215: the retained catalog is the cached source, so the raw
-			// size telemetry reports "cached" rather than a stale live read.
-			servers[i].catalogSource = BindingCatalogSourceCached
-			notifyMCPStartupObserver(observer, name, MCPServerReady, nil, nil)
-			continue
+		selectedPluginRequired := servers[i].source == CatalogSourceSelectedPlugin &&
+			servers[i].PluginID != nil && requiredPlugins[*servers[i].PluginID]
+		explicitlyRequired := required[name] || selectedPluginRequired
+		// Rust #47935: startup_readiness = "catalog" may satisfy startup with an
+		// eligible cached catalog, even on the blocking startup-validation path.
+		// Rust #38217's lazy-startup behavior still applies to required servers
+		// during non-blocking capture. Explicit turn/plugin requirements always
+		// wait for a live connection.
+		cachedStartupCandidate := !explicitlyRequired &&
+			(config.StartupReadiness.Effective() == MCPStartupReadinessCatalog ||
+				(params != nil && params.NonBlockingOptional &&
+					servers[i].State == MCPServerReady && config.Required))
+		if cachedStartupCandidate {
+			if tools, ok := s.cachedCatalogStartupTools(name, &config, servers[i]); ok {
+				servers[i].Tools = tools
+				// Rust #51215: the retained catalog is the cached source, so the
+				// raw size telemetry reports "cached" rather than a stale live
+				// read.
+				servers[i].catalogSource = BindingCatalogSourceCached
+				notifyMCPStartupObserver(observer, name, MCPServerReady, nil, nil)
+				continue
+			}
 		}
 		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil, nil)
 		pending[i] = name
-		selectedPluginRequired := servers[i].source == CatalogSourceSelectedPlugin &&
-			servers[i].PluginID != nil && requiredPlugins[*servers[i].PluginID]
 		if config.Required || required[name] || selectedPluginRequired || (IsCodexAppsMCPServerName(name) && len(servers[i].Tools) == 0) {
 			requiredIndexes[i] = true
 		}
@@ -2922,6 +2928,7 @@ func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	cloned.Enabled = false
 	cloned.DisabledReason = ""
 	cloned.Required = false
+	cloned.StartupReadiness = ""
 	cloned.EnabledTools = nil
 	cloned.DisabledTools = nil
 	cloned.OmitToolsFrom = nil

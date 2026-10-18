@@ -10,6 +10,10 @@ type Binding struct {
 	service    *MCPService
 	generation uint64
 	tools      map[string]map[string]bool
+	// cachedRevisions records the tool-list revision observed with a catalog
+	// accepted under startup_readiness = "catalog". A later notification must
+	// invalidate the binding even if the service generation did not change.
+	cachedRevisions map[string]uint64
 	// authorityPublished reports whether this runtime published per-server
 	// permission authority (Rust #40728). When true, a server absent from
 	// authority has no owner permissions and its calls are rejected.
@@ -26,6 +30,24 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 	for _, status := range statuses {
 		server := status.effectiveName()
 		if server == "" {
+			continue
+		}
+		if config, ok := s.ServerConfigForServer(server); ok &&
+			config.StartupReadiness.Effective() == MCPStartupReadinessCatalog {
+			tools, usable := s.cachedCatalogStartupTools(server, &config, status)
+			if !usable {
+				continue
+			}
+			b.tools[server] = toolNameSet(tools)
+			if b.cachedRevisions == nil {
+				b.cachedRevisions = map[string]uint64{}
+			}
+			b.cachedRevisions[server] = s.cachedToolListRevision(server)
+			if b.authorityPublished {
+				if _, ok := s.PermissionProfileForServer(server); ok {
+					b.authority[server] = true
+				}
+			}
 			continue
 		}
 		set := cachedTools(status)
@@ -77,6 +99,9 @@ func (b *Binding) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, err
 	if !b.tools[server][tool] {
 		return nil, fmt.Errorf("%w: MCP tool %q was not present in captured catalog for server %q", ErrInvalidMCPRequest, tool, server)
 	}
+	if revision, ok := b.cachedRevisions[server]; ok && b.service.cachedToolListRevision(server) != revision {
+		return nil, fmt.Errorf("%w: MCP tool catalog changed after this model step was prepared", ErrInvalidMCPRequest)
+	}
 	if b.authorityPublished && !b.authority[server] {
 		return nil, fmt.Errorf("%w: MCP server %q has no published permission authority", ErrInvalidMCPRequest, server)
 	}
@@ -88,4 +113,14 @@ func (b *Binding) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, err
 		return nil, fmt.Errorf("%w: MCP tool catalog changed while the call was executing", ErrInvalidMCPRequest)
 	}
 	return response, nil
+}
+
+func toolNameSet(tools []MCPToolInfo) map[string]bool {
+	set := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		if name := strings.TrimSpace(tool.Name); name != "" {
+			set[name] = true
+		}
+	}
+	return set
 }

@@ -21008,9 +21008,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: McpStartupReadiness, current_revision_if, record_startup_readiness"
+        "Added mcp_servers.<name>.startup_readiness with connection as the default and catalog as the cached-catalog opt-in. Runtime and CLI config parsing/serialization plus strict enum validation are covered. Required-server validation and binding capture accept only an eligible cached catalog under catalog readiness; explicit RequiredServers/RequiredPlugins still wait for the live connection. Cached catalogs apply per-server tool filters and Rust _meta.ui.visibility, binding capture preserves the observed tool-list revision, and tool execution still requires the live transport. Verified with go test ./mcp -count=1, go test ./config -count=1, go test ./app -run MCP -count=1, and go vet ./mcp ./config ./app."
       ]
     },
     {

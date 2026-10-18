@@ -61,6 +61,7 @@ type mcpCLIServer struct {
 	Enabled                        bool                      `json:"enabled"`
 	DisabledReason                 string                    `json:"disabled_reason,omitempty"`
 	Required                       bool                      `json:"required,omitempty"`
+	StartupReadiness               string                    `json:"startup_readiness,omitempty"`
 	SupportsParallelToolCalls      bool                      `json:"supports_parallel_tool_calls,omitempty"`
 	ToolInputSchemaMaxBytes        *int                      `json:"tool_input_schema_max_bytes,omitempty"`
 	StartupTimeoutSec              *float64                  `json:"startup_timeout_sec,omitempty"`
@@ -643,6 +644,7 @@ func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string)
 		CodexHome:                      codexHome,
 		Enabled:                        server.Enabled,
 		Required:                       server.Required,
+		StartupReadiness:               mcp.MCPStartupReadiness(server.StartupReadiness),
 		EnvironmentID:                  server.EnvironmentID,
 		Auth:                           server.Auth,
 	}
@@ -1018,6 +1020,7 @@ func mcpServerFromConfigValue(name string, table map[string]any) *mcpCLIServer {
 	}
 	server.DisabledReason = stringFromAny(table["disabled_reason"])
 	server.Required = boolFromAny(table["required"])
+	server.StartupReadiness = stringFromAny(table["startup_readiness"])
 	server.SupportsParallelToolCalls = boolFromAny(table["supports_parallel_tool_calls"])
 	server.ToolInputSchemaMaxBytes = positiveIntPtrFromAny(table["tool_input_schema_max_bytes"])
 	server.Auth = stringFromAny(table["auth"])
@@ -1120,6 +1123,9 @@ func mcpServerAddSharedConfigValue(value map[string]any, server *mcpCLIServer) {
 	}
 	if server.Required {
 		value["required"] = true
+	}
+	if server.StartupReadiness == string(mcp.MCPStartupReadinessCatalog) {
+		value["startup_readiness"] = string(mcp.MCPStartupReadinessCatalog)
 	}
 	if server.SupportsParallelToolCalls {
 		value["supports_parallel_tool_calls"] = true
