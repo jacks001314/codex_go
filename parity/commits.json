@@ -29115,9 +29115,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/6; needs review: ReadStateOperation, ReadStateUpdate, publish_thread_attention, thread_read_states, update_thread_read_state"
+        "Equivalent implementation present: StateRuntime stores per-thread first-unread turn and revision in SQLite, returns absent state for missing/deleted threads, and applies read/unread operations in a transaction keyed by expected revision. Idempotent operations preserve revisions, stale writes return ReadStateUpdateConflict with current state, missing rows return unavailable, and foreign-thread updates conflict. State survives metadata rebuild and restart, while thread deletion removes it. Tests cover revision checks, deduplication, rebuild/restart persistence, deletion, and unavailable outcomes."
       ]
     },
     {
