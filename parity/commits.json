@@ -4848,9 +4848,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: collect_guardian_transcript_entries"
+        "Round 606 (parity backfill): guardianReviewTranscriptEntries is the single review transcript collector and feeds state.RenderGuardianTranscript, bounded selection, attribution, compaction-summary filtering, native encrypted messages, formats, and stale-context comparison. Tests: go test ./appserver ./state -run 'GuardianTranscript|GuardianReviewTranscript' -count=1"
       ]
     },
     {
@@ -5100,9 +5100,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: from_model_messages"
+        "Round 607 (parity backfill): auto-review Node REPL policy resolves from model metadata with bundled fallback and explicit-empty suppression; guardianSessionRunner invalidates cached reviewer history when the effective policy changes while keeping unchanged policies reusable. Tests: go test ./appserver -run 'GuardianSessionInvalidatesOnNodeReplPolicyChange|GuardianReviewReusesOrInvalidatesSessionByNodeReplPolicy' -count=1"
       ]
     },
     {
@@ -5400,9 +5400,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: FeedbackThread, FeedbackThreadIndex, GuardianReviewFailures, guardian_review_failures"
+        "Round 608 (parity backfill): feedback selection is bounded to eight tree rollouts, keeps the reported thread, prioritizes descendants with retained failed reviews, and records a bounded feedback-thread index with omitted IDs and discarded-review accounting. Tests: go test ./appserver -run 'FeedbackThreadIndexPrioritizesFailedReviews|GuardianFeedbackDiscardedCount|FeedbackUploadIncludesGuardianFailures' -count=1"
       ]
     },
     {
@@ -6325,9 +6325,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: token_user"
+        "Round 609 (parity backfill): Windows control-socket rendezvous prepares a protected current-user-only directory, rejects broad existing directories and junction/volume-root targets, and pins the validated directory against replacement while dialing. Tests: go test ./codexuds ./appserverdaemon -run 'PrivateSocket|ControlSocket' -count=1"
       ]
     },
     {
@@ -6795,9 +6795,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: MessageReader"
+        "Round 610 (parity backfill): voiceHostFrameReader owns one persistent helper-stdout reader and decodes complete frames across split or coalesced pipe chunks, retaining late frames for the next exchange. Tests: go test ./voicehost -count=1"
       ]
     },
     {
