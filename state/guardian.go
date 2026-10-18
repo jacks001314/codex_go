@@ -139,6 +139,9 @@ type Action struct {
 	EnvironmentID string `json:"-"`
 	SessionID     *int   `json:"-"`
 	Chars         string `json:"-"`
+	// ApprovalID / ProcessID mirror Rust GuardianAssessmentAction::WriteStdin.
+	ApprovalID string `json:"-"`
+	ProcessID  string `json:"-"`
 	// TurnID mirrors Rust RequestPermissionsApprovalAction.turn_id.
 	TurnID string `json:"-"`
 	// ToolDescription / ConnectorDescription are the invoked MCP tool's own

@@ -622,6 +622,10 @@ type GuardianApprovalReviewAction struct {
 	ToolTitle     *string                   `json:"toolTitle,omitempty"`
 	Reason        *string                   `json:"reason,omitempty"`
 	Permissions   *RequestPermissionProfile `json:"permissions,omitempty"`
+	// WriteStdin carries the child approval id, process id, and exact input.
+	ApprovalID string `json:"-"`
+	ProcessID  string `json:"-"`
+	Stdin      string `json:"-"`
 }
 
 func (a *GuardianApprovalReviewAction) MarshalJSON() ([]byte, error) {
@@ -635,6 +639,8 @@ func (a *GuardianApprovalReviewAction) MarshalJSON() ([]byte, error) {
 		actionType = "mcpToolCall"
 	case "request_permissions":
 		actionType = "requestPermissions"
+	case "write_stdin":
+		actionType = "writeStdin"
 	}
 	switch actionType {
 	case "command":
@@ -724,6 +730,20 @@ func (a *GuardianApprovalReviewAction) MarshalJSON() ([]byte, error) {
 			Type:        actionType,
 			Reason:      cloneString(a.Reason),
 			Permissions: permissions,
+		})
+	case "writeStdin":
+		return json.Marshal(struct {
+			Type       string `json:"type"`
+			ApprovalID string `json:"approvalId"`
+			ProcessID  string `json:"processId"`
+			Stdin      string `json:"stdin"`
+			CWD        string `json:"cwd"`
+		}{
+			Type:       actionType,
+			ApprovalID: a.ApprovalID,
+			ProcessID:  a.ProcessID,
+			Stdin:      a.Stdin,
+			CWD:        a.CWD,
 		})
 	default:
 		type actionAlias GuardianApprovalReviewAction

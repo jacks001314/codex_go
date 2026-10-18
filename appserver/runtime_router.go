@@ -15956,7 +15956,10 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 		}
 	}
 	if reviewer.RoutesToGuardian() {
-		outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, strings.TrimSpace(request.CallID), action)
+		// Rust #40528: a stdin review is a child approval for the existing
+		// command item; the write call id disambiguates the callback.
+		targetItemID := firstNonEmpty(strings.TrimSpace(request.LaunchCallID), strings.TrimSpace(request.CallID))
+		outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, targetItemID, action)
 		if outcome.Approved {
 			return nil
 		}
@@ -15966,9 +15969,11 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 		return errors.New("writing input to this terminal was denied by automatic review")
 	}
 	params := &CommandExecutionRequestApprovalParams{
+		Kind:          ExecApprovalKindWriteStdin,
 		ThreadID:      threadID,
 		TurnID:        turnID,
-		ItemID:        strings.TrimSpace(request.CallID),
+		ItemID:        firstNonEmpty(strings.TrimSpace(request.LaunchCallID), strings.TrimSpace(request.CallID)),
+		ApprovalID:    stringPtrIfNotEmpty(strings.TrimSpace(request.CallID)),
 		StartedAtMS:   uint64(time.Now().UTC().UnixMilli()),
 		EnvironmentID: stringPtrIfNotEmpty(strings.TrimSpace(request.EnvironmentID)),
 		Reason:        stringPtrIfNotEmpty(reason),
@@ -16205,6 +16210,8 @@ func terminalWriteApprovalAction(request *tool.WriteStdinApprovalRequest, permis
 		EnvironmentID:      strings.TrimSpace(request.EnvironmentID),
 		SessionID:          &processID,
 		Chars:              request.Chars,
+		ApprovalID:         strings.TrimSpace(request.CallID),
+		ProcessID:          strconv.Itoa(processID),
 		CWD:                strings.TrimSpace(request.CWD),
 		TurnID:             strings.TrimSpace(request.TurnID),
 		SandboxPermissions: string(permissions),

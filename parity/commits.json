@@ -1762,9 +1762,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: CommandExecutionApprovalKind, ExecApprovalKind"
+        "Round 448 (core/protocol/analytics implemented): added ExecApprovalKind with command default, writeStdin approval params (parent itemId + child approvalId), Guardian writeStdin action fields/serialization, child-review target routing, and write_stdin analytics subject classification. Remaining TUI rendering of terminal-input progress/denials/timeouts belongs to the TUI lane. Tests: go test ./appserver -run 'WriteStdin|CommandExecutionApprovalKindDefaults|GuardianWriteStdinAction' -count=1"
       ]
     },
     {

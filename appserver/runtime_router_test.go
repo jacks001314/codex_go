@@ -28136,8 +28136,14 @@ func TestWriteStdinApprovalReviewsEscalatedInputLikeRust(t *testing.T) {
 	if params == nil {
 		t.Fatal("no approval request was sent")
 	}
-	if params.ItemID != "write-call" || params.ThreadID != threadID || params.TurnID != "turn-1" {
+	if params.ItemID != "exec-call" || params.ThreadID != threadID || params.TurnID != "turn-1" {
 		t.Fatalf("approval params = %#v", params)
+	}
+	if params.Kind != ExecApprovalKindWriteStdin {
+		t.Fatalf("approval kind = %q", params.Kind)
+	}
+	if params.ApprovalID == nil || *params.ApprovalID != "write-call" {
+		t.Fatalf("approval id = %#v", params.ApprovalID)
 	}
 	if params.Command == nil || *params.Command != "write_stdin --session-id 42" {
 		t.Fatalf("approval command = %#v", params.Command)

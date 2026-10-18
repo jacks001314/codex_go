@@ -1674,6 +1674,9 @@ func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.
 		ToolTitle:     optionalStringPointer(event.Action.ToolTitle),
 		Reason:        optionalStringPointer(event.Action.Reason),
 		Permissions:   guardianRequestPermissionProfile(event.Action.Permissions),
+		ApprovalID:    event.Action.ApprovalID,
+		ProcessID:     event.Action.ProcessID,
+		Stdin:         event.Action.Chars,
 	}
 	review := guardianApprovalReviewFromState(event)
 	if event.Status == state.StatusInProgress {

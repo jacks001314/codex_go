@@ -76,7 +76,26 @@ func serverRequestThreadID(request *ServerRequest) string {
 	return ""
 }
 
+// ExecApprovalKind distinguishes a command approval from input sent to an
+// existing terminal (Rust #40528). Older events omit the field and retain
+// command semantics.
+type ExecApprovalKind string
+
+const (
+	ExecApprovalKindCommand    ExecApprovalKind = "command"
+	ExecApprovalKindWriteStdin ExecApprovalKind = "writeStdin"
+)
+
+func (k ExecApprovalKind) orDefault() ExecApprovalKind {
+	if strings.TrimSpace(string(k)) == "" {
+		return ExecApprovalKindCommand
+	}
+	return k
+}
+
 type CommandExecutionRequestApprovalParams struct {
+	// Kind defaults to command for older servers/events.
+	Kind                            ExecApprovalKind                     `json:"kind"`
 	ThreadID                        string                               `json:"threadId"`
 	TurnID                          string                               `json:"turnId"`
 	ItemID                          string                               `json:"itemId"`
@@ -99,6 +118,7 @@ type CommandExecutionRequestApprovalParams struct {
 
 func (p *CommandExecutionRequestApprovalParams) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
+		Kind                            ExecApprovalKind `json:"kind"`
 		ThreadID                        string           `json:"threadId"`
 		TurnID                          string           `json:"turnId"`
 		ItemID                          string           `json:"itemId"`
@@ -113,6 +133,7 @@ func (p *CommandExecutionRequestApprovalParams) MarshalJSON() ([]byte, error) {
 		ProposedExecPolicyAmendment     any              `json:"proposedExecpolicyAmendment,omitempty"`
 		ProposedNetworkPolicyAmendments []map[string]any `json:"proposedNetworkPolicyAmendments,omitempty"`
 	}{
+		Kind:                            p.Kind.orDefault(),
 		ThreadID:                        p.ThreadID,
 		TurnID:                          p.TurnID,
 		ItemID:                          p.ItemID,

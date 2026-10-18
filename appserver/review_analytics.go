@@ -385,6 +385,8 @@ func guardianReviewSubjectMetadata(action *GuardianApprovalReviewAction) (string
 	switch guardianReviewActionType(action) {
 	case "execve":
 		return telemetry.ReviewSubjectKindCommandExecution, "command_execution", telemetry.ReviewTriggerExecveIntercept
+	case "writeStdin":
+		return telemetry.ReviewSubjectKindWriteStdin, "write_stdin", telemetry.ReviewTriggerInitial
 	case "applyPatch":
 		return telemetry.ReviewSubjectKindFileChange, "apply_patch", telemetry.ReviewTriggerSandboxDenial
 	case "networkAccess":
@@ -415,6 +417,8 @@ func guardianReviewActionType(action *GuardianApprovalReviewAction) string {
 		return "mcpToolCall"
 	case "request_permissions", "requestPermissions":
 		return "requestPermissions"
+	case "write_stdin", "writeStdin":
+		return "writeStdin"
 	default:
 		return strings.TrimSpace(action.Type)
 	}

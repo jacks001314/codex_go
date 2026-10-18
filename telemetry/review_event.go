@@ -6,6 +6,7 @@ const CodexReviewEventType = "codex_review_event"
 
 const (
 	ReviewSubjectKindCommandExecution = "command_execution"
+	ReviewSubjectKindWriteStdin       = "write_stdin"
 	ReviewSubjectKindFileChange       = "file_change"
 	ReviewSubjectKindMCPToolCall      = "mcp_tool_call"
 	ReviewSubjectKindPermissions      = "permissions"
