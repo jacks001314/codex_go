@@ -9663,9 +9663,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 19/29; needs review: EnterpriseOAuthGeneration, EnterpriseOAuthHttpClient, OAuthHttpContext, OAuthLoginPurpose, OauthLoginFlow"
+        "Round 561 (audit): already implemented. Go strictly resolves enterprise authorization metadata, stages credentials until the callback commits, captures the OIDC ID token, validates callback/resource parameters, and invalidates a staged attempt on logout/token deletion. Tests: go test ./mcp -run 'EnterpriseOAuth|EnterpriseAuthorization|CommitEnterprise|OAuthTokenSet' -count=1"
       ]
     },
     {
@@ -14799,9 +14799,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 562 (audit): already implemented. apps.<connector_id>.omit_tools_from is parsed and validated, serialized through the app config surface, and combined with server-level omissions in the tool spec plan. Tests: go test ./apps ./config ./turn -run 'OmitToolsFrom|ConnectorToolExposure|PerApp' -count=1"
       ]
     },
     {
@@ -26509,9 +26509,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 563 (audit): already implemented. Go recovers malformed deny-read bookkeeping, propagates real I/O errors, rejects linked state files, preserves file identity, and waits for/respects a legacy or active writer before rebuilding reconciliation state. Tests: go test ./sandbox/windowssandbox -run 'DenyReadACLState|DenyRead' -count=1"
       ]
     },
     {
