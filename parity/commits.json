@@ -322,9 +322,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 579 (audit): already implemented. Elevated setup uses synchronous ShellExecuteExW activation (SEE_MASK_NOASYNC) because setup runs without a Windows message loop. Tests: go test ./sandbox/windowssandbox -run 'Setup|Elevat|WFP' -count=1"
       ]
     },
     {
@@ -370,9 +370,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: build_state_with_audit_metadata"
+        "Round 580 (audit): already implemented. Owner/attachment network policy is resolved per selected environment, inherited denials are preserved, the policy is applied to the execution-scoped proxy, and proxy-wire requirements are enforced. Tests: go test ./network -run 'EnvironmentNetworkPolicy' -count=1"
       ]
     },
     {
@@ -730,9 +730,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 581 (audit + regression): execThreadSource accepts a trimmed caller-supplied --thread-source, defaults to user, and forces subagent for subagent context. Added TestExecThreadSourceAllowsCallerClassificationLikeRust for default, custom, trimmed, and subagent-override cases. Tests: go test ./exec -run 'TestExecThreadSourceAllowsCallerClassificationLikeRust' -count=1"
       ]
     },
     {
