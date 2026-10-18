@@ -1462,9 +1462,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ensure_multi_agent_v2_child_loaded"
+        "Round 406 (implementation): thread/resume now requires the immediate parent to be loaded for recorded V2 thread-spawn children; loaded-parent resumes strip public model/config/permission overrides and retain only paging/redaction preferences before marking the child loaded. V1 and non-thread-spawn resumes are unchanged. Tests: go test ./appserver -run 'ParentOwnedV2ChildResume|ThreadResume' -count=1; go vet ./appserver"
       ]
     },
     {

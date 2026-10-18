@@ -3035,6 +3035,11 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 		}
 		if request.Method == MethodThreadResume {
+			updated, resumeErr := r.prepareParentOwnedV2ChildResume(request)
+			if resumeErr != nil {
+				return nil, resumeErr
+			}
+			request = updated
 			updated, updateErr := r.applyConfiguredResumeCWD(request)
 			if updateErr != nil {
 				return nil, updateErr
@@ -3347,6 +3352,48 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
 	}
+}
+
+// prepareParentOwnedV2ChildResume mirrors Rust #40477: a parent-owned
+// Multi-Agent V2 child is reloaded through its currently loaded parent and
+// ignores public resume configuration overrides. Only history-paging
+// preferences are retained from the caller.
+func (r *RuntimeRouter) prepareParentOwnedV2ChildResume(request *Request) (*Request, error) {
+	if r == nil || request == nil || request.Method != MethodThreadResume {
+		return request, nil
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	if threadID == "" {
+		return request, nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || !runtimeRecordIsThreadSpawn(record) ||
+		!strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2)) ||
+		strings.TrimSpace(string(record.ParentThreadID)) == "" {
+		return request, nil
+	}
+	parentID := strings.TrimSpace(string(record.ParentThreadID))
+	if !r.threadIsLoaded(parentID) {
+		return nil, jsonRPCInvalidRequest("cannot resume an unloaded multi-agent v2 sub-agent through its parent; resume the parent first, or use thread/read to inspect it")
+	}
+	attach := ThreadResumeParams{
+		ThreadID:         threadID,
+		ClientName:       cloneString(params.ClientName),
+		ExcludeTurns:     params.ExcludeTurns,
+		InitialTurnsPage: params.InitialTurnsPage,
+	}
+	encoded, err := json.Marshal(attach)
+	if err != nil {
+		return nil, err
+	}
+	updated := *request
+	updated.Params = encoded
+	updated.InternalParams = nil
+	return &updated, nil
 }
 
 func (r *RuntimeRouter) applyConfiguredResumeCWD(request *Request) (*Request, error) {
