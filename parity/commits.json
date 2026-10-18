@@ -21044,9 +21044,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: SelectedPluginContribution, hosted_plugin_connectors, manifest_from_discovery, metadata_from_discovery"
+        "N/A - Go has no McpServerContributor selected_plugins extension API. Selected capability-root identities, plugin MCP attribution, and the MCP catalog are represented independently, so there is no deferred contributor-owned MCP payload to split from plugin identity and no synthetic executor root assigned to hosted connectors."
       ]
     },
     {

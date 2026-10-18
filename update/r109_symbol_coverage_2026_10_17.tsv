@@ -2471,7 +2471,7 @@ e7de1f444089c29ac002e3df08d940f6de8a2613	54674	Add an opt-in tool for copying fi
 e7ea5f4a8658ebe49e879be933effed2340fa276	50148	Add managed worktree tools to the TUI (#50148)	2026-10-02	tui	7	4	0.57	0	0	audit_pending	ManagedWorktreeTools,ToolServices,with_source_config_builder
 e7f119819ab29ba99a377a436453d0fef83f8a5d	47851	Preserve human overrides across repeated heartbeat instructions (#47851)	2026-09-24	guardian	8	8	1.00	0	0	complete	
 e7f5de0a6ac99ac2d194baa782fc8dea9e236b4f	43808	Move v2 extraction chunking into the memory writer (#43808)	2026-09-08	persistence	1	1	1.00	0	0	complete	
-e8098eb406170239aeef3ce63a1ce427f2b999ae	47939	Separate selected plugin identities from MCP contributions (#47939)	2026-09-24	mcp	5	1	0.20	0	0	audit_pending	SelectedPluginContribution,hosted_plugin_connectors,manifest_from_discovery,metadata_from_discovery
+e8098eb406170239aeef3ce63a1ce427f2b999ae	47939	Separate selected plugin identities from MCP contributions (#47939)	2026-09-24	mcp	5	1	0.20	0	0	not_applicable	SelectedPluginContribution,hosted_plugin_connectors,manifest_from_discovery,metadata_from_discovery
 e811c2832ad2d865f9bdfc9558f92cf324316ee0	46517	Stabilize the TUI exit interruption test (#46517)	2026-09-18	tui	0	0		0	0	not_applicable	
 e8271aa8b482f917b2e62dca0e51e29b8d5ec156	44934	Add scenario snapshots for remote compaction and Code Mode tools (#44934)	2026-09-11	core	0	0		0	0	not_applicable	
 e84a594636b47ecb1d9fb8db781915381c4a0e4b	45521	Move Guardian reviewer startup into the pool (#45521)	2026-09-14	guardian	5	2	0.40	0	0	audit_pending	PreparedGuardianContext,ReviewerRequest,prepare_prewarm
