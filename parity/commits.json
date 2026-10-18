@@ -6568,9 +6568,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: confirm_safety_buffered_retry"
+        "Audited upstream 0588fc941c (#42380): already implemented. Selecting retry in the safety-buffering prompt opens NewSafetyBufferingConfirmationView with Keep waiting / Stop and retry; only stop-retry invokes OnSafetyBufferingRetry with the original thread/turn/prompt, and wait preserves the running state. Tests: TestSafetyBufferingConfirmationViewMatchRust, TestModelSafetyBufferingRetryRequiresConfirmationLikeRust, TestModelSafetyBufferingKeepWaitingRetainsRunningStateLikeRust."
       ]
     },
     {
