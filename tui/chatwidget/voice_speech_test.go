@@ -74,6 +74,41 @@ func TestVoiceDelegatedTurnSpeaksOnce(t *testing.T) {
 	}
 }
 
+// Rust #47975: speech recovery keeps an unsettled turn's text fallback but
+// drops answers from a superseded input generation.
+func TestVoicePendingSpeechFiltersSupersededInputLikeRust(t *testing.T) {
+	state := activeVoiceState()
+	if !state.MarkVoiceDelegatedTurn() {
+		t.Fatal("delegated turn was not accepted")
+	}
+	state.TakeVoiceSpeech("awaiting", "answer awaiting turn")
+	state.InputGeneration++
+	pending := state.TakeUndeliveredVoiceSpeech()
+	if len(pending) != 1 || pending[0].ItemID != "awaiting" {
+		t.Fatalf("awaiting-turn fallback = %#v", pending)
+	}
+
+	if !state.MarkVoiceDelegatedTurn() {
+		t.Fatal("second delegated turn was not accepted")
+	}
+	state.TakeVoiceSpeech("settled", "answer settled")
+	state.MarkPendingSpeechTurnCompleted()
+	state.InputGeneration++
+	if pending := state.TakeUndeliveredVoiceSpeech(); len(pending) != 0 {
+		t.Fatalf("superseded answer was recovered: %#v", pending)
+	}
+
+	if !state.MarkVoiceDelegatedTurn() {
+		t.Fatal("third delegated turn was not accepted")
+	}
+	state.TakeVoiceSpeech("stale", "answer stale")
+	state.MarkPendingSpeechTurnCompleted()
+	state.InputGeneration++
+	if text, ok := state.RestoreVoiceSpeech("stale"); ok || text != "" {
+		t.Fatalf("superseded answer restored: %q/%v", text, ok)
+	}
+}
+
 func TestVoiceSpeechRequiresRunningDelegatedTurn(t *testing.T) {
 	// No session at all.
 	var idle VoiceConversationState

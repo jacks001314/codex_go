@@ -226,8 +226,10 @@ func VoiceSpeakableFinalText(text string) bool {
 
 // PendingVoiceSpeech is one spoken answer awaiting delivery.
 type PendingVoiceSpeech struct {
-	ItemID string
-	Text   string
+	ItemID          string
+	Text            string
+	InputGeneration uint64
+	AwaitingTurn    bool
 }
 
 // VoiceSpeakerAction is the speaker transition one caption boundary requires.
@@ -633,7 +635,12 @@ func (s *VoiceConversationState) TakeVoiceSpeech(itemID, text string) (string, b
 	if len(s.PendingSpeech) >= VoicePendingSpeechCapacity {
 		s.PendingSpeech = s.PendingSpeech[1:]
 	}
-	s.PendingSpeech = append(s.PendingSpeech, PendingVoiceSpeech{ItemID: strings.TrimSpace(itemID), Text: trimmed})
+	s.PendingSpeech = append(s.PendingSpeech, PendingVoiceSpeech{
+		ItemID:          strings.TrimSpace(itemID),
+		Text:            trimmed,
+		InputGeneration: s.InputGeneration,
+		AwaitingTurn:    true,
+	})
 	return trimmed, true
 }
 
@@ -662,6 +669,11 @@ func (s *VoiceConversationState) RestoreVoiceSpeech(itemID string) (string, bool
 		if s.PendingSpeech[index].ItemID != itemID {
 			continue
 		}
+		pending := s.PendingSpeech[index]
+		if !pending.AwaitingTurn && pending.InputGeneration != s.InputGeneration {
+			s.PendingSpeech = append(s.PendingSpeech[:index], s.PendingSpeech[index+1:]...)
+			return "", false
+		}
 		text := s.PendingSpeech[index].Text
 		s.PendingSpeech = append(s.PendingSpeech[:index], s.PendingSpeech[index+1:]...)
 		return text, true
@@ -675,9 +687,29 @@ func (s *VoiceConversationState) TakeUndeliveredVoiceSpeech() []PendingVoiceSpee
 	if s == nil || len(s.PendingSpeech) == 0 {
 		return nil
 	}
-	pending := s.PendingSpeech
+	pending := make([]PendingVoiceSpeech, 0, len(s.PendingSpeech))
+	for _, delivery := range s.PendingSpeech {
+		if delivery.AwaitingTurn || delivery.InputGeneration == s.InputGeneration {
+			pending = append(pending, delivery)
+		}
+	}
 	s.PendingSpeech = nil
+	if len(pending) == 0 {
+		return nil
+	}
 	return pending
+}
+
+// MarkPendingSpeechTurnCompleted clears the awaiting-turn fallback for queued
+// answers after their originating turn settles. A later input generation then
+// supersedes their text recovery (Rust #47975).
+func (s *VoiceConversationState) MarkPendingSpeechTurnCompleted() {
+	if s == nil {
+		return
+	}
+	for index := range s.PendingSpeech {
+		s.PendingSpeech[index].AwaitingTurn = false
+	}
 }
 
 // VoiceCaptionDelta folds one streaming caption delta into the input

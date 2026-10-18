@@ -11489,9 +11489,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: materialize_volume_roots"
+        "Round 676 (audit): N/A by architecture. Go has no native MXC launcher or PathUri volume-root materializer, so there is no MXC symbolic :root expansion path to port. Tests: go test ./execserver -run MXC -count=1; go test ./config -run 'MXC|WindowsSandbox' -count=1"
       ]
     },
     {
@@ -21264,9 +21264,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Pending voice speech now records its input generation and an awaiting-turn flag. Recovery returns answers only for the current generation or while their originating turn is unsettled; turn completion clears the fallback, and restored speech from a superseded generation is dropped. TestVoicePendingSpeechFiltersSupersededInputLikeRust covers awaiting-turn retention, settled-generation suppression, and stale restore removal."
       ]
     },
     {
@@ -28182,9 +28182,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "TR-10 (same table): same carrier gap as 52707 (SDK symbols 0 hits) plus the same Windows+MXC node requirement."
+        "Round 676 (audit): N/A by architecture. Go has no mxc-sdk dependency or native MXC launcher; MXC requests fail closed as unavailable, so there is no SDK migration carrier. Tests: go test ./execserver -run MXC -count=1"
       ]
     },
     {

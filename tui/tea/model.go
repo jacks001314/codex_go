@@ -5891,6 +5891,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.clearRetryActivity()
 		m.clearCompactionActivity()
 		m.VoiceConversation.ClearVoiceDelegatedTurn()
+		m.VoiceConversation.MarkPendingSpeechTurnCompleted()
 	case "turn.failed", "error":
 		questionDrafts = m.takeQuestionDrafts()
 		m.clearSafetyBuffering()

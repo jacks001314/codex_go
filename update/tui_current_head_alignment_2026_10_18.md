@@ -2047,3 +2047,6 @@ green.
 - `#49112` remains partial: X11 PRIMARY publication/ownership and middle-click
   paste are still absent, consistent with the existing transcript-selection
   terminal-ownership gap.
+- `#47975` is complete: pending voice speech carries its input generation and
+  awaiting-turn fallback, so recovery drops answers superseded by newer input
+  while retaining unspoken text for an unsettled turn.
