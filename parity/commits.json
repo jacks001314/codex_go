@@ -28050,9 +28050,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture (Round 724 audit): this guards Rust Tokio tracing subscribers against recursive emission while persisting telemetry and SQLite logs. Go uses slog/OpenTelemetry sinks without a Tokio tracing layer or a SQLite-log callback that re-enters tracing, so there is no recursion boundary to guard."
       ]
     },
     {
@@ -30429,9 +30429,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: ResponseInterrupt, record_token_usage"
+        "N/A by architecture (Round 724 audit): this interrupts and drains canceled Rust async Guardian V2 classifier responses before reusing the socket. Go has no async classifier or classifier WebSocket session; Guardian decisions are synchronous model reviews, so ResponseInterrupt and classifier token-usage draining have no carrier."
       ]
     },
     {
@@ -30441,9 +30441,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: PendingScore, is_expired, pending_discount"
+        "N/A by architecture (Round 724 audit): PendingScore expiry/discount logic belongs to Rust's async Guardian V2 classifier. Go's Guardian review is synchronous and uses synchronous score-progress lag tracking; there is no pending async score queue or tool-call lag cancellation window."
       ]
     },
     {
@@ -30549,9 +30549,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture (Round 724 audit): the default applies to Rust's async Guardian V2 classifier input mode. Go has no async classifier configuration or conversation-mode classifier path; synchronous Guardian reviews already receive the transcript/evidence they need."
       ]
     },
     {
