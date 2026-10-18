@@ -18809,9 +18809,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ImageRequestError, imagegen_request_id, into_parts"
+        "Round 402 (audit): the image handler retains x-codex-imagegen-request-id on HTTP/decode failures via typed errors and RequestIDObserver; app-server stores it by thread/call only until failed analytics emission, and item/rollout serialization omits it. Tests: go test ./turn -run 'ImageGeneration.*RequestID|ImageGeneration' -count=1; go test ./appserver -run 'ImageGeneration.*Analytics|Imagegen|ImageGeneration' -count=1; go vet ./turn ./appserver"
       ]
     },
     {
