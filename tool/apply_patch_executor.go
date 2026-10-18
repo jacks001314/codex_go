@@ -27,6 +27,10 @@ type ApplyPatchExecutorOptions struct {
 	DecisionSink      ToolDecisionSink
 	PermissionProfile *sandbox.PermissionProfile
 	SandboxPolicy     *sandbox.SandboxPolicy
+	// AllowedSymlinkedCodexHome is the host-resolved macOS Seatbelt opt-out
+	// (Rust #42716). It guards local patches, which write in-process instead of
+	// launching the filesystem helper.
+	AllowedSymlinkedCodexHome string
 	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so a
 	// patch-level environment id is resolved before verification.
 	EnvironmentCheck *UnifiedExecEnvironmentCheck
@@ -36,15 +40,16 @@ type ApplyPatchExecutorOptions struct {
 }
 
 type ApplyPatchExecutor struct {
-	cwdPath                string
-	includeEnvironmentID   bool
-	toolName               ToolName
-	approval               ApplyPatchApprovalFunc
-	decisionSink           ToolDecisionSink
-	permissionProfile      *sandbox.PermissionProfile
-	sandboxPolicy          *sandbox.SandboxPolicy
-	environmentCheck       *UnifiedExecEnvironmentCheck
-	environmentFileSystems EnvironmentFileSystemProvider
+	cwdPath                   string
+	includeEnvironmentID      bool
+	toolName                  ToolName
+	approval                  ApplyPatchApprovalFunc
+	decisionSink              ToolDecisionSink
+	permissionProfile         *sandbox.PermissionProfile
+	sandboxPolicy             *sandbox.SandboxPolicy
+	allowedSymlinkedCodexHome string
+	environmentCheck          *UnifiedExecEnvironmentCheck
+	environmentFileSystems    EnvironmentFileSystemProvider
 }
 
 type ApplyPatchApprovalDecision struct {
@@ -80,6 +85,7 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	executor.decisionSink = options.DecisionSink
 	executor.permissionProfile = options.PermissionProfile
 	executor.sandboxPolicy = options.SandboxPolicy
+	executor.allowedSymlinkedCodexHome = options.AllowedSymlinkedCodexHome
 	executor.environmentCheck = options.EnvironmentCheck
 	executor.environmentFileSystems = options.EnvironmentFileSystems
 	if options.ToolName.Key() != "" {
@@ -160,6 +166,22 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 			Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, cwd)),
 			LogPreview: shellLogPreview(body),
 		}, nil
+	}
+	if _, local := fileSystem.(localEnvironmentFileSystem); local {
+		policy := e.sandboxPolicy
+		if e.permissionProfile != nil {
+			policy = e.permissionProfile.LegacySandboxPolicy()
+		}
+		if err := sandbox.ValidateWritableRootsForPolicy(cwd, policy, e.allowedSymlinkedCodexHome); err != nil {
+			body := "apply_patch verification failed: " + err.Error()
+			return &Output{
+				Success:    false,
+				Body:       body,
+				Error:      body,
+				Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, cwd)),
+				LogPreview: shellLogPreview(body),
+			}, nil
+		}
 	}
 	if err := action.FillDeleteContent(applyOptions); err != nil {
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))

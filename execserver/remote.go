@@ -62,6 +62,9 @@ type RemoteEnvironmentConfig struct {
 	// EnvironmentConfigReader serves `environmentConfig/read` for the tunneled
 	// session; nil advertises the capability as false.
 	EnvironmentConfigReader EnvironmentConfigReader
+	// AllowedSymlinkedCodexHome is the execution host's macOS Seatbelt opt-out
+	// (Rust #42716), applied to this remote executor's sandbox preparation.
+	AllowedSymlinkedCodexHome string
 	// DirectHTTPClient is Rust's `http_direct` registry pool: the client a
 	// scoped executor credential must use when the registry is plain-HTTP
 	// loopback, so a system proxy can never receive the credential in plaintext
@@ -241,6 +244,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	server.SetPreferMXC(cfg.PreferMXC)
 	server.SetProxyPrivateIPsViaUpstream(cfg.ProxyPrivateIPsViaUpstream)
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
+	server.SetAllowedSymlinkedCodexHome(cfg.AllowedSymlinkedCodexHome)
 	defer server.shutdownSessions()
 	backoff := newRemoteReconnectBackoff(cfg.Backoff, cfg.MaxBackoff)
 	registration, err := registerRemoteEnvironmentWithRetry(ctx, cfg, identity.PublicKey())

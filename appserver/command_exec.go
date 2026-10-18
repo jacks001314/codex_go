@@ -151,6 +151,9 @@ type CommandExecOptions struct {
 	// permissionProfile override the allow-list disallows is rejected (Rust
 	// command_exec_processor).
 	PermissionRequirements *config.ConfigRequirements
+	// AllowedSymlinkedCodexHome is the host-resolved macOS Seatbelt opt-out
+	// (Rust #42716).
+	AllowedSymlinkedCodexHome string
 }
 
 var runCommandExecSandboxed = func(ctx context.Context, req *tool.ShellRequest) (*tool.ShellResult, error) {
@@ -350,13 +353,18 @@ func (s *CommandExecService) executeSandboxedBuffered(ctx context.Context, param
 	envMap := commandExecEnvMap(os.Environ(), params.Env)
 	commandExecInjectNetworkProxyEnv(envMap, resolution)
 	envMap = envutil.InjectApplyPatchEnv(envMap)
+	allowedSymlinkedCodexHome := ""
+	if options != nil {
+		allowedSymlinkedCodexHome = options.AllowedSymlinkedCodexHome
+	}
 	result, err := runCommandExecSandboxed(ctx, &tool.ShellRequest{
-		Command:               append([]string(nil), params.Command...),
-		CWD:                   commandExecCWD(params, defaultCWD),
-		Env:                   envMap,
-		PermissionProfileID:   sandboxResolutionProfileID(resolution),
-		PermissionProfile:     sandboxResolutionProfile(resolution),
-		PermissionProfileJSON: sandboxResolutionProfileJSON(resolution),
+		Command:                   append([]string(nil), params.Command...),
+		CWD:                       commandExecCWD(params, defaultCWD),
+		Env:                       envMap,
+		PermissionProfileID:       sandboxResolutionProfileID(resolution),
+		PermissionProfile:         sandboxResolutionProfile(resolution),
+		PermissionProfileJSON:     sandboxResolutionProfileJSON(resolution),
+		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
 	})
 	if err != nil {
 		if errors.Is(err, sandbox.ErrPlatformSandboxUnsupported) {

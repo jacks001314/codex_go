@@ -1403,6 +1403,14 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		// when `login_shell_package_path` is enabled for this run.
 		if options.Shell != nil {
 			options.Shell.Validation.LoginShellPackagePath = features.Enabled(run.Config.FeatureSettings(), "login_shell_package_path")
+			// Rust #42716: `--ignore-user-config` leaves the host's CODEX_HOME
+			// symlink exception disabled even if the file contains it.
+			if req == nil || !req.Exec.IgnoreUserConfig {
+				options.Shell.Validation.AllowedSymlinkedCodexHome = run.Config.AllowedSymlinkedCodexHome()
+			}
+		}
+		if options.ApplyPatch != nil && (req == nil || !req.Exec.IgnoreUserConfig) {
+			options.ApplyPatch.AllowedSymlinkedCodexHome = run.Config.AllowedSymlinkedCodexHome()
 		}
 	}
 	if run != nil && strings.TrimSpace(run.Model) != "" {

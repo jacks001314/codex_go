@@ -2,8 +2,10 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	pathpkg "path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -15,11 +17,11 @@ type seatbeltParameter struct {
 	Value string
 }
 
-func createSeatbeltCommandArgs(command []string, cwd string, profile *PermissionProfile, allowUnixSockets []string) ([]string, error) {
+func createSeatbeltCommandArgs(command []string, cwd string, profile *PermissionProfile, allowUnixSockets []string, allowedSymlinkedCodexHome string) ([]string, error) {
 	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
 		return nil, fmt.Errorf("%w: command is required", ErrInvalidSandboxRunRequest)
 	}
-	policy, parameters, err := buildSeatbeltPolicy(cwd, profile, allowUnixSockets)
+	policy, parameters, err := buildSeatbeltPolicy(cwd, profile, allowUnixSockets, allowedSymlinkedCodexHome)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +33,7 @@ func createSeatbeltCommandArgs(command []string, cwd string, profile *Permission
 	return append(args, command...), nil
 }
 
-func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSockets []string) (string, []seatbeltParameter, error) {
+func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSockets []string, allowedSymlinkedCodexHome string) (string, []seatbeltParameter, error) {
 	if profile == nil || profile.Disabled {
 		return "(version 1)\n(allow default)\n", nil, nil
 	}
@@ -73,10 +75,26 @@ func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSocket
 			parameters = append(parameters, seatbeltParameter{Name: name, Value: excluded})
 			lines = append(lines, fmt.Sprintf(`(deny file-write* (subpath (param "%s")))`, name))
 		}
+		normalizedHome, err := normalizeSeatbeltAllowedHome(allowedSymlinkedCodexHome)
+		if err != nil {
+			return "", nil, err
+		}
+		allowedSymlinkedCodexHome = normalizedHome
 		for _, root := range policy.GetWritableRootsWithCWD(cwd) {
+			normalizedRoot, literal, err := normalizeSeatbeltWritableRoot(root.Root, allowedSymlinkedCodexHome)
+			if err != nil {
+				return "", nil, err
+			}
 			name := fmt.Sprintf("WRITABLE_ROOT_%d", len(parameters))
-			parameters = append(parameters, seatbeltParameter{Name: name, Value: cleanSeatbeltPath(root.Root)})
-			lines = append(lines, fmt.Sprintf(`(allow file-write* (subpath (param "%s")))`, name))
+			parameters = append(parameters, seatbeltParameter{Name: name, Value: normalizedRoot})
+			match := "subpath"
+			if literal {
+				match = "literal"
+			}
+			lines = append(lines, fmt.Sprintf(`(allow file-write* (%s (param "%s")))`, match, name))
+			// Rust #39599: a sandboxed process must not replace the writable
+			// root whose identity a later policy will reuse.
+			lines = append(lines, fmt.Sprintf(`(deny file-write-unlink (require-all (literal (param "%s")) (vnode-type DIRECTORY)))`, name))
 			for _, protected := range append(append([]string(nil), root.ReadOnlySubpaths...), protectedMetadataPaths(root.Root, root.ProtectedMetadataNames)...) {
 				protectedName := fmt.Sprintf("PROTECTED_WRITE_%d", len(parameters))
 				parameters = append(parameters, seatbeltParameter{Name: protectedName, Value: cleanSeatbeltPath(protected)})
@@ -186,6 +204,200 @@ func seatbeltResolvedSymlinkPath(path string) string {
 		return ""
 	}
 	return resolved
+}
+
+func normalizeSeatbeltAllowedHome(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	normalized, err := normalizeSeatbeltTopLevelAlias(path)
+	if err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
+// normalizeSeatbeltWritableRoot mirrors Rust
+// normalize_writable_root_for_sandbox (#39599, #42716). Writable roots reject
+// nested symlinks unless they are at or beneath the explicitly opted-in user
+// home; the opt-in trusts the current target, while the default preserves
+// mutable components and only resolves top-level system aliases.
+func normalizeSeatbeltWritableRoot(root string, allowedSymlinkedCodexHome string) (string, bool, error) {
+	allowSymlinks := seatbeltAllowedSymlinkHomeCovers(root, allowedSymlinkedCodexHome)
+	if !allowSymlinks {
+		if symlink := seatbeltNestedSymlinkComponent(root); symlink != "" {
+			return "", false, fmt.Errorf(
+				"writable root %s contains symlink component %s; symlinked writable roots are not supported.\n"+
+					"If this writable root is at or beneath CODEX_HOME and you trust its symlink targets, "+
+					"set `allow_symlinked_codex_home = true` at the top level of `$CODEX_HOME/config.toml` "+
+					"(normally `~/.codex/config.toml`) on the execution host, then restart Codex or its executor. "+
+					"This opt-out trusts targets outside CODEX_HOME and targets changed between commands. "+
+					"It does not apply to other writable roots.",
+				cleanSeatbeltPath(root),
+				cleanSeatbeltPath(symlink),
+			)
+		}
+	}
+
+	normalized := cleanSeatbeltPath(root)
+	if allowSymlinks {
+		if resolved, err := filepath.EvalSymlinks(normalized); err == nil {
+			normalized = cleanSeatbeltPath(resolved)
+		}
+	} else {
+		var err error
+		normalized, err = normalizeSeatbeltTopLevelAlias(normalized)
+		if err != nil {
+			return "", false, fmt.Errorf("failed to normalize top-level alias for path %s: %w", cleanSeatbeltPath(root), err)
+		}
+	}
+
+	info, err := os.Lstat(normalized)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return normalized, false, nil
+		}
+		return "", false, fmt.Errorf("failed to inspect Seatbelt writable root %s: %w", normalized, err)
+	}
+	return normalized, !info.IsDir(), nil
+}
+
+// seatbeltAllowedSymlinkHomeCovers reports whether root is at or beneath the
+// opted-in home. Both the configured spelling and its resolved target count,
+// mirroring Rust's two starts_with checks.
+func seatbeltAllowedSymlinkHomeCovers(root string, home string) bool {
+	home = cleanSeatbeltPath(home)
+	if home == "" {
+		return false
+	}
+	root = cleanSeatbeltPath(root)
+	if root == "" {
+		return false
+	}
+	if seatbeltSubpathWithin(root, home) {
+		return true
+	}
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return false
+	}
+	return seatbeltSubpathWithin(root, cleanSeatbeltPath(resolved))
+}
+
+// seatbeltNestedSymlinkComponent returns the deepest user-controlled symlink
+// component, leaving top-level macOS aliases such as `/tmp -> /private/tmp`
+// compatible. Rust #39599 counts a symlink at depth two or deeper as nested.
+func seatbeltNestedSymlinkComponent(path string) string {
+	current := cleanSeatbeltPath(path)
+	for current != "" && current != "/" && current != "." {
+		if info, err := os.Lstat(current); err == nil && info.Mode()&os.ModeSymlink != 0 && seatbeltPathDepth(current) >= 2 {
+			return current
+		}
+		current = parentSeatbeltPath(current)
+	}
+	return ""
+}
+
+func seatbeltPathDepth(path string) int {
+	path = cleanSeatbeltPath(path)
+	if path == "" || path == "/" || path == "." {
+		return 0
+	}
+	if strings.HasPrefix(path, "/") {
+		trimmed := strings.Trim(path, "/")
+		if trimmed == "" {
+			return 0
+		}
+		return len(strings.Split(trimmed, "/"))
+	}
+	volume := filepath.VolumeName(path)
+	rest := strings.TrimPrefix(path, volume)
+	trimmed := strings.Trim(rest, `/\`)
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}))
+}
+
+// normalizeSeatbeltTopLevelAlias resolves only a depth-one system alias (for
+// example `/tmp -> /private/tmp`) and leaves deeper components untouched, in
+// line with Rust AbsolutePathBuf::normalize_system_aliases.
+func normalizeSeatbeltTopLevelAlias(path string) (string, error) {
+	path = cleanSeatbeltPath(path)
+	topLevel := seatbeltTopLevelPath(path)
+	if topLevel == "" {
+		return path, nil
+	}
+	info, err := os.Lstat(topLevel)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(topLevel)
+	if err != nil {
+		return "", err
+	}
+	return cleanSeatbeltPath(filepath.Join(resolved, strings.TrimPrefix(path, topLevel))), nil
+}
+
+func seatbeltTopLevelPath(path string) string {
+	path = cleanSeatbeltPath(path)
+	if path == "" || path == "/" || path == "." {
+		return ""
+	}
+	if strings.HasPrefix(path, "/") {
+		trimmed := strings.TrimPrefix(path, "/")
+		if index := strings.Index(trimmed, "/"); index >= 0 {
+			return "/" + trimmed[:index]
+		}
+		return path
+	}
+	volume := filepath.VolumeName(path)
+	if volume == "" {
+		return ""
+	}
+	return volume + string(filepath.Separator)
+}
+
+// ValidateWritableRootsForPlatform applies the platform's writable-root
+// preparation checks to an in-process filesystem writer such as apply_patch.
+// It is a no-op outside macOS and for full-disk-write profiles.
+func ValidateWritableRootsForPlatform(cwd string, profile *PermissionProfile, allowedSymlinkedCodexHome string) error {
+	if runtime.GOOS != "darwin" || profile == nil || profile.Disabled {
+		return nil
+	}
+	policy := profile.LegacySandboxPolicy()
+	return ValidateWritableRootsForPolicy(cwd, policy, allowedSymlinkedCodexHome)
+}
+
+// ValidateWritableRootsForPolicy applies the macOS writable-root checks to an
+// already-resolved legacy or runtime policy.
+func ValidateWritableRootsForPolicy(cwd string, policy *SandboxPolicy, allowedSymlinkedCodexHome string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	if policy == nil || policy.HasFullDiskWriteAccess() {
+		return nil
+	}
+	normalizedHome, err := normalizeSeatbeltAllowedHome(allowedSymlinkedCodexHome)
+	if err != nil {
+		return err
+	}
+	allowedSymlinkedCodexHome = normalizedHome
+	for _, root := range policy.GetWritableRootsWithCWD(cwd) {
+		if _, _, err := normalizeSeatbeltWritableRoot(root.Root, allowedSymlinkedCodexHome); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // parentSeatbeltPath returns the parent directory of an absolute seatbelt path.

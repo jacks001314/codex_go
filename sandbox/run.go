@@ -33,10 +33,13 @@ type CommandRunRequest struct {
 	LogDenials                    bool
 	UseLegacyLandlock             bool
 	AllowNetworkForProxy          bool
-	ManagedNetworkJSON            string
-	CodexLinuxSandboxExe          string
-	ConfigOverrides               []string
-	Command                       []string
+	// AllowedSymlinkedCodexHome is the host-resolved macOS Seatbelt opt-out
+	// (Rust #42716). Empty keeps symlinked writable roots rejected.
+	AllowedSymlinkedCodexHome string
+	ManagedNetworkJSON        string
+	CodexLinuxSandboxExe      string
+	ConfigOverrides           []string
+	Command                   []string
 }
 
 type CommandRunPlan struct {
@@ -269,7 +272,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		plan.Command = wrapped
 		plan.SandboxType = SandboxTypeLinuxSeccomp
 	} else if runtime.GOOS == "darwin" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
-		wrapped, err := createSeatbeltCommandArgs(plan.Command, plan.CWD, plan.PermissionProfile, req.AllowUnixSockets)
+		wrapped, err := createSeatbeltCommandArgs(plan.Command, plan.CWD, plan.PermissionProfile, req.AllowUnixSockets, req.AllowedSymlinkedCodexHome)
 		if err != nil {
 			return nil, err
 		}

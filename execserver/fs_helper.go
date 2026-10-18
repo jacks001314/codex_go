@@ -206,7 +206,11 @@ func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, pa
 	if err != nil {
 		return true, err
 	}
-	command, env, err := fsSandboxCommand(ctx, profile, profileJSON, cwd, workspaceRoots)
+	allowedSymlinkedCodexHome := ""
+	if ctx != nil {
+		allowedSymlinkedCodexHome = ctx.allowedSymlinkedCodexHome
+	}
+	command, env, err := fsSandboxCommand(ctx, profile, profileJSON, cwd, workspaceRoots, allowedSymlinkedCodexHome)
 	if err != nil {
 		return true, err
 	}
@@ -391,7 +395,7 @@ func fsPermissionsDependOnCWD(raw json.RawMessage) bool {
 	return false
 }
 
-func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.PermissionProfile, profileJSON string, cwd string, workspaceRoots []string) ([]string, map[string]string, error) {
+func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.PermissionProfile, profileJSON string, cwd string, workspaceRoots []string, allowedSymlinkedCodexHome string) ([]string, map[string]string, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, nil, err
@@ -410,9 +414,10 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		// Rust #38561: filesystem helpers only need access to their own
 		// executables; granting the containing directory would make unrelated
 		// sibling files readable.
-		SandboxReadableRoots: fsHelperReadableRoots(executable),
-		UseLegacyLandlock:    ctx.UseLegacyLandlock,
-		Command:              helperCommand,
+		SandboxReadableRoots:      fsHelperReadableRoots(executable),
+		UseLegacyLandlock:         ctx.UseLegacyLandlock,
+		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
+		Command:                   helperCommand,
 	})
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))

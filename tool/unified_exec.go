@@ -954,6 +954,7 @@ func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandbox
 		WindowsSandboxPrivateDesktop:    req.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,
 		SandboxOverride:                 sandboxOverrideForFirstAttempt(req),
+		AllowedSymlinkedCodexHome:       req.AllowedSymlinkedCodexHome,
 	})
 }
 
@@ -997,6 +998,9 @@ type FileSystemSandboxContextOptions struct {
 	// SandboxOverride is the controller's selection carried for observation
 	// (Rust #51786). It never widens permissions or changes the sandbox command.
 	SandboxOverride execserver.SandboxOverride
+	// AllowedSymlinkedCodexHome is the host-resolved macOS Seatbelt opt-out
+	// (Rust #42716).
+	AllowedSymlinkedCodexHome string
 }
 
 // NewFileSystemSandboxContext keeps canonical permissions separate from the
@@ -1050,7 +1054,7 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 	// level was configured, so executor-managed sandboxing is never silently
 	// skipped for Windows-convention paths.
 	windowsSandboxLevel = executorWindowsSandboxLevel(windowsSandboxLevel, options.CWD)
-	return &execserver.FileSystemSandboxContext{
+	context := &execserver.FileSystemSandboxContext{
 		Permissions:                     json.RawMessage(portableJSON),
 		CWD:                             cwd,
 		WorkspaceRoots:                  workspaceRoots,
@@ -1060,7 +1064,9 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		WindowsSandboxProxySettingsMode: options.WindowsSandboxProxySettingsMode,
 		UseLegacyLandlock:               options.UseLegacyLandlock,
 		SandboxOverride:                 options.SandboxOverride,
-	}, nil
+	}
+	context.SetAllowedSymlinkedCodexHome(options.AllowedSymlinkedCodexHome)
+	return context, nil
 }
 
 // executorWindowsSandboxLevel mirrors Rust executor_windows_sandbox_level:

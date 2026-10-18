@@ -83,6 +83,7 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 			WindowsSandboxLevel:          windowsLevel,
 			WindowsSandboxPrivateDesktop: privateDesktop,
 			UseLegacyLandlock:            useLegacyLandlock,
+			AllowedSymlinkedCodexHome:    r.allowedSymlinkedCodexHome,
 		})
 		if contextErr != nil {
 			return contextErr

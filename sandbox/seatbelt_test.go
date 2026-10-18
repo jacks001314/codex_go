@@ -10,7 +10,7 @@ import (
 func TestBuildSeatbeltPolicyWorkspaceWriteAndNetwork(t *testing.T) {
 	cwd := "/workspace"
 	profile := WorkspaceWritePermissionProfile()
-	policy, parameters, err := buildSeatbeltPolicy(cwd, &profile, []string{"/tmp/agent.sock", "relative.sock"})
+	policy, parameters, err := buildSeatbeltPolicy(cwd, &profile, []string{"/tmp/agent.sock", "relative.sock"}, "")
 	if err != nil {
 		t.Fatalf("buildSeatbeltPolicy: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestBuildSeatbeltPolicyDeniedReadAndCommand(t *testing.T) {
 	denied := "/private/secret"
 	profile := ReadOnlyPermissionProfile()
 	profile.DeniedReadEntries = []FileSystemSandboxEntry{{Path: FileSystemPath{Type: "path", Path: denied}, Access: FileSystemAccessDeny}}
-	args, err := createSeatbeltCommandArgs([]string{"echo", "ok"}, "", &profile, nil)
+	args, err := createSeatbeltCommandArgs([]string{"echo", "ok"}, "", &profile, nil, "")
 	if err != nil {
 		t.Fatalf("createSeatbeltCommandArgs: %v", err)
 	}
@@ -45,12 +45,81 @@ func TestBuildSeatbeltPolicyDeniedReadAndCommand(t *testing.T) {
 // profiles deny Mach XPC service lookups.
 func TestBuildSeatbeltPolicyDeniesXPCLookupsLikeRust(t *testing.T) {
 	profile := WorkspaceWritePermissionProfile()
-	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil)
+	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
 	if err != nil {
 		t.Fatalf("buildSeatbeltPolicy: %v", err)
 	}
 	if !strings.Contains(policy, `(deny mach-lookup (xpc-service-name-prefix ""))`) {
 		t.Fatalf("policy missing XPC deny rule:\n%s", policy)
+	}
+}
+
+// Mirrors Rust #39599: a writable root directory is an authority boundary and
+// cannot be unlinked or renamed by the sandboxed process.
+func TestBuildSeatbeltPolicyProtectsWritableRootAnchorLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	if !strings.Contains(policy, `(deny file-write-unlink (require-all (literal (param "WRITABLE_ROOT_`) ||
+		!strings.Contains(policy, `(vnode-type DIRECTORY)))`) {
+		t.Fatalf("policy missing writable-root anchor deny:\n%s", policy)
+	}
+}
+
+// Mirrors Rust #42716: writable roots with nested symlinks are rejected by
+// default, the rejection explains the trusted-home opt-out, and a resolved
+// CODEX_HOME alias covers only roots beneath that home.
+func TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "visualizations")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	outside := t.TempDir()
+	profile := WorkspaceWritePermissionProfile()
+	legacy := profile.LegacySandboxPolicy()
+	legacy.ExcludeSlashTmp = true
+	legacy.ExcludeTmpdirEnvVar = true
+	legacy.WritableRoots = nil
+	profile.SandboxPolicy = legacy
+
+	_, _, err := buildSeatbeltPolicy(link, &profile, nil, "")
+	if err == nil || !strings.Contains(err.Error(), "symlinked writable roots are not supported") {
+		t.Fatalf("disabled opt-out error = %v, want nested symlink rejection", err)
+	}
+	for _, want := range []string{"allow_symlinked_codex_home = true", "targets outside CODEX_HOME", "changed between commands"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("rejection error missing %q: %v", want, err)
+		}
+	}
+
+	if _, _, err := buildSeatbeltPolicy(link, &profile, nil, outside); err == nil || !strings.Contains(err.Error(), "symlinked writable roots are not supported") {
+		t.Fatalf("out-of-scope home error = %v, want rejection", err)
+	}
+
+	_, parameters, err := buildSeatbeltPolicy(link, &profile, nil, home)
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy(allowed home) error = %v", err)
+	}
+	if !seatbeltParametersContain(parameters, target) {
+		t.Fatalf("writable root parameter = %#v, want resolved target %q", parameters, target)
+	}
+	if seatbeltParametersContain(parameters, link) {
+		t.Fatalf("policy retained the unresolved symlink root %q: %#v", link, parameters)
+	}
+
+	alias := filepath.Join(outside, "home-alias")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, _, err := buildSeatbeltPolicy(link, &profile, nil, alias); err != nil {
+		t.Fatalf("buildSeatbeltPolicy(resolved alias) error = %v", err)
 	}
 }
 
@@ -63,7 +132,7 @@ func TestBuildSeatbeltPolicyConstrainsScratchWithExclusionsLikeRust(t *testing.T
 		Path:   FileSystemPath{Type: "path", Path: "/tmp/secret"},
 		Access: FileSystemAccessDeny,
 	}}
-	policy, parameters, err := buildSeatbeltPolicy("/workspace", &profile, nil)
+	policy, parameters, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
 	if err != nil {
 		t.Fatalf("buildSeatbeltPolicy: %v", err)
 	}
@@ -85,7 +154,7 @@ func TestBuildSeatbeltPolicyConstrainsScratchWithExclusionsLikeRust(t *testing.T
 // The deny stays last so no broader allowance reopens the rename operation.
 func TestBuildSeatbeltPolicyProtectsWritableRootAncestorsLikeRust(t *testing.T) {
 	profile := WorkspaceWritePermissionProfile()
-	policy, parameters, err := buildSeatbeltPolicy("/workspace", &profile, nil)
+	policy, parameters, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
 	if err != nil {
 		t.Fatalf("buildSeatbeltPolicy: %v", err)
 	}
@@ -140,7 +209,7 @@ func TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust(t *testing.
 	if err != nil || cleanSeatbeltPath(resolved) != cleanSeatbeltPath(target) {
 		t.Fatalf("symlink resolution = %q, %v", resolved, err)
 	}
-	if _, _, err := buildSeatbeltPolicy(root, &profile, nil); err != nil {
+	if _, _, err := buildSeatbeltPolicy(root, &profile, nil, ""); err != nil {
 		t.Fatalf("buildSeatbeltPolicy: %v", err)
 	}
 }

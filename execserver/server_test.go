@@ -1194,7 +1194,7 @@ func TestPrepareExecProcessNativeLaunchIgnoresManagedNetworkWithoutSandboxLikeRu
 	command, _, _, err := prepareExecProcess(&ExecParams{
 		Argv:                  []string{"go", "version"},
 		EnforceManagedNetwork: true,
-	})
+	}, "")
 	if err != nil || len(command) != 2 {
 		t.Fatalf("prepareExecProcess() = %#v, %v", command, err)
 	}
@@ -1222,12 +1222,24 @@ func TestPrepareExecProcessWithoutSandboxAcceptsPathURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromHostNativePath() error = %v", err)
 	}
-	command, cwd, _, err := prepareExecProcess(&ExecParams{Argv: []string{"go", "version"}, CWD: uri.String()})
+	command, cwd, _, err := prepareExecProcess(&ExecParams{Argv: []string{"go", "version"}, CWD: uri.String()}, "")
 	if err != nil {
 		t.Fatalf("prepareExecProcess() error = %v", err)
 	}
 	if len(command) != 2 || command[0] != "go" || cwd != dir {
 		t.Fatalf("command = %#v, cwd = %q", command, cwd)
+	}
+}
+
+// Mirrors Rust #42716 runtime-path propagation: session handoff keeps the
+// host-resolved CODEX_HOME symlink opt-out on the exec-server instance.
+func TestSessionServerCarriesAllowedSymlinkedCodexHomeLikeRust(t *testing.T) {
+	parent := NewServer()
+	allowed := t.TempDir()
+	parent.SetAllowedSymlinkedCodexHome(allowed)
+	child := newSessionServerWithRuntimeOptions(parent.httpClient, parent)
+	if got := child.allowedSymlinkedCodexHomeValue(); got != allowed {
+		t.Fatalf("session allowed home = %q, want %q", got, allowed)
 	}
 }
 

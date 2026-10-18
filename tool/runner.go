@@ -70,6 +70,7 @@ func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *Sh
 		ResolvedPermissionProfileID:   req.PermissionProfileID,
 		ResolvedPermissionProfileJSON: req.PermissionProfileJSON,
 		CWD:                           req.CWD,
+		AllowedSymlinkedCodexHome:     req.AllowedSymlinkedCodexHome,
 		Command:                       append([]string(nil), req.Command...),
 	}
 	plan, err := sandbox.BuildCommandRunPlan(runReq)

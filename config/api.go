@@ -260,6 +260,7 @@ var configRequiredNullableKeys = []string{
 	"approvals_reviewer",
 	"sandbox_mode",
 	"sandbox_workspace_write",
+	"allow_symlinked_codex_home",
 	"forced_chatgpt_workspace_id",
 	"forced_login_method",
 	"web_search",

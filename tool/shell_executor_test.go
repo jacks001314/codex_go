@@ -69,6 +69,30 @@ func TestShellExecutorRunsCommandAndFormatsOutput(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #42716 propagation: the host-resolved CODEX_HOME symlink
+// opt-out travels from turn validation options to the shell request.
+func TestShellExecutorCarriesAllowedSymlinkedCodexHomeLikeRust(t *testing.T) {
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+	allowed := t.TempDir()
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			CWD:                       t.TempDir(),
+			AllowedSymlinkedCodexHome: allowed,
+		},
+	})
+	if _, err := executor.Execute(context.Background(), &Invocation{
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"true"}`},
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if runner.request == nil || runner.request.AllowedSymlinkedCodexHome != allowed {
+		t.Fatalf("request allowed home = %#v, want %q", runner.request, allowed)
+	}
+}
+
 func TestShellExecutorMarksTruncatedOutput(t *testing.T) {
 	runner := &fakeShellRunner{result: &ShellResult{
 		ExitCode: 0,

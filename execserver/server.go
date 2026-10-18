@@ -244,9 +244,13 @@ type Server struct {
 	// (execserver/environment_config_read.go). It is nil on a bare stub, which
 	// is why the advertised capability follows this field.
 	environmentConfigReader EnvironmentConfigReader
-	v2Discovery             *v2DiscoveryManager
-	shellSnapshots          *shellSnapshotManager
-	credentialBrokers       network.RemoteCredentialBrokerCache
+	// allowedSymlinkedCodexHome is the macOS Seatbelt opt-out the execution
+	// host resolved from its top-level user config (Rust #42716). It is
+	// trusted startup state, never read from a request.
+	allowedSymlinkedCodexHome string
+	v2Discovery               *v2DiscoveryManager
+	shellSnapshots            *shellSnapshotManager
+	credentialBrokers         network.RemoteCredentialBrokerCache
 }
 
 // SetPreferMXC records the startup CLI sandbox preference
@@ -295,6 +299,43 @@ func (s *Server) proxyPrivateIPsViaUpstreamValue() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.proxyPrivateIPsViaUpstream
+}
+
+// SetAllowedSymlinkedCodexHome records the host-resolved macOS Seatbelt
+// opt-out (Rust #42716). Other platforms ignore the value in sandbox setup.
+func (s *Server) SetAllowedSymlinkedCodexHome(path string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowedSymlinkedCodexHome = strings.TrimSpace(path)
+}
+
+func (s *Server) allowedSymlinkedCodexHomeValue() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.allowedSymlinkedCodexHome
+}
+
+func (s *Server) applyFSSandboxRuntimeOptions(sandboxContext *FileSystemSandboxContext) {
+	if sandboxContext == nil {
+		return
+	}
+	sandboxContext.allowedSymlinkedCodexHome = s.allowedSymlinkedCodexHomeValue()
+}
+
+// SetAllowedSymlinkedCodexHome attaches the trusted host-resolved macOS
+// Seatbelt opt-out to an in-process filesystem sandbox context (Rust #42716).
+// It is not serialized; remote executors resolve their own value.
+func (c *FileSystemSandboxContext) SetAllowedSymlinkedCodexHome(path string) {
+	if c == nil {
+		return
+	}
+	c.allowedSymlinkedCodexHome = strings.TrimSpace(path)
 }
 
 type fileHandleEntry struct {
@@ -575,6 +616,9 @@ type FileSystemSandboxContext struct {
 	WindowsSandboxPrivateDesktop    bool                            `json:"windowsSandboxPrivateDesktop,omitempty"`
 	WindowsSandboxProxySettingsMode WindowsSandboxProxySettingsMode `json:"windowsSandboxProxySettingsMode,omitempty"`
 	UseLegacyLandlock               bool                            `json:"useLegacyLandlock,omitempty"`
+	// allowedSymlinkedCodexHome is trusted executor startup state, never a
+	// request field (Rust #42716).
+	allowedSymlinkedCodexHome string
 }
 
 type WindowsSandboxProxySettingsMode string
@@ -1004,6 +1048,7 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
 		server.SetPreferMXC(parent.preferMXCValue())
 		server.SetProxyPrivateIPsViaUpstream(parent.proxyPrivateIPsViaUpstreamValue())
 		server.SetEnvironmentConfigReader(parent.environmentConfigReaderForRead())
+		server.SetAllowedSymlinkedCodexHome(parent.allowedSymlinkedCodexHomeValue())
 	}
 	return server
 }
@@ -1509,12 +1554,16 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
+		for index := range params.Roots {
+			s.applyFSSandboxRuntimeOptions(params.Roots[index].Sandbox)
+		}
 		return discoverCapabilityRoots(&params)
 	case MethodCapabilitiesDiscoverV2:
 		var params DiscoverV2CapabilitiesParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		return s.v2Discovery.Snapshot(&params)
 	case MethodProcessStart:
 		var params ExecParams
@@ -1557,6 +1606,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := readFileContext(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSOpen:
@@ -1598,6 +1648,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := writeFile(&params)
 		return result, mapFSRequestError(err)
 	case MethodFSCreateDirectory:
@@ -1608,6 +1659,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := createDirectory(&params)
 		return result, mapFSRequestError(err)
 	case MethodFSGetMetadata:
@@ -1618,6 +1670,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := getMetadata(&params)
 		return result, mapFSRequestError(err)
 	case MethodFSCanonicalize:
@@ -1628,6 +1681,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := canonicalize(&params)
 		return result, mapFSRequestError(err)
 	case MethodFSReadDirectory:
@@ -1638,6 +1692,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := readDirectory(&params)
 		return result, mapFSRequestError(err)
 	case MethodFSWalk:
@@ -1648,6 +1703,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := walkPath(&params)
 		return result, mapFSRequestError(err)
 	case MethodFSRemove:
@@ -1658,6 +1714,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := removePath(&params)
 		return result, mapFSRequestError(err)
 	case MethodFSCopy:
@@ -1668,6 +1725,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("sourcePath", params.SourcePath, params.Sandbox); err != nil {
 			return nil, err
 		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		if err := validateWirePathURI(params.DestinationPath); err != nil {
 			return nil, requestError(-32602, "invalid params: destinationPath must be an absolute file URI: "+err.Error())
 		}
@@ -1869,7 +1927,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		execServerPrepareSandboxSpan,
 		execServerProcessSpanAttributes(params.ProcessID, nil),
 	)
-	command, cwd, sandboxType, err := prepareExecProcess(params)
+	command, cwd, sandboxType, err := prepareExecProcess(params, s.allowedSymlinkedCodexHomeValue())
 	if prepareSpan != nil {
 		prepareSpan.End()
 	}
@@ -2334,7 +2392,7 @@ func stringValue(value *string) string {
 	return *value
 }
 
-func prepareExecProcess(params *ExecParams) ([]string, string, sandbox.SandboxType, error) {
+func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([]string, string, sandbox.SandboxType, error) {
 	command := append([]string(nil), params.Argv...)
 	cwd, err := nativeExecServerPath(params.CWD, "cwd")
 	if err != nil {
@@ -2395,6 +2453,7 @@ func prepareExecProcess(params *ExecParams) ([]string, string, sandbox.SandboxTy
 		CWD:                           cwd,
 		UseLegacyLandlock:             sandboxContext.UseLegacyLandlock,
 		AllowNetworkForProxy:          params.EnforceManagedNetwork,
+		AllowedSymlinkedCodexHome:     allowedSymlinkedCodexHome,
 		Command:                       command,
 	})
 	if err != nil {

@@ -125,11 +125,14 @@ type ShellRequest struct {
 	// forked shell's directory. They are prepended to the command environment and
 	// re-exported after a shell snapshot restores the user's PATH (Rust's
 	// RuntimePathPrepends).
-	RuntimePathPrepends             []string
-	SandboxProfile                  *ShellSandboxProfile
-	PermissionProfileID             string
-	PermissionProfile               *sandbox.PermissionProfile
-	PermissionProfileJSON           string
+	RuntimePathPrepends   []string
+	SandboxProfile        *ShellSandboxProfile
+	PermissionProfileID   string
+	PermissionProfile     *sandbox.PermissionProfile
+	PermissionProfileJSON string
+	// AllowedSymlinkedCodexHome is the host-resolved macOS Seatbelt opt-out
+	// (Rust #42716). Empty keeps symlinked writable roots rejected.
+	AllowedSymlinkedCodexHome       string
 	ProcessSandboxType              *sandbox.SandboxType
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
 	WindowsSandboxPrivateDesktop    bool
@@ -312,6 +315,7 @@ type ShellValidationOptions struct {
 	DefaultTimeoutMS                uint64
 	PermissionProfileID             string
 	PermissionProfile               *sandbox.PermissionProfile
+	AllowedSymlinkedCodexHome       string
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
 	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
@@ -677,6 +681,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		SandboxProfile:                  sandboxProfile,
 		PermissionProfileID:             permissionProfileID,
 		PermissionProfile:               permissionProfile,
+		AllowedSymlinkedCodexHome:       opts.AllowedSymlinkedCodexHome,
 		WindowsSandboxLevel:             opts.WindowsSandboxLevel,
 		WindowsSandboxPrivateDesktop:    opts.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: opts.WindowsSandboxProxySettingsMode,

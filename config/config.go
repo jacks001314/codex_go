@@ -26,6 +26,10 @@ var embeddedDefaultsTOML string
 type Config struct {
 	Values       map[string]any
 	Requirements *ConfigRequirements
+	// allowedSymlinkedCodexHome is the macOS Seatbelt opt-out resolved only from
+	// the host's top-level user config (Rust #42716). Project config, CLI
+	// overrides, and selected profiles cannot set it.
+	allowedSymlinkedCodexHome string
 	// ApplicationNetworkPolicy is the live application network policy the runtime
 	// published for this config (Rust Config::application_network_policy). Client
 	// factories built from this config bind it, so every application transport
@@ -297,6 +301,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	allowedSymlinkedCodexHome := resolveAllowedSymlinkedCodexHome(codexHome, userValues)
 	mergeConfigMaps(values, userValues)
 	profile := ""
 	cwd := ""
@@ -394,15 +399,87 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		return nil, err
 	}
 	cfg := &Config{
-		Values:             values,
-		Requirements:       requirements,
-		isProjectless:      isProjectless,
-		cloudConfigBinding: cloudConfigBinding,
+		Values:                    values,
+		Requirements:              requirements,
+		allowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
+		isProjectless:             isProjectless,
+		cloudConfigBinding:        cloudConfigBinding,
 	}
 	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// AllowedSymlinkedCodexHome returns the configured CODEX_HOME path whose
+// writable roots may traverse symlinks on macOS, or an empty string when the
+// user config did not opt in. The value is resolved when the configuration is
+// loaded and is not affected by project config, CLI overrides, or profiles.
+func (c *Config) AllowedSymlinkedCodexHome() string {
+	if c == nil {
+		return ""
+	}
+	return c.allowedSymlinkedCodexHome
+}
+
+// AllowedSymlinkedCodexHome reads only the host's top-level user config and
+// returns the CODEX_HOME alias it authorizes. Callers that deliberately skip
+// the user config must not call this helper (Rust #42716).
+func AllowedSymlinkedCodexHome(codexHome string) (string, error) {
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return "", nil
+	}
+	userValues, err := loadConfigFile(ConfigPath(codexHome))
+	if err != nil {
+		return "", err
+	}
+	return resolveAllowedSymlinkedCodexHome(codexHome, userValues), nil
+}
+
+// resolveAllowedSymlinkedCodexHome mirrors Rust
+// codex_config::allowed_symlinked_codex_home: only a boolean at the top level
+// of the user layer opts in, and the configured CODEX_HOME alias is preserved
+// only when it resolves to the same home.
+func resolveAllowedSymlinkedCodexHome(codexHome string, userValues map[string]any) string {
+	enabled, ok := userValues["allow_symlinked_codex_home"].(bool)
+	if !ok || !enabled {
+		return ""
+	}
+	canonicalHome := canonicalCodexHomePath(codexHome)
+	if canonicalHome == "" {
+		return ""
+	}
+	for _, envName := range []string{"CODEX_HOME", "GCODE_HOME"} {
+		alias := strings.TrimSpace(os.Getenv(envName))
+		if alias == "" || !filepath.IsAbs(alias) {
+			continue
+		}
+		alias = filepath.Clean(alias)
+		resolved, err := filepath.EvalSymlinks(alias)
+		if err != nil {
+			continue
+		}
+		if filepath.Clean(resolved) == canonicalHome {
+			return alias
+		}
+	}
+	return canonicalHome
+}
+
+func canonicalCodexHomePath(codexHome string) string {
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(codexHome)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(absolute)
 }
 
 // IsProjectless reports whether configuration discovery found no project-root
@@ -1857,16 +1934,12 @@ func (c *Config) AllowLoginShell() bool {
 	return !ok || value
 }
 
-// AllowSymlinkedCodexHome reports whether the execution host opts into
-// trusting symlink targets beneath CODEX_HOME, mirroring Rust
-// allow_symlinked_codex_home (default false). This only applies to writable
-// roots at or beneath CODEX_HOME.
+// AllowSymlinkedCodexHome reports whether the execution host's top-level user
+// config opted into trusting symlink targets beneath CODEX_HOME, mirroring
+// Rust allow_symlinked_codex_home (default false). Project config, CLI
+// overrides, and profiles cannot enable it.
 func (c *Config) AllowSymlinkedCodexHome() bool {
-	if c == nil || c.Values == nil {
-		return false
-	}
-	value, ok := c.Values["allow_symlinked_codex_home"].(bool)
-	return ok && value
+	return c != nil && c.allowedSymlinkedCodexHome != ""
 }
 
 // ThreadUnloadDelaySecs returns how long the app server keeps an unloaded

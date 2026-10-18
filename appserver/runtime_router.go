@@ -310,6 +310,9 @@ type RuntimeRouter struct {
 	startupModelProviderRoute          threadModelProviderRoute
 	startupModelProviderRouteSet       bool
 	startupModelProviderRouteAttempted bool
+	// allowedSymlinkedCodexHome is the startup-only macOS Seatbelt opt-out
+	// resolved from the execution host's top-level user config (Rust #42716).
+	allowedSymlinkedCodexHome string
 	// workspaceRouting caches workspace routing discovery for account/read
 	// (Rust AccountRequestProcessor::workspace_routing).
 	workspaceRoutingOnce sync.Once
@@ -765,6 +768,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		localNetworkPolicy:      network.NewNetworkPolicyController(),
 		messageBoardHandles:     map[string]agentboard.Board{},
 	}
+	router.allowedSymlinkedCodexHome = allowedSymlinkedCodexHomeForConfigService(configService)
 	if router.services.ThreadRouter != nil {
 		router.services.ThreadRouter.SetCreatorIdentity(router.threadCreatorIdentity)
 	}
@@ -13225,7 +13229,10 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 	if err := r.ensureLocalEnvironment(); err != nil {
 		return nil, err
 	}
-	options := &CommandExecOptions{ConnectionID: request.normalizedConnectionID()}
+	options := &CommandExecOptions{
+		ConnectionID:              request.normalizedConnectionID(),
+		AllowedSymlinkedCodexHome: r.allowedSymlinkedCodexHome,
+	}
 	if r != nil && r.services.Config != nil {
 		options.PermissionProfileResolver = r.commandExecPermissionProfileResolver()
 		if requirements := r.services.Config.Requirements(); requirements != nil {
@@ -13345,6 +13352,21 @@ func (r *RuntimeRouter) localEnvironmentEnabled() bool {
 		return *r.services.LocalEnvironmentEnabled
 	}
 	return !execServerURLDisablesLocalFS(os.Getenv(CodexExecServerURLEnvVar))
+}
+
+// allowedSymlinkedCodexHomeForConfigService resolves the startup-only macOS
+// Seatbelt opt-out from the execution host's top-level user config. A missing
+// or malformed file leaves the exception disabled; the main config load owns
+// reporting that failure.
+func allowedSymlinkedCodexHomeForConfigService(service *config.ConfigService) string {
+	if service == nil {
+		return ""
+	}
+	allowed, err := config.AllowedSymlinkedCodexHome(service.CodexHome())
+	if err != nil {
+		return ""
+	}
+	return allowed
 }
 
 func execServerURLDisablesLocalFS(value string) bool {
@@ -15097,6 +15119,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		if cfg != nil {
 			options.Shell.MaxOutputTokens = cfg.ToolOutputTokenLimit()
 			options.Shell.Validation.AllowLoginShell = cfg.AllowLoginShell()
+			// Rust #42716: the trusted CODEX_HOME symlink opt-out is resolved
+			// from the host's user config and applies to both shell and patch
+			// writes in the local environment.
+			options.Shell.Validation.AllowedSymlinkedCodexHome = r.allowedSymlinkedCodexHome
+			if options.ApplyPatch != nil {
+				options.ApplyPatch.AllowedSymlinkedCodexHome = r.allowedSymlinkedCodexHome
+			}
 			allowTTY := features.Enabled(cfg.FeatureSettings(), "unified_exec_tty")
 			options.Shell.AllowTTY = &allowTTY
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelForConfig(cfg)

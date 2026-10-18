@@ -310,6 +310,7 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 		return err
 	}
 	runReq.UseLegacyLandlock = runConfig.UseLegacyLandlock
+	runReq.AllowedSymlinkedCodexHome = runConfig.AllowedSymlinkedCodexHome
 	resolved := runConfig.PermissionProfile
 	if resolved != nil {
 		runReq.PermissionProfile = ""
@@ -531,6 +532,9 @@ type sandboxRunConfig struct {
 	PermissionProfile *config.SandboxPermissionProfileResolution
 	EnvPolicy         *codexexec.EnvPolicy
 	UseLegacyLandlock bool
+	// AllowedSymlinkedCodexHome is the macOS Seatbelt opt-out resolved from
+	// the execution host's top-level user config (Rust #42716).
+	AllowedSymlinkedCodexHome string
 }
 
 func resolveSandboxPermissionProfileForRun(opts *cli.SandboxOptions) (*config.SandboxPermissionProfileResolution, error) {
@@ -584,9 +588,10 @@ func loadSandboxRunConfigForRunContext(ctx context.Context, opts *cli.SandboxOpt
 		return nil, err
 	}
 	return &sandboxRunConfig{
-		PermissionProfile: resolved,
-		EnvPolicy:         sandboxEnvPolicyFromConfig(loaded, opts.CWD),
-		UseLegacyLandlock: loaded.FeatureSettings()["use_legacy_landlock"],
+		PermissionProfile:         resolved,
+		EnvPolicy:                 sandboxEnvPolicyFromConfig(loaded, opts.CWD),
+		UseLegacyLandlock:         loaded.FeatureSettings()["use_legacy_landlock"],
+		AllowedSymlinkedCodexHome: loaded.AllowedSymlinkedCodexHome(),
 	}, nil
 }
 
@@ -811,6 +816,7 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	httpClient := policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0))
 	server := execserver.NewServerWithHTTPClient(httpClient)
 	server.SetPreferMXC(preferMXC)
+	server.SetAllowedSymlinkedCodexHome(loadedConfig.AllowedSymlinkedCodexHome())
 	// Rust #48568: carry the trusted startup routing flag into the executor's
 	// managed network proxy launch (exec-server/src/process_sandbox.rs).
 	server.SetProxyPrivateIPsViaUpstream(opts.ProxyPrivateIPsViaUpstream)
@@ -866,6 +872,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			PreferMXC:                  preferMXC,
 			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 			EnvironmentConfigReader:    environmentConfigReader,
+			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
@@ -913,6 +920,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 		EnvironmentConfigReader:    environmentConfigReader,
+		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 	})
 }
 
@@ -954,6 +962,7 @@ func runExecServerRemoteWithExecutorCredential(
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 		EnvironmentConfigReader:    environmentConfigReader,
+		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 	}
 	scoped, err := cfg.WithExecutorCredentialAuth()
 	if err != nil {
