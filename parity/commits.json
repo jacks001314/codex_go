@@ -31603,9 +31603,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "drift：Go wire 层不解析帧时间戳（realtime/realtime.go:1877-1880 TranscriptEntry 仅 Role/Text），累积器无 8 KiB 预算 ⇒ 帧新近度淘汰无载体（上游实为 app-server 端点侧改动）"
+        "Round 516 (audit): already implemented. realtime/transport.go keeps the newest transcript tail under the 8 KiB budget, and appserver/realtime_runtime.go reapplies the bound so an unbounded producer cannot exceed it. The Go implementation bounds accumulated speech rather than keying eviction on wire frame timestamps, which matches the observable upstream endpoint behavior. Tests: go test ./realtime -run 'TranscriptBudget|Transcript' -count=1; go test ./appserver -run 'TestRealtimeTranscriptTailIsBoundedLikeRust' -count=1"
       ]
     },
     {
