@@ -8835,9 +8835,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/11); candidate gap: GuardianContextMode, ParentCompaction, ParentCompactionError, ReviewContextPolicy, context_mode"
+        "Round 465 (audit): state.ContextProfile centralizes Guardian context modes, retention/truncation policy, and original entry numbering for synchronous and asynchronous profiles; appserver review planning applies the profile and parent-compaction checkpoint policy. Tests: go test ./state -run 'GuardianContextProfile' -count=1"
       ]
     },
     {
@@ -9207,9 +9207,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/9); candidate gap: MAX_PREVIOUS_REVIEWS, PreviousReviews, PreviousReviewsSection, RenderedReviewEvidence, ReviewEvidence"
+        "Round 466 (audit): the shared state.ContextProfile/TranscriptEvidenceEntry path applies bounded review evidence, per-section retention, omission notices, and original numbering for the synchronous reviewer. Tests: go test ./state -run 'GuardianContextProfile' -count=1"
       ]
     },
     {
@@ -9219,9 +9219,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ContextInput, TrustedTool, TrustedToolSection"
+        "Round 467 (audit): context.GuardianToolDescriptions renders the invoked MCP tool's trusted host/connector metadata as the shared <guardian_tool_descriptions> block, consumed by state.renderGuardianToolDescriptions for every review. Tests: go test ./context ./state -run 'GuardianToolDescriptions' -count=1"
       ]
     },
     {
@@ -9231,9 +9231,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: TrustedSkills, TrustedSkillsSection"
+        "Round 468 (audit): N/A by architecture - Go has no trusted skill evidence source or TrustedSkills registry (the same absence recorded for #41118). The commit only relocates that Rust-only evidence into guardian-context. The synchronous reviewer's existing trusted-tool and retained-user-instruction sections remain covered by GuardianToolDescriptions/retained-context tests."
       ]
     },
     {
