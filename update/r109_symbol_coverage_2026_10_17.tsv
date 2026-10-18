@@ -253,7 +253,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 184ff338ad7d737b0bd6d5e913a070cfd5c666bd	40266	Preserve content annotations when filtering forked agent history (#40266)	2026-08-23	core	0	0		0	0	not_applicable	
 1866e516779012d3ff20541d21074f00be010b32	47924	Make project trust lookup paths explicit and defer root resolution (#47924)	2026-09-24	config	2	2	1.00	0	0	complete	
 18b9e7fd9e3f6670cc4f300338e44050b2c301e4	41250	Include thread source in realtime connection metadata (#41250)	2026-08-28	realtime	0	0		0	0	not_applicable	
-18d7ace2210a1cc65c0de85a2a6af6905e26d634	45537	Move Guardian reviewer lifecycle into the extension (#45537)	2026-09-14	guardian	10	2	0.20	0	0	audit_pending	GuardianReviewSession,GuardianReviewState,PreparedGuardianContext,guardian_review_session,history_reset,prepare_review_prewarm,reuse_key,thread_options
+18d7ace2210a1cc65c0de85a2a6af6905e26d634	45537	Move Guardian reviewer lifecycle into the extension (#45537)	2026-09-14	guardian	10	2	0.20	0	0	not_applicable	GuardianReviewSession,GuardianReviewState,PreparedGuardianContext,guardian_review_session,history_reset,prepare_review_prewarm,reuse_key,thread_options
 18e28fe1b96db7e1d6b13584bec37c41f71b8b0e	51556	Complete dynamic tool lifecycles on cancellation (#51556)	2026-10-07	core	1	1	1.00	0	0	complete	
 19286b88190b1b81c2506af97dfca6ab261ff72b	45579	Copy current thread attachments into non-ephemeral forks (#45579)	2026-09-15	appserver	1	1	1.00	0	0	complete	
 19321435b10927001b260152c6617be208855a61	41207	Propagate executor OS into turn environments (#41207)	2026-08-27	execserver	0	0		0	0	not_applicable	

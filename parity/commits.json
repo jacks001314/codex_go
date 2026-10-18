@@ -13407,9 +13407,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/10; needs review: GuardianReviewSession, GuardianReviewState, PreparedGuardianContext, guardian_review_session, history_reset"
+        "Round 330 (audit): N/A for the extension migration. Go owns a modelGuardianReviewer directly on RuntimeRouter, reviews synchronously with the caller's context, keeps reviewer session state in guardianSessionRunner, and has no extension ThreadManager pool, prepared-session reuse key, history-reset extension, or cached extension decision layer to move or join."
       ]
     },
     {
