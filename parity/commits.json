@@ -3698,9 +3698,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "reasoning_effort_for_request resolves Ultra through the selected model's multi-agent override, then max, then the highest supported non-ultra level, then medium; unsupported overrides are rejected. Tests: go test ./model -run 'ReasoningEffortForRequestModelAwareUltraFallback|Ultra' -count=1"
       ]
     },
     {
@@ -3710,9 +3710,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "EnvironmentInfoResponse preserves executor PlatformOS and turn environment config carries it into environment context/state; tests cover local and remote executor OS propagation. Tests: go test ./appserver -run 'EnvironmentInfoReportsLocalPlatformOS|Environment.*PlatformOS' -count=1"
       ]
     },
     {
@@ -3722,9 +3722,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/10; needs review: PluginMarketplaceContext, PluginMarketplaceScope, list_marketplaces, list_marketplaces_for_context, load_marketplace_context"
+        "handlePluginList reads the effective config for each requested CWD and merges ResolveConfigMarketplaces entries into the catalog, so per-repository plugin marketplace configuration is honored while installation state remains global. Tests: go test ./appserver -run 'Plugin.*Config|Marketplace.*Config' -count=1"
       ]
     },
     {
@@ -3746,9 +3746,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "decideClockToolEnablement reads model metadata for current-time/sleep availability and combines it with effort/mode configuration before registering clock tools. Tests: go test ./appserver -run 'DecideClockToolEnablement' -count=1"
       ]
     },
     {
