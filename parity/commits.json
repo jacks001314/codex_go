@@ -7733,9 +7733,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: Sparkle, render_sparkle, set_astra_sparkle"
+        "Audited upstream 147137c1f4 (#42842): already implemented in tui/tea/composer_sparkle.go. Fresh Astra sessions arm a one-time starfield over untouched composer cells, honor animations/starfield effects and Astra model eligibility, preserve placeholder and draft text, dismiss on ordinary input while retaining slash-command opportunities, expire after the deadline, and re-arm when Astra is selected from the model picker or a bootstrap thread starts. Tests: TestFreshAstraTaskShowsComposerStarfieldLikeRust, TestComposerStarfieldHonorsEffectsAndModelLikeRust, TestComposerStarfieldDismissalRulesLikeRust, TestComposerStarfieldExpiresLikeRust, TestComposerStarfieldArmsWhenModelBecomesAstraLikeRust, TestComposerStarfieldSurvivesBootstrapThreadStart."
       ]
     },
     {
