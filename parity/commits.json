@@ -6662,9 +6662,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: OAuthCredentialStore, acquire_transaction_guard, stored_credentials"
+        "Round 472 (audit): Go's mcp.OAuthStore provides the equivalent adapter: effective keyring/file/auto modes, per-server URL identities, token load/save/delete, refresh-token retirement with locking, fallback-file persistence, and auth status recomputation. Tests: go test ./mcp -run 'OAuthStore|OAuth' -count=1"
       ]
     },
     {
@@ -6674,9 +6674,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ContextManagementConfigToml, apply_experimental_context, resolve_token_budget_config"
+        "Round 473 (audit): config.ContextManagementConfig parses the opt-in experimental_mode, runtime_router.experimentalContextManagementEligible requires the feature, experimental mode, OpenAI provider, supports_experimental_context, ChatGPT auth, and Plus/Pro/Prolite plans, and then activates token-budget/history-notes/new_context surfaces. Tests: go test ./config ./mcp -run 'ContextManagement|OAuthStore|OAuth' -count=1; go test ./appserver -run 'ContextManagement|TokenBudget' -count=1"
       ]
     },
     {
