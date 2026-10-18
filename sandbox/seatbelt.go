@@ -125,6 +125,28 @@ func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSocket
 			fmt.Sprintf(`(allow network-outbound (remote unix-socket (subpath (param "%s"))))`, name),
 		)
 	}
+	// Rust #45984: network grants and Unix-socket allowlists must never reopen
+	// the privileged app-server control socket to filesystem-restricted
+	// commands. Keep this after the allowlist so the deny wins.
+	if !policy.HasFullDiskWriteAccess() {
+		if directory, ok := sharedDaemonSocketDirectory(); ok {
+			name := fmt.Sprintf("DAEMON_SOCKET_%d", len(parameters))
+			parameters = append(parameters, seatbeltParameter{Name: name, Value: directory})
+			lines = append(lines,
+				fmt.Sprintf(`(deny file-read* file-write* (literal (param "%s")))`, name),
+				fmt.Sprintf(`(deny file-read* file-write* (subpath (param "%s")))`, name),
+				fmt.Sprintf(`(deny network-outbound (remote unix-socket (subpath (param "%s"))))`, name),
+			)
+			for ancestor := filepath.Dir(directory); ancestor != "."; ancestor = filepath.Dir(ancestor) {
+				ancestorName := fmt.Sprintf("DAEMON_SOCKET_ANCESTOR_%d", len(parameters))
+				parameters = append(parameters, seatbeltParameter{Name: ancestorName, Value: ancestor})
+				lines = append(lines, fmt.Sprintf(`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "%s"))))`, ancestorName))
+				if ancestor == string(filepath.Separator) {
+					break
+				}
+			}
+		}
+	}
 	// Rust #46571: renaming an allowed ancestor relocates its protected
 	// descendants past their pathname carveouts. Keep these unlink denies last so
 	// no broader allowance can reopen the rename operation.

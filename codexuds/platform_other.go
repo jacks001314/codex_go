@@ -5,6 +5,7 @@ package codexuds
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,6 +17,38 @@ import (
 // traversal and socket creation stay possible while group and other access are
 // denied (Rust SOCKET_DIR_MODE).
 const socketDirectoryMode = 0o700
+
+// SharedDaemonSocketDirectory returns the fixed executor-local directory that
+// every filesystem-restricted sandbox must hide. It deliberately ignores HOME,
+// TMPDIR, CODEX_HOME, and command settings (Rust #45984).
+func SharedDaemonSocketDirectory() (string, error) {
+	temporaryRoot, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(temporaryRoot, fmt.Sprintf("codex-daemon-%d", os.Geteuid())), nil
+}
+
+// PrepareSharedDaemonSocketDirectory creates the reserved socket directory and
+// rejects symlinks, unsafe owners, and non-0700 modes.
+func PrepareSharedDaemonSocketDirectory() (string, error) {
+	directory, err := SharedDaemonSocketDirectory()
+	if err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(directory, socketDirectoryMode); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", err
+	}
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return "", err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || !ok || int(stat.Uid) != os.Geteuid() || info.Mode().Perm() != socketDirectoryMode {
+		return "", errors.New("app-server socket directory must be a user-owned directory with mode 0700")
+	}
+	return directory, nil
+}
 
 // checkSocketPath accepts the platform's addressable length. Unix sun_path is
 // also bounded, but Go's runtime reports that limit when the socket is bound.

@@ -45,6 +45,16 @@ func TestVerifiedLocalDaemonSocketRequiresPrivateDirectoryLikeRust(t *testing.T)
 	if err := codexuds.PreparePrivateSocketDirectory(directory); err != nil {
 		t.Fatalf("PreparePrivateSocketDirectory() error = %v", err)
 	}
+	if runtime.GOOS != "windows" {
+		// Unix daemons publish a deterministic symlink from the advertised
+		// path to a protected physical socket; a direct socket path is never
+		// verified (Rust #45984/#54421). The positive Unix contract is covered
+		// by appserver/unix_socket_protected_unix_test.go.
+		if got, ok := appserver.VerifiedLocalDaemonSocket(socketPath); ok {
+			t.Fatalf("VerifiedLocalDaemonSocket(%q) = %q/true, want an unverified direct socket", socketPath, got)
+		}
+		return
+	}
 	got, ok := appserver.VerifiedLocalDaemonSocket(socketPath)
 	if !ok || filepath.Base(got) != "app-server-control.sock" {
 		t.Fatalf("VerifiedLocalDaemonSocket(%q) = %q/%v, want the verified socket path", socketPath, got, ok)

@@ -22,6 +22,8 @@ import (
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
+
+	"codex_go/codexuds"
 )
 
 const (
@@ -790,14 +792,8 @@ func ensureLegacyLandlockSupportsPolicyWithInterop(cmd *linuxSandboxCommand, int
 		return nil
 	}
 	fs := cmd.PermissionProfile.Filesystem
-	if !fs.hasFullDiskReadAccess() && !fs.hasFullDiskWriteAccess() {
-		return errors.New("permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock")
-	}
-	if cmd.PermissionProfile.NetworkEnabled &&
-		!cmd.managedNetworkEnabled() &&
-		!fs.hasFullDiskWriteAccess() &&
-		pathIsDirectory(interopDir) {
-		return errors.New("legacy Landlock cannot isolate WSL Windows interop with network access enabled; use bubblewrap or restrict network access")
+	if !fs.hasFullDiskWriteAccess() {
+		return errors.New("filesystem-restricted execution requires bubblewrap to isolate app-server sockets; disable features.use_legacy_landlock")
 	}
 	return nil
 }
@@ -1076,6 +1072,28 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 			if fd >= 0 {
 				dataFDs = append(dataFDs, fd)
 			}
+		}
+	}
+	// Rust #45984: filesystem-restricted sandboxes must not reach the
+	// privileged app-server control sockets. Mask the fixed user-owned
+	// rendezvous directory after every bind that could expose it.
+	if fs != nil && !fs.hasFullDiskWriteAccess() {
+		daemonDirectory, err := codexuds.PrepareSharedDaemonSocketDirectory()
+		if err != nil {
+			return err
+		}
+		mountinfo, err := os.ReadFile("/proc/self/mountinfo")
+		if err != nil {
+			return fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
+		}
+		if err := validateDaemonSocketMountIsolation(daemonDirectory, mountinfo); err != nil {
+			return err
+		}
+		args = append(args, "--tmpfs", daemonDirectory)
+		// WSLg exposes a second view of the host root under
+		// /mnt/wslg/distro, so mask the rendezvous directory there as well.
+		if info, statErr := os.Stat("/mnt/wslg/distro"); statErr == nil && info.IsDir() {
+			args = append(args, "--tmpfs", filepath.Join("/mnt/wslg/distro", strings.TrimPrefix(daemonDirectory, "/")))
 		}
 	}
 	args = appendWSLInteropMaskArgs(args, cmd.NoProc, !fs.hasFullDiskWriteAccess(), wslInteropDir)

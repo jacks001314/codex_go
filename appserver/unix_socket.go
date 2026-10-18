@@ -163,14 +163,6 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	return serveErr
 }
 
-func ensureUnixSocketParent(socketPath string) error {
-	dir := filepath.Dir(socketPath)
-	if dir == "." || dir == "" {
-		return nil
-	}
-	return os.MkdirAll(dir, 0o700)
-}
-
 // DaemonShutdownPath is the WebSocket path a managed daemon's owner uses to ask
 // the server to stop (Rust app-server-transport::run_daemon_shutdown).
 const DaemonShutdownPath = "/daemon/shutdown"

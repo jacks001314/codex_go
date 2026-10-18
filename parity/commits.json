@@ -14501,9 +14501,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: prepare_shared_daemon_socket_directory, reject_daemon_mount_aliases, shared_daemon_socket_directory"
+        "Round 700 (implementation): codexuds creates the fixed /tmp/codex-daemon-<uid> rendezvous directory with owner and 0700 checks; app-server Unix listeners bind the sha256-derived protected physical socket and publish the advertised path as a deterministic symlink, rejecting foreign aliases and unsafe parents while preserving replacements on cleanup. verifiedLocalDaemonSocket requires both the alias and shared directory. macOS Seatbelt denies daemon-directory reads/writes and Unix-socket outbound access after allowlists plus ancestor unlink; Linux bwrap masks the canonical directory and WSLg view and rejects host mount aliases/nested mounts. Filesystem-restricted execution now requires bubblewrap; legacy Landlock is rejected. Tests compiled for linux/darwin: appserver protected-rendezvous tests, seatbelt daemon-socket policy test, and daemon mount-isolation parser tests; GOOS=linux/darwin go build ./... passes. Runtime integration is not executable on this Windows host."
       ]
     },
     {
