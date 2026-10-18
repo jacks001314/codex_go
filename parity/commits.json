@@ -9233,9 +9233,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: is_official_server_older"
+        "Audited upstream c977cc0c19 (#43619): already implemented. tui/update_versions.go provides ServerVersionNoticeKindFor with semver precedence comparison, distinguishing Older from Different for dev builds and reporting no notice for equal/newer or unparseable versions. TestServerVersionNoticeKindFor covers release/pre-release ordering, distinct version lines, and dev-build behavior."
       ]
     },
     {
@@ -9365,9 +9365,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: initialize_server_version_notice, refresh_server_version_overview_notice, server_version_notice_for_tui"
+        "Audited upstream 49a9d78999 (#43698): already implemented. The tea model gates notices through ShowServerVersionNotice, emits the startup warning only for connected non-embedded sessions, renders the compact command-center service/CLI comparison notice, and deduplicates by endpoint/server home/version through tui/status. Tests cover the config gate, embedded exclusion, different-version rendering, footer rendering, and cancellation. go test ./tui ./tui/status ./tui/tea -run ServerVersionNotice passes."
       ]
     },
     {
@@ -28194,9 +28194,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 4/10; needs review: GLOB_SCAN_PROGRAM, critical_dependencies, expand_unreadable_globs_in_environment, find_bundled_bwrap_for_exe, find_executable_in_search_paths"
+        "Round 725 (audit): Go's integrity runner already inventories the Codex executable and the launcher command (including bwrap) and resolves ~-prefixed deny globs against the process home, with Linux/Darwin cross-compiled coverage. Remaining bwrap-specific gap: GLOB_SCAN_PROGRAM/rg discovery from the command PATH, bundled/system bwrap candidate inventory, and :tmpdir/TMPDIR resolution from the command's explicit environment are not modeled because RunnerRequest has no command environment."
       ]
     },
     {
@@ -28206,9 +28206,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: critical_dependencies"
+        "Round 725 (audit): Go's platformSandboxType selects MacosSeatbelt on darwin, the integrity runner inventories the Codex executable and the launcher command (the sandbox-exec argv), and PreparePolicy intentionally leaves Seatbelt deny globs as native patterns without a snapshot scan. Covered by sandbox/integrity tests and Darwin cross-compilation."
       ]
     },
     {
