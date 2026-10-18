@@ -646,9 +646,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/6; needs review: McpServerConnectionStatus, StatusTone, connection_statuses, mcp_connection_statuses"
+        "Round 759: mcp.MCPConnectionStatus covers all seven runtime states, MCPListServerStatus includes nullable runtimeStatus derived from the live service without starting servers, and the compact /mcp history view shows connection labels/tool counts while verbose inventory remains available. Tests: go test ./mcp -run 'Runtime|ConnectionStatus|ListServerStatus' -count=1; go test ./tui/history_cell -run MCP -count=1"
       ]
     },
     {
@@ -792,9 +792,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: Go has no Plan-mode composer nudge, dismissal state, or 'Create a plan?' footer override; plan-related drafts keep the normal footer. rg finds no nudge implementation. Behaviour matches the removal."
       ]
     },
     {
@@ -804,9 +804,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: Go records Guardian reviewer sessions with session.GuardianReviewSource (subagent_guardian), treats them as Guardian in history/trusted-provenance checks, and persists that source through rollout metadata; Guardian review threads are not emitted as ordinary subagent thread-start analytics because Go's reviewer is an in-process model session without a separate app-server thread. Tests: go test ./rollout -run GuardianSource -count=1; go test ./app -run GuardianResume -count=1"
       ]
     },
     {
@@ -984,9 +984,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: PlanTypeDisplayName maps auth.PlanSelfServeBusinessProlite to 'Business Premium' (tui/status/helpers.go and tui/subscription.go), with test coverage in tui/status/status_test.go."
       ]
     },
     {
@@ -1068,9 +1068,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: MCP projection checks guardianTurnStart from the immutable turn params (originator/x-openai-subagent metadata) before executor MCP discovery, so Guardian reviewers skip executor-owned MCP servers without rereading mutable session state. Test: go test ./appserver -run 'GuardianTurnSkipsExecutorMCPDiscovery|ExecutorMCPProjection' -count=1"
       ]
     },
     {
@@ -1080,9 +1080,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: Rust advertises shellSnapshotV2 on Unix. Go's exec server still reports false and its test asserts false because the in-memory executor-managed snapshot subsystem from #39957 is missing (local unified exec bypasses exec-server). Advertising true before implementing capture/replay would be incorrect; remains blocked on #39957."
       ]
     },
     {
@@ -1092,9 +1092,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: Go has no rollout-initialization mapping that classifies InvalidInput as corrupt session storage. Rollout creation propagates the original error, so sandbox preparation failures (including macOS symlinked writable roots) reach the user unchanged and are never mislabeled as corruption. This satisfies the behavioral requirement without the Rust error-kind branch."
       ]
     },
     {
@@ -1164,9 +1164,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: skills.list now uses invocation.ResponseByteBudget, omits entries whose single-entry response cannot fit, keeps pagination across retained entries, emits the Rust oversized-metadata warning once per budget, and encodes the budget in new fingerprint:offset:budget cursors while accepting legacy fingerprint:offset cursors. Tests cover multi-page budgeted listing, oversized-entry omission, legacy cursors, and budget changes: go test ./turn -run SkillsList -count=1"
       ]
     },
     {
@@ -1188,9 +1188,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: install.runWindowsUpdate resolves package-manager commands and powershell.exe using absolute PATH entries only, rejects relative-only PATH with the manual-update guidance, and runs the resolved command from a temporary directory. install/update_test.go covers relative PATH and cwd decoys. Tests: go test ./install -run 'UpdateAction|WindowsUpdate' -count=1"
       ]
     },
     {
@@ -1200,9 +1200,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: utils.PathURI recognizes percent-encoded Windows drive colons, rejects encoded / and \\ separators before host conversion via hasEncodedWindowsSeparators, and preserves case-insensitive same-drive joins. utils/pathuri_test.go covers encoded drive colons, encoded separators, and same-drive joins. Tests: go test ./utils -run 'PathURI|WindowsPathURI' -count=1"
       ]
     },
     {
@@ -1224,9 +1224,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: features.features registers in_app_local_automation as a stable default-enabled requirements-capable feature. The generic requirements feature gating already applies managed overrides; no Go desktop automation subsystem consumes the flag yet, so the gate is present for the same contract."
       ]
     },
     {
@@ -1284,9 +1284,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: implemented bounded snapshot retries. shellSnapshotManager caches failures with attempts/retryAt, retries after a one-second backoff up to three attempts, caches the final failure, and single-flights concurrent captures for the same key. Tests cover recovery on the third attempt, backoff suppression, exhaustion caching, and concurrent sharing: go test ./execserver -run ShellSnapshot -count=1"
       ]
     },
     {
@@ -1368,9 +1368,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: hide_web_link_destination"
+        "Round 759: Markdown web links render label-only with a preserved OSC-8 destination in recognized hyperlink-capable terminals (Ghostty, iTerm2, WezTerm, Kitty, VS Code, Alacritty, Windows Terminal, Konsole, GNOME Terminal, VTE), while unknown terminals, Apple Terminal, Warp, multiplexers, screen/tmux TERM values, non-terminal stdout, and empty labels keep the destination visible. Existing wrapping/transcript hyperlink machinery is retained. Tests: go test ./tui/markdown -count=1"
       ]
     },
     {

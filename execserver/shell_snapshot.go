@@ -21,18 +21,39 @@ import (
 const (
 	maxShellSnapshotScopeBytes  = 256
 	shellSnapshotCaptureTimeout = 10 * time.Second
+	shellSnapshotRetryBackoff   = time.Second
+	maxShellSnapshotAttempts    = 3
 )
 
 var shellSnapshotPlatformSupported = runtime.GOOS != "windows"
 
 type shellSnapshotManager struct {
-	mu      sync.Mutex
-	cache   map[string]string
-	capture func(context.Context, []string, string, map[string]string) ([]byte, error)
+	mu       sync.Mutex
+	cache    map[string]string
+	failures map[string]shellSnapshotFailure
+	inflight map[string]*shellSnapshotFlight
+	capture  func(context.Context, []string, string, map[string]string) ([]byte, error)
+	now      func() time.Time
 }
 
 func newShellSnapshotManager() *shellSnapshotManager {
-	return &shellSnapshotManager{cache: map[string]string{}, capture: runShellSnapshotCapture}
+	return &shellSnapshotManager{
+		cache:    map[string]string{},
+		failures: map[string]shellSnapshotFailure{},
+		inflight: map[string]*shellSnapshotFlight{},
+		capture:  runShellSnapshotCapture,
+		now:      time.Now,
+	}
+}
+
+type shellSnapshotFailure struct {
+	attempts int
+	retryAt  time.Time
+	err      error
+}
+
+type shellSnapshotFlight struct {
+	done chan struct{}
 }
 
 func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (*ExecParams, error) {
@@ -129,15 +150,58 @@ func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecPar
 	if err != nil {
 		return "", err
 	}
-	m.mu.Lock()
-	if path := m.cache[key]; path != "" {
-		if _, statErr := os.Stat(path); statErr == nil {
-			m.mu.Unlock()
-			return path, nil
+	attempts := 1
+	for {
+		m.mu.Lock()
+		if path := m.cache[key]; path != "" {
+			if _, statErr := os.Stat(path); statErr == nil {
+				m.mu.Unlock()
+				return path, nil
+			}
+			delete(m.cache, key)
 		}
-		delete(m.cache, key)
+		if failure, ok := m.failures[key]; ok {
+			if failure.attempts >= maxShellSnapshotAttempts || m.now().Before(failure.retryAt) {
+				m.mu.Unlock()
+				return "", failure.err
+			}
+			attempts = failure.attempts + 1
+			delete(m.failures, key)
+		}
+		if flight := m.inflight[key]; flight != nil {
+			done := flight.done
+			m.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		flight := &shellSnapshotFlight{done: make(chan struct{})}
+		m.inflight[key] = flight
+		m.mu.Unlock()
+
+		path, captureErr := m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, key)
+		m.mu.Lock()
+		delete(m.inflight, key)
+		close(flight.done)
+		if captureErr != nil {
+			m.failures[key] = shellSnapshotFailure{
+				attempts: attempts,
+				retryAt:  m.now().Add(shellSnapshotRetryBackoff),
+				err:      captureErr,
+			}
+		} else {
+			m.cache[key] = path
+			delete(m.failures, key)
+		}
+		m.mu.Unlock()
+		return path, captureErr
 	}
-	m.mu.Unlock()
+}
+
+func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, key string) (string, error) {
 
 	ctx, captureSpan := startExecServerSpan(
 		ctx,
@@ -191,9 +255,6 @@ func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecPar
 	if err := os.Rename(tempPath, path); err != nil {
 		return "", err
 	}
-	m.mu.Lock()
-	m.cache[key] = path
-	m.mu.Unlock()
 	return path, nil
 }
 
@@ -207,6 +268,8 @@ func (m *shellSnapshotManager) close() {
 		paths = append(paths, path)
 	}
 	m.cache = map[string]string{}
+	m.failures = map[string]shellSnapshotFailure{}
+	m.inflight = map[string]*shellSnapshotFlight{}
 	m.mu.Unlock()
 	for _, path := range paths {
 		_ = os.Remove(path)

@@ -731,6 +731,13 @@ func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, [
 		}
 		if webURL, ok := codextui.WebDestination(dest); ok {
 			webLinks = append(webLinks, webFileLink{Label: label, URL: webURL})
+			if strings.TrimSpace(label) != "" && hideWebLinkDestination(webURL) {
+				// Rust #40471: known hyperlink-capable terminals can show the
+				// clickable label without repeating the destination.
+				sb.WriteString(source[cursor:m[0]])
+				sb.WriteString(label)
+				cursor = m[1]
+			}
 		}
 	}
 	sb.WriteString(source[cursor:])

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -34,6 +35,7 @@ const (
 	maxSkillToolResponseBytes            = 512 * 1024
 	maxCatalogSkillDescriptionChars      = 1024
 	skillDescriptionTruncatedSuffix      = "..."
+	skillOversizedEntryWarning           = "Some skills were omitted because their metadata is too large."
 )
 
 type skillsToolAuthority struct {
@@ -186,38 +188,143 @@ func (e *skillsToolExecutor) executeList(ctx context.Context, invocation *tool.I
 		return nil, err
 	}
 	listed, warnings := e.listedSkills(ctx, args.Authority.Kind)
-	start, err := parseSkillToolCursor(args.Cursor, listed, "skills.list")
+	responseByteBudget := invocation.ResponseByteBudget(maxSkillToolResponseBytes)
+	start, previousBudget, err := parseSkillListCursor(args.Cursor, listed, "skills.list")
 	if err != nil {
 		return nil, err
 	}
 	if start > len(listed) {
 		return nil, tool.RespondToModel("skills.list cursor is invalid")
 	}
-	pageWarnings := []string{}
-	if start == 0 {
-		pageWarnings = boundedSkillToolWarnings(warnings)
+	omittedOversized := false
+	retained := make([]indexedListedSkill, 0, len(listed)-start)
+	for index := len(listed) - 1; index >= start; index-- {
+		var nextCursor *string
+		if len(retained) > 0 {
+			cursor := skillListCursorWithBudget(listed, index+1, responseByteBudget)
+			nextCursor = &cursor
+		}
+		if skillEntryResponseBounded(listed[index], responseByteBudget, nextCursor) {
+			retained = append(retained, indexedListedSkill{index: index, skill: listed[index]})
+		} else {
+			omittedOversized = true
+		}
 	}
-	end := start + maxSkillToolListPageEntries
-	if end > len(listed) {
-		end = len(listed)
+	for left, right := 0, len(retained)-1; left < right; left, right = left+1, right-1 {
+		retained[left], retained[right] = retained[right], retained[left]
+	}
+	providerWarnings := []string{}
+	if args.Cursor == nil {
+		providerWarnings = boundedSkillToolWarnings(warnings)
+	}
+	omissionWarning := ""
+	if omittedOversized && (previousBudget == nil || *previousBudget != responseByteBudget) {
+		omissionWarning = skillOversizedEntryWarning
+	}
+	end := maxSkillToolListPageEntries
+	if end > len(retained) {
+		end = len(retained)
 	}
 	for {
-		response := skillsListResponse{Skills: append([]listedSkill(nil), listed[start:end]...), Warnings: append([]string(nil), pageWarnings...)}
-		if end < len(listed) {
-			cursor := skillToolCursor(listed, end)
+		response := skillsListResponse{Warnings: append([]string(nil), providerWarnings...)}
+		for _, item := range retained[:end] {
+			response.Skills = append(response.Skills, item.skill)
+		}
+		if omissionWarning != "" {
+			response.Warnings = append(response.Warnings, omissionWarning)
+		}
+		if end < len(retained) {
+			cursor := skillListCursorWithBudget(listed, retained[end-1].index+1, responseByteBudget)
 			response.NextCursor = &cursor
 		}
-		if skillToolSerializedLen(response) <= maxSkillToolResponseBytes {
+		if skillToolSerializedLen(response) <= responseByteBudget {
 			return skillsToolJSONOutput(invocation, response)
 		}
-		if end-start > 1 {
+		if end > 1 {
 			end--
-		} else if len(pageWarnings) > 0 {
-			pageWarnings = nil
+		} else if len(providerWarnings) > 1 {
+			providerWarnings = providerWarnings[:len(providerWarnings)-1]
+		} else if len(response.Warnings) > 0 {
+			response.Skills = nil
+			cursor := skillListCursorWithBudget(listed, start, responseByteBudget)
+			response.NextCursor = &cursor
+			if skillToolSerializedLen(response) <= responseByteBudget {
+				return skillsToolJSONOutput(invocation, response)
+			}
+			if omissionWarning != "" && len(providerWarnings) > 0 {
+				response.Warnings = append([]string(nil), providerWarnings...)
+				legacyCursor := skillListLegacyCursor(listed, start)
+				response.NextCursor = &legacyCursor
+				if skillToolSerializedLen(response) <= responseByteBudget {
+					return skillsToolJSONOutput(invocation, response)
+				}
+			}
+			return nil, tool.RespondToModel("skills.list response budget leaves no room for discovery warnings")
 		} else {
 			return nil, tool.RespondToModel("skill metadata is too large to list")
 		}
 	}
+}
+
+type indexedListedSkill struct {
+	index int
+	skill listedSkill
+}
+
+func skillEntryResponseBounded(skill listedSkill, budget int, nextCursor *string) bool {
+	response := skillsListResponse{Skills: []listedSkill{skill}}
+	response.NextCursor = nextCursor
+	return skillToolSerializedLen(response) <= budget
+}
+
+func skillListCursorWithBudget(value any, offset int, budget int) string {
+	encoded, _ := json.Marshal(value)
+	fingerprint := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x:%d:%d", fingerprint[:8], offset, budget)
+}
+
+func skillListLegacyCursor(value any, offset int) string {
+	encoded, _ := json.Marshal(value)
+	fingerprint := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x:%d", fingerprint[:8], offset)
+}
+
+// parseSkillListCursor accepts legacy fingerprint:offset cursors without a
+// budget and new fingerprint:offset:budget cursors (Rust #40413).
+func parseSkillListCursor(cursor *string, value any, toolName string) (int, *int, error) {
+	if cursor == nil {
+		return 0, nil, nil
+	}
+	raw := strings.TrimSpace(*cursor)
+	canonical := raw
+	var previousBudget *int
+	parts := strings.Split(raw, ":")
+	switch len(parts) {
+	case 3:
+		canonical = parts[0] + ":" + parts[1]
+		budget, err := strconv.Atoi(parts[2])
+		if err != nil || budget < 0 {
+			return 0, nil, tool.RespondToModel(toolName + " cursor is invalid")
+		}
+		previousBudget = &budget
+	case 2:
+	default:
+		return 0, nil, tool.RespondToModel(toolName + " cursor is invalid")
+	}
+	fingerprint, offsetText, ok := strings.Cut(canonical, ":")
+	if !ok {
+		return 0, nil, tool.RespondToModel(toolName + " cursor is invalid")
+	}
+	want := skillListLegacyCursor(value, 0)
+	wantFingerprint, _, _ := strings.Cut(want, ":")
+	if fingerprint != wantFingerprint {
+		return 0, nil, tool.RespondToModel(toolName + " cursor is stale; restart from the first page")
+	}
+	offset, err := strconv.Atoi(offsetText)
+	if err != nil || offset < 0 {
+		return 0, nil, tool.RespondToModel(toolName + " cursor is invalid")
+	}
+	return offset, previousBudget, nil
 }
 
 func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
