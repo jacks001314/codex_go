@@ -11523,9 +11523,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: emit_turn_started"
+        "Round 439 (implementation): regular turns already persisted task_started with root attribution and replay carried Turn.RootTurnID; standalone thread/shellCommand now also writes task_started (root_turn_id = its own turn) and task_complete into the rollout. Tests: go test ./appserver -run 'TestRuntimeRouterThreadShellCommandPersistsUserShellRecord|TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications|TestRuntimeRouterThreadShellCommandEnqueuesActiveTurnContext' -count=1; go test ./appserver -run 'ThreadShellCommand|ThreadHistory|TurnStarted|TurnRead|TurnTurns' -count=1; go test ./rollout -run 'TurnStarted|RootTurn|TurnComplete|ReplayBuilder' -count=1"
       ]
     },
     {

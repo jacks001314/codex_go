@@ -250,6 +250,15 @@ func (r *RuntimeRouter) prepareThreadShellCommandRun(threadID string, command st
 	if err != nil {
 		return nil, err
 	}
+	startedAt := time.Unix(response.Turn.StartedAt, 0).UTC()
+	if response.Turn.StartedAt == 0 {
+		startedAt = time.Now().UTC()
+	}
+	rootTurnID := firstNonEmpty(response.Turn.RootTurnID, response.Turn.ID)
+	// Rust #44611 centralizes TurnStarted emission for regular turns, shell
+	// commands and manual compaction. A standalone shell command has no
+	// inherited root, so the turn's own ID is its root attribution.
+	_ = r.appendRuntimeTurnStarted(threadID, response.Turn.ID, rootTurnID, startedAt)
 	appTurn := appTurnFromTurnRecord(&response.Turn, nil, TurnStatusInProgress, nil, nil)
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
 	return &threadShellCommandRun{
@@ -325,6 +334,17 @@ func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadSh
 	if run.Standalone {
 		_ = r.requireTurns().Complete(&turn.TurnCompleteParams{ThreadID: run.ThreadID, TurnID: run.TurnID, Status: string(TurnStatusCompleted)})
 		duration := completedAtMS - startedAtMS
+		turnStartedAt := time.Unix(run.StartedAt, 0).UTC()
+		if run.StartedAt == 0 {
+			turnStartedAt = time.Now().UTC()
+		}
+		turnDurationMS := completedAtMS - turnStartedAt.UnixMilli()
+		if turnDurationMS < 0 {
+			turnDurationMS = 0
+		}
+		// The persisted turn must close for replay/history reconstruction, like
+		// Rust's shell-command task (Rust #44611).
+		_ = r.appendRuntimeTurnComplete(run.ThreadID, run.TurnID, time.UnixMilli(completedAtMS).UTC(), turnDurationMS)
 		r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 			ThreadID: run.ThreadID,
 			Turn:     completedTurnNotificationTurn(run.TurnID, run.TurnID, TurnStatusCompleted, nil, &run.StartedAt, &completedAtMS, &duration),

@@ -10544,6 +10544,43 @@ func TestRuntimeRouterThreadShellCommandPersistsUserShellRecord(t *testing.T) {
 	if !strings.Contains(item.Text, "<user_shell_command>") || !strings.Contains(item.Text, "persisted-shell") {
 		t.Fatalf("persisted shell text = %q", item.Text)
 	}
+	rolloutPath, err := rollout.FindThreadPath(router.codexHomeForRollout(), string(threadID), false)
+	if err != nil {
+		t.Fatalf("FindThreadPath() error = %v", err)
+	}
+	lines, _, err := rollout.Load(rolloutPath)
+	if err != nil {
+		t.Fatalf("Load(rollout) error = %v", err)
+	}
+	var sawTurnStarted, sawTurnComplete bool
+	for _, line := range lines {
+		if line.Type != "event_msg" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(line.Payload, &payload); err != nil {
+			t.Fatalf("Unmarshal rollout event error = %v", err)
+		}
+		switch payload["type"] {
+		case "task_started":
+			if payload["turn_id"] != started.TurnID {
+				continue
+			}
+			sawTurnStarted = true
+			// Rust #44611: a standalone shell command has no inherited root, so
+			// its turn-start event attributes the turn to itself.
+			if payload["root_turn_id"] != started.TurnID {
+				t.Fatalf("shell turn_started root_turn_id = %#v, want %q", payload["root_turn_id"], started.TurnID)
+			}
+		case "task_complete":
+			if payload["turn_id"] == started.TurnID {
+				sawTurnComplete = true
+			}
+		}
+	}
+	if !sawTurnStarted || !sawTurnComplete {
+		t.Fatalf("shell rollout turn events = started %v, complete %v; lines = %#v", sawTurnStarted, sawTurnComplete, lines)
+	}
 
 	read := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{
 		ThreadID:     string(threadID),
