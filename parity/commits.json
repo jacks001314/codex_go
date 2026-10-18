@@ -12099,9 +12099,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/11; needs review: ClosedCell, begin_execution, finish_notification, insert_ready, remove_execution"
+        "Round 591 (fix): retained executions now have an explicit cell-ID owner, so nested tool and notification callbacks route to the correct invocation when multiple yielded cells are live; call-ID matching remains only the pre-admission fallback. Wait completion, cancellation, and host cell_closed release the retained invocation. Added TestCodeModeRoutesCallbacksToOwningYieldedExecutionLikeRust with two live cells and non-prefixed nested call IDs. Tests: go test ./tool -run 'TestCodeMode' -count=1; go vet ./tool; go test ./codemode -run 'Callback|CellClosed|Delegate|Retained' -count=1"
       ]
     },
     {
@@ -16240,9 +16240,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 592 (audit): model_post_turn_compact_threshold_percent validates 0..100, omitted/zero disables it, and the threshold includes existing auto-compaction limits. Pending input, cancellation, and token-budget mode skip the path; the attempt records postTurn analytics and runs before turn completion. Successful local summaries are buffered, empty summaries do not replace history, interruptions/aborts fail the turn, and other failures warn while preserving the completed answer. Guardian approval reviews use the dedicated reviewer session. Tests: go test ./config ./appserver -run 'PostTurn|CompactThreshold|AfterFinal' -count=1"
       ]
     },
     {
@@ -27841,9 +27841,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: handle_attach"
+        "Round 593 (re-audit; original Round 207): ExistingCallTransport joins client-created calls without session configuration and uses bounded existing-call sideband activation. A replacement publishes the previous close before the successor's started event, and a delayed detach carrying the replaced conversation ID returns ErrRealtimeSessionMismatch without closing the replacement; a matching session ID closes it. Tests: go test ./realtime -run 'Completion|Detach|Replaced|Identity' -count=1"
       ]
     },
     {

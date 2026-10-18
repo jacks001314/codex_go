@@ -96,7 +96,11 @@ type codeModeExecExecutor struct {
 	// cell so notifications and nested calls keep routing to their originating
 	// execution until the cell is cleaned up (Rust #44865).
 	remoteCellReleases map[string]func()
-	defaultYieldMS     int
+	// remoteCellInvocations retains the execution context that owns each live
+	// cell. Callback call IDs are not guaranteed to encode their parent, so the
+	// cell ID is the authoritative routing key (Rust #44865).
+	remoteCellInvocations map[string]*Invocation
+	defaultYieldMS        int
 	// showCellOverhead mirrors Rust's features.code_mode.experimental_show_cell_overhead
 	// (#46288): report the code-mode host duration and harness overhead in the
 	// cell response header.
@@ -300,7 +304,8 @@ func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *
 	exec := &codeModeExecExecutor{
 		store: map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},
 		remoteCellOrigins: map[string]codeModeCallOrigin{}, remoteCellReleases: map[string]func(){},
-		provider: provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
+		remoteCellInvocations: map[string]*Invocation{},
+		provider:              provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
 	}
 	if provider != nil {
 		exec.remote = provider.NewSession(&codeModeRemoteDelegate{exec: exec})
@@ -794,6 +799,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		e.remoteCellsMu.Lock()
 		e.remoteCells[response.CellID] = registry
 		e.remoteCellReleases[response.CellID] = done
+		e.remoteCellInvocations[response.CellID] = invocation
 		e.remoteCellsMu.Unlock()
 		// Rust's CellStarted fact: the exec call that created the cell is its
 		// parent.
@@ -933,6 +939,7 @@ func (e *codeModeExecExecutor) forgetRemoteCell(cellID string) {
 	e.remoteCellsMu.Lock()
 	delete(e.remoteCells, cellID)
 	delete(e.remoteCellOrigins, cellID)
+	delete(e.remoteCellInvocations, cellID)
 	release := e.remoteCellReleases[cellID]
 	delete(e.remoteCellReleases, cellID)
 	e.remoteCellsMu.Unlock()
@@ -1000,6 +1007,24 @@ func (d *codeModeRemoteDelegate) invocation(callID string) *Invocation {
 	return nil
 }
 
+// invocationForCell resolves callbacks from a live cell through the execution
+// that started it. Falling back to call-id matching covers callbacks that
+// arrive before the host's execute response admits the cell.
+func (d *codeModeRemoteDelegate) invocationForCell(cellID string, callID string) *Invocation {
+	if d == nil || d.exec == nil {
+		return nil
+	}
+	if cellID = strings.TrimSpace(cellID); cellID != "" {
+		d.exec.remoteCellsMu.RLock()
+		invocation := d.exec.remoteCellInvocations[cellID]
+		d.exec.remoteCellsMu.RUnlock()
+		if invocation != nil {
+			return invocation
+		}
+	}
+	return d.invocation(callID)
+}
+
 func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemoteNestedCall) (json.RawMessage, error) {
 	if d == nil || d.exec == nil {
 		return nil, fmt.Errorf("code mode tool registry is unavailable")
@@ -1022,7 +1047,7 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 	} else {
 		payload.Arguments = string(call.Input)
 	}
-	parent := d.invocation(call.RuntimeToolCallID)
+	parent := d.invocationForCell(call.CellID, call.RuntimeToolCallID)
 	invocationContext := map[string]any(nil)
 	if parent != nil {
 		invocationContext = cloneInvocationContext(parent.Context)
@@ -1074,8 +1099,8 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 	return json.Marshal(codeModeToolResult(out))
 }
 
-func (d *codeModeRemoteDelegate) Notify(_ context.Context, callID string, _ string, text string) error {
-	if invocation := d.invocation(callID); invocation != nil {
+func (d *codeModeRemoteDelegate) Notify(_ context.Context, callID string, cellID string, text string) error {
+	if invocation := d.invocationForCell(cellID, callID); invocation != nil {
 		if notify, ok := invocation.Context["code_mode_notify"].(CodeModeNotifyFunc); ok {
 			notify(invocation.CallID, text)
 		}

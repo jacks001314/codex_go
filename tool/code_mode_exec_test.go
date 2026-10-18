@@ -1050,6 +1050,87 @@ func (s *yieldedCodeModeSession) Terminate(context.Context, string) (CodeModeRem
 
 func (s *yieldedCodeModeSession) Close() error { return nil }
 
+// perCallYieldedCodeModeSession yields one cell per exec call so a test can keep
+// two executions live at the same time.
+type perCallYieldedCodeModeSession struct{}
+
+func (*perCallYieldedCodeModeSession) Execute(_ context.Context, request CodeModeRemoteExecuteRequest, _ *YieldSignal) (CodeModeRemoteResponse, error) {
+	return CodeModeRemoteResponse{CellID: "cell-" + request.ToolCallID, State: "yielded"}, nil
+}
+
+func (*perCallYieldedCodeModeSession) Wait(_ context.Context, cellID string, _ uint64, _ *YieldSignal) (CodeModeRemoteResponse, error) {
+	return CodeModeRemoteResponse{CellID: cellID, State: "completed"}, nil
+}
+
+func (*perCallYieldedCodeModeSession) Terminate(_ context.Context, cellID string) (CodeModeRemoteResponse, error) {
+	return CodeModeRemoteResponse{CellID: cellID, State: "completed"}, nil
+}
+
+func (*perCallYieldedCodeModeSession) Close() error { return nil }
+
+// Mirrors Rust #44865: callbacks from concurrently yielded cells route through
+// the execution that owns the cell, even when a nested call ID does not encode
+// its parent invocation.
+func TestCodeModeRoutesCallbacksToOwningYieldedExecutionLikeRust(t *testing.T) {
+	runtime := NewCodeModeRuntime(&recordingCodeModeRemoteProvider{session: &perCallYieldedCodeModeSession{}}, false)
+	defer func() { _ = runtime.Close() }()
+	registry := NewRegistry()
+	var mu sync.Mutex
+	var owners []string
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("owner-probe")}, func(_ context.Context, invocation *Invocation) (*Output, error) {
+		owner, _ := invocation.Context["owner"].(string)
+		mu.Lock()
+		owners = append(owners, owner)
+		mu.Unlock()
+		return &Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register owner-probe: %v", err)
+	}
+	exec, _ := runtime.Executors(registry)
+	notified := map[string]string{}
+	for _, owner := range []string{"alpha", "beta"} {
+		owner := owner
+		_, err := exec.Execute(context.Background(), &Invocation{
+			CallID:  "exec-" + owner,
+			Payload: Payload{Kind: PayloadCustom, Input: `text("yield")`},
+			Context: map[string]any{
+				"owner": owner,
+				"code_mode_notify": CodeModeNotifyFunc(func(_ string, text string) {
+					mu.Lock()
+					notified[owner] = text
+					mu.Unlock()
+				}),
+			},
+		})
+		if err != nil {
+			t.Fatalf("execute %s: %v", owner, err)
+		}
+	}
+	delegate, _ := runtime.exec.remoteDelegate()
+	for _, call := range []CodeModeRemoteNestedCall{
+		{CellID: "cell-exec-alpha", RuntimeToolCallID: "nested-a", ToolName: PlainName("owner-probe"), Kind: PayloadFunction, Input: json.RawMessage(`{}`)},
+		{CellID: "cell-exec-beta", RuntimeToolCallID: "nested-b", ToolName: PlainName("owner-probe"), Kind: PayloadFunction, Input: json.RawMessage(`{}`)},
+	} {
+		if _, err := delegate.Invoke(context.Background(), call); err != nil {
+			t.Fatalf("invoke %s: %v", call.CellID, err)
+		}
+	}
+	if err := delegate.Notify(context.Background(), "notify-a", "cell-exec-alpha", "alpha notice"); err != nil {
+		t.Fatalf("notify alpha: %v", err)
+	}
+	if err := delegate.Notify(context.Background(), "notify-b", "cell-exec-beta", "beta notice"); err != nil {
+		t.Fatalf("notify beta: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got := strings.Join(owners, ","); got != "alpha,beta" {
+		t.Fatalf("nested call owners = %q, want alpha,beta", got)
+	}
+	if notified["alpha"] != "alpha notice" || notified["beta"] != "beta notice" {
+		t.Fatalf("notifications = %#v, want each owner's notice", notified)
+	}
+}
+
 // Mirrors Rust #44865: a yielded cell retains its callback registration (its
 // owning execution's context) past the execute return, and the registration is
 // released once the cell completes.
