@@ -22116,9 +22116,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: TableLine, annotate_cell"
+        "Rust retains table identity, cell coordinates and source byte ranges for its app-owned Markdown selection copy serializer. Go's transcript selection is terminal-owned and copies rendered cells directly; there is no CopyLine/TableLine selection metadata path to preserve. Go's table renderer still handles wrapped/key-value/pipe layouts and blank cells for display."
       ]
     },
     {
@@ -22284,9 +22284,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go tracks unmaterialized blank dashboard sessions in agentsOverviewBlankSessions, reuses their snapshots when switching tasks, and clears the retained blank session when a turn starts or worktree flow completes. Agents-overview tests cover new-session and worktree blank-session retention/cleanup."
       ]
     },
     {
@@ -22380,9 +22380,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go restarts the working-header shimmer only when the header text changes, preserves its phase across redraws, honors animations/effects.shimmer and reduced motion, and keeps text/layout unchanged. Tests cover phase stability, settings changes, reduced motion, and fallback rendering."
       ]
     },
     {

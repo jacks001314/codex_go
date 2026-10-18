@@ -2055,6 +2055,11 @@ green.
 - `#48118` and `#48469` are complete: configurable right-click paste and
   terminal-aware copy-on-select behavior are implemented with config,
   eligibility, delivery/invalidations, and selection tests.
+- `#48548` is not applicable to terminal-owned transcript selection; Go has no
+  table-selection copy metadata path.
+- `#48628` and `#48757` are complete: blank dashboard sessions are retained and
+  cleaned up correctly, and working-header shimmer timing/settings match the
+  desktop behavior.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.
