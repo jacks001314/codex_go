@@ -91,6 +91,21 @@ func TestSelectedAgentStatusSymbolUsesSelectionStyleLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #47382: the task owning the running voice conversation carries a
+// visible voice badge, styled with the row selection when selected.
+func TestVoiceBadgeRendersLikeRust(t *testing.T) {
+	view := New([]Row{{ThreadID: "voice", Name: "Voice owner", Group: GroupReady, HasVoice: true}}, "", false)
+	plain := strings.Join(view.Render(100, 12), "\n")
+	if !strings.Contains(plain, "voice") {
+		t.Fatalf("voice badge missing:\n%s", plain)
+	}
+	view.Selected = 0
+	styled := strings.Join(view.RenderStyled(100, 12), "\n")
+	if !strings.Contains(styled, "\x1b[36;1m  voice\x1b[0m") {
+		t.Fatalf("selected voice badge did not use the selection style:\n%s", styled)
+	}
+}
+
 func TestRenderStyledFooterUsesResolvedShortcutHints(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	view.SetShortcutHint(ShortcutHintSearch, "ctrl-l")

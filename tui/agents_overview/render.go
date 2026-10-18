@@ -400,6 +400,13 @@ func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
 		{text: " ", style: spanPlain},
 		v.titleSpan(row.ThreadID, row.Title(), spanPlain),
 	}
+	if row.HasVoice {
+		voiceStyle := spanPlain
+		if v.Selected == index {
+			voiceStyle = spanCyanBold
+		}
+		spans = append(spans, span{text: "  voice", style: voiceStyle})
+	}
 	if projectGrouping {
 		spans = append(spans, span{text: "  " + row.Group.Label(), style: spanDim})
 	}

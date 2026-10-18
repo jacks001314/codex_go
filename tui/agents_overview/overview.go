@@ -211,6 +211,9 @@ type Row struct {
 	Group        Group
 	IsCurrent    bool
 	StatusActive bool // an active turn is running (enables ctrl+x stop)
+	// HasVoice marks the task whose session owns the running voice
+	// conversation (Rust #47382).
+	HasVoice bool
 	// Source is the task's thread source (Rust SessionSource). The dashboard
 	// uses it to decide whether the task may be pinned in the shared section
 	// (Rust #51500 supports_shared_pinning). The host maps

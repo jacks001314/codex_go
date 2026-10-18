@@ -19103,7 +19103,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Go's agents overview rows carry title, group/status, model, reasoning, project, usage, branch, last message and prompt, but no voice-conversation activity badge; tui/agents_overview has no voice field or rendered badge. Rust's voice indicator on task rows remains unimplemented."
+        "Go now carries HasVoice on agents-overview rows, marks the row whose thread id owns the running VoiceConversationState on refresh, renders a 'voice' badge with selection styling, and clears it when voice is no longer running; TestAgentsOverviewMarksVoiceOwnerLikeRust and TestVoiceBadgeRendersLikeRust cover the root-owner path. Rust also maps a child-thread voice owner to its root task session; Go's overview rows carry no session/parent identity for that mapping, so child-owned voice does not yet badge the root row."
       ]
     },
     {

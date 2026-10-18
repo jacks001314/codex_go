@@ -352,6 +352,12 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		// advertises the pin shortcut.
 		m.agentsOverview.ClearPinnedThreads()
 	}
+	voiceOwner := strings.TrimSpace(m.VoiceConversation.ThreadID)
+	voiceRunning := voiceOwner != "" && m.VoiceConversation.Running()
+	for index := range message.rows {
+		message.rows[index].HasVoice = voiceRunning &&
+			strings.TrimSpace(message.rows[index].ThreadID) == voiceOwner
+	}
 	m.agentsOverview.ApplyRefresh(message.rows, m.agentsOverview.SelectedThreadID())
 	m.syncAgentsOverviewUsageLines()
 	usageCmd := m.refreshAgentsOverviewUsageCmd()
