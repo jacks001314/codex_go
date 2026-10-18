@@ -267,6 +267,20 @@ type CompactedEvent struct {
 	RetainedContext *retainedctx.RetainedContext `json:"retained_context,omitempty"`
 }
 
+// TokenUsageRecord mirrors Rust RolloutItem::TokenUsageRecord (#41912): one
+// completed Responses API usage observation with response, turn, thread,
+// session, and root-turn attribution.
+type TokenUsageRecord struct {
+	ThreadID         string         `json:"thread_id"`
+	TurnID           string         `json:"turn_id"`
+	SessionID        string         `json:"session_id"`
+	RootTurnID       string         `json:"root_turn_id"`
+	ResponseID       string         `json:"response_id"`
+	Usage            map[string]any `json:"usage"`
+	TurnTokenUsage   map[string]any `json:"turn_token_usage"`
+	ThreadTokenUsage map[string]any `json:"thread_token_usage"`
+}
+
 type ThreadGoal struct {
 	ThreadID        string `json:"threadId"`
 	Objective       string `json:"objective"`
@@ -839,6 +853,22 @@ func (r *Recorder) AppendTurnContext(record TurnContextRecord, now time.Time) er
 	})
 }
 
+// AppendTokenUsageRecord persists one response's usage observation.
+func (r *Recorder) AppendTokenUsageRecord(record TokenUsageRecord, now time.Time) error {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return r.AppendLine(Line{
+		Type:      "token_usage_record",
+		Timestamp: now.UTC().Format(time.RFC3339Nano),
+		Payload:   payload,
+	})
+}
+
 // AppendRetainedContext persists one sparse retained-context event (Rust
 // RolloutItem::RetainedContext): a model-invisible host fact recorded between
 // compaction checkpoints, which a resumed thread replays in order.
@@ -882,6 +912,32 @@ func RetainedContextEvents(lines []Line) []retainedctx.RetainedContextEvent {
 		events = append(events, event)
 	}
 	return events
+}
+
+// TokenUsageRecords returns durable response usage observations in rollout
+// order.
+func TokenUsageRecords(lines []Line) []TokenUsageRecord {
+	records := []TokenUsageRecord{}
+	for i := range lines {
+		if lines[i].Type != "token_usage_record" || len(lines[i].Payload) == 0 {
+			continue
+		}
+		var record TokenUsageRecord
+		if err := json.Unmarshal(lines[i].Payload, &record); err != nil {
+			continue
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+// LatestTokenUsageRecord returns the newest durable response usage record.
+func LatestTokenUsageRecord(lines []Line) *TokenUsageRecord {
+	records := TokenUsageRecords(lines)
+	if len(records) == 0 {
+		return nil
+	}
+	return &records[len(records)-1]
 }
 
 // TurnContextSettings returns the model, compaction compatibility hash and cyber

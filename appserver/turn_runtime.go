@@ -1874,6 +1874,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		if tokenInfo != nil {
 			usage.Total = tokenInfo.Total
 			usage.Last = tokenInfo.Last
+			total := TokenUsageBreakdown{}
+			if tokenInfo.Total != nil {
+				total = *tokenInfo.Total
+			}
+			r.appendTurnTokenUsageRecords(threadID, turnID, rootTurnID, result, total)
 		}
 		r.notify(NotificationThreadTokenUsageUpdated, &ThreadTokenUsageUpdatedNotification{
 			ThreadID:   threadID,
@@ -5605,6 +5610,87 @@ func tokenUsageFromAgentUsage(usage model.AgentUsage) *TokenUsage {
 		OutputTokens:          usage.OutputTokens,
 		ReasoningOutputTokens: usage.ReasoningOutputTokens,
 		TotalTokens:           model.AgentUsageTotalTokens(usage),
+	}
+}
+
+// appendTurnTokenUsageRecords mirrors Rust #41912's durable per-response
+// TokenUsageRecord lines. The turn total is cumulative at each response; the
+// thread total starts from the turn baseline and adds the turn's running total.
+func (r *RuntimeRouter) appendTurnTokenUsageRecords(threadID string, turnID string, rootTurnID string, result *turn.AgentLoopResult, threadTotal TokenUsageBreakdown) {
+	if r == nil || result == nil || len(result.Responses) == 0 {
+		return
+	}
+	baseline := threadTotal
+	subtractAgentUsageFromBreakdown(&baseline, result.Usage)
+	turnTotal := model.AgentUsage{}
+	now := time.Now().UTC()
+	for _, response := range result.Responses {
+		if response == nil {
+			continue
+		}
+		turnTotal = addTokenUsageRecordUsage(turnTotal, response.Usage)
+		threadAtResponse := baseline
+		addAgentUsageToBreakdown(&threadAtResponse, turnTotal)
+		record := rollout.TokenUsageRecord{
+			ThreadID:         strings.TrimSpace(threadID),
+			TurnID:           strings.TrimSpace(turnID),
+			SessionID:        strings.TrimSpace(threadID),
+			RootTurnID:       strings.TrimSpace(rootTurnID),
+			ResponseID:       strings.TrimSpace(response.ResponseID),
+			Usage:            tokenUsageRecordMap(response.Usage),
+			TurnTokenUsage:   tokenUsageRecordMap(turnTotal),
+			ThreadTokenUsage: tokenUsageBreakdownRecordMap(&threadAtResponse),
+		}
+		_ = r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+			return recorder.AppendTokenUsageRecord(record, now)
+		})
+	}
+}
+
+func addTokenUsageRecordUsage(total model.AgentUsage, usage model.AgentUsage) model.AgentUsage {
+	total.InputTokens += usage.InputTokens
+	total.CachedInputTokens += usage.CachedInputTokens
+	total.CacheWriteInputTokens += usage.CacheWriteInputTokens
+	total.OutputTokens += usage.OutputTokens
+	total.ReasoningOutputTokens += usage.ReasoningOutputTokens
+	total.TotalTokens += model.AgentUsageTotalTokens(usage)
+	return total
+}
+
+func subtractAgentUsageFromBreakdown(total *TokenUsageBreakdown, usage model.AgentUsage) {
+	if total == nil {
+		return
+	}
+	total.InputTokens -= usage.InputTokens
+	total.CachedInputTokens -= usage.CachedInputTokens
+	total.CacheWriteInputTokens -= usage.CacheWriteInputTokens
+	total.OutputTokens -= usage.OutputTokens
+	total.ReasoningOutputTokens -= usage.ReasoningOutputTokens
+	total.TotalTokens -= model.AgentUsageTotalTokens(usage)
+}
+
+func tokenUsageRecordMap(usage model.AgentUsage) map[string]any {
+	return map[string]any{
+		"input_tokens":             usage.InputTokens,
+		"cached_input_tokens":      usage.CachedInputTokens,
+		"cache_write_input_tokens": usage.CacheWriteInputTokens,
+		"output_tokens":            usage.OutputTokens,
+		"reasoning_output_tokens":  usage.ReasoningOutputTokens,
+		"total_tokens":             model.AgentUsageTotalTokens(usage),
+	}
+}
+
+func tokenUsageBreakdownRecordMap(usage *TokenUsageBreakdown) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	return map[string]any{
+		"input_tokens":             usage.InputTokens,
+		"cached_input_tokens":      usage.CachedInputTokens,
+		"cache_write_input_tokens": usage.CacheWriteInputTokens,
+		"output_tokens":            usage.OutputTokens,
+		"reasoning_output_tokens":  usage.ReasoningOutputTokens,
+		"total_tokens":             usage.TotalTokens,
 	}
 }
 
