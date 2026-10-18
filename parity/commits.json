@@ -3037,9 +3037,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "write_stdin gates non-empty input to escalated terminals behind a fresh approval, skips terminals whose launch profile still matches, rejects NUL/oversized input, fails closed on policy drift, and routes hooks/Guardian with writeStdin approval kind. Tests: go test ./appserver -run 'WriteStdinApproval' -count=1; go test ./tool -run 'WriteStdinApproval|UnifiedExecWriteStdin' -count=1"
       ]
     },
     {
