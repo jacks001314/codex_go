@@ -2063,6 +2063,9 @@ green.
 - `#49073` is complete: realtime voice catalog failures stop picker/startup,
   close the helper before sending a start request, and report a saved-but-
   unconfirmed preference without changing in-memory voice settings.
+- `#48560` is complete: an already-painted working tip survives transcript
+  interaction/scrolling, while initial and completion tips still require an
+  idle following viewport.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

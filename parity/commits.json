@@ -22152,9 +22152,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go splits tip surfaces into shared gates plus a viewport gate. Initial working-tip exposure and completion tips require a following/idle viewport, but an already-painted working tip remains eligible after the user scrolls away or transcript interaction interrupts following. Tests cover working/completion selection, tip disappearance, image-row spacing, and header shimmer/phase stability."
       ]
     },
     {
