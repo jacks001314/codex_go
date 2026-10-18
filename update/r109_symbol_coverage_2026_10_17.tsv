@@ -2576,7 +2576,7 @@ f326857cf405fb254cf6c8f38766daff074fca6e	43524	Restrict MCP user verification an
 f35a0fdc5d5fe591fbb2cad7ca6c491c884c3b4b	49261	Preserve Windows sandbox runner launch errors (#49261)	2026-09-29	sandbox	0	0	1.00	0	0	complete	
 f365d5754bb643983079676c29e8f7562399019e	50781	Restrict TUI MCP startup notifications to owned threads (#50781)	2026-10-04	tui	2	0	0.00	0	0	implementation_pending	owns_thread_for_routing,owns_untracked_notification
 f3741880f6dbc706252f4c5bb93f061dba18950d	40999	Harden managed proxy listener handoff (#40999)	2026-08-26	appserver	4	1	0.25	0	0	audit_pending	move_fd_above_stdio,receive_listener,send_listener
-f3803587c9d79ee79b04a61c5c9c9bd2b1aefc52	45439	Share tool output schemas and defer MCP envelope construction (#45439)	2026-09-14	mcp	4	1	0.25	0	0	audit_pending	ToolOutputSchema,from_mcp_output_schema,into_value
+f3803587c9d79ee79b04a61c5c9c9bd2b1aefc52	45439	Share tool output schemas and defer MCP envelope construction (#45439)	2026-09-14	mcp	4	1	0.25	0	0	complete	ToolOutputSchema,from_mcp_output_schema,into_value
 f3c4d082d939cefe1a97c156d02ecee6d19cd207	44933	Remove Windows world-writable scans and warnings from the TUI (#44933)	2026-09-11	tui	0	0		0	0	not_applicable	
 f3da3861c557b4813d9840177a45940a465f9efe	46096	Add a one-time composer starfield for new Astra tasks (#46096)	2026-09-17	tui	30	3	0.10	0	0	audit_pending	AstraModelPickerAction,Sparkle,SparkleDraft,SparkleEditorState,after_sparkle_key,before_sparkle_editor_key,before_sparkle_key,dismiss_composer_sparkle,dismiss_sparkle,handle_paste_burst_flush
 f3f07753ca3db9321a8074d4448afeeb6e293245	46857	Extract shared text selection helpers for the TUI (#46857)	2026-09-20	tui	6	2	0.33	0	0	audit_pending	SelectionUnit,click_count,from_clicks,is_copy_key

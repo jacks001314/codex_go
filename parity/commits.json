@@ -12869,9 +12869,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: ToolOutputSchema, from_mcp_output_schema, into_value"
+        "Go tool specs carry shared output-schema values for built-in and MCP tools, Code Mode forwards compact output-schema raw bytes to its nested surface, and MCP result envelopes are constructed at execution time rather than retained per catalog entry. Tests: go test ./tool -run 'Handler|CodeMode|OutputSchema' -count=1; go test ./mcp -run 'Tool|Catalog|Runtime' -count=1"
       ]
     },
     {
