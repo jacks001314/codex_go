@@ -27673,9 +27673,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: root_ownership"
+        "Round 636 (parity backfill): ownership classification is independent of manifest parsing - malformed ancestor manifests count as plugin ownership, nested manifests as parent ownership, conclusive discovery results are required, and probe failures are surfaced rather than misclassified as standalone. Tests: go test ./appserver -run 'ExecutorPluginRootOwnership' -count=1"
       ]
     },
     {
@@ -27697,9 +27697,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: has_same_workspace"
+        "Round 637 (parity backfill): EnvironmentCapabilityRoots retains original indexes across environment splits; restriction follows captured selections, thread requests reselect retained roots, and each step snapshots the ready roots while workspace identity ignores capability-root/config-only differences. Tests: go test ./appserver -run 'EnvironmentCapabilityRoots|RestrictCapabilityRoots|InspectSelectedCapabilityRoots|StepCapabilitySnapshot' -count=1"
       ]
     },
     {
@@ -27781,9 +27781,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: ordered_env_entries"
+        "Round 638 (parity backfill): :tmpdir resolves only from absolute workload TEMP/TMP values with deterministic case-insensitive deduplication; permission grants and the child environment use the same ordered entries. Tests: go test ./sandbox/windowssandbox -run 'MakeEnvBlock|WritableTempRoots' -count=1"
       ]
     },
     {
@@ -27793,9 +27793,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/12; needs review: clone_for_teardown, into_teardown_guard, record_shutdown_failure, session_teardown, wait_detailed"
+        "Round 639 (parity backfill): the public agent-tree shutdown report carries bounded payload-free failures with operation, phase, and thread classifications, an omitted count, and propagation through agent tool results. Tests: go test ./agent ./appserver -run 'AgentTreeShutdownReport|RuntimeAgentControllerShutdownReport' -count=1"
       ]
     },
     {
@@ -27998,9 +27998,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: ReviewAuthorization, parse_guardian_assessment, project_snapshot"
+        "Round 640 (parity backfill): each review attempt checkpoints the last committed response/seed; a completed allow invalidated by changed authorization restores that checkpoint on retry and exhaustion, preventing the stale response ID from parenting the refreshed review. Tests: go test ./appserver -run 'GuardianReviewRefreshesChangedContext|GuardianReviewStaleRetry|GuardianStaleAllowRollsBack|GuardianReviewDenySkips' -count=1"
       ]
     },
     {
