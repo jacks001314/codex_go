@@ -17421,9 +17421,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 685 (progress): composer_hint renders a quota usage notice from the latest codex rate-limit snapshot, hides it for modal/popup/selection/backtrack/non-following states or an applicable backend banner, selects the highest-used window above the Plus/Team 5h 50% or default 75% threshold, suppresses unlimited/credited accounts, and formats remaining capacity plus reset time within Rust's half-row/compact width policy. Rolling snapshots now merge sparse windows, carry plan/credits/reset metadata forward, refuse lower usage as recovery unless the reset window advanced, and preserve the notice across thread switches. Go's warning history cells already remain visible in its transcript. Remaining: app-server request-id tracking for stale account-read rejection and explicit account-change clearing."
+        "Round 685 (implementation): composer_hint renders the most constrained quota window from rolling codex snapshots while typing and during turns, hides it for modal/popup/selection/backtrack/non-following states or an applicable backend banner, applies Plus/Team 5h 50% and default 75% thresholds, suppresses unlimited/credited accounts, and formats remaining capacity, reset time, and /status within Rust's half-row/compact width policy. Sparse rolling updates merge windows and plan/credits/reset metadata, lower usage cannot confirm recovery unless the reset window advanced, and thread switches preserve the state. Account identity changes clear quota snapshots, plan state, and warning thresholds. Go's warning history cells remain visible in the transcript. A separate account-usage read request-id path does not exist in Go, so stale-read rejection has no carrier. Tests: TestUsageNoticeLineUsesHalfRowWidthLikeRust, TestUsageNoticeThresholdsAndCreditsLikeRust, TestUsageNoticeReplacesPassiveFooterLikeRust, TestRollingUsageNoticeMergeLikeRust, TestAccountChangeClearsUsageNoticeLikeRust; go test ./tui/... -count=1; go vet ./tui/..."
       ]
     },
     {

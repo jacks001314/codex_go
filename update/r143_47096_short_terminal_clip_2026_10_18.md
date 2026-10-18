@@ -15,9 +15,9 @@
   `resets at ...` 文案。
 
 结论：`#47096` 的短终端裁剪与 usage notice 宽度策略均已落地。`#46912`
-仍保留 partial：rolling snapshot 已合并稀疏窗口、保留元数据，并只在 reset
-窗口前进时接受低用量恢复；剩余 app-server request-id 的 stale account-read
-拒绝与账户切换清理。
+已收尾为 complete：rolling snapshot 合并稀疏窗口与元数据，只在 reset 窗口
+前进时接受低用量恢复；账户切换会清理 quota/plan/warning 状态。Go 没有独立
+account-usage read 请求，因此 stale request-id 拒绝无 carrier。
 
 验证：
 

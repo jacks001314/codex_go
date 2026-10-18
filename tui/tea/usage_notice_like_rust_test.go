@@ -105,6 +105,12 @@ func TestUsageNoticeReplacesPassiveFooterLikeRust(t *testing.T) {
 	if strings.Contains(footer, footerHelpText) {
 		t.Fatalf("footer kept passive hints: %q", footer)
 	}
+	model.composer.SetValue("draft while running")
+	model.State.SetStatus("running")
+	footer, _ = model.footerHelpLine()
+	if !strings.Contains(footer, "⚠ 5h limit") {
+		t.Fatalf("notice disappeared with a draft/running turn: %q", footer)
+	}
 
 	model.slashPopup.Active = true
 	footer, _ = model.footerHelpLine()
@@ -158,3 +164,28 @@ func TestRollingUsageNoticeMergeLikeRust(t *testing.T) {
 }
 
 func usageStringPtr(value string) *string { return &value }
+
+// Rust #46912 update_account_state: quota state and warning thresholds belong
+// to the old account and clear when the account identity changes.
+func TestAccountChangeClearsUsageNoticeLikeRust(t *testing.T) {
+	model := usageNoticeModel(t, chatwidget.RateLimitSnapshot{
+		LimitID:  "codex",
+		PlanType: "plus",
+		Primary:  usageNoticeWindowPtr(92, 300, nil),
+	}, 100)
+	model.State.AccountDisplay = "user@example.com (Plus)"
+	model.hasChatGPTAccount = true
+	if _, ok := model.usageNoticeLine(78); !ok {
+		t.Fatal("usage notice missing before account change")
+	}
+	model.Update(AccountStatusUpdatedMsg{
+		Display:           "other@example.com (Plus)",
+		HasChatGPTAccount: true,
+	})
+	if len(model.rateLimitSnapshots) != 0 || model.chatGPTPlanType != "" {
+		t.Fatalf("quota state survived account change: %#v plan=%q", model.rateLimitSnapshots, model.chatGPTPlanType)
+	}
+	if _, ok := model.usageNoticeLine(78); ok {
+		t.Fatal("usage notice survived account change")
+	}
+}
