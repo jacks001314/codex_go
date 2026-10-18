@@ -31651,9 +31651,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 399 (audit): sandboxpath already resolves macOS ASCII aliases for protected metadata and writable-root components through pathconf(_PC_CASE_SENSITIVE), failing closed when sensitivity is unavailable. Explicit metadata grants and narrower deny restrictions retain precedence. Tests: go test ./sandbox/sandboxpath -count=1; go test ./sandbox -run 'Metadata|Protected|Case' -count=1; GOOS=darwin GOARCH=amd64 go test -c ./sandbox/sandboxpath"
       ]
     },
     {
