@@ -15543,9 +15543,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: activate_turn_environments, configured_environment_selections, primary_workspace_roots"
+        "Equivalent mechanism: Thread settings carry no environments field. A running turn keeps its admitted TurnStartParams environment snapshot for tools, MCP roots, callbacks, and capability roots; persisted runtimeEnvironmentSelections are inherited into the next turn that omits an explicit selection. Active/future isolation and pending descendant propagation are covered by the MCP active-selection and environment-inheritance tests."
       ]
     },
     {
