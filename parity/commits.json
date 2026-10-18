@@ -18929,9 +18929,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: current_resource_cache_key"
+        "Round 329 (audit): N/A - Go has no cloud skills extension or Apps-resource cache-key lifecycle. Skills come from host/executor providers and are refreshed from their catalog snapshots; there is no warning-free cloud catalog cache with auth scope and resource-generation invalidation to reuse."
       ]
     },
     {

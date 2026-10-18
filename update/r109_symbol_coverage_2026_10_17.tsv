@@ -1512,7 +1512,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8ec80de0ef55d2fb393332d75c32df9751496a58	52640	Count interrupted goal continuations toward the no-activity limit (#52640)	2026-10-09	appserver	3	3	1.00	0	0	complete
 8ece31a7bf849ddb1d1f01aa72033cd106a1c2ba	45837	Hide WSLg's duplicate root in restricted Linux sandboxes (#45837)	2026-09-16	sandbox	3	0	0.00	0	0	implementation_pending	WSLG_DISTRO_ROOT,ensure_supported_path,is_duplicate_root
 8edb95f274ae70faac9dc35f079ed7b997dd862c	39979	Preserve MCP compatibility with older executors (#39979)	2026-08-21	appserver	0	0		0	0	not_applicable	
-8edfca892d46624a114a1e9a7095a8ed4e334232	47350	Reuse cloud skill catalogs across turns until invalidated (#47350)	2026-09-22	core	1	0	0.00	0	0	implementation_pending	current_resource_cache_key
+8edfca892d46624a114a1e9a7095a8ed4e334232	47350	Reuse cloud skill catalogs across turns until invalidated (#47350)	2026-09-22	core	1	0	0.00	0	0	not_applicable	current_resource_cache_key
 8f0b05910efb6f290dc8a31afc1c3f250f0baf99	48187	Fix zsh alias quoting in sourced shell snapshots (#48187)	2026-09-25	execserver	0	0		0	0	not_applicable	
 8f0d2459ac753e22cf0cf09999c3feac7b80b589	45768	Add consumer Top chats usage analytics (#45768)	2026-09-15	tui	20	10	0.50	0	0	audit_pending	TaskCredits,TaskUsage,TaskUsageAmounts,TaskUsageGroup,TaskUsageResponse,TaskUsageStatus,TaskUsageThread,get_task_usage,task_lines,task_rows
 8f103417ef3e63193561d7b3d8ff4cf9b91335de	47964	Preserve the client-agent header for Amazon Bedrock Runtime (#47964)	2026-09-24	model	0	0		0	0	not_applicable	
