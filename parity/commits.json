@@ -6773,9 +6773,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: footer_flash_delay, resume_text_entry, show_footer_flash"
+        "N/A by architecture (audit): Go does not use Rust's shared ChatComposer/plain-text preset for embedded surfaces. CustomPromptView is a separate single-line/multiline editor used by goal, rename, feedback, and other prompts; it already treats command prefixes literally, has its own paste-burst Enter policy, and reports empty submit in place. Tests: TestCustomPromptPasteBurstNewlineDoesNotSubmitShortFirstLine and TestCustomPromptDelayedEnterAfterTypingSubmits."
       ]
     },
     {
@@ -8489,9 +8489,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: ManagedWorktreeAttach, ManagedWorktreeTransition, attach_working_directory, finish_managed_worktree"
+        "N/A by architecture (audit): upstream 52e12e0cb5 defers managed-worktree attach/transition work into fresh iterations of Rust's recursive event loop. Go's agents overview returns Bubble Tea commands (newAgentsOverviewWorktreeCmd) and applies the result on a later Update, so worktree setup never recurses inside the event handler. Test: TestModelAgentsDashboardNewWorktree."
       ]
     },
     {
@@ -12533,9 +12533,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: cancel_thread_title_generation"
+        "N/A by architecture (audit): Go TUI does not launch asynchronous model-generated thread-title requests. Fresh titles are derived synchronously from the first prompt by interactiveAutoThreadTitle, and manual rename writes the persisted name directly, so there is no pending generated-title operation to cancel after a rename."
       ]
     },
     {
@@ -15017,9 +15017,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: run_with_optional_draft, take_draft"
+        "Audited upstream 1e9564fb85 (#46077): Go agents-overview session creation runs in a Bubble Tea command (newAgentsOverviewSessionCmd), sets agentsOverviewBusy while the request is outstanding, and applies the result on a later Update, so the event loop and composer remain responsive. A failed start retains the draft path and reports the failure in the dashboard. Test: TestModelAgentsDashboardNewSessionOpensBlankSession."
       ]
     },
     {
