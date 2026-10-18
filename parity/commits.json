@@ -610,9 +610,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 720 (audit): already implemented. otelinit applies analytics consent only to the built-in statsig exporter; explicit OTLP HTTP/gRPC collectors remain active when analytics is disabled or absent, and metrics_exporter=none disables metrics. Covered by the otelinit provider tests; go test ./otelinit -count=1."
       ]
     },
     {
