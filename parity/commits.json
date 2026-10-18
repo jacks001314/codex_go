@@ -12063,9 +12063,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 9/13; needs review: McpEmaRegistration, PluginMcpServerEmaAuthConfig, ema_registration, oauth_idp"
+        "Round 536 (audit): already implemented. oauth.authorization_server_issuer is parsed only in the MCP OAuth table, enterprise refresh-token auth is feature-gated, ordinary MCP OAuth login is blocked for EMA servers, and the trusted IdP remains at the config read boundary. Tests: go test ./config ./app ./appserver -run 'EMA|EnterpriseMCP|OAuthIssuer|McpEma' -count=1"
       ]
     },
     {
@@ -26785,9 +26785,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: build_compaction_replacement_history, matches_item, optional_prefix_boxed_fragment"
+        "Round 537 (audit): already implemented. The world-state base-instructions section is included in incremental top-level tool snapshots, and the base-instructions diff is emitted only when the context window changes. Tests: go test ./session ./appserver -run 'TopLevelTools|BaseInstructions|IncrementalCatalog' -count=1"
       ]
     },
     {
@@ -26941,9 +26941,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: record_binding_catalog_size"
+        "Round 538 (audit): already implemented. Per-server raw MCP catalog size records carry source/SKU attribution and cached-source reporting, and the app-server emits binding-catalog telemetry from the catalog path. Tests: go test ./mcp ./telemetry ./appserver -run 'CatalogTelemetry|BindingCatalog|MCPCatalogTelemetry' -count=1"
       ]
     },
     {
