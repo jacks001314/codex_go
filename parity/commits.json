@@ -10841,9 +10841,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: WindowsSystemConfigNamespaceProbe, emit_namespace_squatting_probe, emit_session_start_metrics, path_has_standard_user_mutation_allow, path_has_trusted_system_owner"
+        "Round 664 (audit): N/A by architecture. Go explicitly has no Windows %ProgramData%\\OpenAI\\Codex system config/requirements layer (config/local_layers.go), so there is no windows_codex_system_dir or system-config namespace to probe for owner/ACL squatting. Host-provided equivalent layers do not use that path."
       ]
     },
     {
@@ -15978,9 +15978,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: guardian_fork_history, world_state_checkpoint"
+        "Round 664 (audit): N/A by architecture. Go's Guardian session runner keeps previous/seeded response IDs, transcript admission, policy, evidence cursors, and admitted images in memory; review attempts never flush and reload rollout storage to build a checkpoint. Go has no forkable Guardian history or world-state checkpoint type, so the storage-reload path this commit removes does not exist."
       ]
     },
     {
