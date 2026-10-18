@@ -7061,9 +7061,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 658 (partial): Guardian parent-compaction reuse fails closed unless reuse is enabled and the checkpoint producer hash and current scoring-model hash are both nonempty and equal; missing or unknown provenance drops the stale seeded checkpoint. Local-fallback compaction stamps the producing model's comp_hash and the runtime persists compaction_model_hash in thread metadata. Remaining: Go has no separate async Guardian sampler/extension path, so the Rust sampler rejection and synchronous-review escalation are represented by dropping the seed; per-item checkpoint provenance stays record-level. Tests: go test ./appserver -run 'Guardian.*Compaction|GuardianParentCompaction|CompactionModelHash|ContextCompaction' -count=1; go test ./compact -count=1"
+        "Round 683 (audit): Guardian parent-compaction reuse fails closed unless reuse is enabled and the checkpoint producer hash and current scoring-model hash are both nonempty and equal; missing, empty, mismatched, or stale-auth provenance drops the seeded checkpoint. Local-fallback compaction stamps the producing model's comp_hash and the runtime persists compaction_model_hash in thread metadata across resume. Go has no separate asynchronous Guardian sampler/extension path, so the Rust sampler rejection and synchronous-review escalation have no carrier; omitting the incompatible seed is the fail-closed behavior. Tests: go test ./appserver -run 'Guardian.*Compaction|GuardianParentCompaction|CompactionModelHash|ContextCompaction' -count=1; go test ./compact -count=1"
       ]
     },
     {
