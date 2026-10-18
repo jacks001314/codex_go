@@ -313,6 +313,7 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
 		APIKeyAuth:                      usesAPIKeyAuth,
 		DisableAPIKeyDiscovery:          disableAPIKeyDiscovery,
+		ExplicitProviderCatalog:         strings.TrimSpace(p.info.ModelCatalogURL) != "",
 		HasAuth:                         p.auth != nil,
 		CommandAuth:                     p.info.HasCommandAuth(),
 	})

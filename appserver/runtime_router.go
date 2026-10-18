@@ -1240,6 +1240,7 @@ func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadRe
 		APIKeyAuth:                      usesAPIKeyAuth,
 		HasAuth:                         authSnapshot != nil,
 		CommandAuth:                     providerInfo.HasCommandAuth(),
+		ExplicitProviderCatalog:         strings.TrimSpace(providerInfo.ModelCatalogURL) != "",
 	})
 	model.SetAPIKeyModelDiscoveryEnabled(manager, features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery"))
 	return manager, nil
@@ -4688,6 +4689,10 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				}
 			}
 			r.applyThreadStartConfigSnapshot(response, request)
+			if strings.TrimSpace(response.Model) == "" && r.threadStartUsesExplicitProviderCatalog(request) {
+				r.rollbackThreadStartInitialization(response.Thread.ID)
+				return nil, jsonRPCInvalidRequest("No models are available. Set `model` explicitly or check your model catalog configuration.")
+			}
 			if err := r.applyThreadStartInstructionSources(response, request); err != nil {
 				r.rollbackThreadStartInitialization(response.Thread.ID)
 				return nil, err
@@ -5200,6 +5205,18 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	}
 	modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
 	providerID := firstNonEmpty(strings.TrimSpace(params.ModelProvider), stringConfigValue(cfg, "model_provider"), stringConfigValue(cfg, "modelProvider"), model.OpenAIProviderID)
+	if modelID == "" && threadStartProviderHasExplicitCatalog(cfg, providerID) {
+		presets := r.requireModels().Presets(model.RefreshOnline)
+		for _, preset := range presets {
+			if preset.IsDefault {
+				modelID = preset.Model
+				break
+			}
+		}
+		if modelID == "" && len(presets) > 0 {
+			modelID = presets[0].Model
+		}
+	}
 	modelID = threadStartProviderFallbackModel(modelID, providerID, params.AllowProviderModelFallback)
 	reasoningEffort := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 	serviceTier := r.threadStartServiceTier(cfg, &params, modelID)
@@ -5383,6 +5400,39 @@ func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams)
 		r.trustThreadStartProject(cwd)
 	}
 	return cfg, nil
+}
+
+// threadStartUsesExplicitProviderCatalog reports whether the effective
+// thread-start provider has model_catalog_url configured. An empty resolved
+// model is then a startup error instead of falling back to bundled metadata
+// (Rust #49135).
+func (r *RuntimeRouter) threadStartUsesExplicitProviderCatalog(request *Request) bool {
+	if r == nil || request == nil {
+		return false
+	}
+	var params ThreadStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForThreadStart(&params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	providerID := firstNonEmpty(
+		strings.TrimSpace(params.ModelProvider),
+		stringConfigValue(cfg, "model_provider"),
+		stringConfigValue(cfg, "modelProvider"),
+		model.OpenAIProviderID,
+	)
+	return threadStartProviderHasExplicitCatalog(cfg, providerID)
+}
+
+func threadStartProviderHasExplicitCatalog(cfg *config.Config, providerID string) bool {
+	if cfg == nil {
+		return false
+	}
+	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	return err == nil && provider != nil && strings.TrimSpace(provider.ModelCatalogURL) != ""
 }
 
 func (r *RuntimeRouter) effectiveMCPConfigForThreadStartRequest(request *Request) (*config.Config, error) {

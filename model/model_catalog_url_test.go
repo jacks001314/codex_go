@@ -88,6 +88,88 @@ func TestModelsCatalogURLRejectsOversizedResponseLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #49135: an explicit provider catalog is authoritative even when
+// API-key discovery is gated off, so bundled models are not advertised as a
+// fallback.
+func TestExplicitProviderCatalogSuppressesBundledFallbackLikeRust(t *testing.T) {
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
+		ModelCatalog: &ModelsResponse{Models: []ModelInfo{{
+			Slug:           "bundled",
+			DisplayName:    "Bundled",
+			Visibility:     VisibilityVisible,
+			SupportedInAPI: true,
+		}}},
+		ExplicitProviderCatalog: true,
+		APIKeyAuth:              true,
+		SupportsAPIKeyModels:    true,
+	})
+	if models := manager.ListModels(RefreshOffline); len(models) != 0 {
+		t.Fatalf("explicit provider catalog advertised bundled fallback: %#v", models)
+	}
+}
+
+func TestExplicitProviderCatalogReplacesBundledModelsLikeRust(t *testing.T) {
+	endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{{
+		Models: []ModelInfo{{
+			Slug:           "private-model",
+			DisplayName:    "Private",
+			Visibility:     VisibilityVisible,
+			SupportedInAPI: true,
+		}},
+	}}}
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
+		ModelCatalog: &ModelsResponse{Models: []ModelInfo{{
+			Slug:           "bundled",
+			DisplayName:    "Bundled",
+			Visibility:     VisibilityVisible,
+			SupportedInAPI: true,
+		}}},
+		Endpoint:                endpoint,
+		ExplicitProviderCatalog: true,
+	})
+	models := manager.ListModels(RefreshOnline)
+	if len(models) != 1 || models[0].Model != "private-model" {
+		t.Fatalf("explicit provider models = %#v", models)
+	}
+}
+
+func TestExplicitProviderCatalogUsesExactModelInfoLikeRust(t *testing.T) {
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
+		Endpoint: &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{{
+			Models: []ModelInfo{
+				{Slug: "model", DisplayName: "Short", Visibility: VisibilityList, SupportedInAPI: true},
+				{Slug: "model-long", DisplayName: "Long", Visibility: VisibilityList, SupportedInAPI: true},
+			},
+		}}},
+		ExplicitProviderCatalog: true,
+	})
+	_ = manager.RawModelCatalog(RefreshOnline)
+	info := manager.GetModelInfo("model-longer", nil)
+	if info.Slug != "model-longer" || !info.UsedFallbackModelMetadata {
+		t.Fatalf("explicit catalog prefix-matched model info: %#v", info)
+	}
+	exact := manager.GetModelInfo("model-long", nil)
+	if exact.DisplayName != "Long" || exact.UsedFallbackModelMetadata {
+		t.Fatalf("exact model info = %#v", exact)
+	}
+}
+
+func TestExplicitProviderCatalogRejectsAmbiguousSlugsLikeRust(t *testing.T) {
+	for _, body := range []string{
+		`{"models":[{"slug":" \t"}]}`,
+		`{"models":[{"slug":"duplicate"},{"slug":"duplicate"}]}`,
+	} {
+		server, _ := modelCatalogTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(body))
+		})
+		endpoint := &HTTPModelsEndpoint{CatalogURL: server.URL + "/codex/models"}
+		_, err := endpoint.ListModels(context.Background(), "")
+		if err == nil || err.Error() != "model catalog must contain unique, non-empty model slugs" {
+			t.Fatalf("catalog %s error = %v", body, err)
+		}
+	}
+}
+
 func TestModelsCatalogURLRejectsRedirectsWithoutForwardingCredentialsLikeRust(t *testing.T) {
 	redirected := false
 	target, _ := modelCatalogTestServer(t, func(w http.ResponseWriter, _ *http.Request) {

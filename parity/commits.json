@@ -23168,9 +23168,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: with_provider_catalog"
+        "Implemented explicit-provider catalog authority: model_catalog_url suppresses the bundled seed and fallback, fetched/cached catalog models replace bundled metadata, provider model metadata requires an exact slug match, and duplicate or empty slugs fail closed. Thread start resolves a default from an explicit catalog and returns Rust's no-models error when none is available."
       ]
     },
     {

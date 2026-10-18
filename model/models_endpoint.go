@@ -114,7 +114,7 @@ func (m *RemoteModelsManager) remoteCatalogAuthoritative() bool {
 	if m == nil {
 		return false
 	}
-	return m.useRemoteCatalogAsSourceOfTruth || m.SupportsAPIKeyDiscovery()
+	return m.explicitProviderCatalog || m.useRemoteCatalogAsSourceOfTruth || m.SupportsAPIKeyDiscovery()
 }
 
 func (e *HTTPModelsEndpoint) ListModels(ctx context.Context, etag string) (*ModelsEndpointResponse, error) {
@@ -173,6 +173,19 @@ func (e *HTTPModelsEndpoint) ListModels(ctx context.Context, etag string) (*Mode
 	models, err := decodeModelsEndpointResponse(body)
 	if err != nil {
 		return nil, err
+	}
+	if catalogURL != "" {
+		seen := make(map[string]struct{}, len(models))
+		for _, modelInfo := range models {
+			slug := modelInfo.Slug
+			if strings.TrimSpace(slug) == "" {
+				return nil, fmt.Errorf("model catalog must contain unique, non-empty model slugs")
+			}
+			if _, duplicate := seen[slug]; duplicate {
+				return nil, fmt.Errorf("model catalog must contain unique, non-empty model slugs")
+			}
+			seen[slug] = struct{}{}
+		}
 	}
 	return &ModelsEndpointResponse{
 		Models: models,
@@ -243,6 +256,7 @@ type RemoteModelsManager struct {
 	// without an explicit model_catalog_url must not opt into remote discovery.
 	apiKeyDiscoveryDisabled     bool
 	apiKeyModelDiscoveryEnabled bool
+	explicitProviderCatalog     bool
 	now                         func() time.Time
 }
 
@@ -281,6 +295,10 @@ type RemoteModelsManagerOptions struct {
 	// DisableAPIKeyDiscovery blocks remote API-key catalog discovery while
 	// leaving API-key inference and bundled models available (#46561).
 	DisableAPIKeyDiscovery bool
+	// ExplicitProviderCatalog marks a provider configured with model_catalog_url.
+	// The provider catalog is authoritative: bundled models are not used as a
+	// seed or fallback, and model metadata lookup requires an exact slug match.
+	ExplicitProviderCatalog bool
 }
 
 func NewRemoteModelsManager(modelCatalog *ModelsResponse, endpoint ModelsEndpoint) *RemoteModelsManager {
@@ -298,8 +316,12 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 	if options.ModelCatalog != nil {
 		catalog = *options.ModelCatalog
 	}
+	models := cloneModelInfos(catalog.Models)
+	if options.ExplicitProviderCatalog {
+		models = nil
+	}
 	return &RemoteModelsManager{
-		remoteModels:                    cloneModelInfos(catalog.Models),
+		remoteModels:                    models,
 		endpoint:                        options.Endpoint,
 		useRemoteCatalogAsSourceOfTruth: options.UseRemoteCatalogAsSourceOfTruth,
 		identity:                        strings.TrimSpace(options.Identity),
@@ -309,6 +331,7 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 		metricsAuthModeOverride:         strings.TrimSpace(options.MetricsAuthMode),
 		commandAuth:                     options.CommandAuth,
 		apiKeyDiscoveryDisabled:         options.DisableAPIKeyDiscovery,
+		explicitProviderCatalog:         options.ExplicitProviderCatalog,
 		now:                             time.Now,
 	}
 }
@@ -379,6 +402,9 @@ func (m *RemoteModelsManager) GetDefaultModel(model string, allowProviderModelFa
 }
 
 func (m *RemoteModelsManager) GetModelInfo(model string, config *ModelsManagerConfig) ModelInfo {
+	if m != nil && m.explicitProviderCatalog {
+		return ConstructModelInfoFromExactCandidate(model, m.GetRemoteModels(), config)
+	}
 	return ConstructModelInfoFromCandidates(model, m.GetRemoteModels(), config)
 }
 
@@ -515,13 +541,28 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 			m.mu.Unlock()
 			m.renewCacheTTLIfNeeded()
 		}
+		if err != nil && m.explicitProviderCatalog {
+			m.mu.Lock()
+			m.remoteModels = nil
+			m.etag = ""
+			cachePath := m.cachePath
+			clientVersion := m.cacheClientVersion
+			identity := m.identity
+			m.mu.Unlock()
+			if cachePath != "" {
+				_ = writeModelsCache(cachePath, &modelsCache{
+					ClientVersion: clientVersion,
+					Identity:      identity,
+				})
+			}
+		}
 		return
 	}
 	m.mu.Lock()
 	m.fetched = true
 	m.fetchedIdentity = m.identity
-	if len(response.Models) > 0 {
-		if m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(response.Models) {
+	if len(response.Models) > 0 || m.explicitProviderCatalog {
+		if m.explicitProviderCatalog || (m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(response.Models)) {
 			m.remoteModels = cloneModelInfos(response.Models)
 		} else {
 			m.remoteModels = mergeModelInfos(m.remoteModels, response.Models)
@@ -575,8 +616,8 @@ func (m *RemoteModelsManager) tryLoadFreshCache() bool {
 	m.fetched = true
 	m.etag = strings.TrimSpace(cache.ETag)
 	m.fetchedIdentity = m.identity
-	if len(cache.Models) > 0 {
-		if m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(cache.Models) {
+	if len(cache.Models) > 0 || m.explicitProviderCatalog {
+		if m.explicitProviderCatalog || (m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(cache.Models)) {
 			m.remoteModels = cloneModelInfos(cache.Models)
 		} else {
 			m.remoteModels = mergeModelInfos(m.remoteModels, cache.Models)

@@ -1769,6 +1769,28 @@ func ConstructModelInfoFromCandidates(model string, candidates []ModelInfo, conf
 	return WithConfigOverrides(info, config)
 }
 
+// ConstructModelInfoFromExactCandidate resolves metadata only for an exact
+// catalog slug. Explicit provider catalogs are authoritative (Rust #49135), so
+// prefix and namespaced-suffix fallback would invent metadata from an
+// unrelated model.
+func ConstructModelInfoFromExactCandidate(model string, candidates []ModelInfo, config *ModelsManagerConfig) ModelInfo {
+	var info ModelInfo
+	found := false
+	for _, candidate := range candidates {
+		if candidate.Slug == model {
+			info = candidate
+			found = true
+			break
+		}
+	}
+	if found {
+		info.UsedFallbackModelMetadata = false
+	} else {
+		info = ModelInfoFromSlug(model)
+	}
+	return WithConfigOverrides(info, config)
+}
+
 func mergeModelInfos(base []ModelInfo, updates []ModelInfo) []ModelInfo {
 	out := cloneModelInfos(base)
 	for _, update := range updates {
