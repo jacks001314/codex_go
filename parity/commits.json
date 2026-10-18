@@ -154,9 +154,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Guardian reviewer turns now bypass executor MCP candidate detection, discovery, and runtime projection. A Guardian runtime cannot inherit an unavailable required executor server or block its approval review on executor MCP startup. TestGuardianTurnSkipsExecutorMCPDiscoveryLikeRust verifies the executor config reader is never called and the runtime contains no projected server; go vet ./appserver passes."
       ]
     },
     {
@@ -238,9 +238,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Precondition missing: Go has shell_snapshot_v2 feature registration and the ShellSnapshotV2 capability bit, but not the executor-managed in-memory snapshot subsystem. Local unified exec launches bypass exec-server, and execserver/shell_snapshot.go only captures and replays file-backed snapshots. Completing this requires routing eligible local unified-exec launches through the executor-managed process path and adding the environment/file replay cache, policy filtering, startup-file suppression, prewarm, and telemetry semantics from the Rust implementation."
       ]
     },
     {
@@ -250,9 +250,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Local exec-server EnvironmentInfo now reports ShellSnapshotV2=false on every platform, matching Rust #39958. TestShellSnapshotRequestRoundTripAndCapability locks the false local capability; shell snapshot protocol tests and go vet ./execserver pass."
       ]
     },
     {
@@ -264,7 +264,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Rust-only test/build/release change (codex-rs/app-server/tests/suite/v2/executor_mcp.rs); no Go carrier required"
+        "Go now has equivalent end-to-end coverage: TestExecutorHTTPMCPDiscoversToolsWithExecutorBearerTokenLikeRust routes a bearer-authenticated MCP request through the real executor HTTP client/protocol and resolves the token in the executor environment. The combined executor MCP tests cover discovery, required startup, authenticated tool listing, and exclusion of host-inherited credentials."
       ]
     },
     {

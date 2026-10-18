@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,8 +38,8 @@ func TestShellSnapshotRequestRoundTripAndCapability(t *testing.T) {
 	if decoded.ShellSnapshot == nil || decoded.ShellSnapshot.ScopeID != "attachment-1" {
 		t.Fatalf("decoded shell snapshot = %#v", decoded.ShellSnapshot)
 	}
-	if got := localEnvironmentInfo().Capabilities.ShellSnapshotV2; got != (runtime.GOOS != "windows") {
-		t.Fatalf("shellSnapshotV2 = %t", got)
+	if got := localEnvironmentInfo().Capabilities.ShellSnapshotV2; got {
+		t.Fatal("local exec-server must not advertise shellSnapshotV2")
 	}
 }
 

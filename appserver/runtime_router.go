@@ -13393,12 +13393,15 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(turnParams)
 	environmentAuthority := environmentSelections.Authority()
 	contributionContext := mcp.NewMCPServerContributionContext(threadID, environmentSelections)
+	skipExecutorMCPServers := guardianTurnStart(turnParams)
 	hasExecutorMCPCandidate := false
-	for _, selection := range mcpRuntimeEnvironmentSelections(r, threadID, turnParams) {
-		environmentID := selectionEnvironmentID(selection)
-		if environmentID != "" && environmentID != execserver.LocalEnvironmentID {
-			hasExecutorMCPCandidate = true
-			break
+	if !skipExecutorMCPServers {
+		for _, selection := range mcpRuntimeEnvironmentSelections(r, threadID, turnParams) {
+			environmentID := selectionEnvironmentID(selection)
+			if environmentID != "" && environmentID != execserver.LocalEnvironmentID {
+				hasExecutorMCPCandidate = true
+				break
+			}
 		}
 	}
 	if !r.mcpConfigManaged.Load() && !mcpConfigContainsThreadRuntime(cfg) && !hasExecutorMCPCandidate &&
@@ -13406,7 +13409,9 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		return nil, false
 	}
 	discoveryCache := r.threads.capabilityDiscoveryV2Cache(threadID)
-	r.discoverExecutorHTTPMCPServers(context.Background(), threadID, turnParams, discoveryCache)
+	if !skipExecutorMCPServers {
+		r.discoverExecutorHTTPMCPServers(context.Background(), threadID, turnParams, discoveryCache)
+	}
 	selectedEnvironmentMaps := mcpRuntimeEnvironmentSelections(r, threadID, turnParams)
 	runtimeConfig := func(cfg *config.Config) *mcp.RuntimeConfig {
 		values := map[string]any{}
@@ -13416,7 +13421,9 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 		config := r.runtimeMCPConfigForThread(contributionContext, values, codexHome, runtimeAuth, cfg.Requirements)
-		discoveryCache.applyExecutorMCPServers(r, config, selectedEnvironmentMaps, cfg.Requirements)
+		if !skipExecutorMCPServers {
+			discoveryCache.applyExecutorMCPServers(r, config, selectedEnvironmentMaps, cfg.Requirements)
+		}
 		applyHostMCPRuntimePaths(config, r.hostMCPPathContextForTurn(threadID, turnParams))
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.

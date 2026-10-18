@@ -368,6 +368,48 @@ url = "http://executor-only.invalid/unlisted"
 	}
 }
 
+func TestGuardianTurnSkipsExecutorMCPDiscoveryLikeRust(t *testing.T) {
+	reader := &mcpExecutorDiscoveryTestReader{response: &execserverclient.EnvironmentConfigReadResponse{
+		Config: execserverclient.EnvironmentConfigLayerStack{Layers: []execserverclient.EnvironmentConfigLayer{{
+			TOML: "[mcp_servers.unavailable_browser]\nurl = \"http://127.0.0.1:9/mcp\"\nrequired = true\nstartup_timeout_sec = 1\n",
+		}}},
+	}}
+	execServerURL, closeExecServer := startMCPDiscoveryExecServer(t, reader)
+	defer closeExecServer()
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "file:///workspace")
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "executor-1", ExecServerURL: execServerURL}); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:      config.NewConfigService(t.TempDir()),
+		Environment: manager,
+	})
+	defer router.Close()
+	params := &turn.TurnStartParams{
+		ThreadID:   "thread-guardian-mcp",
+		Originator: "guardian",
+		Environments: []map[string]any{{
+			"environmentId": "executor-1",
+			"cwd":           "file:///workspace",
+		}},
+	}
+	if err := router.registerActiveRuntimeTurn(params.ThreadID, "turn-guardian-mcp", nil, 1, params); err != nil {
+		t.Fatal(err)
+	}
+	service := router.mcpServiceForThread(params.ThreadID, &config.Config{Values: map[string]any{}})
+	if reader.called {
+		t.Fatal("Guardian turn attempted executor MCP discovery")
+	}
+	if service != nil {
+		if server, ok := service.ServerConfigForServer("unavailable_browser"); ok {
+			t.Fatalf("Guardian runtime projected executor MCP server: %#v", server)
+		}
+		if err := service.ValidateRequiredServers(params.ThreadID); err != nil {
+			t.Fatalf("Guardian runtime inherited executor MCP requirements: %v", err)
+		}
+	}
+}
+
 func TestSelectedExecutorHTTPMCPActivatesWithoutHostMCPConfigLikeRust(t *testing.T) {
 	reader := &mcpExecutorDiscoveryTestReader{response: &execserverclient.EnvironmentConfigReadResponse{
 		Config: execserverclient.EnvironmentConfigLayerStack{Layers: []execserverclient.EnvironmentConfigLayer{
