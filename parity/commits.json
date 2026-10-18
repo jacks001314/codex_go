@@ -3554,9 +3554,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: record_descendant_token_usage, runtime_for_thread"
+        "recordDescendantGoalTokenUsage rolls child/grandchild usage into the root goal, applies it to active and idle progress, resets baselines on goal replacement, and preserves concurrent checkpoints; tests cover child/grandchild rollup, budget, unloaded parents, replacement, idle, and concurrency. Tests: go test ./appserver -run 'DescendantToken' -count=1"
       ]
     },
     {
@@ -3566,9 +3566,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "stdinReviewSizeCheckMetric emits codex.unified_exec.stdin_review.size_check with result (formatter_truncated/over_limit/within_limit) and input_kind (control/text), while retaining rejection of truncated/oversized reviews. Tests: go test ./appserver -run 'StdinReview|SizeCheck' -count=1"
       ]
     },
     {
@@ -3674,9 +3674,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "EnvironmentInfoResponse preserves the executor user home, and FileSystemSandboxContext carries UserHomeDir into filesystem/process sandbox contexts; environment info tests assert the executor home. Tests: go test ./execserver ./appserver -run 'UserHomeDir|EnvironmentInfo' -count=1"
       ]
     },
     {
