@@ -3119,9 +3119,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: GuardianTrustedToolFragment, trusted_tool_context"
+        "Round 449 (audit): N/A by architecture - the commit adds GuardianTrustedToolFragment/trusted_tool_context only to ext/guardian-v2's async scorer, which Go does not have. Go's synchronous reviewer already renders the invoked MCP tool's trusted host/connector descriptions through state.renderGuardianToolDescriptions and the <guardian_tool_descriptions> fragment (#45987). Tests: go test ./state -run 'GuardianToolDescriptions|GuardianActionReviewPreservesDescriptionArguments' -count=1"
       ]
     },
     {
