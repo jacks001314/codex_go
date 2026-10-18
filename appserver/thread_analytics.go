@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"codex_go/config"
 	"codex_go/gitutil"
 	"codex_go/session"
 	"codex_go/telemetry"
@@ -55,6 +56,7 @@ func (r *RuntimeRouter) emitCodexThreadInitializedAnalyticsEvent(ctx context.Con
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	r.updateAnalyticsThreadProductSKU(thread.ID, r.effectiveConfigForSessionTelemetry())
 	parentThreadID := thread.ParentThreadID
 	if initializationMode == threadInitializationModeForked {
 		parentThreadID = nil
@@ -75,6 +77,24 @@ func (r *RuntimeRouter) emitCodexThreadInitializedAnalyticsEvent(ctx context.Con
 		CreatedAt:          uint64FromNonNegativeInt64(thread.CreatedAt),
 	})
 	sink.TrackCodexThreadInitializedEvent(ctx, event)
+}
+
+func (r *RuntimeRouter) updateAnalyticsThreadProductSKU(threadID string, cfg *config.Config) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	sink, ok := r.services.Analytics.(interface {
+		UpdateThreadProductSKU(string, *string)
+	})
+	if !ok {
+		return
+	}
+	if cfg == nil || !cfg.AnalyticsEnabled(false) {
+		sink.UpdateThreadProductSKU(strings.TrimSpace(threadID), nil)
+		return
+	}
+	productSKU := strings.TrimSpace(stringFromMap(cfg.Values, "apps_mcp_product_sku"))
+	sink.UpdateThreadProductSKU(strings.TrimSpace(threadID), &productSKU)
 }
 
 // threadIsWorktree mirrors Rust #43621: classify the thread's checkout as a

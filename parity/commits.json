@@ -23096,9 +23096,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/7; needs review: MAX_THREAD_PRODUCTS, ThreadProductUpdate, ThreadProducts, flush_thread, product_event_batches"
+        "Added a bounded per-thread product registry to the HTTP analytics exporter. Batches group by thread product (up to 16 groups), groups send concurrently while preserving order within each group, and X-OpenAI-Product-Sku is set without changing auth. Blank/disabled attribution clears the mapping. Runtime turn/config preparation registers each thread's apps_mcp_product_sku."
       ]
     },
     {

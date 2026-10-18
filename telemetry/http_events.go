@@ -16,6 +16,9 @@ import (
 const (
 	analyticsEventsQueueSize = 256
 	analyticsEventsTimeout   = 10 * time.Second
+	maxThreadProducts        = 4096
+	maxProductBatches        = 16
+	productSKUHeader         = "X-OpenAI-Product-Sku"
 )
 
 type HTTPDoer interface {
@@ -55,6 +58,9 @@ type HTTPAnalyticsExporter struct {
 	authorizeRequest AnalyticsAuthorizeRequestFunc
 	httpClient       HTTPDoer
 	timeout          time.Duration
+	threadProductsMu sync.Mutex
+	threadProducts   map[string]string
+	threadOrder      []string
 }
 
 func NewAnalyticsEventsClient(options AnalyticsEventsClientOptions) *AnalyticsEventsClient {
@@ -103,7 +109,55 @@ func NewHTTPAnalyticsExporter(options AnalyticsEventsClientOptions) *HTTPAnalyti
 		authorizeRequest: options.AuthorizeRequest,
 		httpClient:       client,
 		timeout:          timeout,
+		threadProducts:   map[string]string{},
 	}
+}
+
+// UpdateThreadProductSKU records best-effort product attribution for one
+// thread. A nil or blank SKU clears it (Rust #49117).
+func (c *AnalyticsEventsClient) UpdateThreadProductSKU(threadID string, productSKU *string) {
+	if c == nil || c.exporter == nil {
+		return
+	}
+	c.exporter.UpdateThreadProductSKU(threadID, productSKU)
+}
+
+// UpdateThreadProductSKU records best-effort product attribution for one
+// thread without changing the shared analytics authentication identity.
+func (e *HTTPAnalyticsExporter) UpdateThreadProductSKU(threadID string, productSKU *string) {
+	if e == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	product := ""
+	if productSKU != nil {
+		product = strings.TrimSpace(*productSKU)
+	}
+	e.threadProductsMu.Lock()
+	defer e.threadProductsMu.Unlock()
+	if e.threadProducts == nil {
+		e.threadProducts = map[string]string{}
+	}
+	delete(e.threadProducts, threadID)
+	for index, id := range e.threadOrder {
+		if id == threadID {
+			e.threadOrder = append(e.threadOrder[:index], e.threadOrder[index+1:]...)
+			break
+		}
+	}
+	if product == "" {
+		return
+	}
+	if len(e.threadProducts) >= maxThreadProducts && len(e.threadOrder) > 0 {
+		oldest := e.threadOrder[0]
+		e.threadOrder = e.threadOrder[1:]
+		delete(e.threadProducts, oldest)
+	}
+	e.threadProducts[threadID] = product
+	e.threadOrder = append(e.threadOrder, threadID)
 }
 
 func (c *AnalyticsEventsClient) TrackCodexTurnEvent(ctx context.Context, event CodexTurnEventRequest) {
@@ -498,15 +552,106 @@ func (e *HTTPAnalyticsExporter) SendTrackEvents(ctx context.Context, events []an
 	if e == nil || strings.TrimSpace(e.url) == "" || len(events) == 0 {
 		return nil
 	}
-	for _, batch := range trackEventRequestBatches(events) {
-		if err := e.sendTrackEventsBatch(ctx, batch); err != nil {
+	groups := e.productEventGroups(events)
+	if len(groups) == 1 {
+		for _, batch := range trackEventRequestBatches(groups[0].events) {
+			if err := e.sendTrackEventsBatch(ctx, batch, groups[0].productSKU); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	errs := make(chan error, len(groups))
+	var wg sync.WaitGroup
+	for _, group := range groups {
+		group := group
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for _, batch := range trackEventRequestBatches(group.events) {
+				if err := e.sendTrackEventsBatch(ctx, batch, group.productSKU); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (e *HTTPAnalyticsExporter) sendTrackEventsBatch(ctx context.Context, events []any) error {
+type analyticsProductEventGroup struct {
+	productSKU *string
+	events     []any
+}
+
+func (e *HTTPAnalyticsExporter) productEventGroups(events []any) []analyticsProductEventGroup {
+	e.threadProductsMu.Lock()
+	products := make(map[string]string, len(e.threadProducts))
+	for threadID, product := range e.threadProducts {
+		products[threadID] = product
+	}
+	e.threadProductsMu.Unlock()
+	order := []string{}
+	byProduct := map[string][]any{}
+	for _, event := range events {
+		product := ""
+		if threadID := analyticsEventThreadID(event); threadID != "" {
+			product = products[threadID]
+		}
+		if _, exists := byProduct[product]; !exists {
+			order = append(order, product)
+		}
+		byProduct[product] = append(byProduct[product], event)
+	}
+	if len(order) > maxProductBatches {
+		return []analyticsProductEventGroup{{events: events}}
+	}
+	groups := make([]analyticsProductEventGroup, 0, len(order))
+	for _, product := range order {
+		var sku *string
+		if product != "" {
+			value := product
+			sku = &value
+		}
+		groups = append(groups, analyticsProductEventGroup{productSKU: sku, events: byProduct[product]})
+	}
+	return groups
+}
+
+func analyticsEventThreadID(event any) string {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return ""
+	}
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	params, _ := value["event_params"].(map[string]any)
+	if params == nil {
+		return ""
+	}
+	if threadID, _ := params["thread_id"].(string); strings.TrimSpace(threadID) != "" {
+		return strings.TrimSpace(threadID)
+	}
+	for _, key := range []string{"base", "guardian_review", "guardian_v2", "app"} {
+		if nested, _ := params[key].(map[string]any); nested != nil {
+			if threadID, _ := nested["thread_id"].(string); strings.TrimSpace(threadID) != "" {
+				return strings.TrimSpace(threadID)
+			}
+		}
+	}
+	return ""
+}
+
+func (e *HTTPAnalyticsExporter) sendTrackEventsBatch(ctx context.Context, events []any, productSKU *string) error {
 	if e == nil || strings.TrimSpace(e.url) == "" || len(events) == 0 {
 		return nil
 	}
@@ -519,7 +664,7 @@ func (e *HTTPAnalyticsExporter) sendTrackEventsBatch(ctx context.Context, events
 		requestCtx, cancel = context.WithTimeout(ctx, e.timeout)
 		defer cancel()
 	}
-	request, err := e.newRequest(requestCtx, events)
+	request, err := e.newRequest(requestCtx, events, productSKU)
 	if err != nil || request == nil {
 		return err
 	}
@@ -567,7 +712,7 @@ func analyticsEventShouldSendIsolated(event any) bool {
 	}
 }
 
-func (e *HTTPAnalyticsExporter) newRequest(ctx context.Context, events []any) (*http.Request, error) {
+func (e *HTTPAnalyticsExporter) newRequest(ctx context.Context, events []any, productSKU *string) (*http.Request, error) {
 	rawEvents, err := marshalTrackEvents(events)
 	if err != nil {
 		return nil, err
@@ -586,6 +731,9 @@ func (e *HTTPAnalyticsExporter) newRequest(ctx context.Context, events []any) (*
 	}
 	addHTTPHeaders(request.Header, e.authHeaders)
 	request.Header.Set("Content-Type", "application/json")
+	if productSKU != nil && strings.TrimSpace(*productSKU) != "" {
+		request.Header.Set(productSKUHeader, strings.TrimSpace(*productSKU))
+	}
 	if e.authorizeRequest != nil {
 		ok, err := e.authorizeRequest(ctx, request, body)
 		if err != nil || !ok {

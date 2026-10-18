@@ -458,7 +458,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2e572378f42c35138e33b7bdb716c3082511defe	44938	Add connector auth failure detection without an install URL (#44938)	2026-09-11	mcp	1	1	1.00	0	0	complete	
 2e5ee418ad6bef8b418ba1a809cfa53a56ae4aee	42033	Improve Guardian report diagnostics (#42033)	2026-09-01	guardian	5	5	1.00	0	0	complete	
 2e5fea64eefcaa19f48458b2386011b619f69c70	49560	Add an opt-in model catalog to multi-agent context (#49560)	2026-09-30	persistence	2	0	0.00	0	0	complete	ModelCatalogState,exposes_tool
-2e6cc4ed8d54c096bd18537b4ebfa4fff95f3141	49117	Attribute analytics requests to each thread's product SKU (#49117)	2026-09-29	telemetry	7	1	0.14	0	0	audit_pending	MAX_THREAD_PRODUCTS,ThreadProductUpdate,ThreadProducts,flush_thread,product_event_batches,update_thread_product_sku
+2e6cc4ed8d54c096bd18537b4ebfa4fff95f3141	49117	Attribute analytics requests to each thread's product SKU (#49117)	2026-09-29	telemetry	7	7	1.00	0	0	complete
 2f05c0a71f59fb2f05800846351f3e9926c3e52b	53845	Fix daemon updater socket binding and bootstrap readiness on Unix (#53845)	2026-10-14	appserver	2	0	0.00	0	0	complete	DaemonSocketFileGuard,bind_private_daemon_socket
 2f0a5d5516c566e40b7abefea5f3c1f81fcd64bd	41908	Avoid scanning archived rollouts when archiving threads (#41908)	2026-08-31	persistence	1	0	0.00	0	0	complete	scan_unarchived
 2f1583b411becb2a6345be50754e2e51c53790c8	45544	Discourage logging full image generation results (#45544)	2026-09-14	core	0	0		0	0	not_applicable	

@@ -9346,6 +9346,7 @@ func (r *RuntimeRouter) effectiveConfigForTurn(params *turn.TurnStartParams) (*c
 		if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
 			return nil, err
 		}
+		r.updateAnalyticsThreadProductSKU(params.ThreadID, cfg)
 		return cfg, nil
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
@@ -9374,6 +9375,7 @@ func (r *RuntimeRouter) effectiveConfigForTurn(params *turn.TurnStartParams) (*c
 	if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
 		return nil, err
 	}
+	r.updateAnalyticsThreadProductSKU(params.ThreadID, cfg)
 	return cfg, nil
 }
 
