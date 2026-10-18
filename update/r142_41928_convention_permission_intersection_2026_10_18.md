@@ -10,12 +10,15 @@
 - `ShellRequest` 携带 `PathConvention`，app-server/exec turn 从 CWD 推导；
   `effectiveShellPermissionProfile` 与 internal-permission merge 使用
   `PermissionProfileWithAdditionalPermissionsForConvention`。
-- 剩余 partial：apply_patch/extensions 尚未接收同一 context，symbolic
-  tmp/project grant 的显式 fail-closed gate 仍在 broker 之外。
+- symbolic `tmpdir` grant 在 executor temp metadata 不可解析时 fail closed；
+  相同符号路径本身不足以通过授权。
+- 剩余 partial：apply_patch/extensions 尚未接收同一 context，因为 Go 没有
+  Rust 的 granted session/turn permission cache。
 
 验证：
 
 - `go test ./sandbox -run 'Convention|Intersect|NormalizeRequest' -count=1`
 - `go test ./sandbox -run 'Convention|Intersect|NormalizeRequest|AdditionalPermissionsMaterialize' -count=1`
 - `go test ./tool -run 'CarriesAllowedSymlinked|ShellExecutor' -count=1`
+- `go test ./sandbox -run 'Convention|Intersect|NormalizeRequest|AdditionalPermissionsMaterialize|SymbolicTmpdir' -count=1`
 - `go test ./appserver -run 'ServerRequestBrokerIntersectsURIPermissions|ServerRequestBrokerIntersectsPermissions' -count=1`

@@ -99,3 +99,21 @@ func TestAdditionalPermissionsMaterializeByConventionLikeRust(t *testing.T) {
 		t.Fatalf("writable roots = %#v, want Windows-normalized additional root", effective.LegacySandboxPolicy().WritableRoots)
 	}
 }
+
+func TestSymbolicTmpdirGrantFailsClosedWithoutExecutorMetadataLikeRust(t *testing.T) {
+	t.Setenv("TMPDIR", "")
+	special := FileSystemSandboxEntry{
+		Path:   FileSystemPath{Type: "special", Value: &FileSystemSpecialPath{Kind: "tmpdir"}},
+		Access: FileSystemAccessWrite,
+	}
+	requested := RequestPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{Entries: []FileSystemSandboxEntry{special}}}
+	granted := RequestPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{Entries: []FileSystemSandboxEntry{special}}}
+	if got := IntersectPermissionProfilesWithConvention(requested, granted, "/workspace", utils.ConventionPosix); got.FileSystem != nil {
+		t.Fatalf("unresolved tmpdir grant was accepted: %#v", got)
+	}
+
+	t.Setenv("TMPDIR", "/tmp")
+	if got := IntersectPermissionProfilesWithConvention(requested, granted, "/workspace", utils.ConventionPosix); got.FileSystem == nil || len(got.FileSystem.Entries) != 1 {
+		t.Fatalf("resolved tmpdir grant = %#v", got)
+	}
+}

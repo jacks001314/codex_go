@@ -144,6 +144,13 @@ func grantedPermissionEntryWithinRequest(requested []FileSystemSandboxEntry, gra
 	if !permissionAccessCanRead(granted.Access) || convention == utils.ConventionWindows && isSymbolicSlashTmpPath(granted.Path) {
 		return false
 	}
+	if granted.Path.Type == "special" && granted.Path.Value != nil &&
+		strings.EqualFold(granted.Path.Value.Kind, "tmpdir") &&
+		resolvePermissionPathForConvention(granted.Path, cwd, convention) == "" {
+		// A symbolic temp grant without executor temp metadata cannot be
+		// materialized; equal symbolic spellings are not sufficient (Rust #41928).
+		return false
+	}
 	if path := resolvePermissionPathForConvention(granted.Path, cwd, convention); path != "" {
 		return permissionAccessCovers(resolveRequestedPermissionAccessForConvention(requested, path, cwd, convention), granted.Access)
 	}
@@ -271,9 +278,16 @@ func resolvePermissionPathForConvention(path FileSystemPath, cwd string, convent
 			return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: cwd}, cwd, convention)
 		case "tmpdir":
 			if convention == utils.ConventionPosix {
-				return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: os.Getenv("TMPDIR")}, cwd, convention)
+				tmpdir := strings.TrimSpace(os.Getenv("TMPDIR"))
+				if tmpdir == "" && utils.NativePathConvention() == utils.ConventionPosix {
+					tmpdir = os.TempDir()
+				}
+				return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: tmpdir}, cwd, convention)
 			}
-			return resolvePermissionPath(path, cwd)
+			if utils.NativePathConvention() == utils.ConventionWindows {
+				return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: os.TempDir()}, cwd, convention)
+			}
+			return ""
 		case "slash_tmp":
 			if convention == utils.ConventionPosix {
 				return "/tmp"
