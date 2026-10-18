@@ -23,6 +23,10 @@ type Message struct {
 	Role    MessageRole
 	Text    string
 	RawText string
+	// Phase records the completed agent-message phase (for example
+	// "commentary") when the transcript knows it. Title suggestions omit
+	// commentary messages, matching Rust #40495.
+	Phase string
 	// UserPrompt carries the original submitted prompt for a user message so
 	// backtracking can restore it exactly (Rust UserHistoryCell's
 	// message/local_image_paths/remote_image_urls/text_elements). Text above is

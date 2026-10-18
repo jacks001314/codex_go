@@ -268,15 +268,14 @@ func (m *Model) applyRenameCommand(args string) bubbletea.Cmd {
 	}
 	name := strings.TrimSpace(args)
 	if name == "" {
-		m.openRenamePrompt()
-		return nil
+		return m.openRenamePrompt()
 	}
 	return m.renameCurrentThread(name)
 }
 
-func (m *Model) openRenamePrompt() {
+func (m *Model) openRenamePrompt() bubbletea.Cmd {
 	if m == nil || m.State == nil {
-		return
+		return nil
 	}
 	title := "Name thread"
 	initial := strings.TrimSpace(m.State.ThreadName)
@@ -284,6 +283,12 @@ func (m *Model) openRenamePrompt() {
 		title = "Rename thread"
 	}
 	prompt := bottompane.NewCustomPromptView(title, "Type a name and press Enter", initial, "")
+	threadID := strings.TrimSpace(m.State.ThreadID)
+	requestID := uint64(0)
+	if m.onSuggestThreadName != nil && threadID != "" {
+		requestID = m.nextThreadNameSuggestionRequest()
+		prompt.WithTextSuggestion(requestID, "Generating a title suggestion\u2026", "Suggested from this conversation")
+	}
 	prompt.SetVimEnabled(m.vimMode)
 	m.replaceModal(&modalState{
 		id:           "rename-thread",
@@ -294,6 +299,10 @@ func (m *Model) openRenamePrompt() {
 		},
 	})
 	m.notice = ""
+	if requestID == 0 {
+		return nil
+	}
+	return m.startThreadNameSuggestion(threadID, requestID)
 }
 
 func (m *Model) renameCurrentThread(name string) bubbletea.Cmd {

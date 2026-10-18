@@ -30,6 +30,11 @@ type RecapThreadOptions struct {
 	ModelProvider     string
 	CWD               string
 	PermissionProfile string
+	// ThreadSource distinguishes the temporary feature thread (for example
+	// "thread_title" in Rust #40495) from a user thread.
+	ThreadSource string
+	// Effort optionally overrides the temporary turn's reasoning effort.
+	Effort string
 }
 
 // RecapGenerateFunc runs the temporary structured recap turn and returns the

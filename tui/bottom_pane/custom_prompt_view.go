@@ -33,6 +33,11 @@ type CustomPromptView struct {
 	Submitted  []string
 	Completion CustomPromptCompletion
 
+	suggestionRequestID uint64
+	suggestionPending   bool
+	suggestionLabel     string
+	userEdited          bool
+
 	pasteBurst   PasteBurst
 	cursor       int
 	vimEnabled   bool
@@ -82,6 +87,35 @@ func (v *CustomPromptView) PreserveWhitespace() {
 		return
 	}
 	v.preserveWhitespace = true
+}
+
+// WithTextSuggestion opts the prompt into one correlated background text
+// suggestion (Rust #40495 CustomPromptView::with_text_suggestion).
+func (v *CustomPromptView) WithTextSuggestion(requestID uint64, loadingLabel string, appliedLabel string) *CustomPromptView {
+	if v == nil {
+		return v
+	}
+	v.ContextLabel = loadingLabel
+	v.suggestionRequestID = requestID
+	v.suggestionPending = true
+	v.suggestionLabel = appliedLabel
+	return v
+}
+
+// ApplyTextSuggestion pre-fills a matching prompt only when the user has not
+// edited it yet, and reports whether the request belonged to this prompt.
+func (v *CustomPromptView) ApplyTextSuggestion(requestID uint64, suggestion string, ok bool) bool {
+	if v == nil || !v.suggestionPending || requestID != v.suggestionRequestID {
+		return false
+	}
+	v.suggestionPending = false
+	v.ContextLabel = ""
+	if !v.userEdited && ok && strings.TrimSpace(suggestion) != "" {
+		v.Text = suggestion
+		v.cursor = len([]rune(suggestion))
+		v.ContextLabel = v.suggestionLabel
+	}
+	return true
 }
 
 func (v *CustomPromptView) HandleKey(key string) {
@@ -323,6 +357,7 @@ func (v *CustomPromptView) InsertString(text string) {
 	next = append(next, runes[v.cursor:]...)
 	v.Text = string(next)
 	v.cursor += len(insert)
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) Backspace() {
@@ -338,6 +373,7 @@ func (v *CustomPromptView) Backspace() {
 	next = append(next, runes[v.cursor:]...)
 	v.Text = string(next)
 	v.cursor--
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) Cursor() int {
@@ -461,6 +497,7 @@ func (v *CustomPromptView) DeleteCharAtCursor() {
 		return
 	}
 	v.Text = string(append(append([]rune(nil), runes[:v.cursor]...), runes[v.cursor+1:]...))
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) ReplaceCharAtCursor(ch rune) {
@@ -473,6 +510,7 @@ func (v *CustomPromptView) ReplaceCharAtCursor(ch rune) {
 	}
 	runes[v.cursor] = ch
 	v.Text = string(runes)
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) DeleteWordBackward() {
@@ -489,6 +527,7 @@ func (v *CustomPromptView) DeleteWordBackward() {
 	}
 	v.Text = string(append(append([]rune(nil), runes[:start]...), runes[v.cursor:]...))
 	v.cursor = start
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) DeleteWordForward() {
@@ -504,6 +543,7 @@ func (v *CustomPromptView) DeleteWordForward() {
 		end++
 	}
 	v.Text = string(append(append([]rune(nil), runes[:v.cursor]...), runes[end:]...))
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) KillLineStart() {
@@ -514,6 +554,7 @@ func (v *CustomPromptView) KillLineStart() {
 	runes := []rune(v.Text)
 	v.Text = string(append(append([]rune(nil), runes[:start]...), runes[v.cursor:]...))
 	v.cursor = start
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) KillLineEnd() {
@@ -524,6 +565,7 @@ func (v *CustomPromptView) KillLineEnd() {
 	end := v.lineStartOffset(row) + len(strings.Split(v.Text, "\n")[row])
 	runes := []rune(v.Text)
 	v.Text = string(append(append([]rune(nil), runes[:v.cursor]...), runes[end:]...))
+	v.userEdited = true
 }
 
 func (v *CustomPromptView) DeleteLine() {
@@ -540,6 +582,7 @@ func (v *CustomPromptView) DeleteLine() {
 		next = append(next, lines[row+1:]...)
 	}
 	v.Text = strings.Join(next, "\n")
+	v.userEdited = true
 	if v.cursor > len([]rune(v.Text)) {
 		v.cursor = len([]rune(v.Text))
 	}

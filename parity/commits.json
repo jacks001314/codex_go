@@ -1548,9 +1548,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: apply_text_suggestion, apply_thread_name_suggestion, recent_conversation_messages, recent_conversation_thread_title_prompt, suggest_thread_name"
+        "Round 755: /rename now opens the editable prompt with a loading label, builds a bounded prompt from the latest eight substantive user/assistant transcript messages (commentary and IDE context omitted, markup escaped), and runs the existing temporary structured app-server turn with threadSource=thread_title and the low-effort gpt-5.6-luna model when ChatGPT auth and the catalog advertise it. Responses are correlated by active thread and request id; the prompt pre-fills only when the user has not edited or pasted, while manual edits win. Added shared pure helpers, output schema, and parsing in tui/app. Structural note: the embedded local TUI has no temporary structured app-server hook, so it keeps the plain editable rename prompt without a suggestion; the app-server TUI is fully wired. Tests: go test ./tui/app ./tui/bottom_pane ./tui/tea -count=1; go test ./app -run 'Recap|ThreadTitle' -count=1; go vet ./app ./tui/app ./tui/bottom_pane ./tui/tea ./tui"
       ]
     },
     {

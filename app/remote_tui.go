@@ -481,6 +481,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
+		OnSuggestThreadName:         interactiveRemoteRecapGenerateHandler(ctx, endpoint),
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),

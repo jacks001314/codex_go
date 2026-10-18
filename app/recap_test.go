@@ -99,7 +99,13 @@ func TestInteractiveRemoteRecapGenerateHandlerRunsStructuredTurn(t *testing.T) {
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	handler := interactiveRemoteRecapGenerateHandler(ctx, endpoint)
-	response, err := handler("thread-1", codextea.RecapThreadOptions{Model: "gpt-test", ModelProvider: "openai", CWD: "/repo"},
+	response, err := handler("thread-1", codextea.RecapThreadOptions{
+		Model:         "gpt-test",
+		ModelProvider: "openai",
+		CWD:           "/repo",
+		ThreadSource:  "thread_title",
+		Effort:        "low",
+	},
 		"recap prompt", map[string]any{"type": "object"})
 	if err != nil {
 		t.Fatalf("recap error = %v", err)
@@ -124,6 +130,9 @@ func TestInteractiveRemoteRecapGenerateHandlerRunsStructuredTurn(t *testing.T) {
 	if threadStartParams.Config["features.shell_tool"] != false || threadStartParams.Config["web_search"] != "disabled" {
 		t.Fatalf("config overrides = %#v", threadStartParams.Config)
 	}
+	if threadStartParams.ThreadSource == nil || string(*threadStartParams.ThreadSource) != "thread_title" {
+		t.Fatalf("thread source = %#v", threadStartParams.ThreadSource)
+	}
 	servers, ok := threadStartParams.Config["mcp_servers"].(map[string]any)
 	if !ok || servers["server-a"] == nil {
 		t.Fatalf("mcp servers = %#v", threadStartParams.Config["mcp_servers"])
@@ -133,6 +142,9 @@ func TestInteractiveRemoteRecapGenerateHandlerRunsStructuredTurn(t *testing.T) {
 	}
 	if turnStartParams.OutputSchema == nil {
 		t.Fatal("the structured turn must carry an output schema")
+	}
+	if turnStartParams.Effort == nil || *turnStartParams.Effort != "low" {
+		t.Fatalf("turn effort = %#v", turnStartParams.Effort)
 	}
 	if len(turnStartParams.Input) != 1 || turnStartParams.Input[0].Type != "text" || turnStartParams.Input[0].Text != "recap prompt" {
 		t.Fatalf("turn input = %#v", turnStartParams.Input)

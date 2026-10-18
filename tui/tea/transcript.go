@@ -268,7 +268,7 @@ func (t *TranscriptComponent) completeAssistantCommentary(state *codextui.State,
 	if t == nil || state == nil || strings.TrimSpace(text) == "" {
 		return
 	}
-	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
+	state.Messages = mergeAssistantPhaseToMessages(state.Messages, text, messagePhaseCommentary)
 	state.BumpMessagesRevision()
 	t.activeAssistantDeltaItemID = ""
 }
@@ -336,6 +336,13 @@ func appendAssistantDeltaToMessages(messages []codextui.Message, delta string) [
 // breaks and code padding, Rust #48549); only trailing blank lines and a
 // trailing newline are dropped.
 func mergeAssistantFinalToMessages(messages []codextui.Message, text string) []codextui.Message {
+	return mergeAssistantPhaseToMessages(messages, text, "")
+}
+
+// mergeAssistantPhaseToMessages merges assistant text and records the known
+// completed-message phase so later consumers (such as /rename suggestions) can
+// omit commentary.
+func mergeAssistantPhaseToMessages(messages []codextui.Message, text string, phase string) []codextui.Message {
 	text = codextui.NormalizeCompletedAssistantMarkdown(text)
 	if text == "" {
 		return messages
@@ -345,16 +352,22 @@ func mergeAssistantFinalToMessages(messages []codextui.Message, text string) []c
 		current := codextui.NormalizeCompletedAssistantMarkdown(messages[index].Text)
 		switch {
 		case current == text:
+			if phase != "" {
+				messages[index].Phase = phase
+			}
 			return messages
 		case strings.Contains(text, current):
 			messages[index].Text = text
+			if phase != "" {
+				messages[index].Phase = phase
+			}
 			return messages
 		}
 	}
 	if assistantFinalExistsInCurrentTurn(messages, text) {
 		return messages
 	}
-	return append(messages, codextui.Message{Role: codextui.RoleAssistant, Text: text})
+	return append(messages, codextui.Message{Role: codextui.RoleAssistant, Text: text, Phase: phase})
 }
 
 // applyBufferedThreadEventToMessages replays one buffered background-thread

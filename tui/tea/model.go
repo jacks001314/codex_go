@@ -1165,6 +1165,9 @@ type Options struct {
 	// OnGenerateRecap runs the temporary structured recap turn for /recap (Rust
 	// recap.rs). A nil hook leaves /recap unavailable for this runtime.
 	OnGenerateRecap RecapGenerateFunc
+	// OnSuggestThreadName runs the temporary structured title turn for the
+	// /rename suggestion (Rust #40495). Nil keeps the plain rename prompt.
+	OnSuggestThreadName RecapGenerateFunc
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil keeps scheduled recaps enabled, matching Rust's config default.
 	AutoRecap *bool
@@ -2138,6 +2141,7 @@ type Model struct {
 	pendingClipboardRequest uint64
 	onExportTranscript      TranscriptExportFunc
 	onGenerateRecap         RecapGenerateFunc
+	onSuggestThreadName     RecapGenerateFunc
 	recapInFlight           bool
 	onUpdateDaybreak        DaybreakUpdateFunc
 	onLoadTranscriptPreview TranscriptPreviewFunc
@@ -2330,6 +2334,7 @@ type Model struct {
 	chatGPTPlanType                  string
 	availableRateLimitResetCredits   *int64
 	nextUsageRequestID               uint64
+	nextThreadNameSuggestionID       uint64
 	pendingTokenActivityRequestID    uint64
 	pendingRateLimitResetRequestID   uint64
 	pendingRateLimitResetForPopup    bool
@@ -2663,6 +2668,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		rightClickPasteEnv:              detectRightClickPasteEnvironment(),
 		onExportTranscript:              options.OnExportTranscript,
 		onGenerateRecap:                 options.OnGenerateRecap,
+		onSuggestThreadName:             options.OnSuggestThreadName,
 		onUpdateDaybreak:                options.OnUpdateDaybreak,
 		onLoadTranscriptPreview:         options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:         options.OnReadSessionTranscript,
@@ -3337,6 +3343,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applyDiffResult(msg)
 	case RecapGeneratedMsg:
 		return m, m.applyRecapGeneratedMsg(msg)
+	case ThreadNameSuggestedMsg:
+		return m, m.applyThreadNameSuggested(msg)
 	case recapCheckMsg:
 		return m, m.applyRecapCheck(m.currentTime())
 	case CyberPolicyErrorMsg:

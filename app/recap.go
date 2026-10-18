@@ -40,7 +40,7 @@ func interactiveRemoteRecapGenerateHandler(ctx context.Context, endpoint *appser
 			return "", err
 		}
 		defer unsubscribeRemoteTemporaryThread(client, temporaryThreadID)
-		return runRemoteTemporaryStructuredTurn(runCtx, client, temporaryThreadID, prompt, schema)
+		return runRemoteTemporaryStructuredTurn(runCtx, client, temporaryThreadID, prompt, schema, options.Effort)
 	}
 }
 
@@ -75,6 +75,10 @@ func startRemoteTemporaryStructuredThread(ctx context.Context, client *remoteApp
 		Ephemeral:     true,
 		Config:        overrides,
 	}
+	if source := strings.TrimSpace(options.ThreadSource); source != "" {
+		threadSource := appserver.ThreadSource(source)
+		params.ThreadSource = &threadSource
+	}
 	if profile := strings.TrimSpace(options.PermissionProfile); profile != "" && !strings.HasPrefix(profile, ":") {
 		params.Permissions = &profile
 	} else {
@@ -93,11 +97,14 @@ func startRemoteTemporaryStructuredThread(ctx context.Context, client *remoteApp
 // runRemoteTemporaryStructuredTurn submits the schema-constrained prompt and
 // waits for the turn's assistant message (Rust start_structured_turn +
 // collect_structured_response).
-func runRemoteTemporaryStructuredTurn(ctx context.Context, client *remoteAppServerTUIClient, threadID string, prompt string, schema map[string]any) (string, error) {
+func runRemoteTemporaryStructuredTurn(ctx context.Context, client *remoteAppServerTUIClient, threadID string, prompt string, schema map[string]any, effort string) (string, error) {
 	params := turn.TurnStartParams{
 		ThreadID:     threadID,
 		Input:        []turn.TurnUserInput{{Type: temporaryStructuredTextKind, Text: prompt}},
 		OutputSchema: schema,
+	}
+	if value := strings.TrimSpace(effort); value != "" {
+		params.Effort = &value
 	}
 	var started turn.TurnStartResponse
 	if err := remoteSessionRequest(ctx, client, appserver.MethodTurnStart, params, &started); err != nil {
