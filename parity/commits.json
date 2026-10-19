@@ -10457,9 +10457,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/14; needs review: DEFAULT_MAX_INPUT_TOKENS, REQUEST_TOKENS_METRIC, RequestBudget, SECTION_COST_METRIC, SectionCost"
+        "Guardian reviews emit codex.guardian.context.request_tokens and codex.guardian.context.section_cost with bounded section/request tags, alongside review token-usage metrics. Tests: go test ./appserver -run 'Guardian.*Metric|GuardianContext' -count=1"
       ]
     },
     {
@@ -10469,9 +10469,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/9; needs review: BudgetPriority, GuardianBudgetOmission, content_framing_tokens, enforce_budget, retain_images"
+        "Guardian transcript/context profiles enforce aggregate message/tool/entry budgets with deterministic truncation and omission notices; retained context and sender evidence share the bounded profile behavior. Tests: go test ./state -run 'Guardian.*Budget|Guardian.*Profile|Guardian.*Transcript' -count=1; go test ./appserver -run GuardianContext -count=1"
       ]
     },
     {

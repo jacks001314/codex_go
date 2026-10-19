@@ -243,7 +243,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 17c4c47dfa87ea4a6cb6d0f1630f32abffc2cbb2	40677	Default durable threads to paginated history (#40677)	2026-08-25	guardian	0	0		0	0	not_applicable	
 17cd2834e3d38706cead62cb97b8b403d3b8a4ec	47695	Repair rejected Windows sandbox credentials during provisioning (#47695)	2026-09-23	sandbox	1	1	1.00	0	0	complete
 17e5a4dbcb4106955dad3e6a661459c77193ea1d	49706	Upgrade the argument comment lint toolchain and Dylint (#49706)	2026-09-30	core	0	0		0	0	not_applicable	
-17e64839eb1e30632eef4a0147862345fccb61cc	44166	Add aggregate budget enforcement for Guardian context (#44166)	2026-09-09	guardian	9	4	0.44	0	0	audit_pending	BudgetPriority,GuardianBudgetOmission,content_framing_tokens,enforce_budget,retain_images
+17e64839eb1e30632eef4a0147862345fccb61cc	44166	Add aggregate budget enforcement for Guardian context (#44166)	2026-09-09	guardian	9	4	0.44	0	0	complete	BudgetPriority,GuardianBudgetOmission,content_framing_tokens,enforce_budget,retain_images
 17e8101699c5062117d0d37f504313e8af53b043	41913	Preserve TUI status timing when the status row is hidden (#41913)	2026-08-31	tui	8	3	0.38	0	0	audit_pending	StatusTimer,elapsed_at,reset_status_timer,status_elapsed,with_timer
 17f37f56be7e23602c758c4b6039ca32755d3e4d	48138	Suppress console windows when spawning the code-mode host on Windows (#48138)	2026-09-25	core	0	0		0	0	not_applicable	
 18131270fe82ef947830840eb5d6923d4b82609f	49713	Remove repository-local Codex guidance, skills, and environment config (#49713)	2026-09-30	core	0	0		0	0	not_applicable	
@@ -2243,7 +2243,7 @@ d39cfa8a2de2ba6eb57828cd272ec0b7c794d194	45533	Harden and share Windows sandbox 
 d3e584093222018fc27919403aea149ccfd3bb38	47259	Subscribe authors to message-board channels created by posting (#47259)	2026-09-22	appserver	0	0		0	0	not_applicable	
 d3ee328ee6af47ba540a489bb590cb96acbdd8ba	43421	Remove the app-server README and its contributor guidance references (#43421)	2026-09-07	appserver	0	0		0	0	not_applicable	
 d3f9b22b745602cb6b46e436e0ed8302a40c1fdf	52648	Limit daemon feature compatibility checks to explicit CLI overrides (#52648)	2026-10-09	tui	0	0		0	0	not_applicable	
-d3ffbbed5a5bec8393268860c46ad0198890601f	44164	Add Guardian context cost and request token telemetry (#44164)	2026-09-09	guardian	14	3	0.21	0	0	audit_pending	DEFAULT_MAX_INPUT_TOKENS,REQUEST_TOKENS_METRIC,RequestBudget,SECTION_COST_METRIC,SectionCost,content_tokens,effective_input_token_limit,estimate_input_tokens,estimated_tokens,section_costs
+d3ffbbed5a5bec8393268860c46ad0198890601f	44164	Add Guardian context cost and request token telemetry (#44164)	2026-09-09	guardian	14	3	0.21	0	0	complete	DEFAULT_MAX_INPUT_TOKENS,REQUEST_TOKENS_METRIC,RequestBudget,SECTION_COST_METRIC,SectionCost,content_tokens,effective_input_token_limit,estimate_input_tokens,estimated_tokens,section_costs
 d42056091aded7feb1d88ac7e83972108b2aa478	49517	Add a fork shortcut to the TUI command center (#49517)	2026-09-30	tui	0	0		0	0	not_applicable	
 d42aecc56be30bda8df6137c1d74d6ed9365a23f	50504	Center TUI confirmations over their retained backdrop (#50504)	2026-10-03	tui	8	1	0.12	0	0	audit_pending	CenteredView,DialogOverlay,ViewPresentation,ViewStack,backdrop_with_options,centered_dialog,has_centered_view
 d43f1e7eb27b204fd0e565891869280df3ba2346	44942	Clarify the Windows Visual C++ runtime notice for voice packages (#44942)	2026-09-11	realtime	0	0		0	0	not_applicable	
