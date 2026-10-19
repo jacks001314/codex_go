@@ -151,6 +151,9 @@ type ToolRegistryOptions struct {
 	// CodeModeMessages carries the active model catalog's exec/wait/deferred
 	// guidance and MCP TypeScript overrides (Rust #47118).
 	CodeModeMessages *model.CodeModeToolMessages
+	// AllowedTools, when non-nil, restricts the finalized registry to these
+	// names. An empty list disables every tool (Rust #45711).
+	AllowedTools *[]string
 	// CodeModeShowCellOverhead mirrors features.code_mode.experimental_show_cell_overhead
 	// (#46288): code-mode cell responses report the host duration and overhead.
 	CodeModeShowCellOverhead bool
@@ -811,6 +814,9 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	if err := registry.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(options.FunctionDescriptionPrefixes); err != nil {
 		return nil, err
+	}
+	if options.AllowedTools != nil {
+		registry.RestrictToTools(*options.AllowedTools)
 	}
 	return registry, nil
 }

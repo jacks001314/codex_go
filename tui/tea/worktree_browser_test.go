@@ -112,8 +112,10 @@ func TestWorktreeCommandStartsManagedSession(t *testing.T) {
 		},
 	})
 	model.applyWorktreeCommand("")
-	if _, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter}); cmd != nil {
-		_ = cmd
+	if _, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter}); cmd == nil {
+		t.Fatal("creation should be scheduled off the update loop")
+	} else {
+		model.Update(cmd())
 	}
 	if len(modes) != 1 || modes[0] != "fork@D:\\repo/thread-main" {
 		t.Fatalf("creation calls = %#v", modes)

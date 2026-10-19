@@ -105,7 +105,6 @@ func NewViewImageToolCallWithID(id string, path string, cwd string) ViewImageHis
 }
 
 func (c ViewImageHistoryCell) DisplayLines(width int) []string {
-	_ = width
 	displayPath := strings.TrimSpace(c.Label)
 	if displayPath != "" && c.CWD != "" {
 		if abs, err := filepath.Abs(c.Path); err == nil {
@@ -117,14 +116,41 @@ func (c ViewImageHistoryCell) DisplayLines(width int) []string {
 	if displayPath == "" {
 		displayPath = c.Label
 	}
-	return []string{
-		"\u2022 Viewed Image",
-		"  \u2514 " + displayPath,
+	filename := strings.TrimRight(displayPath, `/\`)
+	if index := strings.LastIndexAny(filename, `/\`); index >= 0 {
+		filename = filename[index+1:]
 	}
+	if filename == "" {
+		filename = displayPath
+	}
+	filename = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(filename)
+	line := "\u2022 Viewed image " + filename
+	if width > 0 {
+		line = tui.TruncateWithEllipsis(line, width)
+	}
+	return []string{line}
 }
 
 func (c ViewImageHistoryCell) RawLines() []string {
-	return c.DisplayLines(0)
+	path := strings.TrimSpace(c.Label)
+	if path == "" {
+		path = c.Path
+	}
+	return []string{"Viewed image " + path}
+}
+
+// TranscriptLines retains the complete image path in the expanded transcript
+// (Rust #46116 transcript_lines).
+func (c ViewImageHistoryCell) TranscriptLines(width int) []string {
+	path := strings.TrimSpace(c.Label)
+	if path == "" {
+		path = c.Path
+	}
+	line := "\u2022 Viewed image " + path
+	if width > 0 {
+		line = tui.TruncateWithEllipsis(line, width)
+	}
+	return []string{line}
 }
 
 // ActivityIDs returns the stable disclosure identity for the viewed image.

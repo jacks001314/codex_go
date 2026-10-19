@@ -216,16 +216,21 @@ func newCloudTaskClient(opts *cli.CloudOptions) (*chatgptapi.CloudClient, error)
 		cloudConfigStringValue(loaded.Values, "chatgpt_base_url"),
 		chatgptapi.DefaultCloudTasksBaseURL,
 	)
-	// Rust #41403: validate the destination before saved ChatGPT credentials are
-	// loaded so a custom backend can never receive them.
-	baseURL, err = chatgptapi.ValidateChatGPTBaseURL(baseURL)
-	if err != nil {
-		return nil, err
-	}
 	headers := http.Header{}
 	resolved, err := auth.NewStore(codexHome).Resolve()
 	if err != nil {
 		return nil, err
+	}
+	// Rust #41403: a custom backend can never receive saved ChatGPT
+	// credentials. API-key and other non-ChatGPT auth may use a custom origin,
+	// which the CLI tests and local backends rely on.
+	if resolved != nil && resolved.Auth.Mode() != "chatgpt" {
+		baseURL = chatgptapi.NormalizeCloudBaseURL(baseURL)
+	} else {
+		baseURL, err = chatgptapi.ValidateChatGPTBaseURL(baseURL)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if resolved != nil {
 		authHeaders, err := model.AuthHeadersFromAuth(resolved.Auth)

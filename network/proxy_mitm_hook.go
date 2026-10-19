@@ -128,6 +128,17 @@ type ProxySecretEnvResolver func(string) (string, bool)
 type ProxySecretFileReader func(string) (string, error)
 
 func ValidateProxyMITMHookConfig(config ProxyConfig) error {
+	if ca := config.Network.MITMCA; ca != nil {
+		if !config.Network.MITM {
+			return fmt.Errorf("network.mitm_ca requires network.mitm = true")
+		}
+		if !filepath.IsAbs(ca.CertificateFile) {
+			return fmt.Errorf("network.mitm_ca.certificate_file must be an absolute path")
+		}
+		if !filepath.IsAbs(ca.PrivateKeyFile) {
+			return fmt.Errorf("network.mitm_ca.private_key_file must be an absolute path")
+		}
+	}
 	hooks := config.Network.MITMHooks
 	if len(hooks) == 0 {
 		return nil

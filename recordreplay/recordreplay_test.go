@@ -114,7 +114,12 @@ func TestParseRustStoryRecording(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(golden): %v (set RECORDREPLAY_UPDATE_GOLDEN=1 to generate)", err)
 	}
-	if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
+	// Git may check the golden out with CRLF on Windows; normalize line endings
+	// before the byte comparison so the frozen contract is platform-stable.
+	normalize := func(value []byte) []byte {
+		return bytes.TrimSpace(bytes.ReplaceAll(value, []byte("\r\n"), []byte("\n")))
+	}
+	if !bytes.Equal(normalize(got), normalize(want)) {
 		t.Fatalf("digest drifted from frozen golden:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }

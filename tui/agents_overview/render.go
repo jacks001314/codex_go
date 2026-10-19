@@ -40,13 +40,12 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		{text: "Agent command center", style: spanBold},
 		{text: "  " + grouping, style: spanDim},
 	}, maxWidth, styled))
-	// summary: worktree creation reports progress in place of the counts
+	// status tabs: worktree creation reports progress in place of the tabs
 	// (Rust #45276).
 	if v.State.CreatingWorktree {
 		lines = append(lines, renderLine(inset, []span{{text: "Creating worktree…", style: spanCyanBold}}, maxWidth, styled))
 	} else {
-		needsYou, working, ready := v.Counts()
-		lines = append(lines, renderLine(inset, []span{{text: formatSummary(needsYou, working, ready), style: spanDim}}, maxWidth, styled))
+		lines = append(lines, renderLine(inset, v.statusFilterTabSpans(maxWidth-len(inset)), maxWidth, styled))
 	}
 	// divider
 	dividerWidth := termWidth - 4
@@ -62,6 +61,9 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		footerWidth = 1
 	}
 	footerRows := v.footerHintRows(footerWidth)
+	if len(v.KeyChordHints) > 0 {
+		footerRows = v.keyChordHintRows(footerWidth)
+	}
 	// header + summary + divider + editor + footer rows
 	bodyHeight := termHeight - 4 - len(footerRows)
 	if bodyHeight < 3 {
@@ -110,7 +112,11 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	}
 
 	// footer
-	if v.Notice != "" {
+	if len(v.KeyChordHints) > 0 {
+		for _, row := range footerRows {
+			lines = append(lines, renderLine(inset, row, maxWidth, styled))
+		}
+	} else if v.Notice != "" {
 		lines = append(lines, renderLine(inset, []span{{text: v.Notice, style: spanDim}}, maxWidth, styled))
 		for range max(len(footerRows)-1, 0) {
 			lines = append(lines, "")
@@ -121,6 +127,168 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		}
 	}
 	return lines
+}
+
+func (v *View) keyChordHintRows(maxWidth int) [][]span {
+	if v == nil || len(v.KeyChordHints) == 0 {
+		return nil
+	}
+	hints := make([][]span, 0, len(v.KeyChordHints))
+	for _, hint := range v.KeyChordHints {
+		keys := strings.TrimSpace(hint.Keys)
+		action := strings.TrimSpace(hint.Action)
+		if keys == "" {
+			continue
+		}
+		row := []span{{text: keys, style: spanBold}}
+		if action != "" {
+			row = append(row, span{text: " " + action, style: spanDim})
+		}
+		hints = append(hints, row)
+	}
+	if len(hints) == 0 {
+		return nil
+	}
+	// Rust renders the chord hint as a single footer line (hint_line) and lets
+	// the footer area clip overflow, so keep every hint on one row here. The
+	// normal footer wraps because footer_hint::wrap_hint_rows applies there.
+	joined := make([]span, 0, len(hints)*3)
+	for index, hint := range hints {
+		if index > 0 {
+			joined = append(joined, span{text: "  ", style: spanDim})
+		}
+		joined = append(joined, hint...)
+	}
+	return [][]span{joined}
+}
+
+// statusFilterTabSpans renders the counted status tabs and, on wide terminals,
+// the active filter shortcut at the right edge (Rust #46839 render.rs).
+func (v *View) statusFilterTabSpans(width int) []span {
+	if v == nil {
+		return nil
+	}
+	if width < 1 {
+		width = 1
+	}
+	labels := v.StatusFilterLabels()
+	hint := strings.TrimSpace(v.FilterHint)
+	hintWidth := runewidth.StringWidth(hint)
+	tabWidth := width
+	if hint != "" && width >= 80 && hintWidth+2 < width {
+		tabWidth = width - hintWidth - 2
+	} else {
+		hint = ""
+	}
+	cells := statusFilterTabCells(labels, v.StatusFilterIndex(), tabWidth)
+	spans := make([]span, 0, len(cells)*2+2)
+	column := 0
+	for _, cell := range cells {
+		if cell.Start > column {
+			spans = append(spans, span{text: strings.Repeat(" ", cell.Start-column), style: spanPlain})
+			column = cell.Start
+		}
+		style := spanDim
+		if cell.Active {
+			style = spanCyanBold
+		}
+		spans = append(spans, span{text: cell.Text, style: style})
+		column += runewidth.StringWidth(cell.Text)
+	}
+	if column < tabWidth {
+		// FilledTabBarText pads to width; preserve that padding before the hint.
+		spans = append(spans, span{text: strings.Repeat(" ", tabWidth-column), style: spanPlain})
+	}
+	if hint != "" {
+		spans = append(spans,
+			span{text: "  ", style: spanPlain},
+			span{text: hint, style: spanDim},
+		)
+	}
+	return spans
+}
+
+// statusFilterTabCell is one visible tab or overflow marker.
+type statusFilterTabCell struct {
+	Start  int
+	Width  int
+	Text   string
+	Active bool
+}
+
+// statusFilterTabCells mirrors Rust's render_filled_tab_bar, kept local to
+// avoid a dependency cycle through the bottom-pane package.
+func statusFilterTabCells(labels []string, activeIdx int, width int) []statusFilterTabCell {
+	if len(labels) == 0 || width <= 0 {
+		return nil
+	}
+	if activeIdx < 0 {
+		activeIdx = 0
+	}
+	if activeIdx >= len(labels) {
+		activeIdx = len(labels) - 1
+	}
+	const markerColumns = 2
+	widths := make([]int, len(labels))
+	for index, label := range labels {
+		widths[index] = runewidth.StringWidth(label) + 2
+	}
+	occupied := func(start int, end int) int {
+		total := end - start - 1
+		for _, cellWidth := range widths[start:end] {
+			total += cellWidth
+		}
+		if start > 0 {
+			total += markerColumns
+		}
+		if end < len(labels) {
+			total += markerColumns
+		}
+		return total
+	}
+	start, end := activeIdx, activeIdx+1
+	for start > 0 && occupied(start-1, end) <= width {
+		start--
+	}
+	for end < len(labels) && occupied(start, end+1) <= width {
+		end++
+	}
+	showLeft := start > 0 && width >= 5
+	showRight := end < len(labels) && width >= 7
+	right := width
+	if showRight {
+		right -= markerColumns
+	}
+	cells := make([]statusFilterTabCell, 0, end-start+2)
+	x := 0
+	if showLeft {
+		cells = append(cells, statusFilterTabCell{Start: x, Width: 1, Text: "\u2039"})
+		x += markerColumns
+	}
+	for index := start; index < end; index++ {
+		cellWidth := min(widths[index], max(right-x, 0))
+		text := truncateToWidthWithEllipsis(" "+labels[index]+" ", cellWidth)
+		cells = append(cells, statusFilterTabCell{
+			Start:  x,
+			Width:  cellWidth,
+			Text:   text,
+			Active: index == activeIdx,
+		})
+		x += cellWidth + 1
+	}
+	if showRight {
+		cells = append(cells, statusFilterTabCell{Start: width - 1, Width: 1, Text: "\u203a"})
+	}
+	return cells
+}
+
+func truncateToWidthWithEllipsis(value string, width int) string {
+	spans := truncateSpansWithEllipsis([]span{{text: value, style: spanPlain}}, width)
+	var builder strings.Builder
+	for _, item := range spans {
+		builder.WriteString(item.text)
+	}
+	return builder.String()
 }
 
 // footerHints returns each footer hint as its own span group, in Rust's order
@@ -313,6 +481,9 @@ func itoa(value int) string {
 // AgentsOverviewView::render_rows including scroll-to-selection behavior.
 func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	visible := v.VisibleIndices()
+	if height > 0 {
+		v.pageHeight = height
+	}
 	if len(visible) == 0 {
 		message := "No matching tasks"
 		switch {
@@ -408,7 +579,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
 		spans = append(spans, span{text: "  voice", style: voiceStyle})
 	}
 	if projectGrouping {
-		spans = append(spans, span{text: "  " + row.Group.Label(), style: spanDim})
+		spans = append(spans, span{text: "  " + row.Group.StatusLabel(row.StatusType), style: spanDim})
 	}
 	return spans
 }
@@ -427,7 +598,7 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	lines = append(lines, []span{
 		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
 		{text: " ", style: spanPlain},
-		{text: row.Group.Label(), style: spanPlain},
+		{text: row.Group.StatusLabel(row.StatusType), style: spanPlain},
 	})
 	lines = append(lines, nil)
 	// Rust #50727: the model and reasoning effort sit at the top of the task

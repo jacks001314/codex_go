@@ -3,11 +3,13 @@ package network
 import (
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -37,8 +39,8 @@ type proxyMITMRuntime struct {
 	closeOnce        sync.Once
 }
 
-func newProxyMITMRuntime(baseEnv map[string]string) (*proxyMITMRuntime, error) {
-	managedCA, err := loadOrCreateProxyManagedCA()
+func newProxyMITMRuntime(baseEnv map[string]string, caConfig *ProxyMITMCAConfig) (*proxyMITMRuntime, error) {
+	managedCA, err := loadProxyMITMCA(caConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +51,7 @@ func newProxyMITMRuntime(baseEnv map[string]string) (*proxyMITMRuntime, error) {
 		releaseProxyManagedCA(managedCA)
 		return nil, fmt.Errorf("build managed MITM CA trust bundle: %w", err)
 	}
-	trustBundlePath, err := PersistProxyManagedCATrustBundle(certificatePath, trustBundle)
+	trustBundlePath, err := persistProxyMITMCATrustBundle(certificatePath, trustBundle, caConfig != nil)
 	if err != nil {
 		releaseProxyManagedCA(managedCA)
 		return nil, fmt.Errorf("persist managed MITM CA trust bundle: %w", err)
@@ -61,6 +63,76 @@ func newProxyMITMRuntime(baseEnv map[string]string) (*proxyMITMRuntime, error) {
 		trustBundlePath:  trustBundlePath,
 		startupEnvValues: startupEnvValues,
 	}, nil
+}
+
+func loadProxyMITMCA(caConfig *ProxyMITMCAConfig) (*proxyManagedCA, error) {
+	if caConfig == nil {
+		return loadOrCreateProxyManagedCA()
+	}
+	certificatePEM, err := readExternalProxyCAFile(caConfig.CertificateFile, false)
+	if err != nil {
+		return nil, err
+	}
+	if bytesContains(certificatePEM, []byte("PRIVATE KEY-----")) {
+		return nil, fmt.Errorf("network.mitm_ca.certificate_file must not contain a private key")
+	}
+	privateKeyPEM, err := readExternalProxyCAFile(caConfig.PrivateKeyFile, true)
+	if err != nil {
+		return nil, err
+	}
+	pair, err := tls.X509KeyPair(certificatePEM, privateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("network.mitm_ca certificate and private key do not match: %w", err)
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse network.mitm_ca.certificate_file: %w", err)
+	}
+	config, err := martianmitm.NewConfig(certificate, pair.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("configure external MITM CA: %w", err)
+	}
+	return &proxyManagedCA{config: config, certificatePath: caConfig.CertificateFile}, nil
+}
+
+func readExternalProxyCAFile(path string, private bool) ([]byte, error) {
+	const maxBytes = 1024 * 1024
+	if runtime.GOOS == "windows" && private {
+		return nil, fmt.Errorf("network.mitm_ca.private_key_file is not supported on this platform because private-file permissions cannot be verified")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect external MITM CA file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("external MITM CA file must not be a symlink")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("external MITM CA file must be a regular file")
+	}
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("external MITM CA file exceeds %d bytes", maxBytes)
+	}
+	if private && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("external MITM CA private key must not be accessible by group or other users")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read external MITM CA file: %w", err)
+	}
+	return contents, nil
+}
+
+func persistProxyMITMCATrustBundle(certificatePath string, trustBundle string, external bool) (string, error) {
+	if !external {
+		return PersistProxyManagedCATrustBundle(certificatePath, trustBundle)
+	}
+	directory, err := proxyManagedCADirectory()
+	if err != nil {
+		return "", err
+	}
+	directory = filepath.Join(directory, "external")
+	return PersistProxyCATrustBundleInDirectory(directory, trustBundle)
 }
 
 func loadOrCreateProxyManagedCA() (*proxyManagedCA, error) {

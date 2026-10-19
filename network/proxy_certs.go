@@ -114,6 +114,18 @@ func PersistProxyManagedCATrustBundle(managedCACertPath string, trustBundle stri
 	return path, nil
 }
 
+func PersistProxyCATrustBundleInDirectory(directory string, trustBundle string) (string, error) {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(trustBundle))
+	path := filepath.Join(directory, fmt.Sprintf("%s-%x.pem", ProxyManagedMITMCATrustBundlePrefix, sum[:]))
+	if err := writeAtomicCreateNewOrReuse(path, []byte(trustBundle), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func lockProxyManagedCAArtifact(path string) (*flock.Flock, error) {
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("refusing to use symlink lock file %s", path)

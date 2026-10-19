@@ -1404,6 +1404,8 @@ type PluginService struct {
 	suggestedCache                *SuggestedPluginList
 	suggestedGeneration           uint64
 	suggestedFetch                *suggestedPluginFetch
+	cloudCapabilities             []CapabilitySummary
+	cloudCatalogKey               string
 	shareBackend                  PluginShareBackend
 	codexHome                     string
 	authMode                      string
@@ -2175,9 +2177,89 @@ func (s *PluginService) EnabledCapabilities() []CapabilitySummary {
 	for _, detail := range details {
 		out = append(out, capabilityFromDetail(&detail))
 	}
+	s.mu.Lock()
+	cloud := append([]CapabilitySummary(nil), s.cloudCapabilities...)
+	s.mu.Unlock()
+	if len(cloud) > 0 {
+		seen := make(map[string]struct{}, len(out))
+		for _, capability := range out {
+			seen[capability.ConfigName] = struct{}{}
+		}
+		for _, capability := range cloud {
+			if _, exists := seen[capability.ConfigName]; exists {
+				continue
+			}
+			out = append(out, capability)
+		}
+	}
 	sort.SliceStable(out, func(i int, j int) bool {
 		return out[i].ConfigName < out[j].ConfigName
 	})
+	return out
+}
+
+// SetCloudPluginCatalog publishes the Apps-only projection of a cloud plugin
+// catalog. Cloud entries never contribute MCP servers (Rust #46572).
+func (s *PluginService) SetCloudPluginCatalog(catalog *PluginCatalog, cacheKey string) {
+	if s == nil {
+		return
+	}
+	capabilities := cloudCapabilitiesFromCatalog(catalog)
+	s.mu.Lock()
+	s.cloudCatalogKey = strings.TrimSpace(cacheKey)
+	s.cloudCapabilities = capabilities
+	s.mu.Unlock()
+}
+
+func (s *PluginService) CloudPluginCatalogKey() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cloudCatalogKey
+}
+
+func cloudCapabilitiesFromCatalog(catalog *PluginCatalog) []CapabilitySummary {
+	if catalog == nil {
+		return nil
+	}
+	out := make([]CapabilitySummary, 0, len(catalog.Entries))
+	for _, entry := range catalog.Entries {
+		if entry.ID.Kind != PluginIdentityRemote {
+			continue
+		}
+		displayName := entry.DisplayName
+		if runes := []rune(displayName); len(runes) > 64 {
+			displayName = string(runes[:64])
+		}
+		seen := map[string]struct{}{}
+		connectors := make([]string, 0, len(entry.ConnectorIDs))
+		for _, connector := range entry.ConnectorIDs {
+			connector = strings.TrimSpace(connector)
+			if connector == "" {
+				continue
+			}
+			if _, ok := seen[connector]; ok {
+				continue
+			}
+			seen[connector] = struct{}{}
+			connectors = append(connectors, connector)
+			if len(connectors) == 64 {
+				break
+			}
+		}
+		out = append(out, CapabilitySummary{
+			Name:           entry.ID.AsString(),
+			ConfigName:     entry.ID.AsString(),
+			DisplayName:    displayName,
+			RemotePluginID: entry.ID.RemotePluginID,
+			AppConnectors:  connectors,
+		})
+		if len(out) == 100 {
+			break
+		}
+	}
 	return out
 }
 

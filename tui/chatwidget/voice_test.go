@@ -4,7 +4,114 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/metrics"
 )
+
+type voiceMetricRecord struct {
+	name string
+	inc  int
+	tags map[string]string
+}
+
+type voiceMetricDurationRecord struct {
+	name     string
+	duration time.Duration
+	tags     map[string]string
+}
+
+type voiceMetricsRecorder struct {
+	counters  []voiceMetricRecord
+	durations []voiceMetricDurationRecord
+}
+
+func (r *voiceMetricsRecorder) RecordDuration(name string, duration time.Duration, tags map[string]string) {
+	r.durations = append(r.durations, voiceMetricDurationRecord{name: name, duration: duration, tags: tags})
+}
+
+func (r *voiceMetricsRecorder) Counter(name string, inc int, tags map[string]string) {
+	r.counters = append(r.counters, voiceMetricRecord{name: name, inc: inc, tags: tags})
+}
+
+func (r *voiceMetricsRecorder) Histogram(string, int, map[string]string) {}
+
+func TestVoiceSessionMetricsMatchRustLifecycle(t *testing.T) {
+	recorder := &voiceMetricsRecorder{}
+	previous := metrics.InstallGlobal(recorder)
+	t.Cleanup(func() { metrics.InstallGlobal(previous) })
+
+	var state VoiceConversationState
+	state.BeginVoiceConversation("thread-1", 1)
+	state.MarkVoiceBackendStarted()
+	if got := countVoiceMetric(recorder.counters, voiceSessionConnectedMetric); got != 0 {
+		t.Fatalf("connected before activation = %d", got)
+	}
+	state.MarkVoiceWebRTCConnected()
+	state.MarkVoiceWebRTCConnected()
+	if got := countVoiceMetric(recorder.counters, voiceSessionConnectedMetric); got != 1 {
+		t.Fatalf("connected = %d, want 1", got)
+	}
+
+	state.ActiveSince = time.Now().Add(-time.Second)
+	if !state.RecordVoiceFailureCause("transport_closed") {
+		t.Fatal("the first failure was not recorded")
+	}
+	if state.RecordVoiceFailureCause("transport_closed") {
+		t.Fatal("the second failure was recorded")
+	}
+	state.CompleteVoiceStop()
+	state.ResetVoiceConversation()
+
+	state.BeginVoiceConversation("thread-2", 2)
+	state.MarkVoiceBackendStarted()
+	state.MarkVoiceWebRTCConnected()
+	state.CompleteVoiceStop()
+
+	if got := countVoiceMetric(recorder.counters, voiceSessionStartMetric); got != 2 {
+		t.Fatalf("start = %d, want 2", got)
+	}
+	if got := countVoiceMetric(recorder.counters, voiceSessionConnectedMetric); got != 2 {
+		t.Fatalf("connected = %d, want 2", got)
+	}
+	if got := countVoiceMetric(recorder.counters, voiceSessionFailureMetric); got != 1 {
+		t.Fatalf("failure = %d, want 1", got)
+	}
+	if got := countVoiceMetric(recorder.counters, voiceSessionEndedMetric); got != 2 {
+		t.Fatalf("ended = %d, want 2", got)
+	}
+	if len(recorder.durations) != 2 {
+		t.Fatalf("durations = %#v, want 2 records", recorder.durations)
+	}
+	if got := recorder.durations[0].tags["outcome"]; got != "failure" {
+		t.Fatalf("first outcome = %q, want failure", got)
+	}
+	if got := recorder.durations[1].tags["outcome"]; got != "success" {
+		t.Fatalf("second outcome = %q, want success", got)
+	}
+	failure := firstVoiceMetric(recorder.counters, voiceSessionFailureMetric)
+	if failure == nil || failure.tags["cause"] != "transport_closed" || failure.tags["phase"] != "active" {
+		t.Fatalf("failure tags = %#v", failure)
+	}
+}
+
+func countVoiceMetric(records []voiceMetricRecord, name string) int {
+	count := 0
+	for _, record := range records {
+		if record.name == name {
+			count += record.inc
+		}
+	}
+	return count
+}
+
+func firstVoiceMetric(records []voiceMetricRecord, name string) *voiceMetricRecord {
+	for index := range records {
+		if records[index].name == name {
+			return &records[index]
+		}
+	}
+	return nil
+}
 
 func TestVoiceConversationRequiresBothStartupSignals(t *testing.T) {
 	var state VoiceConversationState

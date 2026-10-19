@@ -125,7 +125,7 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 	policy.headerInjections = cloneProxyHeaderInjections(config.HeaderInjections)
 	var mitmRuntime *proxyMITMRuntime
 	if settings.MITM {
-		mitmRuntime, err = newProxyMITMRuntime(baseEnv)
+		mitmRuntime, err = newProxyMITMRuntime(baseEnv, settings.MITMCA)
 		if err != nil {
 			cancel()
 			return nil, err

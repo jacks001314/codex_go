@@ -15,8 +15,14 @@ func TestImageHistoryCellsExposeLocalPreviewPathsLikeRust(t *testing.T) {
 	if ids := viewed.ActivityIDs(); len(ids) != 1 || ids[0] != "image-view:call-1" {
 		t.Fatalf("viewed ActivityIDs() = %#v", ids)
 	}
-	if display := strings.Join(viewed.DisplayLines(80), "\n"); !strings.Contains(display, "Viewed Image") {
+	if display := strings.Join(viewed.DisplayLines(80), "\n"); display != "\u2022 Viewed image diagram.png" {
 		t.Fatalf("viewed display = %q", display)
+	}
+	if raw := strings.Join(viewed.RawLines(), "\n"); !strings.Contains(raw, viewed.Label) {
+		t.Fatalf("viewed raw line lost the full path: %q", raw)
+	}
+	if transcript := strings.Join(viewed.TranscriptLines(80), "\n"); !strings.Contains(transcript, viewed.Label) {
+		t.Fatalf("viewed transcript line lost the full path: %q", transcript)
 	}
 
 	generated := NewImageGenerationCall("img-1", "completed", "prompt", "artifacts/out.png")

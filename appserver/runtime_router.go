@@ -91,32 +91,35 @@ type RuntimeServices struct {
 	// other executors are unaffected. Every discovered skill stays enabled by default.
 	DisabledExecutorSkillPaths map[string][]string
 	Plugins                    *plugin.PluginService
-	Models                     *model.ModelService
-	Permissions                *sandbox.PermissionProfileService
-	Collaboration              *CollaborationModeService
-	MCP                        *mcp.MCPService
-	Features                   *features.FeatureService
-	Apps                       *apps.AppService
-	Turns                      *turn.TurnService
-	SteerMailbox               *turn.SteerMailbox
-	ThreadStatus               *ThreadStatusManager
-	Agent                      model.AgentRunner
-	GuardianReviewer           GuardianReviewer
-	CompactRunner              compact.RemoteRunner
-	ToolRouter                 *tool.Router
-	TurnRuntime                *turn.Runtime
-	Reviews                    *review.Service
-	Misc                       *MiscService
-	CommandExec                *CommandExecService
-	Processes                  *ProcessService
-	ServerRequests             *ServerRequestBroker
-	AccountHTTP                chatgptapi.HTTPDoer
-	HTTPClient                 model.HTTPDoer
-	SpawnGraph                 agent.Store
-	Analytics                  telemetry.TurnEventSink
-	SkillShadowMetrics         SkillShadowMetricSink
-	SkillInjectionMetrics      telemetry.CounterDurationSink
-	TurnMetrics                telemetry.TurnMetricSink
+	// PluginCatalogProvider supplies the cloud plugin catalog refreshed at each
+	// regular turn (Rust #46572). Nil leaves the existing catalog untouched.
+	PluginCatalogProvider any
+	Models                *model.ModelService
+	Permissions           *sandbox.PermissionProfileService
+	Collaboration         *CollaborationModeService
+	MCP                   *mcp.MCPService
+	Features              *features.FeatureService
+	Apps                  *apps.AppService
+	Turns                 *turn.TurnService
+	SteerMailbox          *turn.SteerMailbox
+	ThreadStatus          *ThreadStatusManager
+	Agent                 model.AgentRunner
+	GuardianReviewer      GuardianReviewer
+	CompactRunner         compact.RemoteRunner
+	ToolRouter            *tool.Router
+	TurnRuntime           *turn.Runtime
+	Reviews               *review.Service
+	Misc                  *MiscService
+	CommandExec           *CommandExecService
+	Processes             *ProcessService
+	ServerRequests        *ServerRequestBroker
+	AccountHTTP           chatgptapi.HTTPDoer
+	HTTPClient            model.HTTPDoer
+	SpawnGraph            agent.Store
+	Analytics             telemetry.TurnEventSink
+	SkillShadowMetrics    SkillShadowMetricSink
+	SkillInjectionMetrics telemetry.CounterDurationSink
+	TurnMetrics           telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
 	VoiceMetrics                 telemetry.CounterDurationSink
@@ -14854,12 +14857,14 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		codeModeMessages = resolveCodeModeMessages(modelID)
 		codeModeYieldTime = turnConfig.CodeModeDefaultExecYieldTime()
 	}
+	allowedTools := r.threadAllowedToolsForThread(params.ThreadID)
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
 		Router:                       router,
 		ToolRegistrationMetrics:      r.services.TurnMetrics,
 		ToolMetadataMetrics:          r.services.TurnMetrics,
 		CodeModeMessages:             codeModeMessages,
+		AllowedTools:                 allowedTools,
 		CodeModeMessagesForModel:     resolveCodeModeMessages,
 		CodeModeDefaultExecYieldTime: codeModeYieldTime,
 		Hooks:                        hooks,
@@ -15121,6 +15126,12 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
+	allowedTools := r.threadAllowedToolsForThread(threadID)
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		return nil, err
+	}
+	r.refreshCloudPluginCatalogForTurn(ctx, cfg, threadID, turnID)
 	stepCapabilities := newRuntimeStepCapabilitySnapshotContext(ctx, r, threadID, params)
 	if threadID != "" && strings.TrimSpace(turnID) != "" {
 		r.threads.UpdateTurn(threadID, strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
@@ -15134,10 +15145,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	enableCurrentTimeTool := false
 	enableSleepTool := false
 	var clockProvider tool.ClockProvider
-	cfg, err := r.effectiveConfigForTurn(params)
-	if err != nil {
-		return nil, err
-	}
 	webSearchOptions, err := r.webSearchOptionsForTurn(cfg, params)
 	if err != nil {
 		return nil, err
@@ -15226,10 +15233,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return nil, err
 		}
 	}
-	if r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if allowedTools == nil && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
+	options.AllowedTools = allowedTools
 	options.CodexVersion = appServerVersion()
 	options.ToolMode = turnToolMode
 	// Rust #46010: the host-owned apps result metadata is exposed only when the
@@ -15753,6 +15761,53 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// construction. Calls to the missing board tools reach the model as ordinary
 	// unsupported-call errors while the rest of the turn continues.
 	return toolRouter, nil
+}
+
+func (r *RuntimeRouter) threadAllowedToolsForThread(threadID string) *[]string {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	return threadAllowedToolsFromRecord(record)
+}
+
+func (r *RuntimeRouter) refreshCloudPluginCatalogForTurn(ctx context.Context, cfg *config.Config, threadID string, turnID string) {
+	if r == nil || r.services.Plugins == nil {
+		return
+	}
+	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "plugins") || r.services.PluginCatalogProvider == nil {
+		r.services.Plugins.SetCloudPluginCatalog(nil, "")
+		return
+	}
+	codexHome := ""
+	if r.services.Config != nil {
+		codexHome = strings.TrimSpace(r.services.Config.CodexHome())
+	}
+	identityBefore := remoteInstalledPluginsAuthIdentityFromSnapshot(r.accountAuthSnapshot(codexHome))
+	cacheKey := fmt.Sprintf("%T\x00%s", r.services.PluginCatalogProvider, remoteInstalledPluginsAuthIdentityKey(identityBefore))
+	// A catalog discovered under another account (or without Apps access) must
+	// not leak into this turn while the refresh is in flight.
+	if current := r.services.Plugins.CloudPluginCatalogKey(); current != "" && current != cacheKey {
+		r.services.Plugins.SetCloudPluginCatalog(nil, "")
+	}
+	catalog, err := plugin.ListPluginCatalog(ctx, r.services.PluginCatalogProvider, plugin.PluginListQuery{
+		ThreadID: strings.TrimSpace(threadID),
+		TurnID:   strings.TrimSpace(turnID),
+	})
+	if err != nil {
+		// Keep the previous catalog within the same auth/Apps scope.
+		return
+	}
+	// Rust #46572 rechecks the authenticated identity before publishing: a
+	// result fetched with credentials that changed mid-flight is discarded.
+	if identityAfter := remoteInstalledPluginsAuthIdentityFromSnapshot(r.accountAuthSnapshot(codexHome)); identityAfter != identityBefore {
+		return
+	}
+	r.services.Plugins.SetCloudPluginCatalog(catalog, cacheKey)
 }
 
 // runtimeThreadSourceIsInternal mirrors Rust SessionSource::is_internal(): the

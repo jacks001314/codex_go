@@ -218,6 +218,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"auth",
 		"chatgptapi",
 		"cli",
+		"cloudclient",
 		"codemode",
 		"codexapi",
 		"codexuds",

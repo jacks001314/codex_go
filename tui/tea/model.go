@@ -326,6 +326,9 @@ type SettingsWriteResult struct {
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil preserves the current value; the config default is enabled.
 	AutoRecap *bool
+	// PromptSuggestions is the configured `tui.prompt_suggestions` value.
+	// Nil preserves the current value; the config default is disabled.
+	PromptSuggestions *bool
 	// ShowTooltips is the configured `tui.show_tooltips` value (Rust
 	// local_settings). Nil preserves the current value; the config default is
 	// enabled.
@@ -1181,6 +1184,9 @@ type Options struct {
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil keeps scheduled recaps enabled, matching Rust's config default.
 	AutoRecap *bool
+	// PromptSuggestions is the configured `tui.prompt_suggestions` value.
+	// Nil keeps follow-up suggestions disabled, matching Rust's config default.
+	PromptSuggestions *bool
 	// MouseScrollSpeed is the configured `tui.mouse_scroll_speed` multiplier for
 	// transcript wheel events (Rust #50209, local_settings.rs). Nil uses the
 	// default of one row per wheel event; a non-finite or non-positive value
@@ -1267,6 +1273,9 @@ type Options struct {
 	// plus the ordinary-usage recovery inputs (Rust backend_banners). Nil leaves
 	// the banner surface unused.
 	OnReadBackendBanner func() (BackendBannerRead, error)
+	// OnReadSecuritySetup reads the optional account-security reminder for the
+	// verified local ChatGPT identity (Rust #49715). Nil disables the surface.
+	OnReadSecuritySetup func() (string, *SecuritySetupNotice, error)
 	// OnBackendBannerAction dispatches a selected CTA by backend order. The app
 	// resolves the action (open URL / credits nudge / reset credits).
 	OnBackendBannerAction func(action BackendBannerAction) bubbletea.Cmd
@@ -2078,6 +2087,7 @@ type Model struct {
 	onWorktreeOwnerLookup    func(threadID string) (codextui.WorktreeOwnerLookup, bool)
 	onStartManagedWorktree   func(mode string, name string, cwd string, threadID string) (SessionResumeResponse, error)
 	onManagedWorktreeChanged func()
+	managedWorktreeStarting  bool
 	worktreePopupRequestID   string
 	// Named permission profile discovery and pending selection (Rust #43340).
 	onListPermissionProfiles  func() ([]chatwidget.CustomPermissionProfile, bool, error)
@@ -2172,8 +2182,13 @@ type Model struct {
 	dynamicToolThreads map[string]bool
 	// recap tracks the automatic recap deadline and turn accounting (Rust
 	// RecapState).
-	recap            tuiapp.RecapState
-	disableAutoRecap bool
+	recap                       tuiapp.RecapState
+	disableAutoRecap            bool
+	promptSuggestionsEnabled    bool
+	promptSuggestion            *promptSuggestionState
+	nextPromptSuggestionID      uint64
+	promptSuggestionTabAccepted bool
+	composerPlaceholder         string
 	// showRawReasoning selects the raw chain-of-thought variant of a reasoning
 	// block (Rust config show_raw_agent_reasoning, RawReasoningVisibility).
 	showRawReasoning bool
@@ -2184,10 +2199,15 @@ type Model struct {
 	onReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	onReadRateLimits              RateLimitsReaderFunc
+	onReadSecuritySetup           func() (string, *SecuritySetupNotice, error)
 	onReadBackendBanner           func() (BackendBannerRead, error)
 	onBackendBannerAction         func(action BackendBannerAction) bubbletea.Cmd
 	requiresOpenAIAuthOverride    *bool
 	backendBanner                 backendBannerState
+	securitySetupNotice           *SecuritySetupNotice
+	securitySetupIdentity         string
+	securitySetupDismissed        bool
+	securitySetupRequestID        uint64
 	// reserveReturn is the task-local model to restore when ordinary usage
 	// recovers from the reserve model (Rust ReserveReturnModel).
 	reserveReturn *ReserveReturn
@@ -2698,6 +2718,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onLoadTranscriptPreview:         options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:         options.OnReadSessionTranscript,
 		disableAutoRecap:                options.AutoRecap != nil && !*options.AutoRecap,
+		promptSuggestionsEnabled:        options.PromptSuggestions != nil && *options.PromptSuggestions,
+		composerPlaceholder:             firstNonEmpty(options.Placeholder, "Ask gcode"),
 		showRawReasoning:                options.ShowRawReasoning,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
@@ -2705,6 +2727,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
 		onReadRateLimits:                options.OnReadRateLimits,
 		onReadBackendBanner:             options.OnReadBackendBanner,
+		onReadSecuritySetup:             options.OnReadSecuritySetup,
 		onBackendBannerAction:           options.OnBackendBannerAction,
 		requiresOpenAIAuthOverride:      options.RequiresOpenAIAuth,
 		pendingStatusRateLimitRequests:  map[uint64]pendingStatusRateLimitRequest{},
@@ -3041,6 +3064,9 @@ func (m *Model) Init() bubbletea.Cmd {
 	if m.onReadBackendBanner != nil {
 		commands = append(commands, m.backendBannerCmd())
 	}
+	if m.onReadSecuritySetup != nil {
+		commands = append(commands, m.securitySetupCmd())
+	}
 	if m.onReadSkills != nil {
 		// Rust refresh_startup_skills: the initial skills refresh runs in the
 		// background so the first frame is not delayed.
@@ -3151,6 +3177,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, bubbletea.Batch(m.petDrawCmd(), m.petTickCmd())
 	case BackendBannerResultMsg:
 		return m, bubbletea.Batch(m.applyBackendBannerResult(msg), m.applyBackendBannerFallbackCmd())
+	case SecuritySetupResultMsg:
+		m.applySecuritySetupResult(msg)
+		return m, nil
 	case ModelCatalogResultMsg:
 		m.applyModelCatalogResult(msg)
 		return m, m.applyBackendBannerFallbackCmd()
@@ -3346,6 +3375,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case WorktreeBrowserRemovedMsg:
 		m.applyWorktreeBrowserRemoved(msg)
 		return m, nil
+	case managedWorktreeStartMsg:
+		return m, m.applyManagedWorktreeStart(msg)
 	case ThreadSettingsUpdatedMsg:
 		cmd := m.applyThreadSettingsUpdated(msg)
 		if m.windowsSandboxRefreshPending {
@@ -3559,6 +3590,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case WorkingStatusHeaderMsg:
 		m.applyWorkingStatusHeader(msg)
 		return m, nil
+	case PromptSuggestionResultMsg:
+		m.applyPromptSuggestionResult(msg)
+		return m, nil
 	case AgentNavigateResultMsg:
 		return m, m.applyAgentNavigateResult(msg)
 	case SkillsListResultMsg:
@@ -3600,6 +3634,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		cmd := m.applyStreamMessage(msg.Message)
 		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
 	case bubbletea.KeyMsg:
+		if m.promptSuggestionTabAccepted {
+			if msg.Type == bubbletea.KeyTab {
+				return m, nil
+			}
+			m.promptSuggestionTabAccepted = false
+		}
 		if msg.Type == bubbletea.KeyEsc && m.renderedSelection.active {
 			m.renderedSelection.clear()
 			return m, nil
@@ -3797,6 +3837,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, cmd
 			}
 		}
+		if cmd, handled := m.handleSecuritySetupKey(msg); handled {
+			return m, cmd
+		}
 		if cmd, handled := m.handleBackendBannerKey(msg); handled {
 			return m, cmd
 		}
@@ -3818,6 +3861,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, cmd
 		}
 		keySpec := keySpecFromKeyMsg(msg)
+		if m.handlePromptSuggestionKey(msg, keySpec) {
+			return m, nil
+		}
 		if handled, cmd := m.handleKeyChordKey(keySpec, m.currentTime()); handled {
 			return m, cmd
 		}
@@ -4147,6 +4193,8 @@ func (m *Model) View() string {
 		sections = append(sections, m.bottomStyle.Render(m.renderReadOnlyThreadNotice()))
 	} else {
 		if banner := m.renderBackendBanner(); banner != "" {
+			sections = append(sections, m.bottomStyle.Render(banner))
+		} else if banner := m.renderSecuritySetupBanner(); banner != "" {
 			sections = append(sections, m.bottomStyle.Render(banner))
 		}
 		if hook := m.renderHookStatus(m.currentTime()); hook != "" &&
@@ -5090,6 +5138,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		// Rust #43253: a conversation owned by another app accepts no input.
 		return nil
 	}
+	m.clearPromptSuggestion()
 	input := strings.TrimSpace(m.composerText())
 	if m.threadUnavailable && !unavailableThreadCommand(input) {
 		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, or /copy."
@@ -5655,6 +5704,9 @@ func (m *Model) isIdle() bool {
 func (m *Model) setStatus(status string) {
 	if m == nil || m.State == nil {
 		return
+	}
+	if strings.EqualFold(strings.TrimSpace(status), "running") {
+		m.clearPromptSuggestion()
 	}
 	m.State.SetStatus(status)
 	m.syncTaskRunningTimer()

@@ -201,7 +201,7 @@ func TestAgentsDashboardLoadsAndRenders(t *testing.T) {
 		t.Fatalf("Update returned %T", updated)
 	}
 	output := finished.View()
-	for _, want := range []string{"Agent command center", "1 working   1 ready", "alpha", "beta"} {
+	for _, want := range []string{"Agent command center", "Working 1", "Ready 1", "alpha", "beta"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("view missing %q:\n%s", want, output)
 		}
@@ -321,9 +321,9 @@ func TestAgentsDashboardSearchAndGrouping(t *testing.T) {
 	source := newFakeDashboardSource()
 	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
-	model.Update(keyRunes('f'))
+	model.Update(keyRunes('/'))
 	if !model.view.State.Searching {
-		t.Fatal("f did not enter search")
+		t.Fatal("/ did not enter search")
 	}
 	for _, r := range "idle" {
 		model.Update(keyRunes(r))
@@ -344,6 +344,23 @@ func TestAgentsDashboardSearchAndGrouping(t *testing.T) {
 	model.Update(keyRunes('z'))
 	if model.view.State.Grouping != agentsoverview.GroupingStatus || model.view.State.Searching || model.view.State.Input != "" {
 		t.Fatalf("browsing mutated the view state: %#v", model.view.State)
+	}
+}
+
+func TestAgentsDashboardStatusFilterTabsLikeRust(t *testing.T) {
+	source := newFakeDashboardSource()
+	model := newAgentsDashboardModel(context.Background(), source, nil)
+	model.view.ApplyRefresh(source.rows, "")
+	model.Update(keyPress(bubbletea.KeyTab))
+	if model.view.State.StatusFilter != agentsoverview.StatusFilterNeedsYou {
+		t.Fatalf("status filter = %d", model.view.State.StatusFilter)
+	}
+	model.Update(keyPress(bubbletea.KeyShiftTab))
+	if model.view.State.StatusFilter != agentsoverview.StatusFilterAll {
+		t.Fatalf("status filter = %d", model.view.State.StatusFilter)
+	}
+	if !strings.Contains(model.View(), "tab/shift+tab filter") {
+		t.Fatalf("view does not advertise the filter:\n%s", model.View())
 	}
 }
 

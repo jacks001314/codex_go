@@ -524,6 +524,9 @@ func (m *Model) startManagedWorktree(mode string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	if m.managedWorktreeStarting {
+		return nil
+	}
 	if m.onStartManagedWorktree == nil {
 		m.closeWorktreeBrowser()
 		m.addErrorHistoryMessage("Managed worktrees require a local Git repository.")
@@ -532,12 +535,46 @@ func (m *Model) startManagedWorktree(mode string) bubbletea.Cmd {
 	cwd := strings.TrimSpace(m.State.CWD)
 	threadID := strings.TrimSpace(m.State.ThreadID)
 	m.closeWorktreeBrowser()
-	response, err := m.onStartManagedWorktree(mode, "", cwd, threadID)
+	m.managedWorktreeStarting = true
+	start := m.onStartManagedWorktree
+	return func() bubbletea.Msg {
+		response, err := start(mode, "", cwd, threadID)
+		return managedWorktreeStartMsg{
+			threadID: threadID,
+			cwd:      cwd,
+			response: response,
+			err:      err,
+		}
+	}
+}
+
+type managedWorktreeStartMsg struct {
+	threadID string
+	cwd      string
+	response SessionResumeResponse
+	err      error
+}
+
+// applyManagedWorktreeStart attaches the worktree session on a fresh update-loop
+// iteration, so checkout creation never blocks composer input or animation
+// frames (Rust #43298).
+func (m *Model) applyManagedWorktreeStart(msg managedWorktreeStartMsg) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	m.managedWorktreeStarting = false
+	if strings.TrimSpace(m.State.ThreadID) != strings.TrimSpace(msg.threadID) ||
+		strings.TrimSpace(m.State.CWD) != strings.TrimSpace(msg.cwd) {
+		m.addErrorHistoryMessage("Managed worktree creation was canceled because the active session changed.")
+		m.refreshTranscript()
+		return nil
+	}
+	response, err := msg.response, msg.err
 	if err != nil {
 		m.addErrorHistoryMessage("Failed to start managed worktree session: " + err.Error())
 		return nil
 	}
-	resumedThreadID := threadID
+	resumedThreadID := msg.threadID
 	if response.Summary != nil && strings.TrimSpace(response.Summary.ThreadID) != "" {
 		resumedThreadID = strings.TrimSpace(response.Summary.ThreadID)
 		m.upsertSessionItem(*response.Summary)

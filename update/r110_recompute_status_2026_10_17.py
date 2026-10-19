@@ -42,18 +42,22 @@ MANUAL = {
 
 def main():
     ledger = {}
-    for line in io.open(LEDGER, encoding="utf-8", newline="").read().split("\r\n")[1:]:
+    for line in io.open(LEDGER, encoding="utf-8", newline="").read().splitlines()[1:]:
         if not line or line.count("\t") < 5:
             continue
         fields = line.split("\t")
         ledger[fields[1]] = fields[4]
-    lines = io.open(TSV, encoding="utf-8", newline="").read().split("\r\n")
+    lines = io.open(TSV, encoding="utf-8", newline="").read().splitlines()
     header, rest = lines[0], [line for line in lines[1:] if line]
     rows = [line.split("\t") for line in rest]
     before = collections.Counter(row[10] for row in rows)
     changed = 0
     for row in rows:
         pr = row[1]
+        # The TUI lane reconciles its own rows in r109; this script only owns
+        # the non-TUI surface and must not downgrade TUI progress.
+        if row[4] == "tui":
+            continue
         manual = MANUAL.get(pr)
         if manual:
             verdict, matched, coverage, unmatched = manual

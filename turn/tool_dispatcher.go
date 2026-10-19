@@ -45,7 +45,23 @@ type ToolDispatcherOptions struct {
 	// declares external context (Rust `handle_any_tool` marking the thread's
 	// memory mode polluted when `memories.disable_on_external_context`).
 	OnToolOutputExternalContext func(ctx context.Context, invocation *tool.Invocation, output *tool.Output)
+	// Tracer opens Rust #44661's code-mode handler spans and, when it also
+	// implements TraceEventEmitter, receives the call receipt/readiness events.
+	Tracer SpanTracer
 }
+
+// Rust #44661 trace-safe milestones. They carry identifiers and tool names
+// only, never tool arguments or output.
+const (
+	ToolCallReceivedEventName             = "codex.tool_call_received"
+	ToolResultReadyEventName              = "codex.tool_result_ready"
+	CodeModeNestedToolDispatchedEventName = "codex.code_mode.nested_tool_dispatched"
+	CodeModeNestedDispatchInterruptedName = "codex.code_mode.nested_tool_dispatch_interrupted"
+	CodeModeExecuteHandlerSpanName        = "code_mode.handler.execute"
+	CodeModeWaitHandlerSpanName           = "code_mode.handler.wait"
+	ToolTraceSourceDirect                 = "direct"
+	ToolTraceSourceCodeMode               = "code_mode"
+)
 
 // observeNonDispatchedItem records a call ID that bypassed local dispatch so a
 // reused ID cannot be presented as fresh Code Mode evidence (Rust #45185).
@@ -118,6 +134,7 @@ type ToolDispatcher struct {
 	truncation                  *utils.TruncationPolicy
 	truncationForModel          func(model string) *utils.TruncationPolicy
 	onToolOutputExternalContext func(ctx context.Context, invocation *tool.Invocation, output *tool.Output)
+	tracer                      SpanTracer
 	clockMu                     sync.Mutex
 	// preparedDirectCalls/permittedDirectCalls carry the direct-call records
 	// reserved before dispatch so executeToolInvocation can attach each one to
@@ -374,7 +391,93 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		truncation:                  options.Truncation,
 		truncationForModel:          options.TruncationForModel,
 		onToolOutputExternalContext: options.OnToolOutputExternalContext,
+		tracer:                      options.Tracer,
 	}
+}
+
+// traceIDField mirrors Rust's `trace_id` helper: identifiers are exported only
+// when non-empty and bounded, so oversized runtime ids never reach a trace.
+func traceIDField(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	return value, value != "" && len(value) <= 256
+}
+
+// traceToolFields writes the tool identity fields shared by the receipt and
+// readiness events.
+func (d *ToolDispatcher) traceToolFields(fields map[string]string, name tool.ToolName) {
+	namespace := strings.TrimSpace(name.Namespace)
+	if namespace == "" {
+		namespace = tool.DefaultFunctionNamespace
+	}
+	fields["conversation.id"] = d.threadID
+	fields["tool_name"] = name.Name
+	fields["tool_namespace"] = namespace
+}
+
+func (d *ToolDispatcher) emitTraceEvent(ctx context.Context, eventName string, fields map[string]string) {
+	if d == nil || d.tracer == nil || eventName == "" {
+		return
+	}
+	emitter, ok := d.tracer.(TraceEventEmitter)
+	if !ok {
+		return
+	}
+	emitter.EmitTraceSafeEvent(ctx, eventName, fields)
+}
+
+// emitToolCallReceived reports that a model turn or the code-mode broker
+// received a tool call. The broker path has no dispatching turn yet, so its
+// event omits turn_id and carries the cell/runtime identifiers instead.
+func (d *ToolDispatcher) emitToolCallReceived(ctx context.Context, invocation *tool.Invocation, source string, turnID string, cellID string, runtimeCallID string) {
+	if d == nil || invocation == nil {
+		return
+	}
+	fields := map[string]string{"tool_source": source}
+	d.traceToolFields(fields, invocation.ToolName)
+	fields["call_id"] = invocation.CallID
+	if turnID, ok := traceIDField(turnID); ok {
+		fields["turn_id"] = turnID
+	}
+	if cellID, ok := traceIDField(cellID); ok {
+		fields["cell.id"] = cellID
+	}
+	if runtimeCallID, ok := traceIDField(runtimeCallID); ok {
+		fields["runtime_tool_call_id"] = runtimeCallID
+	}
+	d.emitTraceEvent(ctx, ToolCallReceivedEventName, fields)
+}
+
+// emitToolResultReady reports that dispatch produced a terminal outcome. Rust
+// records this before the caller encodes or collects the result; fatal errors
+// never reach this path because they propagate instead of producing a result.
+func (d *ToolDispatcher) emitToolResultReady(ctx context.Context, invocation *tool.Invocation, source string, turnID string) {
+	if d == nil || invocation == nil {
+		return
+	}
+	fields := map[string]string{"tool_source": source}
+	d.traceToolFields(fields, invocation.ToolName)
+	fields["call_id"] = invocation.CallID
+	if turnID, ok := traceIDField(turnID); ok {
+		fields["turn_id"] = turnID
+	}
+	d.emitTraceEvent(ctx, ToolResultReadyEventName, fields)
+}
+
+// codeModeCellID reports the cell a code-mode handler is attached to, first
+// from the invocation context (a resumed cell) and then from the handler output
+// (a newly started cell).
+func codeModeCellID(invocation *tool.Invocation, output *tool.Output) string {
+	if invocation != nil && invocation.Context != nil {
+		if cellID, _ := invocation.Context[tool.CodeModeCellIDContextKey].(string); strings.TrimSpace(cellID) != "" {
+			return strings.TrimSpace(cellID)
+		}
+	}
+	if output != nil && output.Data != nil {
+		if cellID, _ := output.Data["cell_id"].(string); strings.TrimSpace(cellID) != "" {
+			return strings.TrimSpace(cellID)
+		}
+	}
+	return ""
 }
 
 // SetStepModel applies the producing model's output-truncation policy to the
@@ -638,10 +741,31 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 				d.onCodeModeNotify(toolCtx, callID, text)
 			}
 		})
-		if d.emitCodeModeNestedLifecycle || d.executedToolCalls != nil {
+		if d.emitCodeModeNestedLifecycle || d.executedToolCalls != nil || d.tracer != nil {
 			invocation.Context["code_mode_nested_tool_started"] = tool.CodeModeNestedToolStartedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedStartedAt time.Time) {
 				if d.executedToolCalls != nil {
 					d.executedToolCalls.RecordToolCall(nested, d.toolMode)
+				}
+				// Rust #44661: the broker records nested receipt and dispatch
+				// before the dispatching turn is known, so the receipt omits
+				// turn_id and identifies the cell/runtime call instead.
+				if nested != nil {
+					cellID := codeModeCellID(nested, nil)
+					dispatchFields := map[string]string{
+						"conversation.id": d.threadID,
+						"call_id":         nested.CallID,
+					}
+					if turnID, ok := traceIDField(d.turnID); ok {
+						dispatchFields["turn_id"] = turnID
+					}
+					if cellID, ok := traceIDField(cellID); ok {
+						dispatchFields["cell.id"] = cellID
+					}
+					if runtimeCallID, ok := traceIDField(nested.CallID); ok {
+						dispatchFields["runtime_tool_call_id"] = runtimeCallID
+					}
+					d.emitTraceEvent(nestedCtx, CodeModeNestedToolDispatchedEventName, dispatchFields)
+					d.emitToolCallReceived(nestedCtx, nested, ToolTraceSourceCodeMode, "", cellID, nested.CallID)
 				}
 				if d.emitCodeModeNestedLifecycle && d.onToolStarted != nil {
 					d.onToolStarted(nestedCtx, nested, nestedStartedAt)
@@ -656,6 +780,22 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 						d.executedToolCalls.RecordToolResultMetadata(nested, metadata)
 					}
 				}
+				if nested != nil && !toolCallErrorForModel(nestedErr).IsFatal() {
+					d.emitToolResultReady(nestedCtx, nested, ToolTraceSourceCodeMode, d.turnID)
+				}
+				if nested != nil && nestedErr != nil && nestedCtx.Err() != nil {
+					// Rust #44661 distinguishes a cancelled dispatch from one
+					// abandoned by cell closure; Go's synchronous delegate can
+					// only observe cancellation, so closed cells report cancelled.
+					fields := map[string]string{
+						"conversation.id": d.threadID,
+						"outcome":         "cancelled",
+					}
+					if callID, ok := traceIDField(nested.CallID); ok {
+						fields["call_id"] = callID
+					}
+					d.emitTraceEvent(nestedCtx, CodeModeNestedDispatchInterruptedName, fields)
+				}
 				if !d.emitCodeModeNestedLifecycle || d.onToolCompleted == nil {
 					return
 				}
@@ -669,6 +809,37 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 			})
 		}
 	}
+	traceSource := ToolTraceSourceDirect
+	if strings.TrimSpace(invocation.Source) == "code_mode" {
+		traceSource = ToolTraceSourceCodeMode
+	}
+	handlerSpanName := ""
+	if invocation.ToolName.Namespace == "" {
+		switch invocation.ToolName.Name {
+		case tool.CodeModeExecToolName:
+			handlerSpanName = CodeModeExecuteHandlerSpanName
+		case tool.CodeModeWaitToolName:
+			handlerSpanName = CodeModeWaitHandlerSpanName
+		}
+	}
+	dispatchCtx := toolCtx
+	var handlerSpan model.TelemetrySpan
+	if handlerSpanName != "" && d.tracer != nil {
+		// Rust #44661 defaults the handler span to interrupted and overwrites
+		// the outcome once the handler settles.
+		attributes := map[string]string{
+			"conversation.id": d.threadID,
+			"call_id":         invocation.CallID,
+			"cell.id":         "",
+			"outcome":         "interrupted",
+		}
+		if turnID, ok := traceIDField(d.turnID); ok {
+			attributes["turn_id"] = turnID
+		}
+		dispatchCtx, handlerSpan = d.tracer.StartSpan(toolCtx, nil, handlerSpanName, attributes)
+		defer handlerSpan.End()
+	}
+	d.emitToolCallReceived(dispatchCtx, invocation, traceSource, d.turnID, "", "")
 	startedAt := d.nowUTC()
 	// Rust #38568: tool start callbacks run after pre-tool hooks (with the
 	// possibly hook-rewritten invocation) and before the executor runs. We
@@ -684,7 +855,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		}
 	}
 	telemetryTags := d.router.TelemetryTags(invocation)
-	output, dispatchErr := d.router.DispatchWithHooksAfterPreHooks(toolCtx, invocation, d.hooks, startedAfterPreHooks)
+	output, dispatchErr := d.router.DispatchWithHooksAfterPreHooks(dispatchCtx, invocation, d.hooks, startedAfterPreHooks)
 	// Rust ToolCallOutcome::Failed { handler_executed: true } is produced only
 	// when the executor returned an error (dispatch error), not when the handler
 	// completed with a success=false output. A blocked pre-tool hook leaves
@@ -784,6 +955,21 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	if finishedAt.IsZero() {
 		finishedAt = d.nowUTC()
 	}
+	if handlerSpan != nil {
+		outcome := "failed"
+		if output.Success && dispatchErr == nil && !aborted {
+			outcome = "completed"
+		}
+		if aborted {
+			outcome = "interrupted"
+		}
+		attributes := map[string]string{"outcome": outcome}
+		if cellID := codeModeCellID(invocation, output); cellID != "" {
+			attributes["cell.id"] = cellID
+		}
+		handlerSpan.Record(attributes)
+	}
+	d.emitToolResultReady(dispatchCtx, invocation, traceSource, d.turnID)
 	inputItems := d.postExecutionInputItems(toolCtx, invocation, output)
 	notifyMu.Lock()
 	inputItems = append(notifyItems, inputItems...)

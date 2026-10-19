@@ -31,8 +31,12 @@ func TestVerifiedLocalDaemonSocketRequiresPrivateDirectoryLikeRust(t *testing.T)
 	// Mirror codexuds's own coverage: the daemon owns a dedicated directory
 	// beneath a state root, not the state root itself.
 	directory := filepath.Join(root, "app-server-daemon")
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatalf("MkdirAll error = %v", err)
+	if runtime.GOOS != "windows" {
+		// On Windows the private DACL must be created by the builder itself;
+		// os.MkdirAll inherits the broad temp-directory ACL.
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("MkdirAll error = %v", err)
+		}
 	}
 	socketPath := filepath.Join(directory, "app-server-control.sock")
 	if runtime.GOOS == "windows" {

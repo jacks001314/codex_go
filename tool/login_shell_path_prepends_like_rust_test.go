@@ -119,17 +119,7 @@ func serveLoginPathFakeExecutor(t *testing.T, dirs []string) (*httptest.Server, 
 // `login_shell_package_path` feature is on, the policy does not set PATH itself,
 // and the executor reports usable directories.
 func TestUnifiedExecRestoresExecutorPathDirsForLoginShellLikeRust(t *testing.T) {
-	first := filepath.Join(t.TempDir(), "codex-path")
-	second := filepath.Join(t.TempDir(), "extra-tools")
-	firstURI, err := utils.FromHostNativePath(first)
-	if err != nil {
-		t.Fatalf("FromHostNativePath(%q) error = %v", first, err)
-	}
-	secondURI, err := utils.FromHostNativePath(second)
-	if err != nil {
-		t.Fatalf("FromHostNativePath(%q) error = %v", second, err)
-	}
-	dirs := []string{firstURI.String(), secondURI.String()}
+	first, second, dirs := loginPathTestDirs(t)
 	hookCommand := "sh -c 'command -v rg'"
 	loginCommand := []string{"/bin/sh", "-lc", hookCommand}
 
@@ -390,22 +380,7 @@ func TestBuildShellRequestCarriesLoginShellPackagePathLikeRust(t *testing.T) {
 // check rewrite the launch, and the restore actually puts the executor's
 // directories on PATH for the model's script.
 func TestLocalShellLaunchRestoresExecutorPathDirsLikeRust(t *testing.T) {
-	first := filepath.Join(t.TempDir(), "codex-path")
-	second := filepath.Join(t.TempDir(), "extra-tools")
-	for _, dir := range []string{first, second} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
-		}
-	}
-	firstURI, err := utils.FromHostNativePath(first)
-	if err != nil {
-		t.Fatalf("FromHostNativePath(%q) error = %v", first, err)
-	}
-	secondURI, err := utils.FromHostNativePath(second)
-	if err != nil {
-		t.Fatalf("FromHostNativePath(%q) error = %v", second, err)
-	}
-	dirs := []string{firstURI.String(), secondURI.String()}
+	first, second, dirs := loginPathTestDirs(t)
 	previous := localLaunchPrependPathDirs
 	defer func() { localLaunchPrependPathDirs = previous }()
 	localLaunchPrependPathDirs = func() []string { return dirs }
@@ -518,6 +493,33 @@ func TestLocalShellLaunchRestoresExecutorPathDirsLikeRust(t *testing.T) {
 			}
 		})
 	}
+}
+
+// loginPathTestDirs returns the launch command's rendered directories plus the
+// executor-reported URIs. A POSIX login shell can only consume POSIX-convention
+// paths (Rust's derive gate), so Windows hosts use fixed POSIX executor paths
+// for the fake remote/local runner instead of host-native temp directories.
+func loginPathTestDirs(t *testing.T) (string, string, []string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return "/opt/codex-path", "/opt/extra-tools", []string{"file:///opt/codex-path", "file:///opt/extra-tools"}
+	}
+	first := filepath.Join(t.TempDir(), "codex-path")
+	second := filepath.Join(t.TempDir(), "extra-tools")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+	firstURI, err := utils.FromHostNativePath(first)
+	if err != nil {
+		t.Fatalf("FromHostNativePath(%q) error = %v", first, err)
+	}
+	secondURI, err := utils.FromHostNativePath(second)
+	if err != nil {
+		t.Fatalf("FromHostNativePath(%q) error = %v", second, err)
+	}
+	return first, second, []string{firstURI.String(), secondURI.String()}
 }
 
 // TestSnapshotProviderSeesLaunchShellInvocationLikeRust pins Rust #49360's

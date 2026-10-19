@@ -1003,6 +1003,7 @@ var knownTuiConfigFields = map[string]struct{}{
 	"show_tooltips":                   {},
 	"show_server_version_notice":      {},
 	"auto_recap":                      {},
+	"prompt_suggestions":              {},
 	"disable_paste_burst":             {},
 	"vim_mode_default":                {},
 	"question_esc_back":               {},

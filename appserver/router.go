@@ -1114,6 +1114,7 @@ func threadStartExtra(params *ThreadStartParams) map[string]any {
 			extra["dynamic_tools"] = tools
 		}
 	}
+	applyThreadAllowedToolsExtra(extra, params.AllowedTools)
 	if len(params.Config) > 0 {
 		extra = ensureRecordExtra(extra)
 		extra["config"] = cloneAnyMapForRouter(params.Config)
@@ -1122,6 +1123,46 @@ func threadStartExtra(params *ThreadStartParams) map[string]any {
 		return nil
 	}
 	return extra
+}
+
+func applyThreadAllowedToolsExtra(extra map[string]any, allowed *[]string) {
+	if extra == nil {
+		return
+	}
+	if allowed == nil {
+		delete(extra, "allowed_tools")
+		return
+	}
+	cleaned := make([]string, 0, len(*allowed))
+	seen := map[string]struct{}{}
+	for _, name := range *allowed {
+		if name = strings.TrimSpace(name); name != "" {
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			cleaned = append(cleaned, name)
+		}
+	}
+	extra["allowed_tools"] = cleaned
+}
+
+func threadAllowedToolsFromRecord(record *session.Record) *[]string {
+	if record == nil || record.Metadata.Extra == nil {
+		return nil
+	}
+	raw, present := record.Metadata.Extra["allowed_tools"]
+	if !present {
+		return nil
+	}
+	values := stringSliceFromAny(raw)
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return &cleaned
 }
 
 func threadStartHistoryModeError(params *ThreadStartParams) error {
@@ -1518,6 +1559,8 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		}
 	}
 	sourceWasLive := r.threadManager().LiveThread(record.ID) != nil
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	applyThreadAllowedToolsExtra(record.Metadata.Extra, params.AllowedTools)
 	if err := r.retainLiveThread(record); err != nil {
 		return nil, err
 	}

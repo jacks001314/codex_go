@@ -183,16 +183,16 @@ func TestGroupForStatusLikeRust(t *testing.T) {
 		{"active", false, true, GroupNeedsYou, "Needs input"},
 		{"active", false, false, GroupWorking, "Working"},
 		{"idle", false, false, GroupReady, "Ready"},
-		{"systemError", false, false, GroupNeedsYou, "Needs input"},
-		{"notLoaded", false, false, GroupFinished, "Finished"},
-		{"", false, false, GroupFinished, "Finished"},
+		{"systemError", false, false, GroupNeedsYou, "Error"},
+		{"notLoaded", false, false, GroupFinished, "Inactive"},
+		{"", false, false, GroupFinished, "Inactive"},
 	}
 	for _, tc := range cases {
 		if got := GroupForStatus(tc.status, tc.waitingApproval, tc.waitingUserInput); got != tc.want {
 			t.Errorf("GroupForStatus(%q) = %v, want %v", tc.status, got, tc.want)
 		}
-		if GroupForStatus(tc.status, tc.waitingApproval, tc.waitingUserInput).Label() != tc.wantLabel {
-			t.Errorf("GroupForStatus(%q).Label() = %q, want %q", tc.status, GroupForStatus(tc.status, tc.waitingApproval, tc.waitingUserInput).Label(), tc.wantLabel)
+		if got := GroupForStatus(tc.status, tc.waitingApproval, tc.waitingUserInput).StatusLabel(tc.status); got != tc.wantLabel {
+			t.Errorf("GroupForStatus(%q).StatusLabel() = %q, want %q", tc.status, got, tc.wantLabel)
 		}
 	}
 }
@@ -464,7 +464,7 @@ func TestRenderLayout(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"Agent command center",
-		"1 need input   1 working   1 ready",
+		"All 4   Needs you 1   Working 1   Ready 1   Inactive 1",
 		"n new",
 		"h hide",
 		"a archive",
@@ -503,7 +503,7 @@ func TestRenderStatusGrouping(t *testing.T) {
 	view.ToggleGrouping()
 	lines := view.Render(120, 24)
 	joined := strings.Join(lines, "\n")
-	for _, want := range []string{"Needs input  1", "Working  1", "Ready  1", "Finished  1"} {
+	for _, want := range []string{"Needs input  1", "Working  1", "Ready  1", "Inactive  1"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("status grouping missing %q:\n%s", want, joined)
 		}

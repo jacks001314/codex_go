@@ -347,6 +347,16 @@ func persistedCoreLines(path string) ([]PersistedLine, error) {
 				entry.Ordinal = *line.Ordinal
 			}
 			out = append(out, entry)
+		default:
+			// Internal records (token usage, security scores, goal updates)
+			// still occupy an ordinal in the paginated rollout. The cross-check
+			// ignores their content but must keep the ordinal sequence
+			// contiguous.
+			entry := PersistedLine{Type: line.Type, TurnID: line.TurnID}
+			if line.Ordinal != nil {
+				entry.Ordinal = *line.Ordinal
+			}
+			out = append(out, entry)
 		}
 	}
 	return out, nil

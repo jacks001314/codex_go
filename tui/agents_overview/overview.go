@@ -93,6 +93,29 @@ func (g Grouping) Next() Grouping {
 	}
 }
 
+// StatusFilter selects one command-center status tab. The zero value is All.
+type StatusFilter int
+
+const (
+	StatusFilterAll StatusFilter = iota
+	StatusFilterNeedsYou
+	StatusFilterWorking
+	StatusFilterReady
+	StatusFilterInactive
+)
+
+var statusFilterTabs = []struct {
+	label string
+	group Group
+	any   bool
+}{
+	{label: "All", any: true},
+	{label: "Needs you", group: GroupNeedsYou},
+	{label: "Working", group: GroupWorking},
+	{label: "Ready", group: GroupReady},
+	{label: "Inactive", group: GroupFinished},
+}
+
 // Label is the footer hint text for the active grouping mode (Rust
 // agents_overview_render).
 func (g Grouping) Label() string {
@@ -172,8 +195,20 @@ func (g Group) Label() string {
 	case GroupReady:
 		return "Ready"
 	default:
-		return "Finished"
+		return "Inactive"
 	}
+}
+
+// StatusLabel renders the row status, distinguishing a system error from
+// ordinary input prompts (Rust #46837 AgentsOverviewView::status).
+func (g Group) StatusLabel(statusType string) string {
+	if g == GroupNeedsYou {
+		switch strings.ToLower(strings.TrimSpace(statusType)) {
+		case "systemerror", "system_error", "error":
+			return "Error"
+		}
+	}
+	return g.Label()
 }
 
 // Dot returns the status marker glyph (Rust: red/green filled dots, cyan
@@ -207,8 +242,11 @@ type Row struct {
 	// LastMessage is the latest agent message in the task's most recent turn,
 	// previewed for the details pane (Rust agents_overview_details
 	// last_message via thread/turns/list).
-	LastMessage  string
-	Group        Group
+	LastMessage string
+	Group       Group
+	// StatusType is the app-server thread status type. The command center uses
+	// it to distinguish a system error from a needs-input prompt (#46837).
+	StatusType   string
 	IsCurrent    bool
 	StatusActive bool // an active turn is running (enables ctrl+x stop)
 	// HasVoice marks the task whose session owns the running voice
@@ -299,7 +337,12 @@ type State struct {
 	Search    string
 	Searching bool
 	Grouping  Grouping
-	Renaming  bool
+	// StatusFilter is the active command-center status tab (Rust #46839).
+	StatusFilter StatusFilter
+	Renaming     bool
+	// RenameTarget keeps the renamed task visible even when its status leaves
+	// the active filter (Rust AgentsOverviewViewState::rename_target).
+	RenameTarget string
 	// CreatingWorktree reports that the dashboard is creating a managed
 	// worktree for a new session (Rust AgentsOverviewViewState::creating_worktree):
 	// the list shows progress and pauses every action but cancel/quit.
@@ -317,6 +360,9 @@ type View struct {
 	ExitOnCancel bool
 	Completion   Completion
 	hints        map[string]string
+	// KeyChordHints replaces the normal footer and notice while a configured
+	// multi-stroke binding is pending (Rust #46838 key_chord_hint).
+	KeyChordHints []KeyChordHint
 	// Notice replaces the footer hint rows while a connection, refresh, or
 	// server-version message is active (Rust #46838). Key-chord hints take
 	// priority over notices; Go has no separate chord-hint state here.
@@ -324,6 +370,12 @@ type View struct {
 	// Loading reports the initial task refresh. An empty task list renders
 	// "Loading tasks…" instead of "No tasks yet".
 	Loading bool
+	// FilterHint is the resolved tab/shift+tab hint shown at the right edge of
+	// the status tab row when the terminal is wide enough (Rust #46839).
+	FilterHint string
+	// pageHeight is the visible list height from the last render. PageUp and
+	// PageDown move by this many displayed rows (Rust #46837).
+	pageHeight int
 
 	// pinRanks maps a pinned thread id to its shared-section position (Rust
 	// #51500 pinned_thread_ranks). Nil means shared pinning is unavailable
@@ -366,6 +418,13 @@ type View struct {
 	// usageLines holds the pre-rendered token/usage-estimate lines for a task,
 	// shown in the details pane (Rust #44970 agents_overview.usage).
 	usageLines map[string][]string
+}
+
+// KeyChordHint is one pending multi-stroke binding shown in the dashboard
+// footer.
+type KeyChordHint struct {
+	Keys   string
+	Action string
 }
 
 // SetUsageLines replaces the pre-rendered usage lines shown in the task
@@ -703,6 +762,8 @@ func (v *View) VisibleIndices() []int {
 		return nil
 	}
 	search := strings.ToLower(strings.TrimSpace(v.State.Search))
+	statusGroup, filterByStatus := v.statusFilterGroup()
+	renameTarget := v.renameTargetIndex()
 	pinned := make([]int, 0, len(v.pinRanks))
 	visible := make([]int, 0, len(v.Rows))
 	for i := range v.Rows {
@@ -713,11 +774,14 @@ func (v *View) VisibleIndices() []int {
 		if search != "" && !strings.Contains(searchable, search) {
 			continue
 		}
+		// Rust #46839: the status filter combines with search and hide. The
+		// row being renamed stays visible even if its status moved out of the
+		// active tab.
+		if filterByStatus && v.Rows[i].Group != statusGroup && i != renameTarget {
+			continue
+		}
 		// Rust #51500: pinned tasks render first in their own group and the
-		// dashboard's filters still apply to them. Rust also applies its status
-		// filter (TASK_FILTERS) here; the Go dashboard has no status filter
-		// (`grep -rn "TASK_FILTERS|status_filter" tui/` is empty), so the Go
-		// counterpart of that half is the search and hide filters above.
+		// dashboard's filters still apply to them.
 		if v.IsPinned(v.Rows[i].ThreadID) {
 			pinned = append(pinned, i)
 			continue
@@ -746,6 +810,80 @@ func (v *View) VisibleIndices() []int {
 		})
 	}
 	return append(pinned, visible...)
+}
+
+// statusFilterGroup resolves the active tab. The bool is false for All.
+func (v *View) statusFilterGroup() (Group, bool) {
+	if v == nil {
+		return 0, false
+	}
+	index := int(v.State.StatusFilter)
+	if index < 0 || index >= len(statusFilterTabs) {
+		index = int(StatusFilterAll)
+	}
+	tab := statusFilterTabs[index]
+	return tab.group, !tab.any
+}
+
+// StatusFilterIndex returns the clamped active tab index.
+func (v *View) StatusFilterIndex() int {
+	if v == nil {
+		return int(StatusFilterAll)
+	}
+	index := int(v.State.StatusFilter)
+	if index < 0 || index >= len(statusFilterTabs) {
+		return int(StatusFilterAll)
+	}
+	return index
+}
+
+// StatusFilterLabels returns the counted labels for the status tab row.
+func (v *View) StatusFilterLabels() []string {
+	if v == nil {
+		return nil
+	}
+	labels := make([]string, 0, len(statusFilterTabs))
+	for _, tab := range statusFilterTabs {
+		count := 0
+		for _, row := range v.Rows {
+			if tab.any || row.Group == tab.group {
+				count++
+			}
+		}
+		labels = append(labels, tab.label+" "+formatCount(count))
+	}
+	return labels
+}
+
+// CycleStatusFilter moves to the next status tab. Shift-Tab moves backwards
+// (Rust #46839 command_center_key).
+func (v *View) CycleStatusFilter(forward bool) {
+	if v == nil {
+		return
+	}
+	step := 1
+	if !forward {
+		step = len(statusFilterTabs) - 1
+	}
+	v.State.StatusFilter = StatusFilter((v.StatusFilterIndex() + step) % len(statusFilterTabs))
+	v.fitSelection()
+}
+
+// renameTargetIndex returns the row kept visible while renaming, or -1.
+func (v *View) renameTargetIndex() int {
+	if v == nil || !v.State.Renaming {
+		return -1
+	}
+	target := strings.TrimSpace(v.State.RenameTarget)
+	if target == "" {
+		return v.Selected
+	}
+	for index := range v.Rows {
+		if strings.TrimSpace(v.Rows[index].ThreadID) == target {
+			return index
+		}
+	}
+	return -1
 }
 
 // stableSortByGroupKey sorts rows by a group key with an insertion sort, which
@@ -973,17 +1111,41 @@ func (v *View) JumpBottom() {
 	v.Selected = visible[len(visible)-1]
 }
 
-// PageDown / PageUp move five rows (Rust ListAction::PageUp | PageDown).
+// PageDown / PageUp move by the visible viewport and stop at either end
+// (Rust #46837 page_selection).
 func (v *View) PageDown() {
-	for i := 0; i < 5; i++ {
-		v.MoveSelection(true)
-	}
+	v.pageSelection(true)
 }
 
 func (v *View) PageUp() {
-	for i := 0; i < 5; i++ {
-		v.MoveSelection(false)
+	v.pageSelection(false)
+}
+
+func (v *View) pageSelection(forward bool) {
+	if v == nil || v.State.Renaming {
+		return
 	}
+	visible := v.VisibleIndices()
+	if len(visible) == 0 {
+		return
+	}
+	current := 0
+	for index, row := range visible {
+		if row == v.Selected {
+			current = index
+			break
+		}
+	}
+	step := v.pageHeight
+	if step < 1 {
+		step = 1
+	}
+	if forward {
+		current = min(len(visible)-1, current+step)
+	} else {
+		current = max(0, current-step)
+	}
+	v.Selected = visible[current]
 }
 
 // ToggleGrouping cycles project -> status -> model grouping (Rust #44957).
@@ -1058,6 +1220,7 @@ func (v *View) BeginRename() bool {
 	v.State.Search = ""
 	v.State.Searching = false
 	v.State.Renaming = true
+	v.State.RenameTarget = strings.TrimSpace(row.ThreadID)
 	return true
 }
 
@@ -1163,13 +1326,17 @@ func (v *View) Activate() Action {
 	if v.State.Renaming && trimmed != "" {
 		if row := v.SelectedRow(); row != nil {
 			v.State.Renaming = false
+			v.State.RenameTarget = ""
 			v.State.Input = ""
 			v.State.InputCursor = 0
+			v.fitSelection()
 			return ActionRenameThread
 		}
 		v.State.Renaming = false
+		v.State.RenameTarget = ""
 		v.State.Input = ""
 		v.State.InputCursor = 0
+		v.fitSelection()
 		return ActionNone
 	}
 	if row := v.SelectedRow(); row != nil && !v.State.Renaming {
@@ -1192,13 +1359,15 @@ func (v *View) Cancel() Action {
 	if v.State.Searching {
 		v.State.Search = ""
 		v.State.Searching = false
-		v.Selected = 0
+		v.fitSelection()
 		return ActionNone
 	}
 	if v.State.Input != "" || v.State.Renaming {
 		v.State.Input = ""
 		v.State.InputCursor = 0
 		v.State.Renaming = false
+		v.State.RenameTarget = ""
+		v.fitSelection()
 		return ActionNone
 	}
 	if v.ExitOnCancel {
@@ -1506,6 +1675,7 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	view.fitSelection()
 	if selected != "" && !containsThreadID(view.Rows, selected) && view.State.Renaming {
 		view.State.Renaming = false
+		view.State.RenameTarget = ""
 		view.State.Input = ""
 		view.State.InputCursor = 0
 	}

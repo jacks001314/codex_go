@@ -189,6 +189,7 @@ func agentsOverviewRowFromThread(thread *appserver.Thread) agentsoverview.Row {
 		}
 	}
 	row.Group = agentsoverview.GroupForStatus(thread.Status.Type, waitingApproval, waitingUserInput)
+	row.StatusType = strings.TrimSpace(thread.Status.Type)
 	row.StatusActive = strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active")
 	if thread.Name != nil {
 		row.Name = strings.TrimSpace(*thread.Name)

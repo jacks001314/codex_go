@@ -82,6 +82,20 @@ func TestAgentCenterNoticeReplacesFooterLikeRust(t *testing.T) {
 	}
 }
 
+func TestAgentCenterKeyChordHintOverridesNoticeLikeRust(t *testing.T) {
+	view := New(sampleRows(), "", false)
+	view.Notice = "Reconnecting\u2026"
+	view.KeyChordHints = []KeyChordHint{{Keys: "ctrl-x", Action: "chord\u2026"}}
+	lines := view.Render(120, 24)
+	body := strings.Join(lines, "\n")
+	if !strings.Contains(body, "ctrl-x chord\u2026") {
+		t.Fatalf("pending key chord missing: %#v", lines)
+	}
+	if strings.Contains(body, "Reconnecting\u2026") {
+		t.Fatalf("notice should yield to the pending key chord: %#v", lines)
+	}
+}
+
 // Rust #46838 clips search/rename input at grapheme boundaries.
 func TestSingleLineViewportClipsGraphemesLikeRust(t *testing.T) {
 	tests := []struct {

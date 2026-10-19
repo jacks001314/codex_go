@@ -452,6 +452,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		Effects:                      settings.Effects,
 		QuestionEscBack:              settings.QuestionEscBack,
 		AutoRecap:                    settings.AutoRecap,
+		PromptSuggestions:            settings.PromptSuggestions,
 		MouseScrollSpeed:             settings.MouseScrollSpeed,
 		RightClickPaste:              interactiveRightClickPasteValue(settings.RightClickPaste),
 		CopyOnSelect:                 interactiveCopyOnSelectValue(settings.CopyOnSelect),

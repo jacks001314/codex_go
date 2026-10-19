@@ -531,6 +531,12 @@ func (m *Model) renderBackendBanner() string {
 		title = "Usage limit reached"
 		description = "Your included usage is exhausted. Choose an option below to continue."
 	}
+	return m.renderInlineBanner(title, description, actions, banner.Dismissible)
+}
+
+// renderInlineBanner paints title, description, numbered actions, and the
+// inline dismissal hint above the composer.
+func (m *Model) renderInlineBanner(title, description string, actions []BackendBannerAction, dismissible bool) string {
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -551,7 +557,7 @@ func (m *Model) renderBackendBanner() string {
 			lines = append(lines, "  "+codextui.NumberedSelectionPrefix(index, false)+action.Label)
 		}
 	}
-	if hint := backendBannerHint(banner.Dismissible, len(actions) > 0); hint != "" {
+	if hint := backendBannerHint(dismissible, len(actions) > 0); hint != "" {
 		lines = append(lines, "", "  "+hint)
 	}
 	for index, line := range lines {

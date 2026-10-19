@@ -118,9 +118,11 @@ type ProxySettings struct {
 	AllowLocalBinding              bool
 	// AllowLocalBindingSet distinguishes an explicit false from an omitted
 	// setting so executor-specific defaults can be applied later (Rust #46523).
-	AllowLocalBindingSet                         bool
-	MITM                                         bool
-	MITMHooks                                    []ProxyMITMHookConfig
+	AllowLocalBindingSet bool
+	MITM                 bool
+	MITMHooks            []ProxyMITMHookConfig
+	// MITMCA optionally supplies an external signing CA (Rust #47132).
+	MITMCA                                       *ProxyMITMCAConfig
 	CredentialBroker                             bool
 	DangerouslyAllowPlaintextCredentialInjection bool
 	// CredentialBrokerOpenAIHost is the trusted OpenAI endpoint host derived
@@ -130,6 +132,11 @@ type ProxySettings struct {
 	// CredentialProviders holds the validated
 	// features.network_proxy.credentials definitions (#44056).
 	CredentialProviders map[string]CredentialProviderConfig
+}
+
+type ProxyMITMCAConfig struct {
+	CertificateFile string
+	PrivateKeyFile  string
 }
 
 func DefaultProxySettings() ProxySettings {

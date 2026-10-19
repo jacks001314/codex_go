@@ -27,6 +27,9 @@ type RuntimeOptions struct {
 	// CodeModeMessages carries the active model catalog's Code Mode overrides
 	// for code_mode_only exec descriptions (Rust #47118).
 	CodeModeMessages *model.CodeModeToolMessages
+	// AllowedTools, when non-nil, restricts the model-visible tools and hosted
+	// declarations (Rust #45711).
+	AllowedTools *[]string
 	// CodeModeMessagesForModel resolves the catalog overrides for a model so a
 	// mid-turn model change can refresh exec/wait descriptions (Rust #47118).
 	CodeModeMessagesForModel func(model string) *model.CodeModeToolMessages
@@ -84,6 +87,7 @@ type Runtime struct {
 	deferMailboxPreemption       bool
 	indirectDescriptionPrefixes  *tool.IndirectNamespacePrefixes
 	codeModeMessages             *model.CodeModeToolMessages
+	allowedTools                 *[]string
 	codeModeMessagesForModel     func(model string) *model.CodeModeToolMessages
 	codeModeDefaultExecYieldTime time.Duration
 }
@@ -118,6 +122,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		deferMailboxPreemption:       options.DeferMailboxPreemption,
 		indirectDescriptionPrefixes:  options.IndirectDescriptionPrefixes,
 		codeModeMessages:             options.CodeModeMessages,
+		allowedTools:                 options.AllowedTools,
 		codeModeMessagesForModel:     options.CodeModeMessagesForModel,
 		codeModeDefaultExecYieldTime: options.CodeModeDefaultExecYieldTime,
 	}
@@ -300,7 +305,8 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	loopRequest.ToolMode = effectiveToolMode
 	buildTools := func() []any {
 		specs := r.modelVisibleSpecsForRequest(effectiveToolMode)
-		return MergeHostedTools(MergeHostedTools(model.ResponsesToolsFromSpecs(specs), r.hostedTools), request.HostedTools)
+		tools := MergeHostedTools(MergeHostedTools(model.ResponsesToolsFromSpecs(specs), r.hostedTools), request.HostedTools)
+		return filterAllowedHostedTools(tools, r.allowedTools)
 	}
 	var visibleSpecs []tool.Spec
 	if len(loopRequest.Tools) == 0 {
@@ -320,6 +326,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		loopRequest.ClientMetadata = loopRequest.ClientMetadataTransform(loopRequest.ClientMetadata)
 	}
 	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
+	loopRequest.Tools = filterAllowedHostedTools(loopRequest.Tools, r.allowedTools)
 	return NewAgentLoop(&AgentLoopOptions{
 		Agent:                   r.agent,
 		SteerMailbox:            r.steerMailbox,
@@ -343,11 +350,34 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Truncation:                  r.truncationPolicy(loopRequest.Model),
 			TruncationForModel:          r.truncationPolicy,
 			OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
+			Tracer:                      loopRequest.Tracer,
 		}),
 		MaxTurns:               r.maxTurns,
 		Now:                    r.now,
 		DeferMailboxPreemption: r.deferMailboxPreemption,
 	}).Run(ctx, &loopRequest)
+}
+
+func filterAllowedHostedTools(tools []any, allowed *[]string) []any {
+	if allowed == nil {
+		return tools
+	}
+	names := make(map[string]struct{}, len(*allowed))
+	for _, name := range *allowed {
+		if name = strings.TrimSpace(name); name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	out := make([]any, 0, len(tools))
+	for _, spec := range tools {
+		object, _ := spec.(map[string]any)
+		name, _ := object["name"].(string)
+		name = strings.TrimSpace(name)
+		if _, ok := names[name]; ok {
+			out = append(out, spec)
+		}
+	}
+	return out
 }
 
 func (r *Runtime) toolRegistrationCounts() tool.RegistrationCounts {

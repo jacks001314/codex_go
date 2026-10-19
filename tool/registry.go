@@ -368,6 +368,52 @@ func (r *Registry) SetCodeModeMessages(messages *CodeModeToolMessages) {
 	r.mu.Unlock()
 }
 
+// RestrictToTools removes every tool outside the startup allowlist. An empty
+// allowlist disables all tools; namespace-qualified keys and plain base names
+// are both accepted (Rust #45711).
+func (r *Registry) RestrictToTools(allowed []string) {
+	if r == nil {
+		return
+	}
+	names := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	order := r.order[:0]
+	for _, key := range r.order {
+		spec, ok := r.specs[key]
+		if !ok {
+			continue
+		}
+		if !allowedToolName(names, spec.Name) {
+			delete(r.executors, key)
+			delete(r.specs, key)
+			continue
+		}
+		order = append(order, key)
+	}
+	r.order = order
+}
+
+func allowedToolName(allowed map[string]struct{}, name ToolName) bool {
+	if _, ok := allowed[name.Key()]; ok {
+		return true
+	}
+	if name.Namespace == "" || name.Namespace == "functions" {
+		if _, ok := allowed[name.Name]; ok {
+			return true
+		}
+		_, ok := allowed["functions."+name.Name]
+		return ok
+	}
+	return false
+}
+
 func (r *Registry) register(executor Executor, skipDuplicate bool, prepend bool) (bool, error) {
 	if executor == nil {
 		return false, fmt.Errorf("%w: executor is nil", ErrToolInvalidCall)

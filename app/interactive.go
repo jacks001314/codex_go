@@ -1210,6 +1210,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		Effects:                     settings.Effects,
 		QuestionEscBack:             settings.QuestionEscBack,
 		AutoRecap:                   settings.AutoRecap,
+		PromptSuggestions:           settings.PromptSuggestions,
 		MouseScrollSpeed:            settings.MouseScrollSpeed,
 		RightClickPaste:             interactiveRightClickPasteValue(settings.RightClickPaste),
 		CopyOnSelect:                interactiveCopyOnSelectValue(settings.CopyOnSelect),
@@ -1325,6 +1326,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnStartMCPLogin:            interactiveLocalMCPLoginStarter(mcpService),
 		OnReadRateLimits:           interactiveLocalRateLimitsReader(),
 		OnReadBackendBanner:        interactiveLocalBackendBannerReader(),
+		OnReadSecuritySetup:        interactiveLocalSecuritySetupReader(root),
 		OnBackendBannerAction:      interactiveBackendBannerActionHandler(interactiveLocalAddCreditsNudgeSender()),
 		MCPStartupExpectedServers:  mcpExpectedServers,
 		InitialMessages:            initialMessages,
@@ -2232,6 +2234,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		StatusLineUseColors:        interactiveStatusLineUseColors(values),
 		QuestionEscBack:            interactiveQuestionEscBack(values),
 		AutoRecap:                  interactiveAutoRecap(values),
+		PromptSuggestions:          interactivePromptSuggestions(values),
 		MouseScrollSpeed:           interactiveMouseScrollSpeed(values),
 		RightClickPaste:            interactiveRightClickPaste(values),
 		CopyOnSelect:               interactiveCopyOnSelect(values),
@@ -2379,6 +2382,18 @@ func interactiveQuestionEscBack(values map[string]any) *bool {
 func interactiveAutoRecap(values map[string]any) *bool {
 	enabled := true
 	if raw, ok := interactiveTUIConfig(values)["auto_recap"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactivePromptSuggestions resolves `tui.prompt_suggestions` (Rust
+// #47911). The config default is disabled; invalid values keep the default.
+func interactivePromptSuggestions(values map[string]any) *bool {
+	enabled := false
+	if raw, ok := interactiveTUIConfig(values)["prompt_suggestions"]; ok {
 		if configured, ok := raw.(bool); ok {
 			enabled = configured
 		}

@@ -62,7 +62,18 @@ const DefaultQuickCheckBudget = 100 * time.Millisecond
 // first).
 type sqliteQuickCheckManager struct {
 	mu   sync.Mutex
-	seen []os.FileInfo
+	seen []quickCheckFileIdentity
+}
+
+// quickCheckFileIdentity combines the platform file identity with size and
+// modification time. Windows may reuse a file index immediately after a
+// deleted file is replaced (the corruption rebuild does exactly that); the
+// extra fields keep the rebuilt file from inheriting the corrupt file's
+// validated state while an unchanged database still skips a repeat scan.
+type quickCheckFileIdentity struct {
+	info    os.FileInfo
+	size    int64
+	modTime time.Time
 }
 
 // markAttempt records the file identity and reports whether it is new to this
@@ -72,14 +83,15 @@ func (m *sqliteQuickCheckManager) markAttempt(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	identity := quickCheckFileIdentity{info: info, size: info.Size(), modTime: info.ModTime()}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, seen := range m.seen {
-		if seen != nil && os.SameFile(seen, info) {
+		if seen.info != nil && os.SameFile(seen.info, info) && seen.size == identity.size && seen.modTime.Equal(identity.modTime) {
 			return false, nil
 		}
 	}
-	m.seen = append(m.seen, info)
+	m.seen = append(m.seen, identity)
 	return true, nil
 }
 

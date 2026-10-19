@@ -54,10 +54,46 @@ func TestModelAgentsCommandOpensDashboardAndLoads(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	output := utils.StripANSI(model.View())
-	for _, want := range []string{"Agent command center", "alpha", "beta", "gamma", "1 need input", "x stop"} {
+	for _, want := range []string{"Agent command center", "alpha", "beta", "gamma", "All 3", "Needs you 1", "x stop"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("dashboard view missing %q:\n%s", want, output)
 		}
+	}
+}
+
+// TestModelAgentsStatusFilterTabsLikeRust covers #46839: Tab and Shift-Tab
+// cycle the status tabs, search still narrows within the active tab, and the
+// footer advertises the filter keys.
+func TestModelAgentsStatusFilterTabsLikeRust(t *testing.T) {
+	model := NewModel(nil, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+	})
+	openAgentsDashboard(t, model)
+	if !strings.Contains(utils.StripANSI(model.View()), "tab/shift+tab filter") {
+		t.Fatalf("dashboard does not advertise the status filter:\n%s", utils.StripANSI(model.View()))
+	}
+	model.Update(key(bubbletea.KeyTab))
+	if got := model.agentsOverview.State.StatusFilter; got != agentsoverview.StatusFilterNeedsYou {
+		t.Fatalf("status filter after tab = %d", got)
+	}
+	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 1 ||
+		model.agentsOverview.Rows[visible[0]].ThreadID != "root-3" {
+		t.Fatalf("needs-you visible = %v", visible)
+	}
+	model.Update(key(bubbletea.KeyShiftTab))
+	if got := model.agentsOverview.State.StatusFilter; got != agentsoverview.StatusFilterAll {
+		t.Fatalf("status filter after shift-tab = %d", got)
+	}
+
+	// Metadata editing owns Tab: it must not change the filter.
+	model.Update(agentsF3Event())
+	model.Update(key(bubbletea.KeyTab))
+	if got := model.agentsOverview.State.StatusFilter; got != agentsoverview.StatusFilterAll {
+		t.Fatalf("search changed the status filter: %d", got)
 	}
 }
 

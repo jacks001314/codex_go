@@ -16,7 +16,7 @@ type PluginCommandAttribution struct {
 }
 
 type trustedPluginRoot struct {
-	pluginID                string
+	pluginID string
 	// version is the plugin version this root belongs to (Rust #46528). Trusted
 	// roots keep the version so measurement declarations stay bound to the
 	// root that actually matched the script.
@@ -27,6 +27,11 @@ type trustedPluginRoot struct {
 
 type TrustedPluginRoots struct {
 	roots []trustedPluginRoot
+}
+
+// RootCount reports how many verified roots the attribution set contains.
+func (r TrustedPluginRoots) RootCount() int {
+	return len(r.roots)
 }
 
 // NewTrustedPluginRoots builds attribution roots only from verified, installed

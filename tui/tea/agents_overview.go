@@ -471,6 +471,20 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		return nil
 	}
+	// Rust #46839: Tab and Shift-Tab cycle the command-center status tabs,
+	// unless either key is already bound to a list or agents action.
+	switch msg.Type {
+	case bubbletea.KeyTab:
+		if m.agentsOverviewFilterKeyAvailable("tab") {
+			m.agentsOverview.CycleStatusFilter(true)
+			return nil
+		}
+	case bubbletea.KeyShiftTab:
+		if m.agentsOverviewFilterKeyAvailable("shift-tab") {
+			m.agentsOverview.CycleStatusFilter(false)
+			return nil
+		}
+	}
 	if m.keyMatches("agents", "search", keySpec) {
 		m.agentsOverview.ToggleSearch()
 	}
@@ -1237,12 +1251,59 @@ func (m *Model) renderAgentsOverview() string {
 	if m.agentsOverview.Notice == "" {
 		m.agentsOverview.Notice = strings.TrimSpace(m.agentsOverviewServerVersionNotice)
 	}
+	m.agentsOverview.KeyChordHints = m.agentsOverviewKeyChordHints()
+	m.agentsOverview.FilterHint = m.agentsOverviewFilterHint()
 	m.agentsOverview.Loading = (m.agentsOverviewInflight || m.agentsOverviewPending) && len(m.agentsOverview.Rows) == 0
 	lines := m.agentsOverview.RenderStyled(m.width, m.height)
 	if m.agentsOverviewLifecycleProgress != "" {
 		lines = centerAgentsOverviewDialog(lines, m.agentsOverviewLifecycleProgress, m.width, m.height)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// agentsOverviewFilterKeyAvailable reports whether key is free to drive the
+// status-tab cycle (Rust #46839 center_shortcut_keys precedence).
+func (m *Model) agentsOverviewFilterKeyAvailable(key string) bool {
+	if m == nil || key == "" {
+		return false
+	}
+	for _, action := range codextui.KeymapActions(codextui.KeymapActionFilter{}) {
+		if action.Context != "list" && action.Context != "agents" {
+			continue
+		}
+		if codextui.KeymapActionHasBinding(m.keymapConfig, action.Context, action.Action, key) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Model) agentsOverviewFilterHint() string {
+	if m == nil {
+		return ""
+	}
+	keys := make([]string, 0, 2)
+	if m.agentsOverviewFilterKeyAvailable("tab") {
+		keys = append(keys, "tab")
+	}
+	if m.agentsOverviewFilterKeyAvailable("shift-tab") {
+		keys = append(keys, "shift+tab")
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	return strings.Join(keys, "/") + " filter"
+}
+
+func (m *Model) agentsOverviewKeyChordHints() []agentsoverview.KeyChordHint {
+	if m == nil {
+		return nil
+	}
+	keys := strings.TrimSpace(m.pendingKeyChordPrefix)
+	if keys == "" {
+		return nil
+	}
+	return []agentsoverview.KeyChordHint{{Keys: keys, Action: "chord\u2026"}}
 }
 
 // centerAgentsOverviewDialog renders lifecycle progress as a centered dialog

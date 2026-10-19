@@ -2291,7 +2291,7 @@ func turnUserInputsSummary(inputs []turn.TurnUserInput) string {
 
 func requestCWD(req *Request) string {
 	if req == nil {
-		return "."
+		return processWorkingDirectory()
 	}
 	if req.Exec.Shared.CWD != "" {
 		return req.Exec.Shared.CWD
@@ -2299,7 +2299,18 @@ func requestCWD(req *Request) string {
 	if req.Root.Shared.CWD != "" {
 		return req.Root.Shared.CWD
 	}
-	return "."
+	return processWorkingDirectory()
+}
+
+// processWorkingDirectory returns the absolute default cwd used when the
+// request does not set one. Config path facts require an absolute base, and
+// Rust's exec defaults to the process current_dir rather than ".".
+func processWorkingDirectory() string {
+	workingDir, err := os.Getwd()
+	if err != nil || strings.TrimSpace(workingDir) == "" {
+		return "."
+	}
+	return workingDir
 }
 
 // execStartupInputItems ports Rust's exec startup input items: the developer

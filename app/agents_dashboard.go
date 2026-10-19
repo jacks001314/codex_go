@@ -106,6 +106,7 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 			}
 		}
 		row.Group = agentsoverview.GroupForStatus(thread.Status.Type, waitingApproval, waitingUserInput)
+		row.StatusType = strings.TrimSpace(thread.Status.Type)
 		row.StatusActive = strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active")
 		row.IsCurrent = strings.EqualFold(row.ThreadID, currentThreadID)
 		rows = append(rows, row)
@@ -986,6 +987,19 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		return nil
 	}
+	// Rust #46839: Tab and Shift-Tab cycle the command-center status tabs.
+	switch msg.Type {
+	case bubbletea.KeyTab:
+		if m.filterKeyAvailable("tab") {
+			m.view.CycleStatusFilter(true)
+			return nil
+		}
+	case bubbletea.KeyShiftTab:
+		if m.filterKeyAvailable("shift-tab") {
+			m.view.CycleStatusFilter(false)
+			return nil
+		}
+	}
 	// Rust #45255: the dashboard shortcuts are single-letter bindings resolved
 	// from the user's keymap.
 	if m.agentKey("search", msg) && !m.view.State.Renaming {
@@ -1033,6 +1047,38 @@ func (m *agentsDashboardModel) agentKey(action string, msg bubbletea.KeyMsg) boo
 		return false
 	}
 	return codextui.KeymapActionHasBinding(m.keymap, "agents", action, spec)
+}
+
+func (m *agentsDashboardModel) filterKeyAvailable(key string) bool {
+	if m == nil || key == "" {
+		return false
+	}
+	for _, action := range codextui.KeymapActions(codextui.KeymapActionFilter{}) {
+		if action.Context != "list" && action.Context != "agents" {
+			continue
+		}
+		if codextui.KeymapActionHasBinding(m.keymap, action.Context, action.Action, key) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *agentsDashboardModel) filterHint() string {
+	if m == nil {
+		return ""
+	}
+	keys := make([]string, 0, 2)
+	if m.filterKeyAvailable("tab") {
+		keys = append(keys, "tab")
+	}
+	if m.filterKeyAvailable("shift-tab") {
+		keys = append(keys, "shift+tab")
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	return strings.Join(keys, "/") + " filter"
 }
 
 // newSessionCmd opens a new session in the selected checkout without sending a
@@ -1107,6 +1153,7 @@ func (m *agentsDashboardModel) View() string {
 	if m == nil || m.done {
 		return ""
 	}
+	m.view.FilterHint = m.filterHint()
 	lines := m.view.RenderStyled(m.width, m.height)
 	if m.pendingLifecycle != "" {
 		verb := "Archive"

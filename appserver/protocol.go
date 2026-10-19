@@ -1454,6 +1454,9 @@ type ThreadStartParams struct {
 	SelectedCapabilityRoots []SelectedCapabilityRoot `json:"selectedCapabilityRoots,omitempty"`
 	Environments            []map[string]any         `json:"environments,omitempty"`
 	DynamicTools            []json.RawMessage        `json:"dynamicTools,omitempty"`
+	// AllowedTools restricts the thread's tool inventory for its lifetime. An
+	// empty list disables all tools; nil preserves ordinary setup (Rust #45711).
+	AllowedTools *[]string `json:"allowedTools,omitempty"`
 }
 
 func (p *ThreadStartParams) UnmarshalJSON(data []byte) error {
@@ -1734,6 +1737,8 @@ type ThreadResumeParams struct {
 	ServiceTier           *string                   `json:"serviceTier,omitempty"`
 	ServiceTierSet        bool                      `json:"-"`
 	RuntimeWorkspaceRoots []string                  `json:"runtimeWorkspaceRoots,omitempty"`
+	// AllowedTools must be supplied again when resuming, matching Rust #45711.
+	AllowedTools *[]string `json:"allowedTools,omitempty"`
 }
 
 func (p *ThreadResumeParams) UnmarshalJSON(data []byte) error {

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"codex_go/metrics"
 )
 
 // VoiceConversationPhase mirrors the Rust lifecycle.
@@ -253,12 +255,14 @@ func (s *VoiceConversationState) BeginVoiceConversation(threadID string, attempt
 	if s == nil {
 		return
 	}
+	s.finishVoiceSessionMetrics()
 	s.Phase = VoicePhaseStarting
 	s.ThreadID = threadID
 	s.AttemptID = attemptID
 	s.BackendStarted = false
 	s.WebRTCConnected = false
 	s.FailureRecorded = false
+	metrics.Counter(voiceSessionStartMetric, 1, nil)
 }
 
 // MarkVoiceBackendStarted records the app-server accepting the start RPC.
@@ -287,6 +291,7 @@ func (s *VoiceConversationState) activateIfReady() {
 	s.Phase = VoicePhaseActive
 	if s.ActiveSince.IsZero() {
 		s.ActiveSince = time.Now()
+		metrics.Counter(voiceSessionConnectedMetric, 1, nil)
 	}
 }
 
@@ -310,7 +315,13 @@ func (s *VoiceConversationState) FailVoiceStartup(negotiationTimedOut bool, earl
 	}
 	retryable := (negotiationTimedOut || earlyTransportClose) && s.retry() == VoiceRetryAvailable
 	if !retryable {
-		s.RecordVoiceFailure()
+		cause := "connection_unknown"
+		if negotiationTimedOut {
+			cause = "negotiation_timed_out"
+		} else if earlyTransportClose {
+			cause = "transport_closed"
+		}
+		s.RecordVoiceFailureCause(cause)
 		return VoiceStartupOutcome{}
 	}
 	s.Phase = VoicePhaseStopping
@@ -335,6 +346,7 @@ func (s *VoiceConversationState) CompleteVoiceStop() bool {
 	if s == nil {
 		return false
 	}
+	s.finishVoiceSessionMetrics()
 	retry := s.retry() == VoiceRetryWaitingForStop
 	if retry {
 		s.StartupRetry = VoiceRetryUsed
@@ -358,12 +370,25 @@ func (s *VoiceConversationState) BeginVoiceStop() {
 	s.Live = nil
 }
 
-// RecordVoiceFailure counts a failure once per session.
+// RecordVoiceFailure counts an unclassified failure once per session.
 func (s *VoiceConversationState) RecordVoiceFailure() bool {
-	if s == nil || s.FailureRecorded {
+	return s.RecordVoiceFailureCause("connection_unknown")
+}
+
+// RecordVoiceFailureCause counts a classified failure once per session. Rust
+// reports the phase independently from the cause (realtime/failure_metrics.rs).
+func (s *VoiceConversationState) RecordVoiceFailureCause(cause string) bool {
+	if s == nil || s.FailureRecorded || s.Inactive() {
 		return false
 	}
 	s.FailureRecorded = true
+	if cause == "" {
+		cause = "connection_unknown"
+	}
+	metrics.Counter(voiceSessionFailureMetric, 1, map[string]string{
+		"cause": cause,
+		"phase": voiceMetricPhase(s.phase()),
+	})
 	return true
 }
 
@@ -460,9 +485,47 @@ func (s *VoiceConversationState) ResetVoiceConversation() {
 	if s == nil {
 		return
 	}
+	s.finishVoiceSessionMetrics()
 	attemptID := s.AttemptID
 	accepted := s.Accepted
 	*s = VoiceConversationState{AttemptID: attemptID, Accepted: accepted}
+}
+
+const (
+	voiceSessionStartMetric     = "codex.voice.session.start"
+	voiceSessionConnectedMetric = "codex.voice.session.connected"
+	voiceSessionFailureMetric   = "codex.voice.session.failure"
+	voiceSessionEndedMetric     = "codex.voice.session.ended"
+	voiceSessionDurationMetric  = "codex.voice.session.duration"
+)
+
+func (s *VoiceConversationState) finishVoiceSessionMetrics() {
+	if s == nil {
+		return
+	}
+	duration, ok := s.ConsumeVoiceDuration()
+	if !ok {
+		return
+	}
+	outcome := "success"
+	if s.FailureRecorded {
+		outcome = "failure"
+	}
+	metrics.Counter(voiceSessionEndedMetric, 1, nil)
+	metrics.RecordDuration(voiceSessionDurationMetric, duration, map[string]string{"outcome": outcome})
+}
+
+func voiceMetricPhase(phase VoiceConversationPhase) string {
+	switch phase {
+	case VoicePhaseStarting:
+		return "starting"
+	case VoicePhaseActive:
+		return "active"
+	case VoicePhaseStopping:
+		return "stopping"
+	default:
+		return "inactive"
+	}
 }
 
 // IsCurrentVoiceAttempt reports whether a late async result belongs to the
@@ -545,7 +608,7 @@ func (s *VoiceConversationState) ApplyVoiceNotification(notification VoiceNotifi
 		if !s.Running() {
 			return VoiceNotificationEffect{}
 		}
-		s.RecordVoiceFailure()
+		s.RecordVoiceFailureCause("backend")
 		s.BeginVoiceStop()
 		return VoiceNotificationEffect{Handled: true, CloseHelper: true, EndSession: true, Message: notification.Message}
 	case VoiceNotificationClosed:
@@ -557,6 +620,19 @@ func (s *VoiceConversationState) ApplyVoiceNotification(notification VoiceNotifi
 		s.FinishVoiceLiveTranscripts()
 		if s.phase() == VoicePhaseStopping && notification.Reason != "requested" {
 			return VoiceNotificationEffect{Handled: true}
+		}
+		if s.retry() != VoiceRetryWaitingForStop {
+			switch notification.Reason {
+			case "", "transport_closed", "error":
+				cause := "backend"
+				switch notification.Reason {
+				case "":
+					cause = "unknown_close"
+				case "transport_closed":
+					cause = "transport_closed"
+				}
+				s.RecordVoiceFailureCause(cause)
+			}
 		}
 		retry := s.CompleteVoiceStop()
 		effect := VoiceNotificationEffect{Handled: true, CloseHelper: true, EndSession: true}

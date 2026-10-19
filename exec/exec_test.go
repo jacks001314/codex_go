@@ -2043,7 +2043,12 @@ func TestRunExecReviewUsesRustReviewRubricInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if agent.request == nil || !strings.HasPrefix(agent.request.Instructions, review.ReviewPrompt) {
+	if agent.request == nil {
+		t.Fatal("agent request is nil")
+	}
+	wantRubric := strings.TrimSpace(strings.ReplaceAll(review.ReviewPrompt, "\r\n", "\n"))
+	gotInstructions := strings.ReplaceAll(agent.request.Instructions, "\r\n", "\n")
+	if !strings.HasPrefix(gotInstructions, wantRubric) {
 		t.Fatalf("instructions = %q, want Rust review rubric", agent.request.Instructions)
 	}
 	if strings.Contains(agent.request.Instructions, "project instructions") {

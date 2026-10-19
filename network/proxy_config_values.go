@@ -54,6 +54,9 @@ func applyProxySettingsTable(settings *ProxySettings, table map[string]any, path
 	if settings == nil {
 		return nil
 	}
+	if err := rejectProxyUnknownFields(table, path, proxySettingsAllowedKeys); err != nil {
+		return err
+	}
 	if value, ok := boolConfigValue(table, "enabled"); ok {
 		settings.Enabled = value
 	}
@@ -94,6 +97,21 @@ func applyProxySettingsTable(settings *ProxySettings, table map[string]any, path
 	} else if ok {
 		settings.MITMHooks = hooks
 	}
+	if raw, ok := table["mitm_ca"]; ok && raw != nil {
+		caTable, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("network.mitm_ca must be a table")
+		}
+		if err := rejectProxyUnknownFields(caTable, path+".mitm_ca", proxyMITMCAAllowedKeys); err != nil {
+			return err
+		}
+		certificateFile, _ := caTable["certificate_file"].(string)
+		privateKeyFile, _ := caTable["private_key_file"].(string)
+		settings.MITMCA = &ProxyMITMCAConfig{
+			CertificateFile: strings.TrimSpace(certificateFile),
+			PrivateKeyFile:  strings.TrimSpace(privateKeyFile),
+		}
+	}
 	if value, ok := boolConfigValue(table, "credential_broker"); ok {
 		settings.CredentialBroker = value
 	}
@@ -124,6 +142,88 @@ func applyProxySettingsTable(settings *ProxySettings, table map[string]any, path
 	}
 	_ = path
 	return nil
+}
+
+// Rust #47132 rejects unknown fields in NetworkProxyConfig and its nested
+// MITM configuration. The accepted set is the union of the config.toml
+// feature surface and the profile/network fields Go already maps.
+var proxySettingsAllowedKeys = map[string]struct{}{
+	"enabled":                              {},
+	"proxy_url":                            {},
+	"enable_socks5":                        {},
+	"socks_url":                            {},
+	"enable_socks5_udp":                    {},
+	"allow_upstream_proxy":                 {},
+	"dangerously_allow_non_loopback_proxy": {},
+	"dangerously_allow_all_unix_sockets":   {},
+	"mode":                                 {},
+	"domains":                              {},
+	"unix_sockets":                         {},
+	"allowed_domains":                      {},
+	"denied_domains":                       {},
+	"allow_unix_sockets":                   {},
+	"allow_local_binding":                  {},
+	"mitm":                                 {},
+	"mitm_ca":                              {},
+	"mitm_hooks":                           {},
+	"credential_broker":                    {},
+	"credentials":                          {},
+	"dangerously_allow_plaintext_credential_injection": {},
+}
+
+var proxyMITMCAAllowedKeys = map[string]struct{}{
+	"certificate_file": {},
+	"private_key_file": {},
+}
+
+var proxyMITMHookAllowedKeys = map[string]struct{}{
+	"host":    {},
+	"match":   {},
+	"actions": {},
+}
+
+var proxyMITMHookMatchAllowedKeys = map[string]struct{}{
+	"methods":       {},
+	"path_prefixes": {},
+	"query":         {},
+	"headers":       {},
+	"body":          {},
+}
+
+var proxyMITMHookActionsAllowedKeys = map[string]struct{}{
+	"strip_request_headers":  {},
+	"inject_request_headers": {},
+}
+
+var proxyProfileMITMAllowedKeys = map[string]struct{}{
+	"hooks":   {},
+	"actions": {},
+}
+
+var proxyProfileMITMHookAllowedKeys = map[string]struct{}{
+	"host":          {},
+	"methods":       {},
+	"path_prefixes": {},
+	"query":         {},
+	"headers":       {},
+	"action":        {},
+	"body":          {},
+}
+
+// rejectProxyUnknownFields mirrors serde's deny_unknown_fields: the first
+// unknown key (in sorted order, for deterministic diagnostics) fails the load.
+func rejectProxyUnknownFields(table map[string]any, path string, allowed map[string]struct{}) error {
+	unknown := make([]string, 0)
+	for key := range table {
+		if _, ok := allowed[key]; !ok {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("unknown field `%s` in %s", unknown[0], path)
 }
 
 func overlayProxyDomainPermissions(settings *ProxySettings, permissions *ProxyDomainPermissions) {
@@ -257,6 +357,9 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 	if !ok {
 		return fmt.Errorf("%s.mitm must be a table", path)
 	}
+	if err := rejectProxyUnknownFields(mitm, path+".mitm", proxyProfileMITMAllowedKeys); err != nil {
+		return err
+	}
 	if rawActions, exists := mitm["actions"]; exists {
 		actions, ok := rawActions.(map[string]any)
 		if !ok {
@@ -266,6 +369,9 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 			table, ok := rawAction.(map[string]any)
 			if !ok {
 				return fmt.Errorf("%s.mitm.actions.%s must be a table", path, name)
+			}
+			if err := rejectProxyUnknownFields(table, path+".mitm.actions."+name, proxyMITMHookActionsAllowedKeys); err != nil {
+				return err
 			}
 			strip, err := optionalStringListConfigValue(table, "strip_request_headers")
 			if err != nil {
@@ -290,6 +396,9 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 			table, ok := rawHook.(map[string]any)
 			if !ok {
 				return fmt.Errorf("%s.mitm.hooks.%s must be a table", path, name)
+			}
+			if err := rejectProxyUnknownFields(table, path+".mitm.hooks."+name, proxyProfileMITMHookAllowedKeys); err != nil {
+				return err
 			}
 			host, ok := stringConfigValue(table, "host")
 			if !ok {
@@ -385,6 +494,9 @@ func proxyMITMHooksConfigValue(values map[string]any, key string) ([]ProxyMITMHo
 }
 
 func proxyMITMHookConfigFromTable(table map[string]any) (ProxyMITMHookConfig, error) {
+	if err := rejectProxyUnknownFields(table, "network_proxy.mitm_hooks[]", proxyMITMHookAllowedKeys); err != nil {
+		return ProxyMITMHookConfig{}, err
+	}
 	host, ok := stringConfigValue(table, "host")
 	if !ok {
 		return ProxyMITMHookConfig{}, fmt.Errorf("host must be a string")
@@ -394,6 +506,9 @@ func proxyMITMHookConfigFromTable(table map[string]any) (ProxyMITMHookConfig, er
 		match, ok := rawMatch.(map[string]any)
 		if !ok {
 			return ProxyMITMHookConfig{}, fmt.Errorf("match must be a table")
+		}
+		if err := rejectProxyUnknownFields(match, "network_proxy.mitm_hooks[].match", proxyMITMHookMatchAllowedKeys); err != nil {
+			return ProxyMITMHookConfig{}, err
 		}
 		var err error
 		hook.Match.Methods, err = requiredStringListConfigValue(match, "methods")
@@ -418,6 +533,9 @@ func proxyMITMHookConfigFromTable(table map[string]any) (ProxyMITMHookConfig, er
 		actions, ok := rawActions.(map[string]any)
 		if !ok {
 			return ProxyMITMHookConfig{}, fmt.Errorf("actions must be a table")
+		}
+		if err := rejectProxyUnknownFields(actions, "network_proxy.mitm_hooks[].actions", proxyMITMHookActionsAllowedKeys); err != nil {
+			return ProxyMITMHookConfig{}, err
 		}
 		var err error
 		if hook.Actions.StripRequestHeaders, err = optionalStringListConfigValue(actions, "strip_request_headers"); err != nil {
