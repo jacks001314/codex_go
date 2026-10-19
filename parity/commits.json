@@ -10253,9 +10253,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 19/43; needs review: ActiveCredentialSource, active_credential_sources, apply_to_env_for_snapshot, bypasses_proxy_with_local_binding, child_alias_matches"
+        "Go parses configured network-proxy credential providers, matches hosts/routes, applies credentials for the requested environment snapshot, honors MITM/hook requirements and local-binding bypass rules, and carries bounded credential attribution. Tests: go test ./network -run 'CredentialProvider|CredentialBroker' -count=1; go test ./appserver -run 'CredentialProvider|CredentialBroker' -count=1"
       ]
     },
     {
