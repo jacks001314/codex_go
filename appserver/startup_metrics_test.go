@@ -108,11 +108,11 @@ func TestStartupPrewarmRecordsMetricsLikeRust(t *testing.T) {
 		t.Fatalf("startup_prewarm_total missing: %#v", prewarmPhases)
 	}
 	durations := startupMetricRecords(metrics, telemetry.StartupPrewarmDurationMetric)
-	if len(durations) != 1 || durations[0].Tags["status"] != "ready" {
+	if len(durations) != 1 || durations[0].Tags["status"] != "ready" || durations[0].Tags["input_mode"] != "base" {
 		t.Fatalf("prewarm durations = %#v", durations)
 	}
 	ages := startupMetricRecords(metrics, telemetry.StartupPrewarmAgeAtFirstTurnMetric)
-	if len(ages) != 1 || ages[0].Tags["status"] != "consumed" {
+	if len(ages) != 1 || ages[0].Tags["status"] != "consumed" || ages[0].Tags["input_mode"] != "base" {
 		t.Fatalf("prewarm ages = %#v", ages)
 	}
 }

@@ -80,6 +80,11 @@ type ExchangedTokens struct {
 	IDToken      string `json:"id_token"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	// Issuer and ClientID record the OAuth authority that issued the refresh
+	// token. They are persisted as oauth_provenance and are not part of the
+	// token endpoint response.
+	Issuer   string `json:"-"`
+	ClientID string `json:"-"`
 }
 
 // RefreshReason is the caller-reported diagnostic Rust attaches to a ChatGPT
@@ -441,6 +446,8 @@ func ExchangeCodeForTokens(ctx context.Context, opts *OAuthOptions, redirectURI 
 	if strings.TrimSpace(tokens.AccessToken) == "" || strings.TrimSpace(tokens.RefreshToken) == "" {
 		return nil, errors.New("token response omitted access_token or refresh_token")
 	}
+	tokens.Issuer = opts.Issuer
+	tokens.ClientID = opts.ClientID
 	return &tokens, nil
 }
 
@@ -544,6 +551,13 @@ func PersistChatGPTTokensWithOptions(codexHome string, tokens *ExchangedTokens, 
 		},
 		LastRefresh: time.Now().UTC().Format(time.RFC3339),
 	}
+	if issuer := strings.TrimSpace(tokens.Issuer); issuer != "" {
+		clientID := strings.TrimSpace(tokens.ClientID)
+		auth.Tokens["oauth_provenance"] = map[string]any{
+			"issuer": issuer, "client_id": clientID,
+		}
+		auth.Tokens["login_owner_id"] = newOAuthLoginOwnerID()
+	}
 	if accountID := ChatGPTAccountIDFromJWT(tokens.IDToken); accountID != "" {
 		auth.Tokens["account_id"] = accountID
 	}
@@ -554,13 +568,18 @@ func RefreshChatGPTTokens(ctx context.Context, opts *RefreshChatGPTTokenOptions)
 	if opts == nil {
 		opts = &RefreshChatGPTTokenOptions{}
 	}
+	codexHome := strings.TrimSpace(opts.CodexHome)
+	if codexHome == "" {
+		codexHome = DefaultCodexHome()
+	}
+	attempted := refreshAttemptSnapshot(codexHome, opts.AuthSnapshot, opts.StoreOptions)
+	provenance := oauthProvenanceFromTokens(nilSafeTokens(attempted))
 	normalized := NormalizeOAuthOptions(&OAuthOptions{
 		CodexHome:  opts.CodexHome,
-		Issuer:     opts.Issuer,
-		ClientID:   opts.ClientID,
+		Issuer:     firstNonEmptyAuth(opts.Issuer, provenance.Issuer),
+		ClientID:   firstNonEmptyAuth(opts.ClientID, provenance.ClientID),
 		HTTPClient: opts.HTTPClient,
 	})
-	attempted := refreshAttemptSnapshot(normalized.CodexHome, opts.AuthSnapshot, opts.StoreOptions)
 	if failed := RefreshFailureForAuth(normalized.CodexHome, attempted); failed != nil {
 		return nil, failed
 	}
@@ -657,6 +676,14 @@ func PersistRefreshedChatGPTTokensWithOptions(codexHome string, tokens *Exchange
 	}
 	if next.Tokens == nil {
 		next.Tokens = map[string]any{}
+	}
+	if override := strings.TrimSpace(os.Getenv(RefreshTokenURLEnvOverride)); override != "" {
+		provenance := oauthProvenanceFromTokens(next.Tokens)
+		expected := strings.TrimRight(provenance.Issuer, "/") + "/oauth/token"
+		if provenance.Issuer == "" || override != expected {
+			delete(next.Tokens, "oauth_provenance")
+			delete(next.Tokens, "login_owner_id")
+		}
 	}
 	if strings.TrimSpace(tokens.IDToken) != "" {
 		next.Tokens["id_token"] = strings.TrimSpace(tokens.IDToken)
@@ -1026,4 +1053,32 @@ func firstNonEmptyAuth(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// OAuthProvenance records the authority that issued an account refresh token.
+// It is optional for legacy auth records; token claims never infer it.
+type OAuthProvenance struct {
+	Issuer   string
+	ClientID string
+}
+
+func oauthProvenanceFromTokens(tokens map[string]any) OAuthProvenance {
+	raw, _ := tokens["oauth_provenance"].(map[string]any)
+	if raw == nil {
+		if encoded, ok := tokens["oauth_provenance"].(map[string]string); ok {
+			return OAuthProvenance{Issuer: strings.TrimSpace(encoded["issuer"]), ClientID: strings.TrimSpace(encoded["client_id"])}
+		}
+		return OAuthProvenance{}
+	}
+	issuer, _ := raw["issuer"].(string)
+	clientID, _ := raw["client_id"].(string)
+	return OAuthProvenance{Issuer: strings.TrimSpace(issuer), ClientID: strings.TrimSpace(clientID)}
+}
+
+func newOAuthLoginOwnerID() string {
+	var data [16]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(data[:])
 }

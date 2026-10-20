@@ -108,8 +108,12 @@ func TestCanonicalizeRolloutMigratesCompressedRolloutLikeRust(t *testing.T) {
 	}
 	compressed := encoder.EncodeAll(plain, nil)
 	compressedPath := plainPath + ".zst"
-	if err := os.WriteFile(compressedPath, compressed, 0o600); err != nil {
+	if err := os.WriteFile(compressedPath, compressed, 0o640); err != nil {
 		t.Fatalf("WriteFile compressed: %v", err)
+	}
+	wantModified := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := os.Chtimes(compressedPath, wantModified, wantModified); err != nil {
+		t.Fatalf("Chtimes compressed: %v", err)
 	}
 
 	if err := CanonicalizeRollout(home, compressedPath); err != nil {
@@ -121,6 +125,13 @@ func TestCanonicalizeRolloutMigratesCompressedRolloutLikeRust(t *testing.T) {
 	}
 	if _, err := os.Stat(plainPath); !os.IsNotExist(err) {
 		t.Fatalf("plain sibling created unexpectedly (err=%v)", err)
+	}
+	publishedInfo, err := os.Stat(compressedPath)
+	if err != nil {
+		t.Fatalf("Stat published: %v", err)
+	}
+	if !publishedInfo.ModTime().Equal(wantModified) {
+		t.Fatalf("published mtime = %v, want %v", publishedInfo.ModTime(), wantModified)
 	}
 	matches, err := filepath.Glob(filepath.Join(filepath.Dir(compressedPath), ".*.tmp"))
 	if err != nil {

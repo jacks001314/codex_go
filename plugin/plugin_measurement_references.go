@@ -193,6 +193,21 @@ func (c *RemotePluginMeasurementCache) Prepare(ctx context.Context, identity Plu
 	}
 	close(entry.done)
 	refs := entry.refs
+	if err != nil {
+		// A completed failure is visible to the callers already waiting on this
+		// entry, but a new caller admits a fresh retry (Rust #46542).
+		entry.retired = true
+		for index, candidate := range c.entries {
+			if candidate == entry {
+				c.entries = append(c.entries[:index], c.entries[index+1:]...)
+				break
+			}
+		}
+		if refs > 0 {
+			entry.refs--
+			refs = entry.refs
+		}
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return nil, sanitizeMeasurementPreparationError(err)
@@ -226,6 +241,11 @@ func (c *RemotePluginMeasurementCache) waitForEntry(ctx context.Context, entry *
 	select {
 	case <-entry.done:
 		if entry.err != nil {
+			c.mu.Lock()
+			if entry.refs > 0 {
+				entry.refs--
+			}
+			c.mu.Unlock()
 			return nil, sanitizeMeasurementPreparationError(entry.err)
 		}
 		if entry.ref == nil {

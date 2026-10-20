@@ -169,7 +169,8 @@ func TestRunResumeCompactsBeforeTurnAndEmitsActivity(t *testing.T) {
 	if slices.Contains(types, "turn.compacting") || slices.Contains(types, "turn.compacted") {
 		t.Fatalf("Rust exec JSON does not emit compaction lifecycle events: %#v", types)
 	}
-	agentIndex, warningIndex, completedIndex := -1, -1, -1
+	agentIndex, completedIndex := -1, -1
+	warningIndex := -1
 	for i := range events {
 		switch {
 		case events[i].Type == "item.completed" && events[i].Item != nil && events[i].Item.Type == "agent_message":
@@ -180,8 +181,11 @@ func TestRunResumeCompactsBeforeTurnAndEmitsActivity(t *testing.T) {
 			completedIndex = i
 		}
 	}
-	if agentIndex < 0 || warningIndex <= agentIndex || completedIndex <= warningIndex {
-		t.Fatalf("expected agent message before compaction warning before turn.completed: %#v", types)
+	if agentIndex < 0 || completedIndex <= agentIndex {
+		t.Fatalf("expected agent message before turn.completed: %#v", types)
+	}
+	if warningIndex >= 0 {
+		t.Fatalf("compaction must not emit the long-thread warning: %#v", types)
 	}
 	if len(agent.requests) != 2 || !agentRequestInputItemsContainText(&agent.requests[1], compact.SummaryPrefix) {
 		t.Fatalf("agent requests after compaction = %#v", agent.requests)

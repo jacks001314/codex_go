@@ -10,9 +10,9 @@ import (
 )
 
 // Execute runs an mcp_tool hook through the session's shared MCP runtime
-// (Rust #39296/#39331). The call goes through the current connection set
-// without waiting for server startup or reconnection, and without model-tool
-// approval or recursive hook dispatch. Unavailable servers fail immediately.
+// (Rust #39296/#39331/#55263). Dormant cached servers start on demand; the
+// hook timeout covers startup and the call, and no model-tool approval or
+// recursive hook dispatch is involved.
 func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, error) {
 	if r == nil {
 		return "", fmt.Errorf("MCP hook executor is unavailable")
@@ -21,6 +21,11 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, 
 	toolName := strings.TrimSpace(call.Tool)
 	if server == "" || toolName == "" {
 		return "", fmt.Errorf("MCP hook requires server and tool")
+	}
+	if call.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, call.Timeout)
+		defer cancel()
 	}
 	threadID := ""
 	service := r.mcpServiceForThread(threadID, nil)
@@ -40,6 +45,14 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, 
 	if err := validateHookMcpEnvironment(server, config, call.EnvironmentID); err != nil {
 		return "", err
 	}
+	if filter := mcp.ToolFilterFromServerConfig(&config); filter != nil && !filter.Allows(toolName) {
+		return "", fmt.Errorf("MCP hook tool %q is disabled for server %q", toolName, server)
+	}
+	// Rust #55263: a dormant cached server starts on demand for the hook, and
+	// the hook timeout covers startup plus the call.
+	if err := service.WaitForServerStartup(ctx, server, ""); err != nil {
+		return "", err
+	}
 	var arguments map[string]any
 	if len(call.Input) > 0 {
 		arguments = call.Input
@@ -49,6 +62,7 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, 
 		Tool:      toolName,
 		Arguments: arguments,
 		Meta:      cloneAnyMap(call.Metadata),
+		Context:   ctx,
 	})
 	if err != nil {
 		return "", err

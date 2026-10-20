@@ -973,6 +973,14 @@ func EstimateItemTokens(item *Item) int {
 		return compactTokensFromBytes(functionCallModelVisibleBytes(item))
 	case "function_call_output", "custom_tool_call_output", "tool_output":
 		return compactTokensFromBytes(functionCallOutputModelVisibleBytes(item))
+	case "reasoning":
+		// Rust charges an encrypted reasoning item through the length of its
+		// opaque payload. The summary text is not model-visible history, so
+		// without this branch long reasoning items look almost free and cannot
+		// be trimmed when a compaction request is bounded.
+		if tokens, ok := estimateEncryptedReasoningTokens(item); ok {
+			return tokens
+		}
 	}
 	if isStructuredAgentMessage(item) {
 		return (agentMessageModelVisibleBytes(item) + 3) / 4
@@ -983,7 +991,16 @@ func EstimateItemTokens(item *Item) int {
 		// of contributing zero (#46072).
 		return compactTokensFromBytes(compactItemContentBytes(item))
 	}
-	return EstimateTextTokens(ItemText(item))
+	if tokens := EstimateTextTokens(ItemText(item)); tokens > 0 {
+		return tokens
+	}
+	// Legacy or provider-shaped items may keep their only payload in Raw.
+	// Charging the serialized payload is a conservative upper bound that keeps
+	// those items from bypassing the compaction history budget.
+	if len(item.Raw) > 0 {
+		return compactTokensFromBytes(len(item.Raw))
+	}
+	return 0
 }
 
 // EstimateCompactionContentLength mirrors Rust #53691's replay-cache-aware
@@ -1145,6 +1162,42 @@ func agentMessageModelVisibleBytes(item *Item) int {
 // estimate_encrypted_function_output_length (encoded_len * 9 / 16, rounded up).
 func encryptedFunctionOutputByteEstimate(encodedLen int) int {
 	return (encodedLen*9 + 15) / 16
+}
+
+// estimateEncryptedReasoningTokens mirrors Rust's estimate_reasoning_length:
+// the encoded payload expands to roughly three quarters of its length once
+// decrypted, with a fixed 650-byte framing allowance.
+func estimateEncryptedReasoningTokens(item *Item) (int, bool) {
+	encrypted := encryptedReasoningContent(item)
+	if encrypted == "" {
+		return 0, false
+	}
+	bytes := len(encrypted)*3/4 - 650
+	if bytes < 0 {
+		bytes = 0
+	}
+	return compactTokensFromBytes(bytes), true
+}
+
+func encryptedReasoningContent(item *Item) string {
+	if item == nil {
+		return ""
+	}
+	if encrypted, ok := item.Data["encrypted_content"].(string); ok && strings.TrimSpace(encrypted) != "" {
+		return encrypted
+	}
+	if len(item.Raw) == 0 {
+		return ""
+	}
+	var raw map[string]any
+	if json.Unmarshal(item.Raw, &raw) != nil {
+		return ""
+	}
+	encrypted, _ := raw["encrypted_content"].(string)
+	if strings.TrimSpace(encrypted) == "" {
+		return ""
+	}
+	return encrypted
 }
 
 func isStructuredAgentMessage(item *Item) bool {

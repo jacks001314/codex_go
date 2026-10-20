@@ -51,6 +51,7 @@ const (
 	apiKeyStdinTerminalMessage      = "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
 	apiKeyStdinReadingMessage       = "Reading API key from stdin..."
 	apiKeyStdinEmptyMessage         = "No API key provided via stdin."
+	apiKeyAuthenticationNotice      = "Authentication is checked when you send a request."
 	accessTokenStdinTerminalMessage = "--with-access-token expects the access token on stdin. Try piping it, e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`."
 	accessTokenStdinReadingMessage  = "Reading access token from stdin..."
 	accessTokenStdinEmptyMessage    = "No access token provided via stdin."
@@ -682,7 +683,9 @@ func sandboxCloudConfigEligibleAuth(snapshot *auth.AuthDotJSON) bool {
 	}
 	return account.PlanType.IsBusinessLike() ||
 		account.PlanType.IsEducationLike() ||
-		account.PlanType == auth.PlanEnterprise
+		account.PlanType == auth.PlanEnterprise ||
+		account.PlanType == auth.PlanSci ||
+		account.PlanType == auth.PlanSciPlus
 }
 
 func sandboxEnvPolicyFromConfig(cfg *config.Config, cwd string) *codexexec.EnvPolicy {
@@ -1232,6 +1235,9 @@ func printMigrateRolloutsHumanReport(report *rollout.MigrationReport, opts cli.M
 }
 
 func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.RootOptions, stdout io.Writer, stderr io.Writer, stdin io.Reader) error {
+	if opts.PrintStartupConfig {
+		return printAppServerStartupConfig(opts, root, stdout)
+	}
 	if len(opts.Subcommand) > 0 {
 		switch opts.Subcommand[0] {
 		case "daemon":
@@ -1939,7 +1945,8 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		}
 		switch (&current.Auth).Mode() {
 		case "api-key":
-			fmt.Fprintf(stdout, "Logged in using an API key - %s\n", auth.SafeFormatLoginKey(current.Auth.OpenAIAPIKey))
+			fmt.Fprintf(stdout, "API key configured - %s\n", auth.SafeFormatLoginKey(current.Auth.OpenAIAPIKey))
+			fmt.Fprintln(stdout, apiKeyAuthenticationNotice)
 		case "personal-access-token":
 			fmt.Fprintln(stdout, "Logged in using personal access token")
 		case "agent-identity":
@@ -1967,7 +1974,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		if err := store.Save(auth.FromAPIKey(secret)); err != nil {
 			return exitMessagef("Error logging in: %v", err)
 		}
-		fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
+		fmt.Fprintf(stdout, "API key saved. %s\n", apiKeyAuthenticationNotice)
 		return nil
 	case opts.WithAccessToken:
 		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT) {

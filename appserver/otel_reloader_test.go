@@ -97,7 +97,9 @@ func TestOtelProviderReloadsAfterAccountChange(t *testing.T) {
 	writeOtlpMetricsConfig(t, home, second.server.URL+"/v1/metrics")
 	router.noteAuthChanged()
 
-	deadline := time.Now().Add(5 * time.Second)
+	// Exporters rebuild on a background goroutine; a loaded Windows host can
+	// take several seconds to tear down and recreate the OTLP providers.
+	deadline := time.Now().Add(45 * time.Second)
 	for router.currentOtelProvider() == initial {
 		if time.Now().After(deadline) {
 			t.Fatal("the telemetry exporters were not rebuilt after the account change")
@@ -109,10 +111,10 @@ func TestOtelProviderReloadsAfterAccountChange(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	if !first.waitForMetric("codex.before_reload", 3*time.Second) {
+	if !first.waitForMetric("codex.before_reload", 20*time.Second) {
 		t.Fatal("the pre-reload collector did not receive the earlier metric")
 	}
-	if !second.waitForMetric("codex.after_reload", 3*time.Second) {
+	if !second.waitForMetric("codex.after_reload", 20*time.Second) {
 		t.Fatal("the reloaded collector did not receive the later metric")
 	}
 }

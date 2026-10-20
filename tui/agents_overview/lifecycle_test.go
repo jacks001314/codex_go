@@ -33,14 +33,19 @@ func TestArchiveAndDeleteWithoutRowsAreNoops(t *testing.T) {
 func TestFooterAdvertisesArchiveAndDeleteLikeRust(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	output := strings.Join(view.Render(200, 24), "\n")
-	for _, want := range []string{"a archive", "delete delete"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("footer missing %q:\n%s", want, output)
+	if !strings.Contains(output, "? help") {
+		t.Fatalf("footer missing help hint:\n%s", output)
+	}
+	view.ToggleHelp()
+	help := strings.Join(view.Render(200, 30), "\n")
+	for _, want := range []string{"a Archive", "backspace Delete"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q:\n%s", want, help)
 		}
 	}
 	// An unbound action hides its hint.
 	view.SetShortcutHint(ShortcutHintDelete, "")
-	if hidden := strings.Join(view.Render(200, 24), "\n"); strings.Contains(hidden, "delete delete") {
+	if hidden := strings.Join(view.Render(200, 30), "\n"); strings.Contains(hidden, "backspace Delete") {
 		t.Fatalf("unbound delete hint still rendered:\n%s", hidden)
 	}
 }

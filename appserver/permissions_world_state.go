@@ -99,6 +99,7 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 				DangerFullAccess: messages.DangerFullAccess,
 				WorkspaceWrite:   messages.WorkspaceWrite,
 				ReadOnly:         messages.ReadOnly,
+				ApprovedPrefixes: messages.ApprovedPrefixes,
 			}
 		}
 	}

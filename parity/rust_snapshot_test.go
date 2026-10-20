@@ -231,6 +231,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"rollout-trace",
 		"rmcp-client",
 		"responses-api-proxy",
+		"runtime-agent-instance",
 		"response-debug-context",
 		"sandboxing",
 		"stdio-to-uds",
@@ -319,7 +320,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// 9.0.0 (#54761); every other pin below is unchanged at that head.
 		// Round-108 re-anchor to head ce0323f2f2 (#54776): Cargo.toml gained the
 		// protocol/tests/support workspace member; every other pin is unchanged.
-		{Path: "Cargo.toml", SHA256: "05c9740164aa212e1719bae3ad2ec50320b14480ac4171e11cc4ba77782c4f9c"},
+		// Round-111 re-anchor to head 091008729d: the workspace gained
+		// runtime-agent-instance.
+		{Path: "Cargo.toml", SHA256: "fc14a2e39a0249d8d2046b9d7140c3fcc9aa051d0cfc899a7e122e6a1d95008f"},
 		{Path: "cli/src/lib.rs", SHA256: "1558e2085a1226408fd42d5f9ffed634e9d37dacbfe70b3d6bbbbee7f8398f26"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -342,17 +345,21 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// preserves WebSocket continuations when steering a turn.
 		// Re-pinned to upstream 8c076942 (#54945): response item clones share
 		// the additional-tool declaration backing storage; no wire change.
-		{Path: "core/src/client.rs", SHA256: "f6ac9c0a13b901056e548905c6c153b2a02064ecca7939433af78e8673939087"},
+		// Round-110 re-anchor to head e389b2444c: Responses Lite incremental
+		// tool declarations and the pre-turn compaction/config refresh changes.
+		{Path: "core/src/client.rs", SHA256: "7fccc70ba4d244dd5f790a0f867d4a841ad61c919e5a26f8aa46ee08d446d162"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "0e42a89d3bba3ac938867aea4ab653660e5c8d59343b9b9a5fe7e3d6c9a96564"},
+		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
+		// client request definitions.
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "9a6639b092c289ae431952450bb1ffb1fcce336b9486f86b4bd2ec622cbb66d9"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.
 		// Re-pinned to upstream 8c076942 (#54930/#54949/#54961): the
 		// WebSocket-compression and agent-message-wake suites joined the list.
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "567541d440094c2e5cdb64ee0bcf93feb6bb5c8f4b119a902a4624d024571847"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "047923ca0ad3fa28944b58a1bba9962a480602cbf5955b36adf3ac478de4a198"},
 		// Re-pinned to upstream 8ae55c863d (#47407/#47679/#47819/#47820/#47879):
 		// the network-policy, extension-hook, guardian-authorization,
 		// agent-controller and macOS patch-permission suites joined the module

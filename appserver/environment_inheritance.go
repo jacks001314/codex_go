@@ -13,7 +13,7 @@ import (
 // that spawned it, while a failed attachment is dropped instead of being
 // inherited. Thread-derived (`from_thread`) attachments are kept so the child
 // keeps following its own thread configuration.
-func inheritableEnvironmentSelections(selections []map[string]any) []map[string]any {
+func inheritableEnvironmentSelections(selections []map[string]any, configuredOnly bool) []map[string]any {
 	if len(selections) == 0 {
 		return cloneMapSlice(selections)
 	}
@@ -21,6 +21,12 @@ func inheritableEnvironmentSelections(selections []map[string]any) []map[string]
 	for _, selection := range selections {
 		state, err := environmentConfigStateFromAnyMap(selection)
 		if err == nil && state.Kind == EnvironmentConfigFailed {
+			continue
+		}
+		// Temporary turn attachments must not become a child's persistent
+		// environment. With the feature enabled, only configured/thread-derived
+		// selections are inherited (Rust #55375).
+		if configuredOnly && err == nil && state.Kind != EnvironmentConfigFromThread {
 			continue
 		}
 		out = append(out, cloneAnyMap(selection))

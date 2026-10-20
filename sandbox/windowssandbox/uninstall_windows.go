@@ -26,8 +26,10 @@ const (
 
 var (
 	modNetapi32Del       = windows.NewLazySystemDLL("netapi32.dll")
+	modUserenv           = windows.NewLazySystemDLL("userenv.dll")
 	procNetUserDel       = modNetapi32Del.NewProc("NetUserDel")
 	procNetLocalGroupDel = modNetapi32Del.NewProc("NetLocalGroupDel")
+	procDeleteProfileW   = modUserenv.NewProc("DeleteProfileW")
 )
 
 // cleanUpLegacyWindowsSandbox mirrors Rust uninstall_windows::
@@ -59,7 +61,7 @@ func cleanUpLegacyWindowsSandbox(report func(string)) error {
 		{"remove hidden-user entries", func() error {
 			return unhideSandboxUsers([]string{OfflineUsername, OnlineUsername})
 		}},
-		{"remove sandbox users", removeLegacySandboxUsers},
+		{"remove sandbox users", func() error { return removeLegacySandboxUsers(report) }},
 		{"remove sandbox group", removeLegacySandboxGroup},
 	} {
 		if err := step.run(); err != nil {
@@ -76,11 +78,28 @@ func cleanUpLegacyWindowsSandbox(report func(string)) error {
 	return nil
 }
 
-// removeLegacySandboxUsers deletes the machine-wide sandbox accounts
-// (Rust principals::DisabledSandboxUsers::remove_users -> NetUserDel).
-func removeLegacySandboxUsers() error {
+// removeLegacySandboxUsers deletes each sandbox profile before its account.
+// A profile deletion failure preserves the account for a later retry (Rust
+// principals::DisabledSandboxUsers::remove_users).
+func removeLegacySandboxUsers(report func(string)) error {
+	if report == nil {
+		report = func(string) {}
+	}
 	var failures []string
 	for _, name := range []string{OfflineUsername, OnlineUsername} {
+		sid, exists, err := lookupLocalUserSID(name)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("look up sandbox account %s: %v", name, err))
+			continue
+		}
+		if !exists {
+			report(fmt.Sprintf("skipping %s: account not found", name))
+			continue
+		}
+		if err := deleteUserProfile(sid); err != nil {
+			failures = append(failures, fmt.Sprintf("remove sandbox profile %s: %v", name, err))
+			continue
+		}
 		namePtr, err := windows.UTF16PtrFromString(name)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("remove sandbox account %s: %v", name, err))
@@ -89,12 +108,49 @@ func removeLegacySandboxUsers() error {
 		status, _, _ := procNetUserDel.Call(0, uintptr(unsafe.Pointer(namePtr)))
 		if code := uint32(status); code != 0 && code != nerrUserNotFound {
 			failures = append(failures, fmt.Sprintf("remove sandbox account %s: code %d", name, code))
+			continue
 		}
+		report(fmt.Sprintf("removed %s profile and account", name))
 	}
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func lookupLocalUserSID(name string) (string, bool, error) {
+	namePtr, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return "", false, err
+	}
+	sidBuffer := make([]byte, 64)
+	sidSize := uint32(len(sidBuffer))
+	domainBuffer := make([]uint16, 256)
+	domainSize := uint32(len(domainBuffer))
+	var use uint32
+	err = windows.LookupAccountName(nil, namePtr, (*windows.SID)(unsafe.Pointer(&sidBuffer[0])),
+		&sidSize, &domainBuffer[0], &domainSize, &use)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_NONE_MAPPED) || errors.Is(err, windows.ERROR_ACCOUNT_RESTRICTION) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	sid := (*windows.SID)(unsafe.Pointer(&sidBuffer[0]))
+	return sid.String(), true, nil
+}
+
+func deleteUserProfile(sid string) error {
+	sidPtr, err := windows.UTF16PtrFromString(sid)
+	if err != nil {
+		return err
+	}
+	status, _, _ := procDeleteProfileW.Call(uintptr(unsafe.Pointer(sidPtr)), 0, 0)
+	code := uint32(status)
+	if code == 0 || code == 2 || code == 1515 {
+		return nil
+	}
+	return fmt.Errorf("DeleteProfileW code %d", code)
 }
 
 // removeLegacySandboxGroup deletes the machine-wide sandbox group

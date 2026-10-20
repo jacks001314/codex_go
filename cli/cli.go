@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -421,14 +422,21 @@ func applyWebSocketAuthFlag(args []string, index int, arg string, options *WebSo
 }
 
 type AppServerOptions struct {
-	Subcommand              []string
-	Daemon                  AppServerDaemonOptions
-	Proxy                   AppServerProxyOptions
-	Generate                AppServerGenerateOptions
-	StrictConfig            bool
-	Listen                  string
-	Stdio                   bool
-	RemoteControl           bool
+	Subcommand    []string
+	Daemon        AppServerDaemonOptions
+	Proxy         AppServerProxyOptions
+	Generate      AppServerGenerateOptions
+	StrictConfig  bool
+	Listen        string
+	Stdio         bool
+	RemoteControl bool
+	// PrintStartupConfig validates configuration and emits startup requirements
+	// as JSON without starting the server (Rust #55300).
+	PrintStartupConfig bool
+	// StartupSignOut removes managed credentials before startup discovery.
+	StartupSignOut bool
+	// StartupClientInfo is the JSON ClientInfo used for startup discovery.
+	StartupClientInfo       json.RawMessage
 	AnalyticsDefaultEnabled bool
 	CodeModeHostURL         string
 	WebSocketAuthOptions
@@ -2621,6 +2629,26 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			appServer.RemoteControl = true
 		case arg == "--analytics-default-enabled":
 			appServer.AnalyticsDefaultEnabled = true
+		case arg == "--print-startup-config":
+			appServer.PrintStartupConfig = true
+		case arg == "--startup-sign-out":
+			appServer.StartupSignOut = true
+		case arg == "--startup-client-info":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if !json.Valid([]byte(value)) {
+				return fmt.Errorf("--startup-client-info must be valid JSON")
+			}
+			appServer.StartupClientInfo = json.RawMessage(value)
+			i = next
+		case strings.HasPrefix(arg, "--startup-client-info="):
+			value := strings.TrimPrefix(arg, "--startup-client-info=")
+			if !json.Valid([]byte(value)) {
+				return fmt.Errorf("--startup-client-info must be valid JSON")
+			}
+			appServer.StartupClientInfo = json.RawMessage(value)
 		case arg == "--code-mode-host":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2677,6 +2705,12 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 	}
 	if appServer.Stdio && listenSet {
 		return errors.New("--stdio conflicts with --listen")
+	}
+	if appServer.StartupSignOut && !appServer.PrintStartupConfig {
+		return errors.New("--startup-sign-out requires --print-startup-config")
+	}
+	if appServer.PrintStartupConfig && (appServer.Stdio || listenSet || appServer.RemoteControl || len(appServer.Subcommand) > 0) {
+		return errors.New("--print-startup-config conflicts with server startup options")
 	}
 	if listenSet {
 		if err := validateAppServerListen(appServer.Listen); err != nil {

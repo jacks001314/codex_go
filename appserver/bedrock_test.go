@@ -170,6 +170,33 @@ func TestBedrockAccessKeysLoginAndLogoutLikeRust(t *testing.T) {
 	}
 }
 
+func TestBedrockAPIKeyLoginConfiguresProviderLikeRust(t *testing.T) {
+	clearBedrockEnv(t)
+	home := t.TempDir()
+	router := bedrockTestRouter(home)
+	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{
+		Type:   auth.AccountAmazonBedrock,
+		APIKey: " bedrock-api-key ",
+		Region: " us-east-2 ",
+	}))
+	if login.Error != nil {
+		t.Fatalf("login = %+v", login.Error)
+	}
+	configText := readFileString(t, config.ConfigPath(home))
+	if !strings.Contains(configText, `model_provider = "amazon-bedrock"`) ||
+		!strings.Contains(configText, `region = "us-east-2"`) {
+		t.Fatalf("config = %q", configText)
+	}
+	snapshot := router.requireAccount().AuthSnapshot()
+	if snapshot == nil || snapshot.Mode() != "bedrock-api-key" {
+		t.Fatalf("auth snapshot = %#v", snapshot)
+	}
+	keys, ok := snapshot.BedrockAPIKey.(*auth.BedrockAPIKeyAuth)
+	if !ok || keys.APIKey != "bedrock-api-key" || keys.Region != "us-east-2" {
+		t.Fatalf("bedrock api key = %#v", snapshot.BedrockAPIKey)
+	}
+}
+
 // Rust #39277,
 // app-server/tests/suite/v2/bedrock_setup.rs::setup_bedrock_rejects_invalid_or_conflicting_credentials.
 func TestBedrockSetupRejectsInvalidOrConflictingCredentialsLikeRust(t *testing.T) {

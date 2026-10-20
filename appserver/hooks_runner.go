@@ -620,7 +620,7 @@ func hookMatches(event HookEventName, matcher *string, compiled *regexp.Regexp, 
 			}
 		}
 		return false
-	case HookEventUserPromptSubmit, HookEventStop, HookEventInterrupt:
+	case HookEventUserPromptSubmit, HookEventStop, HookEventInterrupt, HookEventPreModelRequest, HookEventPostModelRequest:
 		return true
 	default:
 		return false

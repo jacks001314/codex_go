@@ -43,7 +43,10 @@ func TestResponseFailedPrefersRetryAfterHeaderLikeRust(t *testing.T) {
 			if !ok {
 				t.Fatalf("code=%s header=%q: no retry delay reported", code, testCase.header)
 			}
-			if delay != testCase.wantDelay {
+			// Header/message delays are captured as a deadline, so reading the
+			// remaining delay can trail the exact source duration by a small
+			// scheduling amount.
+			if diff := delay - testCase.wantDelay; diff < -25*time.Millisecond || diff > 25*time.Millisecond {
 				t.Fatalf("code=%s header=%q: delay=%s, want %s", code, testCase.header, delay, testCase.wantDelay)
 			}
 		}
@@ -67,7 +70,7 @@ func TestResponseFailedRetryAfterHeaderPreservedForRetryableErrorsLikeRust(t *te
 			t.Fatal(err)
 		}
 		delay, ok := codexapi.RetryDelayInfo(responseFailedError(raw))
-		if !ok || delay != 7*time.Second {
+		if !ok || delay < 6990*time.Millisecond || delay > 7*time.Second {
 			t.Fatalf("code=%s: delay=%s ok=%t, want 7s", code, delay, ok)
 		}
 	}
@@ -78,7 +81,7 @@ func TestResponseFailedRetryAfterHeaderPreservedForRetryableErrorsLikeRust(t *te
 	if !asAPIError(err, &apiErr) || apiErr.Details().Kind != codexapi.ErrorRetryable {
 		t.Fatalf("malformed error = %#v, want retryable", err)
 	}
-	if delay, ok := codexapi.RetryDelayInfo(err); !ok || delay != 4*time.Second {
+	if delay, ok := codexapi.RetryDelayInfo(err); !ok || delay < 3990*time.Millisecond || delay > 4*time.Second {
 		t.Fatalf("malformed delay = %s ok=%t, want 4s", delay, ok)
 	}
 }

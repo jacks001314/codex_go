@@ -259,11 +259,42 @@ func findExecutableInPath(program string, pathEnv string, cwd string, policy Fil
 		}
 		return false
 	}
+	fileIsWritable := func(path string) bool {
+		if !policyCanWrite(path) || !canModify(path) {
+			return false
+		}
+		info, err := os.Lstat(path)
+		return err != nil || info.Mode()&os.ModeSymlink == 0
+	}
+	pathIsReplaceable := func(path string) bool {
+		return replaceableAncestor(path, roots, policyCanWrite, canModify)
+	}
 	for _, dir := range filepath.SplitList(pathEnv) {
 		if strings.TrimSpace(dir) == "" {
 			continue
 		}
-		resolved := CanonicalExecutable(filepath.Join(dir, program))
+		dir = strings.TrimSpace(dir)
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(cwd, dir)
+		}
+		lookup := program
+		if !strings.ContainsAny(program, `/\`) && !strings.HasPrefix(program, "~") {
+			lookup = filepath.Join(dir, program)
+		} else if !filepath.IsAbs(lookup) {
+			lookup = filepath.Join(cwd, lookup)
+		}
+		if !filepath.IsAbs(lookup) || pathIsReplaceable(lookup) {
+			continue
+		}
+		if resolvedParent := CanonicalDirectory(filepath.Dir(lookup)); resolvedParent != "" {
+			alias := filepath.Join(resolvedParent, filepath.Base(lookup))
+			if (!cwdIsRoot && canonicalCWD != "" && PathWithin(alias, canonicalCWD)) ||
+				fileIsWritable(alias) ||
+				pathIsReplaceable(alias) {
+				continue
+			}
+		}
+		resolved := CanonicalExecutable(lookup)
 		if resolved == "" {
 			continue
 		}
@@ -272,10 +303,10 @@ func findExecutableInPath(program string, pathEnv string, cwd string, policy Fil
 		}
 		// A writable, user-modifiable candidate can be replaced between the
 		// probe and the exec, so it is not a trustworthy launcher.
-		if policyCanWrite(resolved) && canModify(resolved) {
+		if fileIsWritable(resolved) {
 			continue
 		}
-		if replaceableAncestor(resolved, roots, policyCanWrite, canModify) {
+		if pathIsReplaceable(resolved) {
 			continue
 		}
 		return resolved
@@ -297,11 +328,24 @@ func replaceableAncestor(path string, roots []WritableRoot, policyCanWrite func(
 		// Read-only carveouts are bind mounts and cannot themselves be
 		// renamed/unlinked. Continue checking above them, since a mutable
 		// ancestor could still redirect the installation path.
-		if policyCanWrite(parent) && !isReadOnlyMount(component, roots) && canModify(parent) {
+		canonicalParent := CanonicalDirectory(parent)
+		if canonicalParent == "" {
+			return true
+		}
+		alias := filepath.Join(canonicalParent, filepath.Base(component))
+		if policyCanWrite(canonicalParent) && !isReadOnlyMount(alias, roots) &&
+			canReplaceChild(canonicalParent, alias, canModify) {
 			return true
 		}
 		component = parent
 	}
+}
+
+func canReplaceChild(parent string, child string, canModify func(string) bool) bool {
+	if !canModify(parent) {
+		return false
+	}
+	return currentUserCanReplaceChild(parent, child)
 }
 
 func isReadOnlyMount(path string, roots []WritableRoot) bool {

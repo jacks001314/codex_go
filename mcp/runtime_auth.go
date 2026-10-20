@@ -25,6 +25,8 @@ func RuntimeAuthFromSnapshot(snapshot *auth.AuthDotJSON) *RuntimeAuth {
 	runtimeAuth := &RuntimeAuth{
 		UsesCodexBackend: true,
 		HTTPHeaders:      headers,
+		ChatGPTUserID:    auth.ChatGPTUserIDFromAuth(snapshot),
+		AccountID:        auth.AccountIDFromAuthForRestrictions(snapshot),
 	}
 	if resolved.SignRequest != nil {
 		runtimeAuth.ApplyHTTPRequest = func(request *http.Request, body []byte) error {

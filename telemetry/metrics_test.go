@@ -75,6 +75,19 @@ func TestSessionMetricTagsLikeRust(t *testing.T) {
 	}
 }
 
+func TestSessionMetricTagsAllowBuildMetadataLikeRust(t *testing.T) {
+	tags, err := SessionMetricTags("api_key", "cli", "codex_cli", "desktop_app", "gpt-5.1", "0.164.0-alpha.1+internal")
+	if err != nil {
+		t.Fatalf("SessionMetricTags() error = %v", err)
+	}
+	if len(tags) != 6 || tags[5].Key != AppVersionTag || tags[5].Value != "0.164.0-alpha.1+internal" {
+		t.Fatalf("tags = %#v", tags)
+	}
+	if got := SanitizeMetricTagValue("0.164.0-alpha.1+internal"); got != "0.164.0-alpha.1+internal" {
+		t.Fatalf("sanitized version = %q", got)
+	}
+}
+
 func TestMetricValidationRejectsInvalidComponents(t *testing.T) {
 	if err := validateMetricName("codex.turn.token_usage"); err != nil {
 		t.Fatalf("valid name error = %v", err)

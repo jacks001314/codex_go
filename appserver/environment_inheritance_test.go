@@ -2,10 +2,13 @@ package appserver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"codex_go/agent"
+	"codex_go/config"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -42,7 +45,7 @@ func TestInheritableEnvironmentSelectionsLikeRust(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := inheritableEnvironmentSelections(tc.in)
+			got := inheritableEnvironmentSelections(tc.in, false)
 			if len(got) != len(tc.want) {
 				t.Fatalf("inheritableEnvironmentSelections() = %#v, want ids %v", got, tc.want)
 			}
@@ -54,10 +57,58 @@ func TestInheritableEnvironmentSelectionsLikeRust(t *testing.T) {
 		})
 	}
 	// The helper must not alias its input.
-	got := inheritableEnvironmentSelections([]map[string]any{ready})
+	got := inheritableEnvironmentSelections([]map[string]any{ready}, false)
 	got[0]["cwd"] = "/mutated"
 	if ready["cwd"] != "/remote" {
 		t.Fatalf("inheritableEnvironmentSelections aliased its input: %#v", ready)
+	}
+	fromThread := map[string]any{
+		"environmentId": "configured",
+		"cwd":           "/configured",
+		"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigFromThread}),
+	}
+	configuredOnly := inheritableEnvironmentSelections([]map[string]any{ready, pending, fromThread, failed}, true)
+	if len(configuredOnly) != 1 || selectionEnvironmentID(configuredOnly[0]) != "configured" {
+		t.Fatalf("configured-only inheritance = %#v", configuredOnly)
+	}
+}
+
+func TestRuntimeAgentControllerConfiguredEnvironmentInheritanceFeatureLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nsubagent_thread_environments = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(filepath.Join(home, "threads"))
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: "/primary"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Config: config.NewConfigService(home)})
+	selections := []map[string]any{
+		{
+			"environmentId": "temporary",
+			"cwd":           "/temporary",
+			"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigReady, Config: &EnvironmentConfig{}}),
+		},
+		{
+			"environmentId": "configured",
+			"cwd":           "/configured",
+			"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigFromThread}),
+		},
+	}
+	controller := newRuntimeAgentControllerWithEnvironmentSelections(router, "parent", parent.Metadata.CWD, 2, agent.VersionV2, selections)
+	result, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load(session.ThreadID(result.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := environmentSelectionsFromAny(record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
+	if len(persisted) != 1 || selectionEnvironmentID(persisted[0]) != "configured" {
+		t.Fatalf("configured child environments = %#v", persisted)
 	}
 }
 

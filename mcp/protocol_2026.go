@@ -119,6 +119,10 @@ func mcpClientCapabilitiesWithAuthChange(openAIForm bool, advertiseAuthChange bo
 // mcpClientCapabilitiesWithFeatures mirrors Rust #43524: user verification is
 // advertised only to the host-owned apps MCP server.
 func mcpClientCapabilitiesWithFeatures(openAIForm bool, advertiseAuthChange bool, userVerification bool) map[string]any {
+	return mcpClientCapabilitiesWithAllFeatures(openAIForm, advertiseAuthChange, userVerification, false)
+}
+
+func mcpClientCapabilitiesWithAllFeatures(openAIForm bool, advertiseAuthChange bool, userVerification bool, emaAuth bool) map[string]any {
 	capabilities := map[string]any{
 		"roots": map[string]any{"listChanged": false},
 	}
@@ -137,6 +141,14 @@ func mcpClientCapabilitiesWithFeatures(openAIForm bool, advertiseAuthChange bool
 	if advertiseAuthChange {
 		mcpAdvertiseAuthChangeCapability(capabilities)
 	}
+	if emaAuth {
+		extensions, _ := capabilities["extensions"].(map[string]any)
+		if extensions == nil {
+			extensions = map[string]any{}
+		}
+		extensions["io.modelcontextprotocol/enterprise-managed-authorization"] = map[string]any{}
+		capabilities["extensions"] = extensions
+	}
 	return capabilities
 }
 
@@ -149,6 +161,10 @@ func mcpParamsWithProtocolMetadataAndAuthChange(params any, mode MCPProtocolMode
 }
 
 func mcpParamsWithProtocolMetadataAndFeatures(params any, mode MCPProtocolMode, openAIForm bool, advertiseAuthChange bool, userVerification bool) any {
+	return mcpParamsWithProtocolMetadataAndAllFeatures(params, mode, openAIForm, advertiseAuthChange, userVerification, false)
+}
+
+func mcpParamsWithProtocolMetadataAndAllFeatures(params any, mode MCPProtocolMode, openAIForm bool, advertiseAuthChange bool, userVerification bool, emaAuth bool) any {
 	if mode != MCPProtocol20260728 {
 		return params
 	}
@@ -166,7 +182,7 @@ func mcpParamsWithProtocolMetadataAndFeatures(params any, mode MCPProtocolMode, 
 	}
 	meta[mcpProtocolVersionMetadataKey] = modernMCPProtocol
 	meta[mcpClientInfoMetadataKey] = map[string]string{"name": "codex-go", "version": "go-port"}
-	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilitiesWithFeatures(openAIForm, advertiseAuthChange, userVerification)
+	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilitiesWithAllFeatures(openAIForm, advertiseAuthChange, userVerification, emaAuth)
 	out["_meta"] = meta
 	return out
 }

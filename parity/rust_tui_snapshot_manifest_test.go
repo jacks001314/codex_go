@@ -43,8 +43,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// panel directory is new; the per-directory counts below follow).
 	// Round-91 re-anchor to head e16b631d08: #54742 added the
 	// history-search absorbed-slash composer snapshot (1433 total).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1433 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1433", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1437 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1437", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -107,7 +107,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-pinned to upstream 18e28fe1b9: #48621 removed follow-up prompt
 			// suggestions from the TUI, so the prompt-suggestion request-history
 			// snapshot is gone and the dir now holds 85 files.
-			Files:    92,
+			Files:    93,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -140,7 +140,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// two startup-warning summaries into the warnings-viewer snapshots.
 			// #48121 added the command-center draft-handoff snapshot.
 			// #48135 added the remapped-left external-writer view snapshot.
-			Files:    74,
+			Files:    76,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -199,7 +199,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46680-#46710 added the shared picker presentation and filled-tab
 			// snapshots; #46734/#46749/#46751 added the clipped mention popup,
 			// the customized shortcut overlays and the narrow warnings view.
-			Files:    254,
+			Files:    255,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},

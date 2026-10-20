@@ -3645,6 +3645,18 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
 		message = strings.TrimSpace(payload.Error.Message)
 	}
+	// OpenAI-compatible servers (vLLM, DeepSeek, and similar) commonly report an
+	// oversized prompt as a plain 400 without an error code. Classify it as a
+	// context-window failure so the turn records the compaction state and the
+	// next turn can summarize the history instead of surfacing a generic status.
+	if (statusCode == http.StatusBadRequest || statusCode == http.StatusRequestEntityTooLarge) &&
+		((payload.Error != nil && responseErrorCode(payload.Error) == "context_length_exceeded") ||
+			isContextWindowExceededMessage(message)) {
+		if strings.TrimSpace(message) == "" {
+			message = http.StatusText(statusCode)
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded, Status: statusCode, Message: message}
+	}
 	// Rust #38682: misalignment policy violations from HTTP 400/403 responses
 	// surface as a typed, non-retryable error.
 	if (statusCode == http.StatusBadRequest || statusCode == http.StatusForbidden) &&
@@ -3784,6 +3796,43 @@ func mapProviderAPIErrorMessage(providerName string, statusCode int, bodyText st
 		return bedrockExpiredSignatureMessage
 	}
 	return message
+}
+
+// isContextWindowExceededMessage recognizes the provider-specific wording used
+// by OpenAI-compatible Responses servers. The Responses protocol normally
+// carries `code: context_length_exceeded`, but local inference servers often
+// return only a human-readable 400 body.
+func isContextWindowExceededMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"context_length_exceeded",
+		"context length exceeded",
+		"context length limit",
+		"maximum context length",
+		"available context size",
+		"exceeds the available context",
+		"maximum number of tokens",
+		"token count exceeds",
+		"prompt is too long",
+		"input is too long",
+		"too many tokens",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	if strings.Contains(lower, "context window") {
+		for _, marker := range []string{"exceed", "maximum", "too long", "limit"} {
+			if strings.Contains(lower, marker) {
+				return true
+			}
+		}
+	}
+	return strings.Contains(lower, "reduce the length") &&
+		(strings.Contains(lower, "message") || strings.Contains(lower, "input") || strings.Contains(lower, "prompt"))
 }
 
 func responseAuthorizationErrorCode(headers http.Header) string {

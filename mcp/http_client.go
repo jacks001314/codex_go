@@ -166,6 +166,7 @@ type httpClient struct {
 	progress                           MCPProgressHandler
 	openAIForm                         bool
 	userVerification                   bool
+	emaAuth                            bool
 	protocolMode                       MCPProtocolMode
 	negotiatedProtocolVersion          string
 	retrySleep                         func(time.Duration)
@@ -389,12 +390,16 @@ func newMCPHTTPClientWithFeatures(config *ServerConfig, openAIForm bool, userVer
 	protocolMode := MCPProtocolLegacy
 	if config != nil {
 		protocolMode = config.ProtocolMode
+		if config.EMAAuthExtension {
+			protocolMode = MCPProtocol20260728
+		}
 	}
 	return &httpClient{
 		config:           config,
 		client:           mcpHTTPClientWithDefaultHeaders(client, config),
 		openAIForm:       openAIForm,
 		userVerification: userVerification,
+		emaAuth:          config != nil && config.EMAAuthExtension,
 		protocolMode:     protocolMode,
 		retrySleep:       time.Sleep,
 	}
@@ -951,7 +956,7 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 	if endpoint == "" {
 		return nil, 0, errors.New("HTTP MCP URL is required")
 	}
-	params = mcpParamsWithProtocolMetadataAndFeatures(params, c.protocolMode, c.openAIForm, false, c.userVerification)
+	params = mcpParamsWithProtocolMetadataAndAllFeatures(params, c.protocolMode, c.openAIForm, false, c.userVerification, c.emaAuth)
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,

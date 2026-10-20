@@ -16,6 +16,8 @@ var ErrInvalidHook = errors.New("invalid hook")
 type HookEventName string
 
 const (
+	HookEventPreModelRequest   HookEventName = "preModelRequest"
+	HookEventPostModelRequest  HookEventName = "postModelRequest"
 	HookEventPreToolUse        HookEventName = "preToolUse"
 	HookEventPermissionRequest HookEventName = "permissionRequest"
 	HookEventPostToolUse       HookEventName = "postToolUse"

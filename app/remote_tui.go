@@ -1018,11 +1018,10 @@ func interactiveRemoteCollaborationModeUpdateHandler(ctx context.Context, endpoi
 			return err
 		}
 		defer client.close()
-		var response appserver.SettingsUpdateResponse
-		return remoteSessionRequest(reqCtx, client, appserver.MethodThreadSettingsUpdate, appserver.SettingsUpdateParams{
+		return remoteTUIUpdateThreadSettings(reqCtx, client, appserver.SettingsUpdateParams{
 			ThreadID:          threadID,
 			CollaborationMode: interactiveCollaborationModePayload(&mode),
-		}, &response)
+		})
 	}
 }
 

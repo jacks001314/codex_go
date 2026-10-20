@@ -2140,9 +2140,10 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	url := "http://localhost/oauth/" + name
 	if config, ok := s.serverConfig(name); ok && strings.TrimSpace(config.URL) != "" {
 		if config.EffectiveAuth() == ServerAuthEMAAuth {
-			// Enterprise MCP authorization is managed by Codex account sign-in
-			// (Rust #44832); ordinary MCP OAuth login is blocked for EMA.
-			return nil, invalidMCPRequest("EMA MCP connections are not enabled in this version")
+			// Enterprise MCP authorization is managed by Codex account
+			// enterprise sign-in (Rust #55334); ordinary MCP OAuth login is
+			// blocked for EMA.
+			return nil, invalidMCPRequest("enterprise MCP authorization uses account enterprise sign-in, not MCP OAuth login")
 		}
 		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
 			return nil, invalidMCPRequest("OAuth login is not supported for executor-owned ChatGPT MCP servers")
@@ -3180,9 +3181,15 @@ func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPA
 		return MCPAuthUnsupported
 	}
 	if config.EffectiveAuth() == ServerAuthEMAAuth {
-		// EMA connections are not enabled until the runtime stage of the stack
-		// (Rust #44832).
-		return MCPAuthUnsupported
+		// Rust #55334: enterprise authorization is reported like OAuth once the
+		// account-scoped IdP grant exists, and as not signed in before that.
+		if !config.EMAConfigured {
+			return MCPAuthUnsupported
+		}
+		if config.EMACredentialsAvailable {
+			return MCPAuthOAuth
+		}
+		return MCPAuthNotLoggedIn
 	}
 	if strings.TrimSpace(config.BearerTokenEnvVar) != "" {
 		return MCPAuthBearerToken

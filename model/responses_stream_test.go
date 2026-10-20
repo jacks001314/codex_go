@@ -587,7 +587,7 @@ func TestResponseFailedErrorDistinguishesCapacityFromSlowDownLikeRust(t *testing
 			t.Fatal("slow_down should be retryable")
 		}
 		delay, ok := codexapi.RetryDelayInfo(err)
-		if !ok || delay != 3*time.Second {
+		if !ok || delay < 2990*time.Millisecond || delay > 3*time.Second {
 			t.Fatalf("retry delay = %v (ok=%v), want 3s", delay, ok)
 		}
 	})

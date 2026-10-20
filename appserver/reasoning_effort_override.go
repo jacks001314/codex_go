@@ -82,6 +82,33 @@ func reasoningEffortFeatureEnabled(cfg *config.Config) bool {
 	return cfg != nil && features.Enabled(cfg.FeatureSettings(), "reasoning_effort_override")
 }
 
+// coalesceAdjacentReasoningEffortUpdates mirrors Rust #55293: consecutive
+// trusted configuration updates (recovery/retry artifacts) keep only the latest
+// one in the request copy. Persisted history is untouched.
+func coalesceAdjacentReasoningEffortUpdates(items []any) []any {
+	if len(items) < 2 {
+		return items
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		if reasoningEffortUpdateItem(item) && len(out) > 0 && reasoningEffortUpdateItem(out[len(out)-1]) {
+			out[len(out)-1] = item
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func reasoningEffortUpdateItem(item any) bool {
+	object, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	value, _ := object["type"].(string)
+	return strings.EqualFold(strings.TrimSpace(value), "configuration_update")
+}
+
 // reasoningEffortProviderIsOpenAI resolves whether the turn's provider is the
 // OpenAI provider, which the override gate requires (#46530).
 func reasoningEffortProviderIsOpenAI(cfg *config.Config, providerID string) bool {

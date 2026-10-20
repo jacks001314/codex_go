@@ -6,6 +6,7 @@ const (
 	AuthChoiceChatGPT    AuthChoice = "chatgpt"
 	AuthChoiceDeviceCode AuthChoice = "device_code"
 	AuthChoiceAPIKey     AuthChoice = "api_key"
+	AuthChoiceBedrock    AuthChoice = "bedrock"
 )
 
 type SignInState string
@@ -18,6 +19,8 @@ const (
 	SignInChatGPTSuccess           SignInState = "chatgpt_success"
 	SignInAPIKeyEntry              SignInState = "api_key_entry"
 	SignInAPIKeyConfigured         SignInState = "api_key_configured"
+	SignInBedrock                  SignInState = "bedrock"
+	SignInBedrockConfigured        SignInState = "bedrock_configured"
 )
 
 type AuthOption struct {
@@ -36,6 +39,10 @@ func DefaultAuthOptions(apiKeyDisabled bool) []AuthOption {
 }
 
 func AuthOptionsForPolicy(chatGPTAllowed bool, apiKeyAllowed bool) []AuthOption {
+	return AuthOptionsForPolicyWithBedrock(chatGPTAllowed, apiKeyAllowed, false)
+}
+
+func AuthOptionsForPolicyWithBedrock(chatGPTAllowed bool, apiKeyAllowed bool, bedrockAllowed bool) []AuthOption {
 	defaults := DefaultAuthOptions(!apiKeyAllowed)
 	options := []AuthOption{{
 		Choice:      defaults[0].Choice,
@@ -49,12 +56,19 @@ func AuthOptionsForPolicy(chatGPTAllowed bool, apiKeyAllowed bool) []AuthOption 
 	if apiKeyAllowed {
 		options = append(options, defaults[2])
 	}
+	if apiKeyAllowed && bedrockAllowed {
+		options = append(options, AuthOption{
+			Choice:      AuthChoiceBedrock,
+			Label:       "Set up Amazon Bedrock",
+			Description: "Use an AWS profile, access keys, environment credentials, or a Bedrock API key",
+		})
+	}
 	return options
 }
 
 func AuthStepState(state SignInState) StepState {
 	switch state {
-	case SignInChatGPTSuccess, SignInAPIKeyConfigured:
+	case SignInChatGPTSuccess, SignInAPIKeyConfigured, SignInBedrockConfigured:
 		return StepComplete
 	default:
 		return StepInProgress

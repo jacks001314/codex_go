@@ -161,6 +161,13 @@ type ServerConfig struct {
 	// from the connection identity's JSON, and added explicitly to every cache
 	// key instead.
 	CredentialPolicy CredentialPolicy `json:"-"`
+	// EMAConfigured reports that a trusted enterprise profile admitted this
+	// ema_auth server; EMACredentialsAvailable reports a stored account-scoped
+	// IdP grant. EMAAuthExtension advertises the enterprise-managed
+	// authorization MCP extension on the 2026-07-28 protocol.
+	EMAConfigured           bool `json:"-"`
+	EMACredentialsAvailable bool `json:"-"`
+	EMAAuthExtension        bool `json:"-"`
 }
 
 func (c *ServerConfig) EffectiveEnvironmentID() string {
@@ -231,8 +238,12 @@ func ValidateServerAuth(serverName string, config *ServerConfig) error {
 		return nil
 	}
 	if config.EffectiveAuth() == ServerAuthEMAAuth {
-		// EMA MCP connections are not enabled in this version (Rust #44832).
-		return errors.New("EMA MCP connections are not enabled in this version")
+		// Rust #55334: EMA is admitted only from a trusted enterprise profile
+		// and always uses a host-owned streamable HTTP transport.
+		if !config.EMAConfigured {
+			return errors.New("enterprise MCP authorization requires an enabled, directly configured server and a trusted enterprise profile")
+		}
+		return config.ValidateEMAAuthTransport()
 	}
 	if strings.TrimSpace(config.OAuthClientSecret) != "" && strings.TrimSpace(config.OAuthClientID) == "" {
 		return errors.New("oauth.client_secret requires oauth.client_id")
@@ -376,6 +387,11 @@ type RuntimeConfig struct {
 	// OAuthCredentialsStoreMode is Rust's `mcp_oauth_credentials_store`
 	// (auto by default) applied to MCP OAuth credential storage.
 	OAuthCredentialsStoreMode OAuthCredentialsStoreMode
+	// XAAEnabled reports `[features].use_xaa` for enterprise-managed MCP auth.
+	XAAEnabled bool
+	// EnterpriseManagedAuth is the trusted `[mcp_enterprise_managed_auth]`
+	// profile used to derive enterprise IdP credentials.
+	EnterpriseManagedAuth *managedconfig.MCPEnterpriseManagedAuthConfig
 	// RequiresReadOnlyMCPTools mirrors Rust McpConfig: when set, every server's
 	// tool discovery and invocation requests server-side read-only filtering and
 	// invocation checks, and read-only connections never share a connection or
@@ -392,6 +408,10 @@ type RuntimeAuth struct {
 	UsesCodexBackend bool
 	HTTPHeaders      map[string]string
 	ApplyHTTPRequest func(*http.Request, []byte) error
+	// ChatGPTUserID and AccountID identify the account owner for
+	// enterprise-managed MCP authorization (Rust #55334).
+	ChatGPTUserID string
+	AccountID     string
 }
 
 func RuntimeConfigFromValues(values map[string]any, codexHome string) *RuntimeConfig {
@@ -420,6 +440,18 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		RefreshToolListOnNotifications: mcpFeatureEnabled(values, "mcp_tool_list_changed"),
 		OAuthCredentialsStoreMode:      runtimeOAuthCredentialsStoreMode(values),
 	}
+	out.XAAEnabled = mcpFeatureEnabled(values, managedconfig.XAAFeatureKey())
+	if table, ok := values["mcp_enterprise_managed_auth"].(map[string]any); ok {
+		if idp, ok := table["idp"].(map[string]any); ok {
+			issuer, _ := idp["issuer"].(string)
+			clientID, _ := idp["client_id"].(string)
+			if strings.TrimSpace(issuer) != "" && strings.TrimSpace(clientID) != "" {
+				out.EnterpriseManagedAuth = &managedconfig.MCPEnterpriseManagedAuthConfig{
+					IDP: managedconfig.MCPServerIdPOAuthConfig{Issuer: strings.TrimSpace(issuer), ClientID: strings.TrimSpace(clientID)},
+				}
+			}
+		}
+	}
 	rawServers, ok := runtimeConfigMapAny(values, "mcp_servers", "mcpServers")
 	if !ok {
 		return NewManager(nil).RuntimeConfig(*out, nil)
@@ -446,6 +478,12 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		}
 		if config.OAuthCredentialsStoreMode == "" {
 			config.OAuthCredentialsStoreMode = out.OAuthCredentialsStoreMode
+		}
+		if config.EffectiveAuth() == ServerAuthEMAAuth {
+			config.EMAConfigured = out.XAAEnabled && out.EnterpriseManagedAuth != nil
+			config.EMAAuthExtension = config.EMAConfigured
+			modern := MCPProtocol20260728
+			config.ProtocolModeOverride = &modern
 		}
 		out.Servers[name] = ServerRegistration{
 			Name:   name,

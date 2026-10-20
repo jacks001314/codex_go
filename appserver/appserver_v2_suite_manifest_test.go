@@ -149,6 +149,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "thread_read", Owner: "session, appserver", Focus: "thread/read RPC"},
 		{Module: "thread_read_state", Owner: "session, appserver", Focus: "experimental thread read-state methods and thread/readState/changed notifications (#52384, #52395; round-90 pin re-anchor)"},
 		{Module: "thread_resume", Owner: "session, appserver", Focus: "thread/resume RPC"},
+		{Module: "thread_sample", Owner: "appserver, session", Focus: "experimental thread/sample request"},
 		{Module: "thread_revert", Owner: "session, appserver", Focus: "thread/revert RPC and reload notifications"},
 		{Module: "thread_settings_update", Owner: "session, appserver", Focus: "thread/settings/update RPC"},
 		{Module: "thread_sections", Owner: "appserver, session", Focus: "thread section list/create/update/delete/move RPCs"},

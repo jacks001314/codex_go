@@ -175,6 +175,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"rmcp-client",
 		"rollout",
 		"rollout-trace",
+		"runtime-agent-instance",
 		"sandboxing",
 		"scripts",
 		"secrets",

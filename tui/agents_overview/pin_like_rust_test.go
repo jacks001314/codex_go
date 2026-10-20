@@ -225,12 +225,13 @@ func TestPinnedFooterHintLikeRust(t *testing.T) {
 		t.Fatalf("pin hint must not render without shared pinning:\n%s", rendered)
 	}
 	view.SetPinnedThreads(nil)
-	if rendered := strings.Join(view.Render(140, 30), "\n"); !strings.Contains(rendered, "p pin/unpin") {
+	view.ToggleHelp()
+	if rendered := strings.Join(view.Render(140, 30), "\n"); !strings.Contains(rendered, "p Pin/unpin") {
 		t.Fatalf("pin hint missing:\n%s", rendered)
 	}
 	// A custom binding replaces the default key in the footer.
 	view.SetShortcutHint(ShortcutHintTogglePin, "z p")
-	if rendered := strings.Join(view.Render(140, 30), "\n"); !strings.Contains(rendered, "z p pin/unpin") {
+	if rendered := strings.Join(view.Render(140, 30), "\n"); !strings.Contains(rendered, "z p Pin/unpin") {
 		t.Fatalf("custom pin hint missing:\n%s", rendered)
 	}
 	view.SetShortcutHint(ShortcutHintTogglePin, "")

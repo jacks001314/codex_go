@@ -159,8 +159,10 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// app-server-protocol/schema/precomputed/. The pair last changed at
 		// 0e67502123 (#54686, McpServerStatus.toolListMeta) and 6786dccbe7
 		// (#53784, ThreadRealtimeStartParams.voiceSessionId).
-		{"stable", stablePrecomputedExports, "0042e6d2041bb58fdffe4fcd55ff928ed344c8d9c542d30532dfc823e4eca9fd"},
-		{"experimental", experimentalPrecomputedExports, "5087303b0b5bd18746a43f5f771c423c85b219d4e702a26edd9b0f6305b853f1"},
+		// Round-110 re-anchor to upstream e389b2444c: both artifacts were
+		// re-copied byte-for-byte from the pinned Rust checkout.
+		{"stable", stablePrecomputedExports, "7c2f5d6bb1f97def0009284d4614a40bcbee6080de01f294f028288fd3291359"},
+		{"experimental", experimentalPrecomputedExports, "86e0d3cb0de1b2264980311ac0df14a858f3ad2cee371d635f541e6e06212258"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

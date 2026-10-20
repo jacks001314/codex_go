@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,9 @@ func TestRolloutCompressionWorkerCompressesColdPlainRollouts(t *testing.T) {
 	}
 	if !info.ModTime().Equal(coldTime) {
 		t.Fatalf("compressed mtime = %v, want %v", info.ModTime(), coldTime)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("compressed mode = %v, want 0600", info.Mode().Perm())
 	}
 }
 

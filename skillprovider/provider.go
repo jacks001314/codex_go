@@ -37,6 +37,10 @@ type CatalogEntry struct {
 	// PluginID attributes an executor skill to the plugin whose capability
 	// root selected it (Rust #39309), carried into skill_invocation analytics.
 	PluginID string
+	// EnvironmentID and SkillRoot identify one executor installation for the
+	// discovery V2 installations tool (Rust #55330).
+	EnvironmentID string
+	SkillRoot     string
 }
 
 type ToolDependency struct {

@@ -3,6 +3,8 @@ package appserver
 import (
 	"context"
 	"fmt"
+
+	"codex_go/model"
 )
 
 type SessionStartSource string
@@ -65,6 +67,46 @@ type HookInterruptRequest struct {
 	Model          string
 	PermissionMode string
 	Hooks          []HookMetadata
+}
+
+// HookModelRequestRequest is one observation-only model request lifecycle event
+// (Rust #55144). Hook output cannot veto the request or alter model context.
+type HookModelRequestRequest struct {
+	ThreadID       string
+	TurnID         string
+	CWD            string
+	TranscriptPath *string
+	Model          string
+	Phase          string
+	Status         string
+	Error          *string
+	TokenUsage     *model.AgentUsage
+	AgentID        string
+	AgentType      string
+	Hooks          []HookMetadata
+}
+
+func (r *HookRunner) RunModelRequest(ctx context.Context, request *HookModelRequestRequest) (*HookRunResult, error) {
+	if request == nil {
+		return nil, fmt.Errorf("%w: model request hook request is nil", ErrInvalidHook)
+	}
+	inputJSON, err := HookInputJSON(request)
+	if err != nil {
+		return nil, err
+	}
+	eventName := HookEventPreModelRequest
+	if request.Phase == "post" {
+		eventName = HookEventPostModelRequest
+	}
+	turnID := request.TurnID
+	return r.Run(ctx, &HookRunRequest{
+		ThreadID:  request.ThreadID,
+		TurnID:    &turnID,
+		CWD:       request.CWD,
+		EventName: eventName,
+		InputJSON: inputJSON,
+		Hooks:     request.Hooks,
+	})
 }
 
 type HookSubagentStopRequest struct {
@@ -428,6 +470,30 @@ func HookInputJSON(request any) (string, error) {
 	}
 	var input map[string]any
 	switch typed := request.(type) {
+	case *HookModelRequestRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"model":           typed.Model,
+			"agent_id":        typed.AgentID,
+			"agent_type":      typed.AgentType,
+		}
+		if typed.Phase == "post" {
+			input["hook_event_name"] = "PostModelRequest"
+			input["status"] = typed.Status
+			input["error"] = nullableStringValue(typed.Error)
+			if typed.TokenUsage != nil {
+				input["token_usage"] = map[string]any{
+					"input_tokens":  typed.TokenUsage.InputTokens,
+					"output_tokens": typed.TokenUsage.OutputTokens,
+					"total_tokens":  typed.TokenUsage.TotalTokens,
+				}
+			}
+		} else {
+			input["hook_event_name"] = "PreModelRequest"
+		}
 	case *HookSessionStartRequest:
 		input = map[string]any{
 			"session_id":      typed.ThreadID,

@@ -68,6 +68,7 @@ type PermissionPromptPermissionMessages struct {
 	DangerFullAccess *string
 	WorkspaceWrite   *string
 	ReadOnly         *string
+	ApprovedPrefixes *string
 }
 
 // PermissionPromptApprovalMessages mirrors Rust
@@ -204,6 +205,17 @@ func permissionPromptSandboxTemplate(mode PermissionPromptSandboxMode) string {
 // approvalPromptText ports Rust approval_text.
 func approvalPromptText(config *PermissionPromptConfig) string {
 	if selected := approvalMessageForPolicy(config); selected != nil {
+		// A catalog approval message replaces the bundled approval prose, but
+		// an explicitly supplied approved-prefix template still renders for
+		// on-request approvals (Rust #55366).
+		if config.ApprovalPolicy == PermissionPromptApprovalOnRequest && approvedPrefixTemplate(config) != nil {
+			if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes, approvedPrefixTemplate(config)); prefixes != "" {
+				if strings.TrimSpace(*selected) == "" {
+					return prefixes
+				}
+				return strings.TrimSuffix(*selected, "\n") + "\n\n" + prefixes
+			}
+		}
 		return *selected
 	}
 	var text string
@@ -223,7 +235,7 @@ func approvalPromptText(config *PermissionPromptConfig) string {
 		if config.RequestPermissionsToolEnabled {
 			sections = append(sections, requestPermissionsToolText())
 		}
-		if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes); prefixes != "" {
+		if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes, approvedPrefixTemplate(config)); prefixes != "" {
 			sections = append(sections, prefixes)
 		}
 		text = strings.Join(sections, "\n\n")
@@ -270,7 +282,7 @@ func granularText(config *PermissionPromptConfig) string {
 	if config.RequestPermissionsToolEnabled {
 		sections = append(sections, requestPermissionsToolText())
 	}
-	if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes); prefixes != "" {
+	if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes, approvedPrefixTemplate(config)); prefixes != "" {
 		sections = append(sections, prefixes)
 	}
 	return strings.Join(sections, "\n\n")
@@ -343,7 +355,16 @@ func deniedReadsText(paths []string, globs []string) string {
 	return "## Denied filesystem reads\nThe active permission profile denies reading these paths/globs. Do not request escalation or additional permissions to read them; these denials are policy restrictions.\n" + strings.Join(entries, "\n")
 }
 
-func approvedPrefixesText(prefixes [][]string) string {
+func approvedPrefixTemplate(config *PermissionPromptConfig) *string {
+	if config == nil || config.PermissionMessages == nil {
+		return nil
+	}
+	return config.PermissionMessages.ApprovedPrefixes
+}
+
+const bundledApprovedPrefixTemplate = "## Approved command prefixes\nThe following prefix rules have already been approved: {{ approved_prefixes }}"
+
+func approvedPrefixesText(prefixes [][]string, template *string) string {
 	copied := make([][]string, 0, len(prefixes))
 	for _, prefix := range prefixes {
 		if len(prefix) == 0 {
@@ -360,7 +381,14 @@ func approvedPrefixesText(prefixes [][]string) string {
 	if rendered == "" {
 		return ""
 	}
-	return "## Approved command prefixes\nThe following prefix rules have already been approved: " + rendered
+	section := bundledApprovedPrefixTemplate
+	if template != nil {
+		section = *template
+	}
+	if section == "" {
+		return ""
+	}
+	return strings.ReplaceAll(section, "{{ approved_prefixes }}", rendered)
 }
 
 const (

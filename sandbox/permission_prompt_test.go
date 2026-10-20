@@ -276,3 +276,51 @@ func TestFormatAllowPrefixesTruncatesLikeRust(t *testing.T) {
 		t.Fatalf("long prefix did not truncate")
 	}
 }
+
+func TestPermissionPromptApprovedPrefixTemplatesLikeRust(t *testing.T) {
+	prefixes := [][]string{{"git", "status"}}
+	empty := ""
+	custom := "## Custom prefixes\n{{ approved_prefixes }}"
+	catalogApproval := "Catalog approval instructions."
+
+	defaultText := BuildPermissionPrompt(&PermissionPromptConfig{
+		ApprovalPolicy:          PermissionPromptApprovalOnRequest,
+		ApprovedCommandPrefixes: prefixes,
+	})
+	if !strings.Contains(defaultText, "## Approved command prefixes") {
+		t.Fatalf("default prefix template missing:\n%s", defaultText)
+	}
+	suppressed := BuildPermissionPrompt(&PermissionPromptConfig{
+		ApprovalPolicy:          PermissionPromptApprovalOnRequest,
+		ApprovedCommandPrefixes: prefixes,
+		PermissionMessages:      &PermissionPromptPermissionMessages{ApprovedPrefixes: &empty},
+	})
+	if strings.Contains(suppressed, "Approved command prefixes") || strings.Contains(suppressed, "- [\"git\", \"status\"]") {
+		t.Fatalf("empty prefix template did not suppress the section:\n%s", suppressed)
+	}
+	customText := BuildPermissionPrompt(&PermissionPromptConfig{
+		ApprovalPolicy:          PermissionPromptApprovalOnRequest,
+		ApprovedCommandPrefixes: prefixes,
+		PermissionMessages:      &PermissionPromptPermissionMessages{ApprovedPrefixes: &custom},
+	})
+	if !strings.Contains(customText, "## Custom prefixes") || !strings.Contains(customText, "- [\"git\", \"status\"]") {
+		t.Fatalf("custom prefix template = \n%s", customText)
+	}
+	withCatalogApproval := BuildPermissionPrompt(&PermissionPromptConfig{
+		ApprovalPolicy:          PermissionPromptApprovalOnRequest,
+		ApprovedCommandPrefixes: prefixes,
+		ApprovalMessages:        &PermissionPromptApprovalMessages{OnRequest: &catalogApproval},
+		PermissionMessages:      &PermissionPromptPermissionMessages{ApprovedPrefixes: &custom},
+	})
+	if !strings.Contains(withCatalogApproval, catalogApproval) || !strings.Contains(withCatalogApproval, "## Custom prefixes") {
+		t.Fatalf("catalog approval + prefix template = \n%s", withCatalogApproval)
+	}
+	granularText := BuildPermissionPrompt(&PermissionPromptConfig{
+		ApprovalPolicy:          PermissionPromptApprovalGranular,
+		ApprovedCommandPrefixes: prefixes,
+		PermissionMessages:      &PermissionPromptPermissionMessages{ApprovedPrefixes: &custom},
+	})
+	if !strings.Contains(granularText, "## Custom prefixes") {
+		t.Fatalf("granular custom prefix template = \n%s", granularText)
+	}
+}

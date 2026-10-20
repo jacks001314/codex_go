@@ -51,8 +51,8 @@ type incrementalToolCatalogResult struct {
 }
 
 // incrementalToolsEnabledForTurn mirrors Rust
-// `StepContext::incremental_tools_enabled`: the feature is opt-in and only
-// applies to Responses Lite models.
+// `StepContext::incremental_tools_enabled`: the stable feature is default-on
+// and only applies to Responses Lite models.
 func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo) bool {
 	if cfg == nil || info == nil || !info.UseResponsesLite {
 		return false

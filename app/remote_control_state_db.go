@@ -176,5 +176,10 @@ func runAppServerRemoteControlOnly(ctx context.Context, codexHome string, runtim
 	return appserver.ServeRemoteControlOnly(ctx, &appserver.RemoteControlOnlyOptions{
 		CodexHome:      codexHome,
 		RuntimeOptions: runtimeOptions,
+		Ready:          appServerRemoteControlReady,
 	})
 }
+
+// appServerRemoteControlReady is a test seam invoked once the remote-control
+// server has completed state-runtime initialization and is ready to serve.
+var appServerRemoteControlReady func()

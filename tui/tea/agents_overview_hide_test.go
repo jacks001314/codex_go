@@ -22,9 +22,11 @@ func TestModelAgentsHideShortcutLikeRust(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
-	if !strings.Contains(utils.StripANSI(model.View()), "hide") {
-		t.Fatalf("dashboard footer missing hide hint:\n%s", utils.StripANSI(model.View()))
+	model.Update(agentsKeyEvent('?'))
+	if !strings.Contains(utils.StripANSI(model.View()), "Hide") {
+		t.Fatalf("dashboard help missing hide hint:\n%s", utils.StripANSI(model.View()))
 	}
+	model.Update(key(bubbletea.KeyEsc))
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-1" {
 		t.Fatalf("initial selection = %q, want root-1", got)
 	}

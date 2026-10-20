@@ -128,13 +128,16 @@ func TestPlanTypeClassificationsMatchRust(t *testing.T) {
 	if PlanBusiness.IsTeamLike() || PlanProlite.IsTeamLike() {
 		t.Fatal("enterprise and individual Pro Lite plans are not team-like")
 	}
-	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu, PlanEduPlus, PlanEduPro} {
+	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu, PlanEduPlus, PlanEduPro, PlanSci, PlanSciPlus} {
 		if !plan.IsWorkspaceAccount() {
 			t.Fatalf("plan %q should be a workspace account", plan)
 		}
 	}
 	if PlanPlus.IsWorkspaceAccount() || PlanUnknown.IsWorkspaceAccount() {
 		t.Fatal("individual or unknown plans must not be workspace accounts")
+	}
+	if PlanTypeFromString("sci") != PlanSci || PlanTypeFromString("sci_plus") != PlanSciPlus {
+		t.Fatal("academic researcher plans must parse")
 	}
 }
 
@@ -495,6 +498,38 @@ func TestChatGPTAuthTokensLoginUsesExternalMode(t *testing.T) {
 	}
 	updated := manager.AccountUpdated()
 	if updated.AuthMode == nil || *updated.AuthMode != "chatgptAuthTokens" || updated.PlanType == nil || *updated.PlanType != PlanPro {
+		t.Fatalf("updated = %+v", updated)
+	}
+}
+
+func TestBedrockAPIKeyLoginUsesManagedMode(t *testing.T) {
+	manager := NewAccountManager()
+	response, err := manager.Login(&LoginAccountParams{
+		Type:   AccountAmazonBedrock,
+		APIKey: " bedrock-key ",
+		Region: " us-east-2 ",
+	})
+	if err != nil {
+		t.Fatalf("Login(amazonBedrock) error = %v", err)
+	}
+	if response.Type != AccountAmazonBedrock {
+		t.Fatalf("response = %+v", response)
+	}
+	read := manager.GetAccount(&GetAccountParams{})
+	if read.Account == nil || read.Account.Type != AccountAmazonBedrock ||
+		!read.Account.UsesCodexManagedCredentials || read.RequiresOpenAIAuth {
+		t.Fatalf("account = %+v", read)
+	}
+	snapshot := manager.AuthSnapshot()
+	if snapshot == nil || snapshot.Mode() != "bedrock-api-key" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	keys, ok := snapshot.BedrockAPIKey.(*BedrockAPIKeyAuth)
+	if !ok || keys.APIKey != "bedrock-key" || keys.Region != "us-east-2" {
+		t.Fatalf("bedrock api key = %#v", snapshot.BedrockAPIKey)
+	}
+	updated := manager.AccountUpdated()
+	if updated.AuthMode == nil || *updated.AuthMode != "bedrockApiKey" {
 		t.Fatalf("updated = %+v", updated)
 	}
 }

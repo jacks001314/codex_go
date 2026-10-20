@@ -118,6 +118,8 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 		name   HookEventName
 		groups []config.ConfiguredHookGroup
 	}{
+		{HookEventPreModelRequest, managed.PreModelRequest},
+		{HookEventPostModelRequest, managed.PostModelRequest},
 		{HookEventPreToolUse, managed.PreToolUse},
 		{HookEventPermissionRequest, managed.PermissionRequest},
 		{HookEventPostToolUse, managed.PostToolUse},
@@ -1172,6 +1174,8 @@ func hookDiscoveryCWDs(params *HookListParams, defaultCWD string) []string {
 
 func orderedHookJSONEventNames() []string {
 	return []string{
+		"PreModelRequest",
+		"PostModelRequest",
 		"PreToolUse",
 		"PermissionRequest",
 		"PostToolUse",
@@ -1189,6 +1193,10 @@ func orderedHookJSONEventNames() []string {
 
 func hookEventFromJSONName(value string) HookEventName {
 	switch value {
+	case "PreModelRequest":
+		return HookEventPreModelRequest
+	case "PostModelRequest":
+		return HookEventPostModelRequest
 	case "PreToolUse":
 		return HookEventPreToolUse
 	case "PermissionRequest":
@@ -1220,6 +1228,10 @@ func hookEventFromJSONName(value string) HookEventName {
 
 func hookEventKeyLabel(event HookEventName) string {
 	switch event {
+	case HookEventPreModelRequest:
+		return "pre_model_request"
+	case HookEventPostModelRequest:
+		return "post_model_request"
 	case HookEventPreToolUse:
 		return "pre_tool_use"
 	case HookEventPermissionRequest:

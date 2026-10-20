@@ -37,7 +37,7 @@ func (r *RuntimeRouter) executorSkillProviderForThreadSnapshotWithSandbox(thread
 	}
 	hasRoots := r.threadHasSelectedCapabilityRoots(threadID)
 	if snapshot != nil {
-		hasRoots = len(snapshot.selectedRoots()) > 0
+		hasRoots = len(snapshot.selectedRoots()) > 0 || snapshot.executorCapabilityDiscoveryV2Enabled()
 	}
 	if !hasRoots {
 		return nil
@@ -121,9 +121,23 @@ func (r *RuntimeRouter) executorSkillProviderCatalogWithSnapshot(ctx context.Con
 			Enabled:          entry.Enabled,
 			PromptVisible:    entry.AllowsImplicitInvocation(),
 			PluginID:         entry.PluginID,
+			EnvironmentID:    entry.EnvironmentID,
+			SkillRoot:        executorSkillInstallationRoot(entry.SourcePath),
 		})
 	}
 	return catalog, nil
+}
+
+func executorSkillInstallationRoot(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	path = strings.ReplaceAll(path, "\\", "/")
+	if index := strings.LastIndex(path, "/"); index > 0 {
+		return path[:index]
+	}
+	return ""
 }
 
 // disabledExecutorSkillPaths returns the caller-owned disablement map, if any.

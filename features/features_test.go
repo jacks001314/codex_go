@@ -43,11 +43,11 @@ func TestIncrementalToolsFeatureRegisteredLikeRust(t *testing.T) {
 	if !Known("incremental_tools") {
 		t.Fatal("incremental_tools should be known")
 	}
-	if got := StageFor("incremental_tools"); got != StageUnderDevelopment {
-		t.Fatalf("StageFor(incremental_tools) = %q, want %q", got, StageUnderDevelopment)
+	if got := StageFor("incremental_tools"); got != StageStable {
+		t.Fatalf("StageFor(incremental_tools) = %q, want %q", got, StageStable)
 	}
-	if Defaults()["incremental_tools"] {
-		t.Fatal("incremental_tools default = true, want false")
+	if !Defaults()["incremental_tools"] {
+		t.Fatal("incremental_tools default = false, want true")
 	}
 }
 

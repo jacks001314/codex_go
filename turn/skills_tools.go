@@ -22,6 +22,7 @@ const (
 	skillsToolNamespace                  = "skills"
 	skillsToolListName                   = "list"
 	skillsToolReadName                   = "read"
+	skillsToolInstallationsName          = "installations"
 	orchestratorSkillMimeType            = "mcp/skill"
 	maxSkillToolHandleBytes              = 2048
 	maxSkillToolWarnings                 = 4
@@ -33,6 +34,7 @@ const (
 	maxOrchestratorSkillResourceBytes    = 1024 * 1024
 	maxSkillToolListPageEntries          = 20
 	maxSkillToolResponseBytes            = 512 * 1024
+	maxSkillInstallationsResponseBytes   = 8 * 1024
 	maxCatalogSkillDescriptionChars      = 1024
 	skillDescriptionTruncatedSuffix      = "..."
 	skillOversizedEntryWarning           = "Some skills were omitted because their metadata is too large."
@@ -68,6 +70,9 @@ type skillsReadArgs struct {
 	Package   string              `json:"package"`
 	Resource  string              `json:"resource"`
 	Cursor    *string             `json:"cursor,omitempty"`
+	// Source is the discovery-V2 selector (`cloud` or one executor
+	// environment) that may replace the legacy authority selector.
+	Source *skillsInstallationSource `json:"source,omitempty"`
 }
 
 type skillsReadResponse struct {
@@ -75,6 +80,29 @@ type skillsReadResponse struct {
 	Contents   string  `json:"contents"`
 	SkillRoot  *string `json:"skill_root,omitempty"`
 	NextCursor *string `json:"next_cursor"`
+}
+
+type skillsInstallationSource struct {
+	Kind          string `json:"kind"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+}
+
+type skillsInstallationsArgs struct {
+	Package string                    `json:"package"`
+	Source  *skillsInstallationSource `json:"source,omitempty"`
+	Cursor  *string                   `json:"cursor,omitempty"`
+}
+
+type skillsInstallationLocation struct {
+	Package       string `json:"package,omitempty"`
+	Resource      string `json:"resource,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	SkillRoot     string `json:"skill_root,omitempty"`
+}
+
+type skillsInstallationsResponse struct {
+	Installations []skillsInstallationLocation `json:"installations"`
+	NextCursor    *string                      `json:"next_cursor"`
 }
 
 type skillsToolExecutor struct {
@@ -133,7 +161,14 @@ func registerSkillsTools(registry *tool.Registry, options *ToolRegistryOptions) 
 		return err
 	}
 	read := newSkillsToolExecutor(options, skillsToolReadName, "Read one page from a skill. Pass its provided package directly; root aliases are resolved automatically. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. For executor-backed skills, skill_root is the skill's absolute directory in the executor filesystem and can be used to locate bundled scripts. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.", catalog, executor)
-	return registry.Register(read)
+	if err := registry.Register(read); err != nil {
+		return err
+	}
+	if options.DiscoveryV2Skills {
+		installations := newSkillsToolExecutor(options, skillsToolInstallationsName, "Find a skill's enabled Cloud and executor locations, including those omitted by skills.read. Pass its provided package directly; root aliases are resolved automatically. Use source {kind: cloud} for Cloud or {kind: executor, environment_id: ...} for one environment. Omit source for all locations. Cloud locations return package and resource: pass both directly to skills.read to read the main instruction file, usually SKILL.md. Executor locations return environment_id and skill_root, the absolute directory containing instructions and supporting files such as scripts. Pass next_cursor back as cursor with the same package and source to continue listing locations.", catalog, executor)
+		return registry.Register(installations)
+	}
+	return nil
 }
 
 func newSkillsToolExecutor(options *ToolRegistryOptions, name string, description string, catalog *orchestratorSkillCatalogCache, executor *executorSkillCatalogCache) *skillsToolExecutor {
@@ -174,6 +209,8 @@ func (e *skillsToolExecutor) Execute(ctx context.Context, invocation *tool.Invoc
 		return e.executeList(ctx, invocation)
 	case skillsToolReadName:
 		return e.executeRead(ctx, invocation)
+	case skillsToolInstallationsName:
+		return e.executeInstallations(ctx, invocation)
 	default:
 		return nil, tool.Fatal("unknown skills tool")
 	}
@@ -266,6 +303,164 @@ func (e *skillsToolExecutor) executeList(ctx context.Context, invocation *tool.I
 	}
 }
 
+func (e *skillsToolExecutor) executeInstallations(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+	var args skillsInstallationsArgs
+	if err := decodeStrictToolArgs(invocation, &args); err != nil {
+		return nil, tool.RespondToModel(err.Error())
+	}
+	packageArg := strings.TrimSpace(args.Package)
+	if packageArg == "" || len(packageArg) > maxSkillToolHandleBytes || strings.ContainsFunc(packageArg, unicode.IsControl) {
+		return nil, tool.RespondToModel("package must be non-empty, contain no control characters, and be at most 2048 bytes")
+	}
+	if args.Source != nil {
+		switch strings.TrimSpace(args.Source.Kind) {
+		case "cloud":
+		case "executor":
+			environmentID := strings.TrimSpace(args.Source.EnvironmentID)
+			if environmentID == "" || len(environmentID) > maxSkillToolHandleBytes || strings.ContainsFunc(environmentID, unicode.IsControl) {
+				return nil, tool.RespondToModel("environment_id must be non-empty, contain no control characters, and be at most 2048 bytes")
+			}
+		default:
+			return nil, tool.RespondToModel("source.kind must be `cloud` or `executor`")
+		}
+	}
+	locations := e.skillInstallations(ctx, packageArg)
+	if args.Source != nil {
+		filtered := locations[:0]
+		for _, location := range locations {
+			switch strings.TrimSpace(args.Source.Kind) {
+			case "cloud":
+				if location.Package != "" {
+					filtered = append(filtered, location)
+				}
+			case "executor":
+				if location.EnvironmentID == strings.TrimSpace(args.Source.EnvironmentID) {
+					filtered = append(filtered, location)
+				}
+			}
+		}
+		locations = filtered
+	}
+	if len(locations) == 0 {
+		return skillsToolJSONOutput(invocation, skillsInstallationsResponse{Installations: []skillsInstallationLocation{}})
+	}
+	fingerprint := skillInstallationsFingerprint(packageArg, args.Source, locations)
+	start, err := parseSkillInstallationsCursor(args.Cursor, fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	if start > len(locations) {
+		return nil, tool.RespondToModel("skills.installations cursor is invalid")
+	}
+	responseByteBudget := invocation.ResponseByteBudget(maxSkillInstallationsResponseBytes)
+	response := skillsInstallationsResponse{Installations: []skillsInstallationLocation{}}
+	for index := start; index < len(locations); index++ {
+		response.Installations = append(response.Installations, locations[index])
+		if index+1 < len(locations) {
+			cursor := fmt.Sprintf("%s:%d", fingerprint, index+1)
+			response.NextCursor = &cursor
+		} else {
+			response.NextCursor = nil
+		}
+		if skillToolSerializedLen(response) > responseByteBudget {
+			response.Installations = response.Installations[:len(response.Installations)-1]
+			if len(response.Installations) == 0 {
+				return nil, tool.RespondToModel("skills.installations response budget leaves no room for an installation")
+			}
+			cursor := fmt.Sprintf("%s:%d", fingerprint, index)
+			response.NextCursor = &cursor
+			break
+		}
+	}
+	return skillsToolJSONOutput(invocation, response)
+}
+
+func (e *skillsToolExecutor) skillInstallations(ctx context.Context, packageArg string) []skillsInstallationLocation {
+	locations := make([]skillsInstallationLocation, 0)
+	seen := map[skillsInstallationLocation]struct{}{}
+	appendLocation := func(location skillsInstallationLocation) {
+		if _, duplicate := seen[location]; duplicate {
+			return
+		}
+		seen[location] = struct{}{}
+		locations = append(locations, location)
+	}
+	cloud := e.orchestratorSkillCatalog()
+	cloudEntries := orchestratorCatalogAsSkillProviderEntries(cloud)
+	targetNames := map[string]struct{}{}
+	for _, entry := range cloud.Skills {
+		if skillPackageMatchesAlias(cloudEntries, entry.Package, packageArg) {
+			targetNames[strings.TrimSpace(entry.Name)] = struct{}{}
+		}
+	}
+	executor := e.executorSkillCatalog(ctx)
+	for _, entry := range executor.Entries {
+		if skillPackageMatchesAlias(executor.Entries, entry.PackageID, packageArg) {
+			targetNames[strings.TrimSpace(entry.Name)] = struct{}{}
+		}
+	}
+	for _, entry := range cloud.Skills {
+		_, byName := targetNames[strings.TrimSpace(entry.Name)]
+		if !byName && !skillPackageMatchesAlias(cloudEntries, entry.Package, packageArg) {
+			continue
+		}
+		appendLocation(skillsInstallationLocation{Package: entry.Package, Resource: entry.MainResource})
+	}
+	for _, entry := range executor.Entries {
+		_, byName := targetNames[strings.TrimSpace(entry.Name)]
+		if !entry.Enabled || entry.Authority.Kind != skillprovider.SourceExecutor || (!byName && !skillPackageMatchesAlias(executor.Entries, entry.PackageID, packageArg)) {
+			continue
+		}
+		environmentID := strings.TrimSpace(entry.EnvironmentID)
+		if environmentID == "" {
+			environmentID = strings.TrimPrefix(strings.TrimSpace(entry.Authority.ID), "discovery:")
+		}
+		skillRoot := strings.TrimSpace(entry.SkillRoot)
+		if skillRoot == "" {
+			skillRoot = pathDirectory(entry.MainResource)
+		}
+		if environmentID == "" || skillRoot == "" {
+			continue
+		}
+		appendLocation(skillsInstallationLocation{EnvironmentID: environmentID, SkillRoot: skillRoot})
+	}
+	return locations
+}
+
+func pathDirectory(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if index := strings.LastIndex(value, "/"); index > 0 {
+		return value[:index]
+	}
+	return ""
+}
+
+func skillInstallationsFingerprint(packageArg string, source *skillsInstallationSource, locations []skillsInstallationLocation) string {
+	payload, _ := json.Marshal(struct {
+		Package       string                       `json:"package"`
+		Source        *skillsInstallationSource    `json:"source,omitempty"`
+		Installations []skillsInstallationLocation `json:"installations"`
+	}{Package: packageArg, Source: source, Installations: locations})
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+func parseSkillInstallationsCursor(cursor *string, fingerprint string) (int, error) {
+	if cursor == nil || strings.TrimSpace(*cursor) == "" {
+		return 0, nil
+	}
+	value := strings.TrimSpace(*cursor)
+	separator := strings.LastIndex(value, ":")
+	if separator < 0 || value[:separator] != fingerprint {
+		return 0, tool.RespondToModel("skills.installations cursor is stale; restart from the first page")
+	}
+	offset, err := strconv.Atoi(value[separator+1:])
+	if err != nil || offset < 0 {
+		return 0, tool.RespondToModel("skills.installations cursor is invalid")
+	}
+	return offset, nil
+}
+
 type indexedListedSkill struct {
 	index int
 	skill listedSkill
@@ -334,6 +529,13 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	}
 	responseByteBudget := invocation.ResponseByteBudget(maxSkillToolResponseBytes)
 	authority := args.Authority
+	if args.Source != nil {
+		resolved, resolveErr := e.skillReadAuthorityForSource(ctx, args.Package, args.Source)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		authority = resolved
+	}
 	if err := validateSkillsToolReadAuthority(authority); err != nil {
 		return nil, err
 	}
@@ -418,6 +620,37 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 		e.readMu.Unlock()
 	}
 	return skillsToolJSONOutput(invocation, response)
+}
+
+func (e *skillsToolExecutor) skillReadAuthorityForSource(ctx context.Context, packageArg string, source *skillsInstallationSource) (skillsToolAuthority, error) {
+	if source == nil {
+		return skillsToolAuthority{}, nil
+	}
+	switch strings.TrimSpace(source.Kind) {
+	case "cloud":
+		return skillsToolAuthority{Kind: "orchestrator"}, nil
+	case "executor":
+		environmentID := strings.TrimSpace(source.EnvironmentID)
+		if environmentID == "" {
+			return skillsToolAuthority{}, tool.RespondToModel("environment_id is required for an executor source")
+		}
+		catalog := e.executorSkillCatalog(ctx)
+		for _, entry := range catalog.Entries {
+			if !entry.Enabled || entry.Authority.Kind != skillprovider.SourceExecutor || !skillPackageMatchesAlias(catalog.Entries, entry.PackageID, packageArg) {
+				continue
+			}
+			entryEnvironment := strings.TrimSpace(entry.EnvironmentID)
+			if entryEnvironment == "" {
+				entryEnvironment = strings.TrimPrefix(strings.TrimSpace(entry.Authority.ID), "discovery:")
+			}
+			if entryEnvironment == environmentID {
+				return skillsToolAuthority{Kind: "executor", ID: entry.Authority.ID}, nil
+			}
+		}
+		return skillsToolAuthority{}, tool.RespondToModel("skill package is not available from the requested environment")
+	default:
+		return skillsToolAuthority{}, tool.RespondToModel("source.kind must be `cloud` or `executor`")
+	}
 }
 
 func (e *skillsToolExecutor) orchestratorSkillCatalog() OrchestratorSkillCatalog {
@@ -555,6 +788,15 @@ func (e *skillsToolExecutor) listedSkills(ctx context.Context, kind string) ([]l
 }
 
 func (e *skillsToolExecutor) availableSkillPackage(ctx context.Context, authority skillsToolAuthority, pkg string) (listedSkill, bool) {
+	aliasSource := skillAliasSource(pkg)
+	if aliasSource == "cloud" || aliasSource == "host" {
+		if authority.Kind != "orchestrator" || aliasSource == "host" {
+			return listedSkill{}, false
+		}
+	}
+	if aliasSource == "executor" && authority.Kind != "executor" {
+		return listedSkill{}, false
+	}
 	listed, _ := e.listedSkills(ctx, authority.Kind)
 	if authority.Kind == "executor" {
 		catalog := e.executorSkillCatalog(ctx)
@@ -591,15 +833,56 @@ func skillPackageMatchesAlias(entries []skillprovider.CatalogEntry, packageID st
 		}
 	}
 	roots := skillAliasRoots(visible)
-	prefix := "e"
+	prefix := skillAliasPrefixExecutor
 	for _, entry := range visible {
 		if entry.Authority.Kind == skillprovider.SourceOrchestrator {
-			prefix = "o"
+			prefix = skillAliasPrefixCloud
 			break
 		}
 	}
 	short := skillShortPackageLocator(packageID, roots, prefix)
 	return short == candidate
+}
+
+const (
+	// Alias source prefixes are shared by generated locators and parser
+	// selection (Rust #55303).
+	skillAliasPrefixCloud    = "c"
+	skillAliasPrefixExecutor = "e"
+	skillAliasPrefixHost     = "r"
+)
+
+// skillAliasSource recognizes a generated package locator's source from its
+// `cN/`, `eN/`, or `rN/` root. Malformed roots (missing suffix, leading zeros,
+// overflow, non-ASCII digits) are not aliases and keep the legacy search order.
+func skillAliasSource(locator string) string {
+	root, suffix, ok := strings.Cut(strings.TrimSpace(locator), "/")
+	if !ok || suffix == "" || len(root) < 2 {
+		return ""
+	}
+	prefix := root[:1]
+	digits := root[1:]
+	if len(digits) > 1 && digits[0] == '0' {
+		return ""
+	}
+	for index := 0; index < len(digits); index++ {
+		if digits[index] < '0' || digits[index] > '9' {
+			return ""
+		}
+	}
+	if _, err := strconv.ParseUint(digits, 10, 64); err != nil {
+		return ""
+	}
+	switch prefix {
+	case skillAliasPrefixCloud:
+		return "cloud"
+	case skillAliasPrefixExecutor:
+		return "executor"
+	case skillAliasPrefixHost:
+		return "host"
+	default:
+		return ""
+	}
 }
 
 func skillAliasRoots(entries []skillprovider.CatalogEntry) []string {
@@ -1121,6 +1404,24 @@ func skillsToolInputSchema(name string) map[string]any {
 	}
 	properties := map[string]any{"authority": authoritySelector, "cursor": map[string]any{"type": "string"}}
 	required := []string{"authority"}
+	if name == skillsToolInstallationsName {
+		properties = map[string]any{
+			"package": map[string]any{"type": "string"},
+			"source": map[string]any{
+				"oneOf": []any{
+					map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"kind": map[string]any{"const": "cloud"}}, "required": []string{"kind"}},
+					map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"kind": map[string]any{"const": "executor"}, "environment_id": map[string]any{"type": "string"}}, "required": []string{"kind", "environment_id"}},
+				},
+			},
+			"cursor": map[string]any{"type": "string"},
+		}
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties":           properties,
+			"required":             []string{"package"},
+		}
+	}
 	if name == skillsToolReadName {
 		properties["authority"] = map[string]any{
 			"oneOf": []any{
@@ -1130,7 +1431,13 @@ func skillsToolInputSchema(name string) map[string]any {
 		}
 		properties["package"] = map[string]any{"type": "string"}
 		properties["resource"] = map[string]any{"type": "string"}
-		required = append(required, "package")
+		properties["source"] = map[string]any{
+			"oneOf": []any{
+				map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"kind": map[string]any{"const": "cloud"}}, "required": []string{"kind"}},
+				map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"kind": map[string]any{"const": "executor"}, "environment_id": map[string]any{"type": "string"}}, "required": []string{"kind", "environment_id"}},
+			},
+		}
+		required = []string{"package"}
 	}
 	return map[string]any{
 		"type":                 "object",

@@ -1050,6 +1050,87 @@ func TestV3BatchesCodexOutputRoutesBEMAndFlushesTranscriptTail(t *testing.T) {
 	}
 }
 
+func TestV3BackendReasoningStatusAppendsQuietCommentary(t *testing.T) {
+	const threadID = "thread-v3-status"
+	outbound := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(response, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		if _, _, err := conn.Read(request.Context()); err != nil {
+			return
+		}
+		for _, payload := range []string{
+			`{"type":"session.started","session":{"id":"sess-status"}}`,
+			`{"type":"delegation.created","item":{"type":"delegation","target":"client","id":"delegation-status","content":[]}}`,
+		} {
+			if err := conn.Write(request.Context(), websocket.MessageText, []byte(payload)); err != nil {
+				return
+			}
+		}
+		for {
+			_, payload, err := conn.Read(request.Context())
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err == nil {
+				outbound <- message
+			}
+		}
+	}))
+	defer server.Close()
+
+	manager := NewManager()
+	manager.SetTransportBackend(&TransportBackendConfig{WebsocketBaseURL: server.URL})
+	events := make(chan Event, 8)
+	manager.SetEventSink(func(_ string, event Event) { events <- event })
+	version := VersionV3
+	if _, _, err := manager.Start(&StartParams{
+		ThreadID:               threadID,
+		OutputModality:         OutputAudio,
+		Version:                &version,
+		BackendReasoningStatus: true,
+	}); err != nil {
+		t.Fatalf("start V3 realtime: %v", err)
+	}
+	waitRealtimeEvent(t, events, func(event Event) bool {
+		return event.Type == "handoff.requested" && event.HandoffID == "delegation-status"
+	})
+	summary := strings.Repeat("\u00e9", 200)
+	if err := manager.SendReasoningStatus(threadID, summary); err != nil {
+		t.Fatalf("SendReasoningStatus: %v", err)
+	}
+	message := waitRealtimeOutbound(t, outbound)
+	assertV3ContextAppend(t, message, "delegation-status", "[STATUS] "+takeFirstUTF8Bytes(summary, 256), "commentary")
+	if content := message["content"].([]any)[0].(map[string]any); len(content["text"].(string)) > 256+len("[STATUS] ") {
+		t.Fatalf("status text was not bounded: %d bytes", len(content["text"].(string)))
+	}
+}
+
+func TestStartParamsBackendReasoningStatusDefaultsFalseAndRoundTrips(t *testing.T) {
+	raw, err := json.Marshal(StartParams{ThreadID: "thread", OutputModality: OutputAudio})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "backendReasoningStatus") {
+		t.Fatalf("false status was serialized: %s", raw)
+	}
+	raw, err = json.Marshal(StartParams{ThreadID: "thread", OutputModality: OutputAudio, BackendReasoningStatus: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded StartParams
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.BackendReasoningStatus {
+		t.Fatalf("status did not round-trip: %s", raw)
+	}
+}
+
 // Rust #40321: frameless V3 sessions default to gpt-live-1-codex while an
 // explicit per-session model still wins.
 func TestStartParamsNormalizedFramelessRealtimeModelLikeRust(t *testing.T) {

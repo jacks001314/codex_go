@@ -16,7 +16,7 @@ var (
 	ErrEmptyMetricName          = errors.New("metric name must not be empty")
 	ErrInvalidMetricName        = errors.New("metric name must contain only alphanumeric characters, '.', '_' or '-'")
 	ErrEmptyMetricTag           = errors.New("metric tag component must not be empty")
-	ErrInvalidMetricTag         = errors.New("metric tag component must contain only alphanumeric characters, '.', '_', '-' or '/'")
+	ErrInvalidMetricTag         = errors.New("metric tag component must contain only alphanumeric characters, '.', '_', '-', '/' or '+'")
 	ErrNegativeCounterIncrement = errors.New("metric counter increment must not be negative")
 )
 
@@ -153,7 +153,7 @@ func validateMetricTagComponent(value string) error {
 		return ErrEmptyMetricTag
 	}
 	for _, character := range value {
-		if isASCIIAlphanumeric(character) || character == '.' || character == '_' || character == '-' || character == '/' {
+		if isASCIIAlphanumeric(character) || character == '.' || character == '_' || character == '-' || character == '/' || character == '+' {
 			continue
 		}
 		return ErrInvalidMetricTag
@@ -193,7 +193,7 @@ func mergeMetricTags(defaults map[string]string, tags map[string]string) ([]Metr
 }
 
 func isMetricTagRune(character rune) bool {
-	return isASCIIAlphanumeric(character) || character == '.' || character == '_' || character == '-' || character == '/'
+	return isASCIIAlphanumeric(character) || character == '.' || character == '_' || character == '-' || character == '/' || character == '+'
 }
 
 func isASCIIAlphanumeric(character rune) bool {

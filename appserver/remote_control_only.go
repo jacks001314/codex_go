@@ -15,6 +15,10 @@ type RemoteControlOnlyOptions struct {
 	StoreRoot      string
 	RuntimeOptions *RuntimeRouterOptions
 	LoopOptions    *remotecontrol.RemoteControlWebsocketLoopOptions
+	// Ready, when set, runs after the state runtime and router are initialized
+	// and immediately before the remote-control loop starts serving. Tests use
+	// it to cancel a live server without racing startup migrations.
+	Ready func()
 }
 
 func ServeRemoteControlOnly(ctx context.Context, options *RemoteControlOnlyOptions) error {
@@ -56,6 +60,9 @@ func ServeRemoteControlOnly(ctx context.Context, options *RemoteControlOnlyOptio
 	// change wakes the loop to reconnect with the new owner's credentials.
 	loopOptions := remoteControlOnlyLoopOptions(options.LoopOptions, router.remoteControlAuthRevision)
 	loop := remotecontrol.NewRemoteControlWebsocketLoop(manager, loopOptions)
+	if options.Ready != nil {
+		options.Ready()
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

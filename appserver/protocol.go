@@ -36,6 +36,8 @@ const (
 	MethodThreadSetName                      Method = "thread/setName"
 	MethodThreadNameSet                      Method = "thread/name/set"
 	MethodThreadPredictionRequest            Method = "thread/prediction/request"
+	MethodThreadSample                       Method = "thread/sample"
+	MethodThreadSampleCancel                 Method = "thread/sample/cancel"
 	MethodThreadGoalSet                      Method = "thread/goal/set"
 	MethodThreadGoalGet                      Method = "thread/goal/get"
 	MethodThreadGoalClear                    Method = "thread/goal/clear"
@@ -998,6 +1000,107 @@ type ThreadItem struct {
 	ResponseID string              `json:"responseId,omitempty"`
 }
 
+// UnmarshalJSON accepts the polymorphic content field emitted by Rust. User
+// and agent messages carry structured content items, while reasoning items
+// carry an array of strings.
+func (i *ThreadItem) UnmarshalJSON(data []byte) error {
+	if i == nil {
+		return errors.New("cannot unmarshal thread item into nil pointer")
+	}
+	var wire struct {
+		ID         string          `json:"id"`
+		Type       string          `json:"type"`
+		Role       string          `json:"role,omitempty"`
+		Text       string          `json:"text,omitempty"`
+		Name       string          `json:"name,omitempty"`
+		Namespace  string          `json:"namespace,omitempty"`
+		CallID     string          `json:"callId,omitempty"`
+		Status     string          `json:"status,omitempty"`
+		TurnID     string          `json:"turnId,omitempty"`
+		CreatedAt  int64           `json:"createdAt"`
+		Delivery   string          `json:"delivery,omitempty"`
+		Content    json.RawMessage `json:"content,omitempty"`
+		Data       map[string]any  `json:"data,omitempty"`
+		Raw        json.RawMessage `json:"raw,omitempty"`
+		ResponseID string          `json:"responseId,omitempty"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*i = ThreadItem{
+		ID:         wire.ID,
+		Type:       wire.Type,
+		Role:       wire.Role,
+		Text:       wire.Text,
+		Name:       wire.Name,
+		Namespace:  wire.Namespace,
+		CallID:     wire.CallID,
+		Status:     wire.Status,
+		TurnID:     wire.TurnID,
+		CreatedAt:  wire.CreatedAt,
+		Delivery:   wire.Delivery,
+		Data:       wire.Data,
+		Raw:        append(json.RawMessage(nil), wire.Raw...),
+		ResponseID: wire.ResponseID,
+	}
+	if len(wire.Content) > 0 && !bytes.Equal(bytes.TrimSpace(wire.Content), []byte("null")) {
+		var rawContents []json.RawMessage
+		if err := json.Unmarshal(wire.Content, &rawContents); err == nil {
+			contents := make([]ThreadItemContent, 0, len(rawContents))
+			structured := true
+			for _, rawContent := range rawContents {
+				var content ThreadItemContent
+				if err := json.Unmarshal(rawContent, &content); err != nil {
+					structured = false
+					break
+				}
+				contents = append(contents, content)
+			}
+			if structured {
+				i.Content = contents
+			}
+		}
+
+		var genericContent any
+		if err := json.Unmarshal(wire.Content, &genericContent); err != nil {
+			return fmt.Errorf("decode thread item content: %w", err)
+		}
+		if i.Data == nil {
+			i.Data = map[string]any{}
+		}
+		i.Data["content"] = genericContent
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for key, raw := range fields {
+		if threadItemStructuralJSONField(key) {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return fmt.Errorf("decode thread item field %s: %w", key, err)
+		}
+		if i.Data == nil {
+			i.Data = map[string]any{}
+		}
+		i.Data[key] = value
+	}
+	return nil
+}
+
+func threadItemStructuralJSONField(key string) bool {
+	switch key {
+	case "id", "type", "role", "text", "name", "namespace", "callId", "status",
+		"turnId", "createdAt", "delivery", "content", "data", "raw", "responseId":
+		return true
+	default:
+		return false
+	}
+}
+
 type fileChangeUpdate struct {
 	Path string             `json:"path"`
 	Kind fileChangeKindWire `json:"kind"`
@@ -1487,6 +1590,9 @@ func (p *ThreadStartParams) Validate() error {
 	if err := validateThreadRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
 	}
+	if _, _, err := threadUnloadDelayFromConfig(p.Config); err != nil {
+		return jsonRPCInvalidRequest(err.Error())
+	}
 	tools, err := normalizeThreadStartDynamicTools(p.DynamicTools)
 	if err != nil {
 		return err
@@ -1782,6 +1888,9 @@ func (p *ThreadResumeParams) Validate() error {
 	if err := validateThreadRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
 	}
+	if _, _, err := threadUnloadDelayFromConfig(p.Config); err != nil {
+		return jsonRPCInvalidRequest(err.Error())
+	}
 	return nil
 }
 
@@ -2059,6 +2168,9 @@ func (p *ThreadForkParams) Validate() error {
 	if err := validateThreadRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
 	}
+	if _, _, err := threadUnloadDelayFromConfig(p.Config); err != nil {
+		return jsonRPCInvalidRequest(err.Error())
+	}
 	return nil
 }
 
@@ -2068,6 +2180,13 @@ func (p *ThreadForkParams) Validate() error {
 func (p *ThreadForkParams) predictionModeHasConfigOverrides() bool {
 	if p == nil {
 		return false
+	}
+	hasConfig := false
+	for key := range p.Config {
+		if key != "thread_unload_delay_secs" {
+			hasConfig = true
+			break
+		}
 	}
 	return p.Model != nil ||
 		p.ModelProvider != nil ||
@@ -2080,7 +2199,7 @@ func (p *ThreadForkParams) predictionModeHasConfigOverrides() bool {
 		p.Permissions != nil ||
 		p.BaseInstructions != nil ||
 		p.DeveloperInstructions != nil ||
-		len(p.Config) > 0
+		hasConfig
 }
 
 type ThreadForkResponse struct {

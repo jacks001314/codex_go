@@ -90,12 +90,7 @@ func TestInteractiveRemoteEndpointIsLocalRequiresVerifiedDefaultDaemonSocket(t *
 	if interactiveRemoteEndpointIsLocal(appserverdaemon.NewUnixSocketEndpoint(defaultSocket)) {
 		t.Fatal("the default socket needs a private directory before it is local")
 	}
-	if err := os.MkdirAll(filepath.Dir(defaultSocket), 0o700); err != nil {
-		t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(defaultSocket), err)
-	}
-	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(defaultSocket)); err != nil {
-		t.Fatalf("PreparePrivateSocketDirectory() error = %v", err)
-	}
+	prepareTestPrivateSocketDir(t, filepath.Dir(defaultSocket))
 	if _, verified := appserver.VerifiedLocalDaemonSocket(defaultSocket); !verified {
 		t.Fatalf("VerifiedLocalDaemonSocket(%q) is unverified after preparing the socket directory", defaultSocket)
 	}
@@ -138,12 +133,7 @@ func TestInteractiveExplicitDefaultDaemonSocketRequiresPresenceLikeRust(t *testi
 
 	// The presence probe is a real filesystem check that also works for a bound
 	// AF_UNIX socket on this platform.
-	if err := os.MkdirAll(filepath.Dir(defaultSocket), 0o700); err != nil {
-		t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(defaultSocket), err)
-	}
-	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(defaultSocket)); err != nil {
-		t.Fatalf("PreparePrivateSocketDirectory() error = %v", err)
-	}
+	prepareTestPrivateSocketDir(t, filepath.Dir(defaultSocket))
 	listener, listenErr := net.Listen("unix", defaultSocket)
 	if listenErr != nil {
 		t.Fatalf("net.Listen(unix, %q) error = %v", defaultSocket, listenErr)
@@ -204,12 +194,7 @@ func TestExplicitAttachmentNeverFallsBackToEmbeddedLikeRust(t *testing.T) {
 	}
 
 	defaultSocket := defaultLocalDaemonSocketPath()
-	if err := os.MkdirAll(filepath.Dir(defaultSocket), 0o700); err != nil {
-		t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(defaultSocket), err)
-	}
-	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(defaultSocket)); err != nil {
-		t.Fatalf("PreparePrivateSocketDirectory() error = %v", err)
-	}
+	prepareTestPrivateSocketDir(t, filepath.Dir(defaultSocket))
 	listener, listenErr := net.Listen("unix", defaultSocket)
 	if listenErr != nil {
 		t.Fatalf("net.Listen(unix, %q) error = %v", defaultSocket, listenErr)
@@ -236,5 +221,20 @@ func TestExplicitAttachmentNeverFallsBackToEmbeddedLikeRust(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "interactive remote app-server TUI requires a real terminal") {
 		t.Fatalf("implicit launch error = %v, want the remote app-server path", err)
+	}
+}
+
+// prepareTestPrivateSocketDir creates the rendezvous directory the way the
+// daemon does. Windows cannot rely on os.MkdirAll's mode bits, so the private
+// DACL must be applied at creation time.
+func prepareTestPrivateSocketDir(t *testing.T, directory string) {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", directory, err)
+		}
+	}
+	if err := codexuds.PreparePrivateSocketDirectory(directory); err != nil {
+		t.Fatalf("PreparePrivateSocketDirectory(%s) error = %v", directory, err)
 	}
 }

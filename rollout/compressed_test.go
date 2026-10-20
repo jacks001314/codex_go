@@ -3,9 +3,11 @@ package rollout
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +87,36 @@ func TestCompressedProjectionUsesJSONLByteOffsetsAndReferenceMaterializesPlain(t
 	info, err := os.Stat(plain)
 	if err != nil || !info.ModTime().Equal(wantModified) {
 		t.Fatalf("materialized modified time = %v, %v", info.ModTime(), err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+		t.Fatalf("materialized mode = %v, want 0640", info.Mode().Perm())
+	}
+}
+
+func TestStaleRolloutTempCleanupIgnoresManagedMaterializeTemps(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, SessionsSubdir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	managed := filepath.Join(home, SessionsSubdir, ".rollout-materialize-current")
+	stale := filepath.Join(home, SessionsSubdir, "rollout-compress-stale.tmp")
+	for _, path := range []string{managed, stale} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-runMarkerStaleAfter - time.Minute)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if cleanupErrors := cleanStaleRolloutTemps(home, RolloutCompressionTriggerRPC); cleanupErrors {
+		t.Fatal("unexpected cleanup error")
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed materialization temp was removed: %v", err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale compression temp still exists: %v", err)
 	}
 }
 

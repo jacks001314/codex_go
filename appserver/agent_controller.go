@@ -40,8 +40,12 @@ type runtimeAgentController struct {
 	maxDepth           int
 	version            agent.MultiAgentVersion
 	environments       []map[string]any
-	disabledPluginIDs  []string
-	registry           *agent.Registry
+	// inheritConfiguredThreadEnvironments gates Rust #55375: when enabled,
+	// children inherit only configured thread environments, not temporary
+	// turn-only attachments.
+	inheritConfiguredThreadEnvironments bool
+	disabledPluginIDs                   []string
+	registry                            *agent.Registry
 }
 
 func newRuntimeAgentController(router *RuntimeRouter, parentID string, cwd string, maxThreads int) agent.ToolController {
@@ -68,22 +72,29 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 			depth = record.Metadata.AgentDepth
 		}
 	}
+	inheritConfiguredEnvironments := false
+	if router != nil {
+		if cfg, err := router.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: parentID, CWD: cwd}); err == nil && cfg != nil {
+			inheritConfiguredEnvironments = features.Enabled(cfg.FeatureSettings(), "subagent_thread_environments")
+		}
+	}
 	return &runtimeAgentController{
-		router:             router,
-		parentID:           strings.TrimSpace(parentID),
-		parentTurnID:       strings.TrimSpace(parentTurnID),
-		rootTurnID:         strings.TrimSpace(rootTurnID),
-		turnTrigger:        strings.TrimSpace(turnTrigger),
-		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
-		rootID:             rootID,
-		scopePath:          scopePath,
-		cwd:                strings.TrimSpace(cwd),
-		maxThreads:         maxThreads,
-		depth:              depth,
-		maxDepth:           config.DefaultAgentMaxDepth,
-		version:            version,
-		environments:       cloneMapSlice(environments),
-		registry:           registry,
+		router:                              router,
+		parentID:                            strings.TrimSpace(parentID),
+		parentTurnID:                        strings.TrimSpace(parentTurnID),
+		rootTurnID:                          strings.TrimSpace(rootTurnID),
+		turnTrigger:                         strings.TrimSpace(turnTrigger),
+		cyberAccessProgram:                  strings.TrimSpace(cyberAccessProgram),
+		rootID:                              rootID,
+		scopePath:                           scopePath,
+		cwd:                                 strings.TrimSpace(cwd),
+		maxThreads:                          maxThreads,
+		depth:                               depth,
+		maxDepth:                            config.DefaultAgentMaxDepth,
+		version:                             version,
+		environments:                        cloneMapSlice(environments),
+		inheritConfiguredThreadEnvironments: inheritConfiguredEnvironments,
+		registry:                            registry,
 	}
 }
 
@@ -172,7 +183,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	// Rust #49075 `TurnEnvironmentSnapshot::inheritable_selections`: the child
 	// keeps the spawning step's ready and still-starting attachments and drops a
 	// failed one instead of inheriting it verbatim.
-	inheritedEnvironments := inheritableEnvironmentSelections(c.environments)
+	inheritedEnvironments := inheritableEnvironmentSelections(c.environments, c.inheritConfiguredThreadEnvironments)
 	extra := map[string]any{}
 	if len(inheritedEnvironments) > 0 {
 		extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(inheritedEnvironments)

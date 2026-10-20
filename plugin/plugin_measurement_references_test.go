@@ -222,4 +222,12 @@ func TestMeasurementCacheReportsSanitizedPreparationFailureLikeRust(t *testing.T
 	if err.Error() != "plugin measurement catalog lookup failed" {
 		t.Fatalf("error = %q", err.Error())
 	}
+	// A completed failure is not cached as a permanent result: a new caller
+	// retries the authenticated lookup.
+	if reference, err := cache.Prepare(context.Background(), PluginMeasurementIdentity{AuthIdentity: "a"}, fetcher, PluginMeasurementTarget{PluginName: "demo", Version: "1.0.0"}); reference != nil || err == nil {
+		t.Fatalf("retry Prepare() = %#v, %v", reference, err)
+	}
+	if fetcher.calls.Load() != 2 {
+		t.Fatalf("fetches = %d, want 2", fetcher.calls.Load())
+	}
 }

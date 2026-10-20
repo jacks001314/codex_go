@@ -476,19 +476,23 @@ func TestIncrementalToolCatalogWindowReplacementLikeRust(t *testing.T) {
 }
 
 // TestIncrementalToolsEnabledForTurnLikeRust checks the gate of Rust
-// `StepContext::incremental_tools_enabled`: Responses Lite plus the opt-in
-// feature.
+// `StepContext::incremental_tools_enabled`: Responses Lite plus the stable,
+// default-on feature.
 func TestIncrementalToolsEnabledForTurnLikeRust(t *testing.T) {
 	enabled := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools": true}}}
 	disabled := &config.Config{Values: map[string]any{}}
+	explicitlyDisabled := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools": false}}}
 	lite := &model.ModelInfo{UseResponsesLite: true}
 	full := &model.ModelInfo{UseResponsesLite: false}
 
 	if !incrementalToolsEnabledForTurn(enabled, lite) {
 		t.Fatal("lite + feature must enable incremental tools")
 	}
-	if incrementalToolsEnabledForTurn(disabled, lite) {
-		t.Fatal("lite without the feature must stay legacy")
+	if !incrementalToolsEnabledForTurn(disabled, lite) {
+		t.Fatal("lite must enable incremental tools by default")
+	}
+	if incrementalToolsEnabledForTurn(explicitlyDisabled, lite) {
+		t.Fatal("an explicit disable must keep legacy tool declarations")
 	}
 	if incrementalToolsEnabledForTurn(enabled, full) {
 		t.Fatal("non-lite models never use incremental tools")

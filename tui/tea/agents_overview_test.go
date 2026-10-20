@@ -54,7 +54,7 @@ func TestModelAgentsCommandOpensDashboardAndLoads(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	output := utils.StripANSI(model.View())
-	for _, want := range []string{"Agent command center", "alpha", "beta", "gamma", "All 3", "Needs you 1", "x stop"} {
+	for _, want := range []string{"Agent command center", "alpha", "beta", "gamma", "All 3", "Needs you 1", "? help"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("dashboard view missing %q:\n%s", want, output)
 		}
@@ -94,6 +94,35 @@ func TestModelAgentsStatusFilterTabsLikeRust(t *testing.T) {
 	model.Update(key(bubbletea.KeyTab))
 	if got := model.agentsOverview.State.StatusFilter; got != agentsoverview.StatusFilterAll {
 		t.Fatalf("search changed the status filter: %d", got)
+	}
+}
+
+func TestModelAgentsHelpReferenceLikeRust(t *testing.T) {
+	model := NewModel(nil, Options{
+		Width:  120,
+		Height: 30,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+	})
+	openAgentsDashboard(t, model)
+	model.Update(agentsKeyEvent('?'))
+	if !model.agentsOverview.State.Help {
+		t.Fatal("? did not open the shortcut help")
+	}
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Task shortcuts") {
+		t.Fatalf("help view missing heading:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyEsc))
+	if model.agentsOverview.State.Help {
+		t.Fatal("Escape did not close help")
+	}
+
+	// Backspace edits search instead of triggering the task-delete shortcut.
+	model.Update(agentsF3Event())
+	model.Update(key(bubbletea.KeyBackspace))
+	if !model.agentsOverview.State.Searching {
+		t.Fatal("backspace closed search")
 	}
 }
 

@@ -253,6 +253,14 @@ type RuntimeRouter struct {
 	config                *config.ConfigService
 	stateDBRecoveryNotice *config.ConfigWarningNotification
 	threads               *ThreadManager
+	// idleLifecycle evicts unsubscribed, idle persistent v2 children after the
+	// configured delay while keeping ephemeral children and running threads
+	// resident (Rust #52081/#52034).
+	idleLifecycle threadIdleLifecycle
+	// threadUnloadDelays holds runtime-only per-thread retention overrides
+	// (Rust #55270). They are not persisted, so a cold resume uses the default.
+	threadUnloadDelayMu   sync.Mutex
+	threadUnloadDelays    map[string]time.Duration
 	servicesMu            sync.Mutex
 	mu                    sync.RWMutex
 	configWarningsMu      sync.Mutex
@@ -343,6 +351,9 @@ type RuntimeRouter struct {
 	// otelReloadStop ends the account-change provider reloader at close.
 	otelReloadMu   sync.Mutex
 	otelReloadStop chan struct{}
+	// otelReloadWake coalesces auth changes without losing a change that races
+	// reloader startup.
+	otelReloadWake chan struct{}
 	// requestTransport is the transport name the request span reports; the
 	// stdio, unix-socket, and websocket servers install their own name and an
 	// in-process router keeps the "in-process" default.
@@ -403,6 +414,10 @@ type RuntimeRouter struct {
 	contextWindowMu       sync.Mutex
 	contextWindowIDs      map[string]string
 	windowNumbers         map[string]uint64
+	// threadSampleCancels tracks in-flight thread/sample requests by connection
+	// and JSON-RPC request id so thread/sample/cancel can stop only that sample.
+	threadSampleMu      sync.Mutex
+	threadSampleCancels map[string]context.CancelFunc
 	// restoredWindows records the threads whose persisted window state was
 	// already loaded from their record (Rust restores the compacted item's
 	// window_number/window_ids when a thread resumes).
@@ -838,6 +853,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	}
 	router.captureStartupModelProviderRoute()
 	router.configureOAuthStorageTelemetry()
+	threads.SetThreadRetainedHook(router.scheduleThreadIdleUnload)
 	return router
 }
 
@@ -994,6 +1010,15 @@ func (r *RuntimeRouter) noteAuthChanged() {
 		// content clients and permits granted to the previous account stop
 		// working, while the separate local bootstrap policy stays usable.
 		r.invalidateApplicationNetworkPolicy()
+	}
+	r.otelReloadMu.Lock()
+	reloadWake := r.otelReloadWake
+	r.otelReloadMu.Unlock()
+	if reloadWake != nil {
+		select {
+		case reloadWake <- struct{}{}:
+		default:
+		}
 	}
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateAll()
@@ -1849,14 +1874,18 @@ func (r *RuntimeRouter) startOtelReloader(codexHome string, options *RuntimeRout
 	}
 	stop := make(chan struct{})
 	r.otelReloadStop = stop
+	wake := r.otelReloadWake
+	if wake == nil {
+		wake = make(chan struct{}, 1)
+		r.otelReloadWake = wake
+	}
 	r.otelReloadMu.Unlock()
 	go func() {
 		for {
-			changed := r.authChangeChannel()
 			select {
 			case <-stop:
 				return
-			case <-changed:
+			case <-wake:
 			}
 			// Account handlers install the new cloud loader after publishing
 			// auth changes.
@@ -2230,6 +2259,7 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	r.clearConnectionRequestAttestation(connectionID)
 	r.clearConnectionMCPOpenAIForm(connectionID)
 	r.clearConnectionMCPStandardFormInput(connectionID)
+	r.cancelThreadSamplesForConnection(connectionID)
 	if r.mcpEventStreams != nil {
 		r.mcpEventStreams.stopConnection(connectionID)
 	}
@@ -2260,6 +2290,7 @@ func (r *RuntimeRouter) Close() error {
 }
 
 func (r *RuntimeRouter) close() error {
+	r.stopThreadIdleLifecycle()
 	r.modelsRefreshWorker.shutdown()
 	// A managed daemon's recovery snapshot must be taken while its turns are
 	// still live: BeginShutdown below cancels them, and the interrupted turns
@@ -2873,6 +2904,8 @@ func experimentalAPIMethod(method Method) bool {
 		MethodProjectUpdate,
 		MethodThreadItemsRead,
 		MethodThreadPredictionRequest,
+		MethodThreadSample,
+		MethodThreadSampleCancel,
 		MethodThreadQueueAdd,
 		MethodThreadQueueDelete,
 		MethodThreadQueueList,
@@ -2981,7 +3014,12 @@ func rawParam(request *Request, key string) (json.RawMessage, bool) {
 	return value, ok
 }
 
-func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
+func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
+	defer func() {
+		if err == nil {
+			r.applyThreadUnloadDelayFromRequest(request, result)
+		}
+	}()
 	if r == nil {
 		return nil, fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 	}
@@ -2990,6 +3028,18 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	}
 	if err := r.rejectExperimentalAPIDisabled(request); err != nil {
 		return nil, err
+	}
+	if threadLifecycleSensitiveMethod(request.Method) {
+		if threadID := threadLifecycleRequestThreadID(request); threadID != "" {
+			if err := r.awaitPendingThreadUnload(threadID); err != nil {
+				return nil, err
+			}
+			r.noteThreadActivity(threadID)
+			if request.Method == MethodTurnStart {
+				release := r.pinThreadResidency(threadID)
+				defer release()
+			}
+		}
 	}
 	if err := r.rejectRemoteControlDisabledByRequirements(request); err != nil {
 		return nil, err
@@ -3021,6 +3071,12 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 				return nil, err
 			}
 			return r.handleThreadApproveGuardianDeniedActionRuntime(request)
+		}
+		if request.Method == MethodThreadSample {
+			return r.handleThreadSampleRuntime(request)
+		}
+		if request.Method == MethodThreadSampleCancel {
+			return r.handleThreadSampleCancelRuntime(request)
 		}
 		if request.Method == MethodThreadInjectItems {
 			if err := r.rejectNotLoadedThreadRuntimeRequest(request); err != nil {
@@ -6168,6 +6224,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	// Rust ends a session's `session_loop` span when the submission loop
 	// terminates; Go's thread unload is the same lifecycle point.
 	r.endThreadSessionSpan(threadID)
+	r.setThreadUnloadDelayOverride(threadID, 0, false)
 	r.requireThreadStatus().RemoveThread(threadID)
 	r.clearThreadSubscriptions(threadID)
 	r.skillWarningsMu.Lock()
@@ -6220,6 +6277,7 @@ func (r *RuntimeRouter) subscribeThreadConnection(threadID string, connectionID 
 	if threadID == "" {
 		return
 	}
+	r.noteThreadActivity(threadID)
 	r.threads.Subscribe(threadID, connectionID)
 }
 
@@ -6260,14 +6318,22 @@ func (r *RuntimeRouter) unsubscribeThreadConnection(threadID string, connectionI
 	if threadID == "" {
 		return false
 	}
-	return r.threads.Unsubscribe(threadID, connectionID)
+	removed := r.threads.Unsubscribe(threadID, connectionID)
+	if removed {
+		r.scheduleThreadIdleUnload(threadID)
+	}
+	return removed
 }
 
 func (r *RuntimeRouter) clearConnectionSubscriptions(connectionID string) {
 	if r == nil {
 		return
 	}
+	threadIDs := r.threads.ThreadsForConnection(connectionID)
 	r.threads.ClearConnection(connectionID)
+	for _, threadID := range threadIDs {
+		r.scheduleThreadIdleUnload(threadID)
+	}
 }
 
 func (r *RuntimeRouter) clearThreadSubscriptions(threadID string) {
@@ -6279,6 +6345,7 @@ func (r *RuntimeRouter) clearThreadSubscriptions(threadID string) {
 		return
 	}
 	r.threads.ClearThread(threadID)
+	r.scheduleThreadIdleUnload(threadID)
 }
 
 func (r *RuntimeRouter) notifyRestoredTokenUsage(result any) {
@@ -11593,12 +11660,29 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	if r != nil {
 		base.HTTPClient = r.httpClientForConfig(&config.Config{Values: values})
 	}
+	r.attachEnterpriseMCPAuthorization(base, codexHome, runtimeAuth)
 	if r == nil || r.services.Plugins == nil {
 		return base
 	}
-	contributions := r.filterDisabledPluginMCPContributions(
+	var contributions []plugin.MCPServerContribution
+	v2Supplied := false
+	if snapshot := r.activeStepCapabilitySnapshot(threadID); snapshot != nil {
+		if executorCatalog := snapshot.executorPluginCatalog(); executorCatalog != nil {
+			// Rust #55301: a supplied V2 inventory (including a complete empty
+			// one) replaces legacy plugin contribution discovery. Merge cloud
+			// metadata by canonical identity and preserve executor-local plugins.
+			v2Supplied = true
+			policy := plugin.PluginsConfigTomlFromValues(values)
+			merged := plugin.MergePluginCatalogs(executorCatalog, r.services.Plugins.CloudPluginCatalog())
+			contributions = merged.MCPServerContributions(policy.Plugins)
+		}
+	}
+	if !v2Supplied {
+		contributions = r.services.Plugins.EnabledMCPServerContributions()
+	}
+	contributions = r.filterDisabledPluginMCPContributions(
 		threadID,
-		r.filterRetiredPluginEMAAuthContributions(values, r.services.Plugins.EnabledMCPServerContributions()),
+		r.filterRetiredPluginEMAAuthContributions(values, contributions),
 	)
 	overlays := make([]mcp.ConfigOverlay, 0, len(contributions))
 	for _, contribution := range contributions {
@@ -11628,7 +11712,31 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	if len(overlays) == 0 {
 		return base
 	}
-	return mcp.NewManager(nil).RuntimeConfig(*base, overlays)
+	merged := mcp.NewManager(nil).RuntimeConfig(*base, overlays)
+	r.attachEnterpriseMCPAuthorization(merged, codexHome, runtimeAuth)
+	return merged
+}
+
+func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeConfig, codexHome string, runtimeAuth *mcp.RuntimeAuth) {
+	if runtime == nil {
+		return
+	}
+	mcp.AttachEnterpriseMCPAuthorization(runtime, codexHome, runtimeAuth, r.currentEMAAuthScope)
+}
+
+func (r *RuntimeRouter) currentEMAAuthScope() (mcp.EMAAuthScope, bool) {
+	if r == nil || r.services.Account == nil {
+		return mcp.EMAAuthScope{}, false
+	}
+	snapshot := r.services.Account.AuthSnapshot()
+	if snapshot == nil {
+		return mcp.EMAAuthScope{}, false
+	}
+	scope := mcp.EMAAuthScope{
+		UserID:      auth.ChatGPTUserIDFromAuth(snapshot),
+		WorkspaceID: auth.AccountIDFromAuthForRestrictions(snapshot),
+	}
+	return scope, scope.UserID != "" && scope.WorkspaceID != ""
 }
 
 // filterRetiredPluginEMAAuthContributions drops plugin MCP declarations for
@@ -12279,6 +12387,15 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 			return nil, err
 		}
 	}
+	if params.Type == auth.AccountAmazonBedrock {
+		if err := r.ensureUserModelProviderCanBeBedrock(); err != nil {
+			return nil, err
+		}
+		region := strings.TrimSpace(params.Region)
+		if err := r.configureBedrockProvider(&region, nil); err != nil {
+			return nil, err
+		}
+	}
 	response, err := r.requireAccount().Login(&params)
 	if err != nil {
 		return nil, err
@@ -12359,7 +12476,7 @@ func (r *RuntimeRouter) validateLoginAccountParams(params *auth.LoginAccountPara
 	}
 	cfg := config.Config{Values: read.Config}
 	switch params.Type {
-	case auth.AccountAPIKey:
+	case auth.AccountAPIKey, auth.AccountAmazonBedrock:
 		if r.externalChatGPTAuthActive() {
 			return fmt.Errorf(externalChatGPTAuthActiveMessage)
 		}
@@ -12405,6 +12522,9 @@ func authSnapshotFromLoginParams(params *auth.LoginAccountParams) *auth.AuthDotJ
 	switch params.Type {
 	case auth.AccountAPIKey:
 		snapshot := auth.FromAPIKey(params.APIKey)
+		return &snapshot
+	case auth.AccountAmazonBedrock:
+		snapshot := auth.FromBedrockAPIKey(params.APIKey, params.Region)
 		return &snapshot
 	case "chatgptAuthTokens":
 		snapshot := auth.FromChatGPTAuthTokens(params.AccessToken, params.ChatGPTAccountID, params.ChatGPTPlanType)
@@ -15484,6 +15604,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	orchestratorSkillsEnabled := cfg == nil || cfg.OrchestratorSkillsEnabled()
 	options.OrchestratorSkillsEnabled = &orchestratorSkillsEnabled
 	options.SkillProviders = executorSkillProviders
+	options.DiscoveryV2Skills = stepCapabilities != nil && stepCapabilities.executorCapabilityDiscoveryV2Enabled()
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
 	// Rust #46035: the tool exposure policy combines a Codex Apps connector's
@@ -18610,6 +18731,8 @@ func isThreadMethod(method Method) bool {
 		MethodThreadAttachmentOwnerList,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
 		MethodThreadTurnsList, MethodThreadRevert,
+		MethodThreadSample,
+		MethodThreadSampleCancel,
 		MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate,
 		MethodThreadQueueDelete, MethodThreadQueueReorder, MethodThreadQueueStart,
 		MethodThreadInjectItems:

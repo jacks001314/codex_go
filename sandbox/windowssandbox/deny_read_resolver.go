@@ -4,12 +4,19 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	coresandbox "codex_go/sandbox"
+	"codex_go/sandbox/sandboxpath"
 )
+
+// GlobScanProgram is the external deny-glob scanner inventoried by sandbox
+// integrity checks (Rust #51831).
+const GlobScanProgram = "rg"
 
 type DenyReadPolicy struct {
 	Paths            []string
@@ -48,6 +55,27 @@ func ResolveWindowsDenyReadPaths(paths []string) []string {
 }
 
 func ResolveWindowsDenyReadPolicyPaths(policy DenyReadPolicy, cwd string) ([]string, error) {
+	return resolveWindowsDenyReadPolicyPaths(policy, cwd, nil, "")
+}
+
+// ResolveWindowsDenyReadPathsInEnvironment resolves deny paths with the
+// launcher's scanner in an explicit command environment. The supplied
+// environment replaces inheritance, including when it is empty.
+func ResolveWindowsDenyReadPathsInEnvironment(
+	policy DenyReadPolicy,
+	cwd string,
+	env map[string]string,
+	commandCWD string,
+) ([]string, error) {
+	return resolveWindowsDenyReadPolicyPaths(policy, cwd, env, commandCWD)
+}
+
+func resolveWindowsDenyReadPolicyPaths(
+	policy DenyReadPolicy,
+	cwd string,
+	env map[string]string,
+	commandCWD string,
+) ([]string, error) {
 	var paths []string
 	seen := map[string]bool{}
 	for _, path := range policy.Paths {
@@ -75,12 +103,89 @@ func ResolveWindowsDenyReadPolicyPaths(policy DenyReadPolicy, cwd string) ([]str
 				pattern,
 			)
 		}
+		if scanned, ok, err := ripgrepWindowsDenyReadMatches(pattern, plan, env, commandCWD); err != nil {
+			return nil, err
+		} else if ok {
+			for _, path := range scanned {
+				pushDenyReadPath(&paths, seen, path)
+			}
+			continue
+		}
 		seenScanDirs := map[string]bool{}
 		if err := collectExistingGlobMatches(plan.Root, matcher, &paths, seen, seenScanDirs, plan.MaxDepth, 0); err != nil {
 			return nil, err
 		}
 	}
 	return paths, nil
+}
+
+func ripgrepWindowsDenyReadMatches(
+	pattern string,
+	plan GlobScanPlan,
+	env map[string]string,
+	commandCWD string,
+) ([]string, bool, error) {
+	if env == nil {
+		return nil, false, nil
+	}
+	pathEnv := ""
+	for key, value := range env {
+		if strings.EqualFold(key, "PATH") {
+			pathEnv = value
+			break
+		}
+	}
+	scanner := sandboxpath.FindExecutableInPath(GlobScanProgram, pathEnv, commandCWD, sandboxpath.FilesystemPolicy{})
+	if scanner == "" {
+		return nil, false, nil
+	}
+	relativeGlob := strings.TrimPrefix(pattern, plan.Root)
+	relativeGlob = strings.TrimPrefix(relativeGlob, string(filepath.Separator))
+	if relativeGlob == "" {
+		return nil, false, nil
+	}
+	args := []string{"--no-config", "--files", "--hidden", "--no-ignore", "--null"}
+	if plan.MaxDepth != nil {
+		args = append(args, "--max-depth", fmt.Sprintf("%d", *plan.MaxDepth))
+	}
+	args = append(args, "--glob", relativeGlob, "--", plan.Root)
+	command := exec.Command(scanner, args...)
+	command.Dir = commandCWD
+	command.Env = windowsEnvironmentEntries(env)
+	output, err := command.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
+			return nil, true, nil
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, false, fmt.Errorf("ripgrep deny-read scan failed for %s: %s", plan.Root, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, false, err
+	}
+	paths := make([]string, 0)
+	for _, raw := range strings.Split(string(output), "\x00") {
+		if raw == "" {
+			continue
+		}
+		path := raw
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(plan.Root, path)
+		}
+		paths = append(paths, filepath.Clean(path))
+		if canonical, err := filepath.EvalSymlinks(path); err == nil && canonical != path {
+			paths = append(paths, filepath.Clean(canonical))
+		}
+	}
+	return paths, true, nil
+}
+
+func windowsEnvironmentEntries(env map[string]string) []string {
+	entries := make([]string, 0, len(env))
+	for key, value := range env {
+		entries = append(entries, key+"="+value)
+	}
+	sort.Strings(entries)
+	return entries
 }
 
 func GlobScanPlanForPattern(pattern string, configuredMaxDepth *int) GlobScanPlan {

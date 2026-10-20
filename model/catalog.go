@@ -152,6 +152,9 @@ type PermissionMessages struct {
 	DangerFullAccess *string `json:"danger_full_access,omitempty"`
 	WorkspaceWrite   *string `json:"workspace_write,omitempty"`
 	ReadOnly         *string `json:"read_only,omitempty"`
+	// ApprovedPrefixes supports `{{ approved_prefixes }}`. A missing value
+	// keeps the bundled template; an empty value suppresses the section.
+	ApprovedPrefixes *string `json:"approved_prefixes,omitempty"`
 }
 
 // GuardianV2ModelConfig mirrors Rust

@@ -3,6 +3,7 @@ package agentsoverview
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func statusFilterRows() []Row {
@@ -156,5 +157,42 @@ func TestSystemErrorRendersErrorLikeRust(t *testing.T) {
 	rendered := strings.Join(view.Render(120, 24), "\n")
 	if !strings.Contains(rendered, "Error") || strings.Contains(rendered, "Needs input") {
 		t.Fatalf("system error status wording:\n%s", rendered)
+	}
+}
+
+func TestCommandCenterColumnsIncludeRelativeUpdateLikeRust(t *testing.T) {
+	now := time.Now().Unix()
+	view := New([]Row{{
+		ThreadID:  "alpha",
+		Name:      "alpha",
+		CWD:       "/work/a",
+		Group:     GroupWorking,
+		UpdatedAt: now - 125,
+	}}, "", false)
+	rendered := strings.Join(view.Render(120, 24), "\n")
+	if !strings.Contains(rendered, "Working") || !strings.Contains(rendered, "2m ago") {
+		t.Fatalf("row columns missing status/updated:\n%s", rendered)
+	}
+	if got := relativeUpdateTime(0); got != "-" {
+		t.Fatalf("missing timestamp = %q", got)
+	}
+	if got := relativeUpdateTime(now + 10); got != "now" {
+		t.Fatalf("future timestamp = %q", got)
+	}
+}
+
+func TestCommandCenterHelpReferenceLikeRust(t *testing.T) {
+	view := New(statusFilterRows(), "", false)
+	view.SetWorktreesEnabled(true)
+	view.ToggleHelp()
+	rendered := strings.Join(view.Render(120, 30), "\n")
+	for _, want := range []string{"Task shortcuts", "Navigate", "Tasks", "View", "New worktree", "Delete"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("help missing %q:\n%s", want, rendered)
+		}
+	}
+	view.ToggleHelp()
+	if strings.Contains(strings.Join(view.Render(120, 30), "\n"), "Task shortcuts") {
+		t.Fatal("help did not close")
 	}
 }

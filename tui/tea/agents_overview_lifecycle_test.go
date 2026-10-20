@@ -105,7 +105,7 @@ func TestModelAgentsDeleteDetachesRemovedCurrentTaskLikeRust(t *testing.T) {
 	model.State.SetThreadID("root-1")
 	openAgentsDashboard(t, model)
 
-	model.Update(key(bubbletea.KeyDelete))
+	model.Update(key(bubbletea.KeyBackspace))
 	if model.modal == nil || !strings.Contains(model.modal.title, "delete") {
 		t.Fatalf("delete did not open the confirmation: %#v", model.modal)
 	}
@@ -164,7 +164,7 @@ func TestModelAgentsConfirmationNumberKeysLikeRust(t *testing.T) {
 	deleteCalls := &agentsLifecycleCalls{}
 	remove := newAgentsLifecycleModel(t, deleteCalls, nil, nil)
 	openAgentsDashboard(t, remove)
-	remove.Update(key(bubbletea.KeyDelete))
+	remove.Update(key(bubbletea.KeyBackspace))
 	updated, cmd = remove.Update(runeKey('2'))
 	remove = updated.(*Model)
 	if cmd != nil || len(deleteCalls.deleted) != 0 {

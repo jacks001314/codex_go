@@ -2,12 +2,16 @@ package appserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"time"
 
 	"codex_go/features"
 	"codex_go/model"
+	"codex_go/session"
 	"codex_go/turn"
 )
 
@@ -31,6 +35,13 @@ type startupPrewarmState struct {
 	// prewarm returned without error, otherwise "failed").
 	status   string
 	consumed bool
+	// inputMode is "base" for the empty startup prewarm and "history" for the
+	// idle-thread prewarm (Rust #48812).
+	inputMode string
+	// historyKeys and settingsKey gate reuse: only a prompt that extends the
+	// prewarmed history under the same model/settings may chain its response id.
+	historyKeys []string
+	settingsKey string
 }
 
 // scheduleStartupPrewarm kicks off an asynchronous websocket prewarm for a
@@ -59,7 +70,7 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 		r.startupPrewarms = map[string]*startupPrewarmState{}
 	}
 	startedAt := time.Now().UTC()
-	r.startupPrewarms[threadID] = &startupPrewarmState{startedAt: startedAt}
+	r.startupPrewarms[threadID] = &startupPrewarmState{startedAt: startedAt, inputMode: "base"}
 	r.startupPrewarmMu.Unlock()
 
 	modelID := strings.TrimSpace(response.Model)
@@ -89,7 +100,99 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 		r.startupPrewarmMu.Unlock()
 		// Rust's prewarm task records these when it completes.
 		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
-		r.recordStartupPrewarmDuration(status, finishedAt.Sub(startedAt))
+		r.recordStartupPrewarmDuration(status, "base", finishedAt.Sub(startedAt))
+	}()
+}
+
+// scheduleHistoryPrewarm prepares an idle thread's cached WebSocket with its
+// existing conversation history and executed-tool metadata using generate:false
+// (Rust #48812). The next turn may consume the response id only when its input
+// extends this history and its model settings match.
+func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
+	if r == nil || r.services.Agent == nil || r.services.ThreadRouter == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || r.threads == nil || r.threads.LiveThread(session.ThreadID(threadID)) == nil {
+		return
+	}
+	prewarmer, ok := r.services.Agent.(guardianPrewarmer)
+	if !ok {
+		return
+	}
+	historyItems, _ := r.historyInputItemsForTurn(threadID)
+	if len(historyItems) == 0 {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err != nil || record == nil {
+		return
+	}
+	params := &turn.TurnStartParams{ThreadID: threadID, CWD: strings.TrimSpace(record.Metadata.CWD)}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return
+	}
+	modelID := strings.TrimSpace(record.Metadata.Model)
+	if modelID == "" {
+		modelID = strings.TrimSpace(stringFromAny(cfg.Values["model"]))
+	}
+	if modelID == "" {
+		return
+	}
+	instructions, _ := appBaseInstructionsForConfig(cfg)
+	settingsKey := prewarmSettingsKey(modelID, instructions, record.Metadata.ServiceTier)
+	historyKeys := prewarmHistoryKeys(historyItems)
+
+	r.startupPrewarmMu.Lock()
+	if existing := r.startupPrewarms[threadID]; existing != nil && !existing.consumed {
+		// A ready or in-flight prewarm with the same history/settings is reused.
+		if existing.settingsKey == settingsKey && equalStringSlices(existing.historyKeys, historyKeys) {
+			r.startupPrewarmMu.Unlock()
+			return
+		}
+	}
+	if r.startupPrewarms == nil {
+		r.startupPrewarms = map[string]*startupPrewarmState{}
+	}
+	startedAt := time.Now().UTC()
+	r.startupPrewarms[threadID] = &startupPrewarmState{
+		startedAt:   startedAt,
+		inputMode:   "history",
+		historyKeys: historyKeys,
+		settingsKey: settingsKey,
+	}
+	r.startupPrewarmMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
+		defer cancel()
+		var responseID string
+		status := "failed"
+		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
+			Model:        modelID,
+			Instructions: instructions,
+			InputItems:   historyItems,
+			ThreadID:     threadID,
+			Originator:   "session_startup",
+		})
+		if err == nil {
+			status = "ready"
+		}
+		if err == nil && resp != nil {
+			responseID = strings.TrimSpace(resp.ResponseID)
+		}
+		finishedAt := time.Now().UTC()
+		r.startupPrewarmMu.Lock()
+		if state := r.startupPrewarms[threadID]; state != nil && state.inputMode == "history" {
+			state.responseID = responseID
+			state.finished = true
+			state.finishedAt = finishedAt
+			state.status = status
+		}
+		r.startupPrewarmMu.Unlock()
+		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
+		r.recordStartupPrewarmDuration(status, "history", finishedAt.Sub(startedAt))
 	}()
 }
 
@@ -117,21 +220,33 @@ func (r *RuntimeRouter) scheduleCodeModeHostPrewarm(threadID, cwd string) {
 // for the thread when the prewarm finished before the turn started; otherwise
 // it returns "" and the turn proceeds without the prewarm (Rust
 // consume_startup_prewarm_for_regular_turn -> Unavailable).
-func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string) string {
+func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string, historyItems []any, settingsKey string) (string, int) {
 	if r == nil {
-		return ""
+		return "", 0
 	}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
-		return ""
+		return "", 0
 	}
 	r.startupPrewarmMu.Lock()
 	state := r.startupPrewarms[threadID]
 	if state == nil || !state.finished || state.consumed {
 		r.startupPrewarmMu.Unlock()
-		return ""
+		return "", 0
+	}
+	consumed := 0
+	if state.inputMode == "history" {
+		if state.settingsKey != settingsKey || !historyExtendsPrewarm(state.historyKeys, prewarmHistoryKeys(historyItems)) {
+			// A non-prefix prompt or changed settings cannot chain the prepared
+			// response; consume it and let the regular request proceed.
+			state.consumed = true
+			r.startupPrewarmMu.Unlock()
+			return "", 0
+		}
+		consumed = len(state.historyKeys)
 	}
 	responseID := strings.TrimSpace(state.responseID)
+	inputMode := state.inputMode
 	age := time.Since(state.startedAt)
 	if age < 0 {
 		age = 0
@@ -140,13 +255,59 @@ func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string) string {
 		// The prewarm finished without a usable response id; Rust reports the
 		// prewarm setup failure as unavailable with status "failed".
 		r.startupPrewarmMu.Unlock()
-		r.recordStartupPrewarmAgeAtFirstTurn("failed", age)
-		return ""
+		r.recordStartupPrewarmAgeAtFirstTurn("failed", inputMode, age)
+		return "", 0
 	}
 	state.consumed = true
 	r.startupPrewarmMu.Unlock()
-	r.recordStartupPrewarmAgeAtFirstTurn("consumed", age)
-	return responseID
+	r.recordStartupPrewarmAgeAtFirstTurn("consumed", inputMode, age)
+	return responseID, consumed
+}
+
+func prewarmSettingsKey(modelID, instructions, serviceTier string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(modelID),
+		strings.TrimSpace(instructions),
+		strings.TrimSpace(serviceTier),
+	}, "\x00")
+}
+
+func prewarmHistoryKeys(items []any) []string {
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		data, err := json.Marshal(item)
+		if err != nil {
+			keys = append(keys, "")
+			continue
+		}
+		sum := sha256.Sum256(data)
+		keys = append(keys, hex.EncodeToString(sum[:]))
+	}
+	return keys
+}
+
+func historyExtendsPrewarm(prewarmed []string, current []string) bool {
+	if len(prewarmed) > len(current) {
+		return false
+	}
+	for index := range prewarmed {
+		if prewarmed[index] != current[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // startupPrewarmsSnapshot returns a copy of the prewarm states for tests and

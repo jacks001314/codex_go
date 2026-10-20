@@ -307,6 +307,7 @@ type StartParams struct {
 	CodexResponsesAsItems               *bool                     `json:"codexResponsesAsItems,omitempty"`
 	CodexResponseItemPrefix             *string                   `json:"codexResponseItemPrefix,omitempty"`
 	CodexResponseHandoffMode            *CodexResponseHandoffMode `json:"codexResponseHandoffMode,omitempty"`
+	BackendReasoningStatus              bool                      `json:"backendReasoningStatus,omitempty"`
 	CodexResponseHandoffChannelPrefixes map[string][]string       `json:"codexResponseHandoffChannelPrefixes,omitempty"`
 	Model                               *string                   `json:"model,omitempty"`
 	OutputModality                      OutputModality            `json:"outputModality"`
@@ -356,6 +357,7 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		CodexResponsesAsItems               *bool                     `json:"codexResponsesAsItems"`
 		CodexResponseItemPrefix             *string                   `json:"codexResponseItemPrefix"`
 		CodexResponseHandoffMode            *CodexResponseHandoffMode `json:"codexResponseHandoffMode"`
+		BackendReasoningStatus              bool                      `json:"backendReasoningStatus,omitempty"`
 		CodexResponseHandoffChannelPrefixes map[string][]string       `json:"codexResponseHandoffChannelPrefixes"`
 		Model                               *string                   `json:"model"`
 		OutputModality                      OutputModality            `json:"outputModality"`
@@ -375,6 +377,7 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		CodexResponsesAsItems:               p.CodexResponsesAsItems,
 		CodexResponseItemPrefix:             p.CodexResponseItemPrefix,
 		CodexResponseHandoffMode:            p.CodexResponseHandoffMode,
+		BackendReasoningStatus:              p.BackendReasoningStatus,
 		CodexResponseHandoffChannelPrefixes: p.CodexResponseHandoffChannelPrefixes,
 		Model:                               p.Model,
 		OutputModality:                      p.OutputModality,
@@ -602,6 +605,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 		CodexResponsesAsItems:               codexResponsesAsItems,
 		CodexResponseItemPrefix:             stringValue(p.CodexResponseItemPrefix),
 		CodexResponseHandoffMode:            handoffModeValue(p.CodexResponseHandoffMode),
+		BackendReasoningStatus:              p.BackendReasoningStatus,
 		CodexResponseHandoffChannelPrefixes: cloneStringSliceMap(p.CodexResponseHandoffChannelPrefixes),
 		InitialItems:                        append([]InitialTextItem(nil), p.InitialItems...),
 		DelegationAckFiller:                 p.DelegationAckFiller,
@@ -977,6 +981,7 @@ type SessionConfig struct {
 	CodexResponsesAsItems               bool
 	CodexResponseItemPrefix             string
 	CodexResponseHandoffMode            CodexResponseHandoffMode
+	BackendReasoningStatus              bool
 	CodexResponseHandoffChannelPrefixes map[string][]string
 	InitialItems                        []InitialTextItem
 	// DelegationAckFiller is the resolved acknowledgement filler setting; a nil
@@ -1725,6 +1730,22 @@ func (m *Manager) AppendSpeech(params *AppendSpeechParams) (*SessionState, error
 		}
 	}
 	return state, nil
+}
+
+// SendReasoningStatus relays the latest completed public reasoning summary as
+// quiet commentary context for an active V3 delegation.
+func (m *Manager) SendReasoningStatus(threadID string, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	_, connection, err := m.updateWithConnection(threadID, func(*SessionState) {})
+	if err != nil {
+		return err
+	}
+	if connection == nil {
+		return nil
+	}
+	return connection.sendReasoningStatus(text)
 }
 
 // Stop closes the session and returns the notifications it produced: any

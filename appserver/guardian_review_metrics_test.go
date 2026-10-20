@@ -147,9 +147,41 @@ func TestGuardianContextMetricsUseExplicitSharedBoundariesLikeRust(t *testing.T)
 	if request.Tags["target"] != "sync" || request.Tags["component"] != "total" {
 		t.Fatalf("request tags = %#v", request.Tags)
 	}
+	if request.Tags["token_bucket"] != telemetry.GuardianRequestTokenBucket(int(request.Value)) {
+		t.Fatalf("request token bucket = %q for %v", request.Tags["token_bucket"], request.Value)
+	}
 	if len(request.Boundaries) != len(telemetry.GuardianContextRequestTokensBoundaries) ||
 		request.Boundaries[len(request.Boundaries)-1] != 2_000_000 {
 		t.Fatalf("request boundaries = %#v", request.Boundaries)
+	}
+}
+
+func TestGuardianReviewRetryMetricsCountOnlyAdmittedRetries(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	reviewer := &modelGuardianReviewer{metrics: metrics}
+	reviewer.emitGuardianReviewRetryMetrics("session_error", time.Now(), nil)
+	reviewer.emitGuardianReviewRetryMetrics("session_error", time.Now(), context.DeadlineExceeded)
+	reviewer.emitGuardianReviewRetryMetrics("session_error", time.Now(), context.Canceled)
+
+	waits := guardianMetricRecords(metrics, telemetry.GuardianReviewRetryWaitMetric)
+	if len(waits) != 3 {
+		t.Fatalf("retry waits = %d, want 3", len(waits))
+	}
+	outcomes := map[string]bool{}
+	for _, record := range waits {
+		if record.Tags["failure_reason"] != "session_error" {
+			t.Fatalf("wait tags = %#v", record.Tags)
+		}
+		outcomes[record.Tags["outcome"]] = true
+	}
+	for _, outcome := range []string{"retry", "deadline", "cancelled"} {
+		if !outcomes[outcome] {
+			t.Fatalf("missing wait outcome %q: %#v", outcome, outcomes)
+		}
+	}
+	retries := guardianMetricRecords(metrics, telemetry.GuardianReviewRetryMetric)
+	if len(retries) != 1 || retries[0].Tags["outcome"] != "retry" {
+		t.Fatalf("retry counter = %#v", retries)
 	}
 }
 

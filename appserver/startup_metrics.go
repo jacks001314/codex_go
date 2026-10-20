@@ -28,7 +28,7 @@ func (r *RuntimeRouter) recordStartupPhase(phase string, duration time.Duration,
 
 // recordStartupPrewarmDuration mirrors the prewarm task's
 // STARTUP_PREWARM_DURATION_METRIC sample (status "ready"/"failed").
-func (r *RuntimeRouter) recordStartupPrewarmDuration(status string, duration time.Duration) {
+func (r *RuntimeRouter) recordStartupPrewarmDuration(status string, inputMode string, duration time.Duration) {
 	if r == nil || r.services.TurnMetrics == nil {
 		return
 	}
@@ -36,14 +36,15 @@ func (r *RuntimeRouter) recordStartupPrewarmDuration(status string, duration tim
 		duration = 0
 	}
 	r.services.TurnMetrics.RecordDuration(telemetry.StartupPrewarmDurationMetric, duration, map[string]string{
-		"status": status,
+		"status":     status,
+		"input_mode": inputMode,
 	})
 }
 
 // recordStartupPrewarmAgeAtFirstTurn mirrors the resolve path's
 // STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC sample (status "consumed" or the
 // unavailable status).
-func (r *RuntimeRouter) recordStartupPrewarmAgeAtFirstTurn(status string, duration time.Duration) {
+func (r *RuntimeRouter) recordStartupPrewarmAgeAtFirstTurn(status string, inputMode string, duration time.Duration) {
 	if r == nil || r.services.TurnMetrics == nil {
 		return
 	}
@@ -51,6 +52,7 @@ func (r *RuntimeRouter) recordStartupPrewarmAgeAtFirstTurn(status string, durati
 		duration = 0
 	}
 	r.services.TurnMetrics.RecordDuration(telemetry.StartupPrewarmAgeAtFirstTurnMetric, duration, map[string]string{
-		"status": status,
+		"status":     status,
+		"input_mode": inputMode,
 	})
 }

@@ -491,6 +491,7 @@ type responsesStreamNotificationState struct {
 	activeItemID              string
 	activeAgentItemID         string
 	activeReasoningItemID     string
+	reasoningSummaryByItem    map[string]string
 	planMode                  bool
 	planItemID                string
 	planParser                map[string]*proposedPlanStreamParser
@@ -515,14 +516,15 @@ type responsesStreamNotificationState struct {
 
 func newResponsesStreamNotificationState(planMode bool, turnID string) *responsesStreamNotificationState {
 	return &responsesStreamNotificationState{
-		toolNames:         map[string]string{},
-		patchInputs:       map[string]string{},
-		patchFingerprints: map[string]string{},
-		planMode:          planMode,
-		planItemID:        safeIdentifier(turnID) + "-plan",
-		planParser:        map[string]*proposedPlanStreamParser{},
-		startedAgentItems: map[string]bool{},
-		agentItemPhases:   map[string]string{},
+		toolNames:              map[string]string{},
+		patchInputs:            map[string]string{},
+		patchFingerprints:      map[string]string{},
+		planMode:               planMode,
+		planItemID:             safeIdentifier(turnID) + "-plan",
+		planParser:             map[string]*proposedPlanStreamParser{},
+		startedAgentItems:      map[string]bool{},
+		agentItemPhases:        map[string]string{},
+		reasoningSummaryByItem: map[string]string{},
 	}
 }
 
@@ -597,6 +599,18 @@ func (s *responsesStreamNotificationState) reasoningItemID(values ...string) str
 		fallback = values[len(values)-1]
 	}
 	return "reasoning-" + safeIdentifier(fallback)
+}
+
+// takeReasoningSummary returns and clears the completed item's accumulated
+// public summary. Raw reasoning deltas are never stored here.
+func (s *responsesStreamNotificationState) takeReasoningSummary(itemID string) string {
+	if s == nil || len(s.reasoningSummaryByItem) == 0 {
+		return ""
+	}
+	itemID = strings.TrimSpace(itemID)
+	summary := strings.TrimSpace(s.reasoningSummaryByItem[itemID])
+	delete(s.reasoningSummaryByItem, itemID)
+	return summary
 }
 
 func (s *responsesStreamNotificationState) agentMessageItemID(turnID string, values ...string) string {
@@ -934,6 +948,12 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	case model.ResponsesStreamEventOutputDone:
 		state.rememberOutputItem(event)
 		state.rememberAnalyticsToolCallID(event.Item)
+		if event.Item != nil && event.Item.Type == "reasoning" {
+			itemID := firstNonEmpty(event.ItemID, event.Item.ID)
+			if summary := state.takeReasoningSummary(itemID); summary != "" {
+				_ = r.requireRealtime().SendReasoningStatus(threadID, summary)
+			}
+		}
 		if event.Item != nil && (event.Item.Type == "message" || event.Item.Type == "agent_message") {
 			itemID := firstNonEmpty(event.ItemID, event.Item.ID, "agent-message-"+safeIdentifier(turnID))
 			phase := state.agentItemPhases[itemID]
@@ -1008,10 +1028,12 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		if event.ReasoningDelta == nil || event.ReasoningDelta.SummaryIndex == nil || event.ReasoningDelta.Delta == "" {
 			return
 		}
+		itemID := state.reasoningItemID(event.ReasoningDelta.ItemID, event.ItemID)
+		state.reasoningSummaryByItem[itemID] += event.ReasoningDelta.Delta
 		r.notify(NotificationReasoningSummaryTextDelta, &ReasoningSummaryTextDeltaNotification{
 			ThreadID:     threadID,
 			TurnID:       turnID,
-			ItemID:       state.reasoningItemID(event.ReasoningDelta.ItemID, event.ItemID),
+			ItemID:       itemID,
 			Delta:        event.ReasoningDelta.Delta,
 			SummaryIndex: *event.ReasoningDelta.SummaryIndex,
 		})
@@ -1611,6 +1633,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			WindowModel:        runConfig.Model,
 		})
 		if compactErr != nil {
+			r.persistCompactionFailure(threadID, compactErr)
 			r.clearActiveRuntimeTurn(threadID, turnID)
 			// Rust #44487: pre-turn compaction runs before the incoming prompt is
 			// recorded, so preserve the accepted prompt on every failure, before
@@ -1731,6 +1754,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		Trace:                        params.Trace,
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
 		Tracer:                       r.sessionTelemetryForThread(threadID),
+		OnModelRequest:               r.modelRequestHookCallback(threadID, firstNonEmpty(params.CWD, r.services.DefaultCWD)),
 		StepSettings:                 r.turnStepSettingsProvider(threadID, turnID),
 		StepInputItems:               r.turnStepInputItemsProvider(threadID, turnID, runConfig),
 		AttestationProvider:          runConfig.AttestationProvider,
@@ -2295,6 +2319,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		Trace:                        params.Trace,
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
 		Tracer:                       r.sessionTelemetryForThread(threadID),
+		OnModelRequest:               r.modelRequestHookCallback(threadID, firstNonEmpty(params.CWD, r.services.DefaultCWD)),
 		AttestationProvider:          runConfig.AttestationProvider,
 		PostToolInputItems:           runConfig.PostToolInputItems,
 		DisableHostedImageGeneration: true,
@@ -3865,6 +3890,7 @@ func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
 	}
 	r.clearPendingUnifiedExecItems(threadID, turnID)
+	r.scheduleThreadIdleUnload(threadID)
 }
 
 func (r *RuntimeRouter) ensureActiveDiffTrackerLocked(threadID string, turnID string) *runtimeutil.DiffTracker {
@@ -6071,7 +6097,17 @@ func (r *RuntimeRouter) compactTokenStatusForTurnWithPolicy(threadID string, mod
 		// server-observed baseline exists yet for the current window.
 		policy.PrefillTokens = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
 	}
-	return compact.Evaluate(policy, active)
+	status := compact.Evaluate(policy, active)
+	if stored.ShouldCompact && stored.Reason == compact.ReasonContextWindowExceeded {
+		// The last successful sampling request may report fewer tokens than the
+		// rejected request that triggered the overflow. Keep the recovery marker
+		// until a successful compaction or context reset clears it, otherwise the
+		// next turn skips the pre-turn compaction and can overflow again.
+		status.ShouldCompact = true
+		status.Reason = compact.ReasonContextWindowExceeded
+		status.NewContextWindowRequired = true
+	}
+	return status
 }
 
 // compactPolicyForTurn mirrors Rust ModelInfo::auto_compact_token_limit and
@@ -6110,7 +6146,72 @@ func (r *RuntimeRouter) compactPolicyForTurn(modelID string, params *turn.TurnSt
 			}
 		}
 	}
+	// Turn config overrides are authoritative even when the loaded config
+	// snapshot does not carry them (for example an empty CODEX_HOME).
+	if params != nil {
+		if limit := intFromAny(params.Config["model_auto_compact_token_limit"]); limit > 0 {
+			policy.TokenLimit = limit
+		}
+		if stringFromAny(params.Config["model_auto_compact_token_limit_scope"]) == string(AutoCompactTokenLimitScopeBodyAfterPrefix) {
+			policy.Scope = compact.ScopeBodyAfterPrefix
+			if prefill := intFromAny(extra["auto_compact_window_prefill"]); prefill > 0 {
+				policy.PrefillTokens = prefill
+			}
+		}
+	}
 	return policy
+}
+
+// compactionHistoryTokenBudget resolves the history budget for the model that
+// will summarize the thread. Rust bounds the same request against the step's
+// context window; Go's estimator also needs a reserve for the request prefix.
+func (r *RuntimeRouter) compactionHistoryTokenBudget(record *session.Record, params *runtimeCompactRequest) int {
+	if r == nil || record == nil {
+		return 0
+	}
+	modelID := firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model))
+	if modelID == "" {
+		return 0
+	}
+	turnParams := &turn.TurnStartParams{
+		ThreadID: string(record.ID),
+		CWD:      strings.TrimSpace(record.Metadata.CWD),
+		Model:    modelID,
+	}
+	if active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, params.TurnID); active != nil && active.Params != nil {
+		// Turn-scoped model_context_window overrides are authoritative for the
+		// attempt, even when they are not present in the loaded config snapshot.
+		turnParams.Config = active.Params.Config
+	}
+	cfg, err := r.effectiveConfigForTurn(turnParams)
+	if err != nil {
+		cfg = nil
+	}
+	return compactionHistoryTokenBudget(r.modelInfoForRuntimeWithConfig(modelID, cfg))
+}
+
+func compactionHistoryTokenBudget(info *model.ModelInfo) int {
+	if info == nil {
+		return 0
+	}
+	window := info.ContextWindow
+	if window <= 0 {
+		window = info.MaxContextWindow
+	}
+	if window <= 0 {
+		return 0
+	}
+	percent := info.EffectiveContextWindowPercent
+	if percent <= 0 {
+		percent = 95
+	}
+	usable := int(window * int64(percent) / 100)
+	if usable <= 0 {
+		return 0
+	}
+	// Keep an eighth of the usable window for everything that is not replayed
+	// conversation history.
+	return usable * 7 / 8
 }
 
 func (r *RuntimeRouter) persistContextWindowExceededStatus(threadID string) error {
@@ -6298,6 +6399,12 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		}
 		request.Prompt = prompt
 	}
+	// Compaction replays history through the same model window as a sampling
+	// request, so an unbounded history can overflow while it is being
+	// summarized. Bound the history to the compaction model's usable window and
+	// leave headroom for the compaction instructions, prompt, tool-call
+	// metadata and response framing.
+	request.MaxHistoryTokens = r.compactionHistoryTokenBudget(record, params)
 	hookCtx := r.compactHookContext(record, request)
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
 	if err != nil {
@@ -6429,14 +6536,13 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	// MCP request metadata), which is what the thread record below also records.
 	r.advanceWindowNumber(request.ThreadID)
 	r.advanceContextWindowID(request.ThreadID)
-	// A successful pre-turn compaction satisfies the full-context requirement.
-	if request.Phase == compact.PhasePreTurn {
-		status := compactTokenStatusFromMetadata(extra)
-		status.ShouldCompact = false
-		status.NewContextWindowRequired = false
-		status.Reason = ""
-		extra["token_status"] = compactTokenStatusMap(status)
-	}
+	// A successful compaction replaces the overflowing history regardless of
+	// phase, so the persisted overflow/token-limit marker no longer applies.
+	status := compactTokenStatusFromMetadata(extra)
+	status.ShouldCompact = false
+	status.NewContextWindowRequired = false
+	status.Reason = ""
+	extra["token_status"] = compactTokenStatusMap(status)
 	if compacted.Source != "" {
 		extra["compaction_source"] = string(compacted.Source)
 	}
@@ -7693,14 +7799,28 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	// the request copy is filtered; the stored history is untouched.
 	if !reasoningEffortFeatureEnabled(cfg) {
 		historyItems = rejectConfigurationUpdateInputItems(historyItems)
+	} else {
+		// Rust #55293: recovery/retry can leave adjacent effort updates; the
+		// request keeps only the latest while saved history keeps all of them.
+		historyItems = coalesceAdjacentReasoningEffortUpdates(historyItems)
 	}
 	if previousResponseID == "" {
 		// Rust core/src/tasks/regular.rs: the first regular turn consumes the
 		// session-startup websocket prewarm (its response id chains the first
 		// request). A prewarm that has not finished is skipped and the turn
 		// proceeds without it.
-		if id := r.takeStartupPrewarmResponseID(threadID); id != "" {
+		serviceTier := ""
+		if params != nil && params.ServiceTier != nil {
+			serviceTier = *params.ServiceTier
+		}
+		settingsKey := prewarmSettingsKey(modelInfo.Slug, instructions, serviceTier)
+		if id, consumed := r.takeStartupPrewarmResponseID(threadID, historyItems, settingsKey); id != "" {
 			previousResponseID = id
+			if consumed > 0 && consumed <= len(historyItems) {
+				// The prepared response already contains this prefix; send only
+				// the extension so previous_response_id does not duplicate it.
+				historyItems = historyItems[consumed:]
+			}
 		}
 	}
 	inputItems := append([]any(nil), historyItems...)
@@ -10057,9 +10177,11 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	selectedCapabilitySkillMetadata := promptSkillMetadataFromEntries(selectedCapabilitySkillEntries)
 	skillMetadata := append(append([]promptctx.InstructionsSkillMetadata(nil), hostSkillMetadata...), selectedCapabilitySkillMetadata...)
 	orchestratorMetadata := []promptctx.InstructionsSkillMetadata(nil)
+	orchestratorComplete := false
 	if cfg == nil || cfg.OrchestratorSkillsEnabled() {
 		var orchestratorWarnings []string
 		orchestratorMetadata, orchestratorWarnings = r.orchestratorSkillMetadataForRuntime(threadID)
+		orchestratorComplete = len(orchestratorMetadata) > 0 && len(orchestratorWarnings) == 0
 		skillMetadata = append(skillMetadata, orchestratorMetadata...)
 		r.notifySkillWarnings(threadID, orchestratorWarnings)
 	}
@@ -10087,6 +10209,8 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 		promptctx.AvailableSkillsRenderOptions{
 			Budget:                   skillMetadataBudgetForConfig(cfg, r.skillContextWindowForTurn(cfg, params)),
 			IncludeUsageInstructions: includeUsageInstructions,
+			AliasScope:               threadID,
+			CloudSkillsComplete:      orchestratorComplete,
 		},
 	)
 	r.recordSkillCatalogRender(skillCatalogSurfaceTurnInput, skillRenderReportOf(hostAvailable))
@@ -10433,6 +10557,12 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 	if err != nil || record == nil {
 		return nil, nil, err
 	}
+	// Rust #55322: a supplied discovery V2 inventory is the step's complete
+	// executor skill catalog. It must be projected directly instead of
+	// reopening host paths or falling back to legacy per-root discovery.
+	if snapshot != nil && snapshot.executorCapabilityDiscoveryV2Enabled() {
+		return skillEntriesFromDiscoveryV2(snapshot.executorCapabilityDiscoveryV2(), snapshot.disabledPluginIDsSnapshot()), nil, nil
+	}
 	selectedRoots := threadSelectedCapabilityRoots(record)
 	if snapshot != nil {
 		selectedRoots = snapshot.selectedRoots()
@@ -10665,6 +10795,84 @@ func applyExecutorSkillDisplayPaths(entries []SkillsListEntry, selectedRootID st
 	}
 }
 
+// skillEntriesFromDiscoveryV2 projects the step-scoped executor inventory into
+// the same skill entries the prompt and skills tools consume. Plugin skills
+// retain plugin attribution and remote identity; top-level environment skills
+// use the synthetic `skills` root. Disabled plugins never contribute entries.
+func skillEntriesFromDiscoveryV2(snapshots []execserver.ExecutorCapabilityDiscoveryV2Snapshot, disabledPluginIDs []string) []SkillsListEntry {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	disabled := make(map[string]struct{}, len(disabledPluginIDs))
+	for _, id := range disabledPluginIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			disabled[id] = struct{}{}
+		}
+	}
+	entries := make([]SkillsListEntry, 0)
+	for _, snapshot := range snapshots {
+		if snapshot.Response == nil {
+			continue
+		}
+		authorityID := "discovery:" + firstNonEmpty(strings.TrimSpace(snapshot.EnvironmentID), "local")
+		appendSkill := func(skill execserver.ExecutorSkill, pluginID string, remotePluginID string, displayName string) {
+			if strings.TrimSpace(skill.Name) == "" || strings.TrimSpace(skill.Path) == "" {
+				return
+			}
+			root := ""
+			if skill.DiscoveryRoot != nil {
+				root = strings.TrimSpace(skill.DiscoveryRoot.Path)
+			}
+			if root == "" {
+				root = pathpkg.Dir(strings.ReplaceAll(skill.Path, "\\", "/"))
+			}
+			shortDescription := ""
+			if skill.ShortDescription != nil {
+				shortDescription = strings.TrimSpace(*skill.ShortDescription)
+			}
+			entry := SkillsListEntry{
+				Name:             strings.TrimSpace(skill.Name),
+				Path:             LegacyAppPathString(skill.Path),
+				Scope:            "environment",
+				Description:      strings.TrimSpace(skill.Description),
+				ShortDescription: shortDescription,
+				Enabled:          true,
+				PluginID:         strings.TrimSpace(pluginID),
+				RemotePluginID:   strings.TrimSpace(remotePluginID),
+				Root:             root,
+				EnvironmentID:    strings.TrimSpace(snapshot.EnvironmentID),
+				SourcePath:       strings.TrimSpace(skill.Path),
+			}
+			if displayName != "" {
+				prefixPluginSkillNames(&entry, displayName)
+			}
+			list := []SkillsListEntry{entry}
+			applyExecutorSkillDisplayPaths(list, authorityID)
+			entries = append(entries, list[0])
+		}
+		for _, plugin := range snapshot.Response.Plugins {
+			pluginID := strings.TrimSpace(plugin.ID)
+			if pluginID == "" {
+				continue
+			}
+			if _, blocked := disabled[pluginID]; blocked {
+				continue
+			}
+			remotePluginID := ""
+			if plugin.RemotePluginID != nil {
+				remotePluginID = strings.TrimSpace(*plugin.RemotePluginID)
+			}
+			for _, skill := range plugin.Skills {
+				appendSkill(skill, pluginID, remotePluginID, plugin.DisplayName)
+			}
+		}
+		for _, skill := range snapshot.Response.Skills {
+			appendSkill(skill, "", "", "")
+		}
+	}
+	return entries
+}
+
 func executorSkillPackageID(resource string) string {
 	resource = strings.TrimSpace(resource)
 	if !strings.HasPrefix(resource, "skill://") {
@@ -10810,17 +11018,18 @@ func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]
 	metadata := make([]promptctx.InstructionsSkillMetadata, 0, len(cache.catalog.Skills))
 	for _, skill := range cache.catalog.Skills {
 		metadata = append(metadata, promptctx.InstructionsSkillMetadata{
-			Name:          skill.Name,
-			Scope:         "orchestrator",
-			Path:          skill.MainResource,
-			LocatorPath:   skill.Package,
-			LocatorKind:   "orchestrator package",
-			Description:   skill.Description,
-			AuthorityKind: "orchestrator",
-			AuthorityID:   mcp.RuntimeCodexAppsMCPServerName,
-			PackageID:     skill.Package,
-			ResourceID:    skill.MainResource,
-			PluginID:      skill.PluginID,
+			Name:           skill.Name,
+			Scope:          "orchestrator",
+			Path:           skill.MainResource,
+			LocatorPath:    skill.Package,
+			LocatorKind:    "orchestrator package",
+			Description:    skill.Description,
+			AuthorityKind:  "orchestrator",
+			AuthorityID:    mcp.RuntimeCodexAppsMCPServerName,
+			PackageID:      skill.Package,
+			ResourceID:     skill.MainResource,
+			PluginID:       skill.PluginID,
+			RemotePluginID: skill.PluginID,
 		})
 	}
 	warnings := append([]string(nil), cache.catalog.Warnings...)

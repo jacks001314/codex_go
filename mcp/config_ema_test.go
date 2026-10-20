@@ -60,10 +60,10 @@ func TestValidateEMAAuthTransportRejectsAlternateCredentials(t *testing.T) {
 	}
 }
 
-func TestValidateServerAuthRejectsEMAConnections(t *testing.T) {
+func TestValidateServerAuthRejectsUnconfiguredEMAConnections(t *testing.T) {
 	config := &ServerConfig{URL: "https://resource.example", Auth: ServerAuthEMAAuth}
 	err := ValidateServerAuth("enterprise", config)
-	if err == nil || !strings.Contains(err.Error(), "not enabled in this version") {
+	if err == nil || !strings.Contains(err.Error(), "requires an enabled, directly configured server") {
 		t.Fatalf("ValidateServerAuth(ema) error = %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestOauthLoginRejectsEMAConnections(t *testing.T) {
 		},
 	}})
 	_, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "enterprise"})
-	if err == nil || !strings.Contains(err.Error(), "not enabled in this version") {
+	if err == nil || !strings.Contains(err.Error(), "enterprise sign-in") {
 		t.Fatalf("OauthLogin(ema) error = %v", err)
 	}
 }

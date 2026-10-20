@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const (
@@ -78,6 +79,14 @@ type SkillMetadataBudget struct {
 type AvailableSkillsRenderOptions struct {
 	Budget                   SkillMetadataBudget
 	IncludeUsageInstructions bool
+	// AliasScope identifies the live thread whose append-only alias assignments
+	// are shared by consecutive catalogs (Rust #55330). An empty scope is a
+	// one-shot catalog and receives a fresh alias numbering.
+	AliasScope string
+	// CloudSkillsComplete reports that the cloud catalog loaded without
+	// warnings. Only then may unmatched remote executor skills be disabled
+	// (Rust #55322 merge_catalogs).
+	CloudSkillsComplete bool
 }
 
 type AvailableSkills struct {
@@ -112,6 +121,76 @@ type skillAliasPlan struct {
 	rootAliases     map[string]string
 	aliasRootByPath map[string]string
 	tableCost       int
+}
+
+const (
+	skillAliasMaxRoots     = 2048
+	skillAliasMaxTableSize = 16 * 1024
+)
+
+// skillAliasRegistry keeps alias assignments append-only for the lifetime of
+// the process. Rust #55330 retains the same property in each thread's skills
+// state; a process-wide assignment has identical stability semantics for a
+// client because aliases are never reused for a different root.
+var skillAliasRegistry = struct {
+	sync.Mutex
+	scopes map[string]*skillAliasScopeState
+}{
+	scopes: map[string]*skillAliasScopeState{},
+}
+
+type skillAliasScopeState struct {
+	next  map[string]int
+	byKey map[string]string
+	count int
+}
+
+func skillAliasScope(scope string, reset bool) *skillAliasScopeState {
+	scope = strings.TrimSpace(scope)
+	state := skillAliasRegistry.scopes[scope]
+	if state == nil || reset {
+		state = &skillAliasScopeState{next: map[string]int{}, byKey: map[string]string{}}
+		skillAliasRegistry.scopes[scope] = state
+	}
+	return state
+}
+
+func assignSkillAlias(scope string, kind string, root string) (string, bool) {
+	kind = strings.TrimSpace(kind)
+	root = strings.TrimSpace(root)
+	if kind == "" || root == "" {
+		return "", false
+	}
+	key := kind + "\x00" + root
+	skillAliasRegistry.Lock()
+	defer skillAliasRegistry.Unlock()
+	state := skillAliasScope(scope, false)
+	if alias := state.byKey[key]; alias != "" {
+		return alias, true
+	}
+	if state.count >= skillAliasMaxRoots {
+		return "", false
+	}
+	index := state.next[kind]
+	state.next[kind] = index + 1
+	alias := fmt.Sprintf("%s%d", kind, index)
+	state.byKey[key] = alias
+	state.count++
+	return alias, true
+}
+
+func resetSkillAliasScope(scope string) {
+	skillAliasRegistry.Lock()
+	defer skillAliasRegistry.Unlock()
+	skillAliasScope(scope, true)
+}
+
+func skillAliasTableBytes(lines []string) int {
+	total := 0
+	for _, line := range lines {
+		total += len(line) + 1
+	}
+	return total
 }
 
 type skillLineAllocation struct {
@@ -163,6 +242,9 @@ func RenderAvailableSkills(skills []InstructionsSkillMetadata, budget SkillMetad
 }
 
 func RenderAvailableSkillsWithOptions(skills []InstructionsSkillMetadata, options AvailableSkillsRenderOptions) *AvailableSkills {
+	if strings.TrimSpace(options.AliasScope) == "" {
+		resetSkillAliasScope("")
+	}
 	lines := orderedSkillRenderLines(skills)
 	if len(lines) == 0 {
 		return nil
@@ -171,7 +253,7 @@ func RenderAvailableSkillsWithOptions(skills []InstructionsSkillMetadata, option
 	if budget.Limit <= 0 {
 		budget = SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}
 	}
-	skillLines, report, skillRootLines := renderBestSkillLines(lines, budget)
+	skillLines, report, skillRootLines := renderBestSkillLinesForScope(lines, budget, options.AliasScope)
 	warning := skillRenderWarning(report, budget)
 	return &AvailableSkills{
 		Body:           renderAvailableSkillsBody(skillRootLines, skillLines, options.IncludeUsageInstructions),
@@ -210,6 +292,9 @@ func RenderExtensionAvailableSkillsWithOptions(skills []InstructionsSkillMetadat
 // executor catalogs. Executor entries are allocated first to match the runtime
 // extension surface, while host entries can still use path aliases under pressure.
 func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, executorSkills []InstructionsSkillMetadata, options AvailableSkillsRenderOptions) (*AvailableSkills, *AvailableSkills) {
+	if strings.TrimSpace(options.AliasScope) == "" {
+		resetSkillAliasScope("")
+	}
 	hostLines := orderedSkillRenderLines(hostSkills)
 	// Rust #49127 (ext/skills/src/render_dedup.rs): the executor alias plan is
 	// built from the full visible executor inventory before duplicates are
@@ -217,7 +302,7 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 	// that remain (PreparedSkillCatalog::new builds alias_plan first, and
 	// prefer_cloud_skills filters entries afterwards).
 	fullExecutorLines := extensionSkillRenderLines(executorSkills)
-	executorSkills = deduplicateCloudAndExecutorSkillsLikeRust(executorSkills)
+	executorSkills = deduplicateCloudAndExecutorSkills(executorSkills, options.CloudSkillsComplete)
 	executorLines := extensionSkillRenderLines(executorSkills)
 	budget := normalizedSkillMetadataBudget(options.Budget)
 	if len(hostLines) == 0 || len(executorLines) == 0 {
@@ -228,7 +313,7 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 	selected := absolute
 	// Rust #41011: evaluate aliased catalogs regardless of budget pressure and
 	// select them when they preserve inclusion/description while reducing size.
-	if plan, ok := buildSkillAliasPlan(hostLines, budget); ok && plan.tableCost < budget.Limit {
+	if plan, ok := buildSkillAliasPlanForScope(hostLines, budget, options.AliasScope); ok && plan.tableCost < budget.Limit {
 		adjustedBudget := budget
 		adjustedBudget.Limit -= plan.tableCost
 		aliased := renderCombinedSkillLines(applySkillAliases(hostLines, plan), executorLines, adjustedBudget, plan.rootLines)
@@ -238,7 +323,7 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 	}
 	// Rust ce22ea9712: executor locators are compacted with provider-specific
 	// `e` aliases alongside host `r` aliases under metadata pressure.
-	if plan, ok := buildExtensionAliasPlan(fullExecutorLines, budget); ok && plan.tableCost < budget.Limit {
+	if plan, ok := buildExtensionAliasPlanForScope(fullExecutorLines, budget, options.AliasScope); ok && plan.tableCost < budget.Limit {
 		adjustedBudget := budget
 		adjustedBudget.Limit -= plan.tableCost
 		aliased := renderCombinedSkillLines(applySkillAliases(hostLines, nil), applySkillAliases(executorLines, plan), adjustedBudget, nil)
@@ -277,13 +362,28 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 // retired Rust "orchestrator" labels, Rust f3037cafd3/#47074), so the cloud and
 // executor halves are separated by locator kind here.
 func deduplicateCloudAndExecutorSkillsLikeRust(skills []InstructionsSkillMetadata) []InstructionsSkillMetadata {
+	return deduplicateCloudAndExecutorSkills(skills, false)
+}
+
+func deduplicateCloudAndExecutorSkills(skills []InstructionsSkillMetadata, cloudComplete bool) []InstructionsSkillMetadata {
 	cloudNames := cloudSkillNamesLikeRust(skills)
-	if len(cloudNames) == 0 {
+	cloudRemoteKeys := cloudRemoteSkillKeysLikeRust(skills)
+	if len(cloudNames) == 0 && len(cloudRemoteKeys) == 0 {
 		return skills
 	}
 	out := make([]InstructionsSkillMetadata, 0, len(skills))
 	for _, skill := range skills {
 		if isExecutorSkillMetadata(skill) {
+			if key := remoteSkillKey(skill); key != "" {
+				if _, shadowed := cloudRemoteKeys[key]; shadowed {
+					continue
+				}
+				if cloudComplete {
+					// A complete cloud catalog is authoritative for remote
+					// plugins: an executor-only remote skill is not enabled.
+					continue
+				}
+			}
 			if _, shadowed := cloudNames[skill.Name]; shadowed {
 				continue
 			}
@@ -291,6 +391,28 @@ func deduplicateCloudAndExecutorSkillsLikeRust(skills []InstructionsSkillMetadat
 		out = append(out, skill)
 	}
 	return out
+}
+
+func remoteSkillKey(skill InstructionsSkillMetadata) string {
+	remote := strings.TrimSpace(skill.RemotePluginID)
+	name := strings.TrimSpace(skill.Name)
+	if remote == "" || name == "" {
+		return ""
+	}
+	return remote + "\x00" + name
+}
+
+func cloudRemoteSkillKeysLikeRust(skills []InstructionsSkillMetadata) map[string]struct{} {
+	keys := map[string]struct{}{}
+	for _, skill := range skills {
+		if !isCloudSkillMetadata(skill) || !skill.AllowsImplicitInvocation() {
+			continue
+		}
+		if key := remoteSkillKey(skill); key != "" {
+			keys[key] = struct{}{}
+		}
+	}
+	return keys
 }
 
 // cloudSkillNamesLikeRust collects the names the cloud catalog contributes to
@@ -431,13 +553,17 @@ func orderedSkillRenderLines(skills []InstructionsSkillMetadata) []skillRenderLi
 }
 
 func renderBestSkillLines(lines []skillRenderLine, budget SkillMetadataBudget) ([]string, *SkillRenderReport, []string) {
+	return renderBestSkillLinesForScope(lines, budget, "")
+}
+
+func renderBestSkillLinesForScope(lines []skillRenderLine, budget SkillMetadataBudget, scope string) ([]string, *SkillRenderReport, []string) {
 	absoluteLines, absoluteReport := renderSkillLines(lines, budget)
 
 	// Rust #41011: evaluate the aliased catalog regardless of budget pressure
 	// and select it whenever it preserves skill inclusion and description
 	// content while reducing prompt size. Previously aliases were only tried
 	// when the unaliased catalog was not fully rendered.
-	plan, ok := buildSkillAliasPlan(lines, budget)
+	plan, ok := buildSkillAliasPlanForScope(lines, budget, scope)
 	if !ok || plan.tableCost >= budget.Limit {
 		return absoluteLines, absoluteReport, nil
 	}
@@ -622,6 +748,11 @@ func normalizedSkillMetadataBudget(budget SkillMetadataBudget) SkillMetadataBudg
 }
 
 func buildSkillAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*skillAliasPlan, bool) {
+	resetSkillAliasScope("")
+	return buildSkillAliasPlanForScope(lines, budget, "")
+}
+
+func buildSkillAliasPlanForScope(lines []skillRenderLine, budget SkillMetadataBudget, scope string) (*skillAliasPlan, bool) {
 	aliasLines := append([]skillRenderLine(nil), lines...)
 	sort.SliceStable(aliasLines, func(i int, j int) bool {
 		if aliasLines[i].hasRootOrder != aliasLines[j].hasRootOrder {
@@ -665,10 +796,16 @@ func buildSkillAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*
 
 	rootAliases := make(map[string]string, len(aliasRoots))
 	rootLines := make([]string, 0, len(aliasRoots))
-	for i, root := range aliasRoots {
-		alias := fmt.Sprintf("r%d", i)
+	for _, root := range aliasRoots {
+		alias, ok := assignSkillAlias(scope, "r", root)
+		if !ok {
+			return nil, false
+		}
 		rootAliases[root] = alias
 		rootLines = append(rootLines, fmt.Sprintf("- `%s` = `%s`", alias, root))
+		if skillAliasTableBytes(rootLines) > skillAliasMaxTableSize {
+			return nil, false
+		}
 	}
 
 	aliasRootByPath := make(map[string]string, len(lines))
@@ -696,6 +833,11 @@ func buildSkillAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*
 // locators using provider-specific `e`/`o` prefixes (Rust ce22ea9712 aliases.rs).
 // Locator roots are derived from the locator path's leading URI segments.
 func buildExtensionAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*skillAliasPlan, bool) {
+	resetSkillAliasScope("")
+	return buildExtensionAliasPlanForScope(lines, budget, "")
+}
+
+func buildExtensionAliasPlanForScope(lines []skillRenderLine, budget SkillMetadataBudget, scope string) (*skillAliasPlan, bool) {
 	usedRoots := make([]string, 0, len(lines))
 	seen := map[string]bool{}
 	for _, line := range lines {
@@ -714,10 +856,16 @@ func buildExtensionAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget
 	}
 	rootAliases := make(map[string]string, len(usedRoots))
 	rootLines := make([]string, 0, len(usedRoots))
-	for i, root := range usedRoots {
-		alias := fmt.Sprintf("e%d", i)
+	for _, root := range usedRoots {
+		alias, ok := assignSkillAlias(scope, "e", root)
+		if !ok {
+			return nil, false
+		}
 		rootAliases[root] = alias
 		rootLines = append(rootLines, fmt.Sprintf("- `%s` = `%s`", alias, root))
+		if skillAliasTableBytes(rootLines) > skillAliasMaxTableSize {
+			return nil, false
+		}
 	}
 	aliasRootByPath := make(map[string]string, len(lines))
 	for _, line := range lines {

@@ -175,6 +175,8 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodRolloutCompress):                        true,
 		string(MethodServerDiagnostics):                      true,
 		string(MethodThreadPredictionRequest):                true,
+		string(MethodThreadSample):                           true,
+		string(MethodThreadSampleCancel):                     true,
 		string(MethodThreadQueueAdd):                         true,
 		string(MethodThreadQueueList):                        true,
 		string(MethodThreadQueueUpdate):                      true,

@@ -656,6 +656,11 @@ func TestReclamationResumesAfterInterruptedVacuumLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openReclamationDB: %v", err)
 	}
+	watcherDB, err := config.OpenReadOnly(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("open read-only watcher: %v", err)
+	}
+	defer watcherDB.Close()
 	conn, err := maintenance.Conn(ctx)
 	if err != nil {
 		t.Fatalf("maintenance Conn: %v", err)
@@ -670,7 +675,7 @@ func TestReclamationResumesAfterInterruptedVacuumLikeRust(t *testing.T) {
 		defer close(watcher)
 		for {
 			var free int64
-			if err := db.QueryRow(`PRAGMA freelist_count`).Scan(&free); err == nil && free < freeWatcherFree {
+			if err := watcherDB.QueryRow(`PRAGMA freelist_count`).Scan(&free); err == nil && free < freeWatcherFree {
 				close(shutdown)
 				return
 			}

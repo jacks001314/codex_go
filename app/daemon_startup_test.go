@@ -157,6 +157,7 @@ func TestDaemonStartupExclusionEnvironmentLikeRust(t *testing.T) {
 // targets a reachable local daemon, and an unreachable daemon or ineligible
 // launch stays embedded.
 func TestLocalDaemonEndpointForLaunchLikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
 	socketPath := defaultLocalDaemonSocketPath()
 	if strings.TrimSpace(socketPath) == "" {
 		t.Fatal("default daemon socket path is empty")
@@ -245,6 +246,8 @@ func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
 		daemonAutoStartFeature = originalFeature
 		daemonAutoStartStart = originalStart
 	})
+	// Discovery must not see a daemon running under the developer's real home.
+	t.Setenv("CODEX_HOME", t.TempDir())
 
 	started := 0
 	daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }

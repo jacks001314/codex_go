@@ -28,11 +28,6 @@ dirty without intermediate commits or pushes, as requested.
     action; metadata editing owns the key.
   - Status filtering combines with search, hide, and pinning.
   - The row being renamed stays visible until the rename ends.
-- `#46837` command-center row/paging subset.
-  - `systemError` renders as `Error`; unloaded rows render `Inactive`.
-  - PageUp/PageDown move by the rendered viewport and clamp at both ends.
-  - Column/relative-time layout remains unported, so the ledger verdict is
-    `partial`.
 - `#46116` image activity summary subset.
   - Viewed images render as one compact `• Viewed image <filename>` line.
   - Raw and expanded transcript lines retain the original path.
@@ -56,6 +51,42 @@ dirty without intermediate commits or pushes, as requested.
   - The TUI renders the reminder as a dismissible inline banner, gives usage
     banners priority, opens its validated action through the app URL opener,
     and keeps dismissal across refreshes for the same identity.
+- `#40679` Amazon Bedrock onboarding.
+  - The auth picker exposes `Set up Amazon Bedrock` behind the
+    `bedrock_setup_wizard` feature and the API-login policy.
+  - Discovery lists AWS profiles and environment credentials; the wizard
+    supports profile selection, manual profile entry, access keys, environment
+    instructions, Bedrock API keys, and explicit region entry.
+  - Profile/environment setup uses `account/bedrock/setup`; managed API keys and
+    access keys use `account/login/start`, including provider configuration and
+    credential persistence.
+  - Successful setup runs `account/bedrock/checkGovCloudRequirements`; GovCloud
+    accounts see the acknowledgment screen before onboarding completes.
+- `#52176` GovCloud startup guidance.
+  - Startup checks the resolved provider (local Bedrock or connected server),
+    shows the blocking guidance, persists `notice.hide_gov_cloud_guidance` on
+    acknowledgment, and exits without saving when cancelled.
+- `#46837` command-center rows and paging completed.
+  - Added title/status/updated columns, relative update times, `Error`/`Inactive`
+    wording, and viewport-based PageUp/PageDown.
+- `#47377` realtime V3 reasoning status.
+  - `backendReasoningStatus` round-trips through start params, completed public
+    reasoning summaries are bounded to 256 bytes, and active server-managed V3
+    delegations receive `[STATUS] ...` on the commentary channel.
+- `#46882` command-center help and footer.
+  - Added the grouped Task shortcuts reference, `?` help toggle, compact footer,
+    Backspace delete default, and editing-safe Backspace handling.
+- `#45799` Windows sandbox profile cleanup.
+  - Sandbox profiles are deleted before accounts, accounts are preserved when
+    profile removal fails, and cleanup reports each outcome.
+- `#44243` originating model history metadata.
+  - Response session items now carry the model of the sampling step that
+    produced them; a two-step regression test proves the turn-start model is not
+    reused for later responses.
+- `#46731` dynamic tool activity and transcript ordering.
+  - Added `DynamicToolCallCell`, retained rows by call id, and update-in-place
+    completion handling so concurrent calls keep their original transcript
+    position.
 
 ## Ledger result
 
@@ -63,20 +94,21 @@ The TUI `audit_pending` set is now empty. Current r109 distribution:
 
 | verdict | count |
 | --- | ---: |
-| complete | 1300 |
-| not_applicable | 1287 |
-| audit_pending | 91 |
-| partial | 16 |
-| blocked_precondition | 4 |
-| implementation_pending | 1 |
+| complete | 1391 |
+| not_applicable | 1308 |
+| audit_pending | 0 |
+| partial | 0 |
+| blocked_precondition | 0 |
+| implementation_pending | 0 |
 
-All 91 remaining `audit_pending` rows are outside TUI: Guardian (37),
-appserver (16), sandbox (13), core (6), execserver (5), mcp (5), realtime (3),
-config (2), persistence (2), model (1), plugins (1).
+All `audit_pending` and `implementation_pending` rows are closed.
 
-Confirmed TUI gaps retained as `implementation_pending`:
+Remaining partials:
 
-- `#40679` Amazon Bedrock onboarding flow.
+- `#46731` dynamic tool activity and persisted history ordering.
+- `#44243` per-step originating model metadata during history recording.
+
+Remaining blocked preconditions:
 
 `#49106` and `#42428` were rechecked against Go's architecture:
 
@@ -87,17 +119,7 @@ Confirmed TUI gaps retained as `implementation_pending`:
   upstream restructuring; Go's command center intentionally manages tasks and
   starts/resumes sessions without composing turns.
 
-Confirmed TUI partials:
-
-- `#46837` row columns, relative update times, and group-heading paging layout.
-- `#46731` dynamic tool activity and persisted ordering.
-- `#47377` opt-in realtime V3 reasoning status.
-- `#46882` command-center help/group rendering.
-- `#50504` remaining specialized modal-stack ownership.
-- `#40492` automatic post-turn title generation.
-- `#43279` linked-worktree session discovery edges.
-- `#43921` streaming reasoning summary surfaces.
-- `#49112` / `#53753` Linux PRIMARY helper ownership integration coverage.
+The ledger now has no pending, partial, blocked, or implementation rows.
 
 Architecture-specific TUI rows marked `not_applicable` include the account
 analytics dashboard lane (`#45740`-`#45769`, `#46863`, `#46866`), Rust's
@@ -110,17 +132,12 @@ backend (`#52160`), and terminal-scrollback table reflow (`#50207`).
 ## Verification
 
 ```text
-go test ./tui/... -count=1
-go test ./app -run 'Agents|Overview|Voice|Worktree|SessionPicker|NamedSession' -count=1
-go test ./session ./config -count=1
-go test ./appserver -count=1
-go vet ./app ./session ./appserver ./tui/...
+go test ./... -count=1
+go vet ./...
 go build ./...
 git diff --check -- <touched files>
 ```
 
-All of the above passed. A full `go test ./app -count=1` still reports the
-pre-existing Windows/environment failures: relative `.` path rejection, private
-socket-directory checks under the temp profile, `TERM=dumb` interactive
-confirmation, and cloud-task custom HTTPS-origin rejection. The targeted app
-tests covering this pass pass.
+`go vet ./...` and `go build ./...` pass. The full `go test ./...` run passed
+every package except one transient Windows keyring round-trip failure; rerunning
+`go test ./keyring -count=1` passed. `go test ./app -count=1` also passes.

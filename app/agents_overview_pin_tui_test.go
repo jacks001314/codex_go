@@ -329,9 +329,12 @@ func TestAgentsOverviewPinRequestDrivesRealDashboardLikeRust(t *testing.T) {
 	}
 	// The rows the real server served carried a pinnable source, so the
 	// dashboard advertises the shortcut (Rust agent_center/hints.rs).
-	if !strings.Contains(rendered, "pin/unpin") {
+	model.Update(keyRunes('?'))
+	rendered = utils.StripANSI(model.View())
+	if !strings.Contains(rendered, "Pin/unpin") {
 		t.Fatalf("command center did not advertise shared pinning:\n%s", rendered)
 	}
+	model.Update(keyPress(bubbletea.KeyEsc))
 
 	// `p` sends thread/section/move through the app adapter.
 	model, pinCommand := agentsOverviewPinUpdateLikeRust(t, model, agentsOverviewPinKeyLikeRust('p'))

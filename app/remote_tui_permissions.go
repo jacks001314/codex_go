@@ -241,8 +241,7 @@ func interactiveRemoteUpdateThreadPermissions(ctx context.Context, endpoint *app
 		if reviewer := strings.TrimSpace(selection.ApprovalsReviewer); reviewer != "" {
 			params.ApprovalsReviewer = &reviewer
 		}
-		var updated appserver.SettingsUpdateResponse
-		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadSettingsUpdate, params, &updated); err != nil {
+		if err := remoteTUIUpdateThreadSettings(ctx, client, params); err != nil {
 			if remoteTUIPermissionUpdateUnsupported(err) {
 				return codextea.ErrNamedPermissionProfilesUnsupported
 			}

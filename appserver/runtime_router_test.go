@@ -11295,10 +11295,17 @@ func TestRuntimeRouterTurnInterruptWritesRolloutTurnLifecycle(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
 
 	record := rolloutRecordForThread(t, store, threadID)
-	if len(record.Items) != 2 || record.Items[0].Text != "interrupt lifecycle" {
-		t.Fatalf("interrupted record items = %#v", record.Items)
+	userIndex := -1
+	for i := range record.Items {
+		if record.Items[i].Text == "interrupt lifecycle" {
+			userIndex = i
+			break
+		}
 	}
-	marker := record.Items[1]
+	if userIndex < 0 {
+		t.Fatalf("interrupted record is missing the user prompt: %#v", record.Items)
+	}
+	marker := record.Items[len(record.Items)-1]
 	if marker.Metadata["kind"] != "turn_aborted" || marker.Metadata["turnId"] != turnID || !strings.Contains(marker.Text, "<turn_aborted>") {
 		t.Fatalf("interrupted marker item = %#v", record.Items)
 	}
@@ -14711,6 +14718,7 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 		MCP:          mcpService,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	defer router.Close()
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -17167,7 +17175,7 @@ func TestRuntimeRouterAutoCompactsWhenTokenStatusRequiresIt(t *testing.T) {
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
 		Prompt:   "trigger auto compact",
-		Config:   map[string]any{"model_auto_compact_token_limit": 1},
+		Config:   map[string]any{"model_auto_compact_token_limit": 1, "features": map[string]any{"incremental_tools": false}},
 	}))
 	if turnStart.Error != nil {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
@@ -17215,15 +17223,22 @@ func TestRuntimeRouterPreTurnCompactFailurePreservesPromptLikeRust(t *testing.T)
 	defer router.Close()
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD:    cwd,
-		Prompt: "seed context",
+		CWD: cwd,
 	}))
 	if threadStart.Error != nil {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	seedTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "seed context",
+	}))
+	if seedTurn.Error != nil {
+		t.Fatalf("seed turn error: %+v", seedTurn.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, seedTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 	const prompt = "trigger pre-turn compact failure"
-	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
 		Prompt:   prompt,
 		Config:   map[string]any{"model_auto_compact_token_limit": 1},
@@ -17495,6 +17510,7 @@ func TestRuntimeRouterTurnStartRestoresThreadDynamicTools(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	defer router.Close()
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -18884,6 +18900,40 @@ func TestCompactTokenStatusFromMetadata(t *testing.T) {
 	}
 }
 
+// A compaction request replays conversation history, so it must be bounded by
+// the summarization model's usable window. The previous implementation left
+// MaxHistoryTokens unset and could overflow while summarizing.
+func TestCompactionHistoryTokenBudgetBoundsTheSummarizationInput(t *testing.T) {
+	info := &model.ModelInfo{
+		ContextWindow:                 1_048_576,
+		MaxContextWindow:              1_048_576,
+		EffectiveContextWindowPercent: 95,
+	}
+	if got, want := compactionHistoryTokenBudget(info), 871_628; got != want {
+		t.Fatalf("compaction history budget = %d, want %d", got, want)
+	}
+	if got := compactionHistoryTokenBudget(nil); got != 0 {
+		t.Fatalf("nil model budget = %d, want 0", got)
+	}
+	fallback := &model.ModelInfo{MaxContextWindow: 100_000, EffectiveContextWindowPercent: 100}
+	if got, want := compactionHistoryTokenBudget(fallback), 87_500; got != want {
+		t.Fatalf("max-window fallback budget = %d, want %d", got, want)
+	}
+
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"test-model\"\nmodel_context_window = 100000\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Config:       config.NewConfigService(home),
+	})
+	record := &session.Record{ID: "thread-compaction-budget", Metadata: session.Metadata{Model: "test-model"}}
+	if got, want := router.compactionHistoryTokenBudget(record, &runtimeCompactRequest{}), 83_125; got != want {
+		t.Fatalf("configured compaction history budget = %d, want %d", got, want)
+	}
+}
+
 func TestCompactTokenStatusForTurnReadsSnakeCaseUsageAndTrailingItems(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()
@@ -18942,6 +18992,63 @@ func TestPersistContextWindowExceededStatusPreservesUsageAndMarksPreTurnCompact(
 	status := compactTokenStatusFromMetadata(record.Metadata.Extra)
 	if status.ActiveContextTokens != 1234 || !status.ShouldCompact || !status.NewContextWindowRequired || status.Reason != compact.ReasonContextWindowExceeded {
 		t.Fatalf("status = %#v", status)
+	}
+}
+
+// The rejected request is larger than the last successful one, so recomputing
+// from `last_token_usage` alone can hide the overflow. The persisted marker
+// must survive until compaction clears it.
+func TestCompactTokenStatusForTurnKeepsPersistedContextOverflowLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID: "thread-context-overflow-sticky", SessionID: "thread-context-overflow-sticky",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{
+			Model: "gpt-5.4",
+			Extra: map[string]any{
+				"last_token_usage": map[string]any{"input_tokens": int64(1000), "total_tokens": int64(1010)},
+				"token_status": map[string]any{
+					"activeContextTokens": 1000, "shouldCompact": true,
+					"reason": string(compact.ReasonContextWindowExceeded), "newContextWindowRequired": true,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	status := router.compactTokenStatusForTurn("thread-context-overflow-sticky", "gpt-5.4", &turn.TurnStartParams{})
+	if !status.ShouldCompact || !status.NewContextWindowRequired || status.Reason != compact.ReasonContextWindowExceeded {
+		t.Fatalf("status = %#v, want the persisted overflow to force a pre-turn compaction", status)
+	}
+}
+
+// A resumed thread has no server-observed usage yet, so the pre-turn status is
+// estimated from persisted history. Encrypted reasoning payloads are part of
+// that history and must not make a near-full thread look empty.
+func TestCompactTokenStatusForTurnEstimatesEncryptedReasoningOnResume(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	raw, err := json.Marshal(map[string]any{
+		"type": "reasoning", "summary": []any{}, "encrypted_content": strings.Repeat("A", 100_000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(&session.Record{
+		ID: "thread-reasoning-resume", SessionID: "thread-reasoning-resume",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{Model: "gpt-5.4"},
+		Items:    []session.Item{{ID: "r1", Type: "reasoning", Raw: raw, CreatedAt: now}},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	params := &turn.TurnStartParams{Config: map[string]any{"model_context_window": 10_000, "model_auto_compact_token_limit": 1_000}}
+	status := router.compactTokenStatusForTurn("thread-reasoning-resume", "gpt-5.4", params)
+	if status.ActiveContextTokens < 18_000 || !status.ShouldCompact {
+		t.Fatalf("status = %#v, want the encrypted reasoning payload charged and compaction required", status)
 	}
 }
 

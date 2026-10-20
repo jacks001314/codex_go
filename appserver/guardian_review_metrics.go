@@ -1,7 +1,9 @@
 package appserver
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -46,6 +48,8 @@ type guardianReviewMetricAttribution struct {
 	ContextChanged   bool
 	TokenUsage       *model.AgentUsage
 	TimeToFirstToken *time.Duration
+	// AttemptCount is the number of model attempts made for this review.
+	AttemptCount int
 }
 
 // emitGuardianReviewMetrics mirrors emit_guardian_review_metrics.
@@ -69,6 +73,13 @@ func (r *modelGuardianReviewer) emitGuardianReviewMetrics(attribution guardianRe
 		durationMS = 0
 	}
 	sink.Counter(telemetry.GuardianReviewCountMetric, 1, counterTags)
+	sink.HistogramWithBounds(telemetry.GuardianReviewAttemptCountMetric, attribution.AttemptCount, []float64{0, 1, 2, 3}, tags)
+	retryTags := make(map[string]string, len(tags)+1)
+	for key, value := range tags {
+		retryTags[key] = value
+	}
+	retryTags["retried"] = guardianBoolTag(attribution.AttemptCount > 1)
+	sink.Counter(telemetry.GuardianReviewRetryOutcomeMetric, 1, retryTags)
 	sink.RecordDuration(telemetry.GuardianReviewDurationMetric, time.Duration(durationMS)*time.Millisecond, tags)
 	if attribution.TimeToFirstToken != nil {
 		ttft := *attribution.TimeToFirstToken
@@ -86,6 +97,33 @@ func (r *modelGuardianReviewer) emitGuardianReviewMetrics(attribution guardianRe
 			tokenTags["token_type"] = sample.tokenType
 			sink.Histogram(telemetry.GuardianReviewTokenUsageMetric, sample.value, tokenTags)
 		}
+	}
+}
+
+// emitGuardianReviewRetryMetrics mirrors Rust's retry-side telemetry in
+// ext/guardian-reviewer/src/retry.rs: every wait before a possible next attempt
+// is measured, while `retry` counts only waits that actually admit another
+// attempt. A cancelled or deadline-bound wait is tagged with its terminal
+// outcome instead.
+func (r *modelGuardianReviewer) emitGuardianReviewRetryMetrics(reason string, waitStarted time.Time, waitErr error) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "none"
+	}
+	waitOutcome := "retry"
+	switch {
+	case waitErr == nil:
+	case errors.Is(waitErr, context.DeadlineExceeded):
+		waitOutcome = "deadline"
+	default:
+		waitOutcome = "cancelled"
+	}
+	tags := map[string]string{"failure_reason": reason, "outcome": waitOutcome}
+	r.metrics.RecordDuration(telemetry.GuardianReviewRetryWaitMetric, time.Since(waitStarted), tags)
+	if waitErr == nil {
+		r.metrics.Counter(telemetry.GuardianReviewRetryMetric, 1, tags)
 	}
 }
 
@@ -154,11 +192,16 @@ func (r *modelGuardianReviewer) emitGuardianContextMetrics(
 			)
 		}
 	}
+	totalTokens := guardianContextRequestTokenEstimate(prompt, instructions, inputItems)
 	r.metrics.HistogramWithBounds(
 		telemetry.GuardianContextRequestTokensMetric,
-		guardianContextRequestTokenEstimate(prompt, instructions, inputItems),
+		totalTokens,
 		telemetry.GuardianContextRequestTokensBoundaries,
-		map[string]string{"target": "sync", "component": "total"},
+		map[string]string{
+			"target":       "sync",
+			"component":    "total",
+			"token_bucket": telemetry.GuardianRequestTokenBucket(totalTokens),
+		},
 	)
 }
 

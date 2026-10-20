@@ -50,6 +50,83 @@ func TestTurnRootTurnIDExposureLikeRust(t *testing.T) {
 	}
 }
 
+func TestThreadResumeDecodesReasoningStringContentLikeRust(t *testing.T) {
+	raw := `{
+		"thread": {
+			"id": "thread-1",
+			"turns": [{
+				"id": "turn-1",
+				"status": "completed",
+				"items": [{
+					"id": "reasoning-1",
+					"type": "reasoning",
+					"summary": ["checking the repository"],
+					"content": ["private reasoning"]
+				}]
+			}]
+		}
+	}`
+
+	var response ThreadResumeResponse
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		t.Fatalf("Unmarshal(ThreadResumeResponse) error = %v", err)
+	}
+	if response.Thread == nil || len(response.Thread.Turns) != 1 || len(response.Thread.Turns[0].Items) != 1 {
+		t.Fatalf("resumed thread = %#v", response.Thread)
+	}
+	item := response.Thread.Turns[0].Items[0]
+	if len(item.Content) != 0 {
+		t.Fatalf("reasoning content decoded as structured content: %#v", item.Content)
+	}
+	if got := threadItemStringSliceFromData(item.Data, "summary"); !reflect.DeepEqual(got, []string{"checking the repository"}) {
+		t.Fatalf("reasoning summary = %#v", got)
+	}
+	if got := threadItemStringSliceFromData(item.Data, "content"); !reflect.DeepEqual(got, []string{"private reasoning"}) {
+		t.Fatalf("reasoning content = %#v", got)
+	}
+}
+
+func TestThreadItemDecodesStructuredContentLikeRust(t *testing.T) {
+	raw := `{
+		"id": "user-1",
+		"type": "userMessage",
+		"content": [
+			{"type": "text", "text": "hello"},
+			{"type": "image", "url": "https://example.test/image.png", "detail": "high"}
+		]
+	}`
+
+	var item ThreadItem
+	if err := json.Unmarshal([]byte(raw), &item); err != nil {
+		t.Fatalf("Unmarshal(ThreadItem) error = %v", err)
+	}
+	if len(item.Content) != 2 || item.Content[0].Text != "hello" || item.Content[1].Type != "image" || item.Content[1].Detail == nil || *item.Content[1].Detail != "high" {
+		t.Fatalf("structured content = %#v", item.Content)
+	}
+}
+
+func TestThreadItemDecodesExtensionFieldsWithoutContentLikeRust(t *testing.T) {
+	raw := `{
+		"id": "agent-1",
+		"type": "agentMessage",
+		"text": "done",
+		"phase": "final_answer",
+		"memoryCitation": {"threadIds": ["thread-1"]}
+	}`
+
+	var item ThreadItem
+	if err := json.Unmarshal([]byte(raw), &item); err != nil {
+		t.Fatalf("Unmarshal(ThreadItem) error = %v", err)
+	}
+	if item.Data["phase"] != "final_answer" {
+		t.Fatalf("phase = %#v", item.Data["phase"])
+	}
+	citation, ok := item.Data["memoryCitation"].(map[string]any)
+	if !ok || !reflect.DeepEqual(citation["threadIds"], []any{"thread-1"}) {
+		t.Fatalf("memoryCitation = %#v", item.Data["memoryCitation"])
+	}
+}
+
 func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 	cases := []struct {
 		name  string

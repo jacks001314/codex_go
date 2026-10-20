@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
 	"codex_go/codexapi"
@@ -65,5 +66,34 @@ func TestResponseFailedErrorPolicyFallbackMessagesLikeRust(t *testing.T) {
 	blankInvalid := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":""}}}`))
 	if !errors.As(blankInvalid, &apiErr) || apiErr.Message != "" {
 		t.Fatalf("blank invalid_prompt message = %#v", blankInvalid)
+	}
+}
+
+// OpenAI-compatible inference servers often report an oversized prompt as a
+// plain 400 body without a Responses error code. The HTTP client must still
+// surface it as a context-window failure so the turn can be compacted.
+func TestResponsesHTTPErrorClassifiesProviderContextOverflow(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"message":"This model's maximum context length is 1048576 tokens. However, you requested 1299476 tokens (1299476 in the messages, 0 in the completion). Please reduce the length"}}`,
+		`{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}`,
+		`{"error":{"message":"The request exceeds the available context size"}}`,
+		`{"error":{"message":"prompt is too long"}}`,
+		`{"error":{"code":"context_length_exceeded","message":"too big"}}`,
+	} {
+		err := responsesHTTPError("deepseek", http.StatusBadRequest, http.Header{}, []byte(body))
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorContextWindowExceeded || apiErr.Status != http.StatusBadRequest {
+			t.Fatalf("context overflow body %s => %#v, want context-window API error", body, err)
+		}
+	}
+
+	err := responsesHTTPError("deepseek", http.StatusBadRequest, http.Header{}, []byte(`{"error":{"message":"invalid model"}}`))
+	var apiErr *codexapi.APIError
+	if errors.As(err, &apiErr) {
+		t.Fatalf("unrelated 400 was classified as an API error: %#v", err)
+	}
+	var responsesErr *ResponsesAPIError
+	if !errors.As(err, &responsesErr) || responsesErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unrelated 400 = %#v, want a generic Responses API error", err)
 	}
 }

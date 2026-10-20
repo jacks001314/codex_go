@@ -1033,16 +1033,16 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	cleanRoot := *root
 	cleanRoot.Prompt = normalizeInteractivePrompt(cleanRoot.Prompt)
 	root = &cleanRoot
+	// Rust #46088: --no-daemon excludes the shared background server, so the
+	// combination with an explicit remote is rejected up front.
+	if root.Shared.NoDaemon && strings.TrimSpace(root.Remote) != "" {
+		return interactiveFatalExit(stderr, daemonNoDaemonWithRemote)
+	}
 	if err := guardInteractiveDumbTerminal(stdin, stderr, os.Getenv("TERM")); err != nil {
 		return interactiveFatalExit(stderr, err.Error())
 	}
 	if err := interactiveRemoteWorkspaceRootError(root); err != nil {
 		return interactiveFatalExit(stderr, err.Error())
-	}
-	// Rust #46088: --no-daemon excludes the shared background server, so the
-	// combination with an explicit remote is rejected up front.
-	if root.Shared.NoDaemon && strings.TrimSpace(root.Remote) != "" {
-		return interactiveFatalExit(stderr, daemonNoDaemonWithRemote)
 	}
 	remoteEndpoint, err := resolveInteractiveRemoteEndpoint(root)
 	if err != nil {

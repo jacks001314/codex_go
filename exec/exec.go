@@ -90,11 +90,6 @@ type Request struct {
 	multiAgentVersion multiagent.MultiAgentVersion
 }
 
-// execCompactionWarningMessage mirrors the Rust core compaction warning event
-// text so the SDK/exec JSON stream emits the same error item after a
-// compaction turn.
-const execCompactionWarningMessage = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted."
-
 type Result struct {
 	ThreadID    string
 	TurnID      string
@@ -168,6 +163,38 @@ func NewRunner(codexHome string) *Runner {
 	// still used.
 	runner.UnifiedExec.SetSpanSink(runner.unifiedExecSpanSink())
 	return runner
+}
+
+// cloneForSubagent copies the runner configuration without copying its locks
+// or per-turn mutable state.
+func (r *Runner) cloneForSubagent() *Runner {
+	if r == nil {
+		return nil
+	}
+	return &Runner{
+		CodexHome:               r.CodexHome,
+		Agent:                   r.Agent,
+		ToolRouter:              r.ToolRouter,
+		UnifiedExec:             r.UnifiedExec,
+		Hooks:                   r.Hooks,
+		ShellApproval:           r.ShellApproval,
+		UserInput:               r.UserInput,
+		MCPService:              r.MCPService,
+		MCPTools:                append([]mcp.RuntimeToolInfo(nil), r.MCPTools...),
+		MCPConnectors:           append([]mcp.RuntimeConnector(nil), r.MCPConnectors...),
+		MCPElicitation:          r.MCPElicitation,
+		CodeModeProvider:        r.CodeModeProvider,
+		MaxToolTurns:            r.MaxToolTurns,
+		UseResponsesAPI:         r.UseResponsesAPI,
+		HTTPClient:              r.HTTPClient,
+		Now:                     r.Now,
+		UnifiedExecEnvironments: append([]tool.UnifiedExecEnvironment(nil), r.UnifiedExecEnvironments...),
+		goalMu:                  &sync.Mutex{},
+		otelProvider:            r.otelProvider,
+		otelOriginator:          r.otelOriginator,
+		otelToolResultLimits:    r.otelToolResultLimits,
+		otelAuthEnv:             r.otelAuthEnv,
+	}
 }
 
 func NewLocalRunner(codexHome string) *Runner {
@@ -2585,14 +2612,6 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 	}
 	if event, ok := todoLists.completionEvent(); ok {
 		if err := sink.Emit(event); err != nil {
-			return err
-		}
-	}
-	if compactedThisTurn {
-		// Rust emits the compaction warning as an error item after the resumed
-		// turn's final message and before turn.completed. Emit it in the same
-		// position so the SDK event sequence matches.
-		if err := sink.Emit(protocol.ItemCompleted(protocol.ErrorItem("compaction-warning", execCompactionWarningMessage))); err != nil {
 			return err
 		}
 	}

@@ -118,11 +118,19 @@ func CanonicalizeRollout(codexHome string, path string) error {
 			return err
 		}
 		_ = os.Remove(stagedPath)
+		if err := preserveRolloutAccessMetadata(path, compressedStagedPath, sourceInfo); err != nil {
+			_ = os.Remove(compressedStagedPath)
+			return fmt.Errorf("preserve rollout access metadata: %w", err)
+		}
 		if err := os.Rename(compressedStagedPath, path); err != nil {
 			_ = os.Remove(compressedStagedPath)
 			return fmt.Errorf("publish compressed staged rollout: %w", err)
 		}
 	} else {
+		if err := preserveRolloutAccessMetadata(path, stagedPath, sourceInfo); err != nil {
+			_ = os.Remove(stagedPath)
+			return fmt.Errorf("preserve rollout access metadata: %w", err)
+		}
 		if err := os.Rename(stagedPath, path); err != nil {
 			_ = os.Remove(stagedPath)
 			return fmt.Errorf("publish staged rollout: %w", err)

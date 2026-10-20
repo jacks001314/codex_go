@@ -909,7 +909,10 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 			Depth: task.depth, Version: s.multiAgentVersion,
 			Controller: childController,
 		}
-		childRunner := *s.runner
+		childRunner := s.runner.cloneForSubagent()
+		if childRunner == nil {
+			return
+		}
 		childRunner.ToolRouter = nil
 		childRunner.UnifiedExec = tool.NewUnifiedExecManager()
 		result, err := childRunner.RunContext(childCtx, &childReq, strings.NewReader(""), io.Discard, io.Discard)

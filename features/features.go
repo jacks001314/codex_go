@@ -174,7 +174,8 @@ var Registry = []Spec{
 	{Key: "deferred_tool_world_state", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs #50464): track top-level tool
 	// definitions in world state and emit incremental context updates.
-	{Key: "incremental_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
+	{Key: "subagent_thread_environments", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "non_prefixed_mcp_tool_names", Stage: StageUnderDevelopment},
 	{Key: "omit_app_server_notification_media", Stage: StageUnderDevelopment},
 	{Key: "unavailable_dummy_tools", Stage: StageRemoved},
@@ -291,7 +292,7 @@ var Registry = []Spec{
 	// during the sync26 static re-target.
 	// Rust (codex-rs/features/src/lib.rs #46849): the fullscreen transcript
 	// control moved into the TUI configuration; the flag is deprecated.
-	{Key: "transcript_v2", Stage: StageDeprecated, DefaultEnabled: false},
+	{Key: "transcript_v2", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "content_item_kinds", Stage: StageStable, DefaultEnabled: true},
 	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},

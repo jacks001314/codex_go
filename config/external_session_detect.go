@@ -113,18 +113,25 @@ func externalClaudeSessionSummary(path string) (string, string, bool) {
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
 		var row struct {
-			Type        string          `json:"type"`
-			CWD         string          `json:"cwd"`
-			Timestamp   string          `json:"timestamp"`
-			TimestampMS *int64          `json:"timestamp_ms"`
-			IsMeta      bool            `json:"isMeta"`
-			IsSidechain bool            `json:"isSidechain"`
-			CustomTitle string          `json:"customTitle"`
-			AITitle     string          `json:"aiTitle"`
-			Message     json.RawMessage `json:"message"`
+			Type                 string          `json:"type"`
+			CWD                  string          `json:"cwd"`
+			Timestamp            string          `json:"timestamp"`
+			TimestampMS          *int64          `json:"timestamp_ms"`
+			IsMeta               bool            `json:"isMeta"`
+			IsSidechain          bool            `json:"isSidechain"`
+			CustomTitle          string          `json:"customTitle"`
+			AITitle              string          `json:"aiTitle"`
+			ContinuedInSessionID string          `json:"continuedInSessionId"`
+			Message              json.RawMessage `json:"message"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &row) != nil {
 			continue
+		}
+		// Backgrounding a Claude session creates a continuation that already
+		// contains the original history. Offer only the continuation so the
+		// import does not duplicate messages.
+		if row.Type == "continued-in" && strings.TrimSpace(row.ContinuedInSessionID) != "" {
+			return "", "", false
 		}
 		if cwd == "" {
 			cwd = strings.TrimSpace(row.CWD)

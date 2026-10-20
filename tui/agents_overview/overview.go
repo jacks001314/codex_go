@@ -239,6 +239,8 @@ type Row struct {
 	// renders as "Unknown" (Rust #50727).
 	ReasoningEffort string
 	GitBranch       string
+	// UpdatedAt is the thread's last-update Unix timestamp in seconds.
+	UpdatedAt int64
 	// LastMessage is the latest agent message in the task's most recent turn,
 	// previewed for the details pane (Rust agents_overview_details
 	// last_message via thread/turns/list).
@@ -343,6 +345,8 @@ type State struct {
 	// RenameTarget keeps the renamed task visible even when its status leaves
 	// the active filter (Rust AgentsOverviewViewState::rename_target).
 	RenameTarget string
+	// Help shows the grouped task-shortcut reference (Rust #46882).
+	Help bool
 	// CreatingWorktree reports that the dashboard is creating a managed
 	// worktree for a new session (Rust AgentsOverviewViewState::creating_worktree):
 	// the list shows progress and pauses every action but cancel/quit.
@@ -1206,6 +1210,14 @@ func (v *View) ToggleSearch() {
 	if !v.State.Searching {
 		v.State.Search = ""
 	}
+}
+
+// ToggleHelp shows or hides the grouped shortcut reference (Rust #46882).
+func (v *View) ToggleHelp() {
+	if v == nil || v.State.Renaming || v.State.Searching {
+		return
+	}
+	v.State.Help = !v.State.Help
 }
 
 // BeginRename starts renaming the selected row. It returns false when the

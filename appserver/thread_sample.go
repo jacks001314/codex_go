@@ -1,0 +1,289 @@
+package appserver
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"codex_go/model"
+	"codex_go/session"
+	"codex_go/turn"
+)
+
+const (
+	threadSampleTimeout      = 30 * time.Second
+	threadSampleMaxPrompt    = 4000
+	threadSampleMaxOutput    = 64 * 1024
+	threadSampleOriginator   = "thread_sample"
+	threadSampleThreadSource = "thread_sample"
+)
+
+// handleThreadSampleRuntime captures one model response with the source
+// thread's configuration and history. The request is a plain model sample: no
+// tools are executed and the source thread's history is never written.
+func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSampleResponse, error) {
+	if r == nil {
+		return nil, invalidParams("thread/sample is unavailable")
+	}
+	var params ThreadSampleParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	expectedTurnID := strings.TrimSpace(params.ExpectedTurnID)
+	prompt := params.Prompt
+	if expectedTurnID == "" || strings.TrimSpace(prompt) == "" || len(prompt) > threadSampleMaxPrompt {
+		return nil, invalidParams(fmt.Sprintf("thread/sample requires expectedTurnId and a prompt of at most %d bytes", threadSampleMaxPrompt))
+	}
+	sampleBase, unregisterSample := r.registerThreadSampleCancel(request)
+	defer unregisterSample()
+	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || r.threads == nil {
+		return nil, invalidParams("thread/sample requires a loaded thread store")
+	}
+	if !r.threads.HasLiveThread(session.ThreadID(threadID)) {
+		return nil, invalidParams("sample source is not loaded")
+	}
+	if r.threads.ActiveTurn(threadID) != nil {
+		return nil, invalidParams("sample source must be idle")
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return nil, invalidParams("sample source is not loaded")
+	}
+	if boolFromMap(record.Metadata.Extra, "ephemeral") || runtimeRecordIsSubagent(record) || strings.TrimSpace(string(record.ParentThreadID)) != "" {
+		return nil, invalidParams("sample source must be a persistent root thread")
+	}
+	if !threadSampleLatestTurnMatches(record, expectedTurnID) {
+		return nil, invalidParams("sample source turn is no longer the latest completed turn")
+	}
+	historyVersion, err := threadSampleHistoryVersion(record)
+	if err != nil {
+		return nil, invalidParams(err.Error())
+	}
+	sampleTurnID := newMemoryTurnID()
+	settings := r.threadSettingsForTurn(threadID)
+	paramsForTurn := &turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      firstNonEmpty(threadSettingsCWD(settings), strings.TrimSpace(record.Metadata.CWD)),
+		Model:    firstNonEmpty(threadSettingsModel(settings), strings.TrimSpace(record.Metadata.Model)),
+		Config:   threadRecordConfigOverrides(record),
+	}
+	applyThreadSettingsToTurnStartParams(paramsForTurn, settings)
+	cfg, err := r.effectiveConfigForTurn(paramsForTurn)
+	if err != nil {
+		return nil, invalidParams(err.Error())
+	}
+	providerConfig, err := r.appTurnModelProviderConfig(cfg, paramsForTurn)
+	if err != nil {
+		return nil, invalidParams(err.Error())
+	}
+	modelInfo := r.modelInfoForRuntimeWithConfig(providerConfig.Model, cfg)
+	instructions, err := appBaseInstructionsForConfig(cfg)
+	if err != nil {
+		return nil, invalidParams(err.Error())
+	}
+	instructions = firstNonEmpty(turnBaseInstructions(paramsForTurn), instructions)
+	if instructions == "" && modelInfo != nil {
+		instructions = modelInfo.ModelInstructions(appPersonalityForTurn(cfg, paramsForTurn))
+	}
+	historyItems, _ := r.historyInputItemsForTurn(threadID)
+	inputItems := append([]any(nil), historyItems...)
+	if worldStateItems, stateErr := r.modelWorldStateInputItems(threadID, modelInfo, instructions); stateErr == nil {
+		inputItems = append(inputItems, worldStateItems...)
+	}
+	if item, itemErr := r.managedDeveloperInstructionsInputItem(cfg); itemErr == nil && item != nil {
+		inputItems = append(inputItems, item)
+	}
+	runContext, _ := r.buildTurnRuntimeContext(context.Background(), paramsForTurn, sampleTurnID)
+	var tools []any
+	if runContext != nil {
+		tools = runContext.ModelVisibleToolDefinitions("", cfg != nil && cfg.DisableCodeModeInProcessFallback())
+	}
+	effort := appReasoningEffortForTurn(cfg, paramsForTurn)
+	if params.Effort != nil {
+		requested := strings.TrimSpace(*params.Effort)
+		if requested != "" && modelInfo != nil && modelInfo.SupportsReasoningEffortUpdates && strings.EqualFold(providerConfig.ProviderID, model.OpenAIProviderID) {
+			effort = requested
+		}
+	}
+	requestTrace := r.requestSpanTrace(request)
+	agentRequest := &model.AgentRequest{
+		Prompt:          prompt,
+		Instructions:    instructions,
+		InputItems:      inputItems,
+		Tools:           tools,
+		Model:           providerConfig.Model,
+		ProviderID:      providerConfig.ProviderID,
+		ThreadID:        threadID,
+		TurnID:          sampleTurnID,
+		Originator:      threadSampleOriginator,
+		ReasoningEffort: effort,
+		Trace:           requestTrace,
+		Ephemeral:       true,
+		ClientMetadata: map[string]string{
+			"thread_source": threadSampleThreadSource,
+		},
+	}
+	agent := r.requireAgentForTurn(paramsForTurn)
+	sampleContext, cancel := context.WithTimeout(sampleBase, threadSampleTimeout)
+	defer cancel()
+	response, err := agent.Run(sampleContext, agentRequest)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(sampleContext.Err(), context.Canceled) {
+			return nil, fmt.Errorf("sample canceled")
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(sampleContext.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("sample timed out")
+		}
+		return nil, err
+	}
+	if response == nil || strings.TrimSpace(response.ResponseID) == "" {
+		return nil, fmt.Errorf("sample completed without a response")
+	}
+	current, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || current == nil {
+		return nil, invalidParams("sample source changed")
+	}
+	currentVersion, err := threadSampleHistoryVersion(current)
+	if err != nil || currentVersion != historyVersion {
+		return nil, invalidParams("sample source changed")
+	}
+	text, err := threadSampleResponseText(response)
+	if err != nil {
+		return nil, err
+	}
+	result := &ThreadSampleResponse{
+		SourceTurnID: expectedTurnID,
+		ResponseID:   strings.TrimSpace(response.ResponseID),
+		Text:         text,
+	}
+	if response.Usage.InputTokens != 0 || response.Usage.CachedInputTokens != 0 || response.Usage.OutputTokens != 0 {
+		inputTokens := response.Usage.InputTokens
+		cachedTokens := response.Usage.CachedInputTokens
+		outputTokens := response.Usage.OutputTokens
+		result.InputTokens = &inputTokens
+		result.CachedInputTokens = &cachedTokens
+		result.OutputTokens = &outputTokens
+	}
+	return result, nil
+}
+
+func (r *RuntimeRouter) registerThreadSampleCancel(request *Request) (context.Context, func()) {
+	base, cancel := context.WithCancel(context.Background())
+	if r == nil || request == nil {
+		return base, func() {}
+	}
+	key := threadSampleCancelKey(request.ConnectionID, request.ID)
+	r.threadSampleMu.Lock()
+	if r.threadSampleCancels == nil {
+		r.threadSampleCancels = map[string]context.CancelFunc{}
+	}
+	r.threadSampleCancels[key] = cancel
+	r.threadSampleMu.Unlock()
+	return base, func() {
+		cancel()
+		r.threadSampleMu.Lock()
+		delete(r.threadSampleCancels, key)
+		r.threadSampleMu.Unlock()
+	}
+}
+
+func threadSampleCancelKey(connectionID string, requestID RequestID) string {
+	encoded, _ := json.Marshal(requestID)
+	return normalizeConnectionID(connectionID) + "\x00" + string(encoded)
+}
+
+func (r *RuntimeRouter) handleThreadSampleCancelRuntime(request *Request) (*ThreadSampleCancelResponse, error) {
+	var params ThreadSampleCancelParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	key := threadSampleCancelKey(request.ConnectionID, params.RequestID)
+	r.threadSampleMu.Lock()
+	cancel := r.threadSampleCancels[key]
+	r.threadSampleMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	// Unknown or repeated cancellations are harmless no-ops.
+	return &ThreadSampleCancelResponse{}, nil
+}
+
+func (r *RuntimeRouter) cancelThreadSamplesForConnection(connectionID string) {
+	if r == nil {
+		return
+	}
+	prefix := normalizeConnectionID(connectionID) + "\x00"
+	r.threadSampleMu.Lock()
+	var cancels []context.CancelFunc
+	for key, cancel := range r.threadSampleCancels {
+		if strings.HasPrefix(key, prefix) {
+			cancels = append(cancels, cancel)
+			delete(r.threadSampleCancels, key)
+		}
+	}
+	r.threadSampleMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func threadSampleLatestTurnMatches(record *session.Record, expectedTurnID string) bool {
+	if record == nil {
+		return false
+	}
+	turns := record.Metadata.RolloutTurns
+	if len(turns) == 0 {
+		return false
+	}
+	latest := turns[len(turns)-1]
+	return strings.TrimSpace(latest.ID) == expectedTurnID && strings.EqualFold(strings.TrimSpace(latest.Status), "completed")
+}
+
+func threadSampleHistoryVersion(record *session.Record) (string, error) {
+	if record == nil {
+		return "", errors.New("sample source is unavailable")
+	}
+	data, err := json.Marshal(record.Items)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// threadSampleResponseText accepts only assistant text. Reasoning is ignored;
+// any tool call or other output item makes the sample text null, matching the
+// Rust interceptor's text-only contract.
+func threadSampleResponseText(response *model.AgentResponse) (*string, error) {
+	if response == nil {
+		return nil, nil
+	}
+	var builder strings.Builder
+	for _, item := range response.Items {
+		switch item.Type {
+		case "reasoning":
+			continue
+		case "agent_message":
+			if phase, _ := item.Data["phase"].(string); strings.EqualFold(strings.TrimSpace(phase), "commentary") {
+				continue
+			}
+			if builder.Len()+len(item.Text) > threadSampleMaxOutput {
+				return nil, fmt.Errorf("sample output exceeds limit")
+			}
+			builder.WriteString(item.Text)
+		default:
+			return nil, nil
+		}
+	}
+	text := builder.String()
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	return &text, nil
+}

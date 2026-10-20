@@ -42,8 +42,8 @@ func TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust(t *testing.T
 		t.Fatalf("archived = %#v, want [root-1]", source.archived)
 	}
 
-	// Delete uses the Delete key and the same confirmation.
-	model.Update(keyPress(bubbletea.KeyDelete))
+	// Delete uses the Backspace key and the same confirmation.
+	model.Update(keyPress(bubbletea.KeyBackspace))
 	if model.pendingLifecycle != "delete" {
 		t.Fatalf("delete pending action = %q, want delete", model.pendingLifecycle)
 	}

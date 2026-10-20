@@ -93,7 +93,7 @@ func TestModelGroupingLikeRust(t *testing.T) {
 	}
 
 	joined := strings.Join(view.Render(140, 30), "\n")
-	for _, wantText := range []string{"gpt-5.4  2", "gpt-5.5  1", "Unknown  1", "g group: model"} {
+	for _, wantText := range []string{"gpt-5.4  2", "gpt-5.5  1", "Unknown  1", "Group: Model"} {
 		if !strings.Contains(joined, wantText) {
 			t.Errorf("model grouping render missing %q:\n%s", wantText, joined)
 		}
@@ -104,7 +104,7 @@ func TestModelGroupingLikeRust(t *testing.T) {
 	if view.State.Grouping != GroupingProject {
 		t.Fatalf("third toggle = %v, want project", view.State.Grouping)
 	}
-	if !strings.Contains(strings.Join(view.Render(140, 30), "\n"), "g group: project") {
+	if !strings.Contains(strings.Join(view.Render(140, 30), "\n"), "Group: Project") {
 		t.Error("project grouping footer hint missing")
 	}
 
@@ -466,10 +466,10 @@ func TestRenderLayout(t *testing.T) {
 		"Agent command center",
 		"All 4   Needs you 1   Working 1   Ready 1   Inactive 1",
 		"n new",
-		"h hide",
-		"a archive",
+		"? help",
 		"/work/a  2",
-		"› ● alpha  Working",
+		"› ● alpha",
+		"Working",
 		"/work/b  1",
 		"/work/c  1",
 		"✓ Untitled task",
@@ -565,7 +565,9 @@ func TestCreatingWorktreeStateLikeRust(t *testing.T) {
 
 	view.SetCreatingWorktree(false)
 	rendered = strings.Join(view.Render(120, 24), "\n")
-	if !strings.Contains(rendered, "w new worktree") {
+	view.ToggleHelp()
+	rendered = strings.Join(view.Render(120, 30), "\n")
+	if !strings.Contains(rendered, "w New worktree") {
 		t.Fatalf("worktree shortcut hint missing with worktrees enabled:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "Creating worktree") {
@@ -573,7 +575,8 @@ func TestCreatingWorktreeStateLikeRust(t *testing.T) {
 	}
 
 	grouped := New(sampleRows(), "", false)
-	if strings.Contains(strings.Join(grouped.Render(120, 24), "\n"), "w new worktree") {
+	grouped.ToggleHelp()
+	if strings.Contains(strings.Join(grouped.Render(120, 30), "\n"), "w New worktree") {
 		t.Fatal("the worktree hint must not appear without worktree support")
 	}
 }

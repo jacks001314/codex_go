@@ -1,7 +1,9 @@
 package agentsoverview
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mattn/go-runewidth"
 
@@ -100,7 +102,9 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		lines = append(lines, renderLine(inset, []span{{text: searchHint, style: spanDim}}, maxWidth, styled))
 	}
 
-	if bodyWidth >= 90 {
+	if v.State.Help {
+		lines = append(lines, v.renderHelp(bodyWidth, styled)...)
+	} else if bodyWidth >= 90 {
 		listWidth := bodyWidth - 3 - 38
 		if listWidth < 46 {
 			listWidth = 46
@@ -126,6 +130,66 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 			lines = append(lines, renderLine(inset, row, maxWidth, styled))
 		}
 	}
+	return lines
+}
+
+// renderHelp renders the grouped task-shortcut reference (Rust #46882).
+func (v *View) renderHelp(width int, styled bool) []string {
+	if v == nil {
+		return nil
+	}
+	hint := func(key string, fallback string) string {
+		value, _ := v.shortcutHint(key, fallback)
+		return value
+	}
+	lines := []string{renderLine("", []span{{text: "Task shortcuts", style: spanBold}}, width, styled)}
+	group := func(title string, entries ...[2]string) {
+		lines = append(lines, "")
+		lines = append(lines, renderLine("", []span{{text: title, style: spanCyanBold}}, width, styled))
+		for _, entry := range entries {
+			if strings.TrimSpace(entry[0]) == "" {
+				continue
+			}
+			lines = append(lines, renderLine("  ", []span{
+				{text: entry[0], style: spanBold},
+				{text: " " + entry[1], style: spanDim},
+			}, width, styled))
+		}
+	}
+	group("Navigate",
+		[2]string{hint("move_up", "\u2191"), "Up"},
+		[2]string{hint("move_down", "\u2193"), "Down"},
+		[2]string{hint("accept", "enter"), "Open"},
+		[2]string{hint("page_up", "pgup"), "Page up"},
+		[2]string{hint("page_down", "pgdown"), "Page down"},
+	)
+	taskEntries := [][2]string{
+		[2]string{hint(ShortcutHintNewTask, "n"), "New"},
+	}
+	if v.worktreesEnabled {
+		taskEntries = append(taskEntries, [2]string{hint(ShortcutHintNewWorktree, "w"), "New worktree"})
+	}
+	taskEntries = append(taskEntries,
+		[2]string{hint("resume", "o"), "Resume"},
+		[2]string{hint(ShortcutHintRename, "r"), "Rename"},
+		[2]string{hint(ShortcutHintStop, "x"), "Stop"},
+		[2]string{hint(ShortcutHintArchive, "a"), "Archive"},
+		[2]string{hint(ShortcutHintHide, "h"), "Hide"},
+		[2]string{hint(ShortcutHintDelete, "backspace"), "Delete"},
+	)
+	group("Tasks", taskEntries...)
+	if v.CanToggleSelectedPin() {
+		// The shared pin entry sits at the end of the task group.
+		lines = append(lines, renderLine("  ", []span{
+			{text: hint(ShortcutHintTogglePin, "p"), style: spanBold},
+			{text: " Pin/unpin", style: spanDim},
+		}, width, styled))
+	}
+	group("View",
+		[2]string{strings.TrimSpace(v.FilterHint), "Filter"},
+		[2]string{hint(ShortcutHintSearch, "f3"), "Search"},
+		[2]string{hint(ShortcutHintToggleGrouping, "g"), "Group"},
+	)
 	return lines
 }
 
@@ -294,16 +358,18 @@ func truncateToWidthWithEllipsis(value string, width int) string {
 // footerHints returns each footer hint as its own span group, in Rust's order
 // (agents_overview_render.rs).
 func (v *View) footerHints() [][]span {
+	if v != nil && v.State.Help {
+		return [][]span{
+			{{text: "esc", style: spanBold}, {text: " back", style: spanDim}},
+			{{text: "ctrl-c", style: spanBold}, {text: " quit", style: spanDim}},
+		}
+	}
 	if v != nil && v.State.CreatingWorktree {
 		// Rust #45276: creating a worktree pauses the actions, so the footer
 		// only reports progress and the quit shortcut.
 		return [][]span{
 			{{text: "Creating worktree…", style: spanBold}, {text: "  ctrl-c quit", style: spanDim}},
 		}
-	}
-	stopStyle := spanDim
-	if row := v.SelectedRow(); row != nil && row.StatusActive {
-		stopStyle = spanBold
 	}
 	// Rust #45255: Enter opens the selected task; Right only opens when the
 	// list owns the keys, which the footer no longer advertises.
@@ -315,43 +381,12 @@ func (v *View) footerHints() [][]span {
 	if binding, ok := v.shortcutHint(ShortcutHintNewTask, "n"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " new", style: spanDim}})
 	}
-	if v.worktreesEnabled {
-		if binding, ok := v.shortcutHint(ShortcutHintNewWorktree, "w"); ok {
-			hints = append(hints, []span{{text: binding, style: spanBold}, {text: " new worktree", style: spanDim}})
-		}
-	}
-	if binding, ok := v.shortcutHint(ShortcutHintSearch, "f"); ok {
-		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " search", style: spanDim}})
-	}
-	if binding, ok := v.shortcutHint(ShortcutHintToggleGrouping, "g"); ok {
-		// Rust #44957: the footer reports the active grouping mode.
-		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " " + v.State.Grouping.Label(), style: spanDim}})
-	}
-	if binding, ok := v.shortcutHint(ShortcutHintRename, "r"); ok {
-		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " rename", style: spanDim}})
-	}
-	if binding, ok := v.shortcutHint(ShortcutHintStop, "x"); ok {
-		hints = append(hints, []span{{text: binding, style: stopStyle}, {text: " stop", style: spanDim}})
-	}
-	if binding, ok := v.shortcutHint(ShortcutHintHide, "h"); ok {
-		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " hide", style: spanDim}})
-	}
-	if binding, ok := v.shortcutHint(ShortcutHintArchive, "a"); ok {
-		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " archive", style: spanDim}})
-	}
-	if binding, ok := v.shortcutHint(ShortcutHintDelete, "delete"); ok {
-		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " delete", style: spanDim}})
-	}
-	// Rust #51500: the pin shortcut is only advertised when the selected task
-	// can be pinned or unpinned (Rust agent_center/hints.rs "Pin/unpin").
-	if binding, ok := v.shortcutHint(ShortcutHintTogglePin, "p"); ok && v.CanToggleSelectedPin() {
-		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " pin/unpin", style: spanDim}})
-	}
 	// Rust #45255: Esc only cancels metadata editing, so the list stays open and
 	// the hint appears only while editing; quitting is always advertised.
 	if v != nil && (v.State.Searching || v.State.Renaming) {
 		hints = append(hints, []span{{text: "esc", style: spanBold}, {text: " cancel", style: spanDim}})
 	}
+	hints = append(hints, []span{{text: "?", style: spanBold}, {text: " help", style: spanDim}})
 	hints = append(hints, []span{{text: "ctrl-c", style: spanBold}, {text: " quit", style: spanDim}})
 	return hints
 }
@@ -551,12 +586,12 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 		if len(lines) >= height {
 			break
 		}
-		lines = append(lines, renderLine("", v.renderRowSpans(index, grouping != GroupingStatus), listWidth, styled))
+		lines = append(lines, renderLine("", v.renderRowSpans(index, grouping != GroupingStatus, listWidth), listWidth, styled))
 	}
 	return lines
 }
 
-func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
+func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span {
 	row := &v.Rows[index]
 	marker := span{text: " ", style: spanPlain}
 	statusStyle := groupDotStyle(row.Group)
@@ -578,10 +613,67 @@ func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
 		}
 		spans = append(spans, span{text: "  voice", style: voiceStyle})
 	}
+	if width >= 56 {
+		const (
+			updatedWidth = 9
+			statusWidth  = 11
+		)
+		titleWidth := width - updatedWidth - statusWidth - 2
+		if titleWidth < 1 {
+			titleWidth = 1
+		}
+		if spansWidth(spans) > titleWidth {
+			spans = truncateSpans(spans, titleWidth)
+		}
+		if used := spansWidth(spans); used < titleWidth {
+			spans = append(spans, span{text: strings.Repeat(" ", titleWidth-used), style: spanPlain})
+		}
+		status := truncateToWidth(row.Group.StatusLabel(row.StatusType), statusWidth)
+		spans = append(spans,
+			span{text: status, style: spanDim},
+			span{text: strings.Repeat(" ", max(statusWidth-runewidth.StringWidth(status), 1)), style: spanPlain},
+		)
+		if used := spansWidth(spans); used < width-updatedWidth {
+			spans = append(spans, span{text: strings.Repeat(" ", width-updatedWidth-used), style: spanPlain})
+		}
+		updated := relativeUpdateTime(row.UpdatedAt)
+		spans = append(spans, span{text: rightPadLeft(updated, updatedWidth), style: spanDim})
+		return spans
+	}
 	if projectGrouping {
 		spans = append(spans, span{text: "  " + row.Group.StatusLabel(row.StatusType), style: spanDim})
 	}
 	return spans
+}
+
+func relativeUpdateTime(updatedAt int64) string {
+	if updatedAt <= 0 {
+		return "-"
+	}
+	seconds := time.Now().Unix() - updatedAt
+	if seconds <= 0 {
+		return "now"
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("%ds ago", seconds)
+	}
+	minutes := seconds / 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm ago", minutes)
+	}
+	hours := minutes / 60
+	if hours < 24 {
+		return fmt.Sprintf("%dh ago", hours)
+	}
+	return fmt.Sprintf("%dd ago", hours/24)
+}
+
+func rightPadLeft(value string, width int) string {
+	value = truncateToWidth(value, width)
+	if padding := width - runewidth.StringWidth(value); padding > 0 {
+		return strings.Repeat(" ", padding) + value
+	}
+	return value
 }
 
 // renderDetails renders the task details pane (wide terminals), mirroring

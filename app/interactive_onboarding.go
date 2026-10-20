@@ -11,12 +11,22 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/features"
 	modelpkg "codex_go/model"
 	codexnetwork "codex_go/network"
 	"codex_go/tui/onboarding"
 )
 
 func runInteractiveEntry(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	if shouldRunInteractiveAuthOnboarding(root, stdin, stdout) {
+		cancelled, err := maybeRunGovCloudGuidance(ctx, root, stdin, stdout)
+		if err != nil {
+			return err
+		}
+		if cancelled {
+			return nil
+		}
+	}
 	if shouldRunInteractiveAuthOnboarding(root, stdin, stdout) {
 		remoteEndpoint, err := resolveInteractiveRemoteEndpoint(root)
 		if err == nil && remoteEndpoint == nil {
@@ -94,6 +104,15 @@ func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFl
 		APIKeyAllowed:    loaded.IsLoginMethodAllowed(config.ForcedLoginMethodAPI),
 		ForcedWorkspaces: loaded.EffectiveChatGPTWorkspaces(),
 		NoAltScreen:      noAltScreen,
+	}
+	if features.Enabled(loaded.FeatureSettings(), "bedrock_setup_wizard") {
+		discover, setup, loginAPIKey, loginAccessKeys, checkGovCloud := interactiveBedrockCallbacks(codexHome)
+		options.BedrockAllowed = true
+		options.BedrockDiscover = discover
+		options.BedrockSetup = setup
+		options.BedrockLoginAPIKey = loginAPIKey
+		options.BedrockLoginAccessKeys = loginAccessKeys
+		options.BedrockCheckGovCloud = checkGovCloud
 	}
 	// Rust binds the local application policy to the embedded login flow
 	// (tui/src/lib.rs `bind_bootstrap_auth`): the login runs before the effective

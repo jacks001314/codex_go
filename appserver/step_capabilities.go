@@ -79,6 +79,12 @@ func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, rout
 		cfg, _ := router.effectiveConfigForTurn(params)
 		sandboxContexts, _ = router.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params)
 		discoveryV2 = router.executorCapabilityDiscoveryV2ForStep(ctx, threadID, params, cfg, sandboxContexts, s.discoveryV2Cache)
+		if discoveryV2 != nil && router.services.Plugins != nil && cfg != nil {
+			executorCatalog := plugin.CatalogFromExecutorSnapshots(*discoveryV2)
+			merged := plugin.MergePluginCatalogs(executorCatalog, router.services.Plugins.CloudPluginCatalog())
+			policy := plugin.PluginsConfigTomlFromValues(cfg.Values)
+			capabilities = plugin.MergeCapabilitySummaries(capabilities, merged.CapabilitySummaries(policy.Plugins))
+		}
 		enabled := cfg == nil || features.Enabled(cfg.FeatureSettings(), "plugins")
 		executorPluginsEnabled = &enabled
 	}
@@ -124,6 +130,22 @@ func (s *runtimeStepCapabilitySnapshot) enabledPluginSkillRoots() ([]plugin.Enab
 func (s *runtimeStepCapabilitySnapshot) disabledPluginIDsSnapshot() []string {
 	_, disabled, _, _ := s.view()
 	return disabled
+}
+
+// executorPluginCatalog projects the step's V2 discovery snapshots. A nil
+// result means no V2 inventory was supplied (legacy discovery); an empty
+// catalog is a complete empty inventory (Rust #55301).
+func (s *runtimeStepCapabilitySnapshot) executorPluginCatalog() *plugin.PluginCatalog {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	snapshots := s.discoveryV2
+	s.mu.RUnlock()
+	if snapshots == nil {
+		return nil
+	}
+	return plugin.CatalogFromExecutorSnapshots(*snapshots)
 }
 
 func (s *runtimeStepCapabilitySnapshot) executorSandboxContexts() map[string]*execserverclient.FileSystemSandboxContext {

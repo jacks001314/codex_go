@@ -146,7 +146,7 @@ func TestLoginStatusLogoutFlow(t *testing.T) {
 	if err := Run(context.Background(), []string{"login", "--with-api-key"}, strings.NewReader("sk-test\n"), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("login returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), auth.LoginFlowSuccessMessage) {
+	if !strings.Contains(stdout.String(), "API key saved. "+apiKeyAuthenticationNotice) {
 		t.Fatalf("login stdout = %q", stdout.String())
 	}
 
@@ -154,7 +154,7 @@ func TestLoginStatusLogoutFlow(t *testing.T) {
 	if err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("status returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Logged in using an API key") {
+	if !strings.Contains(stdout.String(), "API key configured") {
 		t.Fatalf("status stdout = %q", stdout.String())
 	}
 
@@ -244,7 +244,7 @@ func TestLoginWithKeyringStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
 	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("status returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Logged in using an API key") {
+	if !strings.Contains(stdout.String(), "API key configured") {
 		t.Fatalf("status stdout = %q", stdout.String())
 	}
 }
@@ -3698,6 +3698,8 @@ func TestInteractiveDumbTerminalWithoutTTYFailsLikeRust(t *testing.T) {
 
 func TestInteractiveDumbTerminalTTYConfirmationLikeRust(t *testing.T) {
 	useEmbeddedLaunch(t)
+	// Do not discover a daemon running under the developer's real home.
+	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("TERM", "dumb")
 	var stdout terminalBuffer
 	var stderr terminalBuffer
@@ -6264,7 +6266,7 @@ func TestFeatureEnablementFromRoot(t *testing.T) {
 }
 
 func TestSandboxCloudConfigEligibleAuthEducationPlansLikeRust(t *testing.T) {
-	for _, planType := range []string{"edu", "edu_plus", "edu_pro"} {
+	for _, planType := range []string{"edu", "edu_plus", "edu_pro", "sci", "sci_plus"} {
 		snapshot := &auth.AuthDotJSON{
 			AuthMode: "chatgpt",
 			Tokens:   map[string]any{"plan_type": planType},

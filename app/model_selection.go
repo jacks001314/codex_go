@@ -135,8 +135,7 @@ func interactiveRemoteApplyModelSelection(
 	if mode := interactiveCollaborationModeFromState(state); mode != nil {
 		params.CollaborationMode = interactiveCollaborationModePayload(mode)
 	}
-	var response appserver.SettingsUpdateResponse
-	return remoteSessionRequest(reqCtx, client, appserver.MethodThreadSettingsUpdate, params, &response)
+	return remoteTUIUpdateThreadSettings(reqCtx, client, params)
 }
 
 // interactiveRemoteModelSelectionWriter writes the model-selection config edits

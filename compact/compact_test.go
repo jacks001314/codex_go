@@ -651,6 +651,32 @@ func TestEstimateToolItemTokensLikeRust(t *testing.T) {
 	}
 }
 
+// Rust estimates an encrypted reasoning item from its opaque payload rather
+// than from the visible summary. Without that charge, a bounded compaction
+// request can still replay hundreds of thousands of reasoning tokens.
+func TestEstimateReasoningItemTokensChargesEncryptedPayloadLikeRust(t *testing.T) {
+	encrypted := strings.Repeat("A", 10_000)
+	wantBytes := len(encrypted)*3/4 - 650
+	want := (wantBytes + 3) / 4
+	raw, err := json.Marshal(map[string]any{
+		"type":              "reasoning",
+		"summary":           []any{},
+		"encrypted_content": encrypted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := EstimateItemTokens(&Item{Type: "reasoning", Raw: raw}); got != want {
+		t.Fatalf("raw reasoning estimate = %d, want %d", got, want)
+	}
+	if got := EstimateItemTokens(&Item{Type: "reasoning", Data: map[string]any{"encrypted_content": encrypted}}); got != want {
+		t.Fatalf("data reasoning estimate = %d, want %d", got, want)
+	}
+	if got := EstimateItemTokens(&Item{Type: "reasoning", Text: "short visible summary"}); got == 0 {
+		t.Fatal("reasoning without encrypted content should still charge its visible summary")
+	}
+}
+
 // TestEstimateAudioOutputTokensLikeRust pins Rust #45094's audio arm: an audio
 // content block contributes approx_bytes_for_tokens over its duration-derived
 // token count (20 tokens for 2 s at 10 tokens/s => 80 bytes).

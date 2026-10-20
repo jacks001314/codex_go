@@ -14,6 +14,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"codex_go/appserver"
 	"codex_go/auth"
 )
 
@@ -44,6 +45,14 @@ type AuthFlowOptions struct {
 	// applied to the embedded TUI's login flow). Nil keeps the auth package's
 	// own default client.
 	HTTPClient *http.Client
+	// BedrockAllowed enables the Amazon Bedrock setup wizard. The callbacks
+	// come from the local app server; nil callbacks disable the wizard.
+	BedrockAllowed         bool
+	BedrockDiscover        func(context.Context) (*appserver.BedrockDiscoverResponse, error)
+	BedrockSetup           func(context.Context, appserver.BedrockSetupParams) error
+	BedrockLoginAPIKey     func(context.Context, string, string) error
+	BedrockLoginAccessKeys func(context.Context, auth.LoginAccountParams) error
+	BedrockCheckGovCloud   func(context.Context) (bool, error)
 
 	services *authFlowServices
 }
@@ -96,6 +105,7 @@ type authFlowModel struct {
 	activeAttemptID     uint64
 	activeAttemptCtx    context.Context
 	activeAttemptCancel context.CancelFunc
+	bedrock             *bedrockState
 	completed           bool
 	shouldExit          bool
 }
@@ -201,6 +211,12 @@ func (m *authFlowModel) Update(message bubbletea.Msg) (bubbletea.Model, bubblete
 		m.state = SignInAPIKeyConfigured
 		m.completed = true
 		return m, bubbletea.Quit
+	case bedrockDiscoveredMsg:
+		return m.handleBedrockDiscovered(message)
+	case bedrockConfiguredMsg:
+		return m.handleBedrockConfigured(message)
+	case bedrockGovCloudMsg:
+		return m.handleBedrockGovCloud(message)
 	case bubbletea.KeyMsg:
 		return m.handleKey(message)
 	default:
@@ -225,6 +241,13 @@ func (m *authFlowModel) View() string {
 		return m.renderAPIKeyEntry()
 	case SignInAPIKeyConfigured:
 		return authSuccessStyle.Render("? API key configured")
+	case SignInBedrock:
+		if m.bedrock == nil {
+			return ""
+		}
+		return m.bedrock.render(m.width, m.errorMessage)
+	case SignInBedrockConfigured:
+		return authSuccessStyle.Render("? Amazon Bedrock configured")
 	default:
 		return m.renderPickMode()
 	}
@@ -238,6 +261,9 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 	if message.Type == bubbletea.KeyCtrlC {
 		m.shouldExit = true
 		return m, bubbletea.Batch(m.cancelActiveAttempt(), bubbletea.Quit)
+	}
+	if m.state == SignInBedrock {
+		return m.handleBedrockKey(message)
 	}
 	if m.state == SignInAPIKeyEntry {
 		return m.handleAPIKeyEntryKey(message)
@@ -284,15 +310,17 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 			m.moveHighlight(-1)
 		case "j":
 			m.moveHighlight(1)
-		case "1", "y":
+		case "y":
 			return m.selectDisplayedOption(0)
-		case "2", "n":
+		case "n":
 			return m.selectDisplayedOption(1)
-		case "3":
-			return m.selectDisplayedOption(2)
 		case "q":
 			m.shouldExit = true
 			return m, bubbletea.Quit
+		default:
+			if len(message.Runes) == 1 && message.Runes[0] >= '1' && message.Runes[0] <= '9' {
+				return m.selectDisplayedOption(int(message.Runes[0] - '1'))
+			}
 		}
 	}
 	return m, nil
@@ -425,6 +453,19 @@ func (m *authFlowModel) startChoice(choice AuthChoice) (bubbletea.Model, bubblet
 			m.apiKey = m.options.APIKeyFromEnv
 			m.apiKeyPrepopulated = true
 		}
+	case AuthChoiceBedrock:
+		if !m.options.APIKeyAllowed || !m.options.BedrockAllowed {
+			m.errorMessage = apiKeyLoginDisabledMessage
+			return m, nil
+		}
+		if m.options.BedrockDiscover == nil {
+			m.errorMessage = "Amazon Bedrock setup is unavailable in this build."
+			return m, nil
+		}
+		m.state = SignInBedrock
+		m.errorMessage = ""
+		m.bedrock = newBedrockStateDiscovering()
+		return m, m.discoverBedrockCmd()
 	}
 	return m, nil
 }
@@ -566,7 +607,7 @@ func (m *authFlowModel) oauthOptions(openBrowser bool) *auth.OAuthOptions {
 }
 
 func (m *authFlowModel) displayedOptions() []AuthOption {
-	return AuthOptionsForPolicy(m.options.ChatGPTAllowed, m.options.APIKeyAllowed)
+	return AuthOptionsForPolicyWithBedrock(m.options.ChatGPTAllowed, m.options.APIKeyAllowed, m.options.BedrockAllowed)
 }
 
 func (m *authFlowModel) selectableChoices() []AuthChoice {

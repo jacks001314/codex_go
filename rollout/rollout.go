@@ -445,7 +445,22 @@ func PathForThread(codexHome string, threadID string, now time.Time) string {
 }
 
 func Resume(path string) (*Recorder, error) {
-	lines, _, err := Load(path)
+	plain := PlainRolloutPath(strings.TrimSpace(path))
+	if plain == "" {
+		return nil, errors.New("rollout path is required")
+	}
+	refreshModifiedTime := false
+	if _, err := os.Stat(plain); errors.Is(err, os.ErrNotExist) {
+		refreshModifiedTime = true
+		if _, compressedErr := os.Stat(plain + ".zst"); compressedErr == nil {
+			if _, err := MaterializeRolloutForReference(plain); err != nil {
+				return nil, err
+			}
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	lines, _, err := Load(plain)
 	if err != nil {
 		return nil, err
 	}
@@ -463,11 +478,29 @@ func Resume(path string) (*Recorder, error) {
 			nextOrdinal = *lines[i].Ordinal + 1
 		}
 	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(plain, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	return &Recorder{path: path, file: file, paginated: paginated, threadID: threadID, nextOrdinal: nextOrdinal}, nil
+	if refreshModifiedTime {
+		if err := refreshRolloutModifiedTime(plain); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+	}
+	return &Recorder{path: plain, file: file, paginated: paginated, threadID: threadID, nextOrdinal: nextOrdinal}, nil
+}
+
+// refreshRolloutModifiedTime makes a restored transcript look active. A
+// preserved ACL can allow appending while denying explicit timestamp updates;
+// the append itself updates mtime, so that denial must not prevent it.
+func refreshRolloutModifiedTime(path string) error {
+	now := time.Now()
+	err := os.Chtimes(path, now, now)
+	if errors.Is(err, os.ErrPermission) {
+		return nil
+	}
+	return err
 }
 
 func (line Line) MarshalJSON() ([]byte, error) {
@@ -1629,7 +1662,9 @@ func materializeRolloutForReferenceLocked(plain string, stage *string) (string, 
 		}
 	}
 	*stage = "create_temp"
-	temporary, err := os.CreateTemp(filepath.Dir(plain), "."+filepath.Base(plain)+".decompress-*")
+	// Restoration timestamps can make the staged file look stale. Keep the
+	// managed name distinct from the compressed-worker's "*.tmp" cleanup.
+	temporary, err := os.CreateTemp(filepath.Dir(plain), ".rollout-materialize-*")
 	if err != nil {
 		return "", "", err
 	}
@@ -1639,9 +1674,6 @@ func materializeRolloutForReferenceLocked(plain string, stage *string) (string, 
 		_ = temporary.Close()
 		_ = os.Remove(temporaryPath)
 	}()
-	if err := temporary.Chmod(metadata.Mode().Perm()); err != nil {
-		return "", "", err
-	}
 	*stage = "open_source"
 	input, err := os.Open(compressed)
 	if err != nil {
@@ -1662,16 +1694,27 @@ func materializeRolloutForReferenceLocked(plain string, stage *string) (string, 
 	if closeInputErr != nil {
 		return "", "", closeInputErr
 	}
-	*stage = "sync"
+	*stage = "flush"
 	if err := temporary.Sync(); err != nil {
 		return "", "", err
 	}
-	*stage = "flush"
 	if err := temporary.Close(); err != nil {
 		return "", "", err
 	}
 	*stage = "set_metadata"
-	if err := os.Chtimes(temporaryPath, metadata.ModTime(), metadata.ModTime()); err != nil {
+	if err := preserveRolloutAccessMetadata(compressed, temporaryPath, metadata); err != nil {
+		return "", "", err
+	}
+	*stage = "verify"
+	reopened, err := os.Open(temporaryPath)
+	if err != nil {
+		return "", "", err
+	}
+	if err := reopened.Close(); err != nil {
+		return "", "", err
+	}
+	*stage = "sync"
+	if err := syncRolloutFile(temporaryPath); err != nil {
 		return "", "", err
 	}
 	*stage = "publish"
@@ -1701,13 +1744,25 @@ func materializeRolloutForReferenceLocked(plain string, stage *string) (string, 
 			_ = os.Remove(plain)
 			return "", "", copyErr
 		}
+		if err := preserveRolloutAccessMetadata(compressed, plain, metadata); err != nil {
+			_ = os.Remove(plain)
+			return "", "", err
+		}
+		if reopened, err := os.Open(plain); err != nil {
+			_ = os.Remove(plain)
+			return "", "", err
+		} else if err := reopened.Close(); err != nil {
+			_ = os.Remove(plain)
+			return "", "", err
+		}
+		if err := syncRolloutFile(plain); err != nil {
+			_ = os.Remove(plain)
+			return "", "", err
+		}
 		published = true
 	}
 	if published {
 		*stage = "remove_source"
-		if err := os.Chtimes(plain, metadata.ModTime(), metadata.ModTime()); err != nil {
-			return "", "", err
-		}
 		if err := os.Remove(compressed); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", "", err
 		}

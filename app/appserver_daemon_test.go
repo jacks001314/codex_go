@@ -354,18 +354,31 @@ INSERT INTO remote_control_enrollments (
 }
 
 func runAppServerUntilCanceled(args []string) error {
+	ready := make(chan struct{})
+	appServerRemoteControlReady = func() {
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
+	}
+	defer func() { appServerRemoteControlReady = nil }()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	}()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
+	// Wait until the server is actually serving, then cancel. A fixed timer is
+	// racy on a loaded host: cancelling during migration turns startup into a
+	// context-canceled failure instead of exercising the transport loop.
 	select {
 	case err := <-done:
 		cancel()
 		return err
-	case <-timer.C:
+	case <-ready:
+		cancel()
+		return <-done
+	case <-time.After(20 * time.Second):
 		cancel()
 		return <-done
 	}

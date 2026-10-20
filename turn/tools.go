@@ -89,8 +89,11 @@ type ToolRegistryOptions struct {
 	MCPSourceObserver         func(source mcp.McpCallSource)
 	OrchestratorSkillsEnabled *bool
 	SkillProviders            *skillprovider.Registry
-	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
-	Model                     string
+	// DiscoveryV2Skills exposes skills.installations. It is set only when the
+	// step's executor capability inventory came from discovery V2 (Rust #55330).
+	DiscoveryV2Skills  bool
+	OpenAIFileRewriter *mcp.OpenAIFileRewriter
+	Model              string
 	// ModelConfirmationPolicies carries the issuing model's Browser Use /
 	// Computer Use confirmation-policy Markdown (#41072), forwarded to actor MCP
 	// calls. Nil results in an empty openai/confirmation_policies object for

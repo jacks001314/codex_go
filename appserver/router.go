@@ -1117,7 +1117,7 @@ func threadStartExtra(params *ThreadStartParams) map[string]any {
 	applyThreadAllowedToolsExtra(extra, params.AllowedTools)
 	if len(params.Config) > 0 {
 		extra = ensureRecordExtra(extra)
-		extra["config"] = cloneAnyMapForRouter(params.Config)
+		extra["config"] = cloneAnyMapForRouter(threadConfigWithoutUnloadDelay(params.Config))
 	}
 	if len(extra) == 0 {
 		return nil
@@ -2547,7 +2547,7 @@ func applyThreadForkOverrides(record *session.Record, params *ThreadForkParams) 
 	setThreadRecordRuntimeWorkspaceRoots(record, runtimeWorkspaceRoots)
 	if params.Config != nil {
 		record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
-		record.Metadata.Extra["config"] = cloneAnyMap(params.Config)
+		record.Metadata.Extra["config"] = threadConfigWithoutUnloadDelay(params.Config)
 	}
 	if params.ServiceTierSet || params.ServiceTier != nil {
 		record.Metadata.ServiceTier = threadLifecycleServiceTierForModel(nil, params.ServiceTierSet, params.ServiceTier, record.Metadata.Model)

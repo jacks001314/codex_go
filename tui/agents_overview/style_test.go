@@ -58,19 +58,15 @@ func TestRenderStyledAppliesRustStyles(t *testing.T) {
 	}
 }
 
-func TestRenderStyledFooterStopHintDependsOnSelection(t *testing.T) {
-	// Selected row root-1 is active -> the stop hint is bold.
+func TestRenderStyledHelpStopHint(t *testing.T) {
 	view := New(sampleRows(), "", false)
-	view.Selected = 0
 	styled := strings.Join(view.RenderStyled(120, 24), "\n")
-	if !strings.Contains(styled, "\x1b[1mx\x1b[0m\x1b[2m stop\x1b[0m") {
-		t.Errorf("active selection should bold the stop hint:\n%s", styled)
+	if strings.Contains(styled, " stop") {
+		t.Fatalf("stop hint must move into help:\n%s", styled)
 	}
-	// Selected row root-2 is ready -> the stop hint is dim.
-	view.Selected = 1
-	styled = strings.Join(view.RenderStyled(120, 24), "\n")
-	if !strings.Contains(styled, "\x1b[2mx\x1b[0m\x1b[2m stop\x1b[0m") {
-		t.Errorf("ready selection should dim the stop hint:\n%s", styled)
+	view.ToggleHelp()
+	if help := strings.Join(view.RenderStyled(120, 30), "\n"); !strings.Contains(help, "x") || !strings.Contains(help, "Stop") {
+		t.Errorf("help missing stop hint:\n%s", help)
 	}
 }
 
@@ -110,17 +106,18 @@ func TestRenderStyledFooterUsesResolvedShortcutHints(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	view.SetShortcutHint(ShortcutHintSearch, "ctrl-l")
 	view.SetShortcutHint(ShortcutHintStop, "")
-	styled := strings.Join(view.RenderStyled(120, 24), "\n")
-	if !strings.Contains(styled, "ctrl-l") || !strings.Contains(styled, " search") {
+	view.ToggleHelp()
+	styled := strings.Join(view.RenderStyled(120, 30), "\n")
+	if !strings.Contains(styled, "ctrl-l") || !strings.Contains(styled, " Search") {
 		t.Errorf("custom search hint missing:\n%s", styled)
 	}
 	if strings.Contains(styled, "ctrl+f") {
 		t.Errorf("default search hint should be replaced:\n%s", styled)
 	}
-	if strings.Contains(styled, " stop") || strings.Contains(styled, "x stop") {
+	if strings.Contains(styled, " Stop") {
 		t.Errorf("unbound stop hint should be hidden:\n%s", styled)
 	}
-	if !strings.Contains(styled, "group: project") || !strings.Contains(styled, "rename") {
+	if !strings.Contains(styled, "Group") || !strings.Contains(styled, "Rename") {
 		t.Errorf("default group/rename hints missing:\n%s", styled)
 	}
 }
@@ -143,7 +140,7 @@ func TestFooterWrapsWholeHintsOnNarrowTerminals(t *testing.T) {
 	view.Selected = 0
 	styled := strings.Join(view.RenderStyled(60, 24), "\n")
 	plain := stripANSIForTest(styled)
-	for _, label := range []string{"navigate", "open", "new", "search", "rename", "hide", "archive", "delete", "quit"} {
+	for _, label := range []string{"navigate", "open", "new", "help", "quit"} {
 		if !strings.Contains(plain, label) {
 			t.Fatalf("footer hint %q missing (truncated?):\n%s", label, plain)
 		}

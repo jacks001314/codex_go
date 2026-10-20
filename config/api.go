@@ -1167,6 +1167,8 @@ func (r *ApplicationNetworkRequirements) MarshalJSON() ([]byte, error) {
 type ManagedHooksRequirements struct {
 	ManagedDir        *string               `json:"managedDir,omitempty"`
 	WindowsManagedDir *string               `json:"windowsManagedDir,omitempty"`
+	PreModelRequest   []ConfiguredHookGroup `json:"PreModelRequest"`
+	PostModelRequest  []ConfiguredHookGroup `json:"PostModelRequest"`
 	PreToolUse        []ConfiguredHookGroup `json:"PreToolUse"`
 	PermissionRequest []ConfiguredHookGroup `json:"PermissionRequest"`
 	PostToolUse       []ConfiguredHookGroup `json:"PostToolUse"`
@@ -1185,6 +1187,8 @@ func (r *ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		ManagedDir        *string               `json:"managedDir"`
 		WindowsManagedDir *string               `json:"windowsManagedDir"`
+		PreModelRequest   []ConfiguredHookGroup `json:"PreModelRequest"`
+		PostModelRequest  []ConfiguredHookGroup `json:"PostModelRequest"`
 		PreToolUse        []ConfiguredHookGroup `json:"PreToolUse"`
 		PermissionRequest []ConfiguredHookGroup `json:"PermissionRequest"`
 		PostToolUse       []ConfiguredHookGroup `json:"PostToolUse"`
@@ -1200,6 +1204,8 @@ func (r *ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 	}{
 		ManagedDir:        cloneStringPtr(r.ManagedDir),
 		WindowsManagedDir: cloneStringPtr(r.WindowsManagedDir),
+		PreModelRequest:   hookGroupsForJSON(r.PreModelRequest),
+		PostModelRequest:  hookGroupsForJSON(r.PostModelRequest),
 		PreToolUse:        hookGroupsForJSON(r.PreToolUse),
 		PermissionRequest: hookGroupsForJSON(r.PermissionRequest),
 		PostToolUse:       hookGroupsForJSON(r.PostToolUse),
@@ -4023,12 +4029,15 @@ func cloneManagedHooks(value *ManagedHooksRequirements) *ManagedHooksRequirement
 	return &ManagedHooksRequirements{
 		ManagedDir:        cloneStringPtr(value.ManagedDir),
 		WindowsManagedDir: cloneStringPtr(value.WindowsManagedDir),
+		PreModelRequest:   hookGroupsForJSON(value.PreModelRequest),
+		PostModelRequest:  hookGroupsForJSON(value.PostModelRequest),
 		PreToolUse:        hookGroupsForJSON(value.PreToolUse),
 		PermissionRequest: hookGroupsForJSON(value.PermissionRequest),
 		PostToolUse:       hookGroupsForJSON(value.PostToolUse),
 		PreCompact:        hookGroupsForJSON(value.PreCompact),
 		PostCompact:       hookGroupsForJSON(value.PostCompact),
 		SessionStart:      hookGroupsForJSON(value.SessionStart),
+		SessionEnd:        hookGroupsForJSON(value.SessionEnd),
 		UserPromptSubmit:  hookGroupsForJSON(value.UserPromptSubmit),
 		SubagentStart:     hookGroupsForJSON(value.SubagentStart),
 		SubagentStop:      hookGroupsForJSON(value.SubagentStop),

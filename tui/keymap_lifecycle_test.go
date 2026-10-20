@@ -8,7 +8,7 @@ import (
 )
 
 // TestAgentsArchiveDeleteDefaultsLikeRust covers #44433/#45255: archive
-// defaults to the plain a shortcut and delete to the Delete key.
+// defaults to the plain a shortcut and delete to Backspace.
 func TestAgentsArchiveDeleteDefaultsLikeRust(t *testing.T) {
 	for _, tc := range []struct {
 		action string
@@ -16,7 +16,7 @@ func TestAgentsArchiveDeleteDefaultsLikeRust(t *testing.T) {
 		label  string
 	}{
 		{action: agentsoverview.ShortcutHintArchive, want: "a", label: "Archive"},
-		{action: agentsoverview.ShortcutHintDelete, want: "delete", label: "Delete"},
+		{action: agentsoverview.ShortcutHintDelete, want: "backspace", label: "Delete"},
 	} {
 		bindings, source, custom := ResolvedKeymapBindings(nil, "agents", tc.action)
 		if custom || source != "default" || strings.Join(bindings, ",") != tc.want {
@@ -41,8 +41,8 @@ func TestAgentsArchiveDeleteDefaultsYieldToExistingBindingsLikeRust(t *testing.T
 		{name: "agents a", context: "agents", action: "search", binding: "a", targetAction: agentsoverview.ShortcutHintArchive},
 		{name: "list a", context: "list", action: "jump_top", binding: "a", targetAction: agentsoverview.ShortcutHintArchive},
 		{name: "global a", context: "global", action: "open_agents", binding: "a", targetAction: agentsoverview.ShortcutHintArchive},
-		{name: "agents delete", context: "agents", action: "rename", binding: "delete", targetAction: agentsoverview.ShortcutHintDelete},
-		{name: "list delete", context: "list", action: "delete_selected", binding: "delete", targetAction: agentsoverview.ShortcutHintDelete},
+		{name: "agents backspace", context: "agents", action: "rename", binding: "backspace", targetAction: agentsoverview.ShortcutHintDelete},
+		{name: "list backspace", context: "list", action: "delete_selected", binding: "backspace", targetAction: agentsoverview.ShortcutHintDelete},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

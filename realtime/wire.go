@@ -342,6 +342,29 @@ func (s *realtimeTransportSession) sendSpeech(text string) error {
 	}
 }
 
+// sendReasoningStatus appends a completed reasoning summary as quiet
+// commentary context for the active server-managed V3 delegation.
+func (s *realtimeTransportSession) sendReasoningStatus(text string) error {
+	if s == nil || !s.config.BackendReasoningStatus || s.config.ClientManagedHandoffs ||
+		s.config.Version != VersionV3 {
+		return nil
+	}
+	handoffID := s.activeHandoff()
+	if handoffID == "" {
+		return nil
+	}
+	text = takeFirstUTF8Bytes(strings.TrimSpace(text), 256)
+	if text == "" {
+		return nil
+	}
+	return s.writeJSON(realtimeContextAppend(
+		"delegation.context.append",
+		handoffID,
+		"[STATUS] "+text,
+		"commentary",
+	))
+}
+
 func (s *realtimeTransportSession) activeHandoff() string {
 	if s == nil {
 		return ""

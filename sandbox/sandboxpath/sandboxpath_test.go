@@ -82,6 +82,58 @@ func TestFindExecutableInPathSkipsSymlinkedWritableRootLikeRust(t *testing.T) {
 	}
 }
 
+func TestFindExecutableInPathSkipsWritableSymlinkToReadOnlyTargetLikeRust(t *testing.T) {
+	tempDir := t.TempDir()
+	bin := filepath.Join(tempDir, "bin")
+	protected := filepath.Join(tempDir, "protected")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := writeFakeBwrapIn(t, protected)
+	if err := os.Symlink(target, filepath.Join(bin, "bwrap")); err != nil {
+		t.Fatal(err)
+	}
+	policy := FilesystemPolicy{WritableRoots: []WritableRoot{{Root: bin}}}
+	if got := FindExecutableInPath("bwrap", bin, "/", policy); got != "" {
+		t.Fatalf("writable symlink candidate = %q, want none", got)
+	}
+}
+
+func TestFindExecutableInPathSkipsSymlinkedSearchDirectoryIntoWritableRootLikeRust(t *testing.T) {
+	tempDir := t.TempDir()
+	workspace := filepath.Join(tempDir, "workspace")
+	bin := filepath.Join(workspace, "bin")
+	alias := filepath.Join(tempDir, "alias")
+	protected := filepath.Join(tempDir, "protected")
+	target := writeFakeBwrapIn(t, protected)
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(bin, "bwrap")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Fatal(err)
+	}
+	policy := FilesystemPolicy{WritableRoots: []WritableRoot{{Root: workspace}}}
+	if got := FindExecutableInPath("bwrap", filepath.Join(alias, "bin"), "/", policy); got != "" {
+		t.Fatalf("symlinked search directory candidate = %q, want none", got)
+	}
+}
+
+func TestFindExecutableInPathResolvesRelativeSearchEntriesLikeRust(t *testing.T) {
+	tempDir := t.TempDir()
+	cwd := filepath.Join(tempDir, "cwd:with-colon")
+	bin := filepath.Join(tempDir, "bin")
+	expected := writeFakeBwrapIn(t, bin)
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := FindExecutableInPath("bwrap", "../bin", cwd, FilesystemPolicy{}); got != canonical(t, expected) {
+		t.Fatalf("relative search entry = %q, want %q", got, canonical(t, expected))
+	}
+}
+
 // TestFindExecutableInPathRejectsOwnedBwrapOnFullDiskWriteLikeRust mirrors Rust
 // `full_disk_write_rejects_owned_bwrap_even_when_chmod_read_only`: ownership
 // alone is enough for the current user to chmod and replace the launcher.

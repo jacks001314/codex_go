@@ -1830,9 +1830,20 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 	sessionID := p.remoteSessionID
 	processID := p.remoteID
 	exited := p.exited
+	oldClient := p.remote
+	oldEvents := p.remoteEvents
 	p.mu.Unlock()
 	if exited || (strings.TrimSpace(remoteURL) == "" && remoteProvider == nil) || strings.TrimSpace(sessionID) == "" {
 		return false, disconnectErr
+	}
+	// Stop the disconnected client's own reconnect loop before opening the
+	// replacement. Otherwise both the client and this process can attach the
+	// same session, consuming an extra exec-server connection.
+	if oldEvents != nil {
+		oldEvents.Close()
+	}
+	if oldClient != nil {
+		_ = oldClient.Close()
 	}
 	deadline := time.Now().Add(unifiedExecRemoteRecoveryTimeout)
 	lastErr := disconnectErr
@@ -1885,17 +1896,9 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 						_ = client.Close()
 						return true, nil
 					}
-					oldClient := p.remote
-					oldEvents := p.remoteEvents
 					p.remote = client
 					p.remoteEvents = events
 					p.mu.Unlock()
-					if oldEvents != nil {
-						oldEvents.Close()
-					}
-					if oldClient != nil {
-						_ = oldClient.Close()
-					}
 					return p.applyRemoteReadResponse(response, lastSeq, exitCode)
 				}
 				events.Close()

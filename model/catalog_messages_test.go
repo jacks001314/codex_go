@@ -20,7 +20,7 @@ func TestModelMessagesParseRustWireNames(t *testing.T) {
 			"never": "c",
 			"unless_trusted": "d"
 		},
-		"permissions": {"danger_full_access": "x", "workspace_write": "y", "read_only": "z"},
+		"permissions": {"danger_full_access": "x", "workspace_write": "y", "read_only": "z", "approved_prefixes": "{{ approved_prefixes }}"},
 		"persistent_instructions": "persist",
 		"collaboration_modes": {"default": "cm", "plan": "pm"},
 		"auto_review": {"policy": "policy"},
@@ -48,6 +48,9 @@ func TestModelMessagesParseRustWireNames(t *testing.T) {
 	}
 	if messages.PersistentInstructions == nil || *messages.PersistentInstructions != "persist" {
 		t.Fatalf("persistent_instructions = %#v", messages.PersistentInstructions)
+	}
+	if messages.Permissions == nil || messages.Permissions.ApprovedPrefixes == nil || *messages.Permissions.ApprovedPrefixes != "{{ approved_prefixes }}" {
+		t.Fatalf("permissions.approved_prefixes = %#v", messages.Permissions)
 	}
 	if messages.TokenBudget == nil || !messages.TokenBudget.Enabled || !messages.TokenBudget.UseHistoryNotesExtension {
 		t.Fatalf("token_budget activation = %#v", messages.TokenBudget)

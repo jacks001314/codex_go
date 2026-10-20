@@ -417,6 +417,12 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.agentsOverview.State.CreatingWorktree && msg.String() != "esc" && msg.String() != "ctrl+c" {
 		return nil
 	}
+	if m.agentsOverview.State.Help {
+		if msg.String() == "?" || msg.String() == "esc" {
+			m.agentsOverview.State.Help = false
+		}
+		return nil
+	}
 	selectedBefore := m.agentsOverview.Selected
 	keySpec := keySpecFromKeyMsg(msg)
 	if m.agentsOverview.State.Renaming {
@@ -459,7 +465,9 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			return nil
 		}
 	case "backspace":
-		m.agentsOverview.Backspace()
+		if m.agentsOverview.State.Searching || m.agentsOverview.State.Renaming {
+			m.agentsOverview.Backspace()
+		}
 	}
 	// Rust #45255: while the search or rename field owns the editor, plain
 	// characters edit it instead of triggering a dashboard shortcut.
@@ -469,6 +477,10 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 				m.agentsOverview.TypeChar(r)
 			}
 		}
+		return nil
+	}
+	if msg.String() == "?" {
+		m.agentsOverview.ToggleHelp()
 		return nil
 	}
 	// Rust #46839: Tab and Shift-Tab cycle the command-center status tabs,

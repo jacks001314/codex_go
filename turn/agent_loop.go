@@ -182,6 +182,9 @@ type AgentLoopRequest struct {
 	// CWD is the turn's working directory, reported on the sampling-request span
 	// like Rust's `run_sampling_request` instrumentation.
 	CWD string
+	// OnModelRequest observes each sampling request attempt (Rust #55144).
+	// Output is diagnostic only and cannot veto the request or alter context.
+	OnModelRequest ModelRequestHook
 	// Tracer, when set, opens the turn loop's spans (Rust's per-turn
 	// instrumentation).
 	Tracer SpanTracer
@@ -235,6 +238,21 @@ type AgentLoopRequest struct {
 // AgentPreSamplingValidation is the pre-sampling gate of a turn, invoked with
 // the sampling iteration before every model request (Rust #51157).
 type AgentPreSamplingValidation func(ctx context.Context, iteration int) error
+
+// ModelRequestHookEvent describes one model request lifecycle milestone.
+type ModelRequestHookEvent struct {
+	Phase    string
+	Status   string
+	Error    string
+	Model    string
+	ThreadID string
+	TurnID   string
+	CWD      string
+	Usage    *model.AgentUsage
+}
+
+// ModelRequestHook is one observation-only model request callback.
+type ModelRequestHook func(ctx context.Context, event ModelRequestHookEvent)
 
 type AgentLoopResult struct {
 	Response          *model.AgentResponse
@@ -478,6 +496,11 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		if iteration > 0 && request.ToolsForStep != nil {
 			stepTools = request.ToolsForStep(stepModel)
 		}
+		if request.OnModelRequest != nil {
+			request.OnModelRequest(stepCtx, ModelRequestHookEvent{
+				Phase: "pre", Model: stepModel, ThreadID: request.ThreadID, TurnID: request.TurnID, CWD: request.CWD,
+			})
+		}
 		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,
@@ -532,6 +555,25 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			},
 		})
 		sampling.CloseAt(l.now())
+		if request.OnModelRequest != nil {
+			status := "completed"
+			errorText := ""
+			if err != nil {
+				status = "failed"
+				errorText = err.Error()
+				if stepCtx.Err() != nil {
+					status = "cancelled"
+				}
+			}
+			var usage *model.AgentUsage
+			if response != nil {
+				usage = &response.Usage
+			}
+			request.OnModelRequest(stepCtx, ModelRequestHookEvent{
+				Phase: "post", Status: status, Error: errorText, Model: stepModel,
+				ThreadID: request.ThreadID, TurnID: request.TurnID, CWD: request.CWD, Usage: usage,
+			})
+		}
 		if err != nil {
 			endSamplingRequestSpan()
 			// Rust #53670 (session/turn.rs `try_run_sampling_request`): a

@@ -650,6 +650,18 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	r.beginApprovalToolCall(threadID, targetItemID)
 	// The review attempt starts here: Rust builds ReviewReport/tracking before
 	// the prompt, and the metrics duration is measured from that point.
+	if r.metrics != nil {
+		// Rust #55347: a synchronous model review that did not race an async
+		// approval is the `required_sync` route. Go's reviewer is synchronous,
+		// so the distinction is the configured fresh-review requirement.
+		routeReason := "policy"
+		if requiredReview {
+			routeReason = "fresh_required"
+		}
+		r.metrics.Counter(telemetry.GuardianReviewRouteMetric, 1, map[string]string{
+			"route": "required_sync", "reason": routeReason,
+		})
+	}
 	reviewStartedAt := time.Now().UTC()
 	attribution := r.newGuardianReviewAttribution(threadID, turnID, action)
 	feedbackCapture := &guardianReviewFeedbackCapture{}
@@ -708,10 +720,17 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	}
 	feedbackCapture.model = plan.Selection.Model
 	feedbackCapture.instructions = plan.Instructions
+	historyCheckpoint := guardianReviewHistoryCheckpoint{}
+	historyCheckpointReady := false
 	// Rust #53987/#53797: retries share one attempt budget and deadline. A
 	// changed local review context is stale authorization, refreshed without
 	// the service backoff; parse failures keep Rust's exponential backoff.
 	finishTimedOut := func() (state.ReviewDecision, string, error) {
+		if historyCheckpointReady {
+			if runner, ok := r.agent.(*guardianSessionRunner); ok {
+				runner.rollbackReviewHistory(historyCheckpoint)
+			}
+		}
 		completed, finishErr := store.Timeout(event.ID)
 		if finishErr == nil {
 			r.emit(threadID, completed)
@@ -731,6 +750,11 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		return state.DecisionTimedOut, timeoutMessage, finishErr
 	}
 	finishAborted := func() (state.ReviewDecision, string, error) {
+		if historyCheckpointReady {
+			if runner, ok := r.agent.(*guardianSessionRunner); ok {
+				runner.rollbackReviewHistory(historyCheckpoint)
+			}
+		}
 		completed, finishErr := store.Abort(event.ID, "Guardian review was aborted.")
 		if finishErr == nil {
 			r.emit(threadID, completed)
@@ -747,6 +771,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	var response *model.AgentResponse
 reviewAttempt:
 	attempts++
+	attribution.AttemptCount = attempts
 	var transcript []string
 	var transcriptEntries []state.GuardianTranscriptEntry
 	var transcriptOmissionNote string
@@ -944,9 +969,9 @@ reviewAttempt:
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.SeedForReview(reviewRequest)
 	}
-	historyCheckpoint := guardianReviewHistoryCheckpoint{}
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		historyCheckpoint = runner.reviewHistoryCheckpoint()
+		historyCheckpointReady = true
 	}
 	if history := r.guardianConversationHistoryValue(threadID, turnID); history != nil && len(history.Tools) > 0 {
 		response, err = runGuardianReviewWithHistory(reviewCtx, r.agent, reviewRequest, history)
@@ -978,6 +1003,7 @@ reviewAttempt:
 				if waitErr := reviewCtx.Err(); waitErr != nil {
 					err = waitErr
 				} else {
+					r.emitGuardianReviewRetryMetrics("stale_authorization", time.Now(), nil)
 					if runner, ok := r.agent.(*guardianSessionRunner); ok {
 						runner.rollbackReviewHistory(historyCheckpoint)
 					}
@@ -1012,6 +1038,15 @@ reviewAttempt:
 			runner.RolloverForContext()
 			contextChanged = true
 			runtime.Gosched()
+			waitStarted := time.Now()
+			waitErr := reviewCtx.Err()
+			r.emitGuardianReviewRetryMetrics("session_error", waitStarted, waitErr)
+			if waitErr != nil {
+				if errors.Is(waitErr, context.DeadlineExceeded) {
+					return finishTimedOut()
+				}
+				return finishAborted()
+			}
 			goto reviewAttempt
 		}
 	}
@@ -1037,7 +1072,10 @@ reviewAttempt:
 				"deadline_limited", now.Add(delay).After(deadline),
 			)
 		}
-		if waitErr := waitGuardianReviewRetry(reviewCtx, delay); waitErr != nil {
+		waitStarted := time.Now()
+		waitErr := waitGuardianReviewRetry(reviewCtx, delay)
+		r.emitGuardianReviewRetryMetrics("session_error", waitStarted, waitErr)
+		if waitErr != nil {
 			if errors.Is(waitErr, context.DeadlineExceeded) {
 				return finishTimedOut()
 			}
@@ -1081,7 +1119,10 @@ reviewAttempt:
 	assessment, err = state.ParseAssessment([]byte(guardianAssessmentText(response)))
 	if err != nil && attempts < guardianMaxReviewAttempts {
 		// Rust retries Parse failures inside the same attempt budget.
-		if waitErr := waitGuardianReviewRetry(reviewCtx, guardianReviewRetryDelay(attempts)); waitErr != nil {
+		waitStarted := time.Now()
+		waitErr := waitGuardianReviewRetry(reviewCtx, guardianReviewRetryDelay(attempts))
+		r.emitGuardianReviewRetryMetrics("parse_error", waitStarted, waitErr)
+		if waitErr != nil {
 			if errors.Is(waitErr, context.DeadlineExceeded) {
 				return finishTimedOut()
 			}
@@ -1432,6 +1473,7 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 	}
 	entries := make([]state.GuardianTranscriptEntry, 0, len(items))
 	evidence := make([]state.TranscriptEvidenceEntry, 0, len(items))
+	seenNativeAgentMessageIDs := map[string][]byte{}
 	for i := range items {
 		item := items[i]
 		// Rust #54316 (guardian-context/src/history.rs): compaction summaries are
@@ -1445,6 +1487,17 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 		// parent reply. They cannot be truncated, so the complete native item
 		// is delivered in order, or replaced whole by an omission notice.
 		if native, ok := guardianNativeAgentMessage(&item); ok {
+			if id := strings.TrimSpace(item.ID); id != "" {
+				if previous, duplicate := seenNativeAgentMessageIDs[id]; duplicate {
+					if bytes.Equal(previous, native) {
+						continue
+					}
+					// A conflicting payload under one ID is invalid evidence.
+					// Skip it rather than admitting ambiguous reviewer context.
+					continue
+				}
+				seenNativeAgentMessageIDs[id] = append([]byte(nil), native...)
+			}
 			if len(native) > guardianNativeAgentMessageMaxBytes {
 				entries = append(entries, state.GuardianTranscriptEntry{
 					Author:   "assistant",

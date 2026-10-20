@@ -2180,6 +2180,9 @@ type Model struct {
 	// dynamicToolThreads tracks tasks the TUI started or resumed while serving a
 	// codex_tui dynamic tool call (Rust DynamicToolThreadStarted).
 	dynamicToolThreads map[string]bool
+	// dynamicToolMessageIndex retains each dynamic call's transcript row so a
+	// completion updates the original position instead of appending out of order.
+	dynamicToolMessageIndex map[string]int
 	// recap tracks the automatic recap deadline and turn accounting (Rust
 	// RecapState).
 	recap                       tuiapp.RecapState
@@ -6323,6 +6326,8 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 		m.renderCollabAgentToolCall(item, false)
 	case "sub_agent_activity", "subAgentActivity":
 		m.renderSubAgentActivity(item)
+	case "dynamic_tool_call", "dynamicToolCall":
+		m.applyDynamicToolItem(item, false)
 	}
 }
 
@@ -6427,6 +6432,8 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		}
 	case "plan":
 		m.completeProposedPlan(item)
+	case "dynamic_tool_call", "dynamicToolCall":
+		m.applyDynamicToolItem(item, true)
 	case "reasoning":
 		// Rust #43921: keep the last useful summary through later activity, and
 		// reconcile a refreshed stream with the completed item.

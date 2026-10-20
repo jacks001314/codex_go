@@ -307,6 +307,7 @@ func (r *RuntimeRouter) maybeStartBackgroundCompaction(ctx context.Context, thre
 			StartedAt:    time.Now().UTC(),
 			WindowNumber: captured.Window.WindowNumber,
 		}
+		request.MaxHistoryTokens = compactionHistoryTokenBudget(info)
 		if strings.TrimSpace(request.Prompt) == "" {
 			prompt, promptErr := r.compactPromptForRecord(record)
 			if promptErr != nil {

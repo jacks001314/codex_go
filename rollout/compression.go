@@ -457,9 +457,6 @@ func compressRolloutIfColdInner(path string, threadID string) (compressionOutcom
 	if err := temp.Close(); err != nil {
 		return "", 0, 0, err
 	}
-	if err := verifyZstdRollout(tempPath); err != nil {
-		return "", 0, 0, err
-	}
 	same, err := sameRolloutState(path, before)
 	if err != nil {
 		return "", 0, 0, err
@@ -467,9 +464,18 @@ func compressRolloutIfColdInner(path string, threadID string) (compressionOutcom
 	if !same {
 		return compressionSkippedChanged, before.size, 0, nil
 	}
-	// Keep the source's timestamp so cold-file decisions stay stable across the
-	// representation change.
-	if err := os.Chtimes(tempPath, before.modTime, before.modTime); err != nil {
+	// Preserve the source's access metadata before verifying or publishing.
+	// Metadata failures leave the source intact instead of changing who can
+	// read or append to the transcript.
+	if err := preserveRolloutAccessMetadata(path, tempPath, before.info); err != nil {
+		return "", 0, 0, err
+	}
+	// Reopen after applying final metadata: the owner-only temporary file can
+	// be readable while the published access policy is not.
+	if err := verifyZstdRollout(tempPath); err != nil {
+		return "", 0, 0, err
+	}
+	if err := syncRolloutFile(tempPath); err != nil {
 		return "", 0, 0, err
 	}
 	if _, err := os.Stat(compressedPath); err == nil {
@@ -499,8 +505,12 @@ func compressRolloutIfColdInner(path string, threadID string) (compressionOutcom
 }
 
 type rolloutFileState struct {
-	size    int64
-	modTime time.Time
+	size       int64
+	modTime    time.Time
+	mode       os.FileMode
+	changeTime rolloutChangeTime
+	hasCTime   bool
+	info       os.FileInfo
 }
 
 // coldRolloutState returns the file state when the rollout is cold, nil when it
@@ -519,7 +529,15 @@ func coldRolloutState(path string) (*rolloutFileState, error) {
 	if time.Since(info.ModTime()) < minRolloutAge {
 		return nil, nil
 	}
-	return &rolloutFileState{size: info.Size(), modTime: info.ModTime()}, nil
+	changeTime, hasCTime := rolloutInfoChangeTime(info)
+	return &rolloutFileState{
+		size:       info.Size(),
+		modTime:    info.ModTime(),
+		mode:       info.Mode().Perm(),
+		changeTime: changeTime,
+		hasCTime:   hasCTime,
+		info:       info,
+	}, nil
 }
 
 // sameRolloutState mirrors Rust's `same_file_state`: the source must not have
@@ -532,7 +550,29 @@ func sameRolloutState(path string, expected *rolloutFileState) (bool, error) {
 		}
 		return false, err
 	}
-	return info.Size() == expected.size && info.ModTime().Equal(expected.modTime), nil
+	if info.Size() != expected.size || !info.ModTime().Equal(expected.modTime) ||
+		info.Mode().Perm() != expected.mode {
+		return false, nil
+	}
+	// Ownership and ACL edits change ctime even when mode, length, and mtime
+	// are unchanged. Never publish stale access metadata.
+	if changeTime, ok := rolloutInfoChangeTime(info); expected.hasCTime && ok {
+		return changeTime == expected.changeTime, nil
+	}
+	return true, nil
+}
+
+func syncRolloutFile(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
 }
 
 // encodeRolloutZstd writes the zstd representation of a rollout file.

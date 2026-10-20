@@ -38,6 +38,9 @@ type ThreadManager struct {
 
 	liveThreadsMu sync.Mutex
 	liveThreads   map[session.ThreadID]*managedLiveThread
+	// retainedHook runs after a live thread is retained, outside liveThreadsMu,
+	// so the runtime can arm its idle lifecycle without re-entering the lock.
+	retainedHook func(string)
 
 	// providerRoutes retains the model provider route each live thread started
 	// with, so managed policy changes can be detected against it (Rust #44944
@@ -142,17 +145,35 @@ func (m *ThreadManager) RetainLiveThread(store *session.Store, record *session.R
 		return nil
 	}
 	m.liveThreadsMu.Lock()
-	defer m.liveThreadsMu.Unlock()
 	if _, ok := m.liveThreads[record.ID]; ok {
+		m.liveThreadsMu.Unlock()
 		return nil
 	}
 	guard, err := session.OpenLiveThread(store, record, threadUsesPaginatedHistory(record))
 	if err != nil {
+		m.liveThreadsMu.Unlock()
 		return writerOwnershipError(err)
 	}
 	defer func() { _ = guard.Discard() }()
 	m.liveThreads[record.ID] = &managedLiveThread{persistence: guard.Commit()}
+	hook := m.retainedHook
+	m.liveThreadsMu.Unlock()
+	if hook != nil {
+		hook(string(record.ID))
+	}
 	return nil
+}
+
+// SetThreadRetainedHook installs the callback that arms idle eviction after a
+// thread becomes live (Rust #52081: persisted children created after a client
+// disconnect still receive lifecycle listeners).
+func (m *ThreadManager) SetThreadRetainedHook(hook func(string)) {
+	if m == nil {
+		return
+	}
+	m.liveThreadsMu.Lock()
+	m.retainedHook = hook
+	m.liveThreadsMu.Unlock()
 }
 
 func (m *ThreadManager) AcquireLifecycleWriters(store *session.Store, threadIDs []session.ThreadID) ([]*session.WriterLock, error) {
@@ -712,6 +733,25 @@ func (m *ThreadManager) ClearConnection(connectionID string) {
 			delete(m.subscriptions, threadID)
 		}
 	}
+}
+
+// ThreadsForConnection returns the threads a connection is currently
+// subscribed to, so callers can schedule idle work after clearing it.
+func (m *ThreadManager) ThreadsForConnection(connectionID string) []string {
+	if m == nil {
+		return nil
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	m.subscriptionsMu.Lock()
+	defer m.subscriptionsMu.Unlock()
+	threads := make([]string, 0)
+	for threadID, connections := range m.subscriptions {
+		if _, ok := connections[connectionID]; ok {
+			threads = append(threads, threadID)
+		}
+	}
+	sort.Strings(threads)
+	return threads
 }
 
 func (m *ThreadManager) ClearThread(threadID string) {

@@ -246,3 +246,62 @@ func TestGoalInstructionTextRequiresHostAnnotationLikeRust(t *testing.T) {
 		t.Fatal("an omitted-objective goal instruction must count")
 	}
 }
+
+// The remote compaction runner replays conversation history, so the thread
+// must pass the model-derived history budget along with the request.
+func TestCompactThreadBoundsRemoteHistoryToModelWindow(t *testing.T) {
+	runner := &recordingCompactRunner{}
+	router, store, threadID := newGoalRetentionContext(t, []session.Item{{
+		ID: "user-1", Type: "message", Role: "user", Text: "keep this context",
+	}}, runner)
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("read record error = %v", err)
+	}
+	want := router.compactionHistoryTokenBudget(record, &runtimeCompactRequest{})
+	if want <= 0 {
+		t.Fatalf("compaction history budget = %d, want a positive model window", want)
+	}
+	compactGoalRetentionThread(t, router, threadID)
+	if runner.request == nil || runner.request.MaxHistoryTokens != want {
+		t.Fatalf("compaction MaxHistoryTokens = %#v, want %d", runner.request, want)
+	}
+}
+
+func TestSuccessfulCompactionClearsContextOverflowMarker(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := time.Now().UTC()
+	const threadID = "thread-compaction-clears-overflow"
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: threadID,
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{
+			Model: "gpt-5.4",
+			CWD:   home,
+			Extra: map[string]any{
+				"token_status": compactTokenStatusMap(compact.TokenStatus{
+					ActiveContextTokens: 1000, ShouldCompact: true,
+					Reason: compact.ReasonContextWindowExceeded, NewContextWindowRequired: true,
+				}),
+			},
+		},
+		Items: []session.Item{{ID: "u1", Type: "message", Role: "user", Text: "first"}},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:  NewRouter(store),
+		Config:        config.NewConfigService(home),
+		CompactRunner: &recordingCompactRunner{},
+	})
+	compactGoalRetentionThread(t, router, threadID)
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("read record error = %v", err)
+	}
+	status := compactTokenStatusFromMetadata(record.Metadata.Extra)
+	if status.ShouldCompact || status.NewContextWindowRequired || status.Reason != "" {
+		t.Fatalf("token status after compaction = %#v, want the overflow marker cleared", status)
+	}
+}

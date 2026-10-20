@@ -31,6 +31,8 @@ const (
 	PlanEdu                         PlanType = "edu"
 	PlanEduPlus                     PlanType = "edu_plus"
 	PlanEduPro                      PlanType = "edu_pro"
+	PlanSci                         PlanType = "sci"
+	PlanSciPlus                     PlanType = "sci_plus"
 )
 
 func (p PlanType) IsBusinessLike() bool {
@@ -63,7 +65,8 @@ func (p PlanType) IsTeamLike() bool {
 }
 
 func (p PlanType) IsWorkspaceAccount() bool {
-	return p.IsTeamLike() || p.IsBusinessLike() || p.IsEducationLike() || p == PlanEnterprise
+	return p.IsTeamLike() || p.IsBusinessLike() || p.IsEducationLike() ||
+		p == PlanEnterprise || p == PlanSci || p == PlanSciPlus
 }
 
 type AccountType string
@@ -410,6 +413,16 @@ func (p *LoginAccountParams) MarshalJSON() ([]byte, error) {
 			ChatGPTAccountID: p.ChatGPTAccountID,
 			ChatGPTPlanType:  cloneStringPtr(p.ChatGPTPlanType),
 		})
+	case AccountAmazonBedrock:
+		return json.Marshal(struct {
+			Type   AccountType `json:"type"`
+			APIKey string      `json:"apiKey"`
+			Region string      `json:"region"`
+		}{
+			Type:   AccountAmazonBedrock,
+			APIKey: p.APIKey,
+			Region: p.Region,
+		})
 	case "amazonBedrockAccessKeys":
 		return json.Marshal(struct {
 			Type            AccountType `json:"type"`
@@ -447,6 +460,13 @@ func (p *LoginAccountParams) Validate() error {
 		}
 		if strings.TrimSpace(p.ChatGPTAccountID) == "" {
 			return fmt.Errorf("%w: chatgptAccountId is required", ErrInvalidAccountRequest)
+		}
+	case AccountAmazonBedrock:
+		if strings.TrimSpace(p.APIKey) == "" {
+			return fmt.Errorf("%w: apiKey is required", ErrInvalidAccountRequest)
+		}
+		if strings.TrimSpace(p.Region) == "" {
+			return fmt.Errorf("%w: region is required", ErrInvalidAccountRequest)
 		}
 	case "amazonBedrockAccessKeys":
 		if strings.TrimSpace(p.AccessKeyID) == "" || strings.TrimSpace(p.SecretAccessKey) == "" {
@@ -1093,6 +1113,14 @@ func (m *AccountManager) Login(params *LoginAccountParams) (*LoginAccountRespons
 		m.requiresOpenAIAuth = false
 		m.authSnapshot = cloneAuthDotJSON(&snapshot)
 		return &LoginAccountResponse{Type: AccountAmazonBedrock}, nil
+	case AccountAmazonBedrock:
+		snapshot := FromBedrockAPIKey(params.APIKey, params.Region)
+		m.account = &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}
+		mode := wireAuthModeFromMode("bedrock-api-key")
+		m.authMode = &mode
+		m.requiresOpenAIAuth = false
+		m.authSnapshot = cloneAuthDotJSON(&snapshot)
+		return &LoginAccountResponse{Type: AccountAmazonBedrock}, nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported login type %q", ErrInvalidAccountRequest, params.Type)
 	}
@@ -1661,6 +1689,10 @@ func planFromString(value string) PlanType {
 		return PlanEduPlus
 	case string(PlanEduPro):
 		return PlanEduPro
+	case string(PlanSci):
+		return PlanSci
+	case string(PlanSciPlus):
+		return PlanSciPlus
 	default:
 		return PlanUnknown
 	}

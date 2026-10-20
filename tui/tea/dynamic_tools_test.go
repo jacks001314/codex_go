@@ -1,12 +1,51 @@
 package tea
 
 import (
+	"strings"
 	"testing"
 
 	"codex_go/appserver"
+	"codex_go/protocol"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 )
+
+func TestDynamicToolItemsUpdateOriginalTranscriptRows(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-main")
+	model := NewModel(state, Options{Width: 100, Height: 24})
+	success := true
+	arguments := any(map[string]any{"task": "one"})
+
+	model.applyItemStarted(&protocol.ThreadItem{
+		ID: "call-1", CallID: "call-1", Type: "dynamic_tool_call",
+		ToolName: "create_task", Arguments: &arguments, Status: "inProgress",
+	}, 0)
+	model.applyItemStarted(&protocol.ThreadItem{
+		ID: "call-2", CallID: "call-2", Type: "dynamic_tool_call",
+		ToolName: "list_tasks", Status: "inProgress",
+	}, 0)
+	model.applyItemCompleted(&protocol.ThreadItem{
+		ID: "call-2", CallID: "call-2", Type: "dynamic_tool_call",
+		ToolName: "list_tasks", Success: &success, Output: "two done",
+	})
+	model.applyItemCompleted(&protocol.ThreadItem{
+		ID: "call-1", CallID: "call-1", Type: "dynamic_tool_call",
+		ToolName: "create_task", Success: &success, Output: "one done",
+	})
+
+	if len(model.State.Messages) != 2 {
+		t.Fatalf("dynamic messages = %#v", model.State.Messages)
+	}
+	if !strings.Contains(model.State.Messages[0].Text, "create_task") ||
+		!strings.Contains(model.State.Messages[0].Text, "one done") {
+		t.Fatalf("first row = %q", model.State.Messages[0].Text)
+	}
+	if !strings.Contains(model.State.Messages[1].Text, "list_tasks") ||
+		!strings.Contains(model.State.Messages[1].Text, "two done") {
+		t.Fatalf("second row = %q", model.State.Messages[1].Text)
+	}
+}
 
 func TestDynamicToolThreadStartedTracksDispatchedTasks(t *testing.T) {
 	state := codextui.NewState(nil)

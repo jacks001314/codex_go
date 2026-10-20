@@ -281,6 +281,9 @@ func TestBackgroundCompactionLaunchesFromTurnCheckpointLikeRust(t *testing.T) {
 	if runner.request == nil || runner.request.Phase != compact.PhaseMidTurn || runner.request.Trigger != compact.TriggerAuto {
 		t.Fatalf("background request = %#v", runner.request)
 	}
+	if runner.request.MaxHistoryTokens <= 0 {
+		t.Fatalf("background compaction MaxHistoryTokens = %d, want a bounded model window", runner.request.MaxHistoryTokens)
+	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()

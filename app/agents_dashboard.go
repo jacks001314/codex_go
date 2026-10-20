@@ -74,9 +74,10 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 			continue // subagent thread: folded into the root row
 		}
 		row := agentsoverview.Row{
-			ThreadID: strings.TrimSpace(thread.ID),
-			Preview:  strings.TrimSpace(thread.Preview),
-			CWD:      strings.TrimSpace(thread.CWD),
+			ThreadID:  strings.TrimSpace(thread.ID),
+			Preview:   strings.TrimSpace(thread.Preview),
+			CWD:       strings.TrimSpace(thread.CWD),
+			UpdatedAt: thread.UpdatedAt,
 			// Rust #51500: the command center decides whether a task can be
 			// pinned in the shared section from its thread source
 			// (agents_overview_discovery::supports_shared_pinning).
@@ -152,11 +153,12 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 			continue // subagent thread: folded into the root row
 		}
 		row := agentsoverview.Row{
-			ThreadID: strings.TrimSpace(string(record.ID)),
-			Name:     strings.TrimSpace(record.Title),
-			Preview:  strings.TrimSpace(record.Preview),
-			CWD:      strings.TrimSpace(record.Metadata.CWD),
-			Model:    strings.TrimSpace(record.Metadata.Model),
+			ThreadID:  strings.TrimSpace(string(record.ID)),
+			Name:      strings.TrimSpace(record.Title),
+			Preview:   strings.TrimSpace(record.Preview),
+			CWD:       strings.TrimSpace(record.Metadata.CWD),
+			Model:     strings.TrimSpace(record.Metadata.Model),
+			UpdatedAt: record.UpdatedAt.Unix(),
 			// Rust #51500: even the no-daemon fallback reports the persisted
 			// thread source (session.Metadata.Source), which is the same field
 			// the app server maps with SessionSourceFromString, so the pin
@@ -942,6 +944,12 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		return nil
 	}
+	if m.view.State.Help {
+		if msg.String() == "?" || msg.String() == "esc" {
+			m.view.State.Help = false
+		}
+		return nil
+	}
 	switch msg.String() {
 	case "up", "k":
 		m.view.MoveSelection(false)
@@ -972,7 +980,9 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			return bubbletea.Quit
 		}
 	case "backspace":
-		m.view.Backspace()
+		if m.view.State.Searching || m.view.State.Renaming {
+			m.view.Backspace()
+		}
 	case "ctrl+c":
 		m.done = true
 		return bubbletea.Quit
@@ -985,6 +995,10 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 				m.view.TypeChar(r)
 			}
 		}
+		return nil
+	}
+	if msg.String() == "?" {
+		m.view.ToggleHelp()
 		return nil
 	}
 	// Rust #46839: Tab and Shift-Tab cycle the command-center status tabs.

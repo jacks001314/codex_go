@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -8,7 +9,9 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/appserver"
+	"codex_go/protocol"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/history_cell"
 )
 
 // taskMentionSearchDebounce mirrors Rust task_mentions::SEARCH_DEBOUNCE.
@@ -136,6 +139,82 @@ func (m *Model) applyDynamicToolThreadStarted(msg DynamicToolThreadStartedMsg) b
 	return m.refreshAgentsOverviewCmd()
 }
 
+// applyDynamicToolItem retains one dynamic tool row and updates it in place by
+// call id, so concurrent completions keep their original transcript order.
+func (m *Model) applyDynamicToolItem(item *protocol.ThreadItem, completed bool) {
+	if m == nil || item == nil || m.State == nil {
+		return
+	}
+	callID := strings.TrimSpace(firstNonEmpty(item.CallID, item.ID))
+	if callID == "" {
+		return
+	}
+	status := strings.TrimSpace(item.Status)
+	if completed && status == "" {
+		if item.Success != nil && !*item.Success {
+			status = "failed"
+		} else {
+			status = "completed"
+		}
+	}
+	cell := historycell.DynamicToolCallCell{
+		CallID:    callID,
+		Name:      firstNonEmpty(item.ToolName, item.Tool),
+		Arguments: dynamicToolArgumentsText(item.Arguments),
+		Status:    status,
+		Output:    dynamicToolOutputLines(item),
+	}
+	if m.dynamicToolMessageIndex == nil {
+		m.dynamicToolMessageIndex = map[string]int{}
+	}
+	width := max(m.width, 20)
+	message := historyMessageFromCell(cell, width)
+	if index, ok := m.dynamicToolMessageIndex[callID]; ok && index >= 0 && index < len(m.State.Messages) {
+		m.State.Messages[index] = message
+		m.State.BumpMessagesRevision()
+	} else {
+		m.State.AddHistoryMessage(message)
+		m.dynamicToolMessageIndex[callID] = len(m.State.Messages) - 1
+	}
+	m.refreshTranscript()
+}
+
+func dynamicToolArgumentsText(value *any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := (*value).(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case nil:
+		return ""
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return string(raw)
+	}
+}
+
+func dynamicToolOutputLines(item *protocol.ThreadItem) []string {
+	if item == nil {
+		return nil
+	}
+	var output []string
+	for _, value := range []string{item.Output, item.Text} {
+		if value = strings.TrimSpace(value); value != "" {
+			output = append(output, value)
+		}
+	}
+	for _, value := range item.Content {
+		if value = strings.TrimSpace(value); value != "" {
+			output = append(output, value)
+		}
+	}
+	return output
+}
+
 // registerAgentsOverviewThreadMetadata registers a root task immediately and
 // folds child metadata into the matching root row. Existing rows keep their
 // current metadata, and removed-thread tombstones win over delayed responses.
@@ -174,9 +253,10 @@ func (m *Model) registerAgentsOverviewThreadMetadata(thread *appserver.Thread) {
 
 func agentsOverviewRowFromThread(thread *appserver.Thread) agentsoverview.Row {
 	row := agentsoverview.Row{
-		ThreadID: strings.TrimSpace(thread.ID),
-		Preview:  strings.TrimSpace(thread.Preview),
-		CWD:      strings.TrimSpace(thread.CWD),
+		ThreadID:  strings.TrimSpace(thread.ID),
+		Preview:   strings.TrimSpace(thread.Preview),
+		CWD:       strings.TrimSpace(thread.CWD),
+		UpdatedAt: thread.UpdatedAt,
 	}
 	waitingApproval := false
 	waitingUserInput := false

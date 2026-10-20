@@ -186,25 +186,22 @@ func exchangeManualUpdate(conn net.Conn, socketPath string) (*UpdateOutput, erro
 	if _, err := conn.Write([]byte(manualUpdateRequest)); err != nil {
 		return nil, fmt.Errorf("failed to send the daemon updater request: %w", err)
 	}
-	response, err := io.ReadAll(io.LimitReader(conn, manualUpdateResponseLimit))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read the daemon updater response: %w", err)
-	}
-	if len(response) == 0 {
-		return nil, errors.New("daemon updater disconnected before responding")
-	}
 	var outcome struct {
 		OK  *UpdateOutput `json:"Ok"`
 		Err *string       `json:"Err"`
 	}
-	if err := json.Unmarshal(response, &outcome); err != nil {
+	// Decode exactly one JSON value. Waiting for EOF makes a successful
+	// response depend on the peer closing the socket, which some Windows unix
+	// socket peers keep open until their caller returns.
+	decoder := json.NewDecoder(io.LimitReader(conn, manualUpdateResponseLimit))
+	if err := decoder.Decode(&outcome); err != nil {
 		return nil, fmt.Errorf("invalid response from daemon updater: %w", err)
 	}
 	if outcome.Err != nil {
 		return nil, errors.New(*outcome.Err)
 	}
 	if outcome.OK == nil {
-		return nil, fmt.Errorf("invalid response from daemon updater: %s", strings.TrimSpace(string(response)))
+		return nil, errors.New("invalid response from daemon updater: missing Ok payload")
 	}
 	return outcome.OK, nil
 }

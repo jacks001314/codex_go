@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -71,6 +72,9 @@ type PluginCatalogEntry struct {
 	MCPServers   map[string]string
 	ConnectorIDs []string
 	Locations    []PluginSourceLocation
+	// Disabled marks an executor installation that no cloud definition could
+	// authorize. Cloud entries are enabled unless this is set.
+	Disabled bool
 }
 
 // String mirrors Rust's hand-written Debug for PluginCatalogEntry: declaration
@@ -93,6 +97,126 @@ func (e PluginCatalogEntry) String() string {
 type PluginCatalog struct {
 	Entries  []PluginCatalogEntry
 	Warnings []string
+	// IsPartial records a listing that omitted entries. Only a complete empty
+	// catalog establishes plugin absence (Rust #55301).
+	IsPartial bool
+}
+
+// IsEnabled mirrors PluginCatalogEntry::is_enabled: disabled entries never
+// project, cloud membership supplies enablement, and executor-only entries
+// require every installation's configured plugin to be enabled (omitted means
+// enabled).
+func (e PluginCatalogEntry) IsEnabled(configured map[string]PluginConfig) bool {
+	if e.Disabled {
+		return false
+	}
+	for _, location := range e.Locations {
+		if location.Kind == PluginSourceCloud {
+			return true
+		}
+	}
+	if len(e.Locations) == 0 {
+		return false
+	}
+	for _, location := range e.Locations {
+		if location.Kind != PluginSourceExecutor {
+			return false
+		}
+		pluginConfig, ok := configured[location.PluginID]
+		if !ok {
+			return false
+		}
+		if pluginConfig.Enabled != nil && !*pluginConfig.Enabled {
+			return false
+		}
+	}
+	return true
+}
+
+// MergePluginCatalogs merges executor installations into the cloud catalog by
+// canonical identity (Rust #55301). Cloud metadata and enablement win for
+// remote plugins; installations attach only when versions match. Executor-local
+// plugins are appended, unmatched remote installations are appended disabled,
+// and installation order is preserved.
+func MergePluginCatalogs(executor *PluginCatalog, cloud *PluginCatalog) *PluginCatalog {
+	if executor == nil {
+		if cloud == nil {
+			return &PluginCatalog{}
+		}
+		return cloud.Clone()
+	}
+	if cloud == nil {
+		return executor.Clone()
+	}
+	merged := cloud.Clone()
+	merged.IsPartial = merged.IsPartial || executor.IsPartial
+	merged.Warnings = append(merged.Warnings, executor.Warnings...)
+	cloudCount := len(merged.Entries)
+	for _, installation := range executor.Entries {
+		if installation.ID.Kind == PluginIdentityLocal {
+			merged.Entries = append(merged.Entries, installation)
+			continue
+		}
+		matched := -1
+		for index := 0; index < cloudCount; index++ {
+			if merged.Entries[index].ID == installation.ID {
+				matched = index
+				break
+			}
+		}
+		if matched < 0 {
+			disabled := installation
+			disabled.Disabled = true
+			merged.Entries = append(merged.Entries, disabled)
+			continue
+		}
+		definition := &merged.Entries[matched]
+		if definition.Version != installation.Version {
+			merged.Warnings = append(merged.Warnings, fmt.Sprintf(
+				"plugin `%s` has different cloud and executor versions; retaining the cloud definition",
+				definition.ID.AsString(),
+			))
+			continue
+		}
+		for _, location := range installation.Locations {
+			found := false
+			for _, existing := range definition.Locations {
+				if existing == location {
+					found = true
+					break
+				}
+			}
+			if !found {
+				definition.Locations = append(definition.Locations, location)
+			}
+		}
+	}
+	return merged
+}
+
+// Clone deep-copies a catalog so reconciliation cannot mutate either input.
+func (c *PluginCatalog) Clone() *PluginCatalog {
+	if c == nil {
+		return nil
+	}
+	out := &PluginCatalog{
+		Entries:   make([]PluginCatalogEntry, len(c.Entries)),
+		Warnings:  append([]string(nil), c.Warnings...),
+		IsPartial: c.IsPartial,
+	}
+	for i, entry := range c.Entries {
+		cloned := entry
+		cloned.ConnectorIDs = append([]string(nil), entry.ConnectorIDs...)
+		cloned.Locations = append([]PluginSourceLocation(nil), entry.Locations...)
+		if entry.MCPServers != nil {
+			cloned.MCPServers = make(map[string]string, len(entry.MCPServers))
+			for key, value := range entry.MCPServers {
+				cloned.MCPServers[key] = value
+			}
+		}
+		out.Entries[i] = cloned
+	}
+	return out
 }
 
 // PluginListQuery carries the discovery request context. The MCP extension adds
