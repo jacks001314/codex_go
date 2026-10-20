@@ -53,6 +53,7 @@ func integrityCommandPath(pathEnv, commandCWD string) string {
 	entries := filepath.SplitList(pathEnv)
 	for index, entry := range entries {
 		if strings.TrimSpace(entry) == "" {
+			entries[index] = commandCWD
 			continue
 		}
 		if !filepath.IsAbs(entry) {

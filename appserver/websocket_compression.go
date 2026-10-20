@@ -3,6 +3,7 @@ package appserver
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -77,8 +78,10 @@ func NewZstdEncoder() (*ZstdEncoder, error) {
 	return compressor, nil
 }
 
-// Encode writes one JSON message and flushes it as a zstd block without ending
-// the stream.
+// Encode writes one JSON message plus a newline delimiter and flushes it as a
+// zstd block without ending the stream. Newline is valid JSON whitespace for
+// Rust peers and gives the asynchronous Go decoder an unambiguous message
+// boundary without ending the compression frame.
 func (e *ZstdEncoder) Encode(text string) ([]byte, error) {
 	if e == nil || e.encoder == nil {
 		return nil, errors.New("zstd encoder is not configured")
@@ -91,6 +94,11 @@ func (e *ZstdEncoder) Encode(text string) ([]byte, error) {
 	e.payload.Reset()
 	if _, err := io.WriteString(e.encoder, text); err != nil {
 		return nil, err
+	}
+	if len(text) == 0 || text[len(text)-1] != '\n' {
+		if _, err := io.WriteString(e.encoder, "\n"); err != nil {
+			return nil, err
+		}
 	}
 	if err := e.encoder.Flush(); err != nil {
 		return nil, err
@@ -174,13 +182,22 @@ func (d *ZstdDecoder) DecodeContext(ctx context.Context, payload []byte) (string
 	}
 	d.source.Feed(payload)
 	finished := make(chan struct{})
-	defer close(finished)
+	watcherDone := make(chan struct{})
 	go func() {
+		defer close(watcherDone)
 		select {
 		case <-ctx.Done():
 			d.source.CloseWithError(ctx.Err())
 		case <-finished:
 		}
+	}()
+	// Wait for the cancellation watcher to observe a successful decode before
+	// the caller cancels decodeCtx. Otherwise both select cases can be ready
+	// and a canceled context can close the persistent stream after a valid
+	// message, breaking every subsequent message.
+	defer func() {
+		close(finished)
+		<-watcherDone
 	}()
 	decodedSize := 0
 	for {
@@ -195,18 +212,24 @@ func (d *ZstdDecoder) DecodeContext(ctx context.Context, payload []byte) (string
 		if decodedSize > d.maxMessageSize {
 			return "", errors.New("decompressed app-server WebSocket message exceeds size limit")
 		}
-		if d.source.Buffered() == 0 {
-			break
+		decoded := d.messageBuffer[:decodedSize]
+		if newline := bytes.IndexByte(decoded, '\n'); newline >= 0 {
+			if newline+1 != len(decoded) {
+				return "", errors.New("compressed app-server WebSocket message contains trailing data after its delimiter")
+			}
+			decoded = decoded[:newline]
+			if !utf8.Valid(decoded) {
+				return "", errors.New("decompressed app-server WebSocket message is not valid UTF-8")
+			}
+			return string(decoded), nil
+		}
+		// Rust peers use the same flush boundary without adding a delimiter.
+		// A complete JSON value identifies that boundary while retaining the
+		// decoder's stream history.
+		if json.Valid(bytes.TrimSpace(decoded)) {
+			return string(bytes.TrimSpace(decoded)), nil
 		}
 	}
-	if buffered := d.source.Buffered(); buffered != 0 {
-		return "", fmt.Errorf("app-server WebSocket compressed message left %d unconsumed bytes", buffered)
-	}
-	decoded := d.messageBuffer[:decodedSize]
-	if !utf8.Valid(decoded) {
-		return "", errors.New("decompressed app-server WebSocket message is not valid UTF-8")
-	}
-	return string(decoded), nil
 }
 
 // Close releases decoder resources and wakes any blocked source read.

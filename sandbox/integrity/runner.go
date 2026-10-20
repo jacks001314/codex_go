@@ -51,7 +51,7 @@ func RunIntegrityChecks(ctx context.Context, request *RunnerRequest) {
 }
 
 func runIntegrityChecks(ctx context.Context, request *RunnerRequest, recorder RunnerMetrics) {
-	if request == nil || request.SandboxType != platformSandboxType() ||
+	if request == nil || !supportedIntegritySandboxType(request.SandboxType) ||
 		request.SandboxOverride == "escalatedSandboxWithRestrictions" ||
 		policyHasFullDiskWrite(request.Entries, request.CWD) {
 		return
@@ -63,6 +63,10 @@ func runIntegrityChecks(ctx context.Context, request *RunnerRequest, recorder Ru
 		"backend":        string(request.SandboxType),
 		"has_deny_globs": boolTag(hasGlobDenials(request.Entries)),
 	}
+	if ctx.Err() != nil {
+		recordRunnerTimeout(recorder, 0, tags)
+		return
+	}
 	startedAt := time.Now()
 	work := make(chan runnerResult, 1)
 	go func() {
@@ -73,15 +77,15 @@ func runIntegrityChecks(ctx context.Context, request *RunnerRequest, recorder Ru
 	var result runnerResult
 	select {
 	case result = <-work:
+		if ctx.Err() != nil {
+			recordRunnerTimeout(recorder, time.Since(startedAt), tags)
+			return
+		}
 	case <-timer.C:
-		recordRunnerPreparation(recorder, time.Since(startedAt), false, tags)
-		recordRunnerCheck(recorder, "preparation", "error", "timeout", tags, nil, nil)
-		recordRunnerDuration(recorder, time.Since(startedAt), tags)
+		recordRunnerTimeout(recorder, time.Since(startedAt), tags)
 		return
 	case <-ctx.Done():
-		recordRunnerPreparation(recorder, 0, false, tags)
-		recordRunnerCheck(recorder, "preparation", "error", "timeout", tags, nil, nil)
-		recordRunnerDuration(recorder, time.Since(startedAt), tags)
+		recordRunnerTimeout(recorder, time.Since(startedAt), tags)
 		return
 	}
 	recordRunnerPreparation(recorder, result.preparation, result.preparationOK, tags)
@@ -89,6 +93,25 @@ func runIntegrityChecks(ctx context.Context, request *RunnerRequest, recorder Ru
 		recordRunnerCheck(recorder, check.dependency, check.outcome, check.errorKind, tags, check.target, check.finding)
 	}
 	recordRunnerDuration(recorder, time.Since(startedAt), tags)
+}
+
+func recordRunnerTimeout(recorder RunnerMetrics, preparation time.Duration, tags map[string]string) {
+	recordRunnerPreparation(recorder, preparation, false, tags)
+	recordRunnerCheck(recorder, "preparation", "error", "timeout", tags, nil, nil)
+	recordRunnerDuration(recorder, preparation, tags)
+}
+
+func supportedIntegritySandboxType(sandboxType sandbox.SandboxType) bool {
+	switch sandboxType {
+	case sandbox.SandboxTypeLinuxSeccomp, sandbox.SandboxTypeMacosSeatbelt:
+		return sandboxType == platformSandboxType()
+	case sandbox.SandboxTypeWindowsMxc:
+		return runtime.GOOS == "windows"
+	case sandbox.SandboxTypeWindowsRestrictedToken:
+		return runtime.GOOS == "windows"
+	default:
+		return false
+	}
 }
 
 type runnerResult struct {
@@ -116,6 +139,11 @@ func executeIntegrityChecks(request *RunnerRequest) runnerResult {
 	result := runnerResult{}
 	policy, err := PreparePolicyWithEnvironment(request.Entries, request.CWD, request.Env)
 	if err != nil {
+		result.preparation = time.Since(startedAt)
+		result.checks = []runnerCheck{{dependency: "preparation", outcome: "error", errorKind: "preparation"}}
+		return result
+	}
+	if err := preparePlatformIntegrityPolicy(request); err != nil {
 		result.preparation = time.Since(startedAt)
 		result.checks = []runnerCheck{{dependency: "preparation", outcome: "error", errorKind: "preparation"}}
 		return result

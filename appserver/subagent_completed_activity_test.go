@@ -50,6 +50,7 @@ func TestRuntimeRouterChildCompletionRecordsActivityOnParentTurnLikeRust(t *test
 		Agent:        &subAgentCompletedActivityAgent{},
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	t.Cleanup(func() { _ = router.Close() })
 	router.SetNotificationSink(sink)
 	router.requireThreadStatus().UpsertThread("child-thread", false)
 
@@ -154,6 +155,7 @@ func newSubAgentCompletedRoutingFixture(t *testing.T) *subAgentCompletedRoutingF
 		Agent:        &subAgentCompletedActivityAgent{},
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	t.Cleanup(func() { _ = router.Close() })
 	router.SetNotificationSink(sink)
 	router.requireThreadStatus().UpsertThread("worker-thread", false)
 	// The live agent registry owns agent-path -> thread resolution

@@ -99,38 +99,27 @@ func PreparePolicy(entries []sandbox.FileSystemSandboxEntry, cwd string) (*Prepa
 // fallback, matching Rust #51840.
 func PreparePolicyWithEnvironment(entries []sandbox.FileSystemSandboxEntry, cwd string, env map[string]string) (*PreparedPolicy, error) {
 	normalizedEntries := append([]sandbox.FileSystemSandboxEntry(nil), entries...)
+	resolvedEntries := make([]sandbox.FileSystemSandboxEntry, 0, len(normalizedEntries))
+	for _, entry := range normalizedEntries {
+		if entry.Path.Type != "special" || entry.Path.Value == nil ||
+			!strings.EqualFold(strings.TrimSpace(entry.Path.Value.Kind), "tmpdir") {
+			resolvedEntries = append(resolvedEntries, entry)
+			continue
+		}
+		for _, tmpdir := range policyTemporaryDirectories(env) {
+			resolved, err := resolvePolicyTemporaryPath(tmpdir, cwd, env)
+			if err != nil {
+				return nil, err
+			}
+			materialized := entry
+			materialized.Path = sandbox.FileSystemPath{Type: "path", Path: resolved}
+			resolvedEntries = append(resolvedEntries, materialized)
+		}
+	}
+	normalizedEntries = resolvedEntries
 	globEntries := make([]sandbox.FileSystemSandboxEntry, 0, len(normalizedEntries))
 	for index := 0; index < len(normalizedEntries); index++ {
 		entry := &normalizedEntries[index]
-		if entry.Path.Type == "special" && entry.Path.Value != nil &&
-			strings.EqualFold(strings.TrimSpace(entry.Path.Value.Kind), "tmpdir") {
-			tmpdir := ""
-			if env != nil {
-				tmpdir = strings.TrimSpace(env["TMPDIR"])
-			}
-			if tmpdir == "" {
-				normalizedEntries = append(normalizedEntries[:index], normalizedEntries[index+1:]...)
-				index--
-				continue
-			}
-			if strings.HasPrefix(tmpdir, "~/") || strings.HasPrefix(tmpdir, `~\`) {
-				home := ""
-				if env != nil {
-					home = strings.TrimSpace(env["HOME"])
-				}
-				if home == "" {
-					home, _ = os.UserHomeDir()
-				}
-				if home == "" {
-					return nil, fmt.Errorf("%w: unable to resolve TMPDIR %q without executor home", ErrInvalidPolicy, tmpdir)
-				}
-				tmpdir = filepath.Join(home, tmpdir[2:])
-			}
-			if !filepath.IsAbs(tmpdir) {
-				tmpdir = filepath.Join(cwd, tmpdir)
-			}
-			entry.Path = sandbox.FileSystemPath{Type: "path", Path: filepath.Clean(tmpdir)}
-		}
 		if entry.Path.Type != "glob_pattern" || entry.Access != sandbox.FileSystemAccessDeny {
 			// Upstream keeps non-deny entries in glob_policy but its deny matcher
 			// only consumes deny entries (permissions.rs:1185-1191).
@@ -171,6 +160,27 @@ func PreparePolicyWithEnvironment(entries []sandbox.FileSystemSandboxEntry, cwd 
 	}
 	roots := writableRoots(normalizedEntries, cwd)
 	return &PreparedPolicy{Roots: roots, GlobDenials: globDenials}, nil
+}
+
+func resolvePolicyTemporaryPath(tmpdir string, cwd string, env map[string]string) (string, error) {
+	tmpdir = strings.TrimSpace(tmpdir)
+	if strings.HasPrefix(tmpdir, "~/") || strings.HasPrefix(tmpdir, `~\`) {
+		home := ""
+		if env != nil {
+			home = strings.TrimSpace(env["HOME"])
+		}
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		if home == "" {
+			return "", fmt.Errorf("%w: unable to resolve TMPDIR %q without executor home", ErrInvalidPolicy, tmpdir)
+		}
+		tmpdir = filepath.Join(home, tmpdir[2:])
+	}
+	if !filepath.IsAbs(tmpdir) {
+		tmpdir = filepath.Join(cwd, tmpdir)
+	}
+	return filepath.Clean(tmpdir), nil
 }
 
 // materializeGlobPattern resolves a deny-read glob against cwd the same way the

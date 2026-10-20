@@ -445,16 +445,12 @@ func compressRolloutIfColdInner(path string, threadID string) (compressionOutcom
 		return "", 0, 0, err
 	}
 	tempPath := temp.Name()
+	defer temp.Close()
 	defer func() { _ = os.Remove(tempPath) }()
 	if err := encodeRolloutZstd(path, temp); err != nil {
-		temp.Close()
 		return "", 0, 0, err
 	}
 	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return "", 0, 0, err
-	}
-	if err := temp.Close(); err != nil {
 		return "", 0, 0, err
 	}
 	same, err := sameRolloutState(path, before)
@@ -475,7 +471,10 @@ func compressRolloutIfColdInner(path string, threadID string) (compressionOutcom
 	if err := verifyZstdRollout(tempPath); err != nil {
 		return "", 0, 0, err
 	}
-	if err := syncRolloutFile(tempPath); err != nil {
+	if err := temp.Sync(); err != nil {
+		return "", 0, 0, err
+	}
+	if err := temp.Close(); err != nil {
 		return "", 0, 0, err
 	}
 	if _, err := os.Stat(compressedPath); err == nil {
@@ -560,19 +559,6 @@ func sameRolloutState(path string, expected *rolloutFileState) (bool, error) {
 		return changeTime == expected.changeTime, nil
 	}
 	return true, nil
-}
-
-func syncRolloutFile(path string) error {
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if syncErr != nil {
-		return syncErr
-	}
-	return closeErr
 }
 
 // encodeRolloutZstd writes the zstd representation of a rollout file.

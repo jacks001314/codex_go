@@ -220,6 +220,7 @@ func TestRuntimeAgentControllerSpawnUsesCapturedStepSettingsLikeRust(t *testing.
 		t.Fatal(err)
 	}
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	defer router.Close()
 
 	// The invoking turn's captured settings, as a mid-turn settings update leaves them.
 	effort, summary := "high", "concise"

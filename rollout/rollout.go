@@ -1698,9 +1698,6 @@ func materializeRolloutForReferenceLocked(plain string, stage *string) (string, 
 	if err := temporary.Sync(); err != nil {
 		return "", "", err
 	}
-	if err := temporary.Close(); err != nil {
-		return "", "", err
-	}
 	*stage = "set_metadata"
 	if err := preserveRolloutAccessMetadata(compressed, temporaryPath, metadata); err != nil {
 		return "", "", err
@@ -1714,7 +1711,10 @@ func materializeRolloutForReferenceLocked(plain string, stage *string) (string, 
 		return "", "", err
 	}
 	*stage = "sync"
-	if err := syncRolloutFile(temporaryPath); err != nil {
+	if err := temporary.Sync(); err != nil {
+		return "", "", err
+	}
+	if err := temporary.Close(); err != nil {
 		return "", "", err
 	}
 	*stage = "publish"
@@ -1734,28 +1734,31 @@ func materializeRolloutForReferenceLocked(plain string, stage *string) (string, 
 		}
 		_, copyErr = io.Copy(destination, source)
 		_ = source.Close()
-		if copyErr == nil {
-			copyErr = destination.Sync()
-		}
-		if closeErr := destination.Close(); copyErr == nil {
-			copyErr = closeErr
-		}
 		if copyErr != nil {
+			_ = destination.Close()
 			_ = os.Remove(plain)
 			return "", "", copyErr
 		}
 		if err := preserveRolloutAccessMetadata(compressed, plain, metadata); err != nil {
+			_ = destination.Close()
 			_ = os.Remove(plain)
 			return "", "", err
 		}
 		if reopened, err := os.Open(plain); err != nil {
+			_ = destination.Close()
 			_ = os.Remove(plain)
 			return "", "", err
 		} else if err := reopened.Close(); err != nil {
+			_ = destination.Close()
 			_ = os.Remove(plain)
 			return "", "", err
 		}
-		if err := syncRolloutFile(plain); err != nil {
+		if err := destination.Sync(); err != nil {
+			_ = destination.Close()
+			_ = os.Remove(plain)
+			return "", "", err
+		}
+		if err := destination.Close(); err != nil {
 			_ = os.Remove(plain)
 			return "", "", err
 		}

@@ -3,7 +3,7 @@ package integrity
 import (
 	"strings"
 
-	"codex_go/sandbox/sandboxpath"
+	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
 
@@ -12,7 +12,8 @@ import (
 // glob additionally inventories the scanner selected from the command's own
 // PATH and working directory.
 func platformIntegrityDependencies(request *RunnerRequest, prepared *PreparedPolicy) []integrityDependency {
-	if request == nil || prepared == nil || prepared.GlobDenials == nil || len(request.Command) == 0 {
+	if request == nil || request.SandboxType != sandbox.SandboxTypeWindowsMxc ||
+		prepared == nil || prepared.GlobDenials == nil || len(request.Command) == 0 {
 		return nil
 	}
 	commandCWD := strings.TrimSpace(request.CWD)
@@ -29,11 +30,10 @@ func platformIntegrityDependencies(request *RunnerRequest, prepared *PreparedPol
 	if pathEnv == "" {
 		return nil
 	}
-	scanner := sandboxpath.FindExecutableInPath(
+	scanner := windowssandbox.FindExecutableInCommandPath(
 		windowssandbox.GlobScanProgram,
 		pathEnv,
 		commandCWD,
-		sandboxpath.FilesystemPolicy{},
 	)
 	if scanner == "" {
 		return nil

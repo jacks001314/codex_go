@@ -438,7 +438,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2c4a95736bea64256a50f7b8506bd33c181cc85a	41087	Expose response usage metadata in completion events (#41087)	2026-08-27	appserver	1	1	1.00	0	0	complete
 2c79ee6dacb6deccb7e19ac5acffb3e379bbe895	42178	Add structured asynchronous user input requests (#42178)	2026-09-02	tui	2	2	1.00	0	0	complete
 2c8cfbf44f9cbe16f91d7630d21b501d3e2cf817	41861	Keep history extension tools out of Guardian reviews (#41861)	2026-08-31	appserver	0	0		0	0	not_applicable
-2c9e1a5775caedcfccd64ba7dc928ed63d6ed058	44872	Add managed network policy support to the Windows MXC sandbox (#44872)	2026-09-11	sandbox	3	1	0.33	0	0	blocked_precondition	CODEX_WINDOWS_MXC_ARG1,CreateMxcCommandArgsParams
+2c9e1a5775caedcfccd64ba7dc928ed63d6ed058	44872	Add managed network policy support to the Windows MXC sandbox (#44872)	2026-09-11	sandbox	3	3	1.00	0	0	complete
 2cbbf0c9b542a36a1c3284b5e804917635b6f666	43827	Add memory dual writing and v2 readiness reporting (#43827)	2026-09-08	appserver	5	5	1.00	0	0	complete
 2cc65cdd4c7c167f0c7252fcb5165d649c16aca0	49426	Enable analytics by default for daemon-launched app servers (#49426)	2026-09-30	appserver	0	0		0	0	not_applicable
 2ce38ae6d84a0aa96768742a5ac888a02ff622c7	44027	Support image attachments in agents overview background tasks (#44027)	2026-09-09	tui	1	0	0.00	0	0	complete	restore_agents_overview_prompt
@@ -509,7 +509,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3319d9b296bba4cad340ffa997d216d95f601992	44564	Add app-server APIs for stored thread attachments (#44564)	2026-09-10	tui	13	10	0.77	0	0	complete	thread_attachment_add,thread_attachment_list,thread_attachment_remove
 333beecd41281b1350688b417a2f20c66e2a743e	40472	Add structured full approval reviews to extensions (#40472)	2026-08-24	guardian	5	0	0.00	0	0	not_applicable	ApprovalAssessment,ApprovalReviewError,ApprovalReviewInput,fast_approval_decision,full_approval_review
 333c41eef6b9ba3697fe913973fd58afe32d1ef5	43558	Show completion timestamps after successful TUI turns (#43558)	2026-09-07	tui	4	2	0.50	0	0	complete	completion_cell,group_completed_turn_items
-3342ee8c0783125c7be555020b31bc20766917d3	51831	Add MXC sandbox integrity dependency and policy preparation (#51831)	2026-10-07	execserver	14	6	0.43	0	0	blocked_precondition	GLOB_SCAN_PROGRAM,codex_and_launcher_dependencies,critical_dependencies,materialize_temporary_paths,prepare_file_system_policy,resolve_windows_deny_read_paths_in_environment,volume_roots,with_expanded_deny_globs
+3342ee8c0783125c7be555020b31bc20766917d3	51831	Add MXC sandbox integrity dependency and policy preparation (#51831)	2026-10-07	execserver	14	13	0.93	0	0	complete	with_expanded_deny_globs
 334b6e7321d55697a2415a42e1725c814d3c0df4	48621	Remove follow-up prompt suggestions from the TUI (#48621)	2026-09-27	tui	1	0	0.00	0	0	complete	set_keymap_bindings
 335c7f8ecab29c4462a553bbf174276d2c67a766	50962	Gate stable environment tool exposure behind a feature flag (#50962)	2026-10-04	sandbox	0	0		0	0	complete
 339751715c64496cb86246bfb3935f40e309dd3d	40368	Use snapshot session sources for MCP projection (#40368)	2026-08-24	mcp	0	0		0	0	not_applicable
@@ -2312,7 +2312,7 @@ d9487a29308c378ff65ee049a68cb2c0d06a98e1	48805	Allow transcript wheel scrolling 
 d9511fb7888d98f89526d4ae019dd9be2f14199e	41400	Refresh MCP HTTP helper headers after authorization failures (#41400)	2026-08-28	mcp	2	0	0.00	0	0	complete	InsufficientScopeChallenge,insufficient_scope_challenge
 d979df154cf60e13eafb5453e75b6d84f21c67bf	42631	Initialize the packaged GStreamer runtime in the voice host (#42631)	2026-09-03	realtime	4	4	1.00	0	0	complete
 d99213289f9abe6daeefa50cde67634d9ea6eeed	46897	Honor the effective terminal color level in activity charts (#46897)	2026-09-20	tui	0	0		0	0	not_applicable
-d9960e12bb178bae15d25bde5916642a94675466	51840	Add a bubblewrap backend for sandbox integrity checks (#51840)	2026-10-07	execserver	10	4	0.40	0	0	partial	GLOB_SCAN_PROGRAM,expand_unreadable_globs_in_environment,find_bundled_bwrap_for_exe,find_executable_in_search_paths
+d9960e12bb178bae15d25bde5916642a94675466	51840	Add a bubblewrap backend for sandbox integrity checks (#51840)	2026-10-07	execserver	10	10	1.00	0	0	complete
 d996b4f02a204b36060de4711e106e8ecc7be9ac	44359	Report OAuth authentication failures in MCP status snapshots (#44359)	2026-09-10	mcp	0	0		0	0	not_applicable
 d9ac1f02edd27c45bf955105389253f7bf3b9606	47287	Update the Guardian extra-policy snapshot for retained instructions (#47287)	2026-09-22	guardian	0	0		0	0	not_applicable
 d9cf203890663ee27969b8e0735e08cf35010bbf	50054	Check token estimate filtering directly on the tracing subscriber (#50054)	2026-10-01	core	0	0		0	0	not_applicable
@@ -2705,7 +2705,7 @@ ffd3429d754991183433b4d41b67551e5656ba27	54946	Preserve model catalog caches acr
 9dc3a1ce7ea53bb818b8dd69416d6dde70d0b680	55234	Record Guardian sampling retries, attempts, and delivery outcomes (#55234)	2026-10-19	guardian		0	0.00	0	0	not_applicable
 eb354a928b347856055b29fb55ecd740addf8f77	55237	Add Guardian review routing and cached score metrics (#55237)	2026-10-19	guardian		0	0.00	0	0	not_applicable
 47db41930433487eb1419b3d5887bce7bd53fbe5	55244	Batch thread history materialization into SQLite (#55244)	2026-10-19	persistence		0	0.00	0	0	not_applicable
-5fe32c00015a84e6b704f6f37460bc925cd93ec0	55252	Preserve rollout access metadata across compression and restoration (#55252)	2026-10-19	persistence		0	0.00	0	0	partial
+5fe32c00015a84e6b704f6f37460bc925cd93ec0	55252	Preserve rollout access metadata across compression and restoration (#55252)	2026-10-19	persistence		0	0.00	0	0	complete
 9032fc76839e23a0e9defa71920089187fad1b51	55255	Unload idle ephemeral composer prediction threads without delay (#55255)	2026-10-19	appserver		0	0.00	0	0	complete
 c0ce901923c81843d100659fe4cfa5cb0cb1068e	55261	Share dynamic tool specifications across turn snapshots (#55261)	2026-10-19	core		0	0.00	0	0	not_applicable
 71ab2ea77bc7fca41bb641e8a131bcba7b304a21	55262	Stop memory dual-write when v2 is selected (#55262)	2026-10-19	core		0	0.00	0	0	complete

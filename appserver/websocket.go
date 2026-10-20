@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -398,6 +399,7 @@ func serveWebSocketConnectionWithCompression(
 			decoded, err := decompressor.DecodeContext(decodeCtx, data)
 			cancelDecode()
 			if err != nil {
+				slog.Warn("failed to decode compressed websocket message", "error", err)
 				_ = conn.Close(websocket.StatusUnsupportedData, "invalid compressed JSON message")
 				cleanupConnection()
 				requests.Wait()

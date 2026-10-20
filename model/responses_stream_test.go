@@ -563,8 +563,10 @@ func TestResponseFailedErrorClassifiesRateLimitExceededLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatal("retry delay not reported for rate_limit_exceeded")
 	}
-	if delay.Milliseconds() != 11054 {
-		t.Fatalf("retry delay = %v, want 11054ms", delay)
+	// The parser applies a small safety offset and time.Duration.Milliseconds
+	// truncates, so compare against the message's value with a narrow bound.
+	if delay < 11050*time.Millisecond || delay > 11060*time.Millisecond {
+		t.Fatalf("retry delay = %v, want about 11054ms", delay)
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	coresandbox "codex_go/sandbox"
-	"codex_go/sandbox/sandboxpath"
 )
 
 // GlobScanProgram is the external deny-glob scanner inventoried by sandbox
@@ -135,7 +134,7 @@ func ripgrepWindowsDenyReadMatches(
 			break
 		}
 	}
-	scanner := sandboxpath.FindExecutableInPath(GlobScanProgram, pathEnv, commandCWD, sandboxpath.FilesystemPolicy{})
+	scanner := FindExecutableInCommandPath(GlobScanProgram, pathEnv, commandCWD)
 	if scanner == "" {
 		return nil, false, nil
 	}
@@ -177,6 +176,35 @@ func ripgrepWindowsDenyReadMatches(
 		}
 	}
 	return paths, true, nil
+}
+
+// FindExecutableInCommandPath mirrors `which::which_in`: PATH entries are
+// resolved relative to the command's working directory and empty entries mean
+// that directory.
+func FindExecutableInCommandPath(program, pathEnv, commandCWD string) string {
+	for _, directory := range filepath.SplitList(pathEnv) {
+		directory = strings.Trim(strings.TrimSpace(directory), `"`)
+		if directory == "" {
+			directory = commandCWD
+		} else if !filepath.IsAbs(directory) {
+			directory = filepath.Join(commandCWD, directory)
+		}
+		for _, candidate := range []string{
+			filepath.Join(directory, program),
+			filepath.Join(directory, program+".exe"),
+			filepath.Join(directory, program+".EXE"),
+		} {
+			info, err := os.Stat(candidate)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			absolute, err := filepath.Abs(candidate)
+			if err == nil {
+				return absolute
+			}
+		}
+	}
+	return ""
 }
 
 func windowsEnvironmentEntries(env map[string]string) []string {

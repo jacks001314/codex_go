@@ -416,25 +416,6 @@ func escapeUnclosedGlobClasses(glob string) string {
 	return out.String()
 }
 
-func expandUnreadableGlobsInProcess(patterns []string, cwd string, maxDepth *int) ([]string, error) {
-	expanded := map[string]bool{}
-	for _, pattern := range patterns {
-		matches, err := expandLinuxDenyGlob(pattern, cwd, maxDepth)
-		if err != nil {
-			return nil, err
-		}
-		for _, match := range matches {
-			expanded[filepath.Clean(match)] = true
-		}
-	}
-	paths := make([]string, 0, len(expanded))
-	for path := range expanded {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths, nil
-}
-
 func environmentEntries(env map[string]string) []string {
 	entries := make([]string, 0, len(env))
 	for key, value := range env {

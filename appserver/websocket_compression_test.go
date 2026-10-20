@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -98,7 +99,11 @@ func TestZstdStreamCodecHandlesLargeIncompressibleMessage(t *testing.T) {
 	for index := range content {
 		content[index] &= 0x7f
 	}
-	payload, err := encoder.Encode(string(content))
+	message, err := json.Marshal(map[string]string{"payload": string(content)})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	payload, err := encoder.Encode(string(message))
 	if err != nil {
 		t.Fatalf("Encode() error = %v", err)
 	}
@@ -106,7 +111,7 @@ func TestZstdStreamCodecHandlesLargeIncompressibleMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if decoded != string(content) {
+	if decoded != string(message) {
 		t.Fatal("large compressed round trip changed the payload")
 	}
 	payload, err = encoder.Encode(`{"after":"large"}`)

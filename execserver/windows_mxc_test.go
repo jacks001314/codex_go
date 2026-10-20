@@ -41,25 +41,31 @@ func TestExecServerRejectsMXCLevelLikeRust(t *testing.T) {
 
 	tty := base()
 	tty.TTY = true
-	if _, _, err := startExecServerSandboxProcess(tty); err == nil || !strings.Contains(err.Error(), "MXC currently supports ordinary pipe launches only") {
+	if _, _, err := startExecServerSandboxProcess(tty); err == nil || !strings.Contains(err.Error(), "native MXC is unavailable on this executor") {
 		t.Fatalf("tty launch err = %v", err)
 	}
 	arg0 := "custom-arg0"
 	arg0Params := base()
 	arg0Params.Arg0 = &arg0
-	if _, _, err := startExecServerSandboxProcess(arg0Params); err == nil || !strings.Contains(err.Error(), "MXC currently supports ordinary pipe launches only") {
+	if _, _, err := startExecServerSandboxProcess(arg0Params); err == nil || !strings.Contains(err.Error(), "MXC custom argv0 is not supported") {
 		t.Fatalf("arg0 launch err = %v", err)
 	}
 
 	managed := base()
 	managed.EnforceManagedNetwork = true
-	managed.ManagedNetwork = &ManagedNetworkSandboxContext{AllowLocalBinding: true}
-	if _, _, err := startExecServerSandboxProcess(managed); err == nil || !strings.Contains(err.Error(), "MXC managed networking is not supported yet") {
+	managed.ManagedNetwork = &ManagedNetworkSandboxContext{LoopbackPorts: []uint16{43123}, AllowLocalBinding: true}
+	if _, _, err := startExecServerSandboxProcess(managed); err == nil || !strings.Contains(err.Error(), "native MXC is unavailable on this executor") {
 		t.Fatalf("managed network launch err = %v", err)
+	}
+	invalidManaged := base()
+	invalidManaged.EnforceManagedNetwork = true
+	invalidManaged.ManagedNetwork = &ManagedNetworkSandboxContext{AllowLocalBinding: true}
+	if _, _, err := startExecServerSandboxProcess(invalidManaged); err == nil || !strings.Contains(err.Error(), "dedicated proxy ports") {
+		t.Fatalf("invalid managed network launch err = %v", err)
 	}
 	proxy := base()
 	proxy.NetworkProxy = &RemoteNetworkProxyLaunchConfig{}
-	if _, _, err := startExecServerSandboxProcess(proxy); err == nil || !strings.Contains(err.Error(), "MXC managed networking is not supported yet") {
+	if _, _, err := startExecServerSandboxProcess(proxy); err == nil || !strings.Contains(err.Error(), "native MXC is unavailable on this executor") {
 		t.Fatalf("network proxy launch err = %v", err)
 	}
 }
