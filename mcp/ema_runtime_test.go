@@ -252,8 +252,11 @@ func TestEMAAuthManagerRevokesWhenAccountLoginChangesLikeRust(t *testing.T) {
 	}
 	request, _ := http.NewRequest(http.MethodPost, "https://resource.example/mcp", nil)
 	err = manager.ApplyHTTPRequest(request, nil)
-	if err == nil || !strings.Contains(err.Error(), "enterprise identity requires authentication") {
-		t.Fatalf("ApplyHTTPRequest() error = %v, want reauthentication required", err)
+	// Rust #55691 prefers the request-authority refusal over the credential
+	// failure it caused, so the ownership rejection surfaces as a revoked
+	// authorization that must reconnect.
+	if err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("ApplyHTTPRequest() error = %v, want a revoked authority", err)
 	}
 	// A later successful check does not restore a revoked manager.
 	accountCurrent = true

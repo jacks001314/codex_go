@@ -1621,7 +1621,7 @@ func (r *Runner) configuredMCPRuntimeForConfig(cfg *config.Config, resolvedAuth 
 	if len(resolvedAuth) > 0 && resolvedAuth[0] != nil {
 		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolvedAuth[0].Auth)
 	}
-	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(cfg.Values, r.CodexHome, runtimeAuth, cfg.Requirements)
+	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthRequirementsAndBinding(cfg.Values, r.CodexHome, runtimeAuth, cfg.Requirements, cfg.CloudConfigBinding())
 	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
 		return nil, nil, nil
 	}

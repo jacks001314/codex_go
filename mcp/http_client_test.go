@@ -2300,6 +2300,7 @@ func TestRetryableMCPStreamableHTTPErrorMatchesRustClassifier(t *testing.T) {
 		{name: "service unavailable", err: &mcpHTTPStatusError{StatusCode: http.StatusServiceUnavailable}, want: true},
 		{name: "gateway timeout", err: &mcpHTTPStatusError{StatusCode: http.StatusGatewayTimeout}, want: true},
 		{name: "forbidden", err: &mcpHTTPStatusError{StatusCode: http.StatusForbidden}, want: false},
+		{name: "enterprise policy held request", err: &MCPEMARequestNotSentError{Reason: "enterprise MCP policy is updating or unavailable"}, want: false},
 		{name: "session expired", err: &mcpHTTPStatusError{StatusCode: http.StatusNotFound}, want: false},
 		{name: "transport rpc error", err: &MCPRemoteError{Code: -32603, Message: "http/request failed: reset"}, want: true},
 		{name: "other rpc error", err: &MCPRemoteError{Code: -32603, Message: "internal failure"}, want: false},

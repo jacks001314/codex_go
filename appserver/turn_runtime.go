@@ -11530,7 +11530,7 @@ func (r *RuntimeRouter) runtimeMCPServerConfigsForSkills(cfg *config.Config) map
 	if r != nil {
 		runtimeAuth = mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 	}
-	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, cfg.Requirements)
+	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthRequirementsAndBinding(values, codexHome, runtimeAuth, cfg.Requirements, cfg.CloudConfigBinding())
 	out := make(map[string]mcp.RuntimeServerConfig, len(runtimeConfig.Servers))
 	for name, registration := range runtimeConfig.Servers {
 		config := registration.Config

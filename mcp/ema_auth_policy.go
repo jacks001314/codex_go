@@ -17,6 +17,7 @@ type EMAAuthFailureCode string
 const (
 	EMAAuthFailureInvalidGrant             EMAAuthFailureCode = "invalid_grant"
 	EMAAuthFailureInsufficientUserAuthn    EMAAuthFailureCode = "insufficient_user_authentication"
+	EMAAuthFailureIdentityClientRejected   EMAAuthFailureCode = "enterprise identity rejected the OAuth client"
 	EMAAuthFailureReauthenticationRequired EMAAuthFailureCode = "enterprise identity requires authentication"
 )
 
@@ -49,11 +50,135 @@ func (e *EMAAuthFailure) Error() string {
 		return "invalid_grant"
 	case EMAAuthFailureInsufficientUserAuthn:
 		return "insufficient_user_authentication"
+	case EMAAuthFailureIdentityClientRejected:
+		return "enterprise identity rejected the OAuth client"
 	case EMAAuthFailureReauthenticationRequired:
 		return "enterprise identity requires authentication"
 	default:
 		return "enterprise authentication failed"
 	}
+}
+
+// IsAuthenticationRequired reports whether this failure needs a new sign-in
+// rather than an administrator. A resource authorization rejection does not
+// invalidate the enterprise login itself (Rust #55691).
+func (e *EMAAuthFailure) IsAuthenticationRequired() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Code {
+	case EMAAuthFailureReauthenticationRequired, EMAAuthFailureIdentityClientRejected:
+		return true
+	case EMAAuthFailureInvalidGrant, EMAAuthFailureInsufficientUserAuthn:
+		return e.GrantSource != EMAInvalidGrantSourceResourceAuthorization
+	default:
+		return false
+	}
+}
+
+// EMACredentialKind is the credential source selected for enterprise token
+// acquisition or validation (Rust EmaCredentialKind).
+type EMACredentialKind string
+
+const (
+	EMACredentialKindAccount EMACredentialKind = "account"
+	EMACredentialKindKeyring EMACredentialKind = "keyring"
+)
+
+// EMATokenSourceError carries only a credential kind and an already sanitized
+// auth failure to transport. An unexpected failure deliberately retains
+// neither provider text nor its source chain (Rust EmaTokenSourceError).
+type EMATokenSourceError struct {
+	Credential EMACredentialKind
+	// Failure is nil when the exchange failed for a reason that is not a
+	// sanitized auth failure.
+	Failure *EMAAuthFailure
+}
+
+// NewEMATokenSourceError reports a sanitized auth failure for one credential kind.
+func NewEMATokenSourceError(credential EMACredentialKind, failure *EMAAuthFailure) *EMATokenSourceError {
+	return &EMATokenSourceError{Credential: credential, Failure: failure}
+}
+
+// UnexpectedEMATokenSourceError reports an exchange failure that carried no
+// sanitized auth failure. Its text never includes provider or transport detail.
+func UnexpectedEMATokenSourceError(credential EMACredentialKind) *EMATokenSourceError {
+	return &EMATokenSourceError{Credential: credential}
+}
+
+// Error returns sign-in or administrator guidance, never provider error text.
+func (e *EMATokenSourceError) Error() string {
+	if e == nil {
+		return ""
+	}
+	failure := e.Failure
+	if failure != nil && failure.Code == EMAAuthFailureInsufficientUserAuthn &&
+		failure.GrantSource == EMAInvalidGrantSourceResourceAuthorization {
+		return "The MCP authorization server requires additional user authentication; contact your administrator"
+	}
+	if failure != nil && failure.Code == EMAAuthFailureIdentityClientRejected && e.Credential == EMACredentialKindKeyring {
+		return "The enterprise IdP rejected the configured MCP OAuth client; contact your administrator"
+	}
+	if failure != nil && e.Credential == EMACredentialKindAccount {
+		switch failure.Code {
+		case EMAAuthFailureInvalidGrant, EMAAuthFailureInsufficientUserAuthn:
+			if failure.GrantSource == EMAInvalidGrantSourceEnterpriseIdentity {
+				return "Complete enterprise sign-in for this MCP server"
+			}
+		case EMAAuthFailureIdentityClientRejected:
+			return "Complete enterprise sign-in for this MCP server"
+		case EMAAuthFailureReauthenticationRequired:
+			return "Sign in to your Codex account to restore enterprise MCP access"
+		}
+	}
+	if failure != nil && e.Credential == EMACredentialKindKeyring {
+		switch failure.Code {
+		case EMAAuthFailureInvalidGrant, EMAAuthFailureInsufficientUserAuthn:
+			if failure.GrantSource == EMAInvalidGrantSourceEnterpriseIdentity {
+				return "Complete enterprise sign-in to restore MCP access"
+			}
+		case EMAAuthFailureReauthenticationRequired:
+			return "Complete enterprise sign-in to restore MCP access"
+		}
+	}
+	if failure != nil && failure.Code == EMAAuthFailureInvalidGrant &&
+		failure.GrantSource == EMAInvalidGrantSourceResourceAuthorization {
+		return "The MCP authorization server rejected the enterprise grant: invalid_grant"
+	}
+	return "enterprise MCP token exchange failed"
+}
+
+// IsAuthenticationRequired mirrors Rust's credential-aware classification: a
+// keyring client rejection needs an administrator, while an account client
+// rejection needs a fresh Codex sign-in.
+func (e *EMATokenSourceError) IsAuthenticationRequired() bool {
+	if e == nil || e.Failure == nil {
+		return false
+	}
+	switch e.Failure.Code {
+	case EMAAuthFailureReauthenticationRequired:
+		return true
+	case EMAAuthFailureInvalidGrant, EMAAuthFailureInsufficientUserAuthn:
+		return e.Failure.GrantSource == EMAInvalidGrantSourceEnterpriseIdentity
+	case EMAAuthFailureIdentityClientRejected:
+		return e.Credential == EMACredentialKindAccount
+	default:
+		return false
+	}
+}
+
+// MCPEMARequestNotSentError reports that enterprise policy held a request
+// before dispatch (Rust ExecServerError::RequestNotSent). Transport retry must
+// not replay it; the caller retries once the policy is applied.
+type MCPEMARequestNotSentError struct {
+	Reason string
+}
+
+func (e *MCPEMARequestNotSentError) Error() string {
+	if e == nil || strings.TrimSpace(e.Reason) == "" {
+		return "request not sent: enterprise MCP policy is updating or unavailable"
+	}
+	return "request not sent: " + e.Reason
 }
 
 // safeMCPEMAOAuthErrorCode mirrors Rust safe_oauth_error_code: only known OAuth

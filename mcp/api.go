@@ -1987,6 +1987,18 @@ func mcpErrAuthenticationRequired(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Rust #55691: an enterprise token-source failure classifies a required
+	// sign-in by credential kind and exchange stage, so a resource authorization
+	// rejection is not reported as a login failure. A raw sanitized failure keeps
+	// its own classification.
+	var tokenSourceErr *EMATokenSourceError
+	if errors.As(err, &tokenSourceErr) {
+		return tokenSourceErr.IsAuthenticationRequired()
+	}
+	var emaFailure *EMAAuthFailure
+	if errors.As(err, &emaFailure) {
+		return emaFailure.IsAuthenticationRequired()
+	}
 	var status *mcpHTTPStatusError
 	return errors.As(err, &status) && (status.StatusCode == 401 || status.StatusCode == 407)
 }

@@ -54,7 +54,11 @@ type EMAAuthOptions struct {
 	// manager was built with. A persisted replacement can leave the auth cache
 	// holding the previous login even for the same account (Rust #55680).
 	AccountLoginCurrent func() (bool, error)
-	HTTPClient          *http.Client
+	// PolicyBinding is the enterprise policy revision this manager was built
+	// from. A suspended or stale binding holds new requests before dispatch
+	// while already admitted responses finish (Rust #55691).
+	PolicyBinding *managedconfig.CloudConfigBundleBinding
+	HTTPClient    *http.Client
 }
 
 // EMAAuthManager exchanges the account-scoped enterprise IdP grant for a
@@ -74,6 +78,7 @@ type EMAAuthManager struct {
 	loginGeneration           uint64
 	currentLoginGeneration    func() uint64
 	accountLoginCurrent       func() (bool, error)
+	policyBinding             *managedconfig.CloudConfigBundleBinding
 	revoked                   atomic.Bool
 	codexHome                 string
 	storeMode                 OAuthCredentialsStoreMode
@@ -110,6 +115,7 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 		currentScope:              options.CurrentScope,
 		currentLoginGeneration:    options.CurrentLoginGeneration,
 		accountLoginCurrent:       options.AccountLoginCurrent,
+		policyBinding:             options.PolicyBinding,
 		codexHome:                 strings.TrimSpace(options.CodexHome),
 		storeMode:                 options.StoreMode,
 		httpClient:                options.HTTPClient,
@@ -170,15 +176,47 @@ func (m *EMAAuthManager) ApplyHTTPRequest(request *http.Request, _ []byte) error
 	if m == nil || request == nil {
 		return errors.New("enterprise MCP authorization is unavailable")
 	}
-	if !m.scopeIsCurrent() {
-		return errors.New("enterprise MCP authorization was revoked")
+	if err := m.checkNewRequest(); err != nil {
+		return err
 	}
 	token, err := m.accessToken(request.Context())
 	if err != nil {
+		// A policy change during renewal supersedes the credential failure: the
+		// request was never admitted, so callers retry once policy is applied.
+		if authorityErr := m.checkNewRequest(); authorityErr != nil {
+			return authorityErr
+		}
+		return err
+	}
+	if err := m.checkNewRequest(); err != nil {
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	return nil
+}
+
+// checkNewRequest mirrors Rust EmaRequestAuthority::check_new_request: the
+// synchronous authority and policy checks run at each HTTP boundary, cheaply
+// and without credential or network I/O.
+func (m *EMAAuthManager) checkNewRequest() error {
+	if !m.scopeIsCurrent() {
+		return errors.New("enterprise MCP authorization was revoked")
+	}
+	return m.checkPolicyCurrent()
+}
+
+// checkPolicyCurrent holds new dispatches while the bound enterprise policy is
+// updating or unavailable. Already admitted responses are not cancelled.
+func (m *EMAAuthManager) checkPolicyCurrent() error {
+	if m == nil || m.policyBinding == nil {
+		return nil
+	}
+	if m.policyBinding.Status() == managedconfig.CloudConfigBundleBindingCurrent {
+		return nil
+	}
+	return &MCPEMARequestNotSentError{
+		Reason: "enterprise MCP policy is updating or unavailable; retry after it is applied",
+	}
 }
 
 func (m *EMAAuthManager) scopeIsCurrent() bool {
@@ -240,12 +278,18 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	// accepting its result, so a persisted login replacement cannot keep using
 	// enterprise authority through a stale auth cache.
 	if err := m.checkAccount(); err != nil {
-		return "", err
+		return "", emaAccountCheckFailure(err)
 	}
 	credentialName := EMAAuthCredentialName(m.profile.IDP, m.scope)
 	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(credentialName, m.profile.IDP.Issuer)
-	if err != nil || tokens == nil || strings.TrimSpace(tokens.RefreshToken) == "" {
-		return "", errors.New("enterprise sign-in is required")
+	if err != nil {
+		return "", err
+	}
+	if tokens == nil || strings.TrimSpace(tokens.RefreshToken) == "" {
+		return "", NewEMATokenSourceError(EMACredentialKindKeyring, &EMAAuthFailure{
+			Code:    EMAAuthFailureReauthenticationRequired,
+			Context: "enterprise sign-in is required",
+		})
 	}
 	// Rust ema_identity: a stored enterprise grant must belong to the
 	// configured issuer and IdP client. The credential name already derives
@@ -299,10 +343,17 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 		ResourceHTTPClient:               client,
 	})
 	if err != nil {
-		return "", err
+		// Rust #55691: a rejected enterprise grant is retired only when the
+		// exchange itself rejected it; a resource authorization rejection leaves
+		// the login intact.
+		var failure *EMAAuthFailure
+		if errors.As(err, &failure) && emaFailureInvalidatesCredential(failure) {
+			m.invalidateRejectedCredential(ctx, tokens)
+		}
+		return "", emaExchangeFailure(err)
 	}
 	if err := m.checkAccount(); err != nil {
-		return "", err
+		return "", emaAccountCheckFailure(err)
 	}
 	m.token = token.AccessToken
 	m.tokenExpiresAt = time.Time{}
@@ -313,6 +364,81 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 		return "", errors.New("enterprise MCP authorization was revoked")
 	}
 	return m.token, nil
+}
+
+// emaExchangeFailure converts an exchange error for transport: a sanitized auth
+// failure keeps its credential classification, while anything else becomes an
+// unexpected token-source failure with no provider or transport text (Rust
+// #55691). Only the token exchange itself is wrapped this way; credential
+// storage, discovery, and metadata failures are connection-time errors that
+// keep their diagnostic text, exactly as Rust's EnterpriseTokenSource::new
+// reports them before any token request is made.
+func emaExchangeFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	var failure *EMAAuthFailure
+	if errors.As(err, &failure) {
+		return NewEMATokenSourceError(EMACredentialKindKeyring, failure)
+	}
+	return UnexpectedEMATokenSourceError(EMACredentialKindKeyring)
+}
+
+// emaAccountCheckFailure wraps only a sanitized account-ownership failure; a
+// credential-store error keeps its own text, as in Rust EmaAuth::check_account.
+func emaAccountCheckFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	var failure *EMAAuthFailure
+	if errors.As(err, &failure) {
+		return NewEMATokenSourceError(EMACredentialKindAccount, failure)
+	}
+	return err
+}
+
+// emaFailureInvalidatesCredential reports whether a rejected grant must be
+// retired so a later attempt cannot reuse it (Rust #55691).
+func emaFailureInvalidatesCredential(failure *EMAAuthFailure) bool {
+	if failure == nil {
+		return false
+	}
+	// Rust only retires the stored grant when the enterprise IdP itself rejected
+	// it with invalid_grant. A client-registration or step-up rejection can be
+	// repaired without discarding the user's login, so it leaves the grant alone.
+	return failure.Code == EMAAuthFailureInvalidGrant &&
+		failure.GrantSource == EMAInvalidGrantSourceEnterpriseIdentity
+}
+
+// invalidateRejectedCredential deletes the stored enterprise grant the exchange
+// used, but only while it is still current, so a concurrent replacement
+// survives (Rust #55691). The account is rechecked under the credential lock
+// and a cancelled request deletes nothing.
+func (m *EMAAuthManager) invalidateRejectedCredential(ctx context.Context, used *OAuthTokenSet) {
+	if m == nil || used == nil || m.codexHome == "" {
+		return
+	}
+	guard, err := AcquireEnterpriseOAuthCredentialGuard(
+		m.codexHome,
+		EMAAuthCredentialName(m.profile.IDP, m.scope),
+		m.profile.IDP.Issuer,
+		m.storeMode,
+	)
+	if err != nil {
+		return
+	}
+	defer guard.Close()
+	if err := m.checkAccount(); err != nil {
+		return
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
+	current, err := guard.store.Load(guard.credentialName, guard.issuer)
+	if err != nil || !sameStoredMCPOAuthCredential(current, used) {
+		return
+	}
+	_, _ = guard.DeleteTokens()
 }
 
 // AttachEnterpriseMCPAuthorization configures every admitted EMA server with
@@ -339,6 +465,7 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 			CurrentScope:           currentScope,
 			CurrentLoginGeneration: currentLoginGeneration,
 			AccountLoginCurrent:    accountLoginCurrent,
+			PolicyBinding:          runtime.EMAPolicyBinding,
 			HTTPClient:             httpClientForEMAAuth(runtime),
 		})
 		if err != nil {

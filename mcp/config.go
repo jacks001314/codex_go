@@ -428,6 +428,10 @@ type RuntimeConfig struct {
 	OAuthCredentialsStoreMode OAuthCredentialsStoreMode
 	// XAAEnabled reports `[features].use_xaa` for enterprise-managed MCP auth.
 	XAAEnabled bool
+	// EMAPolicyBinding is the enterprise policy revision this runtime was
+	// resolved from. New enterprise MCP requests are held while the binding is
+	// stale or suspended (Rust #55691).
+	EMAPolicyBinding *managedconfig.CloudConfigBundleBinding
 	// EnterpriseManagedAuth is the trusted `[mcp_enterprise_managed_auth]`
 	// profile used to derive enterprise IdP credentials.
 	EnterpriseManagedAuth *managedconfig.MCPEnterpriseManagedAuthConfig
@@ -462,6 +466,18 @@ func RuntimeConfigFromValuesWithAuth(values map[string]any, codexHome string, ru
 }
 
 func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codexHome string, runtimeAuth *RuntimeAuth, requirements *managedconfig.ConfigRequirements) *RuntimeConfig {
+	return runtimeConfigFromValues(values, codexHome, runtimeAuth, requirements, nil)
+}
+
+// RuntimeConfigFromValuesWithAuthRequirementsAndBinding additionally carries the
+// enterprise policy revision the values were resolved from, so new enterprise
+// MCP requests are held while that revision is suspended or stale (Rust #55691
+// `McpConfig` policy binding). A nil binding keeps the previous behavior.
+func RuntimeConfigFromValuesWithAuthRequirementsAndBinding(values map[string]any, codexHome string, runtimeAuth *RuntimeAuth, requirements *managedconfig.ConfigRequirements, binding *managedconfig.CloudConfigBundleBinding) *RuntimeConfig {
+	return runtimeConfigFromValues(values, codexHome, runtimeAuth, requirements, binding)
+}
+
+func runtimeConfigFromValues(values map[string]any, codexHome string, runtimeAuth *RuntimeAuth, requirements *managedconfig.ConfigRequirements, binding *managedconfig.CloudConfigBundleBinding) *RuntimeConfig {
 	out := &RuntimeConfig{
 		Servers:                   map[string]ServerRegistration{},
 		AppsEnabled:               appsEnabledFromRuntimeConfigValues(values),
@@ -479,6 +495,7 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		// as the MCP protocol modes.
 		RefreshToolListOnNotifications: mcpFeatureEnabled(values, "mcp_tool_list_changed"),
 		OAuthCredentialsStoreMode:      runtimeOAuthCredentialsStoreMode(values),
+		EMAPolicyBinding:               binding,
 	}
 	out.XAAEnabled = mcpFeatureEnabled(values, managedconfig.XAAFeatureKey())
 	if table, ok := values["mcp_enterprise_managed_auth"].(map[string]any); ok {

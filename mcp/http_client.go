@@ -1104,6 +1104,13 @@ func isRetryableMCPStreamableHTTPError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Rust #55691: a request held before dispatch (enterprise policy updating or
+	// unavailable) is never replayed by the transport; the caller retries after
+	// the policy is applied.
+	var notSent *MCPEMARequestNotSentError
+	if errors.As(err, &notSent) {
+		return false
+	}
 	// Rust #55607: transient auth failures (for example a temporarily
 	// unavailable managed credential) are retryable, while auth build errors and
 	// network policy denials are terminal.

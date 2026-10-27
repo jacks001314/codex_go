@@ -282,9 +282,20 @@ func postMCPEMAForm[T any](
 			}
 		case string(EMAAuthFailureInsufficientUserAuthn):
 			return nil, &EMAAuthFailure{
-				Code:    EMAAuthFailureInsufficientUserAuthn,
-				Context: fmt.Sprintf("%s returned HTTP %d: insufficient_user_authentication", operation, response.StatusCode),
+				Code:        EMAAuthFailureInsufficientUserAuthn,
+				GrantSource: invalidGrantSource,
+				Context:     fmt.Sprintf("%s returned HTTP %d: insufficient_user_authentication", operation, response.StatusCode),
 			}
+		case "unauthorized_client", "invalid_client":
+			// Only the IdP stage binds this client registration. A resource
+			// authorization rejection stays a provider failure (Rust #55691).
+			if invalidGrantSource == EMAInvalidGrantSourceEnterpriseIdentity {
+				return nil, &EMAAuthFailure{
+					Code:    EMAAuthFailureIdentityClientRejected,
+					Context: fmt.Sprintf("%s returned HTTP %d: %s", operation, response.StatusCode, code),
+				}
+			}
+			return nil, fmt.Errorf("%s returned HTTP %d: %s", operation, response.StatusCode, code)
 		default:
 			return nil, fmt.Errorf("%s returned HTTP %d: %s", operation, response.StatusCode, code)
 		}
