@@ -69,6 +69,9 @@ TUI lane and are not modified here.
 | `#57358` | Serialize session index mutations across processes; preserve index permissions | `rollout/session_index.go`, `rollout/session_index_lock_test.go` |
 | `#57357` | `migrate-nfs-db` reports no databases instead of success | `app/migrate_nfs_db.go`, `app/migrate_nfs_db_test.go` |
 | `#57352` | npm wrapper preserves child signal failure exit status | `npm/codex/bin/codex.js` |
+| `#57241` | Encrypted Guardian transcripts honor the configured message limit instead of a hard-coded 9,000-token ceiling | `appserver/guardian_reviewer.go`, `appserver/guardian_native_agent_message_like_rust_test.go` |
+| `#55991` | Avoid double-counting retained reasoning when the server reports it as included | `compact/compact.go`, `compact/compact_test.go`, `turn/agent_loop.go`, `appserver/turn_runtime.go`, `appserver/runtime_router_test.go`, `exec/exec.go` |
+| `#56211` | Fresh memory profiles default to V2; reset of an absent workspace is a no-op; fresh profiles report `v2_ready` | `config/memories.go`, `config/config.go`, `config/memories_version_test.go`, `appserver/memory_status.go`, `appserver/memory_status_test.go`, `memories/control.go`, `memories/control_test.go` |
 
 Grounding notes:
 
@@ -712,3 +715,4 @@ Go counterpart; `#57373` is a Rust toolchain pin with no Go analogue.
   row to the Rust v2 suite manifest; `go build ./...` and
   `go vet ./session ./rollout ./app` pass. The npm wrapper has no Go-side JS
   test in this repo.
+- For `#57241`/`#55991`/`#56211`: `go test ./compact ./config ./memories ./turn ./exec -count=1`, `go test ./appserver -run 'GuardianNativeAgentMessage|GuardianReviewTranscript|GuardianTranscriptCarries|GuardianReviewDelivers|MemoryStatus|CompactTokenStatusForTurn' -count=1` and `go build ./...` pass.

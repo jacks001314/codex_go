@@ -1363,14 +1363,71 @@ func ItemsAfterLastModelGeneratedItem(items []Item) []Item {
 	return append([]Item(nil), items[last+1:]...)
 }
 
-// EstimateActiveContextTokens mirrors Rust Session::get_total_token_usage:
-// the last server-reported total plus an estimate of any local items recorded
-// after the most recent model-generated item.
+// EstimateActiveContextTokens mirrors Rust Session::get_total_token_usage with
+// the session's default reasoning-inclusion state: the last server-reported
+// total plus local trailing items plus encrypted reasoning the server did not
+// already account for.
 func EstimateActiveContextTokens(items []Item, lastTotalTokens int) int {
+	return EstimateActiveContextTokensWithServerReasoning(items, lastTotalTokens, false)
+}
+
+// EstimateActiveContextTokensWithServerReasoning mirrors Rust
+// Session::get_total_token_usage. When the last sampling request reported that
+// the server already accounted for reasoning, its total includes every retained
+// reasoning item and re-estimating them would double count (Rust #55991).
+func EstimateActiveContextTokensWithServerReasoning(items []Item, lastTotalTokens int, serverReasoningIncluded bool) int {
 	if lastTotalTokens < 0 {
 		lastTotalTokens = 0
 	}
-	return lastTotalTokens + EstimateTokens(ItemsAfterLastModelGeneratedItem(items))
+	total := lastTotalTokens + EstimateTokens(ItemsAfterLastModelGeneratedItem(items))
+	if !serverReasoningIncluded {
+		total += EstimateNonLastReasoningTokens(items)
+	}
+	return total
+}
+
+// EstimateNonLastReasoningTokens mirrors Rust
+// History::get_non_last_reasoning_items_tokens: encrypted reasoning items before
+// the most recent user-turn boundary are not reflected in the last
+// server-reported total unless the server says it includes reasoning.
+func EstimateNonLastReasoningTokens(items []Item) int {
+	lastBoundary := -1
+	for i := range items {
+		if compactItemIsUserTurnBoundary(&items[i]) {
+			lastBoundary = i
+		}
+	}
+	if lastBoundary <= 0 {
+		return 0
+	}
+	total := 0
+	for i := 0; i < lastBoundary; i++ {
+		item := &items[i]
+		if !strings.EqualFold(strings.TrimSpace(item.Type), "reasoning") {
+			continue
+		}
+		if encryptedReasoningContent(item) == "" {
+			continue
+		}
+		total += EstimateItemTokens(item)
+	}
+	return total
+}
+
+// compactItemIsUserTurnBoundary mirrors Rust is_user_turn_boundary for the
+// compact package's item view: an agent message or a non-contextual user
+// message closes the previous turn.
+func compactItemIsUserTurnBoundary(item *Item) bool {
+	if item == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(item.Type), "agent_message") {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(item.Type), "message") && strings.TrimSpace(item.Role) == "user" {
+		return strings.TrimSpace(item.Text) != ""
+	}
+	return false
 }
 
 func EstimateTextTokens(text string) int {

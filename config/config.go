@@ -50,6 +50,11 @@ type Config struct {
 	// ConfigLayerStack::cloud_config_binding). It does not change the
 	// configuration contents and is never serialized.
 	cloudConfigBinding *CloudConfigBundleBinding
+	// resolvedMemoryVersion is the memory pipeline selected during config load.
+	// Fresh profiles with memories enabled select V2 when no V1 workspace exists
+	// (Rust #56211); an explicit `memories.version` still wins. It is never
+	// serialized.
+	resolvedMemoryVersion MemoryVersion
 	// chatgptBaseURLExplicit records that a configuration layer above packaged
 	// defaults selected chatgpt_base_url (Rust #57178
 	// Config::chatgpt_base_url_is_explicit). An explicit commercial default must
@@ -722,6 +727,9 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	}
 	ApplyOverrides(cfg.Values, overrides)
 	applyDisablePasteBurstOverride(overrides, cfg.Values)
+	// Feature overrides can enable memories, so the fresh-profile memory version
+	// is resolved again after the CLI layers land (Rust #56211).
+	cfg.resolveFreshMemoryVersion(codexHome)
 	// Rust #39630: the untrusted approval policy is retired. Explicit
 	// `approval_policy = "untrusted"` settings fail with an actionable error
 	// regardless of strict mode so callers cannot silently fall back.
@@ -803,7 +811,18 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 			return nil, err
 		}
 	}
+	cfg.resolveFreshMemoryVersion(codexHome)
 	return cfg, nil
+}
+
+// resolveFreshMemoryVersion records the fresh-profile memory pipeline for this
+// configuration (Rust #56211).
+func (c *Config) resolveFreshMemoryVersion(codexHome string) {
+	if c == nil {
+		return
+	}
+	c.resolvedMemoryVersion = ResolveFreshMemoryVersion(
+		codexHome, c.memoriesFromValues(), featureflags.Enabled(c.FeatureSettings(), "memories"))
 }
 
 // applyDisablePasteBurstOverride keeps CLI top-level overrides ahead of a

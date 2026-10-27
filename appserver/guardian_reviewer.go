@@ -1484,14 +1484,7 @@ func guardianPromptDelivery(parts []state.GuardianPromptPart) (string, []any) {
 	return prompt, items
 }
 
-const (
-	// guardianNativeAgentMessageMaxBytes mirrors Rust's sync transcript
-	// native-message budget (#49038): the serialized item must fit
-	// the profile's message entry cap in bytes, otherwise the whole message
-	// becomes an omission notice at the same position.
-	guardianNativeAgentMessageMaxBytes = state.MaxMessageEntryTokens * 4
-	guardianTranscriptOmissionNotice   = state.GuardianTranscriptOmissionNotice
-)
+const guardianTranscriptOmissionNotice = state.GuardianTranscriptOmissionNotice
 
 // guardianTranscriptSelection is the host-selected, profile-retained transcript
 // plus the retention notices that must accompany the prompt (#43806).
@@ -1560,7 +1553,12 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 				}
 				seenNativeAgentMessageIDs[id] = append([]byte(nil), native...)
 			}
-			if len(native) > guardianNativeAgentMessageMaxBytes {
+			// Rust #57241: encrypted agent messages use the configured message
+			// entry cap directly instead of a hard-coded 9,000-token ceiling, so a
+			// larger configured limit admits larger native items. The whole item
+			// still becomes an omission notice at the same position when it exceeds
+			// the budget.
+			if len(native) > utils.ApproxBytesForTokens(profile.Transcript.EntryLimits.MessageTokens) {
 				entries = append(entries, state.GuardianTranscriptEntry{
 					Author:   "assistant",
 					LineRole: "assistant",

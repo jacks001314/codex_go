@@ -31,7 +31,12 @@ func clearRootContents(root string) error {
 	if err == nil && metadata.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing to clear symlinked memory root %s", root)
 	}
-	if err != nil && !os.IsNotExist(err) {
+	if os.IsNotExist(err) {
+		// An absent workspace has nothing to clear; creating it here would leave
+		// an unused V1 directory behind (Rust #56211).
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {

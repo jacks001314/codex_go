@@ -21,8 +21,21 @@ func TestMemoryStatusReportsV2Readiness(t *testing.T) {
 	home := t.TempDir()
 	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
 
-	// No consolidation progress and no summary: not ready.
-	response := router.Handle(requestWithParams(t, IntID(1), MethodMemoryStatus, MemoryStatusParams{}))
+	// Rust #56211: a profile without a V1 workspace is ready immediately.
+	fresh := router.Handle(requestWithParams(t, IntID(1), MethodMemoryStatus, MemoryStatusParams{}))
+	if fresh.Error != nil {
+		t.Fatalf("memory/status error = %#v", fresh.Error)
+	}
+	if got := fresh.Result.(*MemoryStatusResponse); got.V2ConsolidatedThreads != 0 || !got.V2Ready {
+		t.Fatalf("fresh profile memory status = %#v, want ready", got)
+	}
+
+	// An existing V1 workspace still needs consolidation progress and a valid
+	// summary before switching to V2.
+	if err := os.MkdirAll(filepath.Join(home, "memories"), 0o755); err != nil {
+		t.Fatalf("mkdir v1 workspace: %v", err)
+	}
+	response := router.Handle(requestWithParams(t, IntID(2), MethodMemoryStatus, MemoryStatusParams{}))
 	if response.Error != nil {
 		t.Fatalf("memory/status error = %#v", response.Error)
 	}
@@ -52,7 +65,7 @@ func TestMemoryStatusReportsV2Readiness(t *testing.T) {
 
 	// A higher threshold makes the same state not ready.
 	high := uint32(21)
-	notReady := router.Handle(requestWithParams(t, IntID(3), MethodMemoryStatus, MemoryStatusParams{MinConsolidatedThreads: &high}))
+	notReady := router.Handle(requestWithParams(t, IntID(4), MethodMemoryStatus, MemoryStatusParams{MinConsolidatedThreads: &high}))
 	if notReady.Error != nil {
 		t.Fatalf("memory/status error = %#v", notReady.Error)
 	}

@@ -7,6 +7,7 @@ package appserver
 // exposing memory contents.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +50,17 @@ func (r *RuntimeRouter) handleMemoryStatus(request *Request) (*MemoryStatusRespo
 		codexHome = strings.TrimSpace(r.services.Config.CodexHome())
 	}
 	count := memories.MaxConsolidatedThreadCount(codexHome)
-	ready := count >= minimum && v2MemorySummaryValid(codexHome)
+	// Fresh profiles have no V1 workspace to consolidate first, so V2 is ready
+	// immediately (Rust #56211).
+	hasV1Workspace := false
+	if strings.TrimSpace(codexHome) != "" {
+		if _, err := os.Stat(filepath.Join(codexHome, "memories")); err == nil {
+			hasV1Workspace = true
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to check v1 memory workspace: %w", err)
+		}
+	}
+	ready := !hasV1Workspace || (count >= minimum && v2MemorySummaryValid(codexHome))
 	return &MemoryStatusResponse{V2ConsolidatedThreads: count, V2Ready: ready}, nil
 }
 

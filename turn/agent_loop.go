@@ -269,6 +269,12 @@ type AgentLoopResult struct {
 	TimingProfile     *Profile
 	SamplingFollowUps int
 	Compactions       int
+	// ReasoningIncluded is the last server-reported reasoning-inclusion flag of
+	// the turn's sampling requests. Rust #55991 seeds token accounting from the
+	// model's Responses Lite setting and lets server events override it; the
+	// host persists this value so a later resume does not re-estimate retained
+	// reasoning the server already counted.
+	ReasoningIncluded *bool
 }
 
 // postPromptInputItemsForIteration only supplies the turn-level post-prompt
@@ -613,6 +619,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		recordResponseTiming(timing, response, l.now())
 		result.Response = response
 		result.Responses = append(result.Responses, response)
+		if response.ReasoningIncluded != nil {
+			included := *response.ReasoningIncluded
+			result.ReasoningIncluded = &included
+		}
 		if request.OnCompletedResponseItem != nil {
 			for i := range response.Items {
 				request.OnCompletedResponseItem(response.Items[i])

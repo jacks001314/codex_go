@@ -4402,6 +4402,13 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		record.Metadata.SessionPrefix = session.PrefixForSessionID(firstNonEmpty(record.SessionID, threadID))
 	}
 	record.Metadata.Extra = execTokenUsageMetadata(record.Metadata.Extra, tokenUsage)
+	// Rust #55991: seed the reasoning-inclusion state from the model's Responses
+	// Lite setting and let the server-reported flag override it, so a resumed
+	// turn does not re-charge retained reasoning the server already counted.
+	if record.Metadata.Extra == nil {
+		record.Metadata.Extra = map[string]any{}
+	}
+	record.Metadata.Extra["server_reasoning_included"] = execServerReasoningIncluded(record.Metadata.Model, result.ReasoningIncluded)
 	execCompleteTurnSnapshot(&record.Metadata, turnID, now)
 	record.UpdatedAt = now
 	record.RecencyAt = now
@@ -5233,6 +5240,9 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 		usage.Last = protocol.Usage{TotalTokens: int64(compact.EstimateTokens(compacted.NewHistory))}
 	}
 	usage.ModelContextWindow = effectiveExecModelContextWindow(modelID, cfg)
+	// Local re-estimation after compaction already charges every retained
+	// reasoning item (Rust #55991 marks recomputed usage as including reasoning).
+	extra["server_reasoning_included"] = true
 	record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
 	if err := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record); err != nil {
 		return false, err
@@ -5248,6 +5258,16 @@ func execProviderSupportsRemoteCompaction(cfg *config.Config, providerID string)
 	return err == nil && provider != nil && provider.SupportsRemoteCompaction()
 }
 
+// execServerReasoningIncluded reports whether the last sampling request's usage
+// already includes retained reasoning (Rust #55991). The server-reported flag
+// wins; otherwise the model's Responses Lite setting decides.
+func execServerReasoningIncluded(modelID string, reported *bool) bool {
+	if reported != nil {
+		return *reported
+	}
+	return execModelInfo(modelID, nil).UseResponsesLite
+}
+
 func execCompactStatus(record *session.Record, modelID string, cfg *config.Config) compact.TokenStatus {
 	if record == nil {
 		return compact.TokenStatus{}
@@ -5261,8 +5281,15 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 		// Rust derives the active context from the last server-reported total
 		// plus an estimate of any local items recorded after the last
 		// model-generated item (for example a persisted prompt from an
-		// interrupted turn).
-		active = int64(compact.EstimateActiveContextTokens(execCompactItemsFromSession(record.Items), int(active)))
+		// interrupted turn). Retained reasoning is re-estimated only when the
+		// last sampling request did not report that the server includes it
+		// (Rust #55991).
+		serverReasoningIncluded := execModelInfo(modelID, cfg).UseResponsesLite
+		if value, ok := record.Metadata.Extra["server_reasoning_included"].(bool); ok {
+			serverReasoningIncluded = value
+		}
+		active = int64(compact.EstimateActiveContextTokensWithServerReasoning(
+			execCompactItemsFromSession(record.Items), int(active), serverReasoningIncluded))
 	}
 	status := compact.Evaluate(policy, int(active))
 	if execStoredContextWindowRequired(record.Metadata.Extra) {

@@ -1926,7 +1926,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
 		usage.ModelContextWindow = positiveInt64Ptr(r.effectiveModelContextWindowForModel(runConfig.Model, params))
 		lastUsage := lastAgentResponseUsage(result)
-		status, tokenInfo, statusErr := r.persistCompactTokenStatus(threadID, runConfig.Model, params, result.Usage, lastUsage)
+		status, tokenInfo, statusErr := r.persistCompactTokenStatus(threadID, runConfig.Model, params, result.Usage, lastUsage, result.ReasoningIncluded)
 		if tokenInfo != nil {
 			usage.Total = tokenInfo.Total
 			usage.Last = tokenInfo.Last
@@ -5815,7 +5815,7 @@ func (r *RuntimeRouter) persistLastResponseID(threadID string, result *turn.Agen
 	return err
 }
 
-func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID string, params *turn.TurnStartParams, aggregateUsage model.AgentUsage, lastUsage model.AgentUsage) (*compact.TokenStatus, *TokenUsage, error) {
+func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID string, params *turn.TurnStartParams, aggregateUsage model.AgentUsage, lastUsage model.AgentUsage, reportedReasoningIncluded ...*bool) (*compact.TokenStatus, *TokenUsage, error) {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
 		return nil, nil, nil
 	}
@@ -5843,6 +5843,14 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 	extra["last_token_usage"] = lastMap
 	extra["total_token_usage"] = totalMap
 	extra["model_context_window"] = window
+	// Rust #55991 seeds the reasoning-inclusion state from the model's Responses
+	// Lite setting before the request and lets a server event override it. A
+	// later compaction check reads this value so lite usage is not charged twice.
+	serverReasoningIncluded := r.modelUsesResponsesLite(modelID)
+	if len(reportedReasoningIncluded) > 0 && reportedReasoningIncluded[0] != nil {
+		serverReasoningIncluded = *reportedReasoningIncluded[0]
+	}
+	extra["server_reasoning_included"] = serverReasoningIncluded
 	extra["token_usage_info"] = map[string]any{
 		"total_token_usage": totalMap, "last_token_usage": lastMap, "model_context_window": window,
 	}
@@ -6139,8 +6147,11 @@ func (r *RuntimeRouter) compactTokenStatusForTurnWithPolicy(threadID string, mod
 	} else {
 		// Rust adds an estimate of any local items recorded after the last
 		// model-generated item (for example a persisted prompt from an
-		// interrupted turn).
-		active = compact.EstimateActiveContextTokens(compactItemsFromSessionItems(record.Items), active)
+		// interrupted turn). Retained reasoning is only re-estimated when the
+		// last sampling request did not report that the server already includes
+		// it (Rust #55991).
+		active = compact.EstimateActiveContextTokensWithServerReasoning(
+			compactItemsFromSessionItems(record.Items), active, boolFromAny(extra["server_reasoning_included"]))
 	}
 	policy := r.compactPolicyForTurn(modelID, params, extra)
 	if adjust != nil {

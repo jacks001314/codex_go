@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -13,8 +16,9 @@ const (
 	DefaultMemoriesMaxUnusedDays                  = int64(30)
 )
 
-// MemoryVersion selects the memory namespace (Rust MemoryVersion, #43797). V1
-// is the default; V2 is opt-in and stores its artifacts in a sibling root.
+// MemoryVersion selects the memory namespace (Rust MemoryVersion, #43797). An
+// explicit `memories.version` wins; fresh profiles default to V2 during config
+// load when memories are enabled (Rust #56211).
 type MemoryVersion string
 
 const (
@@ -52,8 +56,11 @@ type MemoriesConfig struct {
 	UseMemories              bool
 	// DualWrite runs v1 and v2 extraction/consolidation concurrently with
 	// isolated stores so v2 can warm in the background (Rust #43827).
-	DualWrite      bool
-	DedicatedTools bool
+	DualWrite bool
+	// DualWriteConfigured records that `memories.dual_write` was set explicitly,
+	// so an explicit false can opt a fresh profile out of the V2 default.
+	DualWriteConfigured bool
+	DedicatedTools      bool
 	// Version is the raw configured `memories.version` value. Use
 	// MemoryVersion() to resolve it (empty selects v1).
 	Version                        *string
@@ -81,6 +88,17 @@ func DefaultMemoriesConfig() MemoriesConfig {
 }
 
 func (c *Config) Memories() MemoriesConfig {
+	result := c.memoriesFromValues()
+	if result.Version == nil && c != nil && c.resolvedMemoryVersion == MemoryVersionV2 {
+		version := string(MemoryVersionV2)
+		result.Version = &version
+	}
+	return result
+}
+
+// memoriesFromValues reads the raw `[memories]` table without applying the
+// fresh-profile default, so config load can resolve that default itself.
+func (c *Config) memoriesFromValues() MemoriesConfig {
 	result := DefaultMemoriesConfig()
 	if c == nil || c.Values == nil {
 		return result
@@ -93,6 +111,7 @@ func (c *Config) Memories() MemoriesConfig {
 	result.GenerateMemories = memoryBool(values, "generate_memories", result.GenerateMemories)
 	result.UseMemories = memoryBool(values, "use_memories", result.UseMemories)
 	result.DualWrite = memoryBool(values, "dual_write", result.DualWrite)
+	_, result.DualWriteConfigured = values["dual_write"].(bool)
 	result.DedicatedTools = memoryBool(values, "dedicated_tools", result.DedicatedTools)
 	result.Version = memoryString(values, "version")
 	result.MaxRawMemoriesForConsolidation = int(clampMemoryInt(memoryInt(values, "max_raw_memories_for_consolidation", int64(result.MaxRawMemoriesForConsolidation)), 1, 4096))
@@ -173,4 +192,33 @@ func (c MemoriesConfig) MemoryVersion() MemoryVersion {
 		return MemoryVersionV1
 	}
 	return version
+}
+
+// ResolveFreshMemoryVersion mirrors Rust #56211's fresh-profile default: when
+// memories are enabled, `memories.version` is unset, dual-write was not
+// explicitly disabled, and the V1 workspace does not exist, the V2 pipeline is
+// selected. Explicit selections and filesystem errors keep V1.
+func ResolveFreshMemoryVersion(codexHome string, memories MemoriesConfig, memoriesEnabled bool) MemoryVersion {
+	if memories.Version != nil {
+		// An explicit selection always wins, including an explicit v1.
+		if version, ok := ParseMemoryVersion(*memories.Version); ok {
+			return version
+		}
+		return MemoryVersionV1
+	}
+	if !memoriesEnabled || (memories.DualWriteConfigured && !memories.DualWrite) {
+		return MemoryVersionV1
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return MemoryVersionV1
+	}
+	_, err := os.Stat(filepath.Join(codexHome, MemoryVersionV1.DirectoryName()))
+	if err == nil {
+		return MemoryVersionV1
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return MemoryVersionV2
+	}
+	return MemoryVersionV1
 }

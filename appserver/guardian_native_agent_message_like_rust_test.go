@@ -9,6 +9,7 @@ import (
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/state"
+	"codex_go/utils"
 )
 
 func encryptedAgentMessageRaw(author, recipient, ciphertext string) json.RawMessage {
@@ -72,7 +73,7 @@ func TestGuardianTranscriptCarriesEncryptedAgentMessagesLikeRust(t *testing.T) {
 	threadID := "123e4567-e89b-42d3-a456-426614174203"
 	now := fixedTime()
 	small := encryptedAgentMessageRaw("/root", "/root/worker", "sealed-reply")
-	huge := encryptedAgentMessageRaw("/root", "/root/worker", strings.Repeat("c", guardianNativeAgentMessageMaxBytes))
+	huge := encryptedAgentMessageRaw("/root", "/root/worker", strings.Repeat("c", utils.ApproxBytesForTokens(state.MaxMessageEntryTokens)))
 	items := []session.Item{
 		{ID: "user-1", Type: "message", Role: "user", Text: "Please deploy.", CreatedAt: now},
 		{ID: "agent-small", Type: "agent_message", CreatedAt: now, Metadata: map[string]any{"rawResponseItem": json.RawMessage(small)}},
@@ -173,5 +174,33 @@ func TestGuardianReviewDeliversEncryptedAgentMessageLikeRust(t *testing.T) {
 	}
 	if trailingIndex < 0 || trailingIndex <= nativeIndex {
 		t.Fatalf("trailing transcript/action item index = %d, native index = %d; want the prompt to continue after the native message", trailingIndex, nativeIndex)
+	}
+}
+
+// Mirrors Rust #57241: encrypted agent messages honor the configured message
+// entry limit instead of a hard-coded 9,000-token ceiling. The asynchronous
+// profile's smaller budget must turn the whole native item into an omission at
+// the same position, while the synchronous profile keeps it intact.
+func TestGuardianNativeAgentMessageHonorsConfiguredMessageLimitLikeRust(t *testing.T) {
+	now := fixedTime()
+	ciphertext := strings.Repeat("c", utils.ApproxBytesForTokens(state.AsyncMaxMessageEntryTokens)+4_096)
+	raw := encryptedAgentMessageRaw("/root", "/root/worker", ciphertext)
+	router := guardianProfileTestRouter(t, []session.Item{{
+		ID:        "message-envelope",
+		Type:      "agent_message",
+		Metadata:  map[string]any{"rawResponseItem": json.RawMessage(raw)},
+		CreatedAt: now,
+	}})
+
+	synchronous := router.guardianReviewTranscriptSelection(guardianProfileTestThreadID)
+	if len(synchronous.Entries) != 1 || len(synchronous.Entries[0].Native) == 0 {
+		t.Fatalf("synchronous selection = %#v, want the native item retained", synchronous.Entries)
+	}
+	asynchronous := router.guardianReviewTranscriptSelectionWithProfile(guardianProfileTestThreadID, state.AsynchronousContextProfile())
+	if len(asynchronous.Entries) != 1 {
+		t.Fatalf("asynchronous selection = %#v, want one omission entry", asynchronous.Entries)
+	}
+	if len(asynchronous.Entries[0].Native) != 0 || asynchronous.Entries[0].Text != state.GuardianTranscriptOmissionNotice {
+		t.Fatalf("asynchronous entry = %#v, want an omission notice at the same position", asynchronous.Entries[0])
 	}
 }

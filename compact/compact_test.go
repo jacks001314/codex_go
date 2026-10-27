@@ -774,3 +774,38 @@ func TestEstimateItemTokensChargesMessageImagesLikeRust(t *testing.T) {
 		t.Fatalf("tool output tokens = %d, want at least the maximum patch count", got)
 	}
 }
+
+// Mirrors Rust #55991: Responses Lite reports retained reasoning in its usage
+// even without an X-Reasoning-Included header, so re-estimating reasoning
+// before the last user boundary would trigger compaction prematurely.
+func TestEstimateActiveContextTokensHonorsServerReasoningIncluded(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"type": "reasoning", "summary": []any{}, "encrypted_content": strings.Repeat("A", 4_000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "first"},
+		{ID: "r1", Type: "reasoning", Raw: raw},
+		{ID: "u2", Type: "message", Role: "user", Text: "next"},
+		{ID: "a1", Type: "message", Role: "assistant", Text: "answer"},
+	}
+	reasoning := EstimateNonLastReasoningTokens(items)
+	if reasoning <= 0 {
+		t.Fatalf("non-last reasoning tokens = %d, want the encrypted payload charged", reasoning)
+	}
+	if got := EstimateActiveContextTokensWithServerReasoning(items, 80, true); got != 80 {
+		t.Fatalf("server-included active tokens = %d, want 80", got)
+	}
+	if got := EstimateActiveContextTokensWithServerReasoning(items, 80, false); got != 80+reasoning {
+		t.Fatalf("re-estimated active tokens = %d, want %d", got, 80+reasoning)
+	}
+	limit := Policy{Enabled: true, TokenLimit: 81}
+	if status := Evaluate(limit, EstimateActiveContextTokensWithServerReasoning(items, 80, true)); status.ShouldCompact {
+		t.Fatalf("server-included usage at 80 tokens must stay below an 81-token limit: %+v", status)
+	}
+	if status := Evaluate(limit, EstimateActiveContextTokensWithServerReasoning(items, 80, false)); !status.ShouldCompact {
+		t.Fatalf("re-estimated reasoning must trigger compaction at 81 tokens: %+v", status)
+	}
+}

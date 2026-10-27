@@ -19083,6 +19083,51 @@ func TestCompactTokenStatusForTurnEstimatesEncryptedReasoningOnResume(t *testing
 	}
 }
 
+// Rust #55991: stored usage that already includes retained reasoning must not be
+// charged twice when the thread resumes.
+func TestCompactTokenStatusForTurnHonorsServerReasoningIncluded(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	raw, err := json.Marshal(map[string]any{
+		"type": "reasoning", "summary": []any{}, "encrypted_content": strings.Repeat("A", 4_000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(id string, serverReasoningIncluded any) {
+		extra := map[string]any{
+			"last_token_usage": map[string]any{"total_tokens": int64(80)},
+		}
+		if serverReasoningIncluded != nil {
+			extra["server_reasoning_included"] = serverReasoningIncluded
+		}
+		if err := store.Create(&session.Record{
+			ID: session.ThreadID(id), SessionID: id,
+			CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+			Metadata: session.Metadata{Model: "gpt-5.4", Extra: extra},
+			Items: []session.Item{
+				{ID: "u1", Type: "message", Role: "user", Text: "first", CreatedAt: now},
+				{ID: "r1", Type: "reasoning", Raw: raw, CreatedAt: now},
+				{ID: "u2", Type: "message", Role: "user", Text: "next", CreatedAt: now},
+				{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer", CreatedAt: now},
+			},
+		}); err != nil {
+			t.Fatalf("Create record %s error = %v", id, err)
+		}
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	params := &turn.TurnStartParams{Config: map[string]any{"model_auto_compact_token_limit": 81}}
+
+	create("thread-server-reasoning", true)
+	if status := router.compactTokenStatusForTurn("thread-server-reasoning", "gpt-5.4", params); status.ShouldCompact {
+		t.Fatalf("server-included reasoning at 80 tokens must stay below an 81-token limit: %#v", status)
+	}
+	create("thread-reexamined-reasoning", false)
+	if status := router.compactTokenStatusForTurn("thread-reexamined-reasoning", "gpt-5.4", params); !status.ShouldCompact {
+		t.Fatalf("re-estimated reasoning must trigger compaction at 81 tokens: %#v", status)
+	}
+}
+
 func TestCompactTokenStatusForTurnBodyAfterPrefixChargesGrowthOnly(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()
