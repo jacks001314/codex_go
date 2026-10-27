@@ -172,6 +172,36 @@ Grounding notes:
   `original_bytes` already match Rust's post-refactor output. The host's
   full/delta slice is selected by index, so truncation order cannot change which
   entries are retained.
+- `#57295` is N/A: Rust now collects retained instructions, assistant context,
+  and verified answers before applying synchronous request limits. Go already
+  renders those sections through one snapshot path (`state.RenderRetainedInstructions`,
+  `RetainedAssistantMessage`, `RenderVerifiedAnswer`) that applies the same
+  900-token whole-record rule and emits the same user/assistant omission notices,
+  so no collection/preparation split exists to defer across. The commit's other
+  change — applying the retained-source size check to synchronous transcript
+  preparation — has no Go effect because Go's transcript entries never carry
+  Rust's `RetainedTranscriptSource` label (a pre-window gap from `#48109`/`#51466`).
+- `#57312` is N/A: a structural move of root-message preparation and handoff
+  context selection from `core` into `codex-guardian-context`, with the same
+  helpers for text limits, whole-record verified-answer admission, delivered
+  assistant lookup, and retained-assistant fallback. Go already keeps those
+  helpers in `state`/`appserver` (`guardianRootConversationWithHandoff`,
+  `guardianRootHandoffSelection`, `RetainedAssistantMessage`); there is no
+  behavior change to port.
+- `#57258` is N/A: Rust's remote plugin catalog reduces cache probing overhead
+  by validating a cache envelope without deserializing plugin records, reading a
+  256-byte stale-catalog prefix, and skipping a global-scope probe during
+  discovery. Go's cache (`plugin/remote_catalog.go`) is a per-scope JSON file
+  keyed by scope/collection and read in full into a typed envelope; discovery
+  callers (`app/plugin.go`) request one scope at a time, and a missing `plugins`
+  array already falls back to a network fetch, so there is no probe path or
+  multi-scope probe to optimize.
+- `#57228` is N/A: Rust gives the daemon control-socket `start_pairing` client a
+  single 35-second deadline instead of its 2-second per-message timeout. Go's
+  `remote-control pair` runs through the in-process `remotecontrol.Manager`
+  (`runRemoteControlPair`), not the control-socket client, so no pairing response
+  is subject to `ControlSocketResponseTimeout`; that timeout still bounds the
+  enable/disable exchanges only.
 
 `#57176` details: the synchronous transcript's node_repl output cap now
 follows Rust's `node_repl_result_token_limit` — 6,000 while node_repl evidence is
@@ -777,7 +807,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 108 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 104 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
