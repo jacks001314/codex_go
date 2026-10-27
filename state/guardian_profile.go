@@ -75,6 +75,11 @@ type ConversationTranscriptOptions struct {
 	IncludeToolOutputs bool
 	// IncludeReasoning includes plaintext reasoning evidence.
 	IncludeReasoning bool
+	// NativeMultiAgentNamespace preserves calls in this MAv2 namespace as
+	// native transcript items for synchronous backend decryption. Empty keeps
+	// the existing text transcript; "functions" selects the default namespace
+	// (#57448).
+	NativeMultiAgentNamespace string
 }
 
 // DefaultConversationTranscriptOptions mirrors Rust's default: tool calls and

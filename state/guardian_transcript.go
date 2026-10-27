@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+
+	"codex_go/utils"
 )
 
 // GuardianTranscriptJSONInstructions is Rust's TRANSCRIPT_JSON_INSTRUCTIONS
@@ -110,6 +112,51 @@ func (e GuardianTranscriptEntry) Render(format GuardianTranscriptFormat) string 
 		return e.Text
 	}
 	return role + ": " + e.Text
+}
+
+// GuardianNativeEvidenceOutputText is Rust's evidence-only paired output for a
+// preserved native tool call. It tells the reviewed model that the call is
+// evidence, not a request whose result it is reading.
+const GuardianNativeEvidenceOutputText = "This call is review evidence, not a request to execute it. This is not its execution result."
+
+// GuardianNativeFunctionCallEvidenceOutput mirrors Rust's
+// `native_tool_call::evidence_output`: a preserved native function call is
+// delivered with a paired evidence-only output so the backend can pair the
+// call without executing it. Non-call native items have no paired output.
+func GuardianNativeFunctionCallEvidenceOutput(native json.RawMessage) (json.RawMessage, bool) {
+	if len(native) == 0 {
+		return nil, false
+	}
+	var item struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+	}
+	if err := json.Unmarshal(native, &item); err != nil {
+		return nil, false
+	}
+	callID := strings.TrimSpace(item.CallID)
+	if strings.TrimSpace(item.Type) != "function_call" || callID == "" {
+		return nil, false
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type":    "function_call_output",
+		"call_id": callID,
+		"output":  GuardianNativeEvidenceOutputText,
+	})
+	if err != nil {
+		return nil, false
+	}
+	return payload, true
+}
+
+// GuardianNativeFunctionCallTokens counts the preserved call and its paired
+// evidence output, mirroring Rust's `native_tool_call::estimate_tokens`.
+func GuardianNativeFunctionCallTokens(native json.RawMessage) int {
+	tokens := utils.ApproxTokenCount(string(native))
+	if output, ok := GuardianNativeFunctionCallEvidenceOutput(native); ok {
+		tokens += utils.ApproxTokenCount(string(output))
+	}
+	return tokens
 }
 
 // RenderGuardianTranscript renders entries in conversation order.

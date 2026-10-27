@@ -814,6 +814,13 @@ func BuildPromptPartsWithSectionCosts(
 				flushSections()
 				parts = append(parts, GuardianPromptPart{Native: append(json.RawMessage(nil), entry.Native...)})
 				recordCost("conversation_transcript", len(entry.Native), 0, 0)
+				// Rust's composer pairs a preserved native function call with
+				// its evidence-only output, and both count toward the section
+				// cost (#57448).
+				if output, ok := GuardianNativeFunctionCallEvidenceOutput(entry.Native); ok {
+					parts = append(parts, GuardianPromptPart{Native: output})
+					recordCost("conversation_transcript", len(output), 0, 0)
+				}
 				run.Reset()
 				continue
 			}

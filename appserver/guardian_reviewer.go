@@ -1507,6 +1507,41 @@ func guardianPromptDelivery(parts []state.GuardianPromptPart) (string, []any) {
 
 const guardianTranscriptOmissionNotice = state.GuardianTranscriptOmissionNotice
 
+// guardianNativeToolCallTokenLimit is Rust's hard ceiling for a preserved
+// native MAv2 call: `entry_limits.tool_tokens.min(9_000)` (#57448).
+const guardianNativeToolCallTokenLimit = 9_000
+
+// guardianNativeMultiAgentNamespace resolves Rust's
+// `profile.transcript.options.native_multi_agent_namespace`: native calls are
+// preserved only when `guardian_native_multi_agent_history` is enabled on an
+// MAv2 turn, and the configured tool namespace falls back to `functions`.
+func (r *RuntimeRouter) guardianNativeMultiAgentNamespace(threadID string) string {
+	if r == nil {
+		return ""
+	}
+	threadID = strings.TrimSpace(threadID)
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+	if err != nil || cfg == nil {
+		return ""
+	}
+	if !features.Enabled(cfg.FeatureSettings(), "guardian_native_multi_agent_history") {
+		return ""
+	}
+	agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents())
+	if agentsErr != nil {
+		agentsConfig = nil
+	}
+	if r.runtimeMultiAgentVersionForTurn(threadID, cfg, agentsConfig) != agent.VersionV2 {
+		return ""
+	}
+	if v2Config, v2Err := cfg.MultiAgentV2Config(0); v2Err == nil && v2Config != nil {
+		if namespace := strings.TrimSpace(v2Config.ToolNamespace); namespace != "" {
+			return namespace
+		}
+	}
+	return "functions"
+}
+
 // guardianTranscriptSelection is the host-selected, profile-retained transcript
 // plus the retention notices that must accompany the prompt (#43806).
 type guardianTranscriptSelection struct {
@@ -1529,6 +1564,9 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelection(threadID string) guard
 	// mode before transcript preparation; a disabled evidence mode keeps the
 	// ordinary tool entry cap.
 	profile.Transcript.EntryLimits.NodeReplOutputTokens = r.guardianNodeReplResultTokenLimit(threadID)
+	// Rust #57448 resolves the native MAv2 namespace from the reviewed turn, so
+	// only an enabled feature on a V2 turn preserves native calls.
+	profile.Transcript.Options.NativeMultiAgentNamespace = r.guardianNativeMultiAgentNamespace(threadID)
 	return r.guardianReviewTranscriptSelectionWithProfile(threadID, profile)
 }
 
@@ -1604,6 +1642,41 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 					Kind:   state.GuardianTranscriptProtectedMessage,
 					Role:   "assistant",
 					Tokens: utils.ApproxTokenCount(string(native)),
+				})
+			}
+			continue
+		}
+		// Rust #57448: an enabled native MAv2 history keeps the complete
+		// function call so the backend can decrypt it, or replaces the whole
+		// item with an omission notice when it exceeds the tool-entry cap.
+		if native, ok := guardianNativeMultiAgentCall(&item, profile.Transcript.Options.NativeMultiAgentNamespace); ok {
+			name := guardianNativeFunctionCallName(&item)
+			lineRole := "tool " + name + " call"
+			if state.GuardianNativeFunctionCallTokens(native) <= min(profile.Transcript.EntryLimits.ToolTokens, guardianNativeToolCallTokenLimit) {
+				entries = append(entries, state.GuardianTranscriptEntry{
+					Author:   "tool",
+					Label:    name,
+					LineRole: lineRole,
+					Native:   native,
+				})
+				evidence = append(evidence, state.TranscriptEvidenceEntry{
+					Kind:          state.GuardianTranscriptTool,
+					Role:          lineRole,
+					Tokens:        state.GuardianNativeFunctionCallTokens(native),
+					OriginalBytes: len(native),
+				})
+			} else {
+				entries = append(entries, state.GuardianTranscriptEntry{
+					Author:   "tool",
+					Label:    name,
+					LineRole: lineRole,
+					Text:     guardianTranscriptOmissionNotice,
+				})
+				evidence = append(evidence, state.TranscriptEvidenceEntry{
+					Kind:          state.GuardianTranscriptTool,
+					Role:          lineRole,
+					Text:          guardianTranscriptOmissionNotice,
+					OriginalBytes: len(native),
 				})
 			}
 			continue
