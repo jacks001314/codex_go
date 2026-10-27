@@ -84,8 +84,9 @@ type Account struct {
 	UsesCodexManagedCredentials bool        `json:"usesCodexManagedCredentials,omitempty"`
 	// WorkspaceName is the display name of the selected ChatGPT workspace when
 	// the backend reports one (Rust Account::Chatgpt.workspace_name, #57366).
-	// It is never inferred from the account id.
-	WorkspaceName *string `json:"workspaceName,omitempty"`
+	// It is never inferred from the account id. Rust requires the field for
+	// ChatGPT accounts and serializes it as null when unknown.
+	WorkspaceName *string `json:"workspaceName"`
 }
 
 func (a *Account) MarshalJSON() ([]byte, error) {
@@ -103,7 +104,7 @@ func (a *Account) MarshalJSON() ([]byte, error) {
 			Type          AccountType `json:"type"`
 			Email         *string     `json:"email"`
 			PlanType      PlanType    `json:"planType"`
-			WorkspaceName *string     `json:"workspaceName,omitempty"`
+			WorkspaceName *string     `json:"workspaceName"`
 		}{Type: AccountChatGPT, Email: a.Email, PlanType: plan, WorkspaceName: a.WorkspaceName})
 	case AccountAmazonBedrock:
 		return json.Marshal(struct {
