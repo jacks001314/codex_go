@@ -57,7 +57,10 @@ type stdioClient struct {
 	pendingOrder     []int64
 	openAIForm       bool
 	userVerification bool
-	protocolMode     MCPProtocolMode
+	// networkPolicy advertises the experimental call-scoped network policy
+	// capability to a trusted ChatGPT origin (Rust #56278).
+	networkPolicy bool
+	protocolMode  MCPProtocolMode
 	// messageLimit is the bounded framing limit selected at launch. Discovery
 	// keeps the modern limit even after falling back to the legacy handshake,
 	// matching Rust's bounded local transport (Rust #57210).
@@ -279,13 +282,36 @@ func newMCPStdioClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *std
 }
 
 func newMCPStdioClientWithFeatures(config *ServerConfig, openAIForm bool, userVerification bool) *stdioClient {
+	return newMCPStdioClientWithCapabilities(config, mcpClientFeatures{
+		OpenAIForm:       openAIForm,
+		UserVerification: userVerification,
+	})
+}
+
+// newMCPStdioClientWithCapabilities builds a client that advertises exactly the
+// capabilities projected for its server.
+func newMCPStdioClientWithCapabilities(config *ServerConfig, features mcpClientFeatures) *stdioClient {
 	cloned := cloneServerConfig(config)
 	return &stdioClient{
 		config:           &cloned,
 		nextID:           1,
-		openAIForm:       openAIForm,
-		userVerification: userVerification,
+		openAIForm:       features.OpenAIForm,
+		userVerification: features.UserVerification,
+		networkPolicy:    features.NetworkPolicy,
 		protocolMode:     cloned.ProtocolMode,
+	}
+}
+
+// clientFeatures describes the capabilities this connection advertised.
+func (c *stdioClient) clientFeatures() mcpClientFeatures {
+	if c == nil {
+		return mcpClientFeatures{}
+	}
+	return mcpClientFeatures{
+		OpenAIForm:       c.openAIForm,
+		AuthChange:       c.authChanges != nil,
+		UserVerification: c.userVerification,
+		NetworkPolicy:    c.networkPolicy,
 	}
 }
 
@@ -399,7 +425,7 @@ func (b *mcpCallBudget) pause(elapsed time.Duration) {
 }
 
 func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, method string, params any) (*stdioRPCResponse, error) {
-	params = mcpParamsWithProtocolMetadataAndFeatures(params, c.protocolModeSnapshot(), c.openAIForm, c.authChanges != nil, c.userVerification)
+	params = mcpParamsWithProtocolMetadataForFeatures(params, c.protocolModeSnapshot(), c.clientFeatures())
 	cmd := c.currentCommand()
 	id := c.nextRequestID()
 	pending := &stdioPendingCall{
@@ -674,7 +700,7 @@ func (c *stdioClient) finishModernInitialization(response *stdioRPCResponse) {
 }
 
 func (c *stdioClient) initializeLegacyHandshake(ctx context.Context, options *stdioCallOptions) error {
-	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParamsWithFeatures(c.openAIForm, c.authChanges != nil, c.userVerification))
+	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParamsForFeatures(c.clientFeatures()))
 	if err != nil {
 		return err
 	}
@@ -1390,9 +1416,17 @@ func mcpClientInitializeParamsWithAuthChange(openAIForm bool, advertiseAuthChang
 }
 
 func mcpClientInitializeParamsWithFeatures(openAIForm bool, advertiseAuthChange bool, userVerification bool) map[string]any {
+	return mcpClientInitializeParamsForFeatures(mcpClientFeatures{
+		OpenAIForm:       openAIForm,
+		AuthChange:       advertiseAuthChange,
+		UserVerification: userVerification,
+	})
+}
+
+func mcpClientInitializeParamsForFeatures(features mcpClientFeatures) map[string]any {
 	return map[string]any{
 		"protocolVersion": defaultMCPProtocol,
-		"capabilities":    mcpClientCapabilitiesWithFeatures(openAIForm, advertiseAuthChange, userVerification),
+		"capabilities":    mcpClientCapabilitiesForFeatures(features),
 		"clientInfo": map[string]string{
 			"name":    "codex-go",
 			"version": "go-port",

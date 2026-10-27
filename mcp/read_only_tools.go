@@ -13,13 +13,23 @@ func applyMCPReadOnlyToolsMeta(params map[string]any, config *ServerConfig) {
 	if params == nil || config == nil || !config.RequiresReadOnlyTools {
 		return
 	}
-	meta, _ := params["_meta"].(map[string]any)
-	cloned := make(map[string]any, len(meta)+1)
-	for key, value := range meta {
-		cloned[key] = value
+	params["_meta"] = mcpMetaWithReadOnlyTools(params["_meta"], config)
+}
+
+// mcpMetaWithReadOnlyTools adds the read-only marker to a request metadata
+// value, so a resolver that rebuilds `_meta` cannot drop it (Rust
+// apply_read_only_tools_meta).
+func mcpMetaWithReadOnlyTools(meta any, config *ServerConfig) any {
+	if config == nil || !config.RequiresReadOnlyTools {
+		return meta
 	}
-	cloned[mcpReadOnlyToolsMetaKey] = true
-	params["_meta"] = cloned
+	metaMap, _ := meta.(map[string]any)
+	out := cloneAnyMap(metaMap)
+	if out == nil {
+		out = map[string]any{}
+	}
+	out[mcpReadOnlyToolsMetaKey] = true
+	return out
 }
 
 // mcpListParamsForCursorWithConfig is the tools/list parameter builder: it adds

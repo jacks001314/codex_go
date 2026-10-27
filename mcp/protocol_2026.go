@@ -137,12 +137,24 @@ func mcpClientCapabilitiesWithFeatures(openAIForm bool, advertiseAuthChange bool
 }
 
 func mcpClientCapabilitiesWithAllFeatures(openAIForm bool, advertiseAuthChange bool, userVerification bool, emaAuth bool) map[string]any {
+	return mcpClientCapabilitiesForFeatures(mcpClientFeatures{
+		OpenAIForm:       openAIForm,
+		AuthChange:       advertiseAuthChange,
+		UserVerification: userVerification,
+		EMAAuth:          emaAuth,
+	})
+}
+
+// mcpClientCapabilitiesForFeatures builds the client capabilities one
+// connection offers. Network policy is an experimental capability projected
+// only to trusted ChatGPT origins (Rust #56278).
+func mcpClientCapabilitiesForFeatures(features mcpClientFeatures) map[string]any {
 	capabilities := map[string]any{
 		"roots": map[string]any{"listChanged": false},
 	}
-	if openAIForm {
+	if features.OpenAIForm {
 		elicitation := map[string]any{"form": map[string]any{}}
-		if userVerification {
+		if features.UserVerification {
 			elicitation["userVerification"] = map[string]any{}
 		}
 		capabilities["extensions"] = map[string]any{
@@ -152,16 +164,19 @@ func mcpClientCapabilitiesWithAllFeatures(openAIForm bool, advertiseAuthChange b
 			"openai/elicitation": elicitation,
 		}
 	}
-	if advertiseAuthChange {
+	if features.AuthChange {
 		mcpAdvertiseAuthChangeCapability(capabilities)
 	}
-	if emaAuth {
+	if features.EMAAuth {
 		extensions, _ := capabilities["extensions"].(map[string]any)
 		if extensions == nil {
 			extensions = map[string]any{}
 		}
 		extensions["io.modelcontextprotocol/enterprise-managed-authorization"] = map[string]any{}
 		capabilities["extensions"] = extensions
+	}
+	if features.NetworkPolicy {
+		mcpAdvertiseExperimentalCapability(capabilities, MCPNetworkPolicyMetaCapability)
 	}
 	return capabilities
 }
@@ -179,6 +194,18 @@ func mcpParamsWithProtocolMetadataAndFeatures(params any, mode MCPProtocolMode, 
 }
 
 func mcpParamsWithProtocolMetadataAndAllFeatures(params any, mode MCPProtocolMode, openAIForm bool, advertiseAuthChange bool, userVerification bool, emaAuth bool) any {
+	return mcpParamsWithProtocolMetadataForFeatures(params, mode, mcpClientFeatures{
+		OpenAIForm:       openAIForm,
+		AuthChange:       advertiseAuthChange,
+		UserVerification: userVerification,
+		EMAAuth:          emaAuth,
+	})
+}
+
+// mcpParamsWithProtocolMetadataForFeatures adds the protocol metadata every
+// modern request carries, including the client capabilities this connection
+// advertised during initialization.
+func mcpParamsWithProtocolMetadataForFeatures(params any, mode MCPProtocolMode, features mcpClientFeatures) any {
 	if !mode.usesModernMCPLifecycle() {
 		return params
 	}
@@ -196,7 +223,7 @@ func mcpParamsWithProtocolMetadataAndAllFeatures(params any, mode MCPProtocolMod
 	}
 	meta[mcpProtocolVersionMetadataKey] = modernMCPProtocol
 	meta[mcpClientInfoMetadataKey] = map[string]string{"name": "codex-go", "version": "go-port"}
-	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilitiesWithAllFeatures(openAIForm, advertiseAuthChange, userVerification, emaAuth)
+	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilitiesForFeatures(features)
 	out["_meta"] = meta
 	return out
 }

@@ -61,7 +61,13 @@ func (f MCPAuthChangeSourceFunc) AuthChanged() <-chan struct{} {
 // mcpServerSupportsAuthChange reports whether the initialized server opted in
 // to auth-change notifications via its experimental capabilities.
 func mcpServerSupportsAuthChange(capabilities json.RawMessage) bool {
-	if len(capabilities) == 0 {
+	return mcpServerExperimentalCapability(capabilities, MCPAuthChangeCapability)
+}
+
+// mcpServerExperimentalCapability reports whether the initialized server
+// advertised the named experimental capability.
+func mcpServerExperimentalCapability(capabilities json.RawMessage, capability string) bool {
+	if len(capabilities) == 0 || capability == "" {
 		return false
 	}
 	var payload struct {
@@ -70,14 +76,20 @@ func mcpServerSupportsAuthChange(capabilities json.RawMessage) bool {
 	if err := json.Unmarshal(capabilities, &payload); err != nil {
 		return false
 	}
-	_, ok := payload.Experimental[MCPAuthChangeCapability]
+	_, ok := payload.Experimental[capability]
 	return ok
 }
 
 // mcpAdvertiseAuthChangeCapability inserts the client-side experimental
 // capability that asks the server to opt in.
 func mcpAdvertiseAuthChangeCapability(capabilities map[string]any) {
-	if capabilities == nil {
+	mcpAdvertiseExperimentalCapability(capabilities, MCPAuthChangeCapability)
+}
+
+// mcpAdvertiseExperimentalCapability inserts one empty experimental client
+// capability.
+func mcpAdvertiseExperimentalCapability(capabilities map[string]any, capability string) {
+	if capabilities == nil || capability == "" {
 		return
 	}
 	experimental, _ := capabilities["experimental"].(map[string]any)
@@ -85,7 +97,7 @@ func mcpAdvertiseAuthChangeCapability(capabilities map[string]any) {
 		experimental = map[string]any{}
 		capabilities["experimental"] = experimental
 	}
-	experimental[MCPAuthChangeCapability] = map[string]any{}
+	experimental[capability] = map[string]any{}
 }
 
 // startMCPAuthChangeWatcher sends the initial auth-change notification and

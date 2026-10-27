@@ -352,6 +352,10 @@ type RuntimeConfig struct {
 	// mcp_connection_sharing, disabled by default): eligible local stdio servers
 	// are probed with `server/discover` before the legacy handshake (#57210).
 	DiscoverLocalStdio bool
+	// NetworkPolicyMetadata, when set, supplies call-scoped network policy
+	// metadata to trusted ChatGPT MCP servers (Rust NetworkPolicyMetadataProvider,
+	// #56278). Existing runtimes leave it unset.
+	NetworkPolicyMetadata NetworkPolicyMetadataProvider
 	// RefreshToolListOnNotifications mirrors Rust McpConfig::mcp_tool_list_changed
 	// (feature mcp_tool_list_changed, disabled by default): an ordinary server
 	// that reports a tools/list_changed notification is re-listed before its

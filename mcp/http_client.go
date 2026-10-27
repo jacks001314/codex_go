@@ -156,18 +156,21 @@ type httpClient struct {
 	initialized    bool
 	// startupComplete mirrors `initialized` without the mutex so connection
 	// reuse can distinguish a ready client from a pending startup (Rust #40636).
-	startupComplete                    atomic.Bool
-	sessionID                          string
-	serverName                         string
-	threadID                           string
-	turnID                             string
-	itemID                             string
-	roots                              []MCPRoot
-	elicitation                        MCPElicitationHandler
-	progress                           MCPProgressHandler
-	openAIForm                         bool
-	userVerification                   bool
-	emaAuth                            bool
+	startupComplete  atomic.Bool
+	sessionID        string
+	serverName       string
+	threadID         string
+	turnID           string
+	itemID           string
+	roots            []MCPRoot
+	elicitation      MCPElicitationHandler
+	progress         MCPProgressHandler
+	openAIForm       bool
+	userVerification bool
+	emaAuth          bool
+	// networkPolicy advertises the experimental call-scoped network policy
+	// capability to a trusted ChatGPT origin (Rust #56278).
+	networkPolicy                      bool
 	protocolMode                       MCPProtocolMode
 	negotiatedProtocolVersion          string
 	retrySleep                         func(time.Duration)
@@ -191,6 +194,10 @@ type httpClientCallOptions struct {
 	Roots       []MCPRoot
 	Elicitation MCPElicitationHandler
 	Progress    MCPProgressHandler
+	// MetaForSession rebuilds the request _meta against the session that sends
+	// each attempt, so a recovery retry resolves policy metadata against the
+	// capabilities it negotiated (Rust #56278).
+	MetaForSession func(capabilities json.RawMessage) (any, error)
 }
 
 type mcpOAuthHeaderTransport struct {
@@ -315,20 +322,21 @@ func listMCPHTTPResourceTemplates(client *httpClient, options *httpClientCallOpt
 
 func callMCPHTTPTool(config *ServerConfig, serverName string, threadID string, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
 	client := newMCPHTTPClient(config)
-	return callMCPHTTPToolWithClient(context.Background(), client, serverName, threadID, "", "", nil, elicitation, progress, tool, arguments, meta)
+	return callMCPHTTPToolWithClient(context.Background(), client, serverName, threadID, "", "", nil, elicitation, progress, tool, arguments, meta, nil)
 }
 
-func callMCPHTTPToolWithClient(ctx context.Context, client *httpClient, serverName string, threadID string, turnID string, itemID string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
+func callMCPHTTPToolWithClient(ctx context.Context, client *httpClient, serverName string, threadID string, turnID string, itemID string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any, metaForSession func(json.RawMessage) (any, error)) (*MCPToolCallResponse, error) {
 	params := mcpToolCallParams(client.config, tool, arguments, meta)
 	var response MCPToolCallResponse
 	if err := client.CallWithOptionsContext(ctx, &httpClientCallOptions{
-		ServerName:  serverName,
-		ThreadID:    threadID,
-		TurnID:      turnID,
-		ItemID:      itemID,
-		Roots:       roots,
-		Elicitation: elicitation,
-		Progress:    progress,
+		ServerName:     serverName,
+		ThreadID:       threadID,
+		TurnID:         turnID,
+		ItemID:         itemID,
+		Roots:          roots,
+		Elicitation:    elicitation,
+		Progress:       progress,
+		MetaForSession: metaForSession,
 	}, "tools/call", params, &response); err != nil {
 		return nil, withMCPRequestErrorCode(err)
 	}
@@ -374,6 +382,16 @@ func newMCPHTTPClientWithShared(config *ServerConfig, openAIForm bool, shared HT
 }
 
 func newMCPHTTPClientWithFeatures(config *ServerConfig, openAIForm bool, userVerification bool, shared HTTPDoer) *httpClient {
+	features := mcpClientFeatures{OpenAIForm: openAIForm, UserVerification: userVerification}
+	if config != nil && config.EMAAuthExtension {
+		features.EMAAuth = true
+	}
+	return newMCPHTTPClientWithCapabilities(config, features, shared)
+}
+
+// newMCPHTTPClientWithCapabilities builds a client that advertises exactly the
+// capabilities projected for its server.
+func newMCPHTTPClientWithCapabilities(config *ServerConfig, features mcpClientFeatures, shared HTTPDoer) *httpClient {
 	client := mcpHTTPClientFromShared(shared, mcpClientTimeout(config))
 	if config != nil {
 		if policy := mcpRedirectPolicy(config.URL); policy != nil {
@@ -398,11 +416,25 @@ func newMCPHTTPClientWithFeatures(config *ServerConfig, openAIForm bool, userVer
 	return &httpClient{
 		config:           config,
 		client:           mcpHTTPClientWithDefaultHeaders(client, config),
-		openAIForm:       openAIForm,
-		userVerification: userVerification,
-		emaAuth:          config != nil && config.EMAAuthExtension,
+		openAIForm:       features.OpenAIForm,
+		userVerification: features.UserVerification,
+		emaAuth:          features.EMAAuth,
+		networkPolicy:    features.NetworkPolicy,
 		protocolMode:     protocolMode,
 		retrySleep:       time.Sleep,
+	}
+}
+
+// clientFeatures describes the capabilities this connection advertised.
+func (c *httpClient) clientFeatures() mcpClientFeatures {
+	if c == nil {
+		return mcpClientFeatures{}
+	}
+	return mcpClientFeatures{
+		OpenAIForm:       c.openAIForm,
+		UserVerification: c.userVerification,
+		EMAAuth:          c.emaAuth,
+		NetworkPolicy:    c.networkPolicy,
 	}
 }
 
@@ -624,14 +656,14 @@ func (c *httpClient) CallWithOptionsContext(ctx context.Context, options *httpCl
 			return err
 		}
 	}
-	err := c.callWithTransientRetries(ctx, method, params, out)
+	err := c.callWithTransientRetries(ctx, options, method, params, out)
 	if err == nil || !isMCPHTTPSessionInvalidError(err) || strings.TrimSpace(c.sessionID) == "" {
 		return err
 	}
 	if resetErr := c.reinitialize(ctx); resetErr != nil {
 		return resetErr
 	}
-	return c.callWithTransientRetries(ctx, method, params, out)
+	return c.callWithTransientRetries(ctx, options, method, params, out)
 }
 
 // CallStream performs a long-lived streamable HTTP request (Rust
@@ -705,7 +737,7 @@ func (c *httpClient) initialize(ctx context.Context) (string, error) {
 	c.capabilitiesMu.Lock()
 	c.serverCapabilities = nil
 	c.capabilitiesMu.Unlock()
-	response, requestID, err := c.doRPC(ctx, "initialize", mcpClientInitializeParamsWithFeatures(c.openAIForm, false, c.userVerification), "", true)
+	response, requestID, err := c.doRPC(ctx, "initialize", mcpClientInitializeParamsForFeatures(c.clientFeatures()), "", true)
 	if err != nil {
 		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
 		return "", err
@@ -878,9 +910,13 @@ func (c *httpClient) handshakeRequestTimeout(method string) time.Duration {
 	return remaining
 }
 
-func (c *httpClient) callWithTransientRetries(ctx context.Context, method string, params any, out any) error {
+func (c *httpClient) callWithTransientRetries(ctx context.Context, options *httpClientCallOptions, method string, params any, out any) error {
 	for attempt := 0; ; attempt++ {
-		err := c.callWithSession(ctx, method, params, out, c.sessionID)
+		attemptParams, err := c.paramsWithSessionMeta(options, params)
+		if err != nil {
+			return err
+		}
+		err = c.callWithSession(ctx, method, attemptParams, out, c.sessionID)
 		if err == nil {
 			return nil
 		}
@@ -891,6 +927,20 @@ func (c *httpClient) callWithTransientRetries(ctx context.Context, method string
 			return err
 		}
 	}
+}
+
+// paramsWithSessionMeta replaces the request _meta with the value resolved for
+// the session that sends this attempt. Resolution failures surface before the
+// request is sent, so a local policy failure never reaches the server.
+func (c *httpClient) paramsWithSessionMeta(options *httpClientCallOptions, params any) (any, error) {
+	if options == nil || options.MetaForSession == nil {
+		return params, nil
+	}
+	meta, err := options.MetaForSession(c.serverCapabilitiesRaw())
+	if err != nil {
+		return nil, err
+	}
+	return mcpParamsWithReplacedMeta(params, meta), nil
 }
 
 func (c *httpClient) sleepBeforeRetry(delay time.Duration) {
@@ -957,7 +1007,7 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 	if endpoint == "" {
 		return nil, 0, errors.New("HTTP MCP URL is required")
 	}
-	params = mcpParamsWithProtocolMetadataAndAllFeatures(params, c.protocolMode, c.openAIForm, false, c.userVerification, c.emaAuth)
+	params = mcpParamsWithProtocolMetadataForFeatures(params, c.protocolMode, c.clientFeatures())
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,

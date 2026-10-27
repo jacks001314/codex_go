@@ -755,14 +755,22 @@ type MCPService struct {
 	// both local stdio protocol discovery (#57210) and connection sharing
 	// (#57211).
 	discoverLocalStdio bool
-	oauthLogins        map[string]*OAuthLoginServer
-	oauth              *OAuthStore
-	resourceCache      *MCPResourceCache
-	elicitation        MCPElicitationHandler
-	progress           MCPProgressHandler
-	roots              MCPRootsProvider
-	oauthComplete      MCPOAuthLoginCompletionHandler
-	invocations        *MCPInvocationRegistry
+	// networkPolicyMetadata, when set, supplies call-scoped network policy
+	// metadata to trusted ChatGPT MCP servers (Rust
+	// NetworkPolicyMetadataProvider, #56278). A nil provider disables the
+	// capability advertisement.
+	networkPolicyMetadata NetworkPolicyMetadataProvider
+	// chatGPTBaseURL is the configured ChatGPT origin used to decide whether a
+	// staging MCP server is trusted for policy metadata.
+	chatGPTBaseURL string
+	oauthLogins    map[string]*OAuthLoginServer
+	oauth          *OAuthStore
+	resourceCache  *MCPResourceCache
+	elicitation    MCPElicitationHandler
+	progress       MCPProgressHandler
+	roots          MCPRootsProvider
+	oauthComplete  MCPOAuthLoginCompletionHandler
+	invocations    *MCPInvocationRegistry
 	// oauthCompleteListeners let multiple in-process consumers observe the same
 	// login completion while the app-server handler remains installed.
 	oauthCompleteListeners map[uint64]MCPOAuthLoginCompletionHandlerFunc
@@ -871,6 +879,8 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
 		service.refreshToolListOnNotifications = runtime.RefreshToolListOnNotifications
 		service.discoverLocalStdio = runtime.DiscoverLocalStdio
+		service.networkPolicyMetadata = runtime.NetworkPolicyMetadata
+		service.chatGPTBaseURL = strings.TrimSpace(runtime.ChatGPTBaseURL)
 		if strings.TrimSpace(runtime.CodexHome) != "" {
 			service.oauth = NewOAuthStoreWithMode(runtime.CodexHome, runtime.OAuthCredentialsStoreMode)
 		}
@@ -992,7 +1002,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 			sharedHTTPClientKey = mcpHTTPDoerIdentity(config.HTTPClient)
 		}
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == mcpHTTPConnectionCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm), sharedHTTPClientKey) {
+			cached.key == refreshed.mcpHTTPClientCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm), sharedHTTPClientKey) {
 			nextHTTPClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -1004,7 +1014,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	for name, cached := range s.stdioClients {
 		config, ok := refreshed.configs[name]
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == mcpConnectionCacheKeyWithFeatures(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm)) {
+			cached.key == refreshed.mcpStdioClientCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm)) {
 			nextStdioClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -1030,6 +1040,8 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.serverPermissionProfiles = refreshed.serverPermissionProfiles
 	s.selectedEnvironments = refreshed.selectedEnvironments
 	s.discoverLocalStdio = refreshed.discoverLocalStdio
+	s.networkPolicyMetadata = refreshed.networkPolicyMetadata
+	s.chatGPTBaseURL = refreshed.chatGPTBaseURL
 	s.refreshToolListOnNotifications = refreshed.refreshToolListOnNotifications
 	s.generation++
 	if s.resourceCache == nil {
@@ -2604,8 +2616,11 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	// call its sandbox policy and launcher metadata.
 	var httpTarget *httpClient
 	var stdioTarget *stdioClient
+	var serverConfigValue *ServerConfig
 	serverEnvironmentID := ""
 	if config, ok := s.serverConfig(server); ok {
+		configCopy := config
+		serverConfigValue = &configCopy
 		serverEnvironmentID = config.EffectiveEnvironmentID()
 		if strings.TrimSpace(config.URL) != "" {
 			if err := ValidateServerAuth(server, &config); err != nil {
@@ -2617,16 +2632,26 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 		}
 	}
 	effective, meta := s.prepareToolCallSandboxState(server, serverEnvironmentID, stdioTarget != nil, params, httpTarget.sandboxStateMetaNegotiated(), stdioTarget.sandboxStateMetaNegotiated())
+	// The read-only marker belongs to the resolved metadata, so it survives a
+	// resolver rebuild. The policy metadata itself is resolved against the
+	// session that sends each attempt, while caller-supplied policy metadata is
+	// always discarded (Rust #56278).
+	meta = mcpMetaWithReadOnlyTools(meta, serverConfigValue)
+	metaForSession := s.mcpNetworkPolicyMetaForToolCall(server, serverConfigValue, effective.ServerEnvironmentID, meta)
 	roots := s.rootsForThread(effective.ThreadID)
 	if httpTarget != nil {
 		ctx := params.Context
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		return callMCPHTTPToolWithClient(ctx, httpTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta)
+		return callMCPHTTPToolWithClient(ctx, httpTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta, metaForSession)
 	}
 	if stdioTarget != nil {
-		return callMCPStdioToolWithClient(stdioTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta)
+		resolvedMeta, err := metaForSession(stdioTarget.serverCapabilitiesRaw())
+		if err != nil {
+			return nil, err
+		}
+		return callMCPStdioToolWithClient(stdioTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, resolvedMeta)
 	}
 	encoded, err := json.Marshal(params.Arguments)
 	if err != nil {
@@ -2682,14 +2707,20 @@ func (s *MCPService) sandboxStateToolCallParams(server string, environmentID str
 // permissionProfileJSONForServer serializes the authority published for the
 // server (falling back to the thread authority) as the opaque policy document
 // the sandbox CLI parses.
-func (s *MCPService) permissionProfileJSONForServer(server string) string {
+// permissionProfileForServer returns the authority published for a server,
+// falling back to the thread authority (Rust permission_profile_for_server).
+func (s *MCPService) permissionProfileForServer(server string) *sandbox.PermissionProfile {
 	if s == nil {
-		return ""
+		return nil
 	}
-	profile, ok := s.PermissionProfileForServer(server)
-	if !ok || profile == nil {
-		profile = s.PermissionProfile()
+	if profile, ok := s.PermissionProfileForServer(server); ok && profile != nil {
+		return profile
 	}
+	return s.PermissionProfile()
+}
+
+func (s *MCPService) permissionProfileJSONForServer(server string) string {
+	profile := s.permissionProfileForServer(server)
 	if profile == nil {
 		return ""
 	}
@@ -2939,7 +2970,7 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 		sharedHTTPClient = config.HTTPClient
 		sharedHTTPClientKey = mcpHTTPDoerIdentity(config.HTTPClient)
 	}
-	key := mcpHTTPConnectionCacheKey(config, openAIForm, userVerification, sharedHTTPClientKey)
+	key := s.mcpHTTPClientCacheKey(config, openAIForm, userVerification, sharedHTTPClientKey)
 	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
 		(cached.client.isInitialized() || cached.startupTimeout == config.StartupTimeout) {
 		s.mu.Unlock()
@@ -2947,7 +2978,12 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 	}
 	old := s.deleteHTTPClientLocked(name)
 	cloned := cloneServerConfig(config)
-	client := newMCPHTTPClientWithFeatures(&cloned, openAIForm, userVerification, sharedHTTPClient)
+	client := newMCPHTTPClientWithCapabilities(&cloned, mcpClientFeatures{
+		OpenAIForm:       openAIForm,
+		UserVerification: userVerification,
+		EMAAuth:          cloned.EMAAuthExtension,
+		NetworkPolicy:    s.networkPolicyAdvertisedForServer(config),
+	}, sharedHTTPClient)
 	s.httpClients[name] = &cachedMCPHTTPClient{key: key, client: client, startupTimeout: config.StartupTimeout}
 	s.mu.Unlock()
 	closeHTTPClients([]*httpClient{old})
@@ -2956,6 +2992,21 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 
 func mcpHTTPConnectionCacheKey(config *ServerConfig, openAIForm bool, userVerification bool, sharedHTTPClientKey string) string {
 	return mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification) + "|httpClient=" + sharedHTTPClientKey
+}
+
+// mcpStdioClientCacheKey scopes a cached connection to the capabilities it
+// advertised, so a call can never reuse a connection that did not offer the
+// network policy capability (Rust #56278).
+func (s *MCPService) mcpStdioClientCacheKey(config *ServerConfig, openAIForm bool, userVerification bool) string {
+	key := mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification)
+	if s.networkPolicyAdvertisedForServer(config) {
+		key += "|networkPolicy=1"
+	}
+	return key
+}
+
+func (s *MCPService) mcpHTTPClientCacheKey(config *ServerConfig, openAIForm bool, userVerification bool, sharedHTTPClientKey string) string {
+	return s.mcpStdioClientCacheKey(config, openAIForm, userVerification) + "|httpClient=" + sharedHTTPClientKey
 }
 
 func mcpHTTPDoerIdentity(client HTTPDoer) string {
@@ -3073,7 +3124,7 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	openAIForm := s.openAIForm
 	userVerification := openAIForm && s.serverAllowsUserVerificationLocked(name)
 	authChanges := s.authChangeSource
-	key := mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification)
+	key := s.mcpStdioClientCacheKey(config, openAIForm, userVerification)
 	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
 		(cached.client.isInitialized() || cached.startupTimeout == config.StartupTimeout) {
 		s.mu.Unlock()
@@ -3086,12 +3137,20 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	)
 	if s.mcpStdioSharingEligible(name, config) {
 		client, release = sharedMCPStdioConnections.acquire(mcpStdioPoolKey(key, config), func() *stdioClient {
-			created := newMCPStdioClientWithFeatures(config, openAIForm, userVerification)
+			created := newMCPStdioClientWithCapabilities(config, mcpClientFeatures{
+				OpenAIForm:       openAIForm,
+				UserVerification: userVerification,
+				NetworkPolicy:    s.networkPolicyAdvertisedForServer(config),
+			})
 			created.authChanges = authChanges
 			return created
 		})
 	} else {
-		client = newMCPStdioClientWithFeatures(config, openAIForm, userVerification)
+		client = newMCPStdioClientWithCapabilities(config, mcpClientFeatures{
+			OpenAIForm:       openAIForm,
+			UserVerification: userVerification,
+			NetworkPolicy:    s.networkPolicyAdvertisedForServer(config),
+		})
 		client.authChanges = authChanges
 	}
 	var previous *stdioClient
