@@ -399,7 +399,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if req.OnTurnStarted != nil {
 		req.OnTurnStarted(threadID, turnID)
 	}
-	if err := eventSink.Emit(protocol.TurnStarted()); err != nil {
+	turnStarted := protocol.TurnStarted()
+	turnStarted.InternalTurnID = turnID
+	if err := eventSink.Emit(turnStarted); err != nil {
 		return nil, err
 	}
 	compactedThisTurn := false
@@ -496,8 +498,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	subagentHeader, subagentKind := execReviewSubagentMetadata(req)
 	multiAgentTools, err := r.multiAgentToolsForRun(ctx, req, cfg, threadID, turnID, agent)
 	if err != nil {
-		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
-		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+		kind := execInProcessErrorKind(err)
+		_ = eventSink.Emit(protocol.ErrorEventWithKind(err.Error(), kind))
+		_ = eventSink.Emit(protocol.TurnFailedWithKind(err.Error(), kind))
 		return nil, err
 	}
 	defer closeExecMultiAgentTools(multiAgentTools)
@@ -618,8 +621,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			_ = r.persistExecContextWindowExceeded(resumeContext.Record)
 		}
 		r.emitTurnE2EDuration(turnStartedAt)
-		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
-		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+		kind := execInProcessErrorKind(err)
+		_ = eventSink.Emit(protocol.ErrorEventWithKind(err.Error(), kind))
+		_ = eventSink.Emit(protocol.TurnFailedWithKind(err.Error(), kind))
 		return nil, err
 	}
 	if err := eventSink.Err(); err != nil {
@@ -972,7 +976,22 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		if message := modelRerouteErrorMessage(event.Reroute); message != "" {
 			c.emit(protocol.ItemCompleted(protocol.ErrorItem("model-reroute", message)))
 		}
+	case model.ResponsesStreamEventModeration:
+		// Rust #57363: the embedded app server forwards turn moderation metadata
+		// so the TUI can explain a policy block with turn-scoped recourse.
+		c.emitInternal(protocol.TurnModerationMetadata("", "", event.ModerationMetadata))
 	}
+}
+
+// execInProcessErrorKind reports the app-server error classification the
+// in-process TUI needs to route a policy refusal. The exec JSON event contract
+// carries only the message, so the kind stays internal.
+func execInProcessErrorKind(err error) string {
+	var apiErr *codexapi.APIError
+	if errors.As(err, &apiErr) && apiErr != nil && apiErr.Details().Kind == codexapi.ErrorCyberPolicy {
+		return "cyberPolicy"
+	}
+	return ""
 }
 
 func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *tool.Invocation, _ time.Time) {

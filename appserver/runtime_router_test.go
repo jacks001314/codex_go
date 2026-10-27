@@ -24004,7 +24004,7 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(modelResponsesSSE(
-			`{"type":"response.metadata","metadata":{"type":"safety_buffering","model_reroute":{"from_model":"gpt-test","to_model":"gpt-safe","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"turn_moderation_metadata":{"category":"cyber"},"model":"gpt-safe","use_cases":["cyber"],"reasons":["policy"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}`,
+			`{"type":"response.metadata","metadata":{"type":"safety_buffering","model_reroute":{"from_model":"gpt-test","to_model":"gpt-safe","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"openai_chatgpt_moderation_metadata":{"category":"cyber"},"model":"gpt-safe","use_cases":["cyber"],"reasons":["policy"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}`,
 			`{"type":"response.created","response":{"id":"resp-1"}}`,
 			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
 			`{"type":"response.output_text.delta","delta":"hello "}`,

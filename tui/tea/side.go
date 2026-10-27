@@ -722,10 +722,10 @@ func (m *Model) applyInactiveThreadTurnCompleted(msg TurnCompletedMsg) bool {
 		return true
 	}
 	if threadID == strings.TrimSpace(side.ParentThreadID) {
-		if msg.Err != nil {
+		if msg.Err != nil || msg.Failed {
 			side.ParentStatus = "error"
 			side.ParentSideStatus = SideParentStatusFailed
-			side.ParentMessages = append(side.ParentMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + msg.Err.Error()})
+			side.ParentMessages = append(side.ParentMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + turnErrorText(msg)})
 		} else {
 			side.ParentStatus = "idle"
 			side.ParentSideStatus = SideParentStatusFinished
@@ -740,9 +740,9 @@ func (m *Model) applyInactiveThreadTurnCompleted(msg TurnCompletedMsg) bool {
 		return true
 	}
 	if threadID == strings.TrimSpace(side.SideThreadID) {
-		if msg.Err != nil {
+		if msg.Err != nil || msg.Failed {
 			side.SideStatus = "error"
-			side.SideMessages = append(side.SideMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + msg.Err.Error()})
+			side.SideMessages = append(side.SideMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + turnErrorText(msg)})
 		} else {
 			side.SideStatus = "idle"
 			if strings.TrimSpace(msg.AssistantMessage) != "" {
@@ -752,6 +752,13 @@ func (m *Model) applyInactiveThreadTurnCompleted(msg TurnCompletedMsg) bool {
 		return true
 	}
 	return true
+}
+
+func turnErrorText(msg TurnCompletedMsg) string {
+	if msg.Err != nil {
+		return msg.Err.Error()
+	}
+	return "turn failed"
 }
 
 func (m *Model) applyInactiveThreadTurnInterrupted(msg TurnInterruptedMsg) bool {

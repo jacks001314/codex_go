@@ -65,8 +65,8 @@ func TestModelCyberPolicyNoticeUsesOnlyCurrentModelProgramsLikeRust(t *testing.T
 			name:       "astra with daybreak",
 			model:      "gpt-6-astra",
 			programs:   []string{"standard", "daybreak_blue"},
-			wantNotice: codextui.DaybreakNoticeLimited,
-			wantText:   "We take extra care with some cybersecurity requests.",
+			wantNotice: codextui.DaybreakNoticeDisabled,
+			wantText:   "Daybreak is currently off.",
 		},
 		{
 			name:       "sol standard",

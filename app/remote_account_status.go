@@ -104,7 +104,21 @@ func (c *remoteAppServerTUIClient) refreshAccountEmail(requestID string) {
 	if response.Account.Email != nil {
 		email = strings.TrimSpace(*response.Account.Email)
 	}
-	c.send(codextea.AccountEmailLoadedMsg{RequestID: requestID, Email: email})
+	c.send(codextea.AccountEmailLoadedMsg{
+		RequestID: requestID,
+		Email:     email,
+		Workspace: remoteStatusWorkspaceValue(response),
+	})
+}
+
+// remoteStatusWorkspaceValue mirrors Rust's workspace_display for the /status
+// card (#57366). Provider ownership is checked when the card renders, because
+// the workspace belongs to the account while the provider is a thread setting.
+func remoteStatusWorkspaceValue(response *auth.GetAccountResponse) string {
+	if response == nil || response.Account == nil || response.Account.Type != auth.AccountChatGPT {
+		return ""
+	}
+	return tuistatus.WorkspaceDisplay(response.Account.WorkspaceName, response.WorkspaceRouting)
 }
 
 // remoteReadAccount reads account/read on a dedicated app-server connection so

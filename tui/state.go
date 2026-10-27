@@ -110,6 +110,7 @@ type Options struct {
 	NoAltScreen             bool
 	CLIVersion              string
 	AccountDisplay          string
+	WorkspaceDisplay        string
 	AgentsSummary           string
 	HasChatGPTAccount       bool
 	RequiresOpenAIAuth      *bool
@@ -152,8 +153,11 @@ type State struct {
 	StatusLabelReserves []string
 	CLIVersion          string
 	AccountDisplay      string
-	AgentsSummary       string
-	HasChatGPTAccount   bool
+	// WorkspaceDisplay is the selected ChatGPT workspace row, already gated by
+	// the provider that owns the credentials (Rust #57366).
+	WorkspaceDisplay  string
+	AgentsSummary     string
+	HasChatGPTAccount bool
 	// RequiresOpenAIAuth is the connected server's provider capability. Nil
 	// keeps the legacy provider-name heuristic for callers without an account
 	// response.
@@ -208,6 +212,7 @@ func NewState(options *Options) *State {
 		state.NoAltScreen = options.NoAltScreen
 		state.CLIVersion = strings.TrimSpace(options.CLIVersion)
 		state.AccountDisplay = strings.TrimSpace(options.AccountDisplay)
+		state.WorkspaceDisplay = strings.TrimSpace(options.WorkspaceDisplay)
 		state.AgentsSummary = strings.TrimSpace(options.AgentsSummary)
 		state.HasChatGPTAccount = options.HasChatGPTAccount
 		state.RequiresOpenAIAuth = cloneStatusBool(options.RequiresOpenAIAuth)
@@ -418,6 +423,17 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	)
 	if account := strings.TrimSpace(s.AccountDisplay); account != "" {
 		fields = append(fields, statusFieldData{label: "Account", value: account})
+	}
+	// Rust #57366: the workspace is only meaningful when the credentials belong
+	// to the built-in provider. A connected server owns its provider
+	// definitions, so only the built-in id is certain there.
+	workspace := strings.TrimSpace(s.WorkspaceDisplay)
+	if s.RemoteConnection && !strings.EqualFold(strings.TrimSpace(s.Provider), "openai") &&
+		strings.TrimSpace(s.Provider) != "" {
+		workspace = ""
+	}
+	if workspace != "" {
+		fields = append(fields, statusFieldData{label: "ChatGPT workspace", value: workspace})
 	}
 	if threadName := strings.TrimSpace(s.ThreadName); threadName != "" {
 		fields = append(fields, statusFieldData{label: "Thread name", value: threadName})

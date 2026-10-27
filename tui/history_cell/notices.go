@@ -68,9 +68,12 @@ func (c UpdateAvailableHistoryCell) RawLines() []string {
 }
 
 type SafetyAccessBlockCell struct {
-	Title   string
-	Body    string
-	Actions []SafetyAccessAction
+	Title string
+	// Explanation is the optional turn-scoped recourse lead sentence that
+	// precedes the body (Rust #57363 SafetyAccessBlockCell.explanation).
+	Explanation string
+	Body        string
+	Actions     []SafetyAccessAction
 }
 
 // SafetyAccessAction is one labeled link rendered under the block body.
@@ -81,8 +84,9 @@ type SafetyAccessAction struct {
 
 func NewSafetyAccessBlockEvent() SafetyAccessBlockCell {
 	return SafetyAccessBlockCell{
-		Title: "This content can't be shown",
-		Body:  "We take extra caution with requests involving biological research and applications that could pose safety risks. Eligible researchers can apply for Trusted Access.",
+		Title:       "This content can't be shown",
+		Explanation: "We take extra caution with requests involving biological research and applications that could pose safety risks.",
+		Body:        "Eligible researchers can apply for Trusted Access.",
 		Actions: []SafetyAccessAction{
 			{Label: "Trusted Access", URL: "https://chatgpt.com/r/b749fb02595e04c3007a54375f3f4374"},
 			{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL},
@@ -96,7 +100,8 @@ func NewCyberPolicyErrorEvent(notice tui.DaybreakNotice) SafetyAccessBlockCell {
 	cell := SafetyAccessBlockCell{Title: "This content can\u2019t be shown"}
 	switch notice {
 	case tui.DaybreakNoticeApply:
-		cell.Body = "We take extra care with some cybersecurity requests. If you\u2019re doing authorized security work, apply for Daybreak to get broader access."
+		cell.Explanation = "We take extra care with some cybersecurity requests."
+		cell.Body = "If you\u2019re doing authorized security work, apply for Daybreak to get broader access."
 		cell.Actions = []SafetyAccessAction{
 			{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL},
 			{Label: "Apply for Daybreak", URL: "https://openai.com/form/enterprise-trusted-access-for-cyber/"},
@@ -104,11 +109,26 @@ func NewCyberPolicyErrorEvent(notice tui.DaybreakNotice) SafetyAccessBlockCell {
 	case tui.DaybreakNoticeAstra:
 		cell.Body = "Daybreak isn\u2019t available for Astra. Some cybersecurity requests may still be limited."
 		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}
+	case tui.DaybreakNoticeDisabled:
+		cell.Body = "Daybreak is currently off. If you\u2019re doing authorized security work, turn it on and try your request again."
+		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}
+	case tui.DaybreakNoticeEnabled:
+		cell.Body = "Some cybersecurity requests are still limited, even when Daybreak is on."
+		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}
 	default:
 		cell.Body = "We take extra care with some cybersecurity requests."
 		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}
 	}
 	return cell
+}
+
+// Message renders the explanation and body as the single paragraph shown to the
+// user (Rust SafetyAccessBlockCell::message).
+func (c SafetyAccessBlockCell) Message() string {
+	if explanation := strings.TrimSpace(c.Explanation); explanation != "" {
+		return explanation + " " + c.Body
+	}
+	return c.Body
 }
 
 func (c SafetyAccessBlockCell) DisplayLines(width int) []string {
@@ -119,7 +139,7 @@ func (c SafetyAccessBlockCell) DisplayLines(width int) []string {
 		title = SafetyAccessBlockTitle
 	}
 	lines := []string{"\u24d8 " + title}
-	candidates := []string{"  " + c.Body}
+	candidates := []string{"  " + c.Message()}
 	for _, action := range c.Actions {
 		candidates = append(candidates, "  "+action.Label+": "+action.URL)
 	}
@@ -138,7 +158,7 @@ func (c SafetyAccessBlockCell) RawLines() []string {
 	if title == "" {
 		title = SafetyAccessBlockTitle
 	}
-	lines := []string{title, c.Body}
+	lines := []string{title, c.Message()}
 	for _, action := range c.Actions {
 		lines = append(lines, action.Label+": "+action.URL)
 	}

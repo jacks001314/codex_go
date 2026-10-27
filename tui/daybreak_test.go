@@ -19,13 +19,13 @@ func TestDaybreakNoticeFromCyberProgramsLikeRust(t *testing.T) {
 			name:     "astra standard access with Daybreak",
 			model:    "gpt-6-astra-wm",
 			programs: []string{"standard", "daybreak_blue"},
-			want:     DaybreakNoticeLimited,
+			want:     DaybreakNoticeDisabled,
 		},
 		{
 			name:     "sol with Daybreak",
 			model:    "gpt-5.6-sol",
 			programs: []string{"daybreak_red"},
-			want:     DaybreakNoticeLimited,
+			want:     DaybreakNoticeDisabled,
 		},
 		{
 			name:     "standard access uses application guidance",
@@ -51,5 +51,21 @@ func TestDaybreakNoticeFromCyberProgramsLikeRust(t *testing.T) {
 				t.Fatalf("DaybreakNoticeFromCyberPrograms(%q, %#v) = %v, want %v", test.model, test.programs, got, test.want)
 			}
 		})
+	}
+}
+
+func TestDaybreakNoticeForSettingLikeRust(t *testing.T) {
+	programs := []string{"standard", "daybreak_blue"}
+	if got := DaybreakNoticeForSetting("gpt-5.6-sol", programs, false, false); got != DaybreakNoticeApply {
+		t.Fatalf("ineligible account notice = %v, want Apply", got)
+	}
+	if got := DaybreakNoticeForSetting("gpt-5.6-sol", programs, true, true); got != DaybreakNoticeEnabled {
+		t.Fatalf("enabled notice = %v, want Enabled", got)
+	}
+	if got := DaybreakNoticeForSetting("gpt-5.6-sol", programs, false, true); got != DaybreakNoticeDisabled {
+		t.Fatalf("disabled notice = %v, want Disabled", got)
+	}
+	if got := DaybreakNoticeForSetting("gpt-6-astra", []string{"standard"}, false, true); got != DaybreakNoticeAstra {
+		t.Fatalf("astra notice = %v, want Astra", got)
 	}
 }

@@ -802,6 +802,18 @@ func TestCyberPolicyCopyFollowsDaybreakNotice(t *testing.T) {
 		strings.Contains(got, "Apply for Daybreak:") || !strings.Contains(got, learnMore) {
 		t.Fatalf("limited raw:\n%s", got)
 	}
+
+	disabled := NewCyberPolicyErrorEvent(tui.DaybreakNoticeDisabled)
+	if got := strings.Join(disabled.RawLines(), "\n"); !strings.Contains(got, "Daybreak is currently off.") ||
+		strings.Contains(got, "Apply for Daybreak:") || !strings.Contains(got, learnMore) {
+		t.Fatalf("disabled raw:\n%s", got)
+	}
+
+	enabled := NewCyberPolicyErrorEvent(tui.DaybreakNoticeEnabled)
+	if got := strings.Join(enabled.RawLines(), "\n"); !strings.Contains(got, "Some cybersecurity requests are still limited, even when Daybreak is on.") ||
+		strings.Contains(got, "Apply for Daybreak:") || !strings.Contains(got, learnMore) {
+		t.Fatalf("enabled raw:\n%s", got)
+	}
 }
 
 // TestSplitReasoningSummaryParts mirrors Rust's split_reasoning_summary_parts

@@ -79,6 +79,9 @@ type remoteAppServerTUIClient struct {
 	platformOS      string
 	turnCompleted   bool
 	turnInterrupted bool
+	// turnFailed records the completed turn's failed status so the final
+	// TurnCompletedMsg does not report it as a success.
+	turnFailed bool
 	// turnDurationMS carries the completed turn's protocol duration so the TUI
 	// can show "Worked for" completion metadata (Rust #43558).
 	turnDurationMS *int64
@@ -369,8 +372,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	if remoteKeymap, err := interactiveRemoteKeymapConfig(ctx, endpoint); err == nil {
 		keymapConfig = remoteKeymap
 	}
-	accountDisplay, hasChatGPTAccount, requiresOpenAIAuth := interactiveRemoteStatusAccount(ctx, endpoint)
+	accountDisplay, hasChatGPTAccount, requiresOpenAIAuth, workspaceDisplay := interactiveRemoteStatusAccount(ctx, endpoint)
 	state.AccountDisplay = accountDisplay
+	state.WorkspaceDisplay = workspaceDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
 	state.RequiresOpenAIAuth = requiresOpenAIAuth
 	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
@@ -481,6 +485,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint, backendID),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint, root, backendID),
+		OnContinueSafetyRecourse:    interactiveRemoteContinueSafetyRecourse(ctx, endpoint, root, state, backendID),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
@@ -753,14 +758,15 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	return runPendingDaemonUpdate(ctx, model, stdout, stderr)
 }
 
-func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool, *bool) {
+func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool, *bool, string) {
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
 	response, err := remoteReadAccount(reqCtx, endpoint)
 	if err != nil {
-		return "", false, nil
+		return "", false, nil, ""
 	}
-	return remoteStatusAccountValues(response)
+	display, hasChatGPTAccount, requiresOpenAIAuth := remoteStatusAccountValues(response)
+	return display, hasChatGPTAccount, requiresOpenAIAuth, remoteStatusWorkspaceValue(response)
 }
 
 func remoteStatusAccountValues(response *auth.GetAccountResponse) (string, bool, *bool) {
@@ -3209,7 +3215,7 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 		return
 	}
 	if !client.turnInterrupted {
-		messages <- codextea.TurnCompletedMsg{ThreadID: threadID, DurationMS: client.turnDurationMS}
+		messages <- codextea.TurnCompletedMsg{ThreadID: threadID, DurationMS: client.turnDurationMS, Failed: client.turnFailed}
 	}
 }
 
@@ -4624,12 +4630,14 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeSet, status)
 		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
-			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.TurnCompletedWithID(protocol.Usage{}, payload.Turn.ID)})
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.TurnCompletedWithStatus(
+				protocol.Usage{}, payload.Turn.ID, payload.Turn.Status == appserver.TurnStatusFailed)})
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
 		c.resetReasoningStatus(payload.ThreadID)
 		c.turnCompleted = true
+		c.turnFailed = payload.Turn.Status == appserver.TurnStatusFailed
 		if payload.Turn.DurationMS != nil {
 			value := *payload.Turn.DurationMS
 			c.turnDurationMS = &value
@@ -4641,7 +4649,8 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			c.send(codextea.TurnInterruptedMsg{})
 			return nil
 		}
-		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, payload.Turn.ID)})
+		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompletedWithStatus(
+			protocol.Usage{}, payload.Turn.ID, payload.Turn.Status == appserver.TurnStatusFailed)})
 	// Rust chatwidget ServerNotification::ConfigWarning: startup config
 	// warnings coalesce into the startup warnings entry until the first turn.
 	case appserver.NotificationConfigWarning:
@@ -4878,7 +4887,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		// Rust on_cyber_policy_error: a blocked cyber-safety response renders the
 		// Daybreak-aware refusal cell instead of the generic turn error.
 		if turnErrorIsCyberPolicy(payload.Error) {
-			c.send(codextea.CyberPolicyErrorMsg{ThreadID: payload.ThreadID})
+			c.send(codextea.CyberPolicyErrorMsg{ThreadID: payload.ThreadID, TurnID: payload.TurnID, Message: payload.Error.Message})
 			return nil
 		}
 		text := strings.TrimSpace(payload.Error.Message)
@@ -4922,6 +4931,19 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			Reasons:         payload.Reasons,
 			ShowBufferingUI: payload.ShowBufferingUI,
 			FasterModel:     payload.FasterModel,
+		})
+	case appserver.NotificationTurnModerationMetadata:
+		var payload appserver.TurnModerationMetadataNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.send(codextea.TurnModerationMetadataMsg{
+			ThreadID: payload.ThreadID,
+			TurnID:   payload.TurnID,
+			Metadata: payload.Metadata,
 		})
 	case appserver.NotificationAuthRecoveryStarted, appserver.NotificationAuthRecoveryCompleted:
 		var payload appserver.AuthRecoveryNotification

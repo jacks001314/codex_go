@@ -14,7 +14,10 @@ type AccountStatus struct {
 	SignedIn bool
 	Email    string
 	Plan     string
-	Mode     AccountMode
+	// Workspace is the selected ChatGPT workspace display value (Rust
+	// StatusAccountDisplay::ChatGpt.workspace, #57366).
+	Workspace string
+	Mode      AccountMode
 }
 
 func ChatGPTAccountStatus(email string, plan string) AccountStatus {
@@ -55,6 +58,15 @@ func (s AccountStatus) DisplayValue() (string, bool) {
 
 func (s AccountStatus) IsChatGPT() bool {
 	return s.displayMode() == AccountModeChatGPT
+}
+
+// DisplayWorkspace reports the workspace row value, if one is known.
+func (s AccountStatus) DisplayWorkspace() (string, bool) {
+	workspace := strings.TrimSpace(s.Workspace)
+	if workspace == "" {
+		return "", false
+	}
+	return workspace, true
 }
 
 func (s AccountStatus) displayMode() AccountMode {

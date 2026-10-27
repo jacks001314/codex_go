@@ -48,6 +48,7 @@ import (
 	historycell "codex_go/tui/history_cell"
 	idecontext "codex_go/tui/ide_context"
 	"codex_go/tui/markdown"
+	tuistatus "codex_go/tui/status"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 	"codex_go/worktree"
@@ -1130,8 +1131,12 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// keeps its size-free launch tags for later terminal-size observations.
 	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, nil, false), "in_process")
 	defer tuiTelemetry.close()
-	accountDisplay, hasChatGPTAccount, requiresOpenAIAuth := interactiveStatusAccount(root)
+	accountDisplay, workspaceDisplay, hasChatGPTAccount, requiresOpenAIAuth := interactiveStatusAccount(root)
 	state.AccountDisplay = accountDisplay
+	// Rust #57366: the in-process TUI shows the ChatGPT workspace row only when
+	// the local account carries a workspace identity. Discovery and caching live
+	// in the auth/app-server layers, so an unknown name stays hidden.
+	state.WorkspaceDisplay = workspaceDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
 	state.RequiresOpenAIAuth = requiresOpenAIAuth
 	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
@@ -1237,6 +1242,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnSessionAction:             interactiveSessionActionHandler(root),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
+		OnContinueSafetyRecourse:    interactiveContinueSafetyRecourse(root),
 		OnPromptEdit:                interactivePromptEditHandler(root),
 		OnExportTranscript:          interactiveTranscriptExportHandler(interactiveShowRawAgentReasoning(root)),
 		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
@@ -1628,20 +1634,32 @@ func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycel
 	return service, statuses, expectedServers
 }
 
-func interactiveStatusAccount(root *cli.RootOptions) (string, bool, *bool) {
+func interactiveStatusAccount(root *cli.RootOptions) (string, string, bool, *bool) {
 	codexHome := auth.DefaultCodexHome()
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	requiresOpenAIAuth := interactiveRequiresOpenAIAuth(loaded)
 	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
 	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
 	if err != nil || resolved == nil {
-		return "", false, requiresOpenAIAuth
+		return "", "", false, requiresOpenAIAuth
 	}
-	display, hasChatGPTAccount := interactiveAccountDisplay(auth.AccountFromAuth(&resolved.Auth))
-	return display, hasChatGPTAccount, requiresOpenAIAuth
+	account := auth.AccountFromAuth(&resolved.Auth)
+	display, hasChatGPTAccount := interactiveAccountDisplay(account)
+	return display, interactiveAccountWorkspaceDisplay(account), hasChatGPTAccount, requiresOpenAIAuth
+}
+
+// interactiveAccountWorkspaceDisplay mirrors Rust workspace_display (#57366)
+// for the local account: the trimmed name followed by the routing id when one
+// is known. The local auth record carries no routing identity, so a missing
+// name yields no row.
+func interactiveAccountWorkspaceDisplay(account *auth.Account) string {
+	if account == nil || account.Type != auth.AccountChatGPT {
+		return ""
+	}
+	return tuistatus.WorkspaceDisplay(account.WorkspaceName, nil)
 }
 
 func interactiveRequiresOpenAIAuth(loaded *config.Config) *bool {
@@ -4389,7 +4407,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		// Rust on_cyber_policy_error: a blocked cyber-safety response renders the
 		// Daybreak-aware refusal cell instead of the generic turn error.
 		if cyberPolicyError(err) {
-			send(codextea.CyberPolicyErrorMsg{ThreadID: requestedThreadID})
+			send(codextea.CyberPolicyErrorMsg{ThreadID: requestedThreadID, TurnID: streamWriter.TurnID(), Message: err.Error()})
 			return
 		}
 		send(codextea.TurnCompletedMsg{ThreadID: requestedThreadID, Err: err})
@@ -4593,6 +4611,7 @@ type interactiveStreamEventWriter struct {
 	planMode           bool
 	planStreams        map[string]*interactivePlanStreamState
 	threadID           string
+	turnID             string
 }
 
 type interactivePlanStreamState struct {
@@ -4656,6 +4675,17 @@ func (w *interactiveStreamEventWriter) SawTokenUsage() bool {
 	return w.sawTokenUsage
 }
 
+// TurnID returns the runner-assigned id of the turn whose events this writer
+// forwarded. The TUI scopes safety recourse and policy refusals to it.
+func (w *interactiveStreamEventWriter) TurnID() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.turnID
+}
+
 func (w *interactiveStreamEventWriter) emitLine(line []byte) {
 	if len(line) == 0 || w.send == nil {
 		return
@@ -4678,6 +4708,9 @@ func (w *interactiveStreamEventWriter) HandleEvent(event protocol.ThreadEvent) {
 }
 
 func (w *interactiveStreamEventWriter) handleEventLocked(event protocol.ThreadEvent) {
+	if event.Type == "turn.started" {
+		w.turnID = firstNonEmptyLocal(event.TurnID, event.InternalTurnID)
+	}
 	if w.planMode && w.handlePlanModeEventLocked(event) {
 		return
 	}

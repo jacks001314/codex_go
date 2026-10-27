@@ -1973,7 +1973,9 @@ func modelVerificationFromStreamMetadata(data []byte) *ResponsesModelVerificatio
 }
 
 func turnModerationMetadataFromStreamMetadata(data []byte) (any, bool) {
-	value := streamMetadataValue(data, "turn_moderation_metadata", "turnModerationMetadata", "moderation_metadata", "moderationMetadata")
+	// Rust codex-api responses.rs turn_moderation_metadata(): the key is
+	// `openai_chatgpt_moderation_metadata` on a `response.metadata` event.
+	value := streamMetadataValue(data, "openai_chatgpt_moderation_metadata")
 	if value == nil {
 		return nil, false
 	}

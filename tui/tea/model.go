@@ -175,6 +175,10 @@ type WorkingDirectoryChangeFunc func(threadID string, cwd string) (*codextui.Ses
 
 type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
 
+// SafetyRecourseContinueFunc forks the blocked turn's chat before that turn and
+// prepares the selected rewrite there (Rust #57365 continue_with_rewrite).
+type SafetyRecourseContinueFunc func(threadID, turnID, prompt string) bubbletea.Cmd
+
 // StartManagedWorktreeFunc creates a managed checkout for the active session
 // and returns the conversation now attached to it (Rust #43120). Mode is "new"
 // (fresh conversation) or "fork" (continue the current conversation).
@@ -571,7 +575,11 @@ type TurnCompletedMsg struct {
 	AssistantMessage string
 	// DurationMS is the protocol turn duration, when the completion carried one.
 	DurationMS *int64
-	Err        error
+	// Failed marks an app-server turn that completed with a failed status. The
+	// error cell was already rendered from the error notification, so the
+	// completion must not be reported as a success.
+	Failed bool
+	Err    error
 }
 
 type TurnInterruptedMsg struct {
@@ -596,7 +604,10 @@ type ClipboardBusyMsg struct {
 // AccountStatusUpdatedMsg replaces the status account display after an
 // app-server account/updated notification (Rust #50199).
 type AccountStatusUpdatedMsg struct {
-	Display           string
+	Display string
+	// Workspace is the selected ChatGPT workspace display value. It is empty
+	// when the account has no workspace or the provider does not own it.
+	Workspace         string
 	HasChatGPTAccount bool
 	EmailRequestID    string
 }
@@ -607,6 +618,7 @@ type AccountStatusUpdatedMsg struct {
 type AccountEmailLoadedMsg struct {
 	RequestID string
 	Email     string
+	Workspace string
 }
 
 type reviewTokenSnapshot struct {
@@ -1141,6 +1153,10 @@ type Options struct {
 	OnSessionAction          SessionActionFunc
 	OnWorkingDirectoryChange WorkingDirectoryChangeFunc
 	OnResumeSession          SessionResumeFunc
+	// OnContinueSafetyRecourse forks the blocked turn's chat and prepares the
+	// selected safer rewrite there (Rust #57365 AppEvent::ContinueSafetyRecourse).
+	// Nil keeps the rewrite in the composer when the host cannot fork.
+	OnContinueSafetyRecourse SafetyRecourseContinueFunc
 	// OnPromptEdit branches before a transcript prompt selected via backtrack
 	// ("Esc Esc to edit previous message") and returns the branched session.
 	// A nil hook leaves prompt editing unavailable for this runtime.
@@ -1900,7 +1916,16 @@ type Model struct {
 	misalignmentReview        *misalignmentReview
 	misalignmentReviewSerial  uint64
 	currentTurnID             string
-	modal                     *modalState
+	// pendingSafetyRecourse carries the active turn's moderation block notice
+	// and its validated explanation/rewrites (Rust #57363 safety_recourse).
+	pendingSafetyRecourse        *chatwidget.PendingSafetyRecourse
+	safetyRecourseThreadID       string
+	safetyRecourseTurnID         string
+	safetyRecoursePrompts        []chatwidget.SafetyRecourseSuggestion
+	safetyRecoursePickerThreadID string
+	safetyRecoursePickerTurnID   string
+	onContinueSafetyRecourse     SafetyRecourseContinueFunc
+	modal                        *modalState
 	// modalParents retains dialogs covered by a child dialog so cancel/submit
 	// restores the parent backdrop (Rust #50504 ViewStack).
 	modalParents                []*modalState
@@ -2756,6 +2781,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSessionAction:                 options.OnSessionAction,
 		onWorkingDirectoryChange:        options.OnWorkingDirectoryChange,
 		onResumeSession:                 options.OnResumeSession,
+		onContinueSafetyRecourse:        options.OnContinueSafetyRecourse,
 		onPromptEdit:                    options.OnPromptEdit,
 		backtrack:                       tuiapp.BacktrackState{NthUserMessage: tuiapp.BacktrackNoSelection},
 		onRenameThread:                  options.OnRenameThread,
@@ -3307,6 +3333,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ModelSafetyBufferingMsg:
 		m.applySafetyBufferingUpdate(msg)
 		return m, nil
+	case TurnModerationMetadataMsg:
+		return m, m.applyTurnModerationMetadata(msg)
+	case SafetyRecourseRewriteReadyMsg:
+		return m, m.applySafetyRecourseRewriteReady(msg)
+	case SafetyRecourseRewriteFailedMsg:
+		return m, m.applySafetyRecourseRewriteFailed(msg)
 	case AccountStatusUpdatedMsg:
 		m.applyAccountStatusUpdated(msg)
 		return m, m.refreshStatusControlsCmd()
@@ -3321,7 +3353,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		cmd := m.applyTurnCompleted(msg)
 		recapStatus := appserver.TurnStatusCompleted
-		if msg.Err != nil {
+		if msg.Err != nil || msg.Failed {
 			recapStatus = appserver.TurnStatusFailed
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
@@ -4299,6 +4331,11 @@ func (m *Model) View() string {
 		if hud := m.renderQuickDialHUD(); hud != "" {
 			hudIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(hud))
+		}
+		// Rust #57363: the pending safety-block notice replaces the space above
+		// the composer until the explanation is ready.
+		if notice := m.renderSafetyRecourseNotice(); notice != "" {
+			sections = append(sections, m.bottomStyle.Render(notice))
 		}
 		footerLine, footerAlreadyStyled := m.footerHelpLine()
 		footerBeforeComposer = m.fullscreenTranscript && !m.rawOutput
@@ -5371,6 +5408,13 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 		m.refreshTranscript()
 		return nil
 	}
+	// Rust #57363 queues submitted input while a safety explanation is pending,
+	// so the blocked turn is never extended with a new prompt.
+	if m.pendingSafetyRecourse != nil {
+		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand})
+		m.refreshTranscript()
+		return nil
+	}
 	if parseCommand && len(request.Attachments) == 0 {
 		if invocation, ok := codextui.ParseCommand(request.Prompt); ok && slashInvocationDispatchable(invocation) {
 			return m.applyCommand(invocation)
@@ -5790,6 +5834,13 @@ func (m *Model) isTaskRunning() bool {
 	return m != nil && ((m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "running")) || m.mcpStartupActive)
 }
 
+// embeddedRunner reports whether turns run in-process, where a failure also
+// arrives as TurnCompletedMsg.Err. Local-daemon and remote sessions only emit
+// app-server thread events.
+func (m *Model) embeddedRunner() bool {
+	return m != nil && m.localSession && !m.localDaemonSession && !m.remoteAppServer
+}
+
 func (m *Model) isUserTurnPendingOrRunning() bool {
 	return m != nil && ((m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "running")) || m.reviewState.IsReviewMode)
 }
@@ -6094,11 +6145,44 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		if chatwidget.IsMisalignmentPolicyViolationMessage(errorMessage) {
 			return m.applyMisalignmentPolicyViolation(errorMessage)
 		}
+		// Rust #57363: a pending safety block owns its terminal error and renders
+		// the turn-scoped explanation with safer rewrites instead.
+		if m.renderSafetyRecourseFailure(errorMessage, "") {
+			m.flushDeferredSubAgentActivity()
+			m.appendQuestionDrafts(questionDrafts)
+			return m.refreshThreadUsageAfterTurn()
+		}
+		m.clearSafetyRecourse()
 		m.markActiveToolCallsFailed(errorMessage)
+		// Rust safety_recourse::render_failure -> handle_non_retry_error: a bio
+		// block without an explanation still renders the access block cell.
+		if chatwidget.IsBioPolicyError(errorMessage) {
+			m.applyHistoryCell(historycell.NewSafetyAccessBlockEvent())
+			m.flushDeferredSubAgentActivity()
+			m.notice = errorMessage
+			m.refreshTranscript()
+			m.appendQuestionDrafts(questionDrafts)
+			return m.refreshThreadUsageAfterTurn()
+		}
 		m.clearCurrentThreadAfterFailure(errorMessage)
 		m.addTurnErrorHistoryMessage(errorMessage)
 		m.flushDeferredSubAgentActivity()
 		m.notice = errorMessage
+		m.refreshTranscript()
+		m.appendQuestionDrafts(questionDrafts)
+		return m.refreshThreadUsageAfterTurn()
+	}
+	if message.Failed {
+		// Rust TurnStatus::Failed: the error notification already rendered the
+		// cell and set the status; finalize without a completion footer.
+		if m.State != nil {
+			if strings.TrimSpace(message.ThreadID) != "" {
+				m.State.SetThreadID(message.ThreadID)
+			}
+			m.markThreadCompleted(m.State.ThreadID)
+		}
+		m.flushDeferredSubAgentActivity()
+		m.setStatus("error")
 		m.refreshTranscript()
 		m.appendQuestionDrafts(questionDrafts)
 		return m.refreshThreadUsageAfterTurn()
@@ -6113,6 +6197,8 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		m.mergeAssistantFinal(message.AssistantMessage)
 	}
 	m.flushDeferredSubAgentActivity()
+	// The turn ended without the deferred policy error, so no recourse applies.
+	m.clearSafetyRecourse()
 	// Rust #43558: a successful turn shows its completion metadata after the
 	// final answer, including plain conversational answers.
 	var elapsedSeconds *int64
@@ -6235,6 +6321,8 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			cmd = bubbletea.Batch(cmd, m.prepareGoalSet(objective))
 		}
 	case "turn.started":
+		// Rust #57363: a new turn clears any recourse left by the previous one.
+		m.clearSafetyRecourse()
 		// Rust #45255: the first turn materializes the thread's rollout, so it no
 		// longer needs the retained blank-session snapshot.
 		if m.State != nil {
@@ -6243,7 +6331,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		// Rust #48352: the working tip's clock starts with the turn, and the
 		// frame that paints it must be requested up front (Rust's
 		// `frame_requester.schedule_frame_in(remaining)`).
-		m.currentTurnID = strings.TrimSpace(event.TurnID)
+		m.currentTurnID = strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID))
 		m.turnFinalAnswerSeen = false
 		m.clearMisalignmentForNewTurn(event.TurnID)
 		// Rust #54114: a new turn clears the retained result before any work.
@@ -6310,22 +6398,94 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "turn.completed":
 		questionDrafts = m.takeQuestionDrafts()
 		m.clearSafetyBuffering()
-		m.setStatus("idle")
+		// Rust #57363: the completion notification is where a deferred policy
+		// error renders with its explanation and safer rewrites.
+		if m.renderDeferredSafetyRecourse() {
+			m.finishUnifiedExecWaitStreak()
+			m.resetReasoningSummaryHeader()
+			m.markThreadCompleted(m.State.ThreadID)
+			m.Transcript.lastTurnError = ""
+			m.clearRetryActivity()
+			m.clearCompactionActivity()
+			m.appendQuestionDrafts(questionDrafts)
+			m.refreshTranscript()
+			return cmd
+		}
+		// Rust safety_recourse::render_failure declines when the explanation or
+		// turn scope no longer matches; the deferred policy error then keeps its
+		// normal handling (handle_non_retry_error) instead of disappearing.
+		deferredError, deferredKind := m.takeDeferredSafetyRecourseError()
+		m.clearSafetyRecourse()
 		m.finishUnifiedExecWaitStreak()
 		m.resetReasoningSummaryHeader()
 		m.markThreadCompleted(m.State.ThreadID)
-		m.turnTips.observeTurnCompleted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), true, m.turnFinalAnswerSeen)
 		m.Transcript.lastTurnError = ""
 		m.clearRetryActivity()
 		m.clearCompactionActivity()
 		m.VoiceConversation.ClearVoiceDelegatedTurn()
 		m.VoiceConversation.MarkPendingSpeechTurnCompleted()
+		if deferredError != "" {
+			m.applyNonRetrySafetyError(deferredError, deferredKind)
+			m.appendQuestionDrafts(questionDrafts)
+			m.refreshTranscript()
+			return cmd
+		}
+		// Rust TurnStatus::Failed: a failed turn is never reported as a
+		// successful completion, and its error cell was added by `error`.
+		if event.TurnFailed {
+			m.setStatus("error")
+			m.appendQuestionDrafts(questionDrafts)
+			m.refreshTranscript()
+			return cmd
+		}
+		m.setStatus("idle")
+		m.turnTips.observeTurnCompleted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), true, m.turnFinalAnswerSeen)
 	case "turn.failed", "error":
 		questionDrafts = m.takeQuestionDrafts()
 		m.clearSafetyBuffering()
 		message := "Unknown error"
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
 			message = strings.TrimSpace(event.Error.Message)
+		}
+		// Rust #57363 safety_recourse::defer_error: the terminal policy error of
+		// a pending block is rendered by the completion path with its
+		// explanation instead of the generic error cell.
+		kind := ""
+		if event.Error != nil {
+			kind = strings.TrimSpace(event.Error.Kind)
+		}
+		if m.deferSafetyRecourseError(message, kind) {
+			m.appendQuestionDrafts(questionDrafts)
+			return cmd
+		}
+		// Rust on_cyber_policy_error owns cyber refusals: the app sends a
+		// CyberPolicyErrorMsg that renders the Daybreak-aware cell, so the
+		// generic error cell must not be added here.
+		if event.Error != nil && strings.EqualFold(strings.TrimSpace(event.Error.Kind), "cyberPolicy") {
+			m.setStatus("error")
+			m.clearRetryActivity()
+			m.clearCompactionActivity()
+			m.markActiveToolCallsFailed(message)
+			m.notice = ""
+			m.appendQuestionDrafts(questionDrafts)
+			m.refreshTranscript()
+			return cmd
+		}
+		// Rust handle_non_retry_error: a biological policy block keeps the
+		// access-block cell. The embedded runner reports the same failure again
+		// through TurnCompletedMsg.Err, so only app-server transports render it
+		// here.
+		if !m.embeddedRunner() && chatwidget.IsBioPolicyError(message) {
+			m.setStatus("error")
+			m.clearRetryActivity()
+			m.clearCompactionActivity()
+			m.markActiveToolCallsFailed(message)
+			m.clearSafetyRecourse()
+			m.applyHistoryCell(historycell.NewSafetyAccessBlockEvent())
+			m.notice = message
+			m.appendQuestionDrafts(questionDrafts)
+			m.refreshTranscript()
+			return cmd
 		}
 		m.setStatus("error")
 		m.clearRetryActivity()
@@ -6334,6 +6494,14 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.clearCurrentThreadAfterFailure(message)
 		m.addTurnErrorHistoryMessage(message)
 		m.notice = message
+	case "turn.moderation_metadata":
+		if event.Metadata != nil {
+			cmd = bubbletea.Batch(cmd, m.applyTurnModerationMetadata(TurnModerationMetadataMsg{
+				ThreadID: event.ThreadID,
+				TurnID:   event.TurnID,
+				Metadata: event.Metadata,
+			}))
+		}
 	case "response.rate_limits":
 		if event.RateLimit != nil {
 			cmd = m.applyRateLimitSnapshot(rateLimitSnapshotFromProtocol(event.RateLimit))

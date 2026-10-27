@@ -16,6 +16,12 @@ import (
 // generic turn error (Rust chatwidget::on_cyber_policy_error).
 type CyberPolicyErrorMsg struct {
 	ThreadID string
+	// TurnID scopes the block to the turn that produced it (Rust
+	// ErrorNotification.turn_id). Empty accepts the active turn.
+	TurnID string
+	// Message is the server's refusal text, used to mark running tool calls
+	// failed when a recourse block replaces the generic error cell.
+	Message string
 }
 
 // applyCyberPolicyErrorMsg renders the cyber refusal cell for the active thread.
@@ -26,6 +32,12 @@ func (m *Model) applyCyberPolicyErrorMsg(msg CyberPolicyErrorMsg) bubbletea.Cmd 
 	if threadID := strings.TrimSpace(msg.ThreadID); threadID != "" && threadID != m.currentThreadID() {
 		return nil
 	}
+	// Rust #57363: a pending cyber block renders its turn-scoped explanation and
+	// safer rewrites instead of the plain refusal cell.
+	if m.applyCyberPolicyRecourse(msg) {
+		return nil
+	}
+	m.clearSafetyRecourse()
 	notice := m.cyberPolicyNotice()
 	m.applyHistoryCell(historycell.NewCyberPolicyErrorEvent(notice))
 	if supported, _ := m.daybreakModelSupport(); supported && m.daybreakAccountEligible() &&
@@ -36,18 +48,19 @@ func (m *Model) applyCyberPolicyErrorMsg(msg CyberPolicyErrorMsg) bubbletea.Cmd 
 }
 
 func (m *Model) cyberPolicyNotice() codextui.DaybreakNotice {
-	if m == nil || m.State == nil || !m.State.HasChatGPTAccount {
+	if m == nil || m.State == nil {
 		return codextui.DaybreakNoticeApply
 	}
-	provider := strings.ToLower(strings.TrimSpace(m.State.Provider))
-	if provider != "" && provider != "openai" {
-		return codextui.DaybreakNoticeApply
-	}
-	option, ok := m.currentModelCatalogOption(strings.TrimSpace(m.State.Model))
+	// Rust ChatWidget::cyber_policy_notice: `enabled` only counts while the
+	// account can use Daybreak and no side conversation is active.
+	canEnable := m.daybreakAccountEligible() && m.activeSide == nil
+	enabled := m.daybreakEnabled && canEnable
+	modelID := strings.TrimSpace(m.State.Model)
+	option, ok := m.currentModelCatalogOption(modelID)
 	if !ok {
-		return codextui.DaybreakNoticeApply
+		return codextui.DaybreakNoticeForSetting(modelID, nil, enabled, canEnable)
 	}
-	return codextui.DaybreakNoticeFromCyberPrograms(option.ID, option.AvailableCyberPrograms)
+	return codextui.DaybreakNoticeForSetting(option.ID, option.AvailableCyberPrograms, enabled, canEnable)
 }
 
 func (m *Model) currentModelCatalogOption(modelID string) (codextui.ModelPickerOption, bool) {

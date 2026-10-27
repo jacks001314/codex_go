@@ -82,6 +82,10 @@ type Account struct {
 	Email                       *string     `json:"email,omitempty"`
 	PlanType                    PlanType    `json:"planType,omitempty"`
 	UsesCodexManagedCredentials bool        `json:"usesCodexManagedCredentials,omitempty"`
+	// WorkspaceName is the display name of the selected ChatGPT workspace when
+	// the backend reports one (Rust Account::Chatgpt.workspace_name, #57366).
+	// It is never inferred from the account id.
+	WorkspaceName *string `json:"workspaceName,omitempty"`
 }
 
 func (a *Account) MarshalJSON() ([]byte, error) {
@@ -96,10 +100,11 @@ func (a *Account) MarshalJSON() ([]byte, error) {
 			plan = PlanUnknown
 		}
 		return json.Marshal(struct {
-			Type     AccountType `json:"type"`
-			Email    *string     `json:"email"`
-			PlanType PlanType    `json:"planType"`
-		}{Type: AccountChatGPT, Email: a.Email, PlanType: plan})
+			Type          AccountType `json:"type"`
+			Email         *string     `json:"email"`
+			PlanType      PlanType    `json:"planType"`
+			WorkspaceName *string     `json:"workspaceName,omitempty"`
+		}{Type: AccountChatGPT, Email: a.Email, PlanType: plan, WorkspaceName: a.WorkspaceName})
 	case AccountAmazonBedrock:
 		return json.Marshal(struct {
 			Type                        AccountType `json:"type"`
@@ -1387,6 +1392,7 @@ func cloneAccount(account *Account) *Account {
 	}
 	clone := *account
 	clone.Email = cloneStringPtr(account.Email)
+	clone.WorkspaceName = cloneStringPtr(account.WorkspaceName)
 	return &clone
 }
 

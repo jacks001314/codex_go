@@ -25,6 +25,17 @@ type ThreadEvent struct {
 	// milliseconds) for events whose lifetime needs a live timer, such as a
 	// context compaction item resumed from an app-server snapshot.
 	StartedAtMS *int64 `json:"startedAtMs,omitempty"`
+	// InternalTurnID carries the in-process turn identity when the public exec
+	// JSON event intentionally omits it. The TUI needs the id to scope safety
+	// recourse to the blocked turn.
+	InternalTurnID string `json:"-"`
+	// Metadata carries internal-only turn moderation metadata
+	// (turn/moderationMetadata). The exec JSON stream never encodes it.
+	Metadata any `json:"-"`
+	// TurnFailed marks an internal turn/completed for a failed turn. The exec
+	// JSON stream reports failures as `error`/`turn.failed` events instead, so
+	// this flag never leaves the TUI.
+	TurnFailed bool `json:"-"`
 }
 
 type ThreadTokenUsage struct {
@@ -87,6 +98,9 @@ type CreditsSnapshot struct {
 
 type ThreadError struct {
 	Message string `json:"message"`
+	// Kind carries the app-server codex error classification for in-process
+	// consumers (for example "cyberPolicy"); exec JSON never encodes it.
+	Kind string `json:"-"`
 }
 
 type ThreadItem struct {
@@ -623,6 +637,14 @@ func TurnCompletedWithID(usage Usage, turnID string) ThreadEvent {
 	}
 }
 
+// TurnCompletedWithStatus carries the server's turn id and whether the turn
+// failed, so the TUI does not report a successful completion for a failed turn.
+func TurnCompletedWithStatus(usage Usage, turnID string, failed bool) ThreadEvent {
+	event := TurnCompletedWithID(usage, turnID)
+	event.TurnFailed = failed
+	return event
+}
+
 func TurnFailed(message string) ThreadEvent {
 	return ThreadEvent{
 		Type:  "turn.failed",
@@ -634,6 +656,34 @@ func ErrorEvent(message string) ThreadEvent {
 	return ThreadEvent{
 		Type:  "error",
 		Error: &ThreadError{Message: message},
+	}
+}
+
+// ErrorEventWithKind is ErrorEvent with the in-process classification the TUI
+// uses to route policy refusals (Rust's codex_error_info).
+func ErrorEventWithKind(message, kind string) ThreadEvent {
+	return ThreadEvent{
+		Type:  "error",
+		Error: &ThreadError{Message: message, Kind: kind},
+	}
+}
+
+// TurnFailedWithKind is TurnFailed with the in-process classification.
+func TurnFailedWithKind(message, kind string) ThreadEvent {
+	return ThreadEvent{
+		Type:  "turn.failed",
+		Error: &ThreadError{Message: message, Kind: kind},
+	}
+}
+
+// TurnModerationMetadata emits the internal-only turn moderation metadata that
+// feeds the TUI's safety recourse (Rust #57363).
+func TurnModerationMetadata(threadID, turnID string, metadata any) ThreadEvent {
+	return ThreadEvent{
+		Type:     "turn.moderation_metadata",
+		ThreadID: strings.TrimSpace(threadID),
+		TurnID:   strings.TrimSpace(turnID),
+		Metadata: metadata,
 	}
 }
 

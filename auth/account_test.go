@@ -353,6 +353,7 @@ func TestLoginAccountResponseMarshalRustUnionShape(t *testing.T) {
 
 func TestGetAccountResponseMarshalRustUnionShape(t *testing.T) {
 	email := "user@example.com"
+	workspace := "Acme"
 	cases := []struct {
 		name string
 		in   *GetAccountResponse
@@ -392,6 +393,16 @@ func TestGetAccountResponseMarshalRustUnionShape(t *testing.T) {
 			name: "amazon bedrock",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}},
 			want: `{"account":{"type":"amazonBedrock","usesCodexManagedCredentials":true},"requiresOpenaiAuth":false,"workspaceRouting":null}`,
+		},
+		{
+			name: "chatgpt with workspace name",
+			in: &GetAccountResponse{Account: &Account{
+				Type:          AccountChatGPT,
+				Email:         &email,
+				PlanType:      PlanBusiness,
+				WorkspaceName: &workspace,
+			}, RequiresOpenAIAuth: true},
+			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"business","workspaceName":"Acme"},"requiresOpenaiAuth":true,"workspaceRouting":null}`,
 		},
 	}
 	for _, tc := range cases {

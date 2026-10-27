@@ -22,6 +22,7 @@ func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) {
 	}
 	if m.State != nil {
 		m.State.AccountDisplay = strings.TrimSpace(message.Display)
+		m.State.WorkspaceDisplay = strings.TrimSpace(message.Workspace)
 		m.State.HasChatGPTAccount = message.HasChatGPTAccount
 	}
 	m.hasChatGPTAccount = message.HasChatGPTAccount
@@ -65,6 +66,7 @@ func (m *Model) applyAccountEmailLoaded(message AccountEmailLoadedMsg) bool {
 	}
 	m.accountEmailRequestID = ""
 	m.State.AccountDisplay = tuistatus.AccountDisplayWithEmail(m.State.AccountDisplay, message.Email)
+	m.State.WorkspaceDisplay = strings.TrimSpace(message.Workspace)
 	m.refreshTranscript()
 	return true
 }

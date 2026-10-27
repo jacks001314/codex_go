@@ -1198,6 +1198,13 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.setDaybreakPreference(true)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.SafetyRecourseViewID {
+		m.modal = nil
+		if cancelled {
+			return nil
+		}
+		return m.applySafetyRecourseModalOption(response.OptionID)
+	}
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.DaemonRestartConfirmViewID {
 		m.modal = nil
 		if cancelled || response.OptionID != chatwidget.DaemonMenuItemRestartAndReconnect {
