@@ -8226,7 +8226,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ExtraSessionItems:              extraSessionItemsSnapshot,
 		PostToolInputItems:             postToolInputItems,
 		PreviousResponseID:             previousResponseID,
-		ParallelToolCalls:              r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
+		ParallelToolCalls:              r.modelSupportsParallelToolCalls(modelProviderConfig.Model, params.Originator),
 		ReasoningEffort:                requestReasoningEffort,
 		ReasoningSummary:               turnReasoningSummary(cfg, params),
 		ReasoningEffortOverrideEnabled: reasoningEffortOverride,
@@ -12201,11 +12201,15 @@ func appCyberAccessProgramForTurnPointer(params *turn.TurnStartParams, providerI
 func appStringPointer(value string) *string { return &value }
 
 func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.TurnStartParams, modelID string) string {
+	originator := ""
+	if params != nil {
+		originator = params.Originator
+	}
 	if params != nil && params.ServiceTierForTurn != nil {
 		// Rust applies TurnStartOptions.service_tier to the turn's settings copy
 		// after persisting the thread settings, so a per-turn override wins for
 		// this turn without changing the thread's tier (turn_context.rs).
-		info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+		info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
 		return model.ServiceTierForRequest(info, stringPtrValue(params.ServiceTierForTurn))
 	}
 	settings := map[string]bool{}
@@ -12221,7 +12225,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 			requested = stringPtrValue(params.ServiceTier)
 		}
 		if params.ServiceTierSet || params.ServiceTier != nil {
-			info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+			info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
 			return model.ServiceTierForRequest(info, requested)
 		}
 	}
@@ -12232,7 +12236,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 	if value == "" {
 		return ""
 	}
-	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
 	// Rust #46230: a configured flex tier survives a disabled fast mode.
 	return model.ServiceTierForConfiguredRequest(info, value, fastModeEnabled)
 }
@@ -12261,11 +12265,11 @@ func defaultModelForAppTurn() string {
 	return manager.GetDefaultModel("", true, model.RefreshOffline)
 }
 
-func (r *RuntimeRouter) modelSupportsParallelToolCalls(modelID string) bool {
+func (r *RuntimeRouter) modelSupportsParallelToolCalls(modelID string, originator string) bool {
 	if strings.TrimSpace(modelID) == "" {
 		return false
 	}
-	info := r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID})
+	info := r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Originator: originator})
 	// Rust build_prompt always sets `parallel_tool_calls: true` and the request
 	// applies only the responses-lite gate (client.rs: `prompt.parallel_tool_calls
 	// && !model_info.use_responses_lite`); the catalog carries no such flag.
@@ -12277,13 +12281,21 @@ func (r *RuntimeRouter) modelInfoForRuntime(modelID string) *model.ModelInfo {
 }
 
 func (r *RuntimeRouter) modelInfoForRuntimeWithConfig(modelID string, cfg *config.Config) *model.ModelInfo {
+	return r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, "")
+}
+
+func (r *RuntimeRouter) modelInfoForRuntimeWithConfigAndOriginator(modelID string, cfg *config.Config, originator string) *model.ModelInfo {
 	if strings.TrimSpace(modelID) == "" {
 		return nil
 	}
-	return r.modelInfoForRuntimeWithModelsConfig(modelID, cfg, modelConfigForAppTurn(cfg))
+	return r.modelInfoForRuntimeWithModelsConfigAndOriginator(modelID, cfg, modelConfigForAppTurn(cfg), originator)
 }
 
 func (r *RuntimeRouter) modelInfoForRuntimeWithModelsConfig(modelID string, cfg *config.Config, modelConfig *model.ModelsManagerConfig) *model.ModelInfo {
+	return r.modelInfoForRuntimeWithModelsConfigAndOriginator(modelID, cfg, modelConfig, "")
+}
+
+func (r *RuntimeRouter) modelInfoForRuntimeWithModelsConfigAndOriginator(modelID string, cfg *config.Config, modelConfig *model.ModelsManagerConfig, originator string) *model.ModelInfo {
 	if strings.TrimSpace(modelID) == "" {
 		return nil
 	}
@@ -12295,7 +12307,7 @@ func (r *RuntimeRouter) modelInfoForRuntimeWithModelsConfig(modelID string, cfg 
 		info := model.NewStaticModelsManager(*catalog).GetModelInfo(modelID, modelConfig)
 		return &info
 	}
-	return r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig})
+	return r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig, Originator: originator})
 }
 
 // modelInfoForAppTurn resolves a model with the turn's personality selection
@@ -12307,16 +12319,20 @@ func (r *RuntimeRouter) modelInfoForAppTurn(modelID string, cfg *config.Config, 
 	}
 	modelConfig := modelConfigForAppTurn(cfg)
 	modelConfig.Personality = appPersonalityForTurn(cfg, params)
-	return r.modelInfoForRuntimeWithModelsConfig(modelID, cfg, modelConfig)
+	originator := ""
+	if params != nil {
+		originator = params.Originator
+	}
+	return r.modelInfoForRuntimeWithModelsConfigAndOriginator(modelID, cfg, modelConfig, originator)
 }
 
 // modelInfoForRuntimeWithPersonality resolves a model with only the personality
 // selection folded in, mirroring the models-manager personality opt-out without
 // changing any other effective config.
-func (r *RuntimeRouter) modelInfoForRuntimeWithPersonality(modelID string, cfg *config.Config, personality string) *model.ModelInfo {
+func (r *RuntimeRouter) modelInfoForRuntimeWithPersonality(modelID string, cfg *config.Config, personality string, originator string) *model.ModelInfo {
 	modelConfig := modelConfigForAppTurn(cfg)
 	modelConfig.Personality = strings.TrimSpace(personality)
-	return r.modelInfoForRuntimeWithModelsConfig(modelID, cfg, modelConfig)
+	return r.modelInfoForRuntimeWithModelsConfigAndOriginator(modelID, cfg, modelConfig, originator)
 }
 
 // historyIngestRequestedForTurn mirrors Rust's with_window_and_fork_metadata:

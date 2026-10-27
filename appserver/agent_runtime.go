@@ -29,6 +29,10 @@ func (r *RuntimeRouter) agentForAppTurn(params *turn.TurnStartParams, turnID str
 		return agent
 	}
 	streaming = streaming.WithStreamHandler(r.responsesStreamHandler(params.ThreadID, turnID, params))
+	// Select the thread's originator catalog for the models metadata the agent
+	// uses while assembling a request (Rust #56284). The cached base runner keeps
+	// the default manager so another originator can select its own partition.
+	streaming.ModelsManager = model.ModelsManagerForOriginator(streaming.ModelsManager, params.Originator)
 	streaming.AuthRecoveryHandler = r.authRecoveryEventHandler(params.ThreadID, turnID)
 	streaming.ExternalAuthRefresh = r.externalAuthRefresh
 	streaming.StoreOptions = r.authStoreOptions()

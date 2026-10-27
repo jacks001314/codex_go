@@ -66,6 +66,19 @@ func (m *LazyModelsManager) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
 	}
 }
 
+// ForOriginator forwards catalog partitioning to the resolved manager
+// (Rust #56284). A manager that cannot partition reports false.
+func (m *LazyModelsManager) ForOriginator(originator string) (ModelsManager, bool) {
+	if m == nil {
+		return nil, false
+	}
+	partitioned, ok := m.resolve().(OriginatorModelsManager)
+	if !ok {
+		return nil, false
+	}
+	return partitioned.ForOriginator(originator)
+}
+
 func (m *LazyModelsManager) ListModels(strategy RefreshStrategy) []ModelPreset {
 	return m.resolve().ListModels(strategy)
 }

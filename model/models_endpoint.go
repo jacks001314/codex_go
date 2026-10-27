@@ -98,18 +98,14 @@ func (m *RemoteModelsManager) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
 	if m == nil {
 		return
 	}
-	m.mu.Lock()
-	m.apiKeyModelDiscoveryEnabled = enabled
-	m.mu.Unlock()
+	m.apiKeyModelDiscoveryPolicy().set(enabled)
 }
 
 func (m *RemoteModelsManager) apiKeyModelDiscoveryEnabledValue() bool {
 	if m == nil {
 		return false
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.apiKeyModelDiscoveryEnabled
+	return m.apiKeyModelDiscoveryPolicy().get()
 }
 
 // SupportsAPIKeyDiscovery reports whether the current provider/auth combination
@@ -285,10 +281,19 @@ type RemoteModelsManager struct {
 	commandAuth             bool
 	// apiKeyDiscoveryDisabled mirrors Rust #46561: a custom inference base URL
 	// without an explicit model_catalog_url must not opt into remote discovery.
-	apiKeyDiscoveryDisabled     bool
-	apiKeyModelDiscoveryEnabled bool
-	explicitProviderCatalog     bool
-	now                         func() time.Time
+	apiKeyDiscoveryDisabled bool
+	// apiKeyModelDiscovery is shared by this manager and every originator
+	// partition so a runtime policy change reaches existing catalogs (#56284).
+	apiKeyModelDiscovery    *apiKeyModelDiscoveryPolicy
+	explicitProviderCatalog bool
+	now                     func() time.Time
+
+	// initialModels is the catalog seed used when partitioning an originator.
+	initialModels []ModelInfo
+	// originatorManagers caches one isolated manager per supported originator
+	// (Rust OpenAiModelsManager::originator_managers).
+	originatorManagersMu sync.Mutex
+	originatorManagers   map[ModelCatalogOriginator]*RemoteModelsManager
 }
 
 type modelsCache struct {
@@ -362,9 +367,78 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 		metricsAuthModeOverride:         strings.TrimSpace(options.MetricsAuthMode),
 		commandAuth:                     options.CommandAuth,
 		apiKeyDiscoveryDisabled:         options.DisableAPIKeyDiscovery,
+		apiKeyModelDiscovery:            &apiKeyModelDiscoveryPolicy{},
 		explicitProviderCatalog:         options.ExplicitProviderCatalog,
 		now:                             time.Now,
+		initialModels:                   cloneModelInfos(models),
+		originatorManagers:              map[ModelCatalogOriginator]*RemoteModelsManager{},
 	}
+}
+
+func (m *RemoteModelsManager) apiKeyModelDiscoveryPolicy() *apiKeyModelDiscoveryPolicy {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.apiKeyModelDiscovery == nil {
+		m.apiKeyModelDiscovery = &apiKeyModelDiscoveryPolicy{}
+	}
+	return m.apiKeyModelDiscovery
+}
+
+// ForOriginator returns the cached catalog partition for a supported caller.
+// A backend that cannot apply the originator header yields no partition, so it
+// can never overwrite the default catalog (#56284).
+func (m *RemoteModelsManager) ForOriginator(originator string) (ModelsManager, bool) {
+	if m == nil {
+		return nil, false
+	}
+	partition, ok := ParseModelCatalogOriginator(originator)
+	if !ok {
+		return nil, false
+	}
+	m.originatorManagersMu.Lock()
+	defer m.originatorManagersMu.Unlock()
+	if existing := m.originatorManagers[partition]; existing != nil {
+		return existing, true
+	}
+	endpointClient, ok := m.endpoint.(OriginatorModelsEndpoint)
+	if !ok {
+		return nil, false
+	}
+	endpoint, ok := endpointClient.ForOriginator(partition)
+	if !ok || endpoint == nil {
+		return nil, false
+	}
+	m.mu.RLock()
+	options := &RemoteModelsManagerOptions{
+		ModelCatalog:                    &ModelsResponse{Models: cloneModelInfos(m.initialModels)},
+		Endpoint:                        endpoint,
+		UseRemoteCatalogAsSourceOfTruth: m.useRemoteCatalogAsSourceOfTruth,
+		Identity:                        m.identity,
+		SupportsAPIKeyModels:            m.supportsAPIKeyModels,
+		APIKeyAuth:                      m.apiKeyAuth,
+		HasAuth:                         m.hasAuth,
+		MetricsAuthMode:                 m.metricsAuthModeOverride,
+		CommandAuth:                     m.commandAuth,
+		DisableAPIKeyDiscovery:          m.apiKeyDiscoveryDisabled,
+		ExplicitProviderCatalog:         m.explicitProviderCatalog,
+	}
+	cachePath := m.cachePath
+	cacheTTL := m.cacheTTL
+	cacheClientVersion := m.cacheClientVersion
+	now := m.now
+	discovery := m.apiKeyModelDiscovery
+	m.mu.RUnlock()
+	manager := NewRemoteModelsManagerWithOptions(options)
+	manager.apiKeyModelDiscovery = discovery
+	manager.now = now
+	if cachePath != "" {
+		manager.setCachePath(modelsOriginatorCachePath(cachePath, partition), cacheTTL, cacheClientVersion)
+	}
+	m.originatorManagers[partition] = manager
+	return manager, true
 }
 
 // APIKeyModelDiscoverySetter is implemented by model managers that can toggle
@@ -387,17 +461,42 @@ func (m *RemoteModelsManager) ConfigureCache(codexHome string) {
 		return
 	}
 	codexHome = strings.TrimSpace(codexHome)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if codexHome == "" {
-		m.cachePath = ""
-		m.cacheTTL = 0
-		m.cacheClientVersion = ""
+	cachePath := ""
+	cacheTTL := time.Duration(0)
+	cacheClientVersion := ""
+	if codexHome != "" {
+		cachePath = filepath.Join(codexHome, modelsCacheFilename)
+		cacheTTL = defaultModelsCacheTTL
+		cacheClientVersion = modelsEndpointClientVersion
+	}
+	m.setCachePath(cachePath, cacheTTL, cacheClientVersion)
+
+	// Existing originator partitions keep their separate cache file and inherit
+	// the same TTL/client-version policy as the default catalog.
+	m.originatorManagersMu.Lock()
+	children := make(map[ModelCatalogOriginator]*RemoteModelsManager, len(m.originatorManagers))
+	for originator, manager := range m.originatorManagers {
+		children[originator] = manager
+	}
+	m.originatorManagersMu.Unlock()
+	for originator, manager := range children {
+		path := ""
+		if cachePath != "" {
+			path = modelsOriginatorCachePath(cachePath, originator)
+		}
+		manager.setCachePath(path, cacheTTL, cacheClientVersion)
+	}
+}
+
+func (m *RemoteModelsManager) setCachePath(cachePath string, cacheTTL time.Duration, cacheClientVersion string) {
+	if m == nil {
 		return
 	}
-	m.cachePath = filepath.Join(codexHome, modelsCacheFilename)
-	m.cacheTTL = defaultModelsCacheTTL
-	m.cacheClientVersion = modelsEndpointClientVersion
+	m.mu.Lock()
+	m.cachePath = cachePath
+	m.cacheTTL = cacheTTL
+	m.cacheClientVersion = cacheClientVersion
+	m.mu.Unlock()
 }
 
 func (m *RemoteModelsManager) ListModels(strategy RefreshStrategy) []ModelPreset {
@@ -414,8 +513,21 @@ func (m *RemoteModelsManager) GetRemoteModels() []ModelInfo {
 		return nil
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return cloneModelInfos(m.remoteModels)
+	models := m.remoteModels
+	initialModels := m.initialModels
+	apiKeyAuth := m.apiKeyAuth
+	commandAuth := m.commandAuth
+	discoveryDisabled := m.apiKeyDiscoveryDisabled
+	supportsAPIKeyModels := m.supportsAPIKeyModels
+	policy := m.apiKeyModelDiscovery
+	m.mu.RUnlock()
+	// With API-key discovery off, a catalog fetched while it was enabled must
+	// not leak through the in-memory state (Rust `models_for_entry`). Command
+	// auth keeps its existing discovery behavior.
+	if apiKeyAuth && !commandAuth && (discoveryDisabled || !supportsAPIKeyModels || policy == nil || !policy.get()) {
+		return cloneModelInfos(initialModels)
+	}
+	return cloneModelInfos(models)
 }
 
 func (m *RemoteModelsManager) GetDefaultModel(model string, allowProviderModelFallback bool, strategy RefreshStrategy) string {

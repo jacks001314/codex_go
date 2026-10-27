@@ -5520,6 +5520,7 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 	if loaded, cfgErr := r.effectiveConfigForThreadStart(&params); cfgErr == nil {
 		cfg = loaded
 	}
+	originator := r.threadStartOriginator(&params, request)
 	parts, err := r.threadStartInstructionParts(&params)
 	if err != nil {
 		return err
@@ -5559,7 +5560,7 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 		if cfg != nil {
 			personality = firstNonEmpty(personality, stringConfigValue(cfg, "personality"))
 		}
-		if info := r.modelInfoForRuntimeWithPersonality(modelID, cfg, personality); info != nil {
+		if info := r.modelInfoForRuntimeWithPersonality(modelID, cfg, personality, originator); info != nil {
 			if generated := strings.TrimSpace(info.ModelInstructions(personality)); generated != "" {
 				if cfg != nil && !cfg.UpdatePlanEnabled() && modelUsesBundledInstructions(info) {
 					generated = promptctx.WithoutUpdatePlanInstructions(generated)
@@ -5575,6 +5576,26 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 	return nil
 }
 
+func (r *RuntimeRouter) threadStartOriginatorInfo(params *ThreadStartParams, request *Request) (string, ClientInfo) {
+	if params == nil {
+		return "", ClientInfo{}
+	}
+	originator := strings.TrimSpace(stringPtrValue(params.ServiceName))
+	var clientInfo ClientInfo
+	if originator == "" && request != nil {
+		if info, ok := r.connectionClientInfo(request.normalizedConnectionID()); ok {
+			clientInfo = info
+			originator = strings.TrimSpace(info.Name)
+		}
+	}
+	return originator, clientInfo
+}
+
+func (r *RuntimeRouter) threadStartOriginator(params *ThreadStartParams, request *Request) string {
+	originator, _ := r.threadStartOriginatorInfo(params, request)
+	return originator
+}
+
 func (r *RuntimeRouter) applyThreadStartOriginator(response *ThreadStartResponse, request *Request) {
 	if r == nil || response == nil || response.Thread == nil || request == nil {
 		return
@@ -5583,14 +5604,7 @@ func (r *RuntimeRouter) applyThreadStartOriginator(response *ThreadStartResponse
 	if err := request.DecodeParams(&params); err != nil {
 		return
 	}
-	originator := stringPtrValue(params.ServiceName)
-	var clientInfo ClientInfo
-	if strings.TrimSpace(originator) == "" {
-		if info, ok := r.connectionClientInfo(request.normalizedConnectionID()); ok {
-			clientInfo = info
-			originator = strings.TrimSpace(info.Name)
-		}
-	}
+	originator, clientInfo := r.threadStartOriginatorInfo(&params, request)
 	if strings.TrimSpace(originator) == "" {
 		return
 	}
@@ -5625,8 +5639,9 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	}
 	modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
 	providerID := firstNonEmpty(strings.TrimSpace(params.ModelProvider), stringConfigValue(cfg, "model_provider"), stringConfigValue(cfg, "modelProvider"), model.OpenAIProviderID)
+	originator := r.threadStartOriginator(&params, request)
 	if modelID == "" && threadStartProviderHasExplicitCatalog(cfg, providerID) {
-		presets := r.requireModels().Presets(model.RefreshOnline)
+		presets := r.requireModels().PresetsForOriginator(model.RefreshOnline, originator)
 		for _, preset := range presets {
 			if preset.IsDefault {
 				modelID = preset.Model
@@ -5680,7 +5695,7 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	if sessionDefaults == nil {
 		sessionDefaults = map[string]any{}
 	}
-	modelInfo := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	modelInfo := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
 	applyModelTokenBudgetThreadDefaults(sessionDefaults, cfg, modelInfo)
 	for key, value := range map[string]string{
 		"model":                      modelID,
@@ -15456,13 +15471,15 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 	resolveCodeModeMessages := func(string) *model.CodeModeToolMessages { return nil }
 	if turnConfig != nil {
 		modelID := ""
+		originator := ""
 		if params != nil {
 			modelID = strings.TrimSpace(params.Model)
+			originator = params.Originator
 		}
 		modelID = firstNonEmpty(modelID, stringConfigValue(turnConfig, "model"))
 		resolveCodeModeMessages = func(requestedModel string) *model.CodeModeToolMessages {
 			requestedModel = firstNonEmpty(strings.TrimSpace(requestedModel), modelID)
-			info := r.modelInfoForRuntimeWithConfig(requestedModel, turnConfig)
+			info := r.modelInfoForRuntimeWithConfigAndOriginator(requestedModel, turnConfig, originator)
 			if info == nil || info.ModelMessages == nil {
 				return nil
 			}
@@ -15494,7 +15511,11 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 			if turnConfig == nil {
 				return nil
 			}
-			info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(modelID), turnConfig)
+			originator := ""
+			if params != nil {
+				originator = params.Originator
+			}
+			info := r.modelInfoForRuntimeWithConfigAndOriginator(strings.TrimSpace(modelID), turnConfig, originator)
 			if info == nil || info.TruncationPolicy.Limit <= 0 {
 				return nil
 			}
@@ -15537,13 +15558,15 @@ func resolvedIndirectDescriptionPrefixesForTurn(
 		return nil, nil
 	}
 	modelID := ""
+	originator := ""
 	if params != nil {
 		modelID = strings.TrimSpace(params.Model)
+		originator = params.Originator
 	}
 	if modelID == "" {
 		modelID = stringConfigValue(cfg, "model")
 	}
-	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
 	if info == nil || info.ModelMessages == nil || info.ModelMessages.Tools == nil {
 		return nil, nil
 	}
@@ -15796,9 +15819,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// model_driven / always_on mode, and the current-time tool is registered for
 	// a model that declares the clock capability even without the feature flag.
 	turnModelInfo := (*model.ModelInfo)(nil)
+	originator := ""
 	if params != nil {
+		originator = params.Originator
 		modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
-		turnModelInfo = r.modelInfoForRuntimeWithConfig(modelID, cfg)
+		turnModelInfo = r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
 	}
 	// Rust effective_tool_mode (core/src/tools/mod.rs): the model/feature
 	// resolved mode decides the tool surface. Only CodeModeOnly matters for the
@@ -15850,13 +15875,20 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return nil, err
 		}
 	}
-	if allowedTools == nil && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	catalogEnablesApplyPatch := turnModelInfo == nil || strings.TrimSpace(turnModelInfo.ApplyPatchToolType) != ""
+	if allowedTools == nil && catalogEnablesApplyPatch && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
 	options.AllowedTools = allowedTools
 	options.CodexVersion = appServerVersion()
 	options.ToolMode = turnToolMode
+	// The model catalog decides whether apply_patch is advertised (Rust
+	// model_info.apply_patch_tool_type). A missing model keeps the legacy
+	// app-server surface.
+	if turnModelInfo != nil {
+		options.EnableApplyPatch = strings.TrimSpace(turnModelInfo.ApplyPatchToolType) != ""
+	}
 	// Rust #46010: the host-owned apps result metadata is exposed only when the
 	// session analytics client is enabled; that state gates the MCP executor's
 	// capture, and the dispatcher's recorder decides whether it is kept.

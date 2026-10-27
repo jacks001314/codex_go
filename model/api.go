@@ -216,6 +216,9 @@ type ModelInfoReadParams struct {
 	Model           string
 	Config          *ModelsManagerConfig
 	RefreshStrategy string
+	// Originator selects an isolated model catalog and cache for supported
+	// thread callers (Rust #56284).
+	Originator string
 }
 
 type ModelService struct {
@@ -267,6 +270,25 @@ func (s *ModelService) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
 	SetAPIKeyModelDiscoveryEnabled(s.manager, enabled)
 }
 
+// ManagerForOriginator returns the isolated catalog manager for a supported
+// thread originator, or the default manager for legacy callers (Rust #56284).
+func (s *ModelService) ManagerForOriginator(originator string) ModelsManager {
+	if s == nil || s.manager == nil {
+		return NewStaticModelsManager(BundledModelsResponse())
+	}
+	return ModelsManagerForOriginator(s.manager, originator)
+}
+
+// PresetsForOriginator exposes model presets from an originator-specific
+// catalog, retaining the default catalog for unsupported callers.
+func (s *ModelService) PresetsForOriginator(strategy RefreshStrategy, originator string) []ModelPreset {
+	manager := s.ManagerForOriginator(originator)
+	if manager == nil {
+		return nil
+	}
+	return manager.ListModels(strategy)
+}
+
 func (s *ModelService) Info(params *ModelInfoReadParams) *ModelInfo {
 	if params == nil {
 		params = &ModelInfoReadParams{}
@@ -275,7 +297,7 @@ func (s *ModelService) Info(params *ModelInfoReadParams) *ModelInfo {
 	if s == nil || s.manager == nil {
 		manager = NewStaticModelsManager(BundledModelsResponse())
 	} else {
-		manager = s.manager
+		manager = ModelsManagerForOriginator(s.manager, params.Originator)
 	}
 	strategy := parseStrategy(params.RefreshStrategy)
 	modelID := strings.TrimSpace(params.Model)

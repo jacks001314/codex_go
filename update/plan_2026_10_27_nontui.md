@@ -14,6 +14,7 @@ TUI lane and are not modified here.
 
 | Upstream | Requirement | Go change |
 | --- | --- | --- |
+| `#56284` | Supported thread originators (`codex_work_cca`, `codex_work_web`, `codex_work_desktop`, `codex_work_mobile`, `chatgpt_cca`) select isolated model managers before thread model metadata is resolved. Each partition sends its own `originator` header, reuses its manager, keeps separate in-memory and `models_cache.<originator>.json` disk catalogs, and shares runtime API-key discovery policy; unsupported originators retain the default manager. Thread startup and actual turns use the selected catalog’s instructions and `apply_patch_tool_type`. | `model/models_originator.go`, `model/models_endpoint.go`, `model/lazy_models.go`, `model/api.go`, `model/catalog.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/agent_runtime.go`, like-Rust tests |
 | `#57242` | Default thread unload delay is 1 minute | `config/config.go`, unload-delay test |
 | `#56525` | Drop the 1 MiB explicit model-catalog response cap | `model/models_endpoint.go`, catalog URL test |
 | `#57293` | Add GPT-6.1 Terra to bundled/Bedrock catalogs | `model/provider_info.go`, `model/catalog.go`, `model/catalog_test.go` |
@@ -1101,6 +1102,13 @@ deduplication for tool outputs.
 
 ## Verification
 
+- For `#56284`: `go test ./model -count=1` (25.2s) and
+  `go test ./appserver -run 'Originator|ThreadStart|TurnStart|ApplyPatch|Tool' -count=1`
+  (30.8s) pass. Coverage pins originator-header routing, concurrent catalog
+  isolation, manager reuse, separate disk cache files across restarts, shared
+  API-key discovery policy, unsupported-caller fallback, originator-specific
+  thread-start instructions, and Work/Chat/unsupported/repeated-Work turn
+  instructions plus apply_patch declarations.
 - `gofmt` on all touched packages.
 - Isolated worktree `D:\qax\reagent\dev\codex_go_wt\nontui_verify` (clean
   HEAD + non-TUI patch): `go build ./...` passes.

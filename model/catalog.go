@@ -1223,6 +1223,15 @@ func fallbackBundledModelsResponse() ModelsResponse {
 	// (catalog.go:712/714). Stamp the catalog's values on so the same field
 	// cannot read false here and true on the models.json path.
 	applyBundledCatalogBooleans(&response)
+	// Every bundled Codex model advertises the freeform apply_patch tool, as in
+	// Rust models-manager/models.json. The fallback catalog is also used when
+	// that JSON is not installed, so it must preserve the model-owned tool
+	// surface (Rust #56284 catalog-dependent tool declarations).
+	for index := range response.Models {
+		if strings.TrimSpace(response.Models[index].ApplyPatchToolType) == "" {
+			response.Models[index].ApplyPatchToolType = "freeform"
+		}
+	}
 	return response
 }
 
