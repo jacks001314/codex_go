@@ -12,6 +12,7 @@ func awsSigV4TestConfigValues(action map[string]any) map[string]any {
 			"aws": map[string]any{
 				"network": map[string]any{
 					"mitm": map[string]any{
+						"version": 2,
 						"actions": map[string]any{"sign": map[string]any{"aws_sigv4": action}},
 						"hooks": map[string]any{
 							"aws": map[string]any{

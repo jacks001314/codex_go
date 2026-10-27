@@ -1134,12 +1134,18 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 	// network-proxy/src/http_proxy.rs:910-975).
 	var awsSigner *AWSSigV4Signer
 	var awsGuest *awsGuestSignature
+	var substitution *BodySecretSubstitution
+	bodyFramingSupported := bodySubstitutionHeadersSupported(request.Header)
 	if isMITM || injectCredentials {
-		evaluation := evaluateProxyMITMHookRequest(policy.mitmHooks, policy.broker, host, NewProxyHTTPRequestFromHTTP(request), credentialDestinations)
+		origin := ProxyHookOrigin{Scheme: scheme, Port: int(requestPort)}
+		evaluation := evaluateProxyMITMHookRequest(policy.mitmHooks, policy.broker, host, origin, NewProxyHTTPRequestFromHTTP(request), credentialDestinations)
 		switch evaluation.Kind {
 		case ProxyHookEvaluationHookedNoMatch:
 			return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)
 		case ProxyHookEvaluationMatched:
+			if !proxyPlaceholdersMatch(origin, request.Header, evaluation.Actions) {
+				return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)
+			}
 			if isMITM {
 				// Select the guest credential from the request as it arrived,
 				// before hook actions and brokered credentials rewrite headers.
@@ -1153,6 +1159,9 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 						awsGuest = guest
 					}
 				}
+				if evaluation.Actions.BodySecretSubstitution != nil {
+					substitution = evaluation.Actions.BodySecretSubstitution
+				}
 				applyProxyMITMHookActions(request.Header, evaluation.Actions)
 			}
 		}
@@ -1161,6 +1170,11 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 		policy.broker.InjectRequestHeadersForDestination(scheme, host, requestPort, path, request.Header)
 	}
 	removeProxyHopByHopRequestHeaders(request.Header)
+	if substitution != nil {
+		if err := substitution.Apply(request, bodyFramingSupported); err != nil {
+			return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)
+		}
+	}
 	if awsSigner != nil && awsGuest != nil {
 		if request.URL != nil && request.URL.Scheme == "" {
 			request.URL.Scheme = scheme
@@ -1238,6 +1252,25 @@ func proxyBlockedHTTPResponse(request *http.Request, reason string) *http.Respon
 
 func proxyBadRequestResponse(request *http.Request, message string) *http.Response {
 	return goproxy.NewResponse(request, goproxy.ContentTypeText, http.StatusBadRequest, message)
+}
+
+// proxyPlaceholdersMatch mirrors Rust's placeholders_match: a placeholder-bound
+// secret is substituted only for HTTPS on 443 when the guest sent exactly that
+// whole header value once.
+func proxyPlaceholdersMatch(origin ProxyHookOrigin, headers http.Header, actions ProxyMITMHookActions) bool {
+	for _, header := range actions.InjectRequestHeaders {
+		if header.Placeholder == "" {
+			continue
+		}
+		if !strings.EqualFold(origin.Scheme, "https") || origin.Port != 443 {
+			return false
+		}
+		values := headers.Values(header.Name)
+		if len(values) != 1 || values[0] != header.Placeholder {
+			return false
+		}
+	}
+	return true
 }
 
 func applyProxyMITMHookActions(headers http.Header, actions ProxyMITMHookActions) {

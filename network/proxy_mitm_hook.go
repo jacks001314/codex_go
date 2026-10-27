@@ -25,6 +25,8 @@ type ProxyMITMHookConfig struct {
 }
 
 type ProxyMITMHookMatchConfig struct {
+	Schemes      []string
+	Ports        []int
 	Methods      []string
 	PathPrefixes []string
 	Query        map[string][]string
@@ -33,12 +35,14 @@ type ProxyMITMHookMatchConfig struct {
 }
 
 type ProxyMITMHookActionsConfig struct {
-	StripRequestHeaders  []string
-	InjectRequestHeaders []ProxyInjectedHeaderConfig
-	AWSSigV4             *AWSSigV4Config
+	StripRequestHeaders    []string
+	InjectRequestHeaders   []ProxyInjectedHeaderConfig
+	AWSSigV4               *AWSSigV4Config
+	BodySecretSubstitution *BodySecretSubstitutionConfig
 }
 
 type ProxyInjectedHeaderConfig struct {
+	Placeholder  *string
 	Name         string
 	SecretEnvVar *string
 	SecretFile   *string
@@ -56,6 +60,8 @@ type ProxyMITMHook struct {
 }
 
 type ProxyMITMHookMatcher struct {
+	Schemes      []string
+	Ports        []int
 	Methods      []string
 	PathPrefixes []ProxyPathMatcher
 	Query        []ProxyQueryConstraint
@@ -74,15 +80,17 @@ type ProxyHeaderConstraint struct {
 }
 
 type ProxyMITMHookActions struct {
-	StripRequestHeaders  []string
-	InjectRequestHeaders []ProxyResolvedInjectedHeader
-	AWSSigV4             *AWSSigV4Signer
+	StripRequestHeaders    []string
+	InjectRequestHeaders   []ProxyResolvedInjectedHeader
+	AWSSigV4               *AWSSigV4Signer
+	BodySecretSubstitution *BodySecretSubstitution
 }
 
 type ProxyResolvedInjectedHeader struct {
-	Name   string
-	Value  string
-	Source ProxySecretSource
+	Placeholder string
+	Name        string
+	Value       string
+	Source      ProxySecretSource
 }
 
 type ProxySecretSource struct {
@@ -117,6 +125,13 @@ const (
 type ProxyHookEvaluation struct {
 	Kind    ProxyHookEvaluationKind
 	Actions ProxyMITMHookActions
+}
+
+// ProxyHookOrigin is the authenticated tunnel destination, independent of guest
+// HTTP authority headers.
+type ProxyHookOrigin struct {
+	Scheme string
+	Port   int
 }
 
 type ProxyHTTPRequest struct {
@@ -166,6 +181,9 @@ func ValidateProxyMITMHookConfig(config ProxyConfig) error {
 		if len(pathPrefixes) == 0 {
 			return fmt.Errorf("network.mitm_hooks[%d].match.path_prefixes must not be empty", index)
 		}
+		if err := validateHookOriginConstraints(hook.Match.Schemes, hook.Match.Ports); err != nil {
+			return fmt.Errorf("invalid network.mitm_hooks[%d].match: %w", index, err)
+		}
 		if hook.Match.Body != nil {
 			return fmt.Errorf("network.mitm_hooks[%d].match.body is reserved for a future release and is not yet supported", index)
 		}
@@ -186,6 +204,11 @@ func ValidateProxyMITMHookConfig(config ProxyConfig) error {
 				return fmt.Errorf("invalid network.mitm_hooks[%d].actions.aws_sigv4: %w", index, err)
 			}
 		}
+		if hook.Actions.BodySecretSubstitution != nil {
+			if err := hook.Actions.BodySecretSubstitution.Validate(); err != nil {
+				return fmt.Errorf("invalid network.mitm_hooks[%d].actions.body_secret_substitution: %w", index, err)
+			}
+		}
 	}
 	return nil
 }
@@ -194,13 +217,7 @@ func CompileProxyMITMHooks(config ProxyConfig) (ProxyMITMHooksByHost, error) {
 	return CompileProxyMITMHooksWithResolvers(
 		config,
 		func(name string) (string, bool) { return os.LookupEnv(name) },
-		func(path string) (string, error) {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
-			}
-			return strings.TrimSpace(string(content)), nil
-		},
+		readProxySecretFile,
 	)
 }
 
@@ -245,6 +262,13 @@ func CompileProxyMITMHooksWithResolvers(config ProxyConfig, resolveEnv ProxySecr
 		if err != nil {
 			return nil, err
 		}
+		var substitution *BodySecretSubstitution
+		if hook.Actions.BodySecretSubstitution != nil {
+			substitution, err = hook.Actions.BodySecretSubstitution.Compile(resolveEnv, readFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to compile body substitution action for %s: %w", host, err)
+			}
+		}
 		var awsSigner *AWSSigV4Signer
 		if hook.Actions.AWSSigV4 != nil {
 			awsSigner, err = hook.Actions.AWSSigV4.Compile(resolveEnv, readFile)
@@ -256,15 +280,18 @@ func CompileProxyMITMHooksWithResolvers(config ProxyConfig, resolveEnv ProxySecr
 		hooksByHost[host] = append(hooksByHost[host], ProxyMITMHook{
 			Host: host,
 			Matcher: ProxyMITMHookMatcher{
+				Schemes:      append([]string(nil), hook.Match.Schemes...),
+				Ports:        append([]int(nil), hook.Match.Ports...),
 				Methods:      methods,
 				PathPrefixes: pathPrefixes,
 				Query:        query,
 				Headers:      headers,
 			},
 			Actions: ProxyMITMHookActions{
-				StripRequestHeaders:  stripHeaders,
-				InjectRequestHeaders: injectedHeaders,
-				AWSSigV4:             awsSigner,
+				StripRequestHeaders:    stripHeaders,
+				InjectRequestHeaders:   injectedHeaders,
+				AWSSigV4:               awsSigner,
+				BodySecretSubstitution: substitution,
 			},
 		})
 	}
@@ -275,13 +302,19 @@ func CompileProxyMITMHooksWithResolvers(config ProxyConfig, resolveEnv ProxySecr
 }
 
 func EvaluateProxyMITMHooks(hooksByHost ProxyMITMHooksByHost, host string, req ProxyHTTPRequest) ProxyHookEvaluation {
+	return EvaluateProxyMITMHooksAtOrigin(hooksByHost, host, ProxyHookOrigin{}, req)
+}
+
+// EvaluateProxyMITMHooksAtOrigin mirrors Rust's evaluate_mitm_hooks: scoped
+// hooks match the authenticated destination as well as the request.
+func EvaluateProxyMITMHooksAtOrigin(hooksByHost ProxyMITMHooksByHost, host string, origin ProxyHookOrigin, req ProxyHTTPRequest) ProxyHookEvaluation {
 	normalizedHost := NormalizeProxyHost(host)
 	hooks := hooksByHost[normalizedHost]
 	if len(hooks) == 0 {
 		return ProxyHookEvaluation{Kind: ProxyHookEvaluationNoHooksForHost}
 	}
 	for _, hook := range hooks {
-		if hookMatches(&hook, &req) {
+		if hookMatches(&hook, &origin, &req) {
 			return ProxyHookEvaluation{Kind: ProxyHookEvaluationMatched, Actions: hook.Actions}
 		}
 	}
@@ -294,8 +327,8 @@ func EvaluateProxyMITMHooks(hooksByHost ProxyMITMHooksByHost, host string, req P
 // has no hooks, a brokered credential alias bound to one of the configured
 // hooked hosts still yields HookedHostNoMatch, so the real credential is never
 // substituted for an unhooked alias.
-func evaluateProxyMITMHookRequest(hooksByHost ProxyMITMHooksByHost, broker *ProxyCredentialBroker, host string, req ProxyHTTPRequest, credentialDestinations []string) ProxyHookEvaluation {
-	evaluation := EvaluateProxyMITMHooks(hooksByHost, host, req)
+func evaluateProxyMITMHookRequest(hooksByHost ProxyMITMHooksByHost, broker *ProxyCredentialBroker, host string, origin ProxyHookOrigin, req ProxyHTTPRequest, credentialDestinations []string) ProxyHookEvaluation {
+	evaluation := EvaluateProxyMITMHooksAtOrigin(hooksByHost, host, origin, req)
 	if evaluation.Kind != ProxyHookEvaluationNoHooksForHost || len(hooksByHost) == 0 {
 		return evaluation
 	}
@@ -350,8 +383,16 @@ func (m *ProxyValueMatcher) Matches(candidate string) bool {
 	return candidate == m.Pattern
 }
 
-func hookMatches(hook *ProxyMITMHook, req *ProxyHTTPRequest) bool {
-	method := strings.ToUpper(strings.TrimSpace(req.Method))
+func hookMatches(hook *ProxyMITMHook, origin *ProxyHookOrigin, req *ProxyHTTPRequest) bool {
+	if origin != nil {
+		if len(hook.Matcher.Schemes) > 0 && !stringInSliceFold(hook.Matcher.Schemes, origin.Scheme) {
+			return false
+		}
+		if len(hook.Matcher.Ports) > 0 && !intInSlice(hook.Matcher.Ports, origin.Port) {
+			return false
+		}
+	}
+	method := strings.TrimSpace(req.Method)
 	if method == "" {
 		method = "GET"
 	}
@@ -369,6 +410,24 @@ func hookMatches(hook *ProxyMITMHook, req *ProxyHTTPRequest) bool {
 		return false
 	}
 	return headersMatch(hook.Matcher.Headers, req.Headers)
+}
+
+func stringInSliceFold(values []string, candidate string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func intInSlice(values []int, candidate int) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func pathMatches(matchers []ProxyPathMatcher, path string) bool {
@@ -389,8 +448,9 @@ func queryMatches(constraints []ProxyQueryConstraint, rawQuery string) bool {
 		values = url.Values{}
 	}
 	for _, constraint := range constraints {
+		// Origins disagree on which occurrence wins. Authorize only a single value.
 		actual := values[constraint.Name]
-		if !anyValueMatches(actual, constraint.AllowedValues) {
+		if len(actual) != 1 || !anyValueMatches(actual, constraint.AllowedValues) {
 			return false
 		}
 	}
@@ -413,7 +473,24 @@ func headersMatch(constraints []ProxyHeaderConstraint, headers map[string][]stri
 		if len(constraint.AllowedValues) == 0 {
 			continue
 		}
-		if !anyValueMatches(actual, constraint.AllowedValues) {
+		if len(actual) != 1 {
+			return false
+		}
+		candidate := actual[0]
+		matched := false
+		for index := range constraint.AllowedValues {
+			allowed := &constraint.AllowedValues[index]
+			// A field line can combine multiple logical values. A glob must not
+			// consume the comma and accidentally authorize a second list member.
+			if strings.Contains(candidate, ",") && allowed.Kind != "literal" {
+				continue
+			}
+			if allowed.Matches(candidate) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return false
 		}
 	}
@@ -506,13 +583,40 @@ func normalizeHookHost(host string) (string, error) {
 func normalizeMethods(methods []string) ([]string, error) {
 	out := make([]string, 0, len(methods))
 	for _, method := range methods {
-		normalized := strings.ToUpper(strings.TrimSpace(method))
-		if normalized == "" {
+		trimmed := strings.TrimSpace(method)
+		if trimmed == "" {
 			return nil, fmt.Errorf("methods must not contain empty entries")
 		}
-		out = append(out, normalized)
+		// Keep case-insensitive configuration for standard methods. Extension
+		// methods have case-sensitive names that must match what the origin receives.
+		out = append(out, standardProxyMethod(trimmed))
 	}
 	return out, nil
+}
+
+var standardProxyMethods = []string{"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"}
+
+func standardProxyMethod(method string) string {
+	for _, standard := range standardProxyMethods {
+		if strings.EqualFold(standard, method) {
+			return standard
+		}
+	}
+	return method
+}
+
+func validateHookOriginConstraints(schemes []string, ports []int) error {
+	for _, scheme := range schemes {
+		if !strings.EqualFold(scheme, "http") && !strings.EqualFold(scheme, "https") {
+			return fmt.Errorf("MITM hook schemes must be HTTP/HTTPS and ports must be nonzero")
+		}
+	}
+	for _, port := range ports {
+		if port == 0 {
+			return fmt.Errorf("MITM hook schemes must be HTTP/HTTPS and ports must be nonzero")
+		}
+	}
+	return nil
 }
 
 func validateQueryConstraints(query map[string][]string) error {
@@ -556,8 +660,21 @@ func validateStripRequestHeaders(names []string) error {
 
 func validateInjectedHeaders(headers []ProxyInjectedHeaderConfig) error {
 	for _, header := range headers {
-		if _, err := parseHeaderName(header.Name); err != nil {
+		name, err := parseHeaderName(header.Name)
+		if err != nil {
 			return err
+		}
+		// Rama records User-Agent as a string in its upstream connection spans.
+		if name == "User-Agent" {
+			return fmt.Errorf("proxy secrets cannot be injected into User-Agent")
+		}
+		if header.Placeholder != nil {
+			if _, forbidden := substitutionForbiddenHeaders[name]; *header.Placeholder == "" || forbidden {
+				return fmt.Errorf("invalid secret substitution header or placeholder")
+			}
+			if err := validateHeaderValue(*header.Placeholder); err != nil {
+				return fmt.Errorf("invalid placeholder for injected header %s: %w", header.Name, err)
+			}
 		}
 		switch {
 		case header.SecretEnvVar != nil && header.SecretFile == nil:
@@ -662,7 +779,20 @@ func compileInjectedHeader(header *ProxyInjectedHeaderConfig, resolveEnv ProxySe
 	if err := validateHeaderValue(value); err != nil {
 		return ProxyResolvedInjectedHeader{}, fmt.Errorf("invalid value for injected header %s: %w", header.Name, err)
 	}
-	return ProxyResolvedInjectedHeader{Name: name, Value: value, Source: source}, nil
+	placeholder := ""
+	if header.Placeholder != nil {
+		placeholder = *header.Placeholder
+	}
+	return ProxyResolvedInjectedHeader{Placeholder: placeholder, Name: name, Value: value, Source: source}, nil
+}
+
+var substitutionForbiddenHeaders = map[string]struct{}{
+	"Host":              {},
+	"Content-Length":    {},
+	"Transfer-Encoding": {},
+	"Connection":        {},
+	"Trailer":           {},
+	"Upgrade":           {},
 }
 
 func parseHeaderName(name string) (string, error) {
@@ -685,6 +815,24 @@ func validateHeaderValue(value string) error {
 		}
 	}
 	return nil
+}
+
+// ProxySecretFileMaxBytes bounds secret files read for MITM hook actions.
+const ProxySecretFileMaxBytes = 64 * 1024
+
+func readProxySecretFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	if info.Size() > ProxySecretFileMaxBytes {
+		return "", fmt.Errorf("secret file %s exceeds %d bytes", path, ProxySecretFileMaxBytes)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(content)), nil
 }
 
 func parseSecretFile(path string) (string, error) {

@@ -183,6 +183,8 @@ var proxyMITMHookAllowedKeys = map[string]struct{}{
 }
 
 var proxyMITMHookMatchAllowedKeys = map[string]struct{}{
+	"schemes":       {},
+	"ports":         {},
 	"methods":       {},
 	"path_prefixes": {},
 	"query":         {},
@@ -191,9 +193,21 @@ var proxyMITMHookMatchAllowedKeys = map[string]struct{}{
 }
 
 var proxyMITMHookActionsAllowedKeys = map[string]struct{}{
-	"strip_request_headers":  {},
-	"inject_request_headers": {},
-	"aws_sigv4":              {},
+	"strip_request_headers":    {},
+	"inject_request_headers":   {},
+	"aws_sigv4":                {},
+	"body_secret_substitution": {},
+}
+
+var proxyBodySubstitutionAllowedKeys = map[string]struct{}{
+	"replacements":   {},
+	"port":           {},
+	"max_body_bytes": {},
+}
+
+var proxyBodySubstitutionReplacementAllowedKeys = map[string]struct{}{
+	"placeholder": {},
+	"secret":      {},
 }
 
 var proxyAWSSigV4AllowedKeys = map[string]struct{}{
@@ -208,12 +222,15 @@ var proxyAWSSigV4AllowedKeys = map[string]struct{}{
 }
 
 var proxyProfileMITMAllowedKeys = map[string]struct{}{
+	"version": {},
 	"hooks":   {},
 	"actions": {},
 }
 
 var proxyProfileMITMHookAllowedKeys = map[string]struct{}{
 	"host":          {},
+	"schemes":       {},
+	"ports":         {},
 	"methods":       {},
 	"path_prefixes": {},
 	"query":         {},
@@ -338,13 +355,18 @@ func supportedProxyBuiltinPermissionProfile(name string) bool {
 }
 
 type proxyProfileMITMAccumulator struct {
-	actions map[string]ProxyMITMHookActionsConfig
-	hooks   map[string]proxyProfileMITMHook
+	version          *int
+	usesScopedAction bool
+	usesScopedHook   bool
+	actions          map[string]ProxyMITMHookActionsConfig
+	hooks            map[string]proxyProfileMITMHook
 }
 
 type proxyProfileMITMHook struct {
 	path       string
 	host       string
+	schemes    []string
+	ports      []int
 	methods    []string
 	paths      []string
 	query      map[string][]string
@@ -372,6 +394,13 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 	if err := rejectProxyUnknownFields(mitm, path+".mitm", proxyProfileMITMAllowedKeys); err != nil {
 		return err
 	}
+	if rawVersion, exists := mitm["version"]; exists {
+		version, ok := numberConfigValue(rawVersion)
+		if !ok || version != 2 {
+			return fmt.Errorf("%s.mitm.version must be 2", path)
+		}
+		a.version = &version
+	}
 	if rawActions, exists := mitm["actions"]; exists {
 		actions, ok := rawActions.(map[string]any)
 		if !ok {
@@ -397,10 +426,27 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 			if err != nil {
 				return err
 			}
-			if len(strip) == 0 && len(inject) == 0 && awsSigV4 == nil {
+			substitution, err := bodySecretSubstitutionConfigValue(table, "body_secret_substitution", path+".mitm.actions."+name)
+			if err != nil {
+				return err
+			}
+			if len(strip) == 0 && len(inject) == 0 && awsSigV4 == nil && substitution == nil {
 				return fmt.Errorf("%s.mitm.actions.%s must define at least one operation", path, name)
 			}
-			a.actions[name] = ProxyMITMHookActionsConfig{StripRequestHeaders: strip, InjectRequestHeaders: inject, AWSSigV4: awsSigV4}
+			if awsSigV4 != nil || substitution != nil {
+				a.usesScopedAction = true
+			}
+			for _, header := range inject {
+				if header.Placeholder != nil {
+					a.usesScopedAction = true
+				}
+			}
+			a.actions[name] = ProxyMITMHookActionsConfig{
+				StripRequestHeaders:    strip,
+				InjectRequestHeaders:   inject,
+				AWSSigV4:               awsSigV4,
+				BodySecretSubstitution: substitution,
+			}
 		}
 	}
 	if rawHooks, exists := mitm["hooks"]; exists {
@@ -419,6 +465,14 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 			host, ok := stringConfigValue(table, "host")
 			if !ok {
 				return fmt.Errorf("%s.mitm.hooks.%s.host must be a string", path, name)
+			}
+			schemes, err := optionalStringListConfigValue(table, "schemes")
+			if err != nil {
+				return fmt.Errorf("%s.mitm.hooks.%s: %w", path, name, err)
+			}
+			ports, err := portListConfigValue(table, "ports")
+			if err != nil {
+				return fmt.Errorf("%s.mitm.hooks.%s: %w", path, name, err)
 			}
 			methods, err := requiredStringListConfigValue(table, "methods")
 			if err != nil {
@@ -447,7 +501,10 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 			if rawBody, exists := table["body"]; exists {
 				body = &ProxyMITMHookBodyConfig{Raw: rawBody}
 			}
-			a.hooks[name] = proxyProfileMITMHook{path: path, host: host, methods: methods, paths: paths, query: query, headers: headers, body: body, actionRefs: actionRefs}
+			if len(schemes) > 0 || len(ports) > 0 {
+				a.usesScopedHook = true
+			}
+			a.hooks[name] = proxyProfileMITMHook{path: path, host: host, schemes: schemes, ports: ports, methods: methods, paths: paths, query: query, headers: headers, body: body, actionRefs: actionRefs}
 		}
 	}
 	return nil
@@ -456,6 +513,12 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 func (a *proxyProfileMITMAccumulator) runtimeHooks() ([]ProxyMITMHookConfig, error) {
 	if a == nil || len(a.hooks) == 0 {
 		return nil, nil
+	}
+	if a.version == nil && a.usesScopedAction {
+		return nil, fmt.Errorf("scoped MITM actions require network.mitm.version = 2")
+	}
+	if a.version == nil && a.usesScopedHook {
+		return nil, fmt.Errorf("scoped MITM hooks require network.mitm.version = 2")
 	}
 	names := make([]string, 0, len(a.hooks))
 	for name := range a.hooks {
@@ -479,10 +542,18 @@ func (a *proxyProfileMITMAccumulator) runtimeHooks() ([]ProxyMITMHookConfig, err
 				}
 				actions.AWSSigV4 = action.AWSSigV4
 			}
+			if action.BodySecretSubstitution != nil {
+				if actions.BodySecretSubstitution != nil {
+					return nil, fmt.Errorf("%s.mitm.hooks.%s must select at most one body substitution action", raw.path, name)
+				}
+				actions.BodySecretSubstitution = action.BodySecretSubstitution
+			}
 		}
 		hooks = append(hooks, ProxyMITMHookConfig{
 			Host: raw.host,
 			Match: ProxyMITMHookMatchConfig{
+				Schemes:      raw.schemes,
+				Ports:        raw.ports,
 				Methods:      raw.methods,
 				PathPrefixes: raw.paths,
 				Query:        raw.query,
@@ -533,6 +604,12 @@ func proxyMITMHookConfigFromTable(table map[string]any) (ProxyMITMHookConfig, er
 			return ProxyMITMHookConfig{}, err
 		}
 		var err error
+		if hook.Match.Schemes, err = optionalStringListConfigValue(match, "schemes"); err != nil {
+			return ProxyMITMHookConfig{}, err
+		}
+		if hook.Match.Ports, err = portListConfigValue(match, "ports"); err != nil {
+			return ProxyMITMHookConfig{}, err
+		}
 		hook.Match.Methods, err = requiredStringListConfigValue(match, "methods")
 		if err != nil {
 			return ProxyMITMHookConfig{}, err
@@ -567,6 +644,9 @@ func proxyMITMHookConfigFromTable(table map[string]any) (ProxyMITMHookConfig, er
 			return ProxyMITMHookConfig{}, err
 		}
 		if hook.Actions.AWSSigV4, err = awsSigV4ConfigValue(actions, "aws_sigv4", "network_proxy.mitm_hooks[].actions"); err != nil {
+			return ProxyMITMHookConfig{}, err
+		}
+		if hook.Actions.BodySecretSubstitution, err = bodySecretSubstitutionConfigValue(actions, "body_secret_substitution", "network_proxy.mitm_hooks[].actions"); err != nil {
 			return ProxyMITMHookConfig{}, err
 		}
 	}
@@ -618,6 +698,64 @@ func awsSigV4ConfigValue(values map[string]any, key string, path string) (*AWSSi
 		return nil, err
 	}
 	config.SessionToken = sessionToken
+	if value, exists := table["port"]; exists {
+		port, ok := numberConfigValue(value)
+		if !ok {
+			return nil, fmt.Errorf("%s.port must be an integer", configPath)
+		}
+		config.Port = port
+	}
+	if value, exists := table["max_body_bytes"]; exists {
+		size, ok := numberConfigValue(value)
+		if !ok {
+			return nil, fmt.Errorf("%s.max_body_bytes must be an integer", configPath)
+		}
+		config.MaxBodyBytes = size
+	}
+	return config, nil
+}
+
+// bodySecretSubstitutionConfigValue parses a body_secret_substitution action.
+func bodySecretSubstitutionConfigValue(values map[string]any, key string, path string) (*BodySecretSubstitutionConfig, error) {
+	raw, exists := values[key]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s.%s must be a table", path, key)
+	}
+	configPath := path + "." + key
+	if err := rejectProxyUnknownFields(table, configPath, proxyBodySubstitutionAllowedKeys); err != nil {
+		return nil, err
+	}
+	config := &BodySecretSubstitutionConfig{Port: bodySubstitutionDefaultPort, MaxBodyBytes: DefaultBodySubstitutionMaxBodyBytes}
+	rawReplacements, exists := table["replacements"]
+	if !exists {
+		return nil, fmt.Errorf("%s.replacements must be an array", configPath)
+	}
+	entries, ok := tableListFromAny(rawReplacements)
+	if !ok {
+		return nil, fmt.Errorf("%s.replacements must be an array", configPath)
+	}
+	for index, entry := range entries {
+		entryPath := fmt.Sprintf("%s.replacements[%d]", configPath, index)
+		if err := rejectProxyUnknownFields(entry, entryPath, proxyBodySubstitutionReplacementAllowedKeys); err != nil {
+			return nil, err
+		}
+		placeholder, ok := stringConfigValue(entry, "placeholder")
+		if !ok {
+			return nil, fmt.Errorf("%s.placeholder must be a string", entryPath)
+		}
+		secret, err := proxySecretSourceConfigValue(entry, "secret", entryPath)
+		if err != nil {
+			return nil, err
+		}
+		if secret == nil {
+			return nil, fmt.Errorf("%s.secret must define a secret source", entryPath)
+		}
+		config.Replacements = append(config.Replacements, BodySecretReplacement{Placeholder: placeholder, Secret: *secret})
+	}
 	if value, exists := table["port"]; exists {
 		port, ok := numberConfigValue(value)
 		if !ok {
@@ -703,6 +841,26 @@ func optionalStringListConfigValue(values map[string]any, key string) ([]string,
 	return requiredStringListConfigValue(values, key)
 }
 
+func portListConfigValue(values map[string]any, key string) ([]int, error) {
+	raw, exists := values[key]
+	if !exists {
+		return nil, nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array of integers", key)
+	}
+	ports := make([]int, 0, len(items))
+	for _, item := range items {
+		port, ok := numberConfigValue(item)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an array of integers", key)
+		}
+		ports = append(ports, port)
+	}
+	return ports, nil
+}
+
 func stringListMapConfigValue(values map[string]any, key string) (map[string][]string, error) {
 	raw, exists := values[key]
 	if !exists {
@@ -747,6 +905,9 @@ func injectedHeadersConfigValue(values map[string]any, key string) ([]ProxyInjec
 		}
 		if value, ok := stringConfigValue(table, "secret_file"); ok {
 			header.SecretFile = &value
+		}
+		if value, ok := stringConfigValue(table, "placeholder"); ok {
+			header.Placeholder = &value
 		}
 		result = append(result, header)
 	}
