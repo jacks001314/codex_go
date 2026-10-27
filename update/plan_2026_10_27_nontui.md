@@ -44,6 +44,7 @@ TUI lane and are not modified here.
 | `#55690` | Reclaim aged legacy marketplace staging directories | `plugin/marketplace_staging.go`, `plugin/marketplace_install.go`, `plugin/marketplace_staging_test.go` |
 | `#57251` | Native dollar thread usage in app-server `ThreadUsage` (core surface + coverage) | `appserver/runtime_router_test.go` (type/forwarding landed with `auth/account.go`, `appserver/runtime_router.go`) |
 | `#56553` | Thread-scoped `hooks/list` and `environmentId` in hook metadata | `appserver/hooks.go`, `appserver/runtime_router.go`, `appserver/hooks_runner.go`, like-Rust tests |
+| `#57186` | Fail closed on unreadable deny-glob search root metadata errors | `sandbox/linuxsandbox/bwrap.go`, `sandbox/linuxsandbox/unreadable_glob_root_test.go` |
 
 Grounding notes:
 
@@ -327,6 +328,14 @@ present, null for host-local hooks) instead of keeping the owner private, so
 the wire shape matches Rust's SDK surface. The TUI hooks browser switch to
 thread mode belongs to the TUI lane.
 
+`#57186` details: the ripgrep-backed deny-glob expander now inspects each
+search root before grouping patterns. A directory (including a symlinked
+directory, because `os.Stat` follows links) is scanned, an absent path or a
+path below a non-directory contributes no matches, and any other metadata
+failure rejects the whole expansion with the root and underlying error instead
+of dropping the deny rule. The in-process fallback already failed closed via
+`doublestar.WithFailOnIOErrors`.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -382,6 +391,9 @@ thread mode belongs to the TUI lane.
 - For `#56553`: `go test ./appserver -run 'Hook|hooks' -count=1`,
   `go test ./appserver -run 'Schema|ProtocolSurface' -count=1` and
   `go test ./app -run 'Hook' -count=1` pass.
+- For `#57186`: `go test ./sandbox/linuxsandbox -run 'InspectUnreadableGlobSearchRoot' -count=1`
+  passes; the symlink-loop and symlink-root cases skip on this Windows host
+  because creating symlinks needs a privilege it lacks.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

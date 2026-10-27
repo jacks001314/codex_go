@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"codex_go/install"
 	"codex_go/sandbox/sandboxpath"
@@ -297,6 +299,13 @@ func ExpandUnreadableGlobsInEnvironment(
 		if !ok {
 			continue
 		}
+		usable, err := inspectUnreadableGlobSearchRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		if !usable {
+			continue
+		}
 		index, exists := groupIndex[root]
 		if !exists {
 			index = len(groups)
@@ -361,6 +370,22 @@ func ExpandUnreadableGlobsInEnvironment(
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+// inspectUnreadableGlobSearchRoot reports whether a deny-glob search root can
+// be scanned. Following symlink roots is fine, but an inspection failure other
+// than a missing or non-directory root must reject the expansion so a deny is
+// never silently discarded (Rust #57186). Only absent or non-directory roots
+// have no matches.
+func inspectUnreadableGlobSearchRoot(root string) (bool, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to inspect unreadable glob search root %s: %w", root, err)
+	}
+	return info.IsDir(), nil
 }
 
 func splitUnreadableGlobForRipgrep(pattern, cwd string) (string, string, bool) {
