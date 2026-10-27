@@ -499,3 +499,14 @@ func TestRunJSONDiagnosticsFatalStartupEmitsTerminalRecord(t *testing.T) {
 		t.Fatalf("stderr lines = %d, want 1: %q", strings.Count(stderr.String(), "\n"), stderr.String())
 	}
 }
+
+// TestSessionBoundsDecodedResponseHeadersLikeRust pins Rust #56024: the HTTP/3
+// transport advertises and enforces a 64 KiB decoded field-section limit so
+// QPACK expansion cannot allocate an unbounded HeaderMap.
+func TestSessionBoundsDecodedResponseHeadersLikeRust(t *testing.T) {
+	s := newSession(&ProxyTarget{Host: "127.0.0.1", Port: 22, Authority: "127.0.0.1:22"})
+	defer s.close()
+	if s.transport.MaxResponseHeaderBytes != 64*1024 {
+		t.Fatalf("MaxResponseHeaderBytes = %d, want %d", s.transport.MaxResponseHeaderBytes, 64*1024)
+	}
+}

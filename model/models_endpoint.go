@@ -26,10 +26,6 @@ const modelsCacheFilename = "models_cache.json"
 // #46570), tagged by the authentication mode used for the fetch.
 const remoteModelsFetchUpdateDurationMetric = "codex.remote_models.fetch_update.duration_ms"
 
-// modelsCatalogMaxBytes bounds an explicitly configured provider catalog before
-// decoding or caching it (Rust MAX_MODEL_CATALOG_BYTES).
-const modelsCatalogMaxBytes = 1024 * 1024
-
 type ModelsEndpoint interface {
 	ListModels(ctx context.Context, etag string) (*ModelsEndpointResponse, error)
 }
@@ -151,16 +147,12 @@ func (e *HTTPModelsEndpoint) ListModels(ctx context.Context, etag string) (*Mode
 			NotModified: true,
 		}, nil
 	}
-	reader := io.Reader(response.Body)
-	if catalogURL != "" {
-		reader = io.LimitReader(response.Body, int64(modelsCatalogMaxBytes)+1)
-	}
-	body, err := io.ReadAll(reader)
+	// Rust #56525: an explicitly configured catalog has no response-body size
+	// limit. The native response is still validated after decoding, and
+	// provider diagnostics never include raw values.
+	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, err
-	}
-	if catalogURL != "" && len(body) > modelsCatalogMaxBytes {
-		return nil, fmt.Errorf("model catalog response exceeds %d bytes", modelsCatalogMaxBytes)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if catalogURL != "" {

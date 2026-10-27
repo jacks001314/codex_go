@@ -225,7 +225,7 @@ func TestFallbackBundledCatalogCarriesGPT6FamilyLikeRust(t *testing.T) {
 	}
 	wantLeading := []string{
 		"gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
-		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"gpt-5.6-sol", "gpt-6.1-terra", "gpt-5.6-terra", "gpt-5.6-luna",
 	}
 	if len(leading) < len(wantLeading) {
 		t.Fatalf("picker models = %#v, want at least %#v", leading, wantLeading)
@@ -290,9 +290,9 @@ func TestBedrockGPT56ModelsUseLongContextWindowLikeRust(t *testing.T) {
 	for _, model := range catalog.Models {
 		want := int64(272000)
 		switch model.Slug {
-		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT6SolModelID,
-			AmazonBedrockGPT6LunaModelID, AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID,
-			AmazonBedrockGPT56LunaModelID:
+		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT61TerraModelID,
+			AmazonBedrockGPT6SolModelID, AmazonBedrockGPT6LunaModelID, AmazonBedrockGPT56SolModelID,
+			AmazonBedrockGPT56TerraModelID, AmazonBedrockGPT56LunaModelID:
 			want = 872000
 		}
 		if model.MaxContextWindow != want {
@@ -1536,6 +1536,7 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
 	want := []string{
 		AmazonBedrockGPT61SolModelID,
 		AmazonBedrockGPT6AstraModelID,
+		AmazonBedrockGPT61TerraModelID,
 		AmazonBedrockGPT6SolModelID,
 		AmazonBedrockGPT6LunaModelID,
 		AmazonBedrockGPT56SolModelID,
@@ -1563,6 +1564,7 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
 	wantVersion := map[string]string{
 		AmazonBedrockGPT61SolModelID:   "v2",
 		AmazonBedrockGPT6AstraModelID:  "v2",
+		AmazonBedrockGPT61TerraModelID: "v2",
 		AmazonBedrockGPT6SolModelID:    "v2",
 		AmazonBedrockGPT6LunaModelID:   "v2",
 		AmazonBedrockGPT56SolModelID:   "v2",
@@ -1656,6 +1658,7 @@ func TestBedrockCatalogKeepsUltraReasoningLikeRust(t *testing.T) {
 			}
 		}
 		want := model.Slug == AmazonBedrockGPT61SolModelID || model.Slug == AmazonBedrockGPT6AstraModelID ||
+			model.Slug == AmazonBedrockGPT61TerraModelID ||
 			model.Slug == AmazonBedrockGPT6SolModelID ||
 			model.Slug == AmazonBedrockGPT56SolModelID || model.Slug == AmazonBedrockGPT56TerraModelID
 		if hasUltra != want {
@@ -1981,12 +1984,13 @@ func TestAmazonBedrockModelCatalogLikeRust(t *testing.T) {
 	}{
 		{AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol", 0},
 		{AmazonBedrockGPT6AstraModelID, "GPT-6-Astra", 1},
-		{AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 2},
-		{AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 3},
-		{AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 4},
-		{AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 5},
-		{AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 6},
-		{AmazonBedrockGPT55ModelID, "GPT-5.5", 7},
+		{AmazonBedrockGPT61TerraModelID, "GPT-6.1 Terra", 2},
+		{AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 3},
+		{AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 4},
+		{AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 5},
+		{AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 6},
+		{AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 7},
+		{AmazonBedrockGPT55ModelID, "GPT-5.5", 8},
 	}
 	if len(catalog.Models) != len(wantMetadata) {
 		t.Fatalf("bedrock catalog len = %d, want %d", len(catalog.Models), len(wantMetadata))
@@ -2006,14 +2010,18 @@ func TestAmazonBedrockModelCatalogLikeRust(t *testing.T) {
 		if model.WebSearchToolType != "text" {
 			t.Fatalf("%s WebSearchToolType = %q, want text", model.Slug, model.WebSearchToolType)
 		}
-		if model.ContextWindow != 272000 {
-			t.Fatalf("%s ContextWindow = %d, want 272000", model.Slug, model.ContextWindow)
+		wantContext := int64(272000)
+		if model.Slug == AmazonBedrockGPT61TerraModelID {
+			wantContext = 500000
+		}
+		if model.ContextWindow != wantContext {
+			t.Fatalf("%s ContextWindow = %d, want %d", model.Slug, model.ContextWindow, wantContext)
 		}
 		wantMax := int64(272000)
 		switch model.Slug {
-		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT6SolModelID,
-			AmazonBedrockGPT6LunaModelID, AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID,
-			AmazonBedrockGPT56LunaModelID:
+		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT61TerraModelID,
+			AmazonBedrockGPT6SolModelID, AmazonBedrockGPT6LunaModelID, AmazonBedrockGPT56SolModelID,
+			AmazonBedrockGPT56TerraModelID, AmazonBedrockGPT56LunaModelID:
 			wantMax = 872000
 		}
 		if model.MaxContextWindow != wantMax {
@@ -2071,18 +2079,20 @@ func TestAmazonBedrockRuntimeModelCatalogLikeRust(t *testing.T) {
 	}{
 		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol (Global)", 0},
 		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6AstraModelID, "GPT-6-Astra (Global)", 1},
-		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6SolModelID, "GPT-6 Sol (Global)", 2},
-		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6LunaModelID, "GPT-6 Luna (Global)", 3},
-		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol (Global)", 4},
-		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra (Global)", 5},
-		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna (Global)", 6},
-		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol (US cross-region)", 7},
-		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6AstraModelID, "GPT-6-Astra (US cross-region)", 8},
-		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6SolModelID, "GPT-6 Sol (US cross-region)", 9},
-		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6LunaModelID, "GPT-6 Luna (US cross-region)", 10},
-		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol (US cross-region)", 11},
-		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra (US cross-region)", 12},
-		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna (US cross-region)", 13},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61TerraModelID, "GPT-6.1 Terra (Global)", 2},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6SolModelID, "GPT-6 Sol (Global)", 3},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6LunaModelID, "GPT-6 Luna (Global)", 4},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol (Global)", 5},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra (Global)", 6},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna (Global)", 7},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol (US cross-region)", 8},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6AstraModelID, "GPT-6-Astra (US cross-region)", 9},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT61TerraModelID, "GPT-6.1 Terra (US cross-region)", 10},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6SolModelID, "GPT-6 Sol (US cross-region)", 11},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6LunaModelID, "GPT-6 Luna (US cross-region)", 12},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol (US cross-region)", 13},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra (US cross-region)", 14},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna (US cross-region)", 15},
 	}
 	if len(catalog.Models) != len(want) {
 		t.Fatalf("runtime catalog len = %d, want %d", len(catalog.Models), len(want))
@@ -2097,9 +2107,14 @@ func TestAmazonBedrockRuntimeModelCatalogLikeRust(t *testing.T) {
 			t.Fatalf("%s visibility = %q, want list", model.Slug, model.Visibility)
 		}
 		// The Runtime variants inherit the Mantle base metadata: GPT-5.5 has no
-		// cross-region variant, so every entry keeps the long-context window.
-		if model.ContextWindow != 272000 || model.MaxContextWindow != 872000 {
-			t.Fatalf("%s context window = %d/%d, want 272000/872000", model.Slug, model.ContextWindow, model.MaxContextWindow)
+		// cross-region variant, so every entry keeps the bundled long-context
+		// window; GPT-6.1 Terra's bundled window starts at 500k.
+		wantContext := int64(272000)
+		if strings.HasSuffix(model.Slug, AmazonBedrockGPT61TerraModelID) {
+			wantContext = 500000
+		}
+		if model.ContextWindow != wantContext || model.MaxContextWindow != 872000 {
+			t.Fatalf("%s context window = %d/%d, want %d/872000", model.Slug, model.ContextWindow, model.MaxContextWindow, wantContext)
 		}
 		if model.WebSearchToolType != "text" {
 			t.Fatalf("%s WebSearchToolType = %q, want text", model.Slug, model.WebSearchToolType)
@@ -2165,7 +2180,7 @@ func TestAmazonBedrockRuntimeCatalogDisablesWebSearchLikeRust(t *testing.T) {
 		// matching Rust's pinned runtime table.
 		wantVersion := ""
 		switch base {
-		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID,
+		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT61TerraModelID,
 			AmazonBedrockGPT6SolModelID, AmazonBedrockGPT6LunaModelID,
 			AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID:
 			wantVersion = "v2"
@@ -2209,6 +2224,7 @@ func TestBundledFallbackCarriesCatalogJSONBooleans(t *testing.T) {
 	// to the entries the Go fallback catalog mirrors.
 	const catalogJSON = `{"models":[
 		{"slug":"gpt-6.1-sol","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
+		{"slug":"gpt-6.1-terra","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
 		{"slug":"gpt-6-astra","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
 		{"slug":"gpt-6-sol","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
 		{"slug":"gpt-6-luna","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},

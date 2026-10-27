@@ -72,20 +72,51 @@ func TestResolveQueueSessionTargetUUIDLikeRust(t *testing.T) {
 }
 
 func TestRunSessionQueueRejectsImagesLikeRust(t *testing.T) {
-	var stdout strings.Builder
+	var stdout, stderr strings.Builder
 	err := runSessionQueue(&cli.QueueOptions{
 		Thread:  "thread-1",
 		Message: "hello",
 		Shared:  cli.SharedOptions{Images: []string{"screenshot.png"}},
-	}, nil, &stdout)
+	}, nil, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "does not support image attachments") {
 		t.Fatalf("runSessionQueue(images) error = %v", err)
 	}
 }
 
+// TestRunSessionQueueRejectsModelConfigOverrideLikeRust mirrors Rust #57273:
+// queued messages use the thread's model, so `-c model=...` is rejected in
+// either argument scope.
+func TestRunSessionQueueRejectsModelConfigOverrideLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts *cli.QueueOptions
+		root *cli.RootOptions
+	}{
+		{
+			name: "queue scope",
+			opts: &cli.QueueOptions{Thread: "t", Message: "hi", ConfigOverrides: []string{"model=gpt-5"}},
+		},
+		{
+			name: "spaced key",
+			opts: &cli.QueueOptions{Thread: "t", Message: "hi", ConfigOverrides: []string{" model = gpt-5"}},
+		},
+		{
+			name: "root scope",
+			opts: &cli.QueueOptions{Thread: "t", Message: "hi"},
+			root: &cli.RootOptions{ConfigOverrides: []string{"model=gpt-5"}},
+		},
+	} {
+		var stdout, stderr strings.Builder
+		err := runSessionQueue(tc.opts, tc.root, &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "does not support a `model` config override") {
+			t.Fatalf("%s error = %v", tc.name, err)
+		}
+	}
+}
+
 func TestRunSessionQueueRequiresMessageLikeRust(t *testing.T) {
-	var stdout strings.Builder
-	if err := runSessionQueue(&cli.QueueOptions{Thread: "thread-1", Message: "  "}, nil, &stdout); err == nil || !strings.Contains(err.Error(), "requires --message") {
+	var stdout, stderr strings.Builder
+	if err := runSessionQueue(&cli.QueueOptions{Thread: "thread-1", Message: "  "}, nil, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "requires --message") {
 		t.Fatalf("runSessionQueue(blank message) error = %v", err)
 	}
 }

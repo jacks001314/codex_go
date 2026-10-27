@@ -126,3 +126,54 @@ func TestModelMessagesParsesGuardianV2LikeRust(t *testing.T) {
 		t.Fatal("transcript was not retained")
 	}
 }
+
+// TestGranularApprovalMessagesParseRustWireNames mirrors Rust #57325: the
+// catalog's optional approvals.granular object preserves sparse template
+// strings verbatim, treats null as absent, and distinguishes an empty object
+// from a null value.
+func TestGranularApprovalMessagesParseRustWireNames(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "null", raw: `null`, want: ``},
+		{name: "empty object", raw: `{}`, want: `{}`},
+		{name: "null fields", raw: `{"intro":null,"prompted_categories":null,"rejected_categories":null}`, want: `{}`},
+		{name: "empty template", raw: `{"intro":""}`, want: `{"intro":""}`},
+		{
+			name: "populated",
+			raw:  `{"intro":"Catalog: {{ policy }}","prompted_categories":"Allowed: {{ categories }}","rejected_categories":"Denied: {{ categories }}"}`,
+			want: `{"intro":"Catalog: {{ policy }}","prompted_categories":"Allowed: {{ categories }}","rejected_categories":"Denied: {{ categories }}"}`,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			var messages ModelMessages
+			if err := json.Unmarshal([]byte(`{"approvals":{"on_request":"existing override","granular":`+test.raw+`}}`), &messages); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if messages.Approvals == nil || messages.Approvals.OnRequest == nil || *messages.Approvals.OnRequest != "existing override" {
+				t.Fatalf("approvals.on_request = %#v", messages.Approvals)
+			}
+			encoded, err := json.Marshal(messages.Approvals)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			var got map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &got); err != nil {
+				t.Fatalf("round-trip Unmarshal() error = %v", err)
+			}
+			granular, present := got["granular"]
+			if test.want == "" {
+				if present {
+					t.Fatalf("granular = %s, want absent", granular)
+				}
+				return
+			}
+			if !present || string(granular) != test.want {
+				t.Fatalf("granular = %s, want %s", granular, test.want)
+			}
+		})
+	}
+}

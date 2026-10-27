@@ -144,6 +144,25 @@ type ApprovalMessages struct {
 	OnRequestAutoReview *string `json:"on_request_auto_review,omitempty"`
 	Never               *string `json:"never,omitempty"`
 	UnlessTrusted       *string `json:"unless_trusted,omitempty"`
+	// Granular carries optional catalog templates for harness-owned granular
+	// approval facts (Rust #57325). The templates are preserved verbatim;
+	// validation and rendering are consumer concerns.
+	Granular *GranularApprovalMessages `json:"granular,omitempty"`
+}
+
+// GranularApprovalMessages mirrors Rust protocol::openai_models::
+// GranularApprovalMessages. The harness owns the policy and category lists, so
+// the catalog only supplies presentation around them.
+type GranularApprovalMessages struct {
+	// Intro must be at most 500 UTF-8 bytes and contain exactly one
+	// `{{ policy }}` marker; otherwise consumers use the bundled text.
+	Intro *string `json:"intro,omitempty"`
+	// PromptedCategories wraps `{{ categories }}`, including the fixed
+	// prompted-bucket label. Same byte limit and fallback rules as Intro.
+	PromptedCategories *string `json:"prompted_categories,omitempty"`
+	// RejectedCategories wraps `{{ categories }}`, including the fixed
+	// rejected-bucket label. Same byte limit and fallback rules as Intro.
+	RejectedCategories *string `json:"rejected_categories,omitempty"`
 }
 
 // PermissionMessages mirrors Rust protocol::openai_models::PermissionMessages:
@@ -1039,6 +1058,17 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
+				Slug: "gpt-6.1-terra", DisplayName: "GPT-6.1 Terra", Description: "GPT-6.1 Terra Codex model.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 7, BaseInstructions: BaseInstructions,
+				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
+				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+				ServiceTiers:             []string{"priority"},
+				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
+				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
+				UseResponsesLite: true, DefaultReasoningSummary: "none", SupportsReasoningEffortUpdates: true,
+				ContextWindow: 500000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
+				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
+			}, {
 				Slug: "gpt-6-sol", DisplayName: "GPT-6-Sol", Description: "Previous generation workhorse model.",
 				Visibility: VisibilityList, SupportedInAPI: true, Priority: 3, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
@@ -1210,12 +1240,13 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 			// supplied the GPT-6 Sol/Luna entries that predate it.
 			bedrockModel(bundled, "gpt-6.1-sol", AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol", 0),
 			bedrockModel(bundled, "gpt-6-astra", AmazonBedrockGPT6AstraModelID, "GPT-6-Astra", 1),
-			bedrockModel(bundled, "gpt-6-sol", AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 2),
-			bedrockModel(bundled, "gpt-6-luna", AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 3),
-			bedrockModel(bundled, "gpt-5.6-sol", AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 4),
-			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 5),
-			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 6),
-			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 7),
+			bedrockModel(bundled, "gpt-6.1-terra", AmazonBedrockGPT61TerraModelID, "GPT-6.1 Terra", 2),
+			bedrockModel(bundled, "gpt-6-sol", AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 3),
+			bedrockModel(bundled, "gpt-6-luna", AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 4),
+			bedrockModel(bundled, "gpt-5.6-sol", AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 5),
+			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 6),
+			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 7),
+			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 8),
 		},
 	}, bedrockEndpointMantle)
 }
@@ -1306,6 +1337,7 @@ const (
 // a Bedrock Runtime variant.
 var bedrockRuntimeBaseSlugs = map[string]bool{
 	AmazonBedrockGPT61SolModelID:   true,
+	AmazonBedrockGPT61TerraModelID: true,
 	AmazonBedrockGPT6AstraModelID:  true,
 	AmazonBedrockGPT6SolModelID:    true,
 	AmazonBedrockGPT6LunaModelID:   true,

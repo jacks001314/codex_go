@@ -2480,3 +2480,23 @@ func TestBuildToolRegistrySourcesMCPResourceCatalogEntriesLikeRust(t *testing.T)
 		t.Fatalf("invalid parameter override did not fall back: %#v", readSpec.InputSchema)
 	}
 }
+
+// TestShellSnapshotTelemetryModeLikeRust mirrors Rust #57235's four feature
+// combinations; v2 wins when both snapshot features are enabled.
+func TestShellSnapshotTelemetryModeLikeRust(t *testing.T) {
+	tests := []struct {
+		v1, v2 bool
+		want   string
+	}{
+		{false, false, "disabled"},
+		{true, false, "v1"},
+		{true, true, "v2"},
+		{false, true, "v2"},
+	}
+	for _, tc := range tests {
+		settings := map[string]bool{"shell_snapshot": tc.v1, "shell_snapshot_v2": tc.v2}
+		if got := ShellSnapshotTelemetryMode(settings); got != tc.want {
+			t.Fatalf("v1=%v v2=%v mode = %q, want %q", tc.v1, tc.v2, got, tc.want)
+		}
+	}
+}

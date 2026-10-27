@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
@@ -59,7 +60,7 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		return nil, invalidParams("sample source must be a persistent root thread")
 	}
 	if !threadSampleLatestTurnMatches(record, expectedTurnID) {
-		return nil, invalidParams("sample source turn is no longer the latest completed turn")
+		return nil, invalidParams("sample source turn must be the latest finished turn")
 	}
 	historyVersion, err := threadSampleHistoryVersion(record)
 	if err != nil {
@@ -112,6 +113,32 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		}
 	}
 	requestTrace := r.requestSpanTrace(request)
+	// Rust #56364: callers may override the ephemeral fork's thread source;
+	// thread_sample remains the default. The thread source and turn trigger are
+	// carried inside the turn-metadata document, which is also what the request
+	// body's client_metadata copy uses.
+	threadSource := threadSampleThreadSource
+	if params.ThreadSource != nil {
+		if override := strings.TrimSpace(*params.ThreadSource); override != "" {
+			threadSource = override
+		}
+	}
+	turnTrigger := ""
+	if params.TurnTrigger != nil {
+		turnTrigger = strings.TrimSpace(*params.TurnTrigger)
+	}
+	clientMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
+		SessionID:            threadID,
+		ThreadID:             threadID,
+		TurnID:               sampleTurnID,
+		RequestKind:          codexapi.ClientRequestTurn,
+		ThreadSource:         threadSource,
+		TurnTrigger:          turnTrigger,
+		CodexVersion:         appServerVersion(),
+		Model:                providerConfig.Model,
+		ReasoningEffort:      effort,
+		ResponsesAPIMetadata: params.ResponsesAPIClientMetadata,
+	})
 	agentRequest := &model.AgentRequest{
 		Prompt:          prompt,
 		Instructions:    instructions,
@@ -125,9 +152,7 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		ReasoningEffort: effort,
 		Trace:           requestTrace,
 		Ephemeral:       true,
-		ClientMetadata: map[string]string{
-			"thread_source": threadSampleThreadSource,
-		},
+		ClientMetadata:  clientMetadata,
 	}
 	agent := r.requireAgentForTurn(paramsForTurn)
 	sampleContext, cancel := context.WithTimeout(sampleBase, threadSampleTimeout)
@@ -242,7 +267,16 @@ func threadSampleLatestTurnMatches(record *session.Record, expectedTurnID string
 		return false
 	}
 	latest := turns[len(turns)-1]
-	return strings.TrimSpace(latest.ID) == expectedTurnID && strings.EqualFold(strings.TrimSpace(latest.Status), "completed")
+	if strings.TrimSpace(latest.ID) != expectedTurnID {
+		return false
+	}
+	// Rust #56020: completed, failed, and interrupted are all finished turns.
+	switch strings.ToLower(strings.TrimSpace(latest.Status)) {
+	case "completed", "failed", "interrupted":
+		return true
+	default:
+		return false
+	}
 }
 
 func threadSampleHistoryVersion(record *session.Record) (string, error) {

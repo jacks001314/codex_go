@@ -15371,6 +15371,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// login-shell launch (Feature::ShellSnapshot).
 	if options.Shell != nil {
 		options.Shell.SnapshotProvider = r.shellSnapshotProviderForTurn(threadID, cfg)
+		if cfg != nil {
+			options.Shell.ShellSnapshotMode = turn.ShellSnapshotTelemetryMode(cfg.FeatureSettings())
+		}
 	}
 	// Rust UnifiedExecProcessManager::new(config.background_terminal_max_timeout):
 	// the configured background-terminal timeout caps unified-exec yields.

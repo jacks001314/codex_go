@@ -194,6 +194,10 @@ var Registry = []Spec{
 	{Key: "browser_use_external", Stage: StageStable, DefaultEnabled: true},
 	{Key: "computer_use", Stage: StageStable, DefaultEnabled: true},
 	{Key: "remote_plugin", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #57249): app-server startup plugin
+	// discovery prefetch (directory, featured, recommendations). Stable and
+	// enabled by default; inventory-only hosts can turn it off.
+	{Key: "plugin_discovery_prefetch", Stage: StageStable, DefaultEnabled: true},
 	{Key: "plugin_sharing", Stage: StageStable, DefaultEnabled: true},
 	{Key: "external_migration", Stage: StageRemoved},
 	{Key: "image_generation", Stage: StageStable, DefaultEnabled: true},
@@ -294,6 +298,9 @@ var Registry = []Spec{
 	// control moved into the TUI configuration; the flag is deprecated.
 	{Key: "transcript_v2", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "content_item_kinds", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #57204): render client-supplied
+	// untrusted context as standalone named tool outputs.
+	{Key: "untrusted_as_tool_output", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "in_app_local_automation", Stage: StageStable, DefaultEnabled: true},

@@ -180,7 +180,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandFork:
 		return runSessionFork(&parsed.Session, &parsed.Root, stdout)
 	case cli.CommandQueue:
-		return runSessionQueue(&parsed.Queue, &parsed.Root, stdout)
+		return runSessionQueue(&parsed.Queue, &parsed.Root, stdout, stderr)
 	case cli.CommandTcpTunnel:
 		return tcptunnel.Run(ctx, &parsed.TcpTunnel.Args, stdin, stdout, stderr)
 	case cli.CommandAgents:

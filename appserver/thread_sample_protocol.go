@@ -9,7 +9,16 @@ type ThreadSampleParams struct {
 	ExpectedTurnID string  `json:"expectedTurnId"`
 	Prompt         string  `json:"prompt"`
 	Effort         *string `json:"effort,omitempty"`
-	TurnTrigger    *string `json:"turnTrigger,omitempty"`
+	// ThreadSource overrides the ephemeral fork's thread source (#56364).
+	// ThreadSource is a wire string: "user", "subagent", "guardian_review",
+	// "memory_consolidation", or a feature name such as
+	// "composer_predictions". The default is "thread_sample".
+	ThreadSource *string `json:"threadSource,omitempty"`
+	TurnTrigger  *string `json:"turnTrigger,omitempty"`
+	// ResponsesAPIClientMetadata enriches the sample turn's Responses API
+	// turn metadata (#56031). Reserved keys such as turn_trigger cannot
+	// override the explicit request fields.
+	ResponsesAPIClientMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
 }
 
 type ThreadSampleResponse struct {

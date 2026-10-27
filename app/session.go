@@ -1393,7 +1393,7 @@ type sessionPickerEntry struct {
 // thread/queue/add app-server API for an existing session, resolving the
 // session by UUID or exact name (preferring the most recent match) and routing
 // to a local or explicit remote app server.
-func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout io.Writer) error {
+func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout, stderr io.Writer) error {
 	if opts == nil {
 		return errors.New("queue options are required")
 	}
@@ -1404,6 +1404,18 @@ func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout io.Wr
 	}
 	if len(opts.Shared.Images) > 0 || (root != nil && len(root.Shared.Images) > 0) {
 		return errors.New("`codex queue` does not support image attachments")
+	}
+	// Rust #57273: queued messages use the thread's model, so a model config
+	// override is rejected even though other startup overrides are accepted.
+	var overrides []string
+	if root != nil {
+		overrides = append(overrides, root.ConfigOverrides...)
+	}
+	overrides = append(overrides, opts.ConfigOverrides...)
+	for _, entry := range overrides {
+		if key, _, found := strings.Cut(entry, "="); found && strings.TrimSpace(key) == "model" {
+			return errors.New("`codex queue` does not support a `model` config override; queued messages use the thread's model")
+		}
 	}
 	message := strings.TrimSpace(opts.Message)
 	if message == "" {
@@ -1425,12 +1437,12 @@ func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout io.Wr
 		return err
 	}
 	if endpoint != nil {
-		return runRemoteSessionQueue(context.Background(), endpoint, sessionOpts, message, stdout)
+		return runRemoteSessionQueue(context.Background(), endpoint, sessionOpts, message, opts.Resume, stdout, stderr)
 	}
-	return runLocalSessionQueue(sessionOpts, message, stdout)
+	return runLocalSessionQueue(sessionOpts, message, opts.Resume, stdout, stderr)
 }
 
-func runLocalSessionQueue(opts *cli.SessionOptions, message string, stdout io.Writer) error {
+func runLocalSessionQueue(opts *cli.SessionOptions, message string, resume bool, stdout, stderr io.Writer) error {
 	store := newSessionStore()
 	threadID, err := resolveQueueSessionTarget(store, opts)
 	if err != nil {
@@ -1452,10 +1464,16 @@ func runLocalSessionQueue(opts *cli.SessionOptions, message string, stdout io.Wr
 		return errors.New("queue submission response missing")
 	}
 	fmt.Fprintf(stdout, "Queued message %s for thread %s.\n", response.QueuedSubmission.ID, threadID)
+	if resume {
+		// Rust #57232: the local queue path uses an embedded app server, which
+		// cannot resume threads; the queued message still succeeds.
+		fmt.Fprintf(stderr, "Warning: message was queued, but could not resume thread %s: %v\n", threadID,
+			errors.New("start a local daemon or specify a server with --remote"))
+	}
 	return nil
 }
 
-func runRemoteSessionQueue(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, message string, stdout io.Writer) error {
+func runRemoteSessionQueue(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, message string, resume bool, stdout, stderr io.Writer) error {
 	client, err := openRemoteSessionClient(ctx, endpoint)
 	if err != nil {
 		return err
@@ -1484,7 +1502,36 @@ func runRemoteSessionQueue(ctx context.Context, endpoint *appserverdaemon.Remote
 		return errors.New("queue submission response missing")
 	}
 	fmt.Fprintf(stdout, "Queued message %s for thread %s.\n", response.QueuedSubmission.ID, threadID)
+	if resume {
+		if err := resumeRemoteThreadIfUnloaded(ctx, client, threadID); err != nil {
+			fmt.Fprintf(stderr, "Warning: message was queued, but could not resume thread %s: %v\n", threadID, err)
+		}
+	}
 	return nil
+}
+
+// resumeRemoteThreadIfUnloaded mirrors Rust session_queue_commands.rs
+// resume_if_unloaded (#57232): only a notLoaded thread is resumed, and only the
+// thread status is decoded from thread/read so remote metadata from another OS
+// cannot fail decoding.
+func resumeRemoteThreadIfUnloaded(ctx context.Context, client *remoteAppServerTUIClient, threadID string) error {
+	var read struct {
+		Thread struct {
+			Status appserver.ThreadStatus `json:"status"`
+		} `json:"thread"`
+	}
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadRead, appserver.ThreadReadParams{ThreadID: threadID}, &read); err != nil {
+		return fmt.Errorf("failed to read thread %s: %w", threadID, err)
+	}
+	// A fresh loaded thread can accept input before it has any history to resume.
+	if read.Thread.Status.Type != "" && read.Thread.Status.Type != "notLoaded" {
+		return nil
+	}
+	var ignored any
+	return remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{
+		ThreadID:     threadID,
+		ExcludeTurns: true,
+	}, &ignored)
 }
 
 // resolveQueueSessionTarget resolves the queue target as a UUID or as an exact

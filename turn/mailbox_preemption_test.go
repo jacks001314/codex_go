@@ -336,7 +336,11 @@ func TestAgentLoopDefersMailboxDeliveryForFinalAnswersOnlyLikeRust(t *testing.T)
 		defers bool
 	}{
 		{"final_answer", "final_answer", "The answer.", true},
+		// Rust #56133: an explicit final_answer is terminal even when empty.
+		{"empty_final_answer", "final_answer", "", true},
+		{"whitespace_final_answer", "final_answer", " \n\t", true},
 		{"untagged", "", "The answer.", true},
+		{"untagged_empty", "", "", false},
 		{"commentary", "commentary", "Working on it.", false},
 		{"partial_answer", "partial_answer", "Part of the answer.", false},
 	}

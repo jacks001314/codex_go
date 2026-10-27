@@ -24,11 +24,14 @@ import (
 const (
 	proxyConnectTimeout  = 10 * time.Second
 	quicHandshakeTimeout = 5 * time.Second
-	proxyIdleTimeout     = 30 * time.Second
-	proxyKeepAlive       = 10 * time.Second
-	initialRetryDelay    = time.Second
-	maxRetryDelay        = 15 * time.Second
-	bridgeCopyBufferSize = 64 * 1024
+	// maxDecodedResponseHeaders bounds decoded QPACK response field sections
+	// before they are materialized (Rust #56024); oversized responses are rejected.
+	maxDecodedResponseHeaders = 64 * 1024
+	proxyIdleTimeout          = 30 * time.Second
+	proxyKeepAlive            = 10 * time.Second
+	initialRetryDelay         = time.Second
+	maxRetryDelay             = 15 * time.Second
+	bridgeCopyBufferSize      = 64 * 1024
 )
 
 // EnableConnectProtocol is the HTTP/3 setting identifier for RFC 9220 extended
@@ -211,7 +214,9 @@ func newSession(target *ProxyTarget) *session {
 		QUICConfig:      s.quicConf,
 		// Advertise extended CONNECT (RFC 9220) like Rust's h3 client builder.
 		AdditionalSettings: map[uint64]uint64{enableConnectProtocol: 1},
-		Dial:               s.dial,
+		// h3 advertises and enforces the maximum decoded field-section size.
+		MaxResponseHeaderBytes: maxDecodedResponseHeaders,
+		Dial:                   s.dial,
 	}
 	return s
 }

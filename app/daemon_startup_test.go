@@ -215,7 +215,7 @@ func TestNoDaemonRejectionsLikeRust(t *testing.T) {
 		Thread:  "thread-1",
 		Message: "hi",
 		Shared:  cli.SharedOptions{NoDaemon: true},
-	}, nil, io.Discard); err == nil || !strings.Contains(err.Error(), "cannot be used with codex queue") {
+	}, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "cannot be used with codex queue") {
 		t.Fatalf("queue --no-daemon error = %v", err)
 	}
 

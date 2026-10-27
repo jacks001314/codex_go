@@ -26,7 +26,8 @@ func LastAssistantMessageFromItem(item *ResponseItem, planMode bool) (string, bo
 // codex-rs/core/src/stream_events_utils.rs
 // `completed_item_defers_mailbox_delivery_to_next_turn`: only a completed
 // assistant message that carries a user-visible answer (phase `final_answer`, or
-// untagged) defers queued mailbox mail to the next turn. Rust #51249 extended
+// untagged) defers queued mailbox mail to the next turn. Rust #56133 treats an
+// explicit `final_answer` as terminal regardless of visible text. Rust #51249 extended
 // the deferral rule's complement, so `commentary` and `partial_answer`
 // fragments keep mailbox delivery open instead of closing the turn, and every
 // non-message item (tool calls, image generation, reasoning) falls through to
@@ -39,7 +40,12 @@ func CompletedItemDefersMailboxDeliveryToNextTurn(item *ResponseItem, planMode b
 	if item.Kind != ResponseMessage || item.Role != "assistant" {
 		return false
 	}
-	if item.Phase != "" && item.Phase != "final_answer" {
+	// Rust #56133: an explicit final_answer is terminal even when its visible
+	// text is empty, so queued mailbox mail waits for the next turn.
+	if item.Phase == "final_answer" {
+		return true
+	}
+	if item.Phase != "" {
 		return false
 	}
 	_, ok := LastAssistantMessageFromItem(item, planMode)

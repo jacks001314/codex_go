@@ -78,6 +78,18 @@ type PermissionPromptApprovalMessages struct {
 	OnRequestAutoReview *string
 	Never               *string
 	UnlessTrusted       *string
+	// Granular carries the catalog's granular-approval templates (Rust
+	// #57325). Templates are preserved verbatim; consumers validate size and
+	// markers before rendering.
+	Granular *PermissionPromptGranularApprovalMessages
+}
+
+// PermissionPromptGranularApprovalMessages preserves the catalog's optional
+// granular-approval presentation templates.
+type PermissionPromptGranularApprovalMessages struct {
+	Intro              *string
+	PromptedCategories *string
+	RejectedCategories *string
 }
 
 // BuildPermissionPrompt ports Rust prompts::PermissionsInstructions: sections

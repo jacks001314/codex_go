@@ -538,8 +538,11 @@ type SessionOptions struct {
 // QueueOptions mirrors Rust cli/src/queue_cmd.rs QueueCommand (#39092):
 // submit a text message through thread/queue/add for an existing session.
 type QueueOptions struct {
-	Thread          string
-	Message         string
+	Thread  string
+	Message string
+	// Resume mirrors Rust queue_cmd.rs `--resume` (#57232): after queueing,
+	// ask the daemon or explicit --remote server to resume an unloaded thread.
+	Resume          bool
 	Remote          string
 	RemoteAuthEnv   string
 	Shared          SharedOptions
@@ -744,6 +747,11 @@ func (p *Parsed) Validate() error {
 	switch p.Command {
 	case CommandResume, CommandFork:
 		if err := validateTUISharedOptions(p.Session.Shared); err != nil {
+			return err
+		}
+	case CommandQueue:
+		remoteSpecified := strings.TrimSpace(p.Root.Remote) != "" || strings.TrimSpace(p.Queue.Remote) != ""
+		if err := validateQueueSharedOptions(p.Root.Shared, remoteSpecified); err != nil {
 			return err
 		}
 	}
@@ -2927,7 +2935,20 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 func parseQueue(args []string, queue *QueueOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		// Rust #57273: queue rejects inherited options that cannot affect a
+		// queued message, with dedicated wording for the common cases.
+		switch {
+		case arg == "--model" || arg == "-m" || strings.HasPrefix(arg, "--model=") || (strings.HasPrefix(arg, "-m") && arg != "-m"):
+			return errors.New("`codex queue` does not support `--model`; queued messages use the thread's model")
+		case arg == "--image" || arg == "-i" || strings.HasPrefix(arg, "--image="):
+			return errors.New("`codex queue` does not support image attachments")
+		}
 		if handled, err := parseSharedOption(args, &i, &queue.Shared); err != nil {
+			return err
+		} else if handled {
+			continue
+		}
+		if handled, err := parseTUIOnlyOption(args, &i, &queue.Shared); err != nil {
 			return err
 		} else if handled {
 			continue
@@ -2937,6 +2958,9 @@ func parseQueue(args []string, queue *QueueOptions) error {
 			// Rust's queue command CLI is TuiCli-based, so the flag parses and
 			// is then rejected unless an explicit --remote is supplied (#46088).
 			queue.Shared.NoDaemon = true
+		case arg == "--resume":
+			// Rust #57232: resume an unloaded thread after queueing.
+			queue.Resume = true
 		case arg == "--thread":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2989,8 +3013,11 @@ func parseQueue(args []string, queue *QueueOptions) error {
 		case strings.HasPrefix(arg, "-"):
 			return fmt.Errorf("unknown queue option %s", arg)
 		default:
-			return fmt.Errorf("`codex queue` does not accept positional arguments")
+			return errors.New("`codex queue` does not accept a positional prompt; use `--message`")
 		}
+	}
+	if err := validateQueueSharedOptions(queue.Shared, strings.TrimSpace(queue.Remote) != ""); err != nil {
+		return err
 	}
 	if strings.TrimSpace(queue.Thread) == "" {
 		return errors.New("`codex queue` requires --thread <THREAD>")
@@ -3001,6 +3028,41 @@ func parseQueue(args []string, queue *QueueOptions) error {
 	return nil
 }
 
+// validateQueueSharedOptions mirrors Rust queue_cmd.rs restricted_options
+// (#57273): queue accepts --remote, --remote-auth-token-env, --config,
+// --enable/--disable, --profile, --strict-config, --worktree, --no-daemon and
+// a local --cd, but rejects other inherited session options.
+func validateQueueSharedOptions(shared SharedOptions, remoteSpecified bool) error {
+	if remoteSpecified && shared.CWD != "" {
+		return errors.New("`codex queue` does not support `--cd` with `--remote`")
+	}
+	if shared.Model != "" {
+		return errors.New("`codex queue` does not support `--model`; queued messages use the thread's model")
+	}
+	if len(shared.Images) > 0 {
+		return errors.New("`codex queue` does not support image attachments")
+	}
+	for _, unsupported := range []struct {
+		name string
+		used bool
+	}{
+		{"--model-reasoning-effort", shared.ModelReasoningEffort != ""},
+		{"--sandbox", shared.Sandbox != ""},
+		{"--ask-for-approval", shared.ApprovalPolicy != ""},
+		{"--search", shared.Search},
+		{"--no-alt-screen", shared.NoAltScreen},
+		{"--oss", shared.OSS},
+		{"--local-provider", shared.OSSProvider != ""},
+		{"--add-dir", len(shared.AddDirs) > 0},
+		{"--dangerously-bypass-approvals-and-sandbox", shared.DangerouslyBypassApprovalsAndSandbox},
+		{"--dangerously-bypass-hook-trust", shared.DangerouslyBypassHookTrust},
+	} {
+		if unsupported.used {
+			return fmt.Errorf("`codex queue` does not support `%s`", unsupported.name)
+		}
+	}
+	return nil
+}
 func parseAgents(args []string, agents *AgentsOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]

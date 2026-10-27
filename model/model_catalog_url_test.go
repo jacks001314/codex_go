@@ -76,23 +76,11 @@ func TestModelsCatalogURLRejectsRelativeURLsLikeRust(t *testing.T) {
 	}
 }
 
-func TestModelsCatalogURLRejectsOversizedResponseLikeRust(t *testing.T) {
-	body := make([]byte, modelsCatalogMaxBytes+1)
-	copy(body, `{"models":[]}`)
-	server, _ := modelCatalogTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(body)
-	})
-	endpoint := &HTTPModelsEndpoint{CatalogURL: server.URL + "/codex/models"}
-	if _, err := endpoint.ListModels(context.Background(), ""); err == nil {
-		t.Fatal("oversized catalog response was accepted")
-	}
-}
-
-// Mirrors Rust #45822's opt-in contract: the body limit belongs to the explicit
-// catalog request and must not make ordinary models-endpoint calls bounded.
-func TestModelsCatalogBodyLimitOnlyAppliesToExplicitCatalogLikeRust(t *testing.T) {
+// Mirrors Rust #56525: an explicitly configured catalog may exceed the old
+// 1 MiB bound, while the ordinary models endpoint stays unbounded as well.
+func TestModelsCatalogAllowsLargeExplicitResponseLikeRust(t *testing.T) {
 	body := `{"models":[{"slug":"remote","display_name":"Remote","visibility":"list","supported_in_api":true}],"padding":"` +
-		strings.Repeat("x", modelsCatalogMaxBytes) + `"}`
+		strings.Repeat("x", 2*1024*1024) + `"}`
 	server, _ := modelCatalogTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body))
 	})
@@ -100,16 +88,19 @@ func TestModelsCatalogBodyLimitOnlyAppliesToExplicitCatalogLikeRust(t *testing.T
 	ordinary := &HTTPModelsEndpoint{Provider: &APIProvider{BaseURL: server.URL}}
 	response, err := ordinary.ListModels(context.Background(), "")
 	if err != nil {
-		t.Fatalf("ordinary models request became bounded: %v", err)
+		t.Fatalf("ordinary models request failed: %v", err)
 	}
 	if len(response.Models) != 1 || response.Models[0].Slug != "remote" {
 		t.Fatalf("ordinary models response = %#v", response.Models)
 	}
 
 	explicit := &HTTPModelsEndpoint{CatalogURL: server.URL + "/codex/models"}
-	if _, err := explicit.ListModels(context.Background(), ""); err == nil ||
-		!strings.Contains(err.Error(), "response exceeds") {
-		t.Fatalf("explicit catalog limit error = %v", err)
+	response, err = explicit.ListModels(context.Background(), "")
+	if err != nil {
+		t.Fatalf("explicit catalog was rejected: %v", err)
+	}
+	if len(response.Models) != 1 || response.Models[0].Slug != "remote" {
+		t.Fatalf("explicit catalog response = %#v", response.Models)
 	}
 }
 

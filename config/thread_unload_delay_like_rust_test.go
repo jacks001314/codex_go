@@ -5,11 +5,11 @@ import (
 	"time"
 )
 
-// Rust #52081 raises the default idle-thread unload delay to 30 minutes while
+// Rust #57242 reduces the default idle-thread unload delay to one minute while
 // keeping explicit overrides, including zero, authoritative.
-func TestThreadUnloadDelayDefaultsToThirtyMinutesLikeRust(t *testing.T) {
+func TestThreadUnloadDelayDefaultsToOneMinuteLikeRust(t *testing.T) {
 	var nilConfig *Config
-	if got := nilConfig.ThreadUnloadDelaySecs(); got != 30*time.Minute {
+	if got := nilConfig.ThreadUnloadDelaySecs(); got != time.Minute {
 		t.Fatalf("nil config unload delay = %v, want 30m", got)
 	}
 	tests := []struct {
@@ -17,12 +17,12 @@ func TestThreadUnloadDelayDefaultsToThirtyMinutesLikeRust(t *testing.T) {
 		value any
 		want  time.Duration
 	}{
-		{name: "absent", want: 30 * time.Minute},
+		{name: "absent", want: time.Minute},
 		{name: "zero", value: int64(0), want: 0},
 		{name: "explicit seconds", value: int64(60), want: time.Minute},
-		{name: "non-numeric falls back", value: "120", want: 30 * time.Minute},
-		{name: "negative falls back", value: int64(-1), want: 30 * time.Minute},
-		{name: "overflow falls back", value: int64(9223372036854775807), want: 30 * time.Minute},
+		{name: "non-numeric falls back", value: "120", want: time.Minute},
+		{name: "negative falls back", value: int64(-1), want: time.Minute},
+		{name: "overflow falls back", value: int64(9223372036854775807), want: time.Minute},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

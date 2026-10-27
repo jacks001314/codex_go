@@ -1154,3 +1154,18 @@ func TestOneShotExecReportsExit124OnTimeoutLikeRust(t *testing.T) {
 		t.Fatalf("one-shot timed-out exit code = %v, want 124", output.Data["exit_code"])
 	}
 }
+
+// TestShellExecutorTelemetryTagsSnapshotModeLikeRust mirrors Rust #57235: the
+// executor reports its configured shell snapshot mode, independent of whether
+// an individual command used a snapshot.
+func TestShellExecutorTelemetryTagsSnapshotModeLikeRust(t *testing.T) {
+	for _, mode := range []string{"disabled", "v1", "v2"} {
+		tags := NewShellExecutor(&ShellExecutorOptions{ShellSnapshotMode: mode}).TelemetryTags(&Invocation{ToolName: PlainName("exec_command")})
+		if tags["shell_snapshot_mode"] != mode {
+			t.Fatalf("mode %q tags = %#v", mode, tags)
+		}
+	}
+	if tags := NewShellExecutor(&ShellExecutorOptions{}).TelemetryTags(nil); len(tags) != 0 {
+		t.Fatalf("unconfigured tags = %#v", tags)
+	}
+}

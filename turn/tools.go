@@ -311,6 +311,19 @@ func registerMessageBoardTools(registry *tool.Registry, options *MessageBoardOpt
 	return nil
 }
 
+// ShellSnapshotTelemetryMode reports the configured shell snapshot mode for the
+// exec_command telemetry tag (Rust #57235): v2 takes precedence over v1, and
+// neither feature enabled means "disabled".
+func ShellSnapshotTelemetryMode(settings map[string]bool) string {
+	if featureflags.Enabled(settings, "shell_snapshot_v2") {
+		return "v2"
+	}
+	if featureflags.Enabled(settings, "shell_snapshot") {
+		return "v1"
+	}
+	return "disabled"
+}
+
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 	return &ToolRegistryOptions{
 		Shell: &tool.ShellExecutorOptions{
@@ -329,6 +342,7 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 				LoginShellPackagePath: featureflags.Enabled(nil, "login_shell_package_path"),
 				CWD:                   cwd,
 			},
+			ShellSnapshotMode: ShellSnapshotTelemetryMode(nil),
 		},
 		ApplyPatch:                   &tool.ApplyPatchExecutorOptions{CWD: cwd},
 		UnifiedExec:                  tool.NewUnifiedExecManager(),

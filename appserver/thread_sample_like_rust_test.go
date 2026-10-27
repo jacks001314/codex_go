@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/session"
 )
@@ -235,5 +236,111 @@ func initializeThreadSampleConnection(t *testing.T, router *RuntimeRouter, conne
 	})
 	if response.Error != nil {
 		t.Fatalf("initialize error = %+v", response.Error)
+	}
+}
+
+// TestThreadSampleAcceptsFinishedTurnStatusesLikeRust mirrors Rust #56020:
+// completed, failed, and interrupted latest turns are all valid sample sources.
+func TestThreadSampleAcceptsFinishedTurnStatusesLikeRust(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted", "Completed"} {
+		record := &session.Record{
+			ID:       "thread-status",
+			Metadata: session.Metadata{RolloutTurns: []session.TurnSnapshot{{ID: "turn-latest", Status: status}}},
+		}
+		if !threadSampleLatestTurnMatches(record, "turn-latest") {
+			t.Fatalf("status %q should be accepted", status)
+		}
+	}
+	for _, status := range []string{"inProgress", "active", "", "cancelled"} {
+		record := &session.Record{
+			ID:       "thread-status",
+			Metadata: session.Metadata{RolloutTurns: []session.TurnSnapshot{{ID: "turn-latest", Status: status}}},
+		}
+		if threadSampleLatestTurnMatches(record, "turn-latest") {
+			t.Fatalf("status %q should be rejected", status)
+		}
+	}
+	stale := &session.Record{
+		ID: "thread-status",
+		Metadata: session.Metadata{RolloutTurns: []session.TurnSnapshot{
+			{ID: "turn-old", Status: "completed"},
+			{ID: "turn-latest", Status: "failed"},
+		}},
+	}
+	if threadSampleLatestTurnMatches(stale, "turn-old") {
+		t.Fatal("a non-latest turn should be rejected")
+	}
+}
+
+// TestThreadSampleThreadSourceAndResponsesMetadataLikeRust mirrors Rust
+// #56031/#56364: the caller's thread source and Responses API metadata are
+// applied to the sample turn metadata, while reserved keys cannot override the
+// explicit turn trigger.
+func TestThreadSampleThreadSourceAndResponsesMetadataLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	record := &session.Record{
+		ID: "thread-sample-metadata",
+		Metadata: session.Metadata{
+			CWD:          home,
+			Model:        "gpt-test",
+			RolloutTurns: []session.TurnSnapshot{{ID: "turn-latest", Status: "interrupted"}},
+		},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	agent := &threadSampleRecordingAgent{response: &model.AgentResponse{ResponseID: "resp-sample"}}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Agent: agent, DefaultCWD: home})
+	if err := router.threads.RetainLiveThread(store, record); err != nil {
+		t.Fatal(err)
+	}
+	router.experimentalAPI = map[string]bool{"conn-1": true}
+	initializeThreadSampleConnection(t, router, "conn-1")
+
+	threadSource := "composer_predictions"
+	turnTrigger := "composer_predictions"
+	response := router.Handle(&Request{
+		JSONRPC:      "2.0",
+		ID:           IntID(1),
+		Method:       MethodThreadSample,
+		ConnectionID: "conn-1",
+		Params: mustJSON(t, ThreadSampleParams{
+			ThreadID:       string(record.ID),
+			ExpectedTurnID: "turn-latest",
+			Prompt:         "sample",
+			ThreadSource:   &threadSource,
+			TurnTrigger:    &turnTrigger,
+			ResponsesAPIClientMetadata: map[string]string{
+				"generation_trigger": "composer_prediction",
+				"turn_trigger":       "client-supplied",
+				"thread_source":      "client-supplied",
+			},
+		}),
+	})
+	if response.Error != nil {
+		t.Fatalf("thread/sample error = %+v", response.Error)
+	}
+	agent.mu.Lock()
+	request := agent.request
+	agent.mu.Unlock()
+	if request == nil {
+		t.Fatal("agent request missing")
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]), &metadata); err != nil {
+		t.Fatalf("turn metadata = %q: %v", request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader], err)
+	}
+	if metadata["thread_source"] != "composer_predictions" {
+		t.Fatalf("thread_source = %#v", metadata["thread_source"])
+	}
+	if metadata["turn_trigger"] != "composer_predictions" {
+		t.Fatalf("turn_trigger = %#v", metadata["turn_trigger"])
+	}
+	if metadata["generation_trigger"] != "composer_prediction" {
+		t.Fatalf("generation_trigger = %#v", metadata["generation_trigger"])
+	}
+	if metadata["model"] != "gpt-test" {
+		t.Fatalf("model = %#v", metadata["model"])
 	}
 }

@@ -93,6 +93,13 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 				Never:               messages.Never,
 				UnlessTrusted:       messages.UnlessTrusted,
 			}
+			if granular := messages.Granular; granular != nil {
+				options.ApprovalMessages.Granular = &sandbox.PermissionPromptGranularApprovalMessages{
+					Intro:              granular.Intro,
+					PromptedCategories: granular.PromptedCategories,
+					RejectedCategories: granular.RejectedCategories,
+				}
+			}
 		}
 		if messages := modelInfo.ModelMessages.Permissions; messages != nil {
 			options.PermissionMessages = &sandbox.PermissionPromptPermissionMessages{

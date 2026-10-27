@@ -29,6 +29,20 @@ func TestAssistantMarkupAndDeferral(t *testing.T) {
 	}
 	// Rust's match arm only defers assistant messages: a reasoning item and an
 	// image generation item fall through to `_ => false`.
+	// Rust #56133: an explicit final_answer with empty or whitespace-only text is
+	// still terminal, while an untagged empty message is not.
+	emptyFinal := &ResponseItem{Kind: ResponseMessage, Role: "assistant", Phase: "final_answer"}
+	if !CompletedItemDefersMailboxDeliveryToNextTurn(emptyFinal, true) {
+		t.Fatalf("empty final_answer should defer")
+	}
+	whitespaceFinal := &ResponseItem{Kind: ResponseMessage, Role: "assistant", Phase: "final_answer", Content: []ContentItem{{Kind: ContentOutputText, Text: " \n\t"}}}
+	if !CompletedItemDefersMailboxDeliveryToNextTurn(whitespaceFinal, true) {
+		t.Fatalf("whitespace final_answer should defer")
+	}
+	emptyUntagged := &ResponseItem{Kind: ResponseMessage, Role: "assistant"}
+	if CompletedItemDefersMailboxDeliveryToNextTurn(emptyUntagged, true) {
+		t.Fatalf("untagged empty message should not defer")
+	}
 	item.Phase = ""
 	if CompletedItemDefersMailboxDeliveryToNextTurn(&ResponseItem{Kind: ResponseReasoning}, true) {
 		t.Fatalf("reasoning should not defer")

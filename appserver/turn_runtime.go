@@ -9585,6 +9585,11 @@ func (r *RuntimeRouter) prewarmSuggestedPluginsForThreadStart(cfg *config.Config
 		!features.PluginRecommendationsEnabled(cfg.FeatureSettings()) {
 		return
 	}
+	// Rust #57249: plugin_discovery_prefetch is stable and enabled by default;
+	// inventory-only hosts can disable startup discovery requests.
+	if !features.Enabled(cfg.FeatureSettings(), "plugin_discovery_prefetch") {
+		return
+	}
 	r.configureSuggestedPluginProviderForTurn(cfg)
 	service := r.services.Plugins
 	go func() {

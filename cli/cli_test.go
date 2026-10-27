@@ -133,6 +133,55 @@ func TestParseQueueCommandRejectsInvalidLikeRust(t *testing.T) {
 	}
 }
 
+// TestParseQueueRejectsUnsupportedOptionsLikeRust mirrors Rust #57273:
+// inherited session options are rejected in both argument scopes, and model /
+// image / positional cases get dedicated wording.
+func TestParseQueueRejectsUnsupportedOptionsLikeRust(t *testing.T) {
+	base := []string{"--thread", "t", "--message", "hi"}
+	withBase := func(extra ...string) []string {
+		return append(append([]string{"queue"}, base...), extra...)
+	}
+	tests := []struct {
+		args    []string
+		wantErr string
+	}{
+		{withBase("--model", "gpt-5"), "does not support `--model`"},
+		{withBase("--model=gpt-5"), "does not support `--model`"},
+		{withBase("-m", "gpt-5"), "does not support `--model`"},
+		{withBase("-mgpt-5"), "does not support `--model`"},
+		{append([]string{"--model", "gpt-5", "queue"}, base...), "does not support `--model`"},
+		{withBase("--image", "shot.png"), "does not support image attachments"},
+		{withBase("-i", "shot.png"), "does not support image attachments"},
+		{withBase("--sandbox", "read-only"), "does not support `--sandbox`"},
+		{withBase("--ask-for-approval", "never"), "does not support `--ask-for-approval`"},
+		{withBase("--add-dir", "/tmp"), "does not support `--add-dir`"},
+		{withBase("--search"), "does not support `--search`"},
+		{withBase("--oss"), "does not support `--oss`"},
+		{withBase("--remote", "ws://127.0.0.1:1234", "--cd", "/tmp"), "does not support `--cd` with `--remote`"},
+		{append([]string{"--cd", "/tmp", "queue"}, append([]string{"--remote", "ws://127.0.0.1:1234"}, base...)...), "does not support `--cd` with `--remote`"},
+		{append([]string{"queue"}, append([]string{"--thread", "t", "--message", "hi", "prompt"})...), "positional prompt"},
+	}
+	for _, tc := range tests {
+		_, err := Parse(tc.args)
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("Parse(%v) error = %v, want %q", tc.args, err, tc.wantErr)
+		}
+	}
+
+	// Allowed inherited options still parse, including a local --cd, profile,
+	// config override, feature toggles, and --resume.
+	parsed, err := Parse([]string{"--enable", "foo", "queue", "--thread", "t", "--message", "hi", "--resume", "--cd", "/tmp", "--profile", "work", "-c", "key=value"})
+	if err != nil {
+		t.Fatalf("Parse(queue allowed) error = %v", err)
+	}
+	if !parsed.Queue.Resume || parsed.Queue.Shared.CWD != filepath.Clean("/tmp") || parsed.Queue.Shared.Profile != "work" {
+		t.Fatalf("queue options = %#v", parsed.Queue)
+	}
+	if len(parsed.Queue.ConfigOverrides) != 1 || parsed.Queue.ConfigOverrides[0] != "key=value" {
+		t.Fatalf("queue config overrides = %#v", parsed.Queue.ConfigOverrides)
+	}
+}
+
 func TestRustSubcommandAliasParity(t *testing.T) {
 	// Rust visible_alias/alias attributes in codex-rs/cli/src/main.rs:
 	// exec -> e, apply -> a, cloud -> cloud-tasks.

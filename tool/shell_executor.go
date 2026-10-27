@@ -92,6 +92,10 @@ type ShellExecutorOptions struct {
 	// `shell_snapshot`, which the launch replays before the model's script). Its
 	// result also carries the Rust #51347 command-level observation hook.
 	SnapshotProvider func(ctx context.Context, request SnapshotProviderRequest) SnapshotProviderResult
+	// ShellSnapshotMode is the configured shell snapshot mode reported as the
+	// `shell_snapshot_mode` telemetry tag (Rust #57235): "disabled", "v1", or
+	// "v2". It records configuration, not whether a launch used a snapshot.
+	ShellSnapshotMode string
 	// PluginMeasurementTracker publishes a validated plugin measurement batch.
 	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	// ModelContext reports the resolved model and reasoning effort that invoked a
@@ -141,6 +145,7 @@ type ShellExecutor struct {
 	managedNetworkResolver   ManagedNetworkResolver
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) SnapshotProviderResult
+	shellSnapshotMode        string
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	modelContext             func() (modelSlug string, reasoningEffort string)
 	grantedPermissions       func(turnID, environmentID string) *sandbox.AdditionalPermissionProfile
@@ -218,6 +223,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
 	executor.pluginMetricsResolver = options.PluginMetricsResolver
 	executor.snapshotProvider = options.SnapshotProvider
+	executor.shellSnapshotMode = strings.TrimSpace(options.ShellSnapshotMode)
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
 	executor.modelContext = options.ModelContext
 	executor.grantedPermissions = options.GrantedPermissions
@@ -1328,6 +1334,15 @@ func (e *ShellExecutor) hasUsableEnvironment() bool {
 		return e.environmentCheck.ReadyEnvironmentCount > 0
 	}
 	return e != nil && len(e.unifiedExecEnvironments) > 0
+}
+
+// TelemetryTags reports the configured shell snapshot mode so commands that fall
+// back without using a snapshot stay in their rollout cohort (Rust #57235).
+func (e *ShellExecutor) TelemetryTags(_ *Invocation) map[string]string {
+	if e == nil || e.shellSnapshotMode == "" {
+		return nil
+	}
+	return map[string]string{"shell_snapshot_mode": e.shellSnapshotMode}
 }
 
 func (e *ShellExecutor) PreToolUsePayload(invocation *Invocation) (*PreToolUsePayload, bool) {
