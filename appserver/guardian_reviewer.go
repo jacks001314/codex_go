@@ -148,6 +148,10 @@ type modelGuardianReviewer struct {
 	latestResponseID      func(threadID, turnID string) string
 	nodeReplEvidence      func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
 	rootUserAuthorization func(threadID, turnID string) []state.RootMessage
+	// syncImageContextWindow resolves the review model's usable context window.
+	// Rust #57494 admits synchronous Guardian images only when the prompt stays
+	// within the fixed image budget and the window minus reviewer history.
+	syncImageContextWindow func(threadID, modelID string) (int64, bool)
 	// retainedContext resolves the thread's retained evidence, which the review
 	// prompt renders as the retained user-instruction section (Rust's
 	// SectionHistory::retained_context and the RetainedUserInstructionsSection).
@@ -398,6 +402,10 @@ type guardianSessionRunner struct {
 	// completedReviews mirrors Rust's ConversationState::completed_review_count.
 	// A failed review may admit its input without counting as completed (#54264).
 	completedReviews int
+	// lastUsage is the reviewer's most recent total token usage. Rust #57494
+	// measures reviewer history before admitting new images; the last completed
+	// response is the closest host-owned equivalent in Go.
+	lastUsage int64
 }
 
 type guardianReviewHistoryCheckpoint struct {
@@ -580,7 +588,37 @@ func (r *guardianSessionRunner) Run(ctx context.Context, request *model.AgentReq
 	if err == nil && response != nil && strings.TrimSpace(response.ResponseID) != "" {
 		r.previous = strings.TrimSpace(response.ResponseID)
 	}
+	if err == nil && response != nil {
+		r.lastUsage = model.AgentUsageTotalTokens(response.Usage)
+	}
 	return response, err
+}
+
+func (r *guardianSessionRunner) lastUsageTokens() int64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastUsage
+}
+
+// RunIsolated mirrors Rust ReviewerPool::review_isolated (#57522): one review
+// in a temporary session that neither reads nor replaces the reusable reviewer.
+// The request is built without a previous response or cached snapshot, so the
+// prewarmed session stays available for the next regular review.
+func (r *guardianSessionRunner) RunIsolated(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if r == nil || r.agent == nil {
+		return nil, errors.New("guardian session runner is unavailable")
+	}
+	if request == nil {
+		return nil, errors.New("guardian request is nil")
+	}
+	clone := *request
+	clone.ClientMetadata = cloneStringMap(request.ClientMetadata)
+	clone.PreviousResponseID = ""
+	clone.Store = false
+	return r.agent.Run(ctx, &clone)
 }
 
 // ResetAfterParentCompaction restarts the review session seeded with the
@@ -1002,6 +1040,7 @@ reviewAttempt:
 		reviewedEvidence    uint64
 		hasReviewedEvidence bool
 	)
+	imageItemStart := len(inputItems)
 	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
 		// Rust ComposedContext::retain_new_images (#54278): a reviewer that already
 		// admitted an image must not be shown it again. The host-prepared reference
@@ -1023,6 +1062,7 @@ reviewAttempt:
 		admittedLedger = ledger
 		admittedImages = newImages
 	}
+	imageItemEnd := len(inputItems)
 	if nodeReplEvidence != nil {
 		reviewedEvidence = nodeReplEvidence.Sequence()
 		hasReviewedEvidence = true
@@ -1044,6 +1084,26 @@ reviewAttempt:
 	if fragment := codexctx.NewGuardianPolicy(plan.Instructions); fragment != nil {
 		if item := buildRenderedMessage(codexctx.Render(fragment)); item != nil {
 			inputItems = append(inputItems, item)
+		}
+	}
+	// Rust prepare_sync_images (#57494): the complete prompt must stay within the
+	// fixed image-item budget and the review model's remaining context window.
+	// A missing window is treated as unknown and rejects new images.
+	if imageItemEnd > imageItemStart {
+		promptTokens := guardianInputItemsTokenCount(inputItems)
+		historyTokens := int64(0)
+		contextWindow := int64(0)
+		windowKnown := false
+		if r.syncImageContextWindow != nil {
+			contextWindow, windowKnown = r.syncImageContextWindow(threadID, plan.Selection.Model)
+		}
+		if runner, ok := r.agent.(*guardianSessionRunner); ok {
+			historyTokens = runner.lastUsageTokens()
+		}
+		if !guardianAdmitImages(promptTokens, historyTokens, contextWindow, windowKnown) {
+			inputItems = append(inputItems[:imageItemStart:imageItemStart], inputItems[imageItemEnd:]...)
+			admittedLedger = nil
+			admittedImages = nil
 		}
 	}
 	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
@@ -1795,12 +1855,41 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 		if label == "" {
 			label = role
 		}
+		// Rust #57519: keep scheduler provenance on the collected entry. Sync
+		// compression runs over the complete transcript before suffix selection;
+		// async consumers compress during this collection pass.
+		scheduled := false
+		var heartbeat *state.TranscriptHeartbeat
+		if kind == state.GuardianTranscriptUser {
+			origin := retainedctx.UserInputOriginFromMessage(role, sessionItemContentItemKinds(&item))
+			if origin == retainedctx.UserInputOriginHeartbeat {
+				scheduled = true
+				if parsed, ok := retainedctx.HeartbeatFromMessage(origin, []string{text}); ok {
+					heartbeat = &state.TranscriptHeartbeat{
+						AutomationID: parsed.AutomationID,
+						Timestamp:    parsed.Timestamp,
+						Instructions: parsed.Instructions,
+					}
+				}
+			}
+		}
 		evidence = append(evidence, state.TranscriptEvidenceEntry{
 			Kind:          kind,
 			Role:          label,
 			Text:          limited,
 			OriginalBytes: len(text),
+			Scheduled:     scheduled,
+			Heartbeat:     heartbeat,
 		})
+	}
+	state.CompressGuardianTranscriptHeartbeats(evidence, 0)
+	// Collection keeps entries and evidence parallel; mirror compressed scheduler
+	// text onto the host-attributed entries the prompt renders. Native entries
+	// carry ciphertext instead of text and are never scheduler messages.
+	for index := range entries {
+		if len(entries[index].Native) == 0 {
+			entries[index].Text = evidence[index].Text
+		}
 	}
 	rendered := profile.RenderTranscript(evidence, 0)
 	retained := make([]state.GuardianTranscriptEntry, 0, len(rendered.Indices))
@@ -2508,6 +2597,38 @@ func latestGuardianParentCompactionItem(compacted *compact.Result) *compact.Item
 
 // guardianMaxReviewAttempts mirrors Rust's MAX_REVIEW_ATTEMPTS.
 const guardianMaxReviewAttempts = 3
+
+// guardianMaxImagePromptTokens is Rust's GUARDIAN_MAX_IMAGE_ITEM_TOKENS: a
+// synchronous Guardian prompt above this estimate admits no new images.
+const guardianMaxImagePromptTokens = 10_000
+
+// guardianInputItemsTokenCount estimates the review prompt's token cost from
+// the serialized user-input items, matching the context-window accounting the
+// image admission check needs.
+func guardianInputItemsTokenCount(items []any) int64 {
+	var total int64
+	for _, item := range items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return math.MaxInt64
+		}
+		total += int64(utils.ApproxTokenCount(string(encoded)))
+	}
+	return total
+}
+
+// guardianAdmitImages applies Rust prepare_sync_images' admission rule. A known
+// context window must leave room for both the prompt and reviewer history; when
+// no resolver is wired (unit-level reviewers), only the item budget applies.
+func guardianAdmitImages(promptTokens, historyTokens, contextWindow int64, windowKnown bool) bool {
+	if promptTokens > guardianMaxImagePromptTokens {
+		return false
+	}
+	if !windowKnown {
+		return true
+	}
+	return promptTokens+historyTokens <= contextWindow
+}
 
 // guardianReviewRetryDelay mirrors wait_before_guardian_retry's service
 // backoff: 200ms * 2^(attempt-1) with a 0.9..1.1 jitter. Stale-context retries

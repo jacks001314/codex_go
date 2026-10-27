@@ -177,7 +177,16 @@ func incrementalDeclarationItemObject(item *session.Item) map[string]any {
 // are already in history instead of re-deriving and duplicating them, while a
 // later declaration change still travels as an incremental update.
 func placeIncrementalCatalogBeforeCompactedHistory(record *session.Record, prefix []session.Item, windowNumber uint64, modelID string, instructions *string) error {
-	if record == nil || len(prefix) == 0 {
+	if record == nil {
+		return nil
+	}
+	// Rust #57262: compaction starts a fresh skill catalog listing and resets
+	// its metadata budget, so the incremental snapshots are dropped here even
+	// when this window carries no declaration prefix.
+	if err := clearSkillCatalogSnapshots(record); err != nil {
+		return err
+	}
+	if len(prefix) == 0 {
 		return nil
 	}
 	definitions, recordedInstructions, ok := incrementalDeclarationPrefixParts(prefix)

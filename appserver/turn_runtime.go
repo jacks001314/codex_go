@@ -10284,34 +10284,48 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 		return strings.TrimSpace(instructions), skillInputItems, postToolInputItems, nil
 	}
 	includeUsageInstructions := r.includeSkillsUsageInstructionsForTurn(cfg, params)
+	// Rust #57500: omit descriptions from every model-visible skill catalog.
+	omitSkillDescriptions := cfg != nil && features.Enabled(cfg.FeatureSettings(), "omit_skill_descriptions")
+	// Rust #57262: publish incremental skill catalogs behind their own flag.
+	skillCatalogDeltas := cfg != nil && features.Enabled(cfg.FeatureSettings(), "skill_catalog_deltas")
+	skillBudget := skillMetadataBudgetForConfig(cfg, r.skillContextWindowForTurn(cfg, params))
 	executorMetadata := append(append(append([]promptctx.InstructionsSkillMetadata(nil), orchestratorMetadata...), selectedCapabilitySkillMetadata...), customMetadata...)
 	hostAvailable, executorAvailable := promptctx.RenderCombinedAvailableSkills(
 		hostSkillMetadata,
 		executorMetadata,
 		promptctx.AvailableSkillsRenderOptions{
-			Budget:                   skillMetadataBudgetForConfig(cfg, r.skillContextWindowForTurn(cfg, params)),
+			Budget:                   skillBudget,
 			IncludeUsageInstructions: includeUsageInstructions,
 			AliasScope:               threadID,
 			CloudSkillsComplete:      orchestratorComplete,
+			OmitDescriptions:         omitSkillDescriptions,
 		},
 	)
 	r.recordSkillCatalogRender(skillCatalogSurfaceTurnInput, skillRenderReportOf(hostAvailable))
 	r.recordSkillCatalogRender(skillCatalogSurfaceExecutorWorld, skillRenderReportOf(executorAvailable))
-	for _, available := range []*promptctx.AvailableSkills{hostAvailable, executorAvailable} {
-		if available != nil && available.WarningMessage != nil && strings.TrimSpace(*available.WarningMessage) != "" {
-			r.notify(NotificationWarning, &WarningNotification{
-				ThreadID: stringPtrIfNotEmpty(threadID),
-				Message:  strings.TrimSpace(*available.WarningMessage),
-			})
-		}
-	}
 	skillInputItems := r.explicitSkillInputItemsForTurnWithProvider(ctx, threadID, turnID, modelID, cfg, params, skillMetadata, executorSkillProviders)
 	rendered := make([]string, 0, 3)
-	if hostAvailable != nil {
-		rendered = append(rendered, hostAvailable.Body)
-	}
-	if executorAvailable != nil {
-		rendered = append(rendered, executorAvailable.Body)
+	if skillCatalogDeltas {
+		hostBody, executorBody, err := r.incrementalSkillCatalogBodies(threadID, skillBudget, includeUsageInstructions, hostAvailable, executorAvailable)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		rendered = append(rendered, hostBody, executorBody)
+	} else {
+		for _, available := range []*promptctx.AvailableSkills{hostAvailable, executorAvailable} {
+			if available != nil && available.WarningMessage != nil && strings.TrimSpace(*available.WarningMessage) != "" {
+				r.notify(NotificationWarning, &WarningNotification{
+					ThreadID: stringPtrIfNotEmpty(threadID),
+					Message:  strings.TrimSpace(*available.WarningMessage),
+				})
+			}
+		}
+		if hostAvailable != nil {
+			rendered = append(rendered, hostAvailable.Body)
+		}
+		if executorAvailable != nil {
+			rendered = append(rendered, executorAvailable.Body)
+		}
 	}
 	rendered = append(rendered, instructions)
 	return strings.Join(nonEmpty(rendered), "\n\n"), skillInputItems, postToolInputItems, nil

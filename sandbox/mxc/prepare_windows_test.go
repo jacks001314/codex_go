@@ -7,7 +7,43 @@ import (
 	"testing"
 
 	"codex_go/sandbox"
+	"codex_go/sandbox/windowssandbox"
 )
+
+// TestExpandVolumeRootPathsSkipsBrokenLinksLikeRust pins Rust #57515: only
+// symbolic links are probed, unresolvable targets are skipped, and ordinary
+// children plus valid links keep their generated grants.
+func TestExpandVolumeRootPathsSkipsBrokenLinksLikeRust(t *testing.T) {
+	root := t.TempDir()
+	readable := filepath.Join(root, "readable")
+	if err := os.WriteFile(readable, []byte("readable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(readable, alias); err != nil {
+		t.Skipf("symbolic links are unavailable: %v", err)
+	}
+	dangling := filepath.Join(root, "dangling")
+	if err := os.Symlink(filepath.Join(root, "missing"), dangling); err != nil {
+		t.Skipf("symbolic links are unavailable: %v", err)
+	}
+	loop := filepath.Join(root, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Skipf("self-referential links are unavailable: %v", err)
+	}
+
+	expanded := expandVolumeRootPaths([]string{root}, []string{root})
+	for _, path := range []string{root, readable, alias} {
+		if _, ok := expanded[windowssandbox.CanonicalPathKey(path)]; !ok {
+			t.Fatalf("expandVolumeRootPaths() dropped %q: %#v", path, expanded)
+		}
+	}
+	for _, path := range []string{dangling, loop} {
+		if _, ok := expanded[windowssandbox.CanonicalPathKey(path)]; ok {
+			t.Fatalf("expandVolumeRootPaths() kept unresolvable link %q: %#v", path, expanded)
+		}
+	}
+}
 
 func TestPrepareFileSystemPolicySnapshotsDenyGlobsLikeRust(t *testing.T) {
 	root := t.TempDir()

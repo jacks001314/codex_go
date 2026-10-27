@@ -5,9 +5,69 @@ package appserverdaemon
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// TestReservationProbeReleasesLockWithDuplicatedHandle pins Rust #57512/#57533:
+// a probe must release its lock before returning so a file description shared
+// with a concurrent fork cannot keep the daemon looking reserved.
+func TestReservationProbeReleasesLockWithDuplicatedHandle(t *testing.T) {
+	backend := NewPIDBackend(BackendPaths{PIDFile: filepath.Join(t.TempDir(), PIDFileName)})
+	file, err := openLockFile(backend.LockFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	// Dup shares the open file description, just as an inherited descriptor
+	// would after fork.
+	inherited, err := syscall.Dup(int(file.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(inherited)
+
+	active, err := fileLockIsActive(backend.LockFile)
+	if err != nil {
+		t.Fatalf("fileLockIsActive() error = %v", err)
+	}
+	if active {
+		t.Fatal("unlocked reservation probe reported active")
+	}
+	competitor, err := openLockFile(backend.LockFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer competitor.Close()
+	if err := syscall.Flock(int(competitor.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("inherited descriptor kept the probe lock: %v", err)
+	}
+	if err := syscall.Flock(int(competitor.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestHeldReservationWithoutPIDFileReportsStarting pins the second half of
+// Rust #57512: a live reservation is Starting even before the PID file exists.
+func TestHeldReservationWithoutPIDFileReportsStarting(t *testing.T) {
+	backend := NewPIDBackend(BackendPaths{PIDFile: filepath.Join(t.TempDir(), PIDFileName)})
+	lock, err := acquireExclusiveFileLock(backend.LockFile, time.Second, 10*time.Millisecond, "pid lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if _, err := os.Stat(backend.PIDFile); !os.IsNotExist(err) {
+		t.Fatalf("PID file exists before reservation completes: %v", err)
+	}
+	running, err := backend.IsStartingOrRunning()
+	if err != nil {
+		t.Fatalf("IsStartingOrRunning() error = %v", err)
+	}
+	if !running {
+		t.Fatal("held reservation without a PID file was not reported as starting")
+	}
+}
 
 func TestPIDBackendStartStopUnixProcess(t *testing.T) {
 	script := writeLongRunningCodexScript(t)

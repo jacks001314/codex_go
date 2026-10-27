@@ -19,6 +19,10 @@ const (
 	// individual strings are shortened with the shared Guardian truncation
 	// marker before the aggregate byte limit is checked.
 	GuardianMaxActionStringTokens = 16_000
+
+	// guardianApprovalReasonTokens is Rust's MAX_APPROVAL_REASON_TOKENS, applied
+	// during synchronous Guardian request preparation (#57494).
+	guardianApprovalReasonTokens = 512
 )
 
 // renderGuardianToolDescriptions mirrors Rust's planned-action composition: the
@@ -374,12 +378,15 @@ func joinPlannedAction(action Action, presentation ActionPresentation) (string, 
 		}
 		return renderNativePlannedAction(callID), nil
 	}
+	// Rust #57494 moves the approval-reason budget into request preparation, so
+	// both the action JSON and the rendered framing see the same bounded text.
+	action.Reason, _ = context.GuardianTruncateText(strings.TrimSpace(action.Reason), guardianApprovalReasonTokens)
 	data, err := marshalGuardianPromptAction(action)
 	if err != nil {
 		return "", err
 	}
 	kind, hasTrigger := plannedActionKindFor(action)
-	return strings.Join(renderPlannedAction(data, kind, hasTrigger, strings.TrimSpace(action.Reason), presentation), ""), nil
+	return strings.Join(renderPlannedAction(data, kind, hasTrigger, action.Reason, presentation), ""), nil
 }
 
 // renderNativePlannedAction mirrors Rust's PlannedAction::render for a ToolCall

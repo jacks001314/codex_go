@@ -26,6 +26,13 @@ type WorldState struct {
 	// BaseInstructions carries the recorded base-instruction snapshot (Rust
 	// section id `base_instructions`, #51188).
 	BaseInstructions json.RawMessage `json:"baseInstructions,omitempty"`
+	// SkillsCatalog carries the incremental selected-environment skill catalog
+	// snapshot (Rust #57262 section id `skills`): the entries the model has
+	// already seen and the cumulative metadata budget spent on them.
+	SkillsCatalog json.RawMessage `json:"skillsCatalog,omitempty"`
+	// HostSkillsCatalog carries the incremental host skill catalog snapshot
+	// (Rust #57262 section id `host_skills`).
+	HostSkillsCatalog json.RawMessage `json:"hostSkillsCatalog,omitempty"`
 }
 
 func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
@@ -50,6 +57,8 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.Tools = append(json.RawMessage(nil), state.Tools...)
 	state.TopLevelTools = append(json.RawMessage(nil), state.TopLevelTools...)
 	state.BaseInstructions = append(json.RawMessage(nil), state.BaseInstructions...)
+	state.SkillsCatalog = append(json.RawMessage(nil), state.SkillsCatalog...)
+	state.HostSkillsCatalog = append(json.RawMessage(nil), state.HostSkillsCatalog...)
 	return &state, nil
 }
 

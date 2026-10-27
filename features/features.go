@@ -328,6 +328,10 @@ var Registry = []Spec{
 	{Key: "untrusted_as_tool_output", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #57500/#57262): omit descriptions from
+	// model-visible skill catalogs, and publish incremental skill catalogs.
+	{Key: "omit_skill_descriptions", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "skill_catalog_deltas", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "in_app_local_automation", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #56033): the Bedrock setup wizard is
 	// stable and enabled by default for eligible onboarding; users can still

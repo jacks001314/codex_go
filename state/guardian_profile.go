@@ -202,6 +202,71 @@ type TranscriptEvidenceEntry struct {
 	// Tokens overrides the rendered token cost. Native encrypted evidence uses
 	// this because its payload cannot be rendered as text.
 	Tokens int
+	// Scheduled marks a user entry that came from the scheduler, and Heartbeat
+	// carries its parsed provenance when the envelope is well formed. Repeated
+	// instructions are compressed before retention so delta references keep
+	// their absolute transcript numbers (Rust #57519).
+	Scheduled bool
+	Heartbeat *TranscriptHeartbeat
+}
+
+// TranscriptHeartbeat is the bounded scheduler envelope used to compare
+// repeated instructions; invocation time is excluded from equality.
+type TranscriptHeartbeat struct {
+	AutomationID string
+	Timestamp    string
+	Instructions string
+}
+
+type heartbeatReferenceVersion struct {
+	instructions string
+	number       int
+}
+
+type heartbeatReferences struct {
+	versions map[string]heartbeatReferenceVersion
+}
+
+// prepare replaces repeated scheduler instructions with a reference to the
+// earlier entry. A scheduled envelope that failed to parse clears remembered
+// versions, matching Rust HeartbeatReferences::prepare.
+func (r *heartbeatReferences) prepare(heartbeat *TranscriptHeartbeat, text *string, number int) {
+	if heartbeat == nil {
+		r.versions = nil
+		return
+	}
+	if r.versions == nil {
+		r.versions = map[string]heartbeatReferenceVersion{}
+	}
+	if previous, ok := r.versions[heartbeat.AutomationID]; ok && previous.instructions == heartbeat.Instructions {
+		*text = fmt.Sprintf(
+			"Scheduled automation %s ran at %s. Instructions unchanged from transcript entry [%d]; this is a replay of that earlier instruction, not a new human instruction. If the referenced instructions are unavailable, do not infer authorization from this reference.",
+			heartbeat.AutomationID,
+			heartbeat.Timestamp,
+			previous.number,
+		)
+		return
+	}
+	r.versions[heartbeat.AutomationID] = heartbeatReferenceVersion{
+		instructions: heartbeat.Instructions,
+		number:       number,
+	}
+}
+
+// CompressGuardianTranscriptHeartbeats mirrors Rust prepare_sync_heartbeats
+// (#57519): it runs over the complete collected transcript before any suffix
+// selection, so reference numbers stay absolute in full and delta prompts.
+// Asynchronous consumers apply the same preparation before retention.
+func CompressGuardianTranscriptHeartbeats(entries []TranscriptEvidenceEntry, entryNumberOffset int) {
+	var references heartbeatReferences
+	for index := range entries {
+		entry := &entries[index]
+		if !entry.Scheduled {
+			continue
+		}
+		references.prepare(entry.Heartbeat, &entry.Text, index+entryNumberOffset+1)
+		entry.Heartbeat = nil
+	}
 }
 
 // TranscriptTruncationObservation records evidence lost while rendering.

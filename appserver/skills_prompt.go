@@ -105,9 +105,11 @@ func BuildHostSkillsPromptContext(options *HostSkillsPromptOptions) (*HostSkills
 	metadata = selectSkillMetadata(options.Config, params, metadata)
 
 	if options.Config == nil || options.Config.IncludeSkillInstructions() {
+		omitDescriptions := options.Config != nil && features.Enabled(options.Config.FeatureSettings(), "omit_skill_descriptions")
 		available := promptctx.RenderAvailableSkillsWithOptions(metadata, promptctx.AvailableSkillsRenderOptions{
 			Budget:                   skillMetadataBudgetForConfig(options.Config, options.ContextWindow),
 			IncludeUsageInstructions: true,
+			OmitDescriptions:         omitDescriptions,
 		})
 		if available != nil {
 			result.Instructions = strings.TrimSpace(available.Body)

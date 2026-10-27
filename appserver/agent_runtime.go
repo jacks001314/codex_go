@@ -144,6 +144,13 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.turnPermissionProfile = r.guardianTurnPermissionProfileForTurn
 		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
+		modelReviewer.syncImageContextWindow = func(threadID, modelID string) (int64, bool) {
+			window := r.effectiveModelContextWindowForModel(modelID, &turn.TurnStartParams{ThreadID: threadID})
+			if window <= 0 {
+				return 0, false
+			}
+			return window, true
+		}
 		modelReviewer.installationID = r.guardianInstallationID
 		modelReviewer.environment = r.guardianEnvironmentInputItems
 		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn

@@ -342,7 +342,16 @@ func expandVolumeRootPaths(paths []string, volumeRoots []string) map[string]stri
 			entries, err := os.ReadDir(path)
 			if err == nil {
 				for _, entry := range entries {
-					add(filepath.Join(path, entry.Name()))
+					child := filepath.Join(path, entry.Name())
+					// Rust #57515: directory entries carry the file type, so
+					// only symbolic links need a resolution probe. Broken or
+					// self-referential links would prevent PSEC startup.
+					if entry.Type()&os.ModeSymlink != 0 {
+						if _, statErr := os.Stat(child); statErr != nil {
+							continue
+						}
+					}
+					add(child)
 				}
 			}
 		}
