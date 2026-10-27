@@ -612,8 +612,12 @@ func LastPersistedOwnedThreadCWD(threadID string, lines []Line) string {
 // intentionally omitted the field, and non-nil (possibly empty) when the
 // snapshot recorded a selection.
 type ThreadSettingsSnapshot struct {
-	CWD                   string
-	RuntimeWorkspaceRoots *[]string
+	CWD                     string
+	RuntimeWorkspaceRoots   *[]string
+	ApprovalPolicy          string
+	ApprovalsReviewer       string
+	PermissionProfile       json.RawMessage
+	ActivePermissionProfile json.RawMessage
 }
 
 // LatestPersistedOwnedThreadSettings returns the newest settings snapshot
@@ -631,17 +635,162 @@ func LatestPersistedOwnedThreadSettings(threadID string, lines []Line) (ThreadSe
 			continue
 		}
 		return ThreadSettingsSnapshot{
-			CWD:                   snapshot.CWD,
-			RuntimeWorkspaceRoots: snapshot.RuntimeWorkspaceRoots,
+			CWD:                     snapshot.CWD,
+			RuntimeWorkspaceRoots:   snapshot.RuntimeWorkspaceRoots,
+			ApprovalPolicy:          snapshot.ApprovalPolicy,
+			ApprovalsReviewer:       snapshot.ApprovalsReviewer,
+			PermissionProfile:       snapshot.PermissionProfile,
+			ActivePermissionProfile: snapshot.ActivePermissionProfile,
 		}, true
 	}
 	return ThreadSettingsSnapshot{}, false
 }
 
+// PersistedResumeSettings is the set of thread settings a cold resume or fork
+// restores from rollout history (Rust PersistedResumeSettings, #57227).
+// ActivePermissionProfile is a named profile selection; UnnamedPermissionProfile
+// is the raw inferred base profile that is restored only when no named profile
+// applies.
+type PersistedResumeSettings struct {
+	ApprovalPolicy           string
+	ApprovalsReviewer        string
+	ActivePermissionProfile  json.RawMessage
+	UnnamedPermissionProfile json.RawMessage
+}
+
+// LatestPersistedResumeSettings resolves persisted settings for a resume or
+// fork of threadID (Rust PersistedResumeSettings::from_history, #57227).
+//
+// A running turn can record stale permissions after the thread accepts a
+// settings update, so a snapshot explicitly owned by threadID wins over a
+// TurnContext. An ownerless (legacy) snapshot following that owner's checkpoint
+// is treated as the thread's latest update; an ownerless snapshot that precedes
+// a snapshot owned by another thread belongs to that other thread. Only an
+// owned snapshot can supply the unnamed base profile: raw grants recorded
+// without an identifiable owner may describe another thread or executor.
+func LatestPersistedResumeSettings(threadID string, lines []Line) (PersistedResumeSettings, bool) {
+	threadID = strings.TrimSpace(threadID)
+	var latestLegacy *persistedThreadSettingsEvent
+	for index := len(lines) - 1; index >= 0; index-- {
+		snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload)
+		if !ok {
+			continue
+		}
+		switch {
+		case snapshot.ThreadID == "":
+			if latestLegacy == nil {
+				copied := snapshot
+				latestLegacy = &copied
+			}
+		case snapshot.ThreadID == threadID:
+			chosen := snapshot
+			if latestLegacy != nil {
+				chosen = *latestLegacy
+			}
+			return persistedResumeSettingsFromSnapshot(chosen), true
+		default:
+			latestLegacy = nil
+		}
+	}
+	return latestPersistedResumeSettingsWithoutOwner(lines)
+}
+
+func persistedResumeSettingsFromSnapshot(snapshot persistedThreadSettingsEvent) PersistedResumeSettings {
+	settings := PersistedResumeSettings{
+		ApprovalPolicy:          snapshot.ApprovalPolicy,
+		ApprovalsReviewer:       snapshot.ApprovalsReviewer,
+		ActivePermissionProfile: cloneRawJSON(snapshot.ActivePermissionProfile),
+	}
+	if settings.ActivePermissionProfile == nil {
+		settings.UnnamedPermissionProfile = cloneRawJSON(snapshot.PermissionProfile)
+	}
+	return settings
+}
+
+// latestPersistedResumeSettingsWithoutOwner mirrors Rust's fallback when no
+// settings snapshot identifies the resumed thread: the newest TurnContext, or
+// else the newest ThreadSettingsApplied event of any owner. Turn contexts never
+// supply an unnamed permission profile (Rust #53419/#57227).
+func latestPersistedResumeSettingsWithoutOwner(lines []Line) (PersistedResumeSettings, bool) {
+	for index := len(lines) - 1; index >= 0; index-- {
+		if len(lines[index].TurnContext) > 0 {
+			context := lines[index].TurnContext
+			policy, _ := approvalPolicyFromTurnContext(context)
+			reviewer := approvalsReviewerFromTurnContext(context)
+			if reviewer == "" {
+				reviewer = previousApprovalsReviewer(lines, index)
+			}
+			return PersistedResumeSettings{
+				ApprovalPolicy:          policy,
+				ApprovalsReviewer:       reviewer,
+				ActivePermissionProfile: activePermissionProfileFromTurnContext(context),
+			}, true
+		}
+		if snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload); ok {
+			return PersistedResumeSettings{
+				ApprovalPolicy:          snapshot.ApprovalPolicy,
+				ApprovalsReviewer:       snapshot.ApprovalsReviewer,
+				ActivePermissionProfile: cloneRawJSON(snapshot.ActivePermissionProfile),
+			}, true
+		}
+	}
+	return PersistedResumeSettings{}, false
+}
+
+func previousApprovalsReviewer(lines []Line, before int) string {
+	for index := before - 1; index >= 0; index-- {
+		if len(lines[index].TurnContext) > 0 {
+			if reviewer := approvalsReviewerFromTurnContext(lines[index].TurnContext); reviewer != "" {
+				return reviewer
+			}
+		}
+		if snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload); ok && snapshot.ApprovalsReviewer != "" {
+			return snapshot.ApprovalsReviewer
+		}
+	}
+	return ""
+}
+
+func approvalsReviewerFromTurnContext(raw json.RawMessage) string {
+	var values map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
+		return ""
+	}
+	for _, key := range []string{"approvals_reviewer", "approvalsReviewer"} {
+		if reviewer := strings.TrimSpace(stringFromAny(values[key])); reviewer != "" {
+			return reviewer
+		}
+	}
+	return ""
+}
+
+func activePermissionProfileFromTurnContext(raw json.RawMessage) json.RawMessage {
+	var values map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
+		return nil
+	}
+	encoded, ok := rawMapValue(values, "active_permission_profile")
+	if !ok {
+		encoded, ok = rawMapValue(values, "activePermissionProfile")
+	}
+	if !ok {
+		return nil
+	}
+	data, err := json.Marshal(encoded)
+	if err != nil {
+		return nil
+	}
+	return cloneRawJSON(data)
+}
+
 type persistedThreadSettingsEvent struct {
-	ThreadID              string
-	CWD                   string
-	RuntimeWorkspaceRoots *[]string
+	ThreadID                string
+	CWD                     string
+	RuntimeWorkspaceRoots   *[]string
+	ApprovalPolicy          string
+	ApprovalsReviewer       string
+	PermissionProfile       json.RawMessage
+	ActivePermissionProfile json.RawMessage
 }
 
 func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettingsEvent, bool) {
@@ -649,8 +798,12 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id"`
 		ThreadSettings struct {
-			CWD                   string    `json:"cwd"`
-			RuntimeWorkspaceRoots *[]string `json:"runtime_workspace_roots"`
+			ApprovalPolicy          string          `json:"approval_policy"`
+			ApprovalsReviewer       string          `json:"approvals_reviewer"`
+			PermissionProfile       json.RawMessage `json:"permission_profile"`
+			ActivePermissionProfile json.RawMessage `json:"active_permission_profile"`
+			CWD                     string          `json:"cwd"`
+			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots"`
 		} `json:"thread_settings"`
 	}
 	if len(raw) == 0 {
@@ -665,9 +818,13 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		roots = &copied
 	}
 	return persistedThreadSettingsEvent{
-		ThreadID:              strings.TrimSpace(event.ThreadID),
-		CWD:                   strings.TrimSpace(event.ThreadSettings.CWD),
-		RuntimeWorkspaceRoots: roots,
+		ThreadID:                strings.TrimSpace(event.ThreadID),
+		CWD:                     strings.TrimSpace(event.ThreadSettings.CWD),
+		RuntimeWorkspaceRoots:   roots,
+		ApprovalPolicy:          strings.TrimSpace(event.ThreadSettings.ApprovalPolicy),
+		ApprovalsReviewer:       strings.TrimSpace(event.ThreadSettings.ApprovalsReviewer),
+		PermissionProfile:       cloneRawJSON(event.ThreadSettings.PermissionProfile),
+		ActivePermissionProfile: cloneRawJSON(event.ThreadSettings.ActivePermissionProfile),
 	}, true
 }
 

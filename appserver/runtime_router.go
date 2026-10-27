@@ -5184,6 +5184,12 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
+	restoredForkSettings := restoredThreadSettings{}
+	if sourceRecord != nil && !runtimeRouterThreadIsLive(r, sourceRecord.ID) {
+		// Rust #57227: an unloaded source restores the settings it acknowledged
+		// instead of the stale TurnContext recorded by a running turn.
+		restoredForkSettings = r.services.ThreadRouter.restorePersistedForkSettings(sourceRecord, record, &params)
+	}
 	// Rust #45579: an ephemeral fork carries no attachments.
 	applyThreadForkAttachments(sourceRecord, record, true, runtimeRouterNow(r))
 	// Rust #44349: forked threads report `fork`, not `startup`.
@@ -5202,8 +5208,8 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	}
 	return &ThreadForkResponse{
 		Thread:                  thread,
-		ApprovalPolicy:          params.ApprovalPolicy,
-		ApprovalsReviewer:       cloneString(params.ApprovalsReviewer),
+		ApprovalPolicy:          restoredForkSettings.approvalPolicyResponse(params.ApprovalPolicy),
+		ApprovalsReviewer:       restoredForkSettings.approvalsReviewerResponse(params.ApprovalsReviewer),
 		CWD:                     record.Metadata.CWD,
 		Model:                   record.Metadata.Model,
 		ModelProvider:           record.Metadata.ModelProvider,
@@ -5211,7 +5217,7 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
 		ReasoningEffort:         stringPtrIfNotEmpty(threadRecordReasoningEffort(record)),
 		RuntimeWorkspaceRoots:   threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil),
-		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		ActivePermissionProfile: restoredForkSettings.activePermissionProfileResponse(params.Permissions),
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, true, nil
 }
@@ -5268,6 +5274,15 @@ func runtimeRouterNow(r *RuntimeRouter) time.Time {
 		}
 	}
 	return time.Now().UTC()
+}
+
+// runtimeRouterThreadIsLive reports whether a thread is currently loaded; a
+// live thread's in-memory settings are authoritative over rollout history.
+func runtimeRouterThreadIsLive(r *RuntimeRouter, threadID session.ThreadID) bool {
+	if r == nil || r.threads == nil || strings.TrimSpace(string(threadID)) == "" {
+		return false
+	}
+	return r.threads.LiveThread(threadID) != nil
 }
 
 func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStartResponse, request *Request) error {
@@ -9028,14 +9043,18 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 		appliedPolicy = strings.TrimSpace(committed.ApprovalPolicy)
 	}
 	snapshotRoots := threadRecordRuntimeWorkspaceRoots(record, settingsCWD, nil)
-	return r.services.ThreadRouter.appendThreadSettingsAppliedWithWorkspaceRoots(
-		threadID,
-		appliedPolicy,
-		settingsCWD,
-		collaborationModeSnapshotFromSettings(committed),
-		&snapshotRoots,
-		runtimeRouterNow(r).UTC(),
-	)
+	snapshot := rollout.ThreadSettingsApplied{
+		ApprovalPolicy:        appliedPolicy,
+		ApprovalsReviewer:     strings.TrimSpace(settingsApprovalsReviewer(committed)),
+		CWD:                   settingsCWD,
+		CollaborationMode:     collaborationModeSnapshotFromSettings(committed),
+		RuntimeWorkspaceRoots: &snapshotRoots,
+	}
+	snapshot.ActivePermissionProfile = settingsActivePermissionProfileJSON(committed)
+	if len(snapshot.ActivePermissionProfile) == 0 {
+		snapshot.PermissionProfile = recordPermissionProfileJSON(record)
+	}
+	return r.services.ThreadRouter.appendThreadSettingsAppliedSnapshot(threadID, snapshot, runtimeRouterNow(r).UTC())
 }
 
 // checkpointThreadSettings writes the live effective thread settings to the
@@ -9070,14 +9089,59 @@ func (r *RuntimeRouter) checkpointThreadSettings(threadID string) {
 		}
 	}
 	snapshotRoots := append([]string{}, roots...)
-	_ = r.services.ThreadRouter.appendThreadSettingsAppliedWithWorkspaceRoots(
-		session.ThreadID(threadID),
-		policy,
-		cwd,
-		collaborationModeSnapshotFromSettings(settings),
-		&snapshotRoots,
-		runtimeRouterNow(r).UTC(),
-	)
+	snapshot := rollout.ThreadSettingsApplied{
+		ApprovalPolicy:        policy,
+		ApprovalsReviewer:     strings.TrimSpace(settingsApprovalsReviewer(settings)),
+		CWD:                   cwd,
+		CollaborationMode:     collaborationModeSnapshotFromSettings(settings),
+		RuntimeWorkspaceRoots: &snapshotRoots,
+	}
+	snapshot.ActivePermissionProfile = settingsActivePermissionProfileJSON(settings)
+	if len(snapshot.ActivePermissionProfile) == 0 {
+		snapshot.PermissionProfile = recordPermissionProfileJSON(record)
+	}
+	_ = r.services.ThreadRouter.appendThreadSettingsAppliedSnapshot(session.ThreadID(threadID), snapshot, runtimeRouterNow(r).UTC())
+}
+
+func settingsApprovalsReviewer(settings *Settings) string {
+	if settings == nil {
+		return ""
+	}
+	return strings.TrimSpace(settings.ApprovalsReviewer)
+}
+
+// settingsActivePermissionProfileJSON serializes a named permission selection
+// for the thread settings snapshot (Rust #57227).
+func settingsActivePermissionProfileJSON(settings *Settings) json.RawMessage {
+	if settings == nil || settings.ActivePermissionProfile == nil {
+		return nil
+	}
+	id := strings.TrimSpace(*settings.ActivePermissionProfile)
+	if id == "" {
+		return nil
+	}
+	encoded, err := json.Marshal(sandbox.ActivePermissionProfile{ID: id})
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+// recordPermissionProfileJSON serializes the unnamed base profile recorded on a
+// thread so a resume can restore it while no named profile applies.
+func recordPermissionProfileJSON(record *session.Record) json.RawMessage {
+	if record == nil || record.Metadata.Extra == nil {
+		return nil
+	}
+	raw, ok := record.Metadata.Extra["permission_profile"]
+	if !ok || raw == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 // threadCollaborationModeSnapshot serializes the thread's saved collaboration

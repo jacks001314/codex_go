@@ -708,17 +708,48 @@ func (r *Recorder) AppendThreadSettingsAppliedWithSnapshot(threadID, approvalPol
 // (Rust #43848). A non-nil roots pointer preserves an explicit empty list,
 // which is distinct from an unknown/omitted selection.
 func (r *Recorder) AppendThreadSettingsAppliedWithWorkspaceRoots(threadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, runtimeWorkspaceRoots *[]string, now time.Time) error {
-	approvalPolicy = strings.TrimSpace(approvalPolicy)
+	return r.AppendThreadSettingsAppliedSnapshot(threadID, ThreadSettingsApplied{
+		ApprovalPolicy:        approvalPolicy,
+		CWD:                   cwd,
+		CollaborationMode:     collaborationMode,
+		RuntimeWorkspaceRoots: runtimeWorkspaceRoots,
+	}, now)
+}
+
+// ThreadSettingsApplied is the full thread-owned settings snapshot persisted by
+// a `thread_settings_applied` rollout event (Rust ThreadSettingsSnapshot).
+// ApprovalsReviewer, PermissionProfile, and ActivePermissionProfile let a
+// resumed or forked thread restore the permissions the thread acknowledged
+// instead of a stale TurnContext (Rust #57227).
+type ThreadSettingsApplied struct {
+	ApprovalPolicy          string
+	ApprovalsReviewer       string
+	PermissionProfile       json.RawMessage
+	ActivePermissionProfile json.RawMessage
+	CWD                     string
+	CollaborationMode       json.RawMessage
+	RuntimeWorkspaceRoots   *[]string
+}
+
+// AppendThreadSettingsAppliedSnapshot persists a full thread-owned settings
+// snapshot. A non-nil roots pointer preserves an explicit empty list, which is
+// distinct from an unknown/omitted selection.
+func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings ThreadSettingsApplied, now time.Time) error {
+	approvalPolicy := strings.TrimSpace(settings.ApprovalPolicy)
+	approvalsReviewer := strings.TrimSpace(settings.ApprovalsReviewer)
 	threadID = strings.TrimSpace(threadID)
-	cwd = strings.TrimSpace(cwd)
-	collaborationMode = append(json.RawMessage(nil), collaborationMode...)
+	cwd := strings.TrimSpace(settings.CWD)
+	collaborationMode := append(json.RawMessage(nil), settings.CollaborationMode...)
+	permissionProfile := cloneRawJSON(settings.PermissionProfile)
+	activePermissionProfile := cloneRawJSON(settings.ActivePermissionProfile)
 	var roots *[]string
-	if runtimeWorkspaceRoots != nil {
-		copied := make([]string, len(*runtimeWorkspaceRoots))
-		copy(copied, *runtimeWorkspaceRoots)
+	if settings.RuntimeWorkspaceRoots != nil {
+		copied := make([]string, len(*settings.RuntimeWorkspaceRoots))
+		copy(copied, *settings.RuntimeWorkspaceRoots)
 		roots = &copied
 	}
-	if approvalPolicy == "" && cwd == "" && len(collaborationMode) == 0 && roots == nil {
+	if approvalPolicy == "" && approvalsReviewer == "" && cwd == "" && len(collaborationMode) == 0 &&
+		roots == nil && permissionProfile == nil && activePermissionProfile == nil {
 		return errors.New("thread settings require an approval policy or cwd")
 	}
 	if now.IsZero() {
@@ -728,25 +759,49 @@ func (r *Recorder) AppendThreadSettingsAppliedWithWorkspaceRoots(threadID, appro
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id,omitempty"`
 		ThreadSettings struct {
-			ApprovalPolicy        string          `json:"approval_policy"`
-			CWD                   string          `json:"cwd,omitempty"`
-			CollaborationMode     json.RawMessage `json:"collaboration_mode,omitempty"`
-			RuntimeWorkspaceRoots *[]string       `json:"runtime_workspace_roots,omitempty"`
+			ApprovalPolicy          string          `json:"approval_policy"`
+			ApprovalsReviewer       string          `json:"approvals_reviewer,omitempty"`
+			PermissionProfile       json.RawMessage `json:"permission_profile,omitempty"`
+			ActivePermissionProfile json.RawMessage `json:"active_permission_profile,omitempty"`
+			CWD                     string          `json:"cwd,omitempty"`
+			CollaborationMode       json.RawMessage `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots,omitempty"`
 		} `json:"thread_settings"`
 	}{
 		Type:     "thread_settings_applied",
 		ThreadID: threadID,
 		ThreadSettings: struct {
-			ApprovalPolicy        string          `json:"approval_policy"`
-			CWD                   string          `json:"cwd,omitempty"`
-			CollaborationMode     json.RawMessage `json:"collaboration_mode,omitempty"`
-			RuntimeWorkspaceRoots *[]string       `json:"runtime_workspace_roots,omitempty"`
-		}{ApprovalPolicy: approvalPolicy, CWD: cwd, CollaborationMode: collaborationMode, RuntimeWorkspaceRoots: roots},
+			ApprovalPolicy          string          `json:"approval_policy"`
+			ApprovalsReviewer       string          `json:"approvals_reviewer,omitempty"`
+			PermissionProfile       json.RawMessage `json:"permission_profile,omitempty"`
+			ActivePermissionProfile json.RawMessage `json:"active_permission_profile,omitempty"`
+			CWD                     string          `json:"cwd,omitempty"`
+			CollaborationMode       json.RawMessage `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots,omitempty"`
+		}{
+			ApprovalPolicy:          approvalPolicy,
+			ApprovalsReviewer:       approvalsReviewer,
+			PermissionProfile:       permissionProfile,
+			ActivePermissionProfile: activePermissionProfile,
+			CWD:                     cwd,
+			CollaborationMode:       collaborationMode,
+			RuntimeWorkspaceRoots:   roots,
+		},
 	})
 	if err != nil {
 		return err
 	}
 	return r.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: payload})
+}
+
+// cloneRawJSON returns a copy of raw, treating absent and JSON null values as
+// nil so an omitted field stays omitted.
+func cloneRawJSON(raw json.RawMessage) json.RawMessage {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
 }
 
 // SecurityRiskScorePayload is the durable, rollout-only snapshot of a security

@@ -675,7 +675,22 @@ func (r *Router) appendThreadSettingsAppliedWithSnapshot(threadID session.Thread
 }
 
 func (r *Router) appendThreadSettingsAppliedWithWorkspaceRoots(threadID session.ThreadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, runtimeWorkspaceRoots *[]string, now time.Time) error {
-	if r == nil || r.store == nil || (strings.TrimSpace(approvalPolicy) == "" && strings.TrimSpace(cwd) == "" && len(collaborationMode) == 0 && runtimeWorkspaceRoots == nil) {
+	return r.appendThreadSettingsAppliedSnapshot(threadID, rollout.ThreadSettingsApplied{
+		ApprovalPolicy:        approvalPolicy,
+		CWD:                   cwd,
+		CollaborationMode:     collaborationMode,
+		RuntimeWorkspaceRoots: runtimeWorkspaceRoots,
+	}, now)
+}
+
+func (r *Router) appendThreadSettingsAppliedSnapshot(threadID session.ThreadID, settings rollout.ThreadSettingsApplied, now time.Time) error {
+	if r == nil || r.store == nil || (strings.TrimSpace(settings.ApprovalPolicy) == "" &&
+		strings.TrimSpace(settings.ApprovalsReviewer) == "" &&
+		strings.TrimSpace(settings.CWD) == "" &&
+		len(settings.CollaborationMode) == 0 &&
+		settings.RuntimeWorkspaceRoots == nil &&
+		len(settings.PermissionProfile) == 0 &&
+		len(settings.ActivePermissionProfile) == 0) {
 		return nil
 	}
 	path, err := r.findThreadRolloutPath(threadID, false)
@@ -688,7 +703,7 @@ func (r *Router) appendThreadSettingsAppliedWithWorkspaceRoots(threadID session.
 	}
 	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
-	return recorder.AppendThreadSettingsAppliedWithWorkspaceRoots(string(threadID), approvalPolicy, cwd, collaborationMode, runtimeWorkspaceRoots, now)
+	return recorder.AppendThreadSettingsAppliedSnapshot(string(threadID), settings, now)
 }
 
 func (r *Router) latestPersistedApprovalPolicy(record *session.Record) (string, bool) {
@@ -1561,8 +1576,26 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	sourceWasLive := r.threadManager().LiveThread(record.ID) != nil
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	applyThreadAllowedToolsExtra(record.Metadata.Extra, params.AllowedTools)
+	var restoredSettings restoredThreadSettings
+	if !sourceWasLive {
+		// Rust #57227: a cold resume restores the permissions the thread
+		// acknowledged instead of the stale TurnContext recorded by a running
+		// turn. A live thread's current settings are already authoritative.
+		restoredSettings = r.restorePersistedResumeSettings(record, &params)
+		if params.Permissions != nil {
+			if profile := strings.TrimSpace(*params.Permissions); profile != "" && record.Metadata.ActivePermissionProfile != profile {
+				record.Metadata.ActivePermissionProfile = profile
+				restoredSettings.changed = true
+			}
+		}
+	}
 	if err := r.retainLiveThread(record); err != nil {
 		return nil, err
+	}
+	if restoredSettings.changed {
+		if err := r.saveThreadRecord(record); err != nil {
+			return nil, err
+		}
 	}
 	if !sourceWasLive {
 		r.setHistoryInitialization(record.ID, session.HistoryInitializationColdResume)
@@ -1588,7 +1621,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 			thread.Turns = paginatedTurns
 		}
 	}
-	approvalPolicy := params.ApprovalPolicy
+	approvalPolicy := restoredSettings.approvalPolicyResponse(params.ApprovalPolicy)
 	if approvalPolicy == nil {
 		if value, ok := r.latestPersistedApprovalPolicy(record); ok {
 			approvalPolicy = value
@@ -1611,12 +1644,12 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		ModelProvider:           firstNonEmpty(stringPtrValue(params.ModelProvider), record.Metadata.ModelProvider),
 		ServiceTier:             resumeServiceTier(&params, record),
 		ApprovalPolicy:          approvalPolicy,
-		ApprovalsReviewer:       cloneString(params.ApprovalsReviewer),
+		ApprovalsReviewer:       restoredSettings.approvalsReviewerResponse(params.ApprovalsReviewer),
 		CollaborationMode:       r.latestPersistedCollaborationMode(string(sourceID), record),
 		Sandbox:                 params.Sandbox,
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		InstructionSources:      threadRecordInstructionSources(record),
-		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		ActivePermissionProfile: restoredSettings.activePermissionProfileResponse(params.Permissions),
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}
 	if paginatedResume {
@@ -1685,7 +1718,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	// override survives another resume even before a turn runs. Go retains the
 	// thread while handling the request, so this must not depend on whether the
 	// source was already live.
-	r.checkpointThreadResumeSettings(record.ID, response, runtimeWorkspaceRoots)
+	r.checkpointThreadResumeSettings(record.ID, record, response, runtimeWorkspaceRoots)
 	return response, nil
 }
 
@@ -2066,7 +2099,7 @@ func (e *restoredRuntimeWorkspaceRootsError) Is(target error) bool {
 // checkpointThreadResumeSettings writes the settings a cold resume made
 // effective, including any explicit runtimeWorkspaceRoots override, so the
 // next resume restores the same selection when no turn has run (Rust #43848).
-func (r *Router) checkpointThreadResumeSettings(threadID session.ThreadID, response *ThreadResumeResponse, roots []string) {
+func (r *Router) checkpointThreadResumeSettings(threadID session.ThreadID, record *session.Record, response *ThreadResumeResponse, roots []string) {
 	if r == nil || response == nil || strings.TrimSpace(string(threadID)) == "" {
 		return
 	}
@@ -2080,15 +2113,30 @@ func (r *Router) checkpointThreadResumeSettings(threadID session.ThreadID, respo
 			collaborationMode = encoded
 		}
 	}
+	settings := rollout.ThreadSettingsApplied{
+		ApprovalPolicy:    approvalPolicy,
+		CWD:               response.CWD,
+		CollaborationMode: collaborationMode,
+	}
+	if response.ApprovalsReviewer != nil {
+		settings.ApprovalsReviewer = strings.TrimSpace(*response.ApprovalsReviewer)
+	}
+	if response.ActivePermissionProfile != nil {
+		if encoded, err := json.Marshal(response.ActivePermissionProfile); err == nil {
+			settings.ActivePermissionProfile = encoded
+		}
+	} else if record != nil {
+		// Rust #57227: an unnamed base profile survives only while no named
+		// profile applies, and only when it came from an attributable snapshot.
+		if raw, ok := record.Metadata.Extra["permission_profile"]; ok && raw != nil {
+			if encoded, err := json.Marshal(raw); err == nil {
+				settings.PermissionProfile = encoded
+			}
+		}
+	}
 	snapshotRoots := append([]string{}, roots...)
-	_ = r.appendThreadSettingsAppliedWithWorkspaceRoots(
-		threadID,
-		approvalPolicy,
-		response.CWD,
-		collaborationMode,
-		&snapshotRoots,
-		r.now(),
-	)
+	settings.RuntimeWorkspaceRoots = &snapshotRoots
+	_ = r.appendThreadSettingsAppliedSnapshot(threadID, settings, r.now())
 }
 
 func setThreadRecordRuntimeWorkspaceRoots(record *session.Record, roots []string) {
@@ -2374,6 +2422,12 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
+	restoredForkSettings := restoredThreadSettings{}
+	if sourceRecord != nil && !sourceWasLive {
+		// Rust #57227: a cold fork restores the permissions its source thread
+		// acknowledged rather than the stale TurnContext it may have recorded.
+		restoredForkSettings = r.restorePersistedForkSettings(sourceRecord, record, &params)
+	}
 	// Rust #45579: a non-ephemeral fork owns a copy of the source thread's
 	// current attachments (fresh ids and timestamps, same identities and
 	// payloads) and publishes it with the fork; an ephemeral fork carries none.
@@ -2419,8 +2473,8 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	}
 	return &ThreadForkResponse{
 		Thread:                  thread,
-		ApprovalPolicy:          params.ApprovalPolicy,
-		ApprovalsReviewer:       cloneString(params.ApprovalsReviewer),
+		ApprovalPolicy:          restoredForkSettings.approvalPolicyResponse(params.ApprovalPolicy),
+		ApprovalsReviewer:       restoredForkSettings.approvalsReviewerResponse(params.ApprovalsReviewer),
 		CWD:                     record.Metadata.CWD,
 		Model:                   record.Metadata.Model,
 		ModelProvider:           record.Metadata.ModelProvider,
@@ -2429,7 +2483,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		ReasoningEffort:         stringPtrIfNotEmpty(threadRecordReasoningEffort(record)),
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
-		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		ActivePermissionProfile: restoredForkSettings.activePermissionProfileResponse(params.Permissions),
 	}, nil
 }
 

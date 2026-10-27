@@ -21,6 +21,7 @@ TUI lane and are not modified here.
 | `#57235` | `exec_command` reports `shell_snapshot_mode` telemetry | `tool/shell_executor.go`, `turn/tools.go`, `appserver/runtime_router.go`, `exec/exec.go` |
 | `#56133` | Defer agent mail after empty explicit final answers | `eventmap/stream.go`, stream tests, `turn/mailbox_preemption_test.go` |
 | `#56024` | Bound decoded HTTP/3 response headers (64 KiB) | `tcptunnel/tunnel.go`, tunnel test |
+| `#57227` | Restore acknowledged permissions on resume/fork | `rollout/rollout.go`, `rollout/session_items.go`, `appserver/persisted_resume_settings.go`, `appserver/router.go`, `appserver/runtime_router.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -31,13 +32,19 @@ Grounding notes:
 - `#57249` directory/featured prefetch sites do not exist in Go; only the
   suggested-plugin prewarm path is gated.
 
+`#57227` details: settings snapshots now persist `approvals_reviewer` and both
+named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
+mirrors Rust's `PersistedResumeSettings::from_history` (thread-owned snapshot
+precedence over stale TurnContext; a legacy snapshot following the owner's
+checkpoint applies; a foreign-owned snapshot clears accumulated legacy; only an
+owned snapshot supplies unnamed raw permissions). Resume and cold fork restore
+approval policy, reviewer, named profile, and the unnamed base profile while
+explicit request values win. Go keeps its #53419 portability filter for raw
+permission grants, so executor-materialized path grants are not restored even
+from an owned snapshot.
+
 ## Pending in this window
 
-- `#57227` persisted resume settings ownership: needs thread-owned snapshot
-  precedence, permission profile/reviewer restore, and explicit-override
-  respect for both resume and fork. Helpers exist in
-  `appserver/persisted_permission_profile.go`; rollout snapshots currently only
-  carry CWD/workspace roots and the writer persists only those.
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
   triaged: high-value candidates include `#57311` rollouts trace versions,
   `#57279` untrusted context as tool outputs, `#57280` full MCP results,
