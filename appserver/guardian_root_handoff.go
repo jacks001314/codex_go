@@ -5,71 +5,32 @@ import (
 	"sort"
 	"strings"
 
-	"codex_go/retainedctx"
 	"codex_go/session"
-	"codex_go/state"
 )
 
-const guardianRootHandoffWindow = 3
-
-type guardianRootCandidate struct {
-	message  state.RootMessage
-	order    uint64
-	hasOrder bool
-}
-
-// guardianRootHandoffSelection implements Rust #49057's
-// `selected_message_indices`: recorded collaboration calls to the worker or an
-// ancestor mark approximate relevance boundaries. Each boundary contributes the
-// three preceding root messages, and the three latest messages are always kept
-// so a recent cancellation stays visible. Unordered legacy evidence is kept.
+// guardianRootHandoffSelection implements the recorded-boundary projection:
+// recorded collaboration calls to the worker or an ancestor mark approximate
+// relevance boundaries. Each boundary contributes the three preceding root
+// messages, and the three latest messages are always kept so a recent
+// cancellation stays visible. All user restrictions and unordered legacy
+// evidence are preserved for the shared cap (#50026).
 func guardianRootHandoffSelection(
 	items []session.Item,
 	candidates []guardianRootCandidate,
 	workerPath string,
 	toolNamespace string,
 ) []guardianRootCandidate {
-	workerPath = runtimeCanonicalAgentPath("/root", workerPath)
-	if workerPath == "" || workerPath == "/root" || len(candidates) == 0 {
+	boundaries := guardianRootHandoffBoundaries(items, workerPath, toolNamespace)
+	if len(boundaries) == 0 || len(candidates) == 0 {
 		return nil
 	}
-	if guardianLatestAuthorizationIsHeartbeat(items) {
+	ordered := append([]guardianRootCandidate(nil), candidates...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return guardianRootCandidateSortLess(ordered[i], ordered[j])
+	})
+	selected := guardianSelectRootHandoffIndices(ordered, boundaries)
+	if selected == nil {
 		return nil
-	}
-	selected := map[int]struct{}{}
-	var precedingOrder uint64
-	hasPrecedingOrder := false
-	for i := range items {
-		item := &items[i]
-		if order, ok := guardianRootItemOrder(item); ok && guardianRootItemIsUserMessage(item) {
-			precedingOrder = order
-			hasPrecedingOrder = true
-		}
-		if !hasPrecedingOrder || !guardianRootItemIsHandoff(item, workerPath, toolNamespace) {
-			continue
-		}
-		added := 0
-		for index := len(candidates) - 1; index >= 0 && added < guardianRootHandoffWindow; index-- {
-			if candidates[index].hasOrder && candidates[index].order <= precedingOrder {
-				selected[index] = struct{}{}
-				added++
-			}
-		}
-	}
-	if len(selected) == 0 {
-		return nil
-	}
-	added := 0
-	for index := len(candidates) - 1; index >= 0 && added < guardianRootHandoffWindow; index-- {
-		if candidates[index].hasOrder {
-			selected[index] = struct{}{}
-			added++
-		}
-	}
-	for index := range candidates {
-		if !candidates[index].hasOrder {
-			selected[index] = struct{}{}
-		}
 	}
 	indices := make([]int, 0, len(selected))
 	for index := range selected {
@@ -78,9 +39,34 @@ func guardianRootHandoffSelection(
 	sort.Ints(indices)
 	out := make([]guardianRootCandidate, 0, len(indices))
 	for _, index := range indices {
-		out = append(out, candidates[index])
+		out = append(out, ordered[index])
 	}
 	return out
+}
+
+// guardianRootHandoffBoundaries records the acceptance order in effect at each
+// recorded handoff call. Assistant items carry the same order sidecar as user
+// inputs, so every annotated item advances the boundary.
+func guardianRootHandoffBoundaries(items []session.Item, workerPath string, toolNamespace string) []uint64 {
+	workerPath = runtimeCanonicalAgentPath("/root", workerPath)
+	if workerPath == "" || workerPath == "/root" {
+		return nil
+	}
+	var boundaries []uint64
+	var precedingOrder uint64
+	hasPrecedingOrder := false
+	for index := range items {
+		item := &items[index]
+		if order, ok := guardianRootItemOrder(item); ok {
+			precedingOrder = order
+			hasPrecedingOrder = true
+		}
+		if !hasPrecedingOrder || !guardianRootItemIsHandoff(item, workerPath, toolNamespace) {
+			continue
+		}
+		boundaries = append(boundaries, precedingOrder)
+	}
+	return boundaries
 }
 
 func guardianRootItemOrder(item *session.Item) (uint64, bool) {
@@ -89,32 +75,6 @@ func guardianRootItemOrder(item *session.Item) (uint64, bool) {
 		return 0, false
 	}
 	return *metadata.UserInputOrder, true
-}
-
-func guardianLatestAuthorizationIsHeartbeat(items []session.Item) bool {
-	for index := len(items) - 1; index >= 0; index-- {
-		item := &items[index]
-		if !guardianRootItemIsUserMessage(item) {
-			continue
-		}
-		return guardianRootItemIsHeartbeat(item)
-	}
-	return false
-}
-
-func guardianRootItemIsHeartbeat(item *session.Item) bool {
-	if item == nil {
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(stringValueFromMap(item.Data, "kind")), retainedctx.HeartbeatContentKind) {
-		return true
-	}
-	for _, kind := range stringSliceFromAny(item.Data["content_item_kinds"]) {
-		if strings.TrimSpace(kind) == retainedctx.HeartbeatContentKind {
-			return true
-		}
-	}
-	return strings.HasPrefix(strings.TrimSpace(guardianRootMessageText(item)), "<heartbeat>")
 }
 
 func guardianRootItemIsHandoff(item *session.Item, workerPath string, toolNamespace string) bool {

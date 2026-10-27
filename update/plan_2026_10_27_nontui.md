@@ -92,7 +92,8 @@ TUI lane and are not modified here.
 | `#56414` | External-agent memory imports populate the selected namespace and always v2, queueing consolidation per namespace | `config/external_memory_import.go`, `config/external_memory_import_test.go`, `config/api.go`, `appserver/external_memory_settings.go`, like-Rust tests |
 | `#56462` | Imports and consolidation share a cross-process workspace lock; a busy workspace rejects imports and skips consolidation | `memorylock/lock.go`, `memories/pipeline.go`, `config/external_memory_import.go`, app-server/busy-workspace tests |
 | `#55987` | Registry requests refresh rejected remote exec-server credentials and replay once; executor credentials retry only after the parent rotates them | `execserver/remote_auth.go`, `execserver/remote.go`, `execserver/remote_harness.go`, `execserver/remote_relay.go`, `execserver/executor_credential.go`, `app/exec_server_auth.go`, `app/app.go`, like-Rust tests |
-| `#57420` | Thread item `started_at_ms`/`completed_at_ms` are optional nullable in the TypeScript exports so older servers can omit them | `appserver/schema/precomputed/app-server-exports-stable.json.zst`, `appserver/schema/precomputed/app-server-exports-experimental.json.zst` |
+| `#57425` | Guardian root request preparation is centralized: a 16-message shared cap, legacy-checkpoint copies deduplicated after truncation, verified-answer and incomplete-context notices, and all user restrictions preserved during handoff filtering | `appserver/guardian_root_context.go`, `appserver/agent_runtime.go`, `appserver/guardian_root_handoff.go`, `appserver/retained_context.go`, `state/guardian_retained_context.go`, `context/user_goal.go`, like-Rust tests |
+| `#57420` | Thread item `started_at_ms`/`completed_at_ms` are optional nullable in the TypeScript exports so older servers can omit them | `appserver/schema/precomputed/app-server-exports-stable.json.zst`, `appserver/schema/precomputed/app-server-exports-experimental.json.zst`, pinned SHA-256 values re-anchored in `appserver/schema_test.go` |
 
 Grounding notes:
 
@@ -188,13 +189,14 @@ Grounding notes:
   change — applying the retained-source size check to synchronous transcript
   preparation — has no Go effect because Go's transcript entries never carry
   Rust's `RetainedTranscriptSource` label (a pre-window gap from `#48109`/`#51466`).
-- `#57312` is N/A: a structural move of root-message preparation and handoff
-  context selection from `core` into `codex-guardian-context`, with the same
-  helpers for text limits, whole-record verified-answer admission, delivered
-  assistant lookup, and retained-assistant fallback. Go already keeps those
-  helpers in `state`/`appserver` (`guardianRootConversationWithHandoff`,
-  `guardianRootHandoffSelection`, `RetainedAssistantMessage`); there is no
-  behavior change to port.
+- `#57312` was a structural move of root-message preparation and handoff
+  context selection from `core` into `codex-guardian-context`. Its behavior
+  (shared text limits, whole-record verified-answer admission, delivered
+  assistant lookup, retained-assistant fallback, and the omission notices) is
+  ported with `#57425` in `appserver/guardian_root_context.go`. Go still has no
+  `GuardianRootSnapshot::authorization_version`, so the incomplete-evidence
+  marker is rendered while Rust's authorization-version flag remains absent;
+  trusted-skill paths from the latest legacy turn are likewise not carried.
 - `#57258` is N/A: Rust's remote plugin catalog reduces cache probing overhead
   by validating a cache envelope without deserializing plugin records, reading a
   256-byte stale-catalog prefix, and skipping a global-scope probe during
@@ -294,6 +296,24 @@ long-lived `AuthManager`, so the account store is the source of truth and a
 mutex stands in for `refresh_lock`; the harness-key validation request still
 omits Rust's optional `x-codex-noise-stream-id` header because Go's provider
 signature never carried the stream id.
+
+`#57425` details: `prepareGuardianRootContext` now applies Rust's fixed root
+request policy in one place. Root user instructions and verified answers come
+from the thread's retained evidence (with the raw-item fallback when none is
+retained yet); assistant evidence comes from live output plus retained
+fallbacks, and delivered messaging calls supply their host-confirmed text. All
+user restrictions are kept during handoff filtering, the shared cap is 16
+(`#47947`), and dropping user records, verified answers, or assistant context
+adds the matching host notice instead of silently narrowing authorization.
+Legacy checkpoint instructions are prepended behind `LegacyContextScope`, and a
+record without a message ID is matched to a retained source by turn ID and
+post-truncation text so the worker receives one copy. Go retains the original
+legacy body (including surrounding whitespace) and now records retained
+evidence through `GuardianTruncateText` so both sides use Rust's omission
+marker. Retained evidence compaction bounds still keep 8 records per family, so
+storage eviction itself marks the projection incomplete. Since Go has no
+`authorization_version`, the only observable difference from Rust is that the
+snapshot flag is absent while the omission notice is present.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -1029,4 +1049,11 @@ deduplication for tool outputs.
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full
   `go test ./appserver -count=1` (223.5s), and `go build ./...` pass.
-- For `#57420`: `go test ./parity -run TestPrecomputedAppServerExportsMatchRustTarget -count=1` passes.
+- For `#57420`: `go test ./parity -run TestPrecomputedAppServerExportsMatchRustTarget -count=1` passes, and
+  `go test ./appserver -run 'TestPrecomputedExportArtifactsMatchTargetRustCommit' -count=1` passes after
+  re-anchoring the pinned hashes to the artifacts in the `eec8bde1e9` checkout.
+- For `#57425`/`#47947`: `go test ./appserver -run 'TestGuardianRoot' -count=1`,
+  `go test ./appserver -run 'Guardian' -count=1`, `go test ./retainedctx ./context -count=1`,
+  and the full `go test ./state -count=1` pass. The full `go test ./appserver -count=1`
+  (313.6s) also passes. The regression test mirrors Rust's ID-less checkpoint: one
+  capped user excerpt, both incomplete-evidence notices, and no duplicate legacy copy.

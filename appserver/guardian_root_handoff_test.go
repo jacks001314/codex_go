@@ -33,42 +33,51 @@ func TestGuardianRootHandoffSelectionUsesWorkerWindowsLikeRust(t *testing.T) {
 		guardianHandoffCall(t, "collaboration.send_message", "other"),
 	}
 	candidates := []guardianRootCandidate{
-		{message: guardianRootTestMessage("initial"), order: 1, hasOrder: true},
-		{message: guardianRootTestMessage("first answer"), order: 1, hasOrder: true},
-		{message: guardianRootTestMessage("other branch"), order: 2, hasOrder: true},
-		{message: guardianRootTestMessage("second answer"), order: 2, hasOrder: true},
-		{message: guardianRootTestMessage("third answer"), order: 2, hasOrder: true},
-		{message: guardianRootTestMessage("latest answer"), order: 3, hasOrder: true},
-		{message: guardianRootTestMessage("unordered legacy")},
+		{message: guardianRootUserMessage("initial"), order: 1, hasOrder: true},
+		{message: guardianRootAssistantMessage("first answer"), order: 1, hasOrder: true},
+		{message: guardianRootUserMessage("other branch"), order: 2, hasOrder: true},
+		{message: guardianRootAssistantMessage("second answer"), order: 2, hasOrder: true},
+		{message: guardianRootAssistantMessage("third answer"), order: 2, hasOrder: true},
+		{message: guardianRootAssistantMessage("latest answer"), order: 3, hasOrder: true},
+		{message: guardianRootUserMessage("unordered legacy")},
 	}
 	selected := guardianRootHandoffSelection(items, candidates, "/root/worker/sub", "collaboration")
 	var got []string
 	for _, candidate := range selected {
 		got = append(got, candidate.message.Text)
 	}
-	want := []string{"initial", "first answer", "second answer", "third answer", "latest answer", "unordered legacy"}
+	// Rust keeps every user restriction (including another branch) and places
+	// unordered legacy evidence first, per #50026 and prepare_root_context.
+	want := []string{"unordered legacy", "initial", "first answer", "other branch", "second answer", "third answer", "latest answer"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected messages = %#v, want %#v", got, want)
 	}
 }
 
-func TestGuardianRootHandoffSelectionFallsBackForHeartbeatLikeRust(t *testing.T) {
+func TestGuardianRootHandoffSelectionAppliesDuringHeartbeatLikeRust(t *testing.T) {
 	heartbeat := guardianHandoffUser(t, "heartbeat", 2, "<heartbeat>\n<instructions>run</instructions>\n</heartbeat>")
 	items := []session.Item{
 		guardianHandoffUser(t, "user-1", 1, "initial"),
 		heartbeat,
+		guardianHandoffCall(t, "collaboration.spawn_agent", "worker"),
 	}
-	if selected := guardianRootHandoffSelection(items, []guardianRootCandidate{
-		{message: guardianRootTestMessage("initial"), order: 1, hasOrder: true},
-	}, "/root/worker", "collaboration"); selected != nil {
-		t.Fatalf("heartbeat selected handoff context: %#v", selected)
+	selected := guardianRootHandoffSelection(items, []guardianRootCandidate{
+		{message: guardianRootUserMessage("initial"), order: 1, hasOrder: true},
+		{message: guardianRootUserMessage("<heartbeat>\n<instructions>run</instructions>\n</heartbeat>"), order: 2, hasOrder: true},
+	}, "/root/worker", "collaboration")
+	var got []string
+	for _, candidate := range selected {
+		got = append(got, candidate.message.Text)
+	}
+	if want := []string{"initial", "<heartbeat>\n<instructions>run</instructions>\n</heartbeat>"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("heartbeat selection = %#v, want %#v", got, want)
 	}
 }
 
 func TestGuardianRootHandoffSelectionFallsBackWithoutUsableWindowLikeRust(t *testing.T) {
 	items := []session.Item{guardianHandoffUser(t, "user-1", 1, "initial")}
 	if selected := guardianRootHandoffSelection(items, []guardianRootCandidate{
-		{message: guardianRootTestMessage("initial"), order: 1, hasOrder: true},
+		{message: guardianRootUserMessage("initial"), order: 1, hasOrder: true},
 	}, "/root/worker", "collaboration"); selected != nil {
 		t.Fatalf("context without a handoff call selected messages: %#v", selected)
 	}
@@ -88,15 +97,19 @@ func TestGuardianRootHandoffSelectionReadsRecordedNestedCallsLikeRust(t *testing
 		},
 	}
 	selected := guardianRootHandoffSelection(items, []guardianRootCandidate{
-		{message: guardianRootTestMessage("initial"), order: 1, hasOrder: true},
+		{message: guardianRootUserMessage("initial"), order: 1, hasOrder: true},
 	}, "/root/worker", "collaboration")
 	if len(selected) != 1 || selected[0].message.Text != "initial" {
 		t.Fatalf("nested handoff selection = %#v", selected)
 	}
 }
 
-func guardianRootTestMessage(text string) state.RootMessage {
+func guardianRootUserMessage(text string) state.RootMessage {
 	return state.RootMessage{Kind: state.RootMessageUser, Text: text}
+}
+
+func guardianRootAssistantMessage(text string) state.RootMessage {
+	return state.RootMessage{Kind: state.RootMessageAssistant, Text: text}
 }
 
 func sessionItemMessage(id string, role string, text string) session.Item {

@@ -73,6 +73,16 @@ func (u *UserGoalUpdate) ContentKind() string {
 	return UserGoalContentKind
 }
 
+// UserGoalUpdateMatchesText reports whether text is a rendered goal
+// instruction, mirroring Rust's `UserGoalUpdate::matches_text` marker check.
+func UserGoalUpdateMatchesText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(strings.ToLower(trimmed), strings.ToLower(userGoalOpenTag)) {
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(trimmed), strings.ToLower(userGoalCloseTag))
+}
+
 // Body renders the model-visible text between the fragment markers.
 func (u *UserGoalUpdate) Body() string {
 	if u == nil {

@@ -589,18 +589,26 @@ func SenderUserMessagesSectionItems(context *retainedctx.RetainedContext) []stri
 	return []string{snapshot.Text}
 }
 
-// RenderVerifiedAnswer mirrors Rust's `render_verified_answer`: one complete
-// response keeping both sides of every question/answer pair, or nothing.
-func RenderVerifiedAnswer(answer *retainedctx.VerifiedAnswer) (string, bool) {
+// RenderOriginalVerifiedAnswer mirrors Rust's `render_original_verified_answer`:
+// original question/answer bodies with their source roles, without a
+// request-selection decision. Root request preparation applies the shared
+// answer budget itself.
+func RenderOriginalVerifiedAnswer(answer *retainedctx.VerifiedAnswer) string {
 	if answer == nil {
-		return "", false
+		return ""
 	}
 	var builder strings.Builder
 	for _, pair := range answer.Questions {
 		builder.WriteString(RootMessage{Kind: RootMessageAssistant, Text: pair.Question}.Render())
 		builder.WriteString(RootMessage{Kind: RootMessageUser, Text: pair.Answer}.Render())
 	}
-	text := builder.String()
+	return builder.String()
+}
+
+// RenderVerifiedAnswer mirrors Rust's `render_verified_answer`: one complete
+// response keeping both sides of every question/answer pair, or nothing.
+func RenderVerifiedAnswer(answer *retainedctx.VerifiedAnswer) (string, bool) {
+	text := RenderOriginalVerifiedAnswer(answer)
 	if text == "" || len(text) > utils.ApproxBytesForTokens(verifiedAnswerTokens) {
 		return "", false
 	}

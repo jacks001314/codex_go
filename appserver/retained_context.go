@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	codexctx "codex_go/context"
 	"codex_go/features"
 	"codex_go/retainedctx"
 	"codex_go/rollout"
@@ -316,12 +317,14 @@ func retainedRecordForSessionItem(item *session.Item, index int, metadata *retai
 		}
 	}
 	if assistantMessage {
-		message.Text = utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens))
+		// Rust records retained evidence through `guardian_truncate_text`, so the
+		// omission marker and both retained ends must match the root projection.
+		message.Text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
 		message.Complete = len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
 	} else {
 		// Rust bounds every retained original, and an instruction is only complete
 		// when the harness classified each content entry as genuine user content.
-		message.Text = utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens))
+		message.Text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
 		message.Complete = retainedInstructionComplete(responseItem, hasResponseItem) &&
 			len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
 		// Rust's `UserInputOrigin::from_message`: only a user message whose

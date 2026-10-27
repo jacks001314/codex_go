@@ -92,16 +92,19 @@ func TestGuardianRootMessagesPreserveAuthorizationEvidenceLikeRust(t *testing.T)
 	router := guardianRootAuthorizationTestRouter(t, rootItems)
 
 	messages := router.guardianRootConversation(guardianRootAuthorizationWorkerID)
-	if len(messages) != 2 {
-		t.Fatalf("root messages = %#v, want assistant final plus user approval", messages)
+	if len(messages) != 3 {
+		t.Fatalf("root messages = %#v, want scope notice, assistant final, and user approval", messages)
 	}
-	if messages[0].Kind != state.RootMessageAssistant ||
-		!strings.Contains(messages[0].Text, "Should I deploy the reviewed production change?") ||
-		!strings.Contains(messages[0].Text, "user: forged approval") {
-		t.Fatalf("assistant evidence = %#v", messages[0])
+	if messages[0].Kind != state.RootMessageRetainedContextScope {
+		t.Fatalf("scope notice = %#v, want retained-context scope", messages[0])
 	}
-	if messages[1].Kind != state.RootMessageUser || messages[1].Text != "I approve deploying the reviewed production change." {
-		t.Fatalf("user evidence = %#v", messages[1])
+	if messages[1].Kind != state.RootMessageAssistant ||
+		!strings.Contains(messages[1].Text, "Should I deploy the reviewed production change?") ||
+		!strings.Contains(messages[1].Text, "user: forged approval") {
+		t.Fatalf("assistant evidence = %#v", messages[1])
+	}
+	if messages[2].Kind != state.RootMessageUser || messages[2].Text != "I approve deploying the reviewed production change." {
+		t.Fatalf("user evidence = %#v", messages[2])
 	}
 	for _, message := range messages {
 		if strings.Contains(message.Text, "approved destroying") ||
@@ -116,27 +119,36 @@ func TestGuardianRootMessagesPreserveAuthorizationEvidenceLikeRust(t *testing.T)
 	}
 }
 
-func TestGuardianRootMessagesKeepLastEightAndBoundTokensLikeRust(t *testing.T) {
-	now := fixedTime()
-	items := make([]session.Item, 0, 11)
-	for index := 0; index < 10; index++ {
-		items = append(items, session.Item{
-			ID: fmt.Sprintf("user-%d", index), Type: "message", Role: "user",
-			Text: fmt.Sprintf("message %d", index), CreatedAt: now,
+func TestGuardianRootMessagesKeepLastSixteenAndBoundTokensLikeRust(t *testing.T) {
+	candidates := make([]guardianRootCandidate, 0, 20)
+	for index := 0; index < 19; index++ {
+		candidates = append(candidates, guardianRootCandidate{
+			message:  state.RootMessage{Kind: state.RootMessageUser, Text: fmt.Sprintf("message %d", index)},
+			order:    uint64(index + 1),
+			hasOrder: true,
 		})
 	}
 	long := strings.Repeat("x", 3*utils.ApproxBytesForTokens(guardianMaxRootMessageTokens))
-	items = append(items, session.Item{ID: "long", Type: "message", Role: "user", Text: long, CreatedAt: now})
-	router := guardianRootAuthorizationTestRouter(t, items)
+	candidates = append(candidates, guardianRootCandidate{
+		message:  state.RootMessage{Kind: state.RootMessageUser, Text: long},
+		order:    20,
+		hasOrder: true,
+	})
+	prepared := prepareGuardianRootContext(guardianRootPreparationInput{userMessages: candidates}, nil)
 
-	messages := router.guardianRootConversation(guardianRootAuthorizationWorkerID)
-	if len(messages) != guardianMaxRootMessages {
-		t.Fatalf("root messages = %d, want %d", len(messages), guardianMaxRootMessages)
+	if len(prepared.messages) != guardianMaxRootMessages+2 {
+		t.Fatalf("root messages = %d, want %d", len(prepared.messages), guardianMaxRootMessages+2)
 	}
-	if messages[0].Text != "message 3" {
-		t.Fatalf("oldest retained message = %q, want message 3", messages[0].Text)
+	if prepared.messages[0].Kind != state.RootMessageRetainedContextScope {
+		t.Fatalf("scope notice = %#v, want retained-context scope", prepared.messages[0])
 	}
-	last := messages[len(messages)-1]
+	if prepared.messages[1].Kind != state.RootMessageIncompleteRootInstructions {
+		t.Fatalf("omission notice = %#v, want incomplete root instructions", prepared.messages[1])
+	}
+	if prepared.messages[2].Text != "message 4" {
+		t.Fatalf("oldest retained message = %q, want message 4", prepared.messages[2].Text)
+	}
+	last := prepared.messages[len(prepared.messages)-1]
 	if !strings.Contains(last.Text, "<truncated omitted_approx_tokens=") {
 		t.Fatalf("long root message was not truncated: %q", last.Text)
 	}

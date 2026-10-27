@@ -10,7 +10,6 @@ import (
 	"codex_go/auth"
 	"codex_go/compact"
 	"codex_go/config"
-	codexctx "codex_go/context"
 	"codex_go/eventmap"
 	"codex_go/features"
 	"codex_go/install"
@@ -441,62 +440,34 @@ func (r *RuntimeRouter) guardianRootConversationWithHandoff(workerThreadID strin
 		return nil
 	}
 
-	candidates := make([]guardianRootCandidate, 0, guardianMaxRootMessages)
-	for i := range record.Items {
-		item := record.Items[i]
-		if guardianRootItemIsSummary(&item) {
-			continue
-		}
-		switch {
-		case guardianRootItemIsUserMessage(&item):
-			text := guardianRootMessageText(&item)
-			if text == "" ||
-				strings.HasPrefix(strings.TrimSpace(text), "<user_action>") ||
-				guardianRootContextualUserText(text) {
-				continue
-			}
-			text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
-			order, hasOrder := guardianRootItemOrder(&item)
-			candidates = append(candidates, guardianRootCandidate{
-				message:  state.RootMessage{Kind: state.RootMessageUser, Text: text},
-				order:    order,
-				hasOrder: hasOrder,
-			})
-		case guardianRootItemIsAgentMessage(&item):
-			if phase := strings.ToLower(strings.TrimSpace(stringValueFromMap(item.Data, "phase"))); phase != "" && phase != "final_answer" {
-				continue
-			}
-			text := guardianRootMessageText(&item)
-			if text == "" {
-				continue
-			}
-			text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
-			order, hasOrder := guardianRootItemOrder(&item)
-			candidates = append(candidates, guardianRootCandidate{
-				message:  state.RootMessage{Kind: state.RootMessageAssistant, Text: text},
-				order:    order,
-				hasOrder: hasOrder,
-			})
-		}
+	rootID := string(record.ID)
+	retained := r.retainedContextForThread(rootID)
+	missingRootInstructions := retained != nil && retained.HasMissingUserMessages()
+	var userCandidates []guardianRootCandidate
+	var retainedUserSources []retainedctx.RetainedUserMessage
+	if retained != nil {
+		userCandidates, retainedUserSources, missingRootInstructions = guardianRootRetainedUserCandidates(retained, missingRootInstructions)
+	} else {
+		userCandidates = guardianRootItemUserCandidates(record.Items)
 	}
+	deliveredTexts := guardianRootDeliveredTexts(record.Items)
+	assistantCandidates := guardianRootLiveAssistantCandidates(record.Items, deliveredTexts)
+	var handoffBoundaries []uint64
 	if handoffEnabled {
-		if selected := guardianRootHandoffSelection(record.Items, candidates, workerPath, toolNamespace); selected != nil {
-			candidates = selected
-		}
+		handoffBoundaries = guardianRootHandoffBoundaries(record.Items, workerPath, toolNamespace)
 	}
-	messages := make([]state.RootMessage, 0, len(candidates))
-	for _, candidate := range candidates {
-		messages = append(messages, candidate.message)
-	}
-	if len(messages) > guardianMaxRootMessages {
-		messages = messages[len(messages)-guardianMaxRootMessages:]
-	}
-	return messages
+	prepared := prepareGuardianRootContext(guardianRootPreparationInput{
+		userMessages:            userCandidates,
+		assistantMessages:       assistantCandidates,
+		retainedAssistants:      guardianRootRetainedAssistantCandidates(retained, record.Items),
+		retainedUserSources:     retainedUserSources,
+		handoffBoundaries:       handoffBoundaries,
+		missingRootInstructions: missingRootInstructions,
+		missingAssistantContext: retained != nil && retained.HasOmittedAssistantMessages(),
+		missingVerifiedAnswers:  retained != nil && !retained.VerifiedAnswersComplete(),
+	}, r.guardianRootLegacyUserMessages(record))
+	return prepared.messages
 }
-
-const (
-	guardianMaxRootMessages = 8
-)
 
 func guardianRootItemIsUserMessage(item *session.Item) bool {
 	if !sessionItemIsUserMessage(item) {

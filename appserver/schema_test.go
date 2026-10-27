@@ -161,8 +161,11 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// (#53784, ThreadRealtimeStartParams.voiceSessionId).
 		// Round-110 re-anchor to upstream e389b2444c: both artifacts were
 		// re-copied byte-for-byte from the pinned Rust checkout.
-		{"stable", stablePrecomputedExports, "7c2f5d6bb1f97def0009284d4614a40bcbee6080de01f294f028288fd3291359"},
-		{"experimental", experimentalPrecomputedExports, "86e0d3cb0de1b2264980311ac0df14a858f3ad2cee371d635f541e6e06212258"},
+		// Re-anchored again at eec8bde1e9 (#57420): the optional thread-item
+		// timestamps changed both precomputed exports; the SHA-256 values are
+		// the pinned checkout's artifacts.
+		{"stable", stablePrecomputedExports, "52dffc6ece162ea9bd1d2d1ba8172e4429af23f13d8bfb9b98cab67dd15a4ad0"},
+		{"experimental", experimentalPrecomputedExports, "af23587312e94f77f4dde5e33d1ef3f0b841dc715eac8254ae1892d659d199c6"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
