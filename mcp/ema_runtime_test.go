@@ -33,7 +33,7 @@ func TestRuntimeConfigAdmitsEnterpriseMCPServer(t *testing.T) {
 	if config.ProtocolModeOverride == nil || *config.ProtocolModeOverride != MCPProtocol20260728 || !config.EMAAuthExtension {
 		t.Fatalf("protocol mode/extension = %+v/%v", config.ProtocolModeOverride, config.EMAAuthExtension)
 	}
-	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: "user-1", AccountID: "account-1"}, nil, nil)
+	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: "user-1", AccountID: "account-1"}, nil, nil, nil)
 	attached := runtime.Servers["enterprise"].Config
 	if attached.ApplyHTTPRequest == nil {
 		t.Fatal("enterprise server has no authorization applier")
@@ -210,12 +210,58 @@ func TestAttachEnterpriseMCPAuthorizationSharesCredentialStatusAcrossServers(t *
 		t.Fatal(err)
 	}
 
-	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: scope.UserID, AccountID: scope.WorkspaceID}, nil, nil)
+	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: scope.UserID, AccountID: scope.WorkspaceID}, nil, nil, nil)
 	for _, name := range []string{"first", "second"} {
 		config := runtime.Servers[name].Config
 		if !config.EMAConfigured || !config.EMACredentialsAvailable || config.ApplyHTTPRequest == nil {
 			t.Fatalf("%s config = %+v, want configured EMA with an available grant", name, config)
 		}
+	}
+}
+
+// TestEMAAuthManagerRevokesWhenAccountLoginChangesLikeRust mirrors #55680: an
+// account login replacement revokes enterprise authorization before a token
+// exchange, and the manager stays revoked.
+func TestEMAAuthManagerRevokesWhenAccountLoginChangesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: "https://idp.example", ClientID: "idp-client",
+	}}
+	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
+		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
+		ServerURL:    profile.IDP.Issuer,
+		ClientID:     profile.IDP.ClientID,
+		RefreshToken: "refresh-token",
+		AccessToken:  "idp-access",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accountCurrent := false
+	manager, err := NewEMAAuthManager("enterprise", &ServerConfig{
+		URL: "https://resource.example/mcp", Auth: ServerAuthEMAAuth, OAuthClientID: "mcp-client",
+	}, EMAAuthOptions{
+		CodexHome:           home,
+		StoreMode:           OAuthCredentialsStoreFile,
+		Profile:             profile,
+		Scope:               scope,
+		AccountLoginCurrent: func() (bool, error) { return accountCurrent, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequest(http.MethodPost, "https://resource.example/mcp", nil)
+	err = manager.ApplyHTTPRequest(request, nil)
+	if err == nil || !strings.Contains(err.Error(), "enterprise identity requires authentication") {
+		t.Fatalf("ApplyHTTPRequest() error = %v, want reauthentication required", err)
+	}
+	// A later successful check does not restore a revoked manager.
+	accountCurrent = true
+	if err := manager.ApplyHTTPRequest(request, nil); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("revoked manager error = %v", err)
+	}
+	if manager.CredentialsAvailable() {
+		t.Fatal("revoked manager must not report enterprise credentials")
 	}
 }
 

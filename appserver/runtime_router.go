@@ -12241,7 +12241,7 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	if r != nil {
 		base.HTTPClient = r.httpClientForConfig(&config.Config{Values: values})
 	}
-	r.attachEnterpriseMCPAuthorization(base, codexHome, runtimeAuth)
+	r.attachEnterpriseMCPAuthorization(base, codexHome, runtimeAuth, r.currentCachedAuthSnapshot())
 	if r == nil || r.services.Plugins == nil {
 		return base
 	}
@@ -12294,15 +12294,34 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 		return base
 	}
 	merged := mcp.NewManager(nil).RuntimeConfig(*base, overlays)
-	r.attachEnterpriseMCPAuthorization(merged, codexHome, runtimeAuth)
+	r.attachEnterpriseMCPAuthorization(merged, codexHome, runtimeAuth, r.currentCachedAuthSnapshot())
 	return merged
 }
 
-func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeConfig, codexHome string, runtimeAuth *mcp.RuntimeAuth) {
+func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeConfig, codexHome string, runtimeAuth *mcp.RuntimeAuth, expected *auth.AuthDotJSON) {
 	if runtime == nil {
 		return
 	}
-	mcp.AttachEnterpriseMCPAuthorization(runtime, codexHome, runtimeAuth, r.currentEMAAuthScope, r.currentEMALoginGeneration)
+	var accountLoginCurrent func() (bool, error)
+	if expected != nil {
+		// Capture the store options with the login so the check inspects the
+		// same persisted credential the enterprise manager was built against
+		// (Rust #55680).
+		storeOptions := r.authStoreOptions()
+		accountLoginCurrent = func() (bool, error) {
+			return auth.AccountLoginIsCurrent(codexHome, storeOptions, expected, r.currentCachedAuthSnapshot)
+		}
+	}
+	mcp.AttachEnterpriseMCPAuthorization(runtime, codexHome, runtimeAuth, r.currentEMAAuthScope, r.currentEMALoginGeneration, accountLoginCurrent)
+}
+
+// currentCachedAuthSnapshot returns the account service's cached credential,
+// the Go equivalent of Rust AuthManager::auth_cached.
+func (r *RuntimeRouter) currentCachedAuthSnapshot() *auth.AuthDotJSON {
+	if r == nil || r.services.Account == nil {
+		return nil
+	}
+	return r.services.Account.AuthSnapshot()
 }
 
 // currentEMALoginGeneration returns the login revision EMA managers capture at

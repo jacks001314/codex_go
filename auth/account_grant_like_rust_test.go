@@ -217,6 +217,88 @@ func TestAccountOAuthGrantRejectsRotatedReplacedOrMetadataLosingCredentialsLikeR
 	}
 }
 
+// TestAccountLoginIsCurrentDetectsPersistedReplacementLikeRust mirrors #55680:
+// a replacement persisted by another client is detected even while the cache
+// still holds the previous login and the account owner is unchanged.
+func TestAccountLoginIsCurrentDetectsPersistedReplacementLikeRust(t *testing.T) {
+	home := t.TempDir()
+	options := &StoreOptions{Mode: AuthCredentialsStoreFile}
+	expected := saveGrantTestAuth(t, home, map[string]any{
+		"login_owner_id":  "login-1",
+		"account_id":      "workspace-a",
+		"chatgpt_user_id": "user-a",
+		"refresh_token":   "refresh-1",
+	})
+	cached := expected
+	current, err := AccountLoginIsCurrent(home, options, expected, func() *AuthDotJSON { return cached })
+	if err != nil || !current {
+		t.Fatalf("current login = %v, error = %v", current, err)
+	}
+
+	// Another client replaces the login for the same account without this
+	// process publishing the new snapshot to its cache.
+	replacement := &AuthDotJSON{AuthMode: "chatgpt", Tokens: map[string]any{
+		"login_owner_id":  "login-2",
+		"account_id":      "workspace-a",
+		"chatgpt_user_id": "user-a",
+		"refresh_token":   "refresh-2",
+	}}
+	if err := NewStoreWithOptions(home, options).Save(*replacement); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	current, err = AccountLoginIsCurrent(home, options, expected, func() *AuthDotJSON { return cached })
+	if err != nil || current {
+		t.Fatalf("persisted replacement login = %v, error = %v", current, err)
+	}
+
+	// Even after the cache catches up, the captured login is no longer current.
+	cached = replacement
+	current, err = AccountLoginIsCurrent(home, options, expected, func() *AuthDotJSON { return cached })
+	if err != nil || current {
+		t.Fatalf("captured login after replacement = %v, error = %v", current, err)
+	}
+
+	// Non-ChatGPT auth compares the account and user identity instead.
+	apiKey := &AuthDotJSON{OpenAIAPIKey: "sk-test", Tokens: map[string]any{
+		"account_id":      "workspace-a",
+		"chatgpt_user_id": "user-a",
+	}}
+	current, err = AccountLoginIsCurrent(home, options, apiKey, func() *AuthDotJSON { return apiKey })
+	if err != nil || !current {
+		t.Fatalf("api-key login = %v, error = %v", current, err)
+	}
+	otherUser := &AuthDotJSON{OpenAIAPIKey: "sk-test", Tokens: map[string]any{
+		"account_id":      "workspace-a",
+		"chatgpt_user_id": "user-b",
+	}}
+	current, err = AccountLoginIsCurrent(home, options, apiKey, func() *AuthDotJSON { return otherUser })
+	if err != nil || current {
+		t.Fatalf("changed api-key identity = %v, error = %v", current, err)
+	}
+
+	// A chatgpt login without owner metadata can never be current.
+	anonymous := &AuthDotJSON{AuthMode: "chatgpt", Tokens: map[string]any{
+		"account_id":      "workspace-a",
+		"chatgpt_user_id": "user-a",
+	}}
+	current, err = AccountLoginIsCurrent(home, options, anonymous, func() *AuthDotJSON { return anonymous })
+	if err != nil || current {
+		t.Fatalf("login without owner = %v, error = %v", current, err)
+	}
+}
+
+// TestAccountLoginIsCurrentReportsStorageFailureLikeRust mirrors #55680: an
+// unavailable credential store is an error, not proof that the login moved.
+func TestAccountLoginIsCurrentReportsStorageFailureLikeRust(t *testing.T) {
+	withoutOSKeyring(t)
+	home := t.TempDir()
+	snapshot := saveGrantTestAuth(t, home, grantTestTokens("login-1", "refresh-1"))
+	_, err := AccountLoginIsCurrent(home, &StoreOptions{Mode: AuthCredentialsStoreAuto}, snapshot, func() *AuthDotJSON { return snapshot })
+	if err == nil || !strings.Contains(err.Error(), "Account credential storage is unavailable.") {
+		t.Fatalf("AccountLoginIsCurrent() error = %v", err)
+	}
+}
+
 func TestStoreLoadAccountGrantKeepsKeyringFailuresStrictLikeRust(t *testing.T) {
 	withoutOSKeyring(t)
 	home := t.TempDir()

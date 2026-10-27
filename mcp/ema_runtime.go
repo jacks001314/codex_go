@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	managedconfig "codex_go/config"
@@ -49,7 +50,11 @@ type EMAAuthOptions struct {
 	// revokes this manager even when the account owner is unchanged, including
 	// the loss of login metadata (Rust #55546 login_generation).
 	CurrentLoginGeneration func() uint64
-	HTTPClient             *http.Client
+	// AccountLoginCurrent rechecks the cached and persisted account login the
+	// manager was built with. A persisted replacement can leave the auth cache
+	// holding the previous login even for the same account (Rust #55680).
+	AccountLoginCurrent func() (bool, error)
+	HTTPClient          *http.Client
 }
 
 // EMAAuthManager exchanges the account-scoped enterprise IdP grant for a
@@ -68,6 +73,8 @@ type EMAAuthManager struct {
 	currentScope              func() (EMAAuthScope, bool)
 	loginGeneration           uint64
 	currentLoginGeneration    func() uint64
+	accountLoginCurrent       func() (bool, error)
+	revoked                   atomic.Bool
 	codexHome                 string
 	storeMode                 OAuthCredentialsStoreMode
 	httpClient                *http.Client
@@ -102,6 +109,7 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 		scope:                     options.Scope,
 		currentScope:              options.CurrentScope,
 		currentLoginGeneration:    options.CurrentLoginGeneration,
+		accountLoginCurrent:       options.AccountLoginCurrent,
 		codexHome:                 strings.TrimSpace(options.CodexHome),
 		storeMode:                 options.StoreMode,
 		httpClient:                options.HTTPClient,
@@ -174,7 +182,7 @@ func (m *EMAAuthManager) ApplyHTTPRequest(request *http.Request, _ []byte) error
 }
 
 func (m *EMAAuthManager) scopeIsCurrent() bool {
-	if m == nil {
+	if m == nil || m.revoked.Load() {
 		return false
 	}
 	if m.currentLoginGeneration != nil && m.currentLoginGeneration() != m.loginGeneration {
@@ -191,6 +199,30 @@ func (m *EMAAuthManager) scopeIsCurrent() bool {
 		strings.TrimSpace(current.WorkspaceID) == strings.TrimSpace(m.scope.WorkspaceID)
 }
 
+// checkAccount mirrors EmaAuth::check_account: a failed ownership check
+// revokes this manager, while a storage failure is reported without revoking
+// (Rust #55680).
+func (m *EMAAuthManager) checkAccount() error {
+	if m == nil {
+		return errors.New("enterprise MCP authorization is unavailable")
+	}
+	if m.revoked.Load() {
+		return &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	if m.accountLoginCurrent == nil {
+		return nil
+	}
+	current, err := m.accountLoginCurrent()
+	if err != nil {
+		return err
+	}
+	if !current {
+		m.revoked.Store(true)
+		return &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	return nil
+}
+
 func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -203,6 +235,12 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	client := m.httpClient
 	if client == nil {
 		client = http.DefaultClient
+	}
+	// Rust #55680: check the account login before an exchange and again before
+	// accepting its result, so a persisted login replacement cannot keep using
+	// enterprise authority through a stale auth cache.
+	if err := m.checkAccount(); err != nil {
+		return "", err
 	}
 	credentialName := EMAAuthCredentialName(m.profile.IDP, m.scope)
 	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(credentialName, m.profile.IDP.Issuer)
@@ -257,6 +295,9 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := m.checkAccount(); err != nil {
+		return "", err
+	}
 	m.token = token.AccessToken
 	m.tokenExpiresAt = time.Time{}
 	if token.ExpiresIn != nil && *token.ExpiresIn > 0 {
@@ -270,7 +311,7 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 
 // AttachEnterpriseMCPAuthorization configures every admitted EMA server with
 // its per-request bearer exchange and credential status.
-func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, auth *RuntimeAuth, currentScope func() (EMAAuthScope, bool), currentLoginGeneration func() uint64) {
+func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, auth *RuntimeAuth, currentScope func() (EMAAuthScope, bool), currentLoginGeneration func() uint64, accountLoginCurrent func() (bool, error)) {
 	if runtime == nil || !runtime.XAAEnabled || runtime.EnterpriseManagedAuth == nil {
 		return
 	}
@@ -291,6 +332,7 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 			Scope:                  scope,
 			CurrentScope:           currentScope,
 			CurrentLoginGeneration: currentLoginGeneration,
+			AccountLoginCurrent:    accountLoginCurrent,
 			HTTPClient:             httpClientForEMAAuth(runtime),
 		})
 		if err != nil {

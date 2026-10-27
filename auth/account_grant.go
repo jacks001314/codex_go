@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 )
@@ -78,10 +79,20 @@ func (g *AccountOAuthGrant) LoginGeneration() uint64 {
 	return g.loginGeneration
 }
 
+// SameCredential reports whether two grants carry the same credential
+// revision without exposing the refresh token to state holders (Rust #55680).
+func (g *AccountOAuthGrant) SameCredential(other *AccountOAuthGrant) bool {
+	if g == nil || other == nil {
+		return g == other
+	}
+	return reflect.DeepEqual(g.tokens, other.tokens)
+}
+
 // CheckCurrent rechecks the caller's cached credential and persisted storage
 // after asynchronous work, before accepting a token or publishing a
 // connection. A storage failure is an error, never proof that the saved grant
-// is still valid.
+// is still valid. The complete token data must still match, so an access-token
+// rotation also invalidates the grant (Rust #55680).
 func (g *AccountOAuthGrant) CheckCurrent() (bool, error) {
 	if !g.ownerIsCurrent() {
 		return false, nil
@@ -93,8 +104,61 @@ func (g *AccountOAuthGrant) CheckCurrent() (bool, error) {
 	if !g.ownerIsCurrent() || stored == nil {
 		return false, nil
 	}
-	return sameAccountGrant(g.tokens, stored) &&
-		tokenRefreshToken(g.tokens) == tokenRefreshToken(stored), nil
+	return reflect.DeepEqual(g.tokens, stored), nil
+}
+
+// AccountLoginIsCurrent reports whether the account login captured for an
+// enterprise authorization is still the cached and persisted login. A
+// persisted replacement can leave the auth cache holding the previous login
+// even for the same account, so both views are checked (Rust #55680).
+func AccountLoginIsCurrent(codexHome string, storeOptions *StoreOptions, expected *AuthDotJSON, cached func() *AuthDotJSON) (bool, error) {
+	if expected == nil {
+		return false, nil
+	}
+	cachedSnapshot := func() *AuthDotJSON {
+		if cached == nil {
+			return nil
+		}
+		return cached()
+	}
+	if expected.Mode() != "chatgpt" {
+		current := cachedSnapshot()
+		return current != nil && current.Mode() != "chatgpt" &&
+			AccountIDFromAuthForRestrictions(current) == AccountIDFromAuthForRestrictions(expected) &&
+			ChatGPTUserIDFromAuth(current) == ChatGPTUserIDFromAuth(expected), nil
+	}
+	if tokenLoginOwnerID(expected.Tokens) == "" {
+		return false, nil
+	}
+	matchesOwner := func(snapshot *AuthDotJSON) bool {
+		return snapshot != nil && snapshot.Mode() == "chatgpt" &&
+			sameAccountLogin(expected.Tokens, snapshot.Tokens)
+	}
+	if !matchesOwner(cachedSnapshot()) {
+		return false, nil
+	}
+	stored, err := readPersistedAccountTokens(codexHome, storeOptions)
+	if err != nil {
+		return false, err
+	}
+	return matchesOwner(cachedSnapshot()) && matchesOwner(stored), nil
+}
+
+// readPersistedAccountTokens loads the persisted ChatGPT login without
+// requiring an EMA-eligible grant: dedicated enterprise credentials still
+// belong to this account login (Rust #55680).
+func readPersistedAccountTokens(codexHome string, storeOptions *StoreOptions) (*AuthDotJSON, error) {
+	if IsWorkloadIdentitySelected() || (storeOptions != nil && storeOptions.Mode == AuthCredentialsStoreEphemeral) {
+		return nil, nil
+	}
+	stored, err := NewStoreWithOptions(codexHome, storeOptions).LoadAccountGrant()
+	if err != nil {
+		return nil, errors.New("Account credential storage is unavailable.")
+	}
+	if stored == nil || stored.Mode() != "chatgpt" {
+		return nil, nil
+	}
+	return stored, nil
 }
 
 func (g *AccountOAuthGrant) ownerIsCurrent() bool {
