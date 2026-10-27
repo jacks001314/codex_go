@@ -133,6 +133,34 @@ Grounding notes:
 - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and
   `#56301` are N/A: Rust test-only stabilization, fixture, or `#[cfg(test)]`
   helper changes with no Go analogue.
+- `#57261` is N/A: behavior-preserving refactor of Rust's apply_patch
+  handler/runtime (`prepare_apply_patch_request`,
+  `ApplyPatchRequest::approval_action`). Go's `tool.ApplyPatchExecutor` has no
+  separate orchestrator/runtime/approval-action layer and no intercepted-shell
+  patch path, so there is no equivalent split to extract.
+- `#57202` is N/A: the commit instruments a returned Rust tool-runtime future
+  with the dispatch span (`.instrument`/`.in_current_span`). Go carries spans
+  in `context.Context` through synchronous calls and has no detached futures to
+  instrument.
+- `#57260` is N/A: introduces Rust's `PreparedPermissionRequest` to share
+  argument parsing, path resolution, and approval-action construction. Go's
+  `tool/request_permissions.go` resolves its request inside one executor and the
+  approval path lives in the app-server, so the Rust type split has no Go
+  counterpart.
+- `#57257` is N/A: removes redundant connector-directory loads and clones in
+  Rust's discoverable-app suggestions. Go builds `DiscoverableInfo` candidates
+  directly from plugin detail and templates and has no cached connector
+  directory (`Arc<[AppInfo]>`) to skip.
+- `#57229` is N/A: removes Rust code-mode cell-actor pending-initial-yield state.
+  Go's `codemode` package has no cell actor, observation routing, or buffered
+  completion state; it provides the stdio and gRPC hosts only.
+- `#57294` is N/A: moves Rust plugin-manager error types into a new module and
+  boxes a realtime handoff future to bound its size. Go's plugin errors already
+  live in `plugin`, and Go futures are goroutines without enum-size concerns.
+- `#57278` is N/A: extracts Rust agent spawn/startup/communication helpers with
+  no behavior change. Go already splits those responsibilities across
+  `appserver/agent_controller.go`, `appserver/agent_runtime.go`, and
+  `exec/agent_controller.go`.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -714,7 +742,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 120 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 113 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
