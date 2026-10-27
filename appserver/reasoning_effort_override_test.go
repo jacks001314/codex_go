@@ -12,9 +12,9 @@ import (
 
 func reasoningEffortTestConfig(effort string, featureEnabled bool) *config.Config {
 	values := map[string]any{}
-	if featureEnabled {
-		values["features"] = map[string]any{"reasoning_effort_override": true}
-	}
+	// #56163 promoted the feature to stable and on by default, so the disabled
+	// case must opt out explicitly instead of relying on its absence.
+	values["features"] = map[string]any{"reasoning_effort_override": featureEnabled}
 	if effort != "" {
 		values["model_reasoning_effort"] = effort
 	}
