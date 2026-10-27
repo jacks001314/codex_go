@@ -118,9 +118,26 @@ TUI lane and are not modified here.
 | `#55498` | Noise relay handshakes emit correlated, credential-free diagnostics: executor rejections and pending-validation resets carry a classified reason and registry HTTP status in a normalized UUID stream id, capped at 100 per minute per relay connection plus one suppression marker; harness failures and completions add elapsed time and connection identifiers, WebSocket read failures are classified from typed errors, and valid stream UUIDs are forwarded to key validation as `x-codex-noise-stream-id` | `execserver/remote_relay.go`, `execserver/remote_harness.go`, like-Rust tests |
 | `#56127` | EMA MCP auth status inspection is owner-checked and never waits for account refresh; one lazy read of the account-scoped IdP grant is shared across admitted EMA servers, and a missing grant or read error is cached so every server reports the same state without repeating storage work | `mcp/ema_runtime.go`, like-Rust tests |
 | `#56081` | Decrypted local secret snapshots are cached for every namespace: managed, Codex auth and MCP OAuth keep at most one snapshot process-wide (gateway snapshots stay with their backend), reuse requires the same file path, ciphertext hash and keyring passphrase hash, concurrent misses decrypt once, writes invalidate a matching snapshot, and every read still inspects the file and keyring | `safety/secrets.go`, like-Rust tests |
+| `#55546` | Scoped account OAuth grant leases: `LeaseAccountOAuthGrant` shares one per-home refresh gate with `RefreshChatGPTTokens`, so an identity-provider exchange and a refresh cannot rotate the grant concurrently; release returns a grant that rechecks the cached login, the login generation and the persisted OAuth provenance, complete account identity and refresh token. An unavailable keyring in Auto mode is an error for grant reads, never an older file record. `login_generation` advances separately from `owner_generation`: losing login metadata revokes the login while preserving the same-account network policy, a new login to the same account advances both, and EMA managers capture the revision and revoke on any movement | `auth/account_grant.go`, `auth/change_state.go`, `mcp/ema_runtime.go`, like-Rust tests |
+| `#55646` | Auth persistence and reloads are guarded against concurrent login changes: one process-wide commit lock covers storage load/save/delete, `Resolve`, refresh persistence, logout and agent-identity writes; refreshed tokens (and agent identity records) are written only when the stored login still matches the requesting one, while older clients may drop login metadata when the refresh token matches; reload results are published only when the credential generation is unchanged, and logout invalidates pending reads even with an empty cache before republishing the store. Ordinary auth loading keeps the Auto file fallback; account-grant reads stay strict | `auth/auth.go`, `auth/oauth.go`, `auth/agent_identity_managed.go`, `appserver/runtime_router.go`, `appserver/auth_status.go`, `appserver/agent_runtime.go`, like-Rust tests |
 
 Grounding notes:
 
+- For `#55546`/`#55646`, Go has no `AuthManager` object: refresh and storage are
+  free functions over `auth.Store`, while the cached credential and revisions
+  live in `auth.AccountManager`/`auth.AuthChangeTracker` and are published by
+  `RuntimeRouter`. The lease/reload guard is therefore implemented at those
+  boundaries. The lease takes the caller's cached snapshot and login-generation
+  callback (the app-server supplies both), which is the Go equivalent of
+  reading `AuthManager.inner` and `auth_change_state_tx`. Rust's
+  `validate_auth_restrictions` on the cached grant has no separate manager-level
+  check in Go because the cached snapshot is produced by
+  `resolveAuthWithLoginRestrictions` or admitted through
+  `validateLoginAccountParams`; forced workspace/login-method restrictions are
+  enforced there. Go's EMA authorization uses an account-scoped IdP grant
+  (`ema-idp:` credentials) rather than exchanging the account OAuth token, so
+  the lease has no EMA consumer, but the login-generation revocation applies to
+  EMA exactly as upstream.
 - For `#56266`, Rust's `RequirementSource` is represented by Go's fixed
   disabled-reason strings (requirements vs explicit-and-requirements); Go does
   not carry a separate source value, so retaining the reason string is the
@@ -1346,5 +1363,21 @@ deduplication for tool outputs.
   The regression test pins that an auth/config resource-generation change yields
   an empty contents cache and that a late read holding the replaced generation
   cannot populate its successor.
+- For `#55546`: `go test ./auth -run 'AccountOAuthGrant|AuthChangeTracker|SameAuthOwner' -count=1`
+  and `go test ./mcp -run 'EMA' -count=1` pass. Coverage pins the grant's
+  required OAuth provenance/login owner/account identity/refresh token, cached
+  owner and mode mismatches, refresh exclusion blocking the authority until
+  `Release`, invalidation after token rotation, persisted login replacement,
+  login-metadata loss and logout while a lease is held, plus login generation
+  advancing separately from ownership and EMA revocation when it moves.
+- For `#55646`: `go test ./auth -count=1` (11.1s), `go test ./mcp -count=1`
+  (15.5s), `go test ./appserver -count=1` (141.1s), `go test ./model
+  ./remotecontrol -count=1` and `go test ./app -run 'Login|Logout|Auth' -count=1`
+  pass. Coverage pins the strict Auto grant read versus the ordinary file
+  fallback, refresh persistence rejecting a concurrent login replacement while
+  accepting legacy metadata loss with a matching refresh token, rotated tokens
+  moving from a fallback file to a recovered keyring, guarded agent-identity
+  writes, stale reload rejection after a login change, logout invalidation with
+  an empty cache, and a fresh reload publishing login-generation-only changes.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.

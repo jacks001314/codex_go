@@ -84,6 +84,7 @@ func (r *RuntimeRouter) refreshManagedAuthForStatus(ctx context.Context, snapsho
 		return nil, nil
 	}
 	codexHome := r.codexHomeForRollout()
+	generation := r.authChangeGeneration()
 	refreshed, err := auth.RefreshChatGPTTokens(ctx, &auth.RefreshChatGPTTokenOptions{
 		CodexHome:    codexHome,
 		RefreshToken: stringFromMap(snapshot.Tokens, "refresh_token"),
@@ -93,9 +94,13 @@ func (r *RuntimeRouter) refreshManagedAuthForStatus(ctx context.Context, snapsho
 	if err != nil {
 		return nil, err
 	}
-	if refreshed != nil {
-		r.requireAccount().ApplyAuthSnapshot(refreshed)
-		r.noteAuthChanged()
+	if refreshed == nil {
+		return nil, nil
+	}
+	if !r.publishReloadedAuth(generation, refreshed) {
+		// A login or logout landed while the refresh was in flight; the cache
+		// already holds the newer credential (Rust #55646).
+		return r.requireAccount().AuthSnapshot(), nil
 	}
 	return refreshed, nil
 }

@@ -45,7 +45,11 @@ type EMAAuthOptions struct {
 	// CurrentScope rechecks the account owner at every HTTP dispatch. A missing
 	// callback keeps the captured scope for the manager's lifetime.
 	CurrentScope func() (EMAAuthScope, bool)
-	HTTPClient   *http.Client
+	// CurrentLoginGeneration reports the account login revision. A newer login
+	// revokes this manager even when the account owner is unchanged, including
+	// the loss of login metadata (Rust #55546 login_generation).
+	CurrentLoginGeneration func() uint64
+	HTTPClient             *http.Client
 }
 
 // EMAAuthManager exchanges the account-scoped enterprise IdP grant for a
@@ -60,6 +64,8 @@ type EMAAuthManager struct {
 	profile                   managedconfig.MCPEnterpriseManagedAuthConfig
 	scope                     EMAAuthScope
 	currentScope              func() (EMAAuthScope, bool)
+	loginGeneration           uint64
+	currentLoginGeneration    func() uint64
 	codexHome                 string
 	storeMode                 OAuthCredentialsStoreMode
 	httpClient                *http.Client
@@ -81,7 +87,7 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 	if strings.TrimSpace(options.Scope.UserID) == "" || strings.TrimSpace(options.Scope.WorkspaceID) == "" {
 		return nil, errors.New("enterprise MCP requires an account owner")
 	}
-	return &EMAAuthManager{
+	manager := &EMAAuthManager{
 		serverName:                strings.TrimSpace(serverName),
 		serverURL:                 strings.TrimSpace(config.URL),
 		resource:                  strings.TrimSpace(config.OAuthResource),
@@ -91,10 +97,15 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 		profile:                   options.Profile,
 		scope:                     options.Scope,
 		currentScope:              options.CurrentScope,
+		currentLoginGeneration:    options.CurrentLoginGeneration,
 		codexHome:                 strings.TrimSpace(options.CodexHome),
 		storeMode:                 options.StoreMode,
 		httpClient:                options.HTTPClient,
-	}, nil
+	}
+	if manager.currentLoginGeneration != nil {
+		manager.loginGeneration = manager.currentLoginGeneration()
+	}
+	return manager, nil
 }
 
 // CredentialsAvailable reports whether the account has a stored enterprise IdP
@@ -160,6 +171,9 @@ func (m *EMAAuthManager) ApplyHTTPRequest(request *http.Request, _ []byte) error
 
 func (m *EMAAuthManager) scopeIsCurrent() bool {
 	if m == nil {
+		return false
+	}
+	if m.currentLoginGeneration != nil && m.currentLoginGeneration() != m.loginGeneration {
 		return false
 	}
 	if m.currentScope == nil {
@@ -239,7 +253,7 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 
 // AttachEnterpriseMCPAuthorization configures every admitted EMA server with
 // its per-request bearer exchange and credential status.
-func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, auth *RuntimeAuth, currentScope func() (EMAAuthScope, bool)) {
+func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, auth *RuntimeAuth, currentScope func() (EMAAuthScope, bool), currentLoginGeneration func() uint64) {
 	if runtime == nil || !runtime.XAAEnabled || runtime.EnterpriseManagedAuth == nil {
 		return
 	}
@@ -254,12 +268,13 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 			scope = EMAAuthScope{UserID: auth.ChatGPTUserID, WorkspaceID: auth.AccountID}
 		}
 		manager, err := NewEMAAuthManager(name, &config, EMAAuthOptions{
-			CodexHome:    codexHome,
-			StoreMode:    config.OAuthCredentialsStoreMode,
-			Profile:      *runtime.EnterpriseManagedAuth,
-			Scope:        scope,
-			CurrentScope: currentScope,
-			HTTPClient:   httpClientForEMAAuth(runtime),
+			CodexHome:              codexHome,
+			StoreMode:              config.OAuthCredentialsStoreMode,
+			Profile:                *runtime.EnterpriseManagedAuth,
+			Scope:                  scope,
+			CurrentScope:           currentScope,
+			CurrentLoginGeneration: currentLoginGeneration,
+			HTTPClient:             httpClientForEMAAuth(runtime),
 		})
 		if err != nil {
 			// Admission stays intact: the server is configured, but its first

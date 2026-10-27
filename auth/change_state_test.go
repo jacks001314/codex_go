@@ -80,6 +80,52 @@ func TestSameAuthOwnerRequiresCompleteIdentity(t *testing.T) {
 	}
 }
 
+func TestAuthChangeTrackerTracksLoginGenerationSeparatelyLikeRust(t *testing.T) {
+	withLogin := func(login string, token string) *AuthDotJSON {
+		snapshot := chatGPTChangeStateAuth("user-a", "workspace-a", token)
+		if login != "" {
+			snapshot.Tokens["login_owner_id"] = login
+		}
+		return snapshot
+	}
+	tracker := NewAuthChangeTracker(withLogin("login-1", "token-1"))
+
+	expect := func(name string, state AuthChangeState, generation, owner, login uint64) {
+		t.Helper()
+		if state.Generation != generation || state.OwnerGeneration != owner || state.LoginGeneration != login {
+			t.Fatalf("%s: state = %+v, want generation=%d owner=%d login=%d", name, state, generation, owner, login)
+		}
+	}
+	expect("same-login refresh", tracker.NoteAuth(withLogin("login-1", "token-2")), 1, 0, 0)
+	// Losing login metadata preserves the account owner but not the login.
+	expect("login metadata loss", tracker.NoteAuth(withLogin("", "token-3")), 2, 0, 1)
+	// Restoring login metadata names a login that the owner has not seen, so it
+	// advances both revisions.
+	expect("login metadata restoration", tracker.NoteAuth(withLogin("login-1", "token-4")), 3, 1, 2)
+	// A new login to the same account advances the owner and login revisions.
+	expect("new login same account", tracker.NoteAuth(withLogin("login-2", "token-5")), 4, 2, 3)
+	expect("logout", tracker.NoteAuth(nil), 5, 3, 4)
+	// Invalidating pending reads advances only the credential revision.
+	expect("invalidate pending reads", tracker.InvalidatePendingReads(), 6, 3, 4)
+
+	previous := withLogin("login-1", "token-1")
+	if !SameAuthLogin(previous, withLogin("login-1", "token-2")) {
+		t.Fatal("same login owner should survive a token refresh")
+	}
+	if SameAuthLogin(previous, withLogin("", "token-2")) {
+		t.Fatal("login metadata loss must not count as the same login")
+	}
+	if SameAuthOwner(previous, withLogin("", "token-2")) != true {
+		t.Fatal("login metadata loss must preserve the account owner")
+	}
+	if got := LoginOwnerIDFromAuth(previous); got != "login-1" {
+		t.Fatalf("LoginOwnerIDFromAuth() = %q", got)
+	}
+	if got := LoginOwnerIDFromAuth(nil); got != "" {
+		t.Fatalf("LoginOwnerIDFromAuth(nil) = %q", got)
+	}
+}
+
 func TestAuthChangeTrackerForceOwnerChangeAndSeed(t *testing.T) {
 	tracker := NewAuthChangeTracker(nil)
 	tracker.SeedLastAuth(chatGPTChangeStateAuth("user-a", "workspace-a", "token-1"))

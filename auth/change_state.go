@@ -14,8 +14,13 @@ type AuthChangeState struct {
 	Generation uint64 `json:"generation"`
 	// OwnerGeneration advances on login, logout, or changes of user, workspace,
 	// or auth mode. Credential changes with incomplete owner identity also
-	// advance this revision.
+	// advance this revision. Losing login metadata alone preserves the account
+	// owner.
 	OwnerGeneration uint64 `json:"ownerGeneration"`
+	// LoginGeneration advances on a new login or logout, including the loss of
+	// login metadata that leaves the account owner unchanged. Ordinary refresh
+	// within an identifiable OAuth session preserves it (Rust #55546).
+	LoginGeneration uint64 `json:"loginGeneration"`
 }
 
 // SameAuthOwner mirrors Rust's same_owner: a credential change keeps the same
@@ -33,8 +38,29 @@ func SameAuthOwner(previous *AuthDotJSON, current *AuthDotJSON) bool {
 	if user == "" || workspace == "" {
 		return false
 	}
+	currentLogin := LoginOwnerIDFromAuth(current)
+	if currentLogin != "" && LoginOwnerIDFromAuth(previous) != currentLogin {
+		return false
+	}
 	return strings.TrimSpace(ChatGPTUserIDFromAuth(current)) == user &&
 		strings.TrimSpace(AccountIDFromAuthForRestrictions(current)) == workspace
+}
+
+// SameAuthLogin mirrors Rust's same_login: the same account owner and the same
+// recorded login owner. Losing login metadata invalidates the login while
+// preserving the account owner (Rust #55546).
+func SameAuthLogin(previous *AuthDotJSON, current *AuthDotJSON) bool {
+	return SameAuthOwner(previous, current) &&
+		LoginOwnerIDFromAuth(previous) == LoginOwnerIDFromAuth(current)
+}
+
+// LoginOwnerIDFromAuth returns the OAuth login owner recorded on the credential,
+// or an empty string for legacy records that predate login-scoped grants.
+func LoginOwnerIDFromAuth(snapshot *AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	return strings.TrimSpace(stringFromAny(snapshot.Tokens, "login_owner_id"))
 }
 
 // AuthChangeTracker records credential and ownership revisions for one auth
@@ -73,6 +99,9 @@ func (t *AuthChangeTracker) NoteAuth(current *AuthDotJSON) AuthChangeState {
 		if !SameAuthOwner(t.lastAuth, current) {
 			t.state.OwnerGeneration++
 		}
+		if !SameAuthLogin(t.lastAuth, current) {
+			t.state.LoginGeneration++
+		}
 	}
 	t.lastAuth = cloneAuthDotJSON(current)
 	state := t.state
@@ -94,6 +123,23 @@ func (t *AuthChangeTracker) ForceOwnerChange() AuthChangeState {
 	defer t.mu.Unlock()
 	t.state.Generation++
 	t.state.OwnerGeneration++
+	t.state.LoginGeneration++
+	close(t.changed)
+	t.changed = make(chan struct{})
+	return t.state
+}
+
+// InvalidatePendingReads advances only the credential revision without a
+// snapshot comparison, so an in-flight reload result can no longer be
+// published. Logout uses it even when the cached credential is already empty
+// (Rust #55646 invalidate_pending_auth_reads).
+func (t *AuthChangeTracker) InvalidatePendingReads() AuthChangeState {
+	if t == nil {
+		return AuthChangeState{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.state.Generation++
 	close(t.changed)
 	t.changed = make(chan struct{})
 	return t.state

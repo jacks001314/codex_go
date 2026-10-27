@@ -32,7 +32,7 @@ func TestRuntimeConfigAdmitsEnterpriseMCPServer(t *testing.T) {
 	if config.ProtocolModeOverride == nil || *config.ProtocolModeOverride != MCPProtocol20260728 || !config.EMAAuthExtension {
 		t.Fatalf("protocol mode/extension = %+v/%v", config.ProtocolModeOverride, config.EMAAuthExtension)
 	}
-	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: "user-1", AccountID: "account-1"}, nil)
+	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: "user-1", AccountID: "account-1"}, nil, nil)
 	attached := runtime.Servers["enterprise"].Config
 	if attached.ApplyHTTPRequest == nil {
 		t.Fatal("enterprise server has no authorization applier")
@@ -92,6 +92,47 @@ func TestEMAAuthManagerReportsStoredGrantAndRejectsChangedOwner(t *testing.T) {
 	current = scope
 	if manager.CredentialsAvailable() {
 		t.Fatal("logged-out account must not report a grant")
+	}
+}
+
+func TestEMAAuthManagerRevokesOnLoginGenerationChangeLikeRust(t *testing.T) {
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: "https://idp.example", ClientID: "idp-client",
+	}}
+	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
+		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
+		ServerURL:    profile.IDP.Issuer,
+		ClientID:     profile.IDP.ClientID,
+		RefreshToken: "refresh-token",
+		AccessToken:  "idp-access",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	config := &ServerConfig{URL: "https://resource.example/mcp", Auth: ServerAuthEMAAuth, OAuthClientID: "mcp-client", OAuthResource: "https://resource.example/mcp"}
+	var loginGeneration uint64
+	manager, err := NewEMAAuthManager("enterprise", config, EMAAuthOptions{
+		CodexHome:              home,
+		StoreMode:              OAuthCredentialsStoreFile,
+		Profile:                profile,
+		Scope:                  scope,
+		CurrentScope:           func() (EMAAuthScope, bool) { return scope, true },
+		CurrentLoginGeneration: func() uint64 { return loginGeneration },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manager.CredentialsAvailable() {
+		t.Fatal("stored enterprise grant not found")
+	}
+	loginGeneration = 1
+	if manager.CredentialsAvailable() {
+		t.Fatal("a newer login must revoke the enterprise grant status")
+	}
+	request, _ := http.NewRequest(http.MethodPost, "https://resource.example/mcp", nil)
+	if err := manager.ApplyHTTPRequest(request, nil); err == nil {
+		t.Fatal("a newer login must revoke enterprise authorization")
 	}
 }
 
@@ -168,7 +209,7 @@ func TestAttachEnterpriseMCPAuthorizationSharesCredentialStatusAcrossServers(t *
 		t.Fatal(err)
 	}
 
-	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: scope.UserID, AccountID: scope.WorkspaceID}, nil)
+	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: scope.UserID, AccountID: scope.WorkspaceID}, nil, nil)
 	for _, name := range []string{"first", "second"} {
 		config := runtime.Servers[name].Config
 		if !config.EMAConfigured || !config.EMACredentialsAvailable || config.ApplyHTTPRequest == nil {

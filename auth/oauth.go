@@ -572,6 +572,14 @@ func RefreshChatGPTTokens(ctx context.Context, opts *RefreshChatGPTTokenOptions)
 	if codexHome == "" {
 		codexHome = DefaultCodexHome()
 	}
+	// Ordinary refresh holds the same gate as AccountOAuthGrantLease, so an
+	// identity-provider exchange and a refresh cannot rotate the grant
+	// concurrently (Rust #55546 refresh_lock).
+	gate := accountRefreshGateFor(codexHome)
+	if err := gate.acquire(ctx); err != nil {
+		return nil, errors.New("Account refresh coordination is unavailable.")
+	}
+	defer gate.release()
 	attempted := refreshAttemptSnapshot(codexHome, opts.AuthSnapshot, opts.StoreOptions)
 	provenance := oauthProvenanceFromTokens(nilSafeTokens(attempted))
 	normalized := NormalizeOAuthOptions(&OAuthOptions{
@@ -631,7 +639,7 @@ func RefreshChatGPTTokens(ctx context.Context, opts *RefreshChatGPTTokenOptions)
 	if strings.TrimSpace(out.RefreshToken) == "" {
 		out.RefreshToken = refreshToken
 	}
-	if err := PersistRefreshedChatGPTTokensWithOptions(normalized.CodexHome, &out, opts.StoreOptions); err != nil {
+	if err := persistRefreshedChatGPTTokens(normalized.CodexHome, attempted, &out, opts.StoreOptions); err != nil {
 		return nil, err
 	}
 	return NewStoreWithOptions(normalized.CodexHome, opts.StoreOptions).Load()
@@ -663,27 +671,58 @@ func PersistRefreshedChatGPTTokensWithOptions(codexHome string, tokens *Exchange
 	if tokens == nil {
 		return errors.New("tokens are required")
 	}
-	store := NewStoreWithOptions(codexHome, storeOptions)
-	current, err := store.Load()
+	expected, err := NewStoreWithOptions(codexHome, storeOptions).Load()
 	if err != nil {
 		return err
 	}
-	next := AuthDotJSON{AuthMode: "chatgpt", Tokens: map[string]any{}}
-	if current != nil {
-		next = *current
-		next.AuthMode = "chatgpt"
-		next.Tokens = cloneAnyMap(current.Tokens)
+	return persistRefreshedChatGPTTokens(codexHome, expected, tokens, storeOptions)
+}
+
+var errAccountCredentialsChangedDuringRefresh = errors.New("Account credentials changed during refresh.")
+
+// persistRefreshedChatGPTTokens writes a refresh response only when the stored
+// credential still belongs to the login that requested it. The read, login
+// check and write are one process-wide commit (Rust #55646 persist_tokens).
+func persistRefreshedChatGPTTokens(codexHome string, expected *AuthDotJSON, tokens *ExchangedTokens, storeOptions *StoreOptions) error {
+	if tokens == nil {
+		return errors.New("tokens are required")
 	}
+	if expected == nil || expected.Tokens == nil {
+		return errors.New("Token data is not available.")
+	}
+	store := NewStoreWithOptions(codexHome, storeOptions)
+	authStorageCommitMu.Lock()
+	defer authStorageCommitMu.Unlock()
+	current, err := store.loadLocked()
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return errors.New("Token data is not available.")
+	}
+	if current.Mode() != "chatgpt" || !sameLoginForPersistence(expected.Tokens, current.Tokens) {
+		return errAccountCredentialsChangedDuringRefresh
+	}
+	next := *current
+	next.AuthMode = "chatgpt"
+	next.Tokens = cloneAnyMap(current.Tokens)
 	if next.Tokens == nil {
 		next.Tokens = map[string]any{}
 	}
-	if override := strings.TrimSpace(os.Getenv(RefreshTokenURLEnvOverride)); override != "" {
-		provenance := oauthProvenanceFromTokens(next.Tokens)
-		expected := strings.TrimRight(provenance.Issuer, "/") + "/oauth/token"
-		if provenance.Issuer == "" || override != expected {
-			delete(next.Tokens, "oauth_provenance")
-			delete(next.Tokens, "login_owner_id")
+	refreshToken := strings.TrimSpace(tokens.RefreshToken)
+	// Attach provenance only when this response rotated the refresh token or the
+	// stored grant is still the one the request used. A concurrent writer that
+	// replaced the refresh token has unknown authority (Rust #55546).
+	rotated := refreshToken != "" && refreshToken != tokenRefreshToken(expected.Tokens)
+	provenance := oauthProvenanceFromTokens(expected.Tokens)
+	endpointMatches := provenance.Issuer != "" &&
+		refreshTokenURL(provenance.Issuer) == strings.TrimRight(provenance.Issuer, "/")+"/oauth/token"
+	if endpointMatches && (rotated || tokenRefreshToken(next.Tokens) == tokenRefreshToken(expected.Tokens)) {
+		next.Tokens["oauth_provenance"] = map[string]any{
+			"issuer": provenance.Issuer, "client_id": provenance.ClientID,
 		}
+	} else {
+		delete(next.Tokens, "oauth_provenance")
 	}
 	if strings.TrimSpace(tokens.IDToken) != "" {
 		next.Tokens["id_token"] = strings.TrimSpace(tokens.IDToken)
@@ -692,9 +731,9 @@ func PersistRefreshedChatGPTTokensWithOptions(codexHome string, tokens *Exchange
 		}
 	}
 	next.Tokens["access_token"] = strings.TrimSpace(tokens.AccessToken)
-	next.Tokens["refresh_token"] = strings.TrimSpace(tokens.RefreshToken)
+	next.Tokens["refresh_token"] = refreshToken
 	next.LastRefresh = time.Now().UTC().Format(time.RFC3339)
-	return store.Save(next)
+	return store.saveLocked(next)
 }
 
 func ChatGPTAccountIDFromJWT(jwt string) string {

@@ -923,6 +923,7 @@ func (r *RuntimeRouter) proactiveRefreshManagedChatGPT(ctx context.Context, code
 	if r == nil || snapshot == nil {
 		return snapshot
 	}
+	generation := r.authChangeGeneration()
 	refreshed, _, attempted, err := auth.ProactiveRefreshManagedChatGPT(ctx, &auth.RefreshChatGPTTokenOptions{
 		CodexHome:    codexHome,
 		HTTPClient:   r.policyHTTPClientForConfig(cfg),
@@ -932,8 +933,11 @@ func (r *RuntimeRouter) proactiveRefreshManagedChatGPT(ctx context.Context, code
 	if !attempted || err != nil || refreshed == nil {
 		return snapshot
 	}
-	r.requireAccount().ApplyAuthSnapshot(refreshed)
-	r.noteAuthChanged()
+	if !r.publishReloadedAuth(generation, refreshed) {
+		// A login or logout landed while the refresh was in flight; build the
+		// agent from the newer cached credential instead (Rust #55646).
+		return r.requireAccount().AuthSnapshot()
+	}
 	return refreshed
 }
 

@@ -1038,15 +1038,71 @@ func (r *RuntimeRouter) noteAuthChanged() {
 	// drop cached credentials/connections only when the account identity
 	// changes (Rust AuthChangeState, #43428). Reading the snapshot before
 	// taking authRevisionMu keeps the two locks independent.
-	snapshot := r.requireAccount().AuthSnapshot()
-	state := r.authChangeTracker.NoteAuth(snapshot)
+	r.publishAuthSnapshot(r.requireAccount().AuthSnapshot(), nil)
+}
+
+// publishAuthSnapshot applies a credential snapshot and advances the revisions.
+// When expectedGeneration is set, a login or logout that landed while the
+// caller was loading asynchronously rejects the stale snapshot (Rust #55646
+// publish_reloaded_auth).
+func (r *RuntimeRouter) publishAuthSnapshot(snapshot *auth.AuthDotJSON, expectedGeneration *uint64) bool {
+	if r == nil {
+		return false
+	}
 	r.authRevisionMu.Lock()
+	if expectedGeneration != nil && r.authChangeTracker.Snapshot().Generation != *expectedGeneration {
+		r.authRevisionMu.Unlock()
+		return false
+	}
+	r.requireAccount().ApplyAuthSnapshot(snapshot)
+	state := r.authChangeTracker.NoteAuth(snapshot)
 	r.authRevision++
 	ownerChanged := state.OwnerGeneration != r.authOwnerRevision
 	r.authOwnerRevision = state.OwnerGeneration
 	close(r.authChanged)
 	r.authChanged = make(chan struct{})
 	r.authRevisionMu.Unlock()
+	r.afterAuthChanged(ownerChanged)
+	return true
+}
+
+// publishReloadedAuth publishes an asynchronously loaded credential only when
+// no credential change landed since generation was captured.
+func (r *RuntimeRouter) publishReloadedAuth(generation uint64, snapshot *auth.AuthDotJSON) bool {
+	return r.publishAuthSnapshot(snapshot, &generation)
+}
+
+// authChangeGeneration returns the credential revision a reload result is
+// validated against.
+func (r *RuntimeRouter) authChangeGeneration() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.authChangeTracker.Snapshot().Generation
+}
+
+// invalidatePendingAuthReads advances only the credential revision so logout
+// cannot be undone by an in-flight reload, even when the cache was already
+// empty (Rust #55646 invalidate_pending_auth_reads).
+func (r *RuntimeRouter) invalidatePendingAuthReads() {
+	if r == nil || r.authChangeTracker == nil {
+		return
+	}
+	r.authRevisionMu.Lock()
+	state := r.authChangeTracker.InvalidatePendingReads()
+	r.authRevision++
+	ownerChanged := state.OwnerGeneration != r.authOwnerRevision
+	r.authOwnerRevision = state.OwnerGeneration
+	close(r.authChanged)
+	r.authChanged = make(chan struct{})
+	r.authRevisionMu.Unlock()
+	r.afterAuthChanged(ownerChanged)
+}
+
+func (r *RuntimeRouter) afterAuthChanged(ownerChanged bool) {
+	if r == nil {
+		return
+	}
 	if ownerChanged {
 		r.advanceRemoteInstalledPluginCacheGeneration()
 		r.clearRemoteInstalledPluginMetadataForAuthChange()
@@ -12037,7 +12093,36 @@ func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeCon
 	if runtime == nil {
 		return
 	}
-	mcp.AttachEnterpriseMCPAuthorization(runtime, codexHome, runtimeAuth, r.currentEMAAuthScope)
+	mcp.AttachEnterpriseMCPAuthorization(runtime, codexHome, runtimeAuth, r.currentEMAAuthScope, r.currentEMALoginGeneration)
+}
+
+// currentEMALoginGeneration returns the login revision EMA managers capture at
+// construction. Losing login metadata advances it while the account owner stays
+// unchanged, so enterprise authorization is revoked without dropping the
+// same-account network policy (Rust #55546).
+// resolveStoredAuthSnapshot reloads the managed credential from storage. A
+// missing or unusable store resolves to "unauthenticated".
+func (r *RuntimeRouter) resolveStoredAuthSnapshot() *auth.AuthDotJSON {
+	if r == nil {
+		return nil
+	}
+	codexHome := r.codexHomeForRollout()
+	if codexHome == "" {
+		return nil
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(codexHome)
+	if err != nil || resolved == nil {
+		return nil
+	}
+	snapshot := resolved.Auth
+	return &snapshot
+}
+
+func (r *RuntimeRouter) currentEMALoginGeneration() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.authChangeTracker.Snapshot().LoginGeneration
 }
 
 func (r *RuntimeRouter) currentEMAAuthScope() (mcp.EMAAuthScope, bool) {
@@ -13160,6 +13245,11 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 			return nil, err
 		}
 	}
+	// Always invalidate pending reads, even when the cache was already empty,
+	// then republish the (now unauthenticated) stored state so a reload that
+	// started before logout cannot restore credentials (Rust #55646).
+	r.invalidatePendingAuthReads()
+	r.publishReloadedAuth(r.authChangeGeneration(), r.resolveStoredAuthSnapshot())
 	r.configureMCPFromConfig()
 	r.maybeStartCuratedRepoSync(false)
 	r.refreshPluginCachesAndMCPRuntimes()
