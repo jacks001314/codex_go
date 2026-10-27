@@ -113,6 +113,8 @@ type mcpEMAExchangeRecorder struct {
 	// onIDPToken runs before the IdP answers and reports whether this request
 	// must be rejected, so a test can rotate the stored grant mid-exchange.
 	onIDPToken func(url.Values) bool
+	// rejectionError is the OAuth error returned by a rejecting onIDPToken.
+	rejectionError string
 }
 
 func (r *mcpEMAExchangeRecorder) record(values url.Values) {
@@ -152,9 +154,13 @@ func mcpEMAAccountTestServer(t *testing.T, recorder *mcpEMAExchangeRecorder) *ht
 				recorder.record(r.PostForm)
 			}
 			if recorder.onIDPToken != nil && recorder.onIDPToken(r.PostForm) {
+				code := recorder.rejectionError
+				if code == "" {
+					code = "invalid_grant"
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+				_, _ = w.Write([]byte(`{"error":"` + code + `"}`))
 				return
 			}
 			if recorder.rejectAccountIDPToken && r.PostForm.Get("client_id") == "account-client" {
@@ -499,4 +505,106 @@ func newMCPEMAAccountTestManager(t *testing.T, home string, server *httptest.Ser
 		t.Fatal(err)
 	}
 	return manager
+}
+
+// TestEMAAuthManagerRemembersStepUpRejectionLikeRust mirrors #55883: an IdP
+// step-up failure is remembered for that grant revision, so the next dispatch
+// reports reauthentication without another IdP request.
+func TestEMAAuthManagerRemembersStepUpRejectionLikeRust(t *testing.T) {
+	recorder := &mcpEMAExchangeRecorder{rejectionError: "insufficient_user_authentication"}
+	server := mcpEMAAccountTestServer(t, recorder)
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: server.URL + "/idp", ClientID: "idp-client",
+	}}
+	snapshot := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")}
+	if err := auth.NewStore(home).Save(*snapshot); err != nil {
+		t.Fatal(err)
+	}
+	recorder.onIDPToken = func(url.Values) bool { return true }
+	manager := newMCPEMAAccountTestManager(t, home, server, profile, func() *auth.AuthDotJSON { return snapshot })
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.ApplyHTTPRequest(request, nil)
+	var tokenSourceErr *EMATokenSourceError
+	if !errors.As(err, &tokenSourceErr) || !tokenSourceErr.IsAuthenticationRequired() {
+		t.Fatalf("ApplyHTTPRequest() error = %v, want a step-up sign-in failure", err)
+	}
+	if got := tokenSourceErr.Error(); got != "Complete enterprise sign-in for this MCP server" {
+		t.Fatalf("guidance = %q", got)
+	}
+	requests := len(recorder.idpRequests())
+	if requests != 1 {
+		t.Fatalf("IdP requests = %d, want 1", requests)
+	}
+	second, err := http.NewRequest(http.MethodPost, server.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.ApplyHTTPRequest(second, nil)
+	if !errors.As(err, &tokenSourceErr) {
+		t.Fatalf("second ApplyHTTPRequest() error = %v, want a remembered rejection", err)
+	}
+	if got := len(recorder.idpRequests()); got != requests {
+		t.Fatalf("remembered rejection still reached the IdP: %d -> %d", requests, got)
+	}
+}
+
+// TestEMAAuthManagerStopsAfterRepeatedRotationLikeRust mirrors #55883: a grant
+// that keeps rotating under the exchange exhausts the single retry without
+// revoking the still-current account owner's rejection state.
+func TestEMAAuthManagerStopsAfterRepeatedRotationLikeRust(t *testing.T) {
+	recorder := &mcpEMAExchangeRecorder{}
+	server := mcpEMAAccountTestServer(t, recorder)
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: server.URL + "/idp", ClientID: "idp-client",
+	}}
+	snapshot := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")}
+	if err := auth.NewStore(home).Save(*snapshot); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	current := snapshot
+	var rotations int
+	recorder.onIDPToken = func(url.Values) bool {
+		mu.Lock()
+		rotations++
+		tokens := mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")
+		tokens["refresh_token"] = "account-refresh-" + string(rune('a'+rotations))
+		next := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: tokens}
+		mu.Unlock()
+		if err := auth.NewStore(home).Save(*next); err != nil {
+			t.Error(err)
+		}
+		mu.Lock()
+		current = next
+		mu.Unlock()
+		return true
+	}
+	manager := newMCPEMAAccountTestManager(t, home, server, profile, func() *auth.AuthDotJSON {
+		mu.Lock()
+		defer mu.Unlock()
+		return current
+	})
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.ApplyHTTPRequest(request, nil)
+	var tokenSourceErr *EMATokenSourceError
+	if !errors.As(err, &tokenSourceErr) {
+		t.Fatalf("ApplyHTTPRequest() error = %v, want a token-source failure", err)
+	}
+	if got := tokenSourceErr.Error(); got != "enterprise MCP token exchange failed" {
+		t.Fatalf("guidance = %q", got)
+	}
+	if tokenSourceErr.IsAuthenticationRequired() {
+		t.Fatal("repeated rotation must not require a new sign-in")
+	}
+	if got := len(recorder.idpRequests()); got != 2 {
+		t.Fatalf("IdP requests = %d, want the single retry", got)
+	}
 }
