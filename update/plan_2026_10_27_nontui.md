@@ -42,6 +42,7 @@ TUI lane and are not modified here.
 | `#56552` `#57225` `#57226` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`, `cli/cli.go`, `app/migrate_nfs_db.go`, `app/app.go`, like-Rust tests |
 | `#56495` | Paginated subscribed-channel listing on the local message board | `agentboard/local.go`, `agentboard/local_test.go` |
 | `#55690` | Reclaim aged legacy marketplace staging directories | `plugin/marketplace_staging.go`, `plugin/marketplace_install.go`, `plugin/marketplace_staging_test.go` |
+| `#57251` | Native dollar thread usage in app-server `ThreadUsage` (core surface + coverage) | `appserver/runtime_router_test.go` (type/forwarding landed with `auth/account.go`, `appserver/runtime_router.go`) |
 
 Grounding notes:
 
@@ -302,6 +303,17 @@ legacy entry; cleanup is best effort and cannot fail an install. Go never
 creates `marketplace-upgrade-*` directories itself, so that branch reclaims
 Rust leftovers in a shared `CODEX_HOME`.
 
+`#57251` details: the app-server `ThreadUsage` payload already gained the
+optional `nativeUsageUsdMicros` field and the backend-to-wire forwarding in the
+TUI lane's change to `auth/account.go` and `appserver/runtime_router.go`. This
+lane adds the core regression coverage Rust ships with the change: the
+`account/usage/read` response forwards a backend native amount alongside the
+credit estimate, an explicit zero stays zero, and a missing native amount stays
+absent so callers see unknown rather than `$0.00`. Rust exposes no native
+amount on `ThreadUsageBreakdownGroup`; Go's cloud client decodes that group
+field but the app-server type still omits it, matching the Rust wire surface.
+Credit/native display selection (ENT26) remains TUI-owned.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -351,6 +363,9 @@ Rust leftovers in a shared `CODEX_HOME`.
 - For `#55690`: `go test ./plugin -run 'CleanupMarketplaceStaging' -count=1`
   and the full `go test ./plugin -count=1` pass (the symlink test skips on this
   Windows host because creating symlinks needs a privilege it lacks).
+- For `#57251`: `go test ./appserver -run
+  'TestRuntimeRouterGetAccountThreadUsageMatchesRust|TestAccountThreadUsagePreservesNativeDollarsLikeRust' -count=1`
+  passes.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

@@ -4469,6 +4469,7 @@ func TestRuntimeRouterGetAccountThreadUsageMatchesRust(t *testing.T) {
 				"thread_id":                      "thread-1",
 				"estimated_usage_credits_micros": 9876,
 				"estimated_usage_usd_micros":     4321,
+				"native_usage_usd_micros":        8765,
 				"groups": []map[string]any{{
 					"model":                          "gpt-5.2-codex",
 					"reasoning_effort":               "medium",
@@ -4505,8 +4506,40 @@ func TestRuntimeRouterGetAccountThreadUsageMatchesRust(t *testing.T) {
 	if usage.ThreadUsage == nil || usage.ThreadUsage.ThreadID != "thread-1" || usage.ThreadUsage.EstimatedUsageCreditsMicros != 9876 || usage.ThreadUsage.EstimatedUsageUSDMicros == nil || *usage.ThreadUsage.EstimatedUsageUSDMicros != 4321 {
 		t.Fatalf("thread usage = %+v", usage.ThreadUsage)
 	}
+	// Native dollars stay separate from credit estimates (Rust #57251).
+	if usage.ThreadUsage.NativeUsageUSDMicros == nil || *usage.ThreadUsage.NativeUsageUSDMicros != 8765 {
+		t.Fatalf("native usage = %+v", usage.ThreadUsage.NativeUsageUSDMicros)
+	}
 	if len(usage.ThreadUsage.Groups) != 1 || usage.ThreadUsage.Groups[0].Model == nil || *usage.ThreadUsage.Groups[0].Model != "gpt-5.2-codex" || usage.ThreadUsage.Groups[0].TotalTokens == nil || *usage.ThreadUsage.Groups[0].TotalTokens != 77 {
 		t.Fatalf("groups = %+v", usage.ThreadUsage.Groups)
+	}
+}
+
+// TestAccountThreadUsagePreservesNativeDollarsLikeRust mirrors Rust #57251: a
+// missing native amount is unknown rather than zero, an explicit zero stays
+// zero, and native dollars never replace the credit estimate.
+func TestAccountThreadUsagePreservesNativeDollarsLikeRust(t *testing.T) {
+	credits, usd, native := int64(9876), int64(4321), int64(0)
+	converted := accountThreadUsageFromBackend(&chatgptapi.ThreadUsage{
+		ThreadID:                    "thread-1",
+		EstimatedUsageCreditsMicros: credits,
+		EstimatedUsageUSDMicros:     &usd,
+		NativeUsageUSDMicros:        &native,
+	})
+	if converted == nil || converted.EstimatedUsageUSDMicros == nil || *converted.EstimatedUsageUSDMicros != usd {
+		t.Fatalf("estimated usd = %+v", converted)
+	}
+	if converted.NativeUsageUSDMicros == nil || *converted.NativeUsageUSDMicros != 0 {
+		t.Fatalf("explicit zero native usage = %+v", converted.NativeUsageUSDMicros)
+	}
+
+	converted = accountThreadUsageFromBackend(&chatgptapi.ThreadUsage{
+		ThreadID:                    "thread-1",
+		EstimatedUsageCreditsMicros: credits,
+		EstimatedUsageUSDMicros:     &usd,
+	})
+	if converted.NativeUsageUSDMicros != nil {
+		t.Fatalf("missing native usage = %+v", *converted.NativeUsageUSDMicros)
 	}
 }
 
