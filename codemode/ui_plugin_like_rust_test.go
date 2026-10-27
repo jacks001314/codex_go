@@ -445,6 +445,63 @@ func TestUIPluginHostMessagesRejectUnknownOrNullFields(t *testing.T) {
 	}
 }
 
+func TestUIPluginPacketsRejectUnknownOrNullFields(t *testing.T) {
+	for _, payload := range []string{
+		`{"instance":1}`,
+		`{"message":{"type":"close"}}`,
+		`{"instance":null,"message":{"type":"close"}}`,
+		`{"instance":1,"message":null}`,
+		`{"instance":1,"message":{"type":"close"},"extra":true}`,
+		`{"instance":"1","message":{"type":"close"}}`,
+		`{"instance":1.5,"message":{"type":"close"}}`,
+		`{"instance":-1,"message":{"type":"close"}}`,
+		`null`,
+		`[]`,
+	} {
+		if _, err := decodeUIPluginInboundPacket([]byte(payload)); err == nil {
+			t.Fatalf("decodeUIPluginInboundPacket(%s) unexpectedly succeeded", payload)
+		}
+	}
+	for _, payload := range []string{
+		`{"instance":0,"message":{"type":"close"}}`,
+		`{"instance":18446744073709551615,"message":{"type":"initialize","source":"export default 1"}}`,
+	} {
+		if _, err := decodeUIPluginInboundPacket([]byte(payload)); err != nil {
+			t.Fatalf("decodeUIPluginInboundPacket(%s) error = %v", payload, err)
+		}
+	}
+}
+
+func TestUIPluginQueueCapacitiesMatchRust(t *testing.T) {
+	if uiPluginOutputQueueCapacity != 321 {
+		t.Fatalf("output queue capacity = %d, want 321", uiPluginOutputQueueCapacity)
+	}
+	if uiPluginCommandQueueCapacity != 288 {
+		t.Fatalf("command queue capacity = %d, want 288", uiPluginCommandQueueCapacity)
+	}
+}
+
+func TestUIPluginSandboxRejectsUnknownPacketFieldsLikeRust(t *testing.T) {
+	host := startUIPluginTestHost(t)
+	if err := writeUIPluginJSON(host.input, map[string]any{
+		"instance": 1,
+		"message":  map[string]any{"type": "close"},
+		"extra":    true,
+	}); err != nil {
+		t.Fatalf("write plugin packet: %v", err)
+	}
+	select {
+	case err := <-host.done:
+		if err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Fatalf("RunUIPluginSandbox() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("unknown packet field did not stop the host")
+	}
+	_ = host.input.Close()
+	_ = host.output.Close()
+}
+
 func TestUIPluginExecutorClosesMissingAndAlreadyClosedInstancesLikeRust(t *testing.T) {
 	outputs := make(chan uiPluginQueuedOutput, 8)
 	commands := make(chan uiPluginCommand, 4)

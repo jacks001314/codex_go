@@ -22,8 +22,8 @@ const uiPluginTurnDeadlineMillis = 100
 // RunUIPluginSandbox serves the bounded UI plugin ABI on stdin/stdout. It is
 // selected by --codex-ui-plugin-process in codex-code-mode-host (#57508).
 func RunUIPluginSandbox(stdin io.Reader, stdout io.Writer) error {
-	outputs := make(chan uiPluginQueuedOutput, uiPluginMaxInstances*(uiPluginMaxInFlight+1)+1)
-	commands := make(chan uiPluginCommand, uiPluginMaxInstances*(uiPluginMaxInFlight+1))
+	outputs := make(chan uiPluginQueuedOutput, uiPluginOutputQueueCapacity)
+	commands := make(chan uiPluginCommand, uiPluginCommandQueueCapacity)
 	fatal := make(chan error, 1)
 	stop := make(chan struct{})
 	writerDone := make(chan struct{})
@@ -45,9 +45,9 @@ func RunUIPluginSandbox(stdin io.Reader, stdout io.Writer) error {
 			if !ok {
 				return
 			}
-			var packet uiPluginInboundPacket
-			if err := json.Unmarshal(payload, &packet); err != nil {
-				readErrors <- fmt.Errorf("failed to decode plugin packet: %w", err)
+			packet, err := decodeUIPluginInboundPacket(payload)
+			if err != nil {
+				readErrors <- err
 				return
 			}
 			select {

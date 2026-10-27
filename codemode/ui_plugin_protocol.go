@@ -22,6 +22,14 @@ const (
 	uiPluginMaxScriptError = 16 * 1024
 )
 
+// Each instance reserves one queue slot per in-flight turn plus one for close;
+// the output queue additionally reserves one slot for a rejected open.
+const (
+	uiPluginOutputSlotsPerInstance = uiPluginMaxInFlight + 1
+	uiPluginCommandQueueCapacity   = uiPluginMaxInstances * (uiPluginMaxInFlight + 1)
+	uiPluginOutputQueueCapacity    = uiPluginMaxInstances*(uiPluginOutputSlotsPerInstance+1) + 1
+)
+
 const (
 	uiPluginReturnSync       = "sync"
 	uiPluginReturnMaybeAsync = "maybeAsync"
@@ -132,6 +140,48 @@ func decodeUIPluginHostMessage(payload []byte) (uiPluginHostMessage, error) {
 		return uiPluginHostMessage{}, fmt.Errorf("unknown plugin message type %q", kind)
 	}
 	return message, nil
+}
+
+// decodeUIPluginInboundPacket mirrors the Rust `Packet` envelope, which denies
+// unknown fields and requires non-null `instance` and `message` members.
+func decodeUIPluginInboundPacket(payload []byte) (uiPluginInboundPacket, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return uiPluginInboundPacket{}, fmt.Errorf("failed to decode plugin packet: %w", err)
+	}
+	if fields == nil {
+		return uiPluginInboundPacket{}, fmt.Errorf("failed to decode plugin packet: expected an object")
+	}
+	for name := range fields {
+		if name != "instance" && name != "message" {
+			return uiPluginInboundPacket{}, fmt.Errorf("failed to decode plugin packet: unknown field %q", name)
+		}
+	}
+	rawInstance, ok := fields["instance"]
+	if !ok {
+		return uiPluginInboundPacket{}, fmt.Errorf("failed to decode plugin packet: missing field \"instance\"")
+	}
+	rawMessage, ok := fields["message"]
+	if !ok {
+		return uiPluginInboundPacket{}, fmt.Errorf("failed to decode plugin packet: missing field \"message\"")
+	}
+	var packet uiPluginInboundPacket
+	if err := decodeUIPluginEnvelopeValue(rawInstance, &packet.Instance); err != nil {
+		return uiPluginInboundPacket{}, fmt.Errorf("failed to decode plugin packet: invalid \"instance\": %w", err)
+	}
+	if err := decodeUIPluginEnvelopeValue(rawMessage, &packet.Message); err != nil {
+		return uiPluginInboundPacket{}, fmt.Errorf("failed to decode plugin packet: invalid \"message\": %w", err)
+	}
+	return packet, nil
+}
+
+func decodeUIPluginEnvelopeValue(raw json.RawMessage, target any) error {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return fmt.Errorf("must not be null")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
 }
 
 func uiPluginInitializedMessage() any {
