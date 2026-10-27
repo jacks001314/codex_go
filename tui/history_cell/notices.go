@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"codex_go/tui"
+
+	"github.com/rivo/uniseg"
 )
 
 // Rust parity: codex-rs/tui/src/history_cell/notices.rs.
@@ -139,18 +141,162 @@ func (c SafetyAccessBlockCell) DisplayLines(width int) []string {
 		title = SafetyAccessBlockTitle
 	}
 	lines := []string{"\u24d8 " + title}
-	candidates := []string{"  " + c.Message()}
-	for _, action := range c.Actions {
-		candidates = append(candidates, "  "+action.Label+": "+action.URL)
+	// Rust wraps `"  " + message` at `width - 2` with a two-column hanging
+	// indent, so wrapping the bare message at `width - 4` and prefixing two
+	// spaces reproduces both the first-row and continuation widths.
+	for _, line := range tui.AdaptiveWrapLine(c.Message(), tui.WrapOptions{
+		Width:      max(wrapWidth-2, 1),
+		BreakWords: true,
+	}) {
+		lines = append(lines, "  "+line)
 	}
-	for _, line := range candidates {
-		lines = append(lines, tui.AdaptiveWrapLine(line, tui.WrapOptions{
-			Width:            wrapWidth,
-			SubsequentIndent: "  ",
-			BreakWords:       true,
-		})...)
+	for _, action := range c.Actions {
+		// Rust uses the non-adaptive `word_wrap_line` for action rows, which
+		// keeps the standard textwrap break opportunities (hyphens and
+		// slashes) instead of preserving the URL as one token.
+		lines = append(lines, wrapSafetyAccessActionLine(
+			"  "+action.Label+": "+action.URL,
+			wrapWidth,
+			"  ",
+		)...)
 	}
 	return lines
+}
+
+// safetyAccessWrapUnit is a textwrap-style word plus its trailing whitespace.
+type safetyAccessWrapUnit struct {
+	word       string
+	whitespace string
+}
+
+// wrapSafetyAccessActionLine mirrors Rust's standard `word_wrap_line` call for
+// safety action rows: textwrap FirstFit with hyphen/slash break opportunities,
+// a hanging indent, and the caller's leading spaces kept on the first row.
+func wrapSafetyAccessActionLine(text string, width int, indent string) []string {
+	width = max(width, 1)
+	indentWidth := tui.DisplayWidth(indent)
+	var lines []string
+	line := ""
+	lineWidth := 0
+	atLineStart := true
+	for _, unit := range safetyAccessWrapUnits(text) {
+		wordWidth := tui.DisplayWidth(unit.word)
+		spaceWidth := tui.DisplayWidth(unit.whitespace)
+		if !atLineStart && lineWidth+wordWidth+spaceWidth > width {
+			lines = append(lines, strings.TrimRight(line, " \t"))
+			line = indent
+			lineWidth = indentWidth
+			atLineStart = true
+		}
+		if lineWidth+wordWidth > width {
+			// textwrap breaks an overlong word by width when no break
+			// opportunity can make progress.
+			available := max(width-lineWidth, 1)
+			for index, piece := range splitSafetyAccessWordByWidth(unit.word, available) {
+				if index > 0 {
+					lines = append(lines, strings.TrimRight(line, " \t"))
+					line = indent
+					lineWidth = indentWidth
+					available = max(width-lineWidth, 1)
+				}
+				line += piece
+				lineWidth += tui.DisplayWidth(piece)
+			}
+		} else {
+			line += unit.word
+			lineWidth += wordWidth
+		}
+		line += unit.whitespace
+		lineWidth += spaceWidth
+		atLineStart = false
+	}
+	return append(lines, strings.TrimRight(line, " \t"))
+}
+
+func safetyAccessWrapUnits(text string) []safetyAccessWrapUnit {
+	runes := []rune(text)
+	var units []safetyAccessWrapUnit
+	index := 0
+	start := index
+	for index < len(runes) && isSafetyAccessWrapSpace(runes[index]) {
+		index++
+	}
+	if index > start {
+		// Leading whitespace is a zero-width word in textwrap, which keeps it
+		// on the first row instead of dropping it.
+		units = append(units, safetyAccessWrapUnit{whitespace: string(runes[start:index])})
+	}
+	for index < len(runes) {
+		start = index
+		for index < len(runes) && !isSafetyAccessWrapSpace(runes[index]) {
+			index++
+		}
+		word := string(runes[start:index])
+		spaceStart := index
+		for index < len(runes) && isSafetyAccessWrapSpace(runes[index]) {
+			index++
+		}
+		whitespace := string(runes[spaceStart:index])
+		pieces := splitSafetyAccessBreakOpportunities(word)
+		for pieceIndex, piece := range pieces {
+			if pieceIndex == len(pieces)-1 {
+				units = append(units, safetyAccessWrapUnit{word: piece, whitespace: whitespace})
+			} else {
+				units = append(units, safetyAccessWrapUnit{word: piece})
+			}
+		}
+	}
+	return units
+}
+
+func isSafetyAccessWrapSpace(r rune) bool {
+	switch r {
+	case '\u00a0', '\u202f', '\u2007':
+		return false
+	}
+	return r == ' ' || r == '\t'
+}
+
+// splitSafetyAccessBreakOpportunities approximates textwrap's default Unicode
+// line-breaking opportunities: hyphens and slashes end a breakable piece.
+func splitSafetyAccessBreakOpportunities(word string) []string {
+	var pieces []string
+	start := 0
+	for index, r := range word {
+		if r != '-' && r != '/' {
+			continue
+		}
+		end := index + len(string(r))
+		pieces = append(pieces, word[start:end])
+		start = end
+	}
+	if start < len(word) || len(pieces) == 0 {
+		pieces = append(pieces, word[start:])
+	}
+	return pieces
+}
+
+func splitSafetyAccessWordByWidth(word string, width int) []string {
+	width = max(width, 1)
+	var pieces []string
+	var current strings.Builder
+	used := 0
+	graphemes := uniseg.NewGraphemes(word)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		graphemeWidth := tui.DisplayWidth(grapheme)
+		if used > 0 && used+graphemeWidth > width {
+			pieces = append(pieces, current.String())
+			current.Reset()
+			used = 0
+		}
+		current.WriteString(grapheme)
+		used += graphemeWidth
+	}
+	if current.Len() > 0 || len(pieces) == 0 {
+		pieces = append(pieces, current.String())
+	}
+	return pieces
 }
 
 func (c SafetyAccessBlockCell) RawLines() []string {

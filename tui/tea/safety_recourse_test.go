@@ -354,3 +354,155 @@ func TestModelSafetyRecourseStaleForkDoesNotSwitchThreads(t *testing.T) {
 		t.Fatalf("stale fork switched thread to %q", model.State.ThreadID)
 	}
 }
+
+// TestModelSafetyRecourseFailureMergesRewriteWithDraftLikeRust mirrors Rust
+// restore_user_message_to_composer: the failed rewrite lands ahead of the unsent
+// draft instead of replacing it, and the notice repeats the sanitized prompt.
+func TestModelSafetyRecourseFailureMergesRewriteWithDraftLikeRust(t *testing.T) {
+	model := newSafetyRecourseModel(Options{})
+	model.setStatus("idle")
+	model.setComposerPrompt("Keep this unsent draft")
+	model.applySafetyRecourseRewriteFailed(SafetyRecourseRewriteFailedMsg{
+		SourceThreadID: "thread-safety",
+		Prompt:         "Explain the general background.",
+		Err:            errors.New("the fork boundary could not be verified"),
+	})
+	if got := model.composerText(); got != "Explain the general background.\nKeep this unsent draft" {
+		t.Fatalf("composer = %q", got)
+	}
+	want := "Couldn’t start a new chat for this rewrite. Explain the general background."
+	if !strings.Contains(model.renderedHistoryText(), want) {
+		t.Fatalf("history = %q, want %q", model.renderedHistoryText(), want)
+	}
+	if strings.Contains(model.renderedHistoryText(), "fork boundary") {
+		t.Fatalf("history leaks the internal error: %q", model.renderedHistoryText())
+	}
+}
+
+// TestModelSafetyRecourseReadyRequiresIdleChatLikeRust mirrors
+// prepare_safety_recourse_rewrite: a chat that started working or queued input
+// while the fork was being prepared keeps its thread and gets the rewrite back.
+func TestModelSafetyRecourseReadyRequiresIdleChatLikeRust(t *testing.T) {
+	var submitted []SubmitRequest
+	model := newSafetyRecourseModel(Options{
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+	})
+	model.applySafetyRecourseRewriteReady(SafetyRecourseRewriteReadyMsg{
+		SourceThreadID: "thread-safety",
+		Prompt:         "Explain the general background.",
+		Response: SessionResumeResponse{
+			Summary: &codextui.SessionSummary{ThreadID: "thread-fork"},
+			Status:  "idle",
+		},
+	})
+	if model.State.ThreadID != "thread-safety" {
+		t.Fatalf("busy chat switched to %q", model.State.ThreadID)
+	}
+	if len(submitted) != 0 {
+		t.Fatalf("submitted on a busy chat: %#v", submitted)
+	}
+	if got := model.composerText(); got != "Explain the general background." {
+		t.Fatalf("composer = %q", got)
+	}
+}
+
+// TestModelSafetyRecourseReadyKeepsSourceDraftLikeRust mirrors #57365: the
+// source chat keeps its draft while the fork starts with an empty composer.
+func TestModelSafetyRecourseReadyKeepsSourceDraftLikeRust(t *testing.T) {
+	var submitted []SubmitRequest
+	model := newSafetyRecourseModel(Options{
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+	})
+	model.setStatus("idle")
+	model.setComposerPrompt("Keep this unsent draft")
+	model.applySafetyRecourseRewriteReady(SafetyRecourseRewriteReadyMsg{
+		SourceThreadID: "thread-safety",
+		Prompt:         "Explain the general background.",
+		Response: SessionResumeResponse{
+			Summary: &codextui.SessionSummary{ThreadID: "thread-fork"},
+			Status:  "idle",
+		},
+	})
+	if model.State.ThreadID != "thread-fork" {
+		t.Fatalf("active thread = %q", model.State.ThreadID)
+	}
+	if got := model.composerText(); got != "" {
+		t.Fatalf("fork composer = %q, want empty", got)
+	}
+	if got := model.agentsOverviewDrafts["thread-safety"]; got != "Keep this unsent draft" {
+		t.Fatalf("source draft = %q", got)
+	}
+	if len(submitted) != 1 || submitted[0].TurnTrigger != safetyRecourseFollowUpTrigger {
+		t.Fatalf("submitted = %#v", submitted)
+	}
+}
+
+// TestModelSafetyRecourseReadyRestoresRejectedRewriteLikeRust mirrors
+// continue_with_rewrite: when the fork submission is rejected, the rewrite goes
+// back to the fork's composer instead of disappearing with the reset.
+func TestModelSafetyRecourseReadyRestoresRejectedRewriteLikeRust(t *testing.T) {
+	var submitted []SubmitRequest
+	model := newSafetyRecourseModel(Options{
+		HasChatGPTAccount: true,
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+	})
+	model.setStatus("idle")
+	model.applySafetyRecourseRewriteReady(SafetyRecourseRewriteReadyMsg{
+		SourceThreadID: "thread-safety",
+		Prompt:         "Explain the general background.",
+		Response: SessionResumeResponse{
+			// The fork has Daybreak on but its model offers no cyber program, so
+			// the turn is rejected before reaching the backend.
+			Summary: &codextui.SessionSummary{ThreadID: "thread-fork", DaybreakEnabled: true},
+			Status:  "idle",
+		},
+	})
+	if model.State.ThreadID != "thread-fork" {
+		t.Fatalf("active thread = %q", model.State.ThreadID)
+	}
+	if len(submitted) != 0 {
+		t.Fatalf("rejected rewrite reached the backend: %#v", submitted)
+	}
+	if got := model.composerText(); got != "Explain the general background." {
+		t.Fatalf("fork composer = %q, want the rewrite restored", got)
+	}
+}
+
+// TestModelSafetyRecourseReadyReadOnlyForkRestoresRewriteLikeRust locks the
+// post-attach failure path: a read-only fork still reports the failure and keeps
+// the rewrite on the fork instead of the source thread.
+func TestModelSafetyRecourseReadyReadOnlyForkRestoresRewriteLikeRust(t *testing.T) {
+	model := newSafetyRecourseModel(Options{})
+	model.setStatus("idle")
+	model.applySafetyRecourseRewriteReady(SafetyRecourseRewriteReadyMsg{
+		SourceThreadID: "thread-safety",
+		Prompt:         "Explain the general background.",
+		Response: SessionResumeResponse{
+			Summary:  &codextui.SessionSummary{ThreadID: "thread-fork"},
+			Status:   "idle",
+			ReadOnly: true,
+		},
+	})
+	if model.State.ThreadID != "thread-fork" {
+		t.Fatalf("active thread = %q", model.State.ThreadID)
+	}
+	if !model.readOnlyThread {
+		t.Fatal("read-only fork was not marked read-only")
+	}
+	if got := model.composerText(); got != "Explain the general background." {
+		t.Fatalf("fork composer = %q, want the rewrite restored", got)
+	}
+	want := "Couldn’t start a new chat for this rewrite. Explain the general background."
+	if !strings.Contains(model.renderedHistoryText(), want) {
+		t.Fatalf("history = %q, want %q", model.renderedHistoryText(), want)
+	}
+}

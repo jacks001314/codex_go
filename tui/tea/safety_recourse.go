@@ -342,6 +342,16 @@ func (m *Model) applySafetyRecourseRewriteReady(msg SafetyRecourseRewriteReadyMs
 	if source := strings.TrimSpace(msg.SourceThreadID); source != "" && source != m.currentThreadID() {
 		return nil
 	}
+	// Rust prepare_safety_recourse_rewrite: the fork only receives the rewrite
+	// when the chat is idle, no rate-limit switch is pending, and nothing else is
+	// queued. Otherwise the rewrite returns to the composer instead of replacing
+	// work the user started while the fork was being prepared.
+	if m.safetyRecourseRewriteBlocked() {
+		return m.applySafetyRecourseRewriteFailed(SafetyRecourseRewriteFailedMsg{
+			SourceThreadID: msg.SourceThreadID,
+			Prompt:         msg.Prompt,
+		})
+	}
 	forkID := strings.TrimSpace(msg.Response.SummaryThreadID())
 	if forkID == "" {
 		return m.applySafetyRecourseRewriteFailed(SafetyRecourseRewriteFailedMsg{
@@ -354,11 +364,59 @@ func (m *Model) applySafetyRecourseRewriteReady(msg SafetyRecourseRewriteReadyMs
 	if msg.Response.Summary != nil {
 		cwd = strings.TrimSpace(msg.Response.Summary.CWD)
 	}
+	// Rust #57365 preserves the source chat's draft: the source thread keeps its
+	// input state while the fork is attached with an empty composer.
+	m.captureAgentsOverviewDraft(m.currentThreadID())
 	m.applyResumeResponseWithCWD(forkID, msg.Response, cwd)
-	return m.submitRequest(SubmitRequest{
-		Prompt:      strings.TrimSpace(msg.Prompt),
+	m.resetComposer()
+	if m.readOnlyThread || m.threadUnavailable {
+		// The failure belongs to the fork we just attached, not to the source
+		// thread, so the message and restored rewrite stay on the new chat.
+		return m.applySafetyRecourseRewriteFailed(SafetyRecourseRewriteFailedMsg{
+			SourceThreadID: forkID,
+			Prompt:         msg.Prompt,
+			Err:            fmt.Errorf("the fork is unavailable"),
+		})
+	}
+	prompt := strings.TrimSpace(msg.Prompt)
+	cmd := m.submitRequest(SubmitRequest{
+		Prompt:      prompt,
 		TurnTrigger: safetyRecourseFollowUpTrigger,
 	}, false)
+	// Rust continue_with_rewrite restores the rewrite whenever the fork did not
+	// start a turn; rejected submissions only surface a notice, so the prompt
+	// would otherwise be lost.
+	if !m.userTurnSubmissionStarted() {
+		m.restoreSafetyRecoursePrompt(prompt)
+		m.refreshTranscript()
+	}
+	return cmd
+}
+
+// userTurnSubmissionStarted reports whether submitRequest handed the rewrite to
+// a turn. Rust's is_user_turn_pending_or_running covers both the pending and
+// running lifecycles.
+func (m *Model) userTurnSubmissionStarted() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(m.State.Status)) {
+	case "pending", "running":
+		return true
+	}
+	return m.reviewState.IsReviewMode
+}
+
+// safetyRecourseRewriteBlocked mirrors Rust prepare_safety_recourse_rewrite's
+// preconditions for submitting the selected rewrite to the fork.
+func (m *Model) safetyRecourseRewriteBlocked() bool {
+	if m == nil {
+		return true
+	}
+	return m.isUserTurnPendingOrRunning() ||
+		m.rateLimitRecoveryPending ||
+		len(m.queued) > 0 ||
+		m.pendingSafetyRecourse != nil
 }
 
 // applySafetyRecourseRewriteFailed restores the rewrite so the user can retry
@@ -371,22 +429,29 @@ func (m *Model) applySafetyRecourseRewriteFailed(msg SafetyRecourseRewriteFailed
 		return nil
 	}
 	prompt := strings.TrimSpace(msg.Prompt)
-	detail := ""
-	if msg.Err != nil {
-		detail = strings.TrimSpace(msg.Err.Error())
-	}
 	message := "Couldn’t start a new chat for this rewrite."
-	if detail != "" {
-		message += " " + detail
+	if text := historycell.SanitizeUserText(prompt); text != "" {
+		message += " " + text
 	}
-	if prompt != "" {
-		m.composer.SetValue(prompt)
-	}
+	m.restoreSafetyRecoursePrompt(prompt)
 	m.addTurnErrorHistoryMessage(message)
 	m.notice = message
 	m.setStatus("idle")
 	m.refreshTranscript()
 	return nil
+}
+
+// restoreSafetyRecoursePrompt puts the failed rewrite back ahead of the
+// composer's current draft, matching Rust restore_user_message_to_composer's
+// merge (the rewrite first, then the unsent draft on its own line).
+func (m *Model) restoreSafetyRecoursePrompt(prompt string) {
+	if m == nil || prompt == "" {
+		return
+	}
+	if draft := m.composerText(); draft != "" {
+		prompt += "\n" + draft
+	}
+	m.setComposerPrompt(prompt)
 }
 
 // renderSafetyRecourseNotice draws the transient block notice above the
