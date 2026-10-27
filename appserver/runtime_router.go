@@ -12650,6 +12650,7 @@ func (r *RuntimeRouter) handleExternalAgentConfigDetect(request *Request) (*conf
 		return nil, err
 	}
 	service := r.requireConfig()
+	r.applyExternalMemoryImportSettings(service)
 	response := service.DetectExternalAgentConfig(&params)
 	if err := service.RecordDetectedExternalSessionConnectors(&params, response.Items); err != nil {
 		return nil, fmt.Errorf("failed to record detected connector candidates: %w", err)
@@ -12662,7 +12663,9 @@ func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*conf
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, completedResults := r.requireConfig().StartExternalAgentConfigImport(&params, true)
+	service := r.requireConfig()
+	r.applyExternalMemoryImportSettings(service)
+	response, completedResults := service.StartExternalAgentConfigImport(&params, true)
 	if len(params.MigrationItems) > 0 {
 		params.MigrationItems = append([]config.ExternalAgentConfigMigrationItem(nil), params.MigrationItems...)
 		go r.completeExternalAgentConfigImport(params, response.ImportID, completedResults, request.normalizedConnectionID())

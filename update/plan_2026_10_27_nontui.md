@@ -89,6 +89,8 @@ TUI lane and are not modified here.
 | `#57240` | Memory baselines are bounded to 10 MiB and recover as empty snapshots under a cross-process lock | `memories/workspace.go`, `memories/workspace_test.go`, `memories/pipeline_test.go` |
 | `#56250` | Resuming a thread with unchanged settings no longer appends a duplicate settings checkpoint | `rollout/session_items.go`, `rollout/rollout.go`, `appserver/router.go`, like-Rust tests |
 | `#57185` | Unified-exec captured output keeps Rust's byte-omission marker through model truncation | `tool/unified_exec_buffer.go`, `tool/unified_exec.go`, `tool/shell.go`, `tool/shell_executor.go`, like-Rust tests |
+| `#56414` | External-agent memory imports populate the selected namespace and always v2, queueing consolidation per namespace | `config/external_memory_import.go`, `config/external_memory_import_test.go`, `config/api.go`, `appserver/external_memory_settings.go`, like-Rust tests |
+| `#56462` | Imports and consolidation share a cross-process workspace lock; a busy workspace rejects imports and skips consolidation | `memorylock/lock.go`, `memories/pipeline.go`, `config/external_memory_import.go`, app-server/busy-workspace tests |
 
 Grounding notes:
 
@@ -254,6 +256,24 @@ Rust's `... N bytes omitted ...` marker at the retained boundary, and transcript
 end events carry the same marker. `ShellResult` retains the omitted byte count
 so model-facing truncation re-adds the notice when middle truncation removed
 it, without duplicating a marker that survived. Local shell output is unchanged.
+
+`#56414`/`#56462` details: external-agent memory imports now mirror Rust's
+`memory_import.rs`. Detection and import resolve the applicable namespaces
+(always v2, plus v1 when selected or when a legacy `memories` workspace
+exists), compare each owned project's files, `scope.json`, and extra paths to
+decide what is pending, copy raw source files with compact `{"cwd": ...}`
+scope files and the shared extension instructions, and enqueue one
+consolidation for each namespace whose resources changed. Import and
+consolidation exclude each other through `memorylock`'s sibling
+`memories.lock`/`memories_v2.lock` files: every destination is locked before
+any workspace is touched, a busy lock rejects the import with Rust's retryable
+`external_agent_config_import_error`/`import_request_failed` result, and phase
+two records `skipped_workspace_busy` (or `failed_workspace_lock`) instead of
+claiming the job. Go still carries discovered files in
+`MigrationDetails.MemoryFiles` rather than Rust's project-key list, so the
+import re-discovers source files under the locks and cleans up owned projects
+without a current source; success entries use Rust's project-key `cwd` and v2
+resources target.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -835,7 +855,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 101 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 99 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -972,6 +992,11 @@ deduplication for tool outputs.
 - For `#57240`: `go test ./memories -count=1` and `go build ./...` pass.
 - For `#56250`: `go test ./rollout -count=1`, `go test ./appserver -run 'Resume|Settings|Revert|Checkpoint' -count=1`, and `go build ./...` pass.
 - For `#57185`: `go test ./tool -run 'OmissionMarker|HeadTailBuffer|HookResponse|UnifiedExec' -count=1` (126s) and `go build ./...` pass.
+- For `#56414`/`#56462`: `go test ./config ./memorylock -count=1`,
+  `go test ./memories -count=1` (22.4s), and
+  `go test ./appserver -run 'ExternalAgent' -count=1` pass, including the
+  busy-workspace import rejection and retry enqueuing one consolidation per
+  namespace.
 - For `#57181`: `go test ./turn -run 'AdditionalContext' -count=1`,
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full

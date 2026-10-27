@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"codex_go/config"
+	"codex_go/memorylock"
 	"codex_go/model"
 	"codex_go/safety"
 	"codex_go/state"
@@ -308,6 +310,21 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	// it before measuring storage so the measurement is not part of the run.
 	timer := p.startMemoryTimer(MemoryPhaseTwoE2EMetric)
 	defer timer.Stop()
+	// Imports and consolidation share one workspace lock (Rust #56462). A busy
+	// workspace is skipped without touching the job or the memory files.
+	root := RootForVersion(p.CodexHome, p.Version)
+	workspaceLock, lockErr := memorylock.TryAcquire(root)
+	if lockErr != nil {
+		status := "failed_workspace_lock"
+		if errors.Is(lockErr, memorylock.ErrBusy) {
+			status = "skipped_workspace_busy"
+		} else {
+			slog.Error("failed locking memory workspace", "root", root, "error", lockErr)
+		}
+		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, status)
+		return status
+	}
+	defer func() { _ = workspaceLock.Close() }()
 	claim, err := p.State.TryClaimGlobalPhase2Job(ctx, p.CurrentThreadID, PhaseTwoJobLeaseSeconds)
 	if err != nil {
 		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, "failed_claim")
@@ -327,7 +344,6 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 		}
 		return reason
 	}
-	root := RootForVersion(p.CodexHome, p.Version)
 	if err := PrepareWorkspace(ctx, root); err != nil {
 		return fail("failed_prepare_workspace")
 	}

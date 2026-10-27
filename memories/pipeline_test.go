@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/memorylock"
 	"codex_go/model"
 	"codex_go/rollout"
 	"codex_go/state"
@@ -501,5 +502,42 @@ func TestSanitizeMemoryResponseItemDropsCiphertextLikeRust(t *testing.T) {
 	}
 	if _, ok := sanitizeMemoryResponseItem(developer); ok {
 		t.Fatal("developer message was retained")
+	}
+}
+
+func TestPhaseTwoSkipsBusyWorkspaceLikeRust(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	runtime := newMemoryPipelineRuntime(t, home)
+	root := Root(home)
+	workspaceLock, err := memorylock.TryAcquire(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consolidator := &artifactConsolidator{}
+	pipeline := &StartupPipeline{
+		State: runtime, CodexHome: home, PhaseTwo: consolidator,
+		PhaseTwoModel: "consolidate-model", Config: config.DefaultMemoriesConfig(),
+	}
+	report, err := pipeline.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PhaseTwoStatus != "skipped_workspace_busy" {
+		t.Fatalf("phase two status = %q, want skipped_workspace_busy", report.PhaseTwoStatus)
+	}
+	if len(consolidator.requests) != 0 {
+		t.Fatalf("busy consolidation ran %d times", len(consolidator.requests))
+	}
+
+	if err := workspaceLock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err = pipeline.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PhaseTwoStatus == "skipped_workspace_busy" {
+		t.Fatal("phase two still skipped after the workspace lock was released")
 	}
 }

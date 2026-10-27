@@ -1874,6 +1874,10 @@ type ConfigService struct {
 	nextImportID      int
 	externalAgentHome string
 	now               func() time.Time
+	// memoryImportMu guards the host-supplied external-memory pipeline settings
+	// (Rust #56414/#56462); they are read while the import mutex is held.
+	memoryImportMu sync.RWMutex
+	memoryImport   MemoryImportSettings
 }
 
 func NewConfigService(codexHome string) *ConfigService {
