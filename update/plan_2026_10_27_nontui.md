@@ -33,6 +33,7 @@ TUI lane and are not modified here.
 | `#57304` | Surface permanent refresh-token rejection during workspace routing | `appserver/workspace_routing.go`, `appserver/turn_runtime.go`, like-Rust test |
 | `#57287` | Preserve parent tool declarations in MCP-disabled prediction forks | `features/features.go`, `appserver/protocol.go`, `appserver/thread_sample_protocol.go`, `appserver/prediction_parent_tools.go`, `appserver/runtime_router.go`, `appserver/thread_sample.go`, `appserver/turn_runtime.go`, `appserver/incremental_tools.go`, `turn/runtime.go`, like-Rust tests |
 | `#57270` | Load cloud config for sandbox and remote exec-server commands | `app/app.go`, sandbox/exec-server cloud-config tests |
+| `#57192` | Gate capability discovery V2 on executor version | `execserver/capability_discovery_v2_compat.go`, `execserver/client.go`, `appserver/executor_capability_discovery_v2.go`, `appserver/initialize.go`, `cmd/codex/main.go`, version tests |
 
 Grounding notes:
 
@@ -165,6 +166,20 @@ requirements and activates its effective application network policy before
 creating HTTP clients, so a cloud policy can deny registration. Go has no
 `--aws-sigv4` transport flag, so that Rust exclusion has no counterpart.
 
+`#57192` details: V2 discovery now requires both the `capabilityDiscoveryV2`
+flag and an executor version at least `0.164.0`, mirroring Rust's
+`supports_capability_discovery_v2` (build info compared by release precedence,
+so the cutoff prerelease is incompatible and a newer prerelease is not).
+Versions that Rust's `semver::Version::parse` rejects — empty, malformed,
+shorthand `0.164`, or `v`-prefixed — stay incompatible. The compatibility check
+is shared by the exec-server client (`DiscoverCapabilitiesV2` rejects before the
+RPC with `capabilities/discoverV2 is unavailable in this environment session`)
+and by session discovery. When incompatible executors yield no V2 snapshots the
+step returns nil, so V1 discovery keeps selected roots and skills and any
+previous V2 inventory is dropped. `cmd/codex` stamps `environmentInfo`'s
+`executorVersion` from `appserver.CodexVersion()` at startup; unstamped builds
+report `0.0.0` and are incompatible, as in Rust.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -193,6 +208,8 @@ creating HTTP clients, so a cloud policy can deny registration. Go has no
   pass.
 - For `#57270`: `go test ./app -run 'TestSandbox|TestRemoteExecServer|TestExecServerRemote|TestCLIHostPublishesApplicationNetworkPolicyLikeRust' -count=1`
   and `go build ./...` pass.
+- For `#57192`: `go test ./execserver -count=1` and
+  `go test ./appserver -run 'CapabilityDiscoveryV2' -count=1` pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

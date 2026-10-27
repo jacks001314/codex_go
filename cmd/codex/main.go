@@ -7,6 +7,7 @@ import (
 
 	"codex_go/app"
 	"codex_go/applypatch"
+	"codex_go/appserver"
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/execserver"
@@ -18,6 +19,9 @@ import (
 )
 
 func main() {
+	// Executor compatibility checks (Rust #57192) compare the release version
+	// reported in environmentInfo, so stamp it from the packaged build metadata.
+	execserver.SetExecServerVersion(appserver.CodexVersion())
 	// Rust process-hardening (pre_main_hardening): disable ptrace attach and
 	// core dumps, clear LD_*/DYLD_* loader vars, fail-closed on Unix.
 	processhardening.ApplyPreMain()

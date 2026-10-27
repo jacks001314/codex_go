@@ -94,6 +94,12 @@ func InitializeUserAgent(info ClientInfo) string {
 	return sanitizeHeaderValue(candidate, fmt.Sprintf("%s/%s", defaultInitializeOriginator, version))
 }
 
+// CodexVersion returns the packaged CLI version used for app-server metadata
+// and executor compatibility decisions.
+func CodexVersion() string {
+	return appServerVersion()
+}
+
 func appServerVersion() string {
 	if value := strings.TrimSpace(os.Getenv("CODEX_GO_VERSION")); value != "" {
 		return value

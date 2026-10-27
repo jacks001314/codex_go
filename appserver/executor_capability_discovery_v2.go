@@ -151,6 +151,7 @@ func (r *RuntimeRouter) executorCapabilityDiscoveryV2ForStep(ctx context.Context
 	cache.cache.EnsureCapacity(remoteEnvironmentCount)
 
 	snapshots := []execserverclient.ExecutorCapabilityDiscoveryV2Snapshot{}
+	skippedIncompatibleExecutor := false
 	for _, selection := range selections {
 		state, stateErr := environmentConfigStateFromAnyMap(selection)
 		if stateErr == nil && (state.Kind == EnvironmentConfigPending || state.Kind == EnvironmentConfigFailed) {
@@ -177,12 +178,13 @@ func (r *RuntimeRouter) executorCapabilityDiscoveryV2ForStep(ctx context.Context
 			snapshots = append(snapshots, executorCapabilityDiscoveryV2Failure(environmentID))
 			continue
 		}
-		capabilities, capabilityErr := client.EnvironmentCapabilities(ctx)
+		supported, capabilityErr := client.SupportsCapabilityDiscoveryV2(ctx)
 		if capabilityErr != nil {
 			snapshots = append(snapshots, executorCapabilityDiscoveryV2Failure(environmentID))
 			continue
 		}
-		if capabilities == nil || !capabilities.CapabilityDiscoveryV2 {
+		if !supported {
+			skippedIncompatibleExecutor = true
 			continue
 		}
 		request := &execserverclient.DiscoverV2CapabilitiesParams{
@@ -201,6 +203,11 @@ func (r *RuntimeRouter) executorCapabilityDiscoveryV2ForStep(ctx context.Context
 	}
 	if cache.cache.TakeRecoveredDiscovery() && r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateThread(strings.TrimSpace(threadID))
+	}
+	if len(snapshots) == 0 && skippedIncompatibleExecutor {
+		// Rust #57192: an executor that only advertises the old V2 contract
+		// must keep V1 discovery (and its selected roots/skills) active.
+		return nil
 	}
 	return &snapshots
 }

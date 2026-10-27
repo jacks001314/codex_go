@@ -37,6 +37,9 @@ func (w *capabilityDiscoveryV2URLWriter) Write(data []byte) (int, error) {
 
 func startCapabilityDiscoveryV2Executor(t *testing.T) string {
 	t.Helper()
+	previousVersion := execserverclient.ExecServerExecutorVersion()
+	execserverclient.SetExecServerVersion("0.164.0")
+	t.Cleanup(func() { execserverclient.SetExecServerVersion(previousVersion) })
 	ctx, cancel := context.WithCancel(context.Background())
 	urlCh := make(chan string, 1)
 	done := make(chan error, 1)
@@ -158,7 +161,7 @@ func TestExecutorCapabilityDiscoveryV2StaysOutOfModelCatalogsLikeRust(t *testing
 	}
 }
 
-func TestExecutorCapabilityDiscoveryV2SkipsUnsupportedExecutorLikeRust(t *testing.T) {
+func TestExecutorCapabilityDiscoveryV2FallsBackForOldExecutorLikeRust(t *testing.T) {
 	var discoveryCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		conn, err := websocket.Accept(writer, request, nil)
@@ -184,8 +187,9 @@ func TestExecutorCapabilityDiscoveryV2SkipsUnsupportedExecutorLikeRust(t *testin
 				result = map[string]any{
 					"sessionId": "unsupported-executor",
 					"environmentInfo": map[string]any{
-						"shell":        map[string]any{"name": "bash", "path": "/bin/bash"},
-						"capabilities": map[string]any{"capabilityDiscoveryV2": false},
+						"shell":           map[string]any{"name": "bash", "path": "/bin/bash"},
+						"executorVersion": "0.163.0",
+						"capabilities":    map[string]any{"capabilityDiscoveryV2": true},
 					},
 				}
 			case "capabilities/discoverV2":
@@ -228,11 +232,11 @@ func TestExecutorCapabilityDiscoveryV2SkipsUnsupportedExecutorLikeRust(t *testin
 		"features": map[string]any{"executor_capability_discovery_v2": true},
 	}}
 	snapshots := router.executorCapabilityDiscoveryV2ForStep(context.Background(), "thread-unsupported", params, cfg, nil, newRuntimeCapabilityDiscoveryV2Cache())
-	if snapshots == nil || len(*snapshots) != 0 {
-		t.Fatalf("unsupported executor snapshots = %#v, want enabled but empty", snapshots)
+	if snapshots != nil {
+		t.Fatalf("old executor snapshots = %#v, want V1 fallback", snapshots)
 	}
 	if calls := discoveryCalls.Load(); calls != 0 {
-		t.Fatalf("unsupported executor discovery calls = %d, want 0", calls)
+		t.Fatalf("old executor discovery calls = %d, want 0", calls)
 	}
 }
 

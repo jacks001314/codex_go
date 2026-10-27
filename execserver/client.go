@@ -1153,6 +1153,18 @@ func (c *Client) EnvironmentCapabilities(ctx context.Context) (*EnvironmentCapab
 	return &capabilities, nil
 }
 
+// SupportsCapabilityDiscoveryV2 reports whether the initialized executor both
+// advertises V2 discovery and reports a compatible release version. The
+// compatibility check is shared with Environment::discover_capabilities_v2
+// (Rust #57192).
+func (c *Client) SupportsCapabilityDiscoveryV2(ctx context.Context) (bool, error) {
+	info, err := c.cachedEnvironmentInfo(ctx)
+	if err != nil {
+		return false, err
+	}
+	return SupportsCapabilityDiscoveryV2(info), nil
+}
+
 // rememberEnvironmentInfo caches the executor metadata returned by the
 // initialize handshake. Rust sets its `environment_info` OnceCell from
 // `InitializeResponse::environment_info` and only probes when the handshake
@@ -1337,6 +1349,13 @@ func (c *Client) DiscoverCapabilitiesV2(ctx context.Context, params *DiscoverV2C
 	}
 	if params == nil || strings.TrimSpace(params.CWD) == "" {
 		return nil, errors.New("capabilities/discoverV2 cwd is required")
+	}
+	supported, err := c.SupportsCapabilityDiscoveryV2(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !supported {
+		return nil, errors.New("capabilities/discoverV2 is unavailable in this environment session")
 	}
 	response, err := c.discoverCapabilitiesV2Once(ctx, params)
 	if err != nil && IsRetryableRecoveryError(err) {
