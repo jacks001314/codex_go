@@ -1,6 +1,9 @@
 package context
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Mirrors the shared-deduplication half of guardian-context/src/images.rs
 // (#54278, enforcement_tests.rs::image_accounting_preserves_later_eviction_policy):
@@ -88,15 +91,38 @@ func TestNodeReplReviewEvidenceFiltersImagesWithoutDroppingText(t *testing.T) {
 		refs[0].Source != GuardianImageSourceInline {
 		t.Fatalf("ImageRefs() = %#v", refs)
 	}
-	if all := fragment.MultimodalInputItems(); len(all) != 3 {
+	if all := fragment.MultimodalInputItems(); countGuardianImageItems(all) != 2 {
 		t.Fatalf("unfiltered items = %#v", all)
 	}
 	filtered := fragment.MultimodalInputItemsFiltered(func(ref GuardianImageRef) bool { return ref.Ref == "image-b" })
-	if len(filtered) != 2 || filtered[0]["type"] != "text" || filtered[1]["image_url"] != "image-b" {
+	if countGuardianImageItems(filtered) != 1 || filtered[len(filtered)-2]["image_url"] != "image-b" {
 		t.Fatalf("filtered items = %#v", filtered)
 	}
+	if !strings.Contains(guardianTextItems(filtered), "evidence text") {
+		t.Fatalf("filtered items dropped the text evidence: %#v", filtered)
+	}
 	none := fragment.MultimodalInputItemsFiltered(func(GuardianImageRef) bool { return false })
-	if len(none) != 1 || none[0]["type"] != "text" {
+	if countGuardianImageItems(none) != 0 || !strings.Contains(guardianTextItems(none), "evidence text") {
 		t.Fatalf("fully deduplicated items = %#v", none)
 	}
+}
+
+func countGuardianImageItems(items []map[string]any) int {
+	count := 0
+	for _, item := range items {
+		if item["type"] == "image" {
+			count++
+		}
+	}
+	return count
+}
+
+func guardianTextItems(items []map[string]any) string {
+	var builder strings.Builder
+	for _, item := range items {
+		if text, ok := item["text"].(string); ok {
+			builder.WriteString(text)
+		}
+	}
+	return builder.String()
 }

@@ -113,14 +113,26 @@ func TestNodeReplReviewEvidenceMultimodalInputItems(t *testing.T) {
 		t.Fatalf("fragment = %#v", fragment)
 	}
 	items := fragment.MultimodalInputItems()
-	if len(items) != 3 {
+	// Rust's multimodal layout emits an opening marker and introduction, the
+	// response header and text, its inline images, and the closing marker.
+	if len(items) != 6 {
 		t.Fatalf("multimodal items = %#v", items)
 	}
-	if items[0]["type"] != "text" || items[1]["type"] != "image" || items[2]["type"] != "image" {
-		t.Fatalf("multimodal item types = %#v", items)
+	start, end := fragment.Markers()
+	if intro, _ := items[0]["text"].(string); intro != start+nodeReplEvidenceIntro {
+		t.Fatalf("multimodal intro = %q", intro)
 	}
-	if !strings.Contains(items[0]["text"].(string), "text evidence") {
-		t.Fatalf("multimodal text = %#v", items[0])
+	if items[1]["type"] != "text" || !strings.Contains(items[1]["text"].(string), "[REPL response 1") {
+		t.Fatalf("multimodal header = %#v", items[1])
+	}
+	if items[2]["type"] != "text" || items[2]["text"] != "text evidence\n" {
+		t.Fatalf("multimodal text = %#v", items[2])
+	}
+	if items[3]["image_url"] != "data:image/png;base64,AAAA" || items[4]["image_url"] != "data:image/png;base64,BBBB" {
+		t.Fatalf("multimodal images = %#v", items[3:5])
+	}
+	if items[5]["text"] != end {
+		t.Fatalf("multimodal closing = %#v", items[5])
 	}
 
 	textOnly := &NodeReplReviewEvidence{}
@@ -128,5 +140,39 @@ func TestNodeReplReviewEvidenceMultimodalInputItems(t *testing.T) {
 	fragment = textOnly.SnapshotSince(0)
 	if fragment.HasImages() || len(fragment.MultimodalInputItems()) != 1 {
 		t.Fatalf("text-only multimodal = %#v", fragment.MultimodalInputItems())
+	}
+}
+
+// Rust #57274 shares response selection between the text and multimodal
+// layouts: both keep the newest contiguous suffix inside the rendered byte
+// budget, report the rest as omitted, and deduplicate inline images.
+func TestNodeReplReviewEvidenceRenderedLayoutsShareSelection(t *testing.T) {
+	evidence := &NodeReplReviewEvidence{}
+	for index := 0; index < 10; index++ {
+		evidence.RecordMultimodal("js", "cell", "call", []string{strings.Repeat("x", 6_000)}, []string{"image-a"})
+	}
+	fragment := evidence.SnapshotSince(0)
+	if fragment == nil {
+		t.Fatal("fragment is nil")
+	}
+
+	text := fragment.Body()
+	if !strings.Contains(text, `<omitted node_repl_responses="`) || !strings.Contains(text, `/>`) {
+		t.Fatalf("text layout missing the bounded omission notice: %q", text[:min(len(text), 160)])
+	}
+	if !strings.Contains(text, "[REPL response 10 ") || strings.Contains(text, "[REPL response 1 ") {
+		t.Fatalf("text layout did not retain the newest suffix")
+	}
+
+	items := fragment.MultimodalInputItems()
+	multimodal := guardianTextItems(items)
+	if !strings.Contains(multimodal, `reason="resource_bounds"`) {
+		t.Fatalf("multimodal layout missing the bounded omission notice")
+	}
+	if !strings.Contains(multimodal, "[REPL response 10 ") || strings.Contains(multimodal, "[REPL response 1 ") {
+		t.Fatalf("multimodal layout did not retain the newest suffix")
+	}
+	if count := countGuardianImageItems(items); count != 1 {
+		t.Fatalf("multimodal images = %d, want 1 deduplicated reference", count)
 	}
 }

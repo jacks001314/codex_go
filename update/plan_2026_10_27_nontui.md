@@ -85,6 +85,7 @@ TUI lane and are not modified here.
 | `#55644` | Pending injections interrupt `wait_agent` and `clock.sleep` | `turn/steer_mailbox.go`, `turn/tool_dispatcher.go`, `turn/agent_loop.go`, `tool/step_activity.go`, `tool/handlers.go`, `appserver/agent_controller.go`, `exec/agent_controller.go`, like-Rust tests |
 | `#57181` | Optional names on untrusted additional context validate before input admission | `turn/api.go`, `appserver/runtime_router.go`, like-Rust tests |
 | `#57176` | Sync Guardian transcripts resolve the node_repl output cap from the turn's evidence mode | `appserver/node_repl_evidence.go`, `appserver/guardian_reviewer.go`, `appserver/turn_runtime.go`, like-Rust test |
+| `#57274` | Node REPL evidence renders in Rust's multimodal layout | `context/node_repl_review_evidence.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -162,6 +163,15 @@ Grounding notes:
   no behavior change. Go already splits those responsibilities across
   `appserver/agent_controller.go`, `appserver/agent_runtime.go`, and
   `exec/agent_controller.go`.
+- `#56505`, `#56533`, and `#56555` are N/A: Rust defers synchronous tool-call,
+  tool-output, and message truncation from `collect_transcript_for_target` to
+  `ContextProfile::prepare_transcript`. Go's transcript has no separate shared
+  collection stage: `guardianReviewTranscriptSelectionWithProfile` resolves the
+  target profile once and applies the same per-entry caps immediately before
+  `RenderTranscript` charges them, so the rendered text, token costs, and
+  `original_bytes` already match Rust's post-refactor output. The host's
+  full/delta slice is selected by index, so truncation order cannot change which
+  entries are retained.
 
 `#57176` details: the synchronous transcript's node_repl output cap now
 follows Rust's `node_repl_result_token_limit` — 6,000 while node_repl evidence is
@@ -174,6 +184,18 @@ agree. Resolving the mode also repaired evidence collection: it called
 recorded accepted node_repl results. The dispatcher now passes the executed turn
 id, and the mode check uses `ComputerUseReviewRequired` as Rust's
 `node_repl_review_evidence_mode` does.
+
+`#57274` details: Go's multimodal node_repl evidence now follows Rust's
+`guardian-context/src/node_repl.rs` layout — the `<node_repl_review_evidence>`
+opening marker and introduction, each retained response's header and text with
+its accepted inline images in place (deduplicated across the snapshot), a
+`<omitted node_repl_responses="N" reason="resource_bounds" />` notice, and the
+closing marker. Text and multimodal layouts share one newest-suffix selection
+helper with Rust's 32,000-byte rendered budget and layout-specific notice
+reservation, so an oversized snapshot keeps the same responses in both layouts.
+Go previously delivered the multimodal evidence as one text blob without marker
+framing followed by every image, which lost the per-response headers, image
+positions, and marker boundaries.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -755,7 +777,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 112 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 108 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -886,6 +908,9 @@ deduplication for tool outputs.
   `go test ./rollout -count=1`, and `go build ./...` pass.
 - For `#57176`: `go test ./appserver -run 'Guardian|NodeRepl' -count=1`,
   `go test ./state -count=1`, and `go build ./...` pass.
+- For `#57274`: `go test ./context -run 'NodeRepl|Guardian' -count=1`,
+  `go test ./appserver -run 'Guardian|NodeRepl' -count=1`, and `go build ./...`
+  pass.
 - For `#57181`: `go test ./turn -run 'AdditionalContext' -count=1`,
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full
