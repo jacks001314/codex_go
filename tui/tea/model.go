@@ -3,6 +3,7 @@ package tea
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -3117,6 +3118,10 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	// (Rust terminal_probe::default_colors at TUI startup).
 	probeTerminalColorsForTUI(input, output)
 	final, err := NewProgram(ctx, state, options, input, output).Run()
+	// Rust #57391: reports the terminal generated while mouse/focus reporting
+	// was still enabled must be drained before stdin returns to the shell.
+	// Panic unwinding flushes queued input without waiting for a DA1 reply.
+	codextui.DrainPendingTerminalReports(input, output, !errors.Is(err, bubbletea.ErrProgramPanic))
 	if err != nil {
 		return nil, err
 	}
