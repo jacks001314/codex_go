@@ -41,6 +41,7 @@ TUI lane and are not modified here.
 | `#56022` | Preserve config overrides across CLI subcommand boundaries | `cli/cli.go`, `cli/cli_test.go` |
 | `#56552` `#57225` `#57226` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`, `cli/cli.go`, `app/migrate_nfs_db.go`, `app/app.go`, like-Rust tests |
 | `#56495` | Paginated subscribed-channel listing on the local message board | `agentboard/local.go`, `agentboard/local_test.go` |
+| `#55690` | Reclaim aged legacy marketplace staging directories | `plugin/marketplace_staging.go`, `plugin/marketplace_install.go`, `plugin/marketplace_staging_test.go` |
 
 Grounding notes:
 
@@ -50,6 +51,16 @@ Grounding notes:
 - `#57293` GCP/Vertex picker portion is N/A: the Go build has no GCP provider.
 - `#57249` directory/featured prefetch sites do not exist in Go; only the
   suggested-plugin prewarm path is gated.
+- `#56263` is N/A: Go has no marketplace allowed-source/host-pattern policy
+  (`restrict_to_allowed_sources`, `host_pattern`), so there is no allowlist
+  decision to harden against URL-parser backslash handling.
+- `#55593` is N/A: the Go build ships no `windows-sandbox-service` binary or
+  package-identity connection gate to tighten.
+- `#57233` is N/A: Go has no codex-home `.env`/dotenv loader to deduplicate.
+- `#57247` is N/A: release rollout maintenance uses `gofrs/flock` with explicit
+  `Release()` and no `Drop`-style finalizer.
+- `#57193` is N/A: Go has no rollout-trace/replay-bundle package.
+- `#57245` is N/A: Rust test-only queue stabilization.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -278,6 +289,19 @@ correlation so thread subscriptions never appear, and returns a pure `Page[strin
 (vs. `ListChannels`, which adds board permissions). Like Rust, the method is on
 the local board rather than the `Board` interface.
 
+`#55690` details: marketplace staging cleanup now reclaims directories left
+behind by older binaries, which publish no owner lock. Before creating a
+staging checkout, `materializeGitMarketplace` scans the `.staging` directory it
+is about to use (`<install root>/.staging`, matching Rust's layout) and removes
+up to four entries per pass: `marketplace-add-*` directories older than 24 hours
+and `marketplace-upgrade-*` directories older than 10 minutes by modification
+time. Recent clones are preserved so a concurrent upgrade can coexist with an
+in-flight checkout, and symlinks, regular files and unrelated names are never
+touched. Go publishes no owner lock, so every Go checkout is treated as a
+legacy entry; cleanup is best effort and cannot fail an install. Go never
+creates `marketplace-upgrade-*` directories itself, so that branch reclaims
+Rust leftovers in a shared `CODEX_HOME`.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -324,6 +348,9 @@ the local board rather than the `Board` interface.
   Windows host and still need a Linux/macOS run before relying on the cutover.
 - For `#56495`: `go test ./agentboard -run 'SubscribedChannels' -count=1` and
   the full `go test ./agentboard -count=1` pass.
+- For `#55690`: `go test ./plugin -run 'CleanupMarketplaceStaging' -count=1`
+  and the full `go test ./plugin -count=1` pass (the symlink test skips on this
+  Windows host because creating symlinks needs a privilege it lacks).
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

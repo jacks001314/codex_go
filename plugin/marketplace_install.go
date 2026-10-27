@@ -144,6 +144,7 @@ func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []st
 	if err := os.MkdirAll(stagingParent, 0o755); err != nil {
 		return fmt.Errorf("failed to create marketplace staging directory %s: %w", stagingParent, err)
 	}
+	cleanupMarketplaceStaging(stagingParent, time.Now())
 	stagedRoot, err := os.MkdirTemp(stagingParent, "marketplace-add-")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary marketplace directory in %s: %w", stagingParent, err)
