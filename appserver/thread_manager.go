@@ -28,7 +28,10 @@ type ThreadManager struct {
 	capabilityDiscoveryV2 map[string]*runtimeCapabilityDiscoveryV2Cache
 	asyncCompaction       map[string]*asyncCompactionState
 	closing               bool
-	turnWG                sync.WaitGroup
+	// paused closes turn admission while a runtime-wide change (a workspace
+	// switch) replaces credentials. Rust #57514 TurnAdmission.pause.
+	paused bool
+	turnWG sync.WaitGroup
 
 	ephemeralMu sync.RWMutex
 	ephemeral   map[string]*session.Record
@@ -408,6 +411,9 @@ func (m *ThreadManager) ReserveTurn(threadID string) error {
 	if m.closing {
 		return ErrServerDraining
 	}
+	if m.paused {
+		return jsonRPCInvalidRequest("Workspace change in progress; retry when it completes")
+	}
 	if active := m.active[threadID]; active != nil {
 		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
 	}
@@ -438,6 +444,12 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 			cancel()
 		}
 		return ErrServerDraining
+	}
+	if m.paused {
+		if cancel != nil {
+			cancel()
+		}
+		return jsonRPCInvalidRequest("Workspace change in progress; retry when it completes")
 	}
 	if active := m.active[threadID]; active != nil {
 		if active.TurnID == "" {
@@ -553,6 +565,80 @@ func (m *ThreadManager) IsClosing() bool {
 	m.turnsMu.Lock()
 	defer m.turnsMu.Unlock()
 	return m.closing
+}
+
+// TurnAdmissionPause keeps turn admission closed until Release is called. A
+// dropped pause (released exactly once) restores the previous state.
+type TurnAdmissionPause struct {
+	manager *ThreadManager
+	once    sync.Once
+}
+
+// Release allows new turns to start again.
+func (p *TurnAdmissionPause) Release() {
+	if p == nil || p.manager == nil {
+		return
+	}
+	p.once.Do(func() {
+		p.manager.turnsMu.Lock()
+		p.manager.paused = false
+		p.manager.turnsMu.Unlock()
+	})
+}
+
+// PauseTurnAdmission prevents new turns from starting and waits up to ten
+// seconds for the active turns to drain (Rust #57514 TurnAdmission::pause).
+func (m *ThreadManager) PauseTurnAdmission(ctx context.Context) (*TurnAdmissionPause, error) {
+	if m == nil {
+		return nil, jsonRPCInvalidRequest("Turn admission is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.turnsMu.Lock()
+	if m.closing || m.paused {
+		m.turnsMu.Unlock()
+		return nil, jsonRPCInvalidRequest("Runtime changes are already paused")
+	}
+	m.paused = true
+	m.turnsMu.Unlock()
+	pause := &TurnAdmissionPause{manager: m}
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		m.turnsMu.Lock()
+		active := len(m.active)
+		m.turnsMu.Unlock()
+		if active == 0 {
+			return pause, nil
+		}
+		select {
+		case <-ctx.Done():
+			pause.Release()
+			return nil, jsonRPCInvalidRequest("Turn admission is unavailable")
+		case <-deadline.C:
+			pause.Release()
+			return nil, jsonRPCInvalidRequest("Work is still starting; retry the workspace switch")
+		case <-ticker.C:
+		}
+	}
+}
+
+// LiveThreadIDs lists the threads whose runtime is currently loaded.
+func (m *ThreadManager) LiveThreadIDs() []session.ThreadID {
+	if m == nil {
+		return nil
+	}
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	ids := make([]session.ThreadID, 0, len(m.liveThreads))
+	for threadID := range m.liveThreads {
+		ids = append(ids, threadID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func (m *ThreadManager) UpdateTurn(threadID string, turnID string, apply func(*activeRuntimeTurn)) bool {

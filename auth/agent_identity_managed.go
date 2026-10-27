@@ -389,19 +389,23 @@ func persistManagedAgentIdentityRecord(opts *AgentIdentityBootstrapOptions, snap
 // login replacement must not be overwritten by an older registration
 // (Rust #55646 persist_agent_identity_record).
 func persistAgentIdentityRecord(store *Store, cached *AuthDotJSON, record *AgentIdentityAuthRecord) error {
-	authStorageCommitMu.Lock()
-	defer authStorageCommitMu.Unlock()
+	guard, err := store.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer guard.release()
 	stored, err := store.loadLocked()
 	if err != nil {
 		return err
 	}
 	cachedTokens := nilSafeTokens(cached)
-	if tokenLoginOwnerID(cachedTokens) != "" &&
-		(stored == nil || !sameLoginForPersistence(cachedTokens, stored.Tokens)) {
+	if stored != nil && !sameLoginForPersistence(cachedTokens, stored.Tokens) {
 		return errors.New("Account changed during agent identity registration.")
 	}
 	base := stored
 	if base == nil {
+		// The caller supplied an in-memory credential that has not been written
+		// yet; persist the identity alongside it.
 		base = cloneAuthDotJSON(cached)
 	}
 	if base == nil {

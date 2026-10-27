@@ -924,6 +924,9 @@ func (p *AccountSessionsLogoutParams) Validate() error {
 type AccountSessionsSwitchParams struct {
 	SessionID string `json:"sessionId"`
 	AccountID string `json:"accountId"`
+	// AllowBrowserLogin lets Core start a browser sign-in when the selected
+	// workspace needs SSO for this login (Rust #57514).
+	AllowBrowserLogin bool `json:"allowBrowserLogin,omitempty"`
 }
 
 func (p *AccountSessionsSwitchParams) Validate() error {
@@ -943,6 +946,52 @@ type AccountSessionsResponse = SessionsResponse
 type AccountSession = Session
 type AccountSessionWorkspace = SessionWorkspace
 type AccountSessionWorkspaceKind = SessionWorkspaceKind
+
+// AccountBrowserLogin is the accountSession/switch response when the requested
+// workspace requires a fresh browser sign-in. Open AuthURL and wait for
+// account/login/completed for LoginID.
+type AccountBrowserLogin struct {
+	LoginID string `json:"loginId"`
+	AuthURL string `json:"authUrl"`
+}
+
+// AccountSessionsSwitchResponse mirrors Rust's untagged
+// AccountSessionsSwitchResponse: either a flattened session listing or a
+// browser sign-in request.
+type AccountSessionsSwitchResponse struct {
+	Sessions     *AccountSessionsResponse
+	BrowserLogin *AccountBrowserLogin
+}
+
+func (r AccountSessionsSwitchResponse) MarshalJSON() ([]byte, error) {
+	if r.BrowserLogin != nil {
+		return json.Marshal(r.BrowserLogin)
+	}
+	if r.Sessions != nil {
+		return json.Marshal(r.Sessions)
+	}
+	return json.Marshal(AccountSessionsResponse{})
+}
+
+func (r *AccountSessionsSwitchResponse) UnmarshalJSON(data []byte) error {
+	var probe struct {
+		ActiveSessionID *string   `json:"activeSessionId"`
+		Sessions        []Session `json:"sessions"`
+		LoginID         string    `json:"loginId"`
+		AuthURL         string    `json:"authUrl"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if probe.LoginID != "" || probe.AuthURL != "" {
+		r.Sessions = nil
+		r.BrowserLogin = &AccountBrowserLogin{LoginID: probe.LoginID, AuthURL: probe.AuthURL}
+		return nil
+	}
+	r.BrowserLogin = nil
+	r.Sessions = &AccountSessionsResponse{ActiveSessionID: probe.ActiveSessionID, Sessions: probe.Sessions}
+	return nil
+}
 
 func (r *SessionsResponse) MarshalJSON() ([]byte, error) {
 	sessions := append([]Session(nil), r.Sessions...)

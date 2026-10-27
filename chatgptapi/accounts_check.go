@@ -15,6 +15,10 @@ import (
 // endpoint.
 type AccountsCheckEntry struct {
 	ID                     string  `json:"id"`
+	CanAccessWithSession   *bool   `json:"can_access_with_session,omitempty"`
+	SSOConnectionName      *string `json:"sso_connection_name,omitempty"`
+	IsDeactivated          bool    `json:"is_deactivated,omitempty"`
+	IsFedrampCompliant     bool    `json:"is_fedramp_compliant_workspace,omitempty"`
 	PlanType               *string `json:"plan_type,omitempty"`
 	WorkspaceBackendOrigin *string `json:"workspace_backend_origin,omitempty"`
 	AccountRoutingOverride *string `json:"account_routing_override,omitempty"`
@@ -53,12 +57,18 @@ func (r *AccountsCheckResponse) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	var mapped map[string]struct {
-		Account struct {
-			AccountID         *string `json:"account_id"`
-			PlanType          *string `json:"plan_type"`
-			Name              *string `json:"name"`
-			ProfilePictureURL *string `json:"profile_picture_url"`
-			Structure         string  `json:"structure"`
+		CanAccessWithSession *bool   `json:"can_access_with_session"`
+		SSOConnectionName    *string `json:"sso_connection_name"`
+		Account              struct {
+			AccountID              *string `json:"account_id"`
+			PlanType               *string `json:"plan_type"`
+			Name                   *string `json:"name"`
+			ProfilePictureURL      *string `json:"profile_picture_url"`
+			Structure              string  `json:"structure"`
+			IsDeactivated          bool    `json:"is_deactivated"`
+			IsFedrampCompliant     bool    `json:"is_fedramp_compliant_workspace"`
+			WorkspaceBackendOrigin *string `json:"workspace_backend_origin"`
+			AccountRoutingOverride *string `json:"account_routing_override"`
 		} `json:"account"`
 	}
 	if err := json.Unmarshal(raw.Accounts, &mapped); err != nil {
@@ -71,11 +81,17 @@ func (r *AccountsCheckResponse) UnmarshalJSON(data []byte) error {
 			continue
 		}
 		entries = append(entries, AccountsCheckEntry{
-			ID:                *entry.Account.AccountID,
-			PlanType:          entry.Account.PlanType,
-			Name:              entry.Account.Name,
-			ProfilePictureURL: entry.Account.ProfilePictureURL,
-			Structure:         entry.Account.Structure,
+			ID:                     *entry.Account.AccountID,
+			CanAccessWithSession:   entry.CanAccessWithSession,
+			SSOConnectionName:      entry.SSOConnectionName,
+			IsDeactivated:          entry.Account.IsDeactivated,
+			IsFedrampCompliant:     entry.Account.IsFedrampCompliant,
+			PlanType:               entry.Account.PlanType,
+			WorkspaceBackendOrigin: entry.Account.WorkspaceBackendOrigin,
+			AccountRoutingOverride: entry.Account.AccountRoutingOverride,
+			Name:                   entry.Account.Name,
+			ProfilePictureURL:      entry.Account.ProfilePictureURL,
+			Structure:              entry.Account.Structure,
 		})
 	}
 	r.Accounts = entries

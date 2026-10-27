@@ -49,7 +49,10 @@ type OAuthOptions struct {
 	CallbackPort       uint16
 	ForceState         string
 	ForcedWorkspaces   []string
-	StoreOptions       *StoreOptions
+	// WorkspaceLogin, when set, binds the browser callback to the managed login
+	// that requested a workspace switch (Rust #57514 WorkspaceLogin).
+	WorkspaceLogin *WorkspaceLogin
+	StoreOptions   *StoreOptions
 }
 
 type PKCECodes struct {
@@ -194,6 +197,15 @@ func BuildAuthorizeURL(opts *OAuthOptions, redirectURI string, pkce *PKCECodes, 
 	query.Set("originator", "codex_cli_rs")
 	if workspaces := normalizedWorkspaceList(opts.ForcedWorkspaces); len(workspaces) > 0 {
 		query.Set("allowed_workspace_id", strings.Join(workspaces, ","))
+	}
+	if login := opts.WorkspaceLogin; login != nil {
+		query.Set("current_workspace_id", login.WorkspaceID)
+		if login.Email != "" {
+			query.Set("login_hint", login.Email)
+		}
+		if login.Connection != "" {
+			query.Set("connection", login.Connection)
+		}
 	}
 	base.RawQuery = query.Encode()
 	return base.String(), nil
@@ -542,6 +554,13 @@ func PersistChatGPTTokensWithOptions(codexHome string, tokens *ExchangedTokens, 
 	if tokens == nil {
 		return errors.New("tokens are required")
 	}
+	auth := authDotJSONFromExchangedTokens(tokens)
+	return NewStoreWithOptions(codexHome, storeOptions).Save(auth)
+}
+
+// authDotJSONFromExchangedTokens renders a completed OAuth exchange the way a
+// fresh ChatGPT login stores it.
+func authDotJSONFromExchangedTokens(tokens *ExchangedTokens) AuthDotJSON {
 	auth := AuthDotJSON{
 		AuthMode: "chatgpt",
 		Tokens: map[string]any{
@@ -561,7 +580,7 @@ func PersistChatGPTTokensWithOptions(codexHome string, tokens *ExchangedTokens, 
 	if accountID := ChatGPTAccountIDFromJWT(tokens.IDToken); accountID != "" {
 		auth.Tokens["account_id"] = accountID
 	}
-	return NewStoreWithOptions(codexHome, storeOptions).Save(auth)
+	return auth
 }
 
 func RefreshChatGPTTokens(ctx context.Context, opts *RefreshChatGPTTokenOptions) (*AuthDotJSON, error) {
@@ -691,8 +710,11 @@ func persistRefreshedChatGPTTokens(codexHome string, expected *AuthDotJSON, toke
 		return errors.New("Token data is not available.")
 	}
 	store := NewStoreWithOptions(codexHome, storeOptions)
-	authStorageCommitMu.Lock()
-	defer authStorageCommitMu.Unlock()
+	guard, err := store.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer guard.release()
 	current, err := store.loadLocked()
 	if err != nil {
 		return err
@@ -724,10 +746,15 @@ func persistRefreshedChatGPTTokens(codexHome string, expected *AuthDotJSON, toke
 	} else {
 		delete(next.Tokens, "oauth_provenance")
 	}
-	if strings.TrimSpace(tokens.IDToken) != "" {
-		next.Tokens["id_token"] = strings.TrimSpace(tokens.IDToken)
-		if accountID := ChatGPTAccountIDFromJWT(tokens.IDToken); accountID != "" {
-			next.Tokens["account_id"] = accountID
+	if idToken := strings.TrimSpace(tokens.IDToken); idToken != "" {
+		next.Tokens["id_token"] = idToken
+		// Rust #57514 persist_tokens keeps the selected workspace: a refresh may
+		// return an ID token for the login's default workspace while
+		// tokens.account_id still names the workspace the user switched to.
+		if existing := strings.TrimSpace(stringFromAny(next.Tokens, "account_id")); existing == "" {
+			if accountID := ChatGPTAccountIDFromJWT(idToken); accountID != "" {
+				next.Tokens["account_id"] = accountID
+			}
 		}
 	}
 	next.Tokens["access_token"] = strings.TrimSpace(tokens.AccessToken)
@@ -958,6 +985,12 @@ func handleOAuthCallback(request *http.Request, opts *OAuthOptions, redirectURI 
 	}
 	if err := EnsureWorkspaceAllowed(opts.ForcedWorkspaces, tokens.IDToken); err != nil {
 		return &oauthCallbackOutcome{err: err}
+	}
+	if opts.WorkspaceLogin != nil {
+		if err := opts.WorkspaceLogin.Save(tokens); err != nil {
+			return &oauthCallbackOutcome{err: fmt.Errorf("sign-in completed but credentials could not be saved locally: %w", err)}
+		}
+		return &oauthCallbackOutcome{successURL: composeOAuthSuccessURL(request, tokens)}
 	}
 	if err := PersistChatGPTTokensWithOptions(opts.CodexHome, tokens, opts.StoreOptions); err != nil {
 		return &oauthCallbackOutcome{err: fmt.Errorf("sign-in completed but credentials could not be saved locally: %w", err)}

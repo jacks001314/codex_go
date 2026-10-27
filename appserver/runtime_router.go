@@ -439,6 +439,7 @@ type RuntimeRouter struct {
 	mcpEnterpriseAdmission mcpEnterpriseAdmission
 	loginRuntimeMu         sync.Mutex
 	loginRuntimeCancels    map[string]context.CancelFunc
+	loginRuntimePauses     map[string]*TurnAdmissionPause
 	approvalSessionsMu     sync.RWMutex
 	commandApprovals       map[string]struct{}
 	fileApprovals          map[string]struct{}
@@ -3083,7 +3084,9 @@ var goOnlyExperimentalAliases = []Method{
 
 func experimentalAPIMethod(method Method) bool {
 	switch method {
-	case MethodBedrockCheckGovCloudRequirements,
+	case MethodAccountSessionList,
+		MethodAccountSessionSwitch,
+		MethodBedrockCheckGovCloudRequirements,
 		MethodBedrockDiscover,
 		MethodBedrockSetup,
 		MethodGcpSetup,
@@ -3637,6 +3640,10 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		return r.handleAccountSessionsLogout(request)
 	case MethodAccountSessionsSwitch:
 		return r.handleAccountSessionsSwitch(request)
+	case MethodAccountSessionList:
+		return r.handleAccountSessionList(request)
+	case MethodAccountSessionSwitch:
+		return r.handleAccountSessionSwitch(request)
 	case MethodLogoutAccount:
 		return r.handleLogoutAccount(request)
 	case MethodGetAccount:
@@ -13313,12 +13320,21 @@ func (r *RuntimeRouter) accountOAuthOptions() *auth.OAuthOptions {
 }
 
 func (r *RuntimeRouter) startAccountLoginRuntime(params *auth.LoginAccountParams, response *auth.LoginAccountResponse) error {
+	return r.startAccountLoginRuntimeWithOptions(params, response, r.accountOAuthOptions(), nil)
+}
+
+// startAccountLoginRuntimeWithOptions runs a login flow with caller-supplied
+// OAuth options. A workspace browser login keeps turn admission paused until
+// the callback saves the new credential (Rust #57514 start_browser_login).
+func (r *RuntimeRouter) startAccountLoginRuntimeWithOptions(params *auth.LoginAccountParams, response *auth.LoginAccountResponse, options *auth.OAuthOptions, pause *TurnAdmissionPause) error {
 	if r == nil || params == nil || response == nil || strings.TrimSpace(response.LoginID) == "" {
+		if pause != nil {
+			pause.Release()
+		}
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	loginID := strings.TrimSpace(response.LoginID)
-	options := r.accountOAuthOptions()
 	var done <-chan error
 	switch params.Type {
 	case auth.AccountChatGPT:
@@ -13349,6 +13365,12 @@ func (r *RuntimeRouter) startAccountLoginRuntime(params *auth.LoginAccountParams
 		r.loginRuntimeCancels = map[string]context.CancelFunc{}
 	}
 	r.loginRuntimeCancels[loginID] = cancel
+	if pause != nil {
+		if r.loginRuntimePauses == nil {
+			r.loginRuntimePauses = map[string]*TurnAdmissionPause{}
+		}
+		r.loginRuntimePauses[loginID] = pause
+	}
 	r.loginRuntimeMu.Unlock()
 	go r.awaitAccountLoginRuntime(loginID, done)
 	return nil
@@ -13359,7 +13381,12 @@ func (r *RuntimeRouter) awaitAccountLoginRuntime(loginID string, done <-chan err
 	r.loginRuntimeMu.Lock()
 	_, owned := r.loginRuntimeCancels[loginID]
 	delete(r.loginRuntimeCancels, loginID)
+	pause := r.loginRuntimePauses[loginID]
+	delete(r.loginRuntimePauses, loginID)
 	r.loginRuntimeMu.Unlock()
+	if pause != nil {
+		defer pause.Release()
+	}
 	if !owned {
 		return
 	}
@@ -13393,7 +13420,12 @@ func (r *RuntimeRouter) cancelAccountLoginRuntime(loginID string) {
 	r.loginRuntimeMu.Lock()
 	cancel := r.loginRuntimeCancels[strings.TrimSpace(loginID)]
 	delete(r.loginRuntimeCancels, strings.TrimSpace(loginID))
+	pause := r.loginRuntimePauses[strings.TrimSpace(loginID)]
+	delete(r.loginRuntimePauses, strings.TrimSpace(loginID))
 	r.loginRuntimeMu.Unlock()
+	if pause != nil {
+		pause.Release()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -13405,13 +13437,23 @@ func (r *RuntimeRouter) cancelAllAccountLoginRuntimes() {
 	}
 	r.loginRuntimeMu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(r.loginRuntimeCancels))
+	pauses := make([]*TurnAdmissionPause, 0, len(r.loginRuntimePauses))
 	for loginID, cancel := range r.loginRuntimeCancels {
 		if cancel != nil {
 			cancels = append(cancels, cancel)
 		}
 		delete(r.loginRuntimeCancels, loginID)
 	}
+	for loginID, pause := range r.loginRuntimePauses {
+		if pause != nil {
+			pauses = append(pauses, pause)
+		}
+		delete(r.loginRuntimePauses, loginID)
+	}
 	r.loginRuntimeMu.Unlock()
+	for _, pause := range pauses {
+		pause.Release()
+	}
 	for _, cancel := range cancels {
 		cancel()
 	}

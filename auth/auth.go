@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
+
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -198,6 +201,38 @@ func (s *Store) Path() string {
 // (Rust #55646 AUTH_STORAGE_COMMIT).
 var authStorageCommitMu sync.Mutex
 
+// authWriteGuard serializes a read/modify/write across every manager in this
+// process and every cooperating process holding <codex home>/auth.lock
+// (Rust #57514 AuthStorageBackend::lock_for_write). Ephemeral stores have no
+// persistent home and therefore only take the process-wide mutex.
+type authWriteGuard struct {
+	lock *flock.Flock
+}
+
+func (s *Store) lockForWrite() (*authWriteGuard, error) {
+	authStorageCommitMu.Lock()
+	if s == nil || s.options.Mode == AuthCredentialsStoreEphemeral {
+		return &authWriteGuard{}, nil
+	}
+	lock := flock.New(filepath.Join(s.CodexHome, "auth.lock"))
+	if err := lock.Lock(); err != nil {
+		authStorageCommitMu.Unlock()
+		return nil, fmt.Errorf("failed to lock auth credentials: %w", err)
+	}
+	return &authWriteGuard{lock: lock}, nil
+}
+
+func (g *authWriteGuard) release() {
+	if g == nil {
+		return
+	}
+	if g.lock != nil {
+		_ = g.lock.Unlock()
+		g.lock = nil
+	}
+	authStorageCommitMu.Unlock()
+}
+
 // Load reads the stored credential.
 func (s *Store) Load() (*AuthDotJSON, error) {
 	authStorageCommitMu.Lock()
@@ -292,9 +327,49 @@ func (s *Store) resolveWorkloadIdentity() (*ResolvedAuth, error) {
 
 // Save writes the credential atomically with other in-process commits.
 func (s *Store) Save(auth AuthDotJSON) error {
-	authStorageCommitMu.Lock()
-	defer authStorageCommitMu.Unlock()
+	guard, err := s.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer guard.release()
 	return s.saveLocked(auth)
+}
+
+// ReplaceIfCurrent writes updated only while the stored account grant is still
+// expected. The comparison and write happen under one write lock so a
+// concurrent login or logout cannot be overwritten (Rust #57514
+// replace_if_current).
+func (s *Store) ReplaceIfCurrent(expected *AuthDotJSON, updated AuthDotJSON) error {
+	guard, err := s.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer guard.release()
+	current, err := s.backend().LoadAccountGrant()
+	if err != nil {
+		return err
+	}
+	if !authDotJSONEqual(current, expected) {
+		return errAccountCredentialsChanged
+	}
+	return s.saveLocked(updated)
+}
+
+// errAccountCredentialsChanged reports a conditional credential write that lost
+// a race with another auth operation.
+var errAccountCredentialsChanged = errors.New("Account credentials changed")
+
+// IsAccountCredentialsChanged reports whether err is the conditional-write
+// conflict raised by ReplaceIfCurrent.
+func IsAccountCredentialsChanged(err error) bool {
+	return errors.Is(err, errAccountCredentialsChanged)
+}
+
+func authDotJSONEqual(left *AuthDotJSON, right *AuthDotJSON) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return reflect.DeepEqual(*left, *right)
 }
 
 func (s *Store) saveLocked(auth AuthDotJSON) (err error) {
@@ -322,8 +397,11 @@ func (s *Store) saveLocked(auth AuthDotJSON) (err error) {
 // Delete removes the stored credential atomically with other in-process
 // commits.
 func (s *Store) Delete() (bool, error) {
-	authStorageCommitMu.Lock()
-	defer authStorageCommitMu.Unlock()
+	guard, err := s.lockForWrite()
+	if err != nil {
+		return false, err
+	}
+	defer guard.release()
 	return s.deleteLocked()
 }
 
@@ -357,8 +435,11 @@ func (s *Store) deleteLocked() (removed bool, err error) {
 // Unlike ordinary login loading, an unavailable keyring must not authorize an
 // exchange using an older file fallback (Rust #55546/#55646).
 func (s *Store) LoadAccountGrant() (*AuthDotJSON, error) {
-	authStorageCommitMu.Lock()
-	defer authStorageCommitMu.Unlock()
+	guard, err := s.lockForWrite()
+	if err != nil {
+		return nil, err
+	}
+	defer guard.release()
 	return s.backend().LoadAccountGrant()
 }
 

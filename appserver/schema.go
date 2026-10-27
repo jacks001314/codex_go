@@ -269,6 +269,8 @@ func baseClientRequestMethods() []ProtocolMethod {
 
 func experimentalClientRequestMethods() []ProtocolMethod {
 	return []ProtocolMethod{
+		{Method: string(MethodAccountSessionList), Experimental: true},
+		{Method: string(MethodAccountSessionSwitch), Experimental: true},
 		{Method: string(MethodBedrockCheckGovCloudRequirements), Experimental: true},
 		{Method: string(MethodBedrockDiscover), Experimental: true},
 		{Method: string(MethodBedrockSetup), Experimental: true},
@@ -519,6 +521,8 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodAccountSessionsList):                    {Params: "AccountSessionsListParams", Result: "AccountSessionsResponse"},
 		string(MethodAccountSessionsLogout):                  {Params: "AccountSessionsLogoutParams", Result: "AccountSessionsResponse"},
 		string(MethodAccountSessionsSwitch):                  {Params: "AccountSessionsSwitchParams", Result: "AccountSessionsResponse"},
+		string(MethodAccountSessionList):                     {Params: "AccountSessionsListParams", Result: "AccountSessionsResponse"},
+		string(MethodAccountSessionSwitch):                   {Params: "AccountSessionsSwitchParams", Result: "AccountSessionsSwitchResponse"},
 		string(MethodAppList):                                {Params: "AppsListParams", Result: "AppsListResponse"},
 		string(MethodAppRead):                                {Params: "AppsReadParams", Result: "AppsReadResponse"},
 		string(MethodAppInstalled):                           {Params: "AppsInstalledParams", Result: "AppsInstalledResponse"},
