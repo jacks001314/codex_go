@@ -130,7 +130,8 @@ func TestInteractiveHooksReaderUnknownThreadFails(t *testing.T) {
 	t.Setenv("CODEX_HOME", home)
 
 	_, err := interactiveHooksReader(nil)(codextui.HooksListTargetForThread("missing-thread"))
-	if err == nil || !strings.Contains(err.Error(), "thread not found: missing-thread") {
+	want := "hooks/list failed in TUI: hooks/list failed: thread not found: missing-thread (code -32600)"
+	if err == nil || err.Error() != want {
 		t.Fatalf("unknown thread error = %v", err)
 	}
 }

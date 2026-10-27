@@ -48,6 +48,10 @@ func TestHooksListTargetAndResponseMatchRust(t *testing.T) {
 	if _, err := HooksListEntryFromResponse(appserver.HookListResponse{}, cwdTarget); err == nil {
 		t.Fatal("empty hooks/list response did not error")
 	}
+	wantErr := "hooks/list failed in TUI: hooks/list failed: thread not found: thread-1 (code -32600)"
+	if err := HooksListRequestError("thread not found: thread-1", appserver.JSONRPCInvalidRequestErrorCode); err == nil || err.Error() != wantErr {
+		t.Fatalf("hooks/list error = %v", err)
+	}
 }
 
 func TestBuildHookTrustWriteParamsMatchesRust(t *testing.T) {

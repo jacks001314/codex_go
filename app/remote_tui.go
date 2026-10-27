@@ -1155,13 +1155,17 @@ func interactiveRemoteReadHooks(ctx context.Context, endpoint *appserverdaemon.R
 	defer cancel()
 	client, err := openRemoteSessionClient(reqCtx, endpoint)
 	if err != nil {
-		return appserver.HookListEntry{}, err
+		return appserver.HookListEntry{}, fmt.Errorf("hooks/list failed in TUI: %w", err)
 	}
 	defer client.close()
 	params := codextui.BuildHooksListParams(target)
 	var response appserver.HookListResponse
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodHooksList, params, &response); err != nil {
-		return appserver.HookListEntry{}, err
+		var rpcErr *remoteRPCError
+		if errors.As(err, &rpcErr) {
+			return appserver.HookListEntry{}, codextui.HooksListRequestError(rpcErr.Message, rpcErr.Code)
+		}
+		return appserver.HookListEntry{}, fmt.Errorf("hooks/list failed in TUI: %w", err)
 	}
 	return codextui.HooksListEntryFromResponse(response, target)
 }

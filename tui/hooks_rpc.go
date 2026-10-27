@@ -76,6 +76,14 @@ func HooksListEntryFromResponse(response appserver.HookListResponse, target Hook
 	return response.Data[0], nil
 }
 
+// HooksListRequestError mirrors Rust's user-visible hooks/list failure surface:
+// fetch_hooks_list wraps the typed client error, whose Display already names
+// the method and JSON-RPC code, e.g.
+// "hooks/list failed in TUI: hooks/list failed: thread not found: x (code -32600)".
+func HooksListRequestError(message string, code int) error {
+	return fmt.Errorf("hooks/list failed in TUI: hooks/list failed: %s (code %d)", strings.TrimSpace(message), code)
+}
+
 func HookNeedsReview(hook appserver.HookMetadata) bool {
 	return hook.TrustStatus == appserver.HookTrustUntrusted || hook.TrustStatus == appserver.HookTrustModified
 }

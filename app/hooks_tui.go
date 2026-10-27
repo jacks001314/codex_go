@@ -3,7 +3,6 @@ package app
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"codex_go/appserver"
@@ -20,7 +19,10 @@ func interactiveHooksReader(root *cli.RootOptions) codextea.HooksListReaderFunc 
 		if target.IsThread() {
 			resolved := interactiveThreadHooksCWD(target.ThreadID)
 			if resolved == "" {
-				return appserver.HookListEntry{}, fmt.Errorf("thread not found: %s", strings.TrimSpace(target.ThreadID))
+				return appserver.HookListEntry{}, codextui.HooksListRequestError(
+					"thread not found: "+strings.TrimSpace(target.ThreadID),
+					appserver.JSONRPCInvalidRequestErrorCode,
+				)
 			}
 			cwd = resolved
 		}
@@ -47,7 +49,7 @@ func interactiveHooksReader(root *cli.RootOptions) codextea.HooksListReaderFunc 
 			return appserver.HookListEntry{}, errors.New("hooks/list returned no response")
 		}
 		if response.Error != nil {
-			return appserver.HookListEntry{}, errors.New(response.Error.Message)
+			return appserver.HookListEntry{}, codextui.HooksListRequestError(response.Error.Message, response.Error.Code)
 		}
 		listed, ok := response.Result.(*appserver.HookListResponse)
 		if !ok || listed == nil {
