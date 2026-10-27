@@ -49,6 +49,7 @@ func (m *Model) clearUsageNoticeState() {
 	m.rateLimitSnapshots = map[string]chatwidget.RateLimitSnapshot{}
 	m.rateLimitWarnings = chatwidget.RateLimitWarningState{}
 	m.chatGPTPlanType = ""
+	m.clearThreadUsage()
 	m.syncStateRateLimits()
 }
 

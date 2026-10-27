@@ -53,3 +53,20 @@ func TestFormatEstimatedUSDMicrosMatchesRust(t *testing.T) {
 		}
 	}
 }
+
+// TestThreadCostMicrosMatchesRust covers Rust #57251: ENT26 uses native dollar
+// usage and a missing native amount stays unknown instead of falling back to
+// the credit estimate.
+func TestThreadCostMicrosMatchesRust(t *testing.T) {
+	native := int64(750_000)
+	estimated := int64(1_820_000)
+	if got := ThreadCostMicros(&native, &estimated, PlanTypeEnt26); got == nil || *got != native {
+		t.Fatalf("ent26 cost = %v, want native %d", got, native)
+	}
+	if got := ThreadCostMicros(nil, &estimated, PlanTypeEnt26); got != nil {
+		t.Fatalf("ent26 missing native cost = %v, want nil", *got)
+	}
+	if got := ThreadCostMicros(&native, &estimated, "business"); got == nil || *got != estimated {
+		t.Fatalf("business cost = %v, want estimated %d", got, estimated)
+	}
+}

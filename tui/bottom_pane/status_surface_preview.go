@@ -15,36 +15,39 @@ type StatusSurfacePreview struct {
 type StatusSurfacePreviewItem string
 
 const (
-	StatusPreviewAppName            StatusSurfacePreviewItem = "app-name"
-	StatusPreviewProjectName        StatusSurfacePreviewItem = "project-name"
-	StatusPreviewProjectRoot        StatusSurfacePreviewItem = "project-root"
-	StatusPreviewCurrentDir         StatusSurfacePreviewItem = "current-dir"
-	StatusPreviewHostname           StatusSurfacePreviewItem = "hostname"
-	StatusPreviewStatus             StatusSurfacePreviewItem = "status"
-	StatusPreviewThreadTitle        StatusSurfacePreviewItem = "thread-title"
-	StatusPreviewGitBranch          StatusSurfacePreviewItem = "git-branch"
-	StatusPreviewPullRequestNumber  StatusSurfacePreviewItem = "pull-request-number"
-	StatusPreviewBranchChanges      StatusSurfacePreviewItem = "branch-changes"
-	StatusPreviewPermissions        StatusSurfacePreviewItem = "permissions"
-	StatusPreviewApprovalMode       StatusSurfacePreviewItem = "approval-mode"
-	StatusPreviewContextRemaining   StatusSurfacePreviewItem = "context-remaining"
-	StatusPreviewContextUsed        StatusSurfacePreviewItem = "context-used"
-	StatusPreviewFiveHourLimit      StatusSurfacePreviewItem = "five-hour-limit"
-	StatusPreviewWeeklyLimit        StatusSurfacePreviewItem = "weekly-limit"
-	StatusPreviewCodexVersion       StatusSurfacePreviewItem = "codex-version"
-	StatusPreviewContextWindowSize  StatusSurfacePreviewItem = "context-window-size"
-	StatusPreviewUsedTokens         StatusSurfacePreviewItem = "used-tokens"
-	StatusPreviewTotalInputTokens   StatusSurfacePreviewItem = "total-input-tokens"
-	StatusPreviewTotalOutputTokens  StatusSurfacePreviewItem = "total-output-tokens"
-	StatusPreviewSessionID          StatusSurfacePreviewItem = "session-id"
-	StatusPreviewFastMode           StatusSurfacePreviewItem = "fast-mode"
-	StatusPreviewDaybreak           StatusSurfacePreviewItem = "daybreak"
-	StatusPreviewRawOutput          StatusSurfacePreviewItem = "raw-output"
-	StatusPreviewWorkspaceHeadline  StatusSurfacePreviewItem = "workspace-headline"
-	StatusPreviewModel              StatusSurfacePreviewItem = "model"
-	StatusPreviewModelWithReasoning StatusSurfacePreviewItem = "model-with-reasoning"
-	StatusPreviewReasoning          StatusSurfacePreviewItem = "reasoning"
-	StatusPreviewTaskProgress       StatusSurfacePreviewItem = "task-progress"
+	StatusPreviewAppName             StatusSurfacePreviewItem = "app-name"
+	StatusPreviewProjectName         StatusSurfacePreviewItem = "project-name"
+	StatusPreviewProjectRoot         StatusSurfacePreviewItem = "project-root"
+	StatusPreviewCurrentDir          StatusSurfacePreviewItem = "current-dir"
+	StatusPreviewHostname            StatusSurfacePreviewItem = "hostname"
+	StatusPreviewStatus              StatusSurfacePreviewItem = "status"
+	StatusPreviewThreadName          StatusSurfacePreviewItem = "thread-name"
+	StatusPreviewThreadTitle         StatusSurfacePreviewItem = "thread-title"
+	StatusPreviewGitBranch           StatusSurfacePreviewItem = "git-branch"
+	StatusPreviewPullRequestNumber   StatusSurfacePreviewItem = "pull-request-number"
+	StatusPreviewBranchChanges       StatusSurfacePreviewItem = "branch-changes"
+	StatusPreviewPermissions         StatusSurfacePreviewItem = "permissions"
+	StatusPreviewApprovalMode        StatusSurfacePreviewItem = "approval-mode"
+	StatusPreviewContextRemaining    StatusSurfacePreviewItem = "context-remaining"
+	StatusPreviewContextUsed         StatusSurfacePreviewItem = "context-used"
+	StatusPreviewFiveHourLimit       StatusSurfacePreviewItem = "five-hour-limit"
+	StatusPreviewWeeklyLimit         StatusSurfacePreviewItem = "weekly-limit"
+	StatusPreviewCodexVersion        StatusSurfacePreviewItem = "codex-version"
+	StatusPreviewContextWindowSize   StatusSurfacePreviewItem = "context-window-size"
+	StatusPreviewUsedTokens          StatusSurfacePreviewItem = "used-tokens"
+	StatusPreviewTotalInputTokens    StatusSurfacePreviewItem = "total-input-tokens"
+	StatusPreviewTotalOutputTokens   StatusSurfacePreviewItem = "total-output-tokens"
+	StatusPreviewThreadCredits       StatusSurfacePreviewItem = "thread-credits"
+	StatusPreviewEstimatedThreadCost StatusSurfacePreviewItem = "estimated-thread-cost"
+	StatusPreviewSessionID           StatusSurfacePreviewItem = "session-id"
+	StatusPreviewFastMode            StatusSurfacePreviewItem = "fast-mode"
+	StatusPreviewDaybreak            StatusSurfacePreviewItem = "daybreak"
+	StatusPreviewRawOutput           StatusSurfacePreviewItem = "raw-output"
+	StatusPreviewWorkspaceHeadline   StatusSurfacePreviewItem = "workspace-headline"
+	StatusPreviewModel               StatusSurfacePreviewItem = "model"
+	StatusPreviewModelWithReasoning  StatusSurfacePreviewItem = "model-with-reasoning"
+	StatusPreviewReasoning           StatusSurfacePreviewItem = "reasoning"
+	StatusPreviewTaskProgress        StatusSurfacePreviewItem = "task-progress"
 )
 
 type StatusPreviewValue struct {
@@ -80,6 +83,7 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewCurrentDir,
 		StatusPreviewHostname,
 		StatusPreviewStatus,
+		StatusPreviewThreadName,
 		StatusPreviewThreadTitle,
 		StatusPreviewGitBranch,
 		StatusPreviewPullRequestNumber,
@@ -95,6 +99,8 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewUsedTokens,
 		StatusPreviewTotalInputTokens,
 		StatusPreviewTotalOutputTokens,
+		StatusPreviewThreadCredits,
+		StatusPreviewEstimatedThreadCost,
 		StatusPreviewSessionID,
 		StatusPreviewFastMode,
 		StatusPreviewDaybreak,
@@ -219,6 +225,8 @@ func StatusSurfacePreviewPlaceholder(item StatusSurfacePreviewItem) string {
 		return "my-host"
 	case StatusPreviewStatus:
 		return "Working"
+	case StatusPreviewThreadName:
+		return "thread name"
 	case StatusPreviewThreadTitle:
 		return "thread title"
 	case StatusPreviewGitBranch:
@@ -249,6 +257,10 @@ func StatusSurfacePreviewPlaceholder(item StatusSurfacePreviewItem) string {
 		return "0 in"
 	case StatusPreviewTotalOutputTokens:
 		return "0 out"
+	case StatusPreviewThreadCredits:
+		return "5.2 credits"
+	case StatusPreviewEstimatedThreadCost:
+		return "~$1.82"
 	case StatusPreviewSessionID:
 		return "550e8400-e29b-41d4"
 	case StatusPreviewFastMode:

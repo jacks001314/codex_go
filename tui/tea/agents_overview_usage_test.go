@@ -153,7 +153,7 @@ func TestAgentsOverviewUsageGates(t *testing.T) {
 			t.Errorf("plan %q must not fetch dashboard usage", plan)
 		}
 	}
-	for _, plan := range []string{"business", "enterprise_cbp_usage_based", "enterprise_cbp_automation"} {
+	for _, plan := range []string{"business", "ent26", "enterprise_cbp_usage_based", "enterprise_cbp_automation"} {
 		model := newUsageDashboardModel(t, plan)
 		model.onAgentsOverviewUsage = func(string) (AgentsOverviewUsageResult, error) {
 			return AgentsOverviewUsageResult{}, nil
@@ -181,8 +181,31 @@ func TestAgentsOverviewUsageLinesIncompleteGroups(t *testing.T) {
 		GroupOutputTokens:      usageInt64Ptr(30),
 		EstimatedCreditsMicros: 0,
 	}}
-	lines := agentsOverviewUsageLines(entry)
+	lines := agentsOverviewUsageLines(entry, "")
 	if len(lines) != 2 || lines[0] != "Tokens: 30 out" || lines[1] != "Est. usage: 0 credits" {
 		t.Fatalf("usage lines = %#v", lines)
+	}
+}
+
+// TestAgentsOverviewUsageEnt26UsesNativeDollars covers Rust #57251: ENT26 hides
+// credits and reports the native dollar amount, while missing native usage is
+// unknown rather than a zero estimate.
+func TestAgentsOverviewUsageEnt26UsesNativeDollars(t *testing.T) {
+	entry := &agentsOverviewUsageEntry{estimate: &AgentsOverviewThreadUsage{
+		EstimatedCreditsMicros: 46_000_000,
+		EstimatedUSDMicros:     usageInt64Ptr(1_820_000),
+		NativeUSDMicros:        usageInt64Ptr(750_000),
+	}}
+	lines := agentsOverviewUsageLines(entry, "ent26")
+	if len(lines) != 1 || lines[0] != "Est. usage: ~$0.75" {
+		t.Fatalf("ent26 usage lines = %#v", lines)
+	}
+
+	missingNative := &agentsOverviewUsageEntry{estimate: &AgentsOverviewThreadUsage{
+		EstimatedCreditsMicros: 46_000_000,
+		EstimatedUSDMicros:     usageInt64Ptr(1_820_000),
+	}}
+	if lines := agentsOverviewUsageLines(missingNative, "ent26"); len(lines) != 0 {
+		t.Fatalf("missing native usage lines = %#v, want none", lines)
 	}
 }

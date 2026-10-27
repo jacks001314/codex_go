@@ -572,6 +572,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return interactiveRemoteConsumeRateLimitResetCredit(ctx, endpoint, idempotencyKey)
 		},
 		OnReadRateLimits:    interactiveRemoteRateLimitsReader(ctx, endpoint),
+		OnReadThreadUsage:   interactiveRemoteThreadUsageReader(ctx, endpoint),
 		OnReadBackendBanner: interactiveRemoteBackendBannerReader(ctx, endpoint),
 		OnBackendBannerAction: interactiveBackendBannerActionHandler(
 			interactiveRemoteAddCreditsNudgeSender(ctx, endpoint),

@@ -321,7 +321,7 @@ func (m *Model) applyStatusLineCommand(args string) bubbletea.Cmd {
 		m.statusSurfaceOverrides.recordStatusLine(m.currentThreadID(), []string{})
 		m.notice = "Status line: " + firstNonEmpty(result.StatusLineText, "disabled")
 		m.refreshTranscript()
-		return nil
+		return m.refreshStatusControlsCmd()
 	}
 	if len(items) == 0 {
 		// Rust #54387: `--colors`/`--no-colors` without items preserves the
@@ -335,7 +335,7 @@ func (m *Model) applyStatusLineCommand(args string) bubbletea.Cmd {
 	m.statusSurfaceOverrides.recordStatusLine(m.currentThreadID(), chatwidget.StatusLineItemIDs(items))
 	m.notice = "Status line: " + firstNonEmpty(result.StatusLineText, "disabled")
 	m.refreshTranscript()
-	return nil
+	return m.refreshStatusControlsCmd()
 }
 
 func (m *Model) applyTerminalTitleCommand(args string) bubbletea.Cmd {
@@ -350,10 +350,10 @@ func (m *Model) applyTerminalTitleCommand(args string) bubbletea.Cmd {
 		m.ensureStatusControls()
 		m.statusControls.TerminalTitleConfigured = false
 		m.statusControls.TerminalTitleIDs = nil
-		result := m.statusControls.RefreshTerminalTitle()
+		result := m.refreshStatusControls()
 		m.notice = "Terminal title reset to default: " + firstNonEmpty(result.TerminalTitleText, "disabled")
 		m.refreshTranscript()
-		return m.applyTerminalTitleResult(result)
+		return m.refreshStatusControlsCmd()
 	}
 	// Rust #54387 passes switches=["--clear"] for `/title` and no boolean
 	// settings (status_surface_commands.rs:77), so `--colors` is an unknown
@@ -391,7 +391,7 @@ func (m *Model) applyTerminalTitleCommand(args string) bubbletea.Cmd {
 	m.statusSurfaceOverrides.recordTerminalTitle(m.currentThreadID(), chatwidget.TerminalTitleItemIDs(items))
 	m.notice = "Terminal title: " + firstNonEmpty(result.TerminalTitleText, "disabled")
 	m.refreshTranscript()
-	return m.applyTerminalTitleResult(result)
+	return m.refreshStatusControlsCmd()
 }
 
 func (m *Model) openStatusLineSetup() {
@@ -505,7 +505,7 @@ func (m *Model) commitStatusLineSetup(setup *statusLineSetupModal) bubbletea.Cmd
 	m.statusSurfaceOverrides.clearStatusLine(m.currentThreadID())
 	m.notice = "Status line: " + firstNonEmpty(result.StatusLineText, "disabled")
 	m.refreshTranscript()
-	return nil
+	return m.refreshStatusControlsCmd()
 }
 
 func (m *Model) commitTerminalTitleSetup(setup *terminalTitleSetupModal) bubbletea.Cmd {
@@ -519,17 +519,17 @@ func (m *Model) commitTerminalTitleSetup(setup *terminalTitleSetupModal) bubblet
 	m.statusSurfaceOverrides.clearTerminalTitle(m.currentThreadID())
 	m.notice = "Terminal title: " + firstNonEmpty(result.TerminalTitleText, "disabled")
 	m.refreshTranscript()
-	return m.applyTerminalTitleResult(result)
+	return m.refreshStatusControlsCmd()
 }
 
 func (m *Model) cancelTerminalTitleSetup() bubbletea.Cmd {
 	if m == nil || m.statusControls == nil {
 		return nil
 	}
-	result := m.statusControls.CancelTerminalTitleSetup()
+	m.statusControls.CancelTerminalTitleSetup()
 	m.notice = "Cancelled"
 	m.refreshTranscript()
-	return m.applyTerminalTitleResult(result)
+	return m.refreshStatusControlsCmd()
 }
 
 func setupOptionSelected(modal *modalState, id string) bool {
@@ -714,24 +714,31 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 	if m == nil || m.State == nil {
 		return chatwidget.StatusControlsRuntime{CWD: cwd, ProjectName: projectName, ProjectRoot: cwd}
 	}
+	runtimeUsage := m.currentThreadUsageEstimate()
 	return chatwidget.StatusControlsRuntime{
-		CWD:                    cwd,
-		ProjectName:            projectName,
-		ProjectRoot:            cwd,
-		ModelName:              m.modelDisplayName(m.State.Model),
-		ReasoningEffort:        m.State.EffectiveReasoningEffort(),
-		StatusText:             strings.TrimSpace(m.State.Status),
-		Permissions:            strings.TrimSpace(m.State.Sandbox),
-		ApprovalMode:           strings.TrimSpace(m.State.ApprovalPolicy),
-		ThreadID:               strings.TrimSpace(m.State.ThreadID),
-		RawOutput:              m.rawOutput,
-		DaybreakEnabled:        m.daybreakEnabled,
-		SideConversationActive: m.inSideConversation(),
-		ProcessingTier:         m.processingTierDisplayName(),
-		ThreadTitle:            strings.TrimSpace(m.State.ThreadID),
-		TaskProgress:           m.goalTaskProgress(),
-		CodexVersion:           "codex_go",
-		RateLimitSnapshots:     cloneRateLimitSnapshots(m.rateLimitSnapshots),
+		CWD:                           cwd,
+		ProjectName:                   projectName,
+		ProjectRoot:                   cwd,
+		ModelName:                     m.modelDisplayName(m.State.Model),
+		ReasoningEffort:               m.State.EffectiveReasoningEffort(),
+		StatusText:                    strings.TrimSpace(m.State.Status),
+		Permissions:                   strings.TrimSpace(m.State.Sandbox),
+		ApprovalMode:                  strings.TrimSpace(m.State.ApprovalPolicy),
+		ThreadID:                      strings.TrimSpace(m.State.ThreadID),
+		RawOutput:                     m.rawOutput,
+		DaybreakEnabled:               m.daybreakEnabled,
+		SideConversationActive:        m.inSideConversation(),
+		ProcessingTier:                m.processingTierDisplayName(),
+		ThreadName:                    strings.TrimSpace(m.State.ThreadName),
+		ThreadTitle:                   strings.TrimSpace(m.State.ThreadName),
+		TaskProgress:                  m.goalTaskProgress(),
+		CodexVersion:                  "codex_go",
+		RateLimitSnapshots:            cloneRateLimitSnapshots(m.rateLimitSnapshots),
+		PlanType:                      m.chatGPTPlanType,
+		ThreadUsageCreditsMicros:      threadUsageCreditsMicros(runtimeUsage),
+		ThreadUsageEstimatedUSDMicros: threadUsageEstimatedUSDMicros(runtimeUsage),
+		ThreadUsageNativeUSDMicros:    threadUsageNativeUSDMicros(runtimeUsage),
+		ThreadUsageAvailable:          runtimeUsage != nil,
 	}
 }
 
@@ -880,10 +887,14 @@ func (m *Model) refreshStatusControls() chatwidget.StatusSurfaceRefreshResult {
 
 func (m *Model) refreshStatusControlsCmd() bubbletea.Cmd {
 	result := m.refreshStatusControls()
-	if m == nil || m.statusControls == nil || (!m.statusControls.TerminalTitleConfigured && !m.statusControls.TerminalTitleSetupActive) {
-		return nil
+	cmds := []bubbletea.Cmd{}
+	if m != nil && m.statusControls != nil && (m.statusControls.TerminalTitleConfigured || m.statusControls.TerminalTitleSetupActive) {
+		cmds = append(cmds, m.applyTerminalTitleResult(result))
 	}
-	return m.applyTerminalTitleResult(result)
+	if m != nil {
+		cmds = append(cmds, m.ensureThreadUsageForSurfaces(result.Selections))
+	}
+	return bubbletea.Batch(cmds...)
 }
 
 // terminalTitleStatusCmd updates the animated terminal-title pieces. Rust

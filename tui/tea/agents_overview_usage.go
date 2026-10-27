@@ -41,6 +41,9 @@ type AgentsOverviewThreadUsage struct {
 	GroupOutputTokens      *int64
 	EstimatedCreditsMicros int64
 	EstimatedUSDMicros     *int64
+	// NativeUSDMicros is the backend's native dollar amount. ENT26 plans use
+	// it instead of the credit estimate (Rust #57251).
+	NativeUSDMicros *int64
 }
 
 // AgentsOverviewUsageResult is the fetch outcome for one task.
@@ -70,14 +73,14 @@ type agentsOverviewUsageLoadedMsg struct {
 // agentsOverviewUsageRefreshMsg re-runs the lazy usage check on the cadence.
 type agentsOverviewUsageRefreshMsg struct{}
 
-// agentsOverviewUsagePlanAllowed mirrors Rust's plan gate: only Business and
-// the Enterprise usage-based/automation plans fetch estimates.
+// agentsOverviewUsagePlanAllowed mirrors Rust's plan gate: Business, ENT26,
+// and the Enterprise usage-based/automation plans fetch estimates.
 func (m *Model) agentsOverviewUsagePlanAllowed() bool {
 	if m == nil {
 		return false
 	}
 	switch strings.TrimSpace(m.chatGPTPlanType) {
-	case "business", "enterprise_cbp_usage_based", "enterprise_cbp_automation":
+	case "business", "ent26", "enterprise_cbp_usage_based", "enterprise_cbp_automation":
 		return true
 	default:
 		return false
@@ -258,14 +261,14 @@ func (m *Model) syncAgentsOverviewUsageLines() {
 		if threadID == "" {
 			continue
 		}
-		m.agentsOverview.SetUsageLines(threadID, agentsOverviewUsageLines(m.agentsOverviewUsage[threadID]))
+		m.agentsOverview.SetUsageLines(threadID, agentsOverviewUsageLines(m.agentsOverviewUsage[threadID], m.chatGPTPlanType))
 	}
 }
 
 // agentsOverviewUsageLines renders the "Tokens:" and "Est. usage:" lines,
 // preferring the live totals and falling back to the complete breakdown
 // (Rust agents_overview_usage::usage_lines).
-func agentsOverviewUsageLines(entry *agentsOverviewUsageEntry) []string {
+func agentsOverviewUsageLines(entry *agentsOverviewUsageEntry, planType string) []string {
 	if entry == nil {
 		return nil
 	}
@@ -290,11 +293,12 @@ func agentsOverviewUsageLines(entry *agentsOverviewUsageEntry) []string {
 	}
 	if estimate := entry.estimate; estimate != nil {
 		var values []string
-		if estimate.EstimatedCreditsMicros >= 0 {
+		ent26 := strings.EqualFold(strings.TrimSpace(planType), tuistatus.PlanTypeEnt26)
+		if !ent26 && estimate.EstimatedCreditsMicros >= 0 {
 			values = append(values, tuistatus.FormatCreditMicros(estimate.EstimatedCreditsMicros)+" credits")
 		}
-		if estimate.EstimatedUSDMicros != nil {
-			if cost, ok := tuistatus.FormatEstimatedUSDMicros(*estimate.EstimatedUSDMicros); ok {
+		if costMicros := tuistatus.ThreadCostMicros(estimate.NativeUSDMicros, estimate.EstimatedUSDMicros, planType); costMicros != nil {
+			if cost, ok := tuistatus.FormatEstimatedUSDMicros(*costMicros); ok {
 				values = append(values, cost)
 			}
 		}

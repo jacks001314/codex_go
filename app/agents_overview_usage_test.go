@@ -28,6 +28,7 @@ func TestAgentsOverviewThreadUsageFromAuth(t *testing.T) {
 		ThreadID:                    "thread-1",
 		EstimatedUsageCreditsMicros: 3_400_000,
 		EstimatedUsageUSDMicros:     int64PtrAppTest(140_000),
+		NativeUsageUSDMicros:        int64PtrAppTest(750_000),
 		Groups: []auth.ThreadUsageBreakdownGroup{
 			{InputTokens: int64PtrAppTest(12_000), OutputTokens: int64PtrAppTest(3_000)},
 		},
@@ -37,6 +38,9 @@ func TestAgentsOverviewThreadUsageFromAuth(t *testing.T) {
 	}
 	if usage.GroupInputTokens == nil || *usage.GroupInputTokens != 12_000 || usage.GroupOutputTokens == nil || *usage.GroupOutputTokens != 3_000 {
 		t.Fatalf("group totals = %#v / %#v", usage.GroupInputTokens, usage.GroupOutputTokens)
+	}
+	if usage.NativeUSDMicros == nil || *usage.NativeUSDMicros != 750_000 {
+		t.Fatalf("native usd = %#v, want 750000 (Rust #57251)", usage.NativeUSDMicros)
 	}
 
 	// An incomplete group keeps only the complete side.
@@ -109,6 +113,7 @@ func TestInteractiveRemoteAgentsOverviewUsageReadsThreadScope(t *testing.T) {
 						"threadId":                    "thread-usage",
 						"estimatedUsageCreditsMicros": 3_400_000,
 						"estimatedUsageUsdMicros":     140_000,
+						"nativeUsageUsdMicros":        750_000,
 						"groups": []map[string]any{
 							{"inputTokens": 12_000, "outputTokens": 3_000},
 						},
@@ -137,6 +142,9 @@ func TestInteractiveRemoteAgentsOverviewUsageReadsThreadScope(t *testing.T) {
 	}
 	if result.Usage.EstimatedUSDMicros == nil || *result.Usage.EstimatedUSDMicros != 140_000 {
 		t.Fatalf("usd = %#v", result.Usage.EstimatedUSDMicros)
+	}
+	if result.Usage.NativeUSDMicros == nil || *result.Usage.NativeUSDMicros != 750_000 {
+		t.Fatalf("native usd = %#v", result.Usage.NativeUSDMicros)
 	}
 
 	disabled = true

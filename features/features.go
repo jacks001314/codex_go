@@ -48,6 +48,11 @@ var Registry = []Spec{
 	// startup was promoted to stable and is enabled by default; the
 	// experimental menu entry and announcement are gone.
 	{Key: "daemon_auto_start", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #56097): the TUI may discover and
+	// select among multiple conversation backends. Under development and off
+	// by default; Go launches a single backend session, so the key only keeps
+	// configuration parity.
+	{Key: "tui_multi_backend", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust #54949: negotiated zstd app-server WebSocket/UDS compression is
 	// opt-in while the transport feature is under development.
 	{Key: "app_server_websocket_compression", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -306,7 +311,10 @@ var Registry = []Spec{
 	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "in_app_local_automation", Stage: StageStable, DefaultEnabled: true},
-	{Key: "bedrock_setup_wizard", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #56033): the Bedrock setup wizard is
+	// stable and enabled by default for eligible onboarding; users can still
+	// opt out with features.bedrock_setup_wizard = false.
+	{Key: "bedrock_setup_wizard", Stage: StageStable, DefaultEnabled: true},
 	{Key: "step_model_switching", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 307ce6cda9): write_stdin_approval
 	// added; compaction_image_budget promoted to stable/default-on (sync28).

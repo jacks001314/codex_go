@@ -168,6 +168,7 @@ func accountThreadUsageFromBackend(usage *chatgptapi.ThreadUsage) *auth.ThreadUs
 		ThreadID:                    usage.ThreadID,
 		EstimatedUsageCreditsMicros: usage.EstimatedUsageCreditsMicros,
 		EstimatedUsageUSDMicros:     cloneInt64PtrAppserver(usage.EstimatedUsageUSDMicros),
+		NativeUsageUSDMicros:        cloneInt64PtrAppserver(usage.NativeUsageUSDMicros),
 		Groups:                      groups,
 	}
 }

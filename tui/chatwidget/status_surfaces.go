@@ -22,63 +22,69 @@ const (
 type TerminalTitleItem string
 
 const (
-	TerminalTitleAppName            TerminalTitleItem = "app-name"
-	TerminalTitleProject            TerminalTitleItem = "project-name"
-	TerminalTitleCurrentDir         TerminalTitleItem = "current-dir"
-	TerminalTitleSpinner            TerminalTitleItem = "activity"
-	TerminalTitleStatus             TerminalTitleItem = "run-state"
-	TerminalTitleThread             TerminalTitleItem = "thread-title"
-	TerminalTitleGitBranch          TerminalTitleItem = "git-branch"
-	TerminalTitleContextRemaining   TerminalTitleItem = "context-remaining"
-	TerminalTitleContextUsed        TerminalTitleItem = "context-used"
-	TerminalTitleFiveHourLimit      TerminalTitleItem = "five-hour-limit"
-	TerminalTitleWeeklyLimit        TerminalTitleItem = "weekly-limit"
-	TerminalTitleCodexVersion       TerminalTitleItem = "codex-version"
-	TerminalTitleUsedTokens         TerminalTitleItem = "used-tokens"
-	TerminalTitleTotalInputTokens   TerminalTitleItem = "total-input-tokens"
-	TerminalTitleTotalOutputTokens  TerminalTitleItem = "total-output-tokens"
-	TerminalTitleSessionID          TerminalTitleItem = "thread-id"
-	TerminalTitleFastMode           TerminalTitleItem = "fast-mode"
-	TerminalTitleDaybreak           TerminalTitleItem = "daybreak"
-	TerminalTitleModel              TerminalTitleItem = "model"
-	TerminalTitleModelWithReasoning TerminalTitleItem = "model-with-reasoning"
-	TerminalTitleReasoning          TerminalTitleItem = "reasoning"
-	TerminalTitleTaskProgress       TerminalTitleItem = "task-progress"
+	TerminalTitleAppName             TerminalTitleItem = "app-name"
+	TerminalTitleProject             TerminalTitleItem = "project-name"
+	TerminalTitleCurrentDir          TerminalTitleItem = "current-dir"
+	TerminalTitleSpinner             TerminalTitleItem = "activity"
+	TerminalTitleStatus              TerminalTitleItem = "run-state"
+	TerminalTitleThreadName          TerminalTitleItem = "thread-name"
+	TerminalTitleThread              TerminalTitleItem = "thread-title"
+	TerminalTitleGitBranch           TerminalTitleItem = "git-branch"
+	TerminalTitleContextRemaining    TerminalTitleItem = "context-remaining"
+	TerminalTitleContextUsed         TerminalTitleItem = "context-used"
+	TerminalTitleFiveHourLimit       TerminalTitleItem = "five-hour-limit"
+	TerminalTitleWeeklyLimit         TerminalTitleItem = "weekly-limit"
+	TerminalTitleCodexVersion        TerminalTitleItem = "codex-version"
+	TerminalTitleUsedTokens          TerminalTitleItem = "used-tokens"
+	TerminalTitleTotalInputTokens    TerminalTitleItem = "total-input-tokens"
+	TerminalTitleTotalOutputTokens   TerminalTitleItem = "total-output-tokens"
+	TerminalTitleThreadCredits       TerminalTitleItem = "thread-credits"
+	TerminalTitleEstimatedThreadCost TerminalTitleItem = "estimated-thread-cost"
+	TerminalTitleSessionID           TerminalTitleItem = "thread-id"
+	TerminalTitleFastMode            TerminalTitleItem = "fast-mode"
+	TerminalTitleDaybreak            TerminalTitleItem = "daybreak"
+	TerminalTitleModel               TerminalTitleItem = "model"
+	TerminalTitleModelWithReasoning  TerminalTitleItem = "model-with-reasoning"
+	TerminalTitleReasoning           TerminalTitleItem = "reasoning"
+	TerminalTitleTaskProgress        TerminalTitleItem = "task-progress"
 )
 
 type StatusSurfacePreviewItem string
 
 const (
-	StatusPreviewAppName            StatusSurfacePreviewItem = "app-name"
-	StatusPreviewProjectName        StatusSurfacePreviewItem = "project-name"
-	StatusPreviewProjectRoot        StatusSurfacePreviewItem = "project-root"
-	StatusPreviewCurrentDir         StatusSurfacePreviewItem = "current-dir"
-	StatusPreviewHostname           StatusSurfacePreviewItem = "hostname"
-	StatusPreviewStatus             StatusSurfacePreviewItem = "status"
-	StatusPreviewThreadTitle        StatusSurfacePreviewItem = "thread-title"
-	StatusPreviewGitBranch          StatusSurfacePreviewItem = "git-branch"
-	StatusPreviewPullRequestNumber  StatusSurfacePreviewItem = "pull-request-number"
-	StatusPreviewBranchChanges      StatusSurfacePreviewItem = "branch-changes"
-	StatusPreviewPermissions        StatusSurfacePreviewItem = "permissions"
-	StatusPreviewApprovalMode       StatusSurfacePreviewItem = "approval-mode"
-	StatusPreviewContextRemaining   StatusSurfacePreviewItem = "context-remaining"
-	StatusPreviewContextUsed        StatusSurfacePreviewItem = "context-used"
-	StatusPreviewFiveHourLimit      StatusSurfacePreviewItem = "five-hour-limit"
-	StatusPreviewWeeklyLimit        StatusSurfacePreviewItem = "weekly-limit"
-	StatusPreviewCodexVersion       StatusSurfacePreviewItem = "codex-version"
-	StatusPreviewContextWindowSize  StatusSurfacePreviewItem = "context-window-size"
-	StatusPreviewUsedTokens         StatusSurfacePreviewItem = "used-tokens"
-	StatusPreviewTotalInputTokens   StatusSurfacePreviewItem = "total-input-tokens"
-	StatusPreviewTotalOutputTokens  StatusSurfacePreviewItem = "total-output-tokens"
-	StatusPreviewSessionID          StatusSurfacePreviewItem = "session-id"
-	StatusPreviewFastMode           StatusSurfacePreviewItem = "fast-mode"
-	StatusPreviewDaybreak           StatusSurfacePreviewItem = "daybreak"
-	StatusPreviewRawOutput          StatusSurfacePreviewItem = "raw-output"
-	StatusPreviewWorkspaceHeadline  StatusSurfacePreviewItem = "workspace-headline"
-	StatusPreviewModel              StatusSurfacePreviewItem = "model"
-	StatusPreviewModelWithReasoning StatusSurfacePreviewItem = "model-with-reasoning"
-	StatusPreviewReasoning          StatusSurfacePreviewItem = "reasoning"
-	StatusPreviewTaskProgress       StatusSurfacePreviewItem = "task-progress"
+	StatusPreviewAppName             StatusSurfacePreviewItem = "app-name"
+	StatusPreviewProjectName         StatusSurfacePreviewItem = "project-name"
+	StatusPreviewProjectRoot         StatusSurfacePreviewItem = "project-root"
+	StatusPreviewCurrentDir          StatusSurfacePreviewItem = "current-dir"
+	StatusPreviewHostname            StatusSurfacePreviewItem = "hostname"
+	StatusPreviewStatus              StatusSurfacePreviewItem = "status"
+	StatusPreviewThreadName          StatusSurfacePreviewItem = "thread-name"
+	StatusPreviewThreadTitle         StatusSurfacePreviewItem = "thread-title"
+	StatusPreviewGitBranch           StatusSurfacePreviewItem = "git-branch"
+	StatusPreviewPullRequestNumber   StatusSurfacePreviewItem = "pull-request-number"
+	StatusPreviewBranchChanges       StatusSurfacePreviewItem = "branch-changes"
+	StatusPreviewPermissions         StatusSurfacePreviewItem = "permissions"
+	StatusPreviewApprovalMode        StatusSurfacePreviewItem = "approval-mode"
+	StatusPreviewContextRemaining    StatusSurfacePreviewItem = "context-remaining"
+	StatusPreviewContextUsed         StatusSurfacePreviewItem = "context-used"
+	StatusPreviewFiveHourLimit       StatusSurfacePreviewItem = "five-hour-limit"
+	StatusPreviewWeeklyLimit         StatusSurfacePreviewItem = "weekly-limit"
+	StatusPreviewCodexVersion        StatusSurfacePreviewItem = "codex-version"
+	StatusPreviewContextWindowSize   StatusSurfacePreviewItem = "context-window-size"
+	StatusPreviewUsedTokens          StatusSurfacePreviewItem = "used-tokens"
+	StatusPreviewTotalInputTokens    StatusSurfacePreviewItem = "total-input-tokens"
+	StatusPreviewTotalOutputTokens   StatusSurfacePreviewItem = "total-output-tokens"
+	StatusPreviewThreadCredits       StatusSurfacePreviewItem = "thread-credits"
+	StatusPreviewEstimatedThreadCost StatusSurfacePreviewItem = "estimated-thread-cost"
+	StatusPreviewSessionID           StatusSurfacePreviewItem = "session-id"
+	StatusPreviewFastMode            StatusSurfacePreviewItem = "fast-mode"
+	StatusPreviewDaybreak            StatusSurfacePreviewItem = "daybreak"
+	StatusPreviewRawOutput           StatusSurfacePreviewItem = "raw-output"
+	StatusPreviewWorkspaceHeadline   StatusSurfacePreviewItem = "workspace-headline"
+	StatusPreviewModel               StatusSurfacePreviewItem = "model"
+	StatusPreviewModelWithReasoning  StatusSurfacePreviewItem = "model-with-reasoning"
+	StatusPreviewReasoning           StatusSurfacePreviewItem = "reasoning"
+	StatusPreviewTaskProgress        StatusSurfacePreviewItem = "task-progress"
 )
 
 type PreviewValue struct {
@@ -132,6 +138,18 @@ func (s StatusSurfaceSelections) UsesGitSummary() bool {
 
 func (s StatusSurfaceSelections) UsesWorkspaceHeadline() bool {
 	return containsStatusLineItem(s.StatusLineItems, bottompane.StatusLineWorkspaceHeadline)
+}
+
+// UsesThreadUsage mirrors Rust StatusSurfaceSelections::uses_thread_usage: a
+// configured thread-credits or estimated-thread-cost item on either surface
+// makes the TUI fetch the thread's billing estimate.
+func (s StatusSurfaceSelections) UsesThreadUsage() bool {
+	if containsStatusLineItem(s.StatusLineItems, bottompane.StatusLineThreadCredits) ||
+		containsStatusLineItem(s.StatusLineItems, bottompane.StatusLineEstimatedThreadCost) {
+		return true
+	}
+	return containsTerminalTitleItem(s.TerminalTitleItems, TerminalTitleThreadCredits) ||
+		containsTerminalTitleItem(s.TerminalTitleItems, TerminalTitleEstimatedThreadCost)
 }
 
 func ParseStatusLineItemsWithInvalids(ids []string) ([]bottompane.StatusLineItem, []string) {
@@ -214,6 +232,12 @@ func ParseStatusLineItem(id string) (bottompane.StatusLineItem, bool) {
 		return bottompane.StatusLineTotalInputTokens, true
 	case "total-output-tokens":
 		return bottompane.StatusLineTotalOutputTokens, true
+	case "thread-credits":
+		return bottompane.StatusLineThreadCredits, true
+	case "estimated-thread-cost":
+		return bottompane.StatusLineEstimatedThreadCost, true
+	case "thread-name":
+		return bottompane.StatusLineThreadName, true
 	case "thread-id", "session-id":
 		return bottompane.StatusLineSessionID, true
 	case "fast-mode":
@@ -277,6 +301,12 @@ func StatusLineItemID(item bottompane.StatusLineItem) string {
 		return "total-input-tokens"
 	case bottompane.StatusLineTotalOutputTokens:
 		return "total-output-tokens"
+	case bottompane.StatusLineThreadCredits:
+		return "thread-credits"
+	case bottompane.StatusLineEstimatedThreadCost:
+		return "estimated-thread-cost"
+	case bottompane.StatusLineThreadName:
+		return "thread-name"
 	case bottompane.StatusLineSessionID:
 		return "thread-id"
 	case bottompane.StatusLineFastMode:
@@ -308,6 +338,8 @@ func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
 		return TerminalTitleSpinner, true
 	case "run-state", "status":
 		return TerminalTitleStatus, true
+	case "thread-name":
+		return TerminalTitleThreadName, true
 	case "thread-title", "thread":
 		return TerminalTitleThread, true
 	case "git-branch":
@@ -328,6 +360,10 @@ func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
 		return TerminalTitleTotalInputTokens, true
 	case "total-output-tokens":
 		return TerminalTitleTotalOutputTokens, true
+	case "thread-credits":
+		return TerminalTitleThreadCredits, true
+	case "estimated-thread-cost":
+		return TerminalTitleEstimatedThreadCost, true
 	case "thread-id", "session-id":
 		return TerminalTitleSessionID, true
 	case "fast-mode":
@@ -373,6 +409,8 @@ func (item TerminalTitleItem) PreviewItem() (StatusSurfacePreviewItem, bool) {
 		return "", false
 	case TerminalTitleStatus:
 		return StatusPreviewStatus, true
+	case TerminalTitleThreadName:
+		return StatusPreviewThreadName, true
 	case TerminalTitleThread:
 		return StatusPreviewThreadTitle, true
 	case TerminalTitleGitBranch:
@@ -393,6 +431,10 @@ func (item TerminalTitleItem) PreviewItem() (StatusSurfacePreviewItem, bool) {
 		return StatusPreviewTotalInputTokens, true
 	case TerminalTitleTotalOutputTokens:
 		return StatusPreviewTotalOutputTokens, true
+	case TerminalTitleThreadCredits:
+		return StatusPreviewThreadCredits, true
+	case TerminalTitleEstimatedThreadCost:
+		return StatusPreviewEstimatedThreadCost, true
 	case TerminalTitleSessionID:
 		return StatusPreviewSessionID, true
 	case TerminalTitleFastMode:
@@ -454,6 +496,12 @@ func StatusLineItemPreviewItem(item bottompane.StatusLineItem) StatusSurfacePrev
 		return StatusPreviewTotalInputTokens
 	case bottompane.StatusLineTotalOutputTokens:
 		return StatusPreviewTotalOutputTokens
+	case bottompane.StatusLineThreadCredits:
+		return StatusPreviewThreadCredits
+	case bottompane.StatusLineEstimatedThreadCost:
+		return StatusPreviewEstimatedThreadCost
+	case bottompane.StatusLineThreadName:
+		return StatusPreviewThreadName
 	case bottompane.StatusLineSessionID:
 		return StatusPreviewSessionID
 	case bottompane.StatusLineFastMode:
@@ -496,6 +544,7 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewProjectRoot,
 		StatusPreviewCurrentDir,
 		StatusPreviewStatus,
+		StatusPreviewThreadName,
 		StatusPreviewThreadTitle,
 		StatusPreviewGitBranch,
 		StatusPreviewPullRequestNumber,
@@ -511,6 +560,8 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewUsedTokens,
 		StatusPreviewTotalInputTokens,
 		StatusPreviewTotalOutputTokens,
+		StatusPreviewThreadCredits,
+		StatusPreviewEstimatedThreadCost,
 		StatusPreviewSessionID,
 		StatusPreviewFastMode,
 		StatusPreviewDaybreak,
@@ -745,6 +796,8 @@ func statusSurfacePlaceholder(item StatusSurfacePreviewItem) string {
 		return "~/my-project/subdir"
 	case StatusPreviewStatus:
 		return "Working"
+	case StatusPreviewThreadName:
+		return "thread name"
 	case StatusPreviewThreadTitle:
 		return "thread title"
 	case StatusPreviewGitBranch:
@@ -775,6 +828,10 @@ func statusSurfacePlaceholder(item StatusSurfacePreviewItem) string {
 		return "0 in"
 	case StatusPreviewTotalOutputTokens:
 		return "0 out"
+	case StatusPreviewThreadCredits:
+		return "5.2 credits"
+	case StatusPreviewEstimatedThreadCost:
+		return "~$1.82"
 	case StatusPreviewSessionID:
 		return "550e8400-e29b-41d4"
 	case StatusPreviewFastMode:

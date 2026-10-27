@@ -9,6 +9,7 @@ import (
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	tuistatus "codex_go/tui/status"
 )
 
 // Rust parity: codex-rs/tui/src/chatwidget/status_controls.rs plus the
@@ -139,12 +140,28 @@ type StatusControlsRuntime struct {
 	// conversation owns the composer (Rust `side_conversation_active`, #49861).
 	SideConversationActive bool
 	RawOutput              bool
-	ThreadTitle            string
-	WorkspaceHeadline      string
-	TaskProgress           string
-	CodexVersion           string
-	HasCodexBackendAuth    bool
-	RateLimitSnapshots     map[string]RateLimitSnapshot
+	// ThreadName is the current thread's name; the thread-title item falls
+	// back to ThreadID when the thread is unnamed (Rust ThreadTitle).
+	ThreadName          string
+	ThreadTitle         string
+	WorkspaceHeadline   string
+	TaskProgress        string
+	CodexVersion        string
+	HasCodexBackendAuth bool
+	RateLimitSnapshots  map[string]RateLimitSnapshot
+	// PlanType gates and formats the thread-usage items (Rust plan_type).
+	PlanType string
+	// ThreadUsageAvailable reports whether an estimate exists for the current
+	// thread; a missing dollar amount then hides the setup placeholder.
+	ThreadUsageAvailable bool
+	// ThreadUsageCreditsMicros is the estimate's credit amount; nil means the
+	// estimate is unavailable and the item is omitted.
+	ThreadUsageCreditsMicros *int64
+	// ThreadUsageEstimatedUSDMicros is the non-ENT26 dollar estimate.
+	ThreadUsageEstimatedUSDMicros *int64
+	// ThreadUsageNativeUSDMicros is the ENT26 native dollar amount; nil means
+	// unknown rather than zero.
+	ThreadUsageNativeUSDMicros *int64
 }
 
 type StatusControlsState struct {
@@ -679,7 +696,7 @@ func (s *StatusControlsState) refreshStatusLineFromSelections(selections StatusS
 }
 
 func (s *StatusControlsState) refreshTerminalTitleFromSelections(selections StatusSurfaceSelections, result *StatusSurfaceRefreshResult) {
-	title, ok := TerminalTitleText(selections.TerminalTitleItems, s.TerminalTitlePreviewData(), TerminalTitleRenderOptions{
+	title, ok := TerminalTitleText(selections.TerminalTitleItems, s.TerminalTitleLiveData(), TerminalTitleRenderOptions{
 		SpinnerText:    s.TerminalTitleSpinnerText,
 		ActionRequired: s.TerminalTitleActionRequired,
 		ActionHidden:   s.TerminalTitleActionHidden,
@@ -771,6 +788,20 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 		return FormatTokensCompact(s.StatusLineTotalUsage().InputTokens) + " in", true
 	case bottompane.StatusLineTotalOutputTokens:
 		return FormatTokensCompact(s.StatusLineTotalUsage().OutputTokens) + " out", true
+	case bottompane.StatusLineThreadCredits:
+		if strings.EqualFold(strings.TrimSpace(s.Runtime.PlanType), tuistatus.PlanTypeEnt26) {
+			return "", false
+		}
+		if s.Runtime.ThreadUsageCreditsMicros == nil {
+			return "", false
+		}
+		return tuistatus.FormatCreditMicros(*s.Runtime.ThreadUsageCreditsMicros) + " credits", true
+	case bottompane.StatusLineEstimatedThreadCost:
+		cost := tuistatus.ThreadCostMicros(s.Runtime.ThreadUsageNativeUSDMicros, s.Runtime.ThreadUsageEstimatedUSDMicros, s.Runtime.PlanType)
+		if cost == nil {
+			return "", false
+		}
+		return tuistatus.FormatEstimatedUSDMicros(*cost)
 	case bottompane.StatusLineFiveHourLimit:
 		window, secondary, ok := s.fiveHourStatusWindow()
 		if !ok {
@@ -809,8 +840,13 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 			return "raw output", true
 		}
 		return "", false
+	case bottompane.StatusLineThreadName:
+		return nonEmptyTrimmed(s.Runtime.ThreadName)
 	case bottompane.StatusLineThreadTitle:
 		if value, ok := nonEmptyTrimmed(s.Runtime.ThreadTitle); ok {
+			return value, true
+		}
+		if value, ok := nonEmptyTrimmed(s.Runtime.ThreadName); ok {
 			return value, true
 		}
 		return nonEmptyTrimmed(s.Runtime.ThreadID)
@@ -861,11 +897,31 @@ func (s *StatusControlsState) StatusSurfacePreviewData() StatusSurfacePreviewDat
 			}
 		}
 	}
+	if _, ok := s.StatusLineValueForItem(bottompane.StatusLineEstimatedThreadCost); !ok && s.Runtime.ThreadUsageAvailable {
+		data.SuppressPlaceholder(StatusPreviewEstimatedThreadCost)
+	}
 	return data
 }
 
 func (s *StatusControlsState) TerminalTitlePreviewData() StatusSurfacePreviewData {
 	data := s.StatusSurfacePreviewData()
+	for _, item := range AllTerminalTitleItems() {
+		previewItem, ok := item.PreviewItem()
+		if !ok {
+			continue
+		}
+		if value, ok := s.TerminalTitleValueForItem(item); ok {
+			data.SetLive(previewItem, value)
+		}
+	}
+	return data
+}
+
+// TerminalTitleLiveData contains only the values that are available right now.
+// The real terminal title must omit unavailable items instead of rendering the
+// setup picker's placeholders (Rust terminal_title_value_for_item -> None).
+func (s *StatusControlsState) TerminalTitleLiveData() StatusSurfacePreviewData {
+	data := StatusSurfacePreviewData{}
 	for _, item := range AllTerminalTitleItems() {
 		previewItem, ok := item.PreviewItem()
 		if !ok {
@@ -927,6 +983,16 @@ func (s *StatusControlsState) TerminalTitleValueForItem(item TerminalTitleItem) 
 		return s.truncatedStatusLineValue(bottompane.StatusLineTotalInputTokens)
 	case TerminalTitleTotalOutputTokens:
 		return s.truncatedStatusLineValue(bottompane.StatusLineTotalOutputTokens)
+	case TerminalTitleThreadName:
+		value, ok := s.StatusLineValueForItem(bottompane.StatusLineThreadName)
+		if !ok {
+			return "", false
+		}
+		return TruncateTerminalTitlePart(value, 48), true
+	case TerminalTitleThreadCredits:
+		return s.truncatedStatusLineValue(bottompane.StatusLineThreadCredits)
+	case TerminalTitleEstimatedThreadCost:
+		return s.truncatedStatusLineValue(bottompane.StatusLineEstimatedThreadCost)
 	case TerminalTitleSessionID:
 		return s.truncatedStatusLineValue(bottompane.StatusLineSessionID)
 	case TerminalTitleFastMode:
@@ -1260,10 +1326,13 @@ func AllStatusLineItems() []bottompane.StatusLineItem {
 		bottompane.StatusLineUsedTokens,
 		bottompane.StatusLineTotalInputTokens,
 		bottompane.StatusLineTotalOutputTokens,
+		bottompane.StatusLineThreadCredits,
+		bottompane.StatusLineEstimatedThreadCost,
 		bottompane.StatusLineSessionID,
 		bottompane.StatusLineFastMode,
 		bottompane.StatusLineDaybreak,
 		bottompane.StatusLineRawOutput,
+		bottompane.StatusLineThreadName,
 		bottompane.StatusLineThreadTitle,
 		bottompane.StatusLineWorkspaceHeadline,
 		bottompane.StatusLineTaskProgress,
@@ -1277,6 +1346,7 @@ func AllTerminalTitleItems() []TerminalTitleItem {
 		TerminalTitleCurrentDir,
 		TerminalTitleSpinner,
 		TerminalTitleStatus,
+		TerminalTitleThreadName,
 		TerminalTitleThread,
 		TerminalTitleGitBranch,
 		TerminalTitleContextRemaining,
@@ -1287,6 +1357,8 @@ func AllTerminalTitleItems() []TerminalTitleItem {
 		TerminalTitleUsedTokens,
 		TerminalTitleTotalInputTokens,
 		TerminalTitleTotalOutputTokens,
+		TerminalTitleThreadCredits,
+		TerminalTitleEstimatedThreadCost,
 		TerminalTitleSessionID,
 		TerminalTitleFastMode,
 		TerminalTitleDaybreak,
@@ -1359,6 +1431,12 @@ func StatusLineItemDescription(item bottompane.StatusLineItem, previewData Statu
 		return "Total input tokens used in session"
 	case bottompane.StatusLineTotalOutputTokens:
 		return "Total output tokens used in session"
+	case bottompane.StatusLineThreadCredits:
+		return "Estimated current-thread credits (Enterprise workspaces only; omitted when unavailable)"
+	case bottompane.StatusLineEstimatedThreadCost:
+		return "Estimated current-thread cost in USD (Enterprise workspaces only; omitted when unavailable)"
+	case bottompane.StatusLineThreadName:
+		return "Current thread name (omitted when unnamed)"
 	case bottompane.StatusLineSessionID:
 		return "Current thread identifier (omitted until thread starts)"
 	case bottompane.StatusLineFastMode:
@@ -1390,6 +1468,8 @@ func TerminalTitleItemDescription(item TerminalTitleItem, previewData StatusSurf
 		return "Spinner while working, action-required message while blocked."
 	case TerminalTitleStatus:
 		return "Compact session run-state text (Ready, Working, Thinking)"
+	case TerminalTitleThreadName:
+		return "Current thread name (omitted when unnamed)"
 	case TerminalTitleThread:
 		return "Current thread title, or thread identifier when unnamed"
 	case TerminalTitleGitBranch:
@@ -1410,6 +1490,10 @@ func TerminalTitleItemDescription(item TerminalTitleItem, previewData StatusSurf
 		return "Total input tokens used in session"
 	case TerminalTitleTotalOutputTokens:
 		return "Total output tokens used in session"
+	case TerminalTitleThreadCredits:
+		return "Estimated current-thread credits (Enterprise workspaces only; omitted when unavailable)"
+	case TerminalTitleEstimatedThreadCost:
+		return "Estimated current-thread cost (Enterprise workspaces only; omitted when unavailable)"
 	case TerminalTitleSessionID:
 		return "Current thread identifier (omitted until thread starts)"
 	case TerminalTitleFastMode:
@@ -1467,6 +1551,12 @@ func statusLineItemForPreviewItem(item StatusSurfacePreviewItem) (bottompane.Sta
 		return bottompane.StatusLineTotalInputTokens, true
 	case StatusPreviewTotalOutputTokens:
 		return bottompane.StatusLineTotalOutputTokens, true
+	case StatusPreviewThreadCredits:
+		return bottompane.StatusLineThreadCredits, true
+	case StatusPreviewEstimatedThreadCost:
+		return bottompane.StatusLineEstimatedThreadCost, true
+	case StatusPreviewThreadName:
+		return bottompane.StatusLineThreadName, true
 	case StatusPreviewSessionID:
 		return bottompane.StatusLineSessionID, true
 	case StatusPreviewFastMode:

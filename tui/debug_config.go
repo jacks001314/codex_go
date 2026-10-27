@@ -255,7 +255,7 @@ func renderRequirementLines(requirements *config.ConfigRequirements, sandboxMode
 		lines = append(lines, requirementLine("enforce_residency", string(*requirements.EnforceResidency), "config requirements"))
 	}
 	if requirements.Network != nil {
-		lines = append(lines, requirementLine("experimental_network", FormatNetworkRequirements(requirements.Network), "config requirements"))
+		lines = append(lines, requirementLine("network_proxy", FormatNetworkRequirements(requirements.Network), "config requirements"))
 	}
 	return lines
 }

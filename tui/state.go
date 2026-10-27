@@ -143,10 +143,17 @@ type State struct {
 	RateLimits              []RateLimitStatus
 	RateLimitsLoaded        bool
 	RateLimitsRefreshing    bool
-	CLIVersion              string
-	AccountDisplay          string
-	AgentsSummary           string
-	HasChatGPTAccount       bool
+	// StatusExtraFields carries preformatted /status rows owned by the caller
+	// (the thread-usage block is rendered with tui/status formatters).
+	StatusExtraFields []StatusExtraField
+	// StatusLabelReserves widens the label column without emitting a row.
+	// Rust reserves the billed-token label before the asynchronous thread
+	// usage arrives so values do not shift horizontally.
+	StatusLabelReserves []string
+	CLIVersion          string
+	AccountDisplay      string
+	AgentsSummary       string
+	HasChatGPTAccount   bool
 	// RequiresOpenAIAuth is the connected server's provider capability. Nil
 	// keeps the legacy provider-name heuristic for callers without an account
 	// response.
@@ -168,6 +175,14 @@ type RateLimitStatus struct {
 	Details     string
 	Text        string
 	IsText      bool
+}
+
+// StatusExtraField is one additional /status value row. Labels keep the Rust
+// formatting, including the two-space indent used by thread-usage breakdowns.
+type StatusExtraField struct {
+	Label           string
+	Value           string
+	SeparatorBefore bool
 }
 
 func NewState(options *Options) *State {
@@ -390,6 +405,7 @@ func (s *State) RenderStatusCardWidth(width int) string {
 		resets           string
 		details          string
 		window           bool
+		separator        bool
 	}
 	fields := []statusFieldData{{label: "Model", value: model}}
 	if provider != "" {
@@ -459,6 +475,12 @@ func (s *State) RenderStatusCardWidth(width int) string {
 			usageFields = append(usageFields, statusFieldData{label: "Warning", value: warning})
 		}
 	}
+	for _, field := range s.StatusExtraFields {
+		if field.SeparatorBefore {
+			usageFields = append(usageFields, statusFieldData{separator: true})
+		}
+		usageFields = append(usageFields, statusFieldData{label: field.Label, value: field.Value})
+	}
 
 	labelWidth := DisplayWidth("Token usage")
 	for _, item := range fields {
@@ -468,6 +490,11 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	}
 	for _, item := range usageFields {
 		if candidate := DisplayWidth(item.label); candidate > labelWidth {
+			labelWidth = candidate
+		}
+	}
+	for _, label := range s.StatusLabelReserves {
+		if candidate := DisplayWidth(label); candidate > labelWidth {
 			labelWidth = candidate
 		}
 	}
@@ -504,6 +531,10 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	}
 	rows = append(rows, statusCardRow{})
 	for _, item := range usageFields {
+		if item.separator {
+			rows = append(rows, statusCardRow{})
+			continue
+		}
 		value := item.value
 		if item.window {
 			full := renderStatusLimitProgressBar(item.percentRemaining) + " " + item.value

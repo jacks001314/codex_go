@@ -1076,7 +1076,7 @@ func TestInteractiveDebugConfigReaderUsesRustStyleRenderer(t *testing.T) {
 		"Requirements:",
 		"allowed_web_search_modes: disabled",
 		"allow_remote_control: false",
-		"experimental_network: enabled=true",
+		"network_proxy: enabled=true",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("debug config reader output missing %q:\n%s", want, rendered)

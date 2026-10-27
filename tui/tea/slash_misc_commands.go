@@ -24,6 +24,8 @@ func (m *Model) applyStatusCommand() bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	m.State.StatusExtraFields = m.threadUsageStatusFields()
+	m.State.StatusLabelReserves = m.threadUsageLabelReserves()
 	refreshing := m.State.HasChatGPTAccount && m.onReadRateLimits != nil
 	snapshot := *m.State
 	snapshot.Messages = nil
@@ -41,24 +43,31 @@ func (m *Model) applyStatusCommand() bubbletea.Cmd {
 	m.statusCopyTargets = newStatusCopyTargets(snapshot, cardWidth)
 	m.notice = ""
 	m.refreshTranscript()
-	if !refreshing {
+	var cmds []bubbletea.Cmd
+	requestID := m.nextStatusRateLimitRequestID
+	if refreshing {
+		m.nextStatusRateLimitRequestID++
+		if m.pendingStatusRateLimitRequests == nil {
+			m.pendingStatusRateLimitRequests = map[uint64]pendingStatusRateLimitRequest{}
+		}
+		m.pendingStatusRateLimitRequests[requestID] = pendingStatusRateLimitRequest{
+			messageIndex: messageIndex,
+			snapshot:     snapshot,
+			width:        cardWidth,
+		}
+		reader := m.onReadRateLimits
+		cmds = append(cmds, func() bubbletea.Msg {
+			limits, err := reader()
+			return RateLimitsResultMsg{RequestID: requestID, Limits: limits, Err: err}
+		})
+	}
+	if cmd, started := m.startThreadUsageRefresh(messageIndex, cardWidth); started && cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if len(cmds) == 0 {
 		return nil
 	}
-	requestID := m.nextStatusRateLimitRequestID
-	m.nextStatusRateLimitRequestID++
-	if m.pendingStatusRateLimitRequests == nil {
-		m.pendingStatusRateLimitRequests = map[uint64]pendingStatusRateLimitRequest{}
-	}
-	m.pendingStatusRateLimitRequests[requestID] = pendingStatusRateLimitRequest{
-		messageIndex: messageIndex,
-		snapshot:     snapshot,
-		width:        cardWidth,
-	}
-	reader := m.onReadRateLimits
-	return func() bubbletea.Msg {
-		limits, err := reader()
-		return RateLimitsResultMsg{RequestID: requestID, Limits: limits, Err: err}
-	}
+	return bubbletea.Batch(cmds...)
 }
 
 func (m *Model) applyRateLimitsResult(message RateLimitsResultMsg) bubbletea.Cmd {

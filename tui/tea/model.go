@@ -1273,6 +1273,9 @@ type Options struct {
 	OnReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	OnConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	OnReadRateLimits              RateLimitsReaderFunc
+	// OnReadThreadUsage reads the active thread's billing estimate for /status
+	// (Rust #44970). Nil keeps the thread-usage surface disabled.
+	OnReadThreadUsage ThreadUsageReaderFunc
 	// OnReadBackendBanner reads and validates the backend-owned inline banner
 	// plus the ordinary-usage recovery inputs (Rust backend_banners). Nil leaves
 	// the banner surface unused.
@@ -2234,15 +2237,36 @@ type Model struct {
 	onReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	onReadRateLimits              RateLimitsReaderFunc
-	onReadSecuritySetup           func() (string, *SecuritySetupNotice, error)
-	onReadBackendBanner           func() (BackendBannerRead, error)
-	onBackendBannerAction         func(action BackendBannerAction) bubbletea.Cmd
-	requiresOpenAIAuthOverride    *bool
-	backendBanner                 backendBannerState
-	securitySetupNotice           *SecuritySetupNotice
-	securitySetupIdentity         string
-	securitySetupDismissed        bool
-	securitySetupRequestID        uint64
+	onReadThreadUsage             ThreadUsageReaderFunc
+	threadUsage                   *ThreadUsageEstimate
+	threadUsageDisabled           bool
+	threadUsagePendingRequestID   uint64
+	threadUsageStatusTargets      []threadUsageStatusTarget
+	threadUsageNextRequestID      uint64
+	threadUsageRetryAttempts      int
+	// threadUsageRequested mirrors Rust ThreadUsageState::requested: once the
+	// configured status surfaces asked for an estimate, refreshes reuse the
+	// stored value instead of re-fetching on every render.
+	threadUsageRequested bool
+	// threadUsageSurfaceSelected mirrors Rust thread_usage_is_selected: a
+	// status-line or terminal-title item currently wants the estimate.
+	threadUsageSurfaceSelected bool
+	// Settlement polling after a turn mirrors Rust
+	// refresh_thread_usage_after_turn: billing catches up over a few minutes,
+	// so the estimate is re-read until it grows past the pre-turn baseline.
+	threadUsageSettlementActive                bool
+	threadUsageSettlementAttempts              int
+	threadUsageSettlementBaselineCreditsMicros int64
+	threadUsageSettlementBaselineUSDMicros     *int64
+	onReadSecuritySetup                        func() (string, *SecuritySetupNotice, error)
+	onReadBackendBanner                        func() (BackendBannerRead, error)
+	onBackendBannerAction                      func(action BackendBannerAction) bubbletea.Cmd
+	requiresOpenAIAuthOverride                 *bool
+	backendBanner                              backendBannerState
+	securitySetupNotice                        *SecuritySetupNotice
+	securitySetupIdentity                      string
+	securitySetupDismissed                     bool
+	securitySetupRequestID                     uint64
 	// reserveReturn is the task-local model to restore when ordinary usage
 	// recovers from the reserve model (Rust ReserveReturnModel).
 	reserveReturn *ReserveReturn
@@ -2765,6 +2789,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
 		onReadRateLimits:                options.OnReadRateLimits,
+		onReadThreadUsage:               options.OnReadThreadUsage,
 		onReadBackendBanner:             options.OnReadBackendBanner,
 		onReadSecuritySetup:             options.OnReadSecuritySetup,
 		onBackendBannerAction:           options.OnBackendBannerAction,
@@ -3305,7 +3330,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.refreshStatusControlsCmd()
 		}
 		m.applyTurnInterrupted(msg)
-		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(appserver.TurnStatusInterrupted))
+		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(appserver.TurnStatusInterrupted), m.refreshThreadUsageAfterTurn())
 	case ClipboardWriteResultMsg:
 		m.applyClipboardWriteResult(msg)
 		return m, m.finishSelectCopyClose(msg.Err == nil)
@@ -3438,6 +3463,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), cmd)
 	case RateLimitsResultMsg:
 		return m, m.applyRateLimitsResult(msg)
+	case threadUsageResultMsg:
+		return m, m.applyThreadUsageResult(msg)
+	case threadUsageRetryMsg:
+		return m, m.applyThreadUsageRetry(msg)
+	case threadUsageSettlementMsg:
+		return m, m.applyThreadUsageSettlement(msg)
 	case TokenActivityResultMsg:
 		m.applyTokenActivityResult(msg)
 		return m, nil
@@ -6070,7 +6101,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		m.notice = errorMessage
 		m.refreshTranscript()
 		m.appendQuestionDrafts(questionDrafts)
-		return nil
+		return m.refreshThreadUsageAfterTurn()
 	}
 	if strings.TrimSpace(message.ThreadID) != "" {
 		m.State.SetThreadID(message.ThreadID)
@@ -6120,7 +6151,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	if strings.TrimSpace(response) == "" {
 		response = m.lastAssistantNotificationResponse()
 	}
-	return m.queueNotification(chatwidget.AgentTurnCompleteNotification(response))
+	return bubbletea.Batch(m.queueNotification(chatwidget.AgentTurnCompleteNotification(response)), m.refreshThreadUsageAfterTurn())
 }
 
 func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
@@ -8587,6 +8618,7 @@ func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bu
 		// and the disabled-capability state.
 		if plan := strings.TrimSpace(snapshot.PlanType); plan != m.chatGPTPlanType {
 			m.clearAgentsOverviewUsage()
+			m.clearThreadUsage()
 		}
 		m.chatGPTPlanType = strings.TrimSpace(snapshot.PlanType)
 	} else if m.chatGPTPlanType != "" {

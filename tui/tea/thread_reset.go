@@ -20,6 +20,7 @@ func (m *Model) resetThreadScopedState() {
 	// listener, snapshots, and pending state so /side can reopen it later.
 	m.deactivateSideConversation()
 	m.currentTurnID = ""
+	m.clearThreadUsage()
 	// The fresh-task starfield belongs to the previous thread/task.
 	m.sparkle = composerSparkleState{}
 	m.misalignmentPolicyStopped = false

@@ -723,10 +723,13 @@ type AccountTokenUsageDailyBucket struct {
 
 // ThreadUsage is the estimated billing usage for a requested thread.
 type ThreadUsage struct {
-	ThreadID                    string                      `json:"threadId"`
-	EstimatedUsageCreditsMicros int64                       `json:"estimatedUsageCreditsMicros"`
-	EstimatedUsageUSDMicros     *int64                      `json:"estimatedUsageUsdMicros"`
-	Groups                      []ThreadUsageBreakdownGroup `json:"groups"`
+	ThreadID                    string `json:"threadId"`
+	EstimatedUsageCreditsMicros int64  `json:"estimatedUsageCreditsMicros"`
+	EstimatedUsageUSDMicros     *int64 `json:"estimatedUsageUsdMicros"`
+	// NativeUsageUSDMicros is the backend's native dollar amount, independent
+	// of credit estimates (Rust #57251). Missing means unknown, not zero.
+	NativeUsageUSDMicros *int64                      `json:"nativeUsageUsdMicros"`
+	Groups               []ThreadUsageBreakdownGroup `json:"groups"`
 }
 
 // ThreadUsageBreakdownGroup is one model/speed/reasoning bucket in a thread

@@ -51,6 +51,24 @@ func TestIncrementalToolsFeatureRegisteredLikeRust(t *testing.T) {
 	}
 }
 
+// TestBedrockSetupWizardEnabledByDefaultLikeRust pins Rust #56033: the wizard
+// is stable and enabled by default, while an explicit false still opts out.
+func TestBedrockSetupWizardEnabledByDefaultLikeRust(t *testing.T) {
+	const key = "bedrock_setup_wizard"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	if got := StageFor(key); got != StageStable {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageStable)
+	}
+	if !Enabled(nil, key) {
+		t.Fatalf("%s default = false, want true", key)
+	}
+	if Enabled(map[string]bool{key: false}, key) {
+		t.Fatalf("%s explicit false = true, want false", key)
+	}
+}
+
 // TestCodeModeToolDescriptionFirstRegisteredLikeRust pins Rust #51690, which
 // registers an under-development, default-disabled flag for placing each tool
 // description before its namespace description in Code Mode.

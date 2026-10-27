@@ -34,6 +34,8 @@ const (
 	StatusLineUsedTokens
 	StatusLineTotalInputTokens
 	StatusLineTotalOutputTokens
+	StatusLineThreadCredits
+	StatusLineEstimatedThreadCost
 	StatusLineFiveHourLimit
 	StatusLineWeeklyLimit
 	StatusLineCodexVersion
@@ -43,6 +45,7 @@ const (
 	StatusLineRawOutput
 	StatusLinePermissions
 	StatusLineApprovalMode
+	StatusLineThreadName
 	StatusLineThreadTitle
 	StatusLineWorkspaceHeadline
 	StatusLineTaskProgress
@@ -96,7 +99,7 @@ func StatusLineFromSegments(segments []StatusLineSegment, useThemeColors bool) (
 		span := StatusLineSpan{Text: segment.Text}
 		if useThemeColors {
 			span.Accent = StatusLineAccentForItem(segment.Item)
-			span.ThreadIdentity = segment.Item == StatusLineThreadTitle
+			span.ThreadIdentity = segment.Item == StatusLineThreadName || segment.Item == StatusLineThreadTitle
 		} else {
 			span.Accent = StatusLineAccentNone
 			span.Dim = true
@@ -187,13 +190,15 @@ func StatusLineAccentForItem(item StatusLineItem) StatusLineAccent {
 		return StatusLineAccentState
 	case StatusLineContextRemaining, StatusLineContextUsed, StatusLineContextWindowSize, StatusLineUsedTokens, StatusLineTotalInputTokens, StatusLineTotalOutputTokens:
 		return StatusLineAccentUsage
+	case StatusLineThreadCredits, StatusLineEstimatedThreadCost:
+		return StatusLineAccentUsage
 	case StatusLineFiveHourLimit, StatusLineWeeklyLimit:
 		return StatusLineAccentLimit
 	case StatusLineCodexVersion, StatusLineHostname, StatusLineSessionID:
 		return StatusLineAccentMetadata
 	case StatusLineFastMode, StatusLineDaybreak, StatusLineRawOutput, StatusLinePermissions, StatusLineApprovalMode:
 		return StatusLineAccentMode
-	case StatusLineThreadTitle, StatusLineWorkspaceHeadline:
+	case StatusLineThreadName, StatusLineThreadTitle, StatusLineWorkspaceHeadline:
 		return StatusLineAccentThread
 	case StatusLineTaskProgress:
 		return StatusLineAccentProgress

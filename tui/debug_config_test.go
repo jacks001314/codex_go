@@ -157,7 +157,7 @@ func TestDebugConfigOutputListsRequirementsLikeRust(t *testing.T) {
 		"features: shell_tool=false, web_search=true (source: config requirements)",
 		`hooks: managed_dir=/managed/hooks, windows_managed_dir=C:\managed\hooks, handlers=2 (source: config requirements)`,
 		"enforce_residency: us (source: config requirements)",
-		"experimental_network: enabled=true, http_port=1234, socks_port=5678, allow_upstream_proxy=true, dangerously_allow_non_loopback_proxy=false, dangerously_allow_all_unix_sockets=true, domains={a.example=allow, b.example=deny}, managed_allowed_domains_only=false, unix_sockets={/tmp/a.sock=allow, /tmp/b.sock=deny}, allow_local_binding=true (source: config requirements)",
+		"network_proxy: enabled=true, http_port=1234, socks_port=5678, allow_upstream_proxy=true, dangerously_allow_non_loopback_proxy=false, dangerously_allow_all_unix_sockets=true, domains={a.example=allow, b.example=deny}, managed_allowed_domains_only=false, unix_sockets={/tmp/a.sock=allow, /tmp/b.sock=deny}, allow_local_binding=true (source: config requirements)",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("requirements output missing %q:\n%s", want, rendered)

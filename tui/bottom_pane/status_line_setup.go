@@ -95,6 +95,12 @@ func ParseStatusLineItem(id string) (StatusLineItem, bool) {
 		return StatusLineTotalInputTokens, true
 	case "total-output-tokens":
 		return StatusLineTotalOutputTokens, true
+	case "thread-credits":
+		return StatusLineThreadCredits, true
+	case "estimated-thread-cost":
+		return StatusLineEstimatedThreadCost, true
+	case "thread-name":
+		return StatusLineThreadName, true
 	case "thread-id", "session-id":
 		return StatusLineSessionID, true
 	case "fast-mode":
@@ -158,6 +164,12 @@ func StatusLineItemID(item StatusLineItem) string {
 		return "total-input-tokens"
 	case StatusLineTotalOutputTokens:
 		return "total-output-tokens"
+	case StatusLineThreadCredits:
+		return "thread-credits"
+	case StatusLineEstimatedThreadCost:
+		return "estimated-thread-cost"
+	case StatusLineThreadName:
+		return "thread-name"
 	case StatusLineSessionID:
 		return "thread-id"
 	case StatusLineFastMode:
@@ -221,6 +233,12 @@ func StatusLineItemPreviewItem(item StatusLineItem) StatusSurfacePreviewItem {
 		return StatusPreviewTotalInputTokens
 	case StatusLineTotalOutputTokens:
 		return StatusPreviewTotalOutputTokens
+	case StatusLineThreadCredits:
+		return StatusPreviewThreadCredits
+	case StatusLineEstimatedThreadCost:
+		return StatusPreviewEstimatedThreadCost
+	case StatusLineThreadName:
+		return StatusPreviewThreadName
 	case StatusLineSessionID:
 		return StatusPreviewSessionID
 	case StatusLineFastMode:
@@ -248,32 +266,35 @@ func StatusLineItemDescription(item StatusLineItem, previewData StatusSurfacePre
 		return previewData.RateLimitItemDescription(StatusPreviewWeeklyLimit, "Remaining usage on the secondary usage limit (omitted when unavailable)")
 	}
 	descriptions := map[StatusLineItem]string{
-		StatusLineModelName:          "Current model name",
-		StatusLineModelWithReasoning: "Current model name with reasoning level",
-		StatusLineReasoning:          "Current reasoning level",
-		StatusLineCurrentDir:         "Current working directory",
-		StatusLineProjectRoot:        "Project name (omitted when unavailable)",
-		StatusLineHostname:           "Current machine hostname (omitted when unavailable)",
-		StatusLineGitBranch:          "Current Git branch (omitted when unavailable)",
-		StatusLinePullRequestNumber:  "Open pull request number for the current branch (omitted when unavailable)",
-		StatusLineBranchChanges:      "Committed branch changes against the default branch (omitted when unavailable)",
-		StatusLineStatus:             "Compact session run-state text (Ready, Working, Thinking)",
-		StatusLinePermissions:        "Active permission profile or sandbox mode",
-		StatusLineApprovalMode:       "Active command approval mode",
-		StatusLineContextRemaining:   "Percentage of context window remaining (omitted when unknown)",
-		StatusLineContextUsed:        "Percentage of context window used (omitted when unknown)",
-		StatusLineCodexVersion:       "Codex application version",
-		StatusLineContextWindowSize:  "Total context window size in tokens (omitted when unknown)",
-		StatusLineUsedTokens:         "Total tokens used in session (omitted when zero)",
-		StatusLineTotalInputTokens:   "Total input tokens used in session",
-		StatusLineTotalOutputTokens:  "Total output tokens used in session",
-		StatusLineSessionID:          "Current thread identifier (omitted until thread starts)",
-		StatusLineFastMode:           "Whether Fast mode is currently active",
-		StatusLineDaybreak:           "Whether Daybreak is enabled for this thread",
-		StatusLineRawOutput:          "Whether raw scrollback mode is active",
-		StatusLineThreadTitle:        "Current thread title, or thread identifier when unnamed",
-		StatusLineWorkspaceHeadline:  "Workspace notification headline (Enterprise workspaces only; omitted when unavailable)",
-		StatusLineTaskProgress:       "Latest task progress from update_plan (omitted until available)",
+		StatusLineModelName:           "Current model name",
+		StatusLineModelWithReasoning:  "Current model name with reasoning level",
+		StatusLineReasoning:           "Current reasoning level",
+		StatusLineCurrentDir:          "Current working directory",
+		StatusLineProjectRoot:         "Project name (omitted when unavailable)",
+		StatusLineHostname:            "Current machine hostname (omitted when unavailable)",
+		StatusLineGitBranch:           "Current Git branch (omitted when unavailable)",
+		StatusLinePullRequestNumber:   "Open pull request number for the current branch (omitted when unavailable)",
+		StatusLineBranchChanges:       "Committed branch changes against the default branch (omitted when unavailable)",
+		StatusLineStatus:              "Compact session run-state text (Ready, Working, Thinking)",
+		StatusLinePermissions:         "Active permission profile or sandbox mode",
+		StatusLineApprovalMode:        "Active command approval mode",
+		StatusLineContextRemaining:    "Percentage of context window remaining (omitted when unknown)",
+		StatusLineContextUsed:         "Percentage of context window used (omitted when unknown)",
+		StatusLineCodexVersion:        "Codex application version",
+		StatusLineContextWindowSize:   "Total context window size in tokens (omitted when unknown)",
+		StatusLineUsedTokens:          "Total tokens used in session (omitted when zero)",
+		StatusLineTotalInputTokens:    "Total input tokens used in session",
+		StatusLineTotalOutputTokens:   "Total output tokens used in session",
+		StatusLineThreadCredits:       "Estimated current-thread credits (Enterprise workspaces only; omitted when unavailable)",
+		StatusLineEstimatedThreadCost: "Estimated current-thread cost in USD (Enterprise workspaces only; omitted when unavailable)",
+		StatusLineThreadName:          "Current thread name (omitted when unnamed)",
+		StatusLineSessionID:           "Current thread identifier (omitted until thread starts)",
+		StatusLineFastMode:            "Whether Fast mode is currently active",
+		StatusLineDaybreak:            "Whether Daybreak is enabled for this thread",
+		StatusLineRawOutput:           "Whether raw scrollback mode is active",
+		StatusLineThreadTitle:         "Current thread title, or thread identifier when unnamed",
+		StatusLineWorkspaceHeadline:   "Workspace notification headline (Enterprise workspaces only; omitted when unavailable)",
+		StatusLineTaskProgress:        "Latest task progress from update_plan (omitted until available)",
 	}
 	return descriptions[item]
 }

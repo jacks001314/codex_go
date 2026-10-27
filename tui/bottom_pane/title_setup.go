@@ -12,28 +12,31 @@ type TitleSetupState struct {
 type TerminalTitleItem string
 
 const (
-	TerminalTitleAppName            TerminalTitleItem = "app-name"
-	TerminalTitleProject            TerminalTitleItem = "project-name"
-	TerminalTitleCurrentDir         TerminalTitleItem = "current-dir"
-	TerminalTitleSpinner            TerminalTitleItem = "activity"
-	TerminalTitleStatus             TerminalTitleItem = "run-state"
-	TerminalTitleThread             TerminalTitleItem = "thread-title"
-	TerminalTitleGitBranch          TerminalTitleItem = "git-branch"
-	TerminalTitleContextRemaining   TerminalTitleItem = "context-remaining"
-	TerminalTitleContextUsed        TerminalTitleItem = "context-used"
-	TerminalTitleFiveHourLimit      TerminalTitleItem = "five-hour-limit"
-	TerminalTitleWeeklyLimit        TerminalTitleItem = "weekly-limit"
-	TerminalTitleCodexVersion       TerminalTitleItem = "codex-version"
-	TerminalTitleUsedTokens         TerminalTitleItem = "used-tokens"
-	TerminalTitleTotalInputTokens   TerminalTitleItem = "total-input-tokens"
-	TerminalTitleTotalOutputTokens  TerminalTitleItem = "total-output-tokens"
-	TerminalTitleSessionID          TerminalTitleItem = "thread-id"
-	TerminalTitleFastMode           TerminalTitleItem = "fast-mode"
-	TerminalTitleDaybreak           TerminalTitleItem = "daybreak"
-	TerminalTitleModel              TerminalTitleItem = "model"
-	TerminalTitleModelWithReasoning TerminalTitleItem = "model-with-reasoning"
-	TerminalTitleReasoning          TerminalTitleItem = "reasoning"
-	TerminalTitleTaskProgress       TerminalTitleItem = "task-progress"
+	TerminalTitleAppName             TerminalTitleItem = "app-name"
+	TerminalTitleProject             TerminalTitleItem = "project-name"
+	TerminalTitleCurrentDir          TerminalTitleItem = "current-dir"
+	TerminalTitleSpinner             TerminalTitleItem = "activity"
+	TerminalTitleStatus              TerminalTitleItem = "run-state"
+	TerminalTitleThreadName          TerminalTitleItem = "thread-name"
+	TerminalTitleThread              TerminalTitleItem = "thread-title"
+	TerminalTitleGitBranch           TerminalTitleItem = "git-branch"
+	TerminalTitleContextRemaining    TerminalTitleItem = "context-remaining"
+	TerminalTitleContextUsed         TerminalTitleItem = "context-used"
+	TerminalTitleFiveHourLimit       TerminalTitleItem = "five-hour-limit"
+	TerminalTitleWeeklyLimit         TerminalTitleItem = "weekly-limit"
+	TerminalTitleCodexVersion        TerminalTitleItem = "codex-version"
+	TerminalTitleUsedTokens          TerminalTitleItem = "used-tokens"
+	TerminalTitleTotalInputTokens    TerminalTitleItem = "total-input-tokens"
+	TerminalTitleTotalOutputTokens   TerminalTitleItem = "total-output-tokens"
+	TerminalTitleThreadCredits       TerminalTitleItem = "thread-credits"
+	TerminalTitleEstimatedThreadCost TerminalTitleItem = "estimated-thread-cost"
+	TerminalTitleSessionID           TerminalTitleItem = "thread-id"
+	TerminalTitleFastMode            TerminalTitleItem = "fast-mode"
+	TerminalTitleDaybreak            TerminalTitleItem = "daybreak"
+	TerminalTitleModel               TerminalTitleItem = "model"
+	TerminalTitleModelWithReasoning  TerminalTitleItem = "model-with-reasoning"
+	TerminalTitleReasoning           TerminalTitleItem = "reasoning"
+	TerminalTitleTaskProgress        TerminalTitleItem = "task-progress"
 )
 
 func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
@@ -48,6 +51,8 @@ func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
 		return TerminalTitleSpinner, true
 	case "run-state", "status":
 		return TerminalTitleStatus, true
+	case "thread-name":
+		return TerminalTitleThreadName, true
 	case "thread-title", "thread":
 		return TerminalTitleThread, true
 	case "git-branch":
@@ -68,6 +73,10 @@ func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
 		return TerminalTitleTotalInputTokens, true
 	case "total-output-tokens":
 		return TerminalTitleTotalOutputTokens, true
+	case "thread-credits":
+		return TerminalTitleThreadCredits, true
+	case "estimated-thread-cost":
+		return TerminalTitleEstimatedThreadCost, true
 	case "thread-id", "session-id":
 		return TerminalTitleSessionID, true
 	case "fast-mode":
@@ -111,6 +120,8 @@ func (i TerminalTitleItem) PreviewItem() (StatusSurfacePreviewItem, bool) {
 		return "", false
 	case TerminalTitleStatus:
 		return StatusPreviewStatus, true
+	case TerminalTitleThreadName:
+		return StatusPreviewThreadName, true
 	case TerminalTitleThread:
 		return StatusPreviewThreadTitle, true
 	case TerminalTitleGitBranch:
@@ -131,6 +142,10 @@ func (i TerminalTitleItem) PreviewItem() (StatusSurfacePreviewItem, bool) {
 		return StatusPreviewTotalInputTokens, true
 	case TerminalTitleTotalOutputTokens:
 		return StatusPreviewTotalOutputTokens, true
+	case TerminalTitleThreadCredits:
+		return StatusPreviewThreadCredits, true
+	case TerminalTitleEstimatedThreadCost:
+		return StatusPreviewEstimatedThreadCost, true
 	case TerminalTitleSessionID:
 		return StatusPreviewSessionID, true
 	case TerminalTitleFastMode:

@@ -62,6 +62,20 @@ func FormatEstimatedUSDMicros(micros int64) (string, bool) {
 	return "~$" + strconv.FormatInt(cents/100, 10) + "." + zeroPad(strconv.FormatInt(cents%100, 10), 2), true
 }
 
+// PlanTypeEnt26 is the enterprise plan that is billed directly in dollars
+// (Rust PlanType::Ent26).
+const PlanTypeEnt26 = "ent26"
+
+// ThreadCostMicros selects the dollar amount that describes a thread's usage.
+// ENT26 plans report native dollars, and missing native usage means unknown
+// rather than a zero credit estimate (Rust status::thread_cost_micros, #57251).
+func ThreadCostMicros(nativeUSD, estimatedUSD *int64, planType string) *int64 {
+	if strings.EqualFold(strings.TrimSpace(planType), PlanTypeEnt26) {
+		return nativeUSD
+	}
+	return estimatedUSD
+}
+
 func zeroPad(value string, width int) string {
 	if len(value) >= width {
 		return value

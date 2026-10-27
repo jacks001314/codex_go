@@ -215,6 +215,10 @@ func agentsOverviewThreadUsageFromAuth(usage *auth.ThreadUsage) codextea.AgentsO
 		usd := *usage.EstimatedUsageUSDMicros
 		out.EstimatedUSDMicros = &usd
 	}
+	if usage.NativeUsageUSDMicros != nil {
+		usd := *usage.NativeUsageUSDMicros
+		out.NativeUSDMicros = &usd
+	}
 	out.HasGroups = len(usage.Groups) > 0
 	if len(usage.Groups) == 0 {
 		return out
