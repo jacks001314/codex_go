@@ -572,15 +572,16 @@ func loadSandboxRunConfigForRunContext(ctx context.Context, opts *cli.SandboxOpt
 	if err != nil {
 		return nil, err
 	}
+	includeManagedConfig := sandboxIncludesManagedRequirements(opts)
 	managedConfigPath := ""
-	if opts.IncludeManagedConfig {
+	if includeManagedConfig {
 		managedConfigPath = filepath.Join(codexHome, "managed_config.toml")
 	}
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
 		Profile:              opts.ConfigProfile,
 		CWD:                  opts.CWD,
 		RawOverrides:         append([]string(nil), opts.ConfigOverrides...),
-		IncludeManagedConfig: opts.IncludeManagedConfig,
+		IncludeManagedConfig: includeManagedConfig,
 		ManagedConfigPath:    managedConfigPath,
 		CloudConfigBundle:    cloudConfigBundle,
 	})
@@ -609,26 +610,44 @@ func loadSandboxRunConfigForRunContext(ctx context.Context, opts *cli.SandboxOpt
 	}, nil
 }
 
+// sandboxIncludesManagedRequirements mirrors Rust's
+// ManagedRequirementsMode::for_profile_invocation: omitting an explicit
+// permission profile includes managed requirements, while a profile invocation
+// only includes them when --include-managed-config is set.
+func sandboxIncludesManagedRequirements(opts *cli.SandboxOptions) bool {
+	if opts == nil || strings.TrimSpace(opts.PermissionProfile) == "" {
+		return true
+	}
+	return opts.IncludeManagedConfig
+}
+
 func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts *cli.SandboxOptions) (*config.CloudConfigLoader, error) {
-	if opts == nil || strings.TrimSpace(opts.PermissionProfile) == "" || !opts.IncludeManagedConfig {
+	if opts == nil || strings.TrimSpace(opts.SandboxStateJSON) != "" || !sandboxIncludesManagedRequirements(opts) {
 		return nil, nil
 	}
 	bootstrap, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
 		Profile:              opts.ConfigProfile,
 		CWD:                  opts.CWD,
 		RawOverrides:         append([]string(nil), opts.ConfigOverrides...),
-		IncludeManagedConfig: opts.IncludeManagedConfig,
+		IncludeManagedConfig: true,
 		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	store := auth.NewStoreWithOptions(codexHome, authStoreOptionsFromLoadedConfig(bootstrap))
-	snapshot, err := store.Load()
+	snapshot, err := auth.NewStoreWithOptions(codexHome, authStoreOptionsFromLoadedConfig(bootstrap)).Load()
 	if err != nil {
 		return nil, err
 	}
-	if !sandboxCloudConfigEligibleAuth(snapshot) {
+	return cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, snapshot)
+}
+
+// cloudConfigBundleLoaderForRun builds the ChatGPT-backed cloud config loader
+// for a configuration whose managed requirements are already included. It
+// leaves the loader unset for non-enterprise identities and limits bootstrap
+// requests with the configuration's application network policy.
+func cloudConfigBundleLoaderForRun(ctx context.Context, codexHome string, bootstrap *config.Config, snapshot *auth.AuthDotJSON) (*config.CloudConfigLoader, error) {
+	if bootstrap == nil || !sandboxCloudConfigEligibleAuth(snapshot) {
 		return nil, nil
 	}
 	authHeaders, err := model.AuthHeadersFromAuth(*snapshot)
@@ -805,12 +824,15 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 		}
 		codexHome := auth.DefaultCodexHome()
 		loadedConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
-			RawOverrides: rootConfigOverrides,
-			StrictConfig: strictConfig,
+			RawOverrides:         rootConfigOverrides,
+			StrictConfig:         strictConfig,
+			IncludeManagedConfig: true,
+			ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
 		})
 		if err != nil {
 			return err
 		}
+		publishApplicationNetworkPolicy(loadedConfig)
 		return execserver.ForwardServer(ctx, &execserver.ForwardOptions{
 			ConnectURL:    forward,
 			EnvironmentID: environmentID,
@@ -818,13 +840,17 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 			HTTPClient:    policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 		})
 	}
-	loadedConfig, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
-		RawOverrides: rootConfigOverrides,
-		StrictConfig: strictConfig,
+	codexHome := auth.DefaultCodexHome()
+	loadedConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+		RawOverrides:         rootConfigOverrides,
+		StrictConfig:         strictConfig,
+		IncludeManagedConfig: true,
+		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
 	})
 	if err != nil {
 		return err
 	}
+	publishApplicationNetworkPolicy(loadedConfig)
 	listenURL := opts.Listen
 	if !opts.ListenSet {
 		listenURL = execserver.DefaultListenURL
@@ -859,13 +885,41 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		return errors.New("environment id is required for remote exec-server registration")
 	}
 	codexHome := auth.DefaultCodexHome()
-	loadedConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
-		RawOverrides: rootConfigOverrides,
-		StrictConfig: strictConfig,
+	bootstrapConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+		RawOverrides:         rootConfigOverrides,
+		StrictConfig:         strictConfig,
+		IncludeManagedConfig: true,
+		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
 	})
 	if err != nil {
 		return err
 	}
+	var cloudConfigBundle *config.CloudConfigLoader
+	var resolved *auth.ResolvedAuth
+	if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth {
+		storeOptions := authStoreOptionsFromLoadedConfig(bootstrapConfig)
+		resolved, err = auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
+		if err != nil {
+			return err
+		}
+		if resolved != nil {
+			cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, &resolved.Auth)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	loadedConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+		RawOverrides:         rootConfigOverrides,
+		StrictConfig:         strictConfig,
+		IncludeManagedConfig: true,
+		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
+		CloudConfigBundle:    cloudConfigBundle,
+	})
+	if err != nil {
+		return err
+	}
+	publishApplicationNetworkPolicy(loadedConfig)
 	if opts.ExecutorCredentialStdin {
 		// Rust #54434: the scoped credential pipe replaces account
 		// authentication and workload identity, and it owns the parent
@@ -892,9 +946,11 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
-	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
-	if err != nil {
-		return err
+	if resolved == nil {
+		resolved, err = auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
+		if err != nil {
+			return err
+		}
 	}
 	if resolved == nil {
 		return errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY")

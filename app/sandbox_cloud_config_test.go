@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -53,14 +54,9 @@ func TestSandboxFetchesCachesAndEnforcesCloudManagedPermissionProfile(t *testing
 		t.Fatalf("Save(auth) error = %v", err)
 	}
 
-	if _, err := loadSandboxRunConfigForRunContext(context.Background(), &cli.SandboxOptions{IncludeManagedConfig: true}); err != nil {
-		t.Fatalf("default sandbox load error = %v", err)
-	}
-	if requests.Load() != 0 {
-		t.Fatalf("default sandbox requested cloud config %d times", requests.Load())
-	}
-
-	opts := &cli.SandboxOptions{PermissionProfile: "managed-cloud", IncludeManagedConfig: true, CWD: home}
+	// Rust #57270: a sandbox invocation without an explicit permission profile
+	// still includes managed requirements and bootstraps cloud config.
+	opts := &cli.SandboxOptions{CWD: home}
 	for attempt := 0; attempt < 2; attempt++ {
 		runConfig, err := loadSandboxRunConfigForRunContext(context.Background(), opts)
 		if err != nil {
@@ -91,3 +87,123 @@ extends = ":workspace"
 [permissions.managed-cloud.network]
 enabled = true
 `
+
+func TestSandboxCloudBootstrapSkipsSandboxStateJSONLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	writeFileForSandboxCloudTest(t, config.ConfigPath(home), fmt.Sprintf("chatgpt_base_url = %q\n", server.URL+"/backend-api"))
+	saveSandboxCloudAuth(t, home)
+
+	loader, err := sandboxCloudConfigBundleForRun(context.Background(), home, &cli.SandboxOptions{SandboxStateJSON: "{}"})
+	if err != nil {
+		t.Fatalf("sandboxCloudConfigBundleForRun() error = %v", err)
+	}
+	if loader != nil {
+		t.Fatal("sandbox-state-json still produced a cloud config loader")
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("sandbox-state-json requested cloud config %d times", requests.Load())
+	}
+}
+
+func TestSandboxCloudBootstrapHonorsLocalNetworkPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	writeFileForSandboxCloudTest(t, config.ConfigPath(home), fmt.Sprintf("chatgpt_base_url = %q\n", server.URL+"/backend-api"))
+	writeFileForSandboxCloudTest(t, filepath.Join(home, "requirements.toml"), "[application.network]\nenabled = true\n")
+	saveSandboxCloudAuth(t, home)
+
+	loader, err := sandboxCloudConfigBundleForRun(context.Background(), home, &cli.SandboxOptions{})
+	if err != nil {
+		t.Fatalf("sandboxCloudConfigBundleForRun() error = %v", err)
+	}
+	if loader == nil {
+		t.Fatal("eligible sandbox auth produced no cloud config loader")
+	}
+	if _, err := loader.Get(); err == nil || !strings.Contains(err.Error(), "destination denied by application network policy") {
+		t.Fatalf("cloud bootstrap error = %v, want the local policy denial", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("local policy still sent %d cloud config requests", requests.Load())
+	}
+}
+
+func TestSandboxCloudConfigAppliesProviderWithoutExplicitProfileLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"config_toml": map[string]any{
+				"enterprise_managed": []map[string]any{{
+					"id":       "cloud-provider",
+					"name":     "Cloud provider",
+					"contents": "[model_providers.cloud-provider]\nname = \"Cloud provider\"\nwire_api = \"responses\"\n",
+				}},
+			},
+		})
+	}))
+	defer server.Close()
+	writeFileForSandboxCloudTest(t, config.ConfigPath(home), fmt.Sprintf("chatgpt_base_url = %q\n", server.URL+"/backend-api"))
+	saveSandboxCloudAuth(t, home)
+
+	loader, err := sandboxCloudConfigBundleForRun(context.Background(), home, &cli.SandboxOptions{})
+	if err != nil {
+		t.Fatalf("sandboxCloudConfigBundleForRun() error = %v", err)
+	}
+	if loader == nil {
+		t.Fatal("eligible sandbox auth produced no cloud config loader")
+	}
+	loaded, err := config.LoadEffectiveWithOptions(home, &config.EffectiveOptions{
+		RawOverrides:         []string{`model_provider="cloud-provider"`},
+		IncludeManagedConfig: true,
+		ManagedConfigPath:    filepath.Join(home, "managed_config.toml"),
+		CloudConfigBundle:    loader,
+	})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions() error = %v", err)
+	}
+	if got := loaded.Values["model_provider"]; got != "cloud-provider" {
+		t.Fatalf("model_provider = %#v", got)
+	}
+	providers, _ := loaded.Values["model_providers"].(map[string]any)
+	provider, _ := providers["cloud-provider"].(map[string]any)
+	if provider["name"] != "Cloud provider" {
+		t.Fatalf("cloud provider = %#v", provider)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("cloud config requests = %d", requests.Load())
+	}
+}
+
+func writeFileForSandboxCloudTest(t *testing.T, path string, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+}
+
+func saveSandboxCloudAuth(t *testing.T, home string) {
+	t.Helper()
+	snapshot := auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: map[string]any{
+		"access_token": "chatgpt-token", "account_id": "workspace-123", "chatgpt_account_id": "workspace-123",
+		"chatgpt_user_id": "user-123", "plan_type": "enterprise",
+	}}
+	if err := auth.NewStoreWithOptions(home, auth.StoreOptionsFromConfig("file", false)).Save(snapshot); err != nil {
+		t.Fatalf("Save(auth) error = %v", err)
+	}
+}

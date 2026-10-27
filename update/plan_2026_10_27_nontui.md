@@ -32,6 +32,7 @@ TUI lane and are not modified here.
 | `#57286` | Managed `[network_proxy]` requirements with `[experimental_network]` alias | `config/requirements_file.go`, `config/cloud_config.go`, `config/ignored_settings.go`, `appserver/managed_network_constraints.go`, config tests |
 | `#57304` | Surface permanent refresh-token rejection during workspace routing | `appserver/workspace_routing.go`, `appserver/turn_runtime.go`, like-Rust test |
 | `#57287` | Preserve parent tool declarations in MCP-disabled prediction forks | `features/features.go`, `appserver/protocol.go`, `appserver/thread_sample_protocol.go`, `appserver/prediction_parent_tools.go`, `appserver/runtime_router.go`, `appserver/thread_sample.go`, `appserver/turn_runtime.go`, `appserver/incremental_tools.go`, `turn/runtime.go`, like-Rust tests |
+| `#57270` | Load cloud config for sandbox and remote exec-server commands | `app/app.go`, sandbox/exec-server cloud-config tests |
 
 Grounding notes:
 
@@ -147,13 +148,29 @@ appends the developer notice
 with `disableMCP` for a non-lite model or a history without a catalog keeps the
 current behavior.
 
+`#57270`: sandbox invocations now mirror Rust's managed-requirements mode:
+omitting an explicit permission profile includes managed requirements, while a
+profile invocation only does so with `--include-managed-config`. Cloud config is
+bootstrapped whenever that mode includes managed config, except when
+`--sandbox-state-json` supplies the sandbox state. Eligible ChatGPT identities
+therefore receive cloud providers and requirements even without `-P`, and a
+local `application.network` policy limits the bootstrap request.
+
+Remote `exec-server` registrations also load cloud config for ChatGPT auth so
+cloud-defined providers and requirements are present before the registry client
+is created. The loader is skipped for `--executor-credential-stdin` and
+`--use-agent-identity-auth`; `CODEX_API_KEY` (and the other API-key selections)
+bypass ChatGPT cloud config. Every exec-server config path includes managed
+requirements and activates its effective application network policy before
+creating HTTP clients, so a cloud policy can deny registration. Go has no
+`--aws-sigv4` transport flag, so that Rust exclusion has no counterpart.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
   triaged: high-value candidates include `#57311` rollouts trace versions,
   `#57280` full MCP results, `#57276` permission
-  world-state, `#57171` runtime auth and
-  `#57270` cloud config for sandbox/exec-server, and
+  world-state, `#57171` runtime auth, and
   `#56036`/`#56049` remote credentials. The `feedback/save` and
   `thread/memory/read` schema drift is fixed by the entries above.
 
@@ -174,6 +191,8 @@ current behavior.
 - For `#57287`: `go test ./appserver -run 'PredictionFork|IncrementalToolCatalog|ThreadSample' -count=1`,
   `go test ./features ./turn -count=1`, and the full `go test ./appserver -count=1`
   pass.
+- For `#57270`: `go test ./app -run 'TestSandbox|TestRemoteExecServer|TestExecServerRemote|TestCLIHostPublishesApplicationNetworkPolicyLikeRust' -count=1`
+  and `go build ./...` pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.
