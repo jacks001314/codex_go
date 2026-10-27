@@ -62,11 +62,36 @@ func parseRequirementsTOMLValues(data []byte) (map[string]any, error) {
 	return values, nil
 }
 
+// normalizeNetworkRequirementAliases mirrors Rust #57286: `network_proxy` is
+// the canonical managed network requirements table and `experimental_network`
+// remains a compatibility alias. A single layer may not declare both (Rust's
+// serde duplicate-field error), and either spelling is renamed before layers
+// are merged so precedence and source tracking stay intact.
+func normalizeNetworkRequirementAliases(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	_, hasCanonical := values["network_proxy"]
+	legacy, hasLegacy := values["experimental_network"]
+	if hasCanonical && hasLegacy {
+		return fmt.Errorf("duplicate field `network_proxy`")
+	}
+	if !hasLegacy {
+		return nil
+	}
+	values["network_proxy"] = legacy
+	delete(values, "experimental_network")
+	return nil
+}
+
 func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequirements, error) {
-	if raw, ok := values["experimental_network"]; ok {
+	if err := normalizeNetworkRequirementAliases(values); err != nil {
+		return nil, err
+	}
+	if raw, ok := values["network_proxy"]; ok {
 		networkValues, ok := raw.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("invalid type for experimental_network: expected table")
+			return nil, fmt.Errorf("invalid type for network_proxy: expected table")
 		}
 		if err := validateNetworkRequirementsTOML(networkValues); err != nil {
 			return nil, err
@@ -295,6 +320,9 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if len(values) == 0 {
 		return nil, nil
 	}
+	if err := normalizeNetworkRequirementAliases(values); err != nil {
+		return nil, err
+	}
 	var out ConfigRequirements
 	if values, ok := stringListAnyKey(values, "allowed_approval_policies", "allowedApprovalPolicies"); ok {
 		out.AllowedApprovalPolicies = make([]sandbox.AskForApproval, 0, len(values))
@@ -468,7 +496,7 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		residency := ResidencyRequirement(value)
 		out.EnforceResidency = &residency
 	}
-	if nested, ok := mapAnyKey(values, "experimental_network"); ok {
+	if nested, ok := mapAnyKey(values, "network_proxy"); ok {
 		out.Network = networkRequirementsFromMap(nested)
 	}
 	if nested, ok := mapAnyKey(values, "application"); ok {
@@ -828,15 +856,15 @@ func networkHeaderInjectionFromMap(values map[string]any) NetworkHeaderInjection
 func validateNetworkRequirementsTOML(values map[string]any) error {
 	if _, hasDomains := values["domains"]; hasDomains {
 		if _, hasAllowed := values["allowed_domains"]; hasAllowed {
-			return fmt.Errorf("`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`")
+			return fmt.Errorf("`domains` cannot be combined with legacy `allowed_domains` or `denied_domains` in managed network requirements")
 		}
 		if _, hasDenied := values["denied_domains"]; hasDenied {
-			return fmt.Errorf("`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`")
+			return fmt.Errorf("`domains` cannot be combined with legacy `allowed_domains` or `denied_domains` in managed network requirements")
 		}
 	}
 	if _, hasUnixSockets := values["unix_sockets"]; hasUnixSockets {
 		if _, hasLegacy := values["allow_unix_sockets"]; hasLegacy {
-			return fmt.Errorf("`experimental_network.unix_sockets` cannot be combined with legacy `allow_unix_sockets`")
+			return fmt.Errorf("`unix_sockets` cannot be combined with legacy `allow_unix_sockets` in managed network requirements")
 		}
 	}
 
@@ -850,21 +878,21 @@ func validateNetworkRequirementsTOML(values map[string]any) error {
 	} {
 		if raw, ok := values[key]; ok {
 			if _, ok := raw.(bool); !ok {
-				return fmt.Errorf("invalid type for experimental_network.%s: expected boolean", key)
+				return fmt.Errorf("invalid type for network_proxy.%s: expected boolean", key)
 			}
 		}
 	}
 	for _, key := range []string{"http_port", "socks_port"} {
 		if raw, ok := values[key]; ok {
 			if _, ok := strictTOMLUint16(raw); !ok {
-				return fmt.Errorf("invalid value for experimental_network.%s: expected an integer from 0 through 65535", key)
+				return fmt.Errorf("invalid value for network_proxy.%s: expected an integer from 0 through 65535", key)
 			}
 		}
 	}
 	for _, key := range []string{"allowed_domains", "denied_domains", "allow_unix_sockets"} {
 		if raw, ok := values[key]; ok {
 			if !strictTOMLStringList(raw) {
-				return fmt.Errorf("invalid type for experimental_network.%s: expected an array of strings", key)
+				return fmt.Errorf("invalid type for network_proxy.%s: expected an array of strings", key)
 			}
 		}
 	}
@@ -881,12 +909,12 @@ func validateNetworkRequirementsTOML(values map[string]any) error {
 func validateNetworkPermissionTable(key string, raw any) error {
 	values, ok := raw.(map[string]any)
 	if !ok {
-		return fmt.Errorf("invalid type for experimental_network.%s: expected table", key)
+		return fmt.Errorf("invalid type for network_proxy.%s: expected table", key)
 	}
 	for pattern, rawPermission := range values {
 		permission, ok := rawPermission.(string)
 		if !ok || (permission != string(NetworkAllow) && permission != string(NetworkDeny)) {
-			return fmt.Errorf("invalid value for experimental_network.%s.%s: expected `allow` or `deny`", key, pattern)
+			return fmt.Errorf("invalid value for network_proxy.%s.%s: expected `allow` or `deny`", key, pattern)
 		}
 	}
 	return nil

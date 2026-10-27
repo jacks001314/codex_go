@@ -48,7 +48,7 @@ var knownRequirementsTopLevelFields = func() map[string]bool {
 		"feature_requirements", "featureRequirements", "features",
 		"hooks",
 		"enforce_residency", "enforceResidency",
-		"experimental_network",
+		"network_proxy", "experimental_network",
 		"application",
 		"models",
 		"mcp_servers", "mcpServers",
@@ -239,7 +239,7 @@ func sortedAnyKeys(values map[string]any) []string {
 func ignoredSettingHint(key string) string {
 	switch key {
 	case "network_proxy":
-		return " Use [permissions.<name>.network] for network settings, or [experimental_network] in requirements.toml for enforced network policy."
+		return " Use [permissions.<name>.network] for network settings, or [network_proxy] in requirements.toml for enforced network policy."
 	case "allowed_permissions":
 		return " Use [allowed_permission_profiles] and default_permissions; the old allowlist is ignored even when both forms are present."
 	case "include_view_image_tool", "features.include_view_image_tool":

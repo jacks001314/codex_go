@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -51,6 +52,55 @@ func TestFeatureRequirementAliasesMergeWithLayerPrecedence(t *testing.T) {
 			features := requirements.FeatureRequirements
 			if features["chronicle"] || features["shell_snapshot"] || features["apps"] {
 				t.Fatalf("merged feature requirements = %#v, want chronicle=false shell_snapshot=false apps=false", features)
+			}
+		})
+	}
+}
+
+// Mirrors Rust's network_aliases_merge_with_layer_precedence_and_sources.
+func TestNetworkAliasesMergeWithLayerPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		lowKey  string
+		highKey string
+	}{
+		{lowKey: "network_proxy", highKey: "experimental_network"},
+		{lowKey: "experimental_network", highKey: "network_proxy"},
+	} {
+		t.Run(tc.lowKey+"_"+tc.highKey, func(t *testing.T) {
+			low := "[" + tc.lowKey + "]\nenabled = true\nallow_local_binding = false\n\n[" +
+				tc.lowKey + ".domains]\n\"low.example.com\" = \"allow\"\n\"shared.example.com\" = \"allow\"\n"
+			high := "[" + tc.highKey + "]\nenabled = false\nallow_upstream_proxy = true\n\n[" +
+				tc.highKey + ".domains]\n\"high.example.com\" = \"allow\"\n\"shared.example.com\" = \"deny\"\n"
+			values := map[string]any{}
+			requirements, err := applyCloudConfigBundle(values, nil, CloudConfigBundle{
+				RequirementsTOML: CloudConfigRequirementsTOMLBundle{EnterpriseManaged: []CloudConfigFragment{
+					{ID: "high", Name: "High", Contents: high},
+					{ID: "low", Name: "Low", Contents: low},
+				}},
+			}, t.TempDir())
+			if err != nil {
+				t.Fatalf("applyCloudConfigBundle() error = %v", err)
+			}
+			network := requirements.Network
+			if network == nil {
+				t.Fatalf("requirements = %#v, want managed network", requirements)
+			}
+			if network.Enabled == nil || *network.Enabled {
+				t.Fatalf("enabled = %#v, want false from the high-priority layer", network.Enabled)
+			}
+			if network.AllowLocalBinding == nil || *network.AllowLocalBinding {
+				t.Fatalf("allow_local_binding = %#v, want false from the low-priority layer", network.AllowLocalBinding)
+			}
+			if network.AllowUpstreamProxy == nil || !*network.AllowUpstreamProxy {
+				t.Fatalf("allow_upstream_proxy = %#v, want true", network.AllowUpstreamProxy)
+			}
+			wantDomains := map[string]NetworkPermission{
+				"low.example.com":    NetworkAllow,
+				"high.example.com":   NetworkAllow,
+				"shared.example.com": NetworkDeny,
+			}
+			if !reflect.DeepEqual(network.Domains, wantDomains) {
+				t.Fatalf("domains = %#v, want %#v", network.Domains, wantDomains)
 			}
 		})
 	}

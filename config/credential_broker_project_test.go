@@ -5,8 +5,37 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"testing"
 )
+
+// Mirrors Rust's managed_network_requirements_control_broker_project_discovery.
+func TestManagedNetworkRequirementsControlBrokerProjectDiscoveryLikeRust(t *testing.T) {
+	trusted := map[string]any{
+		"features": map[string]any{
+			"network_proxy": map[string]any{
+				"enabled":           true,
+				"credential_broker": true,
+			},
+		},
+	}
+	for _, table := range []string{"network_proxy", "experimental_network"} {
+		for _, enabled := range []bool{false, true} {
+			body := "[" + table + "]\nenabled = " + strconv.FormatBool(enabled) + "\n"
+			requirements, err := ParseRequirementsTOML([]byte(body))
+			if err != nil {
+				t.Fatalf("ParseRequirementsTOML(%s, enabled=%v) error = %v", table, enabled, err)
+			}
+			want := CredentialBrokerProjectDisabled
+			if enabled {
+				want = CredentialBrokerProjectEnabled
+			}
+			if got := CredentialBrokerProjectStateForValuesWithRequirements(trusted, requirements); got != want {
+				t.Fatalf("%s enabled=%v state = %q, want %q", table, enabled, got, want)
+			}
+		}
+	}
+}
 
 // Mirrors Rust's project_config_cannot_override_configured_credential_broker_hosts.
 func TestSanitizeProjectConfigDeniesBuiltinProviderEnvOverrides(t *testing.T) {

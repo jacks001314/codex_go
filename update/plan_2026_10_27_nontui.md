@@ -29,6 +29,7 @@ TUI lane and are not modified here.
 | `#55940` | `feedback/save` writes a local diagnostic ZIP instead of uploading | `appserver/protocol.go`, `appserver/feedback.go`, `appserver/feedback_archive.go`, `appserver/feedback_thread_index.go`, `appserver/runtime_router.go`, `appserver/schema.go`, like-Rust tests |
 | `#57313` | Gateway OAuth tokens default to `Authorization: Bearer` | `model/provider_info.go`, `model/gateway_auth.go`, `model/provider_config.go`, gateway tests |
 | `#56309` `#57263` | Permission catalog path wording (`writable_root(s)`, `omitted_paths`, `denied_reads`) | `model/catalog.go`, `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go`, catalog/permission tests |
+| `#57286` | Managed `[network_proxy]` requirements with `[experimental_network]` alias | `config/requirements_file.go`, `config/cloud_config.go`, `config/ignored_settings.go`, `appserver/managed_network_constraints.go`, config tests |
 
 Grounding notes:
 
@@ -109,13 +110,24 @@ one `{{ roots }}`, `{{ denied_reads }}` only within path budget + policy + 500,
 and `omitted_paths` prepended to the mandatory warning). All control
 characters except newline, plus U+2028/U+2029 and permission tags, are rejected.
 
+`#57286`: `network_proxy` is now the canonical managed requirements table and
+`experimental_network` remains a compatibility alias. Parsing, cloud-config
+layer merging, and direct map readers all normalize the alias before merging.
+A single layer that declares both is rejected as a duplicate `network_proxy`
+field, and mixed-shape diagnostics use Rust's wording (`domains` /
+`unix_sockets` cannot be combined with their legacy list forms in managed
+network requirements). The ignored-setting hint points at `[network_proxy]`,
+the recognized requirements key list accepts both spellings, and
+credential-broker project discovery works through either spelling. The TUI
+debug-config label stays in the TUI lane.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
   triaged: high-value candidates include `#57311` rollouts trace versions,
   `#57280` full MCP results,
-  `#57287` prediction-fork tool declarations, `#57286` managed
-  `network_proxy`, `#57276` permission world-state, `#57171` runtime auth and
+  `#57287` prediction-fork tool declarations, `#57276` permission
+  world-state, `#57171` runtime auth and
   `#57270` cloud config for sandbox/exec-server, and
   `#56036`/`#56049` remote credentials. The `feedback/save` and
   `thread/memory/read` schema drift is fixed by the entries above.
@@ -128,6 +140,9 @@ characters except newline, plus U+2028/U+2029 and permission tags, are rejected.
 - `go test ./tool ./turn ./eventmap ./tcptunnel -count=1` passes.
 - `go test ./appserver -run 'ThreadSample|ShellSnapshot|GranularApproval|PermissionPrompt' -count=1` passes.
 - `go test ./app ./cli ./model ./config ./sandbox -count=1` passes.
+- For `#57286`: `go test ./config -count=1` and
+  `go test ./appserver -run 'ManagedNetwork|NetworkRequirements|NetworkProxy|Permission|Granular|ConfigRequirements' -count=1`
+  pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

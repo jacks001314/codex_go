@@ -417,14 +417,14 @@ func validateManagedNetworkRequirements(requirements *config.NetworkRequirements
 		return nil
 	}
 	if requirements.Domains != nil && (requirements.AllowedDomains != nil || requirements.DeniedDomains != nil) {
-		return fmt.Errorf("experimental_network.domains cannot be combined with legacy allowed_domains or denied_domains")
+		return fmt.Errorf("`domains` cannot be combined with legacy `allowed_domains` or `denied_domains` in managed network requirements")
 	}
 	if requirements.UnixSockets != nil && requirements.AllowUnixSockets != nil {
-		return fmt.Errorf("experimental_network.unix_sockets cannot be combined with legacy allow_unix_sockets")
+		return fmt.Errorf("`unix_sockets` cannot be combined with legacy `allow_unix_sockets` in managed network requirements")
 	}
 	for host, permission := range requirements.Domains {
 		if strings.TrimSpace(host) == "" || (permission != config.NetworkAllow && permission != config.NetworkDeny) {
-			return fmt.Errorf("invalid experimental_network.domains entry %q", host)
+			return fmt.Errorf("invalid network_proxy.domains entry %q", host)
 		}
 	}
 	return nil

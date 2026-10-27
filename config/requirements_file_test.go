@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -222,7 +223,7 @@ allowed_domains = ["api.example.com"]
 [experimental_network.domains]
 "*.openai.com" = "allow"
 `,
-			want: "`experimental_network.domains` cannot be combined",
+			want: "`domains` cannot be combined with legacy `allowed_domains` or `denied_domains` in managed network requirements",
 		},
 		{
 			name: "unix sockets",
@@ -232,7 +233,7 @@ allow_unix_sockets = ["/tmp/example.sock"]
 [experimental_network.unix_sockets]
 "/tmp/another.sock" = "allow"
 `,
-			want: "`experimental_network.unix_sockets` cannot be combined",
+			want: "`unix_sockets` cannot be combined with legacy `allow_unix_sockets` in managed network requirements",
 		},
 	}
 	for _, test := range tests {
@@ -246,6 +247,30 @@ allow_unix_sockets = ["/tmp/example.sock"]
 				t.Fatalf("LoadRequirementsFile() error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+// Mirrors Rust's network_proxy_and_experimental_network_are_equivalent_aliases.
+func TestNetworkProxyAndExperimentalNetworkAreEquivalentAliasesLikeRust(t *testing.T) {
+	parse := func(table string) *ConfigRequirements {
+		body := "[" + table + "]\nenabled = true\nmanaged_allowed_domains_only = true\n\n[" + table + ".domains]\n\"api.example.com\" = \"allow\"\n"
+		requirements, err := ParseRequirementsTOML([]byte(body))
+		if err != nil {
+			t.Fatalf("ParseRequirementsTOML(%s) error = %v", table, err)
+		}
+		return requirements
+	}
+	canonical := parse("network_proxy")
+	legacy := parse("experimental_network")
+	if !reflect.DeepEqual(canonical, legacy) {
+		t.Fatalf("network_proxy = %#v, experimental_network = %#v", canonical, legacy)
+	}
+	for _, values := range []string{"", "enabled = true"} {
+		body := "[network_proxy]\n" + values + "\n[experimental_network]\n" + values + "\n"
+		_, err := ParseRequirementsTOML([]byte(body))
+		if err == nil || !strings.Contains(err.Error(), "duplicate field `network_proxy`") {
+			t.Fatalf("both spellings error = %v, want duplicate field `network_proxy`", err)
+		}
 	}
 }
 
