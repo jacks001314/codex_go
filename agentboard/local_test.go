@@ -465,3 +465,41 @@ func openLocalBoard(t *testing.T, sqlite state.SqliteConfig, identity string, ho
 func pointerTo[T any](value T) *T {
 	return &value
 }
+
+// TestLocalBoardSubscribedChannelsPagesLikeRust mirrors Rust #56495: the board
+// lists the caller's subscribed channels in name order across successive
+// one-item pages, reports no cursor after the final page, and skips channels
+// the caller never subscribed to.
+func TestLocalBoardSubscribedChannelsPagesLikeRust(t *testing.T) {
+	ctx := context.Background()
+	host, root, child, _ := testTree(t)
+	database := openBoardSqliteConfig(t)
+	board := openLocalBoard(t, database, root, host)
+	defer board.Close()
+
+	// CreateChannel subscribes its caller, so only "unsubscribed" is absent.
+	for _, name := range []string{"zeta", "alpha", "unsubscribed"} {
+		change := Subscribe
+		if name == "unsubscribed" {
+			change = Unsubscribe
+		}
+		if _, err := board.CreateChannel(ctx, child, CreateChannelRequest{ChannelName: name, Subscription: change}); err != nil {
+			t.Fatalf("CreateChannel(%q) error = %v", name, err)
+		}
+	}
+
+	first, err := board.SubscribedChannels(ctx, child, PageRequest{Limit: 1})
+	if err != nil {
+		t.Fatalf("SubscribedChannels(first) error = %v", err)
+	}
+	if len(first.Results) != 1 || first.Results[0] != "alpha" || first.NextCursor == nil {
+		t.Fatalf("first page = %#v", first)
+	}
+	last, err := board.SubscribedChannels(ctx, child, PageRequest{Cursor: first.NextCursor, Limit: 1})
+	if err != nil {
+		t.Fatalf("SubscribedChannels(last) error = %v", err)
+	}
+	if len(last.Results) != 1 || last.Results[0] != "zeta" || last.NextCursor != nil {
+		t.Fatalf("last page = %#v", last)
+	}
+}

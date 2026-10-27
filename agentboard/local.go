@@ -712,6 +712,45 @@ func (b *LocalAgentMessageBoard) ListChannels(ctx context.Context, caller string
 	return &ChannelPage{Page: *page, BoardPermissions: b.access.boardPermissions()}, nil
 }
 
+// SubscribedChannels lists the caller's channel subscriptions on this board in
+// name order, within the existing page budget (Rust #56495
+// `LocalAgentMessageBoard::subscribed_channels`). Thread subscriptions are not
+// channel subscriptions and stay out of the listing.
+func (b *LocalAgentMessageBoard) SubscribedChannels(ctx context.Context, caller string, page PageRequest) (*Page[string], error) {
+	if _, err := b.host.AgentPath(ctx, caller); err != nil {
+		return nil, err
+	}
+	offset, limit, err := boardWindow(page)
+	if err != nil {
+		return nil, err
+	}
+	// Probe the subscriptions primary key for each channel, exactly like Rust's
+	// `json_object('Channel', c.name)` correlation.
+	rows, err := b.db.QueryContext(ctx,
+		"SELECT c.name FROM channels c WHERE c.board=? AND EXISTS ("+
+			"SELECT 1 FROM subscriptions s WHERE s.board=c.board "+
+			"AND s.target=json_object('Channel',c.name) AND s.agent=?) ORDER BY c.name LIMIT ? OFFSET ?",
+		b.identity, caller, int64(limit+1), int64(offset))
+	if err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for rows.Next() {
+		name := ""
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	_ = rows.Close()
+	return finishBoardPage(offset, limit, names)
+}
+
 func (b *LocalAgentMessageBoard) ListThreads(ctx context.Context, caller string, query ThreadQuery) (*Page[ThreadSummary], error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err

@@ -40,6 +40,7 @@ TUI lane and are not modified here.
 | `#56468` | Preserve `SystemRoot` for Windows filesystem sandbox helpers | `execserver/fs_helper.go`, helper environment test |
 | `#56022` | Preserve config overrides across CLI subcommand boundaries | `cli/cli.go`, `cli/cli_test.go` |
 | `#56552` `#57225` `#57226` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`, `cli/cli.go`, `app/migrate_nfs_db.go`, `app/app.go`, like-Rust tests |
+| `#56495` | Paginated subscribed-channel listing on the local message board | `agentboard/local.go`, `agentboard/local_test.go` |
 
 Grounding notes:
 
@@ -268,6 +269,15 @@ skips the logs database when `log_dir` is configured, as Rust does. Go has no
 enforcement-time skip of legacy NFS log cleanup has no counterpart here; that
 `log_dir` relocation remains a separate pending upstream item.
 
+`#56495` details: `LocalAgentMessageBoard.SubscribedChannels` lists the caller's
+channel subscriptions on the current board in name order using the existing
+`PageRequest` budget (normalized default 20, hard cap 50, base64 offset cursor
+and one-item lookahead). It validates caller membership like every other board
+operation, probes `subscriptions` with Rust's `json_object('Channel', c.name)`
+correlation so thread subscriptions never appear, and returns a pure `Page[string]`
+(vs. `ListChannels`, which adds board permissions). Like Rust, the method is on
+the local board rather than the `Board` interface.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -312,6 +322,8 @@ enforcement-time skip of legacy NFS log cleanup has no counterpart here; that
   pass. `NFSSQLiteMigrationSupported`/`NFSDatabaseNeedsPermissionConfirmation`
   gate the conversion, resume and mode-bit tests to Unix, so they skip on this
   Windows host and still need a Linux/macOS run before relying on the cutover.
+- For `#56495`: `go test ./agentboard -run 'SubscribedChannels' -count=1` and
+  the full `go test ./agentboard -count=1` pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.
