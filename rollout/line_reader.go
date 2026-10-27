@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
-
 	"codex_go/metrics"
 )
 
@@ -137,7 +135,7 @@ func openRolloutLineReaderOnce(path string) (*RolloutLineReader, error) {
 		return nil, err
 	}
 	if strings.HasSuffix(strings.ToLower(resolved), ".zst") {
-		decoder, decodeErr := zstd.NewReader(file)
+		decoder, decodeErr := newDiagnosticZstdDecoder(file)
 		if decodeErr != nil {
 			_ = file.Close()
 			return nil, decodeErr

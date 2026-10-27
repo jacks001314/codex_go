@@ -162,3 +162,45 @@ func TestFeedbackReadAttachmentKeepsUnrelatedZstdOpaqueLikeRust(t *testing.T) {
 		t.Fatalf("opaque attachment = (%q, %d bytes), want (diagnostics.zst, %d bytes)", got.Filename, len(got.Buffer), len(data))
 	}
 }
+
+// Mirrors Rust #55545: an undecodable compressed rollout is attached as its raw
+// `.zst` archive when no preferred plain representation exists, under the
+// bounded raw size and with a `.zst` suffix on filename overrides.
+func TestFeedbackReadAttachmentPreservesUndecodableCompressedRolloutLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	plain, compressed := writeCompressedFeedbackRollout(t, dir, feedbackRolloutJSONL)
+	damaged := []byte("not zstd")
+	if err := os.WriteFile(compressed, damaged, 0o600); err != nil {
+		t.Fatalf("WriteFile(compressed) error = %v", err)
+	}
+	for _, path := range []string{plain, compressed} {
+		attachment := FeedbackAttachmentPath{Path: path}
+		if _, ok, err := FeedbackReadAttachmentPath(attachment, int64(len(damaged))-1); err != nil || ok {
+			t.Fatalf("undersized raw fallback(%s): ok=%v err=%v", path, ok, err)
+		}
+		got, ok, err := FeedbackReadAttachmentPath(attachment, int64(len(damaged)))
+		if err != nil || !ok {
+			t.Fatalf("raw fallback(%s): ok=%v err=%v", path, ok, err)
+		}
+		if got.Filename != filepath.Base(compressed) || got.ContentType != "application/octet-stream" {
+			t.Fatalf("raw fallback(%s) = %+v", path, got)
+		}
+		if string(got.Buffer) != string(damaged) {
+			t.Fatalf("raw fallback(%s) buffer = %q", path, string(got.Buffer))
+		}
+		override := "diagnostic.jsonl"
+		attachment.AttachmentFilenameOverride = &override
+		got, ok, err = FeedbackReadAttachmentPath(attachment, int64(len(damaged)))
+		if err != nil || !ok || got.Filename != "diagnostic.jsonl.zst" {
+			t.Fatalf("override raw fallback(%s) = %+v ok=%v err=%v", path, got, ok, err)
+		}
+	}
+	// A preferred plain representation is never replaced by the archive.
+	if err := os.WriteFile(plain, feedbackRolloutJSONL, 0o600); err != nil {
+		t.Fatalf("WriteFile(plain) error = %v", err)
+	}
+	got, ok, err := FeedbackReadAttachmentPath(FeedbackAttachmentPath{Path: compressed}, 1024)
+	if err != nil || !ok || string(got.Buffer) != string(feedbackRolloutJSONL) {
+		t.Fatalf("plain preferred: ok=%v err=%v buffer=%q", ok, err, string(got.Buffer))
+	}
+}

@@ -75,46 +75,42 @@ func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int6
 	}
 	var buffer []byte
 	rolloutPath := ""
+	attachmentPath := attachment.Path
+	rawRollout := false
 	if _, isRollout := rollout.ThreadIDFromFilename(filepath.Base(attachment.Path)); isRollout {
 		rolloutPath = rollout.PlainRolloutPath(attachment.Path)
 		decoded, ok, err := rollout.ReadRolloutPrefix(attachment.Path, maxBytes+1)
-		if err != nil {
-			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", err)
-		}
-		if !ok {
+		switch {
+		case err == nil && ok:
+			buffer = decoded
+		case err == nil:
 			slog.Error("feedback attachment skipped: rollout is missing or not a regular file")
 			return FeedbackAttachment{}, false, nil
-		}
-		buffer = decoded
-	} else {
-		info, err := os.Stat(attachment.Path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				slog.Error("feedback attachment skipped: rollout is missing or not a regular file")
+		case feedbackAttachmentKeepsRawRollout(attachment.Path, err):
+			// Rust #55545: preserve a selected, undecodable archive for
+			// diagnosis. A preferred plain rollout is never replaced by its
+			// potentially stale compressed sibling.
+			rolloutPath = ""
+			rawRollout = true
+			attachmentPath = rollout.PlainRolloutPath(attachment.Path) + ".zst"
+			read, ok, readErr := feedbackReadRegularFile(attachmentPath, maxBytes)
+			if readErr != nil {
+				return FeedbackAttachment{}, false, readErr
+			}
+			if !ok {
 				return FeedbackAttachment{}, false, nil
 			}
-			return FeedbackAttachment{}, false, fmt.Errorf("stat feedback attachment: %w", err)
-		}
-		if !info.Mode().IsRegular() {
-			slog.Error("feedback attachment skipped: not a regular file")
-			return FeedbackAttachment{}, false, nil
-		}
-		if info.Size() > maxBytes {
-			slog.Error("feedback attachment skipped: size limit exceeded", "bytes", info.Size(), "max_bytes", maxBytes)
-			return FeedbackAttachment{}, false, nil
-		}
-		file, err := os.Open(attachment.Path)
-		if err != nil {
+			buffer = read
+		default:
 			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", err)
 		}
-		// Keep one extra byte so growth after the metadata check is detected.
-		read, readErr := io.ReadAll(io.LimitReader(file, maxBytes+1))
-		closeErr := file.Close()
-		if readErr != nil {
-			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", readErr)
+	} else {
+		read, ok, err := feedbackReadRegularFile(attachmentPath, maxBytes)
+		if err != nil {
+			return FeedbackAttachment{}, false, err
 		}
-		if closeErr != nil {
-			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", closeErr)
+		if !ok {
+			return FeedbackAttachment{}, false, nil
 		}
 		buffer = read
 	}
@@ -126,6 +122,9 @@ func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int6
 	if rolloutPath != "" && (attachment.AttachmentFilenameOverride == nil || strings.TrimSpace(*attachment.AttachmentFilenameOverride) == "") {
 		filename = filepath.Base(rolloutPath)
 	}
+	if rawRollout && !strings.HasSuffix(filename, ".zst") {
+		filename += ".zst"
+	}
 	contentType := "application/octet-stream"
 	if strings.EqualFold(filepath.Ext(filename), ".jsonl") {
 		contentType = "text/plain"
@@ -135,6 +134,66 @@ func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int6
 		ContentType: contentType,
 		Buffer:      buffer,
 	}, true, nil
+}
+
+// feedbackAttachmentKeepsRawRollout reports whether a failed rollout decode
+// should fall back to attaching the raw compressed archive (Rust #55545): the
+// plain representation must be absent, and OS-level read failures keep failing
+// instead of being mistaken for corrupt archives.
+func feedbackAttachmentKeepsRawRollout(path string, err error) bool {
+	if err == nil {
+		return false
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return false
+	}
+	plain := rollout.PlainRolloutPath(path)
+	if plain == "" {
+		return false
+	}
+	if _, statErr := os.Stat(plain); statErr == nil {
+		return false
+	}
+	if _, statErr := os.Stat(plain + ".zst"); statErr != nil {
+		return false
+	}
+	return true
+}
+
+// feedbackReadRegularFile reads a whole regular file within maxBytes, mirroring
+// Rust's metadata check plus one extra byte to detect growth after the check.
+// ok is false for a missing, non-regular, or oversized source.
+func feedbackReadRegularFile(path string, maxBytes int64) ([]byte, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			slog.Error("feedback attachment skipped: rollout is missing or not a regular file")
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("stat feedback attachment: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		slog.Error("feedback attachment skipped: not a regular file")
+		return nil, false, nil
+	}
+	if info.Size() > maxBytes {
+		slog.Error("feedback attachment skipped: size limit exceeded", "bytes", info.Size(), "max_bytes", maxBytes)
+		return nil, false, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false, fmt.Errorf("read feedback attachment: %w", err)
+	}
+	read, readErr := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, false, fmt.Errorf("read feedback attachment: %w", readErr)
+	}
+	if closeErr != nil {
+		return nil, false, fmt.Errorf("read feedback attachment: %w", closeErr)
+	}
+	return read, true, nil
 }
 
 // FeedbackArchiveRollouts mirrors Rust `rollout_archive::archive_rollouts`: the
