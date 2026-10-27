@@ -110,6 +110,12 @@ func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome 
 // ignored-configuration notice - which the TUI coalesces into its startup
 // warnings entry (Rust config.startup_warnings -> ConfigWarning notifications).
 func interactiveStartupConfigWarnings(codexHome string, cwd string, theme string) []string {
+	return interactiveStartupConfigWarningsWithNFS(codexHome, cwd, theme, nfsMigrationStartupWarning)
+}
+
+// interactiveStartupConfigWarningsWithNFS keeps the NFS probe injectable so
+// tests can pin the coalesced rendering without depending on the host mount.
+func interactiveStartupConfigWarningsWithNFS(codexHome string, cwd string, theme string, nfsWarning func(string) string) []string {
 	service := config.NewConfigService(codexHome)
 	warnings := service.StartupWarningsForCWD(cwd)
 	if ignored := strings.TrimSpace(service.IgnoredSettingsWarning(cwd)); ignored != "" {
@@ -123,8 +129,10 @@ func interactiveStartupConfigWarnings(codexHome string, cwd string, theme string
 	}
 	// Rust #57226 inserts the Linux-only NFS migration warning into the same
 	// coalesced startup warnings entry, but only for local workspaces.
-	if nfsWarning := nfsMigrationWarningForHome(codexHome); nfsWarning != "" {
-		warnings = append(warnings, nfsWarning)
+	if nfsWarning != nil {
+		if warning := nfsWarning(codexHome); warning != "" {
+			warnings = append(warnings, warning)
+		}
 	}
 	return warnings
 }

@@ -72,11 +72,9 @@ func TestNFSMigrationWarningSuppressedByInspectionError(t *testing.T) {
 // local TUI wiring: the NFS warning joins the coalesced startup warnings list
 // that the model renders, while the remote TUI keeps its own warning source.
 func TestInteractiveStartupConfigWarningsIncludesNFSWarningLikeRust(t *testing.T) {
-	previous := nfsMigrationWarningForHome
-	t.Cleanup(func() { nfsMigrationWarningForHome = previous })
-	nfsMigrationWarningForHome = func(string) string { return nfsMigrationWarning }
-
-	warnings := interactiveStartupConfigWarnings(t.TempDir(), "", "ansi")
+	warnings := interactiveStartupConfigWarningsWithNFS(t.TempDir(), "", "ansi", func(string) string {
+		return nfsMigrationWarning
+	})
 	if len(warnings) != 1 || warnings[0] != nfsMigrationWarning {
 		t.Fatalf("startup warnings = %#v", warnings)
 	}

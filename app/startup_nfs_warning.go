@@ -10,10 +10,6 @@ import (
 // nfsMigrationWarning is the Rust TUI startup warning verbatim (Rust #57226).
 const nfsMigrationWarning = "Some Codex SQLite files on NFS have permissions other than 0600. Migration preserves these permissions and requires your confirmation. Before running `codex migrate-nfs-db`, stop Codex on every host that uses these databases."
 
-// nfsMigrationWarningForHome is a seam for the local TUI startup wiring test;
-// production always uses nfsMigrationStartupWarning.
-var nfsMigrationWarningForHome = nfsMigrationStartupWarning
-
 // nfsMigrationStartupWarning mirrors Rust's TUI startup_warnings::
 // warn_about_nfs_migration: automatic NFS detection only runs on Linux, and
 // only for local workspaces (the remote TUI never inspects the local state DB).
