@@ -65,6 +65,12 @@ type oauthAuthorizationServerMetadata struct {
 	ClientIDMetadataDocumentSupported          bool     `json:"client_id_metadata_document_supported"`
 	TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
 	AuthorizationResponseIssParameterSupported bool     `json:"authorization_response_iss_parameter_supported"`
+	// IdentityChainingRequestedTokenTypesSupported and GrantTypesSupported are
+	// ID-JAG token-exchange capabilities. Enterprise identity resolution keeps
+	// them as raw JSON so an absent list differs from a published one (Rust
+	// #55685).
+	IdentityChainingRequestedTokenTypesSupported json.RawMessage `json:"identity_chaining_requested_token_types_supported"`
+	GrantTypesSupported                          json.RawMessage `json:"grant_types_supported"`
 }
 
 type oauthProtectedResourceMetadata struct {

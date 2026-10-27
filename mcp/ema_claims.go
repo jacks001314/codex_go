@@ -113,8 +113,9 @@ type mcpEMAOIDCClaims struct {
 	Exp      uint64               `json:"exp"`
 }
 
-// mcpEMAOIDCIdentity mirrors Rust oidc_identity.
-func mcpEMAOIDCIdentity(assertion string, expectedIssuer string, expectedAudience string) (*mcpEMAOIDCClaims, error) {
+// mcpEMAOIDCIdentityClaims parses the identity assertion claims without binding
+// them to an expected issuer or audience.
+func mcpEMAOIDCIdentityClaims(assertion string) (*mcpEMAOIDCClaims, error) {
 	parts, err := mcpEMASignedJWTParts(assertion)
 	if err != nil {
 		return nil, err
@@ -126,6 +127,19 @@ func mcpEMAOIDCIdentity(assertion string, expectedIssuer string, expectedAudienc
 	if claims.Audience == nil {
 		return nil, errors.New("invalid identity assertion JWT claims")
 	}
+	return &claims, nil
+}
+
+// mcpEMAOIDCIdentity mirrors Rust oidc_identity (#55685): an empty expected
+// issuer or client can never bind an assertion.
+func mcpEMAOIDCIdentity(assertion string, expectedIssuer string, expectedAudience string) (*mcpEMAOIDCClaims, error) {
+	if strings.TrimSpace(expectedIssuer) == "" || strings.TrimSpace(expectedAudience) == "" {
+		return nil, errors.New("OIDC identity assertion requires a non-empty expected issuer and client")
+	}
+	claims, err := mcpEMAOIDCIdentityClaims(assertion)
+	if err != nil {
+		return nil, err
+	}
 	if claims.Issuer != expectedIssuer || strings.TrimSpace(claims.Subject) == "" {
 		return nil, errors.New("OIDC identity assertion issuer or subject does not match the enterprise IdP")
 	}
@@ -135,7 +149,15 @@ func mcpEMAOIDCIdentity(assertion string, expectedIssuer string, expectedAudienc
 		(multipleAudiences && (claims.AZP == nil || *claims.AZP != expectedAudience)) {
 		return nil, errors.New("OIDC identity assertion audience or authorized party does not match the IdP client")
 	}
-	return &claims, nil
+	return claims, nil
+}
+
+// mcpEMAOIDCIssuerHint mirrors Rust oidc_issuer_hint: the unverified issuer
+// claim, used only to explain a legacy login migration. Never use this hint to
+// choose where a refresh token is sent.
+func mcpEMAOIDCIssuerHint(assertion string, expectedIssuer string) bool {
+	claims, err := mcpEMAOIDCIdentityClaims(assertion)
+	return err == nil && claims.Issuer == expectedIssuer
 }
 
 // ValidateMCPEMAOIDCIdentityAssertion mirrors Rust

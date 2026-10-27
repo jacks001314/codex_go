@@ -71,8 +71,30 @@ type MCPEMAIDJAGExchangeRequest struct {
 
 // ExchangeMCPEMAIDJAG mirrors Rust exchange_id_jag: an enterprise IdP
 // credential is exchanged for an ID-JAG, which is then traded for a
-// resource-bound MCP bearer token.
+// resource-bound MCP bearer token. The caller releases any credential lease
+// before the resource request through ExchangeMCPEMAIDJAGWithCredentials.
 func ExchangeMCPEMAIDJAG(ctx context.Context, request MCPEMAIDJAGExchangeRequest) (*MCPEMAAccessToken, error) {
+	token, _, err := ExchangeMCPEMAIDJAGWithCredentials(ctx, request, struct{}{}, func(struct{}) struct{} {
+		return struct{}{}
+	})
+	return token, err
+}
+
+// ExchangeMCPEMAIDJAGWithCredentials mirrors Rust exchange_id_jag's
+// caller-owned credential boundary (#55685): only the IdP receives the refresh
+// token, so finishIDP runs once after the IdP exchange and before any resource
+// authorization server I/O. Its receipt is returned even when the resource
+// exchange fails.
+func ExchangeMCPEMAIDJAGWithCredentials[L, R any](
+	ctx context.Context,
+	request MCPEMAIDJAGExchangeRequest,
+	credentials L,
+	finishIDP func(L) R,
+) (*MCPEMAAccessToken, R, error) {
+	var zero R
+	if finishIDP == nil {
+		return nil, zero, errors.New("enterprise IdP exchange requires a credential release callback")
+	}
 	for _, endpoint := range []struct {
 		value       string
 		description string
@@ -84,17 +106,17 @@ func ExchangeMCPEMAIDJAG(ctx context.Context, request MCPEMAIDJAGExchangeRequest
 		{request.IDPTokenEndpoint, "enterprise IdP token endpoint"},
 	} {
 		if err := validateMCPEMAOAuthEndpoint(endpoint.value, endpoint.description); err != nil {
-			return nil, err
+			return nil, zero, err
 		}
 	}
 	if request.AuthorizationServerIssuer == request.IDPIssuer {
-		return nil, errors.New("enterprise IdP and MCP authorization server issuers must be different for ID-JAG")
+		return nil, zero, errors.New("enterprise IdP and MCP authorization server issuers must be different for ID-JAG")
 	}
 	if strings.TrimSpace(request.MCPClientID) == "" || strings.TrimSpace(request.IDPClientID) == "" {
-		return nil, errors.New("enterprise authorization requires the registered IdP and MCP client IDs")
+		return nil, zero, errors.New("enterprise authorization requires the registered IdP and MCP client IDs")
 	}
 	if strings.TrimSpace(request.RefreshToken) == "" {
-		return nil, errors.New("enterprise IdP refresh token must not be empty")
+		return nil, zero, errors.New("enterprise IdP refresh token must not be empty")
 	}
 	idpAuth := request.IDPClientAuthentication
 	if idpAuth.ClientID == "" {
@@ -106,14 +128,14 @@ func ExchangeMCPEMAIDJAG(ctx context.Context, request MCPEMAIDJAGExchangeRequest
 	}
 	for _, auth := range []mcpEMAClientAuthentication{idpAuth, resourceAuth} {
 		if auth.Method != "" && !auth.Method.IsValid() {
-			return nil, fmt.Errorf("unknown value %q for token endpoint authentication method", auth.Method)
+			return nil, zero, fmt.Errorf("unknown value %q for token endpoint authentication method", auth.Method)
 		}
 		if auth.Method != "" && strings.TrimSpace(auth.ClientSecret) == "" {
-			return nil, errors.New("client secret must not be empty")
+			return nil, zero, errors.New("client secret must not be empty")
 		}
 	}
 	if (idpAuth.ClientSecret != "" || resourceAuth.ClientSecret != "") && strings.TrimSpace(request.AuthorizationServerIssuer) == "" {
-		return nil, errors.New("confidential ema_auth requires a configured authorization server issuer")
+		return nil, zero, errors.New("confidential ema_auth requires a configured authorization server issuer")
 	}
 	requestedScopes := make(map[string]struct{}, len(request.Scopes))
 	validScopes := true
@@ -130,7 +152,7 @@ func ExchangeMCPEMAIDJAG(ctx context.Context, request MCPEMAIDJAGExchangeRequest
 		validScopes = false
 	}
 	if !validScopes {
-		return nil, errors.New("enterprise MCP authorization scopes must be distinct, non-empty scope tokens")
+		return nil, zero, errors.New("enterprise MCP authorization scopes must be distinct, non-empty scope tokens")
 	}
 	params := [][2]string{
 		{"grant_type", mcpEMATokenExchangeGrantType},
@@ -153,7 +175,7 @@ func ExchangeMCPEMAIDJAG(ctx context.Context, request MCPEMAIDJAGExchangeRequest
 		"enterprise IdP ID-JAG exchange",
 	)
 	if err != nil {
-		return nil, err
+		return nil, zero, err
 	}
 	grantedScopes, err := idJag.Validate(MCPEMAIDJAGBinding{
 		Issuer:          request.IDPIssuer,
@@ -163,8 +185,11 @@ func ExchangeMCPEMAIDJAG(ctx context.Context, request MCPEMAIDJAGExchangeRequest
 		RequestedScopes: requestedScopes,
 	})
 	if err != nil {
-		return nil, err
+		return nil, zero, err
 	}
+	// Only the IdP receives the refresh token. Release its lease before the
+	// resource authorization server sees any request.
+	receipt := finishIDP(credentials)
 	// Only the signed assertion carries authority to the Resource AS. Repeating
 	// the requested resource or scopes could undo enterprise policy narrowing.
 	accessToken, err := postMCPEMAForm[mcpEMAMCPAccessTokenResponse](
@@ -180,9 +205,13 @@ func ExchangeMCPEMAIDJAG(ctx context.Context, request MCPEMAIDJAGExchangeRequest
 		"MCP JWT bearer exchange",
 	)
 	if err != nil {
-		return nil, err
+		return nil, receipt, err
 	}
-	return accessToken.Validate(request.Resource, grantedScopes)
+	token, err := accessToken.Validate(request.Resource, grantedScopes)
+	if err != nil {
+		return nil, receipt, err
+	}
+	return token, receipt, nil
 }
 
 func mcpEMAIsASCIIWhitespace(r rune) bool {

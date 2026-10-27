@@ -33,6 +33,15 @@ type mcpEnterpriseAuthorizationMetadata struct {
 	// ClientAuthentication is the approved IdP token endpoint authentication
 	// for this registration (Rust #56001).
 	ClientAuthentication mcpEMAClientAuthentication
+	// TokenEndpointAuthMethodsSupported is the IdP's published client
+	// authentication methods, retained so an exchange can decide whether a
+	// refresh token may be sent there.
+	TokenEndpointAuthMethodsSupported []string
+	// IdentityChainingRequestedTokenTypesSupported and GrantTypesSupported keep
+	// the raw advertisement lists (nil when absent) that gate refresh-token
+	// exchange (Rust #55685).
+	IdentityChainingRequestedTokenTypesSupported json.RawMessage
+	GrantTypesSupported                          json.RawMessage
 }
 
 // enterpriseDiscoveryURLs mirrors rmcp
@@ -175,11 +184,14 @@ func resolveEnterpriseAuthorizationMetadata(ctx context.Context, issuer string, 
 			return nil, err
 		}
 		return &mcpEnterpriseAuthorizationMetadata{
-			Issuer:                strings.TrimSpace(metadata.Issuer),
-			AuthorizationEndpoint: strings.TrimSpace(metadata.AuthorizationEndpoint),
-			TokenEndpoint:         strings.TrimSpace(metadata.TokenEndpoint),
-			CallbackMode:          callbackMode,
-			ClientAuthentication:  authentication,
+			Issuer:                            strings.TrimSpace(metadata.Issuer),
+			AuthorizationEndpoint:             strings.TrimSpace(metadata.AuthorizationEndpoint),
+			TokenEndpoint:                     strings.TrimSpace(metadata.TokenEndpoint),
+			CallbackMode:                      callbackMode,
+			ClientAuthentication:              authentication,
+			TokenEndpointAuthMethodsSupported: metadata.TokenEndpointAuthMethodsSupported,
+			IdentityChainingRequestedTokenTypesSupported: metadata.IdentityChainingRequestedTokenTypesSupported,
+			GrantTypesSupported:                          metadata.GrantTypesSupported,
 		}, nil
 	}
 	return nil, errors.New("enterprise IdP must publish authorization metadata")

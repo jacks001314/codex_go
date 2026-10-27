@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -232,6 +233,20 @@ func advertisedMCPEMACapability(value any, expected string, description string) 
 	}
 	found := mcpEMAArrayContainsString(values, expected)
 	return &found, nil
+}
+
+// advertisedMCPEMAJSONCapability decodes one raw metadata field before
+// applying advertisedMCPEMACapability. An absent field yields nil, while a JSON
+// null is malformed, as in Rust's `Value::as_array` on null.
+func advertisedMCPEMAJSONCapability(raw []byte, expected string, description string) (*bool, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return nil, fmt.Errorf("%s is malformed", description)
+	}
+	return advertisedMCPEMACapability(value, expected, description)
 }
 
 // mcpEMAArray reports whether value is a JSON array. Element types are not

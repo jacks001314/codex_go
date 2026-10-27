@@ -276,6 +276,12 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Rust #55685: a published advertisement that omits ID-JAG identity
+	// chaining or the token-exchange grant type rejects the exchange before any
+	// credentialed request is sent.
+	if err := validateMCPEMAIDPTokenExchangeCapability(idp); err != nil {
+		return "", err
+	}
 	scopes := append([]string(nil), m.scopes...)
 	token, err := ExchangeMCPEMAIDJAG(ctx, MCPEMAIDJAGExchangeRequest{
 		Resource:                         resource,
