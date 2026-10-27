@@ -170,11 +170,15 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 	return &outcome, nil
 }
 
-func (r *SessionRuntime) Terminate(cellID CellID) (*WaitOutcome, error) {
+// Terminate stops a cell and returns its final observation. The request's
+// MaxOutputTokens only applies when the session uses server output truncation;
+// client-mode sessions ignore it (Rust #57272).
+func (r *SessionRuntime) Terminate(request TerminateRequest) (*WaitOutcome, error) {
 	startedAt := time.Now()
 	if r == nil {
 		return nil, fmt.Errorf("code mode session runtime is nil")
 	}
+	cellID := request.CellID
 	// Capture the cell's wakeup channel before the termination so a script that
 	// finishes concurrently wakes this wait instead of a fresh channel.
 	wakeup := r.wakeup(cellID.String())

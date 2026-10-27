@@ -169,7 +169,7 @@ func TestSessionRuntimeTerminationPreservesProducedOutputLikeRust(t *testing.T) 
 		case <-time.After(5 * time.Second):
 			t.Fatal("the released engine did not produce output")
 		}
-		terminated, err := runtime.Terminate(started.CellID)
+		terminated, err := runtime.Terminate(TerminateRequestForCell(started.CellID))
 		if err != nil {
 			t.Fatalf("Terminate() error = %v", err)
 		}

@@ -193,7 +193,7 @@ func TestSessionRuntimeExecuteWaitTerminateAndHost(t *testing.T) {
 		t.Fatalf("wait = %#v", wait)
 	}
 
-	terminated, err := runtime.Terminate(NewCellID("missing"))
+	terminated, err := runtime.Terminate(TerminateRequestForCell(NewCellID("missing")))
 	if err != nil {
 		t.Fatalf("Terminate(missing) error = %v", err)
 	}

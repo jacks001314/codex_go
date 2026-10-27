@@ -20,7 +20,7 @@ import (
 )
 
 func TestImageGenerationUsageLimitFailureDetectionLikeRust(t *testing.T) {
-	failure := imageGenerationUsageLimitFailure([]byte(`{"error":{"message":"usage limit","limit_id":"image_gen","resets_at":1786000000}}`))
+	failure := imageGenerationUsageLimitFailure([]byte(`{"error":{"message":"usage limit","limit_id":"image_gen","resets_at":1786000000}}`), nil)
 	if failure == nil {
 		t.Fatal("failure = nil, want usageLimitExceeded")
 	}
@@ -32,10 +32,10 @@ func TestImageGenerationUsageLimitFailureDetectionLikeRust(t *testing.T) {
 		t.Fatalf("resetsAt = %#v", failure["resetsAt"])
 	}
 	// Non-image limits and malformed bodies are not treated as failures.
-	if got := imageGenerationUsageLimitFailure([]byte(`{"error":{"limit_id":"other"}}`)); got != nil {
+	if got := imageGenerationUsageLimitFailure([]byte(`{"error":{"limit_id":"other"}}`), nil); got != nil {
 		t.Fatalf("other limit failure = %#v, want nil", got)
 	}
-	if got := imageGenerationUsageLimitFailure([]byte(`not json`)); got != nil {
+	if got := imageGenerationUsageLimitFailure([]byte(`not json`), nil); got != nil {
 		t.Fatalf("malformed failure = %#v, want nil", got)
 	}
 }
@@ -511,5 +511,45 @@ func TestImageGenerationRecordsInputImageIdentityLikeRust(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Fatalf("generation input images = %#v, want none", none)
+	}
+}
+
+// Rust #57275: the premium imagegen limit is recognized, and an exhausted
+// window's reset time fills in when the body carries none.
+func TestImageGenerationPremiumUsageLimitFailureLikeRust(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("x-codex-active-limit", "imagegen_premium")
+	headers.Set("x-imagegen-premium-primary-used-percent", "100.0")
+	headers.Set("x-imagegen-premium-primary-window-minutes", "1440")
+	headers.Set("x-imagegen-premium-primary-reset-at", "1786154400")
+	failure := imageGenerationUsageLimitFailure([]byte(`{"error":{"type":"usage_limit_reached","message":"image limit reached"}}`), headers)
+	if failure == nil {
+		t.Fatal("premium failure = nil, want usageLimitExceeded")
+	}
+	if failure["type"] != "usageLimitExceeded" || failure["limitId"] != "imagegen_premium" {
+		t.Fatalf("premium failure = %#v", failure)
+	}
+	resetsAt, ok := failure["resetsAt"].(*int64)
+	if !ok || *resetsAt != 1786154400 {
+		t.Fatalf("resetsAt = %#v, want the exhausted window reset", failure["resetsAt"])
+	}
+	// A body reset time wins over the header fallback.
+	withBody := imageGenerationUsageLimitFailure([]byte(`{"error":{"limit_id":"image_gen","resets_at":1786150800}}`), headers)
+	if withBody == nil {
+		t.Fatal("body reset failure = nil")
+	}
+	if got, ok := withBody["resetsAt"].(*int64); !ok || *got != 1786150800 {
+		t.Fatalf("body resetsAt = %#v, want the body value", withBody["resetsAt"])
+	}
+	// Neither a header limit id nor an exhausted window is a failure.
+	unrelated := http.Header{}
+	unrelated.Set("x-codex-active-limit", "premium")
+	if got := imageGenerationUsageLimitFailure([]byte(`{"error":{}}`), unrelated); got != nil {
+		t.Fatalf("unrelated limit = %#v, want nil", got)
+	}
+	noReset := http.Header{}
+	noReset.Set("x-codex-active-limit", "imagegen_premium")
+	if got := imageGenerationUsageLimitFailure([]byte(`{"error":{}}`), noReset); got == nil || got["resetsAt"] != (*int64)(nil) {
+		t.Fatalf("missing reset = %#v, want the limit with no reset time", got)
 	}
 }

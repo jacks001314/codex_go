@@ -131,6 +131,55 @@ func (r *ExecuteRequest) Validate() error {
 type WaitRequest struct {
 	CellID      CellID `json:"cell_id"`
 	YieldTimeMS uint64 `json:"yield_time_ms"`
+	// MaxOutputTokens limits this observation when the session uses server
+	// output truncation; client mode ignores it (Rust #57272). The stdio wire
+	// carries the budget on the enclosing host request, not this payload.
+	MaxOutputTokens *int `json:"-"`
+}
+
+// TerminateRequest stops a cell and optionally bounds its final observation
+// (Rust #57272).
+type TerminateRequest struct {
+	CellID          CellID
+	MaxOutputTokens *int
+}
+
+// TerminateRequestForCell builds the default terminate request for a cell.
+func TerminateRequestForCell(cellID CellID) TerminateRequest {
+	return TerminateRequest{CellID: cellID}
+}
+
+// OutputTruncation names who applies the output budget for exec and wait
+// observations (Rust CodeModeOutputTruncation).
+type OutputTruncation string
+
+const (
+	// OutputTruncationClient returns raw output and lets the caller truncate it.
+	OutputTruncationClient OutputTruncation = "client"
+	// OutputTruncationServer asks the host to apply each observation's budget
+	// before transmission. Requires the bounded-output-v1 host capability.
+	OutputTruncationServer OutputTruncation = "server"
+)
+
+// SessionOptions are the settings shared by every cell in one code-mode
+// session (Rust CodeModeSessionOptions).
+type SessionOptions struct {
+	CellExecutionLimits *CellExecutionLimits
+	OutputTruncation    OutputTruncation
+}
+
+// ValidateSessionOptions rejects settings this host cannot honor. Providers
+// keep client-side truncation by default and reject server mode until they
+// advertise bounded-output-v1 (Rust #57272).
+func ValidateSessionOptions(options SessionOptions) error {
+	switch options.OutputTruncation {
+	case "", OutputTruncationClient:
+		return nil
+	case OutputTruncationServer:
+		return fmt.Errorf("code-mode session provider does not support server output truncation")
+	default:
+		return fmt.Errorf("unknown code-mode output truncation %q", options.OutputTruncation)
+	}
 }
 
 // CellExecutionLimits carries the optional per-cell resource limits shared by

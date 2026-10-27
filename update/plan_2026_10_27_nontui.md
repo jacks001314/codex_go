@@ -72,9 +72,16 @@ TUI lane and are not modified here.
 | `#57241` | Encrypted Guardian transcripts honor the configured message limit instead of a hard-coded 9,000-token ceiling | `appserver/guardian_reviewer.go`, `appserver/guardian_native_agent_message_like_rust_test.go` |
 | `#55991` | Avoid double-counting retained reasoning when the server reports it as included | `compact/compact.go`, `compact/compact_test.go`, `turn/agent_loop.go`, `appserver/turn_runtime.go`, `appserver/runtime_router_test.go`, `exec/exec.go` |
 | `#56211` | Fresh memory profiles default to V2; reset of an absent workspace is a no-op; fresh profiles report `v2_ready` | `config/memories.go`, `config/config.go`, `config/memories_version_test.go`, `appserver/memory_status.go`, `appserver/memory_status_test.go`, `memories/control.go`, `memories/control_test.go` |
+| `#57275` | Premium `imagegen_premium` usage-limit failures keep structured metadata and fall back to the exhausted window's reset time | `turn/image_generation.go`, `turn/image_generation_test.go` |
+| `#57272` | Code-mode output-truncation contracts: session options, wait/terminate budgets, `bounded-output-v1`, stdio and gRPC schemas | `codemode/protocol_types.go`, `codemode/protocol_host.go`, `codemode/session_provider.go`, `codemode/session_runtime.go`, `codemode/session_host.go`, `codemode/stdio_host.go`, `codemode/grpc/codex.code_mode.v1.proto`, regenerated `codemode/grpc` bindings, `codemode/protocol_truncation_test.go` |
 
 Grounding notes:
 
+- `#57276` (extension world-state window prefixes) is N/A: Rust adds
+  `WorldStateSectionContribution::with_window_prefix()` for extension
+  contributors, and Go has no extension world-state section registry to carry
+  that prefix; its built-in world-state updates already place
+  `WorldStatePrefix` with the tool catalog.
 - `#56234` (prompt telemetry ordering) is structurally N/A: Go never wires
   `RunUserPromptSubmit` into turns, so there is no pre-hook telemetry path to
   order against. Recorded in `update/plan_2026_09_11.md`.
@@ -605,7 +612,7 @@ Go counterpart; `#57373` is a Rust toolchain pin with no Go analogue.
 
 ## Pending in this window
 
-- About 170 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 155 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -716,3 +723,5 @@ Go counterpart; `#57373` is a Rust toolchain pin with no Go analogue.
   `go vet ./session ./rollout ./app` pass. The npm wrapper has no Go-side JS
   test in this repo.
 - For `#57241`/`#55991`/`#56211`: `go test ./compact ./config ./memories ./turn ./exec -count=1`, `go test ./appserver -run 'GuardianNativeAgentMessage|GuardianReviewTranscript|GuardianTranscriptCarries|GuardianReviewDelivers|MemoryStatus|CompactTokenStatusForTurn' -count=1` and `go build ./...` pass.
+- For `#57275`: `go test ./turn -run 'ImageGenerationUsageLimit|ImageGenerationPremium|ImageGenerationErrorOutput' -count=1` passes.
+- For `#57272`: `go test ./codemode -count=1` and `go build ./...` pass; the proto was regenerated with the checked-in `protoc-gen-go`/`protoc-gen-go-grpc` plugins.

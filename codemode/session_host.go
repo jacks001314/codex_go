@@ -10,13 +10,24 @@ import (
 type SessionHost struct {
 	runtime             *SessionRuntime
 	cellExecutionLimits *CellExecutionLimits
+	outputTruncation    OutputTruncation
 }
 
 func NewSessionHost(runtime *SessionRuntime) *SessionHost {
 	if runtime == nil {
 		runtime = NewSessionRuntime()
 	}
-	return &SessionHost{runtime: runtime}
+	return &SessionHost{runtime: runtime, outputTruncation: OutputTruncationClient}
+}
+
+// OutputTruncation reports who applies output budgets for this session. Server
+// truncation is not implemented yet, so the captured setting only identifies
+// the contract the client asked for (Rust #57272).
+func (h *SessionHost) OutputTruncation() OutputTruncation {
+	if h == nil {
+		return OutputTruncationClient
+	}
+	return h.outputTruncation
 }
 
 // Handle serves one host request. The trailing signal is the request's
@@ -35,6 +46,10 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 		// captured at open and applied to every later execute/wait yield time
 		// without terminating the running cell.
 		h.cellExecutionLimits = request.CellExecutionLimits
+		h.outputTruncation = OutputTruncationClient
+		if request.OutputTruncation != nil {
+			h.outputTruncation = *request.OutputTruncation
+		}
 		return &HostResponse{Type: "session/ready", SessionID: request.SessionID}, nil, nil
 	case "session/execute":
 		if request.Request == nil {
@@ -63,7 +78,7 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 		}
 		return &HostResponse{Type: "wait/completed", Outcome: outcome}, nil, nil
 	case "session/terminate":
-		outcome, err := h.runtime.Terminate(request.CellID)
+		outcome, err := h.runtime.Terminate(TerminateRequest{CellID: request.CellID, MaxOutputTokens: request.MaxOutputTokens})
 		if err != nil {
 			return nil, nil, err
 		}

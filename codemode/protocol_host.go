@@ -24,6 +24,10 @@ const SessionCellExecutionResourceLimitsCapability = "session-cell-execution-res
 // cell (Rust #48123).
 const YieldObservationCapability = "yield-observation"
 
+// BoundedOutputCapability is the optional host capability advertising that the
+// host can apply observation output budgets itself (Rust #57272).
+const BoundedOutputCapability = "bounded-output-v1"
+
 type RequestID int64
 
 type DelegateRequestID int64
@@ -533,6 +537,11 @@ type HostRequest struct {
 	Wait                *WaitRequest         `json:"-"`
 	CellID              CellID               `json:"cellId,omitempty"`
 	CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits,omitempty"`
+	// OutputTruncation is sent only when output-truncation support was agreed
+	// at connection hello; omission keeps the legacy wire shape (Rust #57272).
+	OutputTruncation *OutputTruncation `json:"outputTruncation,omitempty"`
+	// MaxOutputTokens bounds a wait or terminate observation in server mode.
+	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`
 }
 
 func (r *HostRequest) UnmarshalJSON(data []byte) error {
@@ -545,11 +554,13 @@ func (r *HostRequest) UnmarshalJSON(data []byte) error {
 		Request             json.RawMessage      `json:"request"`
 		CellID              CellID               `json:"cellId"`
 		CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits"`
+		OutputTruncation    *OutputTruncation    `json:"outputTruncation"`
+		MaxOutputTokens     *int                 `json:"maxOutputTokens"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID, CellExecutionLimits: envelope.CellExecutionLimits}
+	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID, CellExecutionLimits: envelope.CellExecutionLimits, OutputTruncation: envelope.OutputTruncation, MaxOutputTokens: envelope.MaxOutputTokens}
 	if len(envelope.Request) == 0 || string(envelope.Request) == "null" {
 		return nil
 	}
@@ -558,6 +569,7 @@ func (r *HostRequest) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(envelope.Request, &request); err != nil {
 			return err
 		}
+		request.MaxOutputTokens = envelope.MaxOutputTokens
 		r.Wait = &request
 		return nil
 	}
@@ -585,6 +597,17 @@ func OpenSessionRequestWithLimits(sessionID SessionID, limits *CellExecutionLimi
 	return request
 }
 
+// OpenSessionRequestWithOptions adds the session's output truncation setting;
+// client truncation keeps the legacy wire shape.
+func OpenSessionRequestWithOptions(sessionID SessionID, options SessionOptions) HostRequest {
+	request := OpenSessionRequestWithLimits(sessionID, options.CellExecutionLimits)
+	if options.OutputTruncation != "" && options.OutputTruncation != OutputTruncationClient {
+		truncation := options.OutputTruncation
+		request.OutputTruncation = &truncation
+	}
+	return request
+}
+
 func ExecuteSessionRequest(sessionID SessionID, request ExecuteRequest) HostRequest {
 	return HostRequest{Method: "session/execute", SessionID: sessionID, Request: &request}
 }
@@ -597,6 +620,16 @@ func TerminateSessionRequest(sessionID SessionID, cellID CellID) HostRequest {
 	return HostRequest{Method: "session/terminate", SessionID: sessionID, CellID: cellID}
 }
 
+// TerminateSessionRequestWithBudget carries an optional final-observation
+// budget for server-mode sessions (Rust #57272).
+func TerminateSessionRequestWithBudget(sessionID SessionID, request TerminateRequest) HostRequest {
+	hostRequest := HostRequest{Method: "session/terminate", SessionID: sessionID, CellID: request.CellID}
+	if request.MaxOutputTokens != nil {
+		hostRequest.MaxOutputTokens = request.MaxOutputTokens
+	}
+	return hostRequest
+}
+
 func ShutdownSessionRequest(sessionID SessionID) HostRequest {
 	return HostRequest{Method: "session/shutdown", SessionID: sessionID}
 }
@@ -605,10 +638,11 @@ func (r HostRequest) MarshalJSON() ([]byte, error) {
 	switch r.Method {
 	case "session/wait":
 		return json.Marshal(struct {
-			Method    string       `json:"method"`
-			SessionID SessionID    `json:"sessionId"`
-			Request   *WaitRequest `json:"request"`
-		}{Method: r.Method, SessionID: r.SessionID, Request: r.Wait})
+			Method          string       `json:"method"`
+			SessionID       SessionID    `json:"sessionId"`
+			Request         *WaitRequest `json:"request"`
+			MaxOutputTokens *int         `json:"maxOutputTokens,omitempty"`
+		}{Method: r.Method, SessionID: r.SessionID, Request: r.Wait, MaxOutputTokens: r.MaxOutputTokens})
 	default:
 		type alias HostRequest
 		return json.Marshal(alias(r))

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -480,7 +481,7 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 		if message == "" {
 			message = resp.Status
 		}
-		if failure := imageGenerationUsageLimitFailure(respBody); failure != nil {
+		if failure := imageGenerationUsageLimitFailure(respBody, resp.Header); failure != nil {
 			return nil, requestID, &imageGenerationAPIError{message: message, failure: failure, requestID: requestID}
 		}
 		return nil, requestID, &imageGenerationRequestError{message: message, requestID: requestID}
@@ -518,21 +519,82 @@ func (h *ImageGenerationHandler) sessionID() string {
 	return "session"
 }
 
-func imageGenerationUsageLimitFailure(body []byte) map[string]any {
+// imageGenerationUsageLimitFailure classifies a failed image request as a
+// structured usage-limit failure. Rust #57275 recognizes the premium imagegen
+// limit alongside the ordinary image_gen limit and falls back to the exhausted
+// window's reset time when the body carries none.
+func imageGenerationUsageLimitFailure(body []byte, headers http.Header) map[string]any {
 	var payload struct {
 		Error struct {
 			LimitID  string `json:"limit_id"`
 			ResetsAt *int64 `json:"resets_at"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil || payload.Error.LimitID != "image_gen" {
+	_ = json.Unmarshal(body, &payload)
+	limitID := strings.TrimSpace(payload.Error.LimitID)
+	if limitID == "" && headers != nil {
+		limitID = strings.TrimSpace(headers.Get("x-codex-active-limit"))
+	}
+	if limitID != "image_gen" && limitID != "imagegen_premium" {
 		return nil
+	}
+	resetsAt := payload.Error.ResetsAt
+	if resetsAt == nil {
+		resetsAt = imageGenerationExhaustedWindowReset(headers, "x-"+strings.ReplaceAll(limitID, "_", "-"))
 	}
 	return map[string]any{
 		"type":     "usageLimitExceeded",
-		"limitId":  payload.Error.LimitID,
-		"resetsAt": payload.Error.ResetsAt,
+		"limitId":  limitID,
+		"resetsAt": resetsAt,
 	}
+}
+
+// imageGenerationExhaustedWindowReset mirrors Rust's fallback: the latest reset
+// time among the limit's primary and secondary windows that are fully used.
+func imageGenerationExhaustedWindowReset(headers http.Header, prefix string) *int64 {
+	if headers == nil || prefix == "" {
+		return nil
+	}
+	var latest *int64
+	for _, window := range []string{"primary", "secondary"} {
+		used, ok := imageGenerationHeaderFloat(headers, prefix+"-"+window+"-used-percent")
+		if !ok || used < 100 {
+			continue
+		}
+		reset, ok := imageGenerationHeaderInt(headers, prefix+"-"+window+"-reset-at")
+		if !ok {
+			continue
+		}
+		if latest == nil || reset > *latest {
+			value := reset
+			latest = &value
+		}
+	}
+	return latest
+}
+
+func imageGenerationHeaderFloat(headers http.Header, name string) (float64, bool) {
+	raw := strings.TrimSpace(headers.Get(name))
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func imageGenerationHeaderInt(headers http.Header, name string) (int64, bool) {
+	raw := strings.TrimSpace(headers.Get(name))
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
 }
 
 func imageGenerationErrorOutput(invocation *tool.Invocation, prompt string, message string, failures ...map[string]any) *tool.Output {

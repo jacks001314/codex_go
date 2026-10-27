@@ -177,7 +177,11 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 		_, active := h.sessions[request.SessionID]
 		_, reused := h.seen[request.SessionID]
 		if !active && !reused {
-			h.sessions[request.SessionID] = newStdioHostSession(h, request.SessionID)
+			session := newStdioHostSession(h, request.SessionID)
+			if request.OutputTruncation != nil {
+				session.outputTruncation = *request.OutputTruncation
+			}
+			h.sessions[request.SessionID] = session
 			h.seen[request.SessionID] = struct{}{}
 		}
 		h.mu.Unlock()
@@ -226,7 +230,9 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse](fmt.Sprintf("unknown code-mode session %s", request.SessionID))))
 			return
 		}
-		outcome := session.wait(ctx, &WaitRequest{CellID: request.CellID}, true, yield)
+		// The terminating observation's maxOutputTokens budget is accepted for
+		// server-truncated sessions; client-mode sessions ignore it (Rust #57272).
+		outcome := session.wait(ctx, &WaitRequest{CellID: request.CellID, MaxOutputTokens: request.MaxOutputTokens}, true, yield)
 		_ = h.write(HostOperationResponse(id, ResultOK(WaitCompleted(outcome))))
 		_ = h.write(CellClosed(request.SessionID, request.CellID))
 	case "session/shutdown":
@@ -351,12 +357,16 @@ type stdioHostSession struct {
 	waitExecutor tool.Executor
 	definitions  map[string]struct{}
 	nextCell     atomic.Uint64
+	// outputTruncation records the session-level setting requested at
+	// session/open. Server-side truncation is not implemented yet, so the
+	// setting is captured without changing observation output (Rust #57272).
+	outputTruncation OutputTruncation
 }
 
 func newStdioHostSession(host *stdioHostServer, id SessionID) *stdioHostSession {
 	registry := tool.NewRegistry()
 	execExecutor, waitExecutor := tool.NewCodeModeExecutors(registry)
-	return &stdioHostSession{host: host, id: id, registry: registry, exec: execExecutor, waitExecutor: waitExecutor, definitions: map[string]struct{}{}}
+	return &stdioHostSession{host: host, id: id, registry: registry, exec: execExecutor, waitExecutor: waitExecutor, definitions: map[string]struct{}{}, outputTruncation: OutputTruncationClient}
 }
 
 func (s *stdioHostSession) nextCellID() CellID {
