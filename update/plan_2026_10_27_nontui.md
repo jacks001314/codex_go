@@ -41,7 +41,7 @@ TUI lane and are not modified here.
 | `#56445` | Treat `model_not_found` provider errors as terminal failures | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_stream.go`, `model/responses_agent.go`, `rollout/codex_error_info.go`, `appserver/turn_runtime.go`, like-Rust tests |
 | `#56468` | Preserve `SystemRoot` for Windows filesystem sandbox helpers | `execserver/fs_helper.go`, helper environment test |
 | `#56022` | Preserve config overrides across CLI subcommand boundaries | `cli/cli.go`, `cli/cli_test.go` |
-| `#56552` `#57225` `#57226` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`, `cli/cli.go`, `app/migrate_nfs_db.go`, `app/app.go`, like-Rust tests |
+| `#56552` `#57225` `#57226` `#55975` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`, `cli/cli.go`, `app/migrate_nfs_db.go`, `app/app.go`, like-Rust tests |
 | `#56495` | Paginated subscribed-channel listing on the local message board | `agentboard/local.go`, `agentboard/local_test.go` |
 | `#55690` | Reclaim aged legacy marketplace staging directories | `plugin/marketplace_staging.go`, `plugin/marketplace_install.go`, `plugin/marketplace_staging_test.go` |
 | `#57251` | Native dollar thread usage in app-server `ThreadUsage` (core surface + coverage) | `appserver/runtime_router_test.go` (type/forwarding landed with `auth/account.go`, `appserver/runtime_router.go`) |
@@ -107,6 +107,28 @@ Grounding notes:
 - `#57245` is N/A: Rust test-only queue stabilization.
 - `#57199` is N/A: the 240-byte JSON summary truncation lives in Rust's
   `rollout-trace` reducer, which has no Go counterpart.
+
+- The `rollout-trace` family is N/A: `#57311`, `#57280`, `#56524`, `#56515`,
+  `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has
+  no `rollout-trace` recorder or event model — no thread trace events such as
+  `codex.tool_result_ready`, per-turn/code-cell/terminal spans, or the
+  conversation/tool reducer these commits extend. `rollout.ReduceTraceBundle`
+  only summarizes an existing `trace.jsonl`, `memories` extracts conversation
+  items straight from rollout JSONL, and the `codemode` package has no tracer,
+  so these reducer and instrumentation changes have no Go surface.
+- `#56535` is N/A: the commit extracts Rust's head-tail buffer into a utility
+  crate; Go already has `exec.HeadTailBuffer` and `utils.PlanTokenTruncation`.
+- `#55652` is N/A: Go has no rollout-file search module
+  (`codex-rs/rollout/src/search.rs`); thread history search reads the SQLite
+  state database instead.
+- `#55456` is N/A: Go has no system config layer or system `requirements.toml`
+  (`config/local_layers.go` documents this), so there is no Windows registry
+  override to merge into the requirements stack.
+- `#55677` and `#56439` are N/A: a Rust toolchain/CI pin and a Cargo dependency
+  bump (`ctutils`), neither of which exists in the Go module.
+- `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and
+  `#56301` are N/A: Rust test-only stabilization, fixture, or `#[cfg(test)]`
+  helper changes with no Go analogue.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -642,7 +664,7 @@ when the candidate's history generation no longer matches, as Rust does.
 
 ## Pending in this window
 
-- About 155 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 124 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
