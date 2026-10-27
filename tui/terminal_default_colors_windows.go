@@ -48,22 +48,22 @@ func platformTerminalDefaultColors() (DefaultColors, bool) {
 // colors through the console input queue while preserving every console record
 // that is not part of a reply (Rust terminal_probe/windows.rs). When it reports
 // false, the console color table above remains the platform source.
-func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, bool) {
+func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, []byte, bool) {
 	if timeout <= 0 {
 		timeout = terminalColorProbeTimeout
 	}
 	output, ok := windowsStdHandle(stdOutputHandle)
 	if !ok {
-		return DefaultColors{}, false
+		return DefaultColors{}, nil, false
 	}
 	input, ok := windowsStdHandle(stdInputHandle)
 	if !ok {
-		return DefaultColors{}, false
+		return DefaultColors{}, nil, false
 	}
 	if colors, ok := queryWindowsOSCDefaultColors(input, output, timeout); ok {
-		return colors, true
+		return colors, nil, true
 	}
-	return DefaultColors{}, false
+	return DefaultColors{}, nil, false
 }
 
 const (

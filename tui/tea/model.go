@@ -116,22 +116,26 @@ type SubmitRequest struct {
 }
 
 // probeTerminalColorsForTUI runs the bounded terminal color probe only when the
-// TUI owns real terminal stdio, so tests and piped sessions are untouched.
-func probeTerminalColorsForTUI(input io.Reader, output io.Writer) {
+// TUI owns real terminal stdio, so tests and piped sessions are untouched. It
+// returns the input the TUI should read: keystrokes that arrived during the
+// probe window come back as leftover bytes and are replayed ahead of the
+// terminal, mirroring Rust's terminal_probe::startup + startup_replay_input.
+func probeTerminalColorsForTUI(input io.Reader, output io.Writer) io.Reader {
 	inputFile, inputOK := input.(*os.File)
 	outputFile, outputOK := output.(*os.File)
 	if !inputOK || !outputOK || inputFile == nil || outputFile == nil {
-		return
+		return input
 	}
 	inputInfo, err := inputFile.Stat()
 	if err != nil || inputInfo.Mode()&os.ModeCharDevice == 0 {
-		return
+		return input
 	}
 	outputInfo, err := outputFile.Stat()
 	if err != nil || outputInfo.Mode()&os.ModeCharDevice == 0 {
-		return
+		return input
 	}
-	codextui.ProbeTerminalDefaultColors(100 * time.Millisecond)
+	_, leftover, _ := codextui.ProbeTerminalStartup(100 * time.Millisecond)
+	return newReplayInputReader(leftover, input)
 }
 
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
@@ -3094,12 +3098,12 @@ func detectTerminalSize(input io.Reader, output io.Writer) (int, int, bool) {
 		}
 		return width, height, true
 	}
-	if file, ok := output.(*os.File); ok {
+	if file, ok := output.(interface{ Fd() uintptr }); ok {
 		if width, height, ok := probe(file.Fd()); ok {
 			return width, height, true
 		}
 	}
-	if file, ok := input.(*os.File); ok {
+	if file, ok := input.(interface{ Fd() uintptr }); ok {
 		if width, height, ok := probe(file.Fd()); ok {
 			return width, height, true
 		}
@@ -3115,13 +3119,16 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	defer closeDefaultClipboardReader()
 	// Install the terminal's OSC 10/11 default colors before the input loop
 	// starts so the summary shimmer can blend against the real palette
-	// (Rust terminal_probe::default_colors at TUI startup).
-	probeTerminalColorsForTUI(input, output)
+	// (Rust terminal_probe::default_colors at TUI startup). Keys typed during
+	// that window are replayed into the input loop instead of being dropped.
+	terminalInput := input
+	input = probeTerminalColorsForTUI(input, output)
 	final, err := NewProgram(ctx, state, options, input, output).Run()
 	// Rust #57391: reports the terminal generated while mouse/focus reporting
 	// was still enabled must be drained before stdin returns to the shell.
 	// Panic unwinding flushes queued input without waiting for a DA1 reply.
-	codextui.DrainPendingTerminalReports(input, output, !errors.Is(err, bubbletea.ErrProgramPanic))
+	// The drain needs the real terminal handle, not the replayed reader.
+	codextui.DrainPendingTerminalReports(terminalInput, output, !errors.Is(err, bubbletea.ErrProgramPanic))
 	if err != nil {
 		return nil, err
 	}

@@ -25,34 +25,34 @@ const terminalStartupProbeQuery = "\x1b[c" + terminalColorProbeQuery
 // mode before probing (`set_modes`), because a canonical terminal withholds the
 // unterminated report bytes; the probe restores the previous mode before it
 // returns.
-func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, bool) {
+func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, []byte, bool) {
 	if timeout <= 0 {
 		timeout = terminalColorProbeTimeout
 	}
 	setTerminalDA1Supported(false)
 	info, err := os.Stdin.Stat()
 	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
-		return DefaultColors{}, false
+		return DefaultColors{}, nil, false
 	}
 	fd, err := syscall.Dup(int(os.Stdin.Fd()))
 	if err != nil {
-		return DefaultColors{}, false
+		return DefaultColors{}, nil, false
 	}
 	file := os.NewFile(uintptr(fd), "stdin-probe")
 	if file == nil {
 		_ = syscall.Close(fd)
-		return DefaultColors{}, false
+		return DefaultColors{}, nil, false
 	}
 	defer file.Close()
 	if state, err := term.MakeRaw(os.Stdin.Fd()); err == nil {
 		defer func() { _ = term.Restore(os.Stdin.Fd(), state) }()
 	}
 	if err := syscall.SetNonblock(fd, true); err != nil {
-		return DefaultColors{}, false
+		return DefaultColors{}, nil, false
 	}
 	defer syscall.SetNonblock(fd, false)
 	if _, err := os.Stdout.WriteString(terminalStartupProbeQuery); err != nil {
-		return DefaultColors{}, false
+		return DefaultColors{}, nil, false
 	}
 	deadline := time.Now().Add(timeout)
 	buffer := make([]byte, 0, 128)
@@ -73,13 +73,13 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, b
 						setTerminalDA1Supported(true)
 					}
 				}
-				return colors, true
+				return colors, StartupReplayInput(buffer), true
 			}
 		}
 		if err != nil && !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
-			return DefaultColors{}, false
+			return DefaultColors{}, StartupReplayInput(buffer), false
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return DefaultColors{}, false
+	return DefaultColors{}, StartupReplayInput(buffer), false
 }

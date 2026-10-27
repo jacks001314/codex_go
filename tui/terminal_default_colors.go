@@ -40,12 +40,21 @@ func DefaultTerminalColors() (DefaultColors, bool) {
 // set_default_colors_from_startup_probe). It must run before the TUI's input loop
 // starts; hosts without a probe report false.
 func ProbeTerminalDefaultColors(timeout time.Duration) bool {
-	colors, ok := probePlatformTerminalDefaultColors(timeout)
+	_, _, ok := ProbeTerminalStartup(timeout)
+	return ok
+}
+
+// ProbeTerminalStartup queries the terminal's startup state and returns the
+// default colors plus the input that was not a probe reply. Callers replay the
+// leftover input into the TUI's input stream, mirroring Rust's
+// `terminal_probe::startup` and `startup_replay_input`.
+func ProbeTerminalStartup(timeout time.Duration) (DefaultColors, []byte, bool) {
+	colors, leftover, ok := probePlatformTerminalDefaultColors(timeout)
 	if !ok {
-		return false
+		return DefaultColors{}, leftover, false
 	}
 	SetDefaultColorsFromStartupProbe(&colors)
-	return true
+	return colors, leftover, true
 }
 
 // defaultTerminalColors reports the cached terminal default colors. Like Rust's
