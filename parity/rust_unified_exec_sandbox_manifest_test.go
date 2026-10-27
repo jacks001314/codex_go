@@ -107,7 +107,9 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			// suite grew from 8 to 15 table-driven cases as environment-backed
 			// tool exposure and process-event replay were covered; the login
 			// test on unified_exec.rs also dropped its `hides_and_` prefix.
-			TestCases: 26,
+			// Re-anchored to upstream 4d3ed3f3b4: credential masking added the
+			// custom-provider fallback row to the process-event table.
+			TestCases: 27,
 			Tests: []string{
 				"exec_command_consumes_pushed_remote_process_events",
 			},
@@ -176,10 +178,13 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"exec_command_post_tool_use_payload_skips_running_sessions",
 				"exec_command_post_tool_use_payload_uses_output_for_interactive_completion",
 				"exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_commands",
+				"exec_command_pre_tool_use_cwd_rejects_invalid_environment_and_path",
+				"exec_command_pre_tool_use_cwd_resolves_selected_environment",
 				"exec_command_pre_tool_use_payload_skips_write_stdin",
 				"exec_command_pre_tool_use_payload_uses_raw_command",
 				"exec_command_rejects_login_when_selected_environment_disallows_it",
 				"exec_command_reuses_foreign_windows_grant",
+				"exec_command_telemetry_records_configured_snapshot_mode",
 				"test_get_command_rejects_explicit_login_when_disallowed",
 				"test_get_command_does_not_change_nested_login_or_powershell",
 				"test_get_command_keeps_path_prepends_after_login_startup",

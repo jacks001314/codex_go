@@ -56,7 +56,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// (#48213).
 			// Re-pinned to upstream a6bd19261c (#48491): the restrictive Windows
 			// launcher adds the embedded-fallback warning snapshot.
-			Files: 45,
+			// Re-anchored to upstream 4d3ed3f3b4: the CLI suite gained the
+			// rollout-trace reducer, queued-message and NFS-database migration
+			// fixtures plus their support modules.
+			Files: 48,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -101,7 +104,11 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// thread-settings, project, environment and executor
 			// bearer-token fixtures (#46917-#48004), plus the negotiated
 			// WebSocket compression integration fixture (#54930/#54949).
-			Files: 170,
+			// Re-anchored to upstream 4d3ed3f3b4: the v2 suite also gained the
+			// account-enterprise, GCP/Bedrock, guardian, critical-path, thread
+			// sample/unload and MCP connection-sharing fixtures from the
+			// intervening sync windows.
+			Files: 180,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -146,7 +153,11 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// advance to e16b631d08), so the suite grows by three files.
 			// #54961 added the parent-completion-wakes-idle-root scenario
 			// snapshot.
-			Files: 360,
+			// Re-anchored to upstream 4d3ed3f3b4: the core suite absorbed the
+			// mailbox, guardian, incremental-tool, MCP-EMA/sharing, skill-catalog
+			// dedup, critical-path, GCP/Bedrock, hooks-CWD and remote-environment
+			// fixtures landed across the intervening sync windows.
+			Files: 389,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -170,7 +181,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// dynamic-activity, transcript-copy and transcript-composer suites.
 			// This pass adds the prompt-suggestion, transcript-search,
 			// startup-warning, warnings-viewer and effect-toggle coverage.
-			Files: 140,
+			// Re-anchored to upstream 4d3ed3f3b4 for the two chatwidget
+			// fixtures added by the parallel TUI lane's upstream window.
+			Files: 142,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -186,7 +199,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// history-projection, dynamic-activity and transcript-copy ones.
 			// This pass adds the prompt-suggestion, transcript-search,
 			// warnings-viewer and markdown/effect snapshot set.
-			Files: 82,
+			// Re-anchored to upstream 4d3ed3f3b4: the chatwidget snapshot root
+			// gained one fixture alongside the two new tests.
+			Files: 83,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
@@ -196,8 +211,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		{
 			// This pass adds the advertised-identity and model-specific
 			// description coverage (#47118/#47642/#47670/#47981).
-			Path:  "tools/src",
-			Files: 42,
+			Path: "tools/src",
+			// Re-anchored to upstream 4d3ed3f3b4: the tools crate gained the
+			// catalog tool-message and functions-namespace prefix modules.
+			Files: 44,
 			Owner: "tool, turn",
 			Focus: "tool schemas, dynamic tools, MCP tools, tool search",
 			Required: []string{

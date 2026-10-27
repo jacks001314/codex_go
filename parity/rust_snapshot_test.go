@@ -159,6 +159,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"code-mode-host",
 		"code-mode-protocol",
 		"code-mode-runtime",
+		"plugin-host",
 		"codex-home",
 		"cloud-config",
 		"cloud-tasks",
@@ -177,6 +178,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"core-plugin-common",
 		"core-plugins",
 		"diagnostics",
+		"direct-tool-timing",
 		"guardian-context",
 		"hooks",
 		"history",
@@ -197,6 +199,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"ext/git-attribution",
 		"ext/guardian-reviewer",
 		"ext/guardian-v2",
+		"ext/guardian-v3",
 		"ext/history-notes",
 		"ext/image-generation",
 		"ext/items",
@@ -216,6 +219,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"memories/read",
 		"memories/write",
 		"mermaid",
+		"message-board",
 		"model-provider-info",
 		"mxc-sandbox",
 		"models-manager",
@@ -254,7 +258,9 @@ func rustWorkspaceMembersSnapshot() []string {
 		"utils/cargo-bin",
 		"git-utils",
 		"utils/cache",
+		"utils/critical-path",
 		"utils/git-discovery",
+		"utils/head-tail-buffer",
 		"utils/image",
 		"utils/json-to-toml",
 		"utils/home-dir",
@@ -322,15 +328,20 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// protocol/tests/support workspace member; every other pin is unchanged.
 		// Round-111 re-anchor to head 091008729d: the workspace gained
 		// runtime-agent-instance.
-		{Path: "Cargo.toml", SHA256: "fc14a2e39a0249d8d2046b9d7140c3fcc9aa051d0cfc899a7e122e6a1d95008f"},
-		{Path: "cli/src/lib.rs", SHA256: "1558e2085a1226408fd42d5f9ffed634e9d37dacbfe70b3d6bbbbee7f8398f26"},
+		// Re-anchored to upstream 4d3ed3f3b4: Cargo.toml gained the
+		// plugin-host member, and the remaining pins below track the protocol,
+		// client and suite surfaces after the intervening sync windows
+		// (accountSession/list and accountSession/switch in
+		// app-server-protocol/src/protocol/common.rs).
+		{Path: "Cargo.toml", SHA256: "80b5d1de8eb3431b16e97fad56c4e0dd4c03b247026e6cb976d031acdb83f0bc"},
+		{Path: "cli/src/lib.rs", SHA256: "bc73cee3f5714a1ab90ca8853bbaa74f16dc5abd6edc6bb888d8648b6c49f14a"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
 		// Re-anchored to head 5b0b253035 via 1fbe15c962 (#51595): the two
 		// ThreadListParams literals in resolve_resume_thread_id gained
 		// `excluded_thread_ids: None` (mechanical consequence of the
 		// thread/list exclusion field; Go side already landed as sync551).
-		{Path: "exec/src/lib.rs", SHA256: "36c6bb343db323ed6bb0b2679a4298d43db50bbf333409155ab44e96e2b4da7b"},
+		{Path: "exec/src/lib.rs", SHA256: "e1860499175b5c8d37e061773621f41aa4098fced7c83a7bbb3bfd6c735b497e"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -347,19 +358,19 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// the additional-tool declaration backing storage; no wire change.
 		// Round-110 re-anchor to head e389b2444c: Responses Lite incremental
 		// tool declarations and the pre-turn compaction/config refresh changes.
-		{Path: "core/src/client.rs", SHA256: "7fccc70ba4d244dd5f790a0f867d4a841ad61c919e5a26f8aa46ee08d446d162"},
+		{Path: "core/src/client.rs", SHA256: "5296f323c72ddd27db79c211eb1b773ac85a0a7fd3273546a1e7ea890363a846"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "9a6639b092c289ae431952450bb1ffb1fcce336b9486f86b4bd2ec622cbb66d9"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "4d42dd4aabf5b3210e0953c8d9ba5f6e7d76f2cba8418d16d76bf4512993f918"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.
 		// Re-pinned to upstream 8c076942 (#54930/#54949/#54961): the
 		// WebSocket-compression and agent-message-wake suites joined the list.
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "047923ca0ad3fa28944b58a1bba9962a480602cbf5955b36adf3ac478de4a198"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "2a41c2232f39d7f23b3b7d1348cd73b0b1516d621e4ef46312c62349a2f95482"},
 		// Re-pinned to upstream 8ae55c863d (#47407/#47679/#47819/#47820/#47879):
 		// the network-policy, extension-hook, guardian-authorization,
 		// agent-controller and macOS patch-permission suites joined the module
@@ -367,7 +378,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Re-pinned to upstream 95ec468619 (round-89 pin advance): the core suite
 		// module dropped its windows_sandbox module declaration when #51678 moved
 		// that file to core/tests/windows_sandbox.rs.
-		{Path: "core/tests/suite/mod.rs", SHA256: "ca88b198e3ca41d80ff0a163025df751790562cb52bc35a09b728f0775996e19"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "da941c56087578fb2fce6c0e55c39b56f5b628f135488b7a6a8b17c8ff7a2c8a"},
 	}
 }
 

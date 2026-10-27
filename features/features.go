@@ -312,6 +312,9 @@ var Registry = []Spec{
 	// developer messages across compacted context windows.
 	{Key: "retain_client_developer_messages", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "use_agent_identity", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs): runtime agent instances are still
+	// under development and disabled by default.
+	{Key: "runtime_agent_instances", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "workspace_dependencies", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #42196, #44870): managed Git
 	// worktrees; stable and enabled by default since #44870.
