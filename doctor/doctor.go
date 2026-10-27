@@ -3265,7 +3265,7 @@ func websocketReachabilityCheckFromProvider(providerID string, provider *model.P
 	}
 	details = append(details, fmt.Sprintf("connect timeout: %d ms", provider.EffectiveWebsocketConnectTimeout().Milliseconds()))
 	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
-	apiProvider, err := runtimeProvider.APIProvider()
+	apiProvider, apiAuth, err := runtimeProvider.APIProviderAndAuth()
 	if err != nil {
 		return websocketProbeWarning("Responses WebSocket provider setup failed", details, "provider setup failed: "+err.Error())
 	}
@@ -3286,7 +3286,7 @@ func websocketReachabilityCheckFromProvider(providerID string, provider *model.P
 	}
 	details = append(details, "endpoint: "+endpoint)
 	details = append(details, websocketDNSAddressFamilyDetails(endpoint)...)
-	headers, err := websocketProbeHeaders(context.Background(), endpoint, apiProvider.Headers, runtimeProvider)
+	headers, err := websocketProbeHeaders(context.Background(), endpoint, apiProvider.Headers, apiAuth)
 	if err != nil {
 		return websocketProbeWarning("Responses WebSocket auth could not be resolved", details, "auth resolution failed: "+err.Error())
 	}
@@ -3393,15 +3393,8 @@ func websocketImmediateCloseForDoctor(conn *websocket.Conn, grace time.Duration)
 	return nil, err
 }
 
-func websocketProbeHeaders(ctx context.Context, endpoint string, providerHeaders http.Header, runtimeProvider model.RuntimeProvider) (http.Header, error) {
+func websocketProbeHeaders(ctx context.Context, endpoint string, providerHeaders http.Header, authHeaders model.AuthHeaders) (http.Header, error) {
 	headers := cloneHTTPHeaderForDoctor(providerHeaders)
-	if runtimeProvider == nil {
-		return headers, nil
-	}
-	authHeaders, err := runtimeProvider.APIAuth()
-	if err != nil {
-		return nil, err
-	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err

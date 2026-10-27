@@ -79,7 +79,7 @@ func ResolveProviderAuth(snapshot *auth.AuthDotJSON, provider ProviderInfo) (Aut
 	if bearer, err := bearerTokenForProvider(provider); err != nil {
 		return AuthHeaders{}, err
 	} else if bearer != "" {
-		return BearerAuthHeaders(bearer, "", false), nil
+		return BearerAuthHeaders(bearer, "", auth.IsFedrampAPIKey(bearer)), nil
 	}
 	// Rust #39214: providers that do not require OpenAI auth and have no
 	// configured auth must not inherit ambient authentication headers
@@ -99,7 +99,9 @@ func ResolveProviderAuth(snapshot *auth.AuthDotJSON, provider ProviderInfo) (Aut
 func AuthHeadersFromAuth(snapshot auth.AuthDotJSON) (AuthHeaders, error) {
 	switch (&snapshot).Mode() {
 	case "api-key":
-		return BearerAuthHeaders(snapshot.OpenAIAPIKey, "", false), nil
+		// A FedRAMP issuance marker routes the request and adds the header while
+		// the complete key still authenticates (Rust #57178).
+		return BearerAuthHeaders(snapshot.OpenAIAPIKey, "", auth.IsFedrampAPIKey(snapshot.OpenAIAPIKey)), nil
 	case "personal-access-token":
 		return BearerAuthHeaders(snapshot.PersonalAccessToken, accountIDFromMap(snapshot.Tokens), fedrampFromMap(snapshot.Tokens)), nil
 	case "agent-identity":

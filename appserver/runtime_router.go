@@ -1302,8 +1302,13 @@ func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadRe
 	usesAPIKeyAuth := providerInfo.HasProviderAPIKey() || authSnapshot.Mode() == "api-key"
 	if supportsAPIKeyModels && usesAPIKeyAuth && strings.TrimSpace(providerInfo.ModelCatalogURL) == "" && strings.TrimSpace(providerInfo.BaseURL) == "" {
 		// Codex model metadata is served by the Codex backend, not the
-		// public /v1/models API (Rust #44392). Inference is unaffected.
-		apiProvider.BaseURL = model.ChatGPTCodexBaseURL
+		// public /v1/models API (Rust #44392). Inference is unaffected, and a
+		// FedRAMP credential selects the government host (Rust #57178).
+		discoveryURL, err := model.ModelDiscoveryBaseURL(*providerInfo, authSnapshot)
+		if err != nil {
+			return nil, err
+		}
+		apiProvider.BaseURL = discoveryURL
 	}
 	endpoint := model.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
 	endpoint.CatalogURL = strings.TrimSpace(providerInfo.ModelCatalogURL)
@@ -1769,10 +1774,11 @@ func (r *RuntimeRouter) configureAnalyticsFromConfig(codexHome string, options *
 	if !cfg.AnalyticsEnabled(defaultEnabled) {
 		return
 	}
+	backendURL := cfg.ChatGPTBackendURL()
 	r.services.Analytics = telemetry.NewAnalyticsEventsClient(telemetry.AnalyticsEventsClientOptions{
-		BaseURL:          cfg.ChatGPTBaseURL(),
+		BaseURL:          backendURL.Resolve("", ""),
 		HTTPClient:       r.httpClientForConfig(cfg),
-		AuthorizeRequest: r.analyticsAuthorizeRequest(codexHome),
+		AuthorizeRequest: r.analyticsAuthorizeRequest(codexHome, backendURL),
 	})
 }
 
@@ -2044,7 +2050,7 @@ func (r *RuntimeRouter) requestSpanTrace(request *Request) *protocol.W3CTraceCon
 	return &protocol.W3CTraceContext{Traceparent: traceparent, Tracestate: tracestate}
 }
 
-func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.AnalyticsAuthorizeRequestFunc {
+func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string, backendURL config.ChatGPTBackendURL) telemetry.AnalyticsAuthorizeRequestFunc {
 	return func(ctx context.Context, request *http.Request, body []byte) (bool, error) {
 		if r == nil {
 			return false, nil
@@ -2055,6 +2061,17 @@ func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.An
 		}
 		if !authUsesCodexBackend(&resolved.Auth) {
 			return false, nil
+		}
+		// Rust #57178 resolves the analytics destination from the same auth that
+		// signs the request, so a credential-dependent host cannot mismatch.
+		if request != nil && request.URL != nil {
+			target := strings.TrimRight(backendURL.Resolve(resolved.Auth.Mode(), resolved.Auth.OpenAIAPIKey), "/") + "/codex/analytics-events/events"
+			if parsed, parseErr := url.Parse(target); parseErr == nil {
+				request.URL.Scheme = parsed.Scheme
+				request.URL.Host = parsed.Host
+				request.URL.Path = parsed.Path
+				request.Host = ""
+			}
 		}
 		headers, err := model.AuthHeadersFromAuth(resolved.Auth)
 		if err != nil {
@@ -13250,7 +13267,7 @@ func (r *RuntimeRouter) accountBackendClient(snapshot *auth.AuthDotJSON) (*chatg
 		return nil, err
 	}
 	return chatgptapi.NewCloudClient(&chatgptapi.CloudClientOptions{
-		BaseURL:    r.chatGPTBaseURL(),
+		BaseURL:    r.chatGPTBackendURL().Resolve(snapshot.Mode(), snapshot.OpenAIAPIKey),
 		Headers:    headers.Headers,
 		HTTPClient: r.accountHTTPClient(),
 	}), nil
@@ -13683,15 +13700,20 @@ func (r *RuntimeRouter) accountHTTPClient() chatgptapi.HTTPDoer {
 }
 
 func (r *RuntimeRouter) chatGPTBaseURL() string {
+	return r.chatGPTBackendURL().Resolve("", "")
+}
+
+// chatGPTBackendURL reads the configured backend routing. The returned value
+// still needs the request's credential snapshot to resolve a default.
+func (r *RuntimeRouter) chatGPTBackendURL() config.ChatGPTBackendURL {
 	if r == nil || r.services.Config == nil {
-		return config.DefaultChatGPTBaseURL
+		return config.ChatGPTBackendURL{}
 	}
 	read, err := r.services.Config.Read(&config.ConfigReadParams{})
 	if err != nil || read == nil {
-		return config.DefaultChatGPTBaseURL
+		return config.ChatGPTBackendURL{}
 	}
-	cfg := &config.Config{Values: read.Config}
-	return cfg.ChatGPTBaseURL()
+	return config.NewConfigFromRead(read).ChatGPTBackendURL()
 }
 
 type accountRequestError struct {
@@ -16193,11 +16215,7 @@ func (r *RuntimeRouter) historyNotesBackendForTurn(cfg *config.Config, params *t
 		return nil, "", "", false
 	}
 	runtimeProvider := model.CreateRuntimeProviderForID(modelProviderConfig.ProviderID, *providerInfo, &resolved.Auth)
-	apiProvider, err := runtimeProvider.APIProvider()
-	if err != nil {
-		return nil, "", "", false
-	}
-	authHeaders, err := runtimeProvider.APIAuth()
+	apiProvider, authHeaders, err := runtimeProvider.APIProviderAndAuth()
 	if err != nil {
 		return nil, "", "", false
 	}

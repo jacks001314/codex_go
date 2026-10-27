@@ -40,11 +40,7 @@ func (r *RuntimeRouter) imageGenerationOptionsForTurn(cfg *config.Config, params
 	if !appImageGenerationStandaloneEnabled(*providerInfo, runtimeProvider.Capabilities(), modelInfo, snapshot, cfg.FeatureSettings()) {
 		return nil, nil
 	}
-	apiProvider, err := runtimeProvider.APIProvider()
-	if err != nil {
-		return nil, err
-	}
-	authHeaders, err := runtimeProvider.APIAuth()
+	apiProvider, authHeaders, err := runtimeProvider.APIProviderAndAuth()
 	if err != nil {
 		return nil, err
 	}

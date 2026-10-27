@@ -43,11 +43,7 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 	if !appStandaloneWebSearchEnabled(runtimeProvider.Capabilities(), modelInfo, cfg.FeatureSettings()) {
 		return nil, nil
 	}
-	apiProvider, err := runtimeProvider.APIProvider()
-	if err != nil {
-		return nil, err
-	}
-	authHeaders, err := runtimeProvider.APIAuth()
+	apiProvider, authHeaders, err := runtimeProvider.APIProviderAndAuth()
 	if err != nil {
 		return nil, err
 	}

@@ -58,12 +58,10 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	explicitBearer := apiKey != "" || strings.TrimSpace(provider.ExperimentalBearerToken) != ""
 
 	authMode := ""
-	authBackendMode := ""
 	accountID, userID, email, plan, rawPlan := "", "", "", "", ""
 	fedramp := false
 	if authSnapshot != nil {
 		authMode = authSnapshot.Mode()
-		authBackendMode = authSnapshot.BackendMode()
 		accountID = auth.AccountIDFromAuthForRestrictions(authSnapshot)
 		userID = auth.ChatGPTUserIDFromAuth(authSnapshot)
 		if account := auth.AccountFromAuth(authSnapshot); account != nil {
@@ -91,10 +89,11 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 		stableAccount = hasStableAccountAuthMode(authMode) && accountID != "" && (userID != "" || email != "")
 	}
 
-	// Rust resolves the routing half through `provider_info.to_api_provider`: the
+	// Rust resolves the routing half through `resolve_api_provider`: the
 	// effective backend auth mode (externally managed ChatGPT tokens normalize to
-	// `chatgpt`) selects the default base URL and the provider header map.
-	apiProvider, err := provider.ToAPIProvider(authBackendMode)
+	// `chatgpt`) selects the default base URL and the provider header map, and a
+	// FedRAMP API key selects the government host.
+	apiProvider, err := ResolveAPIProvider(*provider, authSnapshot)
 	if err != nil {
 		return ""
 	}

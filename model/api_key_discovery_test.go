@@ -70,14 +70,17 @@ func TestAPIKeyDiscoveryRequiresAPIKeyAuthWithoutCommandAuth(t *testing.T) {
 }
 
 func TestConfiguredProviderRoutesAPIKeyModelDiscoveryToCodexBackend(t *testing.T) {
-	apiKeyAuth := &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}
 	for name, baseURL := range map[string]struct {
+		key  string
 		base string
 		want string
 	}{
-		"default openai base url": {"", ChatGPTCodexBaseURL},
-		"explicit base url":       {"https://example.com/codex", "https://example.com/codex"},
+		"default openai base url": {"sk-test", "", ChatGPTCodexBaseURL},
+		"fedramp key":             {"sk-proj-fedramp-synthetic-test-key", "", FedRAMPCodexBaseURL},
+		"explicit base url":       {"sk-test", "https://example.com/codex", "https://example.com/codex"},
+		"fedramp explicit base":   {"sk-proj-fedramp-synthetic-test-key", "https://example.com/codex", "https://example.com/codex"},
 	} {
+		apiKeyAuth := &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: baseURL.key}
 		provider := CreateRuntimeProvider(CreateOpenAIProvider(baseURL.base), apiKeyAuth)
 		configured, ok := provider.(*ConfiguredProvider)
 		if !ok {

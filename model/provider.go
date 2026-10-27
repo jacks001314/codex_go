@@ -77,6 +77,10 @@ type RuntimeProvider interface {
 	SupportsAttestation() bool
 	AccountState() (ProviderAccountState, error)
 	APIProvider() (APIProvider, error)
+	// APIProviderAndAuth resolves routing and authentication from the same
+	// credential snapshot so credential-dependent defaults cannot disagree with
+	// the credentials that authenticate the request (Rust #57178).
+	APIProviderAndAuth() (APIProvider, AuthHeaders, error)
 	RuntimeBaseURL() (string, error)
 	APIAuth() (AuthHeaders, error)
 	// GatewayAuthManager returns the provider's gateway credential manager, or
@@ -227,16 +231,24 @@ func (p *ConfiguredProvider) AccountState() (ProviderAccountState, error) {
 }
 
 func (p *ConfiguredProvider) APIProvider() (APIProvider, error) {
-	authMode := ""
-	if p.auth != nil {
-		authMode = p.auth.BackendMode()
-	}
-	apiProvider, err := p.info.ToAPIProvider(authMode)
+	apiProvider, err := ResolveAPIProvider(p.info, p.auth)
 	if err != nil {
 		return APIProvider{}, err
 	}
 	apiProvider.ApplyManagedResidency(p.residency)
 	return apiProvider, nil
+}
+
+func (p *ConfiguredProvider) APIProviderAndAuth() (APIProvider, AuthHeaders, error) {
+	apiProvider, err := p.APIProvider()
+	if err != nil {
+		return APIProvider{}, AuthHeaders{}, err
+	}
+	authHeaders, err := p.APIAuth()
+	if err != nil {
+		return APIProvider{}, AuthHeaders{}, err
+	}
+	return apiProvider, authHeaders, nil
 }
 
 func (p *ConfiguredProvider) RuntimeBaseURL() (string, error) {
@@ -298,7 +310,11 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 	if supportsAPIKeyModels && usesAPIKeyAuth && strings.TrimSpace(p.info.ModelCatalogURL) == "" && strings.TrimSpace(p.info.BaseURL) == "" {
 		// Codex model metadata is served by the Codex backend, not the public
 		// /v1/models API (Rust #44392). Inference keeps its own base URL.
-		apiProvider.BaseURL = ChatGPTCodexBaseURL
+		discoveryURL, err := ModelDiscoveryBaseURL(p.info, p.auth)
+		if err != nil {
+			return NewStaticModelsManager(BundledModelsResponse())
+		}
+		apiProvider.BaseURL = discoveryURL
 	}
 	endpoint := NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
 	endpoint.CatalogURL = strings.TrimSpace(p.info.ModelCatalogURL)
@@ -456,6 +472,18 @@ func (p *AmazonBedrockProvider) APIProvider() (APIProvider, error) {
 		info.BaseURL = baseURL
 	}
 	return info.ToAPIProvider("")
+}
+
+func (p *AmazonBedrockProvider) APIProviderAndAuth() (APIProvider, AuthHeaders, error) {
+	apiProvider, err := p.APIProvider()
+	if err != nil {
+		return APIProvider{}, AuthHeaders{}, err
+	}
+	authHeaders, err := p.APIAuth()
+	if err != nil {
+		return APIProvider{}, AuthHeaders{}, err
+	}
+	return apiProvider, authHeaders, nil
 }
 
 func (p *AmazonBedrockProvider) RuntimeBaseURL() (string, error) {

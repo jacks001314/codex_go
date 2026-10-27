@@ -361,8 +361,30 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 		return nil, err
 	}
 	websocketProvider.ApplyManagedResidency(managedResidencyForConfig(cfg))
-	if baseURL := stringConfigValue(cfg, "experimental_realtime_ws_base_url"); baseURL != "" {
-		websocketProvider.BaseURL = baseURL
+	transportType := "websocket"
+	if params.Transport != nil && strings.TrimSpace(params.Transport.Type) != "" {
+		transportType = strings.TrimSpace(params.Transport.Type)
+	}
+	// Rust #57178: a FedRAMP API key selects the government WebSocket host
+	// unless an explicit realtime endpoint overrides it. Routing and the
+	// Authorization header must come from this same key.
+	apiKey := ""
+	if transportType == "websocket" {
+		resolvedKey, keyErr := realtimeAPIKey(snapshot, providerInfo)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		apiKey = resolvedKey
+		if baseURL := stringConfigValue(cfg, "experimental_realtime_ws_base_url"); baseURL != "" {
+			websocketProvider.BaseURL = baseURL
+		} else {
+			realtimeAuth := auth.FromAPIKey(apiKey)
+			resolved, resolveErr := model.ResolveAPIProvider(*providerInfo, &realtimeAuth)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			websocketProvider.BaseURL = resolved.BaseURL
+		}
 	}
 	sidebandBaseURL := "https://api.openai.com/v1"
 	if baseURL := stringConfigValue(cfg, "experimental_realtime_ws_base_url"); baseURL != "" {
@@ -393,16 +415,11 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 	}
 	commonHeaders := realtimeThreadHeaders(record, params.ThreadID)
 	mergeHTTPHeaders(headers, commonHeaders)
-	transportType := "websocket"
-	if params.Transport != nil && strings.TrimSpace(params.Transport.Type) != "" {
-		transportType = strings.TrimSpace(params.Transport.Type)
-	}
 	if transportType == "websocket" {
-		apiKey, keyErr := realtimeAPIKey(snapshot, providerInfo)
-		if keyErr != nil {
-			return nil, keyErr
-		}
 		headers.Set("Authorization", "Bearer "+apiKey)
+		if auth.IsFedrampAPIKey(apiKey) {
+			headers.Set("X-OpenAI-Fedramp", "true")
+		}
 	} else {
 		headers.Del("Authorization")
 	}

@@ -2142,7 +2142,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		return nil, err
 	}
 	if strings.TrimSpace(profile) != "" {
-		if err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
+		if _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
 			return nil, err
 		}
 	}

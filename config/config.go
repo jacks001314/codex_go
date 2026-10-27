@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/auth"
 	"codex_go/keymapschema"
 	"codex_go/network"
 
@@ -49,6 +50,11 @@ type Config struct {
 	// ConfigLayerStack::cloud_config_binding). It does not change the
 	// configuration contents and is never serialized.
 	cloudConfigBinding *CloudConfigBundleBinding
+	// chatgptBaseURLExplicit records that a configuration layer above packaged
+	// defaults selected chatgpt_base_url (Rust #57178
+	// Config::chatgpt_base_url_is_explicit). An explicit commercial default must
+	// not be replaced by a credential-dependent government endpoint.
+	chatgptBaseURLExplicit bool
 }
 
 type ForcedLoginMethod string
@@ -273,6 +279,10 @@ func ResolveResumeCWD(mode ResumeCWDMode, currentCWD, sessionCWD string) string 
 
 const DefaultChatGPTBaseURL = "https://chatgpt.com/backend-api/"
 
+// FedRAMPChatGPTBaseURL is the default ChatGPT backend for API keys with a
+// FedRAMP issuance marker (Rust #57178).
+const FedRAMPChatGPTBaseURL = "https://gov.chatgpt.com/backend-api/"
+
 const DefaultProjectDocMaxBytes = 32 * 1024
 
 type LoadOptions struct {
@@ -335,6 +345,9 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		return nil, err
 	}
 	allowedSymlinkedCodexHome := resolveAllowedSymlinkedCodexHome(codexHome, userValues)
+	// Packaged defaults always supply a URL, so explicitness needs the layers
+	// above them rather than the merged value (Rust #57178).
+	chatgptBaseURLExplicit := configValuePresent(userValues, "chatgpt_base_url")
 	mergeConfigMaps(values, userValues)
 	profile := ""
 	cwd := ""
@@ -368,6 +381,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			if exists {
 				resolveProjectRelativeConfigValues(projectValues, filepath.Dir(path))
 				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
+				chatgptBaseURLExplicit = chatgptBaseURLExplicit || configValuePresent(projectValues, "chatgpt_base_url")
 				mergeConfigMaps(values, projectValues)
 			}
 		}
@@ -381,9 +395,11 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		isProjectless = projectDiscoveryIsProjectless(cwd, codexHome, projectRootMarkersFromValues(discoveryValues))
 	}
 	if profile != "" {
-		if err := applyProfileLayer(codexHome, values, profile); err != nil {
+		profileSetsBaseURL, err := applyProfileLayer(codexHome, values, profile)
+		if err != nil {
 			return nil, err
 		}
+		chatgptBaseURLExplicit = chatgptBaseURLExplicit || profileSetsBaseURL
 	}
 	if opts != nil && opts.IncludeManagedConfig {
 		if shouldIgnoreDefaultManagedConfig(opts.ManagedConfigPath) {
@@ -397,6 +413,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 				return nil, err
 			}
 			if exists {
+				chatgptBaseURLExplicit = chatgptBaseURLExplicit || configValuePresent(managedValues, "chatgpt_base_url")
 				mergeConfigMaps(values, managedValues)
 			}
 		}
@@ -431,12 +448,16 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := applyManagedConstrainedOverrides(values, requirements); err != nil {
 		return nil, err
 	}
+	if requirements != nil && requirements.ChatgptBaseURL != nil {
+		chatgptBaseURLExplicit = true
+	}
 	cfg := &Config{
 		Values:                    values,
 		Requirements:              requirements,
 		allowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
 		isProjectless:             isProjectless,
 		cloudConfigBinding:        cloudConfigBinding,
+		chatgptBaseURLExplicit:    chatgptBaseURLExplicit,
 	}
 	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
 		return nil, err
@@ -2521,6 +2542,63 @@ func (c *Config) ChatGPTBaseURL() string {
 	return value
 }
 
+func configValuePresent(values map[string]any, key string) bool {
+	if values == nil {
+		return false
+	}
+	_, ok := values[key]
+	return ok
+}
+
+// ChatGPTBackendURL is a ChatGPT backend endpoint that remembers whether
+// configuration supplied an override (Rust ChatgptBaseUrl, #57178).
+type ChatGPTBackendURL struct {
+	// configured is empty for the default endpoint. A non-empty value keeps the
+	// configured URL across credential changes, including an explicit
+	// commercial default.
+	configured string
+}
+
+// ChatGPTBackendURL returns backend routing that resolves defaults against the
+// credentials that will authenticate the request.
+func (c *Config) ChatGPTBackendURL() ChatGPTBackendURL {
+	if c == nil {
+		return ChatGPTBackendURL{}
+	}
+	value := stringFromConfigValue(c.Values["chatgpt_base_url"])
+	if value == "" {
+		value = DefaultChatGPTBaseURL
+	}
+	if !c.chatgptBaseURLExplicit && value == DefaultChatGPTBaseURL {
+		return ChatGPTBackendURL{}
+	}
+	return ChatGPTBackendURL{configured: value}
+}
+
+// NewConfigFromRead returns the runtime view of an effective configuration
+// read. Origin metadata identifies an explicitly configured chatgpt_base_url,
+// because packaged defaults are excluded from origins (Rust #38179).
+func NewConfigFromRead(read *ConfigReadResponse) *Config {
+	if read == nil {
+		return &Config{Values: map[string]any{}}
+	}
+	_, explicit := read.Origins["chatgpt_base_url"]
+	return &Config{Values: read.Config, chatgptBaseURLExplicit: explicit}
+}
+
+// Resolve returns the backend URL for the credentials that authenticate the
+// request. Only an API key with a FedRAMP issuance marker selects the
+// government default, and only when configuration did not override the URL.
+func (u ChatGPTBackendURL) Resolve(authMode string, apiKey string) string {
+	if u.configured != "" {
+		return u.configured
+	}
+	if authMode == "api-key" && auth.IsFedrampAPIKey(apiKey) {
+		return FedRAMPChatGPTBaseURL
+	}
+	return DefaultChatGPTBaseURL
+}
+
 // ProjectDocMaxBytes is the aggregate project-instruction budget. The current
 // local runtime has one project filesystem; remote environment filesystems will
 // share this same budget when executor-scoped instruction loading is wired in.
@@ -3480,27 +3558,31 @@ func resolveConfigFileRelativePath(value string, baseDir string) string {
 	return filepath.Clean(filepath.Join(baseDir, value))
 }
 
-func applyProfileLayer(codexHome string, values map[string]any, profile string) error {
+// applyProfileLayer merges a selected profile and reports whether that profile
+// selected chatgpt_base_url.
+func applyProfileLayer(codexHome string, values map[string]any, profile string) (bool, error) {
 	profilePath, err := ResolveProfileConfigPath(codexHome, profile)
 	if err != nil {
-		return err
+		return false, err
 	}
 	profileValues, exists, err := loadConfigFileIfExists(profilePath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if exists {
+		setsBaseURL := configValuePresent(profileValues, "chatgpt_base_url")
 		mergeConfigMaps(values, profileValues)
-		return nil
+		return setsBaseURL, nil
 	}
 	if legacyProfile, ok, err := legacyProfileValues(values, profile); ok || err != nil {
 		if err != nil {
-			return err
+			return false, err
 		}
+		setsBaseURL := configValuePresent(legacyProfile, "chatgpt_base_url")
 		mergeConfigMaps(values, legacyProfile)
-		return nil
+		return setsBaseURL, nil
 	}
-	return fmt.Errorf("profile %q not found", profile)
+	return false, fmt.Errorf("profile %q not found", profile)
 }
 
 func legacyProfileValues(values map[string]any, profile string) (map[string]any, bool, error) {

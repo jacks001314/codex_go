@@ -122,6 +122,44 @@ voice = "cove"
 	}
 }
 
+// Mirrors Rust #57178: realtime WebSocket startup routes a FedRAMP API key to
+// the government host and sends the routing header with the unchanged key.
+func TestRealtimeStartOptionsRouteFedrampAPIKeyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[features]\nrealtime_conversation = true\n"), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+	const apiKey = "sk-proj-fedramp-synthetic-test-key"
+	t.Setenv(auth.OpenAIAPIKeyEnv, apiKey)
+
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	t.Cleanup(func() { _ = router.Close() })
+	options, err := router.realtimeStartOptions(&realtime.StartParams{
+		ThreadID:       "thread-fedramp",
+		OutputModality: realtime.OutputAudio,
+	})
+	if err != nil {
+		t.Fatalf("realtimeStartOptions: %v", err)
+	}
+	if options == nil || options.Backend == nil {
+		t.Fatal("realtimeStartOptions returned no backend")
+	}
+	if got := options.Backend.WebsocketBaseURL; got != model.FedRAMPAPIBaseURL {
+		t.Fatalf("websocket base URL = %q, want %q", got, model.FedRAMPAPIBaseURL)
+	}
+	if got := options.Backend.SidebandBaseURL; got != "https://api.openai.com/v1" {
+		t.Fatalf("sideband base URL = %q, want commercial default", got)
+	}
+	for key, want := range map[string]string{
+		"Authorization":    "Bearer " + apiKey,
+		"X-OpenAI-Fedramp": "true",
+	} {
+		if got := options.Backend.Headers.Get(key); got != want {
+			t.Fatalf("websocket header %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestRealtimeV3HandoffStartsTurnAndWritesCodexOutputBack(t *testing.T) {
 	modelRequests := make(chan map[string]any, 1)
 	modelServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
