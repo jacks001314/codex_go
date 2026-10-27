@@ -121,6 +121,11 @@ func interactiveStartupConfigWarnings(codexHome string, cwd string, theme string
 	if themeWarning := codextui.ThemeStartupWarning(theme, codexHome); themeWarning != "" {
 		warnings = append(warnings, themeWarning)
 	}
+	// Rust #57226 inserts the Linux-only NFS migration warning into the same
+	// coalesced startup warnings entry, but only for local workspaces.
+	if nfsWarning := nfsMigrationWarningForHome(codexHome); nfsWarning != "" {
+		warnings = append(warnings, nfsWarning)
+	}
 	return warnings
 }
 
