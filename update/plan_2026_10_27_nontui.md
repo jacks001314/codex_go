@@ -430,12 +430,19 @@ interval is the metric's only consumer.
 
 ## Pending in this window
 
-- Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
-  triaged: high-value candidates include `#57311` rollouts trace versions,
-  `#57280` full MCP results, `#57276` permission
-  world-state, `#57171` runtime auth, and
-  `#56036`/`#56049` remote credentials. The `feedback/save` and
-  `thread/memory/read` schema drift is fixed by the entries above.
+- About 170 non-TUI commits in `update/_cls_core.tsv` still need triage.
+  The largest identified gaps, in rough value order, are:
+  `#57218`/`#57220` negotiated zstd plus compression statistics in the remote
+  app-server client (Go only compresses on the server side), `#57178` FedRAMP
+  key routing across provider, model discovery, analytics, and realtime,
+  `#55591` per-turn Guardian approval blocking time, `#56461`/`#55973`
+  message-board silent append and host-selected tool catalogs (the append tool
+  depends on selection), `#57201`/`#57207` critical-path capture, `#55958`
+  provider catalog preservation across failed refreshes, `#55957`/`#55968`
+  cloud catalog refresh on auth change and failure backoff, `#56530` catalog
+  size histograms, `#55631` frozen cloud skill snapshots, and `#55847`
+  retained-analytics bounds. Items already verified as having no Go
+  counterpart are listed above.
 
 ## Verification
 
