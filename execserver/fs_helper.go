@@ -482,13 +482,55 @@ func fsHelperReadableRoots(executable string) []string {
 }
 
 func fsHelperEnvironment() map[string]string {
+	return fsHelperEnvironmentFrom(os.Environ(), runtime.GOOS)
+}
+
+// fsHelperEnvironmentFrom filters the helper's launch environment like Rust's
+// `helper_env_from_vars` (exec-server/src/fs_sandbox.rs): a small portable
+// allowlist, plus the platform-specific entries the sandboxed helper needs.
+// Windows environment names are case-insensitive, so SystemDrive, SystemRoot
+// and LOCALAPPDATA match in any spelling and keep the host's own casing
+// (Rust #56468: MXC needs SystemRoot to create the helper process).
+func fsHelperEnvironmentFrom(vars []string, goos string) map[string]string {
 	env := map[string]string{}
 	for _, key := range []string{"PATH", "TMPDIR", "TMP", "TEMP"} {
-		if value, ok := os.LookupEnv(key); ok {
+		if value, ok := lookupEnvVar(vars, key, false); ok {
 			env[key] = value
 		}
 	}
+	if goos == "windows" {
+		for _, key := range []string{"PATH", "SystemDrive", "SystemRoot", "LOCALAPPDATA"} {
+			for _, candidate := range vars {
+				name, value, found := strings.Cut(candidate, "=")
+				if !found || !strings.EqualFold(name, key) {
+					continue
+				}
+				env[name] = value
+				break
+			}
+		}
+	}
+	// CoreFoundation consults this before falling back to user lookup during
+	// helper startup on macOS.
+	if goos == "darwin" {
+		if value, ok := lookupEnvVar(vars, "__CF_USER_TEXT_ENCODING", false); ok {
+			env["__CF_USER_TEXT_ENCODING"] = value
+		}
+	}
 	return env
+}
+
+func lookupEnvVar(vars []string, key string, caseInsensitive bool) (string, bool) {
+	for _, candidate := range vars {
+		name, value, found := strings.Cut(candidate, "=")
+		if !found {
+			continue
+		}
+		if name == key || (caseInsensitive && strings.EqualFold(name, key)) {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func fsHelperCodexHome() string {
