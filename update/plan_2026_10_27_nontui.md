@@ -117,6 +117,7 @@ TUI lane and are not modified here.
 | `#55856` | Managed app-server and updater stderr logs go through one bounded, nonblocking worker (64 queued records, 16 KiB per record, lossy); a live log above 1 MiB keeps its latest 256 KiB in `.log.previous` and is truncated in place with append-only handles, and updater handoff pauses predecessor pruning until ownership is restored | `appserverdaemon/stderr_log.go`, `appserverdaemon/stderr_append_unix.go`, `appserverdaemon/stderr_append_windows.go`, `appserverdaemon/daemon.go`, `appserverdaemon/migration.go`, `appserverdaemon/update_loop.go`, `appserverdaemon/pid_shutdown_windows.go`, `app/app.go`, like-Rust tests |
 | `#55498` | Noise relay handshakes emit correlated, credential-free diagnostics: executor rejections and pending-validation resets carry a classified reason and registry HTTP status in a normalized UUID stream id, capped at 100 per minute per relay connection plus one suppression marker; harness failures and completions add elapsed time and connection identifiers, WebSocket read failures are classified from typed errors, and valid stream UUIDs are forwarded to key validation as `x-codex-noise-stream-id` | `execserver/remote_relay.go`, `execserver/remote_harness.go`, like-Rust tests |
 | `#56127` | EMA MCP auth status inspection is owner-checked and never waits for account refresh; one lazy read of the account-scoped IdP grant is shared across admitted EMA servers, and a missing grant or read error is cached so every server reports the same state without repeating storage work | `mcp/ema_runtime.go`, like-Rust tests |
+| `#56081` | Decrypted local secret snapshots are cached for every namespace: managed, Codex auth and MCP OAuth keep at most one snapshot process-wide (gateway snapshots stay with their backend), reuse requires the same file path, ciphertext hash and keyring passphrase hash, concurrent misses decrypt once, writes invalidate a matching snapshot, and every read still inspects the file and keyring | `safety/secrets.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -159,6 +160,13 @@ Grounding notes:
   `AttachEnterpriseMCPAuthorization` shares one lazy read per (store mode,
   credential name, issuer) across admitted EMA servers, caching success,
   missing-grant and read-error results alike.
+- `#56081` targets Rust's `codex-secrets` crate, and Go's `safety` local backend
+  is the equivalent (no decrypted cache existed before, so the snapshot cache is
+  introduced here rather than extended). Go's `mcp` OAuth and `auth` gateway
+  stores write the same namespaces directly; they keep their own storage paths,
+  and the `safety` namespace caches cover every consumer of the local secret
+  backend. Cached plaintext is cloned before being returned, matching Rust's
+  `Arc` clone, so a caller saving a mutated snapshot cannot corrupt the cache.
 - `#56124`'s reviewer-event forwarding is structurally N/A: Rust installs a
   parent observer on a private Guardian review *session* and forwards its
   `RawResponseItem`/`TurnAborted` events under the reviewer's own thread and
@@ -1313,5 +1321,12 @@ deduplication for tool outputs.
   the configured credential status and request applier, owner changes no longer
   reporting the previous account's grant, and a logged-out account reporting no
   grant.
+- For `#56081`: `go test ./safety -count=1` (19.3s), `go test ./auth -run Gateway -count=1`,
+  and `go vet ./safety` pass. Coverage pins one decryption for concurrent reads
+  through two backends in each process-wide namespace, a backend-scoped gateway
+  snapshot, invalidation on writes, external ciphertext replacement, file
+  removal, invalid ciphertext, key rotation, a keyring failure never serving
+  cached plaintext, one snapshot per namespace across homes, and namespace
+  isolation.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.

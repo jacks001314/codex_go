@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"codex_go/keyring"
 )
@@ -146,6 +147,9 @@ type LocalBackend struct {
 	codexHome string
 	namespace LocalNamespace
 	keyring   keyring.Store
+	// gatewayCache holds the one gateway OAuth snapshot this backend may reuse.
+	// The other namespaces share a process-wide cache instead (Rust #56081).
+	gatewayCache *localFileCache
 }
 
 func NewLocalSecretBackend(codexHome string, namespace LocalNamespace) *LocalBackend {
@@ -158,7 +162,7 @@ func NewLocalSecretBackendWithKeyring(codexHome string, namespace LocalNamespace
 	if namespace == "" {
 		namespace = LocalNamespaceManaged
 	}
-	return &LocalBackend{codexHome: codexHome, namespace: namespace, keyring: store}
+	return &LocalBackend{codexHome: codexHome, namespace: namespace, keyring: store, gatewayCache: &localFileCache{}}
 }
 
 func (b *LocalBackend) Set(scope *SecretScope, name *SecretName, value string) error {
@@ -225,6 +229,63 @@ type localFile struct {
 	Secrets map[string]string `json:"secrets"`
 }
 
+// cachedLocalFile is one decrypted snapshot. A snapshot is reusable only while
+// the file path, ciphertext and keyring passphrase still match (Rust #56081).
+type cachedLocalFile struct {
+	path           string
+	ciphertextHash [sha256.Size]byte
+	passphraseHash [sha256.Size]byte
+	file           *localFile
+}
+
+type localFileCache struct {
+	mu     sync.Mutex
+	cached *cachedLocalFile
+}
+
+var (
+	// Each namespace keeps at most one snapshot process-wide. Gateway snapshots
+	// are scoped to their backend so independent gateways cannot evict each
+	// other's plaintext.
+	managedSecretsCache   = &localFileCache{}
+	codexAuthSecretsCache = &localFileCache{}
+	mcpOAuthSecretsCache  = &localFileCache{}
+)
+
+func (b *LocalBackend) decryptedCache() *localFileCache {
+	switch b.namespace {
+	case LocalNamespaceCodexAuth:
+		return codexAuthSecretsCache
+	case LocalNamespaceMCPOAuth:
+		return mcpOAuthSecretsCache
+	case LocalNamespaceGatewayOAuth:
+		return b.gatewayCache
+	default:
+		return managedSecretsCache
+	}
+}
+
+// decryptSecrets is the scrypt-backed decryption seam; tests observe reuse by
+// counting calls.
+var decryptSecrets = decryptWithPassphrase
+
+func emptyLocalFile() *localFile {
+	return &localFile{Version: 1, Secrets: map[string]string{}}
+}
+
+// cloneLocalFile keeps cached plaintext immutable while callers mutate the
+// snapshot they are about to save.
+func cloneLocalFile(file *localFile) *localFile {
+	if file == nil {
+		return emptyLocalFile()
+	}
+	clone := &localFile{Version: file.Version, Secrets: make(map[string]string, len(file.Secrets))}
+	for key, value := range file.Secrets {
+		clone.Secrets[key] = value
+	}
+	return clone
+}
+
 func (b *LocalBackend) path() string {
 	return filepath.Join(b.codexHome, "secrets", string(b.namespace))
 }
@@ -233,7 +294,7 @@ func (b *LocalBackend) load() (*localFile, error) {
 	path := b.path()
 	ciphertext, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return &localFile{Version: 1, Secrets: map[string]string{}}, nil
+		return emptyLocalFile(), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read secrets file at %s: %w", path, err)
@@ -242,7 +303,21 @@ func (b *LocalBackend) load() (*localFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	plaintext, err := decryptWithPassphrase(ciphertext, passphrase)
+	ciphertextHash := sha256.Sum256(ciphertext)
+	passphraseHash := sha256.Sum256([]byte(passphrase))
+	// Every read still checks the file and the keyring. Holding the namespace
+	// lock through decryption lets concurrent misses share one snapshot instead
+	// of repeating the scrypt work.
+	cache := b.decryptedCache()
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cached := cache.cached; cached != nil &&
+		cached.path == path &&
+		cached.ciphertextHash == ciphertextHash &&
+		cached.passphraseHash == passphraseHash {
+		return cloneLocalFile(cached.file), nil
+	}
+	plaintext, err := decryptSecrets(ciphertext, passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt secrets file at %s: %w", path, err)
 	}
@@ -258,6 +333,12 @@ func (b *LocalBackend) load() (*localFile, error) {
 	}
 	if file.Secrets == nil {
 		file.Secrets = map[string]string{}
+	}
+	cache.cached = &cachedLocalFile{
+		path:           path,
+		ciphertextHash: ciphertextHash,
+		passphraseHash: passphraseHash,
+		file:           cloneLocalFile(&file),
 	}
 	return &file, nil
 }
@@ -282,7 +363,18 @@ func (b *LocalBackend) save(file *localFile) error {
 	if err != nil {
 		return err
 	}
-	return writeSecretsFileAtomically(path, ciphertext)
+	if err := writeSecretsFileAtomically(path, ciphertext); err != nil {
+		return err
+	}
+	// A successful write invalidates any snapshot of this file so the next read
+	// decrypts the new ciphertext instead of serving the old plaintext.
+	cache := b.decryptedCache()
+	cache.mu.Lock()
+	if cache.cached != nil && cache.cached.path == path {
+		cache.cached = nil
+	}
+	cache.mu.Unlock()
+	return nil
 }
 
 func EnvironmentIDFromCWD(cwd string) string {
