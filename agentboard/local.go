@@ -103,13 +103,19 @@ type storedPost struct {
 // The shared SQLite configuration preserves the host's connection and journal
 // policy.
 func OpenLocalBoard(ctx context.Context, sqlite state.SqliteConfig, identity string, host Host) (*LocalAgentMessageBoard, error) {
+	return OpenLocalBoardWithOptions(ctx, sqlite, LocalBoardOptions{}, identity, host)
+}
+
+// OpenLocalBoardWithOptions reopens a board in the selected storage namespace
+// (Rust #55971). Callers must pass the same options when setup and deletion run.
+func OpenLocalBoardWithOptions(ctx context.Context, sqlite state.SqliteConfig, options LocalBoardOptions, identity string, host Host) (*LocalAgentMessageBoard, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if strings.TrimSpace(identity) == "" {
 		return nil, invalid("invalid board session identity")
 	}
-	path, err := localBoardDatabasePath(sqlite)
+	path, err := localBoardDatabasePath(sqlite, options)
 	if err != nil {
 		return nil, err
 	}
@@ -141,10 +147,14 @@ func (b *LocalAgentMessageBoard) Identity() string {
 	return b.identity
 }
 
-func localBoardDatabasePath(sqlite state.SqliteConfig) (string, error) {
+func localBoardDatabasePath(sqlite state.SqliteConfig, options LocalBoardOptions) (string, error) {
 	home := strings.TrimSpace(sqlite.Home())
 	if home == "" {
 		return "", fmt.Errorf("agent message-board storage home is required")
+	}
+	filename, err := options.databaseFile()
+	if err != nil {
+		return "", err
 	}
 	if resolved, err := filepath.EvalSymlinks(home); err == nil {
 		home = resolved
@@ -153,7 +163,7 @@ func localBoardDatabasePath(sqlite state.SqliteConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(absolute, AgentMessageBoardDatabaseFile), nil
+	return filepath.Join(absolute, filename), nil
 }
 
 // acquireLocalBoardPool returns the process-shared pool for a database path,
@@ -239,8 +249,18 @@ func closeLocalBoardPool(path string) {
 // including their posts and subscriptions. A child's ID does not match its
 // parent's board, so unload and archive must not call this.
 func DeleteLocalBoards(ctx context.Context, sqlite state.SqliteConfig, roots []string) error {
+	return DeleteLocalBoardsWithOptions(ctx, sqlite, LocalBoardOptions{}, roots)
+}
+
+// DeleteLocalBoardsWithOptions permanently removes boards from the selected
+// storage namespace (Rust #55971), leaving boards in other namespaces intact.
+func DeleteLocalBoardsWithOptions(ctx context.Context, sqlite state.SqliteConfig, options LocalBoardOptions, roots []string) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	filename, err := options.databaseFile()
+	if err != nil {
+		return err
 	}
 	if len(roots) == 0 {
 		return nil
@@ -249,14 +269,14 @@ func DeleteLocalBoards(ctx context.Context, sqlite state.SqliteConfig, roots []s
 	if home == "" {
 		return fmt.Errorf("agent message-board storage home is required")
 	}
-	rawPath := filepath.Join(home, AgentMessageBoardDatabaseFile)
+	rawPath := filepath.Join(home, filename)
 	if _, err := os.Stat(rawPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	path, err := localBoardDatabasePath(sqlite)
+	path, err := localBoardDatabasePath(sqlite, options)
 	if err != nil {
 		return err
 	}

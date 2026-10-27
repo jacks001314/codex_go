@@ -73,6 +73,12 @@ func (s *LocalBoardSetup) UnmarshalJSON(data []byte) error {
 // agents start. Identical retries are safe; conflicting templates, previously
 // used unpinned boards and permanently deleted boards are rejected.
 func ConfigureLocalBoard(ctx context.Context, sqlite state.SqliteConfig, boardID string, setup LocalBoardSetup) error {
+	return ConfigureLocalBoardWithOptions(ctx, sqlite, LocalBoardOptions{}, boardID, setup)
+}
+
+// ConfigureLocalBoardWithOptions pins a template in the selected storage
+// namespace (Rust #55971).
+func ConfigureLocalBoardWithOptions(ctx context.Context, sqlite state.SqliteConfig, options LocalBoardOptions, boardID string, setup LocalBoardSetup) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -87,7 +93,7 @@ func ConfigureLocalBoard(ctx context.Context, sqlite state.SqliteConfig, boardID
 	if err != nil {
 		return err
 	}
-	path, err := localBoardDatabasePath(sqlite)
+	path, err := localBoardDatabasePath(sqlite, options)
 	if err != nil {
 		return err
 	}

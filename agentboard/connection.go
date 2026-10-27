@@ -18,11 +18,22 @@ import (
 type LocalBoard struct {
 	sqlite   state.SqliteConfig
 	identity string
+	options  LocalBoardOptions
 }
 
 // NewLocalBoard binds one board identity to a SQLite configuration.
 func NewLocalBoard(sqlite state.SqliteConfig, identity string) *LocalBoard {
 	return &LocalBoard{sqlite: sqlite, identity: strings.TrimSpace(identity)}
+}
+
+// WithOptions selects the storage namespace shared by this board's
+// connections (Rust #55971). Reopening must pass the same options.
+func (b *LocalBoard) WithOptions(options LocalBoardOptions) *LocalBoard {
+	if b == nil {
+		return nil
+	}
+	b.options = options
+	return b
 }
 
 // ReadOnly returns a connection that may read and manage its own
@@ -86,7 +97,7 @@ func (c *LocalBoardConnection) Open(ctx context.Context, host Host) (*LocalAgent
 	if c == nil || c.board == nil || c.board.identity == "" {
 		return nil, invalid("invalid board connection")
 	}
-	board, err := OpenLocalBoard(ctx, c.board.sqlite, c.board.identity, host)
+	board, err := OpenLocalBoardWithOptions(ctx, c.board.sqlite, c.board.options, c.board.identity, host)
 	if err != nil {
 		return nil, err
 	}

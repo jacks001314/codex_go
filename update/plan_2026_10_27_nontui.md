@@ -80,6 +80,7 @@ TUI lane and are not modified here.
 | `#57272` | Code-mode output-truncation contracts: session options, wait/terminate budgets, `bounded-output-v1`, stdio and gRPC schemas | `codemode/protocol_types.go`, `codemode/protocol_host.go`, `codemode/session_provider.go`, `codemode/session_runtime.go`, `codemode/session_host.go`, `codemode/stdio_host.go`, `codemode/grpc/codex.code_mode.v1.proto`, regenerated `codemode/grpc` bindings, `codemode/protocol_truncation_test.go` |
 | `#55545` | Preserve undecodable compressed rollouts for diagnostics and log bounded read details | `appserver/rollout_archive.go`, `rollout/read_diagnostics.go`, `rollout/line_reader.go`, like-Rust tests |
 | `#55581` | A failed background compaction releases the foreground waiter so it falls back instead of hanging | `appserver/async_compaction.go`, like-Rust test |
+| `#55971` | Local message boards can select an isolated storage namespace | `agentboard/local_options.go`, `agentboard/local.go`, `agentboard/connection.go`, `agentboard/configure_local_board.go`, like-Rust test |
 
 Grounding notes:
 
@@ -662,9 +663,20 @@ compaction. Previously the runner exited without signalling and
 Rust's closed-oneshot panic. `TakeReady` now also clears the result channel
 when the candidate's history generation no longer matches, as Rust does.
 
+`#55971` details: `LocalBoardOptions{StorageNamespace}` selects board storage
+independently of tool selection and connections, and the zero value keeps the
+default namespace. Namespaces are 1–64 lowercase ASCII letters, digits, `_` or
+`-`; the default namespace still writes `agent_message_board_1.sqlite`, while a
+custom namespace writes `message_board_<namespace>_1.sqlite` so it cannot
+collide with another runtime database. `OpenLocalBoardWithOptions`,
+`ConfigureLocalBoardWithOptions`, `DeleteLocalBoardsWithOptions`, and
+`LocalBoard.WithOptions` all use the same selection, so setup, reopening, and
+permanent deletion stay on one namespace and leave other namespaces untouched.
+The existing non-options entry points delegate with the default options.
+
 ## Pending in this window
 
-- About 124 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 123 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -780,6 +792,9 @@ when the candidate's history generation no longer matches, as Rust does.
 - For `#56033`/`#55701`/`#56163`: `go test ./features ./config ./app -count=1`, `go test ./exec -run 'ReasoningEffort' -count=1`, `go test ./appserver -run 'ReasoningEffort|OAuth|MCP' -count=1`, and `go build ./...` pass.
 - For `#56371`: `go test ./config -run GuardianReviewTimeout -count=1` and `go test ./appserver -run 'GuardianReview(Timeout|Context|erUsesConfigured|erUnlimited)' -count=1` pass.
 - For `#55581`: `go test ./appserver -run 'AsyncCompaction' -count=1` passes; reverting the fix makes the new test block.
+- For `#55971`: `go test ./agentboard -count=1`,
+  `go test ./appserver -run 'MessageBoard|Board' -count=1`, and `go build ./...`
+  pass.
 - For `#55545`: `go test ./rollout -run 'CompressedRolloutReadDiagnostic|FirstFrameContentSize' -count=1`,
   `go test ./appserver -run 'FeedbackReadAttachment' -count=1`, the full
   `go test ./rollout -count=1`, and `go build ./...` pass.
