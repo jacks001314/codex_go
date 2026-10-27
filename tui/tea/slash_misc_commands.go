@@ -332,7 +332,7 @@ func (m *Model) renameCurrentThread(name string) bubbletea.Cmd {
 		m.pendingThreadName = true
 		m.notice = "Thread will be named " + name + " when it starts."
 		m.refreshTranscript()
-		return nil
+		return m.refreshStatusControlsCmd()
 	}
 	if m.onRenameThread != nil {
 		if err := m.onRenameThread(threadID, name); err != nil {
@@ -349,7 +349,9 @@ func (m *Model) renameCurrentThread(name string) bubbletea.Cmd {
 	m.notice = message
 	m.addInfoHistoryMessage(message)
 	m.refreshTranscript()
-	return nil
+	// The default terminal title and thread-name status item follow the live
+	// thread name (Rust refresh_status_surfaces on ThreadTitleUpdated).
+	return m.refreshStatusControlsCmd()
 }
 
 func (m *Model) persistPendingThreadName() {

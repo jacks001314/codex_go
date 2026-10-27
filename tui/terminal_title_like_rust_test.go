@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // Rust #50375, `terminal_title.rs::screen_title_stays_ascii_across_activity_and_user_named_fields`:
 // under GNU Screen the finished title is printable ASCII, while every other
@@ -42,12 +45,22 @@ func TestTerminalTitleSanitizesControlCharactersLikeRust(t *testing.T) {
 	if want := "Project Title"; stripped != want {
 		t.Fatalf("stripped = %q, want %q", stripped, want)
 	}
+	formatted := SanitizeTerminalTitle("A\u00a0\u3000B\u200b\u2060C\U0001BCA0D\U000E0100E")
+	if want := "A BCDE"; formatted != want {
+		t.Fatalf("supplementary formatting = %q, want %q", formatted, want)
+	}
 }
 
 // Rust #50375: Screen is detected through STY, because TERM=screen alone is not
 // sufficient (tmux also uses it).
 func TestTerminalTitleEncodingDetectsGnuScreenLikeRust(t *testing.T) {
 	t.Setenv("STY", "")
+	if got := TerminalTitleEncoding(); got != TitleEncodingScreen {
+		t.Fatalf("encoding with an empty STY = %v, want Screen", got)
+	}
+	if err := os.Unsetenv("STY"); err != nil {
+		t.Fatalf("unset STY: %v", err)
+	}
 	if got := TerminalTitleEncoding(); got != TitleEncodingUnicode {
 		t.Fatalf("encoding without STY = %v, want Unicode", got)
 	}
@@ -59,7 +72,9 @@ func TestTerminalTitleEncodingDetectsGnuScreenLikeRust(t *testing.T) {
 	if !ok || osc != "\x1b]0;* ???\x07" {
 		t.Fatalf("Screen OSC = %q ok=%v", osc, ok)
 	}
-	t.Setenv("STY", "")
+	if err := os.Unsetenv("STY"); err != nil {
+		t.Fatalf("unset STY: %v", err)
+	}
 	if osc, ok := TerminalTitleOSC("\u25cf"); !ok || osc != "\x1b]0;\u25cf\x07" {
 		t.Fatalf("Unicode OSC = %q ok=%v", osc, ok)
 	}

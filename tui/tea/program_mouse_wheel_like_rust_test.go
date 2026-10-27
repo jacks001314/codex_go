@@ -60,9 +60,16 @@ type realProgram struct {
 
 func startRealProgram(t *testing.T, options Options) *realProgram {
 	t.Helper()
+	return startRealProgramWithState(t, tuiStateWithScrollback(), options)
+}
+
+// startRealProgramWithState drives NewProgram over a pipe so a test can feed
+// real terminal escapes against a prepared transcript.
+func startRealProgramWithState(t *testing.T, state *codextui.State, options Options) *realProgram {
+	t.Helper()
 	input, inputWriter := io.Pipe()
 	output := &lockedProgramOutput{}
-	program := NewProgram(context.Background(), tuiStateWithScrollback(), options, input, output)
+	program := NewProgram(context.Background(), state, options, input, output)
 	models := make(chan bubbletea.Model, 1)
 	errs := make(chan error, 1)
 	go func() {

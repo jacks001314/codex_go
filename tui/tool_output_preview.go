@@ -42,14 +42,30 @@ func SetOpenTranscriptHintProvider(resolve func() string) {
 // TranscriptDisclosureHint returns "<binding> to view transcript", or "" when
 // the `open_transcript` action is unbound (Rust #48761).
 func TranscriptDisclosureHint() string {
-	label := transcriptDefaultBinding
-	if openTranscriptHint != nil {
-		label = strings.TrimSpace(openTranscriptHint())
-	}
+	label := transcriptHintBinding()
 	if label == "" {
 		return ""
 	}
 	return label + " to view transcript"
+}
+
+// TranscriptExpandHint returns "<binding> to expand" for an owned-transcript
+// activity disclosure control (Rust activity_layout's `to expand` hint). It
+// follows the same `open_transcript` keymap resolver as the legacy hint.
+func TranscriptExpandHint() string {
+	label := transcriptHintBinding()
+	if label == "" {
+		return ""
+	}
+	return label + " to expand"
+}
+
+func transcriptHintBinding() string {
+	label := transcriptDefaultBinding
+	if openTranscriptHint != nil {
+		label = strings.TrimSpace(openTranscriptHint())
+	}
+	return label
 }
 
 // ToolOutputPreview collects the leading preview rows of a tool result.

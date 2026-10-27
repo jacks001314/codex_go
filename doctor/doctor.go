@@ -4033,7 +4033,7 @@ func gitEntrySummary(repoRoot string) string {
 	}
 }
 
-var defaultTerminalTitleItems = []string{"activity", "project-name"}
+var defaultTerminalTitleItems = []string{"activity", "thread-name", "project-name"}
 
 const projectTitleMaxChars = 24
 

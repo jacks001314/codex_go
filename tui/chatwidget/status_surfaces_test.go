@@ -12,7 +12,7 @@ func TestStatusSurfaceSelectionsDefaultsAliasesAndInvalids(t *testing.T) {
 	if !reflect.DeepEqual(selection.StatusLineItems, []bottompane.StatusLineItem{bottompane.StatusLineModelWithReasoning, bottompane.StatusLineCurrentDir}) {
 		t.Fatalf("default status items = %#v", selection.StatusLineItems)
 	}
-	if !reflect.DeepEqual(selection.TerminalTitleItems, []TerminalTitleItem{TerminalTitleSpinner, TerminalTitleProject}) {
+	if !reflect.DeepEqual(selection.TerminalTitleItems, []TerminalTitleItem{TerminalTitleSpinner, TerminalTitleThreadName, TerminalTitleProject}) {
 		t.Fatalf("default title items = %#v", selection.TerminalTitleItems)
 	}
 

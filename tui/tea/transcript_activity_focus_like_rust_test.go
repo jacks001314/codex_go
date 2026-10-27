@@ -51,8 +51,9 @@ func TestTranscriptActivityFocusDisclosureLikeRust(t *testing.T) {
 	if view := utils.StripANSI(model.View()); strings.Contains(view, "hidden detail") {
 		t.Fatalf("focus alone expanded hidden output:\n%s", view)
 	}
-	if !strings.Contains(utils.StripANSI(model.View()), "Activity · up/down select") {
-		t.Fatalf("activity footer missing:\n%s", utils.StripANSI(model.View()))
+	footer := utils.StripANSI(model.View())
+	if !strings.Contains(footer, "↑ previous · ↓ next · enter details · esc back") {
+		t.Fatalf("activity footer missing:\n%s", footer)
 	}
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
 	if model.activityFocus.active {
@@ -218,5 +219,38 @@ func TestActivityFocusMigratesLiveGroupToHistoryLikeRust(t *testing.T) {
 	}
 	if model.focusedTranscriptActivityIndex() != 0 {
 		t.Fatalf("focused index = %d, want original live group at 0", model.focusedTranscriptActivityIndex())
+	}
+}
+
+// Rust footer_hint::first_fitting_line drops whole navigation hints from the
+// left so a narrow activity footer never shows half a shortcut.
+func TestActivityFocusFooterFitsWidthLikeRust(t *testing.T) {
+	model := activityFocusFixture(t)
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
+	const (
+		all     = "\u2191 previous \u00b7 \u2193 next \u00b7 enter details \u00b7 esc back"
+		next    = "\u2193 next \u00b7 enter details \u00b7 esc back"
+		details = "enter details \u00b7 esc back"
+		back    = "esc back"
+	)
+	for _, testCase := range []struct {
+		width int
+		want  string
+	}{
+		{width: 80, want: all},
+		{width: 46, want: all},
+		{width: 45, want: next},
+		{width: 33, want: next},
+		{width: 32, want: details},
+		{width: 24, want: details},
+		{width: 23, want: back},
+		{width: 20, want: back},
+		{width: 8, want: back},
+		{width: 7, want: ""},
+		{width: 0, want: ""},
+	} {
+		if got := model.activityFocusBarLine(testCase.width); got != testCase.want {
+			t.Fatalf("footer at width %d = %q, want %q", testCase.width, got, testCase.want)
+		}
 	}
 }

@@ -107,7 +107,7 @@ func (m *Model) applyAutomaticThreadTitle(message ThreadNameSuggestedMsg) bubble
 	if message.RenameFailed {
 		m.State.SetThreadName("")
 		m.refreshTranscript()
-		return nil
+		return m.refreshStatusControlsCmd()
 	}
 	if !message.OK || strings.TrimSpace(message.Suggestion) == "" {
 		return nil
@@ -120,5 +120,5 @@ func (m *Model) applyAutomaticThreadTitle(message ThreadNameSuggestedMsg) bubble
 	}
 	m.State.SetThreadName(finalTitle)
 	m.refreshTranscript()
-	return nil
+	return m.refreshStatusControlsCmd()
 }

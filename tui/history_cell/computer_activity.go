@@ -50,6 +50,12 @@ func (c ComputerActivityCell) ActivityIDs() []string {
 	return ids
 }
 
+// ActivityDisclosure reports generic transcript details for a grouped computer
+// activity (Rust's default HistoryCell::activity_disclosure).
+func (c ComputerActivityCell) ActivityDisclosure(int) tui.ActivityDisclosure {
+	return tui.ActivityDisclosure{Generic: true}
+}
+
 // Start appends a call once, keeping replay deduplication.
 func (c *ComputerActivityCell) Start(call McpToolCallCell) {
 	if c == nil {

@@ -1,6 +1,7 @@
 package chatwidget
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -499,4 +500,31 @@ func findTerminalTitleSetupItem(items []TerminalTitleSetupItem, id string) *Term
 		}
 	}
 	return nil
+}
+
+// Rust truncates the terminal-title project segment to 24 graphemes.
+func TestTerminalTitleProjectTruncatesLikeRust(t *testing.T) {
+	state := NewStatusControlsState(StatusControlsRuntime{ProjectName: strings.Repeat("a", 30)})
+	got, ok := state.TerminalTitleValueForItem(TerminalTitleProject)
+	if !ok || got != strings.Repeat("a", 21)+"..." {
+		t.Fatalf("project title = %q ok=%v", got, ok)
+	}
+}
+
+// Rust renders the status-line `project-root` item from
+// `status_line_project_root_name`, i.e. the root directory's display name
+// rather than its absolute path.
+func TestStatusLineProjectRootUsesRootNameLikeRust(t *testing.T) {
+	state := NewStatusControlsState(StatusControlsRuntime{
+		ProjectName: "repo",
+		ProjectRoot: filepath.Join("tmp", "checkout", "repo"),
+	})
+	if got, ok := state.StatusLineValueForItem(bottompane.StatusLineProjectRoot); !ok || got != "repo" {
+		t.Fatalf("project root = %q ok=%v", got, ok)
+	}
+
+	fallback := NewStatusControlsState(StatusControlsRuntime{ProjectRoot: filepath.Join("tmp", "repo")})
+	if got, ok := fallback.StatusLineValueForItem(bottompane.StatusLineProjectRoot); !ok || got != "repo" {
+		t.Fatalf("project root fallback = %q ok=%v", got, ok)
+	}
 }

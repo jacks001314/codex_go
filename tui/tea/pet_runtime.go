@@ -47,6 +47,22 @@ func (r *petRuntime) setOutput(out io.Writer) {
 	r.out = out
 }
 
+// writeTerminalSequence writes a control sequence directly to the terminal
+// while holding the same lock as frame output, so it neither interleaves with a
+// repaint nor gets suppressed by Bubble Tea's alternate-screen handling.
+func (r *petRuntime) writeTerminalSequence(sequence string) error {
+	if r == nil || sequence == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.out == nil {
+		return nil
+	}
+	_, err := io.WriteString(r.out, sequence)
+	return err
+}
+
 // install replaces the active ambient pet; the next frame write renders it.
 func (r *petRuntime) install(state pets.AmbientPetState) {
 	r.mu.Lock()

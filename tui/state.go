@@ -75,6 +75,17 @@ type Message struct {
 	// group. Disclosure focus/expansion follows these IDs across cell
 	// replacements and history regrouping (Rust #46734).
 	ActivityIDs []string
+	// ActivityHiddenLines is the retained-output line count a compact activity
+	// preview hides (Rust ActivityDisclosure::OutputLines). Zero means the cell
+	// cannot report a line count.
+	ActivityHiddenLines int
+	// ActivityGenericDetails marks activity details that expand without a
+	// retained-output line count (Rust ActivityDisclosure::Generic).
+	ActivityGenericDetails bool
+	// ActivityDisclosureKnown reports that the producing cell supplied
+	// disclosure metadata. A known empty disclosure means the cell has no
+	// inline detail control, as opposed to a message built without a cell.
+	ActivityDisclosureKnown bool
 	// ImagePath is the local artifact a rich fullscreen transcript may preview
 	// below this entry. Image rows are layout-only and never searchable text.
 	ImagePath string

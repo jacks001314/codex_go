@@ -74,6 +74,12 @@ func (c DynamicToolCallCell) ActivityIDs() []string {
 	return []string{"dynamic-tool:" + strings.TrimSpace(c.CallID)}
 }
 
+// ActivityDisclosure reports generic transcript details for a dynamic tool
+// call (Rust's default HistoryCell::activity_disclosure).
+func (c DynamicToolCallCell) ActivityDisclosure(int) tui.ActivityDisclosure {
+	return tui.ActivityDisclosure{Generic: true}
+}
+
 func truncateDynamicLine(value string, width int) string {
 	if width <= 0 {
 		return value

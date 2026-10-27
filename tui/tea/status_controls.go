@@ -2,6 +2,7 @@ package tea
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"codex_go/config"
 	"codex_go/features"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
@@ -707,18 +709,26 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		cwd, _ = os.Getwd()
 	}
 	cwd = strings.TrimSpace(cwd)
+	projectRoot := ""
 	projectName := ""
 	if cwd != "" {
-		projectName = filepath.Base(cwd)
+		// Rust's status-line and terminal-title project name is the repository
+		// root, not the basename of a nested working directory. Fall back to the
+		// cwd when no project root marker is present.
+		projectRoot = strings.TrimSpace(config.ActiveProjectRoot(cwd))
+		if projectRoot == "" {
+			projectRoot = cwd
+		}
+		projectName = filepath.Base(projectRoot)
 	}
 	if m == nil || m.State == nil {
-		return chatwidget.StatusControlsRuntime{CWD: cwd, ProjectName: projectName, ProjectRoot: cwd}
+		return chatwidget.StatusControlsRuntime{CWD: cwd, ProjectName: projectName, ProjectRoot: projectRoot}
 	}
 	runtimeUsage := m.currentThreadUsageEstimate()
 	return chatwidget.StatusControlsRuntime{
 		CWD:                           cwd,
 		ProjectName:                   projectName,
-		ProjectRoot:                   cwd,
+		ProjectRoot:                   projectRoot,
 		ModelName:                     m.modelDisplayName(m.State.Model),
 		ReasoningEffort:               m.State.EffectiveReasoningEffort(),
 		StatusText:                    strings.TrimSpace(m.State.Status),
@@ -882,16 +892,15 @@ func (m *Model) refreshStatusControls() chatwidget.StatusSurfaceRefreshResult {
 		return chatwidget.StatusSurfaceRefreshResult{}
 	}
 	m.ensureStatusControls()
+	m.syncTerminalTitleAnimation()
 	return m.statusControls.RefreshStatusSurfaces()
 }
 
 func (m *Model) refreshStatusControlsCmd() bubbletea.Cmd {
 	result := m.refreshStatusControls()
 	cmds := []bubbletea.Cmd{}
-	if m != nil && m.statusControls != nil && (m.statusControls.TerminalTitleConfigured || m.statusControls.TerminalTitleSetupActive) {
-		cmds = append(cmds, m.applyTerminalTitleResult(result))
-	}
 	if m != nil {
+		cmds = append(cmds, m.applyTerminalTitleResult(result))
 		cmds = append(cmds, m.ensureThreadUsageForSurfaces(result.Selections))
 	}
 	return bubbletea.Batch(cmds...)
@@ -905,36 +914,42 @@ func (m *Model) terminalTitleStatusCmd() bubbletea.Cmd {
 	if m == nil || m.statusControls == nil || m.terminalTitleWriter == nil {
 		return nil
 	}
-	if !m.statusControls.TerminalTitleConfigured && !m.statusControls.TerminalTitleSetupActive {
+	if !m.syncTerminalTitleAnimation() {
 		return nil
 	}
-	if !m.terminalTitleUsesActivity() {
-		return nil
-	}
+	return m.applyTerminalTitleResult(m.statusControls.RefreshTerminalTitle())
+}
 
+// syncTerminalTitleAnimation updates the time-varying title state and reports
+// whether it changed. The static title is emitted at startup and whenever a
+// status surface refreshes; animation ticks only need to write when a spinner
+// frame or action-required blink phase actually changes.
+func (m *Model) syncTerminalTitleAnimation() bool {
+	if m == nil || m.statusControls == nil {
+		return false
+	}
 	status := m.desiredProgramStatus()
 	blocked := status.State == codextui.ProgramStatusBlocked
-	spinner := ""
-	if !blocked && m.isTaskRunning() && m.animationsEnabled && m.effects.Progress {
-		spinner = chatwidget.TerminalTitleSpinnerFrame(m.animEngineTick() / 2)
-	}
-
 	now := m.currentTime()
 	if m.terminalTitleAnimationOrigin.IsZero() {
 		m.terminalTitleAnimationOrigin = now
 	}
+	spinner := ""
+	if !blocked && m.isTaskRunning() && m.animationsEnabled && m.effects.Progress {
+		spinner = chatwidget.TerminalTitleSpinnerFrameAt(m.terminalTitleAnimationOrigin, now)
+	}
+
 	hidden := false
 	if blocked && m.animationsEnabled && m.effects.Title {
 		elapsed := now.Sub(m.terminalTitleAnimationOrigin)
 		hidden = (elapsed/time.Second)%2 == 1
 	}
 
-	forceRefresh := !m.terminalTitleAnimationReady
-	if !forceRefresh &&
+	if m.terminalTitleAnimationReady &&
 		blocked == m.terminalTitleActionRequired &&
 		spinner == m.terminalTitleSpinnerText &&
 		hidden == m.terminalTitleActionHidden {
-		return nil
+		return false
 	}
 	m.terminalTitleAnimationReady = true
 	m.terminalTitleActionRequired = blocked
@@ -943,22 +958,7 @@ func (m *Model) terminalTitleStatusCmd() bubbletea.Cmd {
 	m.statusControls.TerminalTitleActionRequired = blocked
 	m.statusControls.TerminalTitleSpinnerText = spinner
 	m.statusControls.TerminalTitleActionHidden = hidden
-	return m.applyTerminalTitleResult(m.statusControls.RefreshTerminalTitle())
-}
-
-// terminalTitleUsesActivity reports whether the configured title includes the
-// spinner/activity item (Rust terminal_title_uses_activity).
-func (m *Model) terminalTitleUsesActivity() bool {
-	if m == nil || m.statusControls == nil {
-		return false
-	}
-	selections := chatwidget.NewStatusSurfaceSelections(nil, m.statusControls.ConfiguredTerminalTitleItems())
-	for _, item := range selections.TerminalTitleItems {
-		if item == chatwidget.TerminalTitleSpinner {
-			return true
-		}
-	}
-	return false
+	return true
 }
 
 // animEngineTick returns the shared animation tick, defaulting to zero when the
@@ -968,6 +968,18 @@ func (m *Model) animEngineTick() int {
 		return 0
 	}
 	return m.animEngine.CurrentTick()
+}
+
+// writeTerminalTitleSequence emits a title update through the same output lock
+// as rendered frames. Bubble Tea suppresses its Printf command while the
+// alternate screen is active, but Rust manages the terminal title in both
+// screen modes.
+func (m *Model) writeTerminalTitleSequence(sequence string) bubbletea.Cmd {
+	if m == nil || m.petRuntime == nil {
+		return nil
+	}
+	_ = m.petRuntime.writeTerminalSequence(sequence)
+	return nil
 }
 
 func (m *Model) applyTerminalTitleResult(result chatwidget.StatusSurfaceRefreshResult) bubbletea.Cmd {
@@ -988,6 +1000,20 @@ func (m *Model) applyTerminalTitleResult(result chatwidget.StatusSurfaceRefreshR
 	}
 	m.lastTerminalTitleSequence = sequence
 	return m.terminalTitleWriter(sequence)
+}
+
+// clearTerminalTitleOnExit mirrors Rust App::drop's
+// clear_managed_terminal_title: only a title Codex actually wrote is cleared,
+// and an already-cleared title is not emitted again.
+func clearTerminalTitleOnExit(model *Model, output io.Writer) {
+	if model == nil || output == nil {
+		return
+	}
+	sequence := model.lastTerminalTitleSequence
+	if sequence == "" || sequence == codextui.ClearTerminalTitleOSC() {
+		return
+	}
+	_, _ = io.WriteString(output, codextui.ClearTerminalTitleOSC())
 }
 
 func cloneRateLimitSnapshots(values map[string]chatwidget.RateLimitSnapshot) map[string]chatwidget.RateLimitSnapshot {

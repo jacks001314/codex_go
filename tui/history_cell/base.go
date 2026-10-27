@@ -31,6 +31,21 @@ type ActivityIDCell interface {
 	ActivityIDs() []string
 }
 
+// ActivityDisclosureCell reports the inline details a compact activity preview
+// hides. Rust parity: HistoryCell::activity_disclosure.
+type ActivityDisclosureCell interface {
+	ActivityDisclosure(width int) tui.ActivityDisclosure
+}
+
+// ActivityDisclosureFor resolves a cell's disclosure metadata; cells without
+// the optional interface have no inline detail control.
+func ActivityDisclosureFor(cell HistoryCell, width int) tui.ActivityDisclosure {
+	if disclosureCell, ok := cell.(ActivityDisclosureCell); ok {
+		return disclosureCell.ActivityDisclosure(width)
+	}
+	return tui.ActivityDisclosure{}
+}
+
 type HyperlinkLine struct {
 	Text  string
 	Links []tui.TerminalHyperlink

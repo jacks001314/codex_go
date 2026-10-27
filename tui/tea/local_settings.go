@@ -39,6 +39,17 @@
 //     and this file carries the Rust contract it must honour.
 package tea
 
+// cloneTUIStringList preserves the distinction between an absent list (nil)
+// and an explicitly configured empty list, which disables a status surface.
+func cloneTUIStringList(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
 // SettingsReloadOutcome classifies one configuration-reload attempt for the
 // TUI's local settings (Rust #51510). Rust's `confirm_directory_trust` reports a
 // check that did not reload configuration as `Ok(None)`, a successful reload as

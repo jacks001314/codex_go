@@ -161,6 +161,12 @@ func (c ViewImageHistoryCell) ActivityIDs() []string {
 	return []string{"image-view:" + c.ActivityID}
 }
 
+// ActivityDisclosure reports generic transcript details for a viewed image
+// (Rust's default HistoryCell::activity_disclosure).
+func (c ViewImageHistoryCell) ActivityDisclosure(int) tui.ActivityDisclosure {
+	return tui.ActivityDisclosure{Generic: true}
+}
+
 // ImagePath returns the local artifact path for transcript previews.
 func (c ViewImageHistoryCell) ImagePath() string {
 	return c.Path

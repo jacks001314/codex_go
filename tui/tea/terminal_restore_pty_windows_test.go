@@ -158,6 +158,15 @@ func runWindowsPTYTerminalRestoreParent(t *testing.T) {
 	if !strings.Contains(text, "\x1b[?1049l") {
 		t.Fatalf("exiting the TUI did not restore the main screen; output=%q", text)
 	}
+	// Rust manages the terminal title even while the alternate screen is
+	// active. Bubble Tea's Printf command is suppressed there, so this proves
+	// the production Run path uses the direct, output-locked writer.
+	if !strings.Contains(text, "\x1b]0;codex_go\x07") {
+		t.Fatalf("owned-screen run did not set the default terminal title; output=%q", text)
+	}
+	if !strings.Contains(text, "\x1b]0;\x07") {
+		t.Fatalf("owned-screen run did not clear the managed title on exit; output=%q", text)
+	}
 }
 
 func runWindowsPTYFocusInputParent(t *testing.T) {

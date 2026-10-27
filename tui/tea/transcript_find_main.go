@@ -188,7 +188,8 @@ func (m *Model) renderMainTranscriptFindContent() (string, int) {
 	}
 	match, ok := m.mainFind.selected()
 	if !ok {
-		return m.transcriptRenderCached(m.State, m.transcript.Width), -1
+		content, _ := m.transcriptRenderCached(m.State, m.transcript.Width)
+		return content, -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
 	expanded := m.expandedTranscriptActivityMessages()

@@ -99,6 +99,78 @@ func (c ExecCell) DisplayLinesWithTheme(width int, themeID string) []string {
 	return c.commandDisplayLinesWithTheme(width, themeID)
 }
 
+// ActivityDisclosure reports the inline detail control for this group. Rust
+// parity: ExecCell::activity_disclosure. Exploring groups always expose generic
+// details; a completed command reports the retained output lines its compact
+// preview hides.
+func (c ExecCell) ActivityDisclosure(width int) tui.ActivityDisclosure {
+	if c.IsExploringCell() {
+		return tui.ActivityDisclosure{Generic: true}
+	}
+	if len(c.Calls) != 1 {
+		return tui.ActivityDisclosure{}
+	}
+	call := c.Calls[0]
+	if call.IsUserShellCommand() {
+		if userShellOutputTruncated(call, width) {
+			return tui.ActivityDisclosure{Generic: true}
+		}
+		return tui.ActivityDisclosure{}
+	}
+	if !call.IsUnifiedExecInteraction() && call.Output != nil {
+		lines := splitCommandOutputLines(call.Output.AggregatedOutput)
+		clipped := 0
+		for index := max(len(lines)-tui.PreviewLines, 0); index < len(lines); index++ {
+			if tui.DisplayWidth(utils.StripANSI(lines[index]))+4 > max(width, 1) {
+				clipped++
+			}
+		}
+		if hidden := max(len(lines)-tui.PreviewLines, 0) + clipped; hidden > 0 {
+			return tui.ActivityDisclosure{HiddenLines: hidden}
+		}
+	}
+	script := StripShellCommand(call.Command)
+	if strings.Contains(script, "\n") {
+		return tui.ActivityDisclosure{Generic: true}
+	}
+	if display := c.DisplayLines(1 << 15); len(display) > 0 &&
+		tui.DisplayWidth(utils.StripANSI(display[0])) > max(width, 1) {
+		return tui.ActivityDisclosure{Generic: true}
+	}
+	if call.Output != nil {
+		lines := splitCommandOutputLines(call.Output.AggregatedOutput)
+		if len(lines) > tui.PreviewLines {
+			return tui.ActivityDisclosure{Generic: true}
+		}
+		for _, line := range lines {
+			if tui.DisplayWidth(utils.StripANSI(line))+4 > max(width, 1) {
+				return tui.ActivityDisclosure{Generic: true}
+			}
+		}
+	}
+	return tui.ActivityDisclosure{}
+}
+
+func userShellOutputTruncated(call ExecCall, width int) bool {
+	if call.Output == nil {
+		return false
+	}
+	if len(splitCommandOutputLines(call.Output.AggregatedOutput)) > UserShellToolCallMaxLines {
+		return true
+	}
+	for _, line := range callDisplayLines(call, width) {
+		plain := utils.StripANSI(line)
+		if strings.Contains(plain, "\u2026 +") && strings.Contains(plain, "lines") {
+			return true
+		}
+	}
+	return false
+}
+
+func callDisplayLines(call ExecCall, width int) []string {
+	return commandCallDisplayLinesStyled(width, call, "", false)
+}
+
 func (c ExecCell) TranscriptLines(width int) []string {
 	out := []string{}
 	for index, call := range c.Calls {

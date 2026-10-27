@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -733,10 +734,13 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 	case bottompane.StatusLineCurrentDir:
 		return nonEmptyTrimmed(s.statusLineCWD())
 	case bottompane.StatusLineProjectRoot:
-		if value, ok := nonEmptyTrimmed(s.Runtime.ProjectRoot); ok {
+		if value, ok := nonEmptyTrimmed(s.Runtime.ProjectName); ok {
 			return value, true
 		}
-		return nonEmptyTrimmed(s.Runtime.ProjectName)
+		if value, ok := nonEmptyTrimmed(s.Runtime.ProjectRoot); ok {
+			return filepath.Base(value), true
+		}
+		return "", false
 	case bottompane.StatusLineHostname:
 		return normalizedOSHostName()
 	case bottompane.StatusLineGitBranch:
@@ -939,13 +943,18 @@ func (s *StatusControlsState) TerminalTitleValueForItem(item TerminalTitleItem) 
 	case TerminalTitleAppName:
 		return "codex", true
 	case TerminalTitleProject:
-		if value, ok := nonEmptyTrimmed(s.Runtime.ProjectName); ok {
-			return value, true
+		value, ok := nonEmptyTrimmed(s.Runtime.ProjectName)
+		if !ok {
+			if root, rootOK := nonEmptyTrimmed(s.Runtime.ProjectRoot); rootOK {
+				value, ok = filepath.Base(root), true
+			} else if cwd, cwdOK := nonEmptyTrimmed(s.statusLineCWD()); cwdOK {
+				value, ok = filepath.Base(cwd), true
+			}
 		}
-		if value, ok := nonEmptyTrimmed(s.Runtime.ProjectRoot); ok {
-			return value, true
+		if !ok {
+			return "", false
 		}
-		return nonEmptyTrimmed(s.statusLineCWD())
+		return TruncateTerminalTitlePart(value, 24), true
 	case TerminalTitleCurrentDir:
 		value, ok := nonEmptyTrimmed(s.statusLineCWD())
 		if !ok {

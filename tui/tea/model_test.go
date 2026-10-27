@@ -6631,6 +6631,9 @@ func TestModelStatusLineAndTitleCommands(t *testing.T) {
 	})
 
 	_ = model.applyStatusLineCommand("model-with-reasoning current-dir run-state")
+	// Rust's refresh_status_line repaints both status surfaces, so applying a
+	// status line also emits the default terminal title.
+	baselineWrites := len(writes)
 	view := model.View()
 	for _, want := range []string{"gpt-5", "high", "repo", "idle"} {
 		if !strings.Contains(view, want) {
@@ -6639,17 +6642,18 @@ func TestModelStatusLineAndTitleCommands(t *testing.T) {
 	}
 
 	_ = model.applyTerminalTitleCommand("app-name project-name run-state")
-	if len(writes) != 1 {
-		t.Fatalf("terminal title writes = %#v, want one write", writes)
+	if len(writes) != baselineWrites+1 {
+		t.Fatalf("terminal title writes = %#v, want one title update", writes)
 	}
+	titleWrite := writes[baselineWrites]
 	for _, want := range []string{"\x1b]0;", "codex", "repo", "idle"} {
-		if !strings.Contains(writes[0], want) {
-			t.Fatalf("terminal title OSC missing %q: %q", want, writes[0])
+		if !strings.Contains(titleWrite, want) {
+			t.Fatalf("terminal title OSC missing %q: %q", want, titleWrite)
 		}
 	}
 
 	_ = model.applyTerminalTitleCommand("off")
-	if len(writes) != 2 || writes[1] != codextui.ClearTerminalTitleOSC() {
+	if len(writes) != baselineWrites+2 || writes[baselineWrites+1] != codextui.ClearTerminalTitleOSC() {
 		t.Fatalf("terminal title clear writes = %#v", writes)
 	}
 }

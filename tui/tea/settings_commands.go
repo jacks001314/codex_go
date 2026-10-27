@@ -576,6 +576,17 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 		// supersedes the session-only colour override.
 		m.statusSurfaceOverrides.clearStatusLineUseColors(m.currentThreadID())
 	}
+	if result.StatusLineItems != nil {
+		m.ensureStatusControls()
+		m.statusControls.StatusLineConfigured = true
+		m.statusControls.StatusLineIDs = cloneTUIStringList(*result.StatusLineItems)
+		m.statusLineConfiguredByUser = true
+	}
+	if result.TerminalTitleItems != nil {
+		m.ensureStatusControls()
+		m.statusControls.TerminalTitleConfigured = true
+		m.statusControls.TerminalTitleIDs = cloneTUIStringList(*result.TerminalTitleItems)
+	}
 	if result.QuestionEscBack != nil {
 		m.questionEscBack = *result.QuestionEscBack
 	}

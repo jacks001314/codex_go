@@ -330,6 +330,11 @@ type SettingsWriteResult struct {
 	// StatusLineUseColors is the configured `tui.status_line_use_colors`
 	// value (Rust #44857). Nil preserves the current value.
 	StatusLineUseColors *bool
+	// StatusLineItems and TerminalTitleItems are the configured ordered item
+	// lists. A nil pointer preserves the live value; a non-nil pointer may
+	// contain an empty list, which explicitly disables that surface.
+	StatusLineItems    *[]string
+	TerminalTitleItems *[]string
 	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
 	// #42889). Nil preserves the current value.
 	QuestionEscBack *bool
@@ -1676,6 +1681,15 @@ type Model struct {
 	// mouseScrollSpeed seeds transcript overlays created later; it always holds
 	// the resolved (default-or-configured) multiplier.
 	mouseScrollSpeed float64
+	// transcriptContentTopRow is the painted screen row of the transcript
+	// viewport's first content line. Mouse hit-testing converts a click into a
+	// content row from it (Rust TranscriptView::area).
+	transcriptContentTopRow int
+	// transcriptMessageRanges records each message's painted content range from
+	// the latest layout pass.
+	transcriptMessageRanges [][2]int
+	// transcriptDisclosureHits maps content rows to painted activity controls.
+	transcriptDisclosureHits map[int]transcriptDisclosureHit
 	// mouseCapturePolicy is the requested terminal mouse policy for the active
 	// surface (Rust #57284 MouseCapture).
 	mouseCapturePolicy mouseCapturePolicy
@@ -2831,7 +2845,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onBackendBannerAction:           options.OnBackendBannerAction,
 		requiresOpenAIAuthOverride:      options.RequiresOpenAIAuth,
 		pendingStatusRateLimitRequests:  map[uint64]pendingStatusRateLimitRequest{},
-		terminalTitleWriter:             terminalSequenceWriterOrDefault(options.OnWriteTerminalTitle),
+		terminalTitleWriter:             options.OnWriteTerminalTitle,
 		terminalClearWriter:             terminalSequenceWriterOrDefault(options.OnClearTerminal),
 		programStatusWriter:             terminalSequenceWriterOrDefault(options.OnWriteProgramStatus),
 		notificationPost:                options.OnPostNotification,
@@ -2951,6 +2965,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 	}
 	model.syncTaskRunningTimer()
 	model.animEngine = anim.NewEngine(20)
+	// Rust initializes the terminal-title animation clock with the chat widget
+	// and derives every spinner/blink phase from wall-clock elapsed time.
+	model.terminalTitleAnimationOrigin = model.currentTime()
 	model.overlays = overlay.NewOverlay(true)
 	model.statusControls = chatwidget.NewStatusControlsState(model.statusControlsRuntime())
 	// Seed the status-line color preference from `tui.status_line_use_colors`
@@ -2964,6 +2981,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 		model.statusControls.TerminalTitleConfigured = true
 		model.statusControls.TerminalTitleIDs = append([]string(nil), options.TerminalTitleItems...)
 	}
+	// Seed the animation phase without emitting output, so ordinary updates do
+	// not have to treat the first frame as a title change. Init writes the
+	// initial static title once the program starts.
+	model.syncTerminalTitleAnimation()
 	model.resize(firstPositive(options.Width, defaultWidth), firstPositive(options.Height, defaultHeight))
 	// Rust #53859 seeds the settle state from the size sampled during init, so
 	// the first frame is not mistaken for a resize.
@@ -3033,6 +3054,13 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	if output != nil {
 		model.petRuntime.setOutput(output)
 		model.transcriptImages.setOutput(output)
+		if model.terminalTitleWriter == nil {
+			// Rust writes the managed terminal title in both inline and owned
+			// (alternate-screen) modes. Bubble Tea's Printf command is ignored
+			// while the alternate screen is active, so the default writer emits
+			// the OSC directly through the frame-output lock.
+			model.terminalTitleWriter = model.writeTerminalTitleSequence
+		}
 		programOptions = append(programOptions, bubbletea.WithOutput(&petOutputWriter{runtime: model.petRuntime, images: model.transcriptImages}))
 	}
 	programOptions = append(programOptions, bubbletea.WithReportFocus())
@@ -3143,6 +3171,7 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	if model.transcriptImages != nil {
 		model.transcriptImages.releaseFiles()
 	}
+	clearTerminalTitleOnExit(model, output)
 	return model, nil
 }
 
@@ -3177,6 +3206,9 @@ func (m *Model) Init() bubbletea.Cmd {
 	}
 	if m.animEngine != nil {
 		commands = append(commands, m.animEngine.TickCmd())
+	}
+	if m.statusControls != nil {
+		commands = append(commands, m.applyTerminalTitleResult(m.statusControls.RefreshTerminalTitle()))
 	}
 	if m.petLoadPending != "" {
 		commands = append(commands, m.loadPetCmd(m.petLoadPending))
@@ -3721,7 +3753,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.refreshStatusControlsCmd()
 	case WorkingDirectoryChangeResultMsg:
 		m.applyWorkingDirectoryChangeResult(msg)
-		return m, nil
+		// The replacement session can change the cwd, project root, and title,
+		// all of which feed the terminal title.
+		return m, m.refreshStatusControlsCmd()
 	case WorkingStatusHeaderMsg:
 		m.applyWorkingStatusHeader(msg)
 		return m, nil
@@ -4200,6 +4234,14 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if handled, cmd := m.handleComposerGapLinkClick(msg); handled {
 			return m, cmd
 		}
+		// Rust pointer_down toggles an activity disclosure before it starts a
+		// text selection, so the control wins an unmodified left press.
+		if m.handleTranscriptDisclosureClick(msg) {
+			return m, nil
+		}
+		// A left press that misses the control clears activity focus but keeps
+		// explicitly expanded details (Rust pointer_down).
+		m.dismissTranscriptActivityFocusOnClick(msg)
 		if handled, cmd := m.handleRenderedSelectionMouse(msg); handled {
 			return m, cmd
 		}
@@ -4267,6 +4309,7 @@ func (m *Model) View() string {
 	if m == nil {
 		return ""
 	}
+	m.transcriptContentTopRow = -1
 	m.composerTopRow = -1
 	m.composerTextTopRow = -1
 	m.flushMCPLoginResultsForCurrentThread()
@@ -4313,6 +4356,12 @@ func (m *Model) View() string {
 	if chrome {
 		status = m.renderStatusRegion(status)
 		transcript = m.renderActivityRegion(transcript)
+	}
+	// The activity heading is painted above the transcript viewport, while the
+	// status region occupies the rows before it.
+	m.transcriptContentTopRow = sectionHeight(status)
+	if chrome {
+		m.transcriptContentTopRow++
 	}
 	transcript = m.applyPinnedPromptHeader(transcript, sectionHeight(status))
 	sections := []string{status, transcript}
@@ -4447,7 +4496,7 @@ func (m *Model) footerHelpLine() (string, bool) {
 	} else if m.mainFind.active() {
 		footerLine = m.mainFind.barLine()
 	} else if m.activityFocus.active {
-		footerLine = m.activityFocusBarLine()
+		footerLine = m.activityFocusBarLine(m.width)
 	} else if m.escBacktrackHint {
 		// Rust show_esc_backtrack_hint replaces the composer footer with the
 		// second-Esc prompt once backtrack mode is primed.
@@ -4909,11 +4958,12 @@ func (m *Model) rerenderComputerActivityGroup() {
 	}
 	width := m.transcriptWidth()
 	cell := *m.computerActivityGroup
-	m.computerActivityMessageIndex = m.upsertHistoryMessageWithTranscript(
+	m.computerActivityMessageIndex = m.upsertHistoryMessageWithActivity(
 		m.computerActivityMessageIndex,
 		cell.DisplayLines(width),
 		cell.RawLines(),
 		cell.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+		cell.ActivityDisclosure(width),
 		cell.ActivityIDs(),
 	)
 }
@@ -7199,7 +7249,14 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 		// The active group still has running calls: render this orphan as its
 		// own history cell without disturbing the group (Rust
 		// OrphanHistoryWhileActiveExec).
-		state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
+		state.MessageIndex = m.upsertHistoryMessageWithActivity(
+			state.MessageIndex,
+			cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+			cell.RawLines(),
+			nil,
+			cell.ActivityDisclosure(width),
+			cell.ActivityIDs(),
+		)
 		if state.Completed {
 			m.Transcript.needsFinalMessageSeparator = true
 		}
@@ -7216,7 +7273,14 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 		return
 	}
 	m.flushActiveExecCell()
-	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
+	state.MessageIndex = m.upsertHistoryMessageWithActivity(
+		state.MessageIndex,
+		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		cell.RawLines(),
+		nil,
+		cell.ActivityDisclosure(width),
+		cell.ActivityIDs(),
+	)
 	if state.Completed {
 		m.Transcript.needsFinalMessageSeparator = true
 	}
@@ -7277,11 +7341,12 @@ func (m *Model) rerenderActiveExecCell() {
 	}
 	width := m.transcriptWidth()
 	cell := *m.activeExecCell
-	m.activeExecCellMessageIndex = m.upsertHistoryMessageWithTranscript(
+	m.activeExecCellMessageIndex = m.upsertHistoryMessageWithActivity(
 		m.activeExecCellMessageIndex,
 		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
 		cell.RawLines(),
 		cell.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+		cell.ActivityDisclosure(width),
 		cell.ActivityIDs(),
 	)
 }
@@ -7371,11 +7436,12 @@ func (m *Model) appendComputerActivityCall(item *protocol.ThreadItem) {
 	if width < 20 {
 		width = 20
 	}
-	m.computerActivityMessageIndex = m.upsertHistoryMessageWithTranscript(
+	m.computerActivityMessageIndex = m.upsertHistoryMessageWithActivity(
 		m.computerActivityMessageIndex,
 		m.computerActivityGroup.DisplayLines(width),
 		m.computerActivityGroup.RawLines(),
 		m.computerActivityGroup.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+		m.computerActivityGroup.ActivityDisclosure(width),
 		m.computerActivityGroup.ActivityIDs(),
 	)
 }
@@ -7736,7 +7802,14 @@ func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *pro
 		call.StartTime = &started
 	}
 	cell := execcell.NewExecCell(call, m.progressEffectsEnabled())
-	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
+	state.MessageIndex = m.upsertHistoryMessageWithActivity(
+		state.MessageIndex,
+		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		cell.RawLines(),
+		nil,
+		cell.ActivityDisclosure(width),
+		cell.ActivityIDs(),
+	)
 	if output != nil {
 		state.Completed = true
 	}
@@ -7755,11 +7828,12 @@ func (m *Model) markActiveToolCallsFailed(message string) {
 			if width < 20 {
 				width = 20
 			}
-			m.computerActivityMessageIndex = m.upsertHistoryMessageWithTranscript(
+			m.computerActivityMessageIndex = m.upsertHistoryMessageWithActivity(
 				m.computerActivityMessageIndex,
 				m.computerActivityGroup.DisplayLines(width),
 				m.computerActivityGroup.RawLines(),
 				m.computerActivityGroup.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+				m.computerActivityGroup.ActivityDisclosure(width),
 				m.computerActivityGroup.ActivityIDs(),
 			)
 		}
@@ -7824,7 +7898,14 @@ func (m *Model) renderToolCallFailure(state *toolCallDisplayState, message strin
 		Duration: duration,
 	}
 	cell := execcell.NewExecCell(call, m.progressEffectsEnabled())
-	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
+	state.MessageIndex = m.upsertHistoryMessageWithActivity(
+		state.MessageIndex,
+		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		cell.RawLines(),
+		nil,
+		cell.ActivityDisclosure(width),
+		cell.ActivityIDs(),
+	)
 	state.Completed = true
 }
 
@@ -7836,6 +7917,12 @@ func (m *Model) upsertHistoryMessage(index int, displayLines []string, rawLines 
 // transcript differs from its raw output (an activity group with interleaved
 // reasoning, Rust #46565). An empty transcript falls back to the raw text.
 func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []string, rawLines []string, transcriptLines []string, activityIDs ...[]string) int {
+	return m.upsertHistoryMessageWithActivity(index, displayLines, rawLines, transcriptLines, codextui.ActivityDisclosure{}, activityIDs...)
+}
+
+// upsertHistoryMessageWithActivity records an activity entry together with the
+// inline disclosure metadata its cell reports (Rust HistoryCell::activity_disclosure).
+func (m *Model) upsertHistoryMessageWithActivity(index int, displayLines []string, rawLines []string, transcriptLines []string, disclosure codextui.ActivityDisclosure, activityIDs ...[]string) int {
 	if m == nil || m.State == nil {
 		return -1
 	}
@@ -7856,11 +7943,14 @@ func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []str
 		ids = append([]string(nil), m.State.Messages[index].ActivityIDs...)
 	}
 	message := codextui.Message{
-		Role:           codextui.RoleHistory,
-		Text:           display,
-		RawText:        raw,
-		TranscriptText: transcript,
-		ActivityIDs:    ids,
+		Role:                    codextui.RoleHistory,
+		Text:                    display,
+		RawText:                 raw,
+		TranscriptText:          transcript,
+		ActivityIDs:             ids,
+		ActivityHiddenLines:     disclosure.HiddenLines,
+		ActivityGenericDetails:  disclosure.Generic,
+		ActivityDisclosureKnown: true,
 	}
 	if index >= 0 && index < len(m.State.Messages) {
 		message.ImagePath = m.State.Messages[index].ImagePath
@@ -8633,6 +8723,12 @@ func historyMessageFromCell(cell historycell.HistoryCell, width int) codextui.Me
 	}
 	if activityCell, ok := cell.(historycell.ActivityIDCell); ok {
 		message.ActivityIDs = normalizeActivityIDs(activityCell.ActivityIDs())
+	}
+	if _, ok := cell.(historycell.ActivityDisclosureCell); ok {
+		disclosure := historycell.ActivityDisclosureFor(cell, width)
+		message.ActivityHiddenLines = disclosure.HiddenLines
+		message.ActivityGenericDetails = disclosure.Generic
+		message.ActivityDisclosureKnown = true
 	}
 	return message
 }
@@ -9758,11 +9854,11 @@ func (m *Model) syncTranscriptHeight() {
 	m.transcript.Height = m.transcriptHeightForLayout()
 }
 
-func (m *Model) transcriptRenderCached(state *codextui.State, width int) string {
+func (m *Model) transcriptRenderCached(state *codextui.State, width int) (string, [][2]int) {
 	if state == nil {
-		return "No messages yet."
+		return "No messages yet.", nil
 	}
-	content, _, plans := renderTranscriptLayout(
+	content, ranges, plans := renderTranscriptLayout(
 		&m.transcriptMessages,
 		state,
 		m.rawOutput,
@@ -9773,9 +9869,11 @@ func (m *Model) transcriptRenderCached(state *codextui.State, width int) string 
 		m.sessionCWD,
 		m.showRawReasoning,
 		m.transcriptImageResolver(width, false),
+		m.transcriptDisclosureLayoutEnabled(),
+		m.ownedScreen && !m.rawOutput,
 	)
 	m.transcriptImagePlans = plans
-	return content
+	return content, ranges
 }
 
 // renderTranscriptWithExpandedMessages renders the main transcript with the
@@ -9795,6 +9893,8 @@ func (m *Model) renderTranscriptWithExpandedMessages(state *codextui.State, widt
 		m.sessionCWD,
 		m.showRawReasoning,
 		m.transcriptImageResolver(width, revealViewedImages),
+		m.transcriptDisclosureLayoutEnabled(),
+		m.ownedScreen && !m.rawOutput,
 	)
 	m.transcriptImagePlans = plans
 	return content, ranges
@@ -9811,6 +9911,7 @@ func (m *Model) refreshTranscript() {
 		content, line := m.renderMainTranscriptFindContent()
 		m.lastTranscriptContent = content
 		m.transcript.SetContent(content)
+		m.recordTranscriptDisclosureHits(m.State, content, nil)
 		if line >= 0 {
 			m.scrollTranscriptToLine(line)
 		}
@@ -9832,20 +9933,17 @@ func (m *Model) refreshTranscript() {
 		if index < 0 {
 			m.activityFocus.active = false
 		} else {
-			content, line := m.renderTranscriptActivityContent()
+			content, ranges, _ := m.renderTranscriptActivityContent()
 			m.lastTranscriptContent = content
 			m.transcript.SetContent(content)
-			m.ensureTranscriptLineVisible(line)
+			m.recordTranscriptDisclosureHits(m.State, content, ranges)
 			m.lastTranscriptHeight = m.transcript.Height
 			return
 		}
 	}
-	content := m.transcriptRenderCached(m.State, m.transcript.Width)
+	content, ranges := m.transcriptRenderCached(m.State, m.transcript.Width)
 	if expanded := m.expandedTranscriptActivityMessages(); len(expanded) > 0 {
-		content, _ = m.renderTranscriptWithExpandedMessages(m.State, m.transcript.Width, expanded, true)
-	}
-	if m.fullscreenTranscript && !m.rawOutput {
-		content = m.hideFullscreenStartupTips(content)
+		content, ranges = m.renderTranscriptWithExpandedMessages(m.State, m.transcript.Width, expanded, true)
 	}
 	// Rust #48352: once a turn finished with a final answer and the cadence
 	// allows it, a completion tip renders in the transcript (four columns are
@@ -9858,6 +9956,7 @@ func (m *Model) refreshTranscript() {
 			m.turnTips.acknowledge(turnTipSurfaceCompletion)
 		}
 	}
+	m.recordTranscriptDisclosureHits(m.State, content, ranges)
 	if content == m.lastTranscriptContent {
 		if m.activityFollow && m.transcript.Height != m.lastTranscriptHeight {
 			m.transcript.GotoBottom()
@@ -9880,32 +9979,6 @@ func (m *Model) refreshTranscript() {
 		m.transcript.SetYOffset(restoreTranscriptScrollAnchor(content, anchor, maxOffset))
 	}
 	m.lastTranscriptHeight = m.transcript.Height
-}
-
-// hideFullscreenStartupTips removes retained startup tooltip rows from the
-// fullscreen transcript while leaving them in State.Messages and raw output,
-// matching Rust #48513's hide-in-fullscreen/keep-in-scrollback split.
-func (m *Model) hideFullscreenStartupTips(content string) string {
-	if m == nil || m.State == nil {
-		return content
-	}
-	for _, message := range m.State.Messages {
-		if !message.StartupTip || strings.TrimSpace(message.Text) == "" {
-			continue
-		}
-		index := strings.Index(content, message.Text)
-		if index < 0 {
-			continue
-		}
-		start, end := index, index+len(message.Text)
-		if start > 0 && content[start-1] == '\n' {
-			start--
-		} else if end < len(content) && content[end] == '\n' {
-			end++
-		}
-		content = content[:start] + content[end:]
-	}
-	return content
 }
 
 func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
@@ -10820,14 +10893,14 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 }
 
 func renderTranscriptMessagesWithRangesAndExpansion(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool) (string, [][2]int) {
-	content, ranges, _ := renderTranscriptLayout(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning, nil)
+	content, ranges, _ := renderTranscriptLayout(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning, nil, false, false)
 	return content, ranges
 }
 
 // renderTranscriptLayout renders the transcript and, when resolveImage is set,
 // reserves layout-only rows below entries whose local artifact can be
 // previewed. Image rows join the message's range but carry no searchable text.
-func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage) (string, [][2]int, []transcriptImagePlan) {
+func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage, disclosureControls bool, hideStartupTips bool) (string, [][2]int, []transcriptImagePlan) {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet.", nil, nil
 	}
@@ -10844,6 +10917,9 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 	first := true
 	previousVisibleUserPrompt := false
 	for i, message := range state.Messages {
+		if hideStartupTips && message.StartupTip && strings.TrimSpace(message.Text) != "" {
+			continue
+		}
 		expanded := expandedHistory || expandedMessages[i]
 		key := transcriptMessageKey{
 			role:           message.Role,
@@ -10880,6 +10956,11 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 		if grouped && len(writeLines) > 0 && isUserSurfaceBlankLine(writeLines[0]) {
 			// The previous prompt already ends with the shared painted row.
 			writeLines = writeLines[1:]
+		}
+		if disclosureControls {
+			if rows, ok := transcriptDisclosureRows(message, writeLines, expanded, width); ok {
+				writeLines = rows
+			}
 		}
 		if !first {
 			if grouped {

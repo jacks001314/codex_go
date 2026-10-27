@@ -1226,6 +1226,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		DaemonCLIPackage:            daemonCLIPackage,
 		AnimationsEnabled:           settings.AnimationsEnabled,
 		Effects:                     settings.Effects,
+		StatusLineUseColors:         settings.StatusLineUseColors,
+		StatusLineItems:             optionalTUISettingList(settings.StatusLineItems),
+		TerminalTitleItems:          optionalTUISettingList(settings.TerminalTitleItems),
 		QuestionEscBack:             settings.QuestionEscBack,
 		AutoRecap:                   settings.AutoRecap,
 		PromptSuggestions:           settings.PromptSuggestions,
@@ -2332,6 +2335,8 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		FullscreenTranscript:       interactiveFullscreenTranscript(values),
 		AlternateScreenMode:        interactiveAlternateScreenMode(values),
 		StatusLineUseColors:        interactiveStatusLineUseColors(values),
+		StatusLineItems:            interactiveTUIStringListFromConfig(values, "status_line"),
+		TerminalTitleItems:         interactiveTUIStringListFromConfig(values, "terminal_title"),
 		QuestionEscBack:            interactiveQuestionEscBack(values),
 		AutoRecap:                  interactiveAutoRecap(values),
 		PromptSuggestions:          interactivePromptSuggestions(values),
@@ -3147,6 +3152,46 @@ func interactiveTUIStringFromConfig(values map[string]any, key string) string {
 	tui := interactiveTUIConfig(values)
 	value, _ := tui[key].(string)
 	return strings.TrimSpace(value)
+}
+
+// interactiveTUIStringListFromConfig resolves an optional ordered string list
+// such as `tui.status_line` or `tui.terminal_title`. Nil means the key was not
+// configured; an explicitly empty list is preserved because Rust uses it to
+// disable the corresponding surface.
+func interactiveTUIStringListFromConfig(values map[string]any, key string) *[]string {
+	raw, ok := interactiveTUIConfig(values)[key]
+	if !ok {
+		return nil
+	}
+	var items []string
+	switch typed := raw.(type) {
+	case []string:
+		items = make([]string, len(typed))
+		copy(items, typed)
+	case []any:
+		items = make([]string, 0, len(typed))
+		for _, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			items = append(items, value)
+		}
+	default:
+		return nil
+	}
+	return &items
+}
+
+// optionalTUISettingList copies a configured list into tea options without
+// collapsing an explicitly empty selection into the nil/default form.
+func optionalTUISettingList(values *[]string) []string {
+	if values == nil {
+		return nil
+	}
+	items := make([]string, len(*values))
+	copy(items, *values)
+	return items
 }
 
 func normalizeNotificationTypes(values []string) []string {

@@ -15,7 +15,7 @@ description: 通过对 Rust 与 Go 版 Codex cli tui 进行真实端到端差分
 
 ## 工作流
 
-1. 构建rust版本的codex cli二进制文件,只要构建一次就可以，后续测试直接使用该二进制文件。
+1. 使用系统内已经安装的codex程序，那是rust版本的。
 
 2. 构建go版本的codex cli二进制文件,每次修改后都需要重新构建。
 

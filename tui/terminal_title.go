@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"strings"
+	"unicode"
 )
 
 // Rust parity: codex-rs/tui/src/terminal_title.rs.
@@ -28,7 +29,9 @@ const (
 // sufficient (tmux also commonly uses that TERM, and a multiplexer inside Screen
 // still passes the title through Screen).
 func TerminalTitleEncoding() TitleEncoding {
-	if os.Getenv("STY") != "" {
+	// Rust checks var_os("STY").is_some(), so even an explicitly empty value
+	// selects Screen encoding.
+	if _, ok := os.LookupEnv("STY"); ok {
 		return TitleEncodingScreen
 	}
 	return TitleEncodingUnicode
@@ -115,7 +118,8 @@ func ClearTerminalTitleOSC() string {
 }
 
 func isTitleWhitespace(r rune) bool {
-	return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\v' || r == '\f'
+	// Rust uses char::is_whitespace, which follows Unicode White_Space.
+	return unicode.IsSpace(r)
 }
 
 func isDisallowedTerminalTitleRune(r rune) bool {
@@ -133,5 +137,7 @@ func isDisallowedTerminalTitleRune(r rune) bool {
 		(r >= 0x2060 && r <= 0x206F) ||
 		(r >= 0xFE00 && r <= 0xFE0F) ||
 		r == 0xFEFF ||
-		(r >= 0xFFF9 && r <= 0xFFFB)
+		(r >= 0xFFF9 && r <= 0xFFFB) ||
+		(r >= 0x1BCA0 && r <= 0x1BCA3) ||
+		(r >= 0xE0100 && r <= 0xE01EF)
 }

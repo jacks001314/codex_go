@@ -1046,7 +1046,7 @@ func TestTerminalTitleReportsDefaultItemsAndGitProjectName(t *testing.T) {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
-		"terminal title items: activity, project-name",
+		"terminal title items: activity, thread-name, project-name",
 		"terminal title project source: git repo root",
 		"terminal title project value: repo",
 	} {

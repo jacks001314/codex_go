@@ -2,6 +2,7 @@ package chatwidget
 
 import (
 	"strings"
+	"time"
 	"unicode"
 
 	bottompane "codex_go/tui/bottom_pane"
@@ -10,9 +11,17 @@ import (
 )
 
 var DefaultStatusLineItems = []string{"model-with-reasoning", "current-dir"}
-var DefaultTerminalTitleItems = []string{"activity", "project-name"}
+
+// DefaultTerminalTitleItems mirrors Rust's DEFAULT_TERMINAL_TITLE_ITEMS.
+// Unnamed threads omit thread-name until a name is available, so the default
+// activity and project-name segments remain visible before then.
+var DefaultTerminalTitleItems = []string{"activity", "thread-name", "project-name"}
 
 var TerminalTitleSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// TerminalTitleSpinnerInterval is the cadence of Rust's terminal-title
+// spinner (TERMINAL_TITLE_SPINNER_INTERVAL).
+const TerminalTitleSpinnerInterval = 100 * time.Millisecond
 
 const (
 	TerminalTitleActionRequiredPrefix       = "[ ! ] Action Required"
@@ -701,6 +710,17 @@ func TerminalTitleSpinnerFrame(frameIndex int) string {
 		frameIndex = -frameIndex
 	}
 	return TerminalTitleSpinnerFrames[frameIndex%len(TerminalTitleSpinnerFrames)]
+}
+
+// TerminalTitleSpinnerFrameAt selects the frame from wall-clock elapsed time,
+// matching Rust's terminal_title_spinner_frame_at. Using the shared animation
+// engine's tick counter would advance only when a tick was delivered and could
+// drift away from the 100 ms cadence.
+func TerminalTitleSpinnerFrameAt(origin, now time.Time) string {
+	if now.Before(origin) {
+		return TerminalTitleSpinnerFrame(0)
+	}
+	return TerminalTitleSpinnerFrame(int(now.Sub(origin) / TerminalTitleSpinnerInterval))
 }
 
 func TruncateTerminalTitlePart(value string, maxChars int) string {

@@ -166,6 +166,7 @@ func (m *Model) focusTranscriptActivity() {
 	m.activityFocus.savedOffset = m.transcript.YOffset
 	m.activityFocus.savedFollow = m.activityFollow
 	m.refreshTranscript()
+	m.ensureFocusedTranscriptActivityVisible()
 }
 
 func (m *Model) clearTranscriptActivityFocus() {
@@ -210,6 +211,7 @@ func (m *Model) moveTranscriptActivityFocus(delta int) bool {
 	}
 	m.setFocusedTranscriptActivity(indexes[next])
 	m.refreshTranscript()
+	m.ensureFocusedTranscriptActivityVisible()
 	return true
 }
 
@@ -218,21 +220,10 @@ func (m *Model) setTranscriptActivityExpanded(expanded bool) bool {
 		return false
 	}
 	index := m.focusedTranscriptActivityIndex()
-	if index < 0 || !m.transcriptActivityExpandable(index) {
+	if index < 0 {
 		return false
 	}
-	if m.activityFocus.expanded == nil {
-		m.activityFocus.expanded = map[string]bool{}
-	}
-	for _, key := range m.transcriptActivityKeys(index) {
-		if expanded {
-			m.activityFocus.expanded[key] = true
-		} else {
-			delete(m.activityFocus.expanded, key)
-		}
-	}
-	m.refreshTranscript()
-	return true
+	return m.setTranscriptActivityExpandedAt(index, expanded)
 }
 
 func (m *Model) toggleTranscriptActivityExpanded() bool {
@@ -259,21 +250,35 @@ func (m *Model) expandedTranscriptActivityMessages() map[int]bool {
 	return expanded
 }
 
-func (m *Model) renderTranscriptActivityContent() (string, int) {
+func (m *Model) renderTranscriptActivityContent() (string, [][2]int, int) {
 	if m == nil || m.State == nil || !m.activityFocus.active {
-		return "No messages yet.", -1
+		return "No messages yet.", nil, -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
 	content, ranges := m.renderTranscriptWithExpandedMessages(m.State, width, m.expandedTranscriptActivityMessages(), true)
 	index := m.focusedTranscriptActivityIndex()
 	if index < 0 || index >= len(ranges) {
-		return content, -1
+		return content, ranges, -1
 	}
 	line := ranges[index][0]
 	if line < 0 {
-		return content, -1
+		return content, ranges, -1
 	}
-	return highlightTranscriptLine(content, line), line
+	return styleFocusedTranscriptActivity(content, ranges, index, width), ranges, line
+}
+
+// ensureFocusedTranscriptActivityVisible scrolls the focused group's header
+// into view after an explicit focus move. Ordinary rendering and wheel
+// scrolling leave the viewport where the user put it (Rust focus_activity).
+func (m *Model) ensureFocusedTranscriptActivityVisible() {
+	if m == nil {
+		return
+	}
+	index := m.focusedTranscriptActivityIndex()
+	if index < 0 || index >= len(m.transcriptMessageRanges) {
+		return
+	}
+	m.ensureTranscriptLineVisible(m.transcriptMessageRanges[index][0])
 }
 
 func (m *Model) ensureTranscriptLineVisible(line int) {
@@ -287,11 +292,38 @@ func (m *Model) ensureTranscriptLineVisible(line int) {
 	}
 }
 
-func (m *Model) activityFocusBarLine() string {
+// activityFocusBarLine renders the disclosure footer from the configured list
+// keymap (Rust TranscriptView::disclosure_footer). Navigation hints are
+// dropped from the left before the details/back controls, and a hint is never
+// split from its key (Rust footer_hint::first_fitting_line).
+func (m *Model) activityFocusBarLine(width int) string {
 	if m == nil || !m.activityFocus.active {
 		return ""
 	}
-	return "Activity · up/down select · enter details · esc back"
+	hints := []struct {
+		action string
+		label  string
+	}{
+		{action: "move_up", label: "previous"},
+		{action: "move_down", label: "next"},
+		{action: "accept", label: "details"},
+		{action: "cancel", label: "back"},
+	}
+	parts := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "list", hint.action)
+		if len(bindings) == 0 {
+			continue
+		}
+		parts = append(parts, displayKeyBinding(bindings[0])+" "+hint.label)
+	}
+	for start := range parts {
+		line := strings.Join(parts[start:], " · ")
+		if codextui.DisplayWidth(line) <= max(width, 0) {
+			return line
+		}
+	}
+	return ""
 }
 
 func (m *Model) updateTranscriptActivityFocusKey(msg bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
@@ -323,6 +355,7 @@ func (m *Model) updateTranscriptActivityFocusKey(msg bubbletea.KeyMsg) (bool, bu
 		if len(indexes) > 0 {
 			m.setFocusedTranscriptActivity(indexes[0])
 			m.refreshTranscript()
+			m.ensureFocusedTranscriptActivityVisible()
 		}
 		return true, nil
 	case bubbletea.KeyEnd:
@@ -330,6 +363,7 @@ func (m *Model) updateTranscriptActivityFocusKey(msg bubbletea.KeyMsg) (bool, bu
 		if len(indexes) > 0 {
 			m.setFocusedTranscriptActivity(indexes[len(indexes)-1])
 			m.refreshTranscript()
+			m.ensureFocusedTranscriptActivityVisible()
 		}
 		return true, nil
 	case bubbletea.KeyEnter:
