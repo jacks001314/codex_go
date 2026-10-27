@@ -114,6 +114,7 @@ TUI lane and are not modified here.
 | `#56297` | Built-in dummy credentials carry the provider prefix, a visible `masked` marker and over 128 random alphanumeric bytes after it, copying no punctuation from the real credential; candidate dummies that duplicate or embed an already-issued credential or dummy are rejected instead of being registered | `network/proxy_credential_broker.go`, like-Rust tests |
 | `#56266` | Managed-requirements denials keep their reason across runtime overlays unless a trusted host-owned Apps registration replaces the server; an explicit disable that requirements also deny stays combined through repeated filtering; standalone MCP login HTTP clients reject requirements-denied servers | `mcp/catalog_priority.go`, `mcp/config.go`, `mcp/api.go`, `config/mcp_requirements.go`, like-Rust tests |
 | `#55978` | `logs_2.sqlite` moves to an explicitly configured `log_dir` (user config or managed requirements) unless a managed `sqlite_home` requirement pins the database home; other databases stay in `sqlite_home` and an unset `log_dir` keeps the old location. The logs directory is created only when its database opens, so an unavailable `log_dir` never blocks login/config reads. Existing logs stay in place: feedback falls back to them as `codex-logs-legacy.log`, and retention pruning plus page reclamation cover both locations with independent maintenance locks and NFS probes | `config/config.go`, `state/sqlite.go`, `state/logs.go`, `state/logs_maintenance.go`, `state/reclamation.go`, `appserver/websocket.go`, `appserver/runtime_router.go`, like-Rust tests |
+| `#55856` | Managed app-server and updater stderr logs go through one bounded, nonblocking worker (64 queued records, 16 KiB per record, lossy); a live log above 1 MiB keeps its latest 256 KiB in `.log.previous` and is truncated in place with append-only handles, and updater handoff pauses predecessor pruning until ownership is restored | `appserverdaemon/stderr_log.go`, `appserverdaemon/stderr_append_unix.go`, `appserverdaemon/stderr_append_windows.go`, `appserverdaemon/daemon.go`, `appserverdaemon/migration.go`, `appserverdaemon/update_loop.go`, `appserverdaemon/pid_shutdown_windows.go`, `app/app.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -128,6 +129,14 @@ Grounding notes:
   opens the old database in `mode=rw` with no busy timeout, matching Rust's
   `open_legacy_logs_for_cleanup`, while the feedback fallback stays read-only.
   `doctor` path reporting for a configured logs home stays with the TUI lane.
+- `#57488` is N/A: Rust moves Guardian prompt composition from core into the
+  `codex-guardian-reviewer` extension crate. Go has no crate boundary or
+  extension partition for the reviewer (its prompt composition already lives
+  beside the reviewer), so the refactor changes no behavior to port.
+- `#55856`'s bounded stderr worker has no Rust `WorkerGuard`: Go keeps the
+  writer for the process lifetime and tests stop it explicitly. The Windows
+  append handle is reopened with `ReOpenFile` (append-only access) and installed
+  with `SetStdHandle`, matching Rust, and `os.Stderr` follows it.
 - `#56124`'s reviewer-event forwarding is structurally N/A: Rust installs a
   parent observer on a private Guardian review *session* and forwards its
   `RawResponseItem`/`TurnAborted` events under the reviewer's own thread and
@@ -1258,5 +1267,11 @@ deduplication for tool outputs.
   attachment, legacy retention pruning that never creates a missing database,
   per-directory reclamation locks, app-server routing from `log_dir`, and the
   managed `sqlite_home` override.
+- For `#55856`: `go test ./appserverdaemon -count=1`, `go vet ./appserverdaemon ./app`,
+  `go build ./appserverdaemon ./app`, and `GOOS=linux`/`GOOS=darwin`
+  `go build ./appserverdaemon` pass. Coverage pins oversized-record and
+  full-queue drops, the 1 MiB prune with a 256 KiB `.previous` tail, skips for
+  small/missing/nonregular files, the handoff pause with ownership restoration,
+  live worker pruning, stale-temp cleanup, and the unmanaged stderr fallback.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.

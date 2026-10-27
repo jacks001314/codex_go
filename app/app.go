@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -1419,6 +1420,16 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 		shutdownAccess := appserver.DaemonShutdownDisabled
 		if strings.TrimSpace(os.Getenv(appserverdaemon.DaemonShutdownSocketEnv)) != "" {
 			shutdownAccess = appserver.DaemonShutdownManaged
+		}
+		// A pid-managed app-server (Rust `managed_daemon`) bounds its stderr log
+		// with a nonblocking worker and live pruning (#55856). The daemon passes
+		// its pid file to every managed child.
+		if strings.TrimSpace(os.Getenv(appserverdaemon.UpdaterPIDFileEnv)) != "" {
+			if err := appserverdaemon.MaintainStderrLog(); err == nil {
+				appserverdaemon.InstallStderrLogging()
+			} else {
+				slog.Warn("failed to maintain managed stderr log", "error", err)
+			}
 		}
 		return appserver.ServeUnixSocket(serverCtx, &appserver.UnixSocketOptions{
 			CodexHome:        codexHome,

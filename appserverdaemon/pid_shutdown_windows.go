@@ -37,7 +37,7 @@ func requestGracefulPIDShutdown(backend *PIDBackend, record *PIDRecord) error {
 	// process once the grace period elapses (Rust logs and keeps waiting).
 	socketPath := AppServerControlSocketPath(filepath.Dir(filepath.Dir(backend.PIDFile)))
 	if err := requestDaemonShutdown(socketPath, record.PID, ControlSocketResponseTimeout); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: managed app-server shutdown request failed; waiting for force deadline: %v\n", err)
+		fmt.Fprintf(StderrWriter(), "warning: managed app-server shutdown request failed; waiting for force deadline: %v\n", err)
 	}
 	return nil
 }

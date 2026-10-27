@@ -127,7 +127,7 @@ func normalizeMigrationOptions(options *MigrationOptions) *MigrationOptions {
 	}
 	if options.Diagnostic == nil {
 		options.Diagnostic = func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, format+"\n", args...)
+			fmt.Fprintf(StderrWriter(), format+"\n", args...)
 		}
 	}
 	return options

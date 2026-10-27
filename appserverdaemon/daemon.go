@@ -605,7 +605,7 @@ func (d *Daemon) Diagnostic(format string, args ...any) {
 	if d != nil && d.LogDiagnostics {
 		return
 	}
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	fmt.Fprintf(StderrWriter(), format+"\n", args...)
 }
 
 func NewDaemonForCodexHome(codexHome string, cliVersion string) *Daemon {

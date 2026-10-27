@@ -68,6 +68,12 @@ func RunPIDUpdateLoop(ctx context.Context, runner *LifecycleRunner, options *Upd
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// A managed updater bounds its stderr log the same way the app-server does
+	// (Rust update_loop::run, #55856). A foreground probe has no managed pid
+	// file, so ordinary stderr stays in place.
+	if err := MaintainStderrLog(); err == nil {
+		InstallStderrLogging()
+	}
 	if err := EnsureNonElevated(); err != nil {
 		return err
 	}
@@ -436,8 +442,15 @@ func ReexecManagedUpdater(managedCodexBin string) error {
 		PIDFile:  pidFile,
 	})
 	previousRecord, _ := ReadPIDRecord(pidFile)
+	// Keep pruning out of the truncated shared log until the successor owns it
+	// (Rust replace_current_updater, #55856).
+	resumePruning, err := pauseStderrPruningForHandoff()
+	if err != nil {
+		return err
+	}
 	pid, _, _, err := startDetachedPIDProcess(backend)
 	if err != nil {
+		resumePruning(false)
 		return fmt.Errorf("failed to start successor updater: %w", err)
 	}
 	deadline := time.Now().Add(PIDStartTimeout)
@@ -445,16 +458,21 @@ func ReexecManagedUpdater(managedCodexBin string) error {
 		state, err := ReadPIDFileState(pidFile)
 		if err == nil && state.Kind == PIDFileRunning && state.Record != nil && state.Record.PID == pid {
 			if active, err := processMatchesPIDRecord(state.Record); err == nil && active {
+				// The successor owns retention now; leave predecessor pruning off.
+				resumePruning(false)
 				return nil
 			}
 		}
 		if time.Now().After(deadline) {
 			_ = forceTerminatePIDProcess(pid, false)
+			ownershipRestored := false
 			if previousRecord != nil {
 				if previous, activeErr := processMatchesPIDRecord(previousRecord); activeErr == nil && previous {
 					_ = WritePIDRecord(pidFile, previousRecord)
+					ownershipRestored = true
 				}
 			}
+			resumePruning(ownershipRestored)
 			return fmt.Errorf("successor updater %d did not become ready on %s", pid, pidFile)
 		}
 		time.Sleep(PIDStartPollInterval)
