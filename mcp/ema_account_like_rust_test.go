@@ -107,6 +107,12 @@ func TestMCPEMAAccountConfigurationIssueLikeRust(t *testing.T) {
 type mcpEMAExchangeRecorder struct {
 	mu     sync.Mutex
 	values []url.Values
+	// rejectAccountIDPToken makes the IdP reject the account grant once, so a
+	// test can observe the initial-connection fallback to enterprise sign-in.
+	rejectAccountIDPToken bool
+	// onIDPToken runs before the IdP answers and reports whether this request
+	// must be rejected, so a test can rotate the stored grant mid-exchange.
+	onIDPToken func(url.Values) bool
 }
 
 func (r *mcpEMAExchangeRecorder) record(values url.Values) {
@@ -144,6 +150,18 @@ func mcpEMAAccountTestServer(t *testing.T, recorder *mcpEMAExchangeRecorder) *ht
 		case "/idp/token":
 			if err := r.ParseForm(); err == nil {
 				recorder.record(r.PostForm)
+			}
+			if recorder.onIDPToken != nil && recorder.onIDPToken(r.PostForm) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+				return
+			}
+			if recorder.rejectAccountIDPToken && r.PostForm.Get("client_id") == "account-client" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+				return
 			}
 			claims := mcpEMATestClaimsAt("http://"+r.Host+"/idp", "http://"+r.Host+"/mcp", "http://"+r.Host+"/mcp", now)
 			accessToken, err := mcpEMATestJWTValue(mcpEMATestJAGHeader(), claims)
@@ -204,11 +222,75 @@ func TestEMAAuthManagerBorrowsAccountGrantLikeRust(t *testing.T) {
 	if got := requests[0].Get("client_id"); got != "account-client" {
 		t.Fatalf("IdP client_id = %q, want the account OAuth client", got)
 	}
+	if !manager.CredentialsAvailable() {
+		t.Fatal("an eligible account grant is a usable credential")
+	}
 }
 
-// TestEMAAuthManagerPrefersStoredEnterpriseGrantLikeRust mirrors #55698: a
-// stored enterprise sign-in keeps winning over an eligible account grant.
-func TestEMAAuthManagerPrefersStoredEnterpriseGrantLikeRust(t *testing.T) {
+// TestEMAAuthManagerRetriesRotatedAccountGrantLikeRust mirrors #55859: when the
+// refresh grant rotates under a rejected exchange, the connection retries the
+// newer grant instead of failing the call or remembering a stale rejection.
+func TestEMAAuthManagerRetriesRotatedAccountGrantLikeRust(t *testing.T) {
+	recorder := &mcpEMAExchangeRecorder{}
+	server := mcpEMAAccountTestServer(t, recorder)
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: server.URL + "/idp", ClientID: "idp-client",
+	}}
+	original := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")}
+	rotatedTokens := mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")
+	rotatedTokens["refresh_token"] = "account-refresh-2"
+	rotatedTokens["access_token"] = "account-access-2"
+	rotated := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: rotatedTokens}
+	if err := auth.NewStore(home).Save(*original); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	current := original
+	var rotateOnce sync.Once
+	recorder.onIDPToken = func(url.Values) bool {
+		rejected := false
+		rotateOnce.Do(func() {
+			rejected = true
+			if err := auth.NewStore(home).Save(*rotated); err != nil {
+				t.Error(err)
+			}
+			mu.Lock()
+			current = rotated
+			mu.Unlock()
+		})
+		return rejected
+	}
+	manager := newMCPEMAAccountTestManager(t, home, server, profile, func() *auth.AuthDotJSON {
+		mu.Lock()
+		defer mu.Unlock()
+		return current
+	})
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ApplyHTTPRequest(request, nil); err != nil {
+		t.Fatalf("ApplyHTTPRequest() error = %v", err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer resource-token" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	requests := recorder.idpRequests()
+	if len(requests) != 2 {
+		t.Fatalf("IdP requests = %#v, want the rejected and retried exchanges", requests)
+	}
+	if requests[0].Get("subject_token") != "account-refresh" || requests[1].Get("subject_token") != "account-refresh-2" {
+		t.Fatalf("IdP requests = %#v, want the rotated grant on retry", requests)
+	}
+	if manager.emaState.RequiresSignIn(manager.registrationIdentity(), rotatedTokens) {
+		t.Fatal("a rotated grant must not inherit the previous revision's rejection")
+	}
+}
+
+// TestEMAAuthManagerPrefersAccountGrantLikeRust mirrors #55859: an eligible
+// account grant wins over a saved enterprise sign-in.
+func TestEMAAuthManagerPrefersAccountGrantLikeRust(t *testing.T) {
 	recorder := &mcpEMAExchangeRecorder{}
 	server := mcpEMAAccountTestServer(t, recorder)
 	home := t.TempDir()
@@ -239,11 +321,64 @@ func TestEMAAuthManagerPrefersStoredEnterpriseGrantLikeRust(t *testing.T) {
 		t.Fatalf("ApplyHTTPRequest() error = %v", err)
 	}
 	requests := recorder.idpRequests()
-	if len(requests) != 1 || requests[0].Get("subject_token") != "enterprise-refresh" {
-		t.Fatalf("IdP requests = %#v, want the stored enterprise grant", requests)
+	if len(requests) != 1 || requests[0].Get("subject_token") != "account-refresh" {
+		t.Fatalf("IdP requests = %#v, want the account grant", requests)
 	}
-	if got := requests[0].Get("client_id"); got != "idp-client" {
-		t.Fatalf("IdP client_id = %q, want the configured IdP client", got)
+	if got := requests[0].Get("client_id"); got != "account-client" {
+		t.Fatalf("IdP client_id = %q, want the account OAuth client", got)
+	}
+}
+
+// TestEMAAuthManagerFallsBackToEnterpriseSignInLikeRust mirrors #55859: when
+// the initial connection's account grant is rejected, a saved enterprise
+// sign-in completes it and the rejection is remembered for that registration.
+func TestEMAAuthManagerFallsBackToEnterpriseSignInLikeRust(t *testing.T) {
+	recorder := &mcpEMAExchangeRecorder{rejectAccountIDPToken: true}
+	server := mcpEMAAccountTestServer(t, recorder)
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: server.URL + "/idp", ClientID: "idp-client",
+	}}
+	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
+		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
+		ServerURL:    profile.IDP.Issuer,
+		ClientID:     profile.IDP.ClientID,
+		RefreshToken: "enterprise-refresh",
+		AccessToken:  "idp-access",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")}
+	if err := auth.NewStore(home).Save(*snapshot); err != nil {
+		t.Fatal(err)
+	}
+	manager := newMCPEMAAccountTestManager(t, home, server, profile, func() *auth.AuthDotJSON { return snapshot })
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ApplyHTTPRequest(request, nil); err != nil {
+		t.Fatalf("ApplyHTTPRequest() error = %v", err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer resource-token" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	requests := recorder.idpRequests()
+	if len(requests) != 2 {
+		t.Fatalf("IdP requests = %#v, want the rejected account exchange and the enterprise sign-in", requests)
+	}
+	if requests[0].Get("subject_token") != "account-refresh" || requests[1].Get("subject_token") != "enterprise-refresh" {
+		t.Fatalf("IdP requests = %#v, want account then enterprise credentials", requests)
+	}
+	if got := requests[1].Get("client_id"); got != "idp-client" {
+		t.Fatalf("fallback IdP client_id = %q, want the configured IdP client", got)
+	}
+	if !manager.emaState.RequiresSignIn(manager.registrationIdentity(), snapshot.Tokens) {
+		t.Fatal("rejected account grant was not remembered for this registration")
+	}
+	if !manager.CredentialsAvailable() {
+		t.Fatal("the saved enterprise sign-in is still a usable credential")
 	}
 }
 

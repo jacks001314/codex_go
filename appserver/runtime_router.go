@@ -287,6 +287,10 @@ type RuntimeRouter struct {
 	// same startedAtMs (Rust #57172 turn timing state).
 	itemStartedTimesMu sync.Mutex
 	itemStartedTimes   map[string]int64
+	// emaState remembers enterprise MCP account grants a registration rejected,
+	// shared by every thread this router serves (Rust McpConfig::ema_state,
+	// #55859). It holds revision digests, never credentials.
+	emaState *mcp.EMAState
 	// agentWakeMu serializes the decision to drain queued agent mail and start
 	// its automatic root turn. Without it, concurrent deliveries could both
 	// observe an idle thread and race to consume the same queue.
@@ -788,6 +792,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		config:                  configService,
 		threads:                 threads,
 		turnsMu:                 &threads.turnsMu,
+		emaState:                mcp.NewEMAState(),
 		active:                  threads.active,
 		diffs:                   threads.diffs,
 		ephemeralMu:             &threads.ephemeralMu,
@@ -12301,6 +12306,11 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeConfig, codexHome string, runtimeAuth *mcp.RuntimeAuth, expected *auth.AuthDotJSON) {
 	if runtime == nil {
 		return
+	}
+	// Rejection markers outlive a runtime rebuild so a rejected account grant is
+	// not retried by the next thread (Rust #55859).
+	if r.emaState != nil {
+		runtime.EMAState = r.emaState
 	}
 	var accountLoginCurrent func() (bool, error)
 	var accountGrantOptions *auth.AccountOAuthGrantLeaseOptions

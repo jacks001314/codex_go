@@ -432,6 +432,11 @@ type RuntimeConfig struct {
 	// resolved from. New enterprise MCP requests are held while the binding is
 	// stale or suspended (Rust #55691).
 	EMAPolicyBinding *managedconfig.CloudConfigBundleBinding
+	// EMAState remembers rejected account grants for each enterprise MCP
+	// registration across threads (Rust McpConfig::ema_state, #55859). It
+	// retains only revision digests, never credentials. A nil value makes
+	// rejection markers local to one enterprise manager.
+	EMAState *EMAState
 	// EnterpriseManagedAuth is the trusted `[mcp_enterprise_managed_auth]`
 	// profile used to derive enterprise IdP credentials.
 	EnterpriseManagedAuth *managedconfig.MCPEnterpriseManagedAuthConfig

@@ -85,6 +85,46 @@ func TestLeaseAccountOAuthGrantRequiresCompleteOAuthIdentityLikeRust(t *testing.
 	}
 }
 
+// TestAccountOAuthGrantRevisionIgnoresTokenRotationLikeRust mirrors #55859: a
+// grant stays the same credential across access and ID token rotation, while a
+// new refresh token or login is a different credential.
+func TestAccountOAuthGrantRevisionIgnoresTokenRotationLikeRust(t *testing.T) {
+	home := t.TempDir()
+	saved := saveGrantTestAuth(t, home, grantTestTokens("login-1", "refresh-1"))
+	lease, err := LeaseAccountOAuthGrant(context.Background(), &AccountOAuthGrantLeaseOptions{
+		CodexHome: home,
+		Cached:    func() *AuthDotJSON { return saved },
+	})
+	if err != nil || lease == nil {
+		t.Fatalf("lease = %+v, error = %v", lease, err)
+	}
+	grant := lease.Release()
+
+	rotated := grantTestTokens("login-1", "refresh-1")
+	rotated["access_token"] = "access-rotated"
+	rotated["id_token"] = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyIn0.signature"
+	saveGrantTestAuth(t, home, rotated)
+	current, ok, err := grant.CurrentTokens()
+	if err != nil || !ok || current == nil {
+		t.Fatalf("CurrentTokens() = %#v, %v, error = %v", current, ok, err)
+	}
+	if current["access_token"] != "access-rotated" {
+		t.Fatalf("CurrentTokens() access token = %v", current["access_token"])
+	}
+
+	renewed := grantTestTokens("login-1", "refresh-2")
+	if AccountOAuthGrantRevisionFromTokens(renewed) == AccountOAuthGrantRevisionFromTokens(grantTestTokens("login-1", "refresh-1")) {
+		t.Fatal("a new refresh token must be a different credential revision")
+	}
+	if AccountOAuthGrantRevisionFromTokens(grantTestTokens("login-2", "refresh-1")) == AccountOAuthGrantRevisionFromTokens(grantTestTokens("login-1", "refresh-1")) {
+		t.Fatal("a new login owner must be a different credential revision")
+	}
+	other := &AccountOAuthGrant{tokens: renewed}
+	if grant.SameCredential(other) {
+		t.Fatal("a renewed refresh token must not be the same credential")
+	}
+}
+
 // Rust #55546: an identity-provider exchange holds the refresh lease, so an
 // ordinary refresh must wait until it is released.
 func TestAccountOAuthGrantLeaseBlocksRefreshUntilReleaseLikeRust(t *testing.T) {

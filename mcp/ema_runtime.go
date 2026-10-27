@@ -64,7 +64,11 @@ type EMAAuthOptions struct {
 	// #55698). The manager fills CodexHome and LoginGeneration from its own
 	// configuration when they are unset.
 	AccountGrantOptions *auth.AccountOAuthGrantLeaseOptions
-	HTTPClient          *http.Client
+	// EMAState remembers account grants this enterprise registration rejected,
+	// shared across threads by the MCP service (Rust #55859). A nil value gives
+	// this manager its own markers.
+	EMAState   *EMAState
+	HTTPClient *http.Client
 }
 
 // EMAAuthManager exchanges the account-scoped enterprise IdP grant for a
@@ -86,8 +90,10 @@ type EMAAuthManager struct {
 	accountLoginCurrent       func() (bool, error)
 	policyBinding             *managedconfig.CloudConfigBundleBinding
 	accountGrantOptions       *auth.AccountOAuthGrantLeaseOptions
+	emaState                  *EMAState
 	credentialSource          emaCredentialSource
 	accountClientID           string
+	initialPending            bool
 	revoked                   atomic.Bool
 	codexHome                 string
 	storeMode                 OAuthCredentialsStoreMode
@@ -128,6 +134,11 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 		codexHome:                 strings.TrimSpace(options.CodexHome),
 		storeMode:                 options.StoreMode,
 		httpClient:                options.HTTPClient,
+		emaState:                  options.EMAState,
+		initialPending:            true,
+	}
+	if manager.emaState == nil {
+		manager.emaState = NewEMAState()
 	}
 	if manager.currentLoginGeneration != nil {
 		manager.loginGeneration = manager.currentLoginGeneration()
@@ -154,6 +165,19 @@ func (m *EMAAuthManager) CredentialsAvailable() bool {
 	if m == nil || m.codexHome == "" || !m.scopeIsCurrent() {
 		return false
 	}
+	// Rust #55859: an eligible, not-yet-rejected account grant is a usable
+	// credential even when no enterprise sign-in is stored. The read is
+	// non-blocking so a status pass never waits for refresh coordination.
+	if m.accountGrantOptions != nil {
+		tokens, err := auth.AccountOAuthGrantTokens(
+			m.accountGrantOptions.CodexHome,
+			m.accountGrantOptions.StoreOptions,
+			m.accountGrantOptions.Cached,
+		)
+		if err == nil && m.emaState.AccountIsUsable(tokens, m.registrationIdentity(), m.profile.IDP) {
+			return true
+		}
+	}
 	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(EMAAuthCredentialName(m.profile.IDP, m.scope), m.profile.IDP.Issuer)
 	return err == nil && tokens != nil && strings.TrimSpace(tokens.RefreshToken) != ""
 }
@@ -163,6 +187,7 @@ type emaCredentialKey struct {
 	storeMode      OAuthCredentialsStoreMode
 	credentialName string
 	issuer         string
+	registration   emaRegistrationIdentity
 }
 
 // emaCredentialStatus shares one lazy credential read across every admitted EMA
@@ -296,23 +321,23 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	if err := m.checkAccount(); err != nil {
 		return "", emaAccountCheckFailure(m.credentialKind(), err)
 	}
-	source, err := m.pinCredentialSource(ctx)
-	if err != nil {
+	if _, err := m.pinCredentialSource(ctx); err != nil {
 		return "", err
 	}
-	var token *MCPEMAAccessToken
-	if source == emaCredentialAccount {
-		grant, err := m.accountGrant(ctx)
-		if err != nil {
-			return "", emaAccountCheckFailure(m.credentialKind(), err)
+	token, err := m.acquireToken(ctx, client)
+	if err != nil && m.initialPending && m.credentialSource == emaCredentialAccount && emaAuthenticationRequired(err) {
+		// Rust #55859: a saved enterprise sign-in can still satisfy step-up when
+		// this connection's account grant was rejected. Once a connection has a
+		// token it never changes source.
+		m.fallbackToKeyring(ctx)
+		if m.credentialSource == emaCredentialKeyring {
+			token, err = m.acquireToken(ctx, client)
 		}
-		token, err = m.exchangeAccountToken(ctx, client, grant)
-	} else {
-		token, err = m.exchangeKeyringToken(ctx, client)
 	}
 	if err != nil {
-		return "", err
+		return "", emaCredentialFailure(m.credentialKind(), err)
 	}
+	m.initialPending = false
 	if err := m.checkAccount(); err != nil {
 		return "", emaAccountCheckFailure(m.credentialKind(), err)
 	}
@@ -327,10 +352,109 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	return m.token, nil
 }
 
+// acquireToken renews the pinned credential. An account connection retries once
+// when the grant rotated under an exchange, because exchanging the newer grant
+// is still this account owner's authority (Rust #55859).
+func (m *EMAAuthManager) acquireToken(ctx context.Context, client *http.Client) (*MCPEMAAccessToken, error) {
+	if err := m.checkAccount(); err != nil {
+		return nil, err
+	}
+	if m.credentialSource != emaCredentialAccount {
+		return m.exchangeKeyringToken(ctx, client)
+	}
+	grant, err := m.accountGrant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		token, err := m.exchangeAccountToken(ctx, client, grant)
+		if err == nil {
+			return token, nil
+		}
+		// Only an IdP rejection or a stale credential can be repaired by
+		// re-reading the grant; anything else is this call's failure.
+		if !emaIDPRejected(err) && !emaReauthenticationRequired(err) {
+			return nil, err
+		}
+		// Keep the exchange failure: re-reading the grant must not replace it.
+		current, grantErr := m.accountGrant(ctx)
+		if grantErr != nil {
+			return nil, grantErr
+		}
+		if !current.SameCredential(grant) {
+			if attempt == 0 {
+				grant = current
+				continue
+			}
+			// Repeated rotation is transient; a later call can renew without
+			// revoking this still-current account owner.
+			return nil, UnexpectedEMATokenSourceError(EMACredentialKindAccount)
+		}
+		if emaIDPRejected(err) {
+			if err := m.rejectAccountGrant(ctx, grant); err != nil {
+				return nil, err
+			}
+		}
+		return nil, err
+	}
+	return nil, UnexpectedEMATokenSourceError(EMACredentialKindAccount)
+}
+
+// rejectAccountGrant publishes a rejection marker for this registration, but
+// only while the stored grant still matches the exchanged revision, so a late
+// rejection cannot replace a newer credential's marker (Rust #55859).
+func (m *EMAAuthManager) rejectAccountGrant(ctx context.Context, grant *auth.AccountOAuthGrant) error {
+	lease, err := m.leaseAccountGrant(ctx)
+	if err != nil {
+		return err
+	}
+	if lease == nil {
+		return nil
+	}
+	tokens := lease.Tokens()
+	lease.Release()
+	if auth.AccountOAuthGrantRevisionFromTokens(tokens) != auth.AccountOAuthGrantRevisionFromTokens(grant.Tokens()) {
+		// Refresh may also rotate after the first credential check.
+		return UnexpectedEMATokenSourceError(EMACredentialKindAccount)
+	}
+	m.emaState.Reject(m.registrationIdentity(), tokens)
+	return nil
+}
+
+// fallbackToKeyring switches an initial account connection to the saved
+// enterprise sign-in when this connection's account grant was rejected and a
+// usable saved grant exists (Rust EnterpriseTokenSource::initial_access_token).
+func (m *EMAAuthManager) fallbackToKeyring(ctx context.Context) {
+	if m.emaState == nil {
+		return
+	}
+	lease, err := m.leaseAccountGrant(ctx)
+	if err != nil {
+		return
+	}
+	rejected := false
+	if lease != nil {
+		rejected = m.emaState.RequiresSignIn(m.registrationIdentity(), lease.Tokens())
+		lease.Release()
+	}
+	if !rejected {
+		return
+	}
+	tokens, err := m.storedEnterpriseCredential()
+	if err != nil || tokens == nil {
+		return
+	}
+	if err := m.checkAccount(); err != nil {
+		return
+	}
+	m.credentialSource = emaCredentialKeyring
+	m.accountClientID = ""
+}
+
 // emaCredentialSource is the credential an enterprise connection is pinned to.
 // Rust EnterpriseTokenSource chooses one source and OAuth client when the
-// connection is established (#55698), so a live connection never silently
-// switches credentials when the other source appears or disappears.
+// connection is established, so a live connection never silently switches
+// credentials when the other source appears or disappears (#55698).
 type emaCredentialSource int
 
 const (
@@ -355,23 +479,16 @@ func (m *EMAAuthManager) credentialKind() EMACredentialKind {
 	return m.credentialSource.kind()
 }
 
-// pinCredentialSource selects the credential and OAuth client this manager uses
-// (Rust EnterpriseTokenSource::new, #55698). A stored enterprise grant wins
-// while it exists; otherwise a validated Codex account grant whose provenance
-// names the configured issuer supplies the IdP client. Only a successful
-// selection is cached, so a later sign-in is still picked up.
+// pinCredentialSource selects the credential and OAuth client this manager uses.
+// An eligible, not-yet-rejected Codex account grant wins over a saved enterprise
+// sign-in; otherwise the saved enterprise grant supplies the credential
+// (Rust EnterpriseTokenSource::new, #55859). Only a successful selection is
+// cached, so a later sign-in is still picked up.
 func (m *EMAAuthManager) pinCredentialSource(ctx context.Context) (emaCredentialSource, error) {
 	if m.credentialSource != emaCredentialUnresolved {
 		return m.credentialSource, nil
 	}
-	tokens, err := m.storedEnterpriseCredential()
-	if err != nil {
-		return emaCredentialUnresolved, err
-	}
-	if tokens != nil {
-		m.credentialSource = emaCredentialKeyring
-		return m.credentialSource, nil
-	}
+	registration := m.registrationIdentity()
 	lease, err := m.leaseAccountGrant(ctx)
 	if err != nil {
 		return emaCredentialUnresolved, err
@@ -380,21 +497,27 @@ func (m *EMAAuthManager) pinCredentialSource(ctx context.Context) (emaCredential
 	if lease != nil {
 		granted := lease.Tokens()
 		lease.Release()
-		if MCPEMAAccountGrantIsUsable(granted, m.profile.IDP) {
+		if m.emaState.AccountIsUsable(granted, registration, m.profile.IDP) {
 			clientID = auth.AccountTokenFactsFromTokens(granted).ClientID
 		}
 	}
-	if clientID == "" {
-		return emaCredentialUnresolved, m.accountSetupError()
+	if clientID != "" {
+		m.credentialSource = emaCredentialAccount
+		m.accountClientID = clientID
+		return m.credentialSource, nil
 	}
-	m.credentialSource = emaCredentialAccount
-	m.accountClientID = clientID
-	return m.credentialSource, nil
+	if tokens, err := m.storedEnterpriseCredential(); err != nil {
+		return emaCredentialUnresolved, err
+	} else if tokens != nil {
+		m.credentialSource = emaCredentialKeyring
+		return m.credentialSource, nil
+	}
+	return emaCredentialUnresolved, m.accountSetupError()
 }
 
 // storedEnterpriseCredential loads the account-scoped enterprise grant. A
 // missing record returns nil so selection can consider the Codex account grant;
-// a record for another IdP client is a configuration error that must not
+// a record for another IdP client stays a configuration error that must not
 // silently fall back to a different credential.
 func (m *EMAAuthManager) storedEnterpriseCredential() (*OAuthTokenSet, error) {
 	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(EMAAuthCredentialName(m.profile.IDP, m.scope), m.profile.IDP.Issuer)
@@ -434,8 +557,8 @@ func (m *EMAAuthManager) leaseAccountGrant(ctx context.Context) (*auth.AccountOA
 }
 
 // accountGrant leases the pinned Codex account grant and rechecks that it is
-// still usable for the pinned OAuth client. A stale grant fails the call
-// instead of being exchanged (Rust EnterpriseTokenSource::account_grant).
+// still usable for the pinned OAuth client. A stale or rejected grant fails the
+// call instead of being exchanged (Rust EnterpriseTokenSource::account_grant).
 func (m *EMAAuthManager) accountGrant(ctx context.Context) (*auth.AccountOAuthGrant, error) {
 	if err := m.checkAccount(); err != nil {
 		return nil, err
@@ -452,6 +575,13 @@ func (m *EMAAuthManager) accountGrant(ctx context.Context) (*auth.AccountOAuthGr
 		auth.AccountTokenFactsFromTokens(tokens).ClientID != m.accountClientID {
 		lease.Release()
 		return nil, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	if m.emaState.RequiresSignIn(m.registrationIdentity(), tokens) {
+		lease.Release()
+		return nil, &EMAAuthFailure{
+			Code:        EMAAuthFailureInsufficientUserAuthn,
+			GrantSource: EMAInvalidGrantSourceEnterpriseIdentity,
+		}
 	}
 	return lease.Release(), nil
 }
@@ -530,7 +660,7 @@ func (m *EMAAuthManager) exchangeKeyringToken(ctx context.Context, client *http.
 		if errors.As(err, &failure) && emaFailureInvalidatesCredential(failure) {
 			m.invalidateRejectedCredential(ctx, tokens)
 		}
-		return nil, emaExchangeFailure(EMACredentialKindKeyring, err)
+		return nil, emaCredentialFailure(EMACredentialKindKeyring, err)
 	}
 	return token, nil
 }
@@ -568,8 +698,16 @@ func (m *EMAAuthManager) exchangeAccountToken(ctx context.Context, client *http.
 	// The lease is released before the resource exchange; releasing again is a
 	// no-op, so an early validation failure cannot strand the refresh gate.
 	defer lease.Release()
-	if !auth.SameAccountGrantCredential(lease.Tokens(), grant.Tokens()) {
+	leased := lease.Tokens()
+	if auth.AccountOAuthGrantRevisionFromTokens(leased) != auth.AccountOAuthGrantRevisionFromTokens(grant.Tokens()) ||
+		!MCPEMAAccountGrantIsUsable(leased, m.profile.IDP) {
 		return nil, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	if m.emaState.RequiresSignIn(m.registrationIdentity(), leased) {
+		return nil, &EMAAuthFailure{
+			Code:        EMAAuthFailureInsufficientUserAuthn,
+			GrantSource: EMAInvalidGrantSourceEnterpriseIdentity,
+		}
 	}
 	request.IDPTokenEndpoint = identity.TokenEndpoint
 	request.IDPClientAuthentication = identity.ClientAuthentication
@@ -579,16 +717,19 @@ func (m *EMAAuthManager) exchangeAccountToken(ctx context.Context, client *http.
 		return held.Release()
 	})
 	if err != nil {
-		return nil, emaExchangeFailure(EMACredentialKindAccount, err)
+		return nil, emaCredentialFailure(EMACredentialKindAccount, err)
 	}
 	if receipt != nil {
-		current, err := receipt.CheckCurrent()
+		current, ok, err := receipt.CurrentTokens()
 		if err != nil {
 			return nil, err
 		}
-		if !current {
-			// A successful exchange with a stale receipt must fail this call.
-			return nil, NewEMATokenSourceError(EMACredentialKindAccount, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired})
+		// Discard this bearer when the latest grant is stale or no longer eligible;
+		// the bounded retry reacquires it only if the credential changed under the
+		// same admitted owner.
+		if !ok || !MCPEMAAccountGrantIsUsable(current, m.profile.IDP) ||
+			m.emaState.RequiresSignIn(m.registrationIdentity(), current) {
+			return nil, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
 		}
 	}
 	return token, nil
@@ -632,15 +773,13 @@ func (t emaPolicyCheckingTransport) RoundTrip(request *http.Request) (*http.Resp
 	return t.next.RoundTrip(request)
 }
 
-// emaExchangeFailure converts an exchange error for transport: an existing
-// classification is preserved, a sanitized auth failure keeps its credential
-// classification, and anything else becomes an unexpected token-source failure
-// with no provider or transport text (Rust #55691). Only the token exchange
-// itself is wrapped this way; credential storage, discovery, and metadata
-// failures are connection-time errors that keep their diagnostic text, exactly
-// as Rust's EnterpriseTokenSource reports them before any token request is
-// made.
-func emaExchangeFailure(credential EMACredentialKind, err error) error {
+// emaCredentialFailure converts a token-acquisition error for transport: an
+// existing classification is preserved, a sanitized auth failure keeps its
+// credential classification, and anything else becomes an unexpected
+// token-source failure with no provider or transport text (Rust #55691).
+// Credential storage, discovery, and metadata failures stay connection-time
+// diagnostics because they keep no provider text.
+func emaCredentialFailure(credential EMACredentialKind, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -653,6 +792,42 @@ func emaExchangeFailure(credential EMACredentialKind, err error) error {
 		return NewEMATokenSourceError(credential, failure)
 	}
 	return UnexpectedEMATokenSourceError(credential)
+}
+
+// emaIDPRejected reports whether the enterprise IdP itself rejected this
+// credential, which is the only failure a rejection marker describes
+// (Rust #55859). A resource authorization rejection is not the IdP's.
+func emaIDPRejected(err error) bool {
+	var failure *EMAAuthFailure
+	if !errors.As(err, &failure) {
+		return false
+	}
+	switch failure.Code {
+	case EMAAuthFailureIdentityClientRejected:
+		return true
+	case EMAAuthFailureInvalidGrant, EMAAuthFailureInsufficientUserAuthn:
+		return failure.GrantSource == EMAInvalidGrantSourceEnterpriseIdentity
+	default:
+		return false
+	}
+}
+
+// emaReauthenticationRequired reports whether the exchange asked for a new
+// sign-in rather than a new credential revision.
+func emaReauthenticationRequired(err error) bool {
+	var failure *EMAAuthFailure
+	return errors.As(err, &failure) && failure.Code == EMAAuthFailureReauthenticationRequired
+}
+
+// emaAuthenticationRequired reports whether a failure needs a sign-in,
+// including the credential-aware classification of a wrapped error.
+func emaAuthenticationRequired(err error) bool {
+	var sourceErr *EMATokenSourceError
+	if errors.As(err, &sourceErr) {
+		return sourceErr.IsAuthenticationRequired()
+	}
+	var failure *EMAAuthFailure
+	return errors.As(err, &failure) && failure.IsAuthenticationRequired()
 }
 
 // emaAccountCheckFailure wraps only a sanitized account-ownership failure; a
@@ -737,6 +912,7 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 			CurrentLoginGeneration: currentLoginGeneration,
 			AccountLoginCurrent:    accountLoginCurrent,
 			AccountGrantOptions:    accountGrantOptions,
+			EMAState:               runtime.EMAState,
 			PolicyBinding:          runtime.EMAPolicyBinding,
 			HTTPClient:             httpClientForEMAAuth(runtime),
 		})
@@ -758,6 +934,7 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 			storeMode:      manager.storeMode,
 			credentialName: EMAAuthCredentialName(manager.profile.IDP, manager.scope),
 			issuer:         manager.profile.IDP.Issuer,
+			registration:   manager.registrationIdentity(),
 		}, manager.CredentialsAvailable)
 		config.ApplyHTTPRequest = manager.ApplyHTTPRequest
 		if runtime.HTTPClient != nil {

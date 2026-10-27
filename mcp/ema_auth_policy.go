@@ -106,6 +106,15 @@ func UnexpectedEMATokenSourceError(credential EMACredentialKind) *EMATokenSource
 	return &EMATokenSourceError{Credential: credential}
 }
 
+// Unwrap exposes the sanitized failure so credential-aware callers can classify
+// a wrapped token-source error without parsing guidance text (Rust #55859).
+func (e *EMATokenSourceError) Unwrap() error {
+	if e == nil || e.Failure == nil {
+		return nil
+	}
+	return e.Failure
+}
+
 // Error returns sign-in or administrator guidance, never provider error text.
 func (e *EMATokenSourceError) Error() string {
 	if e == nil {

@@ -2,8 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
-	"reflect"
 	"strings"
 	"sync"
 )
@@ -81,30 +82,82 @@ func (g *AccountOAuthGrant) LoginGeneration() uint64 {
 
 // SameCredential reports whether two grants carry the same credential
 // revision without exposing the refresh token to state holders (Rust #55680).
+// Access and ID token rotation alone does not make a grant a different
+// credential (#55859).
 func (g *AccountOAuthGrant) SameCredential(other *AccountOAuthGrant) bool {
 	if g == nil || other == nil {
 		return g == other
 	}
-	return reflect.DeepEqual(g.tokens, other.tokens)
+	return g.loginGeneration == other.loginGeneration &&
+		AccountOAuthGrantRevisionFromTokens(g.tokens) == AccountOAuthGrantRevisionFromTokens(other.tokens)
 }
 
-// CheckCurrent rechecks the caller's cached credential and persisted storage
-// after asynchronous work, before accepting a token or publishing a
-// connection. A storage failure is an error, never proof that the saved grant
-// is still valid. The complete token data must still match, so an access-token
-// rotation also invalidates the grant (Rust #55680).
-func (g *AccountOAuthGrant) CheckCurrent() (bool, error) {
+// AccountOAuthGrantRevision identifies one refresh grant, excluding access and
+// ID token rotation. The opaque digest compares revisions; it does not
+// authorize a destination (Rust #55859).
+type AccountOAuthGrantRevision [32]byte
+
+// AccountOAuthGrantRevisionFromTokens digests the login owner, the account and
+// user identity, the trusted OAuth provenance, and the refresh token, so two
+// records compare equal across access and ID token rotation.
+func AccountOAuthGrantRevisionFromTokens(tokens map[string]any) AccountOAuthGrantRevision {
+	facts := AccountTokenFactsFromTokens(tokens)
+	digest := sha256.New()
+	for _, value := range []string{
+		facts.LoginOwnerID,
+		facts.AccountID,
+		facts.ChatGPTUserID,
+		facts.Issuer,
+		facts.ClientID,
+		facts.RefreshToken,
+	} {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		_, _ = digest.Write(length[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	var revision AccountOAuthGrantRevision
+	copy(revision[:], digest.Sum(nil))
+	return revision
+}
+
+// CurrentTokens reads the still-current grant after asynchronous work. Its
+// consumers must validate the latest ID token's eligibility before accepting an
+// exchange result. A storage failure is an error, never proof that the saved
+// grant is still valid. Access and ID token rotation alone does not retire the
+// grant (Rust #55859).
+func (g *AccountOAuthGrant) CurrentTokens() (map[string]any, bool, error) {
 	if !g.ownerIsCurrent() {
-		return false, nil
+		return nil, false, nil
 	}
 	stored, err := readAccountGrantTokens(g.codexHome, g.storeOptions, g.cached())
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if !g.ownerIsCurrent() || stored == nil {
-		return false, nil
+		return nil, false, nil
 	}
-	return reflect.DeepEqual(g.tokens, stored), nil
+	if AccountOAuthGrantRevisionFromTokens(g.tokens) != AccountOAuthGrantRevisionFromTokens(stored) {
+		return nil, false, nil
+	}
+	return cloneAnyMap(stored), true, nil
+}
+
+// CheckCurrent reports whether the grant is still current in the sense of
+// CurrentTokens (Rust #55680).
+func (g *AccountOAuthGrant) CheckCurrent() (bool, error) {
+	_, ok, err := g.CurrentTokens()
+	return ok, err
+}
+
+// AccountOAuthGrantTokens reads the still-current account grant without taking
+// the refresh gate, for status inspection that must not block coordination.
+func AccountOAuthGrantTokens(codexHome string, storeOptions *StoreOptions, cached func() *AuthDotJSON) (map[string]any, error) {
+	var snapshot *AuthDotJSON
+	if cached != nil {
+		snapshot = cached()
+	}
+	return readAccountGrantTokens(codexHome, storeOptions, snapshot)
 }
 
 // AccountLoginIsCurrent reports whether the account login captured for an
@@ -342,14 +395,6 @@ func AccountTokenFactsFromTokens(tokens map[string]any) AccountTokenFacts {
 		AccountID:     strings.TrimSpace(stringFromAny(tokens, "account_id")),
 		IDToken:       strings.TrimSpace(stringFromAny(tokens, "id_token")),
 	}
-}
-
-// SameAccountGrantCredential reports whether two token sets carry the same
-// account credential revision (Rust AccountOAuthGrant::same_credential). An
-// enterprise exchange compares the grant it started with against the record
-// still stored, so an access-token rotation retires the grant.
-func SameAccountGrantCredential(left map[string]any, right map[string]any) bool {
-	return reflect.DeepEqual(left, right)
 }
 
 // accountRefreshGate allows one account refresh at a time and is also held by
