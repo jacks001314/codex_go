@@ -10859,12 +10859,48 @@ func (r *RuntimeRouter) handleHooksList(request *Request) (*HookListResponse, er
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if params.ThreadID != nil {
+		if len(params.CWDs) != 0 {
+			return nil, jsonRPCInvalidRequest("specify either threadId or cwds")
+		}
+		cwd, err := r.loadedThreadHookCWD(strings.TrimSpace(*params.ThreadID))
+		if err != nil {
+			return nil, err
+		}
+		// Go carries no per-environment hook declarations, so a thread's cwd
+		// inventory is its complete hook inventory (Rust #56553).
+		params = HookListParams{CWDs: []string{cwd}}
+	}
 	registry := r.requireHooks().List(&params)
 	discovery := r.configureHookDiscovery()
 	discovered := discovery.Discover(&params, r.services.DefaultCWD)
 	// Rust catalog_processor.rs hooks_to_info: builtin bundled cleanup hooks
 	// stay available to the engine but are omitted from the public hooks list.
 	return hideBuiltinHooks(MergeHookListResponses(registry, discovered)), nil
+}
+
+// loadedThreadHookCWD resolves the working directory of a thread that is
+// currently loaded in this process, mirroring Rust hooks/list threadId mode
+// (Rust #56553). An unknown or unloaded thread is an invalid request.
+func (r *RuntimeRouter) loadedThreadHookCWD(threadID string) (string, error) {
+	if threadID == "" {
+		return "", jsonRPCInvalidRequest("invalid thread id: thread id is required")
+	}
+	if r == nil || r.threads == nil || !r.threads.HasLiveThread(session.ThreadID(threadID)) {
+		return "", jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", threadID))
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) || strings.Contains(err.Error(), "thread not found") {
+			return "", jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", threadID))
+		}
+		return "", err
+	}
+	cwd := strings.TrimSpace(record.Metadata.CWD)
+	if cwd == "" {
+		cwd = r.threadStartDefaultCWD()
+	}
+	return cwd, nil
 }
 
 func (r *RuntimeRouter) handleSkillsList(request *Request) (*SkillsListResponse, error) {

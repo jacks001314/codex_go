@@ -191,9 +191,10 @@ type HookMetadata struct {
 	Input         map[string]any `json:"input,omitempty"`
 	TimeoutSec    int64          `json:"timeoutSec"`
 	StatusMessage *string        `json:"statusMessage"`
-	// EnvironmentID scopes an executor-backed hook to the environment that owns
-	// its source path. Empty means a host-local hook (Rust HandlerSourcePath).
-	EnvironmentID string `json:"-"`
+	// EnvironmentID is the execution environment that owns this hook, when it
+	// came from that environment's requirements (Rust #56553). Nil means a
+	// host-local hook.
+	EnvironmentID *string `json:"environmentId"`
 	// AdditionalContextLimit mirrors Rust HookMetadata.additional_context_limit
 	// (app-server hooks_list contract): nil means the default 2,500-token
 	// spilling threshold; 0 disables spilling.
@@ -286,7 +287,12 @@ func (e *HookListEntry) MarshalJSON() ([]byte, error) {
 }
 
 type HookListParams struct {
+	// CWDs lists working directories to inspect when no thread is specified.
+	// An empty list uses the session cwd.
 	CWDs []string `json:"cwds,omitempty"`
+	// ThreadID lists a loaded thread's hooks instead of inspecting CWDs
+	// (Rust #56553). Omit CWDs in this mode.
+	ThreadID *string `json:"threadId,omitempty"`
 }
 
 type HookListResponse struct {
@@ -488,6 +494,7 @@ func cloneMetadata(metadata HookMetadata) HookMetadata {
 	metadata.Command = cloneString(metadata.Command)
 	metadata.StatusMessage = cloneString(metadata.StatusMessage)
 	metadata.PluginID = cloneString(metadata.PluginID)
+	metadata.EnvironmentID = cloneString(metadata.EnvironmentID)
 	metadata.pluginTrust = metadata.pluginTrust.clone()
 	if metadata.Env != nil {
 		env := make(map[string]string, len(metadata.Env))

@@ -43,6 +43,7 @@ TUI lane and are not modified here.
 | `#56495` | Paginated subscribed-channel listing on the local message board | `agentboard/local.go`, `agentboard/local_test.go` |
 | `#55690` | Reclaim aged legacy marketplace staging directories | `plugin/marketplace_staging.go`, `plugin/marketplace_install.go`, `plugin/marketplace_staging_test.go` |
 | `#57251` | Native dollar thread usage in app-server `ThreadUsage` (core surface + coverage) | `appserver/runtime_router_test.go` (type/forwarding landed with `auth/account.go`, `appserver/runtime_router.go`) |
+| `#56553` | Thread-scoped `hooks/list` and `environmentId` in hook metadata | `appserver/hooks.go`, `appserver/runtime_router.go`, `appserver/hooks_runner.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -314,6 +315,18 @@ amount on `ThreadUsageBreakdownGroup`; Go's cloud client decodes that group
 field but the app-server type still omits it, matching the Rust wire surface.
 Credit/native display selection (ENT26) remains TUI-owned.
 
+`#56553` details: `hooks/list` accepts `threadId` alongside `cwds`. Thread mode
+rejects a request that names both, requires a thread loaded in this process
+(`thread not found: <id>` otherwise, matching Rust's thread-manager lookup),
+and returns exactly one entry keyed by the thread's working directory. Because
+Go has no per-environment hook declarations (`[environment_hooks]`) and no
+`TurnEnvironmentSnapshot` hook sources, the thread's cwd inventory is already
+its complete inventory; Rust's extra environment-hook merge has no Go
+counterpart to add. `HookMetadata` now serializes `environmentId` (always
+present, null for host-local hooks) instead of keeping the owner private, so
+the wire shape matches Rust's SDK surface. The TUI hooks browser switch to
+thread mode belongs to the TUI lane.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -366,6 +379,9 @@ Credit/native display selection (ENT26) remains TUI-owned.
 - For `#57251`: `go test ./appserver -run
   'TestRuntimeRouterGetAccountThreadUsageMatchesRust|TestAccountThreadUsagePreservesNativeDollarsLikeRust' -count=1`
   passes.
+- For `#56553`: `go test ./appserver -run 'Hook|hooks' -count=1`,
+  `go test ./appserver -run 'Schema|ProtocolSurface' -count=1` and
+  `go test ./app -run 'Hook' -count=1` pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

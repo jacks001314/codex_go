@@ -36,6 +36,7 @@ func TestHookRunnerStopMcpCarriesRequestMetadataAndEnvironmentLikeRust(t *testin
 	runner := NewHookRunner()
 	server := "security"
 	toolName := "check"
+	environmentID := "executor-a"
 	executor := &recordingMcpToolHookExecutor{output: `{}`}
 	runner.McpToolHookExecutor = executor
 	requestMetadata := map[string]any{
@@ -54,7 +55,7 @@ func TestHookRunnerStopMcpCarriesRequestMetadataAndEnvironmentLikeRust(t *testin
 			HandlerType:   HookHandlerMCPTool,
 			Server:        &server,
 			Tool:          &toolName,
-			EnvironmentID: "executor-a",
+			EnvironmentID: &environmentID,
 			TimeoutSec:    5,
 			SourcePath:    "/tmp/executor-hooks.json",
 			Source:        HookSourcePlugin,

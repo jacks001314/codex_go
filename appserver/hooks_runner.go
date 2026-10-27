@@ -319,7 +319,7 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 	output, err := r.McpToolHookExecutor.Execute(execCtx, HookMcpCall{
 		Server:        ptrStringValue(metadata.Server),
 		Tool:          ptrStringValue(metadata.Tool),
-		EnvironmentID: strings.TrimSpace(metadata.EnvironmentID),
+		EnvironmentID: strings.TrimSpace(ptrStringValue(metadata.EnvironmentID)),
 		Metadata:      cloneAnyMap(request.Metadata),
 		Input:         input,
 		Timeout:       remaining,
