@@ -95,6 +95,7 @@ func RunGrpcStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ensureGrpcZstdRegistered()
 	listener := &singleConnListener{done: make(chan struct{})}
 	// Rust #52723: the host exits when its stdio connection closes. Closing the
 	// accepted conn unblocks Accept so Serve returns instead of waiting forever
@@ -149,6 +150,9 @@ type grpcStdioHostServer struct {
 
 // Transport runs the shared code-mode host loop over one framed gRPC stream.
 func (s *grpcStdioHostServer) Transport(stream codemodev1.CodeModeHost_TransportServer) error {
+	// Rust #57212: compress responses for clients that advertise zstd and keep
+	// identity responses for clients that do not.
+	_ = grpc.SetSendCompressor(stream.Context(), grpcZstdEncodingName)
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	inbound := make(chan ClientToHost, 16)

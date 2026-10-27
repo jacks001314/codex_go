@@ -49,6 +49,7 @@ TUI lane and are not modified here.
 | `#57198` | `PreToolUse` hook input reports the local command's resolved working directory | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, like-Rust tests |
 | `#57203` | Preserve the command cwd in `PermissionRequest` and `PostToolUse` hook input | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, `appserver/runtime_router.go`, `appserver/network_approval.go`, like-Rust tests |
 | `#56494` | Channel upserts on message boards (`upsert_channel`; `description` on `create_channel`) | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, `agentboard/upsert_channel_test.go`, `agentboard/tools_test.go` |
+| `#57212` | zstd-compressed code-mode gRPC responses for clients that advertise support | `codemode/grpc_zstd.go`, `codemode/grpc_stdio_host.go`, `codemode/grpc_session_provider.go`, `codemode/grpc_process_provider.go`, `codemode/grpc_zstd_test.go` |
 
 Grounding notes:
 
@@ -377,6 +378,15 @@ lists it), validates the 512-byte bound at argument decode and again in the
 boards, and reports `null` on success. Read-only local connections are rejected
 through the `channel.edit_metadata` write requirement.
 
+`#57212` details: the code-mode host negotiates zstd for gRPC responses.
+Go registers a klauspost/compress-backed `zstd` encoding, which makes every
+code-mode client advertise `grpc-accept-encoding: zstd`, and the host selects it
+per stream with `grpc.SetSendCompressor`. A client that does not advertise zstd
+makes that call fail harmlessly, so its responses stay identity-encoded, exactly
+Rust's `send_compressed(Zstd)`/`accept_compressed(Zstd)` pairing. The encoder is
+pooled and uses the fastest level, matching Rust's Bazel patch that forces tonic
+level 1 for response latency; there is no Go build patch to carry.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -435,6 +445,8 @@ through the `channel.edit_metadata` write requirement.
 - For `#57186`: `go test ./sandbox/linuxsandbox -run 'InspectUnreadableGlobSearchRoot' -count=1`
   passes; the symlink-loop and symlink-root cases skip on this Windows host
   because creating symlinks needs a privilege it lacks.
+- For `#57212`: `go test ./codemode -run 'GrpcZstd|NegotiatesZstd' -count=1` and
+  the full `go test ./codemode -count=1` pass.
 - For `#56494`: `go test ./agentboard -run 'UpsertChannel|MessageBoardToolSpecsMatchRust' -count=1`
   and the full `go test ./agentboard -count=1` pass, as do
   `go test ./turn ./appserver -run 'MessageBoard|Board' -count=1`.

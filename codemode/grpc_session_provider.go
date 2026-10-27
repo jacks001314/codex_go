@@ -96,6 +96,7 @@ func (p *GrpcCodeModeSessionProvider) connect(ctx context.Context) (*remoteConne
 	if p.connection != nil && p.connection.Alive() {
 		return p.connection, nil
 	}
+	ensureGrpcZstdRegistered()
 	// Rust #38087 preserves gRPC frame-size limits: the code-mode protocol
 	// permits frames up to ProtocolMaxFrameBytes, so raise gRPC's 4 MiB
 	// defaults to match.

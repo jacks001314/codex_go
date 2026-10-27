@@ -86,6 +86,7 @@ func (p *GrpcProcessProvider) connect(ctx context.Context) (*remoteConnection, e
 	if err != nil {
 		return nil, err
 	}
+	ensureGrpcZstdRegistered()
 	handshakeCtx, cancel := context.WithTimeout(ctx, localHostStartupTimeout)
 	defer cancel()
 	conn := newStdioConn(stdout, stdin)
