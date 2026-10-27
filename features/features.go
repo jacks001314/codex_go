@@ -375,6 +375,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs 6288753b46 #49057): handoff-aware root
 	// context for Guardian reviews.
 	{Key: "guardian_root_handoff_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs a5ef02e561 #57441): preserve native
+	// MAv2 tool calls in synchronous Guardian history.
+	{Key: "guardian_native_multi_agent_history", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 41ed72c32b #49036): opt-in
 	// conversation history retrieval for Guardian reviews.
 	{Key: "guardian_conversation_history_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},

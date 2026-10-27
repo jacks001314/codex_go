@@ -51,6 +51,21 @@ func TestIncrementalToolsFeatureRegisteredLikeRust(t *testing.T) {
 	}
 }
 
+// TestGuardianNativeMultiAgentHistoryRegisteredLikeRust pins Rust #57441: the
+// flag is registered under development and stays off by default.
+func TestGuardianNativeMultiAgentHistoryRegisteredLikeRust(t *testing.T) {
+	const key = "guardian_native_multi_agent_history"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	if got := StageFor(key); got != StageUnderDevelopment {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageUnderDevelopment)
+	}
+	if Defaults()[key] {
+		t.Fatalf("%s default = true, want false", key)
+	}
+}
+
 // TestBedrockSetupWizardEnabledByDefaultLikeRust pins Rust #56033: the wizard
 // is stable and enabled by default, while an explicit false still opts out.
 func TestBedrockSetupWizardEnabledByDefaultLikeRust(t *testing.T) {
