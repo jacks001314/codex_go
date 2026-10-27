@@ -57,10 +57,30 @@ type CodexTurnEventRequest struct {
 	EventParams CodexTurnEventParams `json:"event_params"`
 }
 
+// CodexTurnCriticalPathStatus mirrors Rust's TurnCriticalPath capture status
+// (`disabled`, `incomplete`, or `complete`; Rust #57209).
+const (
+	CodexTurnCriticalPathStatusDisabled   = "disabled"
+	CodexTurnCriticalPathStatusIncomplete = "incomplete"
+	CodexTurnCriticalPathStatusComplete   = "complete"
+)
+
 type CodexTurnEventParams struct {
-	ThreadID  string `json:"thread_id"`
-	SessionID string `json:"session_id"`
-	TurnID    string `json:"turn_id"`
+	// Critical-path capture is not implemented in Go (Rust #57201), so the
+	// default-off `critical_path_timing` feature always reports Rust's
+	// default-config payload: status `disabled` with null durations
+	// (Rust #57209). Missing capture never becomes a zero measurement.
+	CriticalPathStatus      string  `json:"critical_path_status"`
+	CriticalPathDurationMS  *uint64 `json:"critical_path_duration_ms"`
+	CriticalPathInferenceMS *uint64 `json:"critical_path_inference_ms"`
+	CriticalPathAutoReview  *uint64 `json:"critical_path_auto_review_ms"`
+	CriticalPathUserWaitMS  *uint64 `json:"critical_path_user_wait_ms"`
+	CriticalPathToolsMS     *uint64 `json:"critical_path_tools_ms"`
+	CriticalPathOverheadMS  *uint64 `json:"critical_path_overhead_ms"`
+	CriticalPathUnknownMS   *uint64 `json:"critical_path_unknown_ms"`
+	ThreadID                string  `json:"thread_id"`
+	SessionID               string  `json:"session_id"`
+	TurnID                  string  `json:"turn_id"`
 	// RootTurnID is the top-level turn that caused this activity, or null when
 	// the root is unknown or ambiguous (Rust #40486).
 	RootTurnID *string `json:"root_turn_id"`
@@ -243,6 +263,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 	return CodexTurnEventRequest{
 		EventType: CodexTurnEventType,
 		EventParams: CodexTurnEventParams{
+			CriticalPathStatus:                   CodexTurnCriticalPathStatusDisabled,
 			ThreadID:                             input.ThreadID,
 			SessionID:                            input.SessionID,
 			TurnID:                               input.TurnID,

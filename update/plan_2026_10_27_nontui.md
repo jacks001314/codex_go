@@ -45,6 +45,7 @@ TUI lane and are not modified here.
 | `#57251` | Native dollar thread usage in app-server `ThreadUsage` (core surface + coverage) | `appserver/runtime_router_test.go` (type/forwarding landed with `auth/account.go`, `appserver/runtime_router.go`) |
 | `#56553` | Thread-scoped `hooks/list` and `environmentId` in hook metadata | `appserver/hooks.go`, `appserver/runtime_router.go`, `appserver/hooks_runner.go`, like-Rust tests |
 | `#57186` | Fail closed on unreadable deny-glob search root metadata errors | `sandbox/linuxsandbox/bwrap.go`, `sandbox/linuxsandbox/unreadable_glob_root_test.go` |
+| `#57209` | Turn analytics critical-path fields (disabled/null default; capture pending) | `telemetry/turn_event.go`, `telemetry/turn_event_test.go` |
 
 Grounding notes:
 
@@ -64,6 +65,8 @@ Grounding notes:
   `Release()` and no `Drop`-style finalizer.
 - `#57193` is N/A: Go has no rollout-trace/replay-bundle package.
 - `#57245` is N/A: Rust test-only queue stabilization.
+- `#57199` is N/A: the 240-byte JSON summary truncation lives in Rust's
+  `rollout-trace` reducer, which has no Go counterpart.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -336,6 +339,14 @@ failure rejects the whole expansion with the root and underlying error instead
 of dropping the deny rule. The in-process fallback already failed closed via
 `doublestar.WithFailOnIOErrors`.
 
+`#57209` details: `codex_turn_event` now carries Rust's eight critical-path
+fields (`critical_path_status` and the duration/inference/auto-review/
+user-wait/tools/overhead/unknown milliseconds). Because Go does not implement
+critical-path capture (`#57201` is still pending), the payload always reports
+`disabled` with null durations, which is exactly what Rust emits with the
+default-off `critical_path_timing` feature. Nulls are preserved rather than
+zeroed so a missing measurement can never be read as a zero duration.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -394,6 +405,9 @@ of dropping the deny rule. The in-process fallback already failed closed via
 - For `#57186`: `go test ./sandbox/linuxsandbox -run 'InspectUnreadableGlobSearchRoot' -count=1`
   passes; the symlink-loop and symlink-root cases skip on this Windows host
   because creating symlinks needs a privilege it lacks.
+- For `#57209`: `go test ./telemetry -count=1` and
+  `go test ./appserver -run 'Analytics|TurnEvent|TurnProfile|TimingProfile' -count=1`
+  pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

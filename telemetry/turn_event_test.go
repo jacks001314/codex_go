@@ -58,6 +58,14 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{
 		"event_type": "codex_turn_event",
 		"event_params": {
+			"critical_path_status": "disabled",
+			"critical_path_duration_ms": null,
+			"critical_path_inference_ms": null,
+			"critical_path_auto_review_ms": null,
+			"critical_path_user_wait_ms": null,
+			"critical_path_tools_ms": null,
+			"critical_path_overhead_ms": null,
+			"critical_path_unknown_ms": null,
 			"thread_id": "thread-2",
 			"session_id": "session-thread-2",
 			"turn_id": "turn-2",
@@ -191,6 +199,39 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 // TestCodexTurnEventPluginInventoryNullabilityMatchesRust mirrors Rust #46323:
 // an unobserved inventory serializes as null while an observed empty inventory
 // stays an empty array.
+// TestCodexTurnEventCriticalPathDisabledMatchesRust mirrors Rust #57209: a turn
+// without critical-path capture reports `disabled` with null durations, so a
+// missing measurement is never serialized as zero.
+func TestCodexTurnEventCriticalPathDisabledMatchesRust(t *testing.T) {
+	event := NewCodexTurnEvent(CodexTurnEventInput{
+		ThreadID:  "thread-1",
+		SessionID: "session-1",
+		TurnID:    "turn-1",
+	})
+	var payload map[string]any
+	if err := marshalUnmarshalTelemetry(event, &payload); err != nil {
+		t.Fatalf("marshal event error = %v", err)
+	}
+	params := payload["event_params"].(map[string]any)
+	for _, key := range []string{
+		"critical_path_duration_ms",
+		"critical_path_inference_ms",
+		"critical_path_auto_review_ms",
+		"critical_path_user_wait_ms",
+		"critical_path_tools_ms",
+		"critical_path_overhead_ms",
+		"critical_path_unknown_ms",
+	} {
+		value, ok := params[key]
+		if !ok || value != nil {
+			t.Fatalf("%s = %#v, want null", key, value)
+		}
+	}
+	if params["critical_path_status"] != CodexTurnCriticalPathStatusDisabled {
+		t.Fatalf("critical_path_status = %#v", params["critical_path_status"])
+	}
+}
+
 func TestCodexTurnEventPluginInventoryNullabilityMatchesRust(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
