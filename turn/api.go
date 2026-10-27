@@ -714,6 +714,9 @@ const (
 type AdditionalContextEntry struct {
 	Value string                `json:"value"`
 	Kind  AdditionalContextKind `json:"kind"`
+	// Name optionally labels untrusted context when it is rendered as an
+	// agent-namespaced tool output (Rust #57279).
+	Name *string `json:"name,omitempty"`
 }
 
 type TurnService struct {

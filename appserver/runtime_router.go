@@ -296,6 +296,11 @@ type RuntimeRouter struct {
 	// session.tool_approvals).
 	mcpToolApprovalsMu sync.Mutex
 	mcpToolApprovals   map[string]map[mcp.MCPToolApprovalKey]bool
+	// additionalContextMu guards additionalContext, the per-thread store that
+	// deduplicates client additional context across turns (Rust
+	// state::additional_context::AdditionalContextStore).
+	additionalContextMu sync.Mutex
+	additionalContext   map[string]map[string]storedAdditionalContext
 	// gatewayLoginMu guards gatewayLogin, the one in-flight caller-initiated
 	// gateway sign-in and the connection that owns it (Rust #47207).
 	gatewayLoginMu sync.Mutex
@@ -6246,6 +6251,8 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	delete(r.skillWarnings, threadID)
 	r.skillWarningsMu.Unlock()
 	r.forgetMCPToolApprovals(threadID)
+	// Rust drops the session's additional-context store with its runtime.
+	r.forgetAdditionalContext(threadID)
 	// Rust flushes a closing thread's correlated tool events and drops its
 	// code-mode cell evidence (ThreadClosed).
 	r.flushThreadPendingToolEvents(threadID)
@@ -8395,7 +8402,7 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	}
 	noticeEnabled := r.imageResizeNoticeEnabledForSteer(&params)
 	steerMetadata := r.steerClientMetadata(&params)
-	if inputItems := inputItemsFromTurnSteerWithNotice(&params, noticeEnabled); len(inputItems) > 0 {
+	if inputItems := r.inputItemsFromTurnSteer(&params, noticeEnabled); len(inputItems) > 0 {
 		if len(steerMetadata) > 0 {
 			// Rust merges a steer's responsesapi_client_metadata into the turn's
 			// metadata state, so the turn's later sampling steps keep reporting

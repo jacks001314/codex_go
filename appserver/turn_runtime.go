@@ -7888,7 +7888,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			realtimeStateSessionItems = append(realtimeStateSessionItems, persisted)
 		}
 	}
-	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
+	instructions, additionalInputItems := r.instructionsAndInputItemsWithAdditionalContext(threadID, instructions, params.AdditionalContext, cfg)
 	clockNoticeSessionItems := []session.Item{}
 	if items, sessions, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, turnID, params, cfg); err != nil {
 		return nil, err
@@ -9322,35 +9322,8 @@ func modelInputTextMessage(role string, text string) map[string]any {
 	}
 }
 
-func instructionsAndInputItemsWithAdditionalContext(instructions string, values map[string]turn.AdditionalContextEntry) (string, []any) {
-	if len(values) == 0 {
-		return strings.TrimSpace(instructions), nil
-	}
-	developer := []string{}
-	inputItems := []any{}
-	for _, key := range sortedAdditionalContextKeys(values) {
-		entry := values[key]
-		role := contextfrag.RoleUser
-		if entry.Kind == turn.AdditionalContextApplication {
-			role = contextfrag.RoleDeveloper
-		}
-		rendered := contextfrag.Render(contextfrag.NewAdditionalContextFragment(role, key, entry.Value))
-		if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
-			continue
-		}
-		if rendered.Role == contextfrag.RoleDeveloper {
-			developer = append(developer, rendered.Content)
-			continue
-		}
-		inputItems = append(inputItems, map[string]any{
-			"type": "message",
-			"role": "user",
-			"content": []map[string]any{{
-				"type": "input_text",
-				"text": rendered.Content,
-			}},
-		})
-	}
+func (r *RuntimeRouter) instructionsAndInputItemsWithAdditionalContext(threadID string, instructions string, values map[string]turn.AdditionalContextEntry, cfg *config.Config) (string, []any) {
+	developer, inputItems := r.mergeAdditionalContext(threadID, values, additionalContextToolOutputsEnabled(cfg))
 	if len(developer) > 0 {
 		sections := append(developer, strings.TrimSpace(instructions))
 		instructions = strings.Join(nonEmpty(sections), "\n\n")
@@ -9636,17 +9609,6 @@ func sortedBoolKeys(values map[string]bool) []string {
 	for key, value := range values {
 		key = strings.TrimSpace(key)
 		if key != "" && value {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedAdditionalContextKeys(values map[string]turn.AdditionalContextEntry) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		if strings.TrimSpace(key) != "" {
 			keys = append(keys, key)
 		}
 	}
@@ -12332,15 +12294,24 @@ func sessionItemFromTurnSteer(params *turn.TurnSteerParams) (session.Item, bool)
 	}, true
 }
 
-func inputItemsFromTurnSteer(params *turn.TurnSteerParams) []any {
-	return inputItemsFromTurnSteerWithNotice(params, true)
-}
-
-func inputItemsFromTurnSteerWithNotice(params *turn.TurnSteerParams, noticeEnabled bool) []any {
+func (r *RuntimeRouter) inputItemsFromTurnSteer(params *turn.TurnSteerParams, noticeEnabled bool) []any {
 	if params == nil {
 		return nil
 	}
-	items := []any{}
+	// Rust #57279: context items (including agent-namespaced tool outputs) are
+	// emitted before the steered user input.
+	developer, additionalItems := r.mergeAdditionalContext(params.ThreadID, params.AdditionalContext, r.turnSteerAdditionalContextToolOutputs(params.ThreadID))
+	items := append([]any{}, additionalItems...)
+	if instructions := strings.Join(nonEmpty(developer), "\n\n"); instructions != "" {
+		items = append(items, map[string]any{
+			"type": "message",
+			"role": "developer",
+			"content": []map[string]any{{
+				"type": "input_text",
+				"text": instructions,
+			}},
+		})
+	}
 	if item := userMessageInputItemFromTurnUserInputs(params.Prompt, params.Input); item != nil {
 		prepared := prepareSteerUserMessageItem(item)
 		items = append(items, prepared[0])
@@ -12348,19 +12319,20 @@ func inputItemsFromTurnSteerWithNotice(params *turn.TurnSteerParams, noticeEnabl
 			items = append(items, prepared[1])
 		}
 	}
-	instructions, additionalItems := instructionsAndInputItemsWithAdditionalContext("", params.AdditionalContext)
-	if strings.TrimSpace(instructions) != "" {
-		items = append(items, map[string]any{
-			"type": "message",
-			"role": "developer",
-			"content": []map[string]any{{
-				"type": "input_text",
-				"text": strings.TrimSpace(instructions),
-			}},
-		})
-	}
-	items = append(items, additionalItems...)
 	return items
+}
+
+// turnSteerAdditionalContextToolOutputs reports whether a steer should deliver
+// untrusted additional context as tool outputs (Rust features.untrusted_as_tool_output).
+func (r *RuntimeRouter) turnSteerAdditionalContextToolOutputs(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+	if err != nil || cfg == nil {
+		return false
+	}
+	return additionalContextToolOutputsEnabled(cfg)
 }
 
 // prepareSteerUserMessageItem runs the image-preparation pipeline over a steer
@@ -12804,10 +12776,14 @@ func sessionContentFromTurnUserInputs(inputs []turn.TurnUserInput) []session.Con
 func additionalContextMetadata(values map[string]turn.AdditionalContextEntry) map[string]any {
 	out := make(map[string]any, len(values))
 	for key, value := range values {
-		out[key] = map[string]any{
+		entry := map[string]any{
 			"value": value.Value,
 			"kind":  string(value.Kind),
 		}
+		if value.Name != nil {
+			entry["name"] = *value.Name
+		}
+		out[key] = entry
 	}
 	return out
 }
