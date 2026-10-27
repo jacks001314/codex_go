@@ -53,6 +53,7 @@ TUI lane and are not modified here.
 | `#55846` | Measure Guardian review latency once on the monotonic clock | `appserver/guardian_reviewer.go`, `appserver/guardian_review_metrics.go`, like-Rust test |
 | `#57220` | Log WebSocket compression payload statistics | `appserver/websocket_compression_stats.go`, `appserver/websocket_compression.go`, `appserver/websocket.go`, like-Rust test |
 | `#55958` | Preserve provider catalogs across failed refreshes | `model/models_endpoint.go`, `model/gateway_auth.go`, `auth/gateway_login.go`, `auth/gateway_manager.go`, like-Rust tests |
+| `#57178` | Route FedRAMP API keys to government endpoints by default | `auth/api_key.go`, `model/fedramp_routing.go`, `model/auth.go`, `model/provider.go`, `model/models_identity.go`, `config/config.go`, `appserver/runtime_router.go`, `appserver/realtime_runtime.go`, `doctor/doctor.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -452,20 +453,42 @@ issuer error with the generic message. Rejection also resets `fetched` so
 `RefreshOnlineIfUncached` retries; a successful empty response stays
 authoritative.
 
+`#57178` details: `sk-proj-fedramp-` and `sk-svcacct-fedramp-` prefixes are
+routing hints, not credential validation. When the selected credential is such
+a key, `X-OpenAI-Fedramp: true` is attached and the complete unchanged key still
+authenticates. `ResolveAPIProvider` selects `https://gov.api.openai.com/v1`
+only when the provider has no configured `base_url`, so an explicit URL -
+including an explicitly configured commercial default - always wins. Model
+discovery switches to `https://gov.chatgpt.com/backend-api/codex`, the catalog
+identity digests that routing, and realtime WebSocket startup resolves both its
+host and `Authorization` header from the same selected key (an explicit
+`experimental_realtime_ws_base_url` still wins). `config.ChatGPTBackendURL`
+mirrors Rust's `ChatgptBaseUrl`: it remembers whether a layer above packaged
+defaults supplied `chatgpt_base_url` and resolves the government ChatGPT
+backend (`https://gov.chatgpt.com/backend-api/`) from the request's auth
+snapshot; app-server config reads use origin metadata so an explicit commercial
+default is not mistaken for the packaged default. Provider `APIProviderAndAuth`
+returns routing and headers from one snapshot and is used by image generation,
+web search, history notes, and the doctor WebSocket probe. Go's analytics
+client still admits only Codex-backend auth, so API-key analytics event
+eligibility (`can_send_with_api_key_auth`) remains a separate gap; the URL
+resolution plumbing is in place for when that gate is widened.
+
 ## Pending in this window
 
 - About 170 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
-  `#57178` FedRAMP key routing across provider, model discovery, analytics,
-  and realtime, `#55591` per-turn Guardian approval blocking time,
+  `#55591` per-turn Guardian approval blocking time,
   `#56461`/`#55973` message-board silent append and host-selected tool catalogs
   (the append tool depends on selection), `#57201`/`#57207` critical-path
   capture, `#55957`/`#55968` cloud catalog refresh on auth change and failure
   backoff, `#56530` catalog size histograms, `#55631` frozen cloud skill
-  snapshots, and `#55847` retained-analytics bounds. Items already verified as
-  having no Go counterpart are listed above.
+  snapshots, `#55847` retained-analytics bounds, and API-key analytics event
+  eligibility (`can_send_with_api_key_auth`) despite the new FedRAMP URL
+  plumbing. Items already verified as having no Go counterpart are listed
+  above.
 
 ## Verification
 
@@ -537,3 +560,8 @@ authoritative.
 - For `#55958`: `go test ./model -run 'PreservesExplicitCatalog|InvalidatesExplicitCatalog|PersistsEmptyExplicitCatalog|ComposeGatewayAuth' -count=1`
   and `go test ./auth -run 'GatewayAuthManagerWithoutInteractiveLogin|GatewayAuthManagerRefresh|GatewayAuthManagerReauthorizes' -count=1`
   pass; the full `go test ./model -count=1` passes.
+- For `#57178`: `go test ./model -run 'Fedramp|APIProviderAndAuth|ConfiguredProviderRoutesAPIKeyModelDiscovery' -count=1`,
+  `go test ./config -run 'ChatGPTBackendURL|NewConfigFromRead' -count=1`,
+  and `go test ./appserver -run 'RealtimeStartOptions|Analytics|Catalog|ImageGeneration|WebSearch|HistoryNotes' -count=1`
+  pass, as do the full `go test ./auth ./model ./config ./doctor ./exec -count=1`
+  runs and `go build ./...`.
