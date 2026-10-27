@@ -177,3 +177,62 @@ func TestGranularApprovalMessagesParseRustWireNames(t *testing.T) {
 		})
 	}
 }
+
+// TestPermissionMessagesParsePathWordingLikeRust pins the Rust #56309/#57263
+// catalog wire keys for writable-root and permission-path presentation.
+func TestPermissionMessagesParsePathWordingLikeRust(t *testing.T) {
+	var empty PermissionMessages
+	if err := json.Unmarshal([]byte(`{}`), &empty); err != nil {
+		t.Fatalf("empty Unmarshal() error = %v", err)
+	}
+	if empty.WritableRoot != nil || empty.WritableRoots != nil || empty.OmittedPaths != nil || empty.DeniedReads != nil {
+		t.Fatalf("empty permission messages = %#v", empty)
+	}
+	encoded, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("empty Marshal() error = %v", err)
+	}
+	if string(encoded) != "{}" {
+		t.Fatalf("sparse permission messages = %s, want {}", encoded)
+	}
+
+	raw := []byte(`{
+		"writable_root": " Root: {{ roots }}.",
+		"writable_roots": "Roots: {{ roots }}.",
+		"omitted_paths": "Some paths are omitted.",
+		"denied_reads": "Blocked reads:\n{{ denied_reads }}"
+	}`)
+	var messages PermissionMessages
+	if err := json.Unmarshal(raw, &messages); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	for name, value := range map[string]*string{
+		"writable_root":  messages.WritableRoot,
+		"writable_roots": messages.WritableRoots,
+		"omitted_paths":  messages.OmittedPaths,
+		"denied_reads":   messages.DeniedReads,
+	} {
+		if value == nil {
+			t.Fatalf("permissions.%s did not parse", name)
+		}
+	}
+	if *messages.DeniedReads != "Blocked reads:\n{{ denied_reads }}" {
+		t.Fatalf("denied_reads = %q", *messages.DeniedReads)
+	}
+
+	// Explicit nulls behave like omitted fields and never render `null`.
+	var sparse PermissionMessages
+	if err := json.Unmarshal([]byte(`{"writable_root":null,"writable_roots":null,"omitted_paths":null,"denied_reads":null}`), &sparse); err != nil {
+		t.Fatalf("sparse Unmarshal() error = %v", err)
+	}
+	if sparse.WritableRoot != nil || sparse.WritableRoots != nil || sparse.OmittedPaths != nil || sparse.DeniedReads != nil {
+		t.Fatalf("null permission messages = %#v", sparse)
+	}
+	encoded, err = json.Marshal(sparse)
+	if err != nil {
+		t.Fatalf("sparse Marshal() error = %v", err)
+	}
+	if string(encoded) != "{}" {
+		t.Fatalf("null permission messages = %s, want {}", encoded)
+	}
+}

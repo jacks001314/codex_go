@@ -27,6 +27,8 @@ TUI lane and are not modified here.
 | `#57172` | Lifecycle timestamps on app-server thread items | `appserver/protocol.go`, `appserver/item_lifecycle_times.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `state/thread_history_query.go`, like-Rust tests |
 | `#56465` | `thread/memory/read` returns the selected version's memory summary | `appserver/protocol.go`, `appserver/thread_memory_read.go`, `appserver/schema.go`, `appserver/rust_protocol_surface_test.go`, like-Rust tests |
 | `#55940` | `feedback/save` writes a local diagnostic ZIP instead of uploading | `appserver/protocol.go`, `appserver/feedback.go`, `appserver/feedback_archive.go`, `appserver/feedback_thread_index.go`, `appserver/runtime_router.go`, `appserver/schema.go`, like-Rust tests |
+| `#57313` | Gateway OAuth tokens default to `Authorization: Bearer` | `model/provider_info.go`, `model/gateway_auth.go`, `model/provider_config.go`, gateway tests |
+| `#56309` `#57263` | Permission catalog path wording (`writable_root(s)`, `omitted_paths`, `denied_reads`) | `model/catalog.go`, `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go`, catalog/permission tests |
 
 Grounding notes:
 
@@ -92,14 +94,28 @@ Only an already materialized rollout is attached, so saving an untouched
 thread does not materialize one; the thread index reports
 `rolloutArchiveFilename: null` in save mode.
 
+`#57313`: omitted `gateway_oauth.delivery` now resolves to header
+`Authorization` / scheme `Bearer` (also when the table itself is absent). The
+provider is rejected when it already supplies credentials via
+`requires_openai_auth`, `env_key`, `experimental_bearer_token`, or command auth,
+and `model_catalog_url` must share scheme/host/port with `base_url`. A gateway
+token may no longer collide with a provider-set header.
+
+`#56309`/`#57263`: the permission catalog in `model/catalog.go` carries
+`writable_root`, `writable_roots`, `omitted_paths`, and `denied_reads`, and
+`sandbox/permission_prompt.go` renders them with the same bounds as Rust
+(500-byte presentation budget, 1000-byte writable-root template with exactly
+one `{{ roots }}`, `{{ denied_reads }}` only within path budget + policy + 500,
+and `omitted_paths` prepended to the mandatory warning). All control
+characters except newline, plus U+2028/U+2029 and permission tags, are rejected.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
   triaged: high-value candidates include `#57311` rollouts trace versions,
   `#57280` full MCP results,
   `#57287` prediction-fork tool declarations, `#57286` managed
-  `network_proxy`, `#57263`/`#57276`
-  permission wording/world-state, `#57171` runtime auth and
+  `network_proxy`, `#57276` permission world-state, `#57171` runtime auth and
   `#57270` cloud config for sandbox/exec-server, and
   `#56036`/`#56049` remote credentials. The `feedback/save` and
   `thread/memory/read` schema drift is fixed by the entries above.
@@ -112,3 +128,6 @@ thread does not materialize one; the thread index reports
 - `go test ./tool ./turn ./eventmap ./tcptunnel -count=1` passes.
 - `go test ./appserver -run 'ThreadSample|ShellSnapshot|GranularApproval|PermissionPrompt' -count=1` passes.
 - `go test ./app ./cli ./model ./config ./sandbox -count=1` passes.
+- Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
+  `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
+  isolated worktree.

@@ -9,6 +9,7 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -133,7 +134,7 @@ func composeGatewayAuth(ctx context.Context, config *GatewayOAuthConfig, provide
 		return AuthHeaders{}, err
 	}
 	if headerExists(primary.Headers, name) {
-		return AuthHeaders{}, errors.New("gateway OAuth conflicts with primary auth headers")
+		return AuthHeaders{}, fmt.Errorf("The model provider already sets the %s header. Choose a different header or cookie in gateway_oauth.delivery for the gateway token.", name)
 	}
 	headers := http.Header{}
 	for key, values := range primary.Headers {
@@ -150,13 +151,14 @@ func gatewayAuthHeader(config *GatewayOAuthConfig, token string) (string, string
 	if token == "" {
 		return "", "", errors.New("gateway OAuth returned an empty token")
 	}
-	switch config.Delivery.Kind {
+	delivery := config.Delivery.Effective()
+	switch delivery.Kind {
 	case "header":
-		name := strings.TrimSpace(config.Delivery.Name)
+		name := strings.TrimSpace(delivery.Name)
 		if !httpguts.ValidHeaderFieldName(name) {
 			return "", "", errors.New("invalid gateway header")
 		}
-		value := config.Delivery.HeaderScheme() + " " + token
+		value := delivery.HeaderScheme() + " " + token
 		if !httpguts.ValidHeaderFieldValue(value) {
 			return "", "", errors.New("invalid gateway OAuth token header")
 		}
@@ -166,7 +168,7 @@ func gatewayAuthHeader(config *GatewayOAuthConfig, token string) (string, string
 		if !validCookieOAuthToken(token) {
 			return "", "", errors.New("gateway OAuth token is not a valid cookie value")
 		}
-		value := strings.TrimSpace(config.Delivery.Name) + "=" + token
+		value := strings.TrimSpace(delivery.Name) + "=" + token
 		if !httpguts.ValidHeaderFieldValue(value) {
 			return "", "", errors.New("invalid gateway OAuth token header")
 		}

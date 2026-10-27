@@ -107,6 +107,10 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 				WorkspaceWrite:   messages.WorkspaceWrite,
 				ReadOnly:         messages.ReadOnly,
 				ApprovedPrefixes: messages.ApprovedPrefixes,
+				WritableRoot:     messages.WritableRoot,
+				WritableRoots:    messages.WritableRoots,
+				OmittedPaths:     messages.OmittedPaths,
+				DeniedReads:      messages.DeniedReads,
 			}
 		}
 	}

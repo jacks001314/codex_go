@@ -197,17 +197,41 @@ type GatewayOAuthDelivery struct {
 	Scheme string `json:"scheme,omitempty"`
 }
 
+// Effective returns the delivery Rust's serde default applies when the field
+// is omitted: Authorization: Bearer (Rust #57313).
+func (d GatewayOAuthDelivery) Effective() GatewayOAuthDelivery {
+	if strings.TrimSpace(d.Kind) == "" {
+		return GatewayOAuthDelivery{Kind: "header", Name: "Authorization", Scheme: "Bearer"}
+	}
+	return d
+}
+
+// IsAuthorizationBearer reports whether the gateway token rides in the
+// primary Authorization bearer slot (Rust `is_authorization_bearer`).
+func (d GatewayOAuthDelivery) IsAuthorizationBearer() bool {
+	effective := d.Effective()
+	return effective.Kind == "header" &&
+		strings.EqualFold(strings.TrimSpace(effective.Name), "authorization") &&
+		strings.EqualFold(effective.HeaderScheme(), "bearer")
+}
+
 // EffectiveHeaderName returns the request header the delivery writes, and an
 // empty string for an unknown kind. It mirrors Rust's `header` computation in
 // GatewayOAuthConfig::validate.
 func (d GatewayOAuthDelivery) EffectiveHeaderName() string {
-	switch d.Kind {
+	switch effective := d.Effective(); effective.Kind {
 	case "header":
-		return d.Name
+		return effective.Name
 	case "cookie":
 		return "cookie"
 	}
 	return ""
+}
+
+// RequiresGatewayOrigin reports whether the gateway bearer must only be sent
+// to the configured gateway origin (Rust #57313).
+func (c *GatewayOAuthConfig) RequiresGatewayOrigin() bool {
+	return c != nil && c.Delivery.IsAuthorizationBearer()
 }
 
 // HeaderScheme returns the delivery scheme, applying Rust's "Bearer" default.
@@ -261,41 +285,87 @@ func (c *GatewayOAuthConfig) Validate(provider *ProviderInfo) error {
 	if err := validateGatewayOAuthURL(provider.BaseURL, "base_url"); err != nil {
 		return err
 	}
+	if c.RequiresGatewayOrigin() && strings.TrimSpace(provider.ModelCatalogURL) != "" {
+		if err := validateGatewayOAuthURL(provider.ModelCatalogURL, "model_catalog_url"); err != nil {
+			return err
+		}
+		if !gatewayOAuthSameOrigin(provider.BaseURL, provider.ModelCatalogURL) {
+			return errors.New("Codex would send gateway credentials to a different model catalog. Set model_catalog_url to a URL with the same scheme, host, and port as base_url, or remove model_catalog_url to use the gateway's catalog.")
+		}
+	}
 	if strings.TrimSpace(c.ClientID) == "" || (c.RedirectPort != nil && *c.RedirectPort == 0) {
 		return errors.New("gateway_oauth requires a nonempty client_id and a nonzero redirect_port")
 	}
+	delivery := c.Delivery.Effective()
 	header := ""
-	switch c.Delivery.Kind {
-	case "header":
-		if !isGatewayOAuthHeaderName(c.Delivery.Name) {
-			return errors.New("invalid gateway_oauth header name")
+	if delivery.IsAuthorizationBearer() {
+		// The gateway token would share the Authorization slot with the
+		// provider's own credential (Rust #57313).
+		if provider.RequiresOpenAIAuth || strings.TrimSpace(provider.EnvKey) != "" ||
+			strings.TrimSpace(provider.ExperimentalBearerToken) != "" || provider.HasCommandAuth() {
+			return errors.New("Header conflict. Codex is configured to send both the model provider credential and the gateway token in the Authorization header. Set gateway_oauth.delivery to a different header or cookie that your gateway accepts for its token.")
 		}
-		scheme := c.Delivery.HeaderScheme()
-		lowered := strings.ToLower(c.Delivery.Name)
-		if !isGatewayOAuthToken(scheme) || reservedGatewayOAuthHeaders[lowered] ||
-			hasGatewayOAuthReservedPrefix(lowered) {
-			return errors.New("invalid or reserved gateway_oauth delivery header or scheme")
+		header = "authorization"
+	} else {
+		switch delivery.Kind {
+		case "header":
+			if !isGatewayOAuthHeaderName(delivery.Name) {
+				return errors.New("invalid gateway_oauth header name")
+			}
+			scheme := delivery.HeaderScheme()
+			lowered := strings.ToLower(delivery.Name)
+			if !isGatewayOAuthToken(scheme) || reservedGatewayOAuthHeaders[lowered] ||
+				hasGatewayOAuthReservedPrefix(lowered) {
+				return errors.New("invalid or reserved gateway_oauth delivery header or scheme")
+			}
+			header = lowered
+		case "cookie":
+			if !isGatewayOAuthToken(delivery.Name) {
+				return errors.New("invalid gateway_oauth cookie name")
+			}
+			header = "cookie"
+		default:
+			return errors.New("invalid gateway_oauth delivery kind")
 		}
-		header = lowered
-	case "cookie":
-		if !isGatewayOAuthToken(c.Delivery.Name) {
-			return errors.New("invalid gateway_oauth cookie name")
-		}
-		header = "cookie"
-	default:
-		return errors.New("invalid gateway_oauth delivery kind")
 	}
 	for name := range provider.HTTPHeaders {
 		if strings.EqualFold(name, header) {
-			return errors.New("gateway_oauth delivery conflicts with a configured provider header")
+			return fmt.Errorf("The %s header is set in both gateway_oauth.delivery and the provider's http_headers or env_http_headers. Remove the duplicate header from the provider or choose a different gateway delivery.", header)
 		}
 	}
 	for name := range provider.EnvHTTPHeaders {
 		if strings.EqualFold(name, header) {
-			return errors.New("gateway_oauth delivery conflicts with a configured provider header")
+			return fmt.Errorf("The %s header is set in both gateway_oauth.delivery and the provider's http_headers or env_http_headers. Remove the duplicate header from the provider or choose a different gateway delivery.", header)
 		}
 	}
 	return nil
+}
+
+// gatewayOAuthSameOrigin compares the scheme, host, and effective port of
+// two validated URLs (Rust url::Origin equality).
+func gatewayOAuthSameOrigin(left string, right string) bool {
+	leftScheme, leftHost, leftPort := gatewayOAuthURLOrigin(left)
+	rightScheme, rightHost, rightPort := gatewayOAuthURLOrigin(right)
+	return leftScheme == rightScheme && leftHost == rightHost && leftPort == rightPort
+}
+
+func gatewayOAuthURLOrigin(raw string) (string, string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", "", ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	if port == "" {
+		switch scheme {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return scheme, host, port
 }
 
 func hasGatewayOAuthReservedPrefix(name string) bool {

@@ -324,7 +324,14 @@ func gatewayOAuthConfigFromConfig(values map[string]any) (*GatewayOAuthConfig, e
 		value := uint16(port)
 		gateway.RedirectPort = &value
 	}
-	delivery, ok := configValue(values, "delivery").(map[string]any)
+	rawDelivery := configValue(values, "delivery")
+	if rawDelivery == nil {
+		// Rust #57313: an omitted delivery sends the gateway token as
+		// Authorization: Bearer.
+		gateway.Delivery = GatewayOAuthDelivery{Kind: "header", Name: "Authorization", Scheme: "Bearer"}
+		return gateway, nil
+	}
+	delivery, ok := rawDelivery.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("gateway_oauth.delivery must be a table")
 	}

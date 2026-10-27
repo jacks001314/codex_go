@@ -106,7 +106,6 @@ func TestGatewayOAuthRejectsUnsafeEndpointsAndDeliveryCollisions(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"Authorization",
 		"HOST",
 		"x-openai-actor-authorization",
 		"content-length",
@@ -181,6 +180,101 @@ func TestGatewayOAuthRejectsAWSAndIncompleteConfigs(t *testing.T) {
 	badCookie.GatewayOAuth.Delivery = GatewayOAuthDelivery{Kind: "cookie", Name: "bad name"}
 	if err := badCookie.Validate(); err == nil || !strings.Contains(err.Error(), "invalid gateway_oauth cookie name") {
 		t.Fatalf("bad cookie error = %v", err)
+	}
+}
+
+// TestGatewayOAuthDefaultsToAuthorizationBearer mirrors Rust #57313: omitting
+// delivery sends the gateway token as Authorization: Bearer.
+func TestGatewayOAuthDefaultsToAuthorizationBearer(t *testing.T) {
+	provider, err := ProviderInfoFromConfig(gatewayOAuthProviderValues(nil, nil))
+	if err != nil {
+		t.Fatalf("default delivery error = %v", err)
+	}
+	if provider.GatewayOAuth == nil {
+		t.Fatal("gateway_oauth = nil")
+	}
+	if got := provider.GatewayOAuth.Delivery; got.Kind != "header" || got.Name != "Authorization" || got.HeaderScheme() != "Bearer" {
+		t.Fatalf("default delivery = %#v", got)
+	}
+	if !provider.GatewayOAuth.RequiresGatewayOrigin() {
+		t.Fatal("default delivery must require the gateway origin")
+	}
+	name, value, err := gatewayAuthHeader(provider.GatewayOAuth, "gateway-token")
+	if err != nil || name != "Authorization" || value != "Bearer gateway-token" {
+		t.Fatalf("gateway header = %q %q, %v", name, value, err)
+	}
+	// An explicitly configured custom header keeps its own config.
+	custom, err := ProviderInfoFromConfig(gatewayOAuthProviderValues(map[string]any{
+		"delivery": map[string]any{"kind": "header", "name": "x-gateway-auth"},
+	}, nil))
+	if err != nil {
+		t.Fatalf("custom delivery error = %v", err)
+	}
+	if custom.GatewayOAuth.RequiresGatewayOrigin() {
+		t.Fatal("a custom header must not require the gateway origin")
+	}
+}
+
+// TestGatewayOAuthBearerRequiresCatalogOrigin mirrors Rust #57313: bearer
+// delivery refuses to send gateway credentials to another catalog origin.
+func TestGatewayOAuthBearerRequiresCatalogOrigin(t *testing.T) {
+	provider, err := ProviderInfoFromConfig(gatewayOAuthProviderValues(nil, nil))
+	if err != nil {
+		t.Fatalf("fixture error = %v", err)
+	}
+	otherOrigin := *provider
+	otherOrigin.ModelCatalogURL = "https://gateway.example.test:8443/catalog"
+	if err := otherOrigin.Validate(); err == nil || !strings.Contains(err.Error(), "same scheme, host, and port as base_url") {
+		t.Fatalf("cross-origin catalog error = %v", err)
+	}
+	sameOrigin := *provider
+	sameOrigin.ModelCatalogURL = "https://GATEWAY.example.test:443/custom/catalog"
+	if err := sameOrigin.Validate(); err != nil {
+		t.Fatalf("same-origin catalog error = %v", err)
+	}
+	legacy, err := ProviderInfoFromConfig(gatewayOAuthProviderValues(map[string]any{
+		"delivery": map[string]any{"kind": "header", "name": "x-gateway-auth"},
+	}, nil))
+	if err != nil {
+		t.Fatalf("legacy fixture error = %v", err)
+	}
+	legacy.ModelCatalogURL = "https://gateway.example.test:8443/catalog"
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("custom-header catalog error = %v", err)
+	}
+}
+
+// TestGatewayOAuthBearerRejectsProviderCredentials mirrors Rust #57313: a
+// provider credential sharing the Authorization header is a conflict.
+func TestGatewayOAuthBearerRejectsProviderCredentials(t *testing.T) {
+	base, err := ProviderInfoFromConfig(gatewayOAuthProviderValues(nil, nil))
+	if err != nil {
+		t.Fatalf("fixture error = %v", err)
+	}
+	for name, mutate := range map[string]func(*ProviderInfo){
+		"requires_openai_auth":      func(info *ProviderInfo) { info.RequiresOpenAIAuth = true },
+		"env_key":                   func(info *ProviderInfo) { info.EnvKey = "PROVIDER_API_KEY" },
+		"experimental_bearer_token": func(info *ProviderInfo) { info.ExperimentalBearerToken = "token" },
+		"command_auth":              func(info *ProviderInfo) { info.Auth = &ProviderAuthInfo{Command: "print-token"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			info := *base
+			info.GatewayOAuth = cloneGatewayOAuthForTest(base.GatewayOAuth)
+			mutate(&info)
+			if err := info.Validate(); err == nil || !strings.Contains(err.Error(), "gateway_oauth.delivery") {
+				t.Fatalf("conflict error = %v", err)
+			}
+		})
+	}
+	explicit, err := ProviderInfoFromConfig(gatewayOAuthProviderValues(map[string]any{
+		"delivery": map[string]any{"kind": "header", "name": "x-gateway-auth"},
+	}, nil))
+	if err != nil {
+		t.Fatalf("explicit fixture error = %v", err)
+	}
+	explicit.EnvKey = "PROVIDER_API_KEY"
+	if err := explicit.Validate(); err != nil {
+		t.Fatalf("custom header with a provider key error = %v", err)
 	}
 }
 

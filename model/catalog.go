@@ -174,6 +174,19 @@ type PermissionMessages struct {
 	// ApprovedPrefixes supports `{{ approved_prefixes }}`. A missing value
 	// keeps the bundled template; an empty value suppresses the section.
 	ApprovedPrefixes *string `json:"approved_prefixes,omitempty"`
+	// WritableRoot is the singular writable-root sentence with exactly one
+	// `{{ roots }}` placeholder (Rust #56309).
+	WritableRoot *string `json:"writable_root,omitempty"`
+	// WritableRoots is the plural writable-roots sentence with exactly one
+	// `{{ roots }}` placeholder (Rust #56309).
+	WritableRoots *string `json:"writable_roots,omitempty"`
+	// OmittedPaths is optional presentation before the harness-owned omitted
+	// path warning (Rust #57263).
+	OmittedPaths *string `json:"omitted_paths,omitempty"`
+	// DeniedReads is presentation with exactly one `{{ denied_reads }}`
+	// placeholder for the harness-owned denial explanation and path list
+	// (Rust #57263).
+	DeniedReads *string `json:"denied_reads,omitempty"`
 }
 
 // GuardianV2ModelConfig mirrors Rust

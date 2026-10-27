@@ -96,7 +96,7 @@ func TestComposeGatewayAuthFailuresLikeRust(t *testing.T) {
 			name:     "conflicting primary header",
 			config:   gatewayHeaderConfig("authorization", ""),
 			provider: stubGatewayTokenProvider{token: "token"},
-			want:     "gateway OAuth conflicts with primary auth headers",
+			want:     "The model provider already sets the Authorization header. Choose a different header or cookie in gateway_oauth.delivery for the gateway token.",
 		},
 	}
 	for _, testCase := range cases {

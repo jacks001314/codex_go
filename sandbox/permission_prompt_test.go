@@ -324,3 +324,140 @@ func TestPermissionPromptApprovedPrefixTemplatesLikeRust(t *testing.T) {
 		t.Fatalf("granular custom prefix template = \n%s", granularText)
 	}
 }
+
+// TestPermissionPromptCatalogWritableRootsLikeRust mirrors Rust #56309: the
+// catalog singular/plural sentence is selected by the displayed root count and
+// substitutes exactly one {{ roots }} placeholder, preserving path facts.
+func TestPermissionPromptCatalogWritableRootsLikeRust(t *testing.T) {
+	singular := "Catalog root: {{ roots }}."
+	plural := "Catalog roots: {{ roots }}."
+	messages := &PermissionPromptPermissionMessages{WritableRoot: &singular, WritableRoots: &plural}
+
+	one := writableRootsText([]string{"/repo"}, messages)
+	if one != "Catalog root: `/repo`." {
+		t.Fatalf("singular catalog roots = %q", one)
+	}
+	two := writableRootsText([]string{"/b", "/a"}, messages)
+	if two != "Catalog roots: `/a`, `/b`." {
+		t.Fatalf("plural catalog roots = %q", two)
+	}
+	if got := writableRootsText([]string{"/repo"}, nil); got != " The writable root is `/repo`." {
+		t.Fatalf("bundled singular roots = %q", got)
+	}
+
+	for _, invalid := range []string{
+		"",
+		"   ",
+		"Catalog root without a placeholder.",
+		"Catalog {{ roots }} {{ roots }}.",
+		"Catalog {{ other }}.",
+		"Catalog {{ roots }}{ literal }.",
+		"Catalog\nroot {{ roots }}.",
+		"Catalog " + PermissionInstructionsOpenTag + " {{ roots }}.",
+		strings.Repeat("x", maxWritableRootsTemplateBytes+1) + " {{ roots }}",
+	} {
+		value := invalid
+		got := writableRootsText([]string{"/repo"}, &PermissionPromptPermissionMessages{WritableRoot: &value})
+		if got != " The writable root is `/repo`." {
+			t.Fatalf("invalid writable_root %q rendered %q", invalid, got)
+		}
+	}
+
+	// Rendering beyond the shared path+template budget is rejected even when
+	// the template itself is within its byte limit.
+	if _, ok := renderWritableRootsOverride("Roots: {{ roots }}", strings.Repeat("z", maxPermissionPromptPathBytes+maxWritableRootsTemplateBytes)); ok {
+		t.Fatal("an oversized rendered writable-root sentence was accepted")
+	}
+
+	// Truncation happens first: one surviving root selects the singular text.
+	roots := []string{strings.Repeat("x", maxPermissionPromptPathBytes), "/short"}
+	text := BuildPermissionPrompt(&PermissionPromptConfig{
+		SandboxMode:        PermissionPromptWorkspaceWrite,
+		NetworkAccess:      PermissionPromptNetworkRestricted,
+		ApprovalPolicy:     PermissionPromptApprovalNever,
+		PermissionMessages: messages,
+		WritableRoots:      roots,
+	})
+	if !strings.Contains(text, "Catalog root: `/short`.") || strings.Contains(text, "Catalog roots:") {
+		t.Fatalf("truncated writable roots = %q", text)
+	}
+	if !strings.Contains(text, permissionPromptOmittedPathsText) {
+		t.Fatalf("truncated writable roots lost the omission warning: %q", text)
+	}
+}
+
+// TestPermissionPromptCatalogDeniedReadsLikeRust mirrors Rust #57263: the
+// catalog template must contain exactly one {{ denied_reads }} placeholder and
+// keeps the harness-owned policy, facts, and path list.
+func TestPermissionPromptCatalogDeniedReadsLikeRust(t *testing.T) {
+	template := "Blocked reads:\n{{ denied_reads }}"
+	text := deniedReadsText([]string{"/private", "/seed"}, []string{"/root/**"}, &PermissionPromptPermissionMessages{DeniedReads: &template})
+	want := "Blocked reads:\n" + permissionPromptDeniedReadsPolicy + "\n- path `/private`\n- path `/seed`\n- glob `/root/**`"
+	if text != want {
+		t.Fatalf("denied reads = %q, want %q", text, want)
+	}
+
+	for _, invalid := range []string{
+		"",
+		"   ",
+		"Blocked reads without a placeholder",
+		"{{ denied_reads }} and {{ denied_reads }}",
+		"Blocked {{ other }}: {{ denied_reads }}",
+		"Blocked {literal}: {{ denied_reads }}",
+		"Blocked\x01: {{ denied_reads }}",
+		"Blocked\u2028: {{ denied_reads }}",
+		strings.Repeat("x", maxPermissionPresentationBytes+1) + "{{ denied_reads }}",
+		"Blocked: {{ denied_reads }} " + strings.Repeat("z", maxPermissionPresentationBytes),
+		"Blocked: {{ denied_reads }} " + PermissionInstructionsCloseTag,
+	} {
+		value := invalid
+		got := deniedReadsText([]string{"/private"}, nil, &PermissionPromptPermissionMessages{DeniedReads: &value})
+		if got != "## Denied filesystem reads\n"+permissionPromptDeniedReadsPolicy+"\n- path `/private`" {
+			t.Fatalf("invalid denied_reads %q rendered %q", invalid, got)
+		}
+	}
+
+	// A bare placeholder is valid and keeps the catalog's exact framing.
+	bare := "{{ denied_reads }}"
+	if got, want := deniedReadsText([]string{"/private"}, nil, &PermissionPromptPermissionMessages{DeniedReads: &bare}), permissionPromptDeniedReadsPolicy+"\n- path `/private`"; got != want {
+		t.Fatalf("bare denied_reads = %q, want %q", got, want)
+	}
+}
+
+// TestPermissionPromptCatalogOmittedPathsLikeRust mirrors Rust #57263: catalog
+// presentation only precedes the mandatory omission/no-bypass warning, and
+// invalid overrides fall back independently.
+func TestPermissionPromptCatalogOmittedPathsLikeRust(t *testing.T) {
+	presentation := "Some extra permission paths are omitted from this prompt."
+	got := omittedPathsText(&PermissionPromptPermissionMessages{OmittedPaths: &presentation})
+	want := presentation + "\n" + permissionPromptOmittedPathsText
+	if got != want {
+		t.Fatalf("omitted paths = %q, want %q", got, want)
+	}
+	for _, invalid := range []string{
+		"",
+		"   ",
+		"Has {literal} braces",
+		"Has " + PermissionInstructionsOpenTag,
+		"Line\nbreak is allowed",
+	} {
+		value := invalid
+		got := omittedPathsText(&PermissionPromptPermissionMessages{OmittedPaths: &value})
+		if invalid == "Line\nbreak is allowed" {
+			if got != invalid+"\n"+permissionPromptOmittedPathsText {
+				t.Fatalf("newline presentation = %q", got)
+			}
+			continue
+		}
+		if got != permissionPromptOmittedPathsText {
+			t.Fatalf("invalid omitted_paths %q rendered %q", invalid, got)
+		}
+	}
+	oversized := strings.Repeat("x", maxPermissionPresentationBytes+1)
+	if got := omittedPathsText(&PermissionPromptPermissionMessages{OmittedPaths: &oversized}); got != permissionPromptOmittedPathsText {
+		t.Fatalf("oversized omitted_paths rendered %q", got)
+	}
+	if got := omittedPathsText(&PermissionPromptPermissionMessages{OmittedPaths: &presentation}); !strings.HasSuffix(got, permissionPromptOmittedPathsText) {
+		t.Fatalf("omitted_paths lost the mandatory warning: %q", got)
+	}
+}
