@@ -35,6 +35,11 @@ type MCPProtocolMode uint8
 const (
 	MCPProtocolLegacy MCPProtocolMode = iota
 	MCPProtocol20260728
+	// MCPProtocolDiscoverLocalStdio probes an eligible local stdio server with
+	// `server/discover` even when its launch config omits a version
+	// (Rust #57210). A helper that cannot answer discovery is restarted with the
+	// legacy handshake.
+	MCPProtocolDiscoverLocalStdio
 )
 
 var errMCPModernProtocolUnsupported = errors.New("MCP server does not support protocol version 2026-07-28")
@@ -99,10 +104,18 @@ func isHostOwnedCodexAppsRegistration(name string, registration ServerRegistrati
 }
 
 func (m MCPProtocolMode) protocolVersion() string {
-	if m == MCPProtocol20260728 {
+	if m.usesModernMCPLifecycle() {
 		return modernMCPProtocol
 	}
 	return defaultMCPProtocol
+}
+
+// usesModernMCPLifecycle reports whether this mode speaks the MCP 2026-07-28
+// lifecycle: discovery, protocol metadata on every request, multi-round input
+// and bounded message framing. Discovery mode does so until it falls back to the
+// legacy handshake.
+func (m MCPProtocolMode) usesModernMCPLifecycle() bool {
+	return m == MCPProtocol20260728 || m == MCPProtocolDiscoverLocalStdio
 }
 
 func mcpClientCapabilities(openAIForm bool) map[string]any {
@@ -165,7 +178,7 @@ func mcpParamsWithProtocolMetadataAndFeatures(params any, mode MCPProtocolMode, 
 }
 
 func mcpParamsWithProtocolMetadataAndAllFeatures(params any, mode MCPProtocolMode, openAIForm bool, advertiseAuthChange bool, userVerification bool, emaAuth bool) any {
-	if mode != MCPProtocol20260728 {
+	if !mode.usesModernMCPLifecycle() {
 		return params
 	}
 	out := map[string]any{}
@@ -318,8 +331,65 @@ func nextMCP2026RequestParams(ctx context.Context, serverName string, elicitatio
 	return params, true, nil
 }
 
+// mcpStdioHandshakeMode maps a configured protocol policy plus the server's
+// declared CODEX_MCP_PROTOCOL_VERSION to the handshake that will run. The
+// boolean reports whether the declaration is usable at all; an unrecognized
+// version is invalid, exactly like Rust's McpProtocolMode::stdio_mode.
+func mcpStdioHandshakeMode(mode MCPProtocolMode, env map[string]string) (MCPProtocolMode, bool) {
+	if mode != MCPProtocol20260728 && mode != MCPProtocolDiscoverLocalStdio {
+		return MCPProtocolLegacy, true
+	}
+	requested, configured := env[mcpProtocolVersionEnvVar]
+	if !configured {
+		if mode == MCPProtocolDiscoverLocalStdio {
+			return MCPProtocolDiscoverLocalStdio, true
+		}
+		return MCPProtocolLegacy, true
+	}
+	if requested != modernMCPProtocol {
+		return MCPProtocolLegacy, false
+	}
+	return MCPProtocol20260728, true
+}
+
+// mcpServerCanDiscoverLocalStdio mirrors Rust McpServer::can_discover_local_stdio
+// (#57210): the reserved codex_apps server keeps a per-chat catalog, servers
+// with runtime or enterprise-managed credentials need that chat's
+// authentication state, and only stdio launches whose declared version lets
+// discovery run qualify.
+func mcpServerCanDiscoverLocalStdio(name string, config *ServerConfig) bool {
+	if config == nil || strings.TrimSpace(name) == CodexAppsServerName {
+		return false
+	}
+	if !config.IsLocalEnvironment() || strings.TrimSpace(config.Command) == "" {
+		return false
+	}
+	if config.ApplyHTTPRequest != nil || config.EffectiveAuth() == ServerAuthEMAAuth {
+		return false
+	}
+	handshake, valid := mcpStdioHandshakeMode(MCPProtocolDiscoverLocalStdio, config.Env)
+	return valid && handshake.usesModernMCPLifecycle()
+}
+
+// isMCPLegacyInitializeResult reports whether a `server/discover` reply is
+// actually a legacy initialize result: some helpers assume their first request
+// is initialize. Such a helper has already spent its startup budget, so the
+// legacy handshake needs a fresh process (Rust #57210).
+func isMCPLegacyInitializeResult(result *json.RawMessage) bool {
+	if result == nil {
+		return false
+	}
+	var initialized struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(*result, &initialized); err != nil {
+		return false
+	}
+	return isLegacyMCPProtocolDate(strings.TrimSpace(initialized.ProtocolVersion))
+}
+
 func modernMCPMessageLimit(mode MCPProtocolMode) int64 {
-	if mode == MCPProtocol20260728 {
+	if mode.usesModernMCPLifecycle() {
 		return maxModernMCPMessageBytes
 	}
 	return 0

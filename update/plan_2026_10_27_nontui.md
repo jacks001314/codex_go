@@ -14,6 +14,7 @@ TUI lane and are not modified here.
 
 | Upstream | Requirement | Go change |
 | --- | --- | --- |
+| `#57210` | Opt-in protocol discovery for local stdio MCP servers: the disabled-by-default `mcp_connection_sharing` feature makes an eligible local stdio server (not `codex_apps`, local environment, no runtime-managed credentials, no EMA auth, no explicit legacy override) probe `server/discover` before the legacy handshake. A helper that cannot finish discovery is recovered with a fresh handshake after the previous process exits; a working legacy connection is retained for the same helper when an upgrade fails for a non-authentication reason; authentication failures abort without a restart. Discover connections keep the bounded modern message framing and protocol metadata, and share the legacy catalog identity until they negotiate 2026-07-28. | `features/features.go`, `mcp/protocol_2026.go`, `mcp/config.go`, `mcp/api.go`, `mcp/stdio_client.go`, `mcp/protocol_discovery_metrics.go`, `mcp/stdio_discovery_like_rust_test.go` |
 | `#55607` | Auth header construction is fallible so a request is never sent with missing or partial credentials: the API auth provider, telemetry, and request application propagate errors; a provider that requires Codex auth reports a transient error when managed authentication is unavailable (catalog identity stays computable); transient MCP auth errors are retryable while auth build errors and policy denials are terminal. | `codexapi/auth.go`, `model/auth.go`, `model/models_identity.go`, `mcp/http_client.go`, like-Rust tests |
 | `#55923` | Preserve thread model settings across resume and revert: a cold resume restores the thread-owned service tier, reasoning summary, and personality unless the caller overrides them; the selected tier is kept for persistence and settings snapshots while the effective tier is filtered against the model (flex is always preserved); `thread/revert` carries the runtime model, service tier, and personality into reconstruction; and the initial settings checkpoint is written before user input so an interrupted first turn retains it. | `rollout/rollout.go`, `rollout/session_items.go`, `model/catalog.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/persisted_model_settings.go`, like-Rust tests |
 | `#56330` | Interrupts and Plan mode stop reserved agent-message wakes: an interrupt during model discovery rejects the unstarted reservation without a terminal event, preserves its mail for an explicit turn, and blocks later automatic wakes until a new turn starts. Plan mode rejects the wake but does not mark the thread stopped. Accepted wakes keep their admission configuration, and finishing turns stay running and persist only `TurnComplete`. | `turn/api.go`, `appserver/turn_runtime.go`, `appserver/thread_manager.go`, `appserver/agent_controller.go`, `appserver/runtime_router.go`, `appserver/agent_message_wake_controls_like_rust_test.go` |
@@ -1419,6 +1420,19 @@ deduplication for tool outputs.
   personality into the record and checkpoint; and selected-versus-effective tier filtering where flex
   survives a catalog that does not advertise it. The full `go test ./appserver -count=1` still fails
   only in the pre-existing Windows baseline tests listed for `#56330`.
+- For `#57210`: `go build ./...`, `go test ./mcp -count=1`, and
+  `go test ./features -count=1` pass. Coverage pins discovery-mode launch mapping
+  (unmarked -> probe, marked modern -> 2026-07-28, unknown declaration -> error),
+  eligibility exclusions (remote, EMA, runtime credentials, `codex_apps`),
+  feature gating of the effective server config and a disabled default, recovery
+  from a helper that exits, rejects the late initialize, answers discovery with a
+  legacy initialize result, reports only a legacy version, or never answers
+  discovery (fresh process, bounded probe), modern negotiation, authentication
+  failures aborting without a restart, retention of a working legacy connection
+  when an upgrade fails, and the shared legacy catalog identity plus bounded
+  message limit for discovery. Go sends discovery and initialize sequentially, so
+  Rust's late-discovery race modes do not exist here; the recoveries they exercise
+  are covered by the sequential equivalents.
 - For `#55607`: `go build ./...`, `go test ./model ./codexapi -count=1`,
   `go test ./mcp -count=1`, `go test ./appserver -run 'Auth|Login|Logout|Gateway|Provider' -count=1`,
   and `go test ./app -run 'Login|Logout|Auth|Provider' -count=1` pass. Coverage pins rejected

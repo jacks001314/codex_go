@@ -164,6 +164,10 @@ var Registry = []Spec{
 	{Key: "apps", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_mcp_apps", Stage: StageUnderDevelopment},
 	{Key: "mcp_2026_07_28", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #57210): try protocol discovery before
+	// initializing eligible local stdio servers, and share those connections
+	// across chats when they negotiate MCP 2026-07-28 (#57211).
+	{Key: "mcp_connection_sharing", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs eb680c0558 #44318): hosted Codex Apps
 	// get an independent MCP protocol opt-in.
 	{Key: "codex_apps_mcp_2026_07_28", Stage: StageUnderDevelopment, DefaultEnabled: false},

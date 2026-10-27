@@ -877,6 +877,13 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			info := MCPServerInfo{Name: name, Command: firstNonEmptyMCP(registration.Config.Command, registration.Config.URL), Args: append([]string(nil), registration.Config.Args...)}
 			config := cloneServerConfig(&registration.Config)
 			config.ProtocolMode = effectiveMCPProtocolMode(runtime, name, registration)
+			// Rust #57210: with mcp_connection_sharing enabled, an eligible local
+			// stdio server probes its protocol before falling back to the legacy
+			// handshake. An explicit registration override stays authoritative.
+			if runtime.DiscoverLocalStdio && config.ProtocolModeOverride == nil &&
+				mcpServerCanDiscoverLocalStdio(name, &config) {
+				config.ProtocolMode = MCPProtocolDiscoverLocalStdio
+			}
 			// Rust applies the runtime's read-only policy to every enabled
 			// server (McpConnectionSet::with_read_only_mcp_tools).
 			config.RequiresReadOnlyTools = runtime.RequiresReadOnlyMCPTools
@@ -2115,7 +2122,16 @@ func mcpToolCatalogGraceKeyWithFeatures(name string, config *ServerConfig, openA
 		return "", false
 	}
 	if strings.TrimSpace(config.Command) != "" {
-		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification), true
+		// Rust #57210 keys a discovering connection by the legacy catalog mode:
+		// an unmarked helper is expected to fall back, and a modern negotiation
+		// invalidates that legacy catalog instead of publishing into it.
+		catalogConfig := config
+		if catalogConfig.ProtocolMode == MCPProtocolDiscoverLocalStdio {
+			cloned := cloneServerConfig(catalogConfig)
+			cloned.ProtocolMode = MCPProtocolLegacy
+			catalogConfig = &cloned
+		}
+		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKeyWithFeatures(catalogConfig, openAIForm, userVerification), true
 	}
 	if strings.TrimSpace(config.URL) == "" {
 		return "", false
@@ -3056,10 +3072,54 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	old := s.deleteStdioClientLocked(name)
 	client := newMCPStdioClientWithFeatures(config, openAIForm, userVerification)
 	client.authChanges = authChanges
+	if mcpStdioUpgradeFromLegacy(old, config, openAIForm, userVerification) {
+		// A forced reconnect must wait for the previously published helper to
+		// exit, but a working legacy helper stays available until the upgrade
+		// proves itself: a failed discovery for the same account falls back to
+		// it instead of failing the chat (Rust #57210).
+		client.legacyFallback = old
+		old = nil
+	}
 	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout}
 	s.mu.Unlock()
 	closeStdioClients([]*stdioClient{old})
 	return client
+}
+
+// mcpStdioConnectionFamilyKey identifies the helper a config would launch while
+// ignoring the protocol handshake, so an upgrade attempt can recognize the
+// legacy connection it replaces.
+func mcpStdioConnectionFamilyKey(config *ServerConfig, openAIForm bool, userVerification bool) string {
+	if config == nil {
+		return ""
+	}
+	family := config
+	if family.ProtocolMode != MCPProtocolLegacy {
+		cloned := cloneServerConfig(family)
+		cloned.ProtocolMode = MCPProtocolLegacy
+		family = &cloned
+	}
+	return mcpConnectionCacheKeyWithFeatures(family, openAIForm, userVerification)
+}
+
+// mcpStdioUpgradeFromLegacy reports whether previous is a ready legacy
+// connection for the same helper that config now wants to connect with a
+// protocol it has not negotiated yet.
+func mcpStdioUpgradeFromLegacy(previous *stdioClient, config *ServerConfig, openAIForm bool, userVerification bool) bool {
+	if previous == nil || config == nil {
+		return false
+	}
+	if config.ProtocolMode != MCPProtocolDiscoverLocalStdio && config.ProtocolMode != MCPProtocol20260728 {
+		return false
+	}
+	if previous.legacyDelegate() != nil || previous.isClosed() || !previous.isInitialized() {
+		return false
+	}
+	if previous.protocolModeSnapshot() != MCPProtocolLegacy {
+		return false
+	}
+	return mcpStdioConnectionFamilyKey(previous.config, previous.openAIForm, previous.userVerification) ==
+		mcpStdioConnectionFamilyKey(config, openAIForm, userVerification)
 }
 
 // authChangeSourceSnapshot returns the configured auth-change source.
@@ -3377,9 +3437,13 @@ func (s *MCPService) deleteStdioClientLocked(name string) *stdioClient {
 
 func closeStdioClients(clients []*stdioClient) {
 	for _, client := range clients {
-		if client != nil {
-			_ = client.Close()
+		if client == nil {
+			continue
 		}
+		if fallback := client.takeLegacyFallback(); fallback != nil {
+			_ = fallback.Close()
+		}
+		_ = client.Close()
 	}
 }
 

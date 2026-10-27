@@ -46,7 +46,7 @@ func recordProtocolDiscoveryMetrics(mode string, outcome string, duration time.D
 }
 
 func mcpProtocolDiscoveryModeLabel(mode MCPProtocolMode) string {
-	if mode == MCPProtocol20260728 {
+	if mode.usesModernMCPLifecycle() {
 		return "auto"
 	}
 	return "legacy"

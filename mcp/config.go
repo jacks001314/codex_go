@@ -348,6 +348,10 @@ type RuntimeConfig struct {
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements
 	ProtocolMode         MCPProtocolMode
+	// DiscoverLocalStdio mirrors Rust McpConfig::discover_local_stdio (feature
+	// mcp_connection_sharing, disabled by default): eligible local stdio servers
+	// are probed with `server/discover` before the legacy handshake (#57210).
+	DiscoverLocalStdio bool
 	// RefreshToolListOnNotifications mirrors Rust McpConfig::mcp_tool_list_changed
 	// (feature mcp_tool_list_changed, disabled by default): an ordinary server
 	// that reports a tools/list_changed notification is re-listed before its
@@ -434,6 +438,7 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		Auth:                      cloneRuntimeAuth(runtimeAuth),
 		Requirements:              managedconfig.CloneConfigRequirements(requirements),
 		ProtocolMode:              mcpProtocolModeFromValues(values),
+		DiscoverLocalStdio:        mcpFeatureEnabled(values, "mcp_connection_sharing"),
 		HostOwnedAppsProtocolMode: hostOwnedAppsProtocolModeFromValues(values),
 		// Rust #54656 reads the notification refresh from the same feature set
 		// as the MCP protocol modes.
