@@ -36,9 +36,19 @@ func TestMessageBoardToolSpecsMatchRust(t *testing.T) {
 			description: "Create a channel where all agents in this collaboration can read and post messages. You are subscribed to new top-level posts by default.",
 			properties: map[string]any{
 				"channel_name": plainString,
+				"description":  map[string]any{"type": "string", "description": "Optional channel purpose, at most 512 UTF-8 bytes."},
 				"subscribe":    map[string]any{"type": "boolean", "description": "Subscribe to new top-level posts. Default true."},
 			},
 			required: []string{"channel_name"},
+		},
+		{
+			name:        "upsert_channel",
+			description: "Create a channel or update only its description. Existing posts, author, creation time and subscriptions are preserved. Does not subscribe anyone or send notifications. Returns null on success.",
+			properties: map[string]any{
+				"channel_name": plainString,
+				"description":  map[string]any{"type": "string", "description": "Channel purpose, at most 512 UTF-8 bytes."},
+			},
+			required: []string{"channel_name", "description"},
 		},
 		{
 			name:        "get_channels",

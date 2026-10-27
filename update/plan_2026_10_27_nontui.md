@@ -48,6 +48,7 @@ TUI lane and are not modified here.
 | `#57209` | Turn analytics critical-path fields (disabled/null default; capture pending) | `telemetry/turn_event.go`, `telemetry/turn_event_test.go` |
 | `#57198` | `PreToolUse` hook input reports the local command's resolved working directory | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, like-Rust tests |
 | `#57203` | Preserve the command cwd in `PermissionRequest` and `PostToolUse` hook input | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, `appserver/runtime_router.go`, `appserver/network_approval.go`, like-Rust tests |
+| `#56494` | Channel upserts on message boards (`upsert_channel`; `description` on `create_channel`) | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, `agentboard/upsert_channel_test.go`, `agentboard/tools_test.go` |
 
 Grounding notes:
 
@@ -364,6 +365,18 @@ for network approvals from the originating call's trigger cwd when the
 environment is local. `apply_patch`, `request_permissions`, and MCP approvals
 keep the host cwd, matching Rust's `tool_cwd: None` for those payloads.
 
+`#56494` details: `upsert_channel` creates a channel or replaces only its
+description. The local board updates an existing row with a single `UPDATE`
+(no host-clock call), and only falls back to `INSERT ... ON CONFLICT DO UPDATE`
+after the clock when the channel is new, so posts, author, creation time, and
+subscriptions survive and no notification is sent. The in-memory board mirrors
+that recheck-after-clock ordering. The remote board rejects the operation with
+Rust's exact message because its service has no description-update RPC. The
+tool surface now also accepts `description` on `create_channel` (Rust's spec
+lists it), validates the 512-byte bound at argument decode and again in the
+boards, and reports `null` on success. Read-only local connections are rejected
+through the `channel.edit_metadata` write requirement.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -422,6 +435,9 @@ keep the host cwd, matching Rust's `tool_cwd: None` for those payloads.
 - For `#57186`: `go test ./sandbox/linuxsandbox -run 'InspectUnreadableGlobSearchRoot' -count=1`
   passes; the symlink-loop and symlink-root cases skip on this Windows host
   because creating symlinks needs a privilege it lacks.
+- For `#56494`: `go test ./agentboard -run 'UpsertChannel|MessageBoardToolSpecsMatchRust' -count=1`
+  and the full `go test ./agentboard -count=1` pass, as do
+  `go test ./turn ./appserver -run 'MessageBoard|Board' -count=1`.
 - For `#57198`/`#57203`: `go test ./tool -run 'TestShellExecutorHookToolCWDReportsExecutionDirectory' -count=1`
   and `go test ./appserver -run 'TestHookInputCWDReportsToolExecutionDirectoryLikeRust|Hook|Approval' -count=1`
   pass, as does the full `go test ./tool -count=1`.

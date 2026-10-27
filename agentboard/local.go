@@ -370,6 +370,9 @@ func (b *LocalAgentMessageBoard) CreateChannel(ctx context.Context, caller strin
 	if err := validateChannelName(request.ChannelName); err != nil {
 		return nil, err
 	}
+	if err := validateOptionalChannelDescription(request.Description); err != nil {
+		return nil, err
+	}
 	author, err := b.host.AgentPath(ctx, caller)
 	if err != nil {
 		return nil, err
@@ -383,7 +386,7 @@ func (b *LocalAgentMessageBoard) CreateChannel(ctx context.Context, caller strin
 		return nil, err
 	}
 	defer tx.rollback(ctx)
-	if err := b.insertChannel(ctx, tx, request.ChannelName, author, now, nil); err != nil {
+	if err := b.insertChannel(ctx, tx, request.ChannelName, author, now, request.Description); err != nil {
 		return nil, err
 	}
 	if request.Subscription == Subscribe {
@@ -399,6 +402,63 @@ func (b *LocalAgentMessageBoard) CreateChannel(ctx context.Context, caller strin
 		return nil, err
 	}
 	return summary, nil
+}
+
+// UpsertChannel creates a channel or replaces only its description, preserving
+// posts, authorship, creation time, and subscriptions (Rust #56494). Creating a
+// channel needs the host clock; updating an existing one does not.
+func (b *LocalAgentMessageBoard) UpsertChannel(ctx context.Context, caller string, request UpsertChannelRequest) error {
+	if err := b.access.requireWrite(b.identity, "channel.edit_metadata"); err != nil {
+		return err
+	}
+	if err := validateChannelName(request.ChannelName); err != nil {
+		return err
+	}
+	if err := validateChannelDescription(request.Description); err != nil {
+		return err
+	}
+	author, err := b.host.AgentPath(ctx, caller)
+	if err != nil {
+		return err
+	}
+	tx, err := b.beginWrite(ctx)
+	if err != nil {
+		return err
+	}
+	updated, err := tx.conn.ExecContext(ctx,
+		"UPDATE channels SET description=? WHERE board=? AND name=?",
+		request.Description, b.identity, request.ChannelName)
+	if err != nil {
+		return err
+	}
+	rows, err := updated.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 0 {
+		return tx.commit(ctx)
+	}
+	tx.rollback(ctx)
+	// Only creation needs a timestamp. Do not hold a write transaction across
+	// the host clock call; a concurrent creator is handled by the upsert below.
+	now, err := b.host.CurrentTime(ctx, caller)
+	if err != nil {
+		return err
+	}
+	tx, err = b.beginWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.rollback(ctx)
+	if _, err := tx.conn.ExecContext(ctx,
+		"INSERT INTO channels(board,name,name_search,created_at,timestamp,author,description) VALUES(?,?,?,?,?,?,?) "+
+			"ON CONFLICT(board,name) DO UPDATE SET description=excluded.description",
+		b.identity, request.ChannelName, foldCase(request.ChannelName),
+		now.UTC().Format(localBoardTimestampFormat), now.UnixMicro(), string(author), request.Description,
+	); err != nil {
+		return err
+	}
+	return tx.commit(ctx)
 }
 
 // Post creates a post or reply. Once started, the accepted write and its

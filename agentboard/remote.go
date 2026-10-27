@@ -176,6 +176,12 @@ func (b *RemoteBoard) RegisterMembers(ctx context.Context, members map[string]st
 }
 
 // CreateChannel creates a channel and optionally subscribes the caller.
+// UpsertChannel rejects requests: the remote service has no description-update
+// operation, and creation has different semantics (Rust #56494).
+func (b *RemoteBoard) UpsertChannel(_ context.Context, _ string, _ UpsertChannelRequest) error {
+	return invalid("remote message boards do not support channel upsert")
+}
+
 func (b *RemoteBoard) CreateChannel(ctx context.Context, caller string, request CreateChannelRequest) (*ChannelSummary, error) {
 	params := struct {
 		ChannelName  string `json:"channel_name"`

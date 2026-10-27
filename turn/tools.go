@@ -228,7 +228,7 @@ type ToolRegistryOptions struct {
 	MCPResourceMessages  *model.McpResourceToolMessages
 	DisableWaitAgent     bool
 	DisableDirectMessage bool
-	// MessageBoard, when set, registers the shared discussion board's nine
+	// MessageBoard, when set, registers the shared discussion board's ten
 	// collaboration tools for this turn's caller (Rust
 	// `install_agent_message_board`). The host owns board selection, the tool
 	// namespace and its description.

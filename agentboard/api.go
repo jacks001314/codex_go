@@ -28,6 +28,11 @@ type Board interface {
 	Identity() string
 
 	CreateChannel(ctx context.Context, caller string, request CreateChannelRequest) (*ChannelSummary, error)
+	// UpsertChannel creates a channel or replaces only its description,
+	// preserving posts, authorship, creation time, and subscriptions. Backends
+	// without upsert support reject it rather than substituting creation
+	// (Rust #56494).
+	UpsertChannel(ctx context.Context, caller string, request UpsertChannelRequest) error
 	ListChannels(ctx context.Context, caller string, query ChannelQuery) (*ChannelPage, error)
 	// Post creates a post or reply. The request ID identifies a logical call
 	// across retries: a retry with different input is an error, a successful
@@ -77,8 +82,35 @@ const (
 // The JSON tags mirror Rust's serde field names (#48077 added the derives so a
 // host can serialize these request types).
 type CreateChannelRequest struct {
-	ChannelName  string             `json:"channel_name"`
+	ChannelName string `json:"channel_name"`
+	// Description is the optional channel purpose, at most 512 UTF-8 bytes.
+	Description  *string            `json:"description,omitempty"`
 	Subscription SubscriptionChange `json:"subscription"`
+}
+
+// UpsertChannelRequest creates a channel or updates only its navigation
+// description (Rust #56494). Updating an existing channel never changes its
+// posts, author, creation time, or subscriptions.
+type UpsertChannelRequest struct {
+	ChannelName string `json:"channel_name"`
+	Description string `json:"description"`
+}
+
+// channelDescriptionMaxBytes mirrors Rust's ChannelDescription bound.
+const channelDescriptionMaxBytes = 512
+
+func validateChannelDescription(description string) error {
+	if len(description) > channelDescriptionMaxBytes {
+		return invalid("channel descriptions must contain at most 512 UTF-8 bytes")
+	}
+	return nil
+}
+
+func validateOptionalChannelDescription(description *string) error {
+	if description == nil {
+		return nil
+	}
+	return validateChannelDescription(*description)
 }
 
 // ChannelQuery lists or searches channels.

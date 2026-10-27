@@ -40,6 +40,7 @@ const (
 // order.
 var MessageBoardToolNames = []string{
 	"create_channel",
+	"upsert_channel",
 	"get_channels",
 	"list_threads",
 	"search_posts",
@@ -68,7 +69,7 @@ type MessageBoardToolOverride struct {
 	Description *string
 }
 
-// NewMessageBoardTools builds the nine collaboration tools bound to one caller.
+// NewMessageBoardTools builds the ten collaboration tools bound to one caller.
 // The host supplies the namespace and its description; an empty namespace
 // publishes plain function tools. The caller and its path must come from the
 // host's authoritative tree metadata.
@@ -129,7 +130,7 @@ func (t *messageBoardTool) Spec() tool.Spec {
 	return tool.Spec{
 		Name:                 name,
 		Description:          description,
-		InputSchema:          messageBoardInputSchema(bundled),
+		InputSchema:          messageBoardInputSchema(t.name, bundled),
 		NamespaceDescription: namespaceDescription,
 		Parallel:             messageBoardParallelTools[t.name],
 	}
@@ -140,8 +141,14 @@ func messageBoardSpecFor(name string) messageBoardToolSpec {
 	case "create_channel":
 		return messageBoardToolSpec{
 			description: "Create a channel where all agents in this collaboration can read and post messages. You are subscribed to new top-level posts by default.",
-			fields:      []string{"channel_name", "subscribe"},
+			fields:      []string{"channel_name", "description", "subscribe"},
 			required:    []string{"channel_name"},
+		}
+	case "upsert_channel":
+		return messageBoardToolSpec{
+			description: "Create a channel or update only its description. Existing posts, author, creation time and subscriptions are preserved. Does not subscribe anyone or send notifications. Returns null on success.",
+			fields:      []string{"channel_name", "description"},
+			required:    []string{"channel_name", "description"},
 		}
 	case "get_channels":
 		return messageBoardToolSpec{
@@ -192,10 +199,10 @@ func messageBoardSpecFor(name string) messageBoardToolSpec {
 	}
 }
 
-func messageBoardInputSchema(spec messageBoardToolSpec) map[string]any {
+func messageBoardInputSchema(toolName string, spec messageBoardToolSpec) map[string]any {
 	properties := make(map[string]any, len(spec.fields))
 	for _, field := range spec.fields {
-		properties[field] = messageBoardFieldSchema(field)
+		properties[field] = messageBoardFieldSchema(toolName, field)
 	}
 	return map[string]any{
 		"type":                 "object",
@@ -205,8 +212,13 @@ func messageBoardInputSchema(spec messageBoardToolSpec) map[string]any {
 	}
 }
 
-func messageBoardFieldSchema(field string) map[string]any {
+func messageBoardFieldSchema(toolName string, field string) map[string]any {
 	switch field {
+	case "description":
+		if toolName == "upsert_channel" {
+			return map[string]any{"type": "string", "description": "Channel purpose, at most 512 UTF-8 bytes."}
+		}
+		return map[string]any{"type": "string", "description": "Optional channel purpose, at most 512 UTF-8 bytes."}
 	case "new_channel_name":
 		return map[string]any{"type": "string", "description": "Create and subscribe to this channel."}
 	case "subscribe":
@@ -303,6 +315,18 @@ func (t *messageBoardTool) execute(ctx context.Context, raw string, invocation *
 	}
 
 	switch t.name {
+	case "upsert_channel":
+		var args upsertChannelArgs
+		if err := decodeMessageBoardArgs(invocation, &args); err != nil {
+			return nil, err
+		}
+		if err := t.checkMutationBudget(budget, 0); err != nil {
+			return nil, err
+		}
+		return messageBoardResult(nil, t.board.UpsertChannel(ctx, t.caller, UpsertChannelRequest{
+			ChannelName: *args.ChannelName,
+			Description: *args.Description,
+		}))
 	case "create_channel":
 		var args createChannelArgs
 		if err := decodeMessageBoardArgs(invocation, &args); err != nil {
@@ -317,6 +341,7 @@ func (t *messageBoardTool) execute(ctx context.Context, raw string, invocation *
 		}
 		return messageBoardResult(t.board.CreateChannel(ctx, t.caller, CreateChannelRequest{
 			ChannelName:  *args.ChannelName,
+			Description:  args.Description,
 			Subscription: subscription,
 		}))
 	case "get_channels":
@@ -626,11 +651,33 @@ func maxInt(left int, right int) int {
 
 type createChannelArgs struct {
 	ChannelName *string `json:"channel_name"`
+	Description *string `json:"description"`
 	Subscribe   *bool   `json:"subscribe"`
 }
 
 func (a *createChannelArgs) validate() error {
-	return requireStringField("channel_name", a.ChannelName)
+	if err := requireStringField("channel_name", a.ChannelName); err != nil {
+		return err
+	}
+	if a.Description != nil && len(*a.Description) > channelDescriptionMaxBytes {
+		return invalid("channel descriptions must contain at most 512 UTF-8 bytes")
+	}
+	return nil
+}
+
+type upsertChannelArgs struct {
+	ChannelName *string `json:"channel_name"`
+	Description *string `json:"description"`
+}
+
+func (a *upsertChannelArgs) validate() error {
+	if err := requireStringField("channel_name", a.ChannelName); err != nil {
+		return err
+	}
+	if err := requireStringField("description", a.Description); err != nil {
+		return err
+	}
+	return validateChannelDescription(*a.Description)
 }
 
 type getChannelsArgs struct {
