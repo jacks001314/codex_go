@@ -5,11 +5,14 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"hash"
+	"net/http"
 	"sort"
 	"strings"
 
 	"codex_go/auth"
+	"codex_go/codexapi"
 )
 
 // modelsCatalogIdentityTag versions the identity digest so that changing the
@@ -103,7 +106,13 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	if authHeaders == nil && (!stableAccount || explicitBearer) {
 		resolved, err := ResolveProviderAuth(authSnapshot, *provider)
 		if err != nil {
-			return ""
+			// A missing managed credential is not a build failure for the cache
+			// identity; the identity must stay computable while the user is
+			// logged out (Rust #55607 keeps request sending fallible instead).
+			if !errors.Is(err, codexapi.ErrAuthTransient) {
+				return ""
+			}
+			resolved = AuthHeaders{Headers: http.Header{}}
 		}
 		authHeaders = &resolved
 	}

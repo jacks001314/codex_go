@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/model"
 
 	"golang.org/x/oauth2"
@@ -1052,6 +1053,15 @@ func isMCPHTTPSessionInvalidError(err error) bool {
 func isRetryableMCPStreamableHTTPError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// Rust #55607: transient auth failures (for example a temporarily
+	// unavailable managed credential) are retryable, while auth build errors and
+	// network policy denials are terminal.
+	if errors.Is(err, codexapi.ErrAuthBuild) {
+		return false
+	}
+	if errors.Is(err, codexapi.ErrAuthTransient) {
+		return true
 	}
 	var statusErr *mcpHTTPStatusError
 	if errors.As(err, &statusErr) {

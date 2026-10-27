@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/model"
 )
 
@@ -2306,6 +2307,9 @@ func TestRetryableMCPStreamableHTTPErrorMatchesRustClassifier(t *testing.T) {
 		{name: "truncated stream", err: io.ErrUnexpectedEOF, want: true},
 		{name: "clean eof", err: io.EOF, want: false},
 		{name: "decode error", err: errors.New("invalid character"), want: false},
+		{name: "transient auth", err: fmt.Errorf("%w: credential refresh unavailable", codexapi.ErrAuthTransient), want: true},
+		{name: "auth build", err: fmt.Errorf("%w: invalid authentication", codexapi.ErrAuthBuild), want: false},
+		{name: "auth policy denial", err: fmt.Errorf("%w: network policy denied", codexapi.ErrAuthBuild), want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2500,5 +2504,32 @@ func TestHTTPMCPHandshakeDeadlineDoesNotCancelBeforeBodyRead(t *testing.T) {
 	}
 	if err := client.CallWithOptionsContext(context.Background(), &httpClientCallOptions{}, "tools/list", map[string]any{}, &out); err != nil {
 		t.Fatalf("tools/list after delayed-body handshake failed: %v", err)
+	}
+}
+
+func TestHTTPMCPAuthFailureDoesNotSendRequestLikeRust(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &httpClient{
+		config: &ServerConfig{
+			URL:     server.URL,
+			Enabled: true,
+			ApplyHTTPRequest: func(*http.Request, []byte) error {
+				return fmt.Errorf("%w: managed authentication is unavailable", codexapi.ErrAuthTransient)
+			},
+		},
+		client: server.Client(),
+	}
+	_, err := client.doHTTPRequestContext(context.Background(), server.URL, []byte(`{"jsonrpc":"2.0"}`), "", "")
+	if !errors.Is(err, codexapi.ErrAuthTransient) {
+		t.Fatalf("doHTTPRequestContext() error = %v, want ErrAuthTransient", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests = %d, want 0", got)
 	}
 }

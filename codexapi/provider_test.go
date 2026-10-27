@@ -1,6 +1,7 @@
 package codexapi
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -45,8 +46,63 @@ func TestAPIErrorStringsAndAuthTelemetry(t *testing.T) {
 		t.Fatalf("Error() = %q", got)
 	}
 	auth := &HeaderAuthProvider{Headers: http.Header{"Authorization": []string{"Bearer token"}}}
-	telemetry := AuthHeaderTelemetryFor(auth)
+	telemetry, err := AuthHeaderTelemetryFor(auth)
+	if err != nil {
+		t.Fatalf("AuthHeaderTelemetryFor() error = %v", err)
+	}
 	if !telemetry.Attached || telemetry.Name != "authorization" {
 		t.Fatalf("telemetry = %+v", telemetry)
+	}
+}
+
+// rejectedPartialAuth attaches a header and then fails, like Rust #55607's
+// RejectedHeaderAuth: callers must observe the error instead of sending the
+// partially authenticated request.
+type rejectedPartialAuth struct{}
+
+func (rejectedPartialAuth) AddAuthHeaders(headers http.Header) error {
+	headers.Set("Authorization", "Bearer partial-auth")
+	return ErrAuthBuild
+}
+
+func (rejectedPartialAuth) ApplyAuth(request Request) (Request, error) {
+	if request.Headers == nil {
+		request.Headers = http.Header{}
+	}
+	return request, rejectedPartialAuth{}.AddAuthHeaders(request.Headers)
+}
+
+// asyncOnlyAuth requires async resolution, mirroring Rust #55607's
+// AsyncHeaderAuth: the synchronous path reports a build error while the async
+// path can still authenticate.
+type asyncOnlyAuth struct{}
+
+func (asyncOnlyAuth) AddAuthHeaders(http.Header) error { return ErrAuthBuild }
+
+func (asyncOnlyAuth) ApplyAuth(request Request) (Request, error) {
+	request.Headers.Set("Authorization", "Bearer async-auth")
+	return request, nil
+}
+
+func TestAuthHeaderFailuresPropagateLikeRust(t *testing.T) {
+	headers, err := ToAuthHeaders(rejectedPartialAuth{})
+	if !errors.Is(err, ErrAuthBuild) {
+		t.Fatalf("ToAuthHeaders() error = %v, want ErrAuthBuild", err)
+	}
+	if headers.Get("Authorization") != "Bearer partial-auth" {
+		t.Fatalf("partial header = %q, want the rejected provider value retained for inspection", headers.Get("Authorization"))
+	}
+	if _, err := AuthHeaderTelemetryFor(rejectedPartialAuth{}); !errors.Is(err, ErrAuthBuild) {
+		t.Fatalf("AuthHeaderTelemetryFor() error = %v, want ErrAuthBuild", err)
+	}
+	if _, err := ToAuthHeaders(asyncOnlyAuth{}); !errors.Is(err, ErrAuthBuild) {
+		t.Fatalf("sync async-only auth error = %v, want ErrAuthBuild", err)
+	}
+	request, err := asyncOnlyAuth{}.ApplyAuth(Request{Headers: http.Header{}})
+	if err != nil {
+		t.Fatalf("ApplyAuth() error = %v", err)
+	}
+	if request.Headers.Get("Authorization") != "Bearer async-auth" {
+		t.Fatalf("async header = %q", request.Headers.Get("Authorization"))
 	}
 }

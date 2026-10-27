@@ -14,6 +14,7 @@ TUI lane and are not modified here.
 
 | Upstream | Requirement | Go change |
 | --- | --- | --- |
+| `#55607` | Auth header construction is fallible so a request is never sent with missing or partial credentials: the API auth provider, telemetry, and request application propagate errors; a provider that requires Codex auth reports a transient error when managed authentication is unavailable (catalog identity stays computable); transient MCP auth errors are retryable while auth build errors and policy denials are terminal. | `codexapi/auth.go`, `model/auth.go`, `model/models_identity.go`, `mcp/http_client.go`, like-Rust tests |
 | `#55923` | Preserve thread model settings across resume and revert: a cold resume restores the thread-owned service tier, reasoning summary, and personality unless the caller overrides them; the selected tier is kept for persistence and settings snapshots while the effective tier is filtered against the model (flex is always preserved); `thread/revert` carries the runtime model, service tier, and personality into reconstruction; and the initial settings checkpoint is written before user input so an interrupted first turn retains it. | `rollout/rollout.go`, `rollout/session_items.go`, `model/catalog.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/persisted_model_settings.go`, like-Rust tests |
 | `#56330` | Interrupts and Plan mode stop reserved agent-message wakes: an interrupt during model discovery rejects the unstarted reservation without a terminal event, preserves its mail for an explicit turn, and blocks later automatic wakes until a new turn starts. Plan mode rejects the wake but does not mark the thread stopped. Accepted wakes keep their admission configuration, and finishing turns stay running and persist only `TurnComplete`. | `turn/api.go`, `appserver/turn_runtime.go`, `appserver/thread_manager.go`, `appserver/agent_controller.go`, `appserver/runtime_router.go`, `appserver/agent_message_wake_controls_like_rust_test.go` |
 | `#56284` | Supported thread originators (`codex_work_cca`, `codex_work_web`, `codex_work_desktop`, `codex_work_mobile`, `chatgpt_cca`) select isolated model managers before thread model metadata is resolved. Each partition sends its own `originator` header, reuses its manager, keeps separate in-memory and `models_cache.<originator>.json` disk catalogs, and shares runtime API-key discovery policy; unsupported originators retain the default manager. Thread startup and actual turns use the selected catalog’s instructions and `apply_patch_tool_type`. | `model/models_originator.go`, `model/models_endpoint.go`, `model/lazy_models.go`, `model/api.go`, `model/catalog.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/agent_runtime.go`, like-Rust tests |
@@ -1418,3 +1419,12 @@ deduplication for tool outputs.
   personality into the record and checkpoint; and selected-versus-effective tier filtering where flex
   survives a catalog that does not advertise it. The full `go test ./appserver -count=1` still fails
   only in the pre-existing Windows baseline tests listed for `#56330`.
+- For `#55607`: `go build ./...`, `go test ./model ./codexapi -count=1`,
+  `go test ./mcp -count=1`, `go test ./appserver -run 'Auth|Login|Logout|Gateway|Provider' -count=1`,
+  and `go test ./app -run 'Login|Logout|Auth|Provider' -count=1` pass. Coverage pins rejected
+  partial-auth propagation, synchronous versus asynchronous provider resolution, the transient
+  unavailable-managed-auth error while non-Codex providers still send unauthenticated requests,
+  catalog identity remaining computable without credentials, MCP retry classification for
+  transient versus terminal auth errors, and an auth failure suppressing the HTTP request. Go
+  already returned MCP `ApplyHTTPRequest` errors before sending and cancels event streams without
+  resolving credentials, so the Rust event-stream cleanup ordering holds by construction.

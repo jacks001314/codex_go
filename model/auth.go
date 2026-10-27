@@ -99,7 +99,11 @@ func ResolveProviderAuth(snapshot *auth.AuthDotJSON, provider ProviderInfo) (Aut
 		return AuthHeaders{}, errors.New(BedrockAPIKeyUnsupportedMessage)
 	}
 	if snapshot == nil {
-		return AuthHeaders{Headers: http.Header{}}, nil
+		// Rust #55607: a provider that requires Codex auth must not send a
+		// request when managed authentication is unavailable (for example after
+		// a logout or an account switch). The error is transient so callers can
+		// retry once credentials return without treating it as a build failure.
+		return AuthHeaders{}, fmt.Errorf("%w: managed authentication is unavailable", codexapi.ErrAuthTransient)
 	}
 	return AuthHeadersFromAuth(*snapshot)
 }
