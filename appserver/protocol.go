@@ -43,6 +43,7 @@ const (
 	MethodThreadGoalClear                    Method = "thread/goal/clear"
 	MethodThreadUnsubscribe                  Method = "thread/unsubscribe"
 	MethodThreadMemoryModeSet                Method = "thread/memoryMode/set"
+	MethodThreadMemoryRead                   Method = "thread/memory/read"
 	MethodMemoryReset                        Method = "memory/reset"
 	MethodRolloutCompress                    Method = "rollout/compress"
 	MethodMemoryStatus                       Method = "memory/status"
@@ -166,6 +167,7 @@ const (
 	MethodWindowsSandboxSetupStart               Method = "windowsSandbox/setupStart"
 	MethodWindowsSandboxReadiness                Method = "windowsSandbox/readiness"
 	MethodFeedbackUpload                         Method = "feedback/upload"
+	MethodFeedbackSave                           Method = "feedback/save"
 	MethodConfigRead                             Method = "config/read"
 	MethodConfigValueWrite                       Method = "config/value/write"
 	MethodConfigBatchWrite                       Method = "config/batchWrite"
@@ -2439,6 +2441,25 @@ func (p *ThreadMemoryModeSetParams) Validate() error {
 }
 
 type ThreadMemoryModeSetResponse struct{}
+
+type ThreadMemoryReadParams struct {
+	// ThreadID names a thread that is already started or resumed.
+	ThreadID string `json:"threadId"`
+}
+
+func (p *ThreadMemoryReadParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// ThreadMemoryReadResponse mirrors Rust `ThreadMemoryReadResponse`: the summary
+// is null when memory use is disabled or the selected summary is missing,
+// unreadable, or blank.
+type ThreadMemoryReadResponse struct {
+	Summary *string `json:"summary"`
+}
 
 type MemoryResetResponse struct{}
 

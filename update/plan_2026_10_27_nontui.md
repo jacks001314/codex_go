@@ -25,6 +25,8 @@ TUI lane and are not modified here.
 | `#57317` | Feature `simplified_selection_hints` (off): concise plugin hints, 4 KiB bound | `features/features.go`, `plugin/plugin.go`, `appserver/turn_runtime.go`, plugin/RuntimeRouter like-Rust tests |
 | `#57279` | Untrusted additional context as agent-namespaced tool outputs | `turn/api.go`, `appserver/additional_context.go`, `appserver/turn_runtime.go`, `appserver/runtime_router.go`, like-Rust tests |
 | `#57172` | Lifecycle timestamps on app-server thread items | `appserver/protocol.go`, `appserver/item_lifecycle_times.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `state/thread_history_query.go`, like-Rust tests |
+| `#56465` | `thread/memory/read` returns the selected version's memory summary | `appserver/protocol.go`, `appserver/thread_memory_read.go`, `appserver/schema.go`, `appserver/rust_protocol_surface_test.go`, like-Rust tests |
+| `#55940` | `feedback/save` writes a local diagnostic ZIP instead of uploading | `appserver/protocol.go`, `appserver/feedback.go`, `appserver/feedback_archive.go`, `appserver/feedback_thread_index.go`, `appserver/runtime_router.go`, `appserver/schema.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -63,8 +65,32 @@ places every context item before the steered user message.
 Rust's flat payload. Values come from session metadata for live/runtime items,
 from the persisted `thread_items.started_at_ms`/`completed_at_ms` columns for
 paginated history and resume (with the recorded-zero legacy rule), and are
-injected onto `item/started`/`item/completed` payloads before dispatch. A
-code-mode command completion now carries the start time it began with.
+injected onto `item/started`/`item/completed` payloads before dispatch. The
+router records the start time published on `item/started` per turn and reuses
+it on `item/completed`, so the pair reports the same `startedAtMs` even when the
+completion payload is rebuilt from persisted metadata; a completion with no
+recorded start falls back to its completion time, as Rust does. A code-mode
+command completion now carries the start time it began with.
+
+`#56465` details: `thread/memory/read` requires a loaded thread (Rust loads it
+through the thread manager before reading), loads the thread record, resolves
+the effective config with the record's thread overrides, and returns the raw
+`<codexHome>/<version.DirectoryName()>/memory_summary.md` text only when the
+`memories` feature and `memories.use_memories` are both enabled. A missing,
+unreadable, or blank summary yields `summary: null`; Go does not fall back to
+another codex version. The method is experimental in the schema surface.
+
+`#55940` details: `feedback/save` validates the same upload payload plus an
+absolute `savePath` and writes a diagnostic ZIP without contacting the upload
+service, so it works even with `feedback.enabled=false`. The archive mirrors
+Rust's layout (`report.json`, `manifest.json`,
+`attachments/%04d/<basename>`) and limits: 200 MiB uncompressed including the
+report and manifest, at most 128 attachments (rollout last), strict
+missing/non-regular/oversized attachment failures, and a same-directory temp
+file published with a no-clobber link so an existing path is never replaced.
+Only an already materialized rollout is attached, so saving an untouched
+thread does not materialize one; the thread index reports
+`rolloutArchiveFilename: null` in save mode.
 
 ## Pending in this window
 
@@ -74,11 +100,9 @@ code-mode command completion now carries the start time it began with.
   `#57287` prediction-fork tool declarations, `#57286` managed
   `network_proxy`, `#57263`/`#57276`
   permission wording/world-state, `#57171` runtime auth and
-  `#57270` cloud config for sandbox/exec-server,
-  `#56036`/`#56049` remote credentials, and the protocol-schema drift for
-  `feedback/save` plus `thread/memory/read` (both missing from Go schemas at
-  window start, so four `appserver` schema tests fail independently of this
-  lane's changes).
+  `#57270` cloud config for sandbox/exec-server, and
+  `#56036`/`#56049` remote credentials. The `feedback/save` and
+  `thread/memory/read` schema drift is fixed by the entries above.
 
 ## Verification
 

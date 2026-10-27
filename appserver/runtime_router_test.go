@@ -1693,6 +1693,7 @@ func TestRuntimeRouterTurnStartEmitsUserMessageLifecycleWithTextElements(t *test
 	var completedIndex = -1
 	var startedItem map[string]any
 	var completedItem map[string]any
+	var completedAtMS int64
 	for index, notification := range sink.List() {
 		if notification.Method != NotificationItemStarted {
 			if notification.Method == NotificationItemCompleted {
@@ -1700,6 +1701,7 @@ func TestRuntimeRouterTurnStartEmitsUserMessageLifecycleWithTextElements(t *test
 				if ok && completed.Item["type"] == "userMessage" {
 					completedIndex = index
 					completedItem = completed.Item
+					completedAtMS = completed.CompletedAtMS
 				}
 			}
 			continue
@@ -1717,9 +1719,7 @@ func TestRuntimeRouterTurnStartEmitsUserMessageLifecycleWithTextElements(t *test
 	if completedIndex != startedIndex+1 {
 		t.Fatalf("userMessage lifecycle indexes = started %d completed %d", startedIndex, completedIndex)
 	}
-	if !reflect.DeepEqual(completedItem, startedItem) {
-		t.Fatalf("completed item = %#v, started item = %#v", completedItem, startedItem)
-	}
+	assertItemLifecyclePairLikeRust(t, startedItem, completedItem, completedAtMS)
 	if startedItem["clientId"] != clientID {
 		t.Fatalf("clientId = %#v", startedItem["clientId"])
 	}
@@ -7664,9 +7664,7 @@ func TestRuntimeRouterReviewStartEmitsEnteredReviewModeLikeRust(t *testing.T) {
 	if completed.ThreadID != threadID || completed.TurnID != turnID || completed.CompletedAtMS == 0 {
 		t.Fatalf("completed notification = %#v", completed)
 	}
-	if !reflect.DeepEqual(completedItem, startedItem) {
-		t.Fatalf("completed item = %#v, want %#v", completedItem, startedItem)
-	}
+	assertItemLifecyclePairLikeRust(t, startedItem, completedItem, completed.CompletedAtMS)
 	record, err := store.Read(session.ThreadID(threadID), true, true)
 	if err != nil {
 		t.Fatalf("read review thread record: %v", err)
@@ -25271,6 +25269,55 @@ func waitForRawResponseItemCompleted(t *testing.T, sink *NotificationBuffer, tur
 	}
 	t.Fatalf("timed out waiting for turn %s raw response item %s in %#v", turnID, itemID, last)
 	return nil
+}
+
+// assertItemLifecyclePairLikeRust checks the Rust #57172 started/completed
+// contract: ItemStarted carries startedAtMs and a null completedAtMs, while
+// ItemCompleted keeps that same start time and adds completedAtMs.
+func assertItemLifecyclePairLikeRust(t *testing.T, startedItem, completedItem map[string]any, completedAtMS int64) {
+	t.Helper()
+	if startedItem["startedAtMs"] == nil {
+		t.Fatalf("started item startedAtMs = nil, want recorded time")
+	}
+	if value, ok := startedItem["completedAtMs"]; !ok || value != nil {
+		t.Fatalf("started item completedAtMs = %#v (present=%v), want explicit null", value, ok)
+	}
+	if got, want := testLifecycleMilli(completedItem["startedAtMs"]), testLifecycleMilli(startedItem["startedAtMs"]); got != want || want == 0 {
+		t.Fatalf("completed item startedAtMs = %#v, want %#v", completedItem["startedAtMs"], startedItem["startedAtMs"])
+	}
+	if got := testLifecycleMilli(completedItem["completedAtMs"]); got != completedAtMS {
+		t.Fatalf("completed item completedAtMs = %#v, want %v", completedItem["completedAtMs"], completedAtMS)
+	}
+	if got, want := itemWithoutLifecycleTimes(completedItem), itemWithoutLifecycleTimes(startedItem); !reflect.DeepEqual(got, want) {
+		t.Fatalf("completed item = %#v, started item = %#v", got, want)
+	}
+}
+
+func testLifecycleMilli(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		number, _ := typed.Int64()
+		return number
+	default:
+		return 0
+	}
+}
+
+func itemWithoutLifecycleTimes(item map[string]any) map[string]any {
+	out := make(map[string]any, len(item))
+	for key, value := range item {
+		if key == "startedAtMs" || key == "completedAtMs" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func notificationItemMap(t *testing.T, item any) map[string]any {

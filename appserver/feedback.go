@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"codex_go/rollout"
+
+	"github.com/google/uuid"
 )
 
 var ErrInvalidFeedbackRequest = errors.New("invalid feedback request")
@@ -42,6 +46,154 @@ func (p *FeedbackUploadParams) MarshalJSON() ([]byte, error) {
 		payload["includeLogs"] = true
 	}
 	return json.Marshal(payload)
+}
+
+// FeedbackSaveParams mirrors Rust `FeedbackSaveParams` (Rust #55940): the
+// feedback/upload options plus an absolute, previously unused ZIP path on the
+// app-server host. The caller owns the file, including after a disconnected
+// RPC.
+type FeedbackSaveParams struct {
+	FeedbackUploadParams
+	SavePath string `json:"savePath"`
+}
+
+func (p *FeedbackSaveParams) Validate() error {
+	if p == nil {
+		return fmt.Errorf("%w: params are nil", ErrInvalidFeedbackRequest)
+	}
+	if err := p.FeedbackUploadParams.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(p.SavePath) == "" {
+		return fmt.Errorf("%w: savePath is required", ErrInvalidFeedbackRequest)
+	}
+	if !filepath.IsAbs(p.SavePath) {
+		return fmt.Errorf("%w: feedback savePath must be an absolute host path", ErrInvalidFeedbackRequest)
+	}
+	return nil
+}
+
+func (p FeedbackSaveParams) MarshalJSON() ([]byte, error) {
+	base, err := p.FeedbackUploadParams.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(base, &fields); err != nil {
+		return nil, err
+	}
+	savePath, err := json.Marshal(p.SavePath)
+	if err != nil {
+		return nil, err
+	}
+	fields["savePath"] = savePath
+	return json.Marshal(fields)
+}
+
+// FeedbackSaveResponse mirrors Rust `FeedbackSaveResponse` (Rust #55940).
+type FeedbackSaveResponse struct {
+	SavedPath string `json:"savedPath"`
+	ThreadID  string `json:"threadId"`
+	// PromptHash is the same value as feedback/upload; null when prompt
+	// metadata is absent.
+	PromptHash *string `json:"promptHash"`
+}
+
+// FeedbackMaxEventBytes mirrors Rust `MAX_EVENT_BYTES`: the serialized report
+// in a local export is bounded before the archive is published.
+const FeedbackMaxEventBytes = 1024 * 1024
+
+// feedbackReportEvent is the subset of Sentry's event JSON that Rust's
+// `feedback_event` serializes (codex-rs/feedback/src/lib.rs).
+type feedbackReportEvent struct {
+	EventID     string                   `json:"event_id"`
+	Timestamp   string                   `json:"timestamp"`
+	Level       string                   `json:"level"`
+	Message     string                   `json:"message"`
+	Tags        map[string]string        `json:"tags"`
+	Fingerprint []string                 `json:"fingerprint,omitempty"`
+	Exception   *feedbackReportException `json:"exception,omitempty"`
+}
+
+type feedbackReportException struct {
+	Values []feedbackReportExceptionValue `json:"values"`
+}
+
+type feedbackReportExceptionValue struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// FeedbackReport renders the local-export report event. The title and level
+// rules mirror Rust's `feedback_event`: a non-blank `feedback_title` tag wins,
+// otherwise the display classification and thread id form the title, and a
+// reason becomes the exception value.
+func (s *FeedbackSnapshot) FeedbackReport(classification string, reason *string, clientTags map[string]string, sessionSource *string) ([]byte, error) {
+	threadID := ""
+	if s != nil {
+		threadID = s.ThreadID
+	}
+	level := "info"
+	switch classification {
+	case "bug", "bad_result", "safety_check":
+		level = "error"
+	}
+	title := fmt.Sprintf("[%s]: Codex session %s", FeedbackDisplayClassification(classification), threadID)
+	customTitle := ""
+	if clientTags != nil {
+		customTitle = strings.TrimSpace(clientTags["feedback_title"])
+	}
+	if customTitle != "" {
+		title = customTitle
+	}
+	event := feedbackReportEvent{
+		EventID:   strings.ReplaceAll(uuid.NewString(), "-", ""),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Level:     level,
+		Message:   title,
+		Tags:      s.UploadTags(classification, reason, clientTags, sessionSource),
+	}
+	if customTitle != "" {
+		// A shared title must not merge independent reports.
+		event.Fingerprint = []string{event.EventID}
+	}
+	if reason != nil {
+		event.Exception = &feedbackReportException{Values: []feedbackReportExceptionValue{{Type: title, Value: *reason}}}
+	}
+	return json.Marshal(&event)
+}
+
+// SaveFeedback writes the report, selected attachments, and a manifest to path
+// without uploading (Rust `FeedbackSnapshot::save_feedback`, #55940). Local
+// exports remain available when uploads are disabled, are published atomically
+// without replacing existing files, and bound their uncompressed contents and
+// attachment count. Selected attachment paths are strict: a missing,
+// nonregular, or oversized file fails the export without publishing a partial
+// ZIP.
+func (s *FeedbackSnapshot) SaveFeedback(options *FeedbackUploadOptions, path string) error {
+	if options == nil {
+		options = &FeedbackUploadOptions{}
+	}
+	report, err := s.FeedbackReport(options.Classification, options.Reason, options.ClientTags, options.SessionSource)
+	if err != nil {
+		return err
+	}
+	if len(report) > FeedbackMaxEventBytes {
+		return errors.New("feedback event exceeds the size limit")
+	}
+	attachments := s.Attachments(options.IncludeLogs, options.ExtraAttachments, options.LogsOverride)
+	entries := make([]feedbackArchiveEntry, 0, len(attachments)+len(options.AttachmentPaths)+len(options.ExtraAttachmentPath))
+	for i := range attachments {
+		attachment := attachments[i].Clone()
+		entries = append(entries, feedbackArchiveEntry{attachment: &attachment})
+	}
+	for _, paths := range [][]FeedbackAttachmentPath{options.AttachmentPaths, options.ExtraAttachmentPath} {
+		for i := range paths {
+			attachmentPath := paths[i]
+			entries = append(entries, feedbackArchiveEntry{path: &attachmentPath})
+		}
+	}
+	return SaveFeedbackArchive(path, report, entries, DefaultFeedbackArchiveLimits())
 }
 
 func (p *FeedbackUploadParams) Validate() error {

@@ -265,6 +265,11 @@ type RuntimeRouter struct {
 	mu                    sync.RWMutex
 	configWarningsMu      sync.Mutex
 	logDBWriteWarningOnce sync.Once
+	// itemStartedTimesMu guards itemStartedTimes, the start times published on
+	// ItemStarted notifications so the matching ItemCompleted can report the
+	// same startedAtMs (Rust #57172 turn timing state).
+	itemStartedTimesMu sync.Mutex
+	itemStartedTimes   map[string]int64
 	// agentWakeMu serializes the decision to drain queued agent mail and start
 	// its automatic root turn. Without it, concurrent deliveries could both
 	// observe an idle thread and race to consume the same queue.
@@ -899,7 +904,7 @@ func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
 	if r == nil {
 		return
 	}
-	params = withItemLifecycleTimestamps(method, params)
+	params = r.withItemLifecycleTimestamps(method, params)
 	if r.isInternalMemoryNotification(params) {
 		return
 	}
@@ -2943,6 +2948,7 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadIncrementElicitation,
 		MethodThreadIncrementElicitationLegacy,
 		MethodThreadMemoryModeSet,
+		MethodThreadMemoryRead,
 		MethodMemoryStatus,
 		MethodThreadRealtimeAppendAudio,
 		MethodThreadRealtimeAppendSpeech,
@@ -3064,6 +3070,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
 		}
 		return r.services.ThreadRouter.dispatch(request)
+	}
+	if request.Method == MethodThreadMemoryRead {
+		return r.handleThreadMemoryRead(request)
 	}
 	if isThreadMethod(request.Method) {
 		if r.services.ThreadRouter == nil {
@@ -3385,6 +3394,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		return r.handleWindowsSandboxSetupStart(request)
 	case MethodWindowsSandboxReadiness:
 		return r.windowsSandboxReadiness()
+	case MethodFeedbackSave:
+		return r.handleFeedbackSave(request)
 	case MethodFeedbackUpload:
 		return r.handleFeedbackUpload(request)
 	case MethodConfigRead:
@@ -12214,7 +12225,44 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	threadID := "feedback-" + request.ID.String()
+	options, threadID, promptHash, err := r.prepareFeedbackResponse(params, request.ID.String(), false)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := r.requireFeedback()
+	snapshot.ThreadID = threadID
+	snapshot.PrepareUpload(options)
+	return &FeedbackUploadResponse{ThreadID: threadID, PromptHash: promptHash}, nil
+}
+
+// handleFeedbackSave mirrors Rust's local diagnostic ZIP export (Rust #55940).
+// It never uploads and remains available when feedback uploads are disabled.
+func (r *RuntimeRouter) handleFeedbackSave(request *Request) (*FeedbackSaveResponse, error) {
+	var params FeedbackSaveParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	options, threadID, promptHash, err := r.prepareFeedbackResponse(params.FeedbackUploadParams, request.ID.String(), true)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := r.requireFeedback()
+	snapshot.ThreadID = threadID
+	if err := snapshot.SaveFeedback(options, params.SavePath); err != nil {
+		return nil, fmt.Errorf("failed to save feedback: %w", err)
+	}
+	return &FeedbackSaveResponse{SavedPath: params.SavePath, ThreadID: threadID, PromptHash: promptHash}, nil
+}
+
+// prepareFeedbackResponse mirrors Rust's `feedback_response`: it builds the
+// report options shared by feedback/upload and feedback/save. Local saves only
+// select automatic rollouts that are already materialized, and their thread
+// index no longer names the upload-only rollouts archive.
+func (r *RuntimeRouter) prepareFeedbackResponse(params FeedbackUploadParams, requestID string, save bool) (*FeedbackUploadOptions, string, *string, error) {
+	threadID := "feedback-" + requestID
 	if params.ThreadID != nil && *params.ThreadID != "" {
 		threadID = *params.ThreadID
 	}
@@ -12280,6 +12328,10 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 			}
 			guardianFailures = r.guardianReviewFailuresForThreads(failureThreadIDs)
 			rolloutThreadIDs, threadIndex = selectFeedbackTreeThreads(threadID, feedbackThreadIDs, guardianFailures)
+			if save {
+				// Local exports attach selected rollouts individually.
+				threadIndex.RolloutArchiveFilename = nil
+			}
 			includeThreadIndex = true
 		}
 		if r.services.ThreadRouter != nil {
@@ -12315,18 +12367,15 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 			}
 		}
 	}
-	snapshot := r.requireFeedback()
-	snapshot.ThreadID = threadID
-	snapshot.PrepareUpload(&FeedbackUploadOptions{
-		Classification:      params.Classification,
-		Reason:              params.Reason,
-		ClientTags:          clientTags,
-		IncludeLogs:         params.IncludeLogs,
-		LogsOverride:        logsOverride,
-		ExtraAttachments:    historyAttachments,
-		ExtraAttachmentPath: attachmentPaths,
-	})
-	return &FeedbackUploadResponse{ThreadID: threadID, PromptHash: promptHash}, nil
+	return &FeedbackUploadOptions{
+		Classification:   params.Classification,
+		Reason:           params.Reason,
+		ClientTags:       clientTags,
+		IncludeLogs:      params.IncludeLogs,
+		LogsOverride:     logsOverride,
+		ExtraAttachments: historyAttachments,
+		AttachmentPaths:  attachmentPaths,
+	}, threadID, promptHash, nil
 }
 
 func (r *RuntimeRouter) handleConfigRead(request *Request) (*config.ConfigReadResponse, error) {

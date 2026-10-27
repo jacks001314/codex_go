@@ -13,6 +13,10 @@ const (
 )
 
 type feedbackThreadIndex struct {
+	// RolloutArchiveFilename names the upload-only `rollouts.tar.gz` bundle.
+	// Local saves set it to null because selected rollouts are attached
+	// individually (Rust #55940).
+	RolloutArchiveFilename        *string                    `json:"rollout_archive_filename"`
 	Threads                       []feedbackThreadIndexEntry `json:"threads"`
 	RetainedFailureThreadIDs      []string                   `json:"retained_failure_thread_ids"`
 	OmittedThreadIDs              []string                   `json:"omitted_thread_ids"`
@@ -83,7 +87,9 @@ func selectFeedbackTreeThreads(reportedThreadID string, subtree []string, failur
 			unlisted++
 		}
 	}
+	archiveFilename := FeedbackRolloutArchiveFilename
 	index := feedbackThreadIndex{
+		RolloutArchiveFilename:        &archiveFilename,
 		Threads:                       make([]feedbackThreadIndexEntry, len(threads)),
 		RetainedFailureThreadIDs:      append([]string(nil), failures.ThreadIDs...),
 		OmittedThreadIDs:              omitted,
