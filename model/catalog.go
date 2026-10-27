@@ -1768,6 +1768,24 @@ func ServiceTierForRequest(info *ModelInfo, serviceTier string) string {
 	return serviceTier
 }
 
+// ServiceTierForSelectedRequest resolves a selected thread service tier the way
+// Rust get_service_tier does (#55923): flex is always preserved, while other
+// tiers require catalog support. Provider-specific request filtering still
+// happens later in the model client.
+func ServiceTierForSelectedRequest(info *ModelInfo, serviceTier string) string {
+	serviceTier = normalizeServiceTierRequestValue(serviceTier)
+	if serviceTier == "" || serviceTier == ServiceTierDefaultRequestValue {
+		return ""
+	}
+	if serviceTier == ServiceTierFlexRequestValue {
+		return serviceTier
+	}
+	if !SupportsServiceTier(info, serviceTier) {
+		return ""
+	}
+	return serviceTier
+}
+
 // ServiceTierForConfiguredRequest mirrors Rust `get_service_tier` (#46230): a
 // configured `flex` tier is preserved even when fast mode is disabled or the
 // model catalog does not list it, while every other tier still requires fast
@@ -1790,6 +1808,12 @@ func ServiceTierForConfiguredRequest(info *ModelInfo, serviceTier string, fastMo
 // Rust #46230 preserves without fast mode or catalog support.
 func IsFlexServiceTier(serviceTier string) bool {
 	return normalizeServiceTierRequestValue(serviceTier) == ServiceTierFlexRequestValue
+}
+
+// NormalizeServiceTierRequestValue applies the wire-level aliases Rust uses
+// when it stores a selected tier (for example "fast" becomes "priority").
+func NormalizeServiceTierRequestValue(serviceTier string) string {
+	return normalizeServiceTierRequestValue(serviceTier)
 }
 
 func normalizeServiceTierRequestValue(serviceTier string) string {

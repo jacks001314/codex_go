@@ -687,6 +687,9 @@ func (r *Router) appendThreadSettingsAppliedSnapshot(threadID session.ThreadID, 
 	if r == nil || r.store == nil || (strings.TrimSpace(settings.ApprovalPolicy) == "" &&
 		strings.TrimSpace(settings.ApprovalsReviewer) == "" &&
 		strings.TrimSpace(settings.CWD) == "" &&
+		settings.ServiceTier == nil &&
+		settings.ReasoningSummary == nil &&
+		settings.Personality == nil &&
 		len(settings.CollaborationMode) == 0 &&
 		settings.RuntimeWorkspaceRoots == nil &&
 		len(settings.PermissionProfile) == 0 &&
@@ -1577,6 +1580,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	applyThreadAllowedToolsExtra(record.Metadata.Extra, params.AllowedTools)
 	var restoredSettings restoredThreadSettings
+	var restoredModelSettings persistedModelSettings
 	if !sourceWasLive {
 		// Rust #57227: a cold resume restores the permissions the thread
 		// acknowledged instead of the stale TurnContext recorded by a running
@@ -1587,6 +1591,13 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 				record.Metadata.ActivePermissionProfile = profile
 				restoredSettings.changed = true
 			}
+		}
+		// Rust #55923: the resumed model selections come from the thread-owned
+		// settings snapshot unless the caller overrode them explicitly.
+		var modelChanged bool
+		restoredModelSettings, modelChanged = r.restoreColdResumeModelSettings(record, &params)
+		if modelChanged {
+			restoredSettings.changed = true
 		}
 	}
 	if err := r.retainLiveThread(record); err != nil {
@@ -1642,7 +1653,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		CWD:                     cwd,
 		Model:                   firstNonEmpty(stringPtrValue(params.Model), record.Metadata.Model),
 		ModelProvider:           firstNonEmpty(stringPtrValue(params.ModelProvider), record.Metadata.ModelProvider),
-		ServiceTier:             resumeServiceTier(&params, record),
+		ServiceTier:             resumeServiceTier(&params, record, restoredModelSettings),
 		ApprovalPolicy:          approvalPolicy,
 		ApprovalsReviewer:       restoredSettings.approvalsReviewerResponse(params.ApprovalsReviewer),
 		CollaborationMode:       r.latestPersistedCollaborationMode(string(sourceID), record),
@@ -1886,16 +1897,22 @@ func threadResumeHeadCursors(record *session.Record) (*string, *string) {
 	return turnsCursor, itemsCursor
 }
 
-func resumeServiceTier(params *ThreadResumeParams, record *session.Record) *string {
+func resumeServiceTier(params *ThreadResumeParams, record *session.Record, restored persistedModelSettings) *string {
+	modelID := ""
+	if record != nil {
+		modelID = record.Metadata.Model
+	}
+	if params != nil && params.Model != nil {
+		modelID = stringPtrValue(params.Model)
+	}
 	if params != nil && (params.ServiceTierSet || params.ServiceTier != nil) {
-		modelID := ""
-		if record != nil {
-			modelID = record.Metadata.Model
-		}
-		if params.Model != nil {
-			modelID = stringPtrValue(params.Model)
-		}
-		return stringPtrIfNotEmpty(threadLifecycleServiceTierForModel(nil, params.ServiceTierSet, params.ServiceTier, modelID))
+		return stringPtrIfNotEmpty(effectiveSelectedServiceTier(nil, threadLifecycleServiceTier(params.ServiceTierSet, params.ServiceTier), modelID))
+	}
+	// Rust #55923 restores the selected tier from the thread-owned snapshot and
+	// reports the effective (model-filtered) value, so an unsupported saved
+	// tier stays persisted without reaching the response.
+	if restored.ServiceTier != nil {
+		return stringPtrIfNotEmpty(effectiveSelectedServiceTier(nil, *restored.ServiceTier, modelID))
 	}
 	if record != nil && strings.TrimSpace(record.Metadata.ServiceTier) != "" {
 		return cloneString(&record.Metadata.ServiceTier)
@@ -1907,7 +1924,7 @@ func threadLifecycleServiceTier(set bool, value *string) string {
 	if set && value == nil {
 		return model.ServiceTierDefaultRequestValue
 	}
-	return stringPtrValue(value)
+	return model.NormalizeServiceTierRequestValue(stringPtrValue(value))
 }
 
 func threadLifecycleServiceTierForModel(service *model.ModelService, set bool, value *string, modelID string) string {
@@ -1926,7 +1943,7 @@ func threadLifecycleServiceTierForRequest(service *model.ModelService, requested
 		service = model.NewModelService(nil)
 	}
 	info := service.Info(&model.ModelInfoReadParams{Model: strings.TrimSpace(modelID), RefreshStrategy: string(model.RefreshOffline)})
-	return model.ServiceTierForRequest(info, requested)
+	return model.ServiceTierForSelectedRequest(info, requested)
 }
 
 func threadRuntimeWorkspaceRoots(cwd string, roots []string) []string {
@@ -2116,6 +2133,9 @@ func (r *Router) checkpointThreadResumeSettings(threadID session.ThreadID, recor
 	settings := rollout.ThreadSettingsApplied{
 		ApprovalPolicy:    approvalPolicy,
 		CWD:               response.CWD,
+		ServiceTier:       threadRecordSelectedServiceTier(record),
+		ReasoningSummary:  threadRecordReasoningSummary(record),
+		Personality:       threadRecordPersonality(record),
 		CollaborationMode: collaborationMode,
 	}
 	if response.ApprovalsReviewer != nil {

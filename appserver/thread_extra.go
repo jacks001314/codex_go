@@ -913,12 +913,15 @@ func (s *ThreadExtraService) UpdateSettingsWithCommit(params *SettingsUpdatePara
 		settings.Model = *params.Model
 	}
 	if params.ServiceTier != nil && params.ServiceTier.Set {
-		if params.ServiceTier.Value == nil {
-			serviceTier := model.ServiceTierDefaultRequestValue
-			settings.ServiceTier = &serviceTier
-		} else {
-			settings.ServiceTier = cloneString(params.ServiceTier.Value)
+		// Rust stores the parsed ServiceTier enum, so the wire alias "fast"
+		// becomes "priority" and an explicit null means standard speed (#55923).
+		serviceTier := model.ServiceTierDefaultRequestValue
+		if params.ServiceTier.Value != nil {
+			if value := model.NormalizeServiceTierRequestValue(*params.ServiceTier.Value); value != "" {
+				serviceTier = value
+			}
 		}
+		settings.ServiceTier = &serviceTier
 	}
 	if params.Effort != nil {
 		settings.Effort = cloneString(params.Effort)

@@ -665,11 +665,59 @@ func LatestPersistedOwnedThreadSettingsApplied(threadID string, lines []Line) (T
 			PermissionProfile:       snapshot.PermissionProfile,
 			ActivePermissionProfile: snapshot.ActivePermissionProfile,
 			CWD:                     snapshot.CWD,
+			ServiceTier:             cloneStringPtr(snapshot.ServiceTier),
+			ReasoningSummary:        cloneStringPtr(snapshot.ReasoningSummary),
+			Personality:             cloneStringPtr(snapshot.Personality),
 			CollaborationMode:       snapshot.CollaborationMode,
 			RuntimeWorkspaceRoots:   snapshot.RuntimeWorkspaceRoots,
 		}, true
 	}
 	return ThreadSettingsApplied{}, false
+}
+
+// PersistedModelSettings holds the model selections restored on a cold resume
+// (Rust #55923): the requested service tier, reasoning summary, and personality.
+type PersistedModelSettings struct {
+	ServiceTier      *string
+	ReasoningSummary *string
+	Personality      *string
+}
+
+// LatestPersistedModelSettings resolves the model selections a resume restores
+// (Rust latest_persisted_model_settings, #55923). Only thread-owned settings
+// snapshots are considered: an ownerless legacy snapshot is accepted while no
+// foreign snapshot has been crossed, but a snapshot owned by another thread
+// invalidates older ownerless entries. TurnContext entries never supply model
+// settings because a running turn can record stale values.
+func LatestPersistedModelSettings(threadID string, lines []Line) (PersistedModelSettings, bool) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return PersistedModelSettings{}, false
+	}
+	crossedForeignSnapshot := false
+	for index := len(lines) - 1; index >= 0; index-- {
+		snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload)
+		if !ok {
+			continue
+		}
+		switch {
+		case snapshot.ThreadID == threadID:
+			return persistedModelSettingsFromSnapshot(snapshot), true
+		case snapshot.ThreadID != "":
+			crossedForeignSnapshot = true
+		case !crossedForeignSnapshot:
+			return persistedModelSettingsFromSnapshot(snapshot), true
+		}
+	}
+	return PersistedModelSettings{}, false
+}
+
+func persistedModelSettingsFromSnapshot(snapshot persistedThreadSettingsEvent) PersistedModelSettings {
+	return PersistedModelSettings{
+		ServiceTier:      cloneStringPtr(snapshot.ServiceTier),
+		ReasoningSummary: cloneStringPtr(snapshot.ReasoningSummary),
+		Personality:      cloneStringPtr(snapshot.Personality),
+	}
 }
 
 // PersistedResumeSettings is the set of thread settings a cold resume or fork
@@ -817,6 +865,9 @@ type persistedThreadSettingsEvent struct {
 	ApprovalsReviewer       string
 	PermissionProfile       json.RawMessage
 	ActivePermissionProfile json.RawMessage
+	ServiceTier             *string
+	ReasoningSummary        *string
+	Personality             *string
 	CollaborationMode       json.RawMessage
 }
 
@@ -830,6 +881,9 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 			PermissionProfile       json.RawMessage `json:"permission_profile"`
 			ActivePermissionProfile json.RawMessage `json:"active_permission_profile"`
 			CWD                     string          `json:"cwd"`
+			ServiceTier             *string         `json:"service_tier"`
+			ReasoningSummary        *string         `json:"reasoning_summary"`
+			Personality             *string         `json:"personality"`
 			CollaborationMode       json.RawMessage `json:"collaboration_mode"`
 			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots"`
 		} `json:"thread_settings"`
@@ -853,6 +907,9 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		ApprovalsReviewer:       strings.TrimSpace(event.ThreadSettings.ApprovalsReviewer),
 		PermissionProfile:       cloneRawJSON(event.ThreadSettings.PermissionProfile),
 		ActivePermissionProfile: cloneRawJSON(event.ThreadSettings.ActivePermissionProfile),
+		ServiceTier:             cloneTrimmedStringPtr(event.ThreadSettings.ServiceTier),
+		ReasoningSummary:        cloneTrimmedStringPtr(event.ThreadSettings.ReasoningSummary),
+		Personality:             cloneTrimmedStringPtr(event.ThreadSettings.Personality),
 		CollaborationMode:       cloneRawJSON(event.ThreadSettings.CollaborationMode),
 	}, true
 }

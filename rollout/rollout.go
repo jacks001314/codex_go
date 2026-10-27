@@ -729,6 +729,9 @@ type ThreadSettingsApplied struct {
 	PermissionProfile       json.RawMessage
 	ActivePermissionProfile json.RawMessage
 	CWD                     string
+	ServiceTier             *string
+	ReasoningSummary        *string
+	Personality             *string
 	CollaborationMode       json.RawMessage
 	RuntimeWorkspaceRoots   *[]string
 }
@@ -750,8 +753,12 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 		copy(copied, *settings.RuntimeWorkspaceRoots)
 		roots = &copied
 	}
+	serviceTier := cloneStringPtr(settings.ServiceTier)
+	reasoningSummary := cloneStringPtr(settings.ReasoningSummary)
+	personality := cloneStringPtr(settings.Personality)
 	if approvalPolicy == "" && approvalsReviewer == "" && cwd == "" && len(collaborationMode) == 0 &&
-		roots == nil && permissionProfile == nil && activePermissionProfile == nil {
+		roots == nil && permissionProfile == nil && activePermissionProfile == nil &&
+		serviceTier == nil && reasoningSummary == nil && personality == nil {
 		return errors.New("thread settings require an approval policy or cwd")
 	}
 	if now.IsZero() {
@@ -766,6 +773,9 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 			PermissionProfile       json.RawMessage `json:"permission_profile,omitempty"`
 			ActivePermissionProfile json.RawMessage `json:"active_permission_profile,omitempty"`
 			CWD                     string          `json:"cwd,omitempty"`
+			ServiceTier             *string         `json:"service_tier,omitempty"`
+			ReasoningSummary        *string         `json:"reasoning_summary,omitempty"`
+			Personality             *string         `json:"personality,omitempty"`
 			CollaborationMode       json.RawMessage `json:"collaboration_mode,omitempty"`
 			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots,omitempty"`
 		} `json:"thread_settings"`
@@ -778,6 +788,9 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 			PermissionProfile       json.RawMessage `json:"permission_profile,omitempty"`
 			ActivePermissionProfile json.RawMessage `json:"active_permission_profile,omitempty"`
 			CWD                     string          `json:"cwd,omitempty"`
+			ServiceTier             *string         `json:"service_tier,omitempty"`
+			ReasoningSummary        *string         `json:"reasoning_summary,omitempty"`
+			Personality             *string         `json:"personality,omitempty"`
 			CollaborationMode       json.RawMessage `json:"collaboration_mode,omitempty"`
 			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots,omitempty"`
 		}{
@@ -786,6 +799,9 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 			PermissionProfile:       permissionProfile,
 			ActivePermissionProfile: activePermissionProfile,
 			CWD:                     cwd,
+			ServiceTier:             serviceTier,
+			ReasoningSummary:        reasoningSummary,
+			Personality:             personality,
 			CollaborationMode:       collaborationMode,
 			RuntimeWorkspaceRoots:   roots,
 		},
@@ -807,6 +823,9 @@ func ThreadSettingsAppliedEqual(left, right ThreadSettingsApplied) bool {
 		left.CWD == right.CWD &&
 		rawJSONEqual(left.PermissionProfile, right.PermissionProfile) &&
 		rawJSONEqual(left.ActivePermissionProfile, right.ActivePermissionProfile) &&
+		stringPtrsEqual(left.ServiceTier, right.ServiceTier) &&
+		stringPtrsEqual(left.ReasoningSummary, right.ReasoningSummary) &&
+		stringPtrsEqual(left.Personality, right.Personality) &&
 		rawJSONEqual(left.CollaborationMode, right.CollaborationMode) &&
 		stringSlicesPtrEqual(left.RuntimeWorkspaceRoots, right.RuntimeWorkspaceRoots)
 }
@@ -817,6 +836,9 @@ func normalizeThreadSettingsApplied(settings ThreadSettingsApplied) ThreadSettin
 	settings.CWD = strings.TrimSpace(settings.CWD)
 	settings.PermissionProfile = cloneRawJSON(settings.PermissionProfile)
 	settings.ActivePermissionProfile = cloneRawJSON(settings.ActivePermissionProfile)
+	settings.ServiceTier = cloneTrimmedStringPtr(settings.ServiceTier)
+	settings.ReasoningSummary = cloneTrimmedStringPtr(settings.ReasoningSummary)
+	settings.Personality = cloneTrimmedStringPtr(settings.Personality)
 	settings.CollaborationMode = cloneRawJSON(settings.CollaborationMode)
 	if settings.RuntimeWorkspaceRoots != nil {
 		roots := make([]string, len(*settings.RuntimeWorkspaceRoots))
@@ -835,6 +857,26 @@ func rawJSONEqual(left, right json.RawMessage) bool {
 		return bytes.Equal(left, right)
 	}
 	return reflect.DeepEqual(leftValue, rightValue)
+}
+
+func stringPtrsEqual(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+// cloneTrimmedStringPtr normalizes a persisted setting the same way the event is
+// written, where an empty value is omitted rather than serialized.
+func cloneTrimmedStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func stringSlicesPtrEqual(left, right *[]string) bool {

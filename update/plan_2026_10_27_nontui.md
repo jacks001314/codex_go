@@ -14,6 +14,7 @@ TUI lane and are not modified here.
 
 | Upstream | Requirement | Go change |
 | --- | --- | --- |
+| `#55923` | Preserve thread model settings across resume and revert: a cold resume restores the thread-owned service tier, reasoning summary, and personality unless the caller overrides them; the selected tier is kept for persistence and settings snapshots while the effective tier is filtered against the model (flex is always preserved); `thread/revert` carries the runtime model, service tier, and personality into reconstruction; and the initial settings checkpoint is written before user input so an interrupted first turn retains it. | `rollout/rollout.go`, `rollout/session_items.go`, `model/catalog.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/persisted_model_settings.go`, like-Rust tests |
 | `#56330` | Interrupts and Plan mode stop reserved agent-message wakes: an interrupt during model discovery rejects the unstarted reservation without a terminal event, preserves its mail for an explicit turn, and blocks later automatic wakes until a new turn starts. Plan mode rejects the wake but does not mark the thread stopped. Accepted wakes keep their admission configuration, and finishing turns stay running and persist only `TurnComplete`. | `turn/api.go`, `appserver/turn_runtime.go`, `appserver/thread_manager.go`, `appserver/agent_controller.go`, `appserver/runtime_router.go`, `appserver/agent_message_wake_controls_like_rust_test.go` |
 | `#56284` | Supported thread originators (`codex_work_cca`, `codex_work_web`, `codex_work_desktop`, `codex_work_mobile`, `chatgpt_cca`) select isolated model managers before thread model metadata is resolved. Each partition sends its own `originator` header, reuses its manager, keeps separate in-memory and `models_cache.<originator>.json` disk catalogs, and shares runtime API-key discovery policy; unsupported originators retain the default manager. Thread startup and actual turns use the selected catalog’s instructions and `apply_patch_tool_type`. | `model/models_originator.go`, `model/models_endpoint.go`, `model/lazy_models.go`, `model/api.go`, `model/catalog.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/agent_runtime.go`, like-Rust tests |
 | `#57242` | Default thread unload delay is 1 minute | `config/config.go`, unload-delay test |
@@ -1407,3 +1408,13 @@ deduplication for tool outputs.
   exactly one persisted `task_complete` under both feature settings, mail
   requeue on admission conflict, and runtime-build failure requeueing the wake's
   mail without an aborted turn.
+- For `#55923`: `go build ./...`, `go test ./rollout ./model -count=1`, and
+  `go test ./appserver -run 'Persisted|Resume|Revert|Settings|ServiceTier|TurnStart' -count=1`
+  pass. Coverage pins cold-resume restoration of a thread-owned `flex` tier, `concise` summary, and
+  `friendly` personality; explicit resume overrides winning over the snapshot while an unsupported
+  `priority` tier stays persisted and is filtered from the response; ownership semantics for
+  ownerless versus foreign snapshots with no TurnContext fallback; the settings checkpoint preceding
+  the accepted user prompt on turn start; revert carrying the collaboration-mode model, tier, and
+  personality into the record and checkpoint; and selected-versus-effective tier filtering where flex
+  survives a catalog that does not advertise it. The full `go test ./appserver -count=1` still fails
+  only in the pre-existing Windows baseline tests listed for `#56330`.

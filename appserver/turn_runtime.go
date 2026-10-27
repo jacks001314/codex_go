@@ -12227,7 +12227,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 		// after persisting the thread settings, so a per-turn override wins for
 		// this turn without changing the thread's tier (turn_context.rs).
 		info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
-		return model.ServiceTierForRequest(info, stringPtrValue(params.ServiceTierForTurn))
+		return model.ServiceTierForSelectedRequest(info, stringPtrValue(params.ServiceTierForTurn))
 	}
 	settings := map[string]bool{}
 	if cfg != nil {
@@ -12243,7 +12243,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 		}
 		if params.ServiceTierSet || params.ServiceTier != nil {
 			info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
-			return model.ServiceTierForRequest(info, requested)
+			return model.ServiceTierForSelectedRequest(info, requested)
 		}
 	}
 	value := firstNonEmpty(

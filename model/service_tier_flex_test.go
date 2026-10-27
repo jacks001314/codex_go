@@ -42,6 +42,31 @@ func TestServiceTierForConfiguredRequestLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #55923's get_service_tier split: the selected tier is retained
+// for persistence while the request-visible value is filtered against the
+// model catalog, and flex is always preserved.
+func TestServiceTierForSelectedRequestLikeRust(t *testing.T) {
+	priorityOnly := &ModelInfo{ServiceTiers: []string{"priority"}}
+	if got := ServiceTierForSelectedRequest(priorityOnly, "flex"); got != "flex" {
+		t.Fatalf("flex = %q, want flex", got)
+	}
+	if got := ServiceTierForSelectedRequest(&ModelInfo{}, "flex"); got != "flex" {
+		t.Fatalf("flex without catalog support = %q, want flex", got)
+	}
+	if got := ServiceTierForSelectedRequest(priorityOnly, "priority"); got != "priority" {
+		t.Fatalf("supported priority = %q, want priority", got)
+	}
+	if got := ServiceTierForSelectedRequest(priorityOnly, "fast"); got != "priority" {
+		t.Fatalf("fast = %q, want priority", got)
+	}
+	if got := ServiceTierForSelectedRequest(&ModelInfo{}, "priority"); got != "" {
+		t.Fatalf("unsupported priority = %q, want empty", got)
+	}
+	if got := ServiceTierForSelectedRequest(priorityOnly, "default"); got != "" {
+		t.Fatalf("default = %q, want empty", got)
+	}
+}
+
 // Mirrors Rust #50472 (604061ce51) ModelClient::service_tier_for_request: Amazon
 // Bedrock no longer omits every service tier. It sends a tier only when the
 // model advertises it — including flex, which the generic OpenAI resolver

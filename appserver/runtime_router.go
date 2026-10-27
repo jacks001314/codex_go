@@ -3396,6 +3396,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 				}
 			}
 			r.applyThreadResumeRuntimeWorkspaceRoots(result, request)
+			r.applyThreadResumePersistedModelSettings(result, request)
 			r.applyThreadResumeSettingsUpdate(result, request)
 			if response, ok := result.(*ThreadResumeResponse); ok && response != nil && response.Thread != nil {
 				r.applyLiveThreadModelSettings(response.Thread)
@@ -4082,6 +4083,10 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 			return nil, fmt.Errorf("failed to interrupt active turn before revert: %w", err)
 		}
 	}
+	// Rust #55923 carries the runtime model, service tier, and personality into
+	// the reconstructed thread so the reverted suffix cannot fall back to global
+	// defaults.
+	r.applyThreadRevertModelSettings(params.ThreadID)
 	receiptRevision := r.threadReadStateRevisionToRetire(params.ThreadID, params.BeforeTurnID)
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {
@@ -4113,6 +4118,54 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 	// effective selection.
 	r.checkpointThreadSettings(params.ThreadID)
 	return response, nil
+}
+
+// applyThreadRevertModelSettings persists the runtime model selections before
+// thread/revert rebuilds the thread from stored history (Rust #55923).
+func (r *RuntimeRouter) applyThreadRevertModelSettings(threadID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return
+	}
+	settings := r.threadSettingsForTurn(threadID)
+	overrides := threadRecordConfigOverrides(record)
+	if overrides == nil {
+		overrides = map[string]any{}
+	}
+	changed := false
+	if settings != nil {
+		if modelID := collaborationModeModelID(settings.CollaborationMode); modelID != "" && modelID != record.Metadata.Model {
+			record.Metadata.Model = modelID
+			overrides["model"] = modelID
+			changed = true
+		}
+		if settings.ServiceTier != nil && *settings.ServiceTier != strings.TrimSpace(record.Metadata.ServiceTier) {
+			overrides["service_tier"] = *settings.ServiceTier
+			record.Metadata.ServiceTier = *settings.ServiceTier
+			changed = true
+		}
+		if settings.Personality != nil {
+			current, _ := threadConfigStringValue(overrides, "personality")
+			if current != *settings.Personality {
+				overrides["personality"] = *settings.Personality
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return
+	}
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	record.Metadata.Extra["config"] = overrides
+	_ = r.runtimeSaveThreadRecord(record)
+}
+
+func collaborationModeModelID(mode map[string]any) string {
+	settings := collaborationModeSettings(mode)
+	return strings.TrimSpace(stringFromAny(firstMapValue(settings, "model")))
 }
 
 func isThreadQueueMethod(method Method) bool {
@@ -5661,6 +5714,7 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	modelID = threadStartProviderFallbackModel(modelID, providerID, params.AllowProviderModelFallback)
 	reasoningEffort := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 	serviceTier := r.threadStartServiceTier(cfg, &params, modelID)
+	selectedServiceTier := r.threadStartSelectedServiceTier(cfg, &params)
 	r.prewarmSuggestedPluginsForThreadStart(cfg)
 	response.ApprovalPolicy = params.ApprovalPolicy
 	response.ApprovalsReviewer = cloneString(params.ApprovalsReviewer)
@@ -5707,7 +5761,8 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 		"model":                      modelID,
 		"model_reasoning_effort":     reasoningEffort,
 		"plan_mode_reasoning_effort": stringConfigValue(cfg, "plan_mode_reasoning_effort"),
-		"service_tier":               serviceTier,
+		"service_tier":               selectedServiceTier,
+		"model_reasoning_summary":    firstNonEmpty(stringConfigValue(cfg, "model_reasoning_summary"), stringConfigValue(cfg, "modelReasoningSummary")),
 		"personality":                firstNonEmpty(stringPtrValue(params.Personality), stringConfigValue(cfg, "personality")),
 	} {
 		if strings.TrimSpace(value) != "" {
@@ -6209,6 +6264,19 @@ func threadStartProviderFallbackModel(modelID string, providerID string, allowFa
 	// cross-region variants instead of the Mantle slugs.
 	manager := model.NewStaticModelsManager(model.AmazonBedrockCatalogForProviderID(providerID))
 	return manager.GetDefaultModel(modelID, true, model.RefreshOffline)
+}
+
+// threadStartSelectedServiceTier keeps the requested tier rather than the
+// model-filtered one (Rust #55923). Turn requests filter this value against the
+// model, while the thread settings snapshot persists it untouched.
+func (r *RuntimeRouter) threadStartSelectedServiceTier(cfg *config.Config, params *ThreadStartParams) string {
+	if params != nil && (params.ServiceTierSet || params.ServiceTier != nil) {
+		return threadLifecycleServiceTier(params.ServiceTierSet, params.ServiceTier)
+	}
+	return model.NormalizeServiceTierRequestValue(firstNonEmpty(
+		stringConfigValue(cfg, "service_tier"),
+		stringConfigValue(cfg, "serviceTier"),
+	))
 }
 
 func (r *RuntimeRouter) threadStartServiceTier(cfg *config.Config, params *ThreadStartParams, modelID string) string {
@@ -7777,6 +7845,50 @@ func (r *RuntimeRouter) applyThreadResumeRuntimeWorkspaceRoots(result any, reque
 	_ = r.persistThreadRecordRuntimeWorkspaceRoots(response.Thread.ID, roots)
 }
 
+// applyThreadResumePersistedModelSettings seeds the live thread settings with
+// the model selections a cold resume restored (Rust #55923). Explicit resume
+// parameters are applied afterwards through applyThreadResumeSettingsUpdate so
+// they still win and emit their settings notification.
+func (r *RuntimeRouter) applyThreadResumePersistedModelSettings(result any, request *Request) {
+	if r == nil || r.services.ThreadExtras == nil {
+		return
+	}
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	threadID := strings.TrimSpace(response.Thread.ID)
+	if threadID == "" || r.threadIsLoaded(threadID) {
+		// A live thread's in-memory settings are authoritative.
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return
+	}
+	update := &SettingsUpdateParams{ThreadID: threadID}
+	hasUpdate := false
+	if tier := threadRecordSelectedServiceTier(record); tier != nil {
+		update.ServiceTier = &ThreadExtraOptionalString{Set: true, Value: tier}
+		hasUpdate = true
+	}
+	if summary := threadRecordReasoningSummary(record); summary != nil {
+		update.Summary = summary
+		hasUpdate = true
+	}
+	if personality := threadRecordPersonality(record); personality != nil {
+		update.Personality = personality
+		update.PersonalitySet = true
+		hasUpdate = true
+	}
+	if !hasUpdate {
+		return
+	}
+	// This mirrors Rust's silent settings restore; it must not emit a
+	// thread/settings/updated notification on resume.
+	_, _, _ = r.services.ThreadExtras.UpdateSettingsWithCommit(update)
+}
+
 func (r *RuntimeRouter) applyThreadResumeSettingsUpdate(result any, request *Request) {
 	response, ok := result.(*ThreadResumeResponse)
 	if !ok || response == nil || response.Thread == nil || request == nil {
@@ -9308,7 +9420,7 @@ func (r *RuntimeRouter) applyLiveThreadModelSettings(thread *Thread) {
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams, committed *Settings) error {
-	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil && params.Model == nil && params.Effort == nil && params.CWD == nil && params.RuntimeWorkspaceRoots == nil) {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil && params.Model == nil && params.ServiceTier == nil && params.Effort == nil && params.Summary == nil && params.Personality == nil && params.CWD == nil && params.RuntimeWorkspaceRoots == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -9343,6 +9455,30 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 			configOverrides["model_reasoning_effort"] = effort
 		} else {
 			delete(configOverrides, "model_reasoning_effort")
+		}
+	}
+	// Rust #55923 keeps the selected model settings on the thread so a resume
+	// restores them even when the current model cannot use the tier.
+	if params.ServiceTier != nil && params.ServiceTier.Set {
+		selected := threadLifecycleServiceTier(true, params.ServiceTier.Value)
+		if selected == "" {
+			selected = model.ServiceTierDefaultRequestValue
+		}
+		configOverrides["service_tier"] = selected
+		record.Metadata.ServiceTier = effectiveSelectedServiceTier(r.requireModels(), selected, record.Metadata.Model)
+	}
+	if params.Summary != nil {
+		if summary := strings.TrimSpace(*params.Summary); summary != "" {
+			configOverrides["model_reasoning_summary"] = summary
+		} else {
+			delete(configOverrides, "model_reasoning_summary")
+		}
+	}
+	if params.Personality != nil {
+		if personality := strings.TrimSpace(*params.Personality); personality != "" {
+			configOverrides["personality"] = personality
+		} else {
+			delete(configOverrides, "personality")
 		}
 	}
 	record.Metadata.Extra["config"] = configOverrides
@@ -9380,6 +9516,9 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 		ApprovalPolicy:        appliedPolicy,
 		ApprovalsReviewer:     strings.TrimSpace(settingsApprovalsReviewer(committed)),
 		CWD:                   settingsCWD,
+		ServiceTier:           settingsSelectedServiceTier(committed, record),
+		ReasoningSummary:      settingsReasoningSummary(committed, record),
+		Personality:           settingsPersonality(committed, record),
 		CollaborationMode:     collaborationModeSnapshotFromSettings(committed),
 		RuntimeWorkspaceRoots: &snapshotRoots,
 	}
@@ -9426,6 +9565,9 @@ func (r *RuntimeRouter) checkpointThreadSettings(threadID string) {
 		ApprovalPolicy:        policy,
 		ApprovalsReviewer:     strings.TrimSpace(settingsApprovalsReviewer(settings)),
 		CWD:                   cwd,
+		ServiceTier:           settingsSelectedServiceTier(settings, record),
+		ReasoningSummary:      settingsReasoningSummary(settings, record),
+		Personality:           settingsPersonality(settings, record),
 		CollaborationMode:     collaborationModeSnapshotFromSettings(settings),
 		RuntimeWorkspaceRoots: &snapshotRoots,
 	}
