@@ -521,6 +521,19 @@ func (d *ToolDispatcher) BeginStepPreempt(mailbox *SteerMailbox) (*tool.YieldSig
 	return signal, mailbox.WatchUserInput(d.threadID, d.turnID, signal)
 }
 
+// BeginStepActivity mirrors Rust's per-sampling-request InputQueue activity
+// subscription (#55644): a tool that waits on wall time (clock.sleep) ends its
+// wait once the turn queues input, including a notifying injection that arrived
+// before the tool call began. It is independent of the instant-interrupt
+// feature, which only arms code-mode yielding for user messages.
+func (d *ToolDispatcher) BeginStepActivity(mailbox *SteerMailbox) (*tool.YieldSignal, func()) {
+	if d == nil || mailbox == nil {
+		return nil, nil
+	}
+	signal := tool.NewYieldSignal()
+	return signal, mailbox.WatchActivity(d.threadID, d.turnID, signal)
+}
+
 func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.AgentItem) ([]ToolExecutionResult, error) {
 	return d.ExecuteToolItemsWithBatch(ctx, items, nil)
 }

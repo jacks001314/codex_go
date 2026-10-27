@@ -1296,12 +1296,24 @@ func (c *execAgentController) WaitForActivity(ctx context.Context, args *agent.W
 	defer timer.Stop()
 	s.mu.Lock()
 	mailbox := s.activityMailboxLocked(c.scopePath)
+	steerMailbox := s.steerMailbox
 	s.mu.Unlock()
+	// Rust #55644: queued steering input interrupts the wait even when no agent
+	// activity was notified. Inter-agent mail keeps using the notification
+	// channel above and stays mailbox activity.
+	var steerSignal *tool.YieldSignal
+	if steerMailbox != nil && strings.TrimSpace(c.parentID) != "" && strings.TrimSpace(c.activeTurnID) != "" {
+		steerSignal = tool.NewYieldSignal()
+		stopSteer := steerMailbox.WatchSteer(c.parentID, c.activeTurnID, steerSignal)
+		defer stopSteer()
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case message := <-mailbox:
 		return &agent.WaitForActivityResult{Message: message}, nil
+	case <-steerSignal.Done():
+		return &agent.WaitForActivityResult{Message: "Wait interrupted by new input."}, nil
 	case <-timer.C:
 		return &agent.WaitForActivityResult{TimedOut: true}, nil
 	}

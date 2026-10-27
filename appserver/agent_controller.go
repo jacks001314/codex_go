@@ -886,6 +886,25 @@ func (c *runtimeAgentController) WaitForActivity(ctx context.Context, args *agen
 		timeout = time.Duration(*args.TimeoutMS) * time.Millisecond
 	}
 	mailbox := c.router.runtimeAgentActivityMailbox(c.rootID)
+	// Rust #55644: queued steering input interrupts the wait, including a
+	// notifying injection that arrived before it began. Inter-agent mail keeps
+	// its own notification channel below, and passive context leaves the wait
+	// asleep.
+	var steerSignal *tool.YieldSignal
+	if steer := c.router.requireSteerMailbox(); steer != nil {
+		threadID := firstNonEmpty(c.parentID, c.rootID)
+		turnID := c.parentTurnID
+		if turnID == "" {
+			if active := c.router.activeRuntimeTurnSnapshot(threadID); active != nil {
+				turnID = active.ID
+			}
+		}
+		if turnID != "" {
+			steerSignal = tool.NewYieldSignal()
+			stopSteer := steer.WatchSteer(threadID, turnID, steerSignal)
+			defer stopSteer()
+		}
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	// Rust's wait_agent V2 handler records the elapsed wait with the outcome it
@@ -908,6 +927,9 @@ func (c *runtimeAgentController) WaitForActivity(ctx context.Context, args *agen
 	case message := <-mailbox:
 		recordWait(telemetry.MultiAgentWaitOutcomeMailbox)
 		return &agent.WaitForActivityResult{Message: firstNonEmpty(message, "Wait completed.")}, nil
+	case <-steerSignal.Done():
+		recordWait(telemetry.MultiAgentWaitOutcomeSteered)
+		return &agent.WaitForActivityResult{Message: "Wait interrupted by new input."}, nil
 	case <-timer.C:
 		recordWait(telemetry.MultiAgentWaitOutcomeTimedOut)
 		return &agent.WaitForActivityResult{Message: "Wait timed out.", TimedOut: true}, nil

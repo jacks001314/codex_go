@@ -479,6 +479,13 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		if stepPreempt != nil {
 			stepCtx = tool.WithCodeModePreempt(stepCtx, stepPreempt)
 		}
+		// Rust #55644: the sampling request also subscribes to the turn's input
+		// activity, so a waiting tool (clock.sleep) ends early when input is
+		// queued, including an injection queued before the tool call started.
+		stepActivity, stopStepActivity := l.dispatcher.BeginStepActivity(l.steerMailbox)
+		if stepActivity != nil {
+			stepCtx = tool.WithStepActivity(stepCtx, stepActivity)
+		}
 		// Rust keeps `run_sampling_request` open until the step's in-flight tool
 		// futures have been drained, so the step's tool spans (mcp.tools.call and
 		// the tool records) nest under it. endSamplingRequestSpan closes the span
@@ -493,6 +500,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			if stopStepPreempt != nil {
 				stopStepPreempt()
 				stopStepPreempt = nil
+			}
+			if stopStepActivity != nil {
+				stopStepActivity()
+				stopStepActivity = nil
 			}
 			if samplingSpan != nil {
 				samplingSpan.End()

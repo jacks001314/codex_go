@@ -82,6 +82,7 @@ TUI lane and are not modified here.
 | `#55581` | A failed background compaction releases the foreground waiter so it falls back instead of hanging | `appserver/async_compaction.go`, like-Rust test |
 | `#55971` | Local message boards can select an isolated storage namespace | `agentboard/local_options.go`, `agentboard/local.go`, `agentboard/connection.go`, `agentboard/configure_local_board.go`, like-Rust test |
 | `#55692` | Tool-registration metrics carry the effective `incremental_tools` mode | `turn/tool_registration_metrics.go`, `turn/agent_loop.go`, `turn/runtime.go`, `appserver/turn_runtime.go`, like-Rust tests |
+| `#55644` | Pending injections interrupt `wait_agent` and `clock.sleep` | `turn/steer_mailbox.go`, `turn/tool_dispatcher.go`, `turn/agent_loop.go`, `tool/step_activity.go`, `tool/handlers.go`, `appserver/agent_controller.go`, `exec/agent_controller.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -684,9 +685,23 @@ otherwise. `appTurnConfig` computes it once and both `AgentLoopRequest` entry
 paths reuse it across sampling iterations and transport retries, so retries do
 not duplicate samples.
 
+`#55644` details: `SteerMailbox` records a pending notifying injection per
+turn for input queued through `Enqueue` that is not inter-agent mail, mirroring
+Rust's `TurnInputQueue::has_pending_injection`; `Drain` and `Clear` drop the bit
+with the consumed items. `PendingActivity` reports steering activity for that
+bit, a user message, or a function-call output, mailbox activity for queued
+inter-agent mail, and none for passive context. `wait_agent` subscribes with
+`WatchSteer` and now returns "Wait interrupted by new input." (metrics outcome
+`steered`) for a queued injection, including one queued before the wait began;
+the exec controller uses the same subscription beside its existing mail
+notification channel. Each sampling request also arms `WatchActivity` on its
+step context, and `clock.sleep` ends its wait with "Sleep interrupted by new
+input." for pending or live activity. That subscription is independent of the
+instant-interrupt gate, which only arms code-mode yielding for user messages.
+
 ## Pending in this window
 
-- About 122 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 121 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -806,6 +821,12 @@ not duplicate samples.
 - For `#55971`: `go test ./agentboard -count=1`,
   `go test ./appserver -run 'MessageBoard|Board' -count=1`, and `go build ./...`
   pass.
+- For `#55644`: `go test ./turn -run 'SteerMailbox' -count=1`,
+  `go test ./tool -run 'ClockSleep|ClockHandlers' -count=1`,
+  `go test ./appserver -run 'PendingInjectionInterruptsWaitAgent|LiveInjectionInterruptsWaitAgent|QueuedMailDoesNotSteerWaitAgent|MultiAgent' -count=1`,
+  `go test ./exec -run 'WaitForActivity|AgentController|MultiAgent' -count=1`,
+  the full `go test ./turn -count=1` and `go test ./tool -count=1`, and
+  `go build ./...` pass.
 - For `#55545`: `go test ./rollout -run 'CompressedRolloutReadDiagnostic|FirstFrameContentSize' -count=1`,
   `go test ./appserver -run 'FeedbackReadAttachment' -count=1`, the full
   `go test ./rollout -count=1`, and `go build ./...` pass.

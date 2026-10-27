@@ -26,6 +26,12 @@ type SteerMailbox struct {
 	// changed is closed and replaced on every enqueue that stores input, so
 	// watchers wake without polling (Rust InputQueue::activity_tx).
 	changed chan struct{}
+	// pendingInjections records the turns holding response items queued by a
+	// notifying injection (Rust TurnInputQueue::has_pending_injection, #55644).
+	// Inter-agent mail does not count: it wakes a waiter as mailbox activity
+	// instead of steering the turn, and passive context does not wake a waiter
+	// at all.
+	pendingInjections map[string]bool
 }
 
 type SteerEnqueueParams struct {
@@ -64,6 +70,15 @@ func (m *SteerMailbox) Enqueue(params *SteerEnqueueParams) error {
 	key := steerMailboxKey(params.ThreadID, params.TurnID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Rust input_queue.rs::extend_pending_input_and_accept_mailbox_delivery_for_turn_state
+	// records a pending injection before it publishes the activity, so a waiter
+	// that observes the wake already sees the injection (#55644).
+	if steerItemsCarryInjection(items) {
+		if m.pendingInjections == nil {
+			m.pendingInjections = map[string]bool{}
+		}
+		m.pendingInjections[key] = true
+	}
 	m.storeLocked(key, items, metadata)
 	// Rust input_queue.rs::extend_pending_input_and_accept_mailbox_delivery_for_turn_state:
 	// explicit same-turn input (a steered user message) reopens the current turn
@@ -191,6 +206,113 @@ func (m *SteerMailbox) storeLocked(key string, items []any, metadata map[string]
 	m.changed = make(chan struct{})
 }
 
+// SteerMailboxActivity mirrors Rust InputQueueActivity: the kind of queued turn
+// input that a waiter observes.
+type SteerMailboxActivity int
+
+const (
+	// SteerMailboxActivityNone reports no queued input that wakes a waiter.
+	SteerMailboxActivityNone SteerMailboxActivity = iota
+	// SteerMailboxActivityMailbox reports queued inter-agent mail (Rust
+	// TurnInput::InterAgentCommunication).
+	SteerMailboxActivityMailbox
+	// SteerMailboxActivitySteer reports input that steers the turn: a notifying
+	// injection, a user message, or a function-call output.
+	SteerMailboxActivitySteer
+)
+
+// PendingActivity mirrors Rust TurnInputQueue::pending_activity combined with
+// InputQueue::subscribe_activity (#55644): steering input wins over mail, and
+// passive context alone reports no activity.
+func (m *SteerMailbox) PendingActivity(threadID string, turnID string) SteerMailboxActivity {
+	if m == nil {
+		return SteerMailboxActivityNone
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pendingActivityLocked(steerMailboxKey(threadID, turnID))
+}
+
+func (m *SteerMailbox) pendingActivityLocked(key string) SteerMailboxActivity {
+	if m.pendingInjections[key] {
+		return SteerMailboxActivitySteer
+	}
+	items := m.items[key]
+	if steerItemsHaveUserInput(items) || steerItemsHaveFunctionCallOutput(items) {
+		return SteerMailboxActivitySteer
+	}
+	if steerItemsHaveAgentMail(items) {
+		return SteerMailboxActivityMailbox
+	}
+	return SteerMailboxActivityNone
+}
+
+// WatchActivity mirrors Rust InputQueue::subscribe_activity (#55644): it
+// subscribes before the first check, then cancels the signal once the turn has
+// queued any activity. A waiting tool (clock.sleep) uses it to end its wait,
+// unlike WatchUserInput, which only arms code-mode yielding for user messages.
+func (m *SteerMailbox) WatchActivity(threadID string, turnID string, signal *tool.YieldSignal) func() {
+	return m.watchActivity(threadID, turnID, signal, func(activity SteerMailboxActivity) bool {
+		return activity != SteerMailboxActivityNone
+	})
+}
+
+// WatchSteer mirrors Rust's Steer outcome of subscribe_activity (#55644): it
+// cancels the signal only for steering input. wait_agent uses it so queued mail
+// keeps its existing notification path and passive context leaves the wait
+// asleep.
+func (m *SteerMailbox) WatchSteer(threadID string, turnID string, signal *tool.YieldSignal) func() {
+	return m.watchActivity(threadID, turnID, signal, func(activity SteerMailboxActivity) bool {
+		return activity == SteerMailboxActivitySteer
+	})
+}
+
+// watchActivity subscribes before the first check, so an arrival between the
+// check and the wait cannot be missed, and releases the watcher on return.
+func (m *SteerMailbox) watchActivity(threadID string, turnID string, signal *tool.YieldSignal, matches func(SteerMailboxActivity) bool) func() {
+	if m == nil || signal == nil {
+		return func() {}
+	}
+	key := steerMailboxKey(threadID, turnID)
+	stopped := make(chan struct{})
+	released := make(chan struct{})
+
+	m.mu.Lock()
+	if m.changed == nil {
+		m.changed = make(chan struct{})
+	}
+	changed := m.changed
+	pending := matches(m.pendingActivityLocked(key))
+	m.mu.Unlock()
+	if pending {
+		signal.Cancel()
+		return func() {}
+	}
+
+	go func() {
+		defer close(released)
+		for {
+			select {
+			case <-changed:
+				m.mu.Lock()
+				pending := matches(m.pendingActivityLocked(key))
+				changed = m.changed
+				m.mu.Unlock()
+				if pending {
+					signal.Cancel()
+					return
+				}
+			case <-stopped:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stopped)
+		<-released
+	}
+}
+
 // WatchUserInput mirrors Rust InputQueue::watch_user_input (#48135): it
 // subscribes before the first check so an arrival between the check and the wait
 // cannot be missed, then cancels the signal once a queued user message is
@@ -247,11 +369,49 @@ func (m *SteerMailbox) WatchUserInput(threadID string, turnID string, signal *to
 // (runtimeAgentCommunicationInputItem / execAgentCommunicationInputItem).
 func steerItemsHaveAgentMail(items []any) bool {
 	for _, item := range items {
+		if steerItemIsAgentMail(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func steerItemIsAgentMail(item any) bool {
+	raw, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(raw["type"]))) {
+	case "agent_message", "agent_message_board_notification":
+		return true
+	}
+	return false
+}
+
+// steerItemsCarryInjection reports whether a notifying enqueue carried a
+// response-item injection (Rust #55644 extends
+// `TurnInput::ResponseItem` through the accepting variant). Go renders
+// inter-agent mail as an `agent_message` item, which Rust models as
+// `TurnInput::InterAgentCommunication` and therefore does not count.
+func steerItemsCarryInjection(items []any) bool {
+	for _, item := range items {
+		if !steerItemIsAgentMail(item) {
+			return true
+		}
+	}
+	return false
+}
+
+// steerItemsHaveFunctionCallOutput mirrors Rust pending_activity's
+// `TurnInput::FunctionCallOutput` arm: a queued function-call output steers the
+// turn just like a user message.
+func steerItemsHaveFunctionCallOutput(items []any) bool {
+	for _, item := range items {
 		raw, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(raw["type"])), "agent_message") {
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(raw["type"])), "function_call_output") {
 			return true
 		}
 	}
@@ -398,6 +558,9 @@ func (m *SteerMailbox) DrainWithMetadata(params *SteerDrainParams) *SteerDrainRe
 	metadata := cloneStringMap(m.metadata[key])
 	delete(m.items, key)
 	delete(m.metadata, key)
+	// Rust take_pending_input_for_turn_state replaces the whole TurnInputQueue,
+	// so consuming the injection clears its pending bit.
+	delete(m.pendingInjections, key)
 	return &SteerDrainResult{InputItems: items, ClientMetadata: metadata}
 }
 
@@ -410,6 +573,7 @@ func (m *SteerMailbox) Clear(params *SteerDrainParams) {
 	defer m.mu.Unlock()
 	delete(m.items, key)
 	delete(m.metadata, key)
+	delete(m.pendingInjections, key)
 }
 
 func compactInputItems(items []any) []any {

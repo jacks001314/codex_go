@@ -620,15 +620,46 @@ func (h *ClockSleepHandler) Execute(ctx context.Context, invocation *Invocation)
 		return nil, fmt.Errorf("duration_ms must be between 1 and %d", maxSleepToolDurationMS)
 	}
 	started := time.Now()
-	if err := h.clockProvider().Sleep(ctx, h.threadID, time.Duration(args.DurationMS)*time.Millisecond); err != nil {
-		if h != nil && h.nonfatalClockReadErrors {
-			return nil, RespondToModel(contextfrag.CurrentTimeUnavailableMessage)
+	// Rust #55644: the sleep handler subscribes to the turn's input-queue
+	// activity, so input that arrived before the sleep or while it runs ends the
+	// wait. Passive context alone leaves the sleep running.
+	signal := StepActivityFromContext(ctx)
+	if signal == nil {
+		signal = ActivitySignalFromInvocation(invocation)
+	}
+	interrupted := signal.Cancelled()
+	if !interrupted {
+		sleepCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		if signal != nil {
+			stop := make(chan struct{})
+			defer close(stop)
+			go func() {
+				select {
+				case <-signal.Done():
+					cancel()
+				case <-stop:
+				}
+			}()
 		}
-		return nil, Fatal("failed to sleep: " + err.Error())
+		err := h.clockProvider().Sleep(sleepCtx, h.threadID, time.Duration(args.DurationMS)*time.Millisecond)
+		// A provider that honours the cancelled context reports an error; the
+		// activity signal is what distinguishes an interruption from a failure.
+		interrupted = signal.Cancelled()
+		if err != nil && !interrupted {
+			if h != nil && h.nonfatalClockReadErrors {
+				return nil, RespondToModel(contextfrag.CurrentTimeUnavailableMessage)
+			}
+			return nil, Fatal("failed to sleep: " + err.Error())
+		}
+	}
+	message := "Sleep completed."
+	if interrupted {
+		message = "Sleep interrupted by new input."
 	}
 	return &Output{
 		Success: true,
-		Body:    fmt.Sprintf("Wall time: %.4f seconds\nSleep completed.", time.Since(started).Seconds()),
+		Body:    fmt.Sprintf("Wall time: %.4f seconds\n%s", time.Since(started).Seconds(), message),
 	}, nil
 }
 

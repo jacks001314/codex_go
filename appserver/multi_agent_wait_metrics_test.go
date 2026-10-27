@@ -76,7 +76,7 @@ func TestMultiAgentWaitDurationRecordsOutcomeLikeRust(t *testing.T) {
 	}
 	for _, record := range records {
 		if record.Tags["outcome"] == telemetry.MultiAgentWaitOutcomeSteered {
-			t.Fatalf("Go observed the steered outcome, which its mailbox cannot report: %#v", record)
+			t.Fatalf("neither wait had queued steering input, so neither may report steered: %#v", record)
 		}
 		if record.DurationMS <= 0 {
 			t.Fatalf("record %#v has a non-positive duration", record)
