@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -421,6 +422,10 @@ func (p *TurnStartParams) Validate() error {
 	if err := rejectConfigurationUpdateInput(p.Input); err != nil {
 		return err
 	}
+	// Rust validates context names after the app-server's input-length checks.
+	if err := ValidateAdditionalContext(p.AdditionalContext); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -505,6 +510,10 @@ func (p *TurnSteerParams) Validate() error {
 		return err
 	}
 	if err := rejectConfigurationUpdateInput(p.Input); err != nil {
+		return err
+	}
+	// Rust validates context names after the app-server's input-length checks.
+	if err := ValidateAdditionalContext(p.AdditionalContext); err != nil {
 		return err
 	}
 	return nil
@@ -717,6 +726,81 @@ type AdditionalContextEntry struct {
 	// Name optionally labels untrusted context when it is rendered as an
 	// agent-namespaced tool output (Rust #57279).
 	Name *string `json:"name,omitempty"`
+}
+
+// maxAdditionalContextNameBytes mirrors the 64-byte bound Rust applies to an
+// optional untrusted-context name.
+const maxAdditionalContextNameBytes = 64
+
+// AdditionalContextValidationError reports an invalid optional untrusted-context
+// name (Rust AdditionalContextEntry::validate, #57181). Message is the exact
+// text the app-server returns as a JSON-RPC invalid-request error.
+type AdditionalContextValidationError struct {
+	Message string
+}
+
+func (e *AdditionalContextValidationError) Error() string {
+	if e == nil {
+		return ErrInvalidTurnRequest.Error()
+	}
+	return fmt.Sprintf("%s: %s", ErrInvalidTurnRequest, e.Message)
+}
+
+func (e *AdditionalContextValidationError) Unwrap() error {
+	return ErrInvalidTurnRequest
+}
+
+// Validate mirrors Rust AdditionalContextEntry::validate: a name is optional,
+// only valid on untrusted context, and must match [a-z][a-z0-9_]{0,63}.
+func (e AdditionalContextEntry) Validate() error {
+	if e.Name == nil {
+		return nil
+	}
+	if e.Kind == AdditionalContextApplication {
+		return &AdditionalContextValidationError{Message: "additional context name is only supported for untrusted context"}
+	}
+	if !validAdditionalContextName(*e.Name) {
+		return &AdditionalContextValidationError{Message: "additional context name must match [a-z][a-z0-9_]{0,63}"}
+	}
+	return nil
+}
+
+// validAdditionalContextName bounds the name by bytes, matching Rust's
+// `name.len() > 64` check rather than a rune count.
+func validAdditionalContextName(name string) bool {
+	if len(name) == 0 || len(name) > maxAdditionalContextNameBytes {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		char := name[index]
+		if char >= 'a' && char <= 'z' {
+			continue
+		}
+		if index > 0 && ((char >= '0' && char <= '9') || char == '_') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// ValidateAdditionalContext reports the first invalid entry, visiting keys in
+// the same order as Rust's BTreeMap so callers observe the same error.
+func ValidateAdditionalContext(values map[string]AdditionalContextEntry) error {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := values[key].Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type TurnService struct {

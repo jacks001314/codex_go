@@ -7425,6 +7425,21 @@ func (r *RuntimeRouter) emitThreadConfigWarnings(cwd string) {
 	}
 }
 
+// additionalContextNameError mirrors Rust turn_processor's pre-admission
+// validation (#57181): an invalid untrusted-context name is an invalid-request
+// error carrying the exact core message.
+func additionalContextNameError(values map[string]turn.AdditionalContextEntry) error {
+	err := turn.ValidateAdditionalContext(values)
+	if err == nil {
+		return nil
+	}
+	var invalid *turn.AdditionalContextValidationError
+	if errors.As(err, &invalid) {
+		return jsonRPCInvalidRequest(invalid.Message)
+	}
+	return err
+}
+
 func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartResponse, error) {
 	r.turnAdmissionMu.Lock()
 	defer r.turnAdmissionMu.Unlock()
@@ -7443,6 +7458,11 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	// Rust #44944: reject input to a thread whose retained provider route no
 	// longer matches managed model provider requirements.
 	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
+		return nil, err
+	}
+	// Rust #57181: validate additional-context names before the turn changes any
+	// live thread policy or admits input.
+	if err := additionalContextNameError(params.AdditionalContext); err != nil {
 		return nil, err
 	}
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
@@ -8730,6 +8750,7 @@ func turnSteerRuntimeError(err error) error {
 	if err == nil {
 		return nil
 	}
+	var invalidContext *turn.AdditionalContextValidationError
 	switch {
 	case errors.Is(err, turn.ErrNoActiveTurnToSteer):
 		return jsonRPCInvalidRequest("no active turn to steer")
@@ -8737,6 +8758,10 @@ func turnSteerRuntimeError(err error) error {
 		return jsonRPCInvalidRequest(strings.TrimSpace(err.Error()))
 	case errors.Is(err, turn.ErrEmptyTurnSteerInput):
 		return jsonRPCInvalidRequest("input must not be empty")
+	case errors.As(err, &invalidContext):
+		// Rust #57181 maps the core validation failure onto an invalid-request
+		// error with the core message.
+		return jsonRPCInvalidRequest(invalidContext.Message)
 	}
 	message := strings.TrimSpace(err.Error())
 	if strings.Contains(message, "expectedTurnId must not be empty") {

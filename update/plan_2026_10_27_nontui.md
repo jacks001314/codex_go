@@ -83,6 +83,7 @@ TUI lane and are not modified here.
 | `#55971` | Local message boards can select an isolated storage namespace | `agentboard/local_options.go`, `agentboard/local.go`, `agentboard/connection.go`, `agentboard/configure_local_board.go`, like-Rust test |
 | `#55692` | Tool-registration metrics carry the effective `incremental_tools` mode | `turn/tool_registration_metrics.go`, `turn/agent_loop.go`, `turn/runtime.go`, `appserver/turn_runtime.go`, like-Rust tests |
 | `#55644` | Pending injections interrupt `wait_agent` and `clock.sleep` | `turn/steer_mailbox.go`, `turn/tool_dispatcher.go`, `turn/agent_loop.go`, `tool/step_activity.go`, `tool/handlers.go`, `appserver/agent_controller.go`, `exec/agent_controller.go`, like-Rust tests |
+| `#57181` | Optional names on untrusted additional context validate before input admission | `turn/api.go`, `appserver/runtime_router.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -699,9 +700,21 @@ step context, and `clock.sleep` ends its wait with "Sleep interrupted by new
 input." for pending or live activity. That subscription is independent of the
 instant-interrupt gate, which only arms code-mode yielding for user messages.
 
+`#57181` details: an `AdditionalContextEntry` name is optional and only valid
+on `untrusted` context; it must match `[a-z][a-z0-9_]{0,63}` (at most 64 bytes,
+ASCII only). `TurnStartParams.Validate` and `TurnSteerParams.Validate` reject
+invalid entries, and `turn/start` validates before it mutates live thread
+policy, so both requests return the JSON-RPC invalid-request error (with the
+exact Rust message) without admitting input: `turn/start` is rejected before
+`turn/started`, and `turn/steer` before the mailbox accepts items. Multiple
+invalid entries report the key-sorted first error, matching Rust's `BTreeMap`.
+The `name` protocol field and its use as the tool-output label were already
+ported with `#57279`, which also keeps Rust's later name-and-value
+deduplication for tool outputs.
+
 ## Pending in this window
 
-- About 121 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 120 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -830,3 +843,7 @@ instant-interrupt gate, which only arms code-mode yielding for user messages.
 - For `#55545`: `go test ./rollout -run 'CompressedRolloutReadDiagnostic|FirstFrameContentSize' -count=1`,
   `go test ./appserver -run 'FeedbackReadAttachment' -count=1`, the full
   `go test ./rollout -count=1`, and `go build ./...` pass.
+- For `#57181`: `go test ./turn -run 'AdditionalContext' -count=1`,
+  `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
+  `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full
+  `go test ./appserver -count=1` (223.5s), and `go build ./...` pass.
