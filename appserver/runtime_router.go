@@ -5213,6 +5213,16 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	setThreadRecordPendingSessionStartSource(record, SessionStartSourceFork)
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	record.Metadata.Extra["ephemeral"] = true
+	if params.ExperimentalPredictionMode && params.ExperimentalDisablePredictionMcp &&
+		r.predictionForkDisablesMCP(sourceRecord, record) {
+		// Rust #57287: the fork's MCP projection is empty; with the feature
+		// enabled it keeps the parent's inherited declarations instead of
+		// sending a new catalog, and records the MCP-unavailable notice.
+		record.Metadata.Extra[predictionMCPServersDisabledKey] = true
+		if r.predictionPreserveParentToolsEnabled(record) {
+			record.Items = append(record.Items, predictionMCPUnavailableNoticeItem(runtimeRouterNow(r).UTC()))
+		}
+	}
 	r.saveEphemeralThreadRecord(record)
 	responseRecord := record
 	if params.ExcludeTurns {
@@ -11732,6 +11742,12 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	if selections := contributionContext.SelectedEnvironments(); selections != nil {
 		base.SelectedEnvironments = selections
 	}
+	if r != nil && r.threadMCPServersDisabled(threadID) {
+		// Rust core mcp.rs (McpServersDisabled): a prediction fork with MCP
+		// disabled projects no servers, apps, or plugin contributions.
+		base.HTTPClient = r.httpClientForConfig(&config.Config{Values: values})
+		return projectionWithoutMCPServers(base)
+	}
 	if rawFeatures, ok := values["features"].(map[string]any); ok {
 		if settings, _ := features.ResolveSettings(rawFeatures); features.Enabled(settings, "mcp_oauth_refresh_coordination") {
 			for name, registration := range base.Servers {
@@ -14168,6 +14184,9 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(turnParams)
 	environmentAuthority := environmentSelections.Authority()
 	contributionContext := mcp.NewMCPServerContributionContext(threadID, environmentSelections)
+	// Rust #57287 (`McpServersDisabled`): a prediction fork with MCP disabled
+	// projects no executor-owned servers either, and discovery is skipped.
+	mcpServersDisabled := r.threadMCPServersDisabled(threadID)
 	skipExecutorMCPServers := guardianTurnStart(turnParams)
 	hasExecutorMCPCandidate := false
 	if !skipExecutorMCPServers {
@@ -14184,7 +14203,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		return nil, false
 	}
 	discoveryCache := r.threads.capabilityDiscoveryV2Cache(threadID)
-	if !skipExecutorMCPServers {
+	if !skipExecutorMCPServers && !mcpServersDisabled {
 		r.discoverExecutorHTTPMCPServers(context.Background(), threadID, turnParams, discoveryCache)
 	}
 	selectedEnvironmentMaps := mcpRuntimeEnvironmentSelections(r, threadID, turnParams)
@@ -14196,7 +14215,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 		config := r.runtimeMCPConfigForThread(contributionContext, values, codexHome, runtimeAuth, cfg.Requirements)
-		if !skipExecutorMCPServers {
+		if !skipExecutorMCPServers && !mcpServersDisabled {
 			discoveryCache.applyExecutorMCPServers(r, config, selectedEnvironmentMaps, cfg.Requirements)
 		}
 		applyHostMCPRuntimePaths(config, r.hostMCPPathContextForTurn(threadID, turnParams))

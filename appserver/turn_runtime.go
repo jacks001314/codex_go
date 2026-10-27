@@ -8092,6 +8092,8 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	declarationItems := []any{}
 	incrementalActive := false
 	if incrementalToolsEnabledForTurn(cfg, modelInfo) {
+		preserveParentTools := r.threadMCPServersDisabled(threadID) &&
+			features.Enabled(cfg.FeatureSettings(), "prediction_preserve_parent_tools")
 		incremental, incrementalErr := r.incrementalToolCatalogForTurnWithModelMessages(
 			threadID,
 			historyItems,
@@ -8101,6 +8103,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			turnID,
 			time.UnixMilli(startedAtMS).UTC(),
 			incrementalToolMessageOverrides(modelInfo.ModelMessages),
+			preserveParentTools,
 		)
 		if incrementalErr != nil {
 			return nil, incrementalErr

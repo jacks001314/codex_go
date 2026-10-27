@@ -31,6 +31,7 @@ TUI lane and are not modified here.
 | `#56309` `#57263` | Permission catalog path wording (`writable_root(s)`, `omitted_paths`, `denied_reads`) | `model/catalog.go`, `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go`, catalog/permission tests |
 | `#57286` | Managed `[network_proxy]` requirements with `[experimental_network]` alias | `config/requirements_file.go`, `config/cloud_config.go`, `config/ignored_settings.go`, `appserver/managed_network_constraints.go`, config tests |
 | `#57304` | Surface permanent refresh-token rejection during workspace routing | `appserver/workspace_routing.go`, `appserver/turn_runtime.go`, like-Rust test |
+| `#57287` | Preserve parent tool declarations in MCP-disabled prediction forks | `features/features.go`, `appserver/protocol.go`, `appserver/thread_sample_protocol.go`, `appserver/prediction_parent_tools.go`, `appserver/runtime_router.go`, `appserver/thread_sample.go`, `appserver/turn_runtime.go`, `appserver/incremental_tools.go`, `turn/runtime.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -129,12 +130,28 @@ refresh failures keep the generic discovery error. Turn failures carrying that
 error classify as `codexErrorInfo: unauthorized` with
 `codexErrorKind: refresh_token_failed`, so clients show the sign-in guidance.
 
+`#57287`: `thread/fork` gains `experimentalDisablePredictionMcp`, rejected
+without `experimentalPredictionMode` with Rust's message, and
+`thread/sample` gains `disableMCP`. A prediction fork, or a sample, only
+disables MCP when the inherited request history already carries an
+`additional_tools` catalog and the model uses Responses Lite. That thread is
+marked `mcp_servers_disabled`: the MCP projection then carries no servers, apps,
+connectors, plugin contributions, or executor-discovered servers, and executor
+discovery is skipped. With the default-enabled
+`prediction_preserve_parent_tools` feature the thread keeps the inherited
+declarations instead of re-declaring tools inside the copied context window
+(only a new window re-derives the catalog), records no removal notice, and
+appends the developer notice
+`<mcp_tools>\nMCP tools are unavailable for this request.\n</mcp_tools>`
+(hidden from the thread). Samples send no new `tools` catalog, and a sample
+with `disableMCP` for a non-lite model or a history without a catalog keeps the
+current behavior.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
   triaged: high-value candidates include `#57311` rollouts trace versions,
-  `#57280` full MCP results,
-  `#57287` prediction-fork tool declarations, `#57276` permission
+  `#57280` full MCP results, `#57276` permission
   world-state, `#57171` runtime auth and
   `#57270` cloud config for sandbox/exec-server, and
   `#56036`/`#56049` remote credentials. The `feedback/save` and
@@ -153,6 +170,9 @@ error classify as `codexErrorInfo: unauthorized` with
   passes.
 - For `#57286`: `go test ./config -count=1` and
   `go test ./appserver -run 'ManagedNetwork|NetworkRequirements|NetworkProxy|Permission|Granular|ConfigRequirements' -count=1`
+  pass.
+- For `#57287`: `go test ./appserver -run 'PredictionFork|IncrementalToolCatalog|ThreadSample' -count=1`,
+  `go test ./features ./turn -count=1`, and the full `go test ./appserver -count=1`
   pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the

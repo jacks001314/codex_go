@@ -175,6 +175,7 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #50464): track top-level tool
 	// definitions in world state and emit incremental context updates.
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
+	{Key: "prediction_preserve_parent_tools", Stage: StageStable, DefaultEnabled: true},
 	{Key: "subagent_thread_environments", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "non_prefixed_mcp_tool_names", Stage: StageUnderDevelopment},
 	{Key: "omit_app_server_notification_media", Stage: StageUnderDevelopment},

@@ -449,6 +449,24 @@ func (r *Runtime) ModelVisibleToolDefinitions(toolMode string, disableCodeModeFa
 	return model.ResponsesToolsFromSpecs(r.modelVisibleSpecsForRequest(r.effectiveToolModeForRequest(toolMode, disableCodeModeFallback)))
 }
 
+// ModelVisibleToolDefinitionsWithoutThirdParty mirrors a turn whose MCP
+// projection is empty (Rust `McpServersDisabled`): MCP, app, and other
+// third-party specs are omitted while built-in tools stay declared.
+func (r *Runtime) ModelVisibleToolDefinitionsWithoutThirdParty(toolMode string, disableCodeModeFallback bool) []any {
+	if r == nil {
+		return nil
+	}
+	specs := r.modelVisibleSpecsForRequest(r.effectiveToolModeForRequest(toolMode, disableCodeModeFallback))
+	kept := make([]tool.Spec, 0, len(specs))
+	for _, spec := range specs {
+		if spec.ThirdParty {
+			continue
+		}
+		kept = append(kept, spec)
+	}
+	return model.ResponsesToolsFromSpecs(kept)
+}
+
 // truncationPolicy resolves the effective model's output-truncation policy for
 // the turn's tool calls (Rust `ToolCall::truncation_policy`).
 func (r *Runtime) truncationPolicy(modelID string) *utils.TruncationPolicy {

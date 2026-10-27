@@ -101,10 +101,10 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 }
 
 func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModel(threadID string, historyItems []any, definitions []any, instructions string, modelID string, turnID string, createdAt time.Time) (incrementalToolCatalogResult, error) {
-	return r.incrementalToolCatalogForTurnWithModelMessages(threadID, historyItems, definitions, instructions, modelID, turnID, createdAt, nil)
+	return r.incrementalToolCatalogForTurnWithModelMessages(threadID, historyItems, definitions, instructions, modelID, turnID, createdAt, nil, false)
 }
 
-func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID string, historyItems []any, definitions []any, instructions string, modelID string, turnID string, createdAt time.Time, messageOverrides *session.IncrementalToolMessageOverrides) (incrementalToolCatalogResult, error) {
+func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID string, historyItems []any, definitions []any, instructions string, modelID string, turnID string, createdAt time.Time, messageOverrides *session.IncrementalToolMessageOverrides, preserveParentTools bool) (incrementalToolCatalogResult, error) {
 	if r == nil || r.services.ThreadRouter == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return incrementalToolCatalogResult{}, nil
 	}
@@ -137,20 +137,28 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID 
 	}
 	previousModel, previousBaseHash, baseKnown := session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, windowNumber)
 
-	hashes, toolUpdates, err := session.TopLevelToolsUpdatesWithMessages(
-		definitions,
-		previousHashes,
-		previousKnown,
-		session.ResolveIncrementalToolMessages(messageOverrides),
-	)
-	if err != nil {
-		return incrementalToolCatalogResult{}, err
+	var hashes map[string]string
+	var toolUpdates []session.WorldStateUpdate
+	if preserveParentTools && !changed {
+		// Rust #57287: an inherited context window keeps the parent's
+		// declarations; only a new window re-declares the current tools.
+		hashes = previousHashes
+	} else {
+		hashes, toolUpdates, err = session.TopLevelToolsUpdatesWithMessages(
+			definitions,
+			previousHashes,
+			previousKnown,
+			session.ResolveIncrementalToolMessages(messageOverrides),
+		)
+		if err != nil {
+			return incrementalToolCatalogResult{}, err
+		}
+		// Rust #54133 records the per-tool deltas of the same rendered diff. The
+		// recorder now lives with the render step in `session`
+		// (`record_changed_tool_metrics` sits in the same file as `render_diff`),
+		// so this is its single call site.
+		session.RecordChangedToolMetrics(definitions, previousHashes, previousKnown, hashes)
 	}
-	// Rust #54133 records the per-tool deltas of the same rendered diff. The
-	// recorder now lives with the render step in `session`
-	// (`record_changed_tool_metrics` sits in the same file as `render_diff`),
-	// so this is its single call site.
-	session.RecordChangedToolMetrics(definitions, previousHashes, previousKnown, hashes)
 	baseHash, baseUpdates := session.ModelInstructionsUpdate(modelID, instructions, previousModel, previousBaseHash, baseKnown)
 	items := session.MergeWorldStateUpdates(append(toolUpdates, baseUpdates...))
 	for i := range items {

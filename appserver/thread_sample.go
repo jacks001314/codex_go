@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex_go/codexapi"
+	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
@@ -93,6 +94,12 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		instructions = modelInfo.ModelInstructions(appPersonalityForTurn(cfg, paramsForTurn))
 	}
 	historyItems, _ := r.historyInputItemsForTurn(threadID)
+	// Rust #57287: MCP is disabled for a sample only when the inherited window
+	// carries an incremental catalog on a Responses Lite model. The sample reads
+	// the source record without history, so the catalog is detected on the
+	// request history that the sample inherits.
+	disableMCP := params.DisableMCP && modelInfo != nil && modelInfo.UseResponsesLite && historyInputItemsHaveAdditionalTools(historyItems)
+	preserveParentTools := disableMCP && features.Enabled(cfg.FeatureSettings(), "prediction_preserve_parent_tools")
 	inputItems := append([]any(nil), historyItems...)
 	if worldStateItems, stateErr := r.modelWorldStateInputItems(threadID, modelInfo, instructions); stateErr == nil {
 		inputItems = append(inputItems, worldStateItems...)
@@ -100,10 +107,21 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	if item, itemErr := r.managedDeveloperInstructionsInputItem(cfg); itemErr == nil && item != nil {
 		inputItems = append(inputItems, item)
 	}
+	if preserveParentTools {
+		inputItems = append(inputItems, predictionMCPUnavailableNoticeInputItem())
+	}
 	runContext, _ := r.buildTurnRuntimeContext(context.Background(), paramsForTurn, sampleTurnID)
 	var tools []any
 	if runContext != nil {
-		tools = runContext.ModelVisibleToolDefinitions("", cfg != nil && cfg.DisableCodeModeInProcessFallback())
+		if preserveParentTools {
+			// The inherited `additional_tools` item already declares the parent
+			// catalog, so no new declarations are sent (Rust #57287).
+			tools = nil
+		} else if disableMCP {
+			tools = runContext.ModelVisibleToolDefinitionsWithoutThirdParty("", cfg != nil && cfg.DisableCodeModeInProcessFallback())
+		} else {
+			tools = runContext.ModelVisibleToolDefinitions("", cfg != nil && cfg.DisableCodeModeInProcessFallback())
+		}
 	}
 	effort := appReasoningEffortForTurn(cfg, paramsForTurn)
 	if params.Effort != nil {

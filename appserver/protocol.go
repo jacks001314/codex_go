@@ -2167,6 +2167,9 @@ type ThreadForkParams struct {
 	// loaded parent's effective context and request settings (Rust #51884).
 	// Configuration overrides and history cutoffs are rejected in this mode.
 	ExperimentalPredictionMode bool `json:"experimentalPredictionMode,omitempty"`
+	// ExperimentalDisablePredictionMcp disables MCP servers in a prediction fork
+	// whose inherited window uses incremental tools on Responses Lite (#57287).
+	ExperimentalDisablePredictionMcp bool `json:"experimentalDisablePredictionMcp,omitempty"`
 }
 
 func (p *ThreadForkParams) UnmarshalJSON(data []byte) error {
@@ -2199,6 +2202,9 @@ func (p *ThreadForkParams) Validate() error {
 	}
 	if strings.TrimSpace(p.LastTurnID) != "" && strings.TrimSpace(p.BeforeTurnID) != "" {
 		return jsonRPCInvalidRequest("`beforeTurnId` cannot be combined with `lastTurnId`")
+	}
+	if p.ExperimentalDisablePredictionMcp && !p.ExperimentalPredictionMode {
+		return jsonRPCInvalidRequest("`experimentalDisablePredictionMcp` requires `experimentalPredictionMode: true`")
 	}
 	if p.ExperimentalPredictionMode {
 		if p.predictionModeHasConfigOverrides() {

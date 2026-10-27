@@ -19,6 +19,9 @@ type ThreadSampleParams struct {
 	// turn metadata (#56031). Reserved keys such as turn_trigger cannot
 	// override the explicit request fields.
 	ResponsesAPIClientMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
+	// DisableMCP disables MCP servers when the inherited window uses
+	// incremental tools on Responses Lite (Rust #57287).
+	DisableMCP bool `json:"disableMCP,omitempty"`
 }
 
 type ThreadSampleResponse struct {
