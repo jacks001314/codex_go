@@ -1,7 +1,8 @@
 # 2026-10-27 non-TUI sync window
 
 Upstream window: `8196bcdc18..c587d6e54c`, extended by
-`c587d6e54c..6fe77fc123` (Rust `codex` at `6fe77fc123`).
+`c587d6e54c..6fe77fc123` (Rust `codex` at `6fe77fc123`; the non-TUI commits in
+that extension are `#57394`, `#57360`, `#57358`, `#57357`, `#57353`, `#57352`).
 This lane owns non-TUI core packages only. `tui/`, `app/agents_dashboard.go`,
 `app/tui_telemetry.go` and `update/plan_2026_10_27.md` belong to the parallel
 TUI lane and are not modified here.
@@ -64,6 +65,10 @@ TUI lane and are not modified here.
 | `#56560` | `model_providers.gcp.project_id`/`location` override the environment | `model/provider_info.go`, `model/provider_config.go`, `model/gcp_test.go` |
 | `#57188` | `model_providers.gcp.credential_file` for command auth | `model/provider_info.go`, `model/auth.go`, `model/provider_config.go`, `model/gcp_test.go` |
 | `#57394` | Experimental `account/gcp/setup`; `config/read` reloads requirements and republishes the network policy | `appserver/gcp.go`, `appserver/gcp_test.go`, `appserver/runtime_router.go`, `appserver/bedrock.go`, `config/api.go`, `config/gcp_prepare_test.go`, `app/app.go` |
+| `#57360` | Bound the thread writer coordination lock wait (50 ms retry, 30 s timeout) | `session/writer_lock.go`, `session/writer_lock_timeout_test.go` |
+| `#57358` | Serialize session index mutations across processes; preserve index permissions | `rollout/session_index.go`, `rollout/session_index_lock_test.go` |
+| `#57357` | `migrate-nfs-db` reports no databases instead of success | `app/migrate_nfs_db.go`, `app/migrate_nfs_db_test.go` |
+| `#57352` | npm wrapper preserves child signal failure exit status | `npm/codex/bin/codex.js` |
 
 Grounding notes:
 
@@ -582,6 +587,19 @@ on every call, matching Rust's `ConfigManager::read`; this revokes outstanding
 permits, which the network-revocation test now triggers through `config/read`
 like the Rust test.
 
+`#57360`/`#57358`/`#57357`/`#57352` details: writer cleanup and session-index
+mutations now poll their coordination/file lock every 50 ms and fail with a
+timeout (`os.ErrDeadlineExceeded`) after 30 s instead of blocking forever, so a
+suspended host cannot prevent idle thread unloading; a timed-out session-index
+append leaves the index untouched. Index removals are rewritten through a
+unique `session-index-*` temp file that copies the index's permission bits, and
+an absent index/home is a no-op. `codex migrate-nfs-db` counts migrated and
+already-DELETE databases and prints `No databases found.` when none exist.
+The npm wrapper sets `process.exitCode = 128 + signal` and removes terminating
+signal listeners before re-emitting the child's signal. `#57353` is N/A: the
+Rust change lives in the `mxc-sandbox` crate's policy normalizer, which has no
+Go counterpart; `#57373` is a Rust toolchain pin with no Go analogue.
+
 ## Pending in this window
 
 - About 170 non-TUI commits in `update/_cls_core.tsv` still need triage.
@@ -686,3 +704,11 @@ like the Rust test.
   and `go test ./model ./config ./auth -count=1` pass; `go build ./...` passes.
   `go vet ./appserver ./model ./config ./auth` reports only the pre-existing
   `appserver/thread_sample.go:220` context-leak warning.
+- For `#57360`/`#57358`/`#57357`/`#57352`: `go test ./session ./rollout ./state ./app -count=1`
+  passes, as do the focused writer-lock, session-index, and NFS-migration
+  tests. The NFS test skips on this Windows host because
+  `NFSSQLiteMigrationSupported` requires Unix. The full
+  `go test ./appserver -count=1` (233.8s) passes after adding the `gcp_setup`
+  row to the Rust v2 suite manifest; `go build ./...` and
+  `go vet ./session ./rollout ./app` pass. The npm wrapper has no Go-side JS
+  test in this repo.

@@ -3,6 +3,7 @@
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import { constants } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -133,6 +134,13 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 }
 
 child.on("exit", (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  else process.exit(code ?? 1);
+  if (signal) {
+    // Rust #57352: preserve a failure exit code even if Node ignores the
+    // re-emitted signal.
+    process.exitCode = 128 + constants.signals[signal];
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
+  } else {
+    process.exit(code ?? 1);
+  }
 });

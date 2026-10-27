@@ -86,6 +86,7 @@ func runMigrateNFSDB(ctx context.Context, opts cli.MigrateNFSDBOptions, root cli
 		return err
 	}
 	defer migration.Close()
+	databasesFound := 0
 	for _, database := range sqlite.RuntimeDBPaths() {
 		if skipLogs && database.Path == sqlite.LogsDBPath() {
 			fmt.Fprintln(stdout, "Skipped logs database: log_dir is configured.")
@@ -97,11 +98,19 @@ func runMigrateNFSDB(ctx context.Context, opts cli.MigrateNFSDBOptions, root cli
 		}
 		switch outcome.Kind {
 		case state.NFSMigrationMissing:
+			continue
 		case state.NFSMigrationAlreadyDelete:
 			fmt.Fprintf(stdout, "Already in DELETE mode: %s\n", database.Path)
 		case state.NFSMigrationMigrated:
 			fmt.Fprintf(stdout, "Migrated database: %s\nWAL backup: %s\n", database.Path, outcome.BackupDirectory)
 		}
+		databasesFound++
+	}
+	// Rust #57357: an existing database directory with no databases must not
+	// report a successful migration.
+	if databasesFound == 0 {
+		fmt.Fprintln(stdout, "No databases found.")
+		return nil
 	}
 	fmt.Fprintln(stdout, "Migration completed successfully. You can restart Codex.")
 	return nil

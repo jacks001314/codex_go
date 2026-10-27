@@ -7,11 +7,19 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/gofrs/flock"
 )
 
 const writerLockDir = "thread-writer-locks"
+
+// Rust #57360: contention on the coordination lock must not block writer
+// cleanup indefinitely, so acquisition retries and then reports a timeout.
+const writerLockCoordinationRetry = 50 * time.Millisecond
+
+// writerLockCoordinationTimeout is a variable so tests can shorten the wait.
+var writerLockCoordinationTimeout = 30 * time.Second
 
 type WriterLock struct {
 	coordinator *writerLockCoordinator
@@ -73,8 +81,8 @@ func (c *writerLockCoordinator) acquire(threadID ThreadID) (*WriterLock, error) 
 	if err := os.MkdirAll(c.directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create thread writer lock directory: %w", err)
 	}
-	if err := c.coordination.Lock(); err != nil {
-		return nil, fmt.Errorf("acquire thread writer coordination lock: %w", err)
+	if err := lockWriterCoordination(c.coordination); err != nil {
+		return nil, err
 	}
 	defer func() { _ = c.coordination.Unlock() }()
 
@@ -96,8 +104,8 @@ func (l *WriterLock) Close() error {
 	}
 	var closeErr error
 	l.once.Do(func() {
-		if err := l.coordinator.coordination.Lock(); err != nil {
-			closeErr = fmt.Errorf("acquire thread writer coordination lock: %w", err)
+		if err := lockWriterCoordination(l.coordinator.coordination); err != nil {
+			closeErr = err
 			return
 		}
 		defer func() {
@@ -114,6 +122,26 @@ func (l *WriterLock) Close() error {
 		}
 	})
 	return closeErr
+}
+
+// lockWriterCoordination mirrors Rust's bounded coordination wait: retry every
+// 50 ms and report a timeout instead of blocking forever when another process
+// holds the lock.
+func lockWriterCoordination(lock *flock.Flock) error {
+	deadline := time.Now().Add(writerLockCoordinationTimeout)
+	for {
+		locked, err := lock.TryLock()
+		if err != nil {
+			return fmt.Errorf("acquire thread writer coordination lock: %w", err)
+		}
+		if locked {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("acquire thread writer coordination lock: %w: timed out waiting for the thread writer coordination lock; another Codex process may be suspended on this or another host", os.ErrDeadlineExceeded)
+		}
+		time.Sleep(writerLockCoordinationRetry)
+	}
 }
 
 func releaseWriterLocks(locks []*WriterLock) {

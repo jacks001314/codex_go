@@ -74,6 +74,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "feedback", Owner: "appserver", Focus: "feedback submission and local diagnostic ZIP exports"},
 		{Module: "frozen_cloud_skills", Owner: "prompt, plugin", Focus: "frozen cloud skill sources through the native catalog and read handler"},
 		{Module: "fs", Owner: "appserver", Focus: "fs read/write/watch RPCs"},
+		{Module: "gcp_setup", Owner: "config, model, appserver", Focus: "experimental account/gcp/setup previews, verifies credentials, and commits the user provider layer (#57394)"},
 		{Module: "git_attribution", Owner: "appserver, session", Focus: "git attribution propagation"},
 		{Module: "guardian_v2", Owner: "appserver, guardian", Focus: "Guardian V2 approval routing, risk scores and managed-reviewer gating"},
 		{Module: "gateway_oauth", Owner: "auth, appserver", Focus: "explicit gateway OAuth sign-in, credential persistence and redaction (#47207/#47158)"},

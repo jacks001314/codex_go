@@ -4,16 +4,31 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 const SessionIndexFilename = "session_index.jsonl"
 
+// sessionIndexLockFilename serializes index mutations across processes that
+// share a Codex home (Rust #57358). The file is persistent: replacing it would
+// let another process lock a new file while an update still holds the old one.
+const sessionIndexLockFilename = "session_index.jsonl.lock"
+
+const sessionIndexLockRetry = 50 * time.Millisecond
+
+// sessionIndexLockTimeout is a variable so tests can shorten the wait.
+var sessionIndexLockTimeout = 30 * time.Second
+
+// sessionIndexMu serializes mutations within this process before they contend
+// on the cross-process file lock.
 var sessionIndexMu sync.Mutex
 
 type SessionIndexEntry struct {
@@ -31,30 +46,64 @@ func AppendThreadName(codexHome string, threadID string, name string) error {
 }
 
 func AppendSessionIndexEntry(codexHome string, entry SessionIndexEntry) error {
-	sessionIndexMu.Lock()
-	defer sessionIndexMu.Unlock()
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(sessionIndexPath(codexHome), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
+	return withSessionIndexLock(codexHome, func() error {
+		file, err := os.OpenFile(sessionIndexPath(codexHome), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if _, err := file.Write(append(data, '\n')); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// withSessionIndexLock mirrors Rust with_session_index_lock: mutations hold a
+// cross-process file lock for as long as the write runs, and return a timeout
+// error without touching the index when contention lasts past the deadline.
+func withSessionIndexLock(codexHome string, update func() error) error {
+	sessionIndexMu.Lock()
+	defer sessionIndexMu.Unlock()
+	lock := flock.New(filepath.Join(codexHome, sessionIndexLockFilename))
+	deadline := time.Now().Add(sessionIndexLockTimeout)
+	for {
+		locked, err := lock.TryLock()
+		if err != nil {
+			return err
+		}
+		if locked {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%w: timed out waiting for the session index lock; another Codex process may be suspended on this or another host", os.ErrDeadlineExceeded)
+		}
+		time.Sleep(sessionIndexLockRetry)
 	}
-	defer file.Close()
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		return err
-	}
-	return nil
+	defer func() { _ = lock.Unlock() }()
+	return update()
 }
 
 func RemoveThreadNameEntries(codexHome string, threadID string) error {
-	sessionIndexMu.Lock()
-	defer sessionIndexMu.Unlock()
 	path := sessionIndexPath(codexHome)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return withSessionIndexLock(codexHome, func() error {
+		return removeThreadNameEntriesLocked(path, threadID)
+	})
+}
+
+func removeThreadNameEntriesLocked(path string, threadID string) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -84,11 +133,35 @@ func RemoveThreadNameEntries(codexHome string, threadID string) error {
 	if !removed {
 		return nil
 	}
-	temporary := strings.TrimSuffix(path, ".jsonl") + ".jsonl.tmp"
-	if err := os.WriteFile(temporary, remaining.Bytes(), 0o600); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	temporary, err := os.CreateTemp(filepath.Dir(path), "session-index-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	cleanup := func() { _ = os.Remove(temporaryPath) }
+	if err := temporary.Chmod(info.Mode().Perm()); err != nil {
+		_ = temporary.Close()
+		cleanup()
+		return err
+	}
+	if _, err := temporary.Write(remaining.Bytes()); err != nil {
+		_ = temporary.Close()
+		cleanup()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }
 
 func FindThreadNameByID(codexHome string, threadID string) (string, bool, error) {
