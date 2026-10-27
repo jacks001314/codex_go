@@ -38,6 +38,12 @@ type Board interface {
 	// across retries: a retry with different input is an error, a successful
 	// retry returns the same metadata.
 	Post(ctx context.Context, caller string, request PostRequest) (*PostMetadata, error)
+	// Append writes evidence without automatic subscriptions or notifications,
+	// using caller-scoped retry IDs shared with posting: an identical retry
+	// returns the original metadata, while changing the payload or operation is
+	// an error. Backends without silent-write support reject it rather than
+	// falling back to posting (Rust #56461).
+	Append(ctx context.Context, caller string, request AppendRequest) (*PostMetadata, error)
 	ListThreads(ctx context.Context, caller string, query ThreadQuery) (*Page[ThreadSummary], error)
 	SearchPosts(ctx context.Context, caller string, query PostQuery) (*Page[PostPreview], error)
 	ReadThread(ctx context.Context, caller string, request ReadThreadRequest) (*ThreadPage, error)
@@ -140,6 +146,25 @@ type PostRequest struct {
 	Text           string
 	AgentsToNotify []agent.AgentPath
 }
+
+// AppendRequest writes without subscribing its author or notifying anyone.
+// Its request ID shares the caller's post retry namespace (Rust #56461).
+type AppendRequest struct {
+	// RequestID is the host-generated tool invocation identity, never a model
+	// argument.
+	RequestID   string
+	Destination PostDestination
+	Text        string
+}
+
+// postBehavior distinguishes a discussion post from a silent append on the
+// shared write path (Rust's PostBehavior).
+type postBehavior int
+
+const (
+	postDiscussion postBehavior = iota
+	postSilentAppend
+)
 
 // ThreadSort selects the thread ordering key.
 type ThreadSort string

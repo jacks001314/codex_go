@@ -465,6 +465,21 @@ func (b *LocalAgentMessageBoard) UpsertChannel(ctx context.Context, caller strin
 // fanout finish even if the tool caller disconnects; delivery is attempted once
 // and a failed notice never fails the committed post.
 func (b *LocalAgentMessageBoard) Post(ctx context.Context, caller string, request PostRequest) (*PostMetadata, error) {
+	return b.writePost(ctx, caller, request, postDiscussion)
+}
+
+// Append stores evidence without automatic subscriptions or notifications, even
+// on a discussion board. It uses the same access checks, caller-scoped request
+// IDs and durable write path as posting (Rust #56461).
+func (b *LocalAgentMessageBoard) Append(ctx context.Context, caller string, request AppendRequest) (*PostMetadata, error) {
+	return b.writePost(ctx, caller, PostRequest{
+		RequestID:   request.RequestID,
+		Destination: request.Destination,
+		Text:        request.Text,
+	}, postSilentAppend)
+}
+
+func (b *LocalAgentMessageBoard) writePost(ctx context.Context, caller string, request PostRequest, behavior postBehavior) (*PostMetadata, error) {
 	action := "channel.post"
 	if request.Destination.Kind == "thread" {
 		action = "channel.reply"
@@ -477,10 +492,10 @@ func (b *LocalAgentMessageBoard) Post(ctx context.Context, caller string, reques
 	}
 	// The write must not be aborted by the caller's cancellation (Rust posts on
 	// a detached task and awaits its handle).
-	return b.postInner(context.WithoutCancel(ctx), caller, request)
+	return b.postInner(context.WithoutCancel(ctx), caller, request, behavior)
 }
 
-func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, request PostRequest) (*PostMetadata, error) {
+func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, request PostRequest, behavior postBehavior) (*PostMetadata, error) {
 	if err := validatePostRequest(request); err != nil {
 		return nil, err
 	}
@@ -489,9 +504,15 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 		return nil, err
 	}
 	requestID := caller + ":" + request.RequestID
+	// Keep existing post fingerprints compatible with persisted retries; a
+	// silent append carries its operation so reusing the ID for a post (or the
+	// reverse) is rejected (Rust #56461).
 	requestJSON, err := encodeWirePostRequest(request)
 	if err != nil {
 		return nil, err
+	}
+	if behavior == postSilentAppend {
+		requestJSON = "[" + "\"append\"," + requestJSON + "]"
 	}
 	if existing, err := b.existingPost(ctx, b.db, requestID, requestJSON); err != nil {
 		return nil, err
@@ -499,12 +520,14 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 		return &existing.Metadata, nil
 	}
 	recipients := map[string]struct{}{}
-	for _, path := range request.AgentsToNotify {
-		resolved, err := b.host.ResolveAgent(ctx, path)
-		if err != nil {
-			return nil, err
+	if behavior == postDiscussion {
+		for _, path := range request.AgentsToNotify {
+			resolved, err := b.host.ResolveAgent(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			recipients[resolved] = struct{}{}
 		}
-		recipients[resolved] = struct{}{}
 	}
 	now, err := b.host.CurrentTime(ctx, caller)
 	if err != nil {
@@ -528,12 +551,14 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 	if err != nil {
 		return nil, err
 	}
-	subscribed, err := b.subscribedRecipients(ctx, tx, target)
-	if err != nil {
-		return nil, err
-	}
-	for _, recipient := range subscribed {
-		recipients[recipient] = struct{}{}
+	if behavior == postDiscussion {
+		subscribed, err := b.subscribedRecipients(ctx, tx, target)
+		if err != nil {
+			return nil, err
+		}
+		for _, recipient := range subscribed {
+			recipients[recipient] = struct{}{}
+		}
 	}
 	delete(recipients, caller)
 	post := storedPost{
@@ -557,11 +582,16 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 		return nil, err
 	}
 	// Participation subscribes by default, without overriding an explicit opt-out.
-	if err := b.subscribe(ctx, tx, SubscriptionTarget{Kind: "thread", ThreadID: root}, caller); err != nil {
-		return nil, err
+	if behavior == postDiscussion {
+		if err := b.subscribe(ctx, tx, SubscriptionTarget{Kind: "thread", ThreadID: root}, caller); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.commit(ctx); err != nil {
 		return nil, err
+	}
+	if behavior == postSilentAppend {
+		return &post.Metadata, nil
 	}
 	notifyRecipients(ctx, b.host, recipients, post.preview(previewChars))
 	return &post.Metadata, nil

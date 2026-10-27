@@ -182,6 +182,12 @@ func (b *RemoteBoard) UpsertChannel(_ context.Context, _ string, _ UpsertChannel
 	return invalid("remote message boards do not support channel upsert")
 }
 
+// Append rejects requests: the remote protocol has no silent write operation,
+// and posting is not equivalent (Rust #56461).
+func (b *RemoteBoard) Append(_ context.Context, _ string, _ AppendRequest) (*PostMetadata, error) {
+	return nil, invalid("remote message boards do not support silent append")
+}
+
 func (b *RemoteBoard) CreateChannel(ctx context.Context, caller string, request CreateChannelRequest) (*ChannelSummary, error) {
 	params := struct {
 		ChannelName  string `json:"channel_name"`

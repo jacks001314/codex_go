@@ -54,6 +54,8 @@ TUI lane and are not modified here.
 | `#57220` | Log WebSocket compression payload statistics | `appserver/websocket_compression_stats.go`, `appserver/websocket_compression.go`, `appserver/websocket.go`, like-Rust test |
 | `#55958` | Preserve provider catalogs across failed refreshes | `model/models_endpoint.go`, `model/gateway_auth.go`, `auth/gateway_login.go`, `auth/gateway_manager.go`, like-Rust tests |
 | `#57178` | Route FedRAMP API keys to government endpoints by default | `auth/api_key.go`, `model/fedramp_routing.go`, `model/auth.go`, `model/provider.go`, `model/models_identity.go`, `config/config.go`, `appserver/runtime_router.go`, `appserver/realtime_runtime.go`, `doctor/doctor.go`, like-Rust tests |
+| `#55973` | Let consumers select message-board tools | `agentboard/tools.go`, `agentboard/append_test.go` |
+| `#56461` | Silent message-board `append` without subscriptions or notifications | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, like-Rust tests |
 | `#55591` | Measure Guardian approval blocking time per turn | `appserver/guardian_review_blocking.go`, `appserver/guardian_reviewer.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/thread_shell_command.go`, `telemetry/metric_names.go`, like-Rust tests |
 
 Grounding notes:
@@ -454,6 +456,27 @@ issuer error with the generic message. Rejection also resets `fetched` so
 `RefreshOnlineIfUncached` retries; a successful empty response stays
 authoritative.
 
+`#55973` details: `NewMessageBoardToolsWithSelection` builds only the
+selected `MessageBoardTool` values, in the supplied order, and
+`NewMessageBoardTools`/`NewMessageBoardToolsWithOverrides` keep the registered
+discussion set (`MessageBoardToolNames`: Rust's `DISCUSSION` order plus
+`upsert_channel`) through that same path. Selection only chooses tools; it does
+not grant storage permissions the board connection lacks. `append` is not part
+of `MessageBoardDiscussionTools`, so the default agent catalog is unchanged.
+
+`#56461` details: `Board.Append` shares posting's write path but never
+subscribes the author, collects subscribers, or sends notices.
+`AppendRequest` has no recipient field, so the `append` tool's strict decoding
+rejects `agents_to_notify`, and the tool is only exposed when a consumer selects
+`MessageBoardToolAppend`. Retry IDs share the post namespace: an identical
+append returns the original metadata, while a changed payload or an ID already
+used by a post (or the reverse) is an invalid request. The local backend keeps
+the request fingerprint compatible for posts and stores
+`["append", <request>]` for appends, so persisted retries stay distinguishable;
+read-only connections keep the same `channel.post`/`channel.reply` permission
+checks, and the write still outlives caller cancellation. Remote boards reject
+appends without an HTTP request.
+
 `#55591` details: `codex.guardian.turn.blocking_ms` exports, per turn, the
 union of the thread's pending approval waits that turn serviced, tagged
 `outcome=completed|aborted`. `guardianReviewBlocking` mirrors
@@ -496,8 +519,7 @@ resolution plumbing is in place for when that gate is widened.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
-  `#56461`/`#55973` message-board silent append and host-selected tool catalogs
-  (the append tool depends on selection), `#57201`/`#57207` critical-path
+  `#57201`/`#57207` critical-path
   capture, `#55957`/`#55968` cloud catalog refresh on auth change and failure
   backoff, `#56530` catalog size histograms, `#55631` frozen cloud skill
   snapshots, `#55847` retained-analytics bounds, and API-key analytics event
@@ -575,6 +597,10 @@ resolution plumbing is in place for when that gate is widened.
 - For `#55958`: `go test ./model -run 'PreservesExplicitCatalog|InvalidatesExplicitCatalog|PersistsEmptyExplicitCatalog|ComposeGatewayAuth' -count=1`
   and `go test ./auth -run 'GatewayAuthManagerWithoutInteractiveLogin|GatewayAuthManagerRefresh|GatewayAuthManagerReauthorizes' -count=1`
   pass; the full `go test ./model -count=1` passes.
+- For `#55973`/`#56461`: `go test ./agentboard -count=1` passes, as do
+  `go test ./turn -run 'MessageBoard|Board' -count=1`,
+  `go test ./appserver -run 'MessageBoard|Board|Append' -count=1`, and
+  `go build ./...`.
 - For `#55591`: `go test ./appserver -run 'GuardianReviewBlocking' -count=1`
   passes, as do `go test ./appserver -run 'Guardian' -count=1` and
   `go build ./...`.

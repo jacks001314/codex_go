@@ -36,19 +36,59 @@ const (
 	maxPreviewChars = 20_000
 )
 
-// MessageBoardToolNames lists the collaboration tools in Rust's spec::NAMES
-// order.
+// MessageBoardTool identifies one collaboration tool a consumer can expose
+// through NewMessageBoardToolsWithSelection. The values mirror Rust's
+// MessageBoardTool enum (#55973).
+type MessageBoardTool string
+
+const (
+	MessageBoardToolCreateChannel MessageBoardTool = "create_channel"
+	// MessageBoardToolUpsertChannel creates a channel or updates only its
+	// description, without subscriptions or notifications (#56494).
+	MessageBoardToolUpsertChannel MessageBoardTool = "upsert_channel"
+	MessageBoardToolGetChannels   MessageBoardTool = "get_channels"
+	MessageBoardToolListThreads   MessageBoardTool = "list_threads"
+	MessageBoardToolSearchPosts   MessageBoardTool = "search_posts"
+	MessageBoardToolReadThread    MessageBoardTool = "read_thread"
+	MessageBoardToolReadPost      MessageBoardTool = "read_post"
+	MessageBoardToolSubscribe     MessageBoardTool = "subscribe"
+	MessageBoardToolUnsubscribe   MessageBoardTool = "unsubscribe"
+	// MessageBoardToolPost posts, subscribes the author unless opted out, and
+	// notifies recipients.
+	MessageBoardToolPost MessageBoardTool = "post"
+	// MessageBoardToolAppend writes evidence without automatic subscriptions or
+	// notifications (Rust #56461).
+	MessageBoardToolAppend MessageBoardTool = "append"
+)
+
+// MessageBoardDiscussionTools lists the agent discussion tools in Rust's
+// MessageBoardTool::DISCUSSION order. Append is only exposed to consumers that
+// select it.
+var MessageBoardDiscussionTools = []MessageBoardTool{
+	MessageBoardToolCreateChannel,
+	MessageBoardToolGetChannels,
+	MessageBoardToolListThreads,
+	MessageBoardToolSearchPosts,
+	MessageBoardToolReadThread,
+	MessageBoardToolReadPost,
+	MessageBoardToolSubscribe,
+	MessageBoardToolUnsubscribe,
+	MessageBoardToolPost,
+}
+
+// MessageBoardToolNames lists the collaboration tools NewMessageBoardTools
+// registers: Rust's discussion tools plus upsert_channel.
 var MessageBoardToolNames = []string{
-	"create_channel",
-	"upsert_channel",
-	"get_channels",
-	"list_threads",
-	"search_posts",
-	"read_thread",
-	"read_post",
-	"subscribe",
-	"unsubscribe",
-	"post",
+	string(MessageBoardToolCreateChannel),
+	string(MessageBoardToolUpsertChannel),
+	string(MessageBoardToolGetChannels),
+	string(MessageBoardToolListThreads),
+	string(MessageBoardToolSearchPosts),
+	string(MessageBoardToolReadThread),
+	string(MessageBoardToolReadPost),
+	string(MessageBoardToolSubscribe),
+	string(MessageBoardToolUnsubscribe),
+	string(MessageBoardToolPost),
 }
 
 // messageBoardParallelTools mirrors Rust's supports_parallel_tool_calls: the
@@ -78,11 +118,26 @@ func NewMessageBoardTools(board Board, caller string, callerPath agent.AgentPath
 }
 
 // NewMessageBoardToolsWithOverrides mirrors Rust's
-// message_board_tools_with_descriptions.
+// message_board_tools_with_descriptions for the registered discussion set.
 func NewMessageBoardToolsWithOverrides(board Board, caller string, callerPath agent.AgentPath, namespace string, namespaceDescription string, overrides map[string]MessageBoardToolOverride) []tool.Executor {
-	namespace = strings.TrimSpace(namespace)
-	executors := make([]tool.Executor, 0, len(MessageBoardToolNames))
+	selection := make([]MessageBoardTool, 0, len(MessageBoardToolNames))
 	for _, name := range MessageBoardToolNames {
+		selection = append(selection, MessageBoardTool(name))
+	}
+	return NewMessageBoardToolsWithSelection(board, selection, caller, callerPath, namespace, namespaceDescription, overrides)
+}
+
+// NewMessageBoardToolsWithSelection builds only the selected tools, in the
+// supplied order, bound to one caller. Selection does not grant storage
+// permissions the board connection lacks (Rust's message_board_tools, #55973).
+func NewMessageBoardToolsWithSelection(board Board, selected []MessageBoardTool, caller string, callerPath agent.AgentPath, namespace string, namespaceDescription string, overrides map[string]MessageBoardToolOverride) []tool.Executor {
+	namespace = strings.TrimSpace(namespace)
+	executors := make([]tool.Executor, 0, len(selected))
+	for _, selectedTool := range selected {
+		name := string(selectedTool)
+		if name == "" {
+			continue
+		}
 		executor := &messageBoardTool{
 			board:                board,
 			caller:               caller,
@@ -194,6 +249,12 @@ func messageBoardSpecFor(name string) messageBoardToolSpec {
 			fields:      []string{"text", "channel_name", "new_channel_name", "thread_id", "agents_to_notify"},
 			required:    []string{"text"},
 		}
+	case "append":
+		return messageBoardToolSpec{
+			description: "Store a post in an existing or new channel, or reply using the first post's message ID as thread_id. Exactly one destination is required. Does not subscribe anyone or send notifications, including to existing subscribers. Returns metadata, not the post text.",
+			fields:      []string{"text", "channel_name", "new_channel_name", "thread_id"},
+			required:    []string{"text"},
+		}
 	default:
 		return messageBoardToolSpec{}
 	}
@@ -220,6 +281,9 @@ func messageBoardFieldSchema(toolName string, field string) map[string]any {
 		}
 		return map[string]any{"type": "string", "description": "Optional channel purpose, at most 512 UTF-8 bytes."}
 	case "new_channel_name":
+		if toolName == "append" {
+			return map[string]any{"type": "string", "description": "Create this channel without subscribing anyone."}
+		}
 		return map[string]any{"type": "string", "description": "Create and subscribe to this channel."}
 	case "subscribe":
 		return map[string]any{"type": "boolean", "description": "Subscribe to new top-level posts. Default true."}
@@ -501,6 +565,30 @@ func (t *messageBoardTool) execute(ctx context.Context, raw string, invocation *
 			Destination:    destination,
 			Text:           *args.Text,
 			AgentsToNotify: recipients,
+		}))
+	case "append":
+		var args appendArgs
+		if err := decodeMessageBoardArgs(invocation, &args); err != nil {
+			return nil, err
+		}
+		if err := t.checkMutationBudget(budget, 0); err != nil {
+			return nil, err
+		}
+		var destination PostDestination
+		switch {
+		case args.ChannelName != nil && args.NewChannelName == nil && args.ThreadID == nil:
+			destination = PostDestination{Kind: "channel", Name: *args.ChannelName}
+		case args.ChannelName == nil && args.NewChannelName != nil && args.ThreadID == nil:
+			destination = PostDestination{Kind: "new_channel", Name: *args.NewChannelName}
+		case args.ChannelName == nil && args.NewChannelName == nil && args.ThreadID != nil:
+			destination = PostDestination{Kind: "thread", ThreadID: *args.ThreadID}
+		default:
+			return nil, modelError("Supply exactly one of channel_name, new_channel_name or thread_id")
+		}
+		return messageBoardResult(t.board.Append(ctx, t.caller, AppendRequest{
+			RequestID:   messageBoardRequestID(invocation),
+			Destination: destination,
+			Text:        *args.Text,
 		}))
 	default:
 		return nil, tool.Fatal("unknown message-board tool " + t.name)
@@ -795,6 +883,22 @@ type postArgs struct {
 }
 
 func (a *postArgs) validate() error {
+	if err := requireStringField("text", a.Text); err != nil {
+		return err
+	}
+	return requireUUIDField("thread_id", a.ThreadID)
+}
+
+// appendArgs mirrors Rust's tools::arguments::Append: no recipient field, so
+// strict decoding rejects agents_to_notify (Rust #56461).
+type appendArgs struct {
+	Text           *string `json:"text"`
+	ChannelName    *string `json:"channel_name"`
+	NewChannelName *string `json:"new_channel_name"`
+	ThreadID       *string `json:"thread_id"`
+}
+
+func (a *appendArgs) validate() error {
 	if err := requireStringField("text", a.Text); err != nil {
 		return err
 	}
