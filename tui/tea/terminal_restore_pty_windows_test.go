@@ -149,8 +149,14 @@ func runWindowsPTYTerminalRestoreParent(t *testing.T) {
 		t.Fatal("timed out waiting for ConPTY output drain")
 	}
 	text := output.String()
-	if strings.Contains(text, "\x1b[?1049h") {
-		t.Fatalf("normal chat unexpectedly entered alternate screen; output=%q", text)
+	if !strings.Contains(text, "\x1b[?1049h") {
+		t.Fatalf("default chat did not enter the owned alternate screen; output=%q", text)
+	}
+	if !strings.Contains(text, "\x1b[?1002h") && !strings.Contains(text, "\x1b[?1003h") && !strings.Contains(text, "\x1b[?1000h") {
+		t.Fatalf("default owned screen did not enable mouse reporting; output=%q", text)
+	}
+	if !strings.Contains(text, "\x1b[?1049l") {
+		t.Fatalf("exiting the TUI did not restore the main screen; output=%q", text)
 	}
 }
 

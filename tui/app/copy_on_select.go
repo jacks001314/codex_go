@@ -12,12 +12,10 @@ import (
 // button is released unless the terminal is known to forward its own copy
 // shortcut.
 //
-// Go's fullscreen (alt-screen) program deliberately leaves terminal mouse
-// tracking off so the terminal keeps its own selection/copy (see
-// tui/tea/right_click_paste.go's parity note). The decision function below is
-// therefore the aligned config semantics for the owned-transcript lane, while
-// the Go runtime owes its copy-on-release behavior to the terminal; the
-// app-owned selection consumer remains unported.
+// The owned-screen TUI captures the mouse and implements app-owned selection
+// over painted status/footer rows (see tui/tea/rendered_selection.go). Inline
+// mode leaves selection and copy to the terminal. This decision function keeps
+// Rust's config semantics for terminals that forward their own copy shortcut.
 
 // CopyOnSelectMode is the `tui.copy_on_select` value. Rust deserializes it
 // strictly (an unknown spelling fails the config load); Go's `[tui]` sub-table is

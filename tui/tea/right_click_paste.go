@@ -16,13 +16,10 @@ import (
 // fullscreen TUI falls back to pasting clipboard text on an unmodified
 // right-button press that no selection, search or blocking view claims.
 //
-// Go's fullscreen (alt-screen) program deliberately leaves terminal mouse
-// tracking off so the terminal keeps its own selection/copy and native paste,
-// where Rust's owned screen installs EnableMouseCapture and therefore implements
-// the fallback itself. The fallback below is the aligned behavior for any host
-// or test that does report the press (terminals with native right-click paste
-// already produce the same result for `auto`), and it honors `off`, SSH and
-// recognized VS Code terminals.
+// The owned-screen TUI installs mouse reporting, so the app receives the press
+// and implements the fallback itself. Inline mode leaves the gesture to the
+// terminal, which keeps its native right-click paste. The fallback honors
+// `off`, SSH, and recognized VS Code terminals in both modes.
 
 type rightClickPasteReadMsg struct {
 	text string

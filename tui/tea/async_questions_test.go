@@ -84,7 +84,7 @@ func TestAsyncQuestionExpansionDisablesMouseCaptureLikeRust(t *testing.T) {
 	}
 
 	// Inline mode never captures the mouse, so the policy has nothing to change.
-	inline := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
+	inline := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, NoAltScreen: true})
 	inline.State.SetThreadID("thread-inline")
 	inline = feedAsyncQuestions(t, inline, "question-inline", []any{map[string]any{"title": "Inline?"}})
 	inline.expandAsyncQuestions()
@@ -118,7 +118,7 @@ func TestMouseCapturePolicyPrecedence(t *testing.T) {
 		}
 	}
 
-	inline := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
+	inline := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30, NoAltScreen: true})
 	inline.overlay = chatwidget.NewTranscriptOverlay(100, 30, "alpha\nbeta")
 	inline.overlayTranscript = true
 	inline.overlayMouseCapture = mouseCaptureEnabled

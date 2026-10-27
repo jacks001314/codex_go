@@ -75,7 +75,13 @@ func TestRealPTYTerminalRestoreSmoke(t *testing.T) {
 		t.Fatal("timed out waiting for PTY output drain")
 	}
 
-	if strings.Contains(output, "\x1b[?1049h") {
-		t.Fatalf("normal chat unexpectedly entered alternate screen; output=%q", output)
+	if !strings.Contains(output, "\x1b[?1049h") {
+		t.Fatalf("default chat did not enter the owned alternate screen; output=%q", output)
+	}
+	if !strings.Contains(output, "\x1b[?1002h") && !strings.Contains(output, "\x1b[?1003h") && !strings.Contains(output, "\x1b[?1000h") {
+		t.Fatalf("default owned screen did not enable mouse reporting; output=%q", output)
+	}
+	if !strings.Contains(output, "\x1b[?1049l") {
+		t.Fatalf("exiting the TUI did not restore the main screen; output=%q", output)
 	}
 }

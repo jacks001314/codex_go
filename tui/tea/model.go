@@ -1098,9 +1098,14 @@ type Options struct {
 	OnTerminalSizeObservation func(context map[string]string, analyticsEnabled bool, reason string, width int, height int)
 	Width                     int
 	Height                    int
-	NoAltScreen               bool
+	// NoAltScreen is the launcher-resolved terminal ownership. True keeps the
+	// inline buffer and leaves the wheel to the terminal (Rust
+	// TranscriptMode::Terminal); the launcher derives it from
+	// `tui.fullscreen_transcript`, `tui.alternate_screen`, and --no-alt-screen.
+	NoAltScreen bool
 	// AlternateScreenMode is the configured `tui.alternate_screen` value.
-	// `always` opts into owned-screen mouse selection; auto/never stay inline.
+	// `auto` and `always` own the screen (Rust's default transcript mode);
+	// `never` keeps the terminal-owned inline buffer.
 	AlternateScreenMode string
 	Placeholder         string
 	ModelPickerOptions  []codextui.ModelPickerOption
@@ -3027,27 +3032,33 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	}
 	programOptions = append(programOptions, bubbletea.WithReportFocus())
 	if options.usesOwnedScreen() {
-		// Rust #52270: fullscreen owned-screen mode needs terminal mouse
-		// reporting so painted status/footer rows can be selected by the app.
-		// The default auto/inline mode deliberately leaves selection to the
-		// terminal and preserves native scrollback.
+		// Rust #52270: the owned transcript captures the mouse so painted
+		// status/footer rows stay selectable and the wheel scrolls the
+		// transcript instead of the terminal scrollback. Inline mode leaves
+		// both gestures to the terminal.
 		programOptions = append(programOptions, bubbletea.WithAltScreen(), bubbletea.WithMouseCellMotion())
 	}
-	// Rust parity: normal chat runs in the terminal's inline buffer so finalized
-	// conversation rows remain in native scrollback. Alternate screen is reserved
-	// for temporary overlays; starting the whole chat there makes terminals map
-	// the mouse wheel to Up/Down keys, which incorrectly navigates composer history.
+	// Rust parity: the launcher resolves `tui.fullscreen_transcript`,
+	// `tui.alternate_screen`, and `--no-alt-screen` into NoAltScreen
+	// (TranscriptMode::resolve). An owned screen captures the mouse so the wheel
+	// scrolls the transcript instead of the terminal scrollback; inline mode
+	// leaves both gestures to the terminal.
 	return bubbletea.NewProgram(model, programOptions...)
 }
 
-// usesOwnedScreen reports the explicit fullscreen opt-in. Auto mode remains
-// inline in Go, while `tui.alternate_screen = "always"` owns the screen so the
-// app can implement footer/status selection.
+// usesOwnedScreen reports whether this launch owns the full screen. Rust's
+// TranscriptMode::resolve owns the screen when fullscreen transcripts and the
+// alternate screen are both enabled; the launcher folds both settings (and
+// --no-alt-screen) into NoAltScreen. `never` is also honored here so Options
+// built directly by tests and embedders keep the terminal-owned inline buffer.
 func (o Options) usesOwnedScreen() bool {
 	if o.NoAltScreen {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(o.AlternateScreenMode), "always")
+	if o.FullscreenTranscript != nil && !*o.FullscreenTranscript {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(o.AlternateScreenMode), "never")
 }
 
 // resolveProgramSize fills in the terminal size when the caller did not
@@ -3142,6 +3153,12 @@ func applyThemeAccent(base styles.Styles, themeID string) styles.Styles {
 }
 func (m *Model) Init() bubbletea.Cmd {
 	commands := []bubbletea.Cmd{m.composer.Focus()}
+	// Rust alternate_screen::configure_input disables DEC private mode 1007
+	// whenever the owned transcript captures the mouse, so a terminal never
+	// rewrites the wheel into Up/Down keys before the transcript sees it.
+	if m.ownedScreen {
+		m.setAlternateScroll(false)
+	}
 	if m.sizeMonitorEnabled {
 		// Rust #43603: recover resize notifications tmux can drop.
 		commands = append(commands, m.sizeMonitorTickCmd())
@@ -4198,9 +4215,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if cmd := m.startRightClickPaste(msg); cmd != nil {
 			return m, cmd
 		}
-		// Rust parity: do not enable or consume terminal mouse tracking. Leaving
-		// mouse input to the terminal preserves scrollback, text selection/copy,
-		// and native paste behavior.
+		// An owned screen has already handled the transcript wheel above. Inline
+		// mode leaves unconsumed gestures to the terminal so native scrollback,
+		// selection/copy, and paste keep working (Rust TranscriptMode::Terminal).
 		return m, nil
 	}
 

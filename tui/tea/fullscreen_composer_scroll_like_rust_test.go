@@ -224,7 +224,7 @@ func TestOwnedComposerTranscriptWheelStillScrollsTranscript(t *testing.T) {
 // changes do not alter the inline layout.
 func TestInlineComposerKeepsFixedHeightLikeRustScope(t *testing.T) {
 	state := codextui.NewState(nil)
-	model := NewModel(state, Options{Width: 80, Height: 30})
+	model := NewModel(state, Options{Width: 80, Height: 30, NoAltScreen: true})
 	model.composer.SetValue(strings.Repeat("inline row\n", 40))
 	model.View()
 	if got, want := model.composer.Height(), defaultComposerHeight; got != want {

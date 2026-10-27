@@ -141,15 +141,20 @@ func TestRenderedSelectionStationaryClickAndInlineModeLikeRust(t *testing.T) {
 	_ = inlineCopied
 }
 
-func TestOwnedScreenOptInOnlyForExplicitAlternateMode(t *testing.T) {
+func TestDefaultTranscriptOwnershipMatchesRust(t *testing.T) {
+	fullscreenOn := true
+	fullscreenOff := false
 	cases := []struct {
 		name       string
 		options    Options
 		ownsScreen bool
 	}{
-		{name: "auto stays inline", options: Options{AlternateScreenMode: "auto"}},
-		{name: "never", options: Options{AlternateScreenMode: "never"}},
+		{name: "default owns the screen", options: Options{}, ownsScreen: true},
+		{name: "auto owns the screen", options: Options{AlternateScreenMode: "auto"}, ownsScreen: true},
 		{name: "always", options: Options{AlternateScreenMode: "always"}, ownsScreen: true},
+		{name: "never stays inline", options: Options{AlternateScreenMode: "never"}},
+		{name: "fullscreen transcript disabled", options: Options{AlternateScreenMode: "auto", FullscreenTranscript: &fullscreenOff}},
+		{name: "fullscreen transcript enabled", options: Options{AlternateScreenMode: "auto", FullscreenTranscript: &fullscreenOn}, ownsScreen: true},
 		{name: "no-alt-screen wins", options: Options{AlternateScreenMode: "always", NoAltScreen: true}},
 	}
 	for _, testCase := range cases {

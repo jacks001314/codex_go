@@ -1,7 +1,9 @@
 package tea
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -81,6 +83,80 @@ func TestTranscriptWheelDefaultsToOneRowPerEventLikeRust(t *testing.T) {
 	model.Update(wheelPress(bubbletea.MouseButtonWheelDown))
 	if got, want := model.transcript.YOffset, before; got != want {
 		t.Fatalf("default wheel-down offset = %d, want %d", got, want)
+	}
+}
+
+// Rust's default transcript mode is Owned: `tui.fullscreen_transcript`
+// defaults to true and `tui.alternate_screen = "auto"` owns the screen. The
+// owned screen captures the mouse, so a wheel event reaches the model and moves
+// only the transcript viewport instead of scrolling the terminal scrollback.
+func TestMouseWheelScrollsTranscriptOnDefaultOwnedScreenLikeRust(t *testing.T) {
+	model := scrollableTranscript(t)
+	if !model.ownedScreen {
+		t.Fatal("default launch must own the transcript screen like Rust")
+	}
+	if !model.mouseCaptureActive || !model.desiredMouseCapture().captures(model.ownedScreen) {
+		t.Fatal("default owned screen must capture the mouse so the wheel reaches the transcript")
+	}
+	before := model.TranscriptYOffset()
+	draft := model.composer.Value()
+	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	if got, want := model.TranscriptYOffset(), before-1; got != want {
+		t.Fatalf("wheel-up transcript offset = %d, want %d", got, want)
+	}
+	model.Update(wheelPress(bubbletea.MouseButtonWheelDown))
+	if got, want := model.TranscriptYOffset(), before; got != want {
+		t.Fatalf("wheel-down transcript offset = %d, want %d", got, want)
+	}
+	if got := model.composer.Value(); got != draft {
+		t.Fatalf("wheel changed the composer draft to %q, want %q", got, draft)
+	}
+}
+
+// Rust's TranscriptMode::Terminal leaves the wheel to the terminal, which keeps
+// native scrollback working. All three inline configurations must therefore
+// leave mouse reporting off.
+func TestInlineTranscriptLeavesMouseWheelToTerminalLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options Options
+	}{
+		{name: "launcher no-alt-screen", options: Options{NoAltScreen: true}},
+		{name: "alternate screen never", options: Options{AlternateScreenMode: "never"}},
+		{name: "fullscreen transcript disabled", options: Options{FullscreenTranscript: boolPtrTea(false)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.options.Width = 60
+			tc.options.Height = 10
+			model := NewModel(codextui.NewState(nil), tc.options)
+			if model.ownedScreen {
+				t.Fatal("inline configuration must not own the screen")
+			}
+			if model.mouseCaptureActive {
+				t.Fatal("inline configuration must leave the wheel to the terminal")
+			}
+		})
+	}
+}
+
+// Rust's owned alternate screen disables DEC 1007 before accepting input, so
+// terminals cannot translate the wheel into arrow keys. Inline mode leaves the
+// terminal's alternate-scroll policy alone.
+func TestOwnedScreenDisablesAlternateScrollLikeRust(t *testing.T) {
+	owned := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 10})
+	var ownedOutput bytes.Buffer
+	owned.petRuntime.setOutput(&ownedOutput)
+	owned.Init()
+	if !strings.Contains(ownedOutput.String(), "\x1b[?1007l") {
+		t.Fatalf("owned screen did not disable alternate scroll: %q", ownedOutput.String())
+	}
+
+	inline := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 10, NoAltScreen: true})
+	var inlineOutput bytes.Buffer
+	inline.petRuntime.setOutput(&inlineOutput)
+	inline.Init()
+	if strings.Contains(inlineOutput.String(), "\x1b[?1007") {
+		t.Fatalf("inline screen changed the terminal's alternate-scroll policy: %q", inlineOutput.String())
 	}
 }
 
