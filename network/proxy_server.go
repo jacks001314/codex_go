@@ -1093,6 +1093,8 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 	// brokered dummy credential is replaced: an unhooked provider alias bound to
 	// a hooked host must not receive the real credential (#52661,
 	// network-proxy/src/http_proxy.rs:910-975).
+	var awsSigner *AWSSigV4Signer
+	var awsGuest *awsGuestSignature
 	if isMITM || injectCredentials {
 		evaluation := evaluateProxyMITMHookRequest(policy.mitmHooks, policy.broker, host, NewProxyHTTPRequestFromHTTP(request), credentialDestinations)
 		switch evaluation.Kind {
@@ -1100,6 +1102,18 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 			return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)
 		case ProxyHookEvaluationMatched:
 			if isMITM {
+				// Select the guest credential from the request as it arrived,
+				// before hook actions and brokered credentials rewrite headers.
+				if evaluation.Actions.AWSSigV4 != nil {
+					guest, err := evaluation.Actions.AWSSigV4.Plan(request, PreserveSigningHeaders(request.Header))
+					if err != nil {
+						return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)
+					}
+					if guest != nil {
+						awsSigner = evaluation.Actions.AWSSigV4
+						awsGuest = guest
+					}
+				}
 				applyProxyMITMHookActions(request.Header, evaluation.Actions)
 			}
 		}
@@ -1108,6 +1122,15 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 		policy.broker.InjectRequestHeadersForDestination(scheme, host, requestPort, path, request.Header)
 	}
 	removeProxyHopByHopRequestHeaders(request.Header)
+	if awsSigner != nil && awsGuest != nil {
+		if request.URL != nil && request.URL.Scheme == "" {
+			request.URL.Scheme = scheme
+		}
+		if err := awsSigner.Sign(request, awsGuest); err != nil {
+			return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)
+		}
+		request.TransferEncoding = nil
+	}
 	return request, nil
 }
 

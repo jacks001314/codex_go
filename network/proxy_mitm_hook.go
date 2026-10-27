@@ -35,6 +35,7 @@ type ProxyMITMHookMatchConfig struct {
 type ProxyMITMHookActionsConfig struct {
 	StripRequestHeaders  []string
 	InjectRequestHeaders []ProxyInjectedHeaderConfig
+	AWSSigV4             *AWSSigV4Config
 }
 
 type ProxyInjectedHeaderConfig struct {
@@ -75,6 +76,7 @@ type ProxyHeaderConstraint struct {
 type ProxyMITMHookActions struct {
 	StripRequestHeaders  []string
 	InjectRequestHeaders []ProxyResolvedInjectedHeader
+	AWSSigV4             *AWSSigV4Signer
 }
 
 type ProxyResolvedInjectedHeader struct {
@@ -179,6 +181,11 @@ func ValidateProxyMITMHookConfig(config ProxyConfig) error {
 		if err := validateInjectedHeaders(hook.Actions.InjectRequestHeaders); err != nil {
 			return fmt.Errorf("invalid network.mitm_hooks[%d].actions.inject_request_headers: %w", index, err)
 		}
+		if hook.Actions.AWSSigV4 != nil {
+			if err := hook.Actions.AWSSigV4.Validate(); err != nil {
+				return fmt.Errorf("invalid network.mitm_hooks[%d].actions.aws_sigv4: %w", index, err)
+			}
+		}
 	}
 	return nil
 }
@@ -208,6 +215,7 @@ func CompileProxyMITMHooksWithResolvers(config ProxyConfig, resolveEnv ProxySecr
 		readFile = func(path string) (string, error) { return "", fmt.Errorf("missing secret file reader for %s", path) }
 	}
 	hooksByHost := ProxyMITMHooksByHost{}
+	var signers []*AWSSigV4Signer
 	for _, hook := range config.Network.MITMHooks {
 		host, err := normalizeHookHost(hook.Host)
 		if err != nil {
@@ -237,6 +245,14 @@ func CompileProxyMITMHooksWithResolvers(config ProxyConfig, resolveEnv ProxySecr
 		if err != nil {
 			return nil, err
 		}
+		var awsSigner *AWSSigV4Signer
+		if hook.Actions.AWSSigV4 != nil {
+			awsSigner, err = hook.Actions.AWSSigV4.Compile(resolveEnv, readFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to compile AWS signing action for %s: %w", host, err)
+			}
+			signers = append(signers, awsSigner)
+		}
 		hooksByHost[host] = append(hooksByHost[host], ProxyMITMHook{
 			Host: host,
 			Matcher: ProxyMITMHookMatcher{
@@ -248,8 +264,12 @@ func CompileProxyMITMHooksWithResolvers(config ProxyConfig, resolveEnv ProxySecr
 			Actions: ProxyMITMHookActions{
 				StripRequestHeaders:  stripHeaders,
 				InjectRequestHeaders: injectedHeaders,
+				AWSSigV4:             awsSigner,
 			},
 		})
+	}
+	if err := ValidateGuestPlaceholders(signers); err != nil {
+		return nil, err
 	}
 	return hooksByHost, nil
 }

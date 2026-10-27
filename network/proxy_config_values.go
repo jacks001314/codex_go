@@ -193,6 +193,18 @@ var proxyMITMHookMatchAllowedKeys = map[string]struct{}{
 var proxyMITMHookActionsAllowedKeys = map[string]struct{}{
 	"strip_request_headers":  {},
 	"inject_request_headers": {},
+	"aws_sigv4":              {},
+}
+
+var proxyAWSSigV4AllowedKeys = map[string]struct{}{
+	"placeholder_access_key_id": {},
+	"region":                    {},
+	"service":                   {},
+	"access_key_id":             {},
+	"secret_access_key":         {},
+	"session_token":             {},
+	"port":                      {},
+	"max_body_bytes":            {},
 }
 
 var proxyProfileMITMAllowedKeys = map[string]struct{}{
@@ -381,10 +393,14 @@ func (a *proxyProfileMITMAccumulator) apply(networkTable map[string]any, path st
 			if err != nil {
 				return fmt.Errorf("%s.mitm.actions.%s: %w", path, name, err)
 			}
-			if len(strip) == 0 && len(inject) == 0 {
+			awsSigV4, err := awsSigV4ConfigValue(table, "aws_sigv4", path+".mitm.actions."+name)
+			if err != nil {
+				return err
+			}
+			if len(strip) == 0 && len(inject) == 0 && awsSigV4 == nil {
 				return fmt.Errorf("%s.mitm.actions.%s must define at least one operation", path, name)
 			}
-			a.actions[name] = ProxyMITMHookActionsConfig{StripRequestHeaders: strip, InjectRequestHeaders: inject}
+			a.actions[name] = ProxyMITMHookActionsConfig{StripRequestHeaders: strip, InjectRequestHeaders: inject, AWSSigV4: awsSigV4}
 		}
 	}
 	if rawHooks, exists := mitm["hooks"]; exists {
@@ -457,6 +473,12 @@ func (a *proxyProfileMITMAccumulator) runtimeHooks() ([]ProxyMITMHookConfig, err
 			}
 			actions.StripRequestHeaders = append(actions.StripRequestHeaders, action.StripRequestHeaders...)
 			actions.InjectRequestHeaders = append(actions.InjectRequestHeaders, action.InjectRequestHeaders...)
+			if action.AWSSigV4 != nil {
+				if actions.AWSSigV4 != nil {
+					return nil, fmt.Errorf("%s.mitm.hooks.%s must select at most one AWS signing action", raw.path, name)
+				}
+				actions.AWSSigV4 = action.AWSSigV4
+			}
 		}
 		hooks = append(hooks, ProxyMITMHookConfig{
 			Host: raw.host,
@@ -544,8 +566,125 @@ func proxyMITMHookConfigFromTable(table map[string]any) (ProxyMITMHookConfig, er
 		if hook.Actions.InjectRequestHeaders, err = injectedHeadersConfigValue(actions, "inject_request_headers"); err != nil {
 			return ProxyMITMHookConfig{}, err
 		}
+		if hook.Actions.AWSSigV4, err = awsSigV4ConfigValue(actions, "aws_sigv4", "network_proxy.mitm_hooks[].actions"); err != nil {
+			return ProxyMITMHookConfig{}, err
+		}
 	}
 	return hook, nil
+}
+
+// awsSigV4ConfigValue parses an aws_sigv4 hook action table.
+func awsSigV4ConfigValue(values map[string]any, key string, path string) (*AWSSigV4Config, error) {
+	raw, exists := values[key]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s.%s must be a table", path, key)
+	}
+	configPath := path + "." + key
+	if err := rejectProxyUnknownFields(table, configPath, proxyAWSSigV4AllowedKeys); err != nil {
+		return nil, err
+	}
+	config := &AWSSigV4Config{Port: awsSigV4DefaultPort, MaxBodyBytes: DefaultAwsSigV4MaxBodyBytes}
+	required := map[string]*string{
+		"placeholder_access_key_id": &config.PlaceholderAccessKeyID,
+		"region":                    &config.Region,
+		"service":                   &config.Service,
+	}
+	for name, target := range required {
+		value, ok := stringConfigValue(table, name)
+		if !ok {
+			return nil, fmt.Errorf("%s.%s must be a string", configPath, name)
+		}
+		*target = value
+	}
+	for name, target := range map[string]*ProxySecretSource{
+		"access_key_id":     &config.AccessKeyID,
+		"secret_access_key": &config.SecretAccessKey,
+	} {
+		source, err := proxySecretSourceConfigValue(table, name, configPath)
+		if err != nil {
+			return nil, err
+		}
+		if source == nil {
+			return nil, fmt.Errorf("%s.%s must define a secret source", configPath, name)
+		}
+		*target = *source
+	}
+	sessionToken, err := proxySecretSourceConfigValue(table, "session_token", configPath)
+	if err != nil {
+		return nil, err
+	}
+	config.SessionToken = sessionToken
+	if value, exists := table["port"]; exists {
+		port, ok := numberConfigValue(value)
+		if !ok {
+			return nil, fmt.Errorf("%s.port must be an integer", configPath)
+		}
+		config.Port = port
+	}
+	if value, exists := table["max_body_bytes"]; exists {
+		size, ok := numberConfigValue(value)
+		if !ok {
+			return nil, fmt.Errorf("%s.max_body_bytes must be an integer", configPath)
+		}
+		config.MaxBodyBytes = size
+	}
+	return config, nil
+}
+
+func proxySecretSourceConfigValue(values map[string]any, key string, path string) (*ProxySecretSource, error) {
+	raw, exists := values[key]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s.%s must be a table", path, key)
+	}
+	if len(table) != 1 {
+		return nil, fmt.Errorf("%s.%s must define exactly one of env_var or file", path, key)
+	}
+	if value, ok := table["env_var"]; ok {
+		name, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s.%s.env_var must be a string", path, key)
+		}
+		source := ProxySecretSource{Kind: "env_var", Name: name}
+		if err := source.validate(); err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", path, key, err)
+		}
+		return &source, nil
+	}
+	if value, ok := table["file"]; ok {
+		name, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s.%s.file must be a string", path, key)
+		}
+		parsed, err := parseSecretFile(name)
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", path, key, err)
+		}
+		return &ProxySecretSource{Kind: "file", Name: parsed}, nil
+	}
+	return nil, fmt.Errorf("%s.%s must define exactly one of env_var or file", path, key)
+}
+
+func numberConfigValue(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		if typed != float64(int(typed)) {
+			return 0, false
+		}
+		return int(typed), true
+	}
+	return 0, false
 }
 
 func requiredStringListConfigValue(values map[string]any, key string) ([]string, error) {
