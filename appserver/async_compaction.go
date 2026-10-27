@@ -161,12 +161,17 @@ func (s *asyncCompactionState) MaybeStart(ctx context.Context, input backgroundC
 	go func() {
 		defer s.tasks.Done()
 		candidate, err := run(taskCtx, input)
-		if err != nil || candidate == nil {
-			return
-		}
 		s.mu.Lock()
 		if s.shuttingDown || s.lastAttempt == nil || *s.lastAttempt != key {
 			s.mu.Unlock()
+			return
+		}
+		if err != nil || candidate == nil {
+			// Rust #55581: a failed attempt must still release the receiver.
+			// Leaving the channel unsignalled would make the foreground wait
+			// forever instead of falling back to blocking compaction.
+			s.mu.Unlock()
+			resultCh <- nil
 			return
 		}
 		candidate.Key = key
@@ -196,10 +201,11 @@ func (s *asyncCompactionState) TakeReady(currentHistory []compact.Item, modelSlu
 	}
 	select {
 	case candidate := <-s.resultCh:
+		s.resultCh = nil
 		if candidate == nil || candidate.Prefix.Generation != s.lastAttempt.HistoryVersion {
+			s.candidate = nil
 			return nil
 		}
-		s.resultCh = nil
 		s.candidate = nil
 		return candidate
 	default:

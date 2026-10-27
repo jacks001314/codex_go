@@ -78,6 +78,85 @@ func TestCaptureBackgroundCompactionInputKeepsOriginalPrefixLikeRust(t *testing.
 	}
 }
 
+// Mirrors Rust #55581: a background compaction that fails before publishing a
+// candidate must release the foreground waiter so it falls back to blocking
+// compaction instead of hanging on an unsignalled channel.
+func TestAsyncCompactionFailureReleasesForegroundLikeRust(t *testing.T) {
+	history := []compact.Item{{ID: "one", Type: "message", Role: "user", Text: "first"}}
+	input := backgroundCompactionInput{
+		History:             history,
+		ModelSlug:           "gpt-test",
+		CompactionHash:      "hash",
+		AuthOwnerGeneration: 1,
+	}
+	owner := func() uint64 { return 1 }
+	failing := func(context.Context, backgroundCompactionInput) (*backgroundCompactionCandidate, error) {
+		return nil, errors.New("background compaction failed")
+	}
+	waitForBackgroundCompaction := func(t *testing.T, state *asyncCompactionState) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			state.tasks.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("background compaction did not finish")
+		}
+	}
+	waitForPending := func(t *testing.T, state *asyncCompactionState) *backgroundCompactionCandidate {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		result := make(chan *backgroundCompactionCandidate, 1)
+		go func() {
+			result <- state.WaitForPending(ctx, input.History, input.ModelSlug, input.CompactionHash, input.AuthOwnerGeneration)
+		}()
+		select {
+		case candidate := <-result:
+			return candidate
+		case <-time.After(2 * time.Second):
+			t.Fatal("WaitForPending blocked after a failed background compaction")
+			return nil
+		}
+	}
+
+	t.Run("polling then waiting", func(t *testing.T) {
+		state := newAsyncCompactionState()
+		if !state.MaybeStart(context.Background(), input, owner, failing) {
+			t.Fatal("attempt did not start")
+		}
+		waitForBackgroundCompaction(t, state)
+		if candidate := state.TakeReady(input.History, input.ModelSlug, input.CompactionHash, input.AuthOwnerGeneration); candidate != nil {
+			t.Fatalf("TakeReady() = %#v, want nil", candidate)
+		}
+		startedAt := time.Now()
+		if candidate := waitForPending(t, state); candidate != nil {
+			t.Fatalf("WaitForPending() = %#v, want nil", candidate)
+		}
+		if elapsed := time.Since(startedAt); elapsed > time.Second {
+			t.Fatalf("WaitForPending() took %v after polling the failure", elapsed)
+		}
+	})
+
+	t.Run("waiting without polling", func(t *testing.T) {
+		state := newAsyncCompactionState()
+		if !state.MaybeStart(context.Background(), input, owner, failing) {
+			t.Fatal("attempt did not start")
+		}
+		waitForBackgroundCompaction(t, state)
+		startedAt := time.Now()
+		if candidate := waitForPending(t, state); candidate != nil {
+			t.Fatalf("WaitForPending() = %#v, want nil", candidate)
+		}
+		if elapsed := time.Since(startedAt); elapsed > time.Second {
+			t.Fatalf("WaitForPending() took %v after the background failure", elapsed)
+		}
+	})
+}
+
 func TestAsyncCompactionStateDeduplicatesAndRetainsLatestCandidateLikeRust(t *testing.T) {
 	state := newAsyncCompactionState()
 	input := backgroundCompactionInput{
