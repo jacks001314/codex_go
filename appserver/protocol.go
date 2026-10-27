@@ -998,6 +998,11 @@ type ThreadItem struct {
 	Data       map[string]any      `json:"data,omitempty"`
 	Raw        json.RawMessage     `json:"raw,omitempty"`
 	ResponseID string              `json:"responseId,omitempty"`
+	// StartedAtMS and CompletedAtMS are the recorded item lifecycle times in
+	// Unix milliseconds. Rust #57172 keeps them nullable on the wire, so the
+	// keys are always present and serialize as null when the time is unknown.
+	StartedAtMS   *int64 `json:"startedAtMs"`
+	CompletedAtMS *int64 `json:"completedAtMs"`
 }
 
 // UnmarshalJSON accepts the polymorphic content field emitted by Rust. User
@@ -1008,40 +1013,44 @@ func (i *ThreadItem) UnmarshalJSON(data []byte) error {
 		return errors.New("cannot unmarshal thread item into nil pointer")
 	}
 	var wire struct {
-		ID         string          `json:"id"`
-		Type       string          `json:"type"`
-		Role       string          `json:"role,omitempty"`
-		Text       string          `json:"text,omitempty"`
-		Name       string          `json:"name,omitempty"`
-		Namespace  string          `json:"namespace,omitempty"`
-		CallID     string          `json:"callId,omitempty"`
-		Status     string          `json:"status,omitempty"`
-		TurnID     string          `json:"turnId,omitempty"`
-		CreatedAt  int64           `json:"createdAt"`
-		Delivery   string          `json:"delivery,omitempty"`
-		Content    json.RawMessage `json:"content,omitempty"`
-		Data       map[string]any  `json:"data,omitempty"`
-		Raw        json.RawMessage `json:"raw,omitempty"`
-		ResponseID string          `json:"responseId,omitempty"`
+		ID            string          `json:"id"`
+		Type          string          `json:"type"`
+		Role          string          `json:"role,omitempty"`
+		Text          string          `json:"text,omitempty"`
+		Name          string          `json:"name,omitempty"`
+		Namespace     string          `json:"namespace,omitempty"`
+		CallID        string          `json:"callId,omitempty"`
+		Status        string          `json:"status,omitempty"`
+		TurnID        string          `json:"turnId,omitempty"`
+		CreatedAt     int64           `json:"createdAt"`
+		Delivery      string          `json:"delivery,omitempty"`
+		Content       json.RawMessage `json:"content,omitempty"`
+		Data          map[string]any  `json:"data,omitempty"`
+		Raw           json.RawMessage `json:"raw,omitempty"`
+		ResponseID    string          `json:"responseId,omitempty"`
+		StartedAtMS   *int64          `json:"startedAtMs"`
+		CompletedAtMS *int64          `json:"completedAtMs"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
 	*i = ThreadItem{
-		ID:         wire.ID,
-		Type:       wire.Type,
-		Role:       wire.Role,
-		Text:       wire.Text,
-		Name:       wire.Name,
-		Namespace:  wire.Namespace,
-		CallID:     wire.CallID,
-		Status:     wire.Status,
-		TurnID:     wire.TurnID,
-		CreatedAt:  wire.CreatedAt,
-		Delivery:   wire.Delivery,
-		Data:       wire.Data,
-		Raw:        append(json.RawMessage(nil), wire.Raw...),
-		ResponseID: wire.ResponseID,
+		ID:            wire.ID,
+		Type:          wire.Type,
+		Role:          wire.Role,
+		Text:          wire.Text,
+		Name:          wire.Name,
+		Namespace:     wire.Namespace,
+		CallID:        wire.CallID,
+		Status:        wire.Status,
+		TurnID:        wire.TurnID,
+		CreatedAt:     wire.CreatedAt,
+		Delivery:      wire.Delivery,
+		Data:          wire.Data,
+		Raw:           append(json.RawMessage(nil), wire.Raw...),
+		ResponseID:    wire.ResponseID,
+		StartedAtMS:   cloneInt64(wire.StartedAtMS),
+		CompletedAtMS: cloneInt64(wire.CompletedAtMS),
 	}
 	if len(wire.Content) > 0 && !bytes.Equal(bytes.TrimSpace(wire.Content), []byte("null")) {
 		var rawContents []json.RawMessage
@@ -1094,7 +1103,8 @@ func (i *ThreadItem) UnmarshalJSON(data []byte) error {
 func threadItemStructuralJSONField(key string) bool {
 	switch key {
 	case "id", "type", "role", "text", "name", "namespace", "callId", "status",
-		"turnId", "createdAt", "delivery", "content", "data", "raw", "responseId":
+		"turnId", "createdAt", "delivery", "content", "data", "raw", "responseId",
+		"startedAtMs", "completedAtMs":
 		return true
 	default:
 		return false
@@ -1139,6 +1149,40 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 	if i == nil {
 		return []byte("null"), nil
 	}
+	encoded, err := i.marshalPayloadJSON()
+	if err != nil {
+		return nil, err
+	}
+	return appendThreadItemLifecycleTimesJSON(encoded, i.StartedAtMS, i.CompletedAtMS), nil
+}
+
+// appendThreadItemLifecycleTimesJSON keeps the payload flat on the wire while
+// adding the recorded lifecycle times (Rust #57172). Both keys are always
+// present and serialize as null when the time is unknown.
+func appendThreadItemLifecycleTimesJSON(encoded []byte, startedAtMS *int64, completedAtMS *int64) []byte {
+	trimmed := bytes.TrimSpace(encoded)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
+		return encoded
+	}
+	startedJSON, err := json.Marshal(startedAtMS)
+	if err != nil {
+		return encoded
+	}
+	completedJSON, err := json.Marshal(completedAtMS)
+	if err != nil {
+		return encoded
+	}
+	out := make([]byte, 0, len(trimmed)+len(startedJSON)+len(completedJSON)+32)
+	out = append(out, trimmed[:len(trimmed)-1]...)
+	out = append(out, `,"startedAtMs":`...)
+	out = append(out, startedJSON...)
+	out = append(out, `,"completedAtMs":`...)
+	out = append(out, completedJSON...)
+	out = append(out, '}')
+	return out
+}
+
+func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 	switch threadItemWireType(i) {
 	case "userMessage":
 		return json.Marshal(struct {
@@ -4241,23 +4285,41 @@ func BuildThreadItem(item session.Item) ThreadItem {
 	if value, ok := data["turnId"].(string); ok && turnID == "" {
 		turnID = value
 	}
+	startedAtMS, completedAtMS := threadItemLifecycleTimes(data)
 	return ThreadItem{
-		ID:         item.ID,
-		Type:       item.Type,
-		Role:       item.Role,
-		Text:       item.Text,
-		Delivery:   threadItemDelivery(item),
-		Name:       item.Name,
-		Namespace:  item.Namespace,
-		CallID:     item.CallID,
-		Status:     item.Status,
-		TurnID:     turnID,
-		CreatedAt:  unixOrZero(item.CreatedAt),
-		Content:    threadItemContentFromSession(item.Content),
-		Data:       data,
-		Raw:        append(json.RawMessage(nil), item.Raw...),
-		ResponseID: item.ResponseID,
+		ID:            item.ID,
+		Type:          item.Type,
+		Role:          item.Role,
+		Text:          item.Text,
+		Delivery:      threadItemDelivery(item),
+		Name:          item.Name,
+		Namespace:     item.Namespace,
+		CallID:        item.CallID,
+		Status:        item.Status,
+		TurnID:        turnID,
+		CreatedAt:     unixOrZero(item.CreatedAt),
+		Content:       threadItemContentFromSession(item.Content),
+		Data:          data,
+		Raw:           append(json.RawMessage(nil), item.Raw...),
+		ResponseID:    item.ResponseID,
+		StartedAtMS:   startedAtMS,
+		CompletedAtMS: completedAtMS,
 	}
+}
+
+// threadItemLifecycleTimes reads the recorded item start/completion times from
+// session metadata. Older rollouts recorded zero for an unknown time, which
+// Rust treats as unrecorded (Rust #57172).
+func threadItemLifecycleTimes(data map[string]any) (*int64, *int64) {
+	started := threadItemInt64PtrFromData(data, "startedAtMs", "started_at_ms")
+	if started != nil && *started == 0 {
+		started = nil
+	}
+	completed := threadItemInt64PtrFromData(data, "completedAtMs", "completed_at_ms")
+	if completed != nil && *completed == 0 {
+		completed = nil
+	}
+	return started, completed
 }
 
 // threadItemDelivery reads the async delivery marker from the item metadata

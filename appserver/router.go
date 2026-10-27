@@ -4091,6 +4091,14 @@ func deserializeStateThreadItem(stored state.ThreadHistoryItem) (ThreadItem, err
 	if err := json.Unmarshal(stored.ItemJSON, &item); err != nil {
 		return ThreadItem{}, fmt.Errorf("failed to deserialize stored thread item %s: %w", stored.ItemID, err)
 	}
+	// Rust #57172: history reads expose the lifecycle times recorded for the
+	// item, falling back to the persisted columns when the payload omits them.
+	if item.StartedAtMS == nil {
+		item.StartedAtMS = cloneInt64(stored.StartedAtMS)
+	}
+	if item.CompletedAtMS == nil {
+		item.CompletedAtMS = cloneInt64(stored.CompletedAtMS)
+	}
 	return item, nil
 }
 

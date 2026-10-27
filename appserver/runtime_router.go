@@ -899,6 +899,7 @@ func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
 	if r == nil {
 		return
 	}
+	params = withItemLifecycleTimestamps(method, params)
 	if r.isInternalMemoryNotification(params) {
 		return
 	}

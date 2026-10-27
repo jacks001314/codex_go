@@ -2891,6 +2891,12 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		if !ok {
 			return
 		}
+		// Rust #57172: a completion carries the start time recorded when the
+		// command began so the item stays timed across the lifecycle pair.
+		if !execution.StartedAt.IsZero() {
+			startedAtMS := execution.StartedAt.UTC().UnixMilli()
+			item.StartedAtMS = &startedAtMS
+		}
 		status := CommandExecutionCompleted
 		output := ""
 		exitCode := 0

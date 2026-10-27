@@ -24,6 +24,7 @@ TUI lane and are not modified here.
 | `#57227` | Restore acknowledged permissions on resume/fork | `rollout/rollout.go`, `rollout/session_items.go`, `appserver/persisted_resume_settings.go`, `appserver/router.go`, `appserver/runtime_router.go`, like-Rust tests |
 | `#57317` | Feature `simplified_selection_hints` (off): concise plugin hints, 4 KiB bound | `features/features.go`, `plugin/plugin.go`, `appserver/turn_runtime.go`, plugin/RuntimeRouter like-Rust tests |
 | `#57279` | Untrusted additional context as agent-namespaced tool outputs | `turn/api.go`, `appserver/additional_context.go`, `appserver/turn_runtime.go`, `appserver/runtime_router.go`, like-Rust tests |
+| `#57172` | Lifecycle timestamps on app-server thread items | `appserver/protocol.go`, `appserver/item_lifecycle_times.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `state/thread_history_query.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -57,6 +58,14 @@ to truncated content does not, and an empty context map clears the store.
 Application context still rides in developer instructions, and steering now
 places every context item before the steered user message.
 
+`#57172` details: every wire `ThreadItem` now carries nullable
+`startedAtMs`/`completedAtMs` (always present, `null` when unrecorded), matching
+Rust's flat payload. Values come from session metadata for live/runtime items,
+from the persisted `thread_items.started_at_ms`/`completed_at_ms` columns for
+paginated history and resume (with the recorded-zero legacy rule), and are
+injected onto `item/started`/`item/completed` payloads before dispatch. A
+code-mode command completion now carries the start time it began with.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -64,9 +73,12 @@ places every context item before the steered user message.
   `#57280` full MCP results,
   `#57287` prediction-fork tool declarations, `#57286` managed
   `network_proxy`, `#57263`/`#57276`
-  permission wording/world-state, `#57171`/`#57172` runtime auth and
-  lifecycle timestamps, `#57270` cloud config for sandbox/exec-server, and
-  `#56036`/`#56049` remote credentials.
+  permission wording/world-state, `#57171` runtime auth and
+  `#57270` cloud config for sandbox/exec-server,
+  `#56036`/`#56049` remote credentials, and the protocol-schema drift for
+  `feedback/save` plus `thread/memory/read` (both missing from Go schemas at
+  window start, so four `appserver` schema tests fail independently of this
+  lane's changes).
 
 ## Verification
 

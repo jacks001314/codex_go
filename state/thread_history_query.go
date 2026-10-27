@@ -58,10 +58,14 @@ func (e *ThreadHistoryError) Error() string {
 }
 
 type ThreadHistoryItem struct {
-	TurnID             string
-	ItemID             string
-	UpdatedAtOrdinal   uint64
-	CreatedAtMS        int64
+	TurnID           string
+	ItemID           string
+	UpdatedAtOrdinal uint64
+	CreatedAtMS      int64
+	// StartedAtMS and CompletedAtMS carry the item lifecycle times recorded by
+	// canonical item events (Rust #57172).
+	StartedAtMS        *int64
+	CompletedAtMS      *int64
 	ItemJSON           json.RawMessage
 	physicalThreadID   string
 	physicalRolloutPos int64
@@ -180,7 +184,8 @@ func (r *StateRuntime) ThreadHistoryMode(ctx context.Context, threadID string) (
 // no item-id or updated-at anchor.
 func threadHistoryItemsPageQuery(turnScoped bool) string {
 	query := `
-SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
+SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms,
+       started_at_ms, completed_at_ms, item_json
 FROM thread_items`
 	if turnScoped {
 		query += " INDEXED BY idx_thread_items_by_turn_page"
@@ -249,8 +254,9 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 		for result.Next() {
 			var item ThreadHistoryItem
 			var rolloutOrdinal, updatedOrdinal int64
+			var startedAtMS, completedAtMS sql.NullInt64
 			var itemJSON string
-			if scanErr := result.Scan(&item.TurnID, &item.ItemID, &rolloutOrdinal, &updatedOrdinal, &item.CreatedAtMS, &itemJSON); scanErr != nil {
+			if scanErr := result.Scan(&item.TurnID, &item.ItemID, &rolloutOrdinal, &updatedOrdinal, &item.CreatedAtMS, &startedAtMS, &completedAtMS, &itemJSON); scanErr != nil {
 				_ = result.Close()
 				return nil, fmt.Errorf("scan thread history item: %w", scanErr)
 			}
@@ -259,6 +265,8 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 				return nil, errors.New("invalid stored item rollout ordinal")
 			}
 			item.UpdatedAtOrdinal = uint64(updatedOrdinal)
+			item.StartedAtMS = historyNullInt64Ptr(startedAtMS)
+			item.CompletedAtMS = historyNullInt64Ptr(completedAtMS)
 			item.ItemJSON = json.RawMessage(itemJSON)
 			item.physicalThreadID = segment.segment.ThreadID
 			item.physicalRolloutPos = rolloutOrdinal
@@ -693,7 +701,8 @@ WHERE thread_id = ? AND turn_id = ? AND rollout_ordinal >= ? AND (? IS NULL OR r
 		return []ThreadHistoryItem{}, nil
 	}
 	rows, err := db.QueryContext(ctx, `
-SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
+SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms,
+       started_at_ms, completed_at_ms, item_json
 FROM thread_items
 WHERE thread_id = ? AND turn_id = ? AND rollout_ordinal >= ?
   AND (? IS NULL OR rollout_ordinal < ?) AND (item_id = ? OR item_id = ?)
@@ -706,20 +715,33 @@ ORDER BY rollout_ordinal ASC`, owner, turn.TurnID, sqliteInt(segment.Start), nul
 	for rows.Next() {
 		var item ThreadHistoryItem
 		var rolloutOrdinal, updatedOrdinal int64
+		var startedAtMS, completedAtMS sql.NullInt64
 		var itemJSON string
-		if err := rows.Scan(&item.TurnID, &item.ItemID, &rolloutOrdinal, &updatedOrdinal, &item.CreatedAtMS, &itemJSON); err != nil {
+		if err := rows.Scan(&item.TurnID, &item.ItemID, &rolloutOrdinal, &updatedOrdinal, &item.CreatedAtMS, &startedAtMS, &completedAtMS, &itemJSON); err != nil {
 			return nil, err
 		}
 		if rolloutOrdinal < 0 || updatedOrdinal < 0 {
 			return nil, errors.New("invalid stored item ordinal")
 		}
 		item.UpdatedAtOrdinal = uint64(updatedOrdinal)
+		item.StartedAtMS = historyNullInt64Ptr(startedAtMS)
+		item.CompletedAtMS = historyNullInt64Ptr(completedAtMS)
 		item.ItemJSON = json.RawMessage(itemJSON)
 		item.physicalThreadID = owner
 		item.physicalRolloutPos = rolloutOrdinal
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// historyNullInt64Ptr converts a nullable lifecycle column; older rollouts
+// recorded zero for an unknown time and Rust treats that as unrecorded.
+func historyNullInt64Ptr(value sql.NullInt64) *int64 {
+	if !value.Valid || value.Int64 == 0 {
+		return nil
+	}
+	v := value.Int64
+	return &v
 }
 
 func nullableHistoryEnd(end *rollout.HistoryPosition) any {
