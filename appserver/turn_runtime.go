@@ -4535,6 +4535,12 @@ func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
 	if err == nil {
 		return turnAnalyticsErrorFields{}
 	}
+	// Rust protocol/src/error.rs maps RefreshTokenFailed to
+	// CodexErrorInfo::Unauthorized (#57304).
+	var refreshFailed *auth.RefreshTokenFailedError
+	if errors.As(err, &refreshFailed) {
+		return turnAnalyticsErrorFields{TurnError: "unauthorized", CodexErrorKind: stringPtrIfNotEmpty("refresh_token_failed")}
+	}
 	var apiErr *codexapi.APIError
 	if errors.As(err, &apiErr) {
 		return turnAnalyticsErrorFieldsFromAPIError(apiErr)

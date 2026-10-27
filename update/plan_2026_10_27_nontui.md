@@ -30,6 +30,7 @@ TUI lane and are not modified here.
 | `#57313` | Gateway OAuth tokens default to `Authorization: Bearer` | `model/provider_info.go`, `model/gateway_auth.go`, `model/provider_config.go`, gateway tests |
 | `#56309` `#57263` | Permission catalog path wording (`writable_root(s)`, `omitted_paths`, `denied_reads`) | `model/catalog.go`, `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go`, catalog/permission tests |
 | `#57286` | Managed `[network_proxy]` requirements with `[experimental_network]` alias | `config/requirements_file.go`, `config/cloud_config.go`, `config/ignored_settings.go`, `appserver/managed_network_constraints.go`, config tests |
+| `#57304` | Surface permanent refresh-token rejection during workspace routing | `appserver/workspace_routing.go`, `appserver/turn_runtime.go`, like-Rust test |
 
 Grounding notes:
 
@@ -121,6 +122,13 @@ the recognized requirements key list accepts both spellings, and
 credential-broker project discovery works through either spelling. The TUI
 debug-config label stays in the TUI lane.
 
+`#57304`: workspace discovery refresh failures now surface the cached permanent
+`RefreshTokenFailedError` instead of the generic 401 when the auth generation is
+unchanged and workload-identity external auth is not selected; transient
+refresh failures keep the generic discovery error. Turn failures carrying that
+error classify as `codexErrorInfo: unauthorized` with
+`codexErrorKind: refresh_token_failed`, so clients show the sign-in guidance.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -140,6 +148,9 @@ debug-config label stays in the TUI lane.
 - `go test ./tool ./turn ./eventmap ./tcptunnel -count=1` passes.
 - `go test ./appserver -run 'ThreadSample|ShellSnapshot|GranularApproval|PermissionPrompt' -count=1` passes.
 - `go test ./app ./cli ./model ./config ./sandbox -count=1` passes.
+- For `#57304`:
+  `go test ./appserver -run 'WorkspaceRouting|Refresh|AuthStatus|Analytics|TurnError' -count=1`
+  passes.
 - For `#57286`: `go test ./config -count=1` and
   `go test ./appserver -run 'ManagedNetwork|NetworkRequirements|NetworkProxy|Permission|Granular|ConfigRequirements' -count=1`
   pass.

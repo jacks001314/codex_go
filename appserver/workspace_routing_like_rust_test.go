@@ -12,6 +12,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/network"
 )
 
@@ -24,6 +25,88 @@ import (
 // with its HTTP status, a known application network policy denial, or an OS error
 // - and never a raw parser message, configuration contents, or a backend-supplied
 // policy name or id.
+
+// Mirrors Rust's reused_refresh_token_tells_the_user_to_sign_in_again (#57304):
+// a permanently rejected refresh token replaces the generic discovery 401 and
+// classifies as an unauthorized turn failure so the user is told to sign in.
+func TestWorkspaceRoutingSurfacesRejectedRefreshTokenLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		refreshStatus int
+		refreshBody   string
+		wantPermanent bool
+	}{
+		{
+			name:          "permanent rejection",
+			refreshStatus: http.StatusUnauthorized,
+			refreshBody:   `{"error":{"code":"refresh_token_reused"}}`,
+			wantPermanent: true,
+		},
+		{
+			name:          "transient failure",
+			refreshStatus: http.StatusInternalServerError,
+			refreshBody:   `{}`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearAuthEnvAppserver(t)
+			home := t.TempDir()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/wham/accounts/check") {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.WriteHeader(testCase.refreshStatus)
+				_, _ = w.Write([]byte(testCase.refreshBody))
+			}))
+			defer server.Close()
+			baseURL := server.URL + "/backend-api"
+			if err := os.WriteFile(config.ConfigPath(home), []byte("chatgpt_base_url = \""+baseURL+"\"\n"), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			snapshot := auth.AuthDotJSON{
+				AuthMode: "chatgpt",
+				Tokens: map[string]any{
+					"id_token":      fakeJWTAppserver(map[string]any{"chatgpt_account_id": "account-1"}),
+					"access_token":  "stale-access-token",
+					"refresh_token": "stale-refresh-token",
+					"account_id":    "account-1",
+					"plan_type":     "pro",
+				},
+			}
+			if err := auth.NewStore(home).Save(snapshot); err != nil {
+				t.Fatalf("auth save error: %v", err)
+			}
+			auth.ClearPermanentRefreshFailure(home)
+			t.Setenv(auth.RefreshTokenURLEnvOverride, server.URL+"/oauth/token")
+			router := NewRuntimeRouter(RuntimeServices{
+				Account: auth.NewAccountManager(),
+				Config:  config.NewConfigService(home),
+			})
+			_, err := router.discoverWorkspaceRouting(context.Background(), &snapshot, "account-1", baseURL, "")
+			if err == nil {
+				t.Fatal("discoverWorkspaceRouting() error = nil")
+			}
+			if !testCase.wantPermanent {
+				if !errors.Is(err, model.ErrWorkspaceRoutingUnauthorized) {
+					t.Fatalf("transient refresh error = %v, want the generic discovery 401", err)
+				}
+				return
+			}
+			var failed *auth.RefreshTokenFailedError
+			if !errors.As(err, &failed) {
+				t.Fatalf("permanent refresh error = %v, want RefreshTokenFailedError", err)
+			}
+			if !strings.Contains(err.Error(), "refresh token was already used") {
+				t.Fatalf("error message = %q, want reuse guidance", err.Error())
+			}
+			fields := turnAnalyticsErrorFieldsFromError(err)
+			if fields.TurnError != "unauthorized" || fields.CodexErrorKind == nil || *fields.CodexErrorKind != "refresh_token_failed" {
+				t.Fatalf("turn error fields = %#v, want unauthorized / refresh_token_failed", fields)
+			}
+		})
+	}
+}
 
 // malformedWorkspaceRoutingConfig is a configuration that fails to parse and
 // carries a value that must never reach a client (the regression fixture from the

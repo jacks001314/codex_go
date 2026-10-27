@@ -343,12 +343,47 @@ func (r *RuntimeRouter) discoverWorkspaceRouting(ctx context.Context, snapshot *
 		if !errors.Is(err, model.ErrWorkspaceRoutingUnauthorized) || attempt >= workspaceRoutingRecoveryAttempts {
 			return nil, err
 		}
+		generation := r.workspaceRoutingAuthGeneration()
 		refreshed, refreshErr := r.refreshManagedAuthForStatus(ctx, discoveryAuth)
 		if refreshErr != nil || refreshed == nil {
+			// Rust #57304: a permanently rejected refresh token must reach the
+			// caller instead of the generic discovery 401 when the credential
+			// did not change while the refresh failed.
+			if failed := r.permanentRefreshFailureForWorkspaceRouting(refreshErr, discoveryAuth, generation); failed != nil {
+				return nil, failed
+			}
 			return nil, model.ErrWorkspaceRoutingUnauthorized
 		}
 		discoveryAuth = refreshed
 	}
+}
+
+// workspaceRoutingAuthGeneration snapshots the credential generation so a
+// refresh failure does not surface stale guidance after an account switch.
+func (r *RuntimeRouter) workspaceRoutingAuthGeneration() uint64 {
+	if r == nil || r.authChangeTracker == nil {
+		return 0
+	}
+	return r.authChangeTracker.Snapshot().Generation
+}
+
+// permanentRefreshFailureForWorkspaceRouting mirrors Rust's
+// WorkspaceRoutingError::RefreshTokenRejected branch (#57304): only a cached
+// permanent failure for the same credentials, with an unchanged auth generation
+// and no external auth, replaces the generic discovery 401.
+func (r *RuntimeRouter) permanentRefreshFailureForWorkspaceRouting(refreshErr error, discoveryAuth *auth.AuthDotJSON, generation uint64) *auth.RefreshTokenFailedError {
+	var failed *auth.RefreshTokenFailedError
+	if refreshErr == nil || !errors.As(refreshErr, &failed) || failed == nil {
+		return nil
+	}
+	if auth.IsWorkloadIdentitySelected() || r.workspaceRoutingAuthGeneration() != generation {
+		return nil
+	}
+	cached := auth.RefreshFailureForAuth(r.codexHomeForRollout(), discoveryAuth)
+	if cached == nil || cached.Reason != failed.Reason || cached.Message != failed.Message {
+		return nil
+	}
+	return failed
 }
 
 func cloneWorkspaceRouting(routing *auth.WorkspaceRouting) *auth.WorkspaceRouting {
