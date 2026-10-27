@@ -86,6 +86,27 @@ func TestTranscriptWheelDefaultsToOneRowPerEventLikeRust(t *testing.T) {
 	}
 }
 
+// Rust's textarea scroll_mouse only owns the wheel inside the composer and
+// leaves its text selection alone, so a wheel over the transcript must move the
+// transcript and keep the draft selection.
+func TestTranscriptWheelKeepsComposerSelectionLikeRust(t *testing.T) {
+	model := scrollableTranscript(t)
+	model.composer.SetValue("first line\nsecond line")
+	_ = model.View()
+	if model.composerTextTopRow < 0 {
+		t.Fatal("composer layout was not captured")
+	}
+	model.composerSelection = composerTextSelection{active: true, anchorRune: 0, focusRune: 3}
+	before := model.TranscriptYOffset()
+	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	if !model.composerSelection.active {
+		t.Fatal("transcript wheel cleared the composer selection")
+	}
+	if got, want := model.TranscriptYOffset(), before-1; got != want {
+		t.Fatalf("wheel transcript offset = %d, want %d", got, want)
+	}
+}
+
 // Rust's default transcript mode is Owned: `tui.fullscreen_transcript`
 // defaults to true and `tui.alternate_screen = "auto"` owns the screen. The
 // owned screen captures the mouse, so a wheel event reaches the model and moves

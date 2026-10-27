@@ -246,16 +246,17 @@ func (m *Model) renderedSelectionRegionAt(x, y int) (renderedRegion, bool) {
 // handleRenderedSelectionMouse captures a drag over registered passive rows.
 // It returns true when the gesture belongs to the selection.
 func (m *Model) handleRenderedSelectionMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
-	if m == nil || !m.fullscreenTranscript || m.rawOutput ||
-		msg.Button != bubbletea.MouseButtonLeft && msg.Action != bubbletea.MouseActionMotion {
+	if m == nil || !m.fullscreenTranscript || m.rawOutput {
 		return false, nil
 	}
 	state := &m.renderedSelection
 	if msg.Button == bubbletea.MouseButtonWheelUp || msg.Button == bubbletea.MouseButtonWheelDown {
-		if state.active {
-			state.clear()
-			return true, nil
-		}
+		// Rust rendered_selection::handle_mouse clears on ScrollUp/ScrollDown
+		// and returns None, so the same wheel still scrolls the transcript.
+		state.clear()
+		return false, nil
+	}
+	if msg.Button != bubbletea.MouseButtonLeft && msg.Action != bubbletea.MouseActionMotion {
 		return false, nil
 	}
 	switch msg.Action {

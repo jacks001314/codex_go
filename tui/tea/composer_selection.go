@@ -111,6 +111,11 @@ func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 	if msg.Alt || msg.Ctrl || msg.Shift {
 		return false, nil
 	}
+	// Rust's textarea only owns the wheel inside its own rect and scroll_mouse
+	// never clears the selection, so a transcript wheel keeps both.
+	if msg.Button == bubbletea.MouseButtonWheelUp || msg.Button == bubbletea.MouseButtonWheelDown {
+		return false, nil
+	}
 	switch msg.Action {
 	case bubbletea.MouseActionPress:
 		if msg.Button == bubbletea.MouseButtonRight {

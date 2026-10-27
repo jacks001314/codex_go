@@ -141,6 +141,42 @@ func TestRenderedSelectionStationaryClickAndInlineModeLikeRust(t *testing.T) {
 	_ = inlineCopied
 }
 
+// Rust rendered_selection::handle_mouse clears the painted selection on
+// ScrollUp/ScrollDown and returns None, so the wheel keeps scrolling the
+// transcript instead of being swallowed by the stale highlight.
+func TestRenderedSelectionWheelClearsAndScrollsLikeRust(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	for i := 0; i < 40; i++ {
+		state.AddMessage(codextui.RoleSystem, "event\nmore detail")
+	}
+	model := NewModel(state, Options{Width: 100, Height: 12, CopyOnSelect: "never"})
+	_ = model.View()
+	region := model.renderedSelection.regions[renderedRegionFooter]
+	if region.w <= 0 {
+		t.Fatalf("footer region not registered: %#v", region)
+	}
+	line := region.text[0]
+	start := findDisplayColumn(line, "enter send")
+	end := findDisplayColumn(line, "newline")
+	if start < 0 || end < 0 {
+		t.Fatalf("footer text not found in %q", line)
+	}
+	_, _ = model.Update(bubbletea.MouseMsg{X: start, Y: region.y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
+	_, _ = model.Update(bubbletea.MouseMsg{X: end, Y: region.y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft})
+	if !model.renderedSelection.active {
+		t.Fatal("footer drag did not leave a selection active")
+	}
+
+	before := model.TranscriptYOffset()
+	_, _ = model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	if model.renderedSelection.active {
+		t.Fatal("wheel left the rendered selection active")
+	}
+	if got, want := model.TranscriptYOffset(), before-1; got != want {
+		t.Fatalf("wheel transcript offset = %d, want %d", got, want)
+	}
+}
+
 func TestDefaultTranscriptOwnershipMatchesRust(t *testing.T) {
 	fullscreenOn := true
 	fullscreenOff := false
