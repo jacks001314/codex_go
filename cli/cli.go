@@ -653,10 +653,40 @@ func Parse(args []string) (*Parsed, error) {
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
 			return nil, err
 		}
+		p.mergeRootConfigOverrides()
 		return p, p.Validate()
 	}
 	p.Root.Prompt = strings.Join(rest, " ")
 	return p, p.Validate()
+}
+
+// mergeRootConfigOverrides keeps `-c`/`--config` values from every command
+// scope in parse order (Rust #56022). Clap's global arguments only keep the
+// deepest scope's values, so Rust reparses each scope and concatenates them
+// root-first. Commands whose runner also receives RootOptions merge the root
+// scope themselves; the nested CLI commands below only see their own options,
+// so the root overrides are prepended here. Child options keep their existing
+// precedence, matching Rust's unchanged child copies.
+func (p *Parsed) mergeRootConfigOverrides() {
+	if len(p.Root.ConfigOverrides) == 0 {
+		return
+	}
+	p.MCP.ConfigOverrides = prependConfigOverrides(p.Root.ConfigOverrides, p.MCP.ConfigOverrides)
+	p.Plugin.ConfigOverrides = prependConfigOverrides(p.Root.ConfigOverrides, p.Plugin.ConfigOverrides)
+	if p.Plugin.Action == "marketplace" {
+		p.Plugin.Marketplace.ConfigOverrides = prependConfigOverrides(p.Plugin.ConfigOverrides, p.Plugin.Marketplace.ConfigOverrides)
+	}
+	p.Cloud.ConfigOverrides = prependConfigOverrides(p.Root.ConfigOverrides, p.Cloud.ConfigOverrides)
+}
+
+func prependConfigOverrides(parent, child []string) []string {
+	if len(parent) == 0 {
+		return child
+	}
+	merged := make([]string, 0, len(parent)+len(child))
+	merged = append(merged, parent...)
+	merged = append(merged, child...)
+	return merged
 }
 
 func strictConfigUnsupportedBeforeSubcommandParse(command Command) bool {

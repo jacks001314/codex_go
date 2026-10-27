@@ -1938,3 +1938,38 @@ func TestParseDoctorProbeFilesystemPathFlag(t *testing.T) {
 		t.Fatal("an unknown doctor option must fail")
 	}
 }
+
+// TestParsePreservesConfigOverridesAcrossCommandScopesLikeRust mirrors Rust
+// #56022: overrides supplied at more than one command level are all retained in
+// parse order, while typed child arguments keep their existing precedence.
+func TestParsePreservesConfigOverridesAcrossCommandScopesLikeRust(t *testing.T) {
+	parsed, err := Parse([]string{"--config=a=1", "mcp", "add", "example", "-c", "a=3", "--", "program", "-c", "payload"})
+	if err != nil {
+		t.Fatalf("parse mcp add: %v", err)
+	}
+	if got := parsed.MCP.ConfigOverrides; len(got) != 2 || got[0] != "a=1" || got[1] != "a=3" {
+		t.Fatalf("mcp config overrides = %#v, want [a=1 a=3]", got)
+	}
+	if got := parsed.MCP.Command; len(got) != 3 || got[0] != "program" || got[1] != "-c" || got[2] != "payload" {
+		t.Fatalf("mcp add command = %#v, want forwarded args unchanged", got)
+	}
+
+	parsed, err = Parse([]string{"-cb=2", "cloud", "list", "-c", "c=3"})
+	if err != nil {
+		t.Fatalf("parse cloud list: %v", err)
+	}
+	if got := parsed.Cloud.ConfigOverrides; len(got) != 2 || got[0] != "b=2" || got[1] != "c=3" {
+		t.Fatalf("cloud config overrides = %#v, want [b=2 c=3]", got)
+	}
+
+	parsed, err = Parse([]string{"-c", "root=1", "plugin", "marketplace", "list", "-c", "leaf=2"})
+	if err != nil {
+		t.Fatalf("parse plugin marketplace list: %v", err)
+	}
+	if got := parsed.Plugin.ConfigOverrides; len(got) != 1 || got[0] != "root=1" {
+		t.Fatalf("plugin config overrides = %#v, want [root=1]", got)
+	}
+	if got := parsed.Plugin.Marketplace.ConfigOverrides; len(got) != 2 || got[0] != "root=1" || got[1] != "leaf=2" {
+		t.Fatalf("marketplace config overrides = %#v, want [root=1 leaf=2]", got)
+	}
+}

@@ -37,6 +37,8 @@ TUI lane and are not modified here.
 | `#56049` | Configured credential providers in remote credential masking | `network/proxy_credential_providers.go`, `execserver/network_policy.go`, `execserver/server.go`, `tool/unified_exec.go`, capability/masking tests |
 | `#57187` | Advisory rollout budgets with optional limit enforcement | `config/rollout_budget.go`, `config/config.go`, `runtimeutil/budget.go`, `appserver/runtime_router.go`, config/budget tests |
 | `#56445` | Treat `model_not_found` provider errors as terminal failures | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_stream.go`, `model/responses_agent.go`, `rollout/codex_error_info.go`, `appserver/turn_runtime.go`, like-Rust tests |
+| `#56468` | Preserve `SystemRoot` for Windows filesystem sandbox helpers | `execserver/fs_helper.go`, helper environment test |
+| `#56022` | Preserve config overrides across CLI subcommand boundaries | `cli/cli.go`, `cli/cli_test.go` |
 
 Grounding notes:
 
@@ -217,6 +219,21 @@ to `modelNotFound`/`model_not_found` for app-server turn analytics (reporting
 `httpStatusCode` only when present), is accepted by the rollout error-info
 reader, and gets Rust's "model not found" response-debug telemetry text.
 
+`#56468` details: the remote fs-helper environment filter now mirrors Rust's
+`helper_env_from_vars`. Alongside the portable `PATH`/`TMPDIR`/`TMP`/`TEMP`
+allowlist it keeps the Windows platform entries MXC needs (`SystemDrive`,
+`SystemRoot`, `LOCALAPPDATA`) with case-insensitive name matching while
+preserving the host's own spelling, and macOS keeps
+`__CF_USER_TEXT_ENCODING`. Non-Windows hosts still ignore the Windows entries.
+
+`#56022` details: `-c`/`--config` values supplied at the root and at a nested
+command are all retained in parse order. Go's hand-rolled parser already
+collects each scope separately, but `mcp`, `plugin` (including `plugin
+marketplace`) and `cloud` only received their own options, so root overrides
+were dropped. `cli.Parse` now prepends the root overrides for those commands
+(the ones whose runners already merge `RootOptions` are untouched, avoiding
+duplicates), while forwarded `--` arguments keep their existing treatment.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -252,6 +269,9 @@ reader, and gets Rust's "model not found" response-debug telemetry text.
 - For `#56445`: `go test ./codexapi ./model ./rollout -count=1` and
   `go test ./appserver -run 'TurnError|Analytics|ErrorInfo|ModelNotFound' -count=1`
   pass.
+- For `#56468`: `go test ./execserver -count=1` passes.
+- For `#56022`: `go test ./cli -run 'PreservesConfigOverrides' -count=1` and
+  `go test ./app -run 'MCP|Plugin|Cloud|CLI|Parse' -count=1` pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.
