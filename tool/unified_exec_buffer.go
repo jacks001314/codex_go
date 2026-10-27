@@ -1,6 +1,13 @@
 package tool
 
+import "fmt"
+
 const unifiedExecOutputMaxBytes = 1024 * 1024
+
+// unifiedExecOmissionMarker mirrors Rust's format_output_omission_marker.
+func unifiedExecOmissionMarker(omittedBytes int) string {
+	return fmt.Sprintf("... %d bytes omitted ...", omittedBytes)
+}
 
 type unifiedExecHeadTailBuffer struct {
 	maxBytes     int
@@ -67,6 +74,41 @@ func (b *unifiedExecHeadTailBuffer) Snapshot() ([]byte, int) {
 	out = append(out, b.head...)
 	out = append(out, b.tail...)
 	return out, b.omittedBytes
+}
+
+// SnapshotWithOmissionMarker returns retained output with Rust's omission
+// marker between the head and tail when collection dropped bytes.
+func (b *unifiedExecHeadTailBuffer) SnapshotWithOmissionMarker() []byte {
+	if b == nil {
+		return nil
+	}
+	return b.renderWithOmissionMarker()
+}
+
+// DrainWithOmissionMarker drains the retained output and reports the bytes the
+// collection cap dropped.
+func (b *unifiedExecHeadTailBuffer) DrainWithOmissionMarker() ([]byte, int) {
+	if b == nil {
+		return nil, 0
+	}
+	out := b.renderWithOmissionMarker()
+	omitted := b.omittedBytes
+	b.head = nil
+	b.tail = nil
+	b.omittedBytes = 0
+	return out, omitted
+}
+
+func (b *unifiedExecHeadTailBuffer) renderWithOmissionMarker() []byte {
+	out := make([]byte, 0, len(b.head)+len(b.tail)+32)
+	out = append(out, b.head...)
+	if b.omittedBytes > 0 {
+		out = append(out, '\n')
+		out = append(out, unifiedExecOmissionMarker(b.omittedBytes)...)
+		out = append(out, '\n')
+	}
+	out = append(out, b.tail...)
+	return out
 }
 
 func (b *unifiedExecHeadTailBuffer) pushTail(data []byte) {

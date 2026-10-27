@@ -1491,7 +1491,7 @@ func shellResultHookResponse(result *ShellResult, maxOutputTokens *int) *shellTr
 	if maxOutputTokens != nil {
 		maxTokens = *maxOutputTokens
 	}
-	return truncateShellText(output, maxTokens)
+	return truncateShellText(output, maxTokens, result.OmittedBytes)
 }
 
 func decodeExecCommandInvocation(invocation *Invocation) (*ExecCommandArgs, error) {
@@ -1604,8 +1604,8 @@ func shellResultData(result *ShellResult, maxOutputTokens *int, chunkID string) 
 	if maxOutputTokens != nil {
 		maxTokens = *maxOutputTokens
 	}
-	stdout := truncateShellText(result.Stdout, maxTokens)
-	stderr := truncateShellText(result.Stderr, maxTokens)
+	stdout := truncateShellText(result.Stdout, maxTokens, result.OmittedBytes)
+	stderr := truncateShellText(result.Stderr, maxTokens, 0)
 	hookResponse := shellResultHookResponse(result, maxOutputTokens)
 	data := map[string]any{
 		"chunk_id":                chunkID,
@@ -1732,19 +1732,37 @@ func shellOutputText(result *ShellResult) string {
 	return strings.TrimRight(result.Stdout, "\r\n") + "\n\nstderr:\n" + result.Stderr
 }
 
-func truncateShellText(content string, maxTokens int) *shellTruncatedText {
+func truncateShellText(content string, maxTokens int, omittedBytes int) *shellTruncatedText {
 	if content == "" {
 		return &shellTruncatedText{}
 	}
 	policy := utils.TokensPolicy(maxTokens)
+	totalLines := shellOutputLineCount(content)
 	if len(content) <= (&policy).ByteBudget() {
-		return &shellTruncatedText{Text: content, TotalLines: shellOutputLineCount(content)}
+		return &shellTruncatedText{Text: content, TotalLines: totalLines}
+	}
+	originalTokenCount := utils.ApproxTokenCount(content)
+	if omittedBytes > 0 {
+		// Rust's CapturedStream::render keeps the collection omission notice
+		// above the middle truncation when truncation removed it.
+		truncated := utils.TruncateText(content, policy)
+		marker := unifiedExecOmissionMarker(omittedBytes)
+		notice := marker + "\n"
+		if strings.Contains(truncated, marker) {
+			notice = ""
+		}
+		return &shellTruncatedText{
+			Text:               fmt.Sprintf("Warning: truncated output (original token count: %d)\n%s\n%s", originalTokenCount, notice, truncated),
+			Truncated:          true,
+			OriginalTokenCount: originalTokenCount,
+			TotalLines:         totalLines,
+		}
 	}
 	return &shellTruncatedText{
 		Text:               utils.FormattedTruncateText(content, policy),
 		Truncated:          true,
-		OriginalTokenCount: utils.ApproxTokenCount(content),
-		TotalLines:         shellOutputLineCount(content),
+		OriginalTokenCount: originalTokenCount,
+		TotalLines:         totalLines,
 	}
 }
 

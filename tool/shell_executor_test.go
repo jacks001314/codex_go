@@ -196,6 +196,28 @@ func TestShellResultHookResponseSeparatesStderr(t *testing.T) {
 	}
 }
 
+// Rust #57185: the collection omission notice survives model-facing truncation
+// and is never duplicated.
+func TestShellResultHookResponsePreservesCollectionOmissionNoticeLikeRust(t *testing.T) {
+	marker := unifiedExecOmissionMarker(123)
+	raw := "head\n" + marker + "\ntail"
+	result := &ShellResult{Stdout: raw, OmittedBytes: 123}
+	if got := ShellResultHookResponse(result, intPtr(1000)); got != raw {
+		t.Fatalf("uncapped output = %q, want %q", got, raw)
+	}
+	truncated := ShellResultHookResponse(result, intPtr(2))
+	if !strings.Contains(truncated, "Warning: truncated output") {
+		t.Fatalf("truncated output missing warning: %q", truncated)
+	}
+	if count := strings.Count(truncated, marker); count != 1 {
+		t.Fatalf("truncated output marker count = %d in %q", count, truncated)
+	}
+	short := &ShellResult{Stdout: marker + "\nbody", OmittedBytes: 7}
+	if count := strings.Count(ShellResultHookResponse(short, intPtr(2)), unifiedExecOmissionMarker(7)); count != 1 {
+		t.Fatalf("surviving marker duplicated: count = %d", count)
+	}
+}
+
 func TestShellExecutorSpecIncludesRuntimeFields(t *testing.T) {
 	spec := NewShellExecutor(&ShellExecutorOptions{}).Spec()
 	properties, ok := spec.InputSchema["properties"].(map[string]any)

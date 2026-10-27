@@ -296,6 +296,10 @@ type ShellResult struct {
 	HookCommand         string
 	MaxOutputTokensUsed *int
 	UnifiedExecEvented  bool
+	// OmittedBytes counts unified-exec output dropped by the collection cap.
+	// Stdout already carries Rust's omission marker at the head/tail boundary;
+	// this keeps the notice available after model-facing truncation removes it.
+	OmittedBytes int
 }
 
 type ShellValidationOptions struct {

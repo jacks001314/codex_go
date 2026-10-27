@@ -1431,12 +1431,13 @@ func (m *UnifiedExecManager) collect(ctx context.Context, process *unifiedExecPr
 	if err := m.waitForThreadElicitation(ctx, process.threadID); err != nil {
 		return nil, err
 	}
-	output, exited, exitCode, waitErr, timedOut := process.snapshotAndDrain()
+	output, omittedBytes, exited, exitCode, waitErr, timedOut := process.snapshotAndDrain()
 	if exited {
 		stopReason = UnifiedExecStopReasonOutputClosed
 	}
 	result := &ShellResult{
 		Stdout:              output,
+		OmittedBytes:        omittedBytes,
 		Duration:            time.Since(started),
 		TimedOut:            timedOut,
 		ChunkID:             generateShellChunkID(),
@@ -1655,7 +1656,7 @@ func (p *unifiedExecProcess) finishWithExit(err error, exitCode *int) {
 			time.Sleep(unifiedExecTrailingOutputGrace)
 			p.mu.Lock()
 			deltas := p.outputDeltasLocked(nil, true)
-			transcript, _ := p.transcript.Snapshot()
+			transcript := p.transcript.SnapshotWithOmissionMarker()
 			event := UnifiedExecEvent{
 				Kind:        UnifiedExecEventEnd,
 				CallID:      p.callID,
@@ -2193,14 +2194,15 @@ func (p *unifiedExecProcess) markSandboxDenied() {
 	p.mu.Unlock()
 }
 
-func (p *unifiedExecProcess) snapshotAndDrain() (string, bool, int, error, bool) {
+func (p *unifiedExecProcess) snapshotAndDrain() (string, int, bool, int, error, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var output []byte
+	omittedBytes := 0
 	if p.output != nil {
-		output, _ = p.output.Drain()
+		output, omittedBytes = p.output.DrainWithOmissionMarker()
 	}
-	return string(output), p.exited, p.exitCode, p.waitErr, p.timedOut
+	return string(output), omittedBytes, p.exited, p.exitCode, p.waitErr, p.timedOut
 }
 
 type unifiedExecOutputWriter struct {

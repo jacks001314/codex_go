@@ -88,6 +88,7 @@ TUI lane and are not modified here.
 | `#57274` | Node REPL evidence renders in Rust's multimodal layout | `context/node_repl_review_evidence.go`, like-Rust tests |
 | `#57240` | Memory baselines are bounded to 10 MiB and recover as empty snapshots under a cross-process lock | `memories/workspace.go`, `memories/workspace_test.go`, `memories/pipeline_test.go` |
 | `#56250` | Resuming a thread with unchanged settings no longer appends a duplicate settings checkpoint | `rollout/session_items.go`, `rollout/rollout.go`, `appserver/router.go`, like-Rust tests |
+| `#57185` | Unified-exec captured output keeps Rust's byte-omission marker through model truncation | `tool/unified_exec_buffer.go`, `tool/unified_exec.go`, `tool/shell.go`, `tool/shell_executor.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -247,6 +248,12 @@ turn follows the resume; changed settings, or a missing/foreign-only snapshot,
 still persist. Comparison normalizes fields exactly as persistence does and
 keeps an explicit empty runtime-workspace-root list distinct from an omitted
 selection.
+
+`#57185` details: unified-exec collection drains its head/tail buffers with
+Rust's `... N bytes omitted ...` marker at the retained boundary, and transcript
+end events carry the same marker. `ShellResult` retains the omitted byte count
+so model-facing truncation re-adds the notice when middle truncation removed
+it, without duplicating a marker that survived. Local shell output is unchanged.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -828,7 +835,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 102 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 101 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -964,6 +971,7 @@ deduplication for tool outputs.
   pass.
 - For `#57240`: `go test ./memories -count=1` and `go build ./...` pass.
 - For `#56250`: `go test ./rollout -count=1`, `go test ./appserver -run 'Resume|Settings|Revert|Checkpoint' -count=1`, and `go build ./...` pass.
+- For `#57185`: `go test ./tool -run 'OmissionMarker|HeadTailBuffer|HookResponse|UnifiedExec' -count=1` (126s) and `go build ./...` pass.
 - For `#57181`: `go test ./turn -run 'AdditionalContext' -count=1`,
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full

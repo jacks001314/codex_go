@@ -1519,6 +1519,23 @@ func TestUnifiedExecHeadTailBufferCapsAndPreservesEdgesLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #57185: captured unified-exec output keeps an explicit omission marker
+// between the retained head and tail.
+func TestUnifiedExecHeadTailBufferRendersOmissionMarkerLikeRust(t *testing.T) {
+	buffer := newUnifiedExecHeadTailBuffer(10)
+	_, _ = buffer.Write([]byte("hello"))
+	_, _ = buffer.Write([]byte(" middle "))
+	_, _ = buffer.Write([]byte("world"))
+	got, omitted := buffer.DrainWithOmissionMarker()
+	if omitted != 8 {
+		t.Fatalf("omitted = %d, want 8", omitted)
+	}
+	want := "hello\n... 8 bytes omitted ...\nworld"
+	if string(got) != want {
+		t.Fatalf("DrainWithOmissionMarker() = %q, want %q", got, want)
+	}
+}
+
 func TestUnifiedExecProcessAllocationReservesParallelSlot(t *testing.T) {
 	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
 	start := make(chan struct{})
