@@ -19185,9 +19185,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "complete",
+      "status": "partial",
       "evidence": [
-        "Satisfied by Go's screen-mode architecture: Options.usesOwnedScreen keeps `auto` inline for every terminal, so Terminal.app over SSH also retains native scrollback and never enters the alternate screen. `always` opts into the owned screen, while `--no-alt-screen` and `never` override it. Tests TestOwnedScreenOptInOnlyForExplicitAlternateMode, TestInteractiveNoAltScreenResolutionLikeRust, and TestInteractiveTUIModeConfigParsingLikeRust cover the four policy branches; no Apple-specific device-attribute probe is needed."
+        "Satisfied for every terminal except Terminal.app over SSH. Rust's `auto` owns the screen unless a Unix SSH session outside a multiplexer answers the startup DA1/DA2 identity probe as Apple Terminal (`1;2` / `1;95;0`). Go never issues that probe (tui/terminal_probe.go only parses responses), so `Options.usesOwnedScreen` cannot identify Apple Terminal over SSH: the default, `auto`, and `always` all own the screen, and only `--no-alt-screen`, `tui.fullscreen_transcript = false`, or `tui.alternate_screen = \"never\"` stay inline. Those overrides keep native scrollback for Terminal.app over SSH users. Tests: TestDefaultTranscriptOwnershipMatchesRust, TestMouseWheelScrollsTranscriptOnDefaultOwnedScreenLikeRust, TestInlineTranscriptLeavesMouseWheelToTerminalLikeRust, TestInteractiveNoAltScreenResolutionLikeRust, TestInteractiveTUIModeConfigParsingLikeRust."
       ]
     },
     {
@@ -28915,7 +28915,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Completed for Go's explicit fullscreen mode. tui/tea/rendered_selection.go snapshots painted status/footer rows, drag-selects by terminal cell, extracts Unicode text, preserves ANSI/OSC while highlighting, copies on release for copy_on_select auto/always, keeps the selection for Ctrl+C when disabled, clears on content/geometry change, ignores stationary clicks, and leaves the composer/cursor untouched. Options.usesOwnedScreen enables alternate-screen + cell-motion mouse capture only for `tui.alternate_screen=always`; auto/never remain inline with terminal-owned selection and native scrollback (Go's documented architecture mapping). Tests TestRenderedFooterSelectionCopiesPlainTextLikeRust, TestRenderedSelectionPreservesUnicodeAndHyperlinksLikeRust, TestRenderedSelectionInvalidatesChangedRegionLikeRust, TestRenderedSelectionKeyboardCopyLikeRust, TestRenderedSelectionStationaryClickAndInlineModeLikeRust, TestOwnedScreenOptInOnlyForExplicitAlternateMode and production TestOwnedScreenFooterSelectionPTY pass (mouse reporting and reverse-video footer selection observed in the packaged binary)."
+        "Completed for Go's owned screen, which is now the default. tui/tea/rendered_selection.go snapshots painted status/footer rows, drag-selects by terminal cell, extracts Unicode text, preserves ANSI/OSC while highlighting, copies on release for copy_on_select auto/always, keeps the selection for Ctrl+C when disabled, clears on content/geometry change, ignores stationary clicks, and leaves the composer/cursor untouched. Options.usesOwnedScreen enables alternate-screen + cell-motion mouse capture for the default/auto/always modes; inline launches (`--no-alt-screen`, `tui.fullscreen_transcript = false`, `tui.alternate_screen = \"never\"`) keep terminal-owned selection and native scrollback. Tests TestRenderedFooterSelectionCopiesPlainTextLikeRust, TestRenderedSelectionPreservesUnicodeAndHyperlinksLikeRust, TestRenderedSelectionInvalidatesChangedRegionLikeRust, TestRenderedSelectionKeyboardCopyLikeRust, TestRenderedSelectionStationaryClickAndInlineModeLikeRust, TestDefaultTranscriptOwnershipMatchesRust and the gated production TestOwnedScreenFooterSelectionPTY cover the owned surface."
       ]
     },
     {
