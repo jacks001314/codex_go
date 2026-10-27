@@ -15,6 +15,8 @@ TUI lane and are not modified here.
 | Upstream | Requirement | Go change |
 | --- | --- | --- |
 | `#57210` | Opt-in protocol discovery for local stdio MCP servers: the disabled-by-default `mcp_connection_sharing` feature makes an eligible local stdio server (not `codex_apps`, local environment, no runtime-managed credentials, no EMA auth, no explicit legacy override) probe `server/discover` before the legacy handshake. A helper that cannot finish discovery is recovered with a fresh handshake after the previous process exits; a working legacy connection is retained for the same helper when an upgrade fails for a non-authentication reason; authentication failures abort without a restart. Discover connections keep the bounded modern message framing and protocol metadata, and share the legacy catalog identity until they negotiate 2026-07-28. | `features/features.go`, `mcp/protocol_2026.go`, `mcp/config.go`, `mcp/api.go`, `mcp/stdio_client.go`, `mcp/protocol_discovery_metrics.go`, `mcp/stdio_discovery_like_rust_test.go` |
+| `#57211` | Share eligible local stdio MCP connections across chats: the `mcp_connection_sharing` feature also pools local stdio helpers that negotiated MCP 2026-07-28, keyed by helper identity, environment, client capabilities, startup budget, and catalog limit. Later chats join a ready connection and still list their own catalog; input requests keep using the calling chat's callback. Legacy helpers and helpers that requested client input while starting stay private. Each chat releases its lease independently and the final release stops the helper. A forced refresh (runtime apply, server config change, form toggle, or `Refresh`) retires the pooled connection so new chats start a fresh helper without interrupting chats that still share the retired one. | `mcp/connection_pool.go`, `mcp/api.go`, `mcp/stdio_client.go`, `mcp/connection_sharing_like_rust_test.go` |
+| `#57196` | Isolate MCP inputs and timeouts for callers sharing a connection: input requests carry globally unique ids across requests and connections, waiting for client input pauses the request's own timeout budget instead of consuming it, and a cancelled caller on a ready — possibly shared — connection sends `notifications/cancelled` for its own request rather than failing the transport. Tool calls, resource reads, catalog listings, and custom requests all go through the same request path, so cancellation and budget pausing apply uniformly. | `mcp/stdio_client.go`, `mcp/protocol_2026.go`, `mcp/connection_sharing_like_rust_test.go` |
 | `#55607` | Auth header construction is fallible so a request is never sent with missing or partial credentials: the API auth provider, telemetry, and request application propagate errors; a provider that requires Codex auth reports a transient error when managed authentication is unavailable (catalog identity stays computable); transient MCP auth errors are retryable while auth build errors and policy denials are terminal. | `codexapi/auth.go`, `model/auth.go`, `model/models_identity.go`, `mcp/http_client.go`, like-Rust tests |
 | `#55923` | Preserve thread model settings across resume and revert: a cold resume restores the thread-owned service tier, reasoning summary, and personality unless the caller overrides them; the selected tier is kept for persistence and settings snapshots while the effective tier is filtered against the model (flex is always preserved); `thread/revert` carries the runtime model, service tier, and personality into reconstruction; and the initial settings checkpoint is written before user input so an interrupted first turn retains it. | `rollout/rollout.go`, `rollout/session_items.go`, `model/catalog.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/persisted_model_settings.go`, like-Rust tests |
 | `#56330` | Interrupts and Plan mode stop reserved agent-message wakes: an interrupt during model discovery rejects the unstarted reservation without a terminal event, preserves its mail for an explicit turn, and blocks later automatic wakes until a new turn starts. Plan mode rejects the wake but does not mark the thread stopped. Accepted wakes keep their admission configuration, and finishing turns stay running and persist only `TurnComplete`. | `turn/api.go`, `appserver/turn_runtime.go`, `appserver/thread_manager.go`, `appserver/agent_controller.go`, `appserver/runtime_router.go`, `appserver/agent_message_wake_controls_like_rust_test.go` |
@@ -1433,6 +1435,23 @@ deduplication for tool outputs.
   message limit for discovery. Go sends discovery and initialize sequentially, so
   Rust's late-discovery race modes do not exist here; the recoveries they exercise
   are covered by the sequential equivalents.
+- For `#57211`: `go build ./...`, `go test ./mcp -count=1`,
+  `go test ./appserver -run 'MCP|Mcp' -count=1`, and `go test ./app -run 'MCP|Mcp' -count=1`
+  pass. Coverage pins one helper process shared by two chats with per-chat answers, a release
+  that keeps the other chat working, final-release shutdown followed by a fresh helper, a
+  startup elicitation keeping the helper private, and a forced refresh retiring the connection
+  for new chats while the sharing chat keeps using it. Gating reuses the `#57210` eligibility
+  rules, so `codex_apps`, remote/EMA servers, runtime-credential servers, read-only servers, and
+  `ApplyHTTPRequest` servers never enter the pool; legacy connections are private by construction
+  because `isShareable` requires the 2026-07-28 mode. Rust shares one catalog snapshot between
+  chats and refreshes joiners through a cache ticket; Go lists per cached client and keeps the
+  same observable per-chat tool visibility.
+- For `#57196`: `go test ./mcp -count=1` passes. Coverage pins unique input ids for concurrent
+  callers, cancellation of one caller leaving the shared transport usable, and input wait time
+  excluded from the request timeout. Rust's `read_resource_with_elicitation` extension is
+  structural: Go serves `resources/read` through the same `CallWithOptionsContext` continuation
+  loop, so continuation handling, unique ids, and the paused budget apply to resource and custom
+  requests without a second implementation.
 - For `#55607`: `go build ./...`, `go test ./model ./codexapi -count=1`,
   `go test ./mcp -count=1`, `go test ./appserver -run 'Auth|Login|Logout|Gateway|Provider' -count=1`,
   and `go test ./app -run 'Login|Logout|Auth|Provider' -count=1` pass. Coverage pins rejected

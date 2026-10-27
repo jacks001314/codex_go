@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -276,6 +277,17 @@ func isLegacyMCPProtocolDate(version string) bool {
 	return true
 }
 
+// mcpInputRequestSequence numbers prompts raised by MCP input-required
+// continuations. Rust #57196 requires globally unique input ids because a
+// prompt outlives the transport request that raised it; the id never reaches the
+// server, which correlates responses by the request's own map key.
+var mcpInputRequestSequence atomic.Uint64
+
+func nextMCPInputRequestIDValue() json.RawMessage {
+	id := mcpInputRequestSequence.Add(1) - 1
+	return json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("mcp-input/%d", id)))
+}
+
 type mcpInputRequiredResult struct {
 	ResultType    string                             `json:"resultType"`
 	InputRequests map[string]mcpInputRequiredRequest `json:"inputRequests"`
@@ -319,8 +331,7 @@ func nextMCP2026RequestParams(ctx context.Context, serverName string, elicitatio
 		responses := make(map[string]any, len(keys))
 		for _, key := range keys {
 			request := required.InputRequests[key]
-			id, _ := json.Marshal(key)
-			response, rpcErr := mcpClientRequestResult(ctx, serverName, elicitation, request.Method, id, request.Params)
+			response, rpcErr := mcpClientRequestResult(ctx, serverName, elicitation, request.Method, nextMCPInputRequestIDValue(), request.Params)
 			if rpcErr != nil {
 				return nil, false, newMCPRemoteError(request.Method, rpcErr)
 			}

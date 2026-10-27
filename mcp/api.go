@@ -751,14 +751,18 @@ type MCPService struct {
 	starting        map[string]int
 	httpClients     map[string]*cachedMCPHTTPClient
 	stdioClients    map[string]*cachedMCPStdioClient
-	oauthLogins     map[string]*OAuthLoginServer
-	oauth           *OAuthStore
-	resourceCache   *MCPResourceCache
-	elicitation     MCPElicitationHandler
-	progress        MCPProgressHandler
-	roots           MCPRootsProvider
-	oauthComplete   MCPOAuthLoginCompletionHandler
-	invocations     *MCPInvocationRegistry
+	// discoverLocalStdio mirrors Rust McpConfig::discover_local_stdio: it gates
+	// both local stdio protocol discovery (#57210) and connection sharing
+	// (#57211).
+	discoverLocalStdio bool
+	oauthLogins        map[string]*OAuthLoginServer
+	oauth              *OAuthStore
+	resourceCache      *MCPResourceCache
+	elicitation        MCPElicitationHandler
+	progress           MCPProgressHandler
+	roots              MCPRootsProvider
+	oauthComplete      MCPOAuthLoginCompletionHandler
+	invocations        *MCPInvocationRegistry
 	// oauthCompleteListeners let multiple in-process consumers observe the same
 	// login completion while the app-server handler remains installed.
 	oauthCompleteListeners map[uint64]MCPOAuthLoginCompletionHandlerFunc
@@ -835,6 +839,9 @@ type cachedMCPStdioClient struct {
 	key            string
 	client         *stdioClient
 	startupTimeout time.Duration
+	// release returns a shared connection to the process-wide pool (Rust
+	// #57211). It is nil for private connections, which Close owns.
+	release func()
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
@@ -863,6 +870,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		service.environmentUseMXC = cloneBoolMap(runtime.EnvironmentUseMXC)
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
 		service.refreshToolListOnNotifications = runtime.RefreshToolListOnNotifications
+		service.discoverLocalStdio = runtime.DiscoverLocalStdio
 		if strings.TrimSpace(runtime.CodexHome) != "" {
 			service.oauth = NewOAuthStoreWithMode(runtime.CodexHome, runtime.OAuthCredentialsStoreMode)
 		}
@@ -976,7 +984,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	nextHTTPClients := map[string]*cachedMCPHTTPClient{}
 	nextStdioClients := map[string]*cachedMCPStdioClient{}
 	var oldHTTPClients []*httpClient
-	var oldStdioClients []*stdioClient
+	var oldStdioClients []*cachedMCPStdioClient
 	for name, cached := range s.httpClients {
 		config, ok := refreshed.configs[name]
 		sharedHTTPClientKey := refreshed.sharedHTTPClientKey
@@ -1002,7 +1010,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 			continue
 		}
 		if cached != nil && cached.client != nil {
-			oldStdioClients = append(oldStdioClients, cached.client)
+			oldStdioClients = append(oldStdioClients, cached)
 		}
 	}
 	oldOAuthLogins := s.oauthLoginsForCancelLocked()
@@ -1021,13 +1029,15 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.permissionProfile = refreshed.permissionProfile
 	s.serverPermissionProfiles = refreshed.serverPermissionProfiles
 	s.selectedEnvironments = refreshed.selectedEnvironments
+	s.discoverLocalStdio = refreshed.discoverLocalStdio
+	s.refreshToolListOnNotifications = refreshed.refreshToolListOnNotifications
 	s.generation++
 	if s.resourceCache == nil {
 		s.resourceCache = NewMCPResourceCache(nil)
 	}
 	s.mu.Unlock()
 	closeHTTPClients(oldHTTPClients)
-	closeStdioClients(oldStdioClients)
+	retireCachedStdioClients(oldStdioClients)
 	cancelOAuthLogins(oldOAuthLogins)
 	s.clearResourceCache()
 }
@@ -1079,7 +1089,7 @@ func (s *MCPService) Close() error {
 	s.oauthLogins = map[string]*OAuthLoginServer{}
 	s.mu.Unlock()
 	closeHTTPClients(httpClients)
-	closeStdioClients(stdioClients)
+	closeCachedStdioClients(stdioClients)
 	cancelOAuthLogins(oauthLogins)
 	s.clearResourceCache()
 	return nil
@@ -1126,7 +1136,7 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 		s.clearResourceCache()
 		s.mu.Unlock()
 		closeHTTPClients([]*httpClient{oldHTTPClient})
-		closeStdioClients([]*stdioClient{oldStdioClient})
+		retireCachedStdioClients([]*cachedMCPStdioClient{oldStdioClient})
 		cancelOAuthLogins([]*OAuthLoginServer{oldOAuthLogin})
 		return
 	}
@@ -1146,7 +1156,7 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 		s.clearResourceCache()
 		s.mu.Unlock()
 		closeHTTPClients([]*httpClient{oldHTTPClient})
-		closeStdioClients([]*stdioClient{oldStdioClient})
+		retireCachedStdioClients([]*cachedMCPStdioClient{oldStdioClient})
 		cancelOAuthLogins([]*OAuthLoginServer{oldOAuthLogin})
 		return
 	}
@@ -1179,7 +1189,7 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 	s.clearResourceCache()
 	s.mu.Unlock()
 	closeHTTPClients([]*httpClient{oldHTTPClient})
-	closeStdioClients([]*stdioClient{oldStdioClient})
+	retireCachedStdioClients([]*cachedMCPStdioClient{oldStdioClient})
 	cancelOAuthLogins([]*OAuthLoginServer{oldOAuthLogin})
 }
 
@@ -1280,7 +1290,7 @@ func (s *MCPService) SetOpenAIFormElicitationEnabled(enabled bool) {
 	s.stdioClients = map[string]*cachedMCPStdioClient{}
 	s.mu.Unlock()
 	closeHTTPClients(oldHTTPClients)
-	closeStdioClients(oldStdioClients)
+	retireCachedStdioClients(oldStdioClients)
 	s.clearResourceCache()
 }
 
@@ -3070,19 +3080,35 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 		return cached.client
 	}
 	old := s.deleteStdioClientLocked(name)
-	client := newMCPStdioClientWithFeatures(config, openAIForm, userVerification)
-	client.authChanges = authChanges
-	if mcpStdioUpgradeFromLegacy(old, config, openAIForm, userVerification) {
+	var (
+		client  *stdioClient
+		release func()
+	)
+	if s.mcpStdioSharingEligible(name, config) {
+		client, release = sharedMCPStdioConnections.acquire(mcpStdioPoolKey(key, config), func() *stdioClient {
+			created := newMCPStdioClientWithFeatures(config, openAIForm, userVerification)
+			created.authChanges = authChanges
+			return created
+		})
+	} else {
+		client = newMCPStdioClientWithFeatures(config, openAIForm, userVerification)
+		client.authChanges = authChanges
+	}
+	var previous *stdioClient
+	if old != nil {
+		previous = old.client
+	}
+	if release == nil && mcpStdioUpgradeFromLegacy(previous, config, openAIForm, userVerification) {
 		// A forced reconnect must wait for the previously published helper to
 		// exit, but a working legacy helper stays available until the upgrade
 		// proves itself: a failed discovery for the same account falls back to
 		// it instead of failing the chat (Rust #57210).
-		client.legacyFallback = old
+		client.legacyFallback = previous
 		old = nil
 	}
-	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout}
+	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout, release: release}
 	s.mu.Unlock()
-	closeStdioClients([]*stdioClient{old})
+	closeCachedStdioClients([]*cachedMCPStdioClient{old})
 	return client
 }
 
@@ -3407,32 +3433,58 @@ func (s *MCPService) clearStdioClients() {
 	clients := s.stdioClientsForCloseLocked()
 	s.stdioClients = map[string]*cachedMCPStdioClient{}
 	s.mu.Unlock()
-	closeStdioClients(clients)
+	retireCachedStdioClients(clients)
 }
 
-func (s *MCPService) stdioClientsForCloseLocked() []*stdioClient {
+func (s *MCPService) stdioClientsForCloseLocked() []*cachedMCPStdioClient {
 	if s == nil || len(s.stdioClients) == 0 {
 		return nil
 	}
-	clients := make([]*stdioClient, 0, len(s.stdioClients))
+	clients := make([]*cachedMCPStdioClient, 0, len(s.stdioClients))
 	for _, cached := range s.stdioClients {
 		if cached != nil && cached.client != nil {
-			clients = append(clients, cached.client)
+			clients = append(clients, cached)
 		}
 	}
 	return clients
 }
 
-func (s *MCPService) deleteStdioClientLocked(name string) *stdioClient {
+func (s *MCPService) deleteStdioClientLocked(name string) *cachedMCPStdioClient {
 	if s == nil || s.stdioClients == nil {
 		return nil
 	}
 	cached := s.stdioClients[name]
 	delete(s.stdioClients, name)
-	if cached == nil {
-		return nil
+	return cached
+}
+
+// closeCachedStdioClients releases pooled connections and closes private ones.
+// Releasing a shared connection keeps the helper running for other chats.
+func closeCachedStdioClients(cached []*cachedMCPStdioClient) {
+	for _, entry := range cached {
+		if entry == nil {
+			continue
+		}
+		if entry.release != nil {
+			entry.release()
+			entry.release = nil
+			continue
+		}
+		closeStdioClients([]*stdioClient{entry.client})
 	}
-	return cached.client
+}
+
+// retireCachedStdioClients retires pooled connections before releasing them:
+// a forced refresh must start a fresh helper for new chats, while chats that
+// already share the old helper keep it until their own release (Rust #57211).
+func retireCachedStdioClients(cached []*cachedMCPStdioClient) {
+	for _, entry := range cached {
+		if entry == nil || entry.release == nil || entry.client == nil {
+			continue
+		}
+		sharedMCPStdioConnections.retireClient(entry.client)
+	}
+	closeCachedStdioClients(cached)
 }
 
 func closeStdioClients(clients []*stdioClient) {

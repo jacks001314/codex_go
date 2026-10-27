@@ -69,7 +69,11 @@ type stdioClient struct {
 	legacyFallback *stdioClient
 	// delegate is the retained legacy connection this client hands all traffic
 	// to after a failed upgrade.
-	delegate                           *stdioClient
+	delegate *stdioClient
+	// startupInputReceived records that the helper asked its chat for input
+	// before it finished starting, which binds it to that chat and keeps it out
+	// of the shared pool (Rust #57211).
+	startupInputReceived               bool
 	supportsSandboxStateMetaCapability bool
 	// elicitationCancellations remembers server cancellations for this
 	// connection so elicitations return `cancel` instead of hanging
@@ -303,16 +307,24 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.callTimeout())
-	defer cancel()
 	if options != nil {
 		ctx = contextWithMCPClientContextAndRoots(ctx, options.ThreadID, options.TurnID, options.ItemID, options.Roots)
 	}
+	// Rust #57196: a shared connection must pause only the calling chat's
+	// timeout while it awaits input, so every transport attempt gets the budget
+	// that is left after subtracting time spent waiting on the user.
+	budget := newMCPCallBudget(c.callTimeout())
 	if delegate := c.legacyDelegate(); delegate != nil {
 		return delegate.CallWithOptionsContext(ctx, options, method, params, out)
 	}
-	if err := c.ensureInitialized(ctx, options); err != nil {
-		if fallback := c.tryLegacyFallback(ctx, options, err); fallback != nil {
+	initCtx, cancelInit := budget.context(ctx)
+	err := c.ensureInitialized(initCtx, options)
+	cancelInit()
+	if err != nil {
+		fallbackCtx, cancelFallback := budget.context(ctx)
+		fallback := c.tryLegacyFallback(fallbackCtx, options, err)
+		cancelFallback()
+		if fallback != nil {
 			return fallback.CallWithOptionsContext(ctx, options, method, params, out)
 		}
 		return err
@@ -321,7 +333,9 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 	baseParams := params
 	requestParams := params
 	for round := 0; ; round++ {
-		response, err := c.doRequest(ctx, options, method, requestParams)
+		requestCtx, cancelRequest := budget.context(ctx)
+		response, err := c.doRequest(requestCtx, options, method, requestParams)
+		cancelRequest()
 		if err != nil {
 			return decorateMCPStdioError(err, stderr)
 		}
@@ -329,11 +343,17 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 			return newMCPRemoteError(method, response.Error)
 		}
 		if c.protocolModeSnapshot() == MCPProtocol20260728 {
+			// The caller's own timeout is paused while the user answers, so the
+			// waiting time is not charged to the request (Rust #57196).
+			inputStarted := time.Now()
 			nextParams, inputRequired, err := nextMCP2026RequestParams(ctx, serverNameFromStdioOptions(options), elicitationFromStdioOptions(options), baseParams, response.Result)
 			if err != nil {
 				return err
 			}
 			if inputRequired {
+				// Awaiting the caller's answer must not consume the request's
+				// own timeout.
+				budget.pause(time.Since(inputStarted))
 				if round >= maxMCPInputRequiredRounds {
 					return fmt.Errorf("MCP %s exceeded %d input-required rounds", method, maxMCPInputRequiredRounds)
 				}
@@ -346,6 +366,36 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 		}
 		return json.Unmarshal(*response.Result, out)
 	}
+}
+
+// mcpCallBudget hands out a per-attempt deadline while excluding time a call
+// spent waiting for the user's input (Rust #57196).
+type mcpCallBudget struct {
+	timeout time.Duration
+	started time.Time
+	paused  time.Duration
+}
+
+func newMCPCallBudget(timeout time.Duration) *mcpCallBudget {
+	return &mcpCallBudget{timeout: timeout, started: time.Now()}
+}
+
+func (b *mcpCallBudget) context(parent context.Context) (context.Context, context.CancelFunc) {
+	if b == nil {
+		return context.WithCancel(parent)
+	}
+	remaining := b.timeout - time.Since(b.started) + b.paused
+	if remaining <= 0 {
+		remaining = time.Nanosecond
+	}
+	return context.WithTimeout(parent, remaining)
+}
+
+func (b *mcpCallBudget) pause(elapsed time.Duration) {
+	if b == nil || elapsed <= 0 {
+		return
+	}
+	b.paused += elapsed
 }
 
 func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, method string, params any) (*stdioRPCResponse, error) {
@@ -381,8 +431,34 @@ func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, 
 		return result.Response, nil
 	case <-ctx.Done():
 		c.unregisterPending(id)
+		if c.isInitialized() {
+			// A ready (possibly shared) connection keeps serving other callers;
+			// only this request is cancelled (Rust #57196).
+			c.cancelRemoteRequest(cmd, id, ctx.Err())
+			return nil, ctx.Err()
+		}
 		c.failTransportFor(cmd, ctx.Err())
 		return nil, ctx.Err()
+	}
+}
+
+// cancelRemoteRequest asks the server to stop work for one request without
+// disturbing the connection. A failed write still tears the transport down.
+func (c *stdioClient) cancelRemoteRequest(owner *exec.Cmd, id int64, reason error) {
+	message := "cancelled"
+	if reason != nil {
+		message = reason.Error()
+	}
+	err := c.writeFrame(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "notifications/cancelled",
+		"params": map[string]any{
+			"requestId": id,
+			"reason":    message,
+		},
+	})
+	if err != nil {
+		c.failTransportFor(owner, err)
 	}
 }
 
@@ -548,6 +624,7 @@ func (c *stdioClient) startProcess(protocolMode MCPProtocolMode, launchEnv map[s
 	c.stderr = stderr
 	c.started = true
 	c.initialized = false
+	c.startupInputReceived = false
 	c.capabilitiesMu.Lock()
 	c.serverCapabilities = nil
 	c.capabilitiesMu.Unlock()
@@ -898,6 +975,13 @@ func (c *stdioClient) toolsListRevision() uint64 {
 // dispatchElicitationRequest answers a server elicitation on its own goroutine
 // so the read loop can keep observing cancellation notifications.
 func (c *stdioClient) dispatchElicitationRequest(ctx context.Context, serverName string, elicitation MCPElicitationHandler, method string, id json.RawMessage, params json.RawMessage) {
+	if !c.isInitialized() {
+		// Client input during startup binds this helper to the chat that
+		// answered it, so it must stay private (Rust #57211).
+		c.mu.Lock()
+		c.startupInputReceived = true
+		c.mu.Unlock()
+	}
 	cmd := c.currentCommand()
 	requestID := append(json.RawMessage(nil), id...)
 	go func() {
@@ -967,6 +1051,19 @@ func (c *stdioClient) isClosed() bool {
 // isInitialized reports whether the MCP handshake completed for this
 // connection (Rust #40636 startup_complete). A ready connection can be reused
 // across a startup-timeout config change; a pending startup cannot.
+// isShareable reports whether another chat may join this connection: it must
+// have negotiated MCP 2026-07-28 and must not depend on the chat that started
+// it (Rust #57211).
+func (c *stdioClient) isShareable() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.closed && c.initialized && c.delegate == nil && !c.startupInputReceived &&
+		c.protocolMode == MCPProtocol20260728
+}
+
 func (c *stdioClient) isInitialized() bool {
 	if c == nil {
 		return false
@@ -1012,6 +1109,7 @@ func (c *stdioClient) closeLocked() error {
 	c.started = false
 	c.initialized = false
 	c.initializing = false
+	c.startupInputReceived = false
 	c.pending = map[int64]*stdioPendingCall{}
 	c.pendingOrder = nil
 	if c.initDone != nil {
