@@ -97,10 +97,11 @@ func TestSamplingRecordsToolRegistrationsOnceAcrossTransportRetryLikeRust(t *tes
 		ToolRegistrationMetrics: sink,
 	})
 	result, err := runtime.Run(context.Background(), &turn.AgentLoopRequest{
-		Prompt:      "hello",
-		Model:       "gpt-test",
-		ToolMode:    model.ToolModeDirect,
-		HostedTools: []any{map[string]any{"type": "web_search"}},
+		Prompt:           "hello",
+		Model:            "gpt-test",
+		ToolMode:         model.ToolModeDirect,
+		IncrementalTools: true,
+		HostedTools:      []any{map[string]any{"type": "web_search"}},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -137,8 +138,11 @@ func TestSamplingRecordsToolRegistrationsOnceAcrossTransportRetryLikeRust(t *tes
 		if sample.tags["tool_mode"] != model.ToolModeDirect {
 			t.Fatalf("sample[%d] tool_mode = %q, want %q", index, sample.tags["tool_mode"], model.ToolModeDirect)
 		}
-		if len(sample.tags) != 2 {
-			t.Fatalf("sample[%d] tags = %#v, want only exposure and tool_mode", index, sample.tags)
+		if sample.tags["incremental_tools"] != "true" {
+			t.Fatalf("sample[%d] incremental_tools = %q, want true", index, sample.tags["incremental_tools"])
+		}
+		if len(sample.tags) != 3 {
+			t.Fatalf("sample[%d] tags = %#v, want only exposure, tool_mode and incremental_tools", index, sample.tags)
 		}
 		for _, value := range sample.tags {
 			if strings.Contains(value, "private description") {

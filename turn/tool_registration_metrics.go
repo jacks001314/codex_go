@@ -25,12 +25,17 @@ const (
 
 // recordToolRegistrationMetrics records the finalized registration inventory
 // once per sampling request. Zero counts are emitted for categories with no
-// registrations, and only bounded exposure/tool-mode labels are attached.
-func recordToolRegistrationMetrics(sink ToolRegistrationMetricSink, counts tool.RegistrationCounts, toolMode string) {
+// registrations, and only bounded exposure/tool-mode/incremental-tools labels
+// are attached (Rust #55692).
+func recordToolRegistrationMetrics(sink ToolRegistrationMetricSink, counts tool.RegistrationCounts, toolMode string, incrementalTools bool) {
 	if sink == nil {
 		return
 	}
 	toolMode = normalizeToolRegistrationMode(toolMode)
+	incremental := "false"
+	if incrementalTools {
+		incremental = "true"
+	}
 	samples := [...]struct {
 		exposure string
 		count    int
@@ -48,8 +53,9 @@ func recordToolRegistrationMetrics(sink ToolRegistrationMetricSink, counts tool.
 			sample.count,
 			metrics.ToolRegistrationsMetricBoundaries,
 			map[string]string{
-				"exposure":  sample.exposure,
-				"tool_mode": toolMode,
+				"exposure":          sample.exposure,
+				"tool_mode":         toolMode,
+				"incremental_tools": incremental,
 			},
 		)
 	}

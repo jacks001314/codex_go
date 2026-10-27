@@ -81,6 +81,7 @@ TUI lane and are not modified here.
 | `#55545` | Preserve undecodable compressed rollouts for diagnostics and log bounded read details | `appserver/rollout_archive.go`, `rollout/read_diagnostics.go`, `rollout/line_reader.go`, like-Rust tests |
 | `#55581` | A failed background compaction releases the foreground waiter so it falls back instead of hanging | `appserver/async_compaction.go`, like-Rust test |
 | `#55971` | Local message boards can select an isolated storage namespace | `agentboard/local_options.go`, `agentboard/local.go`, `agentboard/connection.go`, `agentboard/configure_local_board.go`, like-Rust test |
+| `#55692` | Tool-registration metrics carry the effective `incremental_tools` mode | `turn/tool_registration_metrics.go`, `turn/agent_loop.go`, `turn/runtime.go`, `appserver/turn_runtime.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -674,9 +675,18 @@ collide with another runtime database. `OpenLocalBoardWithOptions`,
 permanent deletion stay on one namespace and leave other namespaces untouched.
 The existing non-options entry points delegate with the default options.
 
+`#55692` details: `codex.tools.registered` now carries an
+`incremental_tools` label (`true`/`false`) beside `exposure` and `tool_mode`.
+The value is the effective mode for the sampling request — the same decision
+that built the tool declarations: Responses Lite plus the feature gate when the
+window is new, and whether the current window recorded an incremental catalog
+otherwise. `appTurnConfig` computes it once and both `AgentLoopRequest` entry
+paths reuse it across sampling iterations and transport retries, so retries do
+not duplicate samples.
+
 ## Pending in this window
 
-- About 123 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 122 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -792,6 +802,7 @@ The existing non-options entry points delegate with the default options.
 - For `#56033`/`#55701`/`#56163`: `go test ./features ./config ./app -count=1`, `go test ./exec -run 'ReasoningEffort' -count=1`, `go test ./appserver -run 'ReasoningEffort|OAuth|MCP' -count=1`, and `go build ./...` pass.
 - For `#56371`: `go test ./config -run GuardianReviewTimeout -count=1` and `go test ./appserver -run 'GuardianReview(Timeout|Context|erUsesConfigured|erUnlimited)' -count=1` pass.
 - For `#55581`: `go test ./appserver -run 'AsyncCompaction' -count=1` passes; reverting the fix makes the new test block.
+- For `#55692`: `go test ./turn -count=1`, `go test ./appserver -run 'Incremental|ToolRegistration|AsyncCompaction' -count=1`, and `go build ./...` pass.
 - For `#55971`: `go test ./agentboard -count=1`,
   `go test ./appserver -run 'MessageBoard|Board' -count=1`, and `go build ./...`
   pass.

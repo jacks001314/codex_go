@@ -35,7 +35,7 @@ func (s *recordingToolRegistrationMetricSink) HistogramWithBounds(name string, v
 
 func TestRecordToolRegistrationMetricsIncludesEmptyExposuresLikeRust(t *testing.T) {
 	sink := &recordingToolRegistrationMetricSink{}
-	recordToolRegistrationMetrics(sink, tool.RegistrationCounts{}, model.ToolModeCodeMode)
+	recordToolRegistrationMetrics(sink, tool.RegistrationCounts{}, model.ToolModeCodeMode, false)
 
 	if len(sink.samples) != 6 {
 		t.Fatalf("samples = %d, want 6", len(sink.samples))
@@ -56,8 +56,9 @@ func TestRecordToolRegistrationMetricsIncludesEmptyExposuresLikeRust(t *testing.
 			t.Fatalf("sample[%d] boundaries = %#v, want %#v", index, sample.boundaries, metrics.ToolRegistrationsMetricBoundaries)
 		}
 		wantTags := map[string]string{
-			"exposure":  wantExposures[index],
-			"tool_mode": model.ToolModeCodeMode,
+			"exposure":          wantExposures[index],
+			"tool_mode":         model.ToolModeCodeMode,
+			"incremental_tools": "false",
 		}
 		if !reflect.DeepEqual(sample.tags, wantTags) {
 			t.Fatalf("sample[%d] tags = %#v, want %#v", index, sample.tags, wantTags)

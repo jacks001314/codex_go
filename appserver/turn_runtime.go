@@ -1756,6 +1756,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
 		ToolMode:                     runConfig.ToolMode,
+		IncrementalTools:             runConfig.IncrementalTools,
 		DisableCodeModeFallback:      runConfig.DisableCodeModeFallback,
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskRegular,
@@ -2325,6 +2326,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
 		ToolMode:                     runConfig.ToolMode,
+		IncrementalTools:             runConfig.IncrementalTools,
 		DisableCodeModeFallback:      runConfig.DisableCodeModeFallback,
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskReview,
@@ -7726,6 +7728,9 @@ type appTurnRunConfig struct {
 	Model                   string
 	AutoReviewModelOverride string
 	ToolMode                string
+	// IncrementalTools is the effective incremental-tool mode for this turn's
+	// context window (Rust #55692). It tags the tool-registration metric.
+	IncrementalTools        bool
 	DisableCodeModeFallback bool
 	ProviderID              string
 	Instructions            string
@@ -8183,6 +8188,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		Model:                   modelProviderConfig.Model,
 		AutoReviewModelOverride: autoReviewModelOverride,
 		ToolMode:                toolMode,
+		IncrementalTools:        incrementalActive,
 		DisableCodeModeFallback: cfg.DisableCodeModeInProcessFallback(),
 		ProviderID:              modelProviderConfig.ProviderID,
 		Instructions:            instructions,

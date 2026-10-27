@@ -236,6 +236,11 @@ type AgentLoopRequest struct {
 	// skipped for a missing or malformed usage instead of charging an
 	// estimate made up from the partial response.
 	OnIncompleteResponseUsage IncompleteResponseUsageCallback
+	// IncrementalTools reports the effective incremental-tool mode for this
+	// sampling request (Rust #55692 `current_window_uses_incremental_tools`).
+	// The registration metric labels it, and prompt construction already used
+	// the same decision.
+	IncrementalTools bool
 }
 
 // AgentPreSamplingValidation is the pre-sampling gate of a turn, invoked with
@@ -505,7 +510,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		if l.toolRegistrationCounts != nil {
 			toolRegistrationCounts = l.toolRegistrationCounts()
 		}
-		recordToolRegistrationMetrics(l.toolRegistrationMetrics, toolRegistrationCounts, request.ToolMode)
+		recordToolRegistrationMetrics(l.toolRegistrationMetrics, toolRegistrationCounts, request.ToolMode, request.IncrementalTools)
 		stepTools := request.Tools
 		if iteration > 0 && request.ToolsForStep != nil {
 			stepTools = request.ToolsForStep(stepModel)

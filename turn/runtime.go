@@ -229,7 +229,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		if request.InstructionsProvider != nil {
 			instructions = request.InstructionsProvider()
 		}
-		recordToolRegistrationMetrics(r.toolRegistrationMetrics, tool.RegistrationCounts{}, request.ToolMode)
+		recordToolRegistrationMetrics(r.toolRegistrationMetrics, tool.RegistrationCounts{}, request.ToolMode, request.IncrementalTools)
 		response, err := r.agent.Run(ctx, &model.AgentRequest{
 			Prompt:                       request.Prompt,
 			Instructions:                 instructions,
