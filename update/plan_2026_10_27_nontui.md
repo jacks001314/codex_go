@@ -116,6 +116,7 @@ TUI lane and are not modified here.
 | `#55978` | `logs_2.sqlite` moves to an explicitly configured `log_dir` (user config or managed requirements) unless a managed `sqlite_home` requirement pins the database home; other databases stay in `sqlite_home` and an unset `log_dir` keeps the old location. The logs directory is created only when its database opens, so an unavailable `log_dir` never blocks login/config reads. Existing logs stay in place: feedback falls back to them as `codex-logs-legacy.log`, and retention pruning plus page reclamation cover both locations with independent maintenance locks and NFS probes | `config/config.go`, `state/sqlite.go`, `state/logs.go`, `state/logs_maintenance.go`, `state/reclamation.go`, `appserver/websocket.go`, `appserver/runtime_router.go`, like-Rust tests |
 | `#55856` | Managed app-server and updater stderr logs go through one bounded, nonblocking worker (64 queued records, 16 KiB per record, lossy); a live log above 1 MiB keeps its latest 256 KiB in `.log.previous` and is truncated in place with append-only handles, and updater handoff pauses predecessor pruning until ownership is restored | `appserverdaemon/stderr_log.go`, `appserverdaemon/stderr_append_unix.go`, `appserverdaemon/stderr_append_windows.go`, `appserverdaemon/daemon.go`, `appserverdaemon/migration.go`, `appserverdaemon/update_loop.go`, `appserverdaemon/pid_shutdown_windows.go`, `app/app.go`, like-Rust tests |
 | `#55498` | Noise relay handshakes emit correlated, credential-free diagnostics: executor rejections and pending-validation resets carry a classified reason and registry HTTP status in a normalized UUID stream id, capped at 100 per minute per relay connection plus one suppression marker; harness failures and completions add elapsed time and connection identifiers, WebSocket read failures are classified from typed errors, and valid stream UUIDs are forwarded to key validation as `x-codex-noise-stream-id` | `execserver/remote_relay.go`, `execserver/remote_harness.go`, like-Rust tests |
+| `#56127` | EMA MCP auth status inspection is owner-checked and never waits for account refresh; one lazy read of the account-scoped IdP grant is shared across admitted EMA servers, and a missing grant or read error is cached so every server reports the same state without repeating storage work | `mcp/ema_runtime.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -150,6 +151,14 @@ Grounding notes:
   plus error categories produced by its own registry client, and only the
   status code (never response text) is reported. The validator error's raw text
   and reset reasons are never logged.
+- `#56127` has no Go account-grant lease or refresh permit to avoid: Go's EMA
+  status path already reads the stored IdP grant directly (no network exchange
+  and no refresh coordination), so the Rust change's blocking-lease problem does
+  not exist here. The portable parts are implemented — `CredentialsAvailable`
+  now re-checks the captured account owner, and
+  `AttachEnterpriseMCPAuthorization` shares one lazy read per (store mode,
+  credential name, issuer) across admitted EMA servers, caching success,
+  missing-grant and read-error results alike.
 - `#56124`'s reviewer-event forwarding is structurally N/A: Rust installs a
   parent observer on a private Guardian review *session* and forwards its
   `RawResponseItem`/`TurnAborted` events under the reviewer's own thread and
@@ -1297,5 +1306,12 @@ deduplication for tool outputs.
   with environment/registration correlation and no authorization, registry
   response or reset-reason leakage, and the harness failure/completion
   diagnostics including elapsed time, identifiers and stream UUID.
+- For `#56127`: `go test ./mcp -count=1` (15.5s), `go vet ./mcp`, and
+  `go build ./appserver ./app` pass. Coverage pins one storage read for two
+  servers resolving the same grant (distinct stores still read separately), a
+  missing grant cached across repeated inspections, both EMA servers receiving
+  the configured credential status and request applier, owner changes no longer
+  reporting the previous account's grant, and a logged-out account reporting no
+  grant.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.

@@ -98,13 +98,49 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 }
 
 // CredentialsAvailable reports whether the account has a stored enterprise IdP
-// grant without performing a network exchange.
+// grant without performing a network exchange or waiting for token refresh.
+// Rust #56127 inspects an owner-checked grant instead of leasing it, because a
+// status check must not block on refresh coordination; the scope check keeps a
+// stale manager from reporting another account's grant.
 func (m *EMAAuthManager) CredentialsAvailable() bool {
-	if m == nil || m.codexHome == "" {
+	if m == nil || m.codexHome == "" || !m.scopeIsCurrent() {
 		return false
 	}
 	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(EMAAuthCredentialName(m.profile.IDP, m.scope), m.profile.IDP.Issuer)
 	return err == nil && tokens != nil && strings.TrimSpace(tokens.RefreshToken) != ""
+}
+
+// emaCredentialKey identifies one account-scoped enterprise IdP grant lookup.
+type emaCredentialKey struct {
+	storeMode      OAuthCredentialsStoreMode
+	credentialName string
+	issuer         string
+}
+
+// emaCredentialStatus shares one lazy credential read across every admitted EMA
+// server (Rust #56127). Success, a missing grant and a read error are all
+// reported identically for servers that resolve the same account grant, so a
+// status pass performs the storage work once instead of once per server.
+type emaCredentialStatus struct {
+	mu     sync.Mutex
+	values map[emaCredentialKey]bool
+}
+
+func (s *emaCredentialStatus) available(key emaCredentialKey, load func() bool) bool {
+	if s == nil || load == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.values == nil {
+		s.values = map[emaCredentialKey]bool{}
+	}
+	if value, ok := s.values[key]; ok {
+		return value
+	}
+	value := load()
+	s.values[key] = value
+	return value
 }
 
 func (m *EMAAuthManager) ApplyHTTPRequest(request *http.Request, _ []byte) error {
@@ -207,6 +243,7 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 	if runtime == nil || !runtime.XAAEnabled || runtime.EnterpriseManagedAuth == nil {
 		return
 	}
+	grantStatus := &emaCredentialStatus{}
 	for name, registration := range runtime.Servers {
 		config := registration.Config
 		if config.EffectiveAuth() != ServerAuthEMAAuth || !config.Enabled {
@@ -238,7 +275,11 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 		}
 		config.EMAConfigured = true
 		config.EMAAuthExtension = true
-		config.EMACredentialsAvailable = manager.CredentialsAvailable()
+		config.EMACredentialsAvailable = grantStatus.available(emaCredentialKey{
+			storeMode:      manager.storeMode,
+			credentialName: EMAAuthCredentialName(manager.profile.IDP, manager.scope),
+			issuer:         manager.profile.IDP.Issuer,
+		}, manager.CredentialsAvailable)
 		config.ApplyHTTPRequest = manager.ApplyHTTPRequest
 		if runtime.HTTPClient != nil {
 			config.HTTPClient = emaScopeCheckingDoer{next: runtime.HTTPClient, manager: manager}

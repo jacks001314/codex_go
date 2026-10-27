@@ -81,4 +81,98 @@ func TestEMAAuthManagerReportsStoredGrantAndRejectsChangedOwner(t *testing.T) {
 	if err := manager.ApplyHTTPRequest(request, nil); err == nil {
 		t.Fatal("changed account owner must revoke enterprise authorization")
 	}
+	// Rust #56127: inspection is owner-checked, so a manager for the previous
+	// account stops reporting a grant once the account changes.
+	if manager.CredentialsAvailable() {
+		t.Fatal("changed account owner must not report the previous grant")
+	}
+	if _, err := store.Delete(credentialName, profile.IDP.Issuer); err != nil {
+		t.Fatal(err)
+	}
+	current = scope
+	if manager.CredentialsAvailable() {
+		t.Fatal("logged-out account must not report a grant")
+	}
+}
+
+func TestEMACredentialStatusSharesOneReadLikeRust(t *testing.T) {
+	status := &emaCredentialStatus{}
+	calls := 0
+	loadTrue := func() bool { calls++; return true }
+	first := emaCredentialKey{storeMode: OAuthCredentialsStoreFile, credentialName: "grant", issuer: "https://idp.example"}
+	second := emaCredentialKey{storeMode: OAuthCredentialsStoreKeyring, credentialName: "grant", issuer: "https://idp.example"}
+
+	if !status.available(first, loadTrue) || !status.available(first, loadTrue) {
+		t.Fatal("grant was not reported as available")
+	}
+	if calls != 1 {
+		t.Fatalf("loads for one grant = %d, want 1", calls)
+	}
+	// A different store resolves a different credential read.
+	if !status.available(second, loadTrue) || calls != 2 {
+		t.Fatalf("distinct store loads = %d, want 2", calls)
+	}
+	// A missing grant or read error is cached too, so every server reports the
+	// same status without repeating the failed read.
+	missing := emaCredentialKey{storeMode: OAuthCredentialsStoreFile, credentialName: "missing", issuer: "https://idp.example"}
+	loadFalse := func() bool { calls++; return false }
+	for range 3 {
+		if status.available(missing, loadFalse) {
+			t.Fatal("missing grant reported as available")
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("loads after missing grant = %d, want 3", calls)
+	}
+}
+
+func TestAttachEnterpriseMCPAuthorizationSharesCredentialStatusAcrossServers(t *testing.T) {
+	home := t.TempDir()
+	runtime := RuntimeConfigFromValues(map[string]any{
+		"mcp_oauth_credentials_store": "file",
+		"features":                    map[string]any{"use_xaa": true},
+		"mcp_enterprise_managed_auth": map[string]any{
+			"idp": map[string]any{"issuer": "https://idp.example", "client_id": "idp-client"},
+		},
+		"mcp_servers": map[string]any{
+			"first": map[string]any{
+				"url":  "https://first.example/mcp",
+				"auth": ServerAuthEMAAuth,
+				"oauth": map[string]any{
+					"client_id":                   "mcp-client",
+					"authorization_server_issuer": "https://as.example",
+				},
+			},
+			"second": map[string]any{
+				"url":  "https://second.example/mcp",
+				"auth": ServerAuthEMAAuth,
+				"oauth": map[string]any{
+					"client_id":                   "mcp-client",
+					"authorization_server_issuer": "https://as.example",
+				},
+			},
+		},
+	}, home)
+	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: "https://idp.example", ClientID: "idp-client",
+	}}
+	store := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile)
+	if err := store.Save(&OAuthTokenSet{
+		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
+		ServerURL:    profile.IDP.Issuer,
+		ClientID:     profile.IDP.ClientID,
+		RefreshToken: "refresh-token",
+		AccessToken:  "idp-access",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: scope.UserID, AccountID: scope.WorkspaceID}, nil)
+	for _, name := range []string{"first", "second"} {
+		config := runtime.Servers[name].Config
+		if !config.EMAConfigured || !config.EMACredentialsAvailable || config.ApplyHTTPRequest == nil {
+			t.Fatalf("%s config = %+v, want configured EMA with an available grant", name, config)
+		}
+	}
 }
