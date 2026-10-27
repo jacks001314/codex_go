@@ -126,6 +126,13 @@ Grounding notes:
 - `#57245` is N/A: Rust test-only queue stabilization.
 - `#57199` is N/A: the 240-byte JSON summary truncation lives in Rust's
   `rollout-trace` reducer, which has no Go counterpart.
+- `#57435` and `#57438` are structurally N/A: they split Rust's monolithic
+  `ExecCommandHandler` into `ParsedExecCommand`/`PreparedExecCommand` and then
+  carry that prepared value through the process manager. Go already has the
+  equivalent split in reusable `BuildShellRequest`/`ShellRequest`, which carries
+  the resolved command, shell, environment, permissions and approval fields
+  through `ShellExecutor` and `UnifiedExecManager`; there is no behavior change
+  or duplicated request struct to remove.
 
 - The `rollout-trace` family is N/A: `#57311`, `#57280`, `#56524`, `#56515`,
   `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has
