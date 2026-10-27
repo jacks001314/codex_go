@@ -9,6 +9,8 @@ package config
 // opted in from a non-project layer (or a managed requirement).
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,12 +24,33 @@ import (
 // IdP refresh token for resource-specific authorization.
 const MCPServerAuthEMAAuth = "ema_auth"
 
+// MCPEMATokenEndpointAuthMethod is the token-endpoint authentication selected
+// by a confidential enterprise OAuth client registration (Rust #56001).
+type MCPEMATokenEndpointAuthMethod string
+
+const (
+	MCPEMATokenEndpointAuthClientSecretBasic MCPEMATokenEndpointAuthMethod = "client_secret_basic"
+	MCPEMATokenEndpointAuthClientSecretPost  MCPEMATokenEndpointAuthMethod = "client_secret_post"
+)
+
+// IsValid reports whether the method is one this build supports.
+func (m MCPEMATokenEndpointAuthMethod) IsValid() bool {
+	return m == MCPEMATokenEndpointAuthClientSecretBasic || m == MCPEMATokenEndpointAuthClientSecretPost
+}
+
 // MCPServerIdPOAuthConfig is the trusted enterprise OAuth identity provider.
 type MCPServerIdPOAuthConfig struct {
 	// Issuer used for enterprise OAuth discovery and identity validation.
 	Issuer string `json:"issuer"`
-	// ClientID is the public OAuth client registered with that enterprise IdP.
+	// ClientID is the OAuth client registered with that enterprise IdP.
 	ClientID string `json:"client_id"`
+	// ClientSecret is the provisioned secret for confidential IdP login and
+	// token exchange. Empty for a public client.
+	ClientSecret string `json:"client_secret,omitempty"`
+	// TokenEndpointAuthMethod is the registered EMA client authentication
+	// method. It defaults to client_secret_basic when a secret is configured
+	// (Rust #56001).
+	TokenEndpointAuthMethod MCPEMATokenEndpointAuthMethod `json:"token_endpoint_auth_method,omitempty"`
 }
 
 // MCPEnterpriseManagedAuthConfig is the shared enterprise authorization,
@@ -115,7 +138,9 @@ func parseMCPEnterpriseManagedAuth(section any) (*MCPEnterpriseManagedAuthConfig
 		return nil, errors.New("field `idp` must be a table")
 	}
 	for _, key := range mcpEMASortedKeys(idp) {
-		if key != "issuer" && key != "client_id" {
+		switch key {
+		case "issuer", "client_id", "client_secret", "token_endpoint_auth_method":
+		default:
 			return nil, fmt.Errorf("unknown field `mcp_enterprise_managed_auth.idp.%s`", key)
 		}
 	}
@@ -127,9 +152,32 @@ func parseMCPEnterpriseManagedAuth(section any) (*MCPEnterpriseManagedAuthConfig
 	if clientID == "" {
 		return nil, errors.New("missing field `client_id`")
 	}
-	return &MCPEnterpriseManagedAuthConfig{
-		IDP: MCPServerIdPOAuthConfig{Issuer: issuer, ClientID: clientID},
-	}, nil
+	config := MCPServerIdPOAuthConfig{Issuer: issuer, ClientID: clientID}
+	if raw, ok := idp["client_secret"]; ok {
+		secret, isString := raw.(string)
+		if !isString {
+			return nil, errors.New("field `mcp_enterprise_managed_auth.idp.client_secret` must be a string")
+		}
+		if strings.TrimSpace(secret) == "" {
+			return nil, errors.New("enterprise IdP client_secret must not be empty")
+		}
+		config.ClientSecret = secret
+	}
+	if raw, ok := idp["token_endpoint_auth_method"]; ok {
+		method, isString := raw.(string)
+		if !isString {
+			return nil, errors.New("field `mcp_enterprise_managed_auth.idp.token_endpoint_auth_method` must be a string")
+		}
+		parsed := MCPEMATokenEndpointAuthMethod(strings.TrimSpace(method))
+		if !parsed.IsValid() {
+			return nil, fmt.Errorf("unknown variant `%s` for mcp_enterprise_managed_auth.idp.token_endpoint_auth_method; expected client_secret_basic or client_secret_post", method)
+		}
+		config.TokenEndpointAuthMethod = parsed
+	}
+	if config.TokenEndpointAuthMethod != "" && config.ClientSecret == "" {
+		return nil, errors.New("enterprise IdP token_endpoint_auth_method requires client_secret")
+	}
+	return &MCPEnterpriseManagedAuthConfig{IDP: config}, nil
 }
 
 func layerConfigMap(layer Layer) map[string]any {
@@ -547,7 +595,16 @@ func MCPEnterpriseManagedAuthFingerprint(value any) string {
 	if err != nil || profile == nil {
 		return ""
 	}
-	return profile.IDP.Issuer + "\x1f" + profile.IDP.ClientID
+	// Rust #56001 compares the whole trusted profile, so replacing the IdP
+	// secret or its authentication method also retires enterprise authority.
+	// Hash the canonical registration so the fingerprint never carries the
+	// secret itself.
+	encoded, err := json.Marshal(profile.IDP)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
 }
 
 // RetiredPluginEMAAuthRegistrations reports the plugin MCP servers whose host

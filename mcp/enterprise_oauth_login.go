@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	managedconfig "codex_go/config"
 )
 
 // Rust parity: codex-rs/rmcp-client/src/enterprise_oauth_login.rs (#43844).
@@ -21,9 +23,15 @@ type EnterpriseOAuthLoginRequest struct {
 	CredentialName string
 	Issuer         string
 	ClientID       string
-	CallbackPort   *uint16
-	CallbackURL    string
-	Timeout        time.Duration
+	// ClientSecret registers a confidential IdP client (Rust #56001). It is
+	// used only for login and token exchange, never persisted.
+	ClientSecret string
+	// TokenEndpointAuthMethod selects Basic (the default when a secret is
+	// configured) or POST client authentication.
+	TokenEndpointAuthMethod managedconfig.MCPEMATokenEndpointAuthMethod
+	CallbackPort            *uint16
+	CallbackURL             string
+	Timeout                 time.Duration
 }
 
 // enterpriseCallbackSettings mirrors Rust enterprise_callback_settings: an

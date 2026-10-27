@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	managedconfig "codex_go/config"
 )
 
 // Rust parity: codex-rs/rmcp-client/src/ema_identity.rs +
@@ -28,6 +30,9 @@ type mcpEnterpriseAuthorizationMetadata struct {
 	AuthorizationEndpoint string
 	TokenEndpoint         string
 	CallbackMode          MCPOAuthCallbackMode
+	// ClientAuthentication is the approved IdP token endpoint authentication
+	// for this registration (Rust #56001).
+	ClientAuthentication mcpEMAClientAuthentication
 }
 
 // enterpriseDiscoveryURLs mirrors rmcp
@@ -122,7 +127,7 @@ func trimMCPOAuthRootSlash(issuer string) string {
 // advertised public-client token endpoint auth method. Candidate-order and
 // error semantics follow rmcp's discovery loop (network failures abort;
 // non-200/ malformed responses try the next candidate; issuer problems abort).
-func resolveEnterpriseAuthorizationMetadata(ctx context.Context, issuer string, client *http.Client) (*mcpEnterpriseAuthorizationMetadata, error) {
+func resolveEnterpriseAuthorizationMetadata(ctx context.Context, issuer string, clientID string, clientSecret string, method managedconfig.MCPEMATokenEndpointAuthMethod, client *http.Client) (*mcpEnterpriseAuthorizationMetadata, error) {
 	issuer = strings.TrimSpace(issuer)
 	if err := validateMCPEMAOAuthEndpoint(issuer, "enterprise IdP issuer"); err != nil {
 		return nil, err
@@ -161,14 +166,8 @@ func resolveEnterpriseAuthorizationMetadata(ctx context.Context, issuer string, 
 		if err := validateMCPEMAOAuthEndpoint(metadata.TokenEndpoint, "enterprise IdP token endpoint"); err != nil {
 			return nil, err
 		}
-		var methods []any
-		if metadata.TokenEndpointAuthMethodsSupported != nil {
-			methods = make([]any, 0, len(metadata.TokenEndpointAuthMethodsSupported))
-			for _, method := range metadata.TokenEndpointAuthMethodsSupported {
-				methods = append(methods, method)
-			}
-		}
-		if err := validateMCPEMAPublicClientAuth(methods, "enterprise IdP"); err != nil {
+		authentication, err := resolveMCPEMAClientAuth(metadata.TokenEndpointAuthMethodsSupported, clientID, clientSecret, method, "enterprise IdP")
+		if err != nil {
 			return nil, err
 		}
 		callbackMode, err := MCPOAuthCallbackModeForDiscovery(metadata.AuthorizationResponseIssParameterSupported, metadata.Issuer)
@@ -180,6 +179,7 @@ func resolveEnterpriseAuthorizationMetadata(ctx context.Context, issuer string, 
 			AuthorizationEndpoint: strings.TrimSpace(metadata.AuthorizationEndpoint),
 			TokenEndpoint:         strings.TrimSpace(metadata.TokenEndpoint),
 			CallbackMode:          callbackMode,
+			ClientAuthentication:  authentication,
 		}, nil
 	}
 	return nil, errors.New("enterprise IdP must publish authorization metadata")
@@ -218,9 +218,15 @@ type EnterpriseOAuthLoginOptions struct {
 	CredentialName string
 	Issuer         string
 	ClientID       string
-	RedirectURL    string
-	HTTPClient     *http.Client
-	Timeout        time.Duration
+	// ClientSecret registers a confidential IdP client (Rust #56001). It is
+	// never stored with the credentials or added to the authorization URL.
+	ClientSecret string
+	// TokenEndpointAuthMethod selects Basic (the default when a secret is
+	// configured) or POST client authentication.
+	TokenEndpointAuthMethod managedconfig.MCPEMATokenEndpointAuthMethod
+	RedirectURL             string
+	HTTPClient              *http.Client
+	Timeout                 time.Duration
 	// OAuthCredentialsStoreMode is the configured `mcp_oauth_credentials_store`
 	// for the credential the guard commits.
 	OAuthCredentialsStoreMode OAuthCredentialsStoreMode
@@ -274,19 +280,22 @@ func StartEnterpriseOAuthLogin(ctx context.Context, options *EnterpriseOAuthLogi
 	}
 	guard.Close()
 
-	metadata, err := resolveEnterpriseAuthorizationMetadata(ctx, issuer, options.HTTPClient)
+	metadata, err := resolveEnterpriseAuthorizationMetadata(ctx, issuer, strings.TrimSpace(options.ClientID), options.ClientSecret, options.TokenEndpointAuthMethod, options.HTTPClient)
 	if err != nil {
 		return nil, err
 	}
 	session, err := NewOAuthLoginSession(&OAuthLoginSessionOptions{
-		ServerURL:             issuer,
-		ClientID:              strings.TrimSpace(options.ClientID),
-		Issuer:                metadata.Issuer,
-		AuthorizationEndpoint: metadata.AuthorizationEndpoint,
-		TokenEndpoint:         metadata.TokenEndpoint,
-		RedirectURL:           redirectURL,
-		Scopes:                []string{"openid", "offline_access"},
-		CallbackMode:          metadata.CallbackMode,
+		ServerURL:                  issuer,
+		ClientID:                   strings.TrimSpace(options.ClientID),
+		ClientSecret:               options.ClientSecret,
+		OmitClientSecretFromRecord: options.ClientSecret != "",
+		Issuer:                     metadata.Issuer,
+		AuthorizationEndpoint:      metadata.AuthorizationEndpoint,
+		TokenEndpoint:              metadata.TokenEndpoint,
+		RedirectURL:                redirectURL,
+		Scopes:                     []string{"openid", "offline_access"},
+		CallbackMode:               metadata.CallbackMode,
+		TokenEndpointAuthMethod:    metadata.ClientAuthentication.Method,
 	})
 	if err != nil {
 		return nil, errors.New("failed to start enterprise IdP authorization")

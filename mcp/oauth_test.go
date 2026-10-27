@@ -734,7 +734,7 @@ func TestOAuthTokenClientExchangeAuthorizationCode(t *testing.T) {
 			"code":          "auth-code",
 			"redirect_uri":  "http://127.0.0.1:1234/callback",
 			"client_id":     "client-1",
-			"client_secret": "secret-1",
+			"client_secret": " secret-1 ",
 			"code_verifier": "verifier-1",
 		}
 		for key, want := range wants {
@@ -796,7 +796,7 @@ func TestOAuthTokenClientRefreshToken(t *testing.T) {
 			"grant_type":    "refresh_token",
 			"refresh_token": "refresh-old",
 			"client_id":     "client-1",
-			"client_secret": "secret-1",
+			"client_secret": " secret-1 ",
 		}
 		for key, want := range wants {
 			if got := r.Form.Get(key); got != want {

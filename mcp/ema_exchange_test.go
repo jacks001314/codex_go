@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	managedconfig "codex_go/config"
 )
 
 func mcpEMATestJWT(t *testing.T, header map[string]any, claims map[string]any) string {
@@ -119,20 +121,196 @@ func TestMCPEMAResourceOriginQueryAndPathAreBound(t *testing.T) {
 	}
 }
 
-func TestMCPEMAPublicClientAuthRequiresAdvertisedMethod(t *testing.T) {
+func TestMCPEMAClientAuthResolutionLikeRust(t *testing.T) {
+	none := []string{"none"}
+	basicAndNone := []string{"client_secret_basic", "none"}
+	postOnly := []string{"client_secret_post"}
+	privateKey := []string{"private_key_jwt"}
 	for _, test := range []struct {
-		advertised any
+		name       string
+		advertised []string
+		secret     string
+		method     managedconfig.MCPEMATokenEndpointAuthMethod
+		wantMethod managedconfig.MCPEMATokenEndpointAuthMethod
 		valid      bool
 	}{
-		{nil, false},
-		{[]any{"none"}, true},
-		{[]any{"client_secret_basic", "none"}, true},
-		{[]any{"private_key_jwt"}, false},
-		{"none", false},
+		{"public requires advertised methods", nil, "", "", "", false},
+		{"public none", none, "", "", "", true},
+		{"public among confidential methods", basicAndNone, "", "", "", true},
+		{"public unsupported method", privateKey, "", "", "", false},
+		{"confidential defaults to basic without metadata", nil, "s3cret", "", managedconfig.MCPEMATokenEndpointAuthClientSecretBasic, true},
+		{"confidential post without metadata", nil, "s3cret", managedconfig.MCPEMATokenEndpointAuthClientSecretPost, "", false},
+		{"confidential post advertised", postOnly, "s3cret", managedconfig.MCPEMATokenEndpointAuthClientSecretPost, managedconfig.MCPEMATokenEndpointAuthClientSecretPost, true},
+		{"confidential unregistered method", basicAndNone, "s3cret", managedconfig.MCPEMATokenEndpointAuthClientSecretPost, "", false},
+		{"method requires secret", none, "", managedconfig.MCPEMATokenEndpointAuthClientSecretBasic, "", false},
+		{"empty secret", none, "  ", "", "", false},
 	} {
-		if got := validateMCPEMAPublicClientAuth(test.advertised, "IdP") == nil; got != test.valid {
-			t.Fatalf("validateMCPEMAPublicClientAuth(%#v) = %t, want %t", test.advertised, got, test.valid)
+		auth, err := resolveMCPEMAClientAuth(test.advertised, "client", test.secret, test.method, "IdP")
+		if (err == nil) != test.valid {
+			t.Fatalf("%s: err = %v, want valid=%t", test.name, err, test.valid)
 		}
+		if test.valid && auth.Method != test.wantMethod {
+			t.Fatalf("%s: method = %q, want %q", test.name, auth.Method, test.wantMethod)
+		}
+		if test.valid && auth.ClientID != "client" {
+			t.Fatalf("%s: client id = %q", test.name, auth.ClientID)
+		}
+		if strings.Contains(auth.String(), "s3cret") {
+			t.Fatalf("%s: secret leaked in %q", test.name, auth.String())
+		}
+	}
+}
+
+// TestMCPOAuthDiscoveryCarriesTokenEndpointAuthMethodsLikeRust pins the
+// #56001 plumbing: resource discovery must carry the published token endpoint
+// authentication methods so a confidential EMA registration can be validated,
+// while an absent list stays nil and defaults to Basic.
+func TestMCPOAuthDiscoveryCarriesTokenEndpointAuthMethodsLikeRust(t *testing.T) {
+	metadata := &oauthAuthorizationServerMetadata{
+		Issuer:                            "https://as.example",
+		AuthorizationEndpoint:             "https://as.example/authorize",
+		TokenEndpoint:                     "https://as.example/token",
+		TokenEndpointAuthMethodsSupported: []string{"client_secret_post"},
+	}
+	discovery := discoveryFromMCPOAuthAuthorizationMetadata("https://resource.example/mcp", metadata)
+	if discovery == nil {
+		t.Fatal("discovery is nil")
+	}
+	if len(discovery.TokenEndpointAuthMethodsSupported) != 1 || discovery.TokenEndpointAuthMethodsSupported[0] != "client_secret_post" {
+		t.Fatalf("methods = %#v", discovery.TokenEndpointAuthMethodsSupported)
+	}
+	auth, err := resolveMCPEMAClientAuth(discovery.TokenEndpointAuthMethodsSupported, "mcp-client", "s3cret", managedconfig.MCPEMATokenEndpointAuthClientSecretPost, "MCP authorization server")
+	if err != nil || auth.Method != managedconfig.MCPEMATokenEndpointAuthClientSecretPost {
+		t.Fatalf("resolved auth = (%#v, %v)", auth, err)
+	}
+
+	metadata.TokenEndpointAuthMethodsSupported = nil
+	discovery = discoveryFromMCPOAuthAuthorizationMetadata("https://resource.example/mcp", metadata)
+	if discovery == nil || discovery.TokenEndpointAuthMethodsSupported != nil {
+		t.Fatalf("absent methods = %#v, want nil", discovery)
+	}
+	auth, err = resolveMCPEMAClientAuth(discovery.TokenEndpointAuthMethodsSupported, "mcp-client", "s3cret", "", "MCP authorization server")
+	if err != nil || auth.Method != managedconfig.MCPEMATokenEndpointAuthClientSecretBasic {
+		t.Fatalf("absent-list default auth = (%#v, %v)", auth, err)
+	}
+	if _, err := resolveMCPEMAClientAuth(discovery.TokenEndpointAuthMethodsSupported, "mcp-client", "", "", "MCP authorization server"); err == nil {
+		t.Fatal("a public client must still require an advertised `none`")
+	}
+}
+
+// TestMCPEMAExchangeConfidentialClientAuthenticationLikeRust mirrors #56001:
+// Basic credentials travel only in the Authorization header, while POST adds
+// them to the form.
+func TestMCPEMAExchangeConfidentialClientAuthenticationLikeRust(t *testing.T) {
+	now := time.Now().Unix()
+	for _, test := range []struct {
+		name       string
+		method     managedconfig.MCPEMATokenEndpointAuthMethod
+		wantHeader bool
+	}{
+		{"basic", managedconfig.MCPEMATokenEndpointAuthClientSecretBasic, true},
+		{"post", managedconfig.MCPEMATokenEndpointAuthClientSecretPost, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests []*http.Request
+			var bodies []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				body, _ := io.ReadAll(request.Body)
+				requests = append(requests, request)
+				bodies = append(bodies, string(body))
+				issuer := "http://" + request.Host + "/idp"
+				audience := "http://" + request.Host + "/as"
+				resource := "http://" + request.Host + "/mcp"
+				switch request.URL.Path {
+				case "/idp/token":
+					claims := mcpEMATestClaimsAt(issuer, audience, resource, now)
+					accessToken, err := mcpEMATestJWTValue(mcpEMATestJAGHeader(), claims)
+					if err != nil {
+						http.Error(w, "jwt", http.StatusInternalServerError)
+						return
+					}
+					writeJSON(t, w, map[string]any{
+						"access_token":      accessToken,
+						"issued_token_type": idJAGTokenType,
+						"token_type":        "N_A",
+						"resource":          claims["resource"],
+						"scope":             claims["scope"],
+					})
+				case "/as/token":
+					writeJSON(t, w, mcpEMATestTokenResponse())
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			defer server.Close()
+
+			audience := server.URL + "/as"
+			issuer := server.URL + "/idp"
+			token, err := ExchangeMCPEMAIDJAG(context.Background(), MCPEMAIDJAGExchangeRequest{
+				Resource:                         server.URL + "/mcp",
+				MCPClientID:                      "mcp-client",
+				AuthorizationServerIssuer:        audience,
+				AuthorizationServerTokenEndpoint: audience + "/token",
+				IDPTokenEndpoint:                 issuer + "/token",
+				IDPIssuer:                        issuer,
+				IDPClientID:                      "idp-client",
+				IDPClientAuthentication: mcpEMAClientAuthentication{
+					Method:       test.method,
+					ClientID:     "idp-client",
+					ClientSecret: "idp-secret",
+				},
+				ResourceClientAuthentication: mcpEMAClientAuthentication{
+					Method:       test.method,
+					ClientID:     "mcp-client",
+					ClientSecret: "resource-secret",
+				},
+				RefreshToken:       "opaque-refresh-token",
+				IDPHTTPClient:      server.Client(),
+				ResourceHTTPClient: server.Client(),
+			})
+			if err != nil {
+				t.Fatalf("ExchangeMCPEMAIDJAG() error = %v", err)
+			}
+			if token == nil || token.AccessToken != "resource-token" {
+				t.Fatalf("token = %v", token)
+			}
+			if len(requests) != 2 {
+				t.Fatalf("requests = %d, want 2", len(requests))
+			}
+			for index, request := range requests {
+				clientID, secret := "idp-client", "idp-secret"
+				if index == 1 {
+					clientID, secret = "mcp-client", "resource-secret"
+				}
+				form := mcpEMATestParseForm(t, bodies[index])
+				if test.wantHeader {
+					got := request.Header.Get("Authorization")
+					if !strings.HasPrefix(got, "Basic ") {
+						t.Fatalf("Authorization = %q, want Basic", got)
+					}
+					encoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(got, "Basic "))
+					if err != nil {
+						t.Fatalf("decode basic header: %v", err)
+					}
+					if want := url.QueryEscape(clientID) + ":" + url.QueryEscape(secret); string(encoded) != want {
+						t.Fatalf("basic credentials = %q, want %q", string(encoded), want)
+					}
+					if _, ok := form["client_id"]; ok {
+						t.Fatalf("basic request leaked client_id into the form: %#v", form)
+					}
+					if _, ok := form["client_secret"]; ok {
+						t.Fatalf("basic request leaked client_secret into the form: %#v", form)
+					}
+					continue
+				}
+				if request.Header.Get("Authorization") != "" {
+					t.Fatalf("post request Authorization = %q", request.Header.Get("Authorization"))
+				}
+				if form["client_id"] != clientID || form["client_secret"] != secret {
+					t.Fatalf("post form = %#v, want client %q secret %q", form, clientID, secret)
+				}
+			}
+		})
 	}
 }
 
@@ -557,7 +735,7 @@ func TestMCPEMAProviderErrorsCannotReflectCredentials(t *testing.T) {
 			server.Client(),
 			server.URL+"/token",
 			[][2]string{{"subject_token", sentinel}},
-			"test-client",
+			mcpEMAClientAuthentication{ClientID: "test-client"},
 			EMAInvalidGrantSourceEnterpriseIdentity,
 			"test token exchange",
 		)
@@ -596,7 +774,7 @@ func TestMCPEMAProviderErrorsCannotReflectCredentials(t *testing.T) {
 		server.Client(),
 		server.URL+"/token",
 		nil,
-		"test-client",
+		mcpEMAClientAuthentication{ClientID: "test-client"},
 		EMAInvalidGrantSourceEnterpriseIdentity,
 		"test token exchange",
 	)

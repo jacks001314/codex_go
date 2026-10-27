@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	managedconfig "codex_go/config"
+
 	"golang.org/x/oauth2"
 )
 
@@ -35,6 +37,9 @@ type OAuthLoginSessionOptions struct {
 	PublicClientAuth           *bool
 	// CallbackMode selects the OAuth callback mix-up defense (Rust #40691).
 	CallbackMode MCPOAuthCallbackMode
+	// TokenEndpointAuthMethod selects Basic or POST client authentication for
+	// a confidential registration (Rust #56001).
+	TokenEndpointAuthMethod managedconfig.MCPEMATokenEndpointAuthMethod
 }
 
 type OAuthLoginSession struct {
@@ -51,6 +56,7 @@ type OAuthLoginSession struct {
 	AuthorizationURL           string
 	Scopes                     []string
 	CallbackMode               MCPOAuthCallbackMode
+	TokenEndpointAuthMethod    managedconfig.MCPEMATokenEndpointAuthMethod
 }
 
 type OAuthCallbackResult struct {
@@ -110,8 +116,10 @@ func NewOAuthLoginSession(options *OAuthLoginSessionOptions) (*OAuthLoginSession
 		callbackMode = MCPOAuthCallbackSpecific
 	}
 	config := &oauth2.Config{
-		ClientID:     strings.TrimSpace(options.ClientID),
-		ClientSecret: strings.TrimSpace(options.ClientSecret),
+		ClientID: strings.TrimSpace(options.ClientID),
+		// Rust #56001 preserves the provisioned secret exactly; only its
+		// emptiness is validated when the registration is resolved.
+		ClientSecret: options.ClientSecret,
 		RedirectURL:  strings.TrimSpace(options.RedirectURL),
 		Scopes:       scopes,
 		Endpoint: oauth2.Endpoint{
@@ -127,7 +135,7 @@ func NewOAuthLoginSession(options *OAuthLoginSessionOptions) (*OAuthLoginSession
 	return &OAuthLoginSession{
 		ServerURL:                  strings.TrimSpace(options.ServerURL),
 		ClientID:                   strings.TrimSpace(options.ClientID),
-		ClientSecret:               strings.TrimSpace(options.ClientSecret),
+		ClientSecret:               options.ClientSecret,
 		OmitClientSecretFromRecord: options.OmitClientSecretFromRecord,
 		Issuer:                     strings.TrimSpace(options.Issuer),
 		TokenEndpoint:              strings.TrimSpace(options.TokenEndpoint),
@@ -138,6 +146,7 @@ func NewOAuthLoginSession(options *OAuthLoginSessionOptions) (*OAuthLoginSession
 		AuthorizationURL:           config.AuthCodeURL(state, authOptions...),
 		Scopes:                     scopes,
 		CallbackMode:               callbackMode,
+		TokenEndpointAuthMethod:    options.TokenEndpointAuthMethod,
 	}, nil
 }
 
@@ -351,6 +360,7 @@ func (s *OAuthLoginSession) CompleteCallback(ctx context.Context, rawPath string
 		Code:                       callback.Code,
 		CodeVerifier:               s.CodeVerifier,
 		Scopes:                     s.Scopes,
+		TokenEndpointAuthMethod:    s.TokenEndpointAuthMethod,
 	})
 }
 

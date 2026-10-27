@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	managedconfig "codex_go/config"
+
 	"golang.org/x/oauth2"
 )
 
@@ -27,6 +29,10 @@ type OAuthCodeExchangeOptions struct {
 	Code                       string
 	CodeVerifier               string
 	Scopes                     []string
+	// TokenEndpointAuthMethod selects Basic or POST client authentication for
+	// a confidential registration (Rust #56001). Empty keeps POST, which is
+	// also the public-client form.
+	TokenEndpointAuthMethod managedconfig.MCPEMATokenEndpointAuthMethod
 }
 
 type OAuthRefreshOptions struct {
@@ -119,16 +125,28 @@ func oauth2ConfigForCodeExchange(options *OAuthCodeExchangeOptions) (*oauth2.Con
 		return nil, errors.New("MCP OAuth token endpoint is required")
 	}
 	return &oauth2.Config{
-		ClientID:     strings.TrimSpace(options.ClientID),
-		ClientSecret: strings.TrimSpace(options.ClientSecret),
+		ClientID: strings.TrimSpace(options.ClientID),
+		// Rust #56001 preserves the provisioned secret exactly; only its
+		// emptiness is validated when the registration is resolved.
+		ClientSecret: options.ClientSecret,
 		RedirectURL:  strings.TrimSpace(options.RedirectURL),
 		Scopes:       normalizeMCPOAuthScopes(options.Scopes),
 		Endpoint: oauth2.Endpoint{
 			AuthURL:   strings.TrimSpace(options.AuthorizationEndpoint),
 			TokenURL:  strings.TrimSpace(options.TokenEndpoint),
-			AuthStyle: oauth2.AuthStyleInParams,
+			AuthStyle: oauth2AuthStyle(options.TokenEndpointAuthMethod),
 		},
 	}, nil
+}
+
+// oauth2AuthStyle maps a registered EMA authentication method to the token
+// request form. A configured confidential client defaults to Basic (Rust
+// #56001); every other case keeps the public-client POST form.
+func oauth2AuthStyle(method managedconfig.MCPEMATokenEndpointAuthMethod) oauth2.AuthStyle {
+	if method == managedconfig.MCPEMATokenEndpointAuthClientSecretBasic {
+		return oauth2.AuthStyleInHeader
+	}
+	return oauth2.AuthStyleInParams
 }
 
 func oauth2ConfigForRefresh(options *OAuthRefreshOptions) (*oauth2.Config, error) {
@@ -143,7 +161,7 @@ func oauth2ConfigForRefresh(options *OAuthRefreshOptions) (*oauth2.Config, error
 	}
 	return &oauth2.Config{
 		ClientID:     strings.TrimSpace(options.ClientID),
-		ClientSecret: strings.TrimSpace(options.ClientSecret),
+		ClientSecret: options.ClientSecret,
 		Scopes:       normalizeMCPOAuthScopes(options.Scopes),
 		Endpoint: oauth2.Endpoint{
 			TokenURL:  strings.TrimSpace(options.TokenEndpoint),

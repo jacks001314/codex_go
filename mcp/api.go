@@ -2297,7 +2297,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		ServerName:                 config.OAuthCredentialName(name),
 		ServerURL:                  config.URL,
 		ClientID:                   clientID,
-		ClientSecret:               strings.TrimSpace(config.OAuthClientSecret),
+		ClientSecret:               config.OAuthClientSecret,
 		OmitClientSecretFromRecord: strings.TrimSpace(config.OAuthClientSecret) != "",
 		Issuer:                     strings.TrimSpace(discovery.Issuer),
 		RegistrationEndpoint:       discovery.RegistrationEndpoint,

@@ -15,13 +15,15 @@ func mcpOAuthRefreshCredentials(config *ServerConfig, stored *OAuthTokenSet) (st
 	storedClientSecret := ""
 	if stored != nil {
 		storedClientID = strings.TrimSpace(stored.ClientID)
-		storedClientSecret = strings.TrimSpace(stored.ClientSecret)
+		storedClientSecret = stored.ClientSecret
 	}
 	configuredClientID := ""
 	configuredClientSecret := ""
 	if config != nil {
 		configuredClientID = strings.TrimSpace(config.OAuthClientID)
-		configuredClientSecret = strings.TrimSpace(config.OAuthClientSecret)
+		// Rust #56001 exchanges the provisioned secret exactly; emptiness is
+		// validated when the registration is resolved.
+		configuredClientSecret = config.OAuthClientSecret
 	}
 	clientID := storedClientID
 	if configuredClientID != "" {

@@ -124,6 +124,70 @@ use_xaa = true
 		}
 	})
 
+	t.Run("changed_profile_secret_is_retired", func(t *testing.T) {
+		confidential := `[features]
+use_xaa = true
+
+[mcp_enterprise_managed_auth.idp]
+issuer = "https://idp.example"
+client_id = "idp-client"
+client_secret = "secret-one"
+
+` + mcpEnterpriseAdmissionTestServers
+		home := t.TempDir()
+		writeMCPConfigRefreshTestConfig(t, home, confidential)
+		router := newMCPConfigRefreshTestRouter(home)
+		t.Cleanup(func() { _ = router.Close() })
+		reloadMCPConfigForTest(t, router, 1)
+		if names := threadlessMCPServerNames(t, router, 2); !names["enterprise"] {
+			t.Fatalf("enterprise MCP server was not admitted: %v", names)
+		}
+		changed := strings.Replace(confidential, `client_secret = "secret-one"`, `client_secret = "secret-two"`, 1)
+		if changed == confidential {
+			t.Fatal("test fixture did not change the IdP secret")
+		}
+		writeMCPConfigRefreshTestConfig(t, home, changed)
+		reloadMCPConfigForTest(t, router, 3)
+		if names := threadlessMCPServerNames(t, router, 4); names["enterprise"] {
+			t.Fatalf("a replaced IdP secret was adopted instead of retired: %v", names)
+		}
+	})
+
+	t.Run("changed_oauth_auth_method_is_retired", func(t *testing.T) {
+		confidential := `[features]
+use_xaa = true
+
+` + mcpEnterpriseAdmissionTestProfile + `
+[mcp_servers.enterprise]
+url = "https://resource.example/mcp"
+auth = "ema_auth"
+oauth_resource = "https://resource.example/mcp"
+
+[mcp_servers.enterprise.oauth]
+client_id = "mcp-client"
+client_secret = "resource-secret"
+token_endpoint_auth_method = "client_secret_basic"
+authorization_server_issuer = "https://as.example"
+`
+		home := t.TempDir()
+		writeMCPConfigRefreshTestConfig(t, home, confidential)
+		router := newMCPConfigRefreshTestRouter(home)
+		t.Cleanup(func() { _ = router.Close() })
+		reloadMCPConfigForTest(t, router, 1)
+		if names := threadlessMCPServerNames(t, router, 2); !names["enterprise"] {
+			t.Fatalf("enterprise MCP server was not admitted: %v", names)
+		}
+		changed := strings.Replace(confidential, `token_endpoint_auth_method = "client_secret_basic"`, `token_endpoint_auth_method = "client_secret_post"`, 1)
+		if changed == confidential {
+			t.Fatal("test fixture did not change the OAuth authentication method")
+		}
+		writeMCPConfigRefreshTestConfig(t, home, changed)
+		reloadMCPConfigForTest(t, router, 3)
+		if names := threadlessMCPServerNames(t, router, 4); names["enterprise"] {
+			t.Fatalf("a changed OAuth authentication method was adopted instead of retired: %v", names)
+		}
+	})
+
 	t.Run("changed_profile_is_retired", func(t *testing.T) {
 		home := t.TempDir()
 		writeMCPConfigRefreshTestConfig(t, home, admitted)

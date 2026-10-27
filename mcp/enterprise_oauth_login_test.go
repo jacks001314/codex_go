@@ -2,11 +2,14 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +51,7 @@ func enterpriseTestIdP(t *testing.T, mutate func(metadata map[string]any), token
 func TestResolveEnterpriseAuthorizationMetadataStrictness(t *testing.T) {
 	ctx := context.Background()
 	server := enterpriseTestIdP(t, nil, func() map[string]any { return map[string]any{} })
-	metadata, err := resolveEnterpriseAuthorizationMetadata(ctx, server.URL, nil)
+	metadata, err := resolveEnterpriseAuthorizationMetadata(ctx, server.URL, "client", "", "", nil)
 	if err != nil {
 		t.Fatalf("resolve metadata: %v", err)
 	}
@@ -61,7 +64,7 @@ func TestResolveEnterpriseAuthorizationMetadataStrictness(t *testing.T) {
 	slashOnly := enterpriseTestIdP(t, func(metadata map[string]any) {
 		metadata["issuer"] = metadata["issuer"].(string) + "/"
 	}, func() map[string]any { return map[string]any{} })
-	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, slashOnly.URL, nil); err == nil ||
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, slashOnly.URL, "client", "", "", nil); err == nil ||
 		!strings.Contains(err.Error(), "does not match configuration") {
 		t.Fatalf("root-slash issuer error = %v", err)
 	}
@@ -70,7 +73,7 @@ func TestResolveEnterpriseAuthorizationMetadataStrictness(t *testing.T) {
 	mismatched := enterpriseTestIdP(t, func(metadata map[string]any) {
 		metadata["issuer"] = "https://other.example.com"
 	}, func() map[string]any { return map[string]any{} })
-	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, mismatched.URL, nil); err == nil {
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, mismatched.URL, "client", "", "", nil); err == nil {
 		t.Fatal("a mismatched issuer must be rejected")
 	}
 
@@ -78,7 +81,7 @@ func TestResolveEnterpriseAuthorizationMetadataStrictness(t *testing.T) {
 	noPublicAuth := enterpriseTestIdP(t, func(metadata map[string]any) {
 		metadata["token_endpoint_auth_methods_supported"] = []string{"client_secret_basic"}
 	}, func() map[string]any { return map[string]any{} })
-	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, noPublicAuth.URL, nil); err == nil ||
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, noPublicAuth.URL, "client", "", "", nil); err == nil ||
 		!strings.Contains(err.Error(), "public-client") {
 		t.Fatalf("public-client error = %v", err)
 	}
@@ -88,7 +91,7 @@ func TestResolveEnterpriseAuthorizationMetadataStrictness(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer empty.Close()
-	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, empty.URL, nil); err == nil ||
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, empty.URL, "client", "", "", nil); err == nil ||
 		!strings.Contains(err.Error(), "must publish authorization metadata") {
 		t.Fatalf("missing metadata error = %v", err)
 	}
@@ -153,6 +156,117 @@ func TestStartEnterpriseOAuthLoginStagesCredentials(t *testing.T) {
 	}
 	if loaded, err := NewOAuthStore(home).Load("enterprise", server.URL); err != nil || loaded == nil || loaded.AccessToken != "access-1" {
 		t.Fatalf("stored grant = (%#v, %v)", loaded, err)
+	}
+}
+
+// TestStartEnterpriseOAuthLoginConfidentialClientLikeRust mirrors #56001: a
+// provisioned IdP secret authenticates the token request with the registered
+// Basic method, keeps its exact value, and never reaches the authorization URL
+// or the staged and stored grant.
+func TestStartEnterpriseOAuthLoginConfidentialClientLikeRust(t *testing.T) {
+	ctx := context.Background()
+	clientID := "eci-prd-confidential-123"
+	clientSecret := "pa ss&word "
+	var authorizationHeader string
+	var tokenForm url.Values
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case mcpOAuthAuthorizationServerWellKnownPath:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                                "http://" + r.Host,
+				"authorization_endpoint":                "http://" + r.Host + "/authorize",
+				"token_endpoint":                        "http://" + r.Host + "/token",
+				"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
+			})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, "form", http.StatusBadRequest)
+				return
+			}
+			authorizationHeader = r.Header.Get("Authorization")
+			tokenForm = r.PostForm
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  "access-1",
+				"token_type":    "Bearer",
+				"refresh_token": "refresh-1",
+				"id_token":      mcpEMATestJWT(t, map[string]any{"alg": "ES256"}, mcpEMATestClaims(server.URL, clientID, "")),
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	home := t.TempDir()
+	handle, err := StartEnterpriseOAuthLogin(ctx, &EnterpriseOAuthLoginOptions{
+		CodexHome:                 home,
+		CredentialName:            "enterprise",
+		Issuer:                    server.URL,
+		ClientID:                  clientID,
+		ClientSecret:              clientSecret,
+		RedirectURL:               "http://127.0.0.1:1455/callback",
+		OAuthCredentialsStoreMode: OAuthCredentialsStoreFile,
+	})
+	if err != nil {
+		t.Fatalf("start enterprise login: %v", err)
+	}
+	if strings.Contains(handle.AuthorizationURL(), "client_secret") {
+		t.Fatalf("authorization URL leaked the client secret: %q", handle.AuthorizationURL())
+	}
+	if handle.session.ClientSecret != clientSecret {
+		t.Fatalf("session secret = %q, want the exact configured value", handle.session.ClientSecret)
+	}
+
+	credentials, err := handle.Complete(ctx, "/callback?code=code-1&state="+url.QueryEscape(handle.session.State))
+	if err != nil {
+		t.Fatalf("complete enterprise login: %v", err)
+	}
+	if credentials.Tokens == nil || credentials.Tokens.RefreshToken != "refresh-1" {
+		t.Fatalf("staged credentials = %#v", credentials.Tokens)
+	}
+	if credentials.Tokens.ClientSecret != "" {
+		t.Fatalf("staged grant kept the client secret: %q", credentials.Tokens.ClientSecret)
+	}
+
+	if !strings.HasPrefix(authorizationHeader, "Basic ") {
+		t.Fatalf("token request Authorization = %q, want Basic", authorizationHeader)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authorizationHeader, "Basic "))
+	if err != nil {
+		t.Fatalf("decode Basic credentials: %v", err)
+	}
+	if want := url.QueryEscape(clientID) + ":" + url.QueryEscape(clientSecret); string(decoded) != want {
+		t.Fatalf("Basic credentials = %q, want %q", string(decoded), want)
+	}
+	if _, ok := tokenForm["client_id"]; ok {
+		t.Fatalf("Basic token request leaked client_id into the form: %#v", tokenForm)
+	}
+	if _, ok := tokenForm["client_secret"]; ok {
+		t.Fatalf("Basic token request leaked client_secret into the form: %#v", tokenForm)
+	}
+
+	if _, err := CommitEnterpriseOAuthCredentials(home, credentials.Tokens, credentials.CommitGeneration(), func() *string {
+		value := "account-1"
+		return &value
+	}, OAuthCredentialsStoreFile); err != nil {
+		t.Fatalf("commit enterprise credentials: %v", err)
+	}
+	loaded, err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Load("enterprise", server.URL)
+	if err != nil || loaded == nil {
+		t.Fatalf("stored grant = (%#v, %v)", loaded, err)
+	}
+	if loaded.ClientSecret != "" {
+		t.Fatalf("stored grant kept the client secret: %q", loaded.ClientSecret)
+	}
+	file, err := os.ReadFile(filepath.Join(home, mcpOAuthFallbackFilename))
+	if err != nil {
+		t.Fatalf("read credentials file: %v", err)
+	}
+	if strings.Contains(string(file), clientSecret) {
+		t.Fatal("stored credentials file leaked the client secret")
 	}
 }
 

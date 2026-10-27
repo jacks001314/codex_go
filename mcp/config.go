@@ -97,6 +97,10 @@ type ServerConfig struct {
 	// ID and is used for token exchange/refresh instead of persisting it in the
 	// token record.
 	OAuthClientSecret string `json:"oauth_client_secret,omitempty"`
+	// OAuthTokenEndpointAuthMethod is the registered EMA client authentication
+	// method for a confidential MCP registration (Rust #56001). Empty means the
+	// public-client `none` method.
+	OAuthTokenEndpointAuthMethod string `json:"oauth_token_endpoint_auth_method,omitempty"`
 	// ToolInputSchemaMaxBytes is the best-effort compaction threshold for this
 	// server's tool input schemas (Rust #47936). Nil uses 5,000 bytes.
 	ToolInputSchemaMaxBytes *int   `json:"tool_input_schema_max_bytes,omitempty"`
@@ -243,10 +247,18 @@ func ValidateServerAuth(serverName string, config *ServerConfig) error {
 		if !config.EMAConfigured {
 			return errors.New("enterprise MCP authorization requires an enabled, directly configured server and a trusted enterprise profile")
 		}
+		if strings.TrimSpace(config.OAuthClientSecret) != "" && strings.TrimSpace(config.OAuthClientID) == "" {
+			return errors.New("oauth.client_secret requires oauth.client_id")
+		}
 		return config.ValidateEMAAuthTransport()
 	}
 	if strings.TrimSpace(config.OAuthClientSecret) != "" && strings.TrimSpace(config.OAuthClientID) == "" {
 		return errors.New("oauth.client_secret requires oauth.client_id")
+	}
+	// Rust #56001: the registered EMA authentication method only applies to
+	// enterprise-managed authorization.
+	if strings.TrimSpace(config.OAuthTokenEndpointAuthMethod) != "" {
+		return errors.New("oauth.token_endpoint_auth_method requires auth = \"ema_auth\"")
 	}
 	if strings.TrimSpace(config.HTTPHeadersHelper) != "" {
 		if strings.TrimSpace(config.URL) == "" || strings.TrimSpace(config.Command) != "" {
@@ -280,6 +292,25 @@ func (c *ServerConfig) ValidateEMAAuthTransport() error {
 		len(c.EnvHTTPHeaders) != 0 ||
 		strings.TrimSpace(c.HTTPHeadersHelper) != "" {
 		return errors.New("ema_auth cannot be combined with alternate HTTP credentials")
+	}
+	// Rust #56001: a confidential MCP registration needs a non-empty secret and
+	// a pinned authorization server issuer, and its authentication method
+	// requires that secret.
+	method := managedconfig.MCPEMATokenEndpointAuthMethod(strings.TrimSpace(c.OAuthTokenEndpointAuthMethod))
+	if method != "" && !method.IsValid() {
+		return fmt.Errorf("unknown value %q for oauth.token_endpoint_auth_method", c.OAuthTokenEndpointAuthMethod)
+	}
+	if c.OAuthClientSecret == "" {
+		if method != "" {
+			return errors.New("oauth.token_endpoint_auth_method requires oauth.client_secret")
+		}
+		return nil
+	}
+	if strings.TrimSpace(c.OAuthClientSecret) == "" {
+		return errors.New("ema_auth oauth.client_secret must not be empty")
+	}
+	if strings.TrimSpace(c.OAuthAuthorizationServerIssuer) == "" {
+		return errors.New("confidential ema_auth requires oauth.authorization_server_issuer")
 	}
 	return nil
 }
@@ -829,6 +860,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.HTTPHeadersHelper = runtimeConfigString(values, "http_headers_helper")
 		server.OAuthClientID = runtimeConfigOAuthClientID(values)
 		server.OAuthClientSecret = runtimeConfigOAuthClientSecret(values)
+		server.OAuthTokenEndpointAuthMethod = runtimeConfigOAuthTokenEndpointAuthMethod(values)
 		server.ToolInputSchemaMaxBytes = runtimeConfigPositiveIntAny(values, "tool_input_schema_max_bytes", "toolInputSchemaMaxBytes")
 		server.OAuthCallbackPort = runtimeConfigOAuthCallbackPort(values)
 		server.OAuthCallbackURL = runtimeConfigStringAny(values, "oauth_callback_url", "oauthCallbackUrl")
@@ -893,15 +925,41 @@ func runtimeConfigOAuthClientID(values map[string]any) string {
 	return runtimeConfigStringAny(oauth, "client_id", "clientId")
 }
 
+// runtimeConfigOAuthClientSecret keeps the configured value untrimmed so a
+// whitespace-only secret is still detectable and rejected (Rust #56001).
 func runtimeConfigOAuthClientSecret(values map[string]any) string {
-	if value := runtimeConfigStringAny(values, "oauth_client_secret", "oauthClientSecret"); value != "" {
+	if value := runtimeConfigRawStringAny(values, "oauth_client_secret", "oauthClientSecret"); value != "" {
 		return value
 	}
 	oauth, ok := runtimeConfigMapAny(values, "oauth")
 	if !ok {
 		return ""
 	}
-	return runtimeConfigStringAny(oauth, "client_secret", "clientSecret")
+	return runtimeConfigRawStringAny(oauth, "client_secret", "clientSecret")
+}
+
+// runtimeConfigRawStringAny returns the first non-empty string value without
+// trimming it.
+func runtimeConfigRawStringAny(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// runtimeConfigOAuthTokenEndpointAuthMethod resolves the registered EMA client
+// authentication method from either the flat or nested oauth form.
+func runtimeConfigOAuthTokenEndpointAuthMethod(values map[string]any) string {
+	if value := runtimeConfigStringAny(values, "oauth_token_endpoint_auth_method", "oauthTokenEndpointAuthMethod", "token_endpoint_auth_method", "tokenEndpointAuthMethod"); value != "" {
+		return value
+	}
+	oauth, ok := runtimeConfigMapAny(values, "oauth")
+	if !ok {
+		return ""
+	}
+	return runtimeConfigStringAny(oauth, "token_endpoint_auth_method", "tokenEndpointAuthMethod")
 }
 
 func runtimeConfigOAuthCallbackPort(values map[string]any) uint16 {

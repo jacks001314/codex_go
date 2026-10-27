@@ -47,6 +47,10 @@ type StreamableHTTPOAuthDiscovery struct {
 	Issuer                            string
 	ClientIDMetadataDocumentSupported bool
 	PublicClientTokenAuthSupported    bool
+	// TokenEndpointAuthMethodsSupported is the authorization server's published
+	// authenticated-client methods. Nil means absent, so a confidential
+	// registration defaults to Basic (Rust #56001).
+	TokenEndpointAuthMethodsSupported []string
 	// CallbackMode is the OAuth mix-up defense advertised by the authorization
 	// server (Rust #40691).
 	CallbackMode MCPOAuthCallbackMode
@@ -681,6 +685,7 @@ func discoveryFromMCPOAuthAuthorizationMetadata(serverURL string, metadata *oaut
 		Issuer:                             authorizationServer,
 		ClientIDMetadataDocumentSupported:  metadata.ClientIDMetadataDocumentSupported,
 		PublicClientTokenAuthSupported:     metadataHasPublicClientTokenAuth(metadata.TokenEndpointAuthMethodsSupported),
+		TokenEndpointAuthMethodsSupported:  metadata.TokenEndpointAuthMethodsSupported,
 		CallbackMode:                       callbackMode,
 	}
 }

@@ -171,3 +171,106 @@ func TestMCPEMAAuthorizationServerIssuerRequiresEMAAuth(t *testing.T) {
 		t.Fatalf("issuer without ema_auth error = %v", err)
 	}
 }
+
+// TestMCPEnterpriseManagedAuthConfidentialIdPLikeRust mirrors #56001: the IdP
+// registration may carry a client secret and a token-endpoint authentication
+// method, which defaults to Basic and requires the secret.
+func TestMCPEnterpriseManagedAuthConfidentialIdPLikeRust(t *testing.T) {
+	profile, err := parseMCPEnterpriseManagedAuth(map[string]any{
+		"idp": map[string]any{
+			"issuer":                     "https://idp.example",
+			"client_id":                  "enterprise",
+			"client_secret":              "s3cret",
+			"token_endpoint_auth_method": "client_secret_post",
+		},
+	})
+	if err != nil {
+		t.Fatalf("parse error = %v", err)
+	}
+	if profile.IDP.ClientSecret != "s3cret" || profile.IDP.TokenEndpointAuthMethod != MCPEMATokenEndpointAuthClientSecretPost {
+		t.Fatalf("idp = %#v", profile.IDP)
+	}
+	basic, err := parseMCPEnterpriseManagedAuth(map[string]any{
+		"idp": map[string]any{
+			"issuer":        "https://idp.example",
+			"client_id":     "enterprise",
+			"client_secret": "s3cret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("parse error = %v", err)
+	}
+	if basic.IDP.TokenEndpointAuthMethod != "" || basic.IDP.ClientSecret != "s3cret" {
+		t.Fatalf("idp = %#v; omission keeps the default resolution to Basic", basic.IDP)
+	}
+}
+
+func TestMCPEnterpriseManagedAuthRejectsInvalidConfidentialIdPLikeRust(t *testing.T) {
+	cases := []struct {
+		name string
+		idp  map[string]any
+		want string
+	}{
+		{
+			name: "empty secret",
+			idp:  map[string]any{"issuer": "https://idp.example", "client_id": "enterprise", "client_secret": "   "},
+			want: "enterprise IdP client_secret must not be empty",
+		},
+		{
+			name: "method without secret",
+			idp:  map[string]any{"issuer": "https://idp.example", "client_id": "enterprise", "token_endpoint_auth_method": "client_secret_basic"},
+			want: "enterprise IdP token_endpoint_auth_method requires client_secret",
+		},
+		{
+			name: "unknown method",
+			idp:  map[string]any{"issuer": "https://idp.example", "client_id": "enterprise", "client_secret": "s3cret", "token_endpoint_auth_method": "private_key_jwt"},
+			want: "unknown variant `private_key_jwt`",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseMCPEnterpriseManagedAuth(map[string]any{"idp": tc.idp})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestMCPEnterpriseManagedAuthFingerprintTracksConfidentialRegistrationLikeRust
+// mirrors #56001: Rust compares the whole trusted profile, so replacing the IdP
+// secret or its registered authentication method must retire enterprise
+// authority instead of adopting the new credential in a running session.
+func TestMCPEnterpriseManagedAuthFingerprintTracksConfidentialRegistrationLikeRust(t *testing.T) {
+	public := map[string]any{"idp": map[string]any{
+		"issuer": "https://idp.example", "client_id": "enterprise",
+	}}
+	confidential := map[string]any{"idp": map[string]any{
+		"issuer": "https://idp.example", "client_id": "enterprise", "client_secret": "s3cret",
+	}}
+	post := map[string]any{"idp": map[string]any{
+		"issuer":                     "https://idp.example",
+		"client_id":                  "enterprise",
+		"client_secret":              "s3cret",
+		"token_endpoint_auth_method": "client_secret_post",
+	}}
+	base := MCPEnterpriseManagedAuthFingerprint(public)
+	if base == "" {
+		t.Fatal("public profile fingerprint is empty")
+	}
+	if again := MCPEnterpriseManagedAuthFingerprint(public); again != base {
+		t.Fatalf("fingerprint is not stable: %q then %q", base, again)
+	}
+	if MCPEnterpriseManagedAuthFingerprint(confidential) == base {
+		t.Fatal("a provisioned IdP secret did not change the profile fingerprint")
+	}
+	if MCPEnterpriseManagedAuthFingerprint(post) == MCPEnterpriseManagedAuthFingerprint(confidential) {
+		t.Fatal("a changed token endpoint authentication method did not change the profile fingerprint")
+	}
+	if fingerprint := MCPEnterpriseManagedAuthFingerprint(confidential); strings.Contains(fingerprint, "s3cret") {
+		t.Fatalf("fingerprint leaked the client secret: %q", fingerprint)
+	}
+	if MCPEnterpriseManagedAuthFingerprint(map[string]any{"idp": "invalid"}) != "" {
+		t.Fatal("an invalid profile must not produce a fingerprint")
+	}
+}

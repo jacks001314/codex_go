@@ -59,6 +59,8 @@ type EMAAuthManager struct {
 	serverURL                 string
 	resource                  string
 	clientID                  string
+	clientSecret              string
+	tokenEndpointAuthMethod   managedconfig.MCPEMATokenEndpointAuthMethod
 	authorizationServerIssuer string
 	scopes                    []string
 	profile                   managedconfig.MCPEnterpriseManagedAuthConfig
@@ -92,6 +94,8 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 		serverURL:                 strings.TrimSpace(config.URL),
 		resource:                  strings.TrimSpace(config.OAuthResource),
 		clientID:                  strings.TrimSpace(config.OAuthClientID),
+		clientSecret:              config.OAuthClientSecret,
+		tokenEndpointAuthMethod:   managedconfig.MCPEMATokenEndpointAuthMethod(strings.TrimSpace(config.OAuthTokenEndpointAuthMethod)),
 		authorizationServerIssuer: strings.TrimSpace(config.OAuthAuthorizationServerIssuer),
 		scopes:                    append([]string(nil), config.Scopes...),
 		profile:                   options.Profile,
@@ -205,6 +209,13 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	if err != nil || tokens == nil || strings.TrimSpace(tokens.RefreshToken) == "" {
 		return "", errors.New("enterprise sign-in is required")
 	}
+	// Rust ema_identity: a stored enterprise grant must belong to the
+	// configured issuer and IdP client. The credential name already derives
+	// from both; this guard rejects a tampered or legacy record before any
+	// credential reaches the token endpoints.
+	if storedClientID := strings.TrimSpace(tokens.ClientID); storedClientID != strings.TrimSpace(m.profile.IDP.ClientID) {
+		return "", errors.New("stored enterprise IdP credentials do not match the configured issuer and client")
+	}
 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, m.serverURL, client)
 	if err != nil || discovery == nil {
 		return "", errors.New("enterprise MCP authorization discovery failed")
@@ -219,7 +230,11 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	if err := ValidateMCPEMAAuthResource(m.serverURL, &resource); err != nil {
 		return "", err
 	}
-	idp, err := resolveEnterpriseAuthorizationMetadata(ctx, m.profile.IDP.Issuer, client)
+	resourceAuth, err := resolveMCPEMAClientAuth(discovery.TokenEndpointAuthMethodsSupported, m.clientID, m.clientSecret, m.tokenEndpointAuthMethod, "MCP authorization server")
+	if err != nil {
+		return "", err
+	}
+	idp, err := resolveEnterpriseAuthorizationMetadata(ctx, m.profile.IDP.Issuer, m.profile.IDP.ClientID, m.profile.IDP.ClientSecret, m.profile.IDP.TokenEndpointAuthMethod, client)
 	if err != nil {
 		return "", err
 	}
@@ -233,6 +248,8 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 		IDPTokenEndpoint:                 idp.TokenEndpoint,
 		IDPIssuer:                        m.profile.IDP.Issuer,
 		IDPClientID:                      m.profile.IDP.ClientID,
+		IDPClientAuthentication:          idp.ClientAuthentication,
+		ResourceClientAuthentication:     resourceAuth,
 		RefreshToken:                     tokens.RefreshToken,
 		IDPHTTPClient:                    client,
 		ResourceHTTPClient:               client,

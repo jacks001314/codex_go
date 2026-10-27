@@ -109,7 +109,7 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 		ServerName:                 config.OAuthCredentialName(name),
 		ServerURL:                  config.URL,
 		ClientID:                   config.OAuthClientID,
-		ClientSecret:               strings.TrimSpace(config.OAuthClientSecret),
+		ClientSecret:               config.OAuthClientSecret,
 		OmitClientSecretFromRecord: strings.TrimSpace(config.OAuthClientSecret) != "",
 		RegistrationEndpoint:       discovery.RegistrationEndpoint,
 		AuthorizationEndpoint:      discovery.AuthorizationEndpoint,

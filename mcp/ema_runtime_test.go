@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	managedconfig "codex_go/config"
@@ -215,5 +216,46 @@ func TestAttachEnterpriseMCPAuthorizationSharesCredentialStatusAcrossServers(t *
 		if !config.EMAConfigured || !config.EMACredentialsAvailable || config.ApplyHTTPRequest == nil {
 			t.Fatalf("%s config = %+v, want configured EMA with an available grant", name, config)
 		}
+	}
+}
+
+// TestEMAAuthManagerRejectsGrantFromAnotherIdPClientLikeRust mirrors
+// ema_identity's stored-credential guard: a grant whose client does not match
+// the configured IdP client is never exchanged.
+func TestEMAAuthManagerRejectsGrantFromAnotherIdPClientLikeRust(t *testing.T) {
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: "https://idp.example", ClientID: "idp-client", ClientSecret: "s3cret",
+	}}
+	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
+		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
+		ServerURL:    profile.IDP.Issuer,
+		ClientID:     "another-client",
+		RefreshToken: "refresh-token",
+		AccessToken:  "idp-access",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	config := &ServerConfig{
+		URL:                            "https://resource.example/mcp",
+		Auth:                           ServerAuthEMAAuth,
+		OAuthClientID:                  "mcp-client",
+		OAuthResource:                  "https://resource.example/mcp",
+		OAuthAuthorizationServerIssuer: "https://as.example",
+	}
+	manager, err := NewEMAAuthManager("enterprise", config, EMAAuthOptions{
+		CodexHome: home,
+		StoreMode: OAuthCredentialsStoreFile,
+		Profile:   profile,
+		Scope:     scope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequest(http.MethodPost, config.URL, nil)
+	err = manager.ApplyHTTPRequest(request, nil)
+	if err == nil || !strings.Contains(err.Error(), "stored enterprise IdP credentials do not match") {
+		t.Fatalf("ApplyHTTPRequest() error = %v", err)
 	}
 }

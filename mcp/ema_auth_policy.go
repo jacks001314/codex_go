@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	managedconfig "codex_go/config"
 )
 
 // EMAAuthFailureCode is a sanitized enterprise-auth failure that callers may
@@ -77,19 +79,75 @@ func safeMCPEMAOAuthErrorCode(code *string) string {
 	}
 }
 
-// validateMCPEMAPublicClientAuth mirrors Rust validate_ema_public_client_auth.
-func validateMCPEMAPublicClientAuth(advertisedMethods any, issuerDescription string) error {
-	if advertisedMethods == nil {
-		return fmt.Errorf("%s does not explicitly advertise public-client token endpoint authentication", issuerDescription)
+// mcpEMAClientAuthentication is the client authentication approved for one
+// token endpoint. An empty Method is the public-client `none` method. String
+// never exposes the secret (Rust #56001).
+type mcpEMAClientAuthentication struct {
+	Method       managedconfig.MCPEMATokenEndpointAuthMethod
+	ClientID     string
+	ClientSecret string
+}
+
+func (a mcpEMAClientAuthentication) String() string {
+	return fmt.Sprintf("mcpEMAClientAuthentication{method:%q client_id:%q client_secret:[REDACTED]}", a.Method, a.ClientID)
+}
+
+func (a mcpEMAClientAuthentication) GoString() string {
+	return a.String()
+}
+
+// resolveMCPEMAClientAuth mirrors Rust resolve_ema_client_auth: a confidential
+// registration is used exactly as configured after the server advertises that
+// method, while a public registration still requires an advertised `none`.
+// advertised is nil when the server published no method list.
+func resolveMCPEMAClientAuth(
+	advertised []string,
+	clientID string,
+	clientSecret string,
+	method managedconfig.MCPEMATokenEndpointAuthMethod,
+	issuerDescription string,
+) (mcpEMAClientAuthentication, error) {
+	if method != "" && !method.IsValid() {
+		return mcpEMAClientAuthentication{}, fmt.Errorf("unknown value %q for %s token endpoint authentication method", method, issuerDescription)
 	}
-	methods, ok := mcpEMAArray(advertisedMethods)
-	if !ok {
-		return fmt.Errorf("%s advertised malformed token endpoint authentication methods", issuerDescription)
+	if clientSecret != "" {
+		if strings.TrimSpace(clientSecret) == "" {
+			return mcpEMAClientAuthentication{}, fmt.Errorf("%s client secret must not be empty", issuerDescription)
+		}
+		registered := method
+		if registered == "" {
+			registered = managedconfig.MCPEMATokenEndpointAuthClientSecretBasic
+		}
+		// RFC 8414 defaults absent server capabilities to Basic. Capabilities
+		// validate the registration; they do not select its authentication method.
+		supported := false
+		if advertised == nil {
+			supported = registered == managedconfig.MCPEMATokenEndpointAuthClientSecretBasic
+		} else {
+			for _, candidate := range advertised {
+				if candidate == string(registered) {
+					supported = true
+					break
+				}
+			}
+		}
+		if !supported {
+			return mcpEMAClientAuthentication{}, fmt.Errorf("%s does not support the registered token endpoint authentication method", issuerDescription)
+		}
+		return mcpEMAClientAuthentication{Method: registered, ClientID: clientID, ClientSecret: clientSecret}, nil
 	}
-	if mcpEMAArrayContainsString(methods, "none") {
-		return nil
+	if method != "" {
+		return mcpEMAClientAuthentication{}, fmt.Errorf("%s token endpoint authentication method requires a client secret", issuerDescription)
 	}
-	return fmt.Errorf("%s does not support public-client token endpoint authentication", issuerDescription)
+	if advertised == nil {
+		return mcpEMAClientAuthentication{}, fmt.Errorf("%s does not explicitly advertise public-client token endpoint authentication", issuerDescription)
+	}
+	for _, candidate := range advertised {
+		if candidate == "none" {
+			return mcpEMAClientAuthentication{ClientID: clientID}, nil
+		}
+	}
+	return mcpEMAClientAuthentication{}, fmt.Errorf("%s does not support public-client token endpoint authentication", issuerDescription)
 }
 
 // validateMCPEMAOAuthEndpoint mirrors Rust validate_ema_oauth_endpoint.

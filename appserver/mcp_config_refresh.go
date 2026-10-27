@@ -270,6 +270,7 @@ func enterpriseServerRegistrationFingerprint(config mcp.ServerConfig) string {
 		HTTPHeadersHelper              string            `json:"http_headers_helper"`
 		OAuthClientID                  string            `json:"oauth_client_id"`
 		OAuthClientSecret              string            `json:"oauth_client_secret"`
+		OAuthTokenEndpointAuthMethod   string            `json:"oauth_token_endpoint_auth_method"`
 		ToolInputSchemaMaxBytes        *int              `json:"tool_input_schema_max_bytes"`
 		OAuthCallbackPort              uint16            `json:"oauth_callback_port"`
 		OAuthCallbackURL               string            `json:"oauth_callback_url"`
@@ -292,6 +293,7 @@ func enterpriseServerRegistrationFingerprint(config mcp.ServerConfig) string {
 		HTTPHeadersHelper:              config.HTTPHeadersHelper,
 		OAuthClientID:                  config.OAuthClientID,
 		OAuthClientSecret:              config.OAuthClientSecret,
+		OAuthTokenEndpointAuthMethod:   config.OAuthTokenEndpointAuthMethod,
 		ToolInputSchemaMaxBytes:        config.ToolInputSchemaMaxBytes,
 		OAuthCallbackPort:              config.OAuthCallbackPort,
 		OAuthCallbackURL:               config.OAuthCallbackURL,
