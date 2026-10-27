@@ -119,23 +119,34 @@ func (e GuardianTranscriptEntry) Render(format GuardianTranscriptFormat) string 
 // evidence, not a request whose result it is reading.
 const GuardianNativeEvidenceOutputText = "This call is review evidence, not a request to execute it. This is not its execution result."
 
+// GuardianNativeFunctionCall identifies a preserved native function call's
+// call ID, or reports false when the item is not a function call.
+func GuardianNativeFunctionCall(native json.RawMessage) (string, string, bool) {
+	if len(native) == 0 {
+		return "", "", false
+	}
+	var item struct {
+		Type   string `json:"type"`
+		Name   string `json:"name"`
+		CallID string `json:"call_id"`
+	}
+	if err := json.Unmarshal(native, &item); err != nil {
+		return "", "", false
+	}
+	callID := strings.TrimSpace(item.CallID)
+	if strings.TrimSpace(item.Type) != "function_call" || callID == "" {
+		return "", "", false
+	}
+	return callID, strings.TrimSpace(item.Name), true
+}
+
 // GuardianNativeFunctionCallEvidenceOutput mirrors Rust's
 // `native_tool_call::evidence_output`: a preserved native function call is
 // delivered with a paired evidence-only output so the backend can pair the
 // call without executing it. Non-call native items have no paired output.
 func GuardianNativeFunctionCallEvidenceOutput(native json.RawMessage) (json.RawMessage, bool) {
-	if len(native) == 0 {
-		return nil, false
-	}
-	var item struct {
-		Type   string `json:"type"`
-		CallID string `json:"call_id"`
-	}
-	if err := json.Unmarshal(native, &item); err != nil {
-		return nil, false
-	}
-	callID := strings.TrimSpace(item.CallID)
-	if strings.TrimSpace(item.Type) != "function_call" || callID == "" {
+	callID, _, ok := GuardianNativeFunctionCall(native)
+	if !ok {
 		return nil, false
 	}
 	payload, err := json.Marshal(map[string]any{
@@ -157,6 +168,37 @@ func GuardianNativeFunctionCallTokens(native json.RawMessage) int {
 		tokens += utils.ApproxTokenCount(string(output))
 	}
 	return tokens
+}
+
+// GuardianTranscriptWithoutProposedCall mirrors Rust's transcript dedup for a
+// native tool call review: the proposed call is delivered as the planned
+// action, so its history copy becomes an omission placeholder at the same
+// position instead of reaching the reviewer twice.
+func GuardianTranscriptWithoutProposedCall(entries []GuardianTranscriptEntry, callID string) []GuardianTranscriptEntry {
+	callID = strings.TrimSpace(callID)
+	if callID == "" || len(entries) == 0 {
+		return entries
+	}
+	out := make([]GuardianTranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		entryCallID, name, ok := GuardianNativeFunctionCall(entry.Native)
+		if !ok || entryCallID != callID {
+			out = append(out, entry)
+			continue
+		}
+		lineRole := "tool call"
+		if name != "" {
+			lineRole = "tool " + name + " call"
+		}
+		out = append(out, GuardianTranscriptEntry{
+			Author:   entry.Author,
+			Index:    entry.Index,
+			Label:    lineRole,
+			LineRole: lineRole,
+			Text:     GuardianTranscriptOmissionNotice,
+		})
+	}
+	return out
 }
 
 // RenderGuardianTranscript renders entries in conversation order.

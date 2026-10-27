@@ -1882,6 +1882,15 @@ func TestModelInfoGuardianReviewPolicy(t *testing.T) {
 	if got := (*GuardianModelPolicy)(nil).ReviewMode(GuardianScopeShell); got != disabled {
 		t.Fatalf("nil policy review mode = %q, want %q", got, disabled)
 	}
+	// Rust #57433: native tool calls are always reviewed synchronously, even
+	// when the catalog omits every other scope.
+	if got := policy.ReviewMode(GuardianScopeNativeTool); got != synchronous {
+		t.Fatalf("native_tool review mode = %q, want %q", got, synchronous)
+	}
+	nativePolicy := &ModelInfo{Guardian: &GuardianModelPolicy{}}
+	if got := nativePolicy.GuardianReviewMode(GuardianScopeNativeTool); got == nil || *got != synchronous {
+		t.Fatalf("native_tool model review mode = %v, want %q", got, synchronous)
+	}
 
 	withPolicy := &ModelInfo{Guardian: policy}
 	if !withPolicy.ComputerUseReviewRequired() {

@@ -15344,6 +15344,9 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		codeModeYieldTime = turnConfig.CodeModeDefaultExecYieldTime()
 	}
 	allowedTools := r.threadAllowedToolsForThread(params.ThreadID)
+	// Rust #57433: the turn's tool router reviews opted-in native calls before
+	// dispatch, seeing the arguments pre-tool hooks produced.
+	router.SetGuardianReview(r.nativeToolGuardianReview(params.ThreadID, turnID))
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
 		Router:                       router,

@@ -676,6 +676,9 @@ const (
 	GuardianScopeMCP         GuardianScope = "mcp"
 	GuardianScopeNetwork     GuardianScope = "network"
 	GuardianScopePermissions GuardianScope = "permissions"
+	// GuardianScopeNativeTool covers opted-in function calls reviewed before
+	// dispatch. It is always synchronous and has no catalog field (Rust #57433).
+	GuardianScopeNativeTool GuardianScope = "native_tool"
 )
 
 // ReviewMode resolves the model-provided Guardian mode for a scope. An omitted
@@ -683,6 +686,11 @@ const (
 func (p *GuardianModelPolicy) ReviewMode(scope GuardianScope) GuardianReviewMode {
 	if p == nil {
 		return GuardianReviewModeDisabled
+	}
+	if scope == GuardianScopeNativeTool {
+		// Rust GuardianModelPolicy::review_mode: native tool calls are always
+		// reviewed synchronously, independent of the catalog's other scopes.
+		return GuardianReviewModeSynchronous
 	}
 	var mode *GuardianReviewMode
 	switch scope {

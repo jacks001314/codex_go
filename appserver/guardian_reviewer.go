@@ -686,6 +686,14 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if release := r.blocking.enter(threadID); release != nil {
 		defer release()
 	}
+	// Rust #57433: a native tool call keeps review accounting and metrics but has
+	// no action-specific client assessment event, so its started/completed
+	// notifications are suppressed while the review still runs.
+	nativeToolCall := strings.TrimSpace(action.Type) == state.ActionNativeToolCall
+	emit := r.emit
+	if nativeToolCall {
+		emit = func(string, *state.Event) {}
+	}
 	// Rust #57207: bind the review to its owning tool invocation before any
 	// blocking work starts. When the owner is unknown, invalidate the turn's
 	// capture instead of charging an unrelated call.
@@ -766,7 +774,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
-	r.emit(threadID, event)
+	emit(threadID, event)
 	if r.tracer != nil {
 		if tracer := r.tracer(); tracer != nil {
 			span := tracer.StartSpan("guardian_review", map[string]string{
@@ -816,7 +824,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 		completed, finishErr := store.Timeout(event.ID)
 		if finishErr == nil {
-			r.emit(threadID, completed)
+			emit(threadID, completed)
 		}
 		// Rust records a non-denial for a failed review: only a completed
 		// assessment with outcome deny counts as a policy denial.
@@ -840,7 +848,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 		completed, finishErr := store.Abort(event.ID, "Guardian review was aborted.")
 		if finishErr == nil {
-			r.emit(threadID, completed)
+			emit(threadID, completed)
 		}
 		r.recordNonDenial(turnID)
 		attribution.Decision = state.DecisionAborted
@@ -869,6 +877,18 @@ reviewAttempt:
 		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
 	} else if r.transcript != nil {
 		transcript = r.transcript(threadID)
+	}
+	nativeCallID := ""
+	if nativeToolCall {
+		if callID, _, ok := state.GuardianNativeFunctionCall(action.NativeCall); ok {
+			nativeCallID = callID
+		}
+	}
+	if nativeCallID != "" {
+		// The proposed call is delivered as the planned action, so its history
+		// copy becomes an omission placeholder at the same position.
+		transcriptEntries = state.GuardianTranscriptWithoutProposedCall(transcriptEntries, nativeCallID)
+		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
 	}
 	nodeReplAutoReviewRequired := false
 	if r.nodeReplAutoReviewRequired != nil {
@@ -925,7 +945,7 @@ reviewAttempt:
 	var promptParts []state.GuardianPromptPart
 	var promptCosts []state.GuardianPromptSectionCost
 	buildPrompt := func() error {
-		if transcriptEntries != nil {
+		if transcriptEntries != nil || nativeToolCall {
 			var buildErr error
 			promptParts, promptCosts, buildErr = state.BuildPromptPartsWithSectionCosts(action, transcriptEntries, buildOptions)
 			return buildErr
@@ -965,7 +985,7 @@ reviewAttempt:
 			rationale := guardianReviewFailureRationale(err.Error())
 			message := guardianReviewFailureMessage(err.Error())
 			completed, _ := store.FailClosed(event.ID, rationale)
-			r.emit(threadID, completed)
+			emit(threadID, completed)
 			r.recordNonDenial(turnID)
 			attribution.Decision = state.DecisionDenied
 			attribution.TerminalStatus = "failed_closed"
@@ -1072,7 +1092,7 @@ reviewAttempt:
 		runner.markPriorReview()
 	}
 	var staleAuthorization bool
-	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, transcriptEntries, transcriptOmissionNote, rootAuthorization) {
+	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, transcriptEntries, transcriptOmissionNote, rootAuthorization, nativeCallID) {
 		// Rust #47819 only invalidates a completed allow: a deny stands on the
 		// evidence it saw, while an approval must match the latest authorization.
 		if parsed, parseErr := state.ParseAssessment([]byte(guardianAssessmentText(response))); parseErr == nil && parsed.Outcome == state.OutcomeAllow {
@@ -1104,7 +1124,7 @@ reviewAttempt:
 		message := "authorization changed before approval could be applied"
 		rationale := guardianReviewFailureRationale(message)
 		failedClosed, _ := store.FailClosed(event.ID, rationale)
-		r.emit(threadID, failedClosed)
+		emit(threadID, failedClosed)
 		r.recordNonDenial(turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
@@ -1190,7 +1210,7 @@ reviewAttempt:
 		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
 		failedClosed, _ := store.FailClosed(event.ID, rationale)
-		r.emit(threadID, failedClosed)
+		emit(threadID, failedClosed)
 		r.recordNonDenial(turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
@@ -1218,7 +1238,7 @@ reviewAttempt:
 		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
 		failedClosed, _ := store.FailClosed(event.ID, rationale)
-		r.emit(threadID, failedClosed)
+		emit(threadID, failedClosed)
 		r.recordNonDenial(turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
@@ -1235,10 +1255,10 @@ reviewAttempt:
 		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
-	if r.logAssessment != nil {
+	if r.logAssessment != nil && !nativeToolCall {
 		r.logAssessment(threadID, completed)
 	}
-	r.emit(threadID, completed)
+	emit(threadID, completed)
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		// Rust complete_review: a completed assessment advances the transcript
 		// cursor and the completed-review count, unlike a failed-but-admitted
@@ -2535,13 +2555,16 @@ func waitGuardianReviewRetry(ctx context.Context, delay time.Duration) error {
 // guardianReviewContextChanged mirrors Rust #53797's widened invalidation
 // predicate: local or root review evidence that changed while the reviewer was
 // running makes the assessment stale and triggers a fresh attempt.
-func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, omissionNote string, rootAuthorization []state.RootMessage) bool {
+func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, omissionNote string, rootAuthorization []state.RootMessage, nativeCallID string) bool {
 	if r == nil {
 		return false
 	}
 	if r.transcriptSelection != nil {
 		selection := r.transcriptSelection(threadID)
-		if !reflect.DeepEqual(entries, selection.Entries) || omissionNote != selection.OmissionNote {
+		// The proposed native call is part of the plan, not a context change, so
+		// both sides of the comparison drop it.
+		fresh := state.GuardianTranscriptWithoutProposedCall(selection.Entries, nativeCallID)
+		if !reflect.DeepEqual(entries, fresh) || omissionNote != selection.OmissionNote {
 			return true
 		}
 	} else if r.transcript != nil && !slices.Equal(transcript, r.transcript(threadID)) {

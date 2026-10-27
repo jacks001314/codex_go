@@ -149,7 +149,20 @@ type Action struct {
 	// `<guardian_tool_descriptions>` block instead of the action JSON.
 	ToolDescription      string `json:"-"`
 	ConnectorDescription string `json:"-"`
+	// NativeCall is the exact proposed function call of a native tool call
+	// review (Rust GuardianApprovalRequest::NativeToolCall). It is delivered as
+	// its own native message and evidence output, so it never appears in the
+	// action JSON or a client notification.
+	NativeCall json.RawMessage `json:"-"`
 }
+
+// ActionNativeToolCall reviews one opted-in function call before dispatch
+// (Rust GuardianReviewedAction::NativeToolCall).
+const ActionNativeToolCall = "native_tool_call"
+
+// GuardianNativeToolCallMaxTokens mirrors guardian-context's 9,000-token cap on
+// the native call evidence, counting the paired evidence output.
+const GuardianNativeToolCallMaxTokens = 9_000
 
 // ActionAnnotations mirrors Rust GuardianMcpAnnotations: the privileged hints
 // the invoked MCP tool declared, rendered with the reviewed action.
@@ -187,6 +200,10 @@ func (a *Action) Validate() error {
 	case "request_permissions":
 		if len(a.Permissions) == 0 {
 			return fmt.Errorf("%w: permissions are required", ErrInvalidGuardianRequest)
+		}
+	case ActionNativeToolCall:
+		if len(a.NativeCall) == 0 {
+			return fmt.Errorf("%w: native call is required", ErrInvalidGuardianRequest)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported action %q", ErrInvalidGuardianRequest, a.Type)
@@ -860,7 +877,36 @@ func BuildPromptPartsWithSectionCosts(
 		addSection("planned_action", descriptions)
 	}
 	flushSections()
+	if strings.TrimSpace(action.Type) == ActionNativeToolCall {
+		if err := appendGuardianNativeToolCallParts(&parts, func(section string, textBytes int) {
+			recordCost(section, textBytes, 0, 0)
+		}, action.NativeCall); err != nil {
+			return nil, nil, err
+		}
+	}
 	return parts, costs, nil
+}
+
+// appendGuardianNativeToolCallParts mirrors Rust's sync-only planned-action
+// section: the exact call and its paired evidence-only output are delivered as
+// native response items, which keeps encrypted argument metadata intact for the
+// backend. The whole evidence, output included, is bounded by
+// GuardianNativeToolCallMaxTokens.
+func appendGuardianNativeToolCallParts(parts *[]GuardianPromptPart, recordCost func(section string, textBytes int), native json.RawMessage) error {
+	if _, _, ok := GuardianNativeFunctionCall(native); !ok {
+		return fmt.Errorf("guardian native tool call review requires a function call")
+	}
+	if GuardianNativeFunctionCallTokens(native) > GuardianNativeToolCallMaxTokens {
+		return fmt.Errorf("Guardian native tool call evidence exceeds the %d-token review limit", GuardianNativeToolCallMaxTokens)
+	}
+	call := append(json.RawMessage(nil), native...)
+	*parts = append(*parts, GuardianPromptPart{Native: call})
+	recordCost("planned_action", len(call))
+	if output, ok := GuardianNativeFunctionCallEvidenceOutput(call); ok {
+		*parts = append(*parts, GuardianPromptPart{Native: output})
+		recordCost("planned_action", len(output))
+	}
+	return nil
 }
 
 // writeGuardianPromptSection appends one prompt block, separated from the

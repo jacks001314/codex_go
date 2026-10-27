@@ -217,6 +217,18 @@ type Executor interface {
 	Execute(ctx context.Context, invocation *Invocation) (*Output, error)
 }
 
+// GuardianReviewOptIn opts one invocation into synchronous approval review
+// before its handler runs (Rust CoreToolRuntime::requires_guardian_review,
+// #57433). A denied review stops dispatch and reaches the model as the tool
+// call's error, so the handler never executes.
+type GuardianReviewOptIn interface {
+	RequiresGuardianReview(invocation *Invocation) bool
+}
+
+// GuardianReviewFunc reviews one opted-in invocation after its pre-tool hooks
+// produced the final arguments. A non-nil error is the model-facing rejection.
+type GuardianReviewFunc func(ctx context.Context, invocation *Invocation) error
+
 type TelemetryTagProvider interface {
 	TelemetryTags(invocation *Invocation) map[string]string
 }
@@ -671,6 +683,7 @@ type Router struct {
 	plannedCodeModeNames map[string]CodeModeToolNameMetadata
 	toolNamespacesInfo   ToolNamespacesInfo
 	canManageChildren    bool
+	guardianReview       GuardianReviewFunc
 }
 
 func NewRouter(registry *Registry) *Router {
@@ -678,6 +691,56 @@ func NewRouter(registry *Registry) *Router {
 		registry = NewRegistry()
 	}
 	return &Router{registry: registry, now: time.Now}
+}
+
+// nestedGuardianReviewSetter receives the host review for the nested router a
+// Code Mode cell builds (Rust's nested calls share the registry's dispatch).
+type nestedGuardianReviewSetter interface {
+	SetNestedGuardianReview(review GuardianReviewFunc)
+}
+
+// SetGuardianReview installs the host review an opted-in tool invocation runs
+// before its handler (Rust #57433). Without one, an opted-in invocation is not
+// reviewed here; the tool layer never silently approves on the host's behalf.
+// Code Mode cells get the same review, because Rust dispatches nested calls
+// through the same registry and must not let the wrapper bypass it.
+func (r *Router) SetGuardianReview(review GuardianReviewFunc) {
+	if r == nil {
+		return
+	}
+	r.guardianReview = review
+	if r.registry == nil {
+		return
+	}
+	if executor, ok := r.registry.Lookup(PlainName(CodeModeExecToolName)); ok {
+		if setter, ok := executor.(nestedGuardianReviewSetter); ok {
+			setter.SetNestedGuardianReview(review)
+		}
+	}
+}
+
+// RequiresGuardianReview reports whether the invocation's executor opts into a
+// synchronous review before dispatch.
+func (r *Router) RequiresGuardianReview(invocation *Invocation) bool {
+	if r == nil || r.registry == nil || invocation == nil {
+		return false
+	}
+	executor, ok := r.registry.Lookup(invocation.ToolName)
+	if !ok {
+		return false
+	}
+	optIn, ok := executor.(GuardianReviewOptIn)
+	return ok && optIn.RequiresGuardianReview(invocation)
+}
+
+// reviewBeforeDispatch runs the host review for an opted-in invocation. A nil
+// review function leaves the call unreviewed, matching the default-off trait
+// method in Rust.
+func (r *Router) reviewBeforeDispatch(ctx context.Context, invocation *Invocation) error {
+	if r == nil || r.guardianReview == nil || !r.RequiresGuardianReview(invocation) {
+		return nil
+	}
+	return r.guardianReview(ctx, invocation)
 }
 
 func (r *Router) SetClock(clock func() time.Time) {
@@ -1109,6 +1172,9 @@ func (r *Router) Dispatch(ctx context.Context, invocation *Invocation) (*Output,
 	case <-ctx.Done():
 		return nil, ErrToolCancelled
 	default:
+	}
+	if err := r.reviewBeforeDispatch(ctx, invocation); err != nil {
+		return nil, err
 	}
 	output, err := executeToolSafely(ctx, executor, invocation)
 	if err != nil {

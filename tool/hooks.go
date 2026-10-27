@@ -150,6 +150,11 @@ func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation 
 		}
 	}
 
+	// Rust #57433: an opted-in invocation is reviewed synchronously here, after
+	// pre-tool hooks produced the final arguments and before the handler runs.
+	if err := r.reviewBeforeDispatch(ctx, current); err != nil {
+		return nil, err
+	}
 	if onStarted != nil {
 		onStarted(current)
 	}

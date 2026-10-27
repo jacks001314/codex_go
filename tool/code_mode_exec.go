@@ -94,18 +94,22 @@ type codeModeExecExecutor struct {
 	nextID atomic.Uint64
 	// nextCellID numbers this executor's observable cells (`cell-%d`); it must
 	// not consume the nested-call counter (see nextID).
-	nextCellID      atomic.Uint64
-	storeMu         sync.RWMutex
-	store           map[string]json.RawMessage
-	cellsMu         sync.Mutex
-	cells           map[string]*codeModeCell
-	remote          CodeModeRemoteSession
-	provider        CodeModeRemoteProvider
-	messages        *CodeModeToolMessages
-	disableFallback bool
-	warningEmitted  atomic.Bool
-	remoteCellsMu   sync.RWMutex
-	remoteCells     map[string]*Registry
+	nextCellID atomic.Uint64
+	storeMu    sync.RWMutex
+	store      map[string]json.RawMessage
+	cellsMu    sync.Mutex
+	cells      map[string]*codeModeCell
+	remote     CodeModeRemoteSession
+	provider   CodeModeRemoteProvider
+	// guardianReviewMu guards guardianReview, the host review a nested cell
+	// dispatch inherits from the turn's router (Rust #57433).
+	guardianReviewMu sync.RWMutex
+	guardianReview   GuardianReviewFunc
+	messages         *CodeModeToolMessages
+	disableFallback  bool
+	warningEmitted   atomic.Bool
+	remoteCellsMu    sync.RWMutex
+	remoteCells      map[string]*Registry
 	// remoteCellOrigins retains the Responses item and conversation window that
 	// started each Code Mode cell (Rust `cell_originating_call`, #45409), so a
 	// nested call after a wait or a compaction still reports the cell's origin
@@ -677,6 +681,26 @@ func (e *codeModeExecExecutor) cellOrigin(cellID string, parent *Invocation) cod
 	}
 	e.remoteCellsMu.Unlock()
 	return origin
+}
+
+// SetNestedGuardianReview installs the host review a Code Mode cell inherits
+// for its nested dispatches (Rust #57433).
+func (e *codeModeExecExecutor) SetNestedGuardianReview(review GuardianReviewFunc) {
+	if e == nil {
+		return
+	}
+	e.guardianReviewMu.Lock()
+	e.guardianReview = review
+	e.guardianReviewMu.Unlock()
+}
+
+func (e *codeModeExecExecutor) nestedGuardianReview() GuardianReviewFunc {
+	if e == nil {
+		return nil
+	}
+	e.guardianReviewMu.RLock()
+	defer e.guardianReviewMu.RUnlock()
+	return e.guardianReview
 }
 
 func (e *codeModeExecExecutor) Spec() Spec {
@@ -1383,6 +1407,7 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 	runtime := sobek.New()
 	registry, _ := e.binding()
 	nestedRouter := NewRouter(registry)
+	nestedRouter.guardianReview = e.nestedGuardianReview()
 	completion := make(chan codeModeToolCompletion, 32)
 	pending := 0
 	timers := map[uint64]*time.Timer{}
