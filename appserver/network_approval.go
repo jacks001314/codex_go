@@ -201,8 +201,12 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 	// Guardian review and the user approval request. The hook sees the
 	// network-access command as a Bash payload.
 	hookCommand := "network-access " + target
+	var hookToolCWD *string
+	if ownerCall != nil && ownerCall.trigger != nil {
+		hookToolCWD = localHookToolCWD(key.environmentID, ownerCall.trigger.CWD)
+	}
 	if verdict, ok := s.router.permissionRequestHookVerdict(ctx, active.threadID, active.turnID, approvalID, "Bash", nil,
-		map[string]any{"command": hookCommand, "description": hookCommand}); ok && verdict != nil {
+		map[string]any{"command": hookCommand, "description": hookCommand}, hookToolCWD); ok && verdict != nil {
 		switch verdict.Kind {
 		case HookPermissionRequestAllow:
 			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,

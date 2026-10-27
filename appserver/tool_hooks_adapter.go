@@ -50,6 +50,7 @@ func (a *ToolHookAdapter) RunPreToolUse(ctx context.Context, invocation *tool.In
 		MatcherAliases: append([]string(nil), payload.ToolName.MatcherAliases...),
 		ToolUseID:      toolUseID,
 		ToolInput:      payload.ToolInput,
+		ToolCWD:        payload.ToolCWD,
 		Hooks:          a.Hooks,
 	})
 	if err != nil {
@@ -72,7 +73,7 @@ func (a *ToolHookAdapter) RunPreToolUse(ctx context.Context, invocation *tool.In
 // action and returns the folded verdict (Rust
 // hook_runtime::run_permission_request_hooks). A nil verdict means no matching
 // hook decided, so the caller continues with its normal approval flow.
-func (a *ToolHookAdapter) RunPermissionRequest(ctx context.Context, runIDSuffix string, toolName string, matcherAliases []string, toolInput any) (*HookPermissionRequestDecision, error) {
+func (a *ToolHookAdapter) RunPermissionRequest(ctx context.Context, runIDSuffix string, toolName string, matcherAliases []string, toolInput any, toolCWD *string) (*HookPermissionRequestDecision, error) {
 	if a == nil || a.Runner == nil {
 		return nil, nil
 	}
@@ -92,6 +93,7 @@ func (a *ToolHookAdapter) RunPermissionRequest(ctx context.Context, runIDSuffix 
 		MatcherAliases: append([]string(nil), matcherAliases...),
 		RunIDSuffix:    strings.TrimSpace(runIDSuffix),
 		ToolInput:      toolInput,
+		ToolCWD:        toolCWD,
 		Hooks:          a.Hooks,
 	})
 	if err != nil {
@@ -124,6 +126,7 @@ func (a *ToolHookAdapter) RunPostToolUse(ctx context.Context, invocation *tool.I
 		ToolUseID:      toolUseID,
 		ToolInput:      payload.ToolInput,
 		ToolResponse:   payload.ToolResponse,
+		ToolCWD:        payload.ToolCWD,
 		Hooks:          a.Hooks,
 	})
 	if err != nil {

@@ -16255,7 +16255,7 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 		}
 		// Rust Session::request_approval: PermissionRequest hooks decide before
 		// the Guardian review for a request_permissions call too.
-		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, callID, "request_permissions", nil, requestPermissionsHookToolInput(reason, permissions)); ok && verdict != nil {
+		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, callID, "request_permissions", nil, requestPermissionsHookToolInput(reason, permissions), nil); ok && verdict != nil {
 			switch verdict.Kind {
 			case HookPermissionRequestAllow:
 				return r.approvedRequestPermissionsDecision(threadID, turnID, environmentID, requested, cwd, PermissionGrantScopeTurn, false)
@@ -16740,7 +16740,8 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 	}
 	// Rust Session::request_approval: hooks decide first, before Guardian and
 	// the user approval request.
-	if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, strings.TrimSpace(request.CallID), "write_stdin", nil, terminalWriteHookToolInput(request)); ok && verdict != nil {
+	writeCWD := localHookToolCWD(request.EnvironmentID, request.CWD)
+	if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, strings.TrimSpace(request.CallID), "write_stdin", nil, terminalWriteHookToolInput(request), writeCWD); ok && verdict != nil {
 		switch verdict.Kind {
 		case HookPermissionRequestAllow:
 			return nil
@@ -17373,7 +17374,7 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		// Rust Session::request_approval: hooks decide first, before Guardian and
 		// the user approval request. An allow approves the command; a deny
 		// rejects it with the hook's message.
-		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "Bash", nil, shellPermissionRequestToolInput(request.Request)); ok && verdict != nil {
+		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "Bash", nil, shellPermissionRequestToolInput(request.Request), localHookToolCWD(environmentID, cwd)); ok && verdict != nil {
 			switch verdict.Kind {
 			case HookPermissionRequestAllow:
 				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
@@ -17510,7 +17511,7 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 		}
 		// Rust Session::request_approval: hooks decide first, before Guardian and
 		// the user approval request.
-		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "apply_patch", []string{"Write", "Edit"}, applyPatchPermissionRequestToolInput(request.Patch)); ok && verdict != nil {
+		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "apply_patch", []string{"Write", "Edit"}, applyPatchPermissionRequestToolInput(request.Patch), nil); ok && verdict != nil {
 			switch verdict.Kind {
 			case HookPermissionRequestAllow:
 				r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
@@ -18745,7 +18746,7 @@ func applyPatchApprovalAction(request *tool.ApplyPatchApprovalRequest) state.Act
 // It reports ok=false when no hook runner, active turn, or adapter is available,
 // so the caller falls through to its normal approval flow; a nil verdict means
 // the matching hooks declined to decide.
-func (r *RuntimeRouter) permissionRequestHookVerdict(ctx context.Context, threadID string, turnID string, runIDSuffix string, toolName string, matcherAliases []string, toolInput any) (*HookPermissionRequestDecision, bool) {
+func (r *RuntimeRouter) permissionRequestHookVerdict(ctx context.Context, threadID string, turnID string, runIDSuffix string, toolName string, matcherAliases []string, toolInput any, toolCWD *string) (*HookPermissionRequestDecision, bool) {
 	if r == nil || !r.hookRunnerConfigured() {
 		return nil, false
 	}
@@ -18757,11 +18758,26 @@ func (r *RuntimeRouter) permissionRequestHookVerdict(ctx context.Context, thread
 	if adapter == nil {
 		return nil, false
 	}
-	decision, err := adapter.RunPermissionRequest(ctx, runIDSuffix, toolName, matcherAliases, toolInput)
+	decision, err := adapter.RunPermissionRequest(ctx, runIDSuffix, toolName, matcherAliases, toolInput, toolCWD)
 	if err != nil {
 		return nil, false
 	}
 	return decision, true
+}
+
+// localHookToolCWD reports a local command's execution directory for hook input
+// (Rust #57198/#57203). Remote environments keep the host working directory
+// because their paths do not exist on the host where hooks run.
+func localHookToolCWD(environmentID string, cwd string) *string {
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID != "" && environmentID != execserver.LocalEnvironmentID {
+		return nil
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return nil
+	}
+	return &cwd
 }
 
 // applyPatchPermissionRequestToolInput mirrors Rust's ApplyPatch payload: the

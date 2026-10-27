@@ -16,6 +16,11 @@ type HookToolName struct {
 type PreToolUsePayload struct {
 	ToolName  *HookToolName
 	ToolInput any
+	// ToolCWD is the local command's resolved execution directory, reported as
+	// the hook input's cwd (Rust #57198). Remote commands leave it nil so the
+	// hook keeps the host working directory; hook processes always run in the
+	// host cwd either way.
+	ToolCWD *string
 	// McpTool, when set, carries read-only metadata and provenance captured
 	// from the MCP call that will execute (Rust ToolStartInput.mcp_tool,
 	// #40976). It exposes the model-visible MCP tool details and source
@@ -51,6 +56,9 @@ type PostToolUsePayload struct {
 	ToolUseID    string
 	ToolInput    any
 	ToolResponse any
+	// ToolCWD is the local command's execution directory retained for hook
+	// input (Rust #57203). Remote commands leave it nil.
+	ToolCWD *string
 }
 
 type PreToolUseHookOutcome struct {

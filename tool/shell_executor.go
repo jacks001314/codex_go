@@ -1345,6 +1345,33 @@ func (e *ShellExecutor) TelemetryTags(_ *Invocation) map[string]string {
 	return map[string]string{"shell_snapshot_mode": e.shellSnapshotMode}
 }
 
+// hookToolCWD is the working directory a local exec_command will run in,
+// reported to tool hooks as their input cwd (Rust #57198's
+// ExecCommandHandler::pre_tool_use_cwd). It shares resolveShellRequestCWD with
+// command execution, and returns nil for remote environments because their
+// paths are not meaningful on the host where hooks run.
+func (e *ShellExecutor) hookToolCWD(args *ExecCommandArgs) *string {
+	if e == nil || args == nil {
+		return nil
+	}
+	environment, err := e.resolveUnifiedExecEnvironment(args.EnvironmentID)
+	if err != nil {
+		return nil
+	}
+	base := e.validationOptions().CWD
+	if environment != nil {
+		if environment.Remote() {
+			return nil
+		}
+		base = environment.CWD
+	}
+	cwd, err := resolveShellRequestCWD(base, firstNonEmptyString(args.CWD, args.Workdir))
+	if err != nil {
+		return nil
+	}
+	return &cwd
+}
+
 func (e *ShellExecutor) PreToolUsePayload(invocation *Invocation) (*PreToolUsePayload, bool) {
 	args, err := decodeExecCommandInvocation(invocation)
 	if err != nil {
@@ -1353,6 +1380,7 @@ func (e *ShellExecutor) PreToolUsePayload(invocation *Invocation) (*PreToolUsePa
 	return &PreToolUsePayload{
 		ToolName:  bashHookToolName(),
 		ToolInput: shellHookInput(args),
+		ToolCWD:   e.hookToolCWD(args),
 	}, true
 }
 
@@ -1383,6 +1411,7 @@ func (e *ShellExecutor) PostToolUsePayload(invocation *Invocation, output *Outpu
 		ToolUseID:    toolUseID,
 		ToolInput:    shellHookInput(args),
 		ToolResponse: response,
+		ToolCWD:      e.hookToolCWD(args),
 	}, true
 }
 

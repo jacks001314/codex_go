@@ -46,6 +46,8 @@ TUI lane and are not modified here.
 | `#56553` | Thread-scoped `hooks/list` and `environmentId` in hook metadata | `appserver/hooks.go`, `appserver/runtime_router.go`, `appserver/hooks_runner.go`, like-Rust tests |
 | `#57186` | Fail closed on unreadable deny-glob search root metadata errors | `sandbox/linuxsandbox/bwrap.go`, `sandbox/linuxsandbox/unreadable_glob_root_test.go` |
 | `#57209` | Turn analytics critical-path fields (disabled/null default; capture pending) | `telemetry/turn_event.go`, `telemetry/turn_event_test.go` |
+| `#57198` | `PreToolUse` hook input reports the local command's resolved working directory | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, like-Rust tests |
+| `#57203` | Preserve the command cwd in `PermissionRequest` and `PostToolUse` hook input | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, `appserver/runtime_router.go`, `appserver/network_approval.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -347,6 +349,21 @@ critical-path capture (`#57201` is still pending), the payload always reports
 default-off `critical_path_timing` feature. Nulls are preserved rather than
 zeroed so a missing measurement can never be read as a zero duration.
 
+`#57198` `#57203` details: tool hook requests now carry a `toolCWD` that
+becomes the hook input's `cwd`, while `cwd` still selects the directory the
+hook process runs in. `exec_command` resolves it with the same
+`resolveShellRequestCWD` used for execution, from the selected turn
+environment's cwd plus the command's `cwd`/`workdir`, so default, empty,
+relative, and absolute workdirs agree with where the command actually runs.
+Remote environments report nothing, keeping the host cwd, because their paths
+do not exist on the host that launches hooks; Go has no per-environment hook
+process relocation to add. `PermissionRequest` derives the same value for shell
+approvals from the resolved `ShellRequest.CWD` (local by construction at that
+call site), for `write_stdin` from the request's own environment and cwd, and
+for network approvals from the originating call's trigger cwd when the
+environment is local. `apply_patch`, `request_permissions`, and MCP approvals
+keep the host cwd, matching Rust's `tool_cwd: None` for those payloads.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -405,6 +422,9 @@ zeroed so a missing measurement can never be read as a zero duration.
 - For `#57186`: `go test ./sandbox/linuxsandbox -run 'InspectUnreadableGlobSearchRoot' -count=1`
   passes; the symlink-loop and symlink-root cases skip on this Windows host
   because creating symlinks needs a privilege it lacks.
+- For `#57198`/`#57203`: `go test ./tool -run 'TestShellExecutorHookToolCWDReportsExecutionDirectory' -count=1`
+  and `go test ./appserver -run 'TestHookInputCWDReportsToolExecutionDirectoryLikeRust|Hook|Approval' -count=1`
+  pass, as does the full `go test ./tool -count=1`.
 - For `#57209`: `go test ./telemetry -count=1` and
   `go test ./appserver -run 'Analytics|TurnEvent|TurnProfile|TimingProfile' -count=1`
   pass.

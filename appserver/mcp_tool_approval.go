@@ -279,7 +279,7 @@ func (h *appserverMCPToolApprovalHandler) runPermissionRequestHooks(ctx context.
 	if strings.TrimSpace(toolName) == "" {
 		return mcp.MCPToolApprovalDeny, nil, false
 	}
-	verdict, ok := h.router.permissionRequestHookVerdict(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), toolName, aliases, mcpToolCallHookToolInput(request.Arguments))
+	verdict, ok := h.router.permissionRequestHookVerdict(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), toolName, aliases, mcpToolCallHookToolInput(request.Arguments), nil)
 	if !ok || verdict == nil {
 		return mcp.MCPToolApprovalDeny, nil, false
 	}

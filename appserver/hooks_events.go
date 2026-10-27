@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"codex_go/model"
 )
@@ -136,7 +137,10 @@ type HookPreToolUseRequest struct {
 	MatcherAliases []string
 	ToolUseID      string
 	ToolInput      any
-	Hooks          []HookMetadata
+	// ToolCWD is the local command's resolved execution directory, used as the
+	// hook input cwd (Rust #57198). Nil keeps the host cwd.
+	ToolCWD *string
+	Hooks   []HookMetadata
 }
 
 type HookPermissionRequestRequest struct {
@@ -151,7 +155,10 @@ type HookPermissionRequestRequest struct {
 	MatcherAliases []string
 	RunIDSuffix    string
 	ToolInput      any
-	Hooks          []HookMetadata
+	// ToolCWD is the local command's execution directory for hook input
+	// (Rust #57203). Nil keeps the host cwd.
+	ToolCWD *string
+	Hooks   []HookMetadata
 }
 
 type HookPostToolUseRequest struct {
@@ -167,7 +174,10 @@ type HookPostToolUseRequest struct {
 	ToolUseID      string
 	ToolInput      any
 	ToolResponse   any
-	Hooks          []HookMetadata
+	// ToolCWD is the local command's execution directory retained for hook
+	// input (Rust #57203). Nil keeps the host cwd.
+	ToolCWD *string
+	Hooks   []HookMetadata
 }
 
 type HookPreCompactRequest struct {
@@ -566,7 +576,7 @@ func HookInputJSON(request any) (string, error) {
 			"session_id":      typed.ThreadID,
 			"turn_id":         typed.TurnID,
 			"transcript_path": nullableStringValue(typed.TranscriptPath),
-			"cwd":             typed.CWD,
+			"cwd":             hookInputCWD(typed.CWD, typed.ToolCWD),
 			"hook_event_name": "PreToolUse",
 			"model":           typed.Model,
 			"permission_mode": typed.PermissionMode,
@@ -580,7 +590,7 @@ func HookInputJSON(request any) (string, error) {
 			"session_id":      typed.ThreadID,
 			"turn_id":         typed.TurnID,
 			"transcript_path": nullableStringValue(typed.TranscriptPath),
-			"cwd":             typed.CWD,
+			"cwd":             hookInputCWD(typed.CWD, typed.ToolCWD),
 			"hook_event_name": "PermissionRequest",
 			"model":           typed.Model,
 			"permission_mode": typed.PermissionMode,
@@ -593,7 +603,7 @@ func HookInputJSON(request any) (string, error) {
 			"session_id":      typed.ThreadID,
 			"turn_id":         typed.TurnID,
 			"transcript_path": nullableStringValue(typed.TranscriptPath),
-			"cwd":             typed.CWD,
+			"cwd":             hookInputCWD(typed.CWD, typed.ToolCWD),
 			"hook_event_name": "PostToolUse",
 			"model":           typed.Model,
 			"permission_mode": typed.PermissionMode,
@@ -641,6 +651,16 @@ func HookInputJSON(request any) (string, error) {
 		return "", fmt.Errorf("%w: unsupported hook request type %T", ErrInvalidHook, request)
 	}
 	return hookInputJSON(input)
+}
+
+// hookInputCWD reports a local tool's own execution directory when the tool
+// supplied one, and the host working directory otherwise (Rust #57198/#57203).
+// Hook processes still run in the host directory.
+func hookInputCWD(hostCWD string, toolCWD *string) string {
+	if toolCWD != nil && strings.TrimSpace(*toolCWD) != "" {
+		return *toolCWD
+	}
+	return hostCWD
 }
 
 func toolMatcherInputs(toolName string, aliases []string) []string {

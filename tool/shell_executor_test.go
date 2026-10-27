@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -686,6 +687,78 @@ func TestShellExecutorPrePostHookPayload(t *testing.T) {
 	if post.ToolResponse != "hook output" {
 		t.Fatalf("ToolResponse = %#v", post.ToolResponse)
 	}
+}
+
+// Rust #57198: tool hooks receive the local command's resolved execution
+// directory, not the host turn cwd, while remote commands keep the host cwd.
+func TestShellExecutorHookToolCWDReportsExecutionDirectory(t *testing.T) {
+	hostCWD := t.TempDir()
+	otherCWD := t.TempDir()
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Validation: ShellValidationOptions{CWD: hostCWD, ApprovalPolicy: sandbox.ApprovalOnRequest},
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{
+			{ID: "local", CWD: hostCWD},
+			{ID: "local-2", CWD: otherCWD},
+			{ID: "remote", CWD: "/remote/repo", ExecServerURL: "ws://127.0.0.1:1"},
+		},
+	})
+	cases := []struct {
+		name string
+		args string
+		want *string
+	}{
+		{name: "default", args: `{"cmd":"echo hi"}`, want: hookCWDStringPtr(hostCWD)},
+		{name: "empty workdir", args: `{"cmd":"echo hi","workdir":""}`, want: hookCWDStringPtr(hostCWD)},
+		{name: "relative workdir", args: `{"cmd":"echo hi","workdir":"nested/../target"}`, want: hookCWDStringPtr(filepath.Join(hostCWD, "target"))},
+		{name: "absolute workdir", args: `{"cmd":"echo hi","workdir":` + strconv.Quote(otherCWD) + `}`, want: hookCWDStringPtr(otherCWD)},
+		{name: "selected local environment", args: `{"cmd":"echo hi","environment_id":"local-2","workdir":"sub"}`, want: hookCWDStringPtr(filepath.Join(otherCWD, "sub"))},
+		{name: "remote environment", args: `{"cmd":"echo hi","environment_id":"remote","workdir":"sub"}`, want: nil},
+		{name: "unknown environment", args: `{"cmd":"echo hi","environment_id":"missing"}`, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			invocation := &Invocation{
+				CallID:   "call-cwd",
+				ToolName: PlainName(DefaultExecCommandToolName),
+				Payload:  Payload{Kind: PayloadFunction, Arguments: tc.args},
+			}
+			pre, ok := executor.PreToolUsePayload(invocation)
+			if !ok {
+				t.Fatal("PreToolUsePayload() ok = false")
+			}
+			if !equalOptionalString(pre.ToolCWD, tc.want) {
+				t.Fatalf("PreToolUsePayload ToolCWD = %v, want %v", optionalString(pre.ToolCWD), optionalString(tc.want))
+			}
+			post, ok := executor.PostToolUsePayload(invocation, &Output{
+				Body: "ok",
+				Data: map[string]any{"hook_response": "ok"},
+			})
+			if !ok {
+				t.Fatal("PostToolUsePayload() ok = false")
+			}
+			if !equalOptionalString(post.ToolCWD, tc.want) {
+				t.Fatalf("PostToolUsePayload ToolCWD = %v, want %v", optionalString(post.ToolCWD), optionalString(tc.want))
+			}
+		})
+	}
+}
+
+func hookCWDStringPtr(value string) *string {
+	return &value
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func optionalString(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
 }
 
 func TestShellExecutorUpdatedHookInputRewritesCmd(t *testing.T) {
