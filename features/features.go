@@ -171,8 +171,9 @@ var Registry = []Spec{
 	// tools/list_changed notifications within a turn.
 	{Key: "mcp_tool_list_changed", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #42413): coordinated MCP OAuth
-	// refresh across servers sharing an account.
-	{Key: "mcp_oauth_refresh_coordination", Stage: StageUnderDevelopment},
+	// refresh across servers sharing an account. Promoted to stable and enabled
+	// by default (#55701).
+	{Key: "mcp_oauth_refresh_coordination", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #44832): enterprise refresh-token
 	// authorization for configured MCP resources; opt-in must come from a
 	// non-project config layer or a managed requirement.
@@ -258,8 +259,9 @@ var Registry = []Spec{
 	{Key: "token_budget", Stage: StageUnderDevelopment},
 	{Key: "rollout_budget", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs #43795): pin reasoning effort while
-	// configuration overrides are active.
-	{Key: "reasoning_effort_override", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// configuration overrides are active. Promoted to stable and enabled by
+	// default (#56163).
+	{Key: "reasoning_effort_override", Stage: StageStable, DefaultEnabled: true},
 	{Key: "current_time_reminder", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs #45825): report failed clock reads to
 	// the model without failing the turn.

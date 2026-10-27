@@ -166,6 +166,10 @@ type modelGuardianReviewer struct {
 	// contributors, which makes #42807 rust-coupled for the Go architecture.
 	fastDecision func(context.Context, string, string, string)
 	timeout      time.Duration
+	// reviewTimeout, when set, resolves the review's overall budget from the
+	// turn's configuration (Rust #56371). The second result is false when
+	// `auto_review.timeout_ms = 0` disables the deadline.
+	reviewTimeout func(threadID, turnID string) (time.Duration, bool)
 	// installationID supplies the Codex installation id for the review
 	// request's turn metadata (Rust #44298).
 	installationID func() string
@@ -635,6 +639,16 @@ func (r *guardianSessionRunner) SeedForReview(request *model.AgentRequest) {
 	}
 }
 
+// guardianReviewContext applies the configured overall review budget. A
+// non-positive timeout means unlimited: the review keeps the caller's
+// cancellation and the independent transport timeouts (Rust #56371).
+func guardianReviewContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 func newModelGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
 	if agent == nil {
 		return nil
@@ -770,7 +784,14 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if timeout <= 0 {
 		timeout = state.ReviewTimeout
 	}
-	reviewCtx, cancel := context.WithTimeout(ctx, timeout)
+	if r.reviewTimeout != nil {
+		var configured bool
+		timeout, configured = r.reviewTimeout(threadID, turnID)
+		if !configured {
+			timeout = 0
+		}
+	}
+	reviewCtx, cancel := guardianReviewContext(ctx, timeout)
 	defer cancel()
 	plan := r.planForTurn(threadID, turnID)
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {

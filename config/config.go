@@ -1820,6 +1820,35 @@ func (c *Config) GuardianPolicyTemplate() (string, bool) {
 	return autoReviewConfigValue(c.Values, "experimental_policy_template")
 }
 
+// GuardianReviewTimeout mirrors Rust Config::guardian_review_timeout (#56371):
+// the overall Guardian review budget configured by `auto_review.timeout_ms`,
+// including setup and retries. It defaults to
+// `state.ReviewTimeout` (90 seconds); a configured zero disables the deadline,
+// which the second result reports as false. Cancellation and the independent
+// transport timeouts still apply when the review is unlimited.
+func (c *Config) GuardianReviewTimeout() (time.Duration, bool) {
+	const defaultReviewTimeout = 90 * time.Second
+	if c == nil {
+		return defaultReviewTimeout, true
+	}
+	autoReview, ok := c.Values["auto_review"].(map[string]any)
+	if !ok {
+		return defaultReviewTimeout, true
+	}
+	raw, configured := autoReview["timeout_ms"]
+	if !configured {
+		return defaultReviewTimeout, true
+	}
+	timeoutMS, ok := nonNegativeIntFromConfigValue(raw)
+	if !ok {
+		return defaultReviewTimeout, true
+	}
+	if timeoutMS == 0 {
+		return 0, false
+	}
+	return time.Duration(timeoutMS) * time.Millisecond, true
+}
+
 // GuardianConversationHistoryPrompt returns the optional reviewer-only history
 // retrieval instructions. Unlike the policy overrides, an explicitly empty
 // string is meaningful: it suppresses the bundled instructions when the

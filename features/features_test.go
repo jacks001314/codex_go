@@ -69,6 +69,34 @@ func TestBedrockSetupWizardEnabledByDefaultLikeRust(t *testing.T) {
 	}
 }
 
+// TestMCPOAuthRefreshCoordinationEnabledByDefaultLikeRust pins Rust #55701.
+func TestMCPOAuthRefreshCoordinationEnabledByDefaultLikeRust(t *testing.T) {
+	const key = "mcp_oauth_refresh_coordination"
+	if got := StageFor(key); got != StageStable {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageStable)
+	}
+	if !Enabled(nil, key) {
+		t.Fatalf("%s default = false, want true", key)
+	}
+	if Enabled(map[string]bool{key: false}, key) {
+		t.Fatalf("%s explicit false = true, want false", key)
+	}
+}
+
+// TestReasoningEffortOverrideEnabledByDefaultLikeRust pins Rust #56163.
+func TestReasoningEffortOverrideEnabledByDefaultLikeRust(t *testing.T) {
+	const key = "reasoning_effort_override"
+	if got := StageFor(key); got != StageStable {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageStable)
+	}
+	if !Enabled(nil, key) {
+		t.Fatalf("%s default = false, want true", key)
+	}
+	if Enabled(map[string]bool{key: false}, key) {
+		t.Fatalf("%s explicit false = true, want false", key)
+	}
+}
+
 // TestCodeModeToolDescriptionFirstRegisteredLikeRust pins Rust #51690, which
 // registers an under-development, default-disabled flag for placing each tool
 // description before its namespace description in Code Mode.

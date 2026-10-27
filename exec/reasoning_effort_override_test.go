@@ -18,11 +18,11 @@ import (
 )
 
 func execReasoningOverrideConfig(featureEnabled bool) *config.Config {
-	values := map[string]any{}
-	if featureEnabled {
-		values["features"] = map[string]any{"reasoning_effort_override": true}
-	}
-	return &config.Config{Values: values}
+	// Rust #56163 made the feature stable and on by default, so the disabled
+	// case must opt out explicitly instead of omitting the key.
+	return &config.Config{Values: map[string]any{
+		"features": map[string]any{"reasoning_effort_override": featureEnabled},
+	}}
 }
 
 func liteOpenAIModel() model.ModelInfo {

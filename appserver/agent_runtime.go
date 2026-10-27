@@ -131,6 +131,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.reviewEndpoint = r.guardianReviewEndpointForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.maxToolCallLagFor = r.guardianMaxToolCallLagForTurn
+		modelReviewer.reviewTimeout = r.guardianReviewTimeoutForTurn
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
 		modelReviewer.fullAccess = r.guardianFullAccessForTurn
 		modelReviewer.approvalsReviewer = r.guardianApprovalsReviewerForTurn
@@ -200,6 +201,21 @@ func (r *RuntimeRouter) guardianMaxToolCallLagForTurn(threadID, turnID string) i
 	}
 	info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
 	return guardianMaxToolCallLag(cfg, info)
+}
+
+// guardianReviewTimeoutForTurn resolves the turn's configured overall Guardian
+// review budget (Rust #56371). The second result is false when
+// `auto_review.timeout_ms = 0` disables the deadline.
+func (r *RuntimeRouter) guardianReviewTimeoutForTurn(threadID, turnID string) (time.Duration, bool) {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return state.ReviewTimeout, true
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return state.ReviewTimeout, true
+	}
+	return cfg.GuardianReviewTimeout()
 }
 
 // guardianReviewEndpointForTurn mirrors Rust #40892's opt-in dedicated

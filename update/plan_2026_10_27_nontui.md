@@ -73,6 +73,10 @@ TUI lane and are not modified here.
 | `#55991` | Avoid double-counting retained reasoning when the server reports it as included | `compact/compact.go`, `compact/compact_test.go`, `turn/agent_loop.go`, `appserver/turn_runtime.go`, `appserver/runtime_router_test.go`, `exec/exec.go` |
 | `#56211` | Fresh memory profiles default to V2; reset of an absent workspace is a no-op; fresh profiles report `v2_ready` | `config/memories.go`, `config/config.go`, `config/memories_version_test.go`, `appserver/memory_status.go`, `appserver/memory_status_test.go`, `memories/control.go`, `memories/control_test.go` |
 | `#57275` | Premium `imagegen_premium` usage-limit failures keep structured metadata and fall back to the exhausted window's reset time | `turn/image_generation.go`, `turn/image_generation_test.go` |
+| `#56033` | Bedrock setup wizard is stable and enabled by default, with an explicit opt-out | `features/features.go`, `features/features_test.go` |
+| `#55701` | MCP OAuth refresh coordination is stable and enabled by default | `features/features.go`, `features/features_test.go` |
+| `#56163` | Reasoning-effort override is stable and enabled by default | `features/features.go`, `features/features_test.go`, `exec/reasoning_effort_override_test.go` |
+| `#56371` | `auto_review.timeout_ms` configures the overall Guardian review budget; `0` waits without a deadline | `config/config.go`, `config/guardian_timeout_test.go`, `appserver/guardian_reviewer.go`, `appserver/agent_runtime.go`, `appserver/guardian_review_timeout_like_rust_test.go` |
 | `#57272` | Code-mode output-truncation contracts: session options, wait/terminate budgets, `bounded-output-v1`, stdio and gRPC schemas | `codemode/protocol_types.go`, `codemode/protocol_host.go`, `codemode/session_provider.go`, `codemode/session_runtime.go`, `codemode/session_host.go`, `codemode/stdio_host.go`, `codemode/grpc/codex.code_mode.v1.proto`, regenerated `codemode/grpc` bindings, `codemode/protocol_truncation_test.go` |
 
 Grounding notes:
@@ -725,3 +729,5 @@ Go counterpart; `#57373` is a Rust toolchain pin with no Go analogue.
 - For `#57241`/`#55991`/`#56211`: `go test ./compact ./config ./memories ./turn ./exec -count=1`, `go test ./appserver -run 'GuardianNativeAgentMessage|GuardianReviewTranscript|GuardianTranscriptCarries|GuardianReviewDelivers|MemoryStatus|CompactTokenStatusForTurn' -count=1` and `go build ./...` pass.
 - For `#57275`: `go test ./turn -run 'ImageGenerationUsageLimit|ImageGenerationPremium|ImageGenerationErrorOutput' -count=1` passes.
 - For `#57272`: `go test ./codemode -count=1` and `go build ./...` pass; the proto was regenerated with the checked-in `protoc-gen-go`/`protoc-gen-go-grpc` plugins.
+- For `#56033`/`#55701`/`#56163`: `go test ./features ./config ./app -count=1`, `go test ./exec -run 'ReasoningEffort' -count=1`, `go test ./appserver -run 'ReasoningEffort|OAuth|MCP' -count=1`, and `go build ./...` pass.
+- For `#56371`: `go test ./config -run GuardianReviewTimeout -count=1` and `go test ./appserver -run 'GuardianReview(Timeout|Context|erUsesConfigured|erUnlimited)' -count=1` pass.
