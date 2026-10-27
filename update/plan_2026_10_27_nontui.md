@@ -86,6 +86,7 @@ TUI lane and are not modified here.
 | `#57181` | Optional names on untrusted additional context validate before input admission | `turn/api.go`, `appserver/runtime_router.go`, like-Rust tests |
 | `#57176` | Sync Guardian transcripts resolve the node_repl output cap from the turn's evidence mode | `appserver/node_repl_evidence.go`, `appserver/guardian_reviewer.go`, `appserver/turn_runtime.go`, like-Rust test |
 | `#57274` | Node REPL evidence renders in Rust's multimodal layout | `context/node_repl_review_evidence.go`, like-Rust tests |
+| `#57240` | Memory baselines are bounded to 10 MiB and recover as empty snapshots under a cross-process lock | `memories/workspace.go`, `memories/workspace_test.go`, `memories/pipeline_test.go` |
 
 Grounding notes:
 
@@ -226,6 +227,17 @@ reservation, so an oversized snapshot keeps the same responses in both layouts.
 Go previously delivered the multimodal evidence as one text blob without marker
 framing followed by every image, which lost the per-response headers, image
 positions, and marker boundaries.
+
+`#57240` details: memory baselines now carry a `1` version marker under `.git`,
+and preparation, diffing, and resets serialize on a `flock` inside
+`.codex-baseline/.git`, which sits outside the replaceable repository and is
+excluded from scans and diffs. Missing, legacy, or interrupted metadata is
+replaced by an empty-tree baseline, so existing working files remain visible to
+the next consolidation as additions; `ResetWorkspaceBaseline` records the
+current files instead. Files above 10 MiB are never staged into the snapshot,
+are skipped by recovery additions and consolidation diffs, and a tracked file
+that grows past the limit invalidates the baseline rather than staying silently
+processed. `readWorkspaceEntry` bounds its read with an EOF probe byte.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -807,7 +819,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 104 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 103 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -941,6 +953,7 @@ deduplication for tool outputs.
 - For `#57274`: `go test ./context -run 'NodeRepl|Guardian' -count=1`,
   `go test ./appserver -run 'Guardian|NodeRepl' -count=1`, and `go build ./...`
   pass.
+- For `#57240`: `go test ./memories -count=1` and `go build ./...` pass.
 - For `#57181`: `go test ./turn -run 'AdditionalContext' -count=1`,
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full

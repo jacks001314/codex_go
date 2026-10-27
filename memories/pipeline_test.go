@@ -235,6 +235,14 @@ func TestStartupPipelineReportsStorageBytesWithoutWorkspaceChanges(t *testing.T)
 	if err := RebuildRawMemoriesFile(root, nil, 0); err != nil {
 		t.Fatal(err)
 	}
+	if err := SeedExtensionInstructions(root); err != nil {
+		t.Fatal(err)
+	}
+	// Rust #57240: PrepareWorkspace only installs an empty recovery baseline, so
+	// seed the prior successful consolidation's baseline explicitly.
+	if err := ResetWorkspaceBaseline(ctx, root); err != nil {
+		t.Fatal(err)
+	}
 
 	metrics := state.NewTaskMetrics()
 	pipeline := &StartupPipeline{
