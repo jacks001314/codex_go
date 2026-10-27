@@ -92,3 +92,22 @@ func TestRecordFromPathToleratesUnknownCodexErrorClassifications(t *testing.T) {
 		})
 	}
 }
+
+// Rust #57452 adds policy-restricted capacity as a payload-free rollout
+// classification. Both the core snake_case spelling and the app-server
+// camelCase spelling stay readable and are preserved verbatim.
+func TestCodexErrorInfoPreservesPolicyCapacityTagsLikeRust(t *testing.T) {
+	for _, tag := range []string{"policy_capacity_unavailable", "policyCapacityUnavailable"} {
+		classified, ok := normalizeCodexErrorInfoClassification(tag)
+		if !ok || classified != tag {
+			t.Fatalf("bare %q normalized to %#v (ok=%v), want itself", tag, classified, ok)
+		}
+		classified, ok = normalizeCodexErrorInfoClassification(map[string]any{tag: nil})
+		if !ok {
+			t.Fatalf("tagged %q was rejected", tag)
+		}
+		if _, ok := classified.(map[string]any)[tag]; !ok {
+			t.Fatalf("tagged %q normalized to %#v", tag, classified)
+		}
+	}
+}

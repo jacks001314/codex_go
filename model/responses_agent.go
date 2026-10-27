@@ -1430,22 +1430,24 @@ func websocketErrorEventAdviceHeaders(event map[string]any) http.Header {
 	return websocketEventHTTPHeaders(event)
 }
 
-// websocketErrorEventAPIError maps rate-limit and overload `error` events that
-// carry Retry-After advice to the shared retryable API error, preserving the
-// server deadline (Rust #51440). Headerless rate limits and all other codes stay
-// on the terminal generic-error path.
+// websocketErrorEventAPIError maps rate-limit and capacity `error` events to
+// the shared API error, preserving Retry-After advice (Rust #51440). A
+// headerless capacity failure keeps its terminal classification (Rust #57452),
+// while a headerless rate limit stays on the generic-error path.
 func websocketErrorEventAPIError(event map[string]any) *codexapi.APIError {
 	var kind codexapi.APIErrorKind
 	switch strings.ToLower(strings.TrimSpace(websocketEventErrorCode(event))) {
 	case "rate_limit_exceeded", "rate_limited", "rate_limit":
 		kind = codexapi.ErrorRateLimitExceeded
+	case "policy_capacity_unavailable":
+		kind = codexapi.ErrorPolicyCapacityUnavailable
 	case "server_is_overloaded", "overloaded":
 		kind = codexapi.ErrorServerOverloaded
 	default:
 		return nil
 	}
-	delay, ok := responsesRequestedRetryDelay(websocketErrorEventAdviceHeaders(event), time.Now())
-	if !ok {
+	delay, advised := responsesRequestedRetryDelay(websocketErrorEventAdviceHeaders(event), time.Now())
+	if !advised && kind == codexapi.ErrorRateLimitExceeded {
 		return nil
 	}
 	status, _ := uint64FromAny(event["status"])
@@ -1457,11 +1459,15 @@ func websocketErrorEventAPIError(event map[string]any) *codexapi.APIError {
 	if status > 65535 {
 		status = 0
 	}
-	return (&codexapi.APIError{
+	apiErr := &codexapi.APIError{
 		Kind:    kind,
 		Status:  int(status),
 		Message: websocketEventError(event),
-	}).WithRetryDelay(delay)
+	}
+	if advised {
+		return apiErr.WithRetryDelay(delay)
+	}
+	return apiErr
 }
 
 // websocketTerminalProviderError maps a statusless or 400/403/404
@@ -3720,6 +3726,14 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 	// rate limit instead of treating both as one blanket overload.
 	if statusCode == http.StatusServiceUnavailable && payload.Error != nil {
 		switch responseErrorCode(payload.Error) {
+		case "policy_capacity_unavailable":
+			// Rust #57452 keeps the response's Retry-After advice and otherwise
+			// leaves the policy-capacity failure terminal.
+			policyCapacity := &codexapi.APIError{Kind: codexapi.ErrorPolicyCapacityUnavailable, Message: message}
+			if retryAfter, ok := responsesRequestedRetryAfter(headers, retryAfterReceivedAt); ok {
+				return policyCapacity.WithRetryAfter(retryAfter)
+			}
+			return policyCapacity
 		case "server_is_overloaded":
 			// `map_api_error` attaches the response's `Retry-After` advice to
 			// every transport classification it maps

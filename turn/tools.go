@@ -128,6 +128,9 @@ type ToolRegistryOptions struct {
 	AgentToolOverrides map[string]agent.MultiAgentToolOverride
 	AgentRoles         map[string]agent.RoleConfig
 	AgentDefaults      agent.SpawnDefaults
+	// AgentGuardianNativeMultiAgentReview opts state-changing MAv2 calls into
+	// synchronous Guardian review (Rust #57451).
+	AgentGuardianNativeMultiAgentReview bool
 
 	PluginInstallCandidates            []plugin.DiscoverableInfo
 	PluginInstallRecommendationContext bool
@@ -163,10 +166,6 @@ type ToolRegistryOptions struct {
 	// CodeModeShowCellOverhead mirrors features.code_mode.experimental_show_cell_overhead
 	// (#46288): code-mode cell responses report the host duration and overhead.
 	CodeModeShowCellOverhead bool
-	// CodeModeToolDescriptionFirst mirrors
-	// features.code_mode_tool_description_first (#51690/#51704): nested tool
-	// definitions put the tool description before the namespace description.
-	CodeModeToolDescriptionFirst bool
 	// DirectOnlyToolNamespaces mirrors Rust
 	// features.code_mode.direct_only_tool_namespaces: exact namespaces exposed
 	// only as direct model tools, bypassing deferral and the nested Code Mode
@@ -666,22 +665,23 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	if options.EnableAgents {
 		if err := agent.RegisterMultiAgentHandlersWithOptions(registry, &agent.MultiAgentHandlerOptions{
-			Controller:                options.AgentController,
-			Exposure:                  options.AgentExposure,
-			Version:                   options.AgentVersion,
-			Namespace:                 options.AgentNamespace,
-			UsageHintText:             options.AgentUsageHintText,
-			WaitDefault:               options.AgentWaitDefault,
-			WaitMin:                   options.AgentWaitMin,
-			WaitMax:                   options.AgentWaitMax,
-			WaitConfigured:            options.AgentWaitConfigured,
-			HideSpawnMetadata:         options.AgentHideSpawnMetadata,
-			ExposeSpawnModelOverrides: options.AgentExposeSpawnModelOverrides,
-			Roles:                     options.AgentRoles,
-			Defaults:                  options.AgentDefaults,
-			DisableWaitAgent:          options.DisableWaitAgent,
-			DisableDirectMessage:      options.DisableDirectMessage,
-			ToolOverrides:             options.AgentToolOverrides,
+			Controller:                     options.AgentController,
+			Exposure:                       options.AgentExposure,
+			Version:                        options.AgentVersion,
+			Namespace:                      options.AgentNamespace,
+			UsageHintText:                  options.AgentUsageHintText,
+			WaitDefault:                    options.AgentWaitDefault,
+			WaitMin:                        options.AgentWaitMin,
+			WaitMax:                        options.AgentWaitMax,
+			WaitConfigured:                 options.AgentWaitConfigured,
+			HideSpawnMetadata:              options.AgentHideSpawnMetadata,
+			ExposeSpawnModelOverrides:      options.AgentExposeSpawnModelOverrides,
+			Roles:                          options.AgentRoles,
+			Defaults:                       options.AgentDefaults,
+			DisableWaitAgent:               options.DisableWaitAgent,
+			DisableDirectMessage:           options.DisableDirectMessage,
+			ToolOverrides:                  options.AgentToolOverrides,
+			GuardianNativeMultiAgentReview: options.AgentGuardianNativeMultiAgentReview,
 		}); err != nil {
 			return nil, err
 		}
@@ -792,7 +792,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if registryHasSearchableDeferredTool(registry) {
 			registry.Remove(tool.PlainName(tool.ToolSearchName))
 			specs := registry.DiscoverableSpecs()
-			specs = tool.OrderCodeModeToolDescriptions(specs, options.CodeModeToolDescriptionFirst)
+			specs = tool.OrderCodeModeToolDescriptions(specs)
 			if indirectPrefixes != nil {
 				specs = indirectPrefixes.ApplyToSpecs(specs)
 			}
@@ -809,7 +809,6 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			options.CodeModeRuntime.SetCodeModeMessages(options.CodeModeMessages)
 			options.CodeModeRuntime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
-			options.CodeModeRuntime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
 			options.CodeModeRuntime.SetExcludedToolNamespaces(options.ExcludedToolNamespaces)
 			options.CodeModeRuntime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			// Rust #45409: a Code Mode cell retains the window it started in, so
@@ -821,7 +820,6 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			runtime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			runtime.SetCodeModeMessages(options.CodeModeMessages)
 			runtime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
-			runtime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
 			runtime.SetExcludedToolNamespaces(options.ExcludedToolNamespaces)
 			runtime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			execExecutor, waitExecutor = runtime.Executors(registry, codeModeCommandTool)

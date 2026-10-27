@@ -160,6 +160,9 @@ func TestResponsesHTTPOverloadKeepsRetryAdviceLikeRust(t *testing.T) {
 		wantAdvice bool
 	}{
 		{status: http.StatusServiceUnavailable, code: "server_is_overloaded", retryable: true, wantAdvice: true},
+		// Rust #57452: the policy-restricted capacity failure keeps overload
+		// retry behaviour driven by the server's advice.
+		{status: http.StatusServiceUnavailable, code: "policy_capacity_unavailable", retryable: true, wantAdvice: true},
 		{status: http.StatusTooManyRequests, code: "rate_limit_exceeded", retryable: true, wantAdvice: true},
 		{status: http.StatusTooManyRequests, code: "insufficient_quota", retryable: false},
 		{status: http.StatusTooManyRequests, code: "usage_limit_reached", retryable: false},

@@ -21255,6 +21255,15 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			wantError: `"modelNotFound"`,
 			wantKind:  "model_not_found",
 		},
+		{
+			// Rust #57452: policy-restricted capacity keeps its dedicated
+			// classification and reports no HTTP status, matching
+			// CodexErrorDetails::http_status_code_value.
+			name:      "policy capacity unavailable",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorPolicyCapacityUnavailable},
+			wantError: `"policyCapacityUnavailable"`,
+			wantKind:  "policy_capacity_unavailable",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -128,9 +128,6 @@ type codeModeExecExecutor struct {
 	// (#46288): report the code-mode host duration and harness overhead in the
 	// cell response header.
 	showCellOverhead bool
-	// toolDescriptionFirst mirrors features.code_mode_tool_description_first
-	// (#51690/#51704): order nested namespace descriptions after tool guidance.
-	toolDescriptionFirst bool
 	// excludedNamespaces mirrors features.code_mode.excluded_tool_namespaces:
 	// tools in these exact namespaces stay registered for direct model access
 	// but are omitted from the nested Code Mode surface.
@@ -494,17 +491,6 @@ func (r *CodeModeRuntime) SetShowCellOverhead(enabled bool) {
 	}
 	r.exec.bindingMu.Lock()
 	r.exec.showCellOverhead = enabled
-	r.exec.bindingMu.Unlock()
-}
-
-// SetToolDescriptionFirst orders nested Code Mode descriptions as tool text
-// followed by namespace text when enabled (Rust #51704).
-func (r *CodeModeRuntime) SetToolDescriptionFirst(enabled bool) {
-	if r == nil || r.exec == nil {
-		return
-	}
-	r.exec.bindingMu.Lock()
-	r.exec.toolDescriptionFirst = enabled
 	r.exec.bindingMu.Unlock()
 }
 
@@ -1038,7 +1024,6 @@ func (e *codeModeExecExecutor) nestedToolsOrdered(orderDescriptions bool) []code
 	}
 	e.bindingMu.RLock()
 	indirectPrefixes := e.indirectPrefixes
-	toolDescriptionFirst := e.toolDescriptionFirst
 	excludedNamespaces := e.excludedNamespaces
 	e.bindingMu.RUnlock()
 	names := registry.Names()
@@ -1061,7 +1046,7 @@ func (e *codeModeExecExecutor) nestedToolsOrdered(orderDescriptions bool) []code
 		}
 		seenIdentifiers[globalName] = struct{}{}
 		if orderDescriptions {
-			spec.Description = orderCodeModeToolDescription(spec.Description, spec.NamespaceDescription, toolDescriptionFirst)
+			spec.Description = orderCodeModeToolDescription(spec.Description, spec.NamespaceDescription)
 		}
 		if indirectPrefixes != nil {
 			spec = indirectPrefixes.ApplyToSpec(spec)
@@ -1081,20 +1066,21 @@ func codeModeToolNamespace(name ToolName) string {
 }
 
 // OrderCodeModeToolDescriptions merges namespace guidance into each Code Mode
-// tool description. The declaration suffix remains last so tool-search results,
-// remote EnabledTools, and ALL_TOOLS expose the same ordering (Rust #51704).
-func OrderCodeModeToolDescriptions(specs []Spec, toolDescriptionFirst bool) []Spec {
+// tool description, always after the tool's own guidance. The declaration
+// suffix remains last so tool-search results, remote EnabledTools, and
+// ALL_TOOLS expose the same ordering (Rust #57462).
+func OrderCodeModeToolDescriptions(specs []Spec) []Spec {
 	out := make([]Spec, len(specs))
 	for index, spec := range specs {
 		out[index] = cloneSpec(spec)
-		out[index].Description = orderCodeModeToolDescription(spec.Description, spec.NamespaceDescription, toolDescriptionFirst)
+		out[index].Description = orderCodeModeToolDescription(spec.Description, spec.NamespaceDescription)
 	}
 	return out
 }
 
 const codeModeToolDeclarationSeparator = "\n\nexec tool declaration:\n"
 
-func orderCodeModeToolDescription(toolDescription string, namespaceDescription string, toolDescriptionFirst bool) string {
+func orderCodeModeToolDescription(toolDescription string, namespaceDescription string) string {
 	namespaceDescription = strings.TrimSpace(namespaceDescription)
 	if namespaceDescription == "" {
 		return toolDescription
@@ -1105,10 +1091,8 @@ func orderCodeModeToolDescription(toolDescription string, namespaceDescription s
 	switch {
 	case toolText == "":
 		description = namespaceDescription
-	case toolDescriptionFirst:
-		description = toolText + "\n\n" + namespaceDescription
 	default:
-		description = namespaceDescription + "\n\n" + toolText
+		description = toolText + "\n\n" + namespaceDescription
 	}
 	if hasDeclaration {
 		description += codeModeToolDeclarationSeparator + declaration

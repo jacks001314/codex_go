@@ -278,6 +278,7 @@ func TestGuardianReviewSessionRetryClassificationLikeRust(t *testing.T) {
 		{"rate limit exceeded", &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: "slow down"}, true},
 		{"flex unavailable", &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable}, true},
 		{"server overloaded", &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded}, true},
+		{"policy capacity unavailable", &codexapi.APIError{Kind: codexapi.ErrorPolicyCapacityUnavailable}, true},
 		{"api 500", &codexapi.APIError{Kind: codexapi.ErrorAPI, Status: 500}, true},
 		{"api 599", &codexapi.APIError{Kind: codexapi.ErrorAPI, Status: 599}, true},
 		{"api 408", &codexapi.APIError{Kind: codexapi.ErrorAPI, Status: 408}, true},

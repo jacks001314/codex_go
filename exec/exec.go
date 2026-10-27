@@ -549,7 +549,6 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		DisableCodeModeFallback:           cfg.DisableCodeModeInProcessFallback(),
 		CodeModeDefaultExecYieldTime:      cfg.CodeModeDefaultExecYieldTime(),
 		CodeModeShowCellOverhead:          cfg.CodeModeExperimentalShowCellOverhead(),
-		CodeModeToolDescriptionFirst:      cfg.CodeModeToolDescriptionFirst(),
 		DirectOnlyToolNamespaces:          cfg.CodeModeDirectOnlyToolNamespaces(),
 		ExcludedToolNamespaces:            cfg.CodeModeExcludedToolNamespaces(),
 		CodeModeOnlyStrictThirdPartyTools: cfg.CodeModeOnlyStrictThirdPartyTools(),
@@ -782,7 +781,6 @@ type agentRunConfig struct {
 	DisableCodeModeFallback           bool
 	CodeModeDefaultExecYieldTime      time.Duration
 	CodeModeShowCellOverhead          bool
-	CodeModeToolDescriptionFirst      bool
 	DirectOnlyToolNamespaces          []string
 	ExcludedToolNamespaces            []string
 	CodeModeOnlyStrictThirdPartyTools bool
@@ -1501,7 +1499,6 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.CodeModeRuntime = run.CodeModeRuntime
 		options.CodeModeDefaultExecYieldTime = run.CodeModeDefaultExecYieldTime
 		options.CodeModeShowCellOverhead = run.CodeModeShowCellOverhead
-		options.CodeModeToolDescriptionFirst = run.CodeModeToolDescriptionFirst
 		options.DirectOnlyToolNamespaces = append([]string(nil), run.DirectOnlyToolNamespaces...)
 		options.ExcludedToolNamespaces = append([]string(nil), run.ExcludedToolNamespaces...)
 		options.CodeModeOnlyStrictThirdPartyTools = run.CodeModeOnlyStrictThirdPartyTools

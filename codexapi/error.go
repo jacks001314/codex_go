@@ -26,6 +26,9 @@ const (
 	// ErrorFlexUnavailable is the terminal Flex-capacity failure Rust surfaces
 	// for a `flex_unavailable` error code (Rust #47967).
 	ErrorFlexUnavailable APIErrorKind = "flexUnavailable"
+	// ErrorPolicyCapacityUnavailable is a capacity failure on a route restricted
+	// by server policy (Rust #57452). It keeps overload retry advice.
+	ErrorPolicyCapacityUnavailable APIErrorKind = "policyCapacityUnavailable"
 	// ErrorModelNotFound is the terminal provider failure for a
 	// `model_not_found` error code (Rust #56445).
 	ErrorModelNotFound APIErrorKind = "modelNotFound"
@@ -132,6 +135,8 @@ func (e *APIError) Error() string {
 		return "rate limit exceeded: " + e.Message
 	case ErrorServerOverloaded:
 		return "Selected model is at capacity. Please try a different model."
+	case ErrorPolicyCapacityUnavailable:
+		return "Policy-restricted capacity is unavailable. Please try again later."
 	case ErrorFlexUnavailable:
 		// Rust's CodexErr display for CodexErrorDetails::FlexUnavailable.
 		return "Flex capacity unavailable."

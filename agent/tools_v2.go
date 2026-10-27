@@ -112,8 +112,25 @@ type multiAgentV2ToolExecutor struct {
 	waitDefault               time.Duration
 	hideSpawnMetadata         bool
 	exposeSpawnModelOverrides bool
+	// guardianNativeMultiAgentReview opts state-changing MAv2 calls into
+	// synchronous Guardian review (Rust #57451).
+	guardianNativeMultiAgentReview bool
 	// toolOverrides carries the catalog's per-tool overrides (Rust #46505).
 	toolOverrides map[string]MultiAgentToolOverride
+}
+
+// RequiresGuardianReview mirrors Rust MultiAgentV2ToolOverrides: with native
+// MAv2 history enabled, state-changing calls in the configured namespace are
+// reviewed before dispatch.
+func (e *multiAgentV2ToolExecutor) RequiresGuardianReview(*tool.Invocation) bool {
+	if e == nil || !e.guardianNativeMultiAgentReview {
+		return false
+	}
+	namespace := e.namespace
+	if namespace == "" {
+		namespace = MultiAgentV2Namespace
+	}
+	return tool.IsStateChangingMultiAgentTool(tool.NamespacedName(namespace, string(e.kind)), &namespace)
 }
 
 func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHandlerOptions) error {
@@ -154,8 +171,9 @@ func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHa
 			kind: kind, controller: v2, exposure: options.Exposure, namespace: namespace,
 			usageHintText: options.UsageHintText,
 			waitMin:       waitMin, waitMax: waitMax, waitDefault: waitDefault, hideSpawnMetadata: options.HideSpawnMetadata,
-			exposeSpawnModelOverrides: options.ExposeSpawnModelOverrides,
-			toolOverrides:             options.ToolOverrides,
+			exposeSpawnModelOverrides:      options.ExposeSpawnModelOverrides,
+			guardianNativeMultiAgentReview: options.GuardianNativeMultiAgentReview,
+			toolOverrides:                  options.ToolOverrides,
 		}); err != nil {
 			return err
 		}

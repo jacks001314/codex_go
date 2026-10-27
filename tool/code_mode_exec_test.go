@@ -137,60 +137,41 @@ func TestCodeModeToolDescriptionOrderLikeRust(t *testing.T) {
 	if err := registry.Register(NewExecutorFunc(spec, noopExecutor)); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct {
-		name                 string
-		toolDescriptionFirst bool
-		want                 string
-	}{
-		{
-			name: "namespace first",
-			want: "Plan events and manage your calendar.\n\nRead timezone option 99." + declaration,
-		},
-		{
-			name:                 "tool first",
-			toolDescriptionFirst: true,
-			want:                 "Read timezone option 99.\n\nPlan events and manage your calendar." + declaration,
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			runtime := NewCodeModeRuntime(nil, false)
-			runtime.SetToolDescriptionFirst(test.toolDescriptionFirst)
-			executor, _ := runtime.Executors(registry)
-			inner, ok := executor.(*codeModeExecExecutor)
-			if !ok {
-				t.Fatalf("executor type = %T", executor)
-			}
-			nested := inner.nestedToolsWithOrderedDescriptions()
-			if len(nested) != 1 {
-				t.Fatalf("nested tools = %#v", nested)
-			}
-			if nested[0].spec.Description != test.want {
-				t.Fatalf("description = %q, want %q", nested[0].spec.Description, test.want)
-			}
-			localOutput, err := executor.Execute(context.Background(), &Invocation{
-				CallID:  "description-order",
-				Payload: Payload{Kind: PayloadCustom, Input: `text(ALL_TOOLS.find(tool => tool.name === "mcp__calendar__timezone").description)`},
-			})
-			if err != nil {
-				t.Fatalf("local Execute() error = %v", err)
-			}
-			if body := codeModeBodyAfterHeader(t, localOutput.Body, "Script completed"); body != test.want {
-				t.Fatalf("ALL_TOOLS description = %q, want %q", body, test.want)
-			}
+	const want = "Read timezone option 99.\n\nPlan events and manage your calendar." + declaration
+	runtime := NewCodeModeRuntime(nil, false)
+	executor, _ := runtime.Executors(registry)
+	inner, ok := executor.(*codeModeExecExecutor)
+	if !ok {
+		t.Fatalf("executor type = %T", executor)
+	}
+	nested := inner.nestedToolsWithOrderedDescriptions()
+	if len(nested) != 1 {
+		t.Fatalf("nested tools = %#v", nested)
+	}
+	if nested[0].spec.Description != want {
+		t.Fatalf("description = %q, want %q", nested[0].spec.Description, want)
+	}
+	localOutput, err := executor.Execute(context.Background(), &Invocation{
+		CallID:  "description-order",
+		Payload: Payload{Kind: PayloadCustom, Input: `text(ALL_TOOLS.find(tool => tool.name === "mcp__calendar__timezone").description)`},
+	})
+	if err != nil {
+		t.Fatalf("local Execute() error = %v", err)
+	}
+	if body := codeModeBodyAfterHeader(t, localOutput.Body, "Script completed"); body != want {
+		t.Fatalf("ALL_TOOLS description = %q, want %q", body, want)
+	}
 
-			remote := &recordingCodeModeRemoteSession{response: CodeModeRemoteResponse{CellID: "remote-description", State: "completed"}}
-			remoteRuntime := NewCodeModeRuntime(&recordingCodeModeRemoteProvider{session: remote}, false)
-			remoteRuntime.SetToolDescriptionFirst(test.toolDescriptionFirst)
-			remoteExecutor, _ := remoteRuntime.Executors(registry)
-			if _, err := remoteExecutor.Execute(context.Background(), &Invocation{
-				CallID: "remote-description-order", Payload: Payload{Kind: PayloadCustom, Input: `text("x")`},
-			}); err != nil {
-				t.Fatalf("remote Execute() error = %v", err)
-			}
-			if len(remote.request.EnabledTools) != 1 || remote.request.EnabledTools[0].Description != test.want {
-				t.Fatalf("remote EnabledTools = %#v, want description %q", remote.request.EnabledTools, test.want)
-			}
-		})
+	remote := &recordingCodeModeRemoteSession{response: CodeModeRemoteResponse{CellID: "remote-description", State: "completed"}}
+	remoteRuntime := NewCodeModeRuntime(&recordingCodeModeRemoteProvider{session: remote}, false)
+	remoteExecutor, _ := remoteRuntime.Executors(registry)
+	if _, err := remoteExecutor.Execute(context.Background(), &Invocation{
+		CallID: "remote-description-order", Payload: Payload{Kind: PayloadCustom, Input: `text("x")`},
+	}); err != nil {
+		t.Fatalf("remote Execute() error = %v", err)
+	}
+	if len(remote.request.EnabledTools) != 1 || remote.request.EnabledTools[0].Description != want {
+		t.Fatalf("remote EnabledTools = %#v, want description %q", remote.request.EnabledTools, want)
 	}
 }
 

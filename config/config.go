@@ -2237,21 +2237,6 @@ func (c *Config) CodeModeExperimentalShowCellOverhead() bool {
 	return ok && value
 }
 
-// CodeModeToolDescriptionFirst reports whether nested Code Mode tool
-// definitions put the tool description before its namespace description
-// (Rust #51690/#51704). The feature is disabled by default.
-func (c *Config) CodeModeToolDescriptionFirst() bool {
-	if c == nil || c.Values == nil {
-		return false
-	}
-	features, ok := c.Values["features"].(map[string]any)
-	if !ok {
-		return false
-	}
-	enabled, _ := features["code_mode_tool_description_first"].(bool)
-	return enabled
-}
-
 // CodeModeDirectOnlyToolNamespaces returns the exact namespaces that must be
 // exposed only as direct model tools (Rust
 // features.code_mode.direct_only_tool_namespaces). A nil result leaves every

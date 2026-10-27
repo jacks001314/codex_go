@@ -1,8 +1,9 @@
 # 2026-10-27 non-TUI sync window
 
 Upstream window: `8196bcdc18..c587d6e54c`, extended by
-`c587d6e54c..6fe77fc123` (Rust `codex` at `6fe77fc123`; the non-TUI commits in
-that extension are `#57394`, `#57360`, `#57358`, `#57357`, `#57353`, `#57352`).
+`c587d6e54c..6fe77fc123`, then by `eec8bde1e9..6b3b67d71f` (Rust `codex` at
+`6b3b67d71f`; the newest non-TUI commits are `#57451`, `#57455`, `#57452`,
+`#57462`, `#57458`, `#57468`, and the `#57474` regression test).
 This lane owns non-TUI core packages only. `tui/`, `app/agents_dashboard.go`,
 `app/tui_telemetry.go` and `update/plan_2026_10_27.md` belong to the parallel
 TUI lane and are not modified here.
@@ -99,6 +100,10 @@ TUI lane and are not modified here.
 | `#57430` | A user-origin goal set after a worker's first Guardian review reaches that worker's later review root authorization as `User set the goal: …`; an automatic-origin goal never does, and the earlier review stays unchanged | `appserver/retained_context.go` (raw-only message text), `appserver/guardian_goal_provenance_like_rust_test.go`, `appserver/retained_context_test.go` |
 | `#57425` | Guardian root request preparation is centralized: a 16-message shared cap, legacy-checkpoint copies deduplicated after truncation, verified-answer and incomplete-context notices, and all user restrictions preserved during handoff filtering | `appserver/guardian_root_context.go`, `appserver/agent_runtime.go`, `appserver/guardian_root_handoff.go`, `appserver/retained_context.go`, `state/guardian_retained_context.go`, `context/user_goal.go`, like-Rust tests |
 | `#57420` | Thread item `started_at_ms`/`completed_at_ms` are optional nullable in the TypeScript exports so older servers can omit them | `appserver/schema/precomputed/app-server-exports-stable.json.zst`, `appserver/schema/precomputed/app-server-exports-experimental.json.zst`, pinned SHA-256 values re-anchored in `appserver/schema_test.go` |
+| `#57451` | With `guardian_native_multi_agent_history` enabled, wrapped MAv2 `spawn_agent`, `send_message`, `followup_task`, and `interrupt_agent` calls require synchronous Guardian review before dispatch (read-only `wait_agent`/`list_agents` stay unreviewed); the async V2 scorer arm is N/A because Go has no asynchronous scorer | `tool/guardian_scope.go`, `agent/tools.go`, `agent/tools_v2.go`, `turn/tools.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, like-Rust tests |
+| `#57455` | Multi-agent Guardian classification is centralized in `IsStateChangingMultiAgentTool`: an explicit configured namespace must match exactly, while an absent namespace accepts the default `""`/`functions` spellings; both call sites keep their own enablement gate | `tool/guardian_scope.go`, `tool/guardian_scope_test.go`, `agent/tools_v2.go` |
+| `#57452` | `policy_capacity_unavailable` is a distinct terminal capacity failure with the display `Policy-restricted capacity is unavailable. Please try again later.`; HTTP 503, `response.failed`, and WebSocket capacity events preserve the classification and `Retry-After`, stream retries and Guardian retries follow that advice, telemetry reports `policy-restricted capacity unavailable`, analytics map it to `policyCapacityUnavailable`/`policy_capacity_unavailable` with no HTTP status, and rollout decoding preserves both spellings | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_agent.go`, `model/responses_stream.go`, `appserver/guardian_reviewer.go`, `appserver/turn_runtime.go`, `rollout/codex_error_info.go`, re-vendored precomputed exports, like-Rust tests |
+| `#57462` | Code Mode always renders the tool description before the namespace description, then the declaration suffix; `code_mode_tool_description_first` is a removed compatibility flag and its config/plumbing are deleted | `features/features.go`, `config/config.go`, `tool/code_mode_exec.go`, `turn/tools.go`, `exec/exec.go`, `appserver/runtime_router.go`, updated ordering tests |
 
 Grounding notes:
 
@@ -150,6 +155,36 @@ Grounding notes:
 - `#55456` is N/A: Go has no system config layer or system `requirements.toml`
   (`config/local_layers.go` documents this), so there is no Windows registry
   override to merge into the requirements stack.
+- `#57458` is structurally N/A: Rust moves `token_usage_delta` from
+  `core/src/guardian/review_session.rs` into `codex-guardian-reviewer` without
+  changing its clamped-to-zero semantics. Go does not accumulate a review delta;
+  `appserver/guardian_review_metrics.go` reads the reviewer response's
+  `AgentUsage` directly and drops negative samples through `nonNegative`, so
+  there is no helper to relocate.
+- `#57468` is N/A: Rust test-only mock fixes in
+  `core/tests/suite/guardian_root_handoff.rs`; no production behavior changes.
+- `#57452`'s `codex-rs/cli/src/doctor.rs` arm is N/A: Rust's
+  `websocket_error_detail(&ApiError)` match lists `PolicyCapacityUnavailable` so
+  it joins the generic `handshake error: {err}` arm. Go's doctor probe formats
+  handshake failures from the HTTP response or transport error
+  (`websocketHandshakeErrorDetail`) and has no per-`APIErrorKind` match to
+  extend; a policy failure therefore already reports the generic handshake
+  detail.
+- The asynchronous Guardian V2 scorer arm of `#57451`/`#57455` is N/A: Go runs
+  only the synchronous `modelGuardianReviewer`, so it has no
+  `GuardianV2Config`/`async_scorer` observation path or score cache to classify.
+  The synchronous review gate and the shared classifier are implemented.
+- `#57474` is a Rust test-only regression over behavior already ported by
+  `#57448`. The Go equivalent in
+  `appserver/guardian_native_history_incremental_like_rust_test.go` drives two
+  incremental reviews for the default and custom namespaces, asserting the
+  historical encrypted `send_message` call and the encrypted parent reply appear
+  exactly once and in order with their ID, namespace, ciphertext and
+  `encrypted_function_args`, the paired evidence-only output sits immediately
+  after the call, and the second review reuses the first response ID while
+  re-sending the complete history plus the new entry. Go has no reviewer
+  transcript-delta section, so the second request rebuilds the full transcript
+  rather than appending a `TRANSCRIPT DELTA` block.
 - `#55677` and `#56439` are N/A: a Rust toolchain/CI pin and a Cargo dependency
   bump (`ctutils`), neither of which exists in the Go module.
 - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and
@@ -1091,3 +1126,20 @@ deduplication for tool outputs.
   commit is test-only. Porting it exposed that raw-only user messages (persisted goal instructions) were missing
   from retained evidence, so `retainedRecordForSessionItem` now derives text from the message content and falls
   back to the item preview for legacy items.
+- For `#57451`/`#57455`: `go test ./tool -run TestIsStateChangingMultiAgentToolLikeRust -count=1`,
+  `go test ./agent -run 'TestMultiAgentV2GuardianReview' -count=1`, and `go test ./turn ./tool -count=1`
+  pass. Coverage pins the four state-changing tools, the read-only exclusions, the default/explicit namespace
+  rules, feature-off suppression, and a denied router review stopping `team.send_message` before dispatch.
+- For `#57452`: `go test ./codexapi ./model ./rollout -count=1` and
+  `go test ./appserver -run 'Guardian|Policy|Analytics' -count=1` pass. Coverage mirrors Rust's HTTP/SSE/WebSocket cases
+  (policy vs overload attribution with and without `Retry-After`), the exact display and telemetry strings,
+  the retry-advice and Guardian retry tables, the analytics mapping without an HTTP status, and both rollout
+  spellings. The precomputed schema hashes were re-anchored to the `6a6e2fb1f0` artifacts.
+- For `#57462`: `go test ./tool -run 'TestCodeModeToolDescriptionOrderLikeRust' -count=1`,
+  `go test ./turn -run 'TestBuildToolRegistryOrdersCodeModeToolDescriptionsLikeRust|TestBuildToolRegistryAppliesIndirectDescriptionPrefixesLikeRust' -count=1`,
+  and `go test ./features -run 'CodeModeToolDescriptionFirst|TestSorted|TestKnown' -count=1` pass.
+- For `#57474`: `go test ./appserver -run TestGuardianNativeEncryptedHistoryAcrossReviewsLikeRust -count=1`,
+  `go test ./appserver -run 'GuardianNative|NativeMultiAgent|Guardian' -count=1`, and `go test ./state -count=1`
+  pass. This also re-verifies the `#57448` transcript rules for both namespace spellings.
+- Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
+  and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.

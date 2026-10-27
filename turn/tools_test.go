@@ -896,60 +896,48 @@ func TestBuildToolRegistryAppliesIndirectDescriptionPrefixesLikeRust(t *testing.
 	if err := json.Unmarshal([]byte(output.Body), &result); err != nil {
 		t.Fatalf("decode tool search: %v", err)
 	}
-	if len(result.Tools) != 1 || result.Tools[0].Description != "Drive guidance.\n\nDrive tools.\n\nFind Drive." {
+	if len(result.Tools) != 1 || result.Tools[0].Description != "Drive guidance.\n\nFind Drive.\n\nDrive tools." {
 		t.Fatalf("tool search results = %#v", result.Tools)
 	}
 }
 
 func TestBuildToolRegistryOrdersCodeModeToolDescriptionsLikeRust(t *testing.T) {
-	for _, test := range []struct {
-		name                 string
-		toolDescriptionFirst bool
-		want                 string
-	}{
-		{name: "namespace first", want: "Drive tools.\n\nFind Drive."},
-		{name: "tool first", toolDescriptionFirst: true, want: "Find Drive.\n\nDrive tools."},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			options := &ToolRegistryOptions{
-				EnableToolSearch:             true,
-				CodeModeToolDescriptionFirst: test.toolDescriptionFirst,
-				ExtraTools: []tool.Executor{
-					indirectPrefixMCPServerExecutor{
-						serverName: "drive",
-						spec: tool.Spec{
-							Name:                 tool.NamespacedName("mcp__drive", "find"),
-							Description:          "Find Drive.",
-							NamespaceDescription: "Drive tools.",
-							Exposure:             tool.ExposureDiscoverable,
-							Search:               &tool.SearchInfo{Text: "Find Drive."},
-						},
-					},
+	options := &ToolRegistryOptions{
+		EnableToolSearch: true,
+		ExtraTools: []tool.Executor{
+			indirectPrefixMCPServerExecutor{
+				serverName: "drive",
+				spec: tool.Spec{
+					Name:                 tool.NamespacedName("mcp__drive", "find"),
+					Description:          "Find Drive.",
+					NamespaceDescription: "Drive tools.",
+					Exposure:             tool.ExposureDiscoverable,
+					Search:               &tool.SearchInfo{Text: "Find Drive."},
 				},
-			}
-			registry, err := BuildToolRegistry(options)
-			if err != nil {
-				t.Fatalf("BuildToolRegistry() error = %v", err)
-			}
-			executor, ok := registry.Lookup(tool.PlainName(tool.ToolSearchName))
-			if !ok {
-				t.Fatal("tool_search executor is missing")
-			}
-			output, err := executor.Execute(context.Background(), &tool.Invocation{Payload: tool.Payload{
-				Kind:   tool.PayloadToolSearch,
-				Search: map[string]any{"query": "drive"},
-			}})
-			if err != nil || output == nil {
-				t.Fatalf("tool search = %#v, %v", output, err)
-			}
-			var result tool.ToolSearchResult
-			if err := json.Unmarshal([]byte(output.Body), &result); err != nil {
-				t.Fatalf("decode tool search: %v", err)
-			}
-			if len(result.Tools) != 1 || result.Tools[0].Description != test.want {
-				t.Fatalf("tool search results = %#v, want description %q", result.Tools, test.want)
-			}
-		})
+			},
+		},
+	}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	executor, ok := registry.Lookup(tool.PlainName(tool.ToolSearchName))
+	if !ok {
+		t.Fatal("tool_search executor is missing")
+	}
+	output, err := executor.Execute(context.Background(), &tool.Invocation{Payload: tool.Payload{
+		Kind:   tool.PayloadToolSearch,
+		Search: map[string]any{"query": "drive"},
+	}})
+	if err != nil || output == nil {
+		t.Fatalf("tool search = %#v, %v", output, err)
+	}
+	var result tool.ToolSearchResult
+	if err := json.Unmarshal([]byte(output.Body), &result); err != nil {
+		t.Fatalf("decode tool search: %v", err)
+	}
+	if len(result.Tools) != 1 || result.Tools[0].Description != "Find Drive.\n\nDrive tools." {
+		t.Fatalf("tool search results = %#v", result.Tools)
 	}
 }
 

@@ -2527,7 +2527,8 @@ func guardianReviewRetryableError(err error) bool {
 		return false
 	}
 	switch apiErr.Kind {
-	case codexapi.ErrorRateLimitExceeded, codexapi.ErrorFlexUnavailable, codexapi.ErrorServerOverloaded:
+	case codexapi.ErrorRateLimitExceeded, codexapi.ErrorFlexUnavailable, codexapi.ErrorServerOverloaded,
+		codexapi.ErrorPolicyCapacityUnavailable:
 		return true
 	case codexapi.ErrorTransport, codexapi.ErrorStream, codexapi.ErrorRetryable, codexapi.ErrorAPI:
 		return apiErr.Status == 0 || apiErr.Status == 408 || apiErr.Status == 429 ||

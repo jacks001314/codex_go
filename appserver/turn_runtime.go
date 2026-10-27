@@ -4663,6 +4663,8 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return fields("rateLimitExceeded", "rate_limit_exceeded")
 	case codexapi.ErrorServerOverloaded:
 		return fields("serverOverloaded", "server_overloaded")
+	case codexapi.ErrorPolicyCapacityUnavailable:
+		return fields("policyCapacityUnavailable", "policy_capacity_unavailable")
 	case codexapi.ErrorFlexUnavailable:
 		// Rust #47967: FlexUnavailable reports the 429 the Flex capacity
 		// failure arrived with (CodexErrorDetails::http_status_code_value).

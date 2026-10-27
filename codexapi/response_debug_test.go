@@ -20,6 +20,15 @@ func TestExtractResponseDebugContext(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #57452's response-debug-context mapping: the telemetry label
+// names the policy-restricted capacity failure without including the body.
+func TestTelemetryPolicyCapacityMessageLikeRust(t *testing.T) {
+	api := &ResponseAPIError{Kind: ResponseAPIPolicyCapacityUnavailable}
+	if got := TelemetryResponseAPIErrorMessage(api); got != "policy-restricted capacity unavailable" {
+		t.Fatalf("TelemetryResponseAPIErrorMessage() = %q", got)
+	}
+}
+
 func TestTelemetryMessagesOmitHTTPBody(t *testing.T) {
 	transport := &ResponseTransportError{Kind: ResponseTransportHTTP, Status: 401, Message: "secret body"}
 	if got := TelemetryResponseTransportErrorMessage(transport); got != "http 401" {

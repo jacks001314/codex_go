@@ -18,6 +18,8 @@ var codexErrorInfoUnitTags = map[string]bool{
 	"rateLimitExceeded":             true,
 	"server_overloaded":             true,
 	"serverOverloaded":              true,
+	"policy_capacity_unavailable":   true,
+	"policyCapacityUnavailable":     true,
 	"modelNotFound":                 true,
 	"flex_unavailable":              true,
 	"flexUnavailable":               true,

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"codex_go/codexapi"
 )
@@ -260,5 +261,78 @@ func TestWebsocketTerminalProviderErrorLikeRust(t *testing.T) {
 		if apiErr != nil {
 			t.Fatalf("status %v mapped to %#v", status, apiErr)
 		}
+	}
+}
+
+// Mirrors Rust #57452 (api_bridge_tests.rs
+// http_policy_capacity_preserves_retry_advice_and_terminal_behavior): only the
+// explicit `policy_capacity_unavailable` code changes a 503's attribution, and
+// both capacity kinds keep the response's Retry-After advice while remaining
+// terminal without it.
+func TestResponsesHTTPErrorDistinguishesPolicyCapacityLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		code       string
+		errorType  string
+		retryAfter string
+		wantKind   codexapi.APIErrorKind
+		wantText   string
+	}{
+		{
+			name:       "policy capacity with advice",
+			code:       "policy_capacity_unavailable",
+			errorType:  "service_unavailable_error",
+			retryAfter: "6",
+			wantKind:   codexapi.ErrorPolicyCapacityUnavailable,
+			wantText:   "Policy-restricted capacity is unavailable. Please try again later.",
+		},
+		{
+			name:      "policy capacity without advice",
+			code:      "policy_capacity_unavailable",
+			errorType: "service_unavailable_error",
+			wantKind:  codexapi.ErrorPolicyCapacityUnavailable,
+			wantText:  "Policy-restricted capacity is unavailable. Please try again later.",
+		},
+		{
+			// A policy error type on the overload code does not reattribute it.
+			name:       "server overload with policy error type",
+			code:       "server_is_overloaded",
+			errorType:  "policy_error",
+			retryAfter: "6",
+			wantKind:   codexapi.ErrorServerOverloaded,
+			wantText:   "Selected model is at capacity. Please try a different model.",
+		},
+		{
+			name:     "server overload without policy error type",
+			code:     "server_is_overloaded",
+			wantKind: codexapi.ErrorServerOverloaded,
+			wantText: "Selected model is at capacity. Please try a different model.",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			headers := http.Header{}
+			if testCase.retryAfter != "" {
+				headers.Set("Retry-After", testCase.retryAfter)
+			}
+			body := []byte(`{"error":{"type":"` + testCase.errorType + `","code":"` + testCase.code + `","message":"detail"}}`)
+			err := responsesHTTPError(OpenAIProviderName, http.StatusServiceUnavailable, headers, body)
+			var apiErr *codexapi.APIError
+			if !errors.As(err, &apiErr) || apiErr.Kind != testCase.wantKind {
+				t.Fatalf("error = %#v, want kind %q", err, testCase.wantKind)
+			}
+			if apiErr.Error() != testCase.wantText {
+				t.Fatalf("display = %q, want %q", apiErr.Error(), testCase.wantText)
+			}
+			if got := isRetryableResponsesStreamError(err); got != (testCase.retryAfter != "") {
+				t.Fatalf("retryable = %t, want %t", got, testCase.retryAfter != "")
+			}
+			delay, advised := codexapi.RetryDelayInfo(err)
+			if advised != (testCase.retryAfter != "") {
+				t.Fatalf("retry advice present = %t, want %t", advised, testCase.retryAfter != "")
+			}
+			if advised && (delay <= 5*time.Second || delay > 6*time.Second) {
+				t.Fatalf("retry advice = %s, want ~6s", delay)
+			}
+		})
 	}
 }

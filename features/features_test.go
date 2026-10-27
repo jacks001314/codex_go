@@ -112,18 +112,18 @@ func TestReasoningEffortOverrideEnabledByDefaultLikeRust(t *testing.T) {
 	}
 }
 
-// TestCodeModeToolDescriptionFirstRegisteredLikeRust pins Rust #51690, which
-// registers an under-development, default-disabled flag for placing each tool
-// description before its namespace description in Code Mode.
-func TestCodeModeToolDescriptionFirstRegisteredLikeRust(t *testing.T) {
+// TestCodeModeToolDescriptionFirstRemovedLikeRust pins Rust #57462: the
+// compatibility flag remains known but is removed now that Code Mode always
+// places tool descriptions before namespace descriptions.
+func TestCodeModeToolDescriptionFirstRemovedLikeRust(t *testing.T) {
 	const key = "code_mode_tool_description_first"
 	if !Known(key) {
 		t.Fatalf("%s should be known", key)
 	}
 	for _, spec := range Registry {
 		if spec.Key == key {
-			if spec.Stage != StageUnderDevelopment || spec.DefaultEnabled {
-				t.Fatalf("%s spec = %#v, want under development and disabled by default", key, spec)
+			if spec.Stage != StageRemoved || spec.DefaultEnabled {
+				t.Fatalf("%s spec = %#v, want removed and disabled by default", key, spec)
 			}
 			return
 		}

@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -730,4 +731,160 @@ func TestModelNotFoundStreamErrorsTerminateLikeRust(t *testing.T) {
 			t.Fatalf("message = %q, want model_not_found", apiErr.Message)
 		}
 	})
+}
+
+// Mirrors Rust #57452 (sse/responses_error_tests.rs
+// policy_capacity_classification_preserves_overload_retry_behavior): the
+// explicit policy code keeps its own terminal classification while the overload
+// code ignores a policy error type, and both retry only with server advice.
+func TestResponseFailedPolicyCapacityClassificationLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		code       string
+		errorType  string
+		retryAfter string
+		wantKind   codexapi.APIErrorKind
+		wantText   string
+	}{
+		{
+			name:       "policy capacity with advice",
+			code:       "policy_capacity_unavailable",
+			retryAfter: "3",
+			wantKind:   codexapi.ErrorPolicyCapacityUnavailable,
+			wantText:   "Policy-restricted capacity is unavailable. Please try again later.",
+		},
+		{
+			name:     "policy capacity without advice",
+			code:     "policy_capacity_unavailable",
+			wantKind: codexapi.ErrorPolicyCapacityUnavailable,
+			wantText: "Policy-restricted capacity is unavailable. Please try again later.",
+		},
+		{
+			name:       "overload with policy error type",
+			code:       "server_is_overloaded",
+			errorType:  "policy_error",
+			retryAfter: "3",
+			wantKind:   codexapi.ErrorServerOverloaded,
+			wantText:   "Selected model is at capacity. Please try a different model.",
+		},
+		{
+			name:     "overload without policy error type",
+			code:     "server_is_overloaded",
+			wantKind: codexapi.ErrorServerOverloaded,
+			wantText: "Selected model is at capacity. Please try a different model.",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			errorBody := map[string]any{"code": testCase.code}
+			if testCase.errorType != "" {
+				errorBody["type"] = testCase.errorType
+			}
+			if testCase.retryAfter != "" {
+				errorBody["headers"] = map[string]any{"Retry-After": testCase.retryAfter}
+			}
+			raw, err := json.Marshal(map[string]any{
+				"type":     "response.failed",
+				"response": map[string]any{"error": errorBody},
+			})
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			failed := responseFailedError(raw)
+			var apiErr *codexapi.APIError
+			if !errors.As(failed, &apiErr) || apiErr.Kind != testCase.wantKind {
+				t.Fatalf("error = %#v, want kind %q", failed, testCase.wantKind)
+			}
+			if apiErr.Error() != testCase.wantText {
+				t.Fatalf("display = %q, want %q", apiErr.Error(), testCase.wantText)
+			}
+			if got := isRetryableResponsesStreamError(failed); got != (testCase.retryAfter != "") {
+				t.Fatalf("retryable = %t, want %t", got, testCase.retryAfter != "")
+			}
+			delay, advised := codexapi.RetryDelayInfo(failed)
+			if advised != (testCase.retryAfter != "") {
+				t.Fatalf("retry advice present = %t, want %t", advised, testCase.retryAfter != "")
+			}
+			if advised && (delay < 2990*time.Millisecond || delay > 3*time.Second) {
+				t.Fatalf("retry advice = %s, want 3s", delay)
+			}
+		})
+	}
+}
+
+// Mirrors Rust #57452's WebSocket terminal attribution: a policy or overload
+// capacity event keeps its classification with or without server advice, and
+// retries only when that advice is present.
+func TestWebsocketErrorEventCapacityClassificationLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		code       string
+		retryAfter string
+		wantKind   codexapi.APIErrorKind
+		wantText   string
+	}{
+		{
+			name:       "policy capacity with advice",
+			code:       "policy_capacity_unavailable",
+			retryAfter: "1",
+			wantKind:   codexapi.ErrorPolicyCapacityUnavailable,
+			wantText:   "Policy-restricted capacity is unavailable. Please try again later.",
+		},
+		{
+			name:     "policy capacity without advice",
+			code:     "policy_capacity_unavailable",
+			wantKind: codexapi.ErrorPolicyCapacityUnavailable,
+			wantText: "Policy-restricted capacity is unavailable. Please try again later.",
+		},
+		{
+			name:       "server overload with advice",
+			code:       "server_is_overloaded",
+			retryAfter: "1",
+			wantKind:   codexapi.ErrorServerOverloaded,
+			wantText:   "Selected model is at capacity. Please try a different model.",
+		},
+		{
+			name:     "server overload without advice",
+			code:     "server_is_overloaded",
+			wantKind: codexapi.ErrorServerOverloaded,
+			wantText: "Selected model is at capacity. Please try a different model.",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			errorBody := map[string]any{"code": testCase.code, "message": "This model is disabled."}
+			if testCase.retryAfter != "" {
+				errorBody["headers"] = map[string]any{"Retry-After": testCase.retryAfter}
+			}
+			event := map[string]any{
+				"type":   "error",
+				"status": float64(http.StatusServiceUnavailable),
+				"error":  errorBody,
+			}
+			apiErr := websocketErrorEventAPIError(event)
+			if apiErr == nil {
+				t.Fatal("capacity event was not classified")
+			}
+			if apiErr.Kind != testCase.wantKind {
+				t.Fatalf("kind = %q, want %q", apiErr.Kind, testCase.wantKind)
+			}
+			if apiErr.Error() != testCase.wantText {
+				t.Fatalf("display = %q, want %q", apiErr.Error(), testCase.wantText)
+			}
+			if got := isRetryableResponsesStreamError(apiErr); got != (testCase.retryAfter != "") {
+				t.Fatalf("retryable = %t, want %t", got, testCase.retryAfter != "")
+			}
+			_, advised := codexapi.RetryDelayInfo(apiErr)
+			if advised != (testCase.retryAfter != "") {
+				t.Fatalf("retry advice present = %t, want %t", advised, testCase.retryAfter != "")
+			}
+		})
+	}
+
+	// Headerless rate limits keep the existing generic-error path.
+	headerlessRateLimit := map[string]any{
+		"type":  "error",
+		"error": map[string]any{"code": "rate_limit_exceeded", "message": "slow down"},
+	}
+	if apiErr := websocketErrorEventAPIError(headerlessRateLimit); apiErr != nil {
+		t.Fatalf("headerless rate limit classified as %#v, want the generic path", apiErr)
+	}
 }

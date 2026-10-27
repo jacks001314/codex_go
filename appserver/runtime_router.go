@@ -15765,7 +15765,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if cfg != nil {
 		options.CodeModeDefaultExecYieldTime = cfg.CodeModeDefaultExecYieldTime()
 		options.CodeModeShowCellOverhead = cfg.CodeModeExperimentalShowCellOverhead()
-		options.CodeModeToolDescriptionFirst = cfg.CodeModeToolDescriptionFirst()
 		options.DirectOnlyToolNamespaces = cfg.CodeModeDirectOnlyToolNamespaces()
 		options.ExcludedToolNamespaces = cfg.CodeModeExcludedToolNamespaces()
 		options.CodeModeOnlyStrictThirdPartyTools = cfg.CodeModeOnlyStrictThirdPartyTools()
@@ -16117,6 +16116,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
 			}
 			options.AgentVersion = version
+			options.AgentGuardianNativeMultiAgentReview = cfg != nil && features.Enabled(cfg.FeatureSettings(), "guardian_native_multi_agent_history")
 			// Rust's spawn/send-input tools copy the initiating turn's
 			// cyber_access_program into the child's start options (#44893), so the
 			// delegated turn keeps the same model/program pair.

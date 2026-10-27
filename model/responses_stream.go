@@ -555,12 +555,12 @@ func isRetryableResponsesStreamError(err error) bool {
 		switch details.Kind {
 		case codexapi.ErrorRetryable:
 			return true
-		case codexapi.ErrorServerOverloaded:
-			// Rust #49441: `CodexErr::retry_delay` now answers
-			// `server_retry_delay()` for `ServerOverloaded`, so an overload
-			// retries only while the server supplied retry advice. A headerless
-			// overload is terminal at this layer; the request layer still spends
-			// its own budget on the 5xx.
+		case codexapi.ErrorServerOverloaded, codexapi.ErrorPolicyCapacityUnavailable:
+			// Rust #49441/#57452: `CodexErr::retry_delay` answers
+			// `server_retry_delay()` for both overload kinds, so they retry only
+			// while the server supplied retry advice. A headerless failure is
+			// terminal at this layer; the request layer still spends its own budget
+			// on the 5xx.
 			return retryAdvicePresent(err)
 		case codexapi.ErrorRateLimitExceeded:
 			// Rust #45602: `slow_down` (and `rate_limit_exceeded`) are retryable
@@ -2671,6 +2671,12 @@ func responseFailedError(data []byte) error {
 			message = "Invalid request."
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
+	case "policy_capacity_unavailable":
+		policyCapacity := &codexapi.APIError{Kind: codexapi.ErrorPolicyCapacityUnavailable, Message: message}
+		if hasRetryAfter {
+			return policyCapacity.WithRetryAfter(retryAfter)
+		}
+		return policyCapacity
 	case "server_is_overloaded":
 		overloaded := &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
 		if hasRetryAfter {

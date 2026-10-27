@@ -32,6 +32,14 @@ func TestAPIErrorDisplayMatchesRustLikeRust(t *testing.T) {
 			want: "Selected model is at capacity. Please try a different model.",
 		},
 		{
+			// Rust #57452 distinguishes a policy-restricted capacity failure
+			// from an ordinary overload even though both keep overload retry
+			// advice.
+			name: "policy capacity unavailable",
+			err:  &APIError{Kind: ErrorPolicyCapacityUnavailable},
+			want: "Policy-restricted capacity is unavailable. Please try again later.",
+		},
+		{
 			name: "flex unavailable",
 			err:  &APIError{Kind: ErrorFlexUnavailable},
 			want: "Flex capacity unavailable.",

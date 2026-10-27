@@ -329,6 +329,9 @@ type MultiAgentHandlerOptions struct {
 	// stable name (`spawn_agent`, `send_message`, `followup_task`, `wait_agent`,
 	// `interrupt_agent`, `list_agents`).
 	ToolOverrides map[string]MultiAgentToolOverride
+	// GuardianNativeMultiAgentReview opts state-changing MAv2 calls into
+	// synchronous Guardian review (Rust #57451).
+	GuardianNativeMultiAgentReview bool
 }
 
 // MultiAgentToolOverride carries one Multi-Agent V2 tool's catalog overrides:
