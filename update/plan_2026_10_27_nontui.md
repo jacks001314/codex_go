@@ -92,6 +92,7 @@ TUI lane and are not modified here.
 | `#56414` | External-agent memory imports populate the selected namespace and always v2, queueing consolidation per namespace | `config/external_memory_import.go`, `config/external_memory_import_test.go`, `config/api.go`, `appserver/external_memory_settings.go`, like-Rust tests |
 | `#56462` | Imports and consolidation share a cross-process workspace lock; a busy workspace rejects imports and skips consolidation | `memorylock/lock.go`, `memories/pipeline.go`, `config/external_memory_import.go`, app-server/busy-workspace tests |
 | `#55987` | Registry requests refresh rejected remote exec-server credentials and replay once; executor credentials retry only after the parent rotates them | `execserver/remote_auth.go`, `execserver/remote.go`, `execserver/remote_harness.go`, `execserver/remote_relay.go`, `execserver/executor_credential.go`, `app/exec_server_auth.go`, `app/app.go`, like-Rust tests |
+| `#57420` | Thread item `started_at_ms`/`completed_at_ms` are optional nullable in the TypeScript exports so older servers can omit them | `appserver/schema/precomputed/app-server-exports-stable.json.zst`, `appserver/schema/precomputed/app-server-exports-experimental.json.zst` |
 
 Grounding notes:
 
@@ -1028,3 +1029,4 @@ deduplication for tool outputs.
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full
   `go test ./appserver -count=1` (223.5s), and `go build ./...` pass.
+- For `#57420`: `go test ./parity -run TestPrecomputedAppServerExportsMatchRustTarget -count=1` passes.
