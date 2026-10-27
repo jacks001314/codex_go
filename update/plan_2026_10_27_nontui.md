@@ -22,6 +22,7 @@ TUI lane and are not modified here.
 | `#56133` | Defer agent mail after empty explicit final answers | `eventmap/stream.go`, stream tests, `turn/mailbox_preemption_test.go` |
 | `#56024` | Bound decoded HTTP/3 response headers (64 KiB) | `tcptunnel/tunnel.go`, tunnel test |
 | `#57227` | Restore acknowledged permissions on resume/fork | `rollout/rollout.go`, `rollout/session_items.go`, `appserver/persisted_resume_settings.go`, `appserver/router.go`, `appserver/runtime_router.go`, like-Rust tests |
+| `#57317` | Feature `simplified_selection_hints` (off): concise plugin hints, 4 KiB bound | `features/features.go`, `plugin/plugin.go`, `appserver/turn_runtime.go`, plugin/RuntimeRouter like-Rust tests |
 
 Grounding notes:
 
@@ -49,7 +50,7 @@ from an owned snapshot.
   triaged: high-value candidates include `#57311` rollouts trace versions,
   `#57279` untrusted context as tool outputs, `#57280` full MCP results,
   `#57287` prediction-fork tool declarations, `#57286` managed
-  `network_proxy`, `#57317` concise plugin hints, `#57263`/`#57276`
+  `network_proxy`, `#57263`/`#57276`
   permission wording/world-state, `#57171`/`#57172` runtime auth and
   lifecycle timestamps, `#57270` cloud config for sandbox/exec-server, and
   `#56036`/`#56049` remote credentials.

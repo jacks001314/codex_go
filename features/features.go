@@ -182,6 +182,7 @@ var Registry = []Spec{
 	{Key: "tool_suggest", Stage: StageStable, DefaultEnabled: true},
 	{Key: "recommended_plugins", Stage: StageStable, DefaultEnabled: false},
 	{Key: "plugins", Stage: StageStable, DefaultEnabled: true},
+	{Key: "simplified_selection_hints", Stage: StageUnderDevelopment},
 	{Key: "powershell_shell_version", Stage: StageUnderDevelopment},
 	{Key: "executor_capability_discovery", Stage: StageUnderDevelopment},
 	{Key: "plugin_hooks", Stage: StageRemoved},

@@ -10038,6 +10038,7 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 			mentioned,
 			pluginToolInfosForRuntime(mcpTools, capabilities),
 			pluginAppInfosForRuntime(appsByID),
+			features.Enabled(cfg.FeatureSettings(), "simplified_selection_hints"),
 		) {
 			rendered := contextfrag.Render(contextfrag.NewPluginInstructions(text))
 			if rendered != nil && strings.TrimSpace(rendered.Content) != "" {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -159,9 +160,26 @@ func CollectExplicitPluginIDs(input []UserInput) map[string]bool {
 	return mentioned
 }
 
-func RenderExplicitPluginInstructions(plugin *CapabilitySummary, availableMCPServers []string, availableApps []string) (string, bool) {
+const (
+	maxExplicitPluginInstructionsBytes = 4 * 1024
+	truncatedPluginInstructionsSuffix  = "\n- Additional plugin capabilities omitted to fit the context limit."
+	truncatedSelectionHintSuffix       = "\n[Plugin selection truncated to fit the context limit.]"
+)
+
+// RenderExplicitPluginInstructions renders the developer hint for an explicitly
+// selected plugin. When simplified is true (feature
+// `simplified_selection_hints`) the detailed capability list is replaced by a
+// concise pointer to the plugin's skills and tools (Rust #57317).
+func RenderExplicitPluginInstructions(plugin *CapabilitySummary, availableMCPServers []string, availableApps []string, simplified bool) (string, bool) {
 	if plugin == nil {
 		return "", false
+	}
+	if simplified {
+		if !plugin.HasSkills && len(availableApps) == 0 && len(availableMCPServers) == 0 {
+			return "", false
+		}
+		hint := fmt.Sprintf("The user selected the `%s` plugin. Use its available skills and tools to complete this request.", plugin.DisplayName)
+		return boundExplicitPluginInstructions(hint, truncatedSelectionHintSuffix), true
 	}
 	lines := []string{fmt.Sprintf("Capabilities from the `%s` plugin:", plugin.DisplayName)}
 	if plugin.HasSkills {
@@ -187,10 +205,27 @@ func RenderExplicitPluginInstructions(plugin *CapabilitySummary, availableMCPSer
 		return "", false
 	}
 	lines = append(lines, "Use these plugin-associated capabilities to help solve the task.")
-	return strings.Join(lines, "\n"), true
+	return boundExplicitPluginInstructions(strings.Join(lines, "\n"), truncatedPluginInstructionsSuffix), true
 }
 
-func BuildPluginInjections(mentioned []CapabilitySummary, mcpTools []ToolInfo, apps []AppInfo) []string {
+// boundExplicitPluginInstructions bounds a rendered hint to four KiB and keeps
+// the final marker inside the bound, trimming on a rune boundary.
+func boundExplicitPluginInstructions(rendered string, truncationSuffix string) string {
+	if len(rendered) <= maxExplicitPluginInstructionsBytes {
+		return rendered
+	}
+	maxPrefix := maxExplicitPluginInstructionsBytes - len(truncationSuffix)
+	if maxPrefix < 0 {
+		maxPrefix = 0
+	}
+	prefix := rendered[:maxPrefix]
+	for len(prefix) > 0 && !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return prefix + truncationSuffix
+}
+
+func BuildPluginInjections(mentioned []CapabilitySummary, mcpTools []ToolInfo, apps []AppInfo, simplified bool) []string {
 	if len(mentioned) == 0 {
 		return nil
 	}
@@ -211,7 +246,7 @@ func BuildPluginInjections(mentioned []CapabilitySummary, mcpTools []ToolInfo, a
 				appNames[connectorDisplayLabel(&app)] = true
 			}
 		}
-		rendered, ok := RenderExplicitPluginInstructions(&plugin, sortedKeys(servers), sortedKeys(appNames))
+		rendered, ok := RenderExplicitPluginInstructions(&plugin, sortedKeys(servers), sortedKeys(appNames), simplified)
 		if ok {
 			out = append(out, rendered)
 		}

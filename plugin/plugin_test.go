@@ -121,7 +121,7 @@ func TestRenderExplicitPluginInstructions(t *testing.T) {
 	text, ok := RenderExplicitPluginInstructions(&CapabilitySummary{
 		DisplayName: "Docs",
 		HasSkills:   true,
-	}, []string{"docs-mcp"}, []string{"Docs App"})
+	}, []string{"docs-mcp"}, []string{"Docs App"}, false)
 	if !ok {
 		t.Fatalf("RenderExplicitPluginInstructions() ok = false, want true")
 	}
@@ -140,8 +140,43 @@ func TestRenderExplicitPluginInstructions(t *testing.T) {
 }
 
 func TestRenderExplicitPluginInstructionsReturnsFalseForNoCapabilities(t *testing.T) {
-	if text, ok := RenderExplicitPluginInstructions(&CapabilitySummary{DisplayName: "Docs"}, nil, nil); ok || text != "" {
+	if text, ok := RenderExplicitPluginInstructions(&CapabilitySummary{DisplayName: "Docs"}, nil, nil, false); ok || text != "" {
 		t.Fatalf("RenderExplicitPluginInstructions(no capabilities) = %q/%v, want empty/false", text, ok)
+	}
+}
+
+func TestRenderExplicitPluginInstructionsSimplifiedLikeRust(t *testing.T) {
+	text, ok := RenderExplicitPluginInstructions(&CapabilitySummary{DisplayName: "Docs", HasSkills: true}, nil, nil, true)
+	if !ok {
+		t.Fatal("simplified instructions for a plugin with skills = false, want true")
+	}
+	const want = "The user selected the `Docs` plugin. Use its available skills and tools to complete this request."
+	if text != want {
+		t.Fatalf("simplified instructions = %q, want %q", text, want)
+	}
+	if text, ok := RenderExplicitPluginInstructions(&CapabilitySummary{DisplayName: "Docs"}, nil, nil, true); ok || text != "" {
+		t.Fatalf("simplified instructions without capabilities = %q/%v, want empty/false", text, ok)
+	}
+	appText, ok := RenderExplicitPluginInstructions(&CapabilitySummary{DisplayName: "Docs"}, nil, []string{"Docs App"}, true)
+	if !ok || appText != want {
+		t.Fatalf("simplified instructions with an app = %q/%v", appText, ok)
+	}
+}
+
+func TestRenderExplicitPluginInstructionsBoundsLengthLikeRust(t *testing.T) {
+	apps := make([]string, 0, 200)
+	for i := 0; i < 200; i++ {
+		apps = append(apps, strings.Repeat("A", 64))
+	}
+	text, ok := RenderExplicitPluginInstructions(&CapabilitySummary{DisplayName: "Docs"}, nil, apps, false)
+	if !ok {
+		t.Fatal("RenderExplicitPluginInstructions() ok = false")
+	}
+	if len(text) > maxExplicitPluginInstructionsBytes {
+		t.Fatalf("detailed instructions length = %d, want <= %d", len(text), maxExplicitPluginInstructionsBytes)
+	}
+	if !strings.HasSuffix(text, truncatedPluginInstructionsSuffix) {
+		t.Fatalf("detailed instructions = %q, want truncation marker", text)
 	}
 }
 
@@ -157,6 +192,7 @@ func TestBuildPluginInjections(t *testing.T) {
 			{ID: "docs", DisplayName: "Docs App", Enabled: true, PluginDisplayNames: []string{"Docs"}},
 			{ID: "disabled", DisplayName: "Disabled", Enabled: false, PluginDisplayNames: []string{"Docs"}},
 		},
+		false,
 	)
 	if len(got) != 1 {
 		t.Fatalf("BuildPluginInjections() len = %d, want 1", len(got))
