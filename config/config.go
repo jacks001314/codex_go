@@ -149,6 +149,20 @@ func (c *Config) SQLiteHome() string {
 	return strings.TrimSpace(stringFromConfigValue(c.Values["sqlite_home"]))
 }
 
+// UnsafeEnforceSQLiteJournalMode reports whether managed policy requires
+// existing NFS databases to be migrated to DELETE journaling (Rust #57225
+// `unsafe_enforce_sqlite_journal_mode`).
+//
+// Like Rust, this is a managed requirement only: ConfigToml has no such field,
+// so the value comes from the merged requirement layers (local management and
+// cloud policy) rather than user configuration.
+func (c *Config) UnsafeEnforceSQLiteJournalMode() bool {
+	if c == nil || c.Requirements == nil || c.Requirements.UnsafeEnforceSQLiteJournalMode == nil {
+		return false
+	}
+	return *c.Requirements.UnsafeEnforceSQLiteJournalMode
+}
+
 // SuppressUnstableFeaturesWarning reports whether the under-development
 // feature warning should be suppressed, mirroring Rust
 // suppress_unstable_features_warning (default false).

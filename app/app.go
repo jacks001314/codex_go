@@ -141,6 +141,8 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return runApply(parsed.Apply, parsed.Root, stdin, stdout)
 	case cli.CommandMigrateRollouts:
 		return runMigrateRollouts(parsed.MigrateRollouts, parsed.Root, stdout, stderr)
+	case cli.CommandMigrateNFSDB:
+		return runMigrateNFSDB(ctx, parsed.MigrateNFSDB, parsed.Root, stdin, stdout, stderr)
 	case cli.CommandRemoteControl:
 		// Rust cli_main merges the interactive CLI into the subcommand:
 		// `remote_control_cli.no_daemon |= interactive.no_daemon` (#50803).

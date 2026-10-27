@@ -39,6 +39,7 @@ TUI lane and are not modified here.
 | `#56445` | Treat `model_not_found` provider errors as terminal failures | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_stream.go`, `model/responses_agent.go`, `rollout/codex_error_info.go`, `appserver/turn_runtime.go`, like-Rust tests |
 | `#56468` | Preserve `SystemRoot` for Windows filesystem sandbox helpers | `execserver/fs_helper.go`, helper environment test |
 | `#56022` | Preserve config overrides across CLI subcommand boundaries | `cli/cli.go`, `cli/cli_test.go` |
+| `#56552` `#57225` `#57226` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`, `cli/cli.go`, `app/migrate_nfs_db.go`, `app/app.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -234,6 +235,39 @@ were dropped. `cli.Parse` now prepends the root overrides for those commands
 (the ones whose runners already merge `RootOptions` are untouched, avoiding
 duplicates), while forwarded `--` arguments keep their existing treatment.
 
+`#56552` `#57225` `#57226` details: a writable SQLite pool now probes the
+directory that holds its own database, so a separately configured logs home is
+evaluated independently. New databases initialize with DELETE journaling on NFS
+and WAL elsewhere; connections that end up in DELETE raise `synchronous` to
+EXTRA, and existing schemas keep their journal and vacuum modes. The managed
+`unsafe_enforce_sqlite_journal_mode` requirement (`requirements.toml` and cloud
+layers, snake_case or camelCase; managed-only, as in Rust, since ConfigToml has
+no such field) is read from `Config.Requirements` and reaches `SqliteConfig`
+through `appserver.resolveDefaultStateRuntime`,
+`prepareSharedStateRuntime` (effective config with managed layers) and the
+message-board database. On NFS it migrates every runtime database in the home
+under the directory lock before the writable pool opens, then each connection
+must report DELETE (`NFS database requires DELETE journaling, found <mode>`).
+Migration stages a local copy, requires DELETE plus `integrity_check(1)`,
+preserves the source mode bits, writes a private `<name>_wal_migration_backup`
+directory with a `codex-nfs-migration-v1` marker, renames the original and any
+remaining sidecars aside, and hard-links the replacement into place; an
+interrupted cutover is resumed from the marker by the migration itself, and a
+resumed install hard-links rather than truncating an in-use inode. Deliberate
+Go difference: modernc exposes no `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`, so the
+source connection is closed (checkpointing the WAL into the still-installed
+source) before the original is moved, keeping the backup a complete database;
+the staged copy is validated first and the descriptors close after the
+connection, so the exclusive lock is held through the copy. Migration failures
+are re-created without the SQLite error chain so automatic backup-and-rebuild
+corruption recovery never discards the preserved WAL backup, and the 0644
+consent disclosure is printed with a `[y/N]` gate. CLI: `codex migrate-nfs-db
+--staging-dir <dir>` (defaults to the system temporary directory, Unix only)
+skips the logs database when `log_dir` is configured, as Rust does. Go has no
+`legacy_logs_db_path` (it never relocates the logs database), so Rust's
+enforcement-time skip of legacy NFS log cleanup has no counterpart here; that
+`log_dir` relocation remains a separate pending upstream item.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -272,6 +306,12 @@ duplicates), while forwarded `--` arguments keep their existing treatment.
 - For `#56468`: `go test ./execserver -count=1` passes.
 - For `#56022`: `go test ./cli -run 'PreservesConfigOverrides' -count=1` and
   `go test ./app -run 'MCP|Plugin|Cloud|CLI|Parse' -count=1` pass.
+- For `#56552`/`#57225`/`#57226`: `go build ./...`,
+  `go test ./config ./state ./cli -count=1` and
+  `go test ./appserver -run 'NFSDeleteEnforcement|StateRuntime|MessageBoard|Sqlite|Corruption' -count=1`
+  pass. `NFSSQLiteMigrationSupported`/`NFSDatabaseNeedsPermissionConfirmation`
+  gate the conversion, resume and mode-bit tests to Unix, so they skip on this
+  Windows host and still need a Linux/macOS run before relying on the cutover.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

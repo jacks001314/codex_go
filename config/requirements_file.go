@@ -384,6 +384,9 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if value, ok := stringAnyKey(values, "sqlite_home", "sqliteHome"); ok {
 		out.SQLiteHome = &value
 	}
+	if value, ok := boolAnyKey(values, "unsafe_enforce_sqlite_journal_mode", "unsafeEnforceSqliteJournalMode"); ok {
+		out.UnsafeEnforceSQLiteJournalMode = &value
+	}
 	if value, ok := stringAnyKey(values, "log_dir", "logDir"); ok {
 		out.LogDir = &value
 	}
@@ -1185,6 +1188,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.ModelProvider == nil &&
 			value.ModelProviders == nil &&
 			value.SQLiteHome == nil &&
+			value.UnsafeEnforceSQLiteJournalMode == nil &&
 			value.LogDir == nil &&
 			value.ModelCatalogJSON == nil &&
 			value.CheckForUpdateOnStartup == nil &&

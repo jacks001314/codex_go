@@ -221,10 +221,16 @@ func (r *RuntimeRouter) messageBoardSqliteConfig(cfg *config.Config) (state.Sqli
 		codexHome = r.services.Config.CodexHome()
 	}
 	override := ""
+	enforceNFSDelete := false
 	if cfg != nil {
 		override = cfg.SQLiteHome()
+		enforceNFSDelete = cfg.UnsafeEnforceSQLiteJournalMode()
 	}
-	return state.SqliteConfigForCodexHomeWithOverride(codexHome, override)
+	sqlite, err := state.SqliteConfigForCodexHomeWithOverride(codexHome, override)
+	if err != nil {
+		return state.SqliteConfig{}, err
+	}
+	return sqlite.WithNFSDeleteEnforcement(enforceNFSDelete), nil
 }
 
 // messageBoardToolOverridesFromCatalog reads the active model's per-tool

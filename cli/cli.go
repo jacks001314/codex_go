@@ -45,6 +45,7 @@ const (
 	CommandExecServer        Command = "exec-server"
 	CommandFeatures          Command = "features"
 	CommandMigrateRollouts   Command = "migrate-rollouts"
+	CommandMigrateNFSDB      Command = "migrate-nfs-db"
 	CommandAgents            Command = "agents"
 	CommandQueue             Command = "queue"
 	CommandTcpTunnel         Command = "tcp-tunnel"
@@ -82,6 +83,8 @@ var knownCommands = map[string]Command{
 	"features":            CommandFeatures,
 	"migrate-rollouts":    CommandMigrateRollouts,
 	"migrateRollouts":     CommandMigrateRollouts,
+	"migrate-nfs-db":      CommandMigrateNFSDB,
+	"migrateNfsDb":        CommandMigrateNFSDB,
 	"agents":              CommandAgents,
 	"queue":               CommandQueue,
 	"tcp-tunnel":          CommandTcpTunnel,
@@ -498,6 +501,13 @@ type DoctorOptions struct {
 	ProbeFilesystemPath string
 }
 
+// MigrateNFSDBOptions mirrors Rust cli/src/migrate_nfs_db.rs
+// MigrateNfsDbCommand (#57225): `--staging-dir` defaults to the system
+// temporary directory.
+type MigrateNFSDBOptions struct {
+	StagingDir string
+}
+
 type MigrateRolloutsOptions struct {
 	Apply           bool
 	Threads         []string
@@ -607,6 +617,7 @@ type Parsed struct {
 	Completion        CompletionOptions
 	Doctor            DoctorOptions
 	MigrateRollouts   MigrateRolloutsOptions
+	MigrateNFSDB      MigrateNFSDBOptions
 	Apply             ApplyOptions
 	RemoteControl     RemoteControlOptions
 	Session           SessionOptions
@@ -693,7 +704,7 @@ func strictConfigUnsupportedBeforeSubcommandParse(command Command) bool {
 	switch command {
 	case CommandInteractive, CommandExec, CommandReview, CommandExecServer,
 		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor,
-		CommandAppServer:
+		CommandAppServer, CommandMigrateNFSDB:
 		return false
 	default:
 		return command != ""
@@ -742,6 +753,8 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 		return p, parseDoctor(args, &p.Doctor)
 	case CommandMigrateRollouts:
 		return p, parseMigrateRollouts(args, &p.MigrateRollouts)
+	case CommandMigrateNFSDB:
+		return p, parseMigrateNFSDB(args, &p.MigrateNFSDB)
 	case CommandApply:
 		return p, parseApply(args, &p.Apply)
 	case CommandRemoteControl:
@@ -3330,6 +3343,29 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 			return fmt.Errorf("unknown doctor option %s", arg)
 		default:
 			return fmt.Errorf("doctor does not accept argument %s", arg)
+		}
+	}
+	return nil
+}
+
+func parseMigrateNFSDB(args []string, options *MigrateNFSDBOptions) error {
+	if options.StagingDir == "" {
+		options.StagingDir = os.TempDir()
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--staging-dir" || strings.HasPrefix(arg, "--staging-dir="):
+			value, next, err := optionalFlagValue(args, i, arg, "--staging-dir")
+			if err != nil {
+				return err
+			}
+			options.StagingDir = value
+			i = next
+		case strings.HasPrefix(arg, "-"):
+			return fmt.Errorf("unknown migrate-nfs-db option %s", arg)
+		default:
+			return fmt.Errorf("migrate-nfs-db does not accept argument %s", arg)
 		}
 	}
 	return nil

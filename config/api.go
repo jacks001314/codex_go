@@ -609,11 +609,15 @@ type ConfigRequirements struct {
 	// SQLiteHome, LogDir, and ModelCatalogJSON are exact managed path
 	// requirements (Rust ConfigRequirementsToml sqlite_home/log_dir/
 	// model_catalog_json). They override the configured values.
-	SQLiteHome              *string `json:"sqliteHome,omitempty"`
-	LogDir                  *string `json:"logDir,omitempty"`
-	ModelCatalogJSON        *string `json:"modelCatalogJson,omitempty"`
-	CheckForUpdateOnStartup *bool   `json:"checkForUpdateOnStartup,omitempty"`
-	AllowLoginShell         *bool   `json:"allowLoginShell,omitempty"`
+	SQLiteHome *string `json:"sqliteHome,omitempty"`
+	// UnsafeEnforceSQLiteJournalMode is the managed
+	// `unsafe_enforce_sqlite_journal_mode` requirement (Rust #57225): existing
+	// WAL databases on NFS are migrated to DELETE before writable pools open.
+	UnsafeEnforceSQLiteJournalMode *bool   `json:"unsafeEnforceSqliteJournalMode,omitempty"`
+	LogDir                         *string `json:"logDir,omitempty"`
+	ModelCatalogJSON               *string `json:"modelCatalogJson,omitempty"`
+	CheckForUpdateOnStartup        *bool   `json:"checkForUpdateOnStartup,omitempty"`
+	AllowLoginShell                *bool   `json:"allowLoginShell,omitempty"`
 	// Feedback is the managed feedback-collection requirement (Rust
 	// ConfigRequirementsToml.feedback).
 	Feedback   *FeedbackRequirements           `json:"feedback,omitempty"`
@@ -656,6 +660,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		ModelProvider                        *string                        `json:"modelProvider"`
 		ModelProviders                       map[string]any                 `json:"modelProviders"`
 		SQLiteHome                           *string                        `json:"sqliteHome"`
+		UnsafeEnforceSQLiteJournalMode       *bool                          `json:"unsafeEnforceSqliteJournalMode"`
 		LogDir                               *string                        `json:"logDir"`
 		ModelCatalogJSON                     *string                        `json:"modelCatalogJson"`
 		CheckForUpdateOnStartup              *bool                          `json:"checkForUpdateOnStartup"`
@@ -691,6 +696,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		ModelProvider:                        cloneStringPtr(r.ModelProvider),
 		ModelProviders:                       cloneAnyMapOrNil(r.ModelProviders),
 		SQLiteHome:                           cloneStringPtr(r.SQLiteHome),
+		UnsafeEnforceSQLiteJournalMode:       cloneBoolPtr(r.UnsafeEnforceSQLiteJournalMode),
 		LogDir:                               cloneStringPtr(r.LogDir),
 		ModelCatalogJSON:                     cloneStringPtr(r.ModelCatalogJSON),
 		CheckForUpdateOnStartup:              cloneBoolPtr(r.CheckForUpdateOnStartup),
@@ -3806,6 +3812,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.ModelProvider = cloneStringPtr(requirements.ModelProvider)
 	clone.ModelProviders = cloneAnyMapOrNil(requirements.ModelProviders)
 	clone.SQLiteHome = cloneStringPtr(requirements.SQLiteHome)
+	clone.UnsafeEnforceSQLiteJournalMode = cloneBoolPtr(requirements.UnsafeEnforceSQLiteJournalMode)
 	clone.LogDir = cloneStringPtr(requirements.LogDir)
 	clone.ModelCatalogJSON = cloneStringPtr(requirements.ModelCatalogJSON)
 	clone.CheckForUpdateOnStartup = cloneBoolPtr(requirements.CheckForUpdateOnStartup)

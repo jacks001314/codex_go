@@ -1973,3 +1973,32 @@ func TestParsePreservesConfigOverridesAcrossCommandScopesLikeRust(t *testing.T) 
 		t.Fatalf("marketplace config overrides = %#v, want [root=1 leaf=2]", got)
 	}
 }
+
+// TestParseMigrateNFSDBLikeRust mirrors Rust #57225's MigrateNfsDbCommand:
+// `--staging-dir` defaults to the system temporary directory.
+func TestParseMigrateNFSDBLikeRust(t *testing.T) {
+	parsed, err := Parse([]string{"migrate-nfs-db", "--staging-dir", "/tmp/stage"})
+	if err != nil {
+		t.Fatalf("parse --staging-dir: %v", err)
+	}
+	if parsed.Command != CommandMigrateNFSDB || parsed.MigrateNFSDB.StagingDir != "/tmp/stage" {
+		t.Fatalf("parsed migrate-nfs-db = %#v", parsed.MigrateNFSDB)
+	}
+	parsed, err = Parse([]string{"migrate-nfs-db", "--staging-dir=/tmp/other"})
+	if err != nil {
+		t.Fatalf("parse --staging-dir=: %v", err)
+	}
+	if parsed.MigrateNFSDB.StagingDir != "/tmp/other" {
+		t.Fatalf("staging dir = %q", parsed.MigrateNFSDB.StagingDir)
+	}
+	parsed, err = Parse([]string{"migrate-nfs-db"})
+	if err != nil {
+		t.Fatalf("parse default: %v", err)
+	}
+	if parsed.MigrateNFSDB.StagingDir != os.TempDir() {
+		t.Fatalf("default staging dir = %q, want %q", parsed.MigrateNFSDB.StagingDir, os.TempDir())
+	}
+	if _, err := Parse([]string{"migrate-nfs-db", "--unknown"}); err == nil {
+		t.Fatal("unknown option must be rejected")
+	}
+}

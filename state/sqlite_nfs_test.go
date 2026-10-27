@@ -168,3 +168,26 @@ func TestReclaimRuntimeDBSkipsNFSHomeLikeRust(t *testing.T) {
 		t.Fatal("the control pass on a local home must reclaim pages")
 	}
 }
+
+// TestOpenReadWriteInitializesDeleteOnNFSLikeRust mirrors Rust #56552: a new
+// database on an NFS filesystem is initialized with DELETE journaling and the
+// EXTRA durability setting, while an existing schema keeps its journal mode.
+func TestOpenReadWriteInitializesDeleteOnNFSLikeRust(t *testing.T) {
+	ctx := context.Background()
+	probe := &nfsProbeStub{value: true}
+	config, err := sqliteConfigWithFilesystemProbe(t.TempDir(), probe.probe)
+	if err != nil {
+		t.Fatalf("sqliteConfigWithFilesystemProbe: %v", err)
+	}
+	db, err := config.OpenReadWrite(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	journal, vacuum, synchronous := readConnectionSettings(t, db)
+	if journal != "delete" || vacuum != 2 || synchronous != 3 {
+		t.Fatalf("NFS database settings = (%q, %d, %d), want (\"delete\", 2, 3)", journal, vacuum, synchronous)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pool: %v", err)
+	}
+}

@@ -1637,7 +1637,7 @@ func (r *RuntimeRouter) StartupError() error {
 	return r.startupErr
 }
 
-func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *RuntimeRouterOptions, sqliteHomeOverride string) (*state.StateRuntime, bool, error) {
+func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *RuntimeRouterOptions, sqliteHomeOverride string, enforceNFSDelete bool) (*state.StateRuntime, bool, error) {
 	if options != nil && options.StateRuntime != nil {
 		return options.StateRuntime, false, nil
 	}
@@ -1645,6 +1645,7 @@ func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *
 	if err != nil {
 		return nil, false, err
 	}
+	sqliteConfig = sqliteConfig.WithNFSDeleteEnforcement(enforceNFSDelete)
 	if options != nil && options.DBCorruptionMetrics != nil {
 		sqliteConfig = sqliteConfig.WithCorruptionMetrics(options.DBCorruptionMetrics)
 		// Rust #49069 records reclamation through the same SQLite telemetry sink.

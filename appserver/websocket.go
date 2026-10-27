@@ -197,11 +197,15 @@ func prepareSharedStateRuntime(ctx context.Context, codexHome string, options *R
 		}
 		return prepared, nil, nil
 	}
+	// Managed policy applies to the database home and journal mode here, exactly
+	// like Rust's `config.sqlite_config()` (Rust #57225).
 	sqliteHomeOverride := ""
-	if cfg, err := config.LoadWithOptions(codexHome, nil); err == nil {
+	enforceNFSDelete := false
+	if cfg, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{IncludeManagedConfig: true}); err == nil {
 		sqliteHomeOverride = cfg.SQLiteHome()
+		enforceNFSDelete = cfg.UnsafeEnforceSQLiteJournalMode()
 	}
-	runtime, _, err := resolveDefaultStateRuntime(ctx, codexHome, prepared, sqliteHomeOverride)
+	runtime, _, err := resolveDefaultStateRuntime(ctx, codexHome, prepared, sqliteHomeOverride, enforceNFSDelete)
 	if err != nil {
 		return nil, nil, err
 	}
