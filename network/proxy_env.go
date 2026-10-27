@@ -209,7 +209,7 @@ func (p *PreparedProxyManagedNetwork) PrepareForEnvironment(environmentID string
 	baseEnv := cloneProxyEnv(p.baseEnv)
 	p.mu.RUnlock()
 	config.EnvironmentID = environmentID
-	prepared, err := StartProxyManagedNetwork(context.Background(), config, baseEnv)
+	prepared, err := startProxyManagedNetworkWithClient(context.Background(), config, baseEnv, false)
 	if err != nil {
 		return nil, ProxyManagedNetworkSandboxContext{}, err
 	}

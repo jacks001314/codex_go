@@ -353,6 +353,7 @@ func buildProxyEnvExports(env map[string]string) (string, string) {
 	keys := append([]string(nil), network.ProxyEnvKeys...)
 	keys = append(keys, network.ProxyBrokeredCredentialEnvKeys(env)...)
 	keys = append(keys, network.ProxyCustomCAEnvKeys...)
+	keys = append(keys, network.AWSProxyCABundleEnvVar)
 	if env[network.CredentialBrokerActiveEnvKey] == "1" {
 		keys = append(keys, "BASH_ENV")
 	}

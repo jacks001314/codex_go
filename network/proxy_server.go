@@ -66,6 +66,35 @@ type ProxyServer struct {
 	serveErr   error
 }
 
+// localAWSSigners lists the signing pairs whose placeholders a local process may
+// use. Credential masking is only meaningful when brokerage and MITM are on.
+func (p *proxyRuntimePolicy) localAWSSigners() []*AWSSigV4Signer {
+	if p == nil || !p.settings.Enabled || !p.settings.CredentialBroker || !p.settings.MITM {
+		return nil
+	}
+	var signers []*AWSSigV4Signer
+	for _, hooks := range p.mitmHooks {
+		for _, hook := range hooks {
+			if hook.Actions.AWSSigV4 != nil {
+				signers = append(signers, hook.Actions.AWSSigV4)
+			}
+		}
+	}
+	return signers
+}
+
+func maskLocalAWSCredentials(policy *proxyRuntimePolicy, env map[string]string, mitm *proxyMITMRuntime) {
+	signers := policy.localAWSSigners()
+	if len(signers) == 0 {
+		return
+	}
+	caPath := ""
+	if mitm != nil {
+		caPath = mitm.trustBundlePath
+	}
+	MaskLocalAWSEnv(signers, env, caPath)
+}
+
 type proxyRuntimePolicy struct {
 	settings         ProxySettings
 	allowMatcher     *ProxyDomainMatcher
@@ -76,6 +105,13 @@ type proxyRuntimePolicy struct {
 }
 
 func StartProxyManagedNetwork(ctx context.Context, config ProxyConfig, baseEnv map[string]string) (*PreparedProxyManagedNetwork, error) {
+	return startProxyManagedNetworkWithClient(ctx, config, baseEnv, true)
+}
+
+// startProxyManagedNetworkWithClient builds the managed network environment for
+// a local sandboxed process. Remote environments keep the caller's AWS
+// credentials: only a local process receives the placeholder pair (#56554).
+func startProxyManagedNetworkWithClient(ctx context.Context, config ProxyConfig, baseEnv map[string]string, maskLocalAWS bool) (*PreparedProxyManagedNetwork, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -96,6 +132,9 @@ func StartProxyManagedNetwork(ctx context.Context, config ProxyConfig, baseEnv m
 	server.mitm.ApplyChildEnv(prepared.Env)
 	server.runtimePolicy().broker.SetDestinationHints(baseEnv)
 	server.runtimePolicy().broker.VirtualizeChildEnv(prepared.Env)
+	if maskLocalAWS {
+		maskLocalAWSCredentials(server.runtimePolicy(), prepared.Env, server.mitm)
+	}
 	prepared.server = server
 	prepared.baseEnv = cloneProxyEnv(baseEnv)
 	prepared.config = config
