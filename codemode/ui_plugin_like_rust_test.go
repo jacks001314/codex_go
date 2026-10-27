@@ -420,3 +420,27 @@ func TestUIPluginRejectsOversizedFramesLikeRust(t *testing.T) {
 	_ = testInput.Close()
 	_ = testOutput.Close()
 }
+
+func TestUIPluginHostMessagesRejectUnknownOrNullFields(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"close","id":1}`,
+		`{"type":"initialize"}`,
+		`{"type":"initialize","source":null}`,
+		`{"type":"dispatch","id":null,"export":"default","returnMode":"sync"}`,
+		`{"type":"dispatch","id":0,"export":"default","returnMode":"other"}`,
+		`{"type":"unknown"}`,
+	} {
+		if _, err := decodeUIPluginHostMessage([]byte(payload)); err == nil {
+			t.Fatalf("decodeUIPluginHostMessage(%s) unexpectedly succeeded", payload)
+		}
+	}
+	for _, payload := range []string{
+		`{"type":"initialize","source":"export default () => 1"}`,
+		`{"type":"dispatch","id":0,"export":"default","returnMode":"maybeAsync"}`,
+		`{"type":"close"}`,
+	} {
+		if _, err := decodeUIPluginHostMessage([]byte(payload)); err != nil {
+			t.Fatalf("decodeUIPluginHostMessage(%s) error = %v", payload, err)
+		}
+	}
+}
