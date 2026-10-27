@@ -92,6 +92,7 @@ TUI lane and are not modified here.
 | `#56414` | External-agent memory imports populate the selected namespace and always v2, queueing consolidation per namespace | `config/external_memory_import.go`, `config/external_memory_import_test.go`, `config/api.go`, `appserver/external_memory_settings.go`, like-Rust tests |
 | `#56462` | Imports and consolidation share a cross-process workspace lock; a busy workspace rejects imports and skips consolidation | `memorylock/lock.go`, `memories/pipeline.go`, `config/external_memory_import.go`, app-server/busy-workspace tests |
 | `#55987` | Registry requests refresh rejected remote exec-server credentials and replay once; executor credentials retry only after the parent rotates them | `execserver/remote_auth.go`, `execserver/remote.go`, `execserver/remote_harness.go`, `execserver/remote_relay.go`, `execserver/executor_credential.go`, `app/exec_server_auth.go`, `app/app.go`, like-Rust tests |
+| `#57439` | Guardian reviewer marker, routing-hint suppression and ChatGPT parent credits follow the OpenAI provider and auth instead of the base URL; header-based auth counts as Codex-backend auth, while API-key and other providers stay excluded | `model/responses_agent.go`, like-Rust request/provider tests |
 | `#57448` | Native MAv2 calls (`spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`) in the configured namespace stay native in Guardian history, with a paired evidence-only output in delivery and budgeting and whole-item omission past the cap | `appserver/guardian_native_multi_agent_call.go`, `appserver/guardian_reviewer.go`, `state/guardian_profile.go`, `state/guardian_transcript.go`, `state/guardian.go`, like-Rust tests |
 | `#57441` | Feature `guardian_native_multi_agent_history` (under development, off) for native MAv2 calls in Guardian history | `features/features.go`, registration test |
 | `#57425` | Guardian root request preparation is centralized: a 16-message shared cap, legacy-checkpoint copies deduplicated after truncation, verified-answer and incomplete-context notices, and all user restrictions preserved during handoff filtering | `appserver/guardian_root_context.go`, `appserver/agent_runtime.go`, `appserver/guardian_root_handoff.go`, `appserver/retained_context.go`, `state/guardian_retained_context.go`, `context/user_goal.go`, like-Rust tests |
@@ -1054,6 +1055,10 @@ deduplication for tool outputs.
 - For `#57420`: `go test ./parity -run TestPrecomputedAppServerExportsMatchRustTarget -count=1` passes, and
   `go test ./appserver -run 'TestPrecomputedExportArtifactsMatchTargetRustCommit' -count=1` passes after
   re-anchoring the pinned hashes to the artifacts in the `eec8bde1e9` checkout.
+- For `#57439`: `go test ./model -count=1` (31.1s), `go test ./appserver -run 'Guardian' -count=1`,
+  and `go test ./codexapi -count=1` pass. Coverage mirrors Rust's new cases: custom `/v1`
+  and `/api/codex` URLs keep the reviewer marker, ChatGPT auth requests parent credits,
+  and API-key, header-based, and non-OpenAI providers stay excluded.
 - For `#57448`: `go test ./appserver -run 'NativeMultiAgent|GuardianNative|Guardian' -count=1`,
   `go test ./state -count=1` (65.1s), and the non-TUI build pass. Coverage mirrors Rust's
   native-history tests: ordering with ciphertext arguments, feature/namespace/MAv2-name

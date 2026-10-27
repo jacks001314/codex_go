@@ -6,6 +6,28 @@ import (
 	"time"
 )
 
+// Mirrors Rust #57439's provider test: only the Codex backend base URL (or the
+// provider default) supports the dedicated backend routes; a direct
+// `/api/codex` endpoint is a custom Responses URL, not a backend route.
+func TestSupportsCodexBackendRoutesLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		baseURL string
+		want    bool
+	}{
+		{baseURL: "", want: true},
+		{baseURL: "https://chatgpt.com/backend-api/codex", want: true},
+		{baseURL: "https://chatgpt-staging.com/backend-api/codex/", want: true},
+		{baseURL: "https://backend.example.com/api/codex", want: false},
+		{baseURL: "https://backend.example.com/api/codex/", want: false},
+		{baseURL: "https://proxy.example.com/v1", want: false},
+	} {
+		provider := CreateOpenAIProvider(test.baseURL)
+		if got := provider.SupportsCodexBackendRoutes(); got != test.want {
+			t.Fatalf("SupportsCodexBackendRoutes(%q) = %t, want %t", test.baseURL, got, test.want)
+		}
+	}
+}
+
 func TestParseWireAPIRejectsChat(t *testing.T) {
 	_, err := ParseWireAPI("chat")
 	if err == nil {

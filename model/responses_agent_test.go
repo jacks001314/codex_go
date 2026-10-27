@@ -2254,9 +2254,51 @@ func TestResponsesAgentRunnerGuardianRoutingLikeRust(t *testing.T) {
 		t.Fatalf("api-key guardian header = %q, want empty", got)
 	}
 
-	// A provider without the backend routes is unmarked as well.
-	plainRunner := makeRunner("chatgpt", "https://example.test/v1")
-	request, err = plainRunner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
+	// Rust #57439: a custom OpenAI base URL keeps the reviewer marker, the
+	// service-tier drop and the routing-hint suppression because they depend on
+	// the provider and auth rather than the URL.
+	for _, baseURL := range []string{"https://example.test/v1", "https://example.test/api/codex"} {
+		customRunner := makeRunner("chatgpt", baseURL)
+		request, err = customRunner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
+			TaskKind:   AgentTaskReview,
+			Originator: "guardian",
+			Model:      DefaultApprovalReviewPreferredModel,
+		}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel, ServiceTier: "priority"}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := request.Header.Get(GuardianHeaderName); got != GuardianHeaderReviewer {
+			t.Fatalf("%s guardian header = %q, want %q", baseURL, got, GuardianHeaderReviewer)
+		}
+		if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "" {
+			t.Fatalf("%s guardian routing hint = %q, want empty", baseURL, got)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "service_tier") {
+			t.Fatalf("%s guardian body kept a service tier: %s", baseURL, body)
+		}
+	}
+
+	// Header-based auth also marks the review on a direct backend endpoint.
+	headersRunner := makeRunner("headers", "https://example.test/api/codex")
+	request, err = headersRunner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
+		TaskKind:   AgentTaskReview,
+		Originator: "guardian",
+		Model:      DefaultApprovalReviewPreferredModel,
+	}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(GuardianHeaderName); got != GuardianHeaderReviewer {
+		t.Fatalf("header-auth guardian header = %q, want %q", got, GuardianHeaderReviewer)
+	}
+
+	// API-key auth on a custom OpenAI URL stays unmarked.
+	apiKeyCustomRunner := makeRunner("api-key", "https://example.test/v1")
+	request, err = apiKeyCustomRunner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
 		TaskKind: AgentTaskReview,
 		Model:    DefaultApprovalReviewPreferredModel,
 	}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
@@ -2264,7 +2306,46 @@ func TestResponsesAgentRunnerGuardianRoutingLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := request.Header.Get(GuardianHeaderName); got != "" {
-		t.Fatalf("plain-provider guardian header = %q, want empty", got)
+		t.Fatalf("api-key custom-url guardian header = %q, want empty", got)
+	}
+}
+
+// Mirrors Rust #57439: ordinary Codex-backend traffic requests parent Guardian
+// credits from the OpenAI provider plus ChatGPT auth regardless of the base URL,
+// while API-key, header-based and other providers stay excluded.
+func TestResponsesAgentRunnerGuardianCreditsFollowProviderAndAuthLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		authMode  string
+		provider  string
+		baseURL   string
+		wantCreds bool
+	}{
+		{name: "chatgpt custom v1", authMode: "chatgpt", provider: OpenAIProviderName, baseURL: "https://example.test/v1", wantCreds: true},
+		{name: "chatgpt direct backend", authMode: "chatgpt", provider: OpenAIProviderName, baseURL: "https://example.test/api/codex", wantCreds: true},
+		{name: "chatgpt backend codex", authMode: "chatgpt", provider: OpenAIProviderName, baseURL: "https://example.test/backend-api/codex", wantCreds: true},
+		{name: "api key", authMode: "api-key", provider: OpenAIProviderName, baseURL: "https://example.test/v1", wantCreds: false},
+		{name: "header auth", authMode: "headers", provider: OpenAIProviderName, baseURL: "https://example.test/api/codex", wantCreds: false},
+		{name: "custom provider", authMode: "chatgpt", provider: "Custom", baseURL: "https://example.test/v1", wantCreds: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+				Provider:     &APIProvider{Name: test.provider, BaseURL: test.baseURL},
+				AuthSnapshot: &auth.AuthDotJSON{AuthMode: test.authMode},
+			})
+			request, err := runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{Model: "gpt-test"}, "")
+			if err != nil {
+				t.Fatalf("newResponsesHTTPRequest: %v", err)
+			}
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			gotCreds := strings.Contains(string(body), `"`+codexapi.GuardianCreditsRequestedKey+`":"true"`)
+			if gotCreds != test.wantCreds {
+				t.Fatalf("guardian credits = %t, want %t (body %s)", gotCreds, test.wantCreds, body)
+			}
+		})
 	}
 }
 

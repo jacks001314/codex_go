@@ -2050,9 +2050,10 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	guardianReviewer := r.isGuardianReviewerInference(apiRequest.Model, request)
 	if guardianReviewer || dedicatedGuardianEndpoint {
 		apiRequest.ServiceTier = ""
-	} else if r.usesCodexBackend() && r.supportsCodexBackendRoutes() {
-		// Rust #45736: ordinary Codex-backend traffic asks the backend to bill
-		// Guardian credits; reviewer traffic identifies itself by header instead.
+	} else if r.guardianCreditsEligible() {
+		// Rust #45736/#57439: ordinary Codex-backend traffic asks the backend to
+		// bill Guardian credits based on the provider and auth, independent of
+		// the base URL; reviewer traffic identifies itself by header instead.
 		apiRequest.ClientMetadata = withGuardianCreditsRequested(apiRequest.ClientMetadata)
 	}
 	body, err := json.Marshal(apiRequest)
@@ -2139,23 +2140,6 @@ func (r *ResponsesAgentRunner) usesCodexBackend() bool {
 	return authSnapshotUsesCodexBackend(r.AuthSnapshot)
 }
 
-// supportsCodexBackendRoutes reports whether the provider base URL permits the
-// dedicated Codex backend routes (Rust
-// ModelProviderInfo::supports_codex_backend_routes, #40892).
-func (r *ResponsesAgentRunner) supportsCodexBackendRoutes() bool {
-	if r == nil || !strings.EqualFold(r.providerName(), OpenAIProviderName) {
-		return false
-	}
-	baseURL := ""
-	if r.Provider != nil {
-		baseURL = strings.TrimRight(strings.TrimSpace(r.Provider.BaseURL), "/")
-	}
-	if baseURL == "" {
-		return true
-	}
-	return strings.HasSuffix(baseURL, "/backend-api/codex")
-}
-
 // approvalReviewPreferredModel mirrors Rust
 // RuntimeProvider::approval_review_preferred_model (#37103 / #40892).
 func (r *ResponsesAgentRunner) approvalReviewPreferredModel() string {
@@ -2163,6 +2147,21 @@ func (r *ResponsesAgentRunner) approvalReviewPreferredModel() string {
 		return APIKeyApprovalReviewPreferredModel
 	}
 	return DefaultApprovalReviewPreferredModel
+}
+
+// guardianCreditsEligible mirrors Rust's `set_guardian_metadata` guard: only a
+// ChatGPT-account auth on the Codex backend requests parent Guardian credits.
+// API-key, header-based, agent-identity, and other providers stay excluded.
+func (r *ResponsesAgentRunner) guardianCreditsEligible() bool {
+	if r == nil || !r.usesCodexBackend() || r.AuthSnapshot == nil {
+		return false
+	}
+	switch r.AuthSnapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens", "personal-access-token":
+		return true
+	default:
+		return false
+	}
 }
 
 // withGuardianCreditsRequested mirrors Rust's set_guardian_metadata arm: the
@@ -2206,8 +2205,8 @@ func isGuardianReviewRequest(request *AgentRequest) bool {
 // `x-codex-guardian: reviewer` (Rust #45736).
 //
 // Rust seeds the header on the reviewer session for the provider's preferred
-// review model and applies it only while the request still targets that model,
-// uses Codex backend auth, and the provider supports the backend routes.
+// review model and applies it while the request still targets that model on the
+// OpenAI provider with Codex backend auth, regardless of the base URL (#57439).
 // `features.guardianv2.free_guardian` is retained for config compatibility but
 // no longer gates this decision - the backend controls Guardian billing.
 func (r *ResponsesAgentRunner) isGuardianReviewerInference(model string, request *AgentRequest) bool {
@@ -2217,8 +2216,7 @@ func (r *ResponsesAgentRunner) isGuardianReviewerInference(model string, request
 	model = strings.TrimSpace(model)
 	return model != "" &&
 		model == r.approvalReviewPreferredModel() &&
-		r.usesCodexBackend() &&
-		r.supportsCodexBackendRoutes()
+		r.usesCodexBackend()
 }
 
 func (r *ResponsesAgentRunner) addAttestationHeader(ctx context.Context, headers http.Header, request *AgentRequest) error {
@@ -2303,7 +2301,7 @@ func authSnapshotUsesCodexBackend(snapshot *auth.AuthDotJSON) bool {
 		return false
 	}
 	switch snapshot.Mode() {
-	case "chatgpt", "chatgptAuthTokens", "personal-access-token", "agent-identity":
+	case "chatgpt", "chatgptAuthTokens", "personal-access-token", "agent-identity", "headers":
 		return true
 	default:
 		return false
