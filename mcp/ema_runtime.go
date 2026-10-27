@@ -270,10 +270,7 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	if !m.scopeIsCurrent() {
 		return "", errors.New("enterprise MCP authorization was revoked")
 	}
-	client := m.httpClient
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := m.policyCheckedHTTPClient(m.httpClient)
 	// Rust #55680: check the account login before an exchange and again before
 	// accepting its result, so a persisted login replacement cannot keep using
 	// enterprise authority through a stale auth cache.
@@ -364,6 +361,44 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 		return "", errors.New("enterprise MCP authorization was revoked")
 	}
 	return m.token, nil
+}
+
+// policyCheckedHTTPClient bounds every discovery, IdP, and resource-exchange
+// request to the enterprise policy revision this manager was built from. Rust
+// #55696 re-checks the bound policy in EnterpriseExchangeHttpClient before each
+// exchange request, so a revision delivered mid-exchange aborts it instead of
+// completing credential work for a policy that no longer authorizes it.
+func (m *EMAAuthManager) policyCheckedHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if m == nil || m.policyBinding == nil {
+		return client
+	}
+	cloned := *client
+	next := cloned.Transport
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	cloned.Transport = emaPolicyCheckingTransport{next: next, manager: m}
+	return &cloned
+}
+
+// emaPolicyCheckingTransport refuses a request before it leaves the process
+// while the bound enterprise policy is updating or unavailable.
+type emaPolicyCheckingTransport struct {
+	next    http.RoundTripper
+	manager *EMAAuthManager
+}
+
+func (t emaPolicyCheckingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if err := t.manager.checkNewRequest(); err != nil {
+		return nil, err
+	}
+	if t.next == nil {
+		return http.DefaultTransport.RoundTrip(request)
+	}
+	return t.next.RoundTrip(request)
 }
 
 // emaExchangeFailure converts an exchange error for transport: a sanitized auth
@@ -498,17 +533,22 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 	}
 }
 
-// emaScopeCheckingDoer rechecks the account owner at the HTTP client boundary,
-// so a stale manager cannot reuse a revoked enterprise grant after a config
-// reload or account switch (Rust #55287/#55288).
+// emaScopeCheckingDoer rechecks the account owner and the bound policy at the
+// HTTP client boundary, so a stale manager cannot reuse a revoked enterprise
+// grant after a config reload or account switch (Rust #55287/#55288/#55696).
 type emaScopeCheckingDoer struct {
 	next    HTTPDoer
 	manager *EMAAuthManager
 }
 
 func (d emaScopeCheckingDoer) Do(request *http.Request) (*http.Response, error) {
-	if d.manager != nil && !d.manager.scopeIsCurrent() {
-		return nil, errors.New("enterprise MCP authorization was revoked")
+	// Rust #55696 checks the retained connection authority at the HTTP boundary,
+	// so a revoked account or a superseded policy revision stops the dispatch
+	// even when it happens after ApplyHTTPRequest returned.
+	if d.manager != nil {
+		if err := d.manager.checkNewRequest(); err != nil {
+			return nil, err
+		}
 	}
 	return d.next.Do(request)
 }

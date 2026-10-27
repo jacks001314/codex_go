@@ -485,3 +485,116 @@ func TestEMAAuthManagerInvalidatesOnlyRejectedEnterpriseGrantsLikeRust(t *testin
 		})
 	}
 }
+
+// countingMCPHTTPDoer records dispatches for the scope/policy boundary test.
+type countingMCPHTTPDoer struct {
+	calls atomic.Int64
+}
+
+func (d *countingMCPHTTPDoer) Do(*http.Request) (*http.Response, error) {
+	d.calls.Add(1)
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: http.NoBody}, nil
+}
+
+// TestEMAAuthManagerPolicyCheckedHTTPClientHoldsExchangesLikeRust mirrors
+// #55696: discovery and token-exchange requests are refused before they leave
+// the process once the bound policy revision stops authorizing the manager.
+func TestEMAAuthManagerPolicyCheckedHTTPClientHoldsExchangesLikeRust(t *testing.T) {
+	policy := managedconfig.NewCloudConfigBundlePolicy()
+	first := mcpEMAPolicyTestBundle("first")
+	if policy.ObserveRemoteBundle(&first) == nil {
+		t.Fatal("first observation returned no revision")
+	}
+	firstSnapshot := managedconfig.CloudConfigBundleSnapshot{Bundle: &first}
+	policy.PublishSnapshot(&firstSnapshot)
+	if firstSnapshot.Binding == nil {
+		t.Fatal("first snapshot carries no binding")
+	}
+	var calls atomic.Int64
+	client := &http.Client{Transport: oauthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("exchange transport reached")
+	})}
+	manager := &EMAAuthManager{policyBinding: firstSnapshot.Binding}
+	checked := manager.policyCheckedHTTPClient(client)
+	request, err := http.NewRequest(http.MethodPost, "https://idp.example/token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checked.Do(request); err == nil || !strings.Contains(err.Error(), "exchange transport reached") {
+		t.Fatalf("current policy Do() error = %v, want the exchange transport", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("current policy transport calls = %d, want 1", calls.Load())
+	}
+
+	second := mcpEMAPolicyTestBundle("second")
+	if policy.ObserveRemoteBundle(&second) == nil {
+		t.Fatal("changed observation returned no revision")
+	}
+	request, err = http.NewRequest(http.MethodPost, "https://idp.example/token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notSent *MCPEMARequestNotSentError
+	if _, err := checked.Do(request); !errors.As(err, &notSent) {
+		t.Fatalf("suspended policy Do() error = %v, want a held request", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("held exchange reached the transport: calls = %d", calls.Load())
+	}
+}
+
+// TestEMAScopeCheckingDoerChecksPolicyLikeRust mirrors #55696: the retained
+// enterprise connection checks its authority at the HTTP boundary, so a policy
+// revision or account change after ApplyHTTPRequest still stops the dispatch.
+func TestEMAScopeCheckingDoerChecksPolicyLikeRust(t *testing.T) {
+	policy := managedconfig.NewCloudConfigBundlePolicy()
+	first := mcpEMAPolicyTestBundle("first")
+	if policy.ObserveRemoteBundle(&first) == nil {
+		t.Fatal("first observation returned no revision")
+	}
+	firstSnapshot := managedconfig.CloudConfigBundleSnapshot{Bundle: &first}
+	policy.PublishSnapshot(&firstSnapshot)
+	if firstSnapshot.Binding == nil {
+		t.Fatal("first snapshot carries no binding")
+	}
+	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
+	manager := &EMAAuthManager{
+		scope:         scope,
+		currentScope:  func() (EMAAuthScope, bool) { return scope, true },
+		policyBinding: firstSnapshot.Binding,
+	}
+	next := &countingMCPHTTPDoer{}
+	doer := emaScopeCheckingDoer{next: next, manager: manager}
+	request, err := http.NewRequest(http.MethodPost, "https://resource.example/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doer.Do(request); err != nil {
+		t.Fatalf("current authority Do() error = %v", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("current authority dispatches = %d, want 1", next.calls.Load())
+	}
+
+	second := mcpEMAPolicyTestBundle("second")
+	if policy.ObserveRemoteBundle(&second) == nil {
+		t.Fatal("changed observation returned no revision")
+	}
+	var notSent *MCPEMARequestNotSentError
+	if _, err := doer.Do(request); !errors.As(err, &notSent) {
+		t.Fatalf("suspended policy Do() error = %v, want a held request", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("held request reached the transport: dispatches = %d", next.calls.Load())
+	}
+
+	manager.revoked.Store(true)
+	if _, err := doer.Do(request); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("revoked authority Do() error = %v", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("revoked request reached the transport: dispatches = %d", next.calls.Load())
+	}
+}
