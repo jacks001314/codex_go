@@ -42,6 +42,33 @@ func TestOrchestratorSkillCacheResourceGenerationLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #55705: cached cloud skill contents belong to the same auth /
+// Apps generation as the published catalog. Changing the resource generation
+// (the auth change, config mutation and plugin refresh path) exposes an empty
+// contents cache, and a late read that still holds the replaced generation can
+// only write into that unreachable generation.
+func TestOrchestratorSkillResourceCacheClearsOnAuthScopeChangeLikeRust(t *testing.T) {
+	router := &RuntimeRouter{}
+	service := mcp.NewMCPService(nil)
+	_, cache := router.orchestratorSkillCacheForRuntime("thread-1", service)
+	cache.resources["skill://demo/work\x00skill://demo/work/SKILL.md"] = "contents"
+	cache.resourceBytes = len("contents")
+
+	service.InvalidateResourceCaches()
+	_, replacement := router.orchestratorSkillCacheForRuntime("thread-1", service)
+	if replacement == cache {
+		t.Fatal("auth scope change reused the cloud skill contents cache")
+	}
+	if len(replacement.resources) != 0 || replacement.resourceBytes != 0 {
+		t.Fatalf("new generation kept contents: %#v (%d bytes)", replacement.resources, replacement.resourceBytes)
+	}
+
+	cache.resources["late"] = "late-contents"
+	if _, ok := replacement.resources["late"]; ok {
+		t.Fatal("late read populated the replacement generation")
+	}
+}
+
 func TestOrchestratorSkillCacheSurvivesApprovalPolicyRefreshLikeRust(t *testing.T) {
 	coordinator := newMCPRuntimeCoordinator()
 	service := mcp.NewMCPService(nil)

@@ -167,6 +167,20 @@ Grounding notes:
   and the `safety` namespace caches cover every consumer of the local secret
   backend. Cached plaintext is cloned before being returned, matching Rust's
   `Arc` clone, so a caller saving a mutated snapshot cannot corrupt the cache.
+- `#55705` is structurally N/A: Rust moves cloud skill contents out of a
+  per-generation `Mutex<CloudResourceCache>` into `SkillCatalogState`, so the
+  catalog and its contents share one lock. Go has no separate cloud skill
+  catalog state; the orchestrator skill cache is keyed by thread, MCP service
+  identity and `ResourceCacheGeneration()` (`#46033`) and its contents live in
+  that generation's cache entry. Auth changes, config mutations and plugin
+  refreshes call `InvalidateResourceCaches`, which rotates the generation and
+  therefore exposes a new empty contents cache, while a late read only writes
+  into its own replaced entry. Go's cloud plugin catalog path likewise computes
+  one cache key before discovery and reuses that exact key when publishing
+  (discarding a result whose auth identity changed mid-flight), so Rust's second
+  fix — using the key captured by `prepare_cloud_generation` — has no mismatch
+  to correct. A regression test now pins the scope-change clearing and the
+  successor-generation isolation.
 - `#56124`'s reviewer-event forwarding is structurally N/A: Rust installs a
   parent observer on a private Guardian review *session* and forwards its
   `RawResponseItem`/`TurnAborted` events under the reviewer's own thread and
@@ -1328,5 +1342,9 @@ deduplication for tool outputs.
   removal, invalid ciphertext, key rotation, a keyring failure never serving
   cached plaintext, one snapshot per namespace across homes, and namespace
   isolation.
+- For `#55705`: `go test ./appserver -run 'OrchestratorSkill' -count=1` passes.
+  The regression test pins that an auth/config resource-generation change yields
+  an empty contents cache and that a late read holding the replaced generation
+  cannot populate its successor.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.
