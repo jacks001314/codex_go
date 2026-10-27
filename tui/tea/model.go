@@ -477,7 +477,7 @@ type ExternalAgentImportCompletion struct {
 type ExternalAgentImportFunc func(items []config.ExternalAgentConfigMigrationItem, migrationSource string) (config.ExternalAgentConfigImportResponse, <-chan ExternalAgentImportCompletion, error)
 type RolloutPathReaderFunc func(threadID string) (string, error)
 
-type HooksListReaderFunc func(cwd string) (appserver.HookListResponse, error)
+type HooksListReaderFunc func(target codextui.HooksListTarget) (appserver.HookListEntry, error)
 
 type HookConfigWriteFunc func(params config.ConfigBatchWriteParams) error
 
@@ -919,9 +919,9 @@ type WindowsSandboxSetupCompletedMsg struct {
 }
 
 type HooksListResultMsg struct {
-	CWD      string
-	Response appserver.HookListResponse
-	Err      error
+	Target codextui.HooksListTarget
+	Entry  appserver.HookListEntry
+	Err    error
 }
 
 type HookConfigWriteResultMsg struct {

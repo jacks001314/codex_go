@@ -2809,12 +2809,12 @@ func TestModelHooksCommandReadsRuntimeHooks(t *testing.T) {
 		Width:            80,
 		Height:           24,
 		SessionPickerCWD: `D:\repo`,
-		OnReadHooks: func(cwd string) (appserver.HookListResponse, error) {
+		OnReadHooks: func(target codextui.HooksListTarget) (appserver.HookListEntry, error) {
 			calls++
-			if cwd != `D:\repo` {
-				t.Fatalf("cwd = %q, want D:\\repo", cwd)
+			if target.IsThread() || target.CWD != `D:\repo` {
+				t.Fatalf("hooks target = %#v, want D:\\repo", target)
 			}
-			return appserver.HookListResponse{Data: []appserver.HookListEntry{{
+			return appserver.HookListEntry{
 				CWD: `D:\repo`,
 				Hooks: []appserver.HookMetadata{{
 					Key:         "hook-1",
@@ -2828,7 +2828,7 @@ func TestModelHooksCommandReadsRuntimeHooks(t *testing.T) {
 					Enabled:     true,
 					TrustStatus: appserver.HookTrustTrusted,
 				}},
-			}}}, nil
+			}, nil
 		},
 	})
 
@@ -2906,8 +2906,8 @@ func TestModelHooksBrowserWritesRustConfigEdits(t *testing.T) {
 			model := NewModel(codextui.NewState(nil), Options{
 				Width:            100,
 				SessionPickerCWD: `D:\repo`,
-				OnReadHooks: func(string) (appserver.HookListResponse, error) {
-					return response(test.status), nil
+				OnReadHooks: func(codextui.HooksListTarget) (appserver.HookListEntry, error) {
+					return response(test.status).Data[0], nil
 				},
 				OnWriteHookConfig: func(params config.ConfigBatchWriteParams) error {
 					writes = append(writes, params)
@@ -2959,17 +2959,15 @@ func TestModelHooksBrowserUsesRustWriteFailureMessages(t *testing.T) {
 			state := codextui.NewState(nil)
 			model := NewModel(state, Options{
 				SessionPickerCWD: `D:\repo`,
-				OnReadHooks: func(string) (appserver.HookListResponse, error) {
-					return appserver.HookListResponse{Data: []appserver.HookListEntry{
-						{
-							CWD: `D:\repo`,
-							Hooks: []appserver.HookMetadata{{
-								Key: "hook-1", EventName: appserver.HookEventPreToolUse, HandlerType: appserver.HookHandlerCommand,
-								Command: &command, SourcePath: `D:\repo\.gcode\hooks.json`, Source: appserver.HookSourceProject,
-								Enabled: true, CurrentHash: "sha256:current", TrustStatus: test.status,
-							}},
-						},
-					}}, nil
+				OnReadHooks: func(codextui.HooksListTarget) (appserver.HookListEntry, error) {
+					return appserver.HookListEntry{
+						CWD: `D:\repo`,
+						Hooks: []appserver.HookMetadata{{
+							Key: "hook-1", EventName: appserver.HookEventPreToolUse, HandlerType: appserver.HookHandlerCommand,
+							Command: &command, SourcePath: `D:\repo\.gcode\hooks.json`, Source: appserver.HookSourceProject,
+							Enabled: true, CurrentHash: "sha256:current", TrustStatus: test.status,
+						}},
+					}, nil
 				},
 				OnWriteHookConfig: func(config.ConfigBatchWriteParams) error { return errors.New("denied") },
 			})
@@ -2992,8 +2990,8 @@ func TestModelHooksBrowserUsesRustWriteFailureMessages(t *testing.T) {
 func TestModelHooksBrowserConsumesCtrlDForPageDown(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{
 		SessionPickerCWD: `D:\repo`,
-		OnReadHooks: func(string) (appserver.HookListResponse, error) {
-			return appserver.HookListResponse{Data: []appserver.HookListEntry{{CWD: `D:\repo`}}}, nil
+		OnReadHooks: func(codextui.HooksListTarget) (appserver.HookListEntry, error) {
+			return appserver.HookListEntry{CWD: `D:\repo`}, nil
 		},
 	})
 	typeText(t, model, "/hooks")

@@ -164,6 +164,26 @@ func TestHooksBrowserDetailRowsPreserveRustFormatting(t *testing.T) {
 	}
 }
 
+// TestHooksBrowserLabelsEnvironmentOwnedHooksLikeRust mirrors Rust #56553: an
+// environment-owned hook is labelled by its execution environment, and that
+// label wins over the config source that declared it.
+func TestHooksBrowserLabelsEnvironmentOwnedHooksLikeRust(t *testing.T) {
+	environmentID := "env-1"
+	pluginID := "plugin-a"
+	hook := hookBrowserTestHook("env:1", appserver.HookEventPreToolUse, true, false, 0)
+	hook.EnvironmentID = &environmentID
+	hook.Source = appserver.HookSourcePlugin
+	hook.PluginID = &pluginID
+	if got := HookSourceDetail(hook); got != "Environment - env-1" {
+		t.Fatalf("source detail = %q", got)
+	}
+	view := NewHooksBrowserView(appserver.HookListEntry{Hooks: []appserver.HookMetadata{hook}})
+	view.HandleKey("enter")
+	if rows := view.Rows(80); !bottomPaneContainsRow(rows, "Source    Environment - env-1") {
+		t.Fatalf("rows missing environment source:\n%s", strings.Join(rows, "\n"))
+	}
+}
+
 // TestHookHandlerRowAlignsDimmedIndexLikeRust pins the row shape from Rust
 // #51433: the status marker, the right-aligned (dimmed) row number sized to the
 // largest index, the title, and the trust suffix.

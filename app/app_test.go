@@ -2332,7 +2332,7 @@ func TestInteractiveRemoteReadHooksCallsAppServer(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, err)
 					return
 				}
-				if len(params.CWDs) != 1 || params.CWDs[0] != `D:\repo` {
+				if params.ThreadID == nil || *params.ThreadID != "thread-1" || len(params.CWDs) != 0 {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("hooks params = %#v", params))
 					return
 				}
@@ -2383,19 +2383,19 @@ func TestInteractiveRemoteReadHooksCallsAppServer(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	listed, err := interactiveRemoteReadHooks(ctx, endpoint, `D:\repo`)
+	listed, err := interactiveRemoteReadHooks(ctx, endpoint, codextui.HooksListTargetForThread("thread-1"))
 	if err != nil {
 		t.Fatalf("interactiveRemoteReadHooks error = %v", err)
 	}
-	if len(listed.Data) != 1 || len(listed.Data[0].Hooks) != 1 {
+	if len(listed.Hooks) != 1 {
 		t.Fatalf("hooks/list response = %#v", listed)
 	}
-	hook := listed.Data[0].Hooks[0]
+	hook := listed.Hooks[0]
 	if hook.Key != "hook-1" || hook.EventName != appserver.HookEventPreToolUse || hook.Command == nil || *hook.Command != "echo ok" {
 		t.Fatalf("hook metadata = %#v", hook)
 	}
-	if len(listed.Data[0].Warnings) != 1 || listed.Data[0].Warnings[0] != "review hook trust" {
-		t.Fatalf("hook warnings = %#v", listed.Data[0].Warnings)
+	if len(listed.Warnings) != 1 || listed.Warnings[0] != "review hook trust" {
+		t.Fatalf("hook warnings = %#v", listed.Warnings)
 	}
 	write := config.ConfigBatchWriteParams{
 		Edits: []config.ConfigEdit{{

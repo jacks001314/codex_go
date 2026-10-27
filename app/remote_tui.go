@@ -652,12 +652,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnDetectExternalAgent: interactiveRemoteExternalAgentDetectHandler(endpoint),
 		OnImportExternalAgent: interactiveRemoteExternalAgentImportHandler(endpoint),
-		OnReadHooks: func(cwd string) (appserver.HookListResponse, error) {
-			hooksCWD := strings.TrimSpace(cwd)
-			if hooksCWD == "" {
-				hooksCWD = interactiveSessionPickerCWD(root)
-			}
-			return interactiveRemoteReadHooks(ctx, endpoint, hooksCWD)
+		OnReadHooks: func(target codextui.HooksListTarget) (appserver.HookListEntry, error) {
+			return interactiveRemoteReadHooks(ctx, endpoint, target)
 		},
 		OnWriteHookConfig: interactiveRemoteHookConfigWriter(ctx, endpoint),
 		OnReadPlugins: func(cwd string, forceRefetch bool) (plugin.PluginListResponse, error) {
@@ -1154,23 +1150,20 @@ func remoteWindowsSandboxSetupMode(mode chatwidget.WindowsSandboxMode) sandbox.W
 	}
 }
 
-func interactiveRemoteReadHooks(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd string) (appserver.HookListResponse, error) {
+func interactiveRemoteReadHooks(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, target codextui.HooksListTarget) (appserver.HookListEntry, error) {
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
 	client, err := openRemoteSessionClient(reqCtx, endpoint)
 	if err != nil {
-		return appserver.HookListResponse{}, err
+		return appserver.HookListEntry{}, err
 	}
 	defer client.close()
-	params := appserver.HookListParams{}
-	if strings.TrimSpace(cwd) != "" {
-		params.CWDs = []string{strings.TrimSpace(cwd)}
-	}
+	params := codextui.BuildHooksListParams(target)
 	var response appserver.HookListResponse
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodHooksList, params, &response); err != nil {
-		return appserver.HookListResponse{}, err
+		return appserver.HookListEntry{}, err
 	}
-	return response, nil
+	return codextui.HooksListEntryFromResponse(response, target)
 }
 
 func interactiveRemoteHookConfigWriter(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.HookConfigWriteFunc {

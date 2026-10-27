@@ -25,18 +25,28 @@ func TestHookNeedsReviewMatchesRust(t *testing.T) {
 	}
 }
 
-func TestHooksListEntryForCWDMatchesRust(t *testing.T) {
+func TestHooksListTargetAndResponseMatchRust(t *testing.T) {
+	threadTarget := HooksListTargetForThread("thread-1")
+	params := BuildHooksListParams(threadTarget)
+	if params.ThreadID == nil || *params.ThreadID != "thread-1" || len(params.CWDs) != 0 {
+		t.Fatalf("thread params = %#v", params)
+	}
+	cwdTarget := HooksListTargetForCWD(`/tmp/repo`)
+	params = BuildHooksListParams(cwdTarget)
+	if params.ThreadID != nil || len(params.CWDs) != 1 || params.CWDs[0] != cwdTarget.CWD {
+		t.Fatalf("cwd params = %#v", params)
+	}
+
 	response := appserver.HookListResponse{Data: []appserver.HookListEntry{
 		{CWD: `/tmp/other`, Warnings: []string{"skip"}},
 		{CWD: `/tmp/repo`, Warnings: []string{"review"}},
 	}}
-	entry := HooksListEntryForCWD(response, `/tmp/repo`)
-	if entry.CWD != `/tmp/repo` || !reflect.DeepEqual(entry.Warnings, []string{"review"}) {
-		t.Fatalf("HooksListEntryForCWD = %#v", entry)
+	entry, err := HooksListEntryFromResponse(response, cwdTarget)
+	if err != nil || entry.CWD != `/tmp/other` || !reflect.DeepEqual(entry.Warnings, []string{"skip"}) {
+		t.Fatalf("entry = %#v err = %v", entry, err)
 	}
-	missing := HooksListEntryForCWD(response, `/tmp/missing`)
-	if missing.CWD != `/tmp/missing` || len(missing.Hooks) != 0 || len(missing.Warnings) != 0 || len(missing.Errors) != 0 {
-		t.Fatalf("missing entry = %#v", missing)
+	if _, err := HooksListEntryFromResponse(appserver.HookListResponse{}, cwdTarget); err == nil {
+		t.Fatal("empty hooks/list response did not error")
 	}
 }
 

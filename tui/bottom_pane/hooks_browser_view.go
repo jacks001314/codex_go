@@ -662,6 +662,11 @@ func HookHandlerRow(hook appserver.HookMetadata, idx int, indexWidth int) string
 }
 
 func HookSourceDetail(hook appserver.HookMetadata) string {
+	// An execution-environment hook is labelled by its owning environment,
+	// regardless of the config source that declared it (Rust #56553).
+	if hook.EnvironmentID != nil {
+		return "Environment - " + *hook.EnvironmentID
+	}
 	switch hook.Source {
 	case appserver.HookSourcePlugin:
 		if hook.PluginID != nil {

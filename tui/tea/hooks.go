@@ -32,18 +32,35 @@ func (m *Model) applyHooksCommand() bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
+	target := m.hooksListTarget()
 	reader := m.onReadHooks
-	cwd := strings.TrimSpace(m.sessionCWD)
 	m.notice = "Loading hooks..."
 	m.refreshTranscript()
 	return func() bubbletea.Msg {
-		response, err := reader(cwd)
-		return HooksListResultMsg{CWD: cwd, Response: response, Err: err}
+		entry, err := reader(target)
+		return HooksListResultMsg{Target: target, Entry: entry, Err: err}
 	}
+}
+
+// hooksListTarget mirrors Rust ChatWidget::hooks_list_target: a running thread
+// owns its inventory, otherwise inspect the session working directory.
+func (m *Model) hooksListTarget() codextui.HooksListTarget {
+	if m == nil {
+		return codextui.HooksListTargetForCWD("")
+	}
+	if threadID := strings.TrimSpace(m.currentThreadID()); threadID != "" {
+		return codextui.HooksListTargetForThread(threadID)
+	}
+	return codextui.HooksListTargetForCWD(strings.TrimSpace(m.sessionCWD))
 }
 
 func (m *Model) applyHooksListResult(message HooksListResultMsg) {
 	if m == nil {
+		return
+	}
+	// Rust on_hooks_loaded drops a response for a target the chat no longer
+	// points at, so switching threads mid-load cannot open a stale browser.
+	if m.hooksListTarget() != message.Target {
 		return
 	}
 	if message.Err != nil {
@@ -52,7 +69,7 @@ func (m *Model) applyHooksListResult(message HooksListResultMsg) {
 		m.refreshTranscript()
 		return
 	}
-	m.openHooksView(codextui.HooksListEntryForCWD(message.Response, message.CWD))
+	m.openHooksView(message.Entry)
 }
 
 func (m *Model) openHooksView(entry appserver.HookListEntry) {
