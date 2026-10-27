@@ -105,6 +105,11 @@ func ValidateWorkspaceSwitch(snapshot *AuthDotJSON, sessionID string, workspaceI
 	return nil
 }
 
+// errAuthenticationChangedDuringSwitch reports an exchange whose result must be
+// discarded because the external authentication provider took over while the
+// request was in flight (Rust `AuthManager::switch_workspace`).
+var errAuthenticationChangedDuringSwitch = errors.New("Authentication changed during workspace switching")
+
 // NewWorkspaceLogin prepares the browser sign-in binding for one workspace.
 func NewWorkspaceLogin(snapshot *AuthDotJSON, codexHome string, storeOptions *StoreOptions, sessionID string, workspaceID string, connection string) (*WorkspaceLogin, error) {
 	if strings.TrimSpace(workspaceID) == "" {
@@ -177,12 +182,12 @@ func (e *WorkspaceLoginError) Error() string {
 
 // SwitchWorkspace exchanges the current session into another workspace without
 // exporting credentials.
-func SwitchWorkspace(ctx context.Context, store *Store, httpClient WorkspaceHTTPClient, chatGPTBaseURL string, snapshot *AuthDotJSON, sessionID string, workspaceID string, allowedWorkspaces []string) (*WorkspaceSwitch, error) {
+func SwitchWorkspace(ctx context.Context, store *Store, httpClient WorkspaceHTTPClient, chatGPTBaseURL string, snapshot *AuthDotJSON, sessionID string, workspaceID string, allowedWorkspaces []string, externalAuth bool) (*WorkspaceSwitch, error) {
 	if store == nil {
 		return nil, errors.New("Authentication is unavailable")
 	}
 	workspaceID = strings.TrimSpace(workspaceID)
-	if err := ValidateWorkspaceSwitch(snapshot, sessionID, workspaceID, allowedWorkspaces, false); err != nil {
+	if err := ValidateWorkspaceSwitch(snapshot, sessionID, workspaceID, allowedWorkspaces, externalAuth); err != nil {
 		return nil, err
 	}
 	gate := accountRefreshGateFor(store.CodexHome)
@@ -190,7 +195,7 @@ func SwitchWorkspace(ctx context.Context, store *Store, httpClient WorkspaceHTTP
 		return nil, errors.New("Account refresh coordination is unavailable.")
 	}
 	defer gate.release()
-	if err := ValidateWorkspaceSwitch(snapshot, sessionID, workspaceID, allowedWorkspaces, false); err != nil {
+	if err := ValidateWorkspaceSwitch(snapshot, sessionID, workspaceID, allowedWorkspaces, externalAuth); err != nil {
 		return nil, err
 	}
 	if snapshot.Tokens == nil {
@@ -222,8 +227,14 @@ func SwitchWorkspace(ctx context.Context, store *Store, httpClient WorkspaceHTTP
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateWorkspaceSwitch(snapshot, sessionID, workspaceID, allowedWorkspaces, false); err != nil {
+	// The exchange rechecks the workspace allow-list and rejects an external
+	// authentication provider that took over while the request was in flight
+	// (Rust ensure_auth_workspace_allowed + has_external_auth).
+	if err := EnsureWorkspaceAccountAllowed(allowedWorkspaces, workspaceID); err != nil {
 		return nil, err
+	}
+	if externalAuth {
+		return nil, errAuthenticationChangedDuringSwitch
 	}
 	updated := cloneAuthDotJSON(snapshot)
 	updated.Tokens["access_token"] = newAccessToken
@@ -244,7 +255,7 @@ func SwitchWorkspace(ctx context.Context, store *Store, httpClient WorkspaceHTTP
 
 // RollbackWorkspaceSwitch restores a rejected workspace change only while its
 // credentials are still current.
-func RollbackWorkspaceSwitch(ctx context.Context, switched *WorkspaceSwitch) error {
+func RollbackWorkspaceSwitch(ctx context.Context, switched *WorkspaceSwitch, externalAuth bool) error {
 	if switched == nil || switched.store == nil || switched.Selected == nil || switched.Previous == nil {
 		return nil
 	}
@@ -253,9 +264,25 @@ func RollbackWorkspaceSwitch(ctx context.Context, switched *WorkspaceSwitch) err
 		return errors.New("Account refresh coordination is unavailable.")
 	}
 	defer gate.release()
+	// Restore only while the switch's credentials are still current, and never
+	// overwrite credentials owned by an external authentication provider
+	// (Rust `rollback_workspace_switch`).
+	if externalAuth {
+		return errAccountCredentialsChanged
+	}
+	current, err := switched.store.LoadAccountGrant()
+	if err != nil {
+		return err
+	}
+	if !authDotJSONEqual(current, switched.Selected) {
+		return errAccountCredentialsChanged
+	}
 	selectedTokens := nilSafeTokens(switched.Selected)
 	previousTokens := nilSafeTokens(switched.Previous)
 	previousWorkspace := strings.TrimSpace(stringFromAny(previousTokens, "account_id"))
+	if previousWorkspace == "" {
+		return errors.New("Missing previous workspace")
+	}
 	user := strings.TrimSpace(ChatGPTClaimsFromJWT(stringFromAny(selectedTokens, "id_token")).UserID)
 	if user == "" {
 		return errors.New("Missing selected user")
@@ -292,7 +319,7 @@ func ExchangeWorkspaceToken(ctx context.Context, httpClient WorkspaceHTTPClient,
 	if client == nil {
 		client = &http.Client{Timeout: workspaceSwitchTimeout}
 	}
-	response, err := client.Do(request)
+	response, err := workspaceExchangeClient(client).Do(request)
 	if err != nil {
 		return "", err
 	}
@@ -315,4 +342,18 @@ func ExchangeWorkspaceToken(ctx context.Context, httpClient WorkspaceHTTPClient,
 		return "", errors.New("Workspace exchange returned a different user or workspace")
 	}
 	return tokenResponse.AccessToken, nil
+}
+
+// workspaceExchangeClient mirrors Rust's auth-route client: redirects are not
+// followed, so a redirect cannot forward the bearer token to another origin.
+func workspaceExchangeClient(doer WorkspaceHTTPClient) WorkspaceHTTPClient {
+	client, ok := doer.(*http.Client)
+	if !ok || client == nil {
+		return doer
+	}
+	cloned := *client
+	cloned.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &cloned
 }

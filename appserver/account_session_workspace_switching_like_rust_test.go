@@ -25,12 +25,16 @@ type workspaceSwitchBackend struct {
 	memberships     string
 	membershipQueue []string
 	exchangeAccount func(workspaceID string) string
+	onMembership    func()
 }
 
 func (b *workspaceSwitchBackend) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/wham/accounts/check"):
+			if b.onMembership != nil {
+				b.onMembership()
+			}
 			body := b.memberships
 			if len(b.membershipQueue) > 0 {
 				body = b.membershipQueue[0]
@@ -137,6 +141,31 @@ func TestAccountSessionListRefreshLikeRust(t *testing.T) {
 	}
 	if session.Workspaces[1].Name == nil || *session.Workspaces[1].Name != "Bravo" {
 		t.Fatalf("workspace name = %+v", session.Workspaces[1].Name)
+	}
+}
+
+func TestAccountSessionListRefreshRejectsConcurrentLoginLikeRust(t *testing.T) {
+	backend := &workspaceSwitchBackend{memberships: `{"accounts": [{"id": "workspace-a"}]}`}
+	router, _, _ := workspaceSwitchFixture(t, backend, "workspace-a")
+	initializeExperimentalConnection(t, router, "conn-ws")
+	// The account changed while the workspace list was in flight.
+	backend.onMembership = func() {
+		router.requireAccount().ApplyAuthSnapshot(&auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens: map[string]any{
+				"id_token":       fakeJWTAppserver(map[string]any{"chatgpt_account_id": "workspace-b", "chatgpt_user_id": "user-2"}),
+				"access_token":   "access-workspace-b",
+				"refresh_token":  "refresh-2",
+				"account_id":     "workspace-b",
+				"login_owner_id": "login-2",
+			},
+		})
+	}
+	list := requestWithParams(t, IntID(2), MethodAccountSessionList, auth.AccountSessionsListParams{RefreshWorkspaceMetadata: true})
+	list.ConnectionID = "conn-ws"
+	response := router.Handle(list)
+	if response.Error == nil || response.Error.Message != "Authentication changed while listing account sessions" {
+		t.Fatalf("accountSession/list = %+v", response.Error)
 	}
 }
 

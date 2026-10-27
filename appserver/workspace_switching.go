@@ -53,7 +53,9 @@ func (r *RuntimeRouter) listAccountSessions(params *auth.AccountSessionsListPara
 		workspaces = workspaceSessionEntries(accounts)
 		current := r.cachedAccountAuthSnapshot(false)
 		currentSession, _ := auth.ManagedAccountSessionID(current)
-		if currentSession != sessionID || strings.TrimSpace(auth.AccountIDFromAuthForRestrictions(current)) != accountID {
+		if r.externalChatGPTAuthActive() ||
+			currentSession != sessionID ||
+			strings.TrimSpace(auth.AccountIDFromAuthForRestrictions(current)) != accountID {
 			return nil, jsonRPCInvalidRequest("Authentication changed while listing account sessions")
 		}
 	}
@@ -76,21 +78,46 @@ func (r *RuntimeRouter) listAccountSessions(params *auth.AccountSessionsListPara
 
 // cachedAccountAuthSnapshot mirrors Rust AuthManager::auth_cached: the account
 // manager's credential, falling back to the stored credential on first use.
+// With refresh it mirrors AuthManager::auth(): a managed ChatGPT credential
+// inside the proactive refresh window is refreshed before the caller captures
+// the snapshot, so a workspace exchange never starts from an expired token.
 func (r *RuntimeRouter) cachedAccountAuthSnapshot(refresh bool) *auth.AuthDotJSON {
 	if r == nil {
 		return nil
 	}
 	snapshot := r.requireAccount().AuthSnapshot()
-	if refresh || snapshot == nil {
-		if resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout()); err == nil && resolved != nil {
-			loaded := resolved.Auth
-			if snapshot == nil {
-				r.requireAccount().ApplyAuthSnapshot(&loaded)
-			}
-			return &loaded
+	if snapshot == nil {
+		resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+		if err != nil || resolved == nil {
+			return nil
 		}
+		loaded := resolved.Auth
+		r.requireAccount().ApplyAuthSnapshot(&loaded)
+		snapshot = &loaded
+	}
+	if !refresh {
+		return snapshot
+	}
+	if refreshed := r.proactiveRefreshManagedChatGPT(
+		context.Background(),
+		r.codexHomeForRollout(),
+		r.configForWorkspaceSwitch(),
+		snapshot,
+	); refreshed != nil {
+		return refreshed
 	}
 	return snapshot
+}
+
+func (r *RuntimeRouter) configForWorkspaceSwitch() *config.Config {
+	if r == nil || r.services.Config == nil {
+		return &config.Config{Values: map[string]any{}}
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil {
+		return &config.Config{Values: map[string]any{}}
+	}
+	return config.NewConfigFromRead(read)
 }
 
 func (r *RuntimeRouter) workspaceMemberships(snapshot *auth.AuthDotJSON) (*chatgptapi.AccountsCheckResponse, error) {
@@ -215,15 +242,20 @@ func (r *RuntimeRouter) switchAccountSession(params *auth.AccountSessionsSwitchP
 	if err := r.unloadForWorkspaceSwitch(context.Background()); err != nil {
 		return nil, err
 	}
+	// Rust refresh_workspace_config -> AuthManager::switch_workspace refreshes
+	// a managed credential before exchanging it, then validates the refreshed
+	// snapshot against the same session and workspace.
+	switchSnapshot := r.cachedAccountAuthSnapshot(true)
 	switched, err := auth.SwitchWorkspace(
 		context.Background(),
 		r.authStore(r.codexHomeForRollout()),
 		r.workspaceSwitchHTTPClient(),
 		r.chatGPTBaseURL(),
-		current,
+		switchSnapshot,
 		params.SessionID,
 		params.AccountID,
 		r.workspaceSwitchAllowedWorkspaces(),
+		r.externalChatGPTAuthActive(),
 	)
 	if err != nil {
 		return nil, jsonRPCInvalidRequest(err.Error())
@@ -234,7 +266,7 @@ func (r *RuntimeRouter) switchAccountSession(params *auth.AccountSessionsSwitchP
 	// Routing includes fatal authorization and policy checks. Restore the
 	// previous login on any failure, unless another auth operation replaced it.
 	if _, routingErr := r.workspaceRoutingForAccountRead(context.Background(), selected); routingErr != nil {
-		rollbackErr := auth.RollbackWorkspaceSwitch(context.Background(), switched)
+		rollbackErr := auth.RollbackWorkspaceSwitch(context.Background(), switched, r.externalChatGPTAuthActive())
 		r.requireAccount().ApplyAuthSnapshot(switched.PreviousAuth())
 		r.reloadWorkspaceConfigForSwitch()
 		if rollbackErr != nil {

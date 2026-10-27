@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -64,7 +65,7 @@ func TestSwitchWorkspaceExchangesTokenAndPreservesRefreshLikeRust(t *testing.T) 
 	}))
 	defer server.Close()
 
-	switched, err := SwitchWorkspace(context.Background(), store, server.Client(), server.URL+"/backend-api", snapshot, "login-1", "workspace-b", nil)
+	switched, err := SwitchWorkspace(context.Background(), store, server.Client(), server.URL+"/backend-api", snapshot, "login-1", "workspace-b", nil, false)
 	if err != nil {
 		t.Fatalf("SwitchWorkspace() error = %v", err)
 	}
@@ -90,7 +91,7 @@ func TestSwitchWorkspaceRejectsStaleSessionLikeRust(t *testing.T) {
 	if err := store.Save(*snapshot); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	_, err := SwitchWorkspace(context.Background(), store, nil, "https://chatgpt.com/backend-api", snapshot, "login-other", "workspace-b", nil)
+	_, err := SwitchWorkspace(context.Background(), store, nil, "https://chatgpt.com/backend-api", snapshot, "login-other", "workspace-b", nil, false)
 	if err == nil || err.Error() != "Only the active managed account session can be switched" {
 		t.Fatalf("stale session error = %v", err)
 	}
@@ -112,11 +113,11 @@ func TestRollbackWorkspaceSwitchRestoresPreviousLikeRust(t *testing.T) {
 	}))
 	defer server.Close()
 
-	switched, err := SwitchWorkspace(context.Background(), store, server.Client(), server.URL, snapshot, "login-1", "workspace-b", nil)
+	switched, err := SwitchWorkspace(context.Background(), store, server.Client(), server.URL, snapshot, "login-1", "workspace-b", nil, false)
 	if err != nil {
 		t.Fatalf("SwitchWorkspace() error = %v", err)
 	}
-	if err := RollbackWorkspaceSwitch(context.Background(), switched); err != nil {
+	if err := RollbackWorkspaceSwitch(context.Background(), switched, false); err != nil {
 		t.Fatalf("RollbackWorkspaceSwitch() error = %v", err)
 	}
 	stored, err := store.Load()
@@ -125,6 +126,86 @@ func TestRollbackWorkspaceSwitchRestoresPreviousLikeRust(t *testing.T) {
 	}
 	if stored.Tokens["account_id"] != "workspace-a" || stored.Tokens["access_token"] != "access-workspace-a" {
 		t.Fatalf("restored tokens = %#v", stored.Tokens)
+	}
+}
+
+func TestRollbackWorkspaceSwitchRequiresCurrentCredentialsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := NewStore(home)
+	snapshot := workspaceSwitchSnapshot("workspace-a")
+	if err := store.Save(*snapshot); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	var exchanges atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		exchanges.Add(1)
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"access_token":"` + fakeJWTAccount(map[string]any{"chatgpt_account_id": body["workspace_id"], "chatgpt_user_id": "user-1"}) + `"}`))
+	}))
+	defer server.Close()
+
+	switched, err := SwitchWorkspace(context.Background(), store, server.Client(), server.URL, snapshot, "login-1", "workspace-b", nil, false)
+	if err != nil {
+		t.Fatalf("SwitchWorkspace() error = %v", err)
+	}
+	// Another login replaced the switched credential before routing validation
+	// failed, so the rollback must not exchange or overwrite it.
+	newer := workspaceSwitchSnapshot("workspace-a")
+	newer.Tokens["access_token"] = "access-newer"
+	if err := store.Save(*newer); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := RollbackWorkspaceSwitch(context.Background(), switched, false); err == nil || err.Error() != "Account credentials changed" {
+		t.Fatalf("RollbackWorkspaceSwitch() error = %v", err)
+	}
+	if got := exchanges.Load(); got != 1 {
+		t.Fatalf("rollback exchanged a token %d times, want 1 (the original switch only)", got)
+	}
+	stored, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if stored.Tokens["access_token"] != "access-newer" {
+		t.Fatalf("rollback overwrote newer credentials: %#v", stored.Tokens)
+	}
+}
+
+func TestSwitchWorkspaceRejectsExternalAuthLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := NewStore(home)
+	snapshot := workspaceSwitchSnapshot("workspace-a")
+	if err := store.Save(*snapshot); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	_, err := SwitchWorkspace(context.Background(), store, nil, "https://chatgpt.com/backend-api", snapshot, "login-1", "workspace-b", nil, true)
+	if err == nil || err.Error() != "Workspace switching is owned by the external authentication provider" {
+		t.Fatalf("external auth error = %v", err)
+	}
+}
+
+func TestExchangeWorkspaceTokenDoesNotFollowRedirectsLikeRust(t *testing.T) {
+	var leaked atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			leaked.Store(true)
+		}
+		_, _ = w.Write([]byte(`{"access_token":"unused"}`))
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirect.Close()
+
+	_, err := ExchangeWorkspaceToken(context.Background(), redirect.Client(), redirect.URL, "access-workspace-a", "workspace-b", "user-1")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("ExchangeWorkspaceToken() error = %v", err)
+	}
+	if leaked.Load() {
+		t.Fatal("workspace exchange forwarded its bearer token through a redirect")
 	}
 }
 
