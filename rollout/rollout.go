@@ -10,6 +10,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -792,6 +794,54 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 		return err
 	}
 	return r.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: payload})
+}
+
+// ThreadSettingsAppliedEqual reports whether two snapshots would persist as the
+// same thread-owned checkpoint, applying the same trimming and omission rules as
+// AppendThreadSettingsAppliedSnapshot (Rust #56250).
+func ThreadSettingsAppliedEqual(left, right ThreadSettingsApplied) bool {
+	left = normalizeThreadSettingsApplied(left)
+	right = normalizeThreadSettingsApplied(right)
+	return left.ApprovalPolicy == right.ApprovalPolicy &&
+		left.ApprovalsReviewer == right.ApprovalsReviewer &&
+		left.CWD == right.CWD &&
+		rawJSONEqual(left.PermissionProfile, right.PermissionProfile) &&
+		rawJSONEqual(left.ActivePermissionProfile, right.ActivePermissionProfile) &&
+		rawJSONEqual(left.CollaborationMode, right.CollaborationMode) &&
+		stringSlicesPtrEqual(left.RuntimeWorkspaceRoots, right.RuntimeWorkspaceRoots)
+}
+
+func normalizeThreadSettingsApplied(settings ThreadSettingsApplied) ThreadSettingsApplied {
+	settings.ApprovalPolicy = strings.TrimSpace(settings.ApprovalPolicy)
+	settings.ApprovalsReviewer = strings.TrimSpace(settings.ApprovalsReviewer)
+	settings.CWD = strings.TrimSpace(settings.CWD)
+	settings.PermissionProfile = cloneRawJSON(settings.PermissionProfile)
+	settings.ActivePermissionProfile = cloneRawJSON(settings.ActivePermissionProfile)
+	settings.CollaborationMode = cloneRawJSON(settings.CollaborationMode)
+	if settings.RuntimeWorkspaceRoots != nil {
+		roots := make([]string, len(*settings.RuntimeWorkspaceRoots))
+		copy(roots, *settings.RuntimeWorkspaceRoots)
+		settings.RuntimeWorkspaceRoots = &roots
+	}
+	return settings
+}
+
+func rawJSONEqual(left, right json.RawMessage) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return len(left) == 0 && len(right) == 0
+	}
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return bytes.Equal(left, right)
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
+}
+
+func stringSlicesPtrEqual(left, right *[]string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return slices.Equal(*left, *right)
 }
 
 // cloneRawJSON returns a copy of raw, treating absent and JSON null values as

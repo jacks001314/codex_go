@@ -2136,7 +2136,33 @@ func (r *Router) checkpointThreadResumeSettings(threadID session.ThreadID, recor
 	}
 	snapshotRoots := append([]string{}, roots...)
 	settings.RuntimeWorkspaceRoots = &snapshotRoots
+	// Rust #56250: resuming with unchanged settings must not append another
+	// checkpoint, but changed settings persist even when no turn follows.
+	if r.threadSettingsCheckpointMatches(threadID, record, settings) {
+		return
+	}
 	_ = r.appendThreadSettingsAppliedSnapshot(threadID, settings, r.now())
+}
+
+// threadSettingsCheckpointMatches reports whether the latest settings snapshot
+// owned by threadID already records settings.
+func (r *Router) threadSettingsCheckpointMatches(threadID session.ThreadID, record *session.Record, settings rollout.ThreadSettingsApplied) bool {
+	if r == nil || r.store == nil || record == nil || strings.TrimSpace(string(threadID)) == "" {
+		return false
+	}
+	path := r.threadRolloutPath(record)
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	if _, ok := rollout.ExistingRolloutPath(path); !ok {
+		return false
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return false
+	}
+	persisted, ok := rollout.LatestPersistedOwnedThreadSettingsApplied(string(threadID), lines)
+	return ok && rollout.ThreadSettingsAppliedEqual(persisted, settings)
 }
 
 func setThreadRecordRuntimeWorkspaceRoots(record *session.Record, roots []string) {

@@ -646,6 +646,32 @@ func LatestPersistedOwnedThreadSettings(threadID string, lines []Line) (ThreadSe
 	return ThreadSettingsSnapshot{}, false
 }
 
+// LatestPersistedOwnedThreadSettingsApplied returns the newest full settings
+// snapshot owned by threadID, including collaboration mode, so a resume can skip
+// a checkpoint that would not change the persisted settings (Rust #56250).
+func LatestPersistedOwnedThreadSettingsApplied(threadID string, lines []Line) (ThreadSettingsApplied, bool) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ThreadSettingsApplied{}, false
+	}
+	for index := len(lines) - 1; index >= 0; index-- {
+		snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload)
+		if !ok || snapshot.ThreadID != threadID {
+			continue
+		}
+		return ThreadSettingsApplied{
+			ApprovalPolicy:          snapshot.ApprovalPolicy,
+			ApprovalsReviewer:       snapshot.ApprovalsReviewer,
+			PermissionProfile:       snapshot.PermissionProfile,
+			ActivePermissionProfile: snapshot.ActivePermissionProfile,
+			CWD:                     snapshot.CWD,
+			CollaborationMode:       snapshot.CollaborationMode,
+			RuntimeWorkspaceRoots:   snapshot.RuntimeWorkspaceRoots,
+		}, true
+	}
+	return ThreadSettingsApplied{}, false
+}
+
 // PersistedResumeSettings is the set of thread settings a cold resume or fork
 // restores from rollout history (Rust PersistedResumeSettings, #57227).
 // ActivePermissionProfile is a named profile selection; UnnamedPermissionProfile
@@ -791,6 +817,7 @@ type persistedThreadSettingsEvent struct {
 	ApprovalsReviewer       string
 	PermissionProfile       json.RawMessage
 	ActivePermissionProfile json.RawMessage
+	CollaborationMode       json.RawMessage
 }
 
 func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettingsEvent, bool) {
@@ -803,6 +830,7 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 			PermissionProfile       json.RawMessage `json:"permission_profile"`
 			ActivePermissionProfile json.RawMessage `json:"active_permission_profile"`
 			CWD                     string          `json:"cwd"`
+			CollaborationMode       json.RawMessage `json:"collaboration_mode"`
 			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots"`
 		} `json:"thread_settings"`
 	}
@@ -825,6 +853,7 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		ApprovalsReviewer:       strings.TrimSpace(event.ThreadSettings.ApprovalsReviewer),
 		PermissionProfile:       cloneRawJSON(event.ThreadSettings.PermissionProfile),
 		ActivePermissionProfile: cloneRawJSON(event.ThreadSettings.ActivePermissionProfile),
+		CollaborationMode:       cloneRawJSON(event.ThreadSettings.CollaborationMode),
 	}, true
 }
 
