@@ -115,6 +115,7 @@ TUI lane and are not modified here.
 | `#56266` | Managed-requirements denials keep their reason across runtime overlays unless a trusted host-owned Apps registration replaces the server; an explicit disable that requirements also deny stays combined through repeated filtering; standalone MCP login HTTP clients reject requirements-denied servers | `mcp/catalog_priority.go`, `mcp/config.go`, `mcp/api.go`, `config/mcp_requirements.go`, like-Rust tests |
 | `#55978` | `logs_2.sqlite` moves to an explicitly configured `log_dir` (user config or managed requirements) unless a managed `sqlite_home` requirement pins the database home; other databases stay in `sqlite_home` and an unset `log_dir` keeps the old location. The logs directory is created only when its database opens, so an unavailable `log_dir` never blocks login/config reads. Existing logs stay in place: feedback falls back to them as `codex-logs-legacy.log`, and retention pruning plus page reclamation cover both locations with independent maintenance locks and NFS probes | `config/config.go`, `state/sqlite.go`, `state/logs.go`, `state/logs_maintenance.go`, `state/reclamation.go`, `appserver/websocket.go`, `appserver/runtime_router.go`, like-Rust tests |
 | `#55856` | Managed app-server and updater stderr logs go through one bounded, nonblocking worker (64 queued records, 16 KiB per record, lossy); a live log above 1 MiB keeps its latest 256 KiB in `.log.previous` and is truncated in place with append-only handles, and updater handoff pauses predecessor pruning until ownership is restored | `appserverdaemon/stderr_log.go`, `appserverdaemon/stderr_append_unix.go`, `appserverdaemon/stderr_append_windows.go`, `appserverdaemon/daemon.go`, `appserverdaemon/migration.go`, `appserverdaemon/update_loop.go`, `appserverdaemon/pid_shutdown_windows.go`, `app/app.go`, like-Rust tests |
+| `#55498` | Noise relay handshakes emit correlated, credential-free diagnostics: executor rejections and pending-validation resets carry a classified reason and registry HTTP status in a normalized UUID stream id, capped at 100 per minute per relay connection plus one suppression marker; harness failures and completions add elapsed time and connection identifiers, WebSocket read failures are classified from typed errors, and valid stream UUIDs are forwarded to key validation as `x-codex-noise-stream-id` | `execserver/remote_relay.go`, `execserver/remote_harness.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -137,6 +138,18 @@ Grounding notes:
   writer for the process lifetime and tests stop it explicitly. The Windows
   append handle is reopened with `ReOpenFile` (append-only access) and installed
   with `SetStdHandle`, matching Rust, and `os.Stderr` follows it.
+- `#55498` uses `slog` records instead of Rust's separately parented tracing
+  spans: Go has no span exporter here, and the diagnostic attributes are the
+  same (`noise_event`, `noise_outcome`, `noise_side`, `noise_reason`,
+  `registry_status`, `environment_id`, `executor_registration_id`, `stream_id`,
+  `elapsed_ms`). Go's handshake is inline inside `dialNoiseHarnessConnection`,
+  so the initialization timeout is observed when the bounded read fails rather
+  than by a separate readiness channel; the reason is still `timeout` with the
+  elapsed time and identifiers of the failed stream. Registry failures are
+  classified from Go's typed `remoteRegistryHTTPError`
+  plus error categories produced by its own registry client, and only the
+  status code (never response text) is reported. The validator error's raw text
+  and reset reasons are never logged.
 - `#56124`'s reviewer-event forwarding is structurally N/A: Rust installs a
   parent observer on a private Guardian review *session* and forwards its
   `RawResponseItem`/`TurnAborted` events under the reviewer's own thread and
@@ -1273,5 +1286,16 @@ deduplication for tool outputs.
   full-queue drops, the 1 MiB prune with a 256 KiB `.previous` tail, skips for
   small/missing/nonregular files, the handoff pause with ownership restoration,
   live worker pruning, stale-temp cleanup, and the unmanaged stderr fallback.
+- For `#55498`: `go test ./execserver -count=1` (15.4s) and
+  `go vet ./execserver` pass. Coverage pins the 100-per-window slot arithmetic
+  including the single suppression marker and window reset, UUID normalization
+  (uppercase input, non-UUID input becomes `invalid`), the `reset_received`
+  outcome, registry/network/timeout/protocol error classification, typed
+  WebSocket read classification, the optional `x-codex-noise-stream-id` header
+  (uppercase UUID forwarded lowercased, non-UUID and empty values omitted), an
+  end-to-end malformed handshake plus HTTP 503 plus pending-validation reset
+  with environment/registration correlation and no authorization, registry
+  response or reset-reason leakage, and the harness failure/completion
+  diagnostics including elapsed time, identifiers and stream UUID.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.

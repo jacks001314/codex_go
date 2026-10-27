@@ -9,11 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -561,7 +564,23 @@ func dialNoiseHarnessConnection(
 			_ = conn.CloseNow()
 		}
 	}()
+	handshakeStarted := time.Now()
 	streamID := uuid.NewString()
+	// Rust #55498: record a correlated, credential-free diagnostic before the
+	// handshake readiness signal is dropped, so a failed rendezvous is
+	// attributable to this environment, executor registration and stream.
+	recordHandshakeFailure := func(reason string) {
+		slog.Warn("Noise harness handshake failed",
+			"noise_event", "handshake",
+			"noise_outcome", "failed",
+			"noise_side", "harness",
+			"noise_reason", reason,
+			"elapsed_ms", time.Since(handshakeStarted).Milliseconds(),
+			"environment_id", bundle.EnvironmentID,
+			"executor_registration_id", bundle.ExecutorRegistrationID,
+			"stream_id", streamID,
+		)
+	}
 	handshake, err := clatter.NewHybridHandshake(
 		clatter.PatternHybridIK,
 		true,
@@ -573,6 +592,7 @@ func dialNoiseHarnessConnection(
 		clatter.WithPrologue(noiseChannelPrologue(bundle.EnvironmentID, bundle.ExecutorRegistrationID, streamID)),
 	)
 	if err != nil {
+		recordHandshakeFailure("handshake_start")
 		return nil, fmt.Errorf("failed to start Noise relay handshake: %w", err)
 	}
 	handshakeActive := true
@@ -584,6 +604,7 @@ func dialNoiseHarnessConnection(
 	request := make([]byte, clatter.MaxMessageLen)
 	requestLen, err := handshake.WriteMessage([]byte(bundle.HarnessKeyAuthorization), request)
 	if err != nil {
+		recordHandshakeFailure("handshake_start")
 		return nil, fmt.Errorf("failed to start Noise relay handshake: %w", err)
 	}
 	for _, frame := range []relayMessageFrame{
@@ -595,6 +616,7 @@ func dialNoiseHarnessConnection(
 			return nil, err
 		}
 		if err := conn.Write(ctx, websocket.MessageBinary, encoded); err != nil {
+			recordHandshakeFailure("websocket_write")
 			return nil, err
 		}
 	}
@@ -602,13 +624,21 @@ func dialNoiseHarnessConnection(
 	for transport == nil {
 		messageType, payload, err := conn.Read(ctx)
 		if err != nil {
+			reason := websocketReadErrorReason(err)
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+				// The initialization deadline bounds the whole handshake.
+				reason = "timeout"
+			}
+			recordHandshakeFailure(reason)
 			return nil, fmt.Errorf("Noise relay websocket ended during handshake: %w", err)
 		}
 		if messageType != websocket.MessageBinary {
+			recordHandshakeFailure("unexpected_text")
 			return nil, errors.New("Noise relay transport expects binary protobuf frames")
 		}
 		frame, err := decodeRelayMessageFrame(payload)
 		if err != nil {
+			recordHandshakeFailure("invalid_frame")
 			return nil, fmt.Errorf("failed to parse Noise relay frame: %w", err)
 		}
 		if frame.StreamID != streamID {
@@ -619,30 +649,74 @@ func dialNoiseHarnessConnection(
 			responsePayload := make([]byte, clatter.MaxMessageLen)
 			responseLen, err := handshake.ReadMessage(frame.HandshakeBytes, responsePayload)
 			if err != nil {
+				recordHandshakeFailure("invalid_response")
 				return nil, fmt.Errorf("Noise relay handshake failed: %w", err)
 			}
 			if responseLen != 0 {
+				recordHandshakeFailure("invalid_response")
 				return nil, errors.New("Noise handshake response payload must be empty")
 			}
 			transport, err = handshake.Finalize()
 			handshakeActive = false
 			if err != nil {
+				recordHandshakeFailure("handshake_finish")
 				return nil, fmt.Errorf("Noise relay handshake failed: %w", err)
 			}
 		case relayFrameReset:
+			recordHandshakeFailure("relay_reset")
 			return nil, errors.New("Noise relay stream reset")
 		case relayFrameAck, relayFrameResume, relayFrameHeartbeat:
 		case relayFrameData:
+			recordHandshakeFailure("unexpected_frame")
 			return nil, errors.New("Noise relay received data before handshake completion")
 		default:
+			recordHandshakeFailure("unexpected_frame")
 			return nil, errors.New("Noise relay received data before handshake completion")
 		}
 	}
+	slog.Info("Noise harness handshake completed",
+		"noise_event", "handshake",
+		"noise_outcome", "ok",
+		"noise_side", "harness",
+		"elapsed_ms", time.Since(handshakeStarted).Milliseconds(),
+		"environment_id", bundle.EnvironmentID,
+		"executor_registration_id", bundle.ExecutorRegistrationID,
+		"stream_id", streamID,
+	)
 	closeOnError = false
 	return &noiseHarnessClientConnection{
 		conn: conn, streamID: streamID, transport: transport,
 		keepaliveCancel: startClientWebSocketKeepalive(conn),
 	}, nil
+}
+
+// websocketReadErrorReason mirrors Rust #55498's
+// `websocket_read_error_reason`: only locally typed errors are classified, so
+// untrusted wire text never reaches a diagnostic.
+func websocketReadErrorReason(err error) string {
+	switch {
+	case err == nil:
+		return "websocket_read_other"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
+		return "websocket_read_timed_out"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "websocket_read_connection_reset"
+	case errors.Is(err, syscall.ECONNABORTED):
+		return "websocket_read_connection_aborted"
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+		return "websocket_read_unexpected_eof"
+	case isRendezvousConnectionClosed(err):
+		return "websocket_read_closed"
+	case isRendezvousTLSFailure(err):
+		return "websocket_read_tls"
+	case isRendezvousProtocolFailure(err):
+		return "websocket_read_protocol"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "websocket_read_timed_out"
+	}
+	return "websocket_read_io_other"
 }
 
 func decodeRemoteNoisePublicKey(key RemotePublicKey) ([]byte, []byte, error) {

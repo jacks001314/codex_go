@@ -145,7 +145,7 @@ func TestRegistryOperationsReplayOnceWithReplacementCredentialsLikeRust(t *testi
 					EnvironmentID:          "env",
 					ExecutorRegistrationID: "registration",
 				}
-				err = validateRemoteHarnessKey(context.Background(), cfg, registration, key, "authorization")
+				err = validateRemoteHarnessKey(context.Background(), cfg, registration, key, "authorization", "stream-1")
 			}
 			if err != nil {
 				t.Fatalf("%s error = %v, want success after the 401 replay", testCase.operation, err)

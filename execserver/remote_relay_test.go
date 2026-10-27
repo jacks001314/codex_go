@@ -330,7 +330,7 @@ func TestValidateRemoteHarnessKeyDoesNotExposeAuthorization(t *testing.T) {
 	defer registry.Close()
 	err := validateRemoteHarnessKey(context.Background(), RemoteEnvironmentConfig{
 		BaseURL: registry.URL, EnvironmentID: "environment-1", HTTPClient: registry.Client(),
-	}, &remoteRegistrationResponse{ExecutorRegistrationID: "registration-1"}, RemotePublicKey{Suite: noiseChannelSuite}, secret)
+	}, &remoteRegistrationResponse{ExecutorRegistrationID: "registration-1"}, RemotePublicKey{Suite: noiseChannelSuite}, secret, "stream-1")
 	if err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("validateRemoteHarnessKey() error = %v", err)
 	}
@@ -626,7 +626,7 @@ func TestValidateRemoteHarnessKeyRequiresExplicitValidResponseLikeRust(t *testin
 			defer registry.Close()
 			err := validateRemoteHarnessKey(context.Background(), RemoteEnvironmentConfig{
 				BaseURL: registry.URL, EnvironmentID: remoteRelayTestEnvironmentID, HTTPClient: registry.Client(),
-			}, &remoteRegistrationResponse{ExecutorRegistrationID: remoteRelayTestRegistrationID}, RemotePublicKey{Suite: noiseChannelSuite}, "authorization")
+			}, &remoteRegistrationResponse{ExecutorRegistrationID: remoteRelayTestRegistrationID}, RemotePublicKey{Suite: noiseChannelSuite}, "authorization", "stream-1")
 			if err == nil {
 				t.Fatal("validation accepted a response without valid=true")
 			}

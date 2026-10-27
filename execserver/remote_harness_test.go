@@ -3,6 +3,7 @@ package execserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,9 +12,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 )
 
 func TestDialNoiseRendezvousClientRefreshesUnauthorizedBundleAndRunsEncryptedRPCLikeRust(t *testing.T) {
+	logs := installCapturedLogs(t)
 	executorIdentity, err := generateRemoteNoiseIdentity()
 	if err != nil {
 		t.Fatalf("generate executor identity: %v", err)
@@ -144,6 +147,23 @@ func TestDialNoiseRendezvousClientRefreshesUnauthorizedBundleAndRunsEncryptedRPC
 	}
 	if !validated {
 		t.Fatal("executor validation did not bind the refreshed harness key and authorization")
+	}
+	// Rust #55498: a completed harness handshake reports its elapsed time and
+	// connection identifiers without echoing the key authorization.
+	completion := logs.waitForLog(t, "Noise harness handshake completed", nil)
+	if completion["noise_side"] != "harness" || completion["noise_outcome"] != "ok" ||
+		completion["environment_id"] != remoteRelayTestEnvironmentID ||
+		completion["executor_registration_id"] != remoteRelayTestRegistrationID {
+		t.Fatalf("completion attrs = %#v", completion)
+	}
+	if _, ok := completion["elapsed_ms"].(int64); !ok {
+		t.Fatalf("elapsed_ms = %#v", completion["elapsed_ms"])
+	}
+	if _, err := uuid.Parse(fmt.Sprint(completion["stream_id"])); err != nil {
+		t.Fatalf("stream_id = %v, want a UUID", completion["stream_id"])
+	}
+	if strings.Contains(logs.allText(), "authorization-1") {
+		t.Fatalf("harness diagnostics leaked the key authorization: %s", logs.allText())
 	}
 	select {
 	case err := <-relayDone:
