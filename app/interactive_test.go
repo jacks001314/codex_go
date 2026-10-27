@@ -268,6 +268,7 @@ func TestInteractiveAccountDisplayMatchesStatusContract(t *testing.T) {
 	}{
 		{name: "signed out"},
 		{name: "api key", account: &auth.Account{Type: auth.AccountAPIKey}, want: "API key configured (run codex login to use ChatGPT)"},
+		{name: "gcp provider account", account: &auth.Account{Type: auth.AccountGcp}},
 		{name: "chatgpt", account: &auth.Account{Type: auth.AccountChatGPT}, want: "ChatGPT", wantChatGPT: true},
 		{name: "chatgpt email and plan", account: &auth.Account{Type: auth.AccountChatGPT, Email: &email, PlanType: auth.PlanPlus}, want: "dev@example.com (plus)", wantChatGPT: true},
 	}
