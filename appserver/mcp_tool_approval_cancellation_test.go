@@ -27,7 +27,7 @@ func newMCPToolApprovalProvenanceHandler(t *testing.T, resolve func(*ServerReque
 	}))
 	return &appserverMCPToolApprovalHandler{
 		router:                    router,
-		responder:                 func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) { return nil, nil },
+		responder:                 func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) { return nil, nil },
 		threadID:                  "thread-1",
 		turnID:                    "turn-1",
 		approvalPolicy:            sandbox.ApprovalOnRequest,
@@ -167,13 +167,13 @@ func TestAppserverMCPToolApprovalUserInputProvenanceLikeRust(t *testing.T) {
 	const questionID = mcp.MCPToolApprovalQuestionIDPrefix + "_call-1"
 	for _, testCase := range []struct {
 		name       string
-		responder  tool.UserInputResponder
+		responder  tool.UserInputCallIDResponder
 		wantDeny   bool
 		wantReason mcp.MCPApprovalCancellationReason
 	}{
 		{
 			name: "cancel answer is a user action",
-			responder: func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			responder: func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 				return &tool.UserInputResponse{Answers: map[string]string{questionID: mcp.MCPToolApprovalCancel}}, nil
 			},
 			wantDeny:   true,
@@ -181,7 +181,7 @@ func TestAppserverMCPToolApprovalUserInputProvenanceLikeRust(t *testing.T) {
 		},
 		{
 			name: "missing response is an interruption",
-			responder: func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			responder: func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 				return nil, nil
 			},
 			wantDeny:   true,
@@ -189,7 +189,7 @@ func TestAppserverMCPToolApprovalUserInputProvenanceLikeRust(t *testing.T) {
 		},
 		{
 			name: "approval keeps no provenance",
-			responder: func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			responder: func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 				return &tool.UserInputResponse{Answers: map[string]string{questionID: mcp.MCPToolApprovalAccept}}, nil
 			},
 			wantReason: "",

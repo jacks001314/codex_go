@@ -23,7 +23,9 @@ import (
 type appserverMCPToolApprovalHandler struct {
 	router         *RuntimeRouter
 	service        *mcp.MCPService
-	responder      tool.UserInputResponder
+	// responder receives the calling MCP tool's ID so the approval wait is
+	// charged to that invocation (Rust #57207).
+	responder      tool.UserInputCallIDResponder
 	threadID       string
 	turnID         string
 	approvalPolicy sandbox.AskForApproval
@@ -65,7 +67,7 @@ func (r *RuntimeRouter) newAppserverMCPToolApprovalOptions(
 	if r == nil || service == nil || !r.serverRequestSinkConfigured() {
 		return nil
 	}
-	responder := r.userInputResponderForTurn(threadID, strings.TrimSpace(turnID))
+	responder := r.userInputCallIDResponderForTurn(threadID, strings.TrimSpace(turnID))
 	if responder == nil {
 		return nil
 	}
@@ -190,7 +192,7 @@ func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context
 		decision = elicitationDecision
 		cancellationReason = elicitationReason
 	} else {
-		response, err := h.responder(ctx, &tool.RequestUserInputArgs{Questions: []tool.UserInputQuestion{question}})
+		response, err := h.responder(ctx, strings.TrimSpace(request.CallID), &tool.RequestUserInputArgs{Questions: []tool.UserInputQuestion{question}})
 		if err != nil {
 			// Rust's request_user_input failure aborts the call, and #54679
 			// reports that as an interruption.

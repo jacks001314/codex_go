@@ -445,6 +445,7 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 			active.Cancel = cancel
 			active.StartedAtMS = startedAtMS
 			active.Params = cloneTurnStartParams(params)
+			active.Timing = turn.NewTimingState()
 			m.ensureDiffLocked(threadID, turnID)
 			if tracked {
 				m.turnWG.Add(1)
@@ -459,7 +460,7 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 	m.replaceCapabilityDiscoveryV2CacheLocked(threadID)
 	m.active[threadID] = &activeRuntimeTurn{
 		ThreadID: threadID, TurnID: turnID, Cancel: cancel, StartedAtMS: startedAtMS,
-		Params: cloneTurnStartParams(params),
+		Params: cloneTurnStartParams(params), Timing: turn.NewTimingState(),
 	}
 	m.ensureDiffLocked(threadID, turnID)
 	if tracked {

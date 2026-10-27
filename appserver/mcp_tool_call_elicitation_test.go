@@ -143,7 +143,7 @@ func TestMCPToolCallApprovalClassificationLikeRust(t *testing.T) {
 		}))
 		handler := &appserverMCPToolApprovalHandler{
 			router:                    router,
-			responder:                 func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) { return nil, nil },
+			responder:                 func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) { return nil, nil },
 			threadID:                  "thread-approval",
 			turnID:                    "turn-approval",
 			approvalPolicy:            sandbox.ApprovalOnRequest,

@@ -89,6 +89,10 @@ type activeRuntimeTurn struct {
 	// across sampling retries - so a Guardian review still has a parent response
 	// id while the next response is in flight.
 	LatestResponseID string
+	// Timing is the turn's timing profile state. It carries the direct-tool
+	// critical-path registry so Guardian review and user waits can attribute
+	// their blocking time to the owning tool invocation (Rust #57201/#57207).
+	Timing *turn.TimingState
 }
 
 // recordRuntimeTurnResponseID stores the turn's newest response id (Rust #45441).
@@ -1718,8 +1722,32 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// Rust #44675/#50050: refresh AGENTS.md, plugin, and skill context from the
 	// capability snapshot captured for every model request.
 	instructionsProvider := r.turnStepInstructionsProvider(threadID, turnID, params, runConfig)
+	criticalPathTiming := false
+	if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
+		// Rust regular.rs: only a root-agent turn captures the critical path.
+		criticalPathTiming = features.Enabled(cfg.FeatureSettings(), "critical_path_timing") &&
+			strings.TrimSpace(runConfig.SubagentSource) == "" &&
+			!r.turnThreadIsSubagent(threadID)
+	}
+	timingState := turn.NewTimingState()
+	if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Timing != nil {
+		timingState = active.Timing
+	} else {
+		r.threads.UpdateTurn(threadID, turnID, func(active *activeRuntimeTurn) {
+			if active.Timing == nil {
+				active.Timing = timingState
+			}
+		})
+	}
+	// Rust #57201 enables capture at task start, so pre-turn work such as
+	// compaction is covered even when the turn fails before sampling.
+	if criticalPathTiming {
+		timingState.EnableCriticalPath()
+	}
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
+		Timing:                       timingState,
+		CriticalPathTiming:           criticalPathTiming,
 		Instructions:                 runConfig.Instructions,
 		InstructionsProvider:         instructionsProvider,
 		InputItems:                   inputItems,
@@ -1803,6 +1831,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			ConnectionID: connectionID,
 			Params:       params,
 			RunConfig:    runConfig,
+			Timing:       timingState,
 			SteerCount:   steerCount,
 		})
 		return
@@ -1834,6 +1863,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 				Params:       params,
 				RunConfig:    runConfig,
 				Result:       result,
+				Timing:       timingState,
 				SteerCount:   steerCount,
 			})
 			return
@@ -2021,7 +2051,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: lastAgentMessageFromThreadItems(threadItems)})
 	r.maybeWakeRootForPendingAgentMessages(threadID)
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil, timingState)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -2407,7 +2437,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: reviewFinalAgentMessage(result)})
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil, nil)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
 
@@ -4309,10 +4339,13 @@ func stringPointerIfNotEmpty(value string) *string {
 }
 
 type turnCompletionAnalyticsContext struct {
-	ConnectionID                         string
-	Params                               *turn.TurnStartParams
-	RunConfig                            *appTurnRunConfig
-	Result                               *turn.AgentLoopResult
+	ConnectionID string
+	Params       *turn.TurnStartParams
+	RunConfig    *appTurnRunConfig
+	Result       *turn.AgentLoopResult
+	// Timing reports capture coverage for a turn that failed before its
+	// profile was frozen (Rust #57201 reports incomplete, never disabled).
+	Timing                               *turn.TimingState
 	SteerCount                           int
 	TurnError                            CodexErrorInfo
 	CodexErrorKind                       *string
@@ -4329,6 +4362,7 @@ func analyticsContextFromActiveRuntimeTurn(active *activeRuntimeTurn) *turnCompl
 		ConnectionID: active.ConnectionID,
 		Params:       cloneTurnStartParams(active.Params),
 		RunConfig:    active.RunConfig,
+		Timing:       active.Timing,
 		SteerCount:   active.SteerCount,
 	}
 }
@@ -4520,7 +4554,7 @@ func (r *RuntimeRouter) emitTurnCompletionAnalytics(ctx context.Context, analyti
 	}
 	startedAt := time.UnixMilli(startedAtMS).UTC()
 	record := &turn.TurnRecord{ID: turnID}
-	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode, analytics.UsageLimitWindowMinutes, analytics.ExplicitClientInterruptRequestedAtMS)
+	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode, analytics.UsageLimitWindowMinutes, analytics.ExplicitClientInterruptRequestedAtMS, analytics.Timing)
 }
 
 type turnAnalyticsErrorFields struct {
@@ -8647,7 +8681,7 @@ func countTurnUserInputImages(inputs []turn.TurnUserInput) int {
 	return count
 }
 
-func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, usageLimitWindowMinutes *uint16, explicitClientInterruptRequestedAtMS *uint64) {
+func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, usageLimitWindowMinutes *uint16, explicitClientInterruptRequestedAtMS *uint64, timing *turn.TimingState) {
 	if r == nil || r.services.Analytics == nil || params == nil || record == nil || runConfig == nil || r.threadAnalyticsDisabled(params.ThreadID) {
 		return
 	}
@@ -8697,7 +8731,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		RunningBackgroundProcessCount:        intPtrAppserver(r.requireThreadExtras().CountBackgroundTerminals(params.ThreadID)),
 		ToolCounts:                           analyticsTurnToolCounts(result),
 		TokenUsage:                           analyticsTurnTokenUsage(result),
-		TimingProfile:                        analyticsTurnTimingProfile(result),
+		TimingProfile:                        analyticsTurnTimingProfile(result, timing),
 		DurationMS:                           uint64PtrFromNonNegativeInt64(durationMS),
 		StartedAt:                            uint64PtrFromUnixSeconds(startedAt),
 		CompletedAt:                          uint64PtrFromUnixSeconds(completedAt),
@@ -8776,12 +8810,33 @@ func analyticsTurnTokenUsage(result *turn.AgentLoopResult) *telemetry.CodexTurnT
 	}
 }
 
-func analyticsTurnTimingProfile(result *turn.AgentLoopResult) telemetry.CodexTurnTimingProfile {
-	if result == nil || result.TimingProfile == nil {
-		return telemetry.CodexTurnTimingProfile{}
+func analyticsTurnTimingProfile(result *turn.AgentLoopResult, timing *turn.TimingState) telemetry.CodexTurnTimingProfile {
+	var profile *turn.Profile
+	if result != nil {
+		profile = result.TimingProfile
 	}
-	profile := result.TimingProfile
+	if profile == nil {
+		// Rust #57201: a turn that fails before its profile is frozen still
+		// reports its capture coverage. Missing capture stays null, never zero.
+		report := timing.CriticalPathReportSnapshot()
+		return telemetry.CodexTurnTimingProfile{
+			CriticalPath: telemetry.CodexTurnCriticalPath{Status: string(report.Status)},
+		}
+	}
+	criticalPath := telemetry.CodexTurnCriticalPath{Status: string(profile.CriticalPath.Status)}
+	if profile.CriticalPath.Durations != nil {
+		criticalPath.Durations = &telemetry.CodexTurnCriticalPathDurations{
+			DurationMS:   profile.CriticalPath.Durations.DurationMS,
+			InferenceMS:  profile.CriticalPath.Durations.InferenceMS,
+			AutoReviewMS: profile.CriticalPath.Durations.AutoReviewMS,
+			UserWaitMS:   profile.CriticalPath.Durations.UserWaitMS,
+			ToolsMS:      profile.CriticalPath.Durations.ToolsMS,
+			OverheadMS:   profile.CriticalPath.Durations.OverheadMS,
+			UnknownMS:    profile.CriticalPath.Durations.UnknownMS,
+		}
+	}
 	return telemetry.CodexTurnTimingProfile{
+		CriticalPath:              criticalPath,
 		BeforeFirstSamplingMS:     profile.BeforeFirstSamplingMS,
 		SamplingMS:                profile.SamplingMS,
 		BetweenSamplingOverheadMS: profile.BetweenSamplingOverheadMS,
@@ -11221,6 +11276,9 @@ func (r *RuntimeRouter) maybePromptAndInstallSkillMCPDependencies(ctx context.Co
 				{Label: "Continue anyway", Description: "Skip installation for now and do not show again for these MCP servers in this session."},
 			},
 		}
+		// Rust #57207: this prompt has no owning direct tool invocation, so its
+		// wait cannot be attributed and must invalidate the capture.
+		r.invalidateTurnCriticalPath(threadID, turnID)
 		var response ToolRequestUserInputResponse
 		err := r.requireServerRequests().Request(ctx, ServerRequestToolUserInput, &ToolRequestUserInputParams{
 			ThreadID:  threadID,

@@ -205,9 +205,12 @@ type AgentLoopRequest struct {
 	OnCodeModeNotify             CodeModeNotifyCallback
 	OnWarning                    WarningCallback
 	Timing                       *TimingState
-	SamplingFollowUp             SamplingFollowUp
-	SamplingCompaction           SamplingCompaction
-	OnAssistantMessage           AssistantMessageCallback
+	// CriticalPathTiming enables direct-tool dependency-path capture for this
+	// root-agent turn (Rust #57201, default-off feature).
+	CriticalPathTiming bool
+	SamplingFollowUp   SamplingFollowUp
+	SamplingCompaction SamplingCompaction
+	OnAssistantMessage AssistantMessageCallback
 	// OnCompletedResponseItem receives every completed model response item.
 	// Hosts use it for opt-in telemetry that must observe a final answer before
 	// it is folded into the turn result (Rust #47649).
@@ -339,6 +342,11 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	timing := request.Timing
 	if timing == nil {
 		timing = NewTimingState()
+	}
+	// Enable once: turn-runtime callers may already have started capture before
+	// the agent loop runs, and re-enabling would reset the recorded path.
+	if request.CriticalPathTiming && !timing.CriticalPathCaptureEnabled() {
+		timing.EnableCriticalPath()
 	}
 	timing.MarkTurnStarted(l.now())
 	prompt := strings.TrimSpace(request.Prompt)
@@ -759,8 +767,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// the dispatch still runs under the sampling-request span.
 		endSamplingPhaseSpan()
 		toolBlockingSpan := startTurnPhaseSpan(ctx, request, samplingSpan, ToolBlockingPhaseSpanName, TurnPhaseToolBlocking, request.ThreadID, request.TurnID)
-		toolBlocking := timing.BeginToolBlocking(l.now())
-		executions, err := l.dispatcher.ExecuteToolItems(stepCtx, toolItems)
+		batch := l.dispatcher.BatchTiming()
+		toolBlocking := timing.BeginToolBlocking(l.now(), batch)
+		executions, err := l.dispatcher.ExecuteToolItemsWithBatch(stepCtx, toolItems, batch)
 		toolBlocking.CloseAt(l.now())
 		if toolBlockingSpan != nil {
 			toolBlockingSpan.End()

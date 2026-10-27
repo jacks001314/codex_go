@@ -295,6 +295,9 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		return &AgentLoopResult{Response: response, Responses: []*model.AgentResponse{response}, InputItems: resultInputItems, InitialInputCount: len(request.InputItems), Usage: response.Usage, Iterations: 1, TimingProfile: &profile}, nil
 	}
 	loopRequest := *request
+	if loopRequest.CriticalPathTiming && loopRequest.Timing == nil {
+		loopRequest.Timing = NewTimingState()
+	}
 	if loopRequest.SteerMailbox == nil {
 		loopRequest.SteerMailbox = r.steerMailbox
 	}
@@ -351,6 +354,8 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			TruncationForModel:          r.truncationPolicy,
 			OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
 			Tracer:                      loopRequest.Tracer,
+			CriticalPathTiming:          loopRequest.CriticalPathTiming,
+			TimingState:                 loopRequest.Timing,
 		}),
 		MaxTurns:               r.maxTurns,
 		Now:                    r.now,

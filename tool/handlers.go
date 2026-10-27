@@ -220,6 +220,11 @@ type UserInputResponse struct {
 
 type UserInputResponder func(context.Context, *RequestUserInputArgs) (*UserInputResponse, error)
 
+// UserInputCallIDResponder is the call-ID-aware form of UserInputResponder. The
+// request_user_input handler prefers it so the host can attribute the human wait
+// to the owning tool invocation (Rust #57207).
+type UserInputCallIDResponder func(context.Context, string, *RequestUserInputArgs) (*UserInputResponse, error)
+
 // VerifiedAnswerRecorder receives the host-verified answers of an accepted
 // `request_user_input` call (Rust request_user_input.rs records a
 // `RetainedContextEvent::VerifiedAnswer` for the Guardian review evidence). It
@@ -227,9 +232,10 @@ type UserInputResponder func(context.Context, *RequestUserInputArgs) (*UserInput
 type VerifiedAnswerRecorder func(callID string, questions []retainedctx.VerifiedQuestionAnswer)
 
 type RequestUserInputHandler struct {
-	responder      UserInputResponder
-	availableModes []string
-	verifiedAnswer VerifiedAnswerRecorder
+	responder       UserInputResponder
+	callIDResponder UserInputCallIDResponder
+	availableModes  []string
+	verifiedAnswer  VerifiedAnswerRecorder
 }
 
 func NewRequestUserInputHandler(responder UserInputResponder) *RequestUserInputHandler {
@@ -292,7 +298,14 @@ func (h *RequestUserInputHandler) Execute(ctx context.Context, invocation *Invoc
 	}
 	response := &UserInputResponse{Answers: map[string]string{}}
 	var err error
-	if h.responder != nil {
+	if h.callIDResponder != nil {
+		// Rust #57207: the host binds the human wait to the owning tool
+		// invocation, so it needs the call ID before the request is issued.
+		response, err = h.callIDResponder(ctx, strings.TrimSpace(invocation.CallID), &args)
+		if err != nil {
+			return nil, err
+		}
+	} else if h.responder != nil {
 		response, err = h.responder(ctx, &args)
 		if err != nil {
 			return nil, err
@@ -631,6 +644,9 @@ type CoreHandlerOptions struct {
 	ContextStatus                  func() compact.TokenStatus
 	UserInputResponder             UserInputResponder
 	RequestUserInputAvailableModes []string
+	// UserInputCallIDResponder takes precedence over UserInputResponder so the
+	// host can attribute the user wait to the calling tool (Rust #57207).
+	UserInputCallIDResponder UserInputCallIDResponder
 	// DisableRequestUserInput omits the direct request_user_input handler
 	// (Rust tools.experimental_request_user_input.enabled, #51908).
 	DisableRequestUserInput bool
@@ -671,6 +687,7 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 	handlers := []Executor{}
 	if !options.DisableRequestUserInput {
 		handler := NewRequestUserInputHandlerWithModes(options.UserInputResponder, options.RequestUserInputAvailableModes)
+		handler.callIDResponder = options.UserInputCallIDResponder
 		handler.verifiedAnswer = options.VerifiedAnswerRecorder
 		handlers = append(handlers, handler)
 	}

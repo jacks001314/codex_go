@@ -11,6 +11,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/tool"
+	"codex_go/tooltiming"
 	"codex_go/utils"
 )
 
@@ -48,6 +49,11 @@ type ToolDispatcherOptions struct {
 	// Tracer opens Rust #44661's code-mode handler spans and, when it also
 	// implements TraceEventEmitter, receives the call receipt/readiness events.
 	Tracer SpanTracer
+	// CriticalPathTiming enables direct-tool dependency-path capture for this
+	// turn (Rust #57201). TimingState must be the timing state shared with the
+	// turn profile.
+	CriticalPathTiming bool
+	TimingState        *TimingState
 }
 
 // Rust #44661 trace-safe milestones. They carry identifiers and tool names
@@ -145,6 +151,13 @@ type ToolDispatcher struct {
 	// directCallsMu guards the prepared-call maps, which the parallel execution
 	// path completes from multiple goroutines.
 	directCallsMu sync.Mutex
+	// criticalPathTiming and timingState gate and own direct-tool path capture.
+	// stepBatch and stepGate belong to the current sampling step's tool batch;
+	// they are written before dispatch starts and only read while it runs.
+	criticalPathTiming bool
+	timingState        *TimingState
+	stepBatch          *tooltiming.Batch
+	stepGate           *tooltiming.Gate
 }
 
 type ToolExecutionResult struct {
@@ -392,6 +405,8 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		truncationForModel:          options.TruncationForModel,
 		onToolOutputExternalContext: options.OnToolOutputExternalContext,
 		tracer:                      options.Tracer,
+		criticalPathTiming:          options.CriticalPathTiming,
+		timingState:                 options.TimingState,
 	}
 }
 
@@ -507,8 +522,36 @@ func (d *ToolDispatcher) BeginStepPreempt(mailbox *SteerMailbox) (*tool.YieldSig
 }
 
 func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.AgentItem) ([]ToolExecutionResult, error) {
+	return d.ExecuteToolItemsWithBatch(ctx, items, nil)
+}
+
+// BatchTiming returns the critical-path batch for one sampling step, or nil when
+// capture is disabled for this turn.
+func (d *ToolDispatcher) BatchTiming() *tooltiming.Batch {
+	if d == nil || !d.criticalPathTiming || d.timingState == nil {
+		return nil
+	}
+	return tooltiming.NewBatch()
+}
+
+// ExecuteToolItemsWithBatch dispatches one sampling step's direct calls with
+// the supplied critical-path batch. A nil batch creates one when capture is
+// enabled.
+func (d *ToolDispatcher) ExecuteToolItemsWithBatch(ctx context.Context, items []model.AgentItem, batch *tooltiming.Batch) ([]ToolExecutionResult, error) {
 	if d == nil || d.router == nil {
 		return nil, fmt.Errorf("%w: tool router is nil", tool.ErrToolInvalidCall)
+	}
+	if d.criticalPathTiming && d.timingState != nil {
+		if batch == nil {
+			batch = tooltiming.NewBatch()
+		}
+		d.stepBatch = batch
+		d.stepGate = tooltiming.NewGate()
+	} else {
+		// Capture can be disabled between steps; stale step state must not
+		// attribute work to a batch that no longer exists.
+		d.stepBatch = nil
+		d.stepGate = nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -548,11 +591,16 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 		return nil, nil
 	}
 	if len(invocations) == 1 {
+		startedAt := d.nowUTC()
+		guard := d.beginDirectTiming(invocations[0], startedAt)
 		if err := d.router.WaitUntilReady(ctx, invocations[0]); err != nil {
+			d.finishDirectTiming(guard, nil)
 			d.releasePreparedDirectCalls()
 			return nil, err
 		}
+		admitted := d.admitDirectTiming(guard, invocations[0], startedAt)
 		result, err := d.executeToolInvocation(ctx, invocations[0])
+		d.finishDirectTiming(guard, admitted)
 		if err != nil {
 			d.releasePreparedDirectCalls()
 			return nil, err
@@ -595,7 +643,10 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 	var readinessErr error
 	executeReady := func(index int, invocation *tool.Invocation) {
 		defer readinessWG.Done()
+		startedAt := d.nowUTC()
+		guard := d.beginDirectTiming(invocation, startedAt)
 		if err := d.router.WaitUntilReady(ctx, invocation); err != nil {
+			d.finishDirectTiming(guard, nil)
 			readinessErrMu.Lock()
 			if readinessErr == nil {
 				readinessErr = err
@@ -610,7 +661,9 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 			executionGate.Lock()
 			defer executionGate.Unlock()
 		}
+		admitted := d.admitDirectTiming(guard, invocation, startedAt)
 		result, err := d.executeToolInvocation(ctx, invocation)
+		d.finishDirectTiming(guard, admitted)
 		readinessErrMu.Lock()
 		defer readinessErrMu.Unlock()
 		if err != nil {
@@ -630,8 +683,12 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 			continue
 		}
 		if !d.router.SupportsParallel(invocations[index].ToolName) {
+			startedAt := d.nowUTC()
+			guard := d.beginDirectTiming(invocations[index], startedAt)
 			executionGate.Lock()
+			admitted := d.admitDirectTiming(guard, invocations[index], startedAt)
 			result, err := d.executeToolInvocation(ctx, invocations[index])
+			d.finishDirectTiming(guard, admitted)
 			executionGate.Unlock()
 			if err != nil {
 				readinessWG.Wait()
@@ -645,8 +702,17 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 		for index < len(invocations) && d.router.SupportsParallel(invocations[index].ToolName) && !d.router.HasReadinessWait(invocations[index].ToolName) {
 			index++
 		}
+		timed := make([]timedToolInvocation, index-start)
+		for i := start; i < index; i++ {
+			startedAt := d.nowUTC()
+			timed[i-start] = timedToolInvocation{
+				invocation: invocations[i],
+				startedAt:  startedAt,
+				guard:      d.beginDirectTiming(invocations[i], startedAt),
+			}
+		}
 		executionGate.RLock()
-		groupResults, err := d.executeParallelToolInvocations(ctx, invocations[start:index])
+		groupResults, err := d.executeParallelToolInvocations(ctx, timed)
 		executionGate.RUnlock()
 		if err != nil {
 			readinessWG.Wait()
@@ -661,15 +727,24 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 	return results, nil
 }
 
-func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, invocations []*tool.Invocation) ([]ToolExecutionResult, error) {
-	if len(invocations) == 1 {
-		result, err := d.executeToolInvocation(ctx, invocations[0])
+type timedToolInvocation struct {
+	invocation *tool.Invocation
+	startedAt  time.Time
+	guard      *tooltiming.ToolGuard
+}
+
+func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, timed []timedToolInvocation) ([]ToolExecutionResult, error) {
+	if len(timed) == 1 {
+		item := timed[0]
+		admitted := d.admitDirectTiming(item.guard, item.invocation, item.startedAt)
+		result, err := d.executeToolInvocation(ctx, item.invocation)
+		d.finishDirectTiming(item.guard, admitted)
 		if err != nil {
 			return nil, err
 		}
 		return []ToolExecutionResult{*result}, nil
 	}
-	results := make([]ToolExecutionResult, len(invocations))
+	results := make([]ToolExecutionResult, len(timed))
 	var errorLock sync.Mutex
 	var firstErr error
 	var wg sync.WaitGroup
@@ -683,13 +758,15 @@ func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, inv
 			firstErr = err
 		}
 	}
-	for i := range invocations {
+	for i := range timed {
 		index := i
-		invocation := invocations[i]
+		item := timed[i]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			result, err := d.executeToolInvocation(ctx, invocation)
+			admitted := d.admitDirectTiming(item.guard, item.invocation, item.startedAt)
+			result, err := d.executeToolInvocation(ctx, item.invocation)
+			d.finishDirectTiming(item.guard, admitted)
 			if err != nil {
 				setError(err)
 				return
@@ -702,6 +779,70 @@ func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, inv
 		return nil, firstErr
 	}
 	return results, nil
+}
+
+// directPathSupported reports whether direct-tool timing can attribute this
+// invocation. Code Mode and agent-communication dependencies are not captured
+// yet (Rust #57201).
+func (d *ToolDispatcher) directPathSupported(invocation *tool.Invocation) bool {
+	if invocation == nil {
+		return false
+	}
+	if strings.TrimSpace(invocation.Source) == ToolTraceSourceCodeMode {
+		return false
+	}
+	name := invocation.ToolName
+	if name.Namespace == "" && (name.Name == tool.CodeModeExecToolName || name.Name == tool.CodeModeWaitToolName) {
+		return false
+	}
+	// Multi-agent tool namespaces can be overridden by the tool catalog.
+	switch name.Name {
+	case "spawn_agent", "send_input", "close_agent", "resume_agent", "wait_agent",
+		"list_agents", "followup_task", "interrupt_agent", "send_message":
+		return false
+	}
+	return true
+}
+
+func (d *ToolDispatcher) beginDirectTiming(invocation *tool.Invocation, startedAt time.Time) *tooltiming.ToolGuard {
+	if d == nil || !d.criticalPathTiming || d.timingState == nil {
+		return nil
+	}
+	if !d.directPathSupported(invocation) {
+		d.timingState.InvalidateCriticalPath()
+		return nil
+	}
+	if d.stepBatch == nil {
+		d.stepBatch = tooltiming.NewBatch()
+	}
+	return d.timingState.DirectToolTimings().StartTurnDirectCall(
+		invocation.CallID,
+		d.turnID,
+		d.stepBatch,
+		startedAt,
+		d.timingState.SnapshotPath(startedAt),
+	)
+}
+
+func (d *ToolDispatcher) admitDirectTiming(guard *tooltiming.ToolGuard, invocation *tool.Invocation, startedAt time.Time) *tooltiming.AdmittedToolTiming {
+	if guard == nil || d.stepGate == nil {
+		return nil
+	}
+	admission := tooltiming.AdmissionExclusive
+	if d.router != nil && d.router.SupportsParallel(invocation.ToolName) {
+		admission = tooltiming.AdmissionParallel
+	}
+	return d.stepGate.Admit(guard, admission, startedAt)
+}
+
+func (d *ToolDispatcher) finishDirectTiming(guard *tooltiming.ToolGuard, admitted *tooltiming.AdmittedToolTiming) {
+	if admitted != nil {
+		admitted.Finish()
+		return
+	}
+	if guard != nil {
+		guard.Finish()
+	}
 }
 
 func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {

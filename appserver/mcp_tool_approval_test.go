@@ -39,7 +39,7 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 		}))
 		handler := &appserverMCPToolApprovalHandler{
 			router: router,
-			responder: func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			responder: func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 				t.Error("the elicitation transport must not fall back to user input")
 				return nil, nil
 			},
@@ -133,7 +133,7 @@ func TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust(t *tes
 	router.SetServerRequestSink(ServerRequestSinkFunc(func(*ServerRequest) { prompted = true }))
 	handler := &appserverMCPToolApprovalHandler{
 		router: router,
-		responder: func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+		responder: func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			prompted = true
 			return nil, nil
 		},
@@ -170,7 +170,7 @@ func TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust(t *tes
 }
 
 func newMCPToolApprovalTestHandler(
-	responder tool.UserInputResponder,
+	responder tool.UserInputCallIDResponder,
 	persistent bool,
 ) *appserverMCPToolApprovalHandler {
 	return &appserverMCPToolApprovalHandler{
@@ -202,7 +202,7 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 	}
 
 	t.Run("accept", func(t *testing.T) {
-		handler := newMCPToolApprovalTestHandler(func(_ context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+		handler := newMCPToolApprovalTestHandler(func(_ context.Context, _ string, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			question := args.Questions[0]
 			if question.ID != mcp.MCPToolApprovalQuestionIDPrefix+"_call-1" || question.Header != mcp.MCPToolApprovalHeader {
 				t.Fatalf("question = %#v", question)
@@ -230,7 +230,7 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 
 	t.Run("accept for session is remembered", func(t *testing.T) {
 		calls := 0
-		handler := newMCPToolApprovalTestHandler(func(_ context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+		handler := newMCPToolApprovalTestHandler(func(_ context.Context, _ string, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			calls++
 			return &tool.UserInputResponse{Answers: map[string]string{args.Questions[0].ID: mcp.MCPToolApprovalAcceptForSession}}, nil
 		}, true)
@@ -253,7 +253,7 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 	})
 
 	t.Run("cancel aborts", func(t *testing.T) {
-		handler := newMCPToolApprovalTestHandler(func(_ context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+		handler := newMCPToolApprovalTestHandler(func(_ context.Context, _ string, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			return &tool.UserInputResponse{Answers: map[string]string{args.Questions[0].ID: mcp.MCPToolApprovalCancel}}, nil
 		}, true)
 		outcome, err := handler.ApproveMCPToolCall(context.Background(), request())
@@ -264,7 +264,7 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 	})
 
 	t.Run("responder failure aborts", func(t *testing.T) {
-		handler := newMCPToolApprovalTestHandler(func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+		handler := newMCPToolApprovalTestHandler(func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			return nil, errors.New("client disconnected")
 		}, true)
 		outcome, err := handler.ApproveMCPToolCall(context.Background(), request())
@@ -275,7 +275,7 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 	})
 
 	t.Run("prompt mode downgrades remembered answers", func(t *testing.T) {
-		handler := newMCPToolApprovalTestHandler(func(_ context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+		handler := newMCPToolApprovalTestHandler(func(_ context.Context, _ string, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			return &tool.UserInputResponse{Answers: map[string]string{args.Questions[0].ID: mcp.MCPToolApprovalAcceptAndRemember}}, nil
 		}, true)
 		mode := apps.AppToolApprovalPrompt

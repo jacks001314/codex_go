@@ -148,6 +148,13 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.fastDecision = r.emitGuardianV2FastDecision
 		modelReviewer.metrics = r.services.TurnMetrics
 		modelReviewer.blocking = r.requireGuardianReviewBlocking()
+		modelReviewer.turnTiming = func(threadID, turnID string) *turn.TimingState {
+			active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+			if active == nil {
+				return nil
+			}
+			return active.Timing
+		}
 		modelReviewer.subagentThread = r.turnThreadIsSubagent
 		modelReviewer.tracer = r.requestTracer
 		modelReviewer.warn = func(threadID, message string) {

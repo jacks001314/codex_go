@@ -43,7 +43,7 @@ func TestTimingProfile(t *testing.T) {
 	guard.active = false
 	timing.mu.Unlock()
 	timing.RecordSamplingRetry()
-	tool := timing.BeginToolBlocking(start.Add(500 * time.Millisecond))
+	tool := timing.BeginToolBlocking(start.Add(500*time.Millisecond), nil)
 	timing.mu.Lock()
 	timing.profile.endPhase(start.Add(800*time.Millisecond), phaseToolBlocking)
 	tool.active = false

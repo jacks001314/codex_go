@@ -46,6 +46,8 @@ TUI lane and are not modified here.
 | `#56553` | Thread-scoped `hooks/list` and `environmentId` in hook metadata | `appserver/hooks.go`, `appserver/runtime_router.go`, `appserver/hooks_runner.go`, like-Rust tests |
 | `#57186` | Fail closed on unreadable deny-glob search root metadata errors | `sandbox/linuxsandbox/bwrap.go`, `sandbox/linuxsandbox/unreadable_glob_root_test.go` |
 | `#57209` | Turn analytics critical-path fields (disabled/null default; capture pending) | `telemetry/turn_event.go`, `telemetry/turn_event_test.go` |
+| `#57201` | Capture direct-tool critical paths behind `critical_path_timing` | `criticalpath/critical_path.go`, `tooltiming/tool_timing.go`, `features/features.go`, `turn/turn.go`, `turn/tool_dispatcher.go`, `turn/agent_loop.go`, `turn/runtime.go`, `appserver/turn_runtime.go`, `appserver/thread_manager.go`, `telemetry/turn_event.go`, like-Rust tests |
+| `#57207` | Attribute approval waits and Guardian reviews to the owning tool call | `tool/handlers.go`, `turn/tools.go`, `appserver/runtime_router.go`, `appserver/guardian_reviewer.go`, `appserver/network_approval.go`, `appserver/mcp_elicitation.go`, `appserver/mcp_tool_approval.go`, `appserver/agent_runtime.go`, like-Rust tests |
 | `#57198` | `PreToolUse` hook input reports the local command's resolved working directory | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, like-Rust tests |
 | `#57203` | Preserve the command cwd in `PermissionRequest` and `PostToolUse` hook input | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, `appserver/runtime_router.go`, `appserver/network_approval.go`, like-Rust tests |
 | `#56494` | Channel upserts on message boards (`upsert_channel`; `description` on `create_channel`) | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, `agentboard/upsert_channel_test.go`, `agentboard/tools_test.go` |
@@ -350,13 +352,41 @@ failure rejects the whole expansion with the root and underlying error instead
 of dropping the deny rule. The in-process fallback already failed closed via
 `doublestar.WithFailOnIOErrors`.
 
-`#57209` details: `codex_turn_event` now carries Rust's eight critical-path
-fields (`critical_path_status` and the duration/inference/auto-review/
-user-wait/tools/overhead/unknown milliseconds). Because Go does not implement
-critical-path capture (`#57201` is still pending), the payload always reports
-`disabled` with null durations, which is exactly what Rust emits with the
-default-off `critical_path_timing` feature. Nulls are preserved rather than
-zeroed so a missing measurement can never be read as a zero duration.
+`#57209` `#57201` `#57207` details: `codex_turn_event` carries Rust's eight
+critical-path fields (`critical_path_status` and the duration/inference/
+auto-review/user-wait/tools/overhead/unknown milliseconds). With the
+default-off `critical_path_timing` feature the payload reports `disabled` with
+null durations; nulls are preserved rather than zeroed so a missing measurement
+can never be read as a zero duration.
+
+`criticalpath` ports `codex-utils-critical-path`: immutable shared-prefix paths,
+latest-wins joins, clipping, a 16,384-segment bound that collapses into unknown
+work, and exclusive interval attribution with unrecorded gaps as overhead.
+`tooltiming` ports `codex-direct-tool-timing`: per-invocation guards, duplicate
+external call IDs invalidating attribution, user waits taking precedence over
+auto reviews, batch completion, and execution-gate handoffs. The turn profile
+extends the path on every phase transition (sampling and compaction as
+inference, tool blocking through the batch's completed dependency, idle time as
+overhead) and freezes the categories into `Profile.CriticalPath`.
+
+Capture is enabled only for root-agent turns (`tasks/regular.rs`), before
+`runtime.Run`, so pre-turn failures and compaction still report coverage. Code
+Mode and multi-agent tool paths are not captured yet; those dispatches
+invalidate the turn instead of guessing an owner. Review turns do not capture.
+Failed turns report `incomplete` rather than publishing unsettled totals.
+
+`#57207` details: `request_user_input` now passes the calling tool's call ID
+through a `UserInputCallIDResponder`; command, file-change, permission, and
+`write_stdin` approvals plus Guardian reviews and network approvals start a
+user-wait/review guard on the owning invocation. Waits without an owner
+(including MCP elicitations and the MCP dependency-install prompt) invalidate
+the turn's capture instead of charging an unrelated call.
+
+Caveats: Go has a single cancellation path, equivalent to Rust's graceful
+interrupt, and every tool dispatch settles before the turn profile freezes, so
+Rust's forced-teardown invalidation (`tasks/mod.rs`) has no Go counterpart; no
+invalidation is needed. Config changes to `critical_path_timing` take effect on
+the next turn because the dispatcher policy is fixed at turn start.
 
 `#57198` `#57203` details: tool hook requests now carry a `toolCWD` that
 becomes the hook input's `cwd`, while `cwd` still selects the directory the
@@ -423,8 +453,9 @@ Reviewed in this window with no Go change:
   it belongs to the TUI lane.
 - `#57253` (slow daemon startup with early-exit detection) lives in
   `app/daemon_startup.go`, which this lane does not touch (TUI lane owns it).
-- `#57207`/`#57201` (critical-path timing capture) remain pending: Go emits the
-  `#57209` analytics fields as `disabled`/null because no capture exists.
+- `#57201`/`#57207` (critical-path capture and approval-wait attribution) are
+  implemented above; see their caveats for forced teardown and unsupported
+  Code Mode/multi-agent ownership.
 
 `#55846` details: the review metric used to subtract two wall-clock
 millisecond timestamps, so a clock change or a delayed emission changed the
@@ -519,8 +550,7 @@ resolution plumbing is in place for when that gate is widened.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
-  `#57201`/`#57207` critical-path
-  capture, `#55957`/`#55968` cloud catalog refresh on auth change and failure
+  `#55957`/`#55968` cloud catalog refresh on auth change and failure
   backoff, `#56530` catalog size histograms, `#55631` frozen cloud skill
   snapshots, `#55847` retained-analytics bounds, and API-key analytics event
   eligibility (`can_send_with_api_key_auth`) despite the new FedRAMP URL
@@ -604,6 +634,10 @@ resolution plumbing is in place for when that gate is widened.
 - For `#55591`: `go test ./appserver -run 'GuardianReviewBlocking' -count=1`
   passes, as do `go test ./appserver -run 'Guardian' -count=1` and
   `go build ./...`.
+- For `#57201`/`#57207`: `go test ./criticalpath ./tooltiming ./turn ./telemetry -count=1`,
+  `go test ./appserver -run 'TestUserWaitTiming|TestGuardianReviewTimingUsesOwningCall|TestMCPElicitationInvalidates|TestNetworkApprovalTimingCallID|Guardian|Analytics|TurnEvent|TurnProfile|TimingProfile' -count=1`,
+  `go test ./tool -count=1`, the full `go test ./appserver -count=1`, and
+  `go build ./...` pass.
 - For `#57178`: `go test ./model -run 'Fedramp|APIProviderAndAuth|ConfiguredProviderRoutesAPIKeyModelDiscovery' -count=1`,
   `go test ./config -run 'ChatGPTBackendURL|NewConfigFromRead' -count=1`,
   and `go test ./appserver -run 'RealtimeStartOptions|Analytics|Catalog|ImageGeneration|WebSearch|HistoryNotes' -count=1`

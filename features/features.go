@@ -95,6 +95,10 @@ var Registry = []Spec{
 	{Key: "search_tool", Stage: StageRemoved},
 	{Key: "codex_git_commit", Stage: StageRemoved},
 	{Key: "runtime_metrics", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #57201): capture internal direct-tool
+	// dependency paths for turn attribution. Under development and off by
+	// default.
+	{Key: "critical_path_timing", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "sqlite", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "memories", Stage: StageStable},
 	{Key: "external_agent_memory_import", Stage: StageUnderDevelopment},

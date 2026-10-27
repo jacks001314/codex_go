@@ -121,6 +121,7 @@ func TestAnalyticsRootTurnIDReadsLiveTurnMetadataLikeRust(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	assertToolEventRoot(t, waitForCodexTurnEvent(t, sink, turnID).EventParams.RootTurnID, "")
 

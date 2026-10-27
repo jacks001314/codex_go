@@ -55,6 +55,7 @@ import (
 	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/tool"
+	"codex_go/tooltiming"
 	"codex_go/turn"
 	"codex_go/utils"
 )
@@ -14197,12 +14198,13 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 		reviewer = r.ensureGuardianReviewer(r.services.Agent)
 	}
 	service.SetElicitationHandler(&appserverMCPElicitationHandler{
-		broker:    r.requireServerRequests(),
-		service:   service,
-		reviewer:  reviewer,
-		authority: r.currentMCPElicitationAuthority,
-		persist:   r.persistMCPToolApprovalAmendment,
-		record:    r.recordMCPToolApprovalResolution,
+		broker:           r.requireServerRequests(),
+		service:          service,
+		reviewer:         reviewer,
+		authority:        r.currentMCPElicitationAuthority,
+		persist:          r.persistMCPToolApprovalAmendment,
+		record:           r.recordMCPToolApprovalResolution,
+		invalidateTiming: r.invalidateTurnCriticalPath,
 	})
 	service.SetProgressHandler(&appserverMCPProgressHandler{notify: r.notify})
 	service.SetRootsProvider(mcp.MCPRootsProviderFunc(func(threadID string) []mcp.MCPRoot {
@@ -16010,7 +16012,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	}
 	options.ContextStatus = r.contextStatusForThread(threadID)
 	options.NewContextWindow = r.newContextWindowRequesterForTurn(threadID, cfg)
-	options.UserInputResponder = r.userInputResponderForTurn(threadID, strings.TrimSpace(turnID))
+	options.UserInputCallIDResponder = r.userInputCallIDResponderForTurn(threadID, strings.TrimSpace(turnID))
 	// Rust request_user_input.rs: with guardian approval enabled, the answers the
 	// host accepts become retained evidence the reviewer can render.
 	options.VerifiedAnswerRecorder = r.verifiedAnswerRecorderForTurn(threadID, strings.TrimSpace(turnID), cfg.FeatureSettings())
@@ -16267,6 +16269,9 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 		if strings.TrimSpace(reviewThreadID) != "" {
 			threadID = strings.TrimSpace(reviewThreadID)
 		}
+		// Rust #57207: retain the invocation identity before request
+		// preparation can suspend.
+		userWaitOwner := r.userWaitTimingOwner(threadID, turnID, callID)
 		requested, err := additionalPermissionProfileFromJSONMap(permissions)
 		if err != nil {
 			return tool.RequestPermissionsDecision{}, err
@@ -16335,6 +16340,8 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 			Reason:        stringPtrIfNotEmpty(strings.TrimSpace(reason)),
 			Permissions:   permissions,
 		}
+		userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
+		defer userWait.End()
 		var response PermissionsRequestApprovalResponse
 		if err := r.requireServerRequests().Request(ctx, ServerRequestPermissionsApproval, request, &response); err != nil {
 			return tool.RequestPermissionsDecision{}, err
@@ -16803,6 +16810,9 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 		}
 		return errors.New("writing input to this terminal was denied by automatic review")
 	}
+	// Rust #57207: a stdin review is a child approval of the existing command
+	// item, so the launch call owns the wait when it is known.
+	userWaitOwner := r.userWaitTimingOwner(threadID, turnID, firstNonEmpty(strings.TrimSpace(request.LaunchCallID), strings.TrimSpace(request.CallID)))
 	params := &CommandExecutionRequestApprovalParams{
 		Kind:          ExecApprovalKindWriteStdin,
 		ThreadID:      threadID,
@@ -16824,6 +16834,8 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 	if request.AdditionalPermissions != nil {
 		params.AdditionalPermissions = cloneAdditionalPermissionProfile(request.AdditionalPermissions)
 	}
+	userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
+	defer userWait.End()
 	var response CommandExecutionRequestApprovalResponse
 	if err := r.requireServerRequests().Request(ctx, ServerRequestCommandExecutionApproval, params, &response); err != nil {
 		return err
@@ -17383,6 +17395,7 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if itemID == "" {
 			itemID = "command-" + safeIdentifier(turnID)
 		}
+		userWaitOwner := r.userWaitTimingOwner(threadID, turnID, itemID)
 		environmentID := "local"
 		command := strings.TrimSpace(request.Request.HookCommand)
 		cwd := strings.TrimSpace(request.Request.CWD)
@@ -17450,6 +17463,8 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 				params.ProposedExecPolicyAmendment = amendment
 			}
 		}
+		userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
+		defer userWait.End()
 		var response CommandExecutionRequestApprovalResponse
 		if err := r.requireServerRequests().Request(ctx, ServerRequestCommandExecutionApproval, params, &response); err != nil {
 			return tool.ShellApprovalDecision{}, err
@@ -17579,12 +17594,15 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 				telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
 			return tool.ApplyPatchApprovalDecision{DenyReason: outcome.DenyReason}, nil
 		}
+		userWaitOwner := r.userWaitTimingOwner(threadID, turnID, itemID)
 		params := &FileChangeRequestApprovalParams{
 			ThreadID:    strings.TrimSpace(threadID),
 			TurnID:      strings.TrimSpace(turnID),
 			ItemID:      itemID,
 			StartedAtMS: uint64(time.Now().UTC().UnixMilli()),
 		}
+		userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
+		defer userWait.End()
 		var response FileChangeRequestApprovalResponse
 		if err := r.requireServerRequests().Request(ctx, ServerRequestFileChangeApproval, params, &response); err != nil {
 			return tool.ApplyPatchApprovalDecision{}, err
@@ -18384,16 +18402,21 @@ func (r *RuntimeRouter) restoreConversationWindow(threadID string) {
 	}
 }
 
-func (r *RuntimeRouter) userInputResponderForTurn(threadID string, turnID string) tool.UserInputResponder {
+// userInputCallIDResponderForTurn reports the user-facing wait with the calling
+// tool's ID so critical-path capture charges it as user_wait (Rust #57207).
+func (r *RuntimeRouter) userInputCallIDResponderForTurn(threadID string, turnID string) tool.UserInputCallIDResponder {
 	threadID = strings.TrimSpace(threadID)
 	turnID = strings.TrimSpace(turnID)
-	return func(ctx context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+	return func(ctx context.Context, callID string, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 		if r == nil {
 			return nil, fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 		}
 		if threadID == "" {
 			return nil, fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
 		}
+		// Rust #57207: retain the invocation identity before request
+		// preparation can suspend.
+		userWaitOwner := r.userWaitTimingOwner(threadID, turnID, callID)
 		if err := args.Normalize(); err != nil {
 			return nil, err
 		}
@@ -18407,12 +18430,57 @@ func (r *RuntimeRouter) userInputResponderForTurn(threadID string, turnID string
 		}()
 
 		params := toolRequestUserInputParamsFromArgs(threadID, turnID, args)
+		userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
+		defer userWait.End()
 		var response ToolRequestUserInputResponse
 		if err := r.requireServerRequests().Request(ctx, ServerRequestToolUserInput, params, &response); err != nil {
 			return nil, err
 		}
 		return toolUserInputResponseToToolResponse(&response), nil
 	}
+}
+
+// userWaitTimingOwner retains the invoking tool's timing guard before request
+// preparation can block, so an interactive wait is charged to the tool that
+// triggered it (Rust #57207). It returns nil when critical-path capture is off
+// or the call cannot be attributed.
+func (r *RuntimeRouter) userWaitTimingOwner(threadID string, turnID string, callID string) *tooltiming.ToolGuard {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil
+	}
+	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+	if active == nil || active.Timing == nil || !active.Timing.CriticalPathCaptureEnabled() {
+		return nil
+	}
+	return active.Timing.DirectToolTimings().OwnerForTurn(callID, turnID)
+}
+
+// invalidateTurnCriticalPath drops the turn's captured path when a wait cannot
+// be attributed to a direct tool invocation (Rust #57207).
+func (r *RuntimeRouter) invalidateTurnCriticalPath(threadID string, turnID string) {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Timing == nil || !active.Timing.CriticalPathCaptureEnabled() {
+		return
+	}
+	active.Timing.InvalidateCriticalPath()
+}
+
+// startUserWaitTiming brackets the user-facing wait. A wait whose owner cannot
+// be resolved invalidates the turn's capture instead of charging an unrelated
+// call (Rust #57207).
+func (r *RuntimeRouter) startUserWaitTiming(threadID string, turnID string, owner *tooltiming.ToolGuard) *tooltiming.BlockingGuard {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Timing == nil || !active.Timing.CriticalPathCaptureEnabled() {
+		return nil
+	}
+	guard := owner.StartUserWait()
+	if guard == nil {
+		active.Timing.InvalidateCriticalPath()
+	}
+	return guard
 }
 
 func toolRequestUserInputParamsFromArgs(threadID string, turnID string, args *tool.RequestUserInputArgs) *ToolRequestUserInputParams {

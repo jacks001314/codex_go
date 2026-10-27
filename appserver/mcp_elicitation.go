@@ -14,12 +14,15 @@ import (
 )
 
 type appserverMCPElicitationHandler struct {
-	broker              *ServerRequestBroker
-	service             *mcp.MCPService
-	reviewer            GuardianReviewer
-	authority           func(string, string, string) mcpElicitationAuthority
-	persist             func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse) error
-	record              func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse)
+	broker    *ServerRequestBroker
+	service   *mcp.MCPService
+	reviewer  GuardianReviewer
+	authority func(string, string, string) mcpElicitationAuthority
+	persist   func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse) error
+	record    func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse)
+	// invalidateTiming drops the turn's captured critical path. An elicitation
+	// request ID is not a reliable tool invocation owner (Rust #57207).
+	invalidateTiming    func(threadID, turnID string)
 	fullAccessFormInput atomic.Bool
 }
 
@@ -134,7 +137,13 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 			action = guardianMCPRegisteredInvocationAction(liveInvocation)
 		}
 		if h != nil && h.reviewer != nil {
-			decision, reason, err := h.reviewer.Review(ctx, request.ThreadID, request.TurnID, reviewID, action)
+			// Rust #57207: attribute the review to the live tool invocation when
+			// one is known; the elicitation ID is only a display identity.
+			reviewCtx := ctx
+			if liveOK && strings.TrimSpace(liveInvocation.ServerName) == serverName {
+				reviewCtx = withGuardianTimingCallID(ctx, originatingCallID)
+			}
+			decision, reason, err := h.reviewer.Review(reviewCtx, request.ThreadID, request.TurnID, reviewID, action)
 			if err == nil {
 				// Rust #40031: strict MCP auto-review propagates canonical
 				// approved / denied / timed-out / aborted outcomes instead of
@@ -164,6 +173,11 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 }
 
 func (h *appserverMCPElicitationHandler) requestMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
+	// Rust #57207: the callback carries a request ID, not a reliable tool
+	// invocation owner, so its human wait cannot be attributed.
+	if h != nil && h.invalidateTiming != nil && request != nil {
+		h.invalidateTiming(request.ThreadID, request.TurnID)
+	}
 	if h == nil || h.broker == nil {
 		if mcp.IsUserVerificationElicitation(request) {
 			return &mcp.MCPElicitationResponse{

@@ -26,6 +26,9 @@ type ToolRegistryOptions struct {
 	ContextStatus                  func() compact.TokenStatus
 	UserInputResponder             tool.UserInputResponder
 	RequestUserInputAvailableModes []string
+	// UserInputCallIDResponder takes precedence over UserInputResponder and
+	// receives the calling tool's ID (Rust #57207).
+	UserInputCallIDResponder tool.UserInputCallIDResponder
 	// VerifiedAnswerRecorder receives the accepted request_user_input answers
 	// (Rust request_user_input.rs's retained verified-answer capture).
 	VerifiedAnswerRecorder       tool.VerifiedAnswerRecorder
@@ -528,6 +531,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			ContextStatus:                  options.ContextStatus,
 			UserInputResponder:             options.UserInputResponder,
 			RequestUserInputAvailableModes: options.RequestUserInputAvailableModes,
+			UserInputCallIDResponder:       options.UserInputCallIDResponder,
 			DisableRequestUserInput:        options.DisableRequestUserInput,
 			VerifiedAnswerRecorder:         options.VerifiedAnswerRecorder,
 			ClockProvider:                  options.ClockProvider,

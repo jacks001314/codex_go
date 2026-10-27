@@ -37,6 +37,31 @@ type GuardianReviewer interface {
 	Review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error)
 }
 
+// guardianTimingCallIDKey carries the tool call whose critical-path entry should
+// absorb an automatic review. Network approvals and MCP elicitations keep their
+// own display identity, which is not a direct-tool invocation ID (Rust #57207).
+type guardianTimingCallIDKey struct{}
+
+// withGuardianTimingCallID overrides the review's critical-path owner.
+func withGuardianTimingCallID(ctx context.Context, callID string) context.Context {
+	callID = strings.TrimSpace(callID)
+	if callID == "" || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, guardianTimingCallIDKey{}, callID)
+}
+
+func guardianTimingCallIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	callID, ok := ctx.Value(guardianTimingCallIDKey{}).(string)
+	if !ok || strings.TrimSpace(callID) == "" {
+		return "", false
+	}
+	return callID, true
+}
+
 type modelGuardianReviewer struct {
 	agent         model.AgentRunner
 	store         *state.ReviewStore
@@ -80,6 +105,10 @@ type modelGuardianReviewer struct {
 	// omission notices the reviewer conversation already received (#49796).
 	retainedOmissionsMu sync.Mutex
 	retainedOmissions   map[string]state.GuardianRetainedOmissions
+	// turnTiming resolves the reviewed turn's timing state, which owns the
+	// direct-tool invocation registry used to attribute blocking review time to
+	// the owning tool call (Rust #57207).
+	turnTiming func(threadID, turnID string) *turn.TimingState
 	// blocking mirrors Rust's thread-owned ReviewBlocking
 	// (codex-rs/ext/guardian-reviewer/src/blocking.rs): the reviewer enters the
 	// same tracker the turn lifecycle exports samples from, so approval waits
@@ -165,6 +194,13 @@ type guardianScoreProgress struct {
 	latestToolCall       int
 	latestScoredToolCall int
 	wrapperStarts        []guardianWrapperStart
+}
+
+func (r *modelGuardianReviewer) reviewTurnTiming(threadID, turnID string) *turn.TimingState {
+	if r == nil || r.turnTiming == nil {
+		return nil
+	}
+	return r.turnTiming(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 }
 
 func (r *modelGuardianReviewer) beginApprovalToolCall(threadID, toolCallID string) *guardianScoreProgress {
@@ -635,6 +671,20 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// turn that serviced it.
 	if release := r.blocking.enter(threadID); release != nil {
 		defer release()
+	}
+	// Rust #57207: bind the review to its owning tool invocation before any
+	// blocking work starts. When the owner is unknown, invalidate the turn's
+	// capture instead of charging an unrelated call.
+	if timing := r.reviewTurnTiming(threadID, turnID); timing.CriticalPathCaptureEnabled() {
+		timingCallID := targetItemID
+		if override, ok := guardianTimingCallIDFromContext(ctx); ok {
+			timingCallID = override
+		}
+		if guard := timing.DirectToolTimings().StartReviewForTurn(timingCallID, turnID); guard != nil {
+			defer guard.End()
+		} else {
+			timing.InvalidateCriticalPath()
+		}
 	}
 	// Rust #39001: skip approval review when the latest risk score lags by more
 	// than max_tool_call_lag tool calls. The Go simplified reviewer fails closed

@@ -193,6 +193,9 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 func (s *networkApprovalService) requestApproval(ctx context.Context, active *networkApprovalTurn, key networkApprovalKey, request network.ProxyPolicyRequest, ownerCall *activeNetworkApprovalCall) (network.ProxyDecision, NetworkPolicyRuleAction) {
 	protocol := networkApprovalProtocol(request.Protocol)
 	target := networkApprovalTarget(request.Protocol, request.Host, request.Port)
+	// Rust #57207: a network approval has its own display identity, while the
+	// triggering tool call owns the user wait.
+	userWaitOwner := s.router.userWaitTimingOwner(active.threadID, active.turnID, networkApprovalTimingCallID(ownerCall))
 	approvalID := fmt.Sprintf("network#%s#%s#%s#%d", key.environmentID, networkApprovalProtocolKey(protocol), key.host, key.port)
 	// Rust reports every resolved network approval through tool_decision, with no
 	// source and the owning tool's identity (network_approval.rs).
@@ -247,6 +250,8 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 			{"host": request.Host, "action": string(NetworkPolicyRuleDeny)},
 		},
 	}
+	userWait := s.router.startUserWaitTiming(active.threadID, active.turnID, userWaitOwner)
+	defer userWait.End()
 	var response CommandExecutionRequestApprovalResponse
 	err := s.router.requireServerRequests().RequestToConnection(ctx, active.connectionID, ServerRequestCommandExecutionApproval, params, &response)
 	if err != nil {
@@ -335,7 +340,10 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 		s.recordGuardianOutcome(ownerCall, "Auto-approval review is unavailable; the request was denied.")
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 	}
-	decision, reason, err := reviewer.Review(ctx, active.threadID, active.turnID, "", action)
+	// Rust #57207: the review's display identity stays empty, while its
+	// critical-path owner is the triggering tool call.
+	reviewCtx := withGuardianTimingCallID(ctx, networkApprovalTimingCallID(ownerCall))
+	decision, reason, err := reviewer.Review(reviewCtx, active.threadID, active.turnID, "", action)
 	if err == nil && decision == state.DecisionApproved {
 		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
 			telemetry.ToolDecisionApproved, "")
@@ -352,6 +360,16 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 		telemetry.ToolDecisionDenied, "")
 	s.recordGuardianOutcome(ownerCall, reason)
 	return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+}
+
+// networkApprovalTimingCallID reports the tool call whose critical-path entry
+// owns a network approval. Only the trigger carries a real invocation ID
+// (Rust #57207).
+func networkApprovalTimingCallID(ownerCall *activeNetworkApprovalCall) string {
+	if ownerCall == nil || ownerCall.trigger == nil {
+		return ""
+	}
+	return strings.TrimSpace(ownerCall.trigger.CallID)
 }
 
 func networkApprovalCallKey(threadID string, turnID string, callID string) string {
