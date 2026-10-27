@@ -33,7 +33,7 @@ func TestRuntimeConfigAdmitsEnterpriseMCPServer(t *testing.T) {
 	if config.ProtocolModeOverride == nil || *config.ProtocolModeOverride != MCPProtocol20260728 || !config.EMAAuthExtension {
 		t.Fatalf("protocol mode/extension = %+v/%v", config.ProtocolModeOverride, config.EMAAuthExtension)
 	}
-	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: "user-1", AccountID: "account-1"}, nil, nil, nil)
+	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: "user-1", AccountID: "account-1"}, nil, nil, nil, nil)
 	attached := runtime.Servers["enterprise"].Config
 	if attached.ApplyHTTPRequest == nil {
 		t.Fatal("enterprise server has no authorization applier")
@@ -210,7 +210,7 @@ func TestAttachEnterpriseMCPAuthorizationSharesCredentialStatusAcrossServers(t *
 		t.Fatal(err)
 	}
 
-	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: scope.UserID, AccountID: scope.WorkspaceID}, nil, nil, nil)
+	AttachEnterpriseMCPAuthorization(runtime, home, &RuntimeAuth{ChatGPTUserID: scope.UserID, AccountID: scope.WorkspaceID}, nil, nil, nil, nil)
 	for _, name := range []string{"first", "second"} {
 		config := runtime.Servers[name].Config
 		if !config.EMAConfigured || !config.EMACredentialsAvailable || config.ApplyHTTPRequest == nil {

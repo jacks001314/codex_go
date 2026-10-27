@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/auth"
 	managedconfig "codex_go/config"
 )
 
@@ -58,7 +59,12 @@ type EMAAuthOptions struct {
 	// from. A suspended or stale binding holds new requests before dispatch
 	// while already admitted responses finish (Rust #55691).
 	PolicyBinding *managedconfig.CloudConfigBundleBinding
-	HTTPClient    *http.Client
+	// AccountGrantOptions makes the account's Codex OAuth grant available as an
+	// enterprise credential source when no enterprise sign-in is stored (Rust
+	// #55698). The manager fills CodexHome and LoginGeneration from its own
+	// configuration when they are unset.
+	AccountGrantOptions *auth.AccountOAuthGrantLeaseOptions
+	HTTPClient          *http.Client
 }
 
 // EMAAuthManager exchanges the account-scoped enterprise IdP grant for a
@@ -79,6 +85,9 @@ type EMAAuthManager struct {
 	currentLoginGeneration    func() uint64
 	accountLoginCurrent       func() (bool, error)
 	policyBinding             *managedconfig.CloudConfigBundleBinding
+	accountGrantOptions       *auth.AccountOAuthGrantLeaseOptions
+	credentialSource          emaCredentialSource
+	accountClientID           string
 	revoked                   atomic.Bool
 	codexHome                 string
 	storeMode                 OAuthCredentialsStoreMode
@@ -122,6 +131,16 @@ func NewEMAAuthManager(serverName string, config *ServerConfig, options EMAAuthO
 	}
 	if manager.currentLoginGeneration != nil {
 		manager.loginGeneration = manager.currentLoginGeneration()
+	}
+	if options.AccountGrantOptions != nil {
+		grantOptions := *options.AccountGrantOptions
+		if strings.TrimSpace(grantOptions.CodexHome) == "" {
+			grantOptions.CodexHome = manager.codexHome
+		}
+		if grantOptions.LoginGeneration == nil {
+			grantOptions.LoginGeneration = manager.currentLoginGeneration
+		}
+		manager.accountGrantOptions = &grantOptions
 	}
 	return manager, nil
 }
@@ -275,82 +294,27 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 	// accepting its result, so a persisted login replacement cannot keep using
 	// enterprise authority through a stale auth cache.
 	if err := m.checkAccount(); err != nil {
-		return "", emaAccountCheckFailure(err)
+		return "", emaAccountCheckFailure(m.credentialKind(), err)
 	}
-	credentialName := EMAAuthCredentialName(m.profile.IDP, m.scope)
-	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(credentialName, m.profile.IDP.Issuer)
+	source, err := m.pinCredentialSource(ctx)
 	if err != nil {
 		return "", err
 	}
-	if tokens == nil || strings.TrimSpace(tokens.RefreshToken) == "" {
-		return "", NewEMATokenSourceError(EMACredentialKindKeyring, &EMAAuthFailure{
-			Code:    EMAAuthFailureReauthenticationRequired,
-			Context: "enterprise sign-in is required",
-		})
-	}
-	// Rust ema_identity: a stored enterprise grant must belong to the
-	// configured issuer and IdP client. The credential name already derives
-	// from both; this guard rejects a tampered or legacy record before any
-	// credential reaches the token endpoints.
-	if storedClientID := strings.TrimSpace(tokens.ClientID); storedClientID != strings.TrimSpace(m.profile.IDP.ClientID) {
-		return "", errors.New("stored enterprise IdP credentials do not match the configured issuer and client")
-	}
-	discovery, err := DiscoverStreamableHTTPOAuth(ctx, m.serverURL, client)
-	if err != nil || discovery == nil {
-		return "", errors.New("enterprise MCP authorization discovery failed")
-	}
-	if m.authorizationServerIssuer != "" && !enterpriseIssuerIdentifiersMatch(discovery.Issuer, m.authorizationServerIssuer) {
-		return "", errors.New("MCP authorization server issuer does not match configuration")
-	}
-	resource := m.resource
-	if resource == "" {
-		resource = strings.TrimSpace(discovery.Resource)
-	}
-	if err := ValidateMCPEMAAuthResource(m.serverURL, &resource); err != nil {
-		return "", err
-	}
-	resourceAuth, err := resolveMCPEMAClientAuth(discovery.TokenEndpointAuthMethodsSupported, m.clientID, m.clientSecret, m.tokenEndpointAuthMethod, "MCP authorization server")
-	if err != nil {
-		return "", err
-	}
-	idp, err := resolveEnterpriseAuthorizationMetadata(ctx, m.profile.IDP.Issuer, m.profile.IDP.ClientID, m.profile.IDP.ClientSecret, m.profile.IDP.TokenEndpointAuthMethod, client)
-	if err != nil {
-		return "", err
-	}
-	// Rust #55685: a published advertisement that omits ID-JAG identity
-	// chaining or the token-exchange grant type rejects the exchange before any
-	// credentialed request is sent.
-	if err := validateMCPEMAIDPTokenExchangeCapability(idp); err != nil {
-		return "", err
-	}
-	scopes := append([]string(nil), m.scopes...)
-	token, err := ExchangeMCPEMAIDJAG(ctx, MCPEMAIDJAGExchangeRequest{
-		Resource:                         resource,
-		Scopes:                           scopes,
-		MCPClientID:                      m.clientID,
-		AuthorizationServerIssuer:        discovery.Issuer,
-		AuthorizationServerTokenEndpoint: discovery.TokenEndpoint,
-		IDPTokenEndpoint:                 idp.TokenEndpoint,
-		IDPIssuer:                        m.profile.IDP.Issuer,
-		IDPClientID:                      m.profile.IDP.ClientID,
-		IDPClientAuthentication:          idp.ClientAuthentication,
-		ResourceClientAuthentication:     resourceAuth,
-		RefreshToken:                     tokens.RefreshToken,
-		IDPHTTPClient:                    client,
-		ResourceHTTPClient:               client,
-	})
-	if err != nil {
-		// Rust #55691: a rejected enterprise grant is retired only when the
-		// exchange itself rejected it; a resource authorization rejection leaves
-		// the login intact.
-		var failure *EMAAuthFailure
-		if errors.As(err, &failure) && emaFailureInvalidatesCredential(failure) {
-			m.invalidateRejectedCredential(ctx, tokens)
+	var token *MCPEMAAccessToken
+	if source == emaCredentialAccount {
+		grant, err := m.accountGrant(ctx)
+		if err != nil {
+			return "", emaAccountCheckFailure(m.credentialKind(), err)
 		}
-		return "", emaExchangeFailure(err)
+		token, err = m.exchangeAccountToken(ctx, client, grant)
+	} else {
+		token, err = m.exchangeKeyringToken(ctx, client)
+	}
+	if err != nil {
+		return "", err
 	}
 	if err := m.checkAccount(); err != nil {
-		return "", emaAccountCheckFailure(err)
+		return "", emaAccountCheckFailure(m.credentialKind(), err)
 	}
 	m.token = token.AccessToken
 	m.tokenExpiresAt = time.Time{}
@@ -361,6 +325,273 @@ func (m *EMAAuthManager) accessToken(ctx context.Context) (string, error) {
 		return "", errors.New("enterprise MCP authorization was revoked")
 	}
 	return m.token, nil
+}
+
+// emaCredentialSource is the credential an enterprise connection is pinned to.
+// Rust EnterpriseTokenSource chooses one source and OAuth client when the
+// connection is established (#55698), so a live connection never silently
+// switches credentials when the other source appears or disappears.
+type emaCredentialSource int
+
+const (
+	emaCredentialUnresolved emaCredentialSource = iota
+	emaCredentialAccount
+	emaCredentialKeyring
+)
+
+func (s emaCredentialSource) kind() EMACredentialKind {
+	if s == emaCredentialAccount {
+		return EMACredentialKindAccount
+	}
+	return EMACredentialKindKeyring
+}
+
+// credentialKind classifies failures before a source is pinned as an account
+// login problem, because only the account can supply a credential then.
+func (m *EMAAuthManager) credentialKind() EMACredentialKind {
+	if m == nil || m.credentialSource == emaCredentialUnresolved {
+		return EMACredentialKindAccount
+	}
+	return m.credentialSource.kind()
+}
+
+// pinCredentialSource selects the credential and OAuth client this manager uses
+// (Rust EnterpriseTokenSource::new, #55698). A stored enterprise grant wins
+// while it exists; otherwise a validated Codex account grant whose provenance
+// names the configured issuer supplies the IdP client. Only a successful
+// selection is cached, so a later sign-in is still picked up.
+func (m *EMAAuthManager) pinCredentialSource(ctx context.Context) (emaCredentialSource, error) {
+	if m.credentialSource != emaCredentialUnresolved {
+		return m.credentialSource, nil
+	}
+	tokens, err := m.storedEnterpriseCredential()
+	if err != nil {
+		return emaCredentialUnresolved, err
+	}
+	if tokens != nil {
+		m.credentialSource = emaCredentialKeyring
+		return m.credentialSource, nil
+	}
+	lease, err := m.leaseAccountGrant(ctx)
+	if err != nil {
+		return emaCredentialUnresolved, err
+	}
+	var clientID string
+	if lease != nil {
+		granted := lease.Tokens()
+		lease.Release()
+		if MCPEMAAccountGrantIsUsable(granted, m.profile.IDP) {
+			clientID = auth.AccountTokenFactsFromTokens(granted).ClientID
+		}
+	}
+	if clientID == "" {
+		return emaCredentialUnresolved, m.accountSetupError()
+	}
+	m.credentialSource = emaCredentialAccount
+	m.accountClientID = clientID
+	return m.credentialSource, nil
+}
+
+// storedEnterpriseCredential loads the account-scoped enterprise grant. A
+// missing record returns nil so selection can consider the Codex account grant;
+// a record for another IdP client is a configuration error that must not
+// silently fall back to a different credential.
+func (m *EMAAuthManager) storedEnterpriseCredential() (*OAuthTokenSet, error) {
+	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(EMAAuthCredentialName(m.profile.IDP, m.scope), m.profile.IDP.Issuer)
+	if err != nil {
+		return nil, err
+	}
+	if tokens == nil || strings.TrimSpace(tokens.RefreshToken) == "" {
+		return nil, nil
+	}
+	if storedClientID := strings.TrimSpace(tokens.ClientID); storedClientID != strings.TrimSpace(m.profile.IDP.ClientID) {
+		return nil, errors.New("stored enterprise IdP credentials do not match the configured issuer and client")
+	}
+	return tokens, nil
+}
+
+// accountSetupError reports why no enterprise credential can be selected,
+// preferring an actionable sign-in or issuer diagnosis over a generic message.
+func (m *EMAAuthManager) accountSetupError() error {
+	message := "Complete enterprise sign-in to use this MCP server"
+	if m.accountGrantOptions != nil && m.accountGrantOptions.Cached != nil {
+		if cached := m.accountGrantOptions.Cached(); cached != nil {
+			if issue := MCPEMAAccountConfigurationIssue(cached.Tokens, m.profile.IDP); issue != "" {
+				message = issue
+			}
+		}
+	}
+	return errors.New(message)
+}
+
+// leaseAccountGrant takes the account refresh exclusion for one exchange. A
+// manager without an account credential view never leases.
+func (m *EMAAuthManager) leaseAccountGrant(ctx context.Context) (*auth.AccountOAuthGrantLease, error) {
+	if m == nil || m.accountGrantOptions == nil {
+		return nil, nil
+	}
+	return auth.LeaseAccountOAuthGrant(ctx, m.accountGrantOptions)
+}
+
+// accountGrant leases the pinned Codex account grant and rechecks that it is
+// still usable for the pinned OAuth client. A stale grant fails the call
+// instead of being exchanged (Rust EnterpriseTokenSource::account_grant).
+func (m *EMAAuthManager) accountGrant(ctx context.Context) (*auth.AccountOAuthGrant, error) {
+	if err := m.checkAccount(); err != nil {
+		return nil, err
+	}
+	lease, err := m.leaseAccountGrant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if lease == nil {
+		return nil, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	tokens := lease.Tokens()
+	if !MCPEMAAccountGrantIsUsable(tokens, m.profile.IDP) ||
+		auth.AccountTokenFactsFromTokens(tokens).ClientID != m.accountClientID {
+		lease.Release()
+		return nil, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	return lease.Release(), nil
+}
+
+// resolveMCPEMAExchange performs the resource-side discovery every EMA exchange
+// needs and returns a request with the validated resource, authorization-server
+// metadata, and resource client authentication.
+func (m *EMAAuthManager) resolveMCPEMAExchange(ctx context.Context, client *http.Client) (MCPEMAIDJAGExchangeRequest, error) {
+	request := MCPEMAIDJAGExchangeRequest{
+		Scopes:             append([]string(nil), m.scopes...),
+		MCPClientID:        m.clientID,
+		IDPIssuer:          m.profile.IDP.Issuer,
+		IDPHTTPClient:      client,
+		ResourceHTTPClient: client,
+	}
+	discovery, err := DiscoverStreamableHTTPOAuth(ctx, m.serverURL, client)
+	if err != nil || discovery == nil {
+		return request, errors.New("enterprise MCP authorization discovery failed")
+	}
+	if m.authorizationServerIssuer != "" && !enterpriseIssuerIdentifiersMatch(discovery.Issuer, m.authorizationServerIssuer) {
+		return request, errors.New("MCP authorization server issuer does not match configuration")
+	}
+	request.Resource = m.resource
+	if request.Resource == "" {
+		request.Resource = strings.TrimSpace(discovery.Resource)
+	}
+	request.AuthorizationServerIssuer = discovery.Issuer
+	request.AuthorizationServerTokenEndpoint = discovery.TokenEndpoint
+	if err := ValidateMCPEMAAuthResource(m.serverURL, &request.Resource); err != nil {
+		return request, err
+	}
+	resourceAuth, err := resolveMCPEMAClientAuth(discovery.TokenEndpointAuthMethodsSupported, m.clientID, m.clientSecret, m.tokenEndpointAuthMethod, "MCP authorization server")
+	if err != nil {
+		return request, err
+	}
+	request.ResourceClientAuthentication = resourceAuth
+	return request, nil
+}
+
+// exchangeKeyringToken exchanges the dedicated enterprise sign-in grant.
+func (m *EMAAuthManager) exchangeKeyringToken(ctx context.Context, client *http.Client) (*MCPEMAAccessToken, error) {
+	tokens, err := m.storedEnterpriseCredential()
+	if err != nil {
+		return nil, err
+	}
+	if tokens == nil {
+		return nil, NewEMATokenSourceError(EMACredentialKindKeyring, &EMAAuthFailure{
+			Code:    EMAAuthFailureReauthenticationRequired,
+			Context: "enterprise sign-in is required",
+		})
+	}
+	request, err := m.resolveMCPEMAExchange(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	idp, err := resolveEnterpriseAuthorizationMetadata(ctx, m.profile.IDP.Issuer, m.profile.IDP.ClientID, m.profile.IDP.ClientSecret, m.profile.IDP.TokenEndpointAuthMethod, client)
+	if err != nil {
+		return nil, err
+	}
+	// Rust #55685: a published advertisement that omits ID-JAG identity
+	// chaining or the token-exchange grant type rejects the exchange before any
+	// credentialed request is sent.
+	if err := validateMCPEMAIDPTokenExchangeCapability(idp); err != nil {
+		return nil, err
+	}
+	request.IDPTokenEndpoint = idp.TokenEndpoint
+	request.IDPClientAuthentication = idp.ClientAuthentication
+	request.IDPClientID = m.profile.IDP.ClientID
+	request.RefreshToken = tokens.RefreshToken
+	token, err := ExchangeMCPEMAIDJAG(ctx, request)
+	if err != nil {
+		// Rust #55691: a rejected enterprise grant is retired only when the
+		// exchange itself rejected it; a resource authorization rejection leaves
+		// the login intact.
+		var failure *EMAAuthFailure
+		if errors.As(err, &failure) && emaFailureInvalidatesCredential(failure) {
+			m.invalidateRejectedCredential(ctx, tokens)
+		}
+		return nil, emaExchangeFailure(EMACredentialKindKeyring, err)
+	}
+	return token, nil
+}
+
+// exchangeAccountToken exchanges one pinned Codex account grant. Discovery runs
+// before the grant is leased so metadata refresh never blocks ordinary account
+// refresh; the lease covers only the IdP exchange and is released before
+// resource-server I/O (Rust #55698).
+func (m *EMAAuthManager) exchangeAccountToken(ctx context.Context, client *http.Client, grant *auth.AccountOAuthGrant) (*MCPEMAAccessToken, error) {
+	request, err := m.resolveMCPEMAExchange(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	facts := auth.AccountTokenFactsFromTokens(grant.Tokens())
+	identity, err := ResolveMCPEMAAccountIDPIdentity(ctx, MCPEMAAccountIDPIdentityRequest[struct{}]{
+		IdP:          m.profile.IDP,
+		ClientID:     m.accountClientID,
+		IDToken:      facts.IDToken,
+		RefreshToken: facts.RefreshToken,
+		HTTPClient:   client,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := m.checkAccount(); err != nil {
+		return nil, err
+	}
+	lease, err := m.leaseAccountGrant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if lease == nil {
+		return nil, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	// The lease is released before the resource exchange; releasing again is a
+	// no-op, so an early validation failure cannot strand the refresh gate.
+	defer lease.Release()
+	if !auth.SameAccountGrantCredential(lease.Tokens(), grant.Tokens()) {
+		return nil, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired}
+	}
+	request.IDPTokenEndpoint = identity.TokenEndpoint
+	request.IDPClientAuthentication = identity.ClientAuthentication
+	request.IDPClientID = m.accountClientID
+	request.RefreshToken = identity.RefreshToken
+	token, receipt, err := ExchangeMCPEMAIDJAGWithCredentials(ctx, request, lease, func(held *auth.AccountOAuthGrantLease) *auth.AccountOAuthGrant {
+		return held.Release()
+	})
+	if err != nil {
+		return nil, emaExchangeFailure(EMACredentialKindAccount, err)
+	}
+	if receipt != nil {
+		current, err := receipt.CheckCurrent()
+		if err != nil {
+			return nil, err
+		}
+		if !current {
+			// A successful exchange with a stale receipt must fail this call.
+			return nil, NewEMATokenSourceError(EMACredentialKindAccount, &EMAAuthFailure{Code: EMAAuthFailureReauthenticationRequired})
+		}
+	}
+	return token, nil
 }
 
 // policyCheckedHTTPClient bounds every discovery, IdP, and resource-exchange
@@ -401,33 +632,38 @@ func (t emaPolicyCheckingTransport) RoundTrip(request *http.Request) (*http.Resp
 	return t.next.RoundTrip(request)
 }
 
-// emaExchangeFailure converts an exchange error for transport: a sanitized auth
-// failure keeps its credential classification, while anything else becomes an
-// unexpected token-source failure with no provider or transport text (Rust
-// #55691). Only the token exchange itself is wrapped this way; credential
-// storage, discovery, and metadata failures are connection-time errors that
-// keep their diagnostic text, exactly as Rust's EnterpriseTokenSource::new
-// reports them before any token request is made.
-func emaExchangeFailure(err error) error {
+// emaExchangeFailure converts an exchange error for transport: an existing
+// classification is preserved, a sanitized auth failure keeps its credential
+// classification, and anything else becomes an unexpected token-source failure
+// with no provider or transport text (Rust #55691). Only the token exchange
+// itself is wrapped this way; credential storage, discovery, and metadata
+// failures are connection-time errors that keep their diagnostic text, exactly
+// as Rust's EnterpriseTokenSource reports them before any token request is
+// made.
+func emaExchangeFailure(credential EMACredentialKind, err error) error {
 	if err == nil {
 		return nil
 	}
+	var sourceErr *EMATokenSourceError
+	if errors.As(err, &sourceErr) {
+		return sourceErr
+	}
 	var failure *EMAAuthFailure
 	if errors.As(err, &failure) {
-		return NewEMATokenSourceError(EMACredentialKindKeyring, failure)
+		return NewEMATokenSourceError(credential, failure)
 	}
-	return UnexpectedEMATokenSourceError(EMACredentialKindKeyring)
+	return UnexpectedEMATokenSourceError(credential)
 }
 
 // emaAccountCheckFailure wraps only a sanitized account-ownership failure; a
 // credential-store error keeps its own text, as in Rust EmaAuth::check_account.
-func emaAccountCheckFailure(err error) error {
+func emaAccountCheckFailure(credential EMACredentialKind, err error) error {
 	if err == nil {
 		return nil
 	}
 	var failure *EMAAuthFailure
 	if errors.As(err, &failure) {
-		return NewEMATokenSourceError(EMACredentialKindAccount, failure)
+		return NewEMATokenSourceError(credential, failure)
 	}
 	return err
 }
@@ -478,7 +714,7 @@ func (m *EMAAuthManager) invalidateRejectedCredential(ctx context.Context, used 
 
 // AttachEnterpriseMCPAuthorization configures every admitted EMA server with
 // its per-request bearer exchange and credential status.
-func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, auth *RuntimeAuth, currentScope func() (EMAAuthScope, bool), currentLoginGeneration func() uint64, accountLoginCurrent func() (bool, error)) {
+func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, auth *RuntimeAuth, currentScope func() (EMAAuthScope, bool), currentLoginGeneration func() uint64, accountLoginCurrent func() (bool, error), accountGrantOptions *auth.AccountOAuthGrantLeaseOptions) {
 	if runtime == nil || !runtime.XAAEnabled || runtime.EnterpriseManagedAuth == nil {
 		return
 	}
@@ -500,6 +736,7 @@ func AttachEnterpriseMCPAuthorization(runtime *RuntimeConfig, codexHome string, 
 			CurrentScope:           currentScope,
 			CurrentLoginGeneration: currentLoginGeneration,
 			AccountLoginCurrent:    accountLoginCurrent,
+			AccountGrantOptions:    accountGrantOptions,
 			PolicyBinding:          runtime.EMAPolicyBinding,
 			HTTPClient:             httpClientForEMAAuth(runtime),
 		})

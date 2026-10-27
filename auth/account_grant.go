@@ -310,6 +310,48 @@ func tokenChatGPTUserID(tokens map[string]any) string {
 	return ""
 }
 
+// AccountTokenFacts is the persisted account credential subset that enterprise
+// MCP credential selection inspects. It mirrors the Rust TokenData fields that
+// account_grant_is_usable and account_configuration_issue read, without
+// exposing the raw record or its tokens.
+type AccountTokenFacts struct {
+	// Issuer and ClientID are the trusted OAuth provenance recorded with the
+	// login; token claims never infer them.
+	Issuer        string
+	ClientID      string
+	LoginOwnerID  string
+	RefreshToken  string
+	ChatGPTUserID string
+	// AccountID is the record's own account_id. It deliberately does not fall
+	// back to an ID-token claim: the usability check compares the record and
+	// the claim, so a fallback would make that comparison vacuous.
+	AccountID string
+	IDToken   string
+}
+
+// AccountTokenFactsFromTokens extracts the facts enterprise MCP credential
+// selection needs from one admitted account record.
+func AccountTokenFactsFromTokens(tokens map[string]any) AccountTokenFacts {
+	provenance := oauthProvenanceFromTokens(tokens)
+	return AccountTokenFacts{
+		Issuer:        provenance.Issuer,
+		ClientID:      provenance.ClientID,
+		LoginOwnerID:  tokenLoginOwnerID(tokens),
+		RefreshToken:  tokenRefreshToken(tokens),
+		ChatGPTUserID: tokenChatGPTUserID(tokens),
+		AccountID:     strings.TrimSpace(stringFromAny(tokens, "account_id")),
+		IDToken:       strings.TrimSpace(stringFromAny(tokens, "id_token")),
+	}
+}
+
+// SameAccountGrantCredential reports whether two token sets carry the same
+// account credential revision (Rust AccountOAuthGrant::same_credential). An
+// enterprise exchange compares the grant it started with against the record
+// still stored, so an access-token rotation retires the grant.
+func SameAccountGrantCredential(left map[string]any, right map[string]any) bool {
+	return reflect.DeepEqual(left, right)
+}
+
 // accountRefreshGate allows one account refresh at a time and is also held by
 // AccountOAuthGrantLease, so an identity-provider exchange and an ordinary
 // refresh cannot rotate the same grant concurrently.

@@ -12303,6 +12303,7 @@ func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeCon
 		return
 	}
 	var accountLoginCurrent func() (bool, error)
+	var accountGrantOptions *auth.AccountOAuthGrantLeaseOptions
 	if expected != nil {
 		// Capture the store options with the login so the check inspects the
 		// same persisted credential the enterprise manager was built against
@@ -12311,8 +12312,16 @@ func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeCon
 		accountLoginCurrent = func() (bool, error) {
 			return auth.AccountLoginIsCurrent(codexHome, storeOptions, expected, r.currentCachedAuthSnapshot)
 		}
+		// Without an enterprise sign-in the manager borrows this account's OAuth
+		// grant, pinning the IdP client it was issued to (Rust #55698).
+		accountGrantOptions = &auth.AccountOAuthGrantLeaseOptions{
+			CodexHome:       codexHome,
+			StoreOptions:    storeOptions,
+			Cached:          r.currentCachedAuthSnapshot,
+			LoginGeneration: r.currentEMALoginGeneration,
+		}
 	}
-	mcp.AttachEnterpriseMCPAuthorization(runtime, codexHome, runtimeAuth, r.currentEMAAuthScope, r.currentEMALoginGeneration, accountLoginCurrent)
+	mcp.AttachEnterpriseMCPAuthorization(runtime, codexHome, runtimeAuth, r.currentEMAAuthScope, r.currentEMALoginGeneration, accountLoginCurrent, accountGrantOptions)
 }
 
 // currentCachedAuthSnapshot returns the account service's cached credential,
