@@ -41,9 +41,13 @@ type Config struct {
 	// instead of collapsing to an explicit denial.
 	AllowLocalBinding *bool
 	Domains           map[string]DomainPermission
-	UnixSockets       map[string]UnixSocketPermission
-	MITM              bool
-	MITMHooks         []MITMHook
+	// ReviewDomains are managed-only selectors routed through the approval flow
+	// before ordinary allows (Rust #56154). Direct proxy configuration cannot
+	// set them; only managed requirements and owner policies populate them.
+	ReviewDomains []string
+	UnixSockets   map[string]UnixSocketPermission
+	MITM          bool
+	MITMHooks     []MITMHook
 }
 
 type UnixSocketPermission string
@@ -150,8 +154,11 @@ type EnvironmentNetworkPolicy struct {
 	// RequiresProxy requires managed proxy routing even when direct network
 	// access is restricted. False leaves activation to the controller and the
 	// command's permissions. Rust omits it from the wire when false.
-	RequiresProxy                  bool `json:"requiresProxy,omitempty"`
-	Domains                        map[string]DomainPermission
+	RequiresProxy bool `json:"requiresProxy,omitempty"`
+	Domains       map[string]DomainPermission
+	// ReviewDomains are managed host selectors inherited by every execution in
+	// this environment (Rust #56154).
+	ReviewDomains                  []string `json:"reviewDomains,omitempty"`
 	UnixSockets                    map[string]UnixSocketPermission
 	AllowUpstreamProxy             bool
 	DangerouslyAllowAllUnixSockets bool
@@ -170,6 +177,7 @@ func EnvironmentNetworkPolicyFromConfig(config *Config, managedAllowedDomainsOnl
 	return EnvironmentNetworkPolicy{
 		RequiresProxy:                  config.Enabled,
 		Domains:                        copyDomainMapArray(config.Domains),
+		ReviewDomains:                  append([]string(nil), config.ReviewDomains...),
 		UnixSockets:                    copyUnixSocketMap(config.UnixSockets),
 		AllowUpstreamProxy:             config.AllowUpstreamProxy,
 		DangerouslyAllowAllUnixSockets: boolPointerValue(config.DangerouslyAllowAllUnixSockets),
@@ -183,6 +191,12 @@ func EnvironmentNetworkPolicyFromConfig(config *Config, managedAllowedDomainsOnl
 func (p *EnvironmentNetworkPolicy) ApplyTo(config *Config) {
 	if p == nil || config == nil {
 		return
+	}
+	// Neither owner nor controller may remove the other's review selectors.
+	for _, pattern := range p.ReviewDomains {
+		if !containsFold(config.ReviewDomains, pattern) {
+			config.ReviewDomains = append(config.ReviewDomains, pattern)
+		}
 	}
 	inheritedDenials := deniedDomainMap(config)
 	config.Domains = copyDomainMapArray(p.Domains)
@@ -614,6 +628,7 @@ func cloneConfig(config *Config) Config {
 			cloned.Domains[host] = permission
 		}
 	}
+	cloned.ReviewDomains = append([]string(nil), config.ReviewDomains...)
 	cloned.MITMHooks = append([]MITMHook(nil), config.MITMHooks...)
 	return cloned
 }

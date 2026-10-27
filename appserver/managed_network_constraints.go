@@ -285,6 +285,7 @@ func proxyRequirementsFromConfig(requirements *config.NetworkRequirements) *netw
 		AllowUpstreamProxy:               cloneNetworkBool(requirements.AllowUpstreamProxy),
 		DangerouslyAllowNonLoopbackProxy: cloneNetworkBool(requirements.DangerouslyAllowNonLoopbackProxy),
 		DangerouslyAllowAllUnixSockets:   cloneNetworkBool(requirements.DangerouslyAllowAllUnixSockets),
+		ReviewDomains:                    append([]string(nil), requirements.ReviewDomains...),
 		ManagedAllowedDomainsOnly:        requirements.ManagedAllowedDomainsOnly != nil && *requirements.ManagedAllowedDomainsOnly,
 		AllowLocalBinding:                cloneNetworkBool(requirements.AllowLocalBinding),
 	}

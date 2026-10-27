@@ -47,6 +47,9 @@ func TestNetworkApprovalDeciderRequestsOnceAndCachesSessionLikeRust(t *testing.T
 		if params.ItemID != "network#local#https#example.test#443" || params.Command == nil || *params.Command != "network-access https://example.test:443" || len(params.ProposedNetworkPolicyAmendments) != 2 {
 			t.Errorf("network approval params = %#v", params)
 		}
+		if params.Reason == nil || *params.Reason != "Network access to example.test requires approval" {
+			t.Errorf("network approval reason = %v", params.Reason)
+		}
 		_, _ = router.requireServerRequests().Resolve(&Response{ID: request.ID, Result: map[string]any{"decision": string(CommandExecutionApprovalAcceptForSession)}})
 	}))
 

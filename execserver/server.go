@@ -534,7 +534,10 @@ type EnvironmentInfo struct {
 
 type EnvironmentCapabilities struct {
 	NetworkProxyLaunch bool `json:"networkProxyLaunch"`
-	CredentialMasking  bool `json:"credentialMasking,omitempty"`
+	// NetworkProxyReviewDomains advertises that executor proxies enforce
+	// managed review domains before ordinary allows (Rust #56154).
+	NetworkProxyReviewDomains bool `json:"networkProxyReviewDomains,omitempty"`
+	CredentialMasking         bool `json:"credentialMasking,omitempty"`
 	// CredentialMaskingCustomProviders advertises that masking also accepts
 	// configured provider rules (Rust #56049).
 	CredentialMaskingCustomProviders bool `json:"credentialMaskingCustomProviders,omitempty"`
@@ -3881,6 +3884,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		TemporaryDirectories: localTemporaryDirectories(cwdPath),
 		Capabilities: EnvironmentCapabilities{
 			NetworkProxyLaunch:               true,
+			NetworkProxyReviewDomains:        true,
 			CredentialMasking:                credentialMasking,
 			CredentialMaskingCustomProviders: credentialMasking,
 			CapabilityDiscoverySandbox:       true,

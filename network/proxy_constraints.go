@@ -18,6 +18,7 @@ type ProxyRequirements struct {
 	DangerouslyAllowNonLoopbackProxy *bool
 	DangerouslyAllowAllUnixSockets   *bool
 	Domains                          *ProxyDomainPermissions
+	ReviewDomains                    []string
 	ManagedAllowedDomainsOnly        bool
 	UnixSockets                      *ProxyUnixSocketPermissions
 	AllowLocalBinding                *bool
@@ -85,6 +86,7 @@ type ProxyConstraints struct {
 	DangerouslyAllowNonLoopbackProxy *bool
 	DangerouslyAllowAllUnixSockets   *bool
 	AllowedDomains                   *[]string
+	ReviewDomains                    *[]string
 	AllowlistExpansionEnabled        *bool
 	DeniedDomains                    *[]string
 	DenylistExpansionEnabled         *bool
@@ -231,6 +233,12 @@ func applyProxyRequirements(config ProxyConfig, requirements *ProxyRequirements,
 		constraints.AllowlistExpansionEnabled = boolPtr(allowExpansion)
 	}
 
+	if len(requirements.ReviewDomains) > 0 {
+		review := mergeProxyDomainLists(requirements.ReviewDomains, settings.ReviewDomains)
+		settings.ReviewDomains = review
+		constraints.ReviewDomains = cloneStringSlicePtr(requirements.ReviewDomains)
+	}
+
 	managedDenied, hasManagedDenied := proxyRequirementDomains(requirements.Domains, ProxyDomainDeny)
 	if hasManagedDenied {
 		effective := managedDenied
@@ -374,9 +382,14 @@ func ValidateProxyPolicyAgainstConstraints(config ProxyConfig, constraints Proxy
 	}
 
 	if constraints.AllowUnixSockets != nil {
-		allowed := lowerStringSet(*constraints.AllowUnixSockets)
+		// Socket paths are compared exactly: lowering them would let a policy
+		// widen access to a case-different path (Rust #57180).
+		allowed := make(map[string]struct{}, len(*constraints.AllowUnixSockets))
+		for _, path := range *constraints.AllowUnixSockets {
+			allowed[path] = struct{}{}
+		}
 		for _, candidate := range settings.AllowUnixSockets() {
-			if !allowed[strings.ToLower(candidate)] {
+			if _, ok := allowed[candidate]; !ok {
 				return invalidProxyConstraint("network.allow_unix_sockets", candidate, "subset of managed allow_unix_sockets")
 			}
 		}
@@ -497,6 +510,7 @@ func cloneProxySettings(settings ProxySettings) ProxySettings {
 		}
 		clone.UnixSockets = &ProxyUnixSocketPermissions{Entries: entries}
 	}
+	clone.ReviewDomains = append([]string(nil), settings.ReviewDomains...)
 	clone.MITMHooks = append([]ProxyMITMHookConfig(nil), settings.MITMHooks...)
 	if settings.MITMCA != nil {
 		ca := *settings.MITMCA

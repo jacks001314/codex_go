@@ -1079,11 +1079,31 @@ func (c *Client) Start(ctx context.Context, params *ExecParams) (*ExecResponse, 
 		return nil, err
 	}
 	request.CWD = cwd
+	if err := c.ensureNetworkReviewCapability(ctx, &request); err != nil {
+		return nil, err
+	}
 	var response ExecResponse
 	if err := c.call(ctx, MethodProcessStart, &request, &response); err != nil {
 		return nil, err
 	}
 	return &response, nil
+}
+
+// ensureNetworkReviewCapability rejects a launch whose proxy carries managed
+// review domains when the executor cannot enforce them, matching Rust
+// #56154's ExecServerClient::ensure_network_review_capability.
+func (c *Client) ensureNetworkReviewCapability(ctx context.Context, params *ExecParams) error {
+	if params == nil || params.NetworkProxy == nil || len(params.NetworkProxy.Proxy.ReviewDomains) == 0 {
+		return nil
+	}
+	info, err := c.cachedEnvironmentInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if info == nil || !info.Capabilities.NetworkProxyReviewDomains {
+		return errors.New("selected exec-server does not support managed network review domains")
+	}
+	return nil
 }
 
 func (c *Client) Read(ctx context.Context, params *ReadParams) (*ReadResponse, error) {

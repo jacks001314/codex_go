@@ -14,6 +14,8 @@ TUI lane and are not modified here.
 
 | Upstream | Requirement | Go change |
 | --- | --- | --- |
+| `#57180` | Strict standalone proxy config: the `codex-network-proxy` binary accepts `--strict`, which requires an explicit `constraints` object, rejects `metadata` and unknown fields at every level, and rejects documents over the size limit by reading at most limit+1 bytes. The permissive path keeps optional constraints and metadata, and both share normalization, scheme/port, placeholder, `aws_sigv4`, and `body_secret_substitution` parsing. Unix-socket constraint comparison is case-exact. | `network/proxy_static_config.go`, `network/standalone_config.go`, `network/proxy_constraints.go`, `cmd/codex-network-proxy/main.go`, like-Rust tests |
+| `#56154` | Managed review domains: `network.review_domains` selectors from managed requirements route matching hosts through the network approval flow before ordinary allow rules. Explicit denials still win, approval caching, hooks, and reviewer routing still apply, and a matching host without a decider is denied. Selectors merge case-insensitively with user/owner selectors, reach remote executors over `reviewDomains` only when the executor advertises `networkProxyReviewDomains`, and are inherited by owner network policies. | `network/proxy_config.go`, `network/proxy_constraints.go`, `network/proxy_server.go`, `network/network.go`, `execserver/network_policy.go`, `execserver/server.go`, `execserver/client.go`, `appserver/managed_network_constraints.go`, `config/api.go`, `config/requirements_file.go`, like-Rust tests |
 | `#57174` | Scoped request-body secret substitution in MITM hooks: a `body_secret_substitution` action replaces opaque 16-256 byte ASCII placeholders with proxy-held secrets using byte-exact, non-recursive, bounded matching after destination authorization and before signing. Payloads with encoded, streaming-signed, or integrity-protected framing, request trailers, mismatched content length, overlapping matches, more than 65536 occurrences, or an expansion past the configured limit take the hook denial path; secrets may not contain a placeholder. | `network/proxy_secret_substitution.go`, `network/proxy_mitm_hook.go`, `network/proxy_config_values.go`, `network/proxy_server.go`, like-Rust tests |
 | `#56003` | Scope MITM credential substitution to trusted origins and placeholders: hooks accept `schemes` and `ports` constraints matched against the authenticated tunnel destination, and an injected header may bind an exact whole-header `placeholder`. Substitution requires HTTPS on port 443 with exactly one matching value; missing, duplicated, or mismatched placeholders are denied. Ambiguous query values and multi-valued headers no longer authorize, extension methods keep their case, scoped options require `network.mitm.version = 2`, `User-Agent` and framing headers reject secret injection, and secret files are limited to 64 KiB. | `network/proxy_mitm_hook.go`, `network/proxy_config_values.go`, `network/proxy_server.go`, like-Rust tests |
 | `#56554` | Masked AWS credentials for local proxy signing: a local sandboxed process receives the placeholder access key and dummy secret/token of the selected signing pair, `AWS_CA_BUNDLE` defaults to the managed MITM trust bundle, and every environment value plus the protected shell snapshot is scrubbed of configured real credentials. Signing pairs apply only when the proxy is enabled with MITM and credential brokerage, placeholders are validated against every pair so none overlaps a real credential, and remote environments keep the caller's AWS credentials. | `network/proxy_aws_sigv4.go`, `network/proxy_server.go`, `network/proxy_env.go`, `network/proxy_config_values.go`, `tool/shell_snapshot.go`, like-Rust tests |
@@ -1469,6 +1471,20 @@ deduplication for tool outputs.
   session negotiates it while keeping the caller `callId` and the read-only marker. Go resolves the
   metadata per send attempt inside the HTTP client's retry loop, mirroring Rust's per-session
   resolver; the stdio path has a single send attempt, so it resolves once before the request.
+- For `#57180`: `go build ./...`, `go vet ./network`, `go test ./network -run 'StaticProxyConfig|Standalone' -count=1`,
+  and `go test ./network -count=1` pass. Coverage pins strict rejection of missing constraints,
+  `metadata`, and unknown fields, permissive parsing with optional constraints and metadata,
+  bounded config reads, case-exact Unix socket constraint comparison, and the strict parser's
+  acceptance of schemes/ports, placeholders, SigV4, and body secret substitution.
+- For `#56154`: `go build ./...`, `go vet ./network ./config ./execserver`,
+  `go test ./network ./config ./execserver -count=1`,
+  `go test ./appserver -run 'ManagedNetwork|Requirements|Network' -count=1`, and
+  `go test ./tool -run 'Snapshot' -count=1` pass. Coverage pins review domains overriding
+  exact and wildcard allows, explicit denials bypassing the approval flow, denial without a
+  decider, requirements merging and constraint pinning, managed requirements serializing
+  `reviewDomains`, requirement-file parsing of `review_domains`, executor wire round trips that
+  omit empty review domains, the start-time capability gate for legacy executors, owner-policy
+  inheritance without dropping controller selectors, and clone isolation.
 - For `#55607`: `go build ./...`, `go test ./model ./codexapi -count=1`,
   `go test ./mcp -count=1`, `go test ./appserver -run 'Auth|Login|Logout|Gateway|Provider' -count=1`,
   and `go test ./app -run 'Login|Logout|Auth|Provider' -count=1` pass. Coverage pins rejected

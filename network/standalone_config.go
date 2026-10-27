@@ -53,6 +53,8 @@ type standaloneMITMHook struct {
 }
 
 type standaloneMITMHookMatch struct {
+	Schemes      []string            `json:"schemes,omitempty"`
+	Ports        []int               `json:"ports,omitempty"`
 	Methods      []string            `json:"methods,omitempty"`
 	PathPrefixes []string            `json:"path_prefixes,omitempty"`
 	Query        map[string][]string `json:"query,omitempty"`
@@ -61,11 +63,41 @@ type standaloneMITMHookMatch struct {
 }
 
 type standaloneMITMHookActions struct {
-	StripRequestHeaders  []string                   `json:"strip_request_headers,omitempty"`
-	InjectRequestHeaders []standaloneInjectedHeader `json:"inject_request_headers,omitempty"`
+	StripRequestHeaders    []string                    `json:"strip_request_headers,omitempty"`
+	InjectRequestHeaders   []standaloneInjectedHeader  `json:"inject_request_headers,omitempty"`
+	AWSSigV4               *standaloneAWSSigV4         `json:"aws_sigv4,omitempty"`
+	BodySecretSubstitution *standaloneBodySubstitution `json:"body_secret_substitution,omitempty"`
+}
+
+type standaloneAWSSigV4 struct {
+	PlaceholderAccessKeyID string                  `json:"placeholder_access_key_id"`
+	Region                 string                  `json:"region"`
+	Service                string                  `json:"service"`
+	AccessKeyID            standaloneSecretSource  `json:"access_key_id"`
+	SecretAccessKey        standaloneSecretSource  `json:"secret_access_key"`
+	SessionToken           *standaloneSecretSource `json:"session_token,omitempty"`
+	Port                   *int                    `json:"port,omitempty"`
+	MaxBodyBytes           *int                    `json:"max_body_bytes,omitempty"`
+}
+
+type standaloneBodySubstitution struct {
+	Replacements []standaloneBodyReplacement `json:"replacements"`
+	Port         *int                        `json:"port,omitempty"`
+	MaxBodyBytes *int                        `json:"max_body_bytes,omitempty"`
+}
+
+type standaloneBodyReplacement struct {
+	Placeholder string                 `json:"placeholder"`
+	Secret      standaloneSecretSource `json:"secret"`
+}
+
+type standaloneSecretSource struct {
+	EnvVar *string `json:"env_var,omitempty"`
+	File   *string `json:"file,omitempty"`
 }
 
 type standaloneInjectedHeader struct {
+	Placeholder  *string `json:"placeholder,omitempty"`
 	Name         string  `json:"name"`
 	SecretEnvVar *string `json:"secret_env_var,omitempty"`
 	SecretFile   *string `json:"secret_file,omitempty"`

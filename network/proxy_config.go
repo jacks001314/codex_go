@@ -114,8 +114,11 @@ type ProxySettings struct {
 	DangerouslyAllowAllUnixSockets *bool
 	Mode                           ProxyMode
 	Domains                        *ProxyDomainPermissions
-	UnixSockets                    *ProxyUnixSocketPermissions
-	AllowLocalBinding              bool
+	// ReviewDomains are managed-only selectors routed through the approval
+	// flow before ordinary allow rules (Rust #56154).
+	ReviewDomains     []string
+	UnixSockets       *ProxyUnixSocketPermissions
+	AllowLocalBinding bool
 	// AllowLocalBindingSet distinguishes an explicit false from an omitted
 	// setting so executor-specific defaults can be applied later (Rust #46523).
 	AllowLocalBindingSet bool

@@ -161,6 +161,7 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 		Network: &NetworkRequirements{
 			AllowedDomains: []string{},
 			Domains:        map[string]NetworkPermission{"example.com": NetworkAllow},
+			ReviewDomains:  []string{"review.example.com"},
 		},
 		Models: &ModelsRequirements{NewThread: &NewThreadModelDefaults{Model: &model}},
 		MCPServers: map[string]MCPServerRequirement{
@@ -208,6 +209,9 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 	}
 	if network["httpPort"] != nil || network["allowLocalBinding"] != nil {
 		t.Fatalf("network nullable fields = %+v", network)
+	}
+	if reviews, ok := network["reviewDomains"].([]any); !ok || len(reviews) != 1 || reviews[0] != "review.example.com" {
+		t.Fatalf("network reviewDomains = %+v", network["reviewDomains"])
 	}
 	models := root["models"].(map[string]any)
 	newThread := models["newThread"].(map[string]any)
@@ -788,11 +792,16 @@ func TestRequirementsClone(t *testing.T) {
 		AllowedSandboxModes:     []sandbox.SandboxMode{sandbox.SandboxWorkspaceWrite},
 		DefaultPermissions:      &defaultPermissions,
 		AllowRemoteControl:      &allow,
-		Network:                 &NetworkRequirements{Enabled: &allow, Domains: map[string]NetworkPermission{"example.com": NetworkAllow}},
+		Network: &NetworkRequirements{
+			Enabled:       &allow,
+			Domains:       map[string]NetworkPermission{"example.com": NetworkAllow},
+			ReviewDomains: []string{"review.example.com"},
+		},
 	})
 	read := service.Requirements()
 	read.Requirements.AllowedApprovalPolicies[0] = sandbox.ApprovalNever
 	read.Requirements.Network.Domains["example.com"] = NetworkDeny
+	read.Requirements.Network.ReviewDomains[0] = "mutated.example.com"
 
 	again := service.Requirements()
 	if again.Requirements.AllowedApprovalPolicies[0] != sandbox.ApprovalOnRequest {
@@ -800,6 +809,9 @@ func TestRequirementsClone(t *testing.T) {
 	}
 	if again.Requirements.Network.Domains["example.com"] != NetworkAllow {
 		t.Fatalf("requirements map mutation leaked")
+	}
+	if len(again.Requirements.Network.ReviewDomains) != 1 || again.Requirements.Network.ReviewDomains[0] != "review.example.com" {
+		t.Fatalf("requirements slice mutation leaked: %#v", again.Requirements.Network.ReviewDomains)
 	}
 }
 

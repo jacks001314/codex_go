@@ -1080,6 +1080,7 @@ type NetworkRequirements struct {
 	DangerouslyAllowNonLoopbackProxy *bool                        `json:"dangerouslyAllowNonLoopbackProxy,omitempty"`
 	DangerouslyAllowAllUnixSockets   *bool                        `json:"dangerouslyAllowAllUnixSockets,omitempty"`
 	Domains                          map[string]NetworkPermission `json:"domains,omitempty"`
+	ReviewDomains                    []string                     `json:"reviewDomains,omitempty"`
 	ManagedAllowedDomainsOnly        *bool                        `json:"managedAllowedDomainsOnly,omitempty"`
 	AllowedDomains                   []string                     `json:"allowedDomains,omitempty"`
 	DeniedDomains                    []string                     `json:"deniedDomains,omitempty"`
@@ -1098,6 +1099,7 @@ func (r *NetworkRequirements) MarshalJSON() ([]byte, error) {
 		DangerouslyAllowNonLoopbackProxy *bool                        `json:"dangerouslyAllowNonLoopbackProxy"`
 		DangerouslyAllowAllUnixSockets   *bool                        `json:"dangerouslyAllowAllUnixSockets"`
 		Domains                          map[string]NetworkPermission `json:"domains"`
+		ReviewDomains                    []string                     `json:"reviewDomains"`
 		ManagedAllowedDomainsOnly        *bool                        `json:"managedAllowedDomainsOnly"`
 		AllowedDomains                   []string                     `json:"allowedDomains"`
 		DeniedDomains                    []string                     `json:"deniedDomains"`
@@ -1113,6 +1115,7 @@ func (r *NetworkRequirements) MarshalJSON() ([]byte, error) {
 		DangerouslyAllowNonLoopbackProxy: cloneBoolPtr(r.DangerouslyAllowNonLoopbackProxy),
 		DangerouslyAllowAllUnixSockets:   cloneBoolPtr(r.DangerouslyAllowAllUnixSockets),
 		Domains:                          cloneNetworkMap(r.Domains),
+		ReviewDomains:                    stringSliceOrNil(r.ReviewDomains),
 		ManagedAllowedDomainsOnly:        cloneBoolPtr(r.ManagedAllowedDomainsOnly),
 		AllowedDomains:                   stringSliceOrNil(r.AllowedDomains),
 		DeniedDomains:                    stringSliceOrNil(r.DeniedDomains),
@@ -4288,6 +4291,7 @@ func cloneNetwork(value *NetworkRequirements) *NetworkRequirements {
 	clone.DangerouslyAllowNonLoopbackProxy = cloneBoolPtr(value.DangerouslyAllowNonLoopbackProxy)
 	clone.DangerouslyAllowAllUnixSockets = cloneBoolPtr(value.DangerouslyAllowAllUnixSockets)
 	clone.Domains = cloneNetworkMap(value.Domains)
+	clone.ReviewDomains = stringSliceOrNil(value.ReviewDomains)
 	clone.ManagedAllowedDomainsOnly = cloneBoolPtr(value.ManagedAllowedDomainsOnly)
 	clone.AllowedDomains = stringSliceOrNil(value.AllowedDomains)
 	clone.DeniedDomains = stringSliceOrNil(value.DeniedDomains)

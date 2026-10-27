@@ -99,6 +99,7 @@ type proxyRuntimePolicy struct {
 	settings         ProxySettings
 	allowMatcher     *ProxyDomainMatcher
 	denyMatcher      *ProxyDomainMatcher
+	reviewMatcher    *ProxyDomainMatcher
 	mitmHooks        ProxyMITMHooksByHost
 	broker           *ProxyCredentialBroker
 	headerInjections []ProxyHeaderInjection
@@ -331,6 +332,10 @@ func buildProxyRuntimePolicy(settings ProxySettings, broker *ProxyCredentialBrok
 	if err != nil {
 		return nil, fmt.Errorf("compile network.denied_domains: %w", err)
 	}
+	reviewMatcher, err := CompileProxyDomainMatcher(settings.ReviewDomains, false)
+	if err != nil {
+		return nil, fmt.Errorf("compile network.review_domains: %w", err)
+	}
 	// A disabled proxy must not activate brokerage even when the settings
 	// still carry credential_broker = true (Rust
 	// core/src/config/network_proxy_spec.rs:381-390).
@@ -342,11 +347,12 @@ func buildProxyRuntimePolicy(settings ProxySettings, broker *ProxyCredentialBrok
 		)
 	}
 	return &proxyRuntimePolicy{
-		settings:     settings,
-		allowMatcher: allowMatcher,
-		denyMatcher:  denyMatcher,
-		mitmHooks:    hooks,
-		broker:       broker,
+		settings:      settings,
+		allowMatcher:  allowMatcher,
+		denyMatcher:   denyMatcher,
+		reviewMatcher: reviewMatcher,
+		mitmHooks:     hooks,
+		broker:        broker,
 	}, nil
 }
 
@@ -1670,10 +1676,17 @@ func (c *proxyPolicyUDPConn) Write(payload []byte) (int, error) {
 }
 
 func (s *ProxyServer) dialCheckedTarget(ctx context.Context, network string, address string) (net.Conn, error) {
-	settings := s.runtimePolicy().settings
+	policy := s.runtimePolicy()
+	settings := policy.settings
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
+	}
+	// Rust #56154: the connect-time re-check for an approved target still
+	// honors an explicit denial, so a denial recorded after policy evaluation
+	// cannot be bypassed by the already-authorized request.
+	if policy.denyMatcher != nil && policy.denyMatcher.Match(host) {
+		return nil, fmt.Errorf("network target rejected by policy")
 	}
 	dialer := net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	if ip := proxyIPLiteral(host); ip != nil {
@@ -1766,12 +1779,15 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 		allowMatcher, _ = CompileProxyDomainMatcher(allowlist, false)
 	}
 	allowed := allowMatcher.Match(request.Host)
+	// Rust #56154: managed review selectors precede every ordinary allow rule,
+	// so a matching host is not yet authorized for the pre-approval DNS guard.
+	needsReview := policy.reviewMatcher != nil && policy.reviewMatcher.Match(request.Host)
 	if !settings.AllowLocalBinding {
-		if baselineLocalBindingReason(request, allowlist, allowed) != "" {
+		if baselineLocalBindingReason(request, allowlist, allowed && !needsReview) != "" {
 			return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
 		}
 	}
-	if len(allowlist) > 0 && allowed {
+	if !needsReview && len(allowlist) > 0 && allowed {
 		decision := AllowProxyDecision()
 		decision.Source = ProxyDecisionSourceBaselinePolicy
 		decision.Reason = "allow"
@@ -1811,11 +1827,11 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 // branch only runs for a host that is already allowlisted. A request that is
 // merely *decidable* (policyDecider configured) is not yet authorized to touch
 // DNS; an approval grants that later, in approvedLocalBindingReason.
-func baselineLocalBindingReason(request ProxyPolicyRequest, allowlist []string, allowlisted bool) string {
+func baselineLocalBindingReason(request ProxyPolicyRequest, allowlist []string, authorized bool) string {
 	if handled, reason := literalLocalBindingReason(request, allowlist); handled {
 		return reason
 	}
-	if allowlisted && proxyHostResolvesToNonPublicIP(request.Host, request.Port) {
+	if authorized && proxyHostResolvesToNonPublicIP(request.Host, request.Port) {
 		return ProxyReasonNotAllowedLocal
 	}
 	return ""

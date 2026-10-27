@@ -244,3 +244,23 @@ func TestEnvironmentNetworkPolicyLocalBindingWireLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// TestEnvironmentNetworkPolicyInheritsReviewDomainsLikeRust mirrors #56154:
+// managed review selectors belong to the owner and the controller, and neither
+// side may remove the other's selectors.
+func TestEnvironmentNetworkPolicyInheritsReviewDomainsLikeRust(t *testing.T) {
+	controller := &Config{Enabled: true, ReviewDomains: []string{"controller.example.com"}}
+	policy := EnvironmentNetworkPolicyFromConfig(controller, false)
+	if len(policy.ReviewDomains) != 1 || policy.ReviewDomains[0] != "controller.example.com" {
+		t.Fatalf("policy review domains = %#v", policy.ReviewDomains)
+	}
+
+	owner := &EnvironmentNetworkPolicy{
+		ReviewDomains: []string{"OWNER.example.com", "Controller.example.com"},
+	}
+	owner.ApplyTo(controller)
+	got := controller.ReviewDomains
+	if len(got) != 2 || got[0] != "controller.example.com" || got[1] != "OWNER.example.com" {
+		t.Fatalf("review domains = %#v", got)
+	}
+}

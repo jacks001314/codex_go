@@ -790,6 +790,9 @@ func networkRequirementsFromMap(values map[string]any) *NetworkRequirements {
 	if value, ok := networkPermissionMapAnyKey(values, "domains"); ok {
 		out.Domains = value
 	}
+	if value, ok := stringListAnyKey(values, "review_domains", "reviewDomains"); ok {
+		out.ReviewDomains = value
+	}
 	if value, ok := boolAnyKey(values, "managed_allowed_domains_only", "managedAllowedDomainsOnly"); ok {
 		out.ManagedAllowedDomainsOnly = &value
 	}

@@ -231,8 +231,12 @@ type RemoteNetworkProxyConfig struct {
 	DangerouslyAllowAllUnixSockets bool                                        `json:"dangerouslyAllowAllUnixSockets"`
 	Mode                           string                                      `json:"mode"`
 	Domains                        map[string]string                           `json:"domains,omitempty"`
-	UnixSockets                    map[string]string                           `json:"unixSockets,omitempty"`
-	AllowLocalBinding              bool                                        `json:"allowLocalBinding"`
+	// ReviewDomains are managed selectors that must pass the approval flow
+	// before ordinary allows (Rust #56154). Clients must require the
+	// networkProxyReviewDomains capability when this is nonempty.
+	ReviewDomains     []string          `json:"reviewDomains,omitempty"`
+	UnixSockets       map[string]string `json:"unixSockets,omitempty"`
+	AllowLocalBinding bool              `json:"allowLocalBinding"`
 }
 
 // UnmarshalJSON drops provider rules sent with masking disabled (Rust #56049).
@@ -320,6 +324,7 @@ func RemoteNetworkProxyConfigFromProxyConfigWithCredentialMaskingMode(config net
 		DangerouslyAllowAllUnixSockets: allowAllUnixSockets,
 		Mode:                           string(settings.Mode),
 		Domains:                        domains,
+		ReviewDomains:                  append([]string(nil), settings.ReviewDomains...),
 		UnixSockets:                    unixSockets,
 		AllowLocalBinding:              settings.AllowLocalBinding,
 	}, nil
@@ -340,6 +345,7 @@ func (c RemoteNetworkProxyConfig) ProxyConfig() (network.ProxyConfig, error) {
 	allowAllUnixSockets := c.DangerouslyAllowAllUnixSockets
 	settings.DangerouslyAllowAllUnixSockets = &allowAllUnixSockets
 	settings.AllowLocalBinding = c.AllowLocalBinding
+	settings.ReviewDomains = append([]string(nil), c.ReviewDomains...)
 	settings.Mode = network.ProxyMode(c.Mode)
 	if settings.Mode != network.ProxyModeFull && settings.Mode != network.ProxyModeLimited {
 		return network.ProxyConfig{}, fmt.Errorf("unsupported network proxy mode %q", c.Mode)

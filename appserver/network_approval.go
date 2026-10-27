@@ -233,7 +233,9 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 		return s.requestGuardianApproval(ctx, active, request, protocol, target, ownerCall), ""
 	}
 	environmentID := key.environmentID
-	reason := fmt.Sprintf("%s is not in the allowed_domains", request.Host)
+	// Rust #56154: a review-domain host may be allowlisted, so the prompt must
+	// not claim the host is missing from the allowlist.
+	reason := fmt.Sprintf("Network access to %s requires approval", request.Host)
 	command := "network-access " + target
 	params := &CommandExecutionRequestApprovalParams{
 		ThreadID:               active.threadID,
