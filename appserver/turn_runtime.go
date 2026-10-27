@@ -4630,6 +4630,10 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		// Rust #47967: FlexUnavailable reports the 429 the Flex capacity
 		// failure arrived with (CodexErrorDetails::http_status_code_value).
 		return fields("flexUnavailable", "flex_unavailable")
+	case codexapi.ErrorModelNotFound:
+		// Rust #56445: ModelNotFound preserves the provider message and reports
+		// the HTTP status when the error arrived with one.
+		return fields("modelNotFound", "model_not_found")
 	case codexapi.ErrorCyberPolicy:
 		return fields("cyberPolicy", "cyber_policy")
 	case codexapi.ErrorBioPolicy:
@@ -4664,6 +4668,9 @@ func analyticsErrorHTTPStatus(kind codexapi.APIErrorKind, status *uint16) *uint1
 		}
 		tooManyRequests := uint16(http.StatusTooManyRequests)
 		return &tooManyRequests
+	case codexapi.ErrorModelNotFound:
+		// Rust reports the ModelNotFound status only when the error carried one.
+		return status
 	default:
 		return nil
 	}

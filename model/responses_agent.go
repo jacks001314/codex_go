@@ -1269,6 +1269,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			}
 		case "error":
 			closeResponsesWebsocketSession(session, "response failed")
+			if apiErr := websocketTerminalProviderError(event); apiErr != nil {
+				return nil, apiErr
+			}
 			if usageLimit, ok := websocketUsageLimitError(event); ok {
 				// Rust's wrapped-WebSocket mapping builds `Transport(Http{headers})`
 				// and `map_api_error` then reads the rate-limit headers off it, so a
@@ -1459,6 +1462,30 @@ func websocketErrorEventAPIError(event map[string]any) *codexapi.APIError {
 		Status:  int(status),
 		Message: websocketEventError(event),
 	}).WithRetryDelay(delay)
+}
+
+// websocketTerminalProviderError maps a statusless or 400/403/404
+// `model_not_found` WebSocket error event to the terminal provider failure
+// (Rust #56445). Like Rust, the provider message is preserved and the event
+// status, when present, must be one of the eligible codes.
+func websocketTerminalProviderError(event map[string]any) *codexapi.APIError {
+	if strings.TrimSpace(websocketEventErrorCode(event)) != "model_not_found" {
+		return nil
+	}
+	status, _ := uint64FromAny(event["status"])
+	if status > 65535 {
+		status = 0
+	}
+	switch status {
+	case 0, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound:
+	default:
+		return nil
+	}
+	message := strings.TrimSpace(websocketEventError(event))
+	if message == "" {
+		message = "model_not_found"
+	}
+	return &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Status: int(status), Message: message}
 }
 
 // websocketUsageLimitError mirrors Rust's wrapped-WebSocket usage-limit
@@ -3656,6 +3683,11 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 			message = http.StatusText(statusCode)
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded, Status: statusCode, Message: message}
+	}
+	// Rust #56445: a `model_not_found` provider error on 400/403/404 is
+	// terminal and preserves the provider message.
+	if apiErr := terminalProviderError(payload.Error, statusCode); apiErr != nil {
+		return apiErr
 	}
 	// Rust #38682: misalignment policy violations from HTTP 400/403 responses
 	// surface as a typed, non-retryable error.

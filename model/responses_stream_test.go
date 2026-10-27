@@ -678,3 +678,56 @@ func TestResponseFailedErrorUnknownCodeStaysRetryableLikeRust(t *testing.T) {
 		t.Fatal("retry delay reported for unknown error code, want none (Rust preserves only unclassified codes as Retryable without delay)")
 	}
 }
+
+// TestModelNotFoundStreamErrorsTerminateLikeRust mirrors Rust #56445: a
+// statusless `model_not_found` arrives either as a streamed `error` event or as
+// the `response.error` payload of `response.failed`, ends the turn without
+// retries, and keeps the provider message.
+func TestModelNotFoundStreamErrorsTerminateLikeRust(t *testing.T) {
+	t.Run("response.failed", func(t *testing.T) {
+		raw := `{"type":"response.failed","response":{"error":{"code":"model_not_found","message":"Access to this deployment ended."}}}`
+		err := responseFailedError([]byte(raw))
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorModelNotFound {
+			t.Fatalf("error = %#v, want modelNotFound", err)
+		}
+		if apiErr.Status != 0 {
+			t.Fatalf("status = %d, want 0 for a statusless stream error", apiErr.Status)
+		}
+		if apiErr.Message != "Access to this deployment ended." {
+			t.Fatalf("message = %q, want the provider message", apiErr.Message)
+		}
+		if isRetryableResponsesStreamError(err) {
+			t.Fatal("model_not_found must not be retryable")
+		}
+	})
+
+	t.Run("statusless streamed error event", func(t *testing.T) {
+		acc := &responsesStreamAccumulator{}
+		_, err := acc.apply(&responsesSSEEvent{
+			Event: "error",
+			Data:  []byte(`{"type":"error","error":{"code":"model_not_found","message":"Access to this deployment ended."}}`),
+		}, nil)
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorModelNotFound {
+			t.Fatalf("error = %#v, want modelNotFound", err)
+		}
+		if apiErr.Status != 0 || apiErr.Message != "Access to this deployment ended." {
+			t.Fatalf("error = %#v, want status 0 and the provider message", apiErr)
+		}
+		if isRetryableResponsesStreamError(err) {
+			t.Fatal("model_not_found must not be retryable")
+		}
+	})
+
+	t.Run("blank message falls back to the code", func(t *testing.T) {
+		err := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"model_not_found"}}}`))
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorModelNotFound {
+			t.Fatalf("error = %#v, want modelNotFound", err)
+		}
+		if apiErr.Message != "model_not_found" {
+			t.Fatalf("message = %q, want model_not_found", apiErr.Message)
+		}
+	})
+}

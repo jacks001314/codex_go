@@ -2,6 +2,7 @@ package codexapi
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,9 @@ const (
 	// ErrorFlexUnavailable is the terminal Flex-capacity failure Rust surfaces
 	// for a `flex_unavailable` error code (Rust #47967).
 	ErrorFlexUnavailable APIErrorKind = "flexUnavailable"
+	// ErrorModelNotFound is the terminal provider failure for a
+	// `model_not_found` error code (Rust #56445).
+	ErrorModelNotFound APIErrorKind = "modelNotFound"
 )
 
 type APIError struct {
@@ -131,6 +135,13 @@ func (e *APIError) Error() string {
 	case ErrorFlexUnavailable:
 		// Rust's CodexErr display for CodexErrorDetails::FlexUnavailable.
 		return "Flex capacity unavailable."
+	case ErrorModelNotFound:
+		// Rust's CodexErrorDetails::ModelNotFound displays the provider message
+		// and falls back to the error code when it is blank.
+		if strings.TrimSpace(e.Message) == "" {
+			return "model_not_found"
+		}
+		return e.Message
 	default:
 		return e.Message
 	}

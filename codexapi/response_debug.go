@@ -87,6 +87,7 @@ const (
 	ResponseAPICyberPolicy      ResponseAPIErrorKind = "cyberPolicy"
 	ResponseAPIServerOverloaded ResponseAPIErrorKind = "serverOverloaded"
 	ResponseAPIFlexUnavailable  ResponseAPIErrorKind = "flexUnavailable"
+	ResponseAPIModelNotFound    ResponseAPIErrorKind = "modelNotFound"
 )
 
 type ResponseAPIError struct {
@@ -133,6 +134,9 @@ func TelemetryResponseAPIErrorMessage(err *ResponseAPIError) string {
 	case ResponseAPIFlexUnavailable:
 		// Rust response-debug-context telemetry_api_error_message.
 		return "flex capacity unavailable"
+	case ResponseAPIModelNotFound:
+		// Rust response-debug-context telemetry_api_error_message.
+		return "model not found"
 	default:
 		return err.Message
 	}

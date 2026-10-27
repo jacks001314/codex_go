@@ -180,3 +180,85 @@ func TestWebsocketUsageLimitErrorPreservesWindowLikeRust(t *testing.T) {
 		t.Fatal("a status-less usage-limit event must not be mapped")
 	}
 }
+
+// TestResponsesHTTPErrorTreatsModelNotFoundAsTerminalLikeRust mirrors Rust
+// #56445: a `model_not_found` provider error on 400/403/404 ends the turn
+// without retries and keeps the provider message and status.
+func TestResponsesHTTPErrorTreatsModelNotFoundAsTerminalLikeRust(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound} {
+		err := responsesHTTPError("OpenAI", status, http.Header{},
+			[]byte(`{"error":{"code":"model_not_found","message":"Access to this deployment ended."}}`))
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorModelNotFound {
+			t.Fatalf("status %d error = %#v, want modelNotFound", status, err)
+		}
+		if apiErr.Status != status {
+			t.Fatalf("status %d preserved status = %d", status, apiErr.Status)
+		}
+		if apiErr.Message != "Access to this deployment ended." {
+			t.Fatalf("status %d message = %q, want the provider message", status, apiErr.Message)
+		}
+		if isRetryableResponsesStreamError(err) {
+			t.Fatalf("status %d model_not_found must not be retryable", status)
+		}
+	}
+
+	// A blank provider message falls back to the error code, like Rust's
+	// `parse_terminal_provider_error`.
+	blank := responsesHTTPError("OpenAI", http.StatusNotFound, http.Header{},
+		[]byte(`{"error":{"code":"model_not_found","message":"   "}}`))
+	var blankErr *codexapi.APIError
+	if !errors.As(blank, &blankErr) || blankErr.Kind != codexapi.ErrorModelNotFound || blankErr.Message != "model_not_found" {
+		t.Fatalf("blank message error = %#v, want model_not_found", blank)
+	}
+
+	// Only 400/403/404 are eligible; other statuses keep their existing
+	// classification.
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
+		err := responsesHTTPError("OpenAI", status, http.Header{},
+			[]byte(`{"error":{"code":"model_not_found","message":"Access to this deployment ended."}}`))
+		var apiErr *codexapi.APIError
+		if errors.As(err, &apiErr) && apiErr.Kind == codexapi.ErrorModelNotFound {
+			t.Fatalf("status %d classified as modelNotFound", status)
+		}
+	}
+}
+
+// TestWebsocketTerminalProviderErrorLikeRust mirrors Rust #56445's
+// wrapped-WebSocket handling: `model_not_found` is terminal on 400/403/404 and
+// on a statusless event, keeping the provider message.
+func TestWebsocketTerminalProviderErrorLikeRust(t *testing.T) {
+	for _, status := range []any{nil, float64(http.StatusBadRequest), float64(http.StatusForbidden), float64(http.StatusNotFound)} {
+		event := map[string]any{
+			"type":  "error",
+			"error": map[string]any{"code": "model_not_found", "message": "Access to this deployment ended."},
+		}
+		want := 0
+		if status != nil {
+			event["status"] = status
+			want = int(status.(float64))
+		}
+		apiErr := websocketTerminalProviderError(event)
+		if apiErr == nil || apiErr.Kind != codexapi.ErrorModelNotFound {
+			t.Fatalf("status %v error = %#v, want modelNotFound", status, apiErr)
+		}
+		if apiErr.Status != want {
+			t.Fatalf("status %v preserved status = %d, want %d", status, apiErr.Status, want)
+		}
+		if apiErr.Message != "Access to this deployment ended." {
+			t.Fatalf("status %v message = %q", status, apiErr.Message)
+		}
+	}
+
+	// Statuses outside 400/403/404 keep their existing classification.
+	for _, status := range []float64{http.StatusTooManyRequests, http.StatusInternalServerError} {
+		apiErr := websocketTerminalProviderError(map[string]any{
+			"type":   "error",
+			"status": status,
+			"error":  map[string]any{"code": "model_not_found", "message": "not found"},
+		})
+		if apiErr != nil {
+			t.Fatalf("status %v mapped to %#v", status, apiErr)
+		}
+	}
+}

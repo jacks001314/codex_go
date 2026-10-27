@@ -81,6 +81,16 @@ func TestAPIErrorDisplayMatchesRustLikeRust(t *testing.T) {
 			err:  &APIError{Kind: ErrorMisalignmentPolicyViolation, Message: "blocked for misalignment"},
 			want: "blocked for misalignment",
 		},
+		{
+			name: "model not found",
+			err:  &APIError{Kind: ErrorModelNotFound, Message: "Access to this deployment ended."},
+			want: "Access to this deployment ended.",
+		},
+		{
+			name: "model not found blank message",
+			err:  &APIError{Kind: ErrorModelNotFound},
+			want: "model_not_found",
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := testCase.err.Error(); got != testCase.want {

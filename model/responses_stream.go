@@ -91,11 +91,12 @@ type ResponsesStreamEvent struct {
 	RawType            string
 }
 
-// flexUnavailableStreamError recognizes Rust's `parse_flex_unavailable`
-// (codex-api/src/error.rs, #47967): an error object whose `code` is
-// `flex_unavailable`, either as the SSE event's top-level `error` field or as
-// the `response.error` payload of a `response.failed` event.
-func flexUnavailableStreamError(data []byte) (string, bool) {
+// terminalProviderStreamError recognizes Rust's `parse_terminal_provider_error`
+// (codex-api/src/error.rs, #47967/#56445) for streamed errors: an error object
+// whose `code` is `flex_unavailable` or `model_not_found`, either as the SSE
+// event's top-level `error` field or as the `response.error` payload of a
+// `response.failed` event.
+func terminalProviderStreamError(data []byte) (*codexapi.APIError, bool) {
 	var payload struct {
 		Error    *responsesAgentAPIErrorBody `json:"error"`
 		Response struct {
@@ -103,17 +104,45 @@ func flexUnavailableStreamError(data []byte) (string, bool) {
 		} `json:"response"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", false
+		return nil, false
 	}
 	for _, body := range []*responsesAgentAPIErrorBody{payload.Error, payload.Response.Error} {
-		if body == nil {
-			continue
-		}
-		if responseErrorCode(body) == "flex_unavailable" {
-			return strings.TrimSpace(body.Message), true
+		if apiErr := terminalProviderError(body, 0); apiErr != nil {
+			return apiErr, true
 		}
 	}
-	return "", false
+	return nil, false
+}
+
+// terminalProviderError maps provider error codes that end a turn without
+// retries, preserving the provider message and any eligible HTTP status.
+// Status 0 means the error arrived streamed, without a status.
+func terminalProviderError(body *responsesAgentAPIErrorBody, status int) *codexapi.APIError {
+	if body == nil {
+		return nil
+	}
+	switch responseErrorCode(body) {
+	case "flex_unavailable":
+		if status != 0 && status != http.StatusTooManyRequests {
+			return nil
+		}
+		if status == 0 {
+			status = http.StatusTooManyRequests
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Status: status, Message: strings.TrimSpace(body.Message)}
+	case "model_not_found":
+		switch status {
+		case 0, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound:
+		default:
+			return nil
+		}
+		message := strings.TrimSpace(body.Message)
+		if message == "" {
+			message = "model_not_found"
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Status: status, Message: message}
+	}
+	return nil
 }
 
 // ResponseUsageMetadata mirrors Rust protocol::ResponseUsageMetadata (#41087):
@@ -540,7 +569,7 @@ func isRetryableResponsesStreamError(err error) bool {
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
 			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest,
 			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy,
-			codexapi.ErrorFlexUnavailable:
+			codexapi.ErrorFlexUnavailable, codexapi.ErrorModelNotFound:
 			return false
 		default:
 			return details.Status >= http.StatusInternalServerError
@@ -1120,12 +1149,8 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		// `flex_unavailable` is a terminal Flex-capacity failure; it ends the
 		// turn without retries instead of being buffered as a generic stream
 		// error.
-		if message, ok := flexUnavailableStreamError(sse.Data); ok {
-			return false, &codexapi.APIError{
-				Kind:    codexapi.ErrorFlexUnavailable,
-				Status:  http.StatusTooManyRequests,
-				Message: message,
-			}
+		if apiErr, ok := terminalProviderStreamError(sse.Data); ok {
+			return false, apiErr
 		}
 	case string(ResponsesStreamEventTimingMetrics):
 		metrics := responsesTimingMetricsFromEventData(sse.Data)
@@ -2587,6 +2612,11 @@ func responseFailedError(data []byte) error {
 			Message: message,
 		}
 	}
+	// Rust #56445: a statusless `model_not_found` failure ends the turn without
+	// retries and preserves the provider message.
+	if _, message, ok := modelNotFoundErrorBody(rawError); ok {
+		return &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Message: message}
+	}
 	var errBody responsesFailedErrorBody
 	if err := json.Unmarshal(rawError, &errBody); err != nil {
 		if hasRetryAfter {
@@ -2753,6 +2783,23 @@ func flexUnavailableErrorBody(rawError []byte) (string, string, bool) {
 		return "", "", true
 	}
 	return *body.Code, strings.TrimSpace(*body.Message), true
+}
+
+// modelNotFoundErrorBody recognizes Rust's statusless `model_not_found`
+// provider error without requiring the rest of the error object to decode.
+func modelNotFoundErrorBody(rawError []byte) (string, string, bool) {
+	var body struct {
+		Code    *string `json:"code"`
+		Message *string `json:"message"`
+	}
+	if err := json.Unmarshal(rawError, &body); err != nil || body.Code == nil || *body.Code != "model_not_found" {
+		return "", "", false
+	}
+	message := "model_not_found"
+	if body.Message != nil && strings.TrimSpace(*body.Message) != "" {
+		message = strings.TrimSpace(*body.Message)
+	}
+	return *body.Code, message, true
 }
 
 func parseMisalignmentDetails(raw json.RawMessage) *codexapi.MisalignmentDetails {

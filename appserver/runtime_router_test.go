@@ -21161,6 +21161,22 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			wantKind:  "flex_unavailable",
 			wantHTTP:  uint16Ptr(http.StatusTooManyRequests),
 		},
+		{
+			// Rust #56445: ModelNotFound reports the status the provider error
+			// arrived with and keeps its own classification.
+			name:      "model not found",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Status: http.StatusNotFound, Message: "Access to this deployment ended."},
+			wantError: `"modelNotFound"`,
+			wantKind:  "model_not_found",
+			wantHTTP:  uint16Ptr(http.StatusNotFound),
+		},
+		{
+			// A statusless streamed ModelNotFound reports no HTTP status.
+			name:      "model not found without status",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Message: "Access to this deployment ended."},
+			wantError: `"modelNotFound"`,
+			wantKind:  "model_not_found",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -36,6 +36,7 @@ TUI lane and are not modified here.
 | `#57192` | Gate capability discovery V2 on executor version | `execserver/capability_discovery_v2_compat.go`, `execserver/client.go`, `appserver/executor_capability_discovery_v2.go`, `appserver/initialize.go`, `cmd/codex/main.go`, version tests |
 | `#56049` | Configured credential providers in remote credential masking | `network/proxy_credential_providers.go`, `execserver/network_policy.go`, `execserver/server.go`, `tool/unified_exec.go`, capability/masking tests |
 | `#57187` | Advisory rollout budgets with optional limit enforcement | `config/rollout_budget.go`, `config/config.go`, `runtimeutil/budget.go`, `appserver/runtime_router.go`, config/budget tests |
+| `#56445` | Treat `model_not_found` provider errors as terminal failures | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_stream.go`, `model/responses_agent.go`, `rollout/codex_error_info.go`, `appserver/turn_runtime.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -203,6 +204,19 @@ reminder) while `RecordUsage` never reports exhaustion, so the current and
 later turns continue; the Go budget models this as `BudgetConfig.Advisory`,
 whose zero value still enforces the limit.
 
+`#56445` details: a provider error whose `code` is `model_not_found` is now a
+terminal classification instead of a retryable generic failure. HTTP 400/403/404
+bodies, standalone streamed `error` events and the `response.error` payload of
+`response.failed` all map through Rust's `parse_terminal_provider_error`: the
+provider message is preserved (falling back to `model_not_found` when blank) and
+the HTTP status is kept when the error arrived with one, so statusless stream
+errors report no status in analytics. Other statuses keep their existing
+classification, and WebSocket error events are terminal on 400/403/404 or when
+statusless. The new `ErrorModelNotFound` kind joins the non-retryable set, maps
+to `modelNotFound`/`model_not_found` for app-server turn analytics (reporting
+`httpStatusCode` only when present), is accepted by the rollout error-info
+reader, and gets Rust's "model not found" response-debug telemetry text.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -235,6 +249,9 @@ whose zero value still enforces the limit.
   `go test ./appserver -run 'CapabilityDiscoveryV2' -count=1` pass.
 - For `#56049`: `go test ./execserver ./tool -count=1` passes.
 - For `#57187`: `go test ./config ./runtimeutil -run 'RolloutBudget|Budget' -count=1` passes.
+- For `#56445`: `go test ./codexapi ./model ./rollout -count=1` and
+  `go test ./appserver -run 'TurnError|Analytics|ErrorInfo|ModelNotFound' -count=1`
+  pass.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.
