@@ -1176,6 +1176,51 @@ sources = ["tool_outputs", "reasoning"]
 	}
 }
 
+// TestGuardianV3FeatureConfigLikeRust mirrors Rust #56459: guardianv3 accepts a
+// boolean or a table with only `enabled`, profile settings override the base
+// value, and unknown table fields are rejected.
+func TestGuardianV3FeatureConfigLikeRust(t *testing.T) {
+	base := `
+[features]
+guardianv3 = true
+
+[profiles.review.features.guardianv3]
+enabled = false
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{Profile: "review", StrictConfig: true})
+	if err != nil {
+		t.Fatalf("guardianv3 profile config rejected: %v", err)
+	}
+	if cfg.FeatureSettings()["guardianv3"] {
+		t.Fatal("guardianv3 = true, want the profile table to override the base boolean")
+	}
+
+	tableDir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(tableDir), []byte("[features.guardianv3]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tableCfg, err := LoadEffectiveWithOptions(tableDir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("guardianv3 table rejected: %v", err)
+	}
+	if !tableCfg.FeatureSettings()["guardianv3"] {
+		t.Fatal("guardianv3 = false, want the enabled table to turn it on")
+	}
+
+	unknownDir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(unknownDir), []byte("[features.guardianv3]\nunknown = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadEffectiveWithOptions(unknownDir, &EffectiveOptions{StrictConfig: true}); err == nil ||
+		!strings.Contains(err.Error(), "unknown configuration field `features.guardianv3.unknown`") {
+		t.Fatalf("guardianv3 unknown field error = %v", err)
+	}
+}
+
 // TestGuardianV2MaxToolCallLagDefaultsLikeRust mirrors Rust
 // GuardianV2Config::max_tool_call_lag (#39001): the accessor reports whether the
 // config set the value (the model catalog supplies a lower-priority default and

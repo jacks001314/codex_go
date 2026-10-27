@@ -17,6 +17,21 @@ func TestKnownFeature(t *testing.T) {
 	}
 }
 
+// TestGuardianV3FeatureRegisteredLikeRust pins Rust #56459: guardianv3 is an
+// under-development, default-disabled feature.
+func TestGuardianV3FeatureRegisteredLikeRust(t *testing.T) {
+	const key = "guardianv3"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	if got := StageFor(key); got != StageUnderDevelopment {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageUnderDevelopment)
+	}
+	if Defaults()[key] {
+		t.Fatalf("%s default = true, want false", key)
+	}
+}
+
 func TestPluginRecommendationsEnabledLikeRust(t *testing.T) {
 	for _, test := range []struct {
 		name   string

@@ -1410,6 +1410,15 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 			return fmt.Errorf("unknown configuration field `%s.%s`", prefix, key)
 		}
 	}
+	if guardianV3, ok := features["guardianv3"].(map[string]any); ok {
+		// Rust GuardianV3ConfigToml (#56459) denies unknown fields and only
+		// carries the shared `enabled` toggle.
+		for key := range guardianV3 {
+			if key != "enabled" {
+				return fmt.Errorf("unknown configuration field `%s.guardianv3.%s`", prefix, key)
+			}
+		}
+	}
 	if tokenBudget, ok := features["token_budget"].(map[string]any); ok {
 		known := map[string]bool{"enabled": true, "reminder_threshold_tokens": true, "reminder_message_template": true, "guidance_message": true, "auto_compact_fallback_prompt": true, "auto_compact_fallback_buffer_tokens": true}
 		for key := range tokenBudget {

@@ -255,6 +255,9 @@ var Registry = []Spec{
 	// a removed compatibility no-op.
 	{Key: "guardian_ext", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "guardianv2", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #56459): enable Guardian V3
+	// integrations. Under development and off by default.
+	{Key: "guardianv3", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
 	{Key: "token_budget", Stage: StageUnderDevelopment},
 	{Key: "rollout_budget", Stage: StageUnderDevelopment},

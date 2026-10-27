@@ -106,6 +106,8 @@ TUI lane and are not modified here.
 | `#57452` | `policy_capacity_unavailable` is a distinct terminal capacity failure with the display `Policy-restricted capacity is unavailable. Please try again later.`; HTTP 503, `response.failed`, and WebSocket capacity events preserve the classification and `Retry-After`, stream retries and Guardian retries follow that advice, telemetry reports `policy-restricted capacity unavailable`, analytics map it to `policyCapacityUnavailable`/`policy_capacity_unavailable` with no HTTP status, and rollout decoding preserves both spellings | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_agent.go`, `model/responses_stream.go`, `appserver/guardian_reviewer.go`, `appserver/turn_runtime.go`, `rollout/codex_error_info.go`, re-vendored precomputed exports, like-Rust tests |
 | `#57462` | Code Mode always renders the tool description before the namespace description, then the declaration suffix; `code_mode_tool_description_first` is a removed compatibility flag and its config/plumbing are deleted | `features/features.go`, `config/config.go`, `tool/code_mode_exec.go`, `turn/tools.go`, `exec/exec.go`, `appserver/runtime_router.go`, updated ordering tests |
 | `#57476` | Guardian reviewer session helpers: basic-source detection (Go's existing `guardianTurnStart`) and a parent-thread-scoped Responses prompt cache key `guardian:{threadID}` on review requests, matching Rust's `prompt_cache_key_override_for_review_session` (guardian source only, parent required, overrides the fork cache key) | `appserver/guardian_session.go`, `appserver/guardian_reviewer.go`, `appserver/guardian_session_like_rust_test.go` |
+| `#56459` | Feature `guardianv3` (under development, off by default) accepts a boolean or a table with only `enabled`; strict config rejects unknown table fields | `features/features.go`, `config/config.go`, `features/features_test.go`, `config/config_test.go` |
+| `#56460` | Guardian's durable evidence board helpers: shared `guardian` storage namespace and a read-only-capable board for the owning main thread | `agentboard/guardian.go`, `agentboard/guardian_test.go` |
 
 Grounding notes:
 
@@ -1162,6 +1164,10 @@ deduplication for tool outputs.
 - For `#57474`: `go test ./appserver -run TestGuardianNativeEncryptedHistoryAcrossReviewsLikeRust -count=1`,
   `go test ./appserver -run 'GuardianNative|NativeMultiAgent|Guardian' -count=1`, and `go test ./state -count=1`
   pass. This also re-verifies the `#57448` transcript rules for both namespace spellings.
+- For `#56459`/`#56460`: `go test ./config ./features ./agentboard -count=1` and
+  `go vet ./config ./features ./agentboard` pass. The config test covers the
+  boolean and table forms plus profile override and unknown-field rejection;
+  the board test pins the `guardian` namespace and the reviewer read-only view.
 - For `#57476`: `go test ./appserver -run 'TestGuardianPromptCacheKeyScopedToParentThreadLikeRust|TestGuardianReviewRequestUsesParentScopedPromptCacheKeyLikeRust' -count=1`,
   `go test ./appserver -run 'Guardian|NativeMultiAgent' -count=1`, and
   `go build ./appserver ./model ./tool ./agent ./turn ./features ./codexapi ./rollout` pass.
