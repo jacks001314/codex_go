@@ -50,6 +50,7 @@ TUI lane and are not modified here.
 | `#57203` | Preserve the command cwd in `PermissionRequest` and `PostToolUse` hook input | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, `appserver/runtime_router.go`, `appserver/network_approval.go`, like-Rust tests |
 | `#56494` | Channel upserts on message boards (`upsert_channel`; `description` on `create_channel`) | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, `agentboard/upsert_channel_test.go`, `agentboard/tools_test.go` |
 | `#57212` | zstd-compressed code-mode gRPC responses for clients that advertise support | `codemode/grpc_zstd.go`, `codemode/grpc_stdio_host.go`, `codemode/grpc_session_provider.go`, `codemode/grpc_process_provider.go`, `codemode/grpc_zstd_test.go` |
+| `#55846` | Measure Guardian review latency once on the monotonic clock | `appserver/guardian_reviewer.go`, `appserver/guardian_review_metrics.go`, like-Rust test |
 
 Grounding notes:
 
@@ -387,6 +388,46 @@ Rust's `send_compressed(Zstd)`/`accept_compressed(Zstd)` pairing. The encoder is
 pooled and uses the fastest level, matching Rust's Bazel patch that forces tonic
 level 1 for response latency; there is no Go build patch to carry.
 
+Reviewed in this window with no Go change:
+
+- `#57314` (format Rust sources), `#57277` (crates.io `i18n-config`),
+  `#57255`/`#57206`/`#55547`/`#55616` (dependency advisories and lockfiles) are
+  Rust build/dependency maintenance. Go pins its own module set, so there is
+  nothing to mirror.
+- Test-only stabilizations `#57248`, `#57244`, `#57239`, `#57238`, `#57234`,
+  `#56557`, `#55848`, `#55524`, and `#55620` change Rust test harnesses; Go has
+  no counterpart fixtures or tokio scheduling to stabilize.
+- `#57290` (plugin process host with IPC) is absent from Go: no
+  `ProcessHost`/plugin-IPC symbols exist outside the code-mode host test helper,
+  and plugins run in-process.
+- `#57262` (`skill_catalog_deltas` incremental catalogs) is a feature Go does
+  not define; the flag and its delta protocol have no counterpart.
+- `#55946` (bounded remote installed-plugin inventory pagination) is N/A: the Go
+  plugin client has no cursor-paginated inventory fetch (`plugin/` has no
+  `NextCursor`/cursor for installed plugins).
+- `#55645` (in-process app-server shutdown with full queues) is N/A: Go has no
+  Rust-style `InProcessClientHandle`; `DisableCodeModeInProcessFallback` is
+  unrelated.
+- `#57193` (replay failed `write_stdin` rollout traces) and `#57199` (UTF-8-safe
+  240-byte JSON summary truncation in rollout traces) are N/A: Go has no
+  `rollouttrace`/`rollout_trace` package.
+- `#57167` (CUA tool-call lifecycle starts) is N/A: Go exposes no CUA/computer-use
+  tool, only the `browser_computer_use` config surface.
+- `#57256` (parent history in attached thread views) targets TUI thread views;
+  it belongs to the TUI lane.
+- `#57253` (slow daemon startup with early-exit detection) lives in
+  `app/daemon_startup.go`, which this lane does not touch (TUI lane owns it).
+- `#57207`/`#57201` (critical-path timing capture) remain pending: Go emits the
+  `#57209` analytics fields as `disabled`/null because no capture exists.
+
+`#55846` details: the review metric used to subtract two wall-clock
+millisecond timestamps, so a clock change or a delayed emission changed the
+reported latency. The reviewer now captures `time.Now()` when the review
+starts and derives the duration with a single `time.Since`, which reads Go's
+monotonic clock; non-positive or unrepresentable intervals saturate at zero.
+Go records no Guardian analytics `completion_latency_ms`, so the one captured
+interval is the metric's only consumer.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -445,6 +486,8 @@ level 1 for response latency; there is no Go build patch to carry.
 - For `#57186`: `go test ./sandbox/linuxsandbox -run 'InspectUnreadableGlobSearchRoot' -count=1`
   passes; the symlink-loop and symlink-root cases skip on this Windows host
   because creating symlinks needs a privilege it lacks.
+- For `#55846`: `go test ./appserver -run 'GuardianReviewElapsedMS|Guardian.*Duration' -count=1`
+  passes.
 - For `#57212`: `go test ./codemode -run 'GrpcZstd|NegotiatesZstd' -count=1` and
   the full `go test ./codemode -count=1` pass.
 - For `#56494`: `go test ./agentboard -run 'UpsertChannel|MessageBoardToolSpecsMatchRust' -count=1`

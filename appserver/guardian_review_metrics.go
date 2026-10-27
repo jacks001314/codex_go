@@ -369,15 +369,23 @@ func (r *modelGuardianReviewer) recordGuardianDecisionDuration(startedAt time.Ti
 	r.metrics.RecordDuration(telemetry.GuardianDecisionDurationMetric, duration, nil)
 }
 
-func guardianReviewMetricsDurationMS(startedAtMS int64, completedAt time.Time) int64 {
-	if startedAtMS <= 0 {
+// guardianReviewElapsedMS measures one review interval on the monotonic clock
+// captured with startedAt (Rust #55846). Reading elapsed once keeps the metric
+// independent of wall-clock changes and of how late the result is tracked; a
+// non-positive or unrepresentable interval saturates at zero.
+func guardianReviewElapsedMS(startedAt time.Time) int64 {
+	if startedAt.IsZero() {
 		return 0
 	}
-	duration := completedAt.UTC().UnixMilli() - startedAtMS
-	if duration < 0 {
+	elapsed := time.Since(startedAt)
+	if elapsed <= 0 {
 		return 0
 	}
-	return duration
+	milliseconds := elapsed.Milliseconds()
+	if milliseconds < 0 {
+		return 0
+	}
+	return milliseconds
 }
 
 // guardianReviewTokenSamples mirrors emit_guardian_token_usage_histograms,

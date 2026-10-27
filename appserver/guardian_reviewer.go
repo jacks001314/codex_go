@@ -662,7 +662,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			"route": "required_sync", "reason": routeReason,
 		})
 	}
-	reviewStartedAt := time.Now().UTC()
+	reviewStartedAt := time.Now()
 	attribution := r.newGuardianReviewAttribution(threadID, turnID, action)
 	feedbackCapture := &guardianReviewFeedbackCapture{}
 	defer func() {
@@ -676,7 +676,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	contextChanged := false
 	emitReviewMetrics := func() {
 		attribution.ContextChanged = contextChanged
-		r.emitGuardianReviewMetrics(attribution, guardianReviewMetricsDurationMS(reviewStartedAt.UnixMilli(), time.Now().UTC()))
+		r.emitGuardianReviewMetrics(attribution, guardianReviewElapsedMS(reviewStartedAt))
 	}
 	store := r.store
 	if store == nil {
