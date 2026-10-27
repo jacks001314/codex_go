@@ -98,6 +98,10 @@ const (
 	ThreadToolsNamespacesTotalMetric = "codex.thread.tools.namespaces_total"
 	ThreadToolsFragmentBytesMetric   = "codex.thread.tools.fragment_bytes"
 
+	// GuardianTurnBlockingDurationMetric measures, per turn, the union of the
+	// thread's pending approval waits the turn serviced, tagged by outcome
+	// (completed/aborted) (Rust #55591, ext/guardian-reviewer/src/blocking.rs).
+	GuardianTurnBlockingDurationMetric = "codex.guardian.turn.blocking_ms"
 	// GuardianDecisionDurationMetric measures the complete Guardian approval
 	// decision -- fast decisions, preparation and cancellation alongside the
 	// model review that GuardianReviewDurationMetric covers (Rust #51330,

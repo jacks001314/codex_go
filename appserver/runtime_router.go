@@ -600,15 +600,20 @@ type RuntimeRouter struct {
 	// a separate concern (#42065).
 	guardianReviewHistoryMu sync.Mutex
 	guardianReviewHistory   map[string]*guardianReviewHistoryState
-	rolloutBudgetOnce       sync.Once
-	rolloutBudget           *runtimeutil.Budget
-	rolloutBudgetCharged    atomic.Bool
-	rolloutBudgetExhausted  atomic.Bool
-	reasoningEffortMu       sync.Mutex
-	reasoningEffortPins     map[string]reasoningEffortPin
-	closeOnce               sync.Once
-	closeErr                error
-	codexHomeScanCancel     func()
+	// guardianBlocking is the thread-owned approval-wait tracker the Guardian
+	// reviewer enters and the turn lifecycle exports from (Rust's per-thread
+	// ReviewBlocking, #55591).
+	guardianBlockingOnce   sync.Once
+	guardianBlocking       *guardianReviewBlocking
+	rolloutBudgetOnce      sync.Once
+	rolloutBudget          *runtimeutil.Budget
+	rolloutBudgetCharged   atomic.Bool
+	rolloutBudgetExhausted atomic.Bool
+	reasoningEffortMu      sync.Mutex
+	reasoningEffortPins    map[string]reasoningEffortPin
+	closeOnce              sync.Once
+	closeErr               error
+	codexHomeScanCancel    func()
 	// daemonRecoverySink is the daemon-scoped slot a managed daemon shares
 	// between the per-connection routers; nil for every other server, so an
 	// unmanaged app-server never contributes or writes a recovery snapshot.
@@ -949,6 +954,15 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 		return false
 	}
 	r.finishSkillTurnMetrics(notification.ThreadID, notification.Turn.ID, notification.Turn.Status)
+	// Rust #55591: turn stop exports the blocking sample as `completed`, turn
+	// abort as `aborted` (ext/guardian-v2/src/sync_reviewer/mod.rs). A failed
+	// turn ends through Rust's turn-stop lifecycle too, so only an interrupted
+	// turn reports the abort outcome.
+	blockingOutcome := "completed"
+	if notification.Turn.Status == TurnStatusInterrupted {
+		blockingOutcome = "aborted"
+	}
+	r.endGuardianBlockingTurn(notification.ThreadID, notification.Turn.ID, blockingOutcome)
 	r.publishThreadReadAttention(notification)
 	r.requireRealtime().CompleteHandoff(notification.ThreadID)
 	r.notify(NotificationTurnCompleted, notification)
@@ -3615,6 +3629,7 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	appTurn.ItemsView = TurnItemsNotLoaded
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(params.ThreadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: params.ThreadID, Turn: appTurn})
+	r.beginGuardianBlockingTurn(params.ThreadID, turnID)
 	_ = r.appendRuntimeTurnStarted(params.ThreadID, turnID, rootTurnIDForTurn(nil, turnID), startedAt)
 	// Rust #49262: the compaction task runs in its own `codex.compaction`
 	// phase span (core/src/tasks/compact.rs).
@@ -6306,6 +6321,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	// durable checkpoint keeps the evidence a resumed thread needs.
 	r.forgetThreadRetainedContext(threadID)
 	r.forgetGuardianReviewHistory(threadID)
+	r.forgetGuardianBlocking(threadID)
 	r.forgetPermissionGrants(threadID)
 	r.forgetThreadSessionState(threadID)
 	r.closeThreadShellSnapshots(threadID)

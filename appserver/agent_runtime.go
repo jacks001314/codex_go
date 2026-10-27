@@ -147,6 +147,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.conversationHistory = r.guardianConversationHistoryForTurn
 		modelReviewer.fastDecision = r.emitGuardianV2FastDecision
 		modelReviewer.metrics = r.services.TurnMetrics
+		modelReviewer.blocking = r.requireGuardianReviewBlocking()
 		modelReviewer.subagentThread = r.turnThreadIsSubagent
 		modelReviewer.tracer = r.requestTracer
 		modelReviewer.warn = func(threadID, message string) {

@@ -1583,6 +1583,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
+	r.beginGuardianBlockingTurn(threadID, turnID)
 	r.bindRealtimeTurn(threadID, turnID)
 	// Rust #49686: the active turn owns a live remote-board receiver. Its first
 	// connection attempt completes before inference, and it is cancelled on

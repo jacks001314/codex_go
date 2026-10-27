@@ -80,6 +80,11 @@ type modelGuardianReviewer struct {
 	// omission notices the reviewer conversation already received (#49796).
 	retainedOmissionsMu sync.Mutex
 	retainedOmissions   map[string]state.GuardianRetainedOmissions
+	// blocking mirrors Rust's thread-owned ReviewBlocking
+	// (codex-rs/ext/guardian-reviewer/src/blocking.rs): the reviewer enters the
+	// same tracker the turn lifecycle exports samples from, so approval waits
+	// are charged to the turn that serviced them (#55591).
+	blocking *guardianReviewBlocking
 	// reviewModel resolves the catalog-backed reviewer selection for the
 	// reviewed turn: the model, its request-level reasoning effort, and the
 	// reviewer's policy instructions (Rust's resolve_review_model /
@@ -624,6 +629,13 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// the guard above stays outside the timer.
 	decisionStartedAt := time.Now()
 	defer r.recordGuardianDecisionDuration(decisionStartedAt)
+	// Rust #55591 (ext/guardian-reviewer/src/routing.rs): the blocking guard
+	// wraps the complete decision -- fast decisions, preparation and
+	// cancellation -- so the thread's approval-wait union is charged to the
+	// turn that serviced it.
+	if release := r.blocking.enter(threadID); release != nil {
+		defer release()
+	}
 	// Rust #39001: skip approval review when the latest risk score lags by more
 	// than max_tool_call_lag tool calls. The Go simplified reviewer fails closed
 	// (no stale-score auto-approval), mirroring the stale-data guard while

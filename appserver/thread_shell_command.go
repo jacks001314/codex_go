@@ -261,6 +261,7 @@ func (r *RuntimeRouter) prepareThreadShellCommandRun(threadID string, command st
 	_ = r.appendRuntimeTurnStarted(threadID, response.Turn.ID, rootTurnID, startedAt)
 	appTurn := appTurnFromTurnRecord(&response.Turn, nil, TurnStatusInProgress, nil, nil)
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
+	r.beginGuardianBlockingTurn(threadID, response.Turn.ID)
 	return &threadShellCommandRun{
 		ThreadID:   threadID,
 		TurnID:     response.Turn.ID,
