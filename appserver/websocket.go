@@ -296,25 +296,23 @@ func serveWebSocketConnectionWithCompression(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer conn.Close(websocket.StatusNormalClosure, "")
+	connectionNumber := atomic.AddUint64(&websocketConnectionCounter, 1)
+	connectionID := fmt.Sprintf("websocket-%d", connectionNumber)
 	var compressor *ZstdEncoder
 	var decompressor *ZstdDecoder
 	if compression == WebsocketCompressionZstd {
 		var err error
-		compressor, err = NewZstdEncoder()
+		compressor, decompressor, err = NewWebsocketZstdCodecPair(
+			MaxWebsocketDecompressedMessageSize,
+			WebsocketCompressionConnection{ID: connectionNumber, Kind: WebsocketCompressionConnectionListener},
+		)
 		if err != nil {
-			_ = conn.Close(websocket.StatusInternalError, "websocket compression initialization failed")
-			return err
-		}
-		decompressor, err = NewZstdDecoder(MaxWebsocketDecompressedMessageSize)
-		if err != nil {
-			_ = compressor.Close()
 			_ = conn.Close(websocket.StatusInternalError, "websocket compression initialization failed")
 			return err
 		}
 		defer compressor.Close()
 		defer decompressor.Close()
 	}
-	connectionID := fmt.Sprintf("websocket-%d", atomic.AddUint64(&websocketConnectionCounter, 1))
 	var cleanupOnce sync.Once
 	cleanupConnection := func() {
 		cleanupOnce.Do(func() {

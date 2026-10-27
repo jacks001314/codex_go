@@ -59,6 +59,7 @@ type ZstdEncoder struct {
 	mu      sync.Mutex
 	encoder *zstd.Encoder
 	payload bytes.Buffer
+	stats   *websocketCompressionStats
 	closed  bool
 }
 
@@ -103,7 +104,11 @@ func (e *ZstdEncoder) Encode(text string) ([]byte, error) {
 	if err := e.encoder.Flush(); err != nil {
 		return nil, err
 	}
-	return append([]byte(nil), e.payload.Bytes()...), nil
+	encoded := append([]byte(nil), e.payload.Bytes()...)
+	if e.stats != nil {
+		e.stats.record(len(text), len(encoded))
+	}
+	return encoded, nil
 }
 
 // Close releases the encoder after flushing its final stream state.
@@ -117,7 +122,11 @@ func (e *ZstdEncoder) Close() error {
 		return nil
 	}
 	e.closed = true
-	return e.encoder.Close()
+	err := e.encoder.Close()
+	if e.stats != nil {
+		e.stats.report("final")
+	}
+	return err
 }
 
 // ZstdDecoder maintains the peer's zstd stream across messages and bounds the
@@ -128,6 +137,7 @@ type ZstdDecoder struct {
 	source         *websocketZstdMessageSource
 	maxMessageSize int
 	messageBuffer  []byte
+	stats          *websocketCompressionStats
 	closed         bool
 }
 
@@ -199,6 +209,7 @@ func (d *ZstdDecoder) DecodeContext(ctx context.Context, payload []byte) (string
 		close(finished)
 		<-watcherDone
 	}()
+	compressedSize := len(payload)
 	decodedSize := 0
 	for {
 		if decodedSize >= len(d.messageBuffer) {
@@ -221,13 +232,13 @@ func (d *ZstdDecoder) DecodeContext(ctx context.Context, payload []byte) (string
 			if !utf8.Valid(decoded) {
 				return "", errors.New("decompressed app-server WebSocket message is not valid UTF-8")
 			}
-			return string(decoded), nil
+			return d.recordDecoded(string(decoded), compressedSize), nil
 		}
 		// Rust peers use the same flush boundary without adding a delimiter.
 		// A complete JSON value identifies that boundary while retaining the
 		// decoder's stream history.
 		if json.Valid(bytes.TrimSpace(decoded)) {
-			return string(bytes.TrimSpace(decoded)), nil
+			return d.recordDecoded(string(bytes.TrimSpace(decoded)), compressedSize), nil
 		}
 	}
 }
@@ -245,7 +256,19 @@ func (d *ZstdDecoder) Close() error {
 	d.closed = true
 	d.source.CloseWithError(io.EOF)
 	d.decoder.Close()
+	if d.stats != nil {
+		d.stats.report("final")
+	}
 	return nil
+}
+
+// recordDecoded accounts for one successfully decoded message. Failed decodes
+// leave the totals untouched, matching Rust's receive-side statistics.
+func (d *ZstdDecoder) recordDecoded(text string, compressedSize int) string {
+	if d.stats != nil {
+		d.stats.record(len(text), compressedSize)
+	}
+	return text
 }
 
 // websocketZstdMessageSource presents successive compressed WebSocket messages
