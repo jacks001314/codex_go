@@ -107,6 +107,17 @@ func (p *ExecutorCredentialPipe) ResolveAuthHeaders(context.Context) (http.Heade
 	return headers, nil
 }
 
+// RefreshAfterUnauthorized mirrors Rust's `ExecutorCredentialProvider`
+// implementation (#55987): the parent owns credential refresh, so the executor
+// may only retry a 401 when the pipe already delivered a different credential.
+func (p *ExecutorCredentialPipe) RefreshAfterUnauthorized(_ context.Context, rejected http.Header) bool {
+	headers, err := p.ResolveAuthHeaders(context.Background())
+	if err != nil {
+		return false
+	}
+	return headers.Get("Authorization") != rejected.Get("Authorization")
+}
+
 // WaitForInitial mirrors Rust's `ExecutorCredentialProvider::wait_for_initial`:
 // the executor must receive a usable credential within 30 seconds.
 func (p *ExecutorCredentialPipe) WaitForInitial(ctx context.Context) error {

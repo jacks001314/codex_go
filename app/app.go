@@ -970,19 +970,17 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	if err != nil {
 		return err
 	}
+	registryHTTPClient := policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0))
 	var resolveHeaders func(context.Context) (http.Header, error)
-	if resolved.Source == auth.WorkloadIdentitySource {
-		// Rust #38610: remote exec-server registry requests resolve managed
-		// credentials asynchronously so workload identity tokens stay fresh
-		// across re-registrations instead of using a one-time static header.
-		store := auth.NewStoreWithOptions(codexHome, storeOptions)
-		resolveHeaders = func(ctx context.Context) (http.Header, error) {
-			fresh, err := store.Resolve()
-			if err != nil {
-				return nil, err
-			}
-			return execServerRemoteAuthHeaders(&fresh.Auth)
-		}
+	var refreshAfterUnauthorized func(context.Context, http.Header) bool
+	if mode == "chatgpt" || resolved.Source == auth.WorkloadIdentitySource {
+		// Rust #55987: ChatGPT and workload identity auth use the live
+		// auth-provider path rather than one-time static headers, so registry
+		// requests (Rust #38610) resolve managed credentials asynchronously,
+		// refresh proactively, and recover once from a rejected credential.
+		liveAuth := newExecServerRegistryAuth(codexHome, storeOptions, registryHTTPClient)
+		resolveHeaders = liveAuth.ResolveAuthHeaders
+		refreshAfterUnauthorized = liveAuth.RefreshAfterUnauthorized
 	}
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 		BaseURL:                    baseURL,
@@ -990,7 +988,8 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		Name:                       strings.TrimSpace(opts.Name),
 		AuthHeaders:                headers,
 		ResolveAuthHeaders:         resolveHeaders,
-		HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+		RefreshAfterUnauthorized:   refreshAfterUnauthorized,
+		HTTPClient:                 registryHTTPClient,
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 		EnvironmentConfigReader:    environmentConfigReader,
@@ -1024,11 +1023,12 @@ func runExecServerRemoteWithExecutorCredential(
 		return err
 	}
 	cfg := execserver.RemoteEnvironmentConfig{
-		BaseURL:            baseURL,
-		EnvironmentID:      environmentID,
-		Name:               strings.TrimSpace(opts.Name),
-		ResolveAuthHeaders: pipe.ResolveAuthHeaders,
-		HTTPClient:         policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+		BaseURL:                  baseURL,
+		EnvironmentID:            environmentID,
+		Name:                     strings.TrimSpace(opts.Name),
+		ResolveAuthHeaders:       pipe.ResolveAuthHeaders,
+		RefreshAfterUnauthorized: pipe.RefreshAfterUnauthorized,
+		HTTPClient:               policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 		// Rust's `http_direct` pool is built with the legacy direct proxy rules:
 		// a loopback HTTP registry must never receive the credential through a
 		// system proxy, so the scoped request uses a proxy-free client.

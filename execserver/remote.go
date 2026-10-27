@@ -48,10 +48,16 @@ type RemoteEnvironmentConfig struct {
 	// Managed credentials (workload identity) are refreshed asynchronously
 	// before the request is sent. When nil, the static AuthHeaders are used.
 	ResolveAuthHeaders func(ctx context.Context) (http.Header, error)
-	HTTPClient         *http.Client
-	Dial               func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
-	Backoff            time.Duration
-	MaxBackoff         time.Duration
+	// RefreshAfterUnauthorized mirrors Rust AuthProvider::refresh_after_unauthorized
+	// (#55987): after a registry request is rejected with HTTP 401 it may supply
+	// replacement credentials. A true result authorizes exactly one replay of the
+	// same request with freshly resolved auth. It receives the headers of the
+	// rejected attempt so concurrent failures can reuse an earlier refresh.
+	RefreshAfterUnauthorized func(ctx context.Context, rejected http.Header) bool
+	HTTPClient               *http.Client
+	Dial                     func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	Backoff                  time.Duration
+	MaxBackoff               time.Duration
 	// PreferMXC mirrors Rust ExecServerRuntimeOptions::prefer_mxc: only the
 	// sandbox preference from startup `features.prefer_mxc` flags.
 	PreferMXC *bool
@@ -326,28 +332,18 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 	if err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteEndpointURL(cfg.BaseURL, "/cloud/environment/"+cfg.EnvironmentID+"/register"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("environment registry request failed: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	headers, executorCredential, err := resolveRemoteEnvironmentAuth(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("environment registry auth resolution failed: %w", err)
-	}
-	for key, values := range headers {
-		for _, value := range values {
-			request.Header.Add(key, value)
+	build := func() (*http.Request, error) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteEndpointURL(cfg.BaseURL, "/cloud/environment/"+cfg.EnvironmentID+"/register"), bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("environment registry request failed: %w", err)
 		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json")
+		return request, nil
 	}
-	client, err := remoteRegistryHTTPClientForAuth(cfg)
+	response, executorCredential, err := sendRegistryAuthenticated(ctx, cfg, build)
 	if err != nil {
 		return nil, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("environment registry request failed: %w", err)
 	}
 	defer response.Body.Close()
 	var decoded remoteRegistrationResponse

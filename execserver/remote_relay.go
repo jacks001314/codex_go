@@ -2,6 +2,7 @@ package execserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -11,7 +12,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -343,31 +343,22 @@ func validateRemoteHarnessKey(
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteEndpointURL(cfg.BaseURL, "/cloud/environment/"+cfg.EnvironmentID+"/validate"), strings.NewReader(string(body)))
-	if err != nil {
-		return errors.New("environment registry harness key validation failed")
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
 	// Rust #54346 routes this through `resolve_auth` + `http_for_auth`, so the
 	// scoped mode validates its single bearer here too and uses the
-	// proxy-bypassing client for a loopback HTTP registry.
-	headers, executorCredential, err := resolveRemoteEnvironmentAuth(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	for key, values := range headers {
-		for _, value := range values {
-			request.Header.Add(key, value)
+	// proxy-bypassing client for a loopback HTTP registry. Rust #55987 also
+	// replays the validation once after a 401 with replacement credentials.
+	build := func() (*http.Request, error) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteEndpointURL(cfg.BaseURL, "/cloud/environment/"+cfg.EnvironmentID+"/validate"), bytes.NewReader(body))
+		if err != nil {
+			return nil, errors.New("environment registry harness key validation failed")
 		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json")
+		return request, nil
 	}
-	client, err := remoteRegistryHTTPClientForAuth(cfg)
+	response, executorCredential, err := sendRegistryAuthenticated(ctx, cfg, build)
 	if err != nil {
 		return err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return errors.New("environment registry harness key validation failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

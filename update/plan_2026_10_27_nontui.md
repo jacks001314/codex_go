@@ -91,6 +91,7 @@ TUI lane and are not modified here.
 | `#57185` | Unified-exec captured output keeps Rust's byte-omission marker through model truncation | `tool/unified_exec_buffer.go`, `tool/unified_exec.go`, `tool/shell.go`, `tool/shell_executor.go`, like-Rust tests |
 | `#56414` | External-agent memory imports populate the selected namespace and always v2, queueing consolidation per namespace | `config/external_memory_import.go`, `config/external_memory_import_test.go`, `config/api.go`, `appserver/external_memory_settings.go`, like-Rust tests |
 | `#56462` | Imports and consolidation share a cross-process workspace lock; a busy workspace rejects imports and skips consolidation | `memorylock/lock.go`, `memories/pipeline.go`, `config/external_memory_import.go`, app-server/busy-workspace tests |
+| `#55987` | Registry requests refresh rejected remote exec-server credentials and replay once; executor credentials retry only after the parent rotates them | `execserver/remote_auth.go`, `execserver/remote.go`, `execserver/remote_harness.go`, `execserver/remote_relay.go`, `execserver/executor_credential.go`, `app/exec_server_auth.go`, `app/app.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -274,6 +275,24 @@ claiming the job. Go still carries discovered files in
 import re-discovers source files under the locks and cleans up owned projects
 without a current source; success entries use Rust's project-key `cwd` and v2
 resources target.
+
+`#55987` details: remote exec-server registry traffic now goes through one
+helper that resolves auth per attempt and replays a request at most once after
+HTTP 401 when the provider reports replacement credentials
+(`RemoteEnvironmentConfig.RefreshAfterUnauthorized`). Registration, Noise
+connect, and harness-key validation all use it, the connect deadline still
+covers auth, refresh, the replay, and the response parse, and every other
+status or transport failure stays terminal. The sealed executor-credential
+pipe retries only when its parent already delivered a different bearer. The CLI
+now wires ChatGPT auth (and workload identity) to a live store-backed provider
+instead of one-time static headers: it reloads the stored credential, refreshes
+proactively, refreshes the rotated ChatGPT token under a guard so concurrent
+callers share one refresh, reuses a credential another writer already stored,
+and refuses to replay a credential with a recorded permanent failure. Go has no
+long-lived `AuthManager`, so the account store is the source of truth and a
+mutex stands in for `refresh_lock`; the harness-key validation request still
+omits Rust's optional `x-codex-noise-stream-id` header because Go's provider
+signature never carried the stream id.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -855,7 +874,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 99 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 98 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -997,6 +1016,14 @@ deduplication for tool outputs.
   `go test ./appserver -run 'ExternalAgent' -count=1` pass, including the
   busy-workspace import rejection and retry enqueuing one consolidation per
   namespace.
+- For `#55987`: `go test ./execserver -run 'TestRegistry|TestExecutorCredentialRefreshAfterUnauthorized' -count=1`,
+  `go test ./app -run 'ExecServer' -count=1`, `go test ./appserver -run 'ExternalAgent' -count=1`,
+  and `go build ./execserver ./app` pass. A full `go test ./execserver -count=1`
+  run also hits unrelated load-dependent flakes
+  (`TestNoiseHandshakeUsesInitializeTimeoutLikeRust`,
+  `TestProvisionedNoiseConnectWaitsForOfflineExecutorLikeRust`) and the
+  pre-existing Windows failure `TestStdioProcessReadWaitsForOutput`, which also
+  fails on the clean `HEAD` worktree.
 - For `#57181`: `go test ./turn -run 'AdditionalContext' -count=1`,
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full

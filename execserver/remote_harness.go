@@ -1,6 +1,7 @@
 package execserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -191,27 +192,27 @@ func (p *registryNoiseRendezvousConnectProvider) ConnectBundle(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
+	// Rust #55987 keeps authentication, refresh, the single 401 replay, and the
+	// response parse inside the original connection deadline.
 	connectCtx, cancel := context.WithTimeout(ctx, defaultRemoteDialTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(
-		connectCtx,
-		http.MethodPost,
-		remoteEndpointURL(p.config.BaseURL, "/cloud/environment/"+p.config.EnvironmentID+"/connect"),
-		strings.NewReader(string(body)),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("environment registry request failed: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	for key, values := range p.config.AuthHeaders {
-		for _, value := range values {
-			request.Header.Add(key, value)
+	build := func() (*http.Request, error) {
+		request, err := http.NewRequestWithContext(
+			connectCtx,
+			http.MethodPost,
+			remoteEndpointURL(p.config.BaseURL, "/cloud/environment/"+p.config.EnvironmentID+"/connect"),
+			bytes.NewReader(body),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("environment registry request failed: %w", err)
 		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json")
+		return request, nil
 	}
-	response, err := p.config.HTTPClient.Do(request)
+	response, _, err := sendRegistryAuthenticated(connectCtx, p.config, build)
 	if err != nil {
-		return nil, fmt.Errorf("environment registry request failed: %w", err)
+		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
