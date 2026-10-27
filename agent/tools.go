@@ -471,7 +471,18 @@ func (e *MultiAgentToolExecutor) Execute(ctx context.Context, invocation *tool.I
 }
 
 func plaintextCollaborationInvocation(invocation *tool.Invocation) bool {
-	return invocation != nil && invocation.Source == "direct_plaintext_message"
+	if invocation == nil {
+		return false
+	}
+	// Rust #55633: a Code Mode collaboration call is classified as plaintext
+	// so its message receives the same plaintext context wrapper as a direct
+	// plaintext delivery, with sender and recipient attribution.
+	switch invocation.Source {
+	case "direct_plaintext_message", tool.InvocationSourceCodeMode:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *MultiAgentToolExecutor) PreToolUsePayload(invocation *tool.Invocation) (*tool.PreToolUsePayload, bool) {

@@ -279,34 +279,58 @@ func (c *plaintextCaptureV2Controller) FollowupTask(_ context.Context, args *Fol
 }
 
 func TestMultiAgentV2ToolsPropagatePlaintextMessageSource(t *testing.T) {
-	controller := &plaintextCaptureV2Controller{MemoryToolController: NewMemoryToolController()}
-	registry := tool.NewRegistry()
-	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
-		Controller: controller, Version: VersionV2, Namespace: MultiAgentV2Namespace,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// Rust #55633: Code Mode collaboration calls count as plaintext alongside
+	// direct plaintext deliveries, so all three v2 tools mark their message
+	// plaintext for both sources and stay encrypted for a direct call.
 	cases := []struct {
-		name      string
-		arguments string
+		source        string
+		wantPlaintext bool
 	}{
-		{name: "spawn_agent", arguments: `{"task_name":"worker","message":"start","fork_turns":"none"}`},
-		{name: "send_message", arguments: `{"target":"worker","message":"context"}`},
-		{name: "followup_task", arguments: `{"target":"worker","message":"continue"}`},
+		{source: "direct_plaintext_message", wantPlaintext: true},
+		{source: tool.InvocationSourceCodeMode, wantPlaintext: true},
+		{source: "", wantPlaintext: false},
 	}
-	for _, test := range cases {
-		executor, ok := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, test.name))
-		if !ok {
-			t.Fatalf("missing %s", test.name)
-		}
-		if _, err := executor.Execute(context.Background(), &tool.Invocation{
-			Source: "direct_plaintext_message", Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: test.arguments},
-		}); err != nil {
-			t.Fatalf("Execute(%s) error = %v", test.name, err)
-		}
-	}
-	if controller.spawn == nil || !controller.spawn.Plaintext || controller.send == nil || !controller.send.Plaintext || controller.followup == nil || !controller.followup.Plaintext {
-		t.Fatalf("plaintext args = spawn %#v send %#v followup %#v", controller.spawn, controller.send, controller.followup)
+	for _, sourceCase := range cases {
+		t.Run("source="+sourceCase.source, func(t *testing.T) {
+			controller := &plaintextCaptureV2Controller{MemoryToolController: NewMemoryToolController()}
+			registry := tool.NewRegistry()
+			if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+				Controller: controller, Version: VersionV2, Namespace: MultiAgentV2Namespace,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			calls := []struct {
+				name      string
+				arguments string
+			}{
+				{name: "spawn_agent", arguments: `{"task_name":"worker","message":"start","fork_turns":"none"}`},
+				{name: "send_message", arguments: `{"target":"worker","message":"context"}`},
+				{name: "followup_task", arguments: `{"target":"worker","message":"continue"}`},
+			}
+			for _, call := range calls {
+				executor, ok := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, call.name))
+				if !ok {
+					t.Fatalf("missing %s", call.name)
+				}
+				if _, err := executor.Execute(context.Background(), &tool.Invocation{
+					Source: sourceCase.source, Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: call.arguments},
+				}); err != nil {
+					t.Fatalf("Execute(%s) error = %v", call.name, err)
+				}
+			}
+			if controller.spawn == nil || controller.send == nil || controller.followup == nil {
+				t.Fatalf("captured args = spawn %#v send %#v followup %#v", controller.spawn, controller.send, controller.followup)
+			}
+			for name, got := range map[string]bool{
+				"spawn_agent":   controller.spawn.Plaintext,
+				"send_message":  controller.send.Plaintext,
+				"followup_task": controller.followup.Plaintext,
+			} {
+				if got != sourceCase.wantPlaintext {
+					t.Fatalf("%s plaintext for source %q = %v, want %v", name, sourceCase.source, got, sourceCase.wantPlaintext)
+				}
+			}
+		})
 	}
 }
 

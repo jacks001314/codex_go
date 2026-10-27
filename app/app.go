@@ -1209,12 +1209,32 @@ func runApply(opts cli.ApplyOptions, root cli.RootOptions, stdin io.Reader, stdo
 	return err
 }
 
+// indexedRolloutPathsForMigration reads the state database's thread index so a
+// selected-thread migration can skip unrelated rollout headers (Rust #57483).
+// The read is best effort: an unavailable or busy database leaves the index
+// empty, and then every candidate rollout header is inspected.
+func indexedRolloutPathsForMigration(codexHome string) []rollout.MigrationIndexedRollout {
+	rows, err := state.ReadThreadRolloutPaths(context.Background(), codexHome)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	indexed := make([]rollout.MigrationIndexedRollout, 0, len(rows))
+	for _, row := range rows {
+		indexed = append(indexed, rollout.MigrationIndexedRollout{
+			ThreadID:    row.ThreadID,
+			RolloutPath: row.RolloutPath,
+		})
+	}
+	return indexed
+}
+
 func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, stdout io.Writer, stderr io.Writer) error {
 	codexHome := auth.DefaultCodexHome()
 	report, err := rollout.MigrateRollouts(codexHome, rollout.MigrationOptions{
 		Apply:           opts.Apply,
 		ThreadIDs:       opts.Threads,
 		MaxMibPerSecond: opts.MaxMibPerSecond,
+		IndexedRollouts: indexedRolloutPathsForMigration(codexHome),
 	})
 	if err != nil {
 		return err

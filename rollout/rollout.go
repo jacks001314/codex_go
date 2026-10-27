@@ -2799,6 +2799,21 @@ func ParseRolloutFileName(name string) (RolloutFileName, bool) {
 	}, true
 }
 
+// ThreadIDFromRolloutPath returns the stable thread ID encoded in a canonical
+// rollout filename, including a reverted rollout's name (Rust #57483). It reads
+// the name only and never opens the file.
+func ThreadIDFromRolloutPath(path string) (string, bool) {
+	parsed, ok := ParseRolloutFileName(path)
+	if !ok {
+		return "", false
+	}
+	threadID := strings.TrimSpace(parsed.ThreadID)
+	if threadID == "" {
+		return "", false
+	}
+	return threadID, true
+}
+
 // OwnedUnarchivedThreadRollouts mirrors Rust's `scan_unarchived_threads`
 // combined with `owned_rollout_paths_from_index` (Rust #41908, #54060):
 // archiving only needs the active rollouts that still have to be moved, so

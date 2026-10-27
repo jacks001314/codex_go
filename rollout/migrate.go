@@ -57,6 +57,18 @@ type MigrationOptions struct {
 	Apply           bool
 	ThreadIDs       []string
 	MaxMibPerSecond uint64
+	// IndexedRollouts is the state database's thread-to-rollout index. Migrating
+	// selected threads uses it to skip rollout headers that provably belong to
+	// unrelated threads (Rust #57483). It stays empty when the index is
+	// unavailable, and then every candidate header is inspected.
+	IndexedRollouts []MigrationIndexedRollout
+}
+
+// MigrationIndexedRollout is one state-database index row: the thread that owns
+// the indexed rollout path.
+type MigrationIndexedRollout struct {
+	ThreadID    string
+	RolloutPath string
 }
 
 // MigrateRollouts scans sessions and archived_sessions for rollout files and
@@ -99,6 +111,9 @@ func MigrateRollouts(codexHome string, options MigrationOptions) (*MigrationRepo
 		paths = append(paths, collected...)
 	}
 	sort.Strings(paths)
+	if len(options.ThreadIDs) > 0 {
+		paths = pruneUnselectedIndexedRolloutPaths(paths, options)
+	}
 	for _, path := range paths {
 		outcome, ok := inspectRolloutPath(codexHome, path, options)
 		if !ok {
@@ -186,6 +201,46 @@ func migrationOutcomeWithReason(threadID *string, path string, status MigrationS
 func migrationFailureReasonPtr(reason MigrationFailureReason) *MigrationFailureReason {
 	value := reason
 	return &value
+}
+
+// pruneUnselectedIndexedRolloutPaths drops candidate rollouts the state index
+// proves belong to an unselected thread (Rust #57483). A rollout is dropped only
+// when its indexed owner and its canonical filename agree that it is
+// unselected; selected, misnamed, conflicting and unindexed paths stay so the
+// rollout header still decides ownership.
+func pruneUnselectedIndexedRolloutPaths(paths []string, options MigrationOptions) []string {
+	if len(options.IndexedRollouts) == 0 || len(options.ThreadIDs) == 0 {
+		return paths
+	}
+	selected := make(map[string]bool, len(options.ThreadIDs))
+	for _, threadID := range options.ThreadIDs {
+		selected[strings.TrimSpace(threadID)] = true
+	}
+	needsHeader := make(map[string]bool, len(options.IndexedRollouts))
+	for _, indexed := range options.IndexedRollouts {
+		owner := strings.TrimSpace(indexed.ThreadID)
+		indexedPath := strings.TrimSpace(indexed.RolloutPath)
+		if owner == "" || indexedPath == "" {
+			continue
+		}
+		filenameThreadID, ok := ThreadIDFromRolloutPath(indexedPath)
+		inspect := !ok || selected[owner] || filenameThreadID != owner
+		// Conflicting rows can name the same plain or compressed file.
+		plain := PlainRolloutPath(indexedPath)
+		if _, seen := needsHeader[plain]; seen {
+			inspect = true
+		}
+		needsHeader[plain] = inspect
+	}
+	pruned := paths[:0]
+	for _, path := range paths {
+		inspect, indexed := needsHeader[PlainRolloutPath(path)]
+		if indexed && !inspect {
+			continue
+		}
+		pruned = append(pruned, path)
+	}
+	return pruned
 }
 
 func matchesMigrationSelection(selected []string, threadID string) bool {

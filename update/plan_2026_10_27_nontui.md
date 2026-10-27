@@ -1,10 +1,11 @@
 # 2026-10-27 non-TUI sync window
 
 Upstream window: `8196bcdc18..c587d6e54c`, extended by
-`c587d6e54c..6fe77fc123`, then by `eec8bde1e9..6b3b67d71f`, and finally by
-`6b3b67d71f..75667b341a` (Rust `codex` at `75667b341a`; the newest non-TUI
-commits are `#57451`, `#57455`, `#57452`, `#57462`, `#57458`, `#57468`,
-`#57474`, `#57476`, and `#57478`).
+`c587d6e54c..6fe77fc123`, then by `eec8bde1e9..6b3b67d71f`, then by
+`6b3b67d71f..75667b341a`, and finally by `75667b341a..dddc3c0a79` (Rust
+`codex` at `dddc3c0a79`; the newest non-TUI commits are `#57451`, `#57455`,
+`#57452`, `#57462`, `#57458`, `#57468`, `#57474`, `#57476`, `#57478`, and
+`#57483`).
 This lane owns non-TUI core packages only. `tui/`, `app/agents_dashboard.go`,
 `app/tui_telemetry.go` and `update/plan_2026_10_27.md` belong to the parallel
 TUI lane and are not modified here.
@@ -108,9 +109,39 @@ TUI lane and are not modified here.
 | `#57476` | Guardian reviewer session helpers: basic-source detection (Go's existing `guardianTurnStart`) and a parent-thread-scoped Responses prompt cache key `guardian:{threadID}` on review requests, matching Rust's `prompt_cache_key_override_for_review_session` (guardian source only, parent required, overrides the fork cache key) | `appserver/guardian_session.go`, `appserver/guardian_reviewer.go`, `appserver/guardian_session_like_rust_test.go` |
 | `#56459` | Feature `guardianv3` (under development, off by default) accepts a boolean or a table with only `enabled`; strict config rejects unknown table fields | `features/features.go`, `config/config.go`, `features/features_test.go`, `config/config_test.go` |
 | `#56460` | Guardian's durable evidence board helpers: shared `guardian` storage namespace and a read-only-capable board for the owning main thread | `agentboard/guardian.go`, `agentboard/guardian_test.go` |
+| `#55633` | Code Mode collaboration calls (`spawn_agent`, `send_message`, `followup_task`) are classified as plaintext, so their message receives the plaintext wrapper with sender and recipient attribution; ordinary direct calls stay encrypted | `agent/tools.go`, `agent/tools_test.go` |
+| `#57483` | Selected-thread rollout migration reads the state index first and skips rollout headers whose indexed owner and canonical filename agree that they belong to an unselected thread; selected, misnamed, conflicting and unindexed paths still get a header inspection, and a missing/busy database falls back to inspecting everything | `state/rollout_migration.go`, `rollout/rollout.go`, `rollout/migrate.go`, `app/app.go`, like-Rust tests |
+| `#56297` | Built-in dummy credentials carry the provider prefix, a visible `masked` marker and over 128 random alphanumeric bytes after it, copying no punctuation from the real credential; candidate dummies that duplicate or embed an already-issued credential or dummy are rejected instead of being registered | `network/proxy_credential_broker.go`, like-Rust tests |
 
 Grounding notes:
 
+- `#55723` is N/A: it only avoids one clone per recipient in Rust's
+  `OutgoingMessageSender` fan-out (`repeat_n`); Go's notification fan-out has
+  no per-recipient payload clone to remove, so delivery behavior is unchanged.
+- `#56514` is N/A: Rust instruments the spawned tool-dispatch task and its
+  readiness/lock waits with `tracing` spans. Go's tool tracing is a flat
+  event/attribute sink (`UnifiedExecSpanSink`, trace events) with no span
+  nesting or `Instrument`-style propagation, so there is no dispatch span to
+  extend; every dispatch event already records the turn and tool attributes.
+- `#55627` is N/A: Go has no sibling-rollout prefetch cache
+  (`prefetch_sibling_rollout_paths`/`collect_sibling_rollout_ids`), so there is
+  no candidate slot to reserve for the first ancestor.
+- `#56483` is N/A: Go fetches one installed-plugin snapshot per reconciliation
+  with display assets included by default and materializes bundles from it;
+  there is no runtime-vs-display snapshot split or enrichment state in the
+  cache, and tool suggestions read the installed plugin store instead of that
+  snapshot.
+- `#55719` needs no code change: Go never rejected commands when a protected
+  brokered shell snapshot was missing. `execserver` marks such a launch
+  unsupported for masking (`credentialMaskingSupportedShell`), restores the
+  unmasked credentials (`RestoreUnbrokeredEnvironment`) and continues, and a
+  snapshot creation failure restores credentials and injects the
+  `Credential masking is unavailable …` warning on stderr
+  (`execserver/shell_snapshot.go`). The Rust commit removes a rejection path
+  that Go never had; the Go warning text stays its own wording.
+- Rust-test-only commits in this window are N/A: `#56247` (Rust test-module
+  consolidation), `#56236`, `#56233`, `#56220`, `#56210`, `#56139`, and
+  `#56274` (Rust test stabilization/configuration).
 - `#57276` (extension world-state window prefixes) is N/A: Rust adds
   `WorldStateSectionContribution::with_window_prefix()` for extension
   contributors, and Go has no extension world-state section registry to carry
@@ -1164,6 +1195,21 @@ deduplication for tool outputs.
 - For `#57474`: `go test ./appserver -run TestGuardianNativeEncryptedHistoryAcrossReviewsLikeRust -count=1`,
   `go test ./appserver -run 'GuardianNative|NativeMultiAgent|Guardian' -count=1`, and `go test ./state -count=1`
   pass. This also re-verifies the `#57448` transcript rules for both namespace spellings.
+- For `#55633`: `go test ./agent -run 'TestMultiAgentV2ToolsPropagatePlaintextMessageSource' -count=1`
+  passes for the direct-plaintext, Code Mode and ordinary-direct sources.
+- For `#57483`: `go test ./rollout -run 'TestMigrateRollouts' -count=1`,
+  `go test ./state -run 'TestReadThreadRolloutPaths' -count=1` and
+  `go vet ./state ./rollout ./app ./agent` pass. Coverage mirrors Rust's
+  selected-thread pruning: unselected indexed headers are skipped, compressed
+  index paths prune the plain file, and misnamed, conflicting and unindexed
+  paths still defer to the header; the state test proves the index read never
+  creates the database.
+- For `#56297`: `go test ./network -count=1` passes (8.4s). Coverage pins the
+  `{prefix}masked{22+ alnum}` shape for projected/short/classic OpenAI keys and
+  both GitHub token families, restoration of the real value, and rejection of a
+  candidate that duplicates an already-issued dummy. The rejection path also
+  fixed a latent bug: a rejected first candidate used to be returned after the
+  attempt loop instead of leaving the broker without a dummy.
 - For `#56459`/`#56460`: `go test ./config ./features ./agentboard -count=1` and
   `go vet ./config ./features ./agentboard` pass. The config test covers the
   boolean and table forms plus profile override and unknown-field rejection;

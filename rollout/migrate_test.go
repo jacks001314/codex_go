@@ -410,6 +410,140 @@ func TestMigrateRolloutsThreadSelection(t *testing.T) {
 	}
 }
 
+// TestMigrateRolloutsSelectedThreadsSkipUnrelatedIndexedHeadersLikeRust mirrors
+// Rust #57483: when the state index and the canonical filename agree that a
+// rollout belongs to an unselected thread, its header is never read, while
+// selected, renamed, conflicting and unindexed paths still are.
+func TestMigrateRolloutsSelectedThreadsSkipUnrelatedIndexedHeadersLikeRust(t *testing.T) {
+	const keepID = "123e4567-e89b-42d3-a456-426614174030"
+	const skipID = "123e4567-e89b-42d3-a456-426614174031"
+	newHome := func(t *testing.T) (string, string, string) {
+		t.Helper()
+		home := t.TempDir()
+		keepPath := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+keepID+".jsonl")
+		skipPath := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+skipID+".jsonl")
+		writeTestRollout(t, keepPath, keepID, "")
+		// The unrelated rollout has no readable header, so reading it would
+		// surface an invalid_session_metadata failure.
+		if err := os.WriteFile(skipPath, []byte("not a rollout\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s): %v", skipPath, err)
+		}
+		return home, keepPath, skipPath
+	}
+	outcomeThreadIDs := func(report *MigrationReport) []string {
+		ids := make([]string, 0, len(report.Outcomes))
+		for _, outcome := range report.Outcomes {
+			if outcome.ThreadID != nil {
+				ids = append(ids, *outcome.ThreadID)
+			}
+		}
+		return ids
+	}
+
+	t.Run("unselected index skips the header", func(t *testing.T) {
+		home, keepPath, skipPath := newHome(t)
+		report, err := MigrateRollouts(home, MigrationOptions{
+			ThreadIDs: []string{keepID},
+			IndexedRollouts: []MigrationIndexedRollout{
+				{ThreadID: keepID, RolloutPath: keepPath},
+				{ThreadID: skipID, RolloutPath: skipPath},
+			},
+		})
+		if err != nil {
+			t.Fatalf("MigrateRollouts: %v", err)
+		}
+		if ids := outcomeThreadIDs(report); len(ids) != 1 || ids[0] != keepID {
+			t.Fatalf("outcomes = %#v, want only %q", report.Outcomes, keepID)
+		}
+		if report.Outcomes[0].Status != MigrationStatusEligible {
+			t.Fatalf("selected status = %q, want eligible", report.Outcomes[0].Status)
+		}
+	})
+
+	t.Run("compressed index path prunes the plain file", func(t *testing.T) {
+		home, keepPath, skipPath := newHome(t)
+		report, err := MigrateRollouts(home, MigrationOptions{
+			ThreadIDs: []string{keepID},
+			IndexedRollouts: []MigrationIndexedRollout{
+				{ThreadID: keepID, RolloutPath: keepPath},
+				{ThreadID: skipID, RolloutPath: skipPath + ".zst"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("MigrateRollouts: %v", err)
+		}
+		if _, statErr := os.Stat(skipPath + ".zst"); !os.IsNotExist(statErr) {
+			t.Fatalf("unexpected compressed fixture (err=%v)", statErr)
+		}
+		if ids := outcomeThreadIDs(report); len(ids) != 1 || ids[0] != keepID {
+			t.Fatalf("outcomes = %#v, want only %q", report.Outcomes, keepID)
+		}
+	})
+
+	t.Run("misnamed index row keeps header inspection", func(t *testing.T) {
+		home, keepPath, skipPath := newHome(t)
+		// The index claims the unrelated thread owns the selected rollout, but the
+		// canonical filename disagrees, so ownership still comes from the header.
+		report, err := MigrateRollouts(home, MigrationOptions{
+			ThreadIDs: []string{keepID},
+			IndexedRollouts: []MigrationIndexedRollout{
+				{ThreadID: skipID, RolloutPath: keepPath},
+				{ThreadID: skipID, RolloutPath: skipPath},
+			},
+		})
+		if err != nil {
+			t.Fatalf("MigrateRollouts: %v", err)
+		}
+		if ids := outcomeThreadIDs(report); len(ids) != 1 || ids[0] != keepID {
+			t.Fatalf("outcomes = %#v, want %q recovered from the header", report.Outcomes, keepID)
+		}
+	})
+
+	t.Run("conflicting index rows keep header inspection", func(t *testing.T) {
+		home, keepPath, _ := newHome(t)
+		report, err := MigrateRollouts(home, MigrationOptions{
+			ThreadIDs: []string{keepID},
+			IndexedRollouts: []MigrationIndexedRollout{
+				{ThreadID: skipID, RolloutPath: keepPath},
+				{ThreadID: skipID, RolloutPath: keepPath + ".zst"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("MigrateRollouts: %v", err)
+		}
+		if ids := outcomeThreadIDs(report); len(ids) != 1 || ids[0] != keepID {
+			t.Fatalf("outcomes = %#v, want %q from the header", report.Outcomes, keepID)
+		}
+	})
+
+	t.Run("unindexed rollout keeps header inspection", func(t *testing.T) {
+		home, keepPath, _ := newHome(t)
+		report, err := MigrateRollouts(home, MigrationOptions{
+			ThreadIDs:       []string{keepID},
+			IndexedRollouts: []MigrationIndexedRollout{{ThreadID: keepID, RolloutPath: keepPath}},
+		})
+		if err != nil {
+			t.Fatalf("MigrateRollouts: %v", err)
+		}
+		// The second rollout is absent from the index, so its header is read and
+		// it is filtered out by ownership.
+		if ids := outcomeThreadIDs(report); len(ids) != 1 || ids[0] != keepID {
+			t.Fatalf("outcomes = %#v, want only %q", report.Outcomes, keepID)
+		}
+	})
+
+	t.Run("without an index every header is inspected", func(t *testing.T) {
+		home, _, _ := newHome(t)
+		report, err := MigrateRollouts(home, MigrationOptions{ThreadIDs: []string{keepID}})
+		if err != nil {
+			t.Fatalf("MigrateRollouts: %v", err)
+		}
+		if len(report.Outcomes) != 1 || report.Outcomes[0].ThreadID == nil || *report.Outcomes[0].ThreadID != keepID {
+			t.Fatalf("outcomes = %#v, want only %q", report.Outcomes, keepID)
+		}
+	})
+}
+
 func TestMigrateRolloutsApplyMigratesEligibleRollout(t *testing.T) {
 	home := t.TempDir()
 	threadID := "123e4567-e89b-42d3-a456-426614174020"

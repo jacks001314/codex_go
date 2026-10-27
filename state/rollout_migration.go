@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -27,6 +28,63 @@ type RolloutMigrationSkippedRollout struct {
 	RolloutSizeBytes  int64
 	RolloutModifiedNs int64
 	SkipReason        string
+}
+
+// ThreadRolloutPath is one indexed thread's rollout location (Rust #57483).
+type ThreadRolloutPath struct {
+	ThreadID    string
+	RolloutPath string
+}
+
+// ReadThreadRolloutPaths reads the thread IDs and rollout paths an existing
+// state database has indexed, without creating or migrating it (Rust #57483).
+// Selected-thread rollout migration uses the index to skip rollout headers that
+// provably belong to unrelated threads. Callers treat an error as "index
+// unavailable" and fall back to inspecting every header.
+func ReadThreadRolloutPaths(ctx context.Context, sqliteHome string) ([]ThreadRolloutPath, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	config, err := NewSqliteConfig(sqliteHome)
+	if err != nil {
+		return nil, err
+	}
+	path := config.StateDBPath()
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("state database is unavailable: %w", err)
+	}
+	// Migration can scan rollout headers immediately if the index is locked, so
+	// the read waits for no lock (Rust passes a zero busy timeout).
+	db, err := config.OpenReadOnly(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("open state database read-only: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.QueryContext(ctx, `SELECT id, rollout_path FROM threads`)
+	if err != nil {
+		return nil, fmt.Errorf("read indexed rollout paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var paths []ThreadRolloutPath
+	for rows.Next() {
+		var threadID string
+		var rolloutPath sql.NullString
+		if err := rows.Scan(&threadID, &rolloutPath); err != nil {
+			return nil, fmt.Errorf("scan indexed rollout path: %w", err)
+		}
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" || !rolloutPath.Valid || strings.TrimSpace(rolloutPath.String) == "" {
+			continue
+		}
+		paths = append(paths, ThreadRolloutPath{
+			ThreadID:    threadID,
+			RolloutPath: strings.TrimSpace(rolloutPath.String),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read indexed rollout paths: %w", err)
+	}
+	return paths, nil
 }
 
 // GetRolloutMigrationState reads one migration's checked frontier.

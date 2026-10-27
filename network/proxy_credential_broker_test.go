@@ -26,6 +26,67 @@ func TestCredentialBrokerVirtualizesSupportedCredentials(t *testing.T) {
 	}
 }
 
+// TestCredentialBrokerShapesMaskedDummiesLikeRust mirrors Rust #56297: short,
+// opaque, punctuation-carrying and ordinary built-in credentials all receive a
+// fresh dummy with the provider prefix, the `masked` marker and no copied
+// punctuation.
+func TestCredentialBrokerShapesMaskedDummiesLikeRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		envVar string
+		value  string
+		prefix string
+	}{
+		{name: "openai projected key", envVar: "OPENAI_API_KEY", value: "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_", prefix: "sk-proj-"},
+		{name: "openai short key", envVar: "OPENAI_API_KEY", value: "sk-proj-short", prefix: "sk-proj-"},
+		{name: "openai classic key", envVar: "OPENAI_API_KEY", value: "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", prefix: "sk-"},
+		{name: "github fine grained", envVar: "GH_TOKEN", value: "github_pat_11AA0bbCC_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH", prefix: "github_pat_"},
+		{name: "github classic", envVar: "GH_TOKEN", value: "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN", prefix: "ghp_"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			broker := NewProxyCredentialBroker(true)
+			env := map[string]string{test.envVar: test.value}
+			broker.VirtualizeChildEnv(env)
+			dummy := env[test.envVar]
+			assertCredentialShape(t, test.value, dummy, test.prefix)
+			// The marker is visible in the child environment, and the real value
+			// survives only for the proxy's own substitution.
+			if !strings.Contains(dummy, "masked") {
+				t.Fatalf("dummy %q does not mark masking", dummy)
+			}
+			restored := map[string]string{test.envVar: dummy}
+			broker.RestoreAndDisableChildEnv(restored)
+			if restored[test.envVar] != test.value {
+				t.Fatalf("restored = %q, want the real credential", restored[test.envVar])
+			}
+		})
+	}
+}
+
+// TestCredentialBrokerRejectsKnownDummyCollisionsLikeRust mirrors Rust #56297:
+// a candidate that duplicates a credential the broker already handed out is
+// rejected instead of being re-registered.
+func TestCredentialBrokerRejectsKnownDummyCollisionsLikeRust(t *testing.T) {
+	first := constantDummyProvider("vendor_masked_abcdefghijklmnopqrstuvwxyz")
+	second := constantDummyProvider("vendor_masked_abcdefghijklmnopqrstuvwxyz")
+	second.Sources = []ProxyCredentialSource{{
+		EnvVars: []string{"B_TOKEN"},
+		HostBinding: func(map[string]string) (ProxyCredentialHostBinding, bool) {
+			return ProxyCredentialHostBinding{ExactHosts: []string{"api.b.example"}}, true
+		},
+	}}
+	broker := NewProxyCredentialBrokerWithProviders(true, []*ProxyCredentialProvider{first, second})
+	env := map[string]string{"A_TOKEN": "a-real-secret-value", "B_TOKEN": "b-real-secret-value"}
+	broker.VirtualizeChildEnv(env)
+	if env["A_TOKEN"] != "vendor_masked_abcdefghijklmnopqrstuvwxyz" {
+		t.Fatalf("first dummy = %q", env["A_TOKEN"])
+	}
+	if env["B_TOKEN"] != "b-real-secret-value" {
+		t.Fatalf("second dummy = %q, want the colliding candidate rejected", env["B_TOKEN"])
+	}
+}
+
 func TestCredentialBrokerInjectsMatchingDummyHeader(t *testing.T) {
 	broker := NewProxyCredentialBroker(true)
 	env := map[string]string{
@@ -210,28 +271,28 @@ func authorizationValue(headers map[string][]string) string {
 	return ""
 }
 
+// assertCredentialShape mirrors Rust #56297: a built-in dummy keeps its
+// provider prefix, marks itself with `masked`, carries over 128 random
+// alphanumeric bits after the marker and copies no punctuation from the real
+// credential.
 func assertCredentialShape(t *testing.T, realValue string, dummyValue string, prefix string) {
 	t.Helper()
 	if dummyValue == realValue {
 		t.Fatalf("dummy value should differ from real value")
 	}
-	if len(dummyValue) != len(realValue) {
-		t.Fatalf("dummy len = %d want %d", len(dummyValue), len(realValue))
+	marker := prefix + "masked"
+	if !strings.HasPrefix(dummyValue, marker) {
+		t.Fatalf("dummy %q missing masked marker %q", dummyValue, marker)
 	}
-	if !strings.HasPrefix(dummyValue, prefix) {
-		t.Fatalf("dummy %q missing prefix %q", dummyValue, prefix)
+	if len(dummyValue) < len(marker)+minDummyRandomAlphanumeric {
+		t.Fatalf("dummy %q carries fewer than %d random bytes", dummyValue, minDummyRandomAlphanumeric)
 	}
-	for index := len(prefix); index < len(realValue); index++ {
-		real := realValue[index]
-		dummy := dummyValue[index]
-		if isASCIIAlphanumeric(real) {
-			if !isASCIIAlphanumeric(dummy) {
-				t.Fatalf("dummy byte %q at %d should be alphanumeric", dummy, index)
-			}
-			continue
-		}
-		if real != dummy {
-			t.Fatalf("dummy byte %q at %d should preserve %q", dummy, index, real)
+	if len(dummyValue) < len(realValue) {
+		t.Fatalf("dummy len = %d want at least %d", len(dummyValue), len(realValue))
+	}
+	for index := len(marker); index < len(dummyValue); index++ {
+		if !isASCIIAlphanumeric(dummyValue[index]) {
+			t.Fatalf("dummy byte %q at %d should be alphanumeric", dummyValue[index], index)
 		}
 	}
 }

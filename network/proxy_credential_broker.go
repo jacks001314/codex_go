@@ -927,18 +927,26 @@ func (b *ProxyCredentialBroker) register(envVar string, provider *ProxyCredentia
 			return credential.DummyValue
 		}
 	}
+	// Mirrors Rust's `find_map` over the candidate generator: every rejected
+	// candidate leaves the broker without a dummy rather than falling back to
+	// one that collides with an existing credential.
 	dummyValue := ""
 	for attempts := 0; attempts < maxCredentialDummyAttempts; attempts++ {
-		dummyValue = provider.DummyValue(realValue)
-		if dummyValue == "" || dummyValue == realValue || b.isDummyValue(dummyValue) {
+		candidate := provider.DummyValue(realValue)
+		if candidate == "" || candidate == realValue || b.isDummyValue(candidate) {
 			continue
 		}
 		// Rust #44066: a dummy must not embed another provider's credential,
 		// otherwise alias discovery could attribute it to the wrong provider.
-		if b.dummyEmbedsOtherProviderCredential(dummyValue, provider) {
-			dummyValue = ""
+		if b.dummyEmbedsOtherProviderCredential(candidate, provider) {
 			continue
 		}
+		// Rust #56297: a dummy must stay unambiguous against every credential
+		// and dummy the broker already handed out.
+		if b.dummyCollidesWithKnownCredentials(candidate) {
+			continue
+		}
+		dummyValue = candidate
 		break
 	}
 	if dummyValue == "" {
@@ -1289,33 +1297,113 @@ func openAIAPIKeyPrefix(value string) string {
 	return value[:separator+4]
 }
 
+// minDummyRandomAlphanumeric is the randomness Rust keeps after the visible
+// `masked` marker: enough for over 128 bits (#56297).
+const minDummyRandomAlphanumeric = 22
+
+// shapedDummyValue builds a built-in provider's dummy credential. Rust #56297
+// keeps the family's own prefix followed by a visible `masked` marker and over
+// 128 random bits, and never copies punctuation from the real credential, so
+// restoring masked text cannot depend on the real value's shape.
 func shapedDummyValue(realValue string, prefix string, minimumLen int) string {
+	marker := prefix + "masked"
 	targetLen := len(realValue)
 	if targetLen < minimumLen {
 		targetLen = minimumLen
 	}
-	if targetLen < len(prefix)+16 {
-		targetLen = len(prefix) + 16
+	if targetLen < len(marker)+minDummyRandomAlphanumeric {
+		targetLen = len(marker) + minDummyRandomAlphanumeric
 	}
-	seed := randomCredentialSeed(targetLen)
-	if seed == "" {
-		seed = hashedCredentialSeed(realValue, targetLen)
+	randomLen := targetLen - len(marker)
+	random := randomCredentialSeed(randomLen)
+	if len(random) != randomLen {
+		random = hashedCredentialSeed(realValue, randomLen)
 	}
-	var builder strings.Builder
-	builder.Grow(targetLen)
-	builder.WriteString(prefix)
-	for index := len(prefix); index < targetLen; index++ {
-		template := byte(0)
-		if index < len(realValue) {
-			template = realValue[index]
-		}
-		if template != 0 && !isASCIIAlphanumeric(template) {
-			builder.WriteByte(template)
+	if len(random) > randomLen {
+		random = random[:randomLen]
+	}
+	return marker + random
+}
+
+// builtinCredentialShape describes one built-in provider's credential family
+// for `isBuiltinShapedCredential` (Rust registry.rs, #56297).
+type builtinCredentialShape struct {
+	prefixes []string
+	ignored  []string
+	minimum  int
+}
+
+var builtinCredentialShapes = []builtinCredentialShape{
+	{
+		prefixes: []string{"github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_"},
+		minimum:  40,
+	},
+	{
+		prefixes: []string{"sk-proj-", "sk-svcacct-", "sk-admin-", "sk-"},
+		ignored:  []string{"sk-ant-", "sk-or-"},
+		minimum:  51,
+	},
+}
+
+// isBuiltinShapedCredential reports whether the whole value looks like a
+// built-in provider credential, so a candidate embedded in it would make
+// replacement ambiguous (Rust is_builtin_shaped_credential, #56297).
+func isBuiltinShapedCredential(value string) bool {
+	for _, shape := range builtinCredentialShapes {
+		if len(value) < shape.minimum {
 			continue
 		}
-		builder.WriteByte(seed[index%len(seed)])
+		matched := false
+		for _, prefix := range shape.prefixes {
+			if strings.HasPrefix(value, prefix) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		ignored := false
+		for _, prefix := range shape.ignored {
+			if strings.HasPrefix(value, prefix) {
+				ignored = true
+				break
+			}
+		}
+		if !ignored {
+			return true
+		}
 	}
-	return builder.String()
+	return false
+}
+
+// containsEmbeddedToken reports whether text carries value as a complete enough
+// token to matter for restoration (Rust contains_embedded_value, #56297).
+func containsEmbeddedToken(text string, value string) bool {
+	return len(value) >= minEmbeddedCredentialLength && strings.Contains(text, value)
+}
+
+// dummyCollidesWithKnownCredentials mirrors the #56297 collision checks: a new
+// dummy must not equal or embed any registered credential or dummy, and a
+// built-in-shaped real credential must not contain the candidate.
+func (b *ProxyCredentialBroker) dummyCollidesWithKnownCredentials(candidate string) bool {
+	for _, credential := range b.credentials {
+		if credential.RealValue == candidate {
+			return true
+		}
+		if credential.DummyValue != "" &&
+			(strings.Contains(credential.DummyValue, candidate) || containsEmbeddedToken(candidate, credential.DummyValue)) {
+			return true
+		}
+		if containsEmbeddedToken(candidate, credential.RealValue) {
+			return true
+		}
+		if isBuiltinShapedCredential(credential.RealValue) &&
+			(strings.Contains(credential.RealValue, candidate) || strings.Contains(candidate, credential.RealValue)) {
+			return true
+		}
+	}
+	return false
 }
 
 func randomCredentialSeed(length int) string {

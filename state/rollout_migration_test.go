@@ -3,7 +3,9 @@ package state
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +21,54 @@ func openRolloutMigrationTestStateDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func TestReadThreadRolloutPathsReadsIndexWithoutCreatingDatabaseLikeRust(t *testing.T) {
+	// Mirrors Rust read_thread_rollout_paths (#57483): the index is read from an
+	// existing database only, and a missing database reports an error instead of
+	// being created or migrated.
+	home := t.TempDir()
+	ctx := context.Background()
+	if _, err := ReadThreadRolloutPaths(ctx, home); err == nil {
+		t.Fatal("ReadThreadRolloutPaths on a missing state database returned no error")
+	}
+	config, err := NewSqliteConfig(home)
+	if err != nil {
+		t.Fatalf("NewSqliteConfig: %v", err)
+	}
+	if _, err := os.Stat(config.StateDBPath()); !os.IsNotExist(err) {
+		t.Fatalf("missing state database was created (err=%v)", err)
+	}
+	db, err := config.OpenStateDB(ctx)
+	if err != nil {
+		t.Fatalf("OpenStateDB: %v", err)
+	}
+	for _, row := range []struct{ id, path string }{
+		{id: "thread-a", path: filepath.Join("sessions", "rollout-2025-01-01T00-00-00-thread-a.jsonl")},
+		{id: "thread-b", path: filepath.Join("sessions", "rollout-2025-01-01T00-00-00-thread-b.jsonl.zst")},
+	} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO threads
+			(id, rollout_path, created_at, updated_at, created_at_ms, updated_at_ms, recency_at_ms, source, model_provider, cwd, title, sandbox_policy, approval_mode)
+			VALUES (?, ?, 1, 1, 1, 1, 1, 'cli', 'openai', '/workspace', 'thread', '', '')`, row.id, row.path); err != nil {
+			t.Fatalf("insert thread %s: %v", row.id, err)
+		}
+	}
+	_ = db.Close()
+
+	paths, err := ReadThreadRolloutPaths(ctx, home)
+	if err != nil {
+		t.Fatalf("ReadThreadRolloutPaths: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("paths = %#v, want two rows", paths)
+	}
+	byID := map[string]string{}
+	for _, path := range paths {
+		byID[path.ThreadID] = path.RolloutPath
+	}
+	if byID["thread-a"] == "" || !strings.HasSuffix(byID["thread-b"], ".jsonl.zst") {
+		t.Fatalf("indexed paths = %#v", paths)
+	}
 }
 
 func TestRolloutMigrationStateCursorAdvancesMonotonicallyLikeRust(t *testing.T) {
