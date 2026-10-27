@@ -47,6 +47,7 @@ import (
 	streamingpkg "codex_go/tui/streaming"
 	"codex_go/tui/styles"
 	"codex_go/tui/transcript_image"
+	"codex_go/utils"
 	"codex_go/voicehost"
 	"codex_go/worktree"
 )
@@ -377,7 +378,10 @@ type SettingsWriteResult struct {
 	HideRateLimitModelNudge *bool
 	TUITheme                string
 	TUIPet                  string
-	SessionPickerView       string
+	// HistoryPersistence is the configured `history.persistence` value
+	// (`save-all`/`none`). Empty keeps Rust's default.
+	HistoryPersistence string
+	SessionPickerView  string
 	// AgentsOverviewGrouping carries the configured
 	// `tui.agents_overview_grouping` value (Rust #50786). Empty keeps the current
 	// Command Center grouping.
@@ -1458,7 +1462,7 @@ type Options struct {
 	MCPServers                     []historycell.McpServerStatus
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	OnStartMCPLogin                func(name, threadID string) (MCPLoginStart, error)
-	OnListModels                   func(includeHidden bool) ([]codextui.ModelPickerOption, error)
+	OnListModels                   func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error)
 	MCPStartupExpectedServers      []string
 	// StartupConfigWarnings carries the requirement-driven config warnings known
 	// at startup so they coalesce into the startup warnings entry (Rust
@@ -1483,9 +1487,12 @@ type Options struct {
 	TUITheme                string
 	TUIPet                  string
 	CodexHome               string
-	PetEnv                  map[string]string
-	PetFetch                pets.AssetFetchFunc
-	TUIThemeStyles          *styles.Styles
+	// HistoryPersistence is the resolved `history.persistence` value
+	// (`save-all`/`none`). Empty keeps Rust's default of persisting history.
+	HistoryPersistence string
+	PetEnv             map[string]string
+	PetFetch           pets.AssetFetchFunc
+	TUIThemeStyles     *styles.Styles
 }
 
 type Model struct {
@@ -1640,9 +1647,28 @@ type Model struct {
 	// mouseScrollSpeed seeds transcript overlays created later; it always holds
 	// the resolved (default-or-configured) multiplier.
 	mouseScrollSpeed float64
-	overlay          *chatwidget.TranscriptOverlay
-	slashPopup       slashCommandPopup
-	agentsOverview   *agentsoverview.View
+	// mouseCapturePolicy is the requested terminal mouse policy for the active
+	// surface (Rust #57284 MouseCapture).
+	mouseCapturePolicy mouseCapturePolicy
+	// mouseCaptureActive records the state last sent to the terminal so policy
+	// changes emit exactly one enable/disable command.
+	mouseCaptureActive bool
+	// overlayMouseCapture is the policy an open overlay requests.
+	overlayMouseCapture mouseCapturePolicy
+	// selectCopyClose records a copy-and-follow selection waiting for the
+	// clipboard write to confirm before the overlay closes (Rust
+	// pending_follow_close).
+	selectCopyClose bool
+	// selectCopyExitKey is the key that started a copy-and-follow so its held
+	// repeats can be consumed after the write confirms.
+	selectCopyExitKey string
+	// selectExitGuardSpec/Until consume held repeats of the key that left
+	// transcript selection so they cannot submit the composer draft (#57224).
+	selectExitGuardSpec  string
+	selectExitGuardUntil time.Time
+	overlay              *chatwidget.TranscriptOverlay
+	slashPopup           slashCommandPopup
+	agentsOverview       *agentsoverview.View
 	// agentsOverviewRemoved tombstones archived/deleted tasks so a delayed
 	// dynamic-tool registration cannot restore their rows (Rust #46946).
 	agentsOverviewRemoved  map[string]bool
@@ -1935,7 +1961,7 @@ type Model struct {
 	activeMCPLoginIDs               map[string]string
 	mcpLoginResultsByThread         map[string][]MCPLoginCompletedMsg
 	nextMCPLoginRequestID           uint64
-	onListModels                    func(includeHidden bool) ([]codextui.ModelPickerOption, error)
+	onListModels                    func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error)
 	nextModelsRequestID             uint64
 	pendingModelsRequestID          uint64
 	nextMCPInventoryRequestID       uint64
@@ -2097,10 +2123,16 @@ type Model struct {
 	// permissionProfilesExplicit records the server's explicit-profile mode from
 	// the last discovery, and permissionProfilesDiscovered whether one has run
 	// (Rust #43340 PermissionDiscovery).
-	permissionProfilesExplicit    bool
-	permissionProfilesDiscovered  bool
-	permissionProfilesErr         string
-	pendingServerProfile          string
+	permissionProfilesExplicit   bool
+	permissionProfilesDiscovered bool
+	permissionProfilesErr        string
+	pendingServerProfile         string
+	// permissionPopupPending is true between a `/permissions` request and the
+	// app opening its view (Rust #55682 ChatWidget::permission_popup_pending).
+	permissionPopupPending bool
+	// queueAutoSendSuppressed holds queued prompts while a permission selection
+	// is outstanding (Rust input_queue.suppress_queue_autosend).
+	queueAutoSendSuppressed       bool
 	agentsOverviewEmbedded        bool
 	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
 	onAgentsOverviewUsage         AgentsOverviewUsageReaderFunc
@@ -2219,6 +2251,7 @@ type Model struct {
 	// model (Rust input_queue.rate_limit_recovery_pending).
 	rateLimitRecoveryPending       bool
 	codexHome                      string
+	mentionUsage                   *mentionUsage
 	modelCatalogOpts               []codextui.ModelPickerOption
 	nextModelCatalogRequestID      uint64
 	pendingModelCatalogRequestID   uint64
@@ -2429,6 +2462,8 @@ type Model struct {
 	leaderChordPending    bool
 	leaderChordStartedAt  time.Time
 	leaderChordCompletion string
+	leaderChordAction     string
+	leaderChordActions    map[string]string
 	// pendingKeyChordPrefix stores the first stroke of a configured two-stroke
 	// binding. activeKeyChord carries the completed chord through the current
 	// key dispatch so existing keyMatches-based action handlers stay unchanged.
@@ -2601,6 +2636,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		composer:                     composer,
 		noAltScreen:                  options.NoAltScreen,
 		ownedScreen:                  options.usesOwnedScreen(),
+		mouseCaptureActive:           options.usesOwnedScreen(),
 		composerTopRow:               -1,
 		composerTextTopRow:           -1,
 		quickDials:                   cloneTUIPresets(options.QuickDials),
@@ -2906,6 +2942,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model.refreshTranscript()
 	model.petCodexHome = strings.TrimSpace(options.CodexHome)
 	model.codexHome = strings.TrimSpace(options.CodexHome)
+	model.mentionUsage = newMentionUsage(model.codexHome, options.HistoryPersistence)
 	model.petEnv = options.PetEnv
 	model.petFetch = options.PetFetch
 	if model.petFetch == nil {
@@ -3025,6 +3062,7 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	if !ok {
 		return nil, nil
 	}
+	model.mentionUsage.flush()
 	if model.petRuntime != nil {
 		model.petRuntime.clearImmediately()
 	}
@@ -3113,10 +3151,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	statusCmd := next.refreshTerminalProgramStatusCmd()
 	settleCmd := next.terminalSizeSettleCmd()
 	titleCmd := next.terminalTitleStatusCmd()
-	if statusCmd == nil && settleCmd == nil && titleCmd == nil {
+	mouseCmd := next.syncMouseCapture()
+	if statusCmd == nil && settleCmd == nil && titleCmd == nil && mouseCmd == nil {
 		return model, cmd
 	}
-	return model, bubbletea.Batch(cmd, statusCmd, settleCmd, titleCmd)
+	return model, bubbletea.Batch(cmd, statusCmd, settleCmd, titleCmd, mouseCmd)
 }
 
 // handleCtrlInsertCopy maps Bubble Tea v1's undecoded Ctrl+Insert CSI
@@ -3269,8 +3308,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(appserver.TurnStatusInterrupted))
 	case ClipboardWriteResultMsg:
 		m.applyClipboardWriteResult(msg)
-		return m, nil
+		return m, m.finishSelectCopyClose(msg.Err == nil)
 	case ClipboardBusyMsg:
+		m.selectCopyClose = false
 		m.notice = "Copy already in progress; try again after it finishes"
 		return m, nil
 	case SteerResultMsg:
@@ -3626,6 +3666,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.openElicitationModal(msg)
 	case ElicitationAbandonedMsg:
 		return m, m.applyElicitationAbandoned(msg)
+	case ServerRequestResolvedMsg:
+		return m, m.applyServerRequestResolved(msg)
 	case RequestUserInputMsg:
 		return m, m.openRequestUserInputModal(msg)
 	case requestUserInputTimeoutMsg:
@@ -3677,6 +3719,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// guard uses a bounded window like Rust's legacy repeat handling.
 		if !(msg.Type == bubbletea.KeyRunes && msg.Paste) &&
 			m.consumeQuickDialKeyGuard(keySpecFromKeyMsg(msg)) {
+			return m, nil
+		}
+		// Rust #57224: a held Enter/Esc/q that left transcript selection must not
+		// submit the preserved composer draft.
+		if !(msg.Type == bubbletea.KeyRunes && msg.Paste) &&
+			m.consumeSelectExitGuard(keySpecFromKeyMsg(msg)) {
 			return m, nil
 		}
 		// Rust #54381: pasting dismisses the passive preset HUD and is then
@@ -3870,7 +3918,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if handled, cmd := m.handleKeyChordKey(keySpec, m.currentTime()); handled {
 			return m, cmd
 		}
-		if handled, cmd := m.handleLeaderChordKey(keySpec); handled {
+		if handled, cmd := m.handleLeaderChordKey(keySpec, nil); handled {
 			return m, cmd
 		}
 		if m.keyMatches("chat", "open_presets", keySpec) {
@@ -3920,6 +3968,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// Rust #46734 (app/input.rs:584-597): the global find-transcript
 			// shortcut opens the transcript and starts its search bar.
 			return m, m.openTranscriptFind()
+		}
+		if m.keyMatches("global", "select_transcript", keySpec) {
+			// Rust #57223: open the transcript with keyboard selection active.
+			return m, m.beginTranscriptSelection()
 		}
 		if m.keyMatches("global", "focus_activity", keySpec) {
 			m.focusTranscriptActivity()
@@ -4035,6 +4087,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 	case bubbletea.MouseMsg:
 		m.clearLeaderChord()
+		if m.handleWarningsViewMouse(msg) {
+			return m, nil
+		}
 		if handled, cmd := m.handleComposerSelectionMouse(msg); handled {
 			return m, cmd
 		}
@@ -4174,6 +4229,7 @@ func (m *Model) View() string {
 	previewIndex := -1
 	workingIndex := -1
 	hudIndex := -1
+	warningBodyIndex := -1
 	footerBeforeComposer := false
 	if bottom := m.renderBottomPane(); bottom != "" {
 		previewIndex = len(sections)
@@ -4189,6 +4245,7 @@ func (m *Model) View() string {
 		// Rust's warnings viewer occupies the bottom pane without replacing the
 		// retained draft (#48205/#48206).
 		if viewer := m.renderWarningsView(m.width); viewer != "" {
+			warningBodyIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(viewer))
 		}
 	} else if m.readOnlyThread {
@@ -4275,6 +4332,7 @@ func (m *Model) View() string {
 	}
 	m.captureRenderedSelectionRegions(sections, footerIndex)
 	m.captureTurnTipSelectionRegions(sections, workingIndex)
+	m.captureWarningsSelectionRegion(sections, warningBodyIndex)
 	sections = m.applyRenderedSelection(sections)
 	sections = m.insertWelcomeBlossom(sections, composerIndex, 1)
 	rendered := lipgloss.JoinVertical(lipgloss.Left, sections...)
@@ -5480,6 +5538,11 @@ func (m *Model) submitNextQueued() bubbletea.Cmd {
 	if m == nil || !m.isIdle() {
 		return nil
 	}
+	// Rust #55682: a permissions selection holds queued prompts until the
+	// settings settle; the turn-completion path must not bypass that hold.
+	if m.queueAutoSendSuppressed {
+		return nil
+	}
 	if len(m.rejectedSteers) > 0 {
 		next := m.rejectedSteers[0]
 		m.rejectedSteers = append([]queuedSubmission(nil), m.rejectedSteers[1:]...)
@@ -6380,10 +6443,21 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			// end the turn, so it renders as a standalone assistant message
 			// without becoming the turn's final answer.
 			m.Transcript.finishAssistantPreambleBeforeTool()
-			m.applyHistoryCell(historycell.NewAgentMessageCell([]string{item.Text}, true))
 			// Rust #42891: structured async questions become pending local
 			// questions the composer can answer inline.
-			if questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"]); len(questions) > 0 {
+			questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"])
+			if len(questions) > 0 {
+				// Rust #57292 keeps the agent message markdown and decorates the
+				// question titles from the same structured metadata. Loaded
+				// transcripts carry the identical fields, so both surfaces share
+				// this rendering path.
+				m.State.AddHistoryMessage(codextui.Message{
+					Role:           codextui.RoleAssistant,
+					Text:           item.Text,
+					RawText:        item.Text,
+					AsyncQuestions: messageAsyncQuestions(questions),
+				})
+				m.refreshTranscript()
 				previousCount := m.asyncQuestions.UnansweredCount()
 				if m.asyncQuestions.AppendAt(item.ID, questions, m.currentTime()) {
 					// Rust #42903: start the collapsed countdown refresh.
@@ -6403,6 +6477,8 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 						countdownCmd = bubbletea.Batch(countdownCmd, notificationCmd)
 					}
 				}
+			} else {
+				m.applyHistoryCell(historycell.NewAgentMessageCell([]string{item.Text}, true))
 			}
 		} else if strings.EqualFold(strings.TrimSpace(item.Phase), messagePhaseCommentary) {
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
@@ -9616,6 +9692,7 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 		m.overlayTranscript = true
 		m.syncTranscriptOverlay()
 	}
+	m.overlayMouseCapture = mouseCaptureEnabled
 	m.overlay.SetHints(
 		"\u2191/\u2193 to scroll \u00b7 pgup/pgdn to page \u00b7 home/end to jump",
 		m.pagerActionsHint(),
@@ -9641,6 +9718,7 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	wasBacktrack := m.backtrack.OverlayPreviewActive
 	m.overlay = nil
 	m.overlayTranscript = false
+	m.overlayMouseCapture = mouseCaptureInherit
 	m.sessionTranscriptThreadID = ""
 	m.backtrack.OverlayPreviewActive = false
 	if wasBacktrack {
@@ -9667,13 +9745,13 @@ func (m *Model) openPagerTerminalMode() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	// Rust parity: temporary overlay surfaces (Ctrl+T transcript pager) render
-	// on the alternate screen and enable alternate scroll so the mouse wheel
-	// scrolls the overlay content rather than the terminal's native scrollback.
-	// Alternate scroll maps the wheel to up/down key presses, which the pager
-	// keymap turns into scroll, so mouse tracking stays off and native text
-	// selection/copy keeps working. `--no-alt-screen` keeps the overlay inline.
-	m.setAlternateScroll(true)
+	// Rust parity: temporary overlay surfaces render on the alternate screen.
+	// When the overlay owns the mouse (transcript and usage pagers, #57284) the
+	// wheel arrives as mouse events; static pagers leave gestures to the
+	// terminal and use alternate scroll so the wheel still pages the overlay.
+	// `--no-alt-screen` keeps the overlay inline.
+	capture := m.overlayMouseCapture.captures(m.ownedScreen)
+	m.setAlternateScroll(!capture)
 	var commands []bubbletea.Cmd
 	if !m.noAltScreen && !m.overlayAltScreen {
 		m.overlayAltScreen = true
@@ -9751,6 +9829,20 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	// the pager keymap only sees the keys the bar declines (paging while editing).
 	if handled, cmd := m.overlay.HandleFindKey(msg); handled {
 		return cmd
+	}
+	if m.overlay.SelectionActive() {
+		// Rust transcript selection owns every key while active; fixed selection
+		// controls take precedence over remapped pager shortcuts (#57224).
+		return m.updateTranscriptSelectionKey(msg)
+	}
+	if m.overlayTranscript {
+		if handled, cmd := m.handleLeaderChordKey(keySpecFromKeyMsg(msg), selectTranscriptOnly); handled {
+			return cmd
+		}
+		if m.keyMatches("global", "select_transcript", keySpecFromKeyMsg(msg)) {
+			m.overlay.BeginSelection()
+			return nil
+		}
 	}
 	// Rust app_backtrack: with the *transcript* overlay open, Esc begins the
 	// backtrack preview; once the preview is active, Esc/Left step to an older
@@ -10139,6 +10231,7 @@ func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 	m.overlay = chatwidget.NewTranscriptOverlayWithTitle(m.width, m.height, text, "D I F F")
 	m.seedOverlayMouseScrollSpeed()
 	m.overlayTranscript = false
+	m.overlayMouseCapture = mouseCaptureDisabled
 	return m.openPagerTerminalMode()
 }
 
@@ -10206,7 +10299,7 @@ func (m *Model) configuredBindingTakesNavKey(keySpec string) bool {
 			continue
 		}
 		switch descriptor.Action {
-		case "find_transcript", "focus_activity":
+		case "find_transcript", "select_transcript", "focus_activity":
 			continue
 		}
 		if _, _, custom := codextui.ResolvedKeymapBindings(m.keymapConfig, descriptor.Context, descriptor.Action); !custom {
@@ -10520,6 +10613,7 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 	var plans []transcriptImagePlan
 	line := 0
 	first := true
+	previousVisibleUserPrompt := false
 	for i, message := range state.Messages {
 		expanded := expandedHistory || expandedMessages[i]
 		key := transcriptMessageKey{
@@ -10552,15 +10646,26 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 		if len(lines) == 0 {
 			continue
 		}
-		if !first {
-			builder.WriteString("\n\n")
-			// The two newlines terminate the previous line and leave one
-			// blank separator row before this message starts.
-			line++
+		writeLines := lines
+		grouped := !first && previousVisibleUserPrompt && isGroupableUserPrompt(message)
+		if grouped && len(writeLines) > 0 && isUserSurfaceBlankLine(writeLines[0]) {
+			// The previous prompt already ends with the shared painted row.
+			writeLines = writeLines[1:]
 		}
-		builder.WriteString(strings.TrimRight(strings.Join(lines, "\n"), "\r\n"))
-		ranges[i] = [2]int{line, line + len(lines)}
-		line += len(lines)
+		if !first {
+			if grouped {
+				// Rust #56280: the previous prompt's trailing surface row is
+				// the only separator, so the background block stays contiguous.
+				builder.WriteString("\n")
+			} else {
+				builder.WriteString("\n\n")
+				line++
+			}
+		}
+		builder.WriteString(strings.TrimRight(strings.Join(writeLines, "\n"), "\r\n"))
+		ranges[i] = [2]int{line, line + len(writeLines)}
+		line += len(writeLines)
+		previousVisibleUserPrompt = isGroupableUserPrompt(message)
 		if resolveImage != nil {
 			if preview := resolveImage(message, expanded); preview != nil && preview.Rows > 0 {
 				rows := int(preview.Rows)
@@ -10586,6 +10691,22 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 		return "No messages yet.", nil, nil
 	}
 	return builder.String(), ranges, plans
+}
+
+// isGroupableUserPrompt reports whether a message is an ordinary visible user
+// prompt that can share a background block with an adjacent prompt. Async
+// question replies use the user surface too, but stay separate cells.
+func isGroupableUserPrompt(message codextui.Message) bool {
+	return message.Role == codextui.RoleUser && len(message.AsyncQuestionReplies) == 0
+}
+
+// isUserSurfaceBlankLine reports whether a rendered row is an empty row painted
+// with the user prompt surface.
+func isUserSurfaceBlankLine(line string) bool {
+	if !strings.Contains(line, "\x1b[48;5;235m") {
+		return false
+	}
+	return strings.TrimSpace(utils.StripANSI(line)) == ""
 }
 
 // flattenTranscriptDisplayLines turns embedded newlines into separate display
@@ -10701,6 +10822,12 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 	case codextui.RoleHistory:
 		return rawLinesTrimmed(text)
 	case codextui.RoleUser:
+		// Rust #57292: a desktop reply renders as a shortened `↪ Re:` caption
+		// plus the complete Markdown answer.
+		if len(message.AsyncQuestionReplies) > 0 {
+			cell := historycell.NewAsyncQuestionReplyCell(message.AsyncQuestionReplies, themeID, cwd)
+			return trimBlankDisplayEdges(cell.DisplayLines(width))
+		}
 		// Rust #46486: a committed desktop reply renders as readable
 		// question-and-answer text rather than the raw reply envelope.
 		if display, ok := codextui.AsyncQuestionReplyDisplayText(text); ok {
@@ -10712,6 +10839,11 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 		contentWidth := width - 2
 		if contentWidth < 1 {
 			contentWidth = 1
+		}
+		if len(message.AsyncQuestions) > 0 {
+			if lines := historycell.RenderAsyncQuestionMarkdown(text, message.AsyncQuestions, width, themeID, cwd); len(lines) > 0 {
+				return trimBlankDisplayEdges(lines)
+			}
 		}
 		renderText, _ := codextui.RewriteInlineVisualizations(text, nil)
 		// Rust #46899: completed transcript lists use uniform sibling spacing;

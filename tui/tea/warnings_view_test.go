@@ -11,6 +11,98 @@ import (
 	"codex_go/utils"
 )
 
+// TestWarningsBodySelectionCopiesLikeRust mirrors #57271: the warning body is
+// selectable without changing the retained composer draft, and page navigation
+// still works after a selection.
+func TestWarningsBodySelectionCopiesLikeRust(t *testing.T) {
+	enabled := true
+	var copied string
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:                 100,
+		Height:                32,
+		ShowTooltips:          &enabled,
+		CopyOnSelect:          "always",
+		StartupConfigWarnings: []string{"First warning detail", "Second warning detail"},
+		OnClipboardWrite: func(text string) error {
+			copied = text
+			return nil
+		},
+	})
+	model.composer.InsertString("draft stays")
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	_ = model.View()
+
+	region := model.renderedSelection.regions[renderedRegionWarnings]
+	if region.w <= 0 || len(region.text) == 0 {
+		t.Fatalf("warning body region not registered: %#v", region)
+	}
+	line := region.text[0]
+	column := findDisplayColumn(line, "First")
+	if column < 0 {
+		t.Fatalf("warning body missing its first line: %q", line)
+	}
+	start := region.x + column
+	end := start + len("First warning") - 1
+	_, _ = model.Update(bubbletea.MouseMsg{X: start, Y: region.y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
+	_, cmd := model.Update(bubbletea.MouseMsg{X: end, Y: region.y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft})
+	runTeaCmd(t, model, cmd)
+	if copied != "First warning" {
+		t.Fatalf("copied warning selection = %q", copied)
+	}
+	if got := model.composer.Value(); got != "draft stays" {
+		t.Fatalf("composer draft = %q, want unchanged", got)
+	}
+	if view := model.View(); !strings.Contains(view, "\x1b[7m") {
+		t.Fatal("warning selection was not highlighted")
+	}
+
+	// Paging still reaches the second warning; its changed body invalidates the
+	// selection but keeps the viewer in control.
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
+	if got := model.warningsView.CurrentIndex(); got != 1 {
+		t.Fatalf("current warning after page right = %d, want 2", got+1)
+	}
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Second warning detail") {
+		t.Fatalf("paging after selection did not show the second warning:\n%s", view)
+	}
+}
+
+// TestWarningsBodyWheelScrollsLikeRust covers the unmodified three-row wheel
+// and its ownership of gestures inside the painted body only.
+func TestWarningsBodyWheelScrollsLikeRust(t *testing.T) {
+	enabled := true
+	details := strings.Repeat("A long warning line that wraps across several rows. ", 30)
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:                 90,
+		Height:                32,
+		ShowTooltips:          &enabled,
+		StartupConfigWarnings: []string{details},
+	})
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	_ = model.View()
+	region := model.renderedSelection.regions[renderedRegionWarnings]
+	if region.w <= 0 || model.warningsView.MaxOffset() == 0 {
+		t.Fatalf("warning body is not scrollable: region=%#v max=%d", region, model.warningsView.MaxOffset())
+	}
+	x, y := region.x+1, region.y
+	model.Update(bubbletea.MouseMsg{X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown})
+	if got := model.warningsView.Offset(); got != 3 {
+		t.Fatalf("unmodified wheel offset = %d, want 3", got)
+	}
+	model.Update(bubbletea.MouseMsg{X: x, Y: y, Ctrl: true, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown})
+	if got := model.warningsView.Offset(); got != 3 {
+		t.Fatalf("modified wheel changed warning offset to %d", got)
+	}
+	model.Update(bubbletea.MouseMsg{X: x, Y: region.y - 1, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown})
+	if got := model.warningsView.Offset(); got != 3 {
+		t.Fatalf("wheel outside body changed warning offset to %d", got)
+	}
+	model.Update(bubbletea.MouseMsg{X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	if got := model.warningsView.Offset(); got != 0 {
+		t.Fatalf("wheel up offset = %d, want 0", got)
+	}
+}
+
 // Mirrors the #48205/#48206 wiring: F2 opens the retained-warnings viewer, the
 // list actions page through the diagnostics, the draft is untouched, and closing
 // dismisses the pages that were drawn.

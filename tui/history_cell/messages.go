@@ -15,6 +15,8 @@ import (
 const (
 	ansiUserMessageBackground = "\x1b[48;5;235m"
 	ansiUserMessagePrefix     = "\x1b[1;2m"
+	ansiUserMessageSpoken     = "\x1b[1;31m"
+	ansiUserMessageSpokenEnd  = "\x1b[22;39m"
 	ansiUserMessagePrefixEnd  = "\x1b[22m"
 	ansiUserMessageReset      = "\x1b[0m"
 	ansiUserMessageMention    = "\x1b[36m"
@@ -81,6 +83,22 @@ type UserHistoryCell struct {
 	TextElements    []TextElement
 	LocalImagePaths []string
 	RemoteImageURLs []string
+	Presentation    UserMessagePresentation
+}
+
+// UserMessagePresentation mirrors Rust #57291's explicit enum: typed prompts
+// render with the dim marker, while speech transcripts keep their own red
+// marker and leading-whitespace handling.
+type UserMessagePresentation int
+
+const (
+	UserMessagePresentationPlain UserMessagePresentation = iota
+	UserMessagePresentationSpoken
+)
+
+// IsSpoken reports whether the cell renders a speech transcript.
+func (c UserHistoryCell) IsSpoken() bool {
+	return c.Presentation == UserMessagePresentationSpoken
 }
 
 func NewUserPrompt(message string, textElements []TextElement, localImagePaths []string, remoteImageURLs []string) UserHistoryCell {
@@ -89,7 +107,16 @@ func NewUserPrompt(message string, textElements []TextElement, localImagePaths [
 		TextElements:    append([]TextElement(nil), textElements...),
 		LocalImagePaths: append([]string(nil), localImagePaths...),
 		RemoteImageURLs: append([]string(nil), remoteImageURLs...),
+		Presentation:    UserMessagePresentationPlain,
 	}
+}
+
+// NewSpokenUserPrompt builds a speech-transcript cell (Rust
+// new_spoken_user_prompt).
+func NewSpokenUserPrompt(message string) UserHistoryCell {
+	cell := NewUserPrompt(message, nil, nil, nil)
+	cell.Presentation = UserMessagePresentationSpoken
+	return cell
 }
 
 func (c UserHistoryCell) DisplayLines(width int) []string {
@@ -105,6 +132,11 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 		})...)
 	}
 	message := strings.TrimRight(c.Message, "\r\n")
+	// Speech transcripts can begin with whitespace; the marker supplies its own
+	// separator (Rust #57291).
+	if c.IsSpoken() {
+		message = strings.TrimLeft(message, " \t\n\r")
+	}
 	wrappedMessage := []string{}
 	if message != "" {
 		for _, line := range strings.Split(message, "\n") {
@@ -129,7 +161,11 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 	for index, line := range wrappedMessage {
 		prefix := "  "
 		if index == 0 {
-			prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
+			if c.IsSpoken() {
+				prefix = ansiUserMessageSpoken + "\u203a " + ansiUserMessageSpokenEnd
+			} else {
+				prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
+			}
 		}
 		lines = append(lines, styleUserMessageLine(prefix+styleUserMessageMentions(line), width))
 	}
@@ -324,6 +360,13 @@ func styleUserMessageLine(content string, width int) string {
 		padding = 0
 	}
 	return ansiUserMessageBackground + content + strings.Repeat(" ", padding) + ansiUserMessageReset
+}
+
+// UserMessageSurfaceBlankLine is one full-width row painted with the user
+// prompt surface. Consecutive prompts share a single such row so their
+// background block stays contiguous (Rust #56280).
+func UserMessageSurfaceBlankLine(width int) string {
+	return styleUserMessageLine("", width)
 }
 
 func (c UserHistoryCell) RawLines() []string {

@@ -9,26 +9,23 @@ import (
 )
 
 // Rust parity: codex-rs/tui/src/bottom_pane/chat_composer/draft_state.rs
-// PromptPrefix (#54742). The leading `/` of a slash command and the leading
-// `!` of a shell escape are composer state rather than editable text: the
-// textarea holds only the command body and the marker is drawn as the prompt.
-// Every canonical read of the draft (submission, history, queued restore,
-// external editor, slash popup) goes through composerText so the marker is
-// put back in front of the body.
+// is_bash_mode. The leading `!` of a shell escape is composer state rather
+// than editable text: the textarea holds only the command body and the marker
+// is drawn as the prompt. Slash text stays in the textarea (#56021), so `/model`
+// renders after the normal composer prompt. Every canonical read of the draft
+// (submission, history, queued restore, external editor, slash popup) goes
+// through composerText so the shell marker is put back in front of the body.
 type composerPrefix int
 
 const (
 	composerPrefixNone composerPrefix = iota
 	composerPrefixShell
-	composerPrefixSlash
 )
 
 func (p composerPrefix) text() string {
 	switch p {
 	case composerPrefixShell:
 		return "!"
-	case composerPrefixSlash:
-		return "/"
 	default:
 		return ""
 	}
@@ -81,7 +78,8 @@ func (m *Model) composerCursor() int {
 }
 
 // setComposerPrompt replaces the draft with canonical text, moving a leading
-// `!` or `/` into prompt state (Rust imported_text_for_textarea).
+// `!` into prompt state (Rust imported_text_for_textarea). A leading `/` stays
+// editable.
 func (m *Model) setComposerPrompt(text string) {
 	if m == nil {
 		return
@@ -121,9 +119,9 @@ func (m *Model) refreshComposerPrompt() {
 	m.composer.Prompt = m.composerPrefix.prompt()
 }
 
-// splitComposerPrompt reports the prompt prefix carried by canonical text.
-// Rust matches the first *extended grapheme cluster*, so `/` followed by a
-// combining mark stays literal text.
+// splitComposerPrompt reports the shell prompt prefix carried by canonical
+// text. Rust matches the first *extended grapheme cluster*, so `!` followed by
+// a combining mark stays literal text.
 func splitComposerPrompt(text string) (composerPrefix, string) {
 	if text == "" {
 		return composerPrefixNone, text
@@ -132,14 +130,12 @@ func splitComposerPrompt(text string) (composerPrefix, string) {
 	switch cluster {
 	case "!":
 		return composerPrefixShell, rest
-	case "/":
-		return composerPrefixSlash, rest
 	default:
 		return composerPrefixNone, text
 	}
 }
 
-// syncComposerPrefixFromText absorbs a leading `!` or `/` that just landed in
+// syncComposerPrefixFromText absorbs a leading `!` that just landed in
 // the body, preserving the cursor offset (Rust sync_prompt_prefix_from_text).
 func (m *Model) syncComposerPrefixFromText() {
 	if m == nil || m.composerPrefix != composerPrefixNone {
@@ -179,8 +175,7 @@ func (m *Model) handleComposerPrefixKey(msg bubbletea.Msg) (bool, bubbletea.Cmd)
 		m.refreshSlashPopup()
 		return true, nil
 	case bubbletea.KeyEsc:
-		// Rust only lets Esc out of shell mode, and only once the body is
-		// empty; a slash draft keeps its marker.
+		// Rust only lets Esc out of shell mode, and only once the body is empty.
 		if m.composerPrefix == composerPrefixShell && m.composer.Value() == "" {
 			m.clearComposerPrefix()
 			m.refreshSlashPopup()

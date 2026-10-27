@@ -59,7 +59,7 @@ func TestManageSkillsStateKeysByPathIdentityLikeRust(t *testing.T) {
 		t.Fatal("inventory entry was not disabled by path identity")
 	}
 	enabled, disabled, summary, changed := chatwidget.ManageSkillsChangeSummary(state.initial, state.applied)
-	if !changed || enabled != 0 || disabled != 1 || summary != "0 skills enabled, 1 skills disabled" {
+	if !changed || enabled != 0 || disabled != 1 || summary != "Disabled 1 skill" {
 		t.Fatalf("summary = (%d,%d,%q,%v), want one disabled skill", enabled, disabled, summary, changed)
 	}
 }

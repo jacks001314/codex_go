@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	bubbletea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
+	"codex_go/utils"
 )
 
 const (
@@ -54,6 +57,13 @@ type TranscriptOverlay struct {
 	mouseScroll codextui.MouseScrollAccumulator
 	// find is the Ctrl+T pager's find bar (Rust transcript_view::search).
 	find transcriptFind
+	// plainLines caches the ANSI-stripped content rows used by keyboard and
+	// mouse selection (#57221-#57224).
+	plainLines []string
+	// selectMode is Rust transcript_view::SelectMode over this pager's rows.
+	selectMode selectModeState
+	// dragActive keeps a mouse drag extending the current selection.
+	dragActive bool
 }
 
 func NewTranscriptOverlay(width int, height int, content string) *TranscriptOverlay {
@@ -136,6 +146,7 @@ func (o *TranscriptOverlay) SetContent(content string) {
 	follow := o.content == "" || o.viewport.AtBottom()
 	offset := o.viewport.YOffset
 	o.content = content
+	o.refreshPlainLines()
 	o.viewport.SetContent(o.viewContent())
 	if follow {
 		o.viewport.GotoBottom()
@@ -197,7 +208,8 @@ func (o *TranscriptOverlay) viewContent() string {
 		return o.content
 	}
 	_, hasFindMatch := o.find.matchLine()
-	if !o.hasHighlight && !hasFindMatch {
+	selecting := o.selectMode.active && o.selectMode.marked
+	if !o.hasHighlight && !hasFindMatch && !selecting && !o.selectMode.active {
 		return o.content
 	}
 	lines := strings.Split(o.content, "\n")
@@ -215,7 +227,117 @@ func (o *TranscriptOverlay) viewContent() string {
 	if line, ok := o.find.matchLine(); ok && line < len(lines) {
 		lines[line] = reverseVideoLine(lines[line])
 	}
+	if o.selectMode.active {
+		// Rust select_mode highlights the marked cells and underlines the caret.
+		for row := range lines {
+			if from, to, ok := o.selectionSpanForRow(row); ok {
+				lines[row] = applyCellStyle(lines[row], from, to, selectionOn, selectionOff)
+			}
+		}
+		cursor := o.selectCursor()
+		if cursor.Row >= 0 && cursor.Row < len(lines) {
+			if cursor.Col < o.lineWidth(cursor.Row) {
+				lines[cursor.Row] = applyCellStyle(lines[cursor.Row], cursor.Col, cursor.Col+1, cursorOn, cursorOff)
+			}
+		}
+	}
 	return strings.Join(lines, "\n")
+}
+
+// refreshPlainLines caches the ANSI-stripped rows selection operates on.
+func (o *TranscriptOverlay) refreshPlainLines() {
+	if o == nil {
+		return
+	}
+	rows := strings.Split(o.content, "\n")
+	plain := make([]string, len(rows))
+	for index, row := range rows {
+		plain[index] = utils.StripANSI(row)
+	}
+	o.plainLines = plain
+}
+
+// applyCellStyle wraps the display cells [from, to) of one rendered row in the
+// given SGR attributes. Escape sequences are copied through untouched, and a
+// full reset while the range is still open re-asserts the attribute.
+func applyCellStyle(line string, from int, to int, on string, off string) string {
+	if from >= to {
+		return line
+	}
+	var builder strings.Builder
+	builder.Grow(len(line) + len(on) + len(off))
+	column := 0
+	styled := false
+	closed := false
+	for index := 0; index < len(line); {
+		if line[index] == 0x1b {
+			next, sequence := ansiSequence(line[index:])
+			builder.WriteString(sequence)
+			if styled && (sequence == "\x1b[0m" || sequence == "\x1b[m") {
+				builder.WriteString(on)
+			}
+			index += next
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[index:])
+		width := runewidth.RuneWidth(r)
+		if width == 0 {
+			width = 1
+		}
+		if !styled && column >= from {
+			builder.WriteString(on)
+			styled = true
+		}
+		if styled && column >= to && !closed {
+			builder.WriteString(off)
+			closed = true
+		}
+		builder.WriteString(line[index : index+size])
+		column += width
+		index += size
+	}
+	if styled && !closed {
+		builder.WriteString(off)
+	}
+	return builder.String()
+}
+
+// ansiSequence returns the length and text of the escape sequence at the start
+// of value, which must begin with ESC.
+func ansiSequence(value string) (int, string) {
+	if len(value) < 2 {
+		return len(value), value
+	}
+	switch value[1] {
+	case '[':
+		index := 2
+		for index < len(value) && !(value[index] >= 0x40 && value[index] <= 0x7e) {
+			index++
+		}
+		if index < len(value) {
+			index++
+		}
+		if index > len(value) {
+			index = len(value)
+		}
+		return index, value[:index]
+	case ']':
+		index := 2
+		for index < len(value) {
+			if value[index] == 0x07 {
+				index++
+				break
+			}
+			if value[index] == 0x1b && index+1 < len(value) && value[index+1] == '\\' {
+				index += 2
+				break
+			}
+			index++
+		}
+		return index, value[:index]
+	default:
+		return 2, value[:2]
+	}
 }
 
 // scrollToHighlight keeps the selected message on screen without snapping the
@@ -358,10 +480,82 @@ func (o *TranscriptOverlay) Update(message bubbletea.Msg) bubbletea.Cmd {
 			}
 			return nil
 		}
+		if o.handleSelectMouse(msg) {
+			return nil
+		}
 	}
 	var cmd bubbletea.Cmd
 	o.viewport, cmd = o.viewport.Update(message)
 	return cmd
+}
+
+// handleSelectMouse maps left-button drags onto the row/column selection model
+// (Rust transcript_view::input mouse selection). The overlay header occupies
+// screen row 0, so body rows are offset by one.
+func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
+	if o == nil {
+		return false
+	}
+	switch msg.Action {
+	case bubbletea.MouseActionPress:
+		if msg.Button != bubbletea.MouseButtonLeft {
+			return false
+		}
+		point := o.mouseSelectPoint(msg)
+		if !o.selectMode.active {
+			o.selectMode = selectModeState{
+				active:          true,
+				preferredColumn: -1,
+				savedOffset:     o.viewport.YOffset,
+				savedFollow:     o.viewport.AtBottom(),
+			}
+		}
+		o.selectMode.marked = false
+		o.selectMode.unit = SelectUnitCharacter
+		o.selectMode.anchor = point
+		o.selectMode.activeEnd = point
+		o.dragActive = true
+		o.viewport.SetContent(o.viewContent())
+		return true
+	case bubbletea.MouseActionMotion:
+		if !o.dragActive {
+			return false
+		}
+		point := o.mouseSelectPoint(msg)
+		if point != o.selectMode.anchor {
+			o.selectMode.marked = true
+		}
+		o.selectMode.activeEnd = point
+		o.viewport.SetContent(o.viewContent())
+		return true
+	case bubbletea.MouseActionRelease:
+		if !o.dragActive {
+			return false
+		}
+		o.dragActive = false
+		return true
+	}
+	return false
+}
+
+func (o *TranscriptOverlay) mouseSelectPoint(msg bubbletea.MouseMsg) selectPoint {
+	row := o.viewport.YOffset + msg.Y - 1
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(o.plainLines) {
+		row = len(o.plainLines) - 1
+	}
+	column := msg.X
+	if column < 0 {
+		column = 0
+	}
+	if row >= 0 {
+		if width := o.lineWidth(row); column > width {
+			column = width
+		}
+	}
+	return selectPoint{Row: row, Col: column}
 }
 
 func (o *TranscriptOverlay) View() string {

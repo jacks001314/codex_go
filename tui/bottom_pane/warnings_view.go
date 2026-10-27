@@ -25,6 +25,10 @@ type WarningsView struct {
 	offset    int
 	pageSize  int
 	maxOffset int
+	// bodyRows freezes the painted warning rows so the host can register the
+	// viewport for source-backed text selection (Rust #57271).
+	bodyRows []string
+	bodyLeft int
 }
 
 // NewWarningsView mirrors `WarningsView::new`: the entries are frozen and every
@@ -75,6 +79,49 @@ func (v *WarningsView) MaxOffset() int {
 		return 0
 	}
 	return v.maxOffset
+}
+
+// ScrollRows moves the body by delta rows, clamped to the rendered viewport. It
+// reports whether the offset changed. Mouse wheel handling uses an unmodified
+// tick as three rows (Rust #57271).
+func (v *WarningsView) ScrollRows(delta int) bool {
+	if v == nil || delta == 0 || v.maxOffset <= 0 {
+		return false
+	}
+	next := v.offset + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > v.maxOffset {
+		next = v.maxOffset
+	}
+	if next == v.offset {
+		return false
+	}
+	v.offset = next
+	return true
+}
+
+// BodyRows returns the warning body rows painted by the latest render. The host
+// registers these rows as a selectable region without exposing the panel title
+// or footer hints (Rust #57271).
+func (v *WarningsView) BodyRows() []string {
+	if v == nil {
+		return nil
+	}
+	return append([]string(nil), v.bodyRows...)
+}
+
+// BodyTopRow is the first body row relative to the warnings panel: the menu
+// surface's top padding, the title, and the separator.
+func (v *WarningsView) BodyTopRow() int { return 3 }
+
+// BodyLeft is the horizontal inset of the warning body.
+func (v *WarningsView) BodyLeft() int {
+	if v == nil {
+		return 0
+	}
+	return v.bodyLeft
 }
 
 // MarkVisited records that the current page was drawn (Rust sets the render cell
@@ -245,8 +292,11 @@ type WarningsHints struct {
 	Copy string
 	// Navigation is the joined move-left/move-right labels, when bound.
 	Navigation string
-	// Scroll is the list move-down hint, when bound.
-	Scroll string
+	// Scroll is the legacy single scroll hint. ScrollUp/ScrollDown take
+	// precedence so the footer can reflect the directions with more content.
+	Scroll     string
+	ScrollUp   string
+	ScrollDown string
 }
 
 // RenderLines mirrors `warnings_view_render.rs`: a title line naming the current
@@ -258,13 +308,17 @@ func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) [
 		return nil
 	}
 	inner := width - 4
+	bodyLeft := 2
 	title := "Warnings"
 	details := "No warnings"
 	if entry, ok := v.CurrentEntry(); ok {
 		title = fmt.Sprintf("Warnings \u00b7 %d of %d \u00b7 %s", v.current+1, len(v.entries), entry.Source)
 		details = entry.Details
 	}
-	bodyHeight := height - 3
+	bodyHeight := height - 5
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
 	body := warningsWrapText(details, inner)
 	if len(body) > 0 {
 		v.MarkVisited()
@@ -272,7 +326,10 @@ func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) [
 	v.SetPageMetrics(bodyHeight, len(body))
 	offset := v.offset
 	rows := make([]string, 0, height)
-	rows = append(rows, truncateWarningLine(title, inner), "")
+	rows = append(rows, "")
+	rows = append(rows, strings.Repeat(" ", bodyLeft)+truncateWarningLine(title, inner))
+	rows = append(rows, "")
+	v.bodyRows = v.bodyRows[:0]
 	for index := 0; index < bodyHeight; index++ {
 		if offset+index < len(body) {
 			line := body[offset+index]
@@ -280,15 +337,20 @@ func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) [
 				// A web URL is kept whole (never truncated) and annotated as a
 				// terminal hyperlink, so the destination stays complete even when
 				// it is wider than the panel (Rust #51451).
-				rows = append(rows, codextui.AnnotateCompleteWebURLsInLine(line))
+				line = codextui.AnnotateCompleteWebURLsInLine(line)
 			} else {
-				rows = append(rows, truncateWarningLine(line, inner))
+				line = truncateWarningLine(line, inner)
 			}
+			rows = append(rows, strings.Repeat(" ", bodyLeft)+line)
+			v.bodyRows = append(v.bodyRows, line)
 			continue
 		}
 		rows = append(rows, "")
+		v.bodyRows = append(v.bodyRows, "")
 	}
-	rows = append(rows, warningsFooterLine(hints, inner))
+	v.bodyLeft = bodyLeft
+	rows = append(rows, strings.Repeat(" ", bodyLeft)+warningsFooterLine(hints, inner, offset, v.maxOffset))
+	rows = append(rows, "")
 	for len(rows) < height {
 		rows = append(rows, "")
 	}
@@ -297,7 +359,7 @@ func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) [
 
 // warningsFooterLine mirrors Rust's `footer_hint_items_line` item list, dropping
 // trailing items that no longer fit the width.
-func warningsFooterLine(hints WarningsHints, width int) string {
+func warningsFooterLine(hints WarningsHints, width int, offset int, maxOffset int) string {
 	items := make([]string, 0, 5)
 	if label := strings.TrimSpace(hints.Keep); label != "" {
 		items = append(items, label+" keep & next")
@@ -311,7 +373,7 @@ func warningsFooterLine(hints WarningsHints, width int) string {
 	if label := strings.TrimSpace(hints.Navigation); label != "" {
 		items = append(items, label+" warning")
 	}
-	if label := strings.TrimSpace(hints.Scroll); label != "" {
+	if label := warningsScrollHint(hints, offset, maxOffset); label != "" {
 		items = append(items, label+" scroll")
 	}
 	for len(items) > 0 {
@@ -320,6 +382,38 @@ func warningsFooterLine(hints WarningsHints, width int) string {
 			return line
 		}
 		items = items[:len(items)-1]
+	}
+	return ""
+}
+
+// warningsScrollHint reports only the directions that can still move. Rust
+// renders `up`, `down`, or `up/down` from the configured list bindings
+// (Rust #57271).
+func warningsScrollHint(hints WarningsHints, offset int, maxOffset int) string {
+	up, down := strings.TrimSpace(hints.ScrollUp), strings.TrimSpace(hints.ScrollDown)
+	if up == "" && down == "" {
+		return strings.TrimSpace(hints.Scroll)
+	}
+	switch {
+	case offset > 0 && offset < maxOffset:
+		if up != "" && down != "" {
+			return up + "/" + down
+		}
+		return firstNonEmptyWarningHint(up, down)
+	case offset > 0:
+		return up
+	case offset < maxOffset:
+		return down
+	default:
+		return ""
+	}
+}
+
+func firstNonEmptyWarningHint(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
 	}
 	return ""
 }

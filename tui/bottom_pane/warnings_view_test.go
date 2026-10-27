@@ -182,17 +182,20 @@ func TestWarningsViewRenderLikeRust(t *testing.T) {
 	if len(rows) != 12 {
 		t.Fatalf("rendered %d rows, want 12", len(rows))
 	}
-	if !strings.Contains(rows[0], "Warnings \u00b7 1 of 3 \u00b7 MCP \u00b7 example") {
-		t.Fatalf("title = %q", rows[0])
+	if rows[0] != "" {
+		t.Fatalf("top padding = %q, want blank", rows[0])
 	}
-	if rows[1] != "" {
-		t.Fatalf("separator = %q, want blank", rows[1])
+	if !strings.Contains(rows[1], "Warnings \u00b7 1 of 3 \u00b7 MCP \u00b7 example") {
+		t.Fatalf("title = %q", rows[1])
+	}
+	if rows[2] != "" {
+		t.Fatalf("separator = %q, want blank", rows[2])
 	}
 	body := strings.Join(rows, "\n")
 	if !strings.Contains(body, "MCP example could not connect") {
 		t.Fatalf("body lost the diagnostic detail:\n%s", body)
 	}
-	footer := rows[len(rows)-1]
+	footer := rows[len(rows)-2]
 	for _, want := range []string{"k keep & next", "ctrl+c dismiss & close", "ctrl+o copy", "warning", "scroll"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer %q missing %q", footer, want)
@@ -201,13 +204,13 @@ func TestWarningsViewRenderLikeRust(t *testing.T) {
 
 	// A footer that cannot hold every item drops whole trailing items.
 	medium := view.RenderLines(80, 12, hints)
-	if got := medium[len(medium)-1]; !strings.Contains(got, "k keep & next") || strings.Contains(got, "scroll") {
+	if got := medium[len(medium)-2]; !strings.Contains(got, "k keep & next") || strings.Contains(got, "scroll") {
 		t.Fatalf("medium footer = %q, want the leading items without scroll", got)
 	}
 
 	// A narrow footer drops whole trailing items rather than truncating them.
 	narrow := view.RenderLines(20, 6, hints)
-	if got := narrow[len(narrow)-1]; strings.Contains(got, "scroll") || strings.Contains(got, "copy") {
+	if got := narrow[len(narrow)-2]; strings.Contains(got, "scroll") || strings.Contains(got, "copy") {
 		t.Fatalf("narrow footer kept trailing items: %q", got)
 	}
 }
@@ -234,6 +237,44 @@ func TestWarningsViewRenderScrollsLongDiagnosticsLikeRust(t *testing.T) {
 	view.MoveRight()
 	if got := strings.Join(view.RenderLines(40, 9, hints), "\n"); !strings.Contains(got, "Unknown setting") {
 		t.Fatalf("second warning missing:\n%s", got)
+	}
+}
+
+// TestWarningsScrollHintTracksAvailableDirectionsLikeRust mirrors #57271: the
+// footer advertises only directions that can still move.
+func TestWarningsScrollHintTracksAvailableDirectionsLikeRust(t *testing.T) {
+	hints := WarningsHints{ScrollUp: "\u2191", ScrollDown: "z"}
+	for _, testCase := range []struct {
+		offset    int
+		maxOffset int
+		want      string
+	}{
+		{offset: 0, maxOffset: 4, want: "z"},
+		{offset: 2, maxOffset: 4, want: "\u2191/z"},
+		{offset: 4, maxOffset: 4, want: "\u2191"},
+		{offset: 0, maxOffset: 0, want: ""},
+	} {
+		if got := warningsScrollHint(hints, testCase.offset, testCase.maxOffset); got != testCase.want {
+			t.Fatalf("hint(offset=%d,max=%d) = %q, want %q", testCase.offset, testCase.maxOffset, got, testCase.want)
+		}
+	}
+}
+
+// TestWarningsScrollRowsClampsLikeRust covers the three-row mouse tick path.
+func TestWarningsScrollRowsClampsLikeRust(t *testing.T) {
+	view := NewWarningsView(warningsEntriesForTest())
+	view.SetPageMetrics(3, 10)
+	if !view.ScrollRows(3) || view.Offset() != 3 {
+		t.Fatalf("first wheel offset = %d, want 3", view.Offset())
+	}
+	if !view.ScrollRows(-4) || view.Offset() != 0 {
+		t.Fatalf("wheel up did not clamp to 0: %d", view.Offset())
+	}
+	if !view.ScrollRows(100) || view.Offset() != view.MaxOffset() {
+		t.Fatalf("wheel down did not clamp to max: offset=%d max=%d", view.Offset(), view.MaxOffset())
+	}
+	if view.ScrollRows(3) {
+		t.Fatal("wheel at the bottom reported movement")
 	}
 }
 

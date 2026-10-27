@@ -21,6 +21,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/state"
+	codextui "codex_go/tui"
 
 	"github.com/google/uuid"
 )
@@ -668,6 +669,9 @@ func resolveRemoteSessionMutationTarget(ctx context.Context, client *remoteAppSe
 
 func latestRemoteSession(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions) (*appserver.Thread, error) {
 	params := remoteThreadListParams(opts, false, 1)
+	if cwd := latestSessionCWD(opts); cwd != "" {
+		params.CWD = &appserver.ThreadListCwdFilter{Values: []string{cwd}}
+	}
 	var response appserver.ThreadListResponse
 	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
 		return nil, err
@@ -889,14 +893,38 @@ func resolveSessionMutationTarget(store *session.Store, opts *cli.SessionOptions
 }
 
 func latestSessionID(store *session.Store, opts *cli.SessionOptions) (session.ThreadID, error) {
-	records, err := listSessionPickerRecords(store, opts, 1)
+	records, err := sessionPickerRecords(store, opts)
 	if err != nil {
 		return "", err
 	}
-	if len(records) == 0 {
-		return "", session.ErrThreadNotFound
+	// Rust #56308: `resume --last`/`fork --last` stay directory-scoped unless
+	// --all explicitly widens the search.
+	cwd := latestSessionCWD(opts)
+	for i := range records {
+		if cwd != "" && !codextui.PathsMatch(records[i].Metadata.CWD, cwd) {
+			continue
+		}
+		return records[i].ID, nil
 	}
-	return records[0].ID, nil
+	return "", session.ErrThreadNotFound
+}
+
+// latestSessionCWD resolves the directory scope for a --last lookup. Rust
+// latest_session_cwd_filter: --all clears the scope, an explicit launch cwd
+// wins, and otherwise the process working directory is used.
+func latestSessionCWD(opts *cli.SessionOptions) string {
+	if opts != nil {
+		if opts.All {
+			return ""
+		}
+		if cwd := strings.TrimSpace(opts.Shared.CWD); cwd != "" {
+			return cwd
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return ""
 }
 
 func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string) (session.ThreadID, error) {

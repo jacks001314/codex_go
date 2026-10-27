@@ -10,7 +10,128 @@ import (
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/utils"
 )
+
+// TestAsyncQuestionChoicesRenderMarkdownLikeRust mirrors Rust #57259: named
+// suggestions keep their Markdown styling and terminal hyperlinks while the
+// numbered prefix stays in the gutter.
+func TestAsyncQuestionChoicesRenderMarkdownLikeRust(t *testing.T) {
+	model := newAsyncQuestionModel()
+	model = feedAsyncQuestions(t, model, "question-markdown", []any{
+		map[string]any{
+			"title":   "Which database?",
+			"options": []any{"*Postgres*", "[guide](https://example.com/docs)"},
+		},
+	})
+	model.expandAsyncQuestions()
+	view := model.View()
+	if !strings.Contains(view, "\x1b[3m") {
+		t.Fatalf("choice lost italic Markdown styling:\n%q", view)
+	}
+	if !strings.Contains(view, "\x1b]8;;https://example.com/docs\x07") {
+		t.Fatalf("choice lost its terminal hyperlink:\n%q", view)
+	}
+	plain := codextui.StripOSC8(utils.StripANSI(view))
+	if !strings.Contains(plain, "› 1. Postgres") || !strings.Contains(plain, "guide") {
+		t.Fatalf("choice text lost its numbered row:\n%s", plain)
+	}
+	question, ok := model.asyncQuestions.CurrentQuestion()
+	if !ok {
+		t.Fatal("missing current question")
+	}
+	rows := model.asyncQuestionBlockRows(question)
+	if rows < 4 {
+		t.Fatalf("block rows = %d, want the rendered Markdown choices measured", rows)
+	}
+}
+
+// TestAsyncQuestionExpansionDisablesMouseCaptureLikeRust mirrors Rust #57285
+// on top of the explicit policy from #57284: expanded questions hand link
+// gestures back to the terminal only on an owned screen, suspend that policy
+// for an active modal, and restore capture when the questions collapse.
+func TestAsyncQuestionExpansionDisablesMouseCaptureLikeRust(t *testing.T) {
+	owned := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, AlternateScreenMode: "always"})
+	owned.State.SetThreadID("thread-questions")
+	owned = feedAsyncQuestions(t, owned, "question-mouse", []any{
+		map[string]any{"title": "Which database?", "options": []any{"Postgres"}},
+	})
+	if cmd := owned.syncMouseCapture(); cmd != nil || !owned.mouseCaptureActive {
+		t.Fatal("collapsed questions must keep mouse capture")
+	}
+	owned.expandAsyncQuestions()
+	if cmd := owned.syncMouseCapture(); cmd == nil || owned.mouseCaptureActive {
+		t.Fatal("expanded questions must hand mouse capture back to the terminal")
+	}
+	if owned.mouseCapturePolicy != mouseCaptureDisabled {
+		t.Fatalf("policy = %v, want disabled", owned.mouseCapturePolicy)
+	}
+
+	// An active modal keeps capture so the overlay stays interactive.
+	owned.modal = &modalState{}
+	if cmd := owned.syncMouseCapture(); cmd == nil || !owned.mouseCaptureActive {
+		t.Fatal("an active modal must restore mouse capture")
+	}
+	owned.modal = nil
+	if cmd := owned.syncMouseCapture(); cmd == nil || owned.mouseCaptureActive {
+		t.Fatal("closing the modal must disable capture again")
+	}
+
+	owned.collapseAsyncQuestions()
+	if cmd := owned.syncMouseCapture(); cmd == nil || !owned.mouseCaptureActive {
+		t.Fatal("collapsed questions must restore mouse capture")
+	}
+
+	// Inline mode never captures the mouse, so the policy has nothing to change.
+	inline := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
+	inline.State.SetThreadID("thread-inline")
+	inline = feedAsyncQuestions(t, inline, "question-inline", []any{map[string]any{"title": "Inline?"}})
+	inline.expandAsyncQuestions()
+	if cmd := inline.syncMouseCapture(); cmd != nil || inline.mouseCaptureActive {
+		t.Fatal("inline mode must leave mouse handling to the terminal")
+	}
+	if inline.mouseCapturePolicy != mouseCaptureInherit {
+		t.Fatalf("inline policy = %v, want inherit", inline.mouseCapturePolicy)
+	}
+}
+
+// TestMouseCapturePolicyPrecedence mirrors Rust #57284: Inherit follows screen
+// ownership while Enabled/Disabled are absolute, and transcript overlays enable
+// capture even inline while static pagers hand gestures back to the terminal.
+func TestMouseCapturePolicyPrecedence(t *testing.T) {
+	cases := []struct {
+		policy mouseCapturePolicy
+		owned  bool
+		want   bool
+	}{
+		{mouseCaptureInherit, true, true},
+		{mouseCaptureInherit, false, false},
+		{mouseCaptureEnabled, true, true},
+		{mouseCaptureEnabled, false, true},
+		{mouseCaptureDisabled, true, false},
+		{mouseCaptureDisabled, false, false},
+	}
+	for _, testCase := range cases {
+		if got := testCase.policy.captures(testCase.owned); got != testCase.want {
+			t.Fatalf("policy %v owned=%v captures=%v, want %v", testCase.policy, testCase.owned, got, testCase.want)
+		}
+	}
+
+	inline := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
+	inline.overlay = chatwidget.NewTranscriptOverlay(100, 30, "alpha\nbeta")
+	inline.overlayTranscript = true
+	inline.overlayMouseCapture = mouseCaptureEnabled
+	if cmd := inline.syncMouseCapture(); cmd == nil || !inline.mouseCaptureActive {
+		t.Fatal("transcript overlay must enable capture inline")
+	}
+	inline.overlay = nil
+	inline.overlayTranscript = false
+	inline.overlayMouseCapture = mouseCaptureInherit
+	if cmd := inline.syncMouseCapture(); cmd == nil || inline.mouseCaptureActive {
+		t.Fatal("closing the overlay must restore inherit for an inline screen")
+	}
+}
 
 // asyncQuestionItem builds the async agent-message item the app server emits for
 // request_user_input_async (Rust #42178/#42891).
@@ -171,6 +292,56 @@ func TestAsyncQuestionsAnsweredOnAnotherClientDismissesLikeRust(t *testing.T) {
 	}
 }
 
+// TestAsyncQuestionMarkdownMatchesLoadedHistoryLikeRust mirrors Rust #57292:
+// live and loaded async agent messages decorate the same Markdown source with
+// accent question prefixes and render the suggestions as that question's body.
+func TestAsyncQuestionMarkdownMatchesLoadedHistoryLikeRust(t *testing.T) {
+	questions := []any{
+		map[string]any{"title": "Keep `--verbose` for **failed** runs?", "options": []any{"Only for **CI**"}},
+		map[string]any{"title": "See the [guide](https://example.test/guide)?"},
+	}
+	item := &protocol.ThreadItem{
+		ID:       "question-markdown-history",
+		Type:     "agent_message",
+		Text:     "Keep `--verbose` for **failed** runs?\n- Only for **CI**\n\nSee the [guide](https://example.test/guide)?",
+		Delivery: "async",
+		Metadata: map[string]any{"questions": questions},
+	}
+	model := newAsyncQuestionModel()
+	updated, _ := model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "item.completed", Item: item}})
+	model = updated.(*Model)
+
+	var live codextui.Message
+	for _, message := range model.State.Messages {
+		if message.Role == codextui.RoleAssistant {
+			live = message
+		}
+	}
+	if len(live.AsyncQuestions) != 2 {
+		t.Fatalf("live async questions = %#v", live.AsyncQuestions)
+	}
+	loaded := applyBufferedThreadItemToMessages(nil, item)
+	if len(loaded) != 1 || len(loaded[0].AsyncQuestions) != 2 {
+		t.Fatalf("loaded messages = %#v", loaded)
+	}
+
+	liveLines := transcriptMessageDisplayLines(live, 80, "", false, "", false)
+	loadedLines := transcriptMessageDisplayLines(loaded[0], 80, "", false, "", false)
+	if strings.Join(liveLines, "\n") != strings.Join(loadedLines, "\n") {
+		t.Fatalf("live and loaded rendering differ:\nlive:\n%s\nloaded:\n%s",
+			utils.StripANSI(strings.Join(liveLines, "\n")), utils.StripANSI(strings.Join(loadedLines, "\n")))
+	}
+	plain := utils.StripANSI(strings.Join(liveLines, "\n"))
+	for _, want := range []string{"? Keep --verbose for failed runs?", "• Only for CI", "? See the guide"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("question rendering missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "**") || strings.Contains(plain, "`") {
+		t.Fatalf("question rendering leaked Markdown:\n%s", plain)
+	}
+}
+
 // TestBufferedUserMessageRendersReplyEnvelopeAsTextLikeRust mirrors Rust
 // #46486's replay rendering: a buffered reply envelope becomes readable
 // question-and-answer text in the replayed transcript.
@@ -191,6 +362,29 @@ func TestBufferedUserMessageRendersReplyEnvelopeAsTextLikeRust(t *testing.T) {
 	plain := applyBufferedThreadItemToMessages(nil, &protocol.ThreadItem{ID: "m", Type: "user_message", Text: "hello"})
 	if len(plain) != 1 || plain[0].Text != "hello" {
 		t.Fatalf("plain buffered messages = %#v", plain)
+	}
+}
+
+// TestBufferedUserMessageRendersReplyMarkdownLikeRust mirrors Rust #57292:
+// loaded transcripts use the same caption + Markdown answer surface as live
+// replies.
+func TestBufferedUserMessageRendersReplyMarkdownLikeRust(t *testing.T) {
+	item := &protocol.ThreadItem{
+		ID:   "message-3",
+		Type: "user_message",
+		Text: asyncQuestionReplyPrompt("question-1", 0, "*Which* database?", "Use **Postgres**."),
+	}
+	messages := applyBufferedThreadItemToMessages(nil, item)
+	if len(messages) != 1 || len(messages[0].AsyncQuestionReplies) != 1 {
+		t.Fatalf("buffered reply messages = %#v", messages)
+	}
+	lines := transcriptMessageDisplayLines(messages[0], 60, "", false, "", false)
+	plain := utils.StripANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(plain, "\u21aa Re: Which database?") {
+		t.Fatalf("reply caption missing:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Use Postgres.") {
+		t.Fatalf("reply answer missing:\n%s", plain)
 	}
 }
 

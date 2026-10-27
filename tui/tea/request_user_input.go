@@ -12,6 +12,7 @@ import (
 
 type RequestUserInputMsg struct {
 	ID               string
+	ServerRequestID  string
 	Questions        []codextui.RequestUserInputQuestion
 	AutoResolutionMS *int
 }
@@ -24,10 +25,11 @@ func (m *Model) openRequestUserInputModal(message RequestUserInputMsg) bubbletea
 	state, err := codextui.NewRequestUserInputState(message.Questions, message.AutoResolutionMS)
 	if err != nil {
 		m.openModal(ModalRequestMsg{
-			ID:    message.ID,
-			Kind:  ModalKindUserInput,
-			Title: "Request user input",
-			Body:  err.Error(),
+			ID:              message.ID,
+			ServerRequestID: message.ServerRequestID,
+			Kind:            ModalKindUserInput,
+			Title:           "Request user input",
+			Body:            err.Error(),
 			Options: []ModalOption{
 				{ID: "cancel", Label: "Cancel", Shortcut: "enter"},
 			},
@@ -35,10 +37,11 @@ func (m *Model) openRequestUserInputModal(message RequestUserInputMsg) bubbletea
 		return nil
 	}
 	m.replaceModal(&modalState{
-		id:        strings.TrimSpace(message.ID),
-		kind:      ModalKindUserInput,
-		title:     "Request user input",
-		userInput: state,
+		id:              strings.TrimSpace(message.ID),
+		serverRequestID: strings.TrimSpace(message.ServerRequestID),
+		kind:            ModalKindUserInput,
+		title:           "Request user input",
+		userInput:       state,
 	})
 	m.refreshRequestUserInputModal()
 	return requestUserInputTimeoutCommand(m.modal.id, state.AutoResolutionMS)

@@ -9,10 +9,19 @@ import (
 
 // The strict-config validator reads keymapschema, while the TUI reads
 // keymapActionCatalog. Rust #54766 derives the strict policy from the same
-// structs the runtime deserializes, so these two tables must stay identical.
+// structs the runtime deserializes, so these two tables must stay identical
+// apart from config-only bindings: `TuiKeymap` fields such as
+// `global.select_transcript` are accepted by strict config (Rust #57223) even
+// though `KEYMAP_ACTIONS` deliberately leaves them out of the setup catalog.
 func TestKeymapSchemaMatchesCatalogLikeRust(t *testing.T) {
 	catalog := map[string]map[string]bool{}
 	for _, action := range keymapActionCatalog {
+		if catalog[action.Context] == nil {
+			catalog[action.Context] = map[string]bool{}
+		}
+		catalog[action.Context][action.Action] = true
+	}
+	for _, action := range keymapConfigOnlyActions {
 		if catalog[action.Context] == nil {
 			catalog[action.Context] = map[string]bool{}
 		}

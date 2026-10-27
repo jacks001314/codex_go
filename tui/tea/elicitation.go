@@ -13,6 +13,7 @@ import (
 
 type ElicitationRequestMsg struct {
 	ID              string
+	ServerRequestID string
 	Title           string
 	Mode            string
 	Description     string
@@ -52,7 +53,9 @@ func (m *Model) applyElicitationAbandoned(message ElicitationAbandonedMsg) bubbl
 	for _, candidate := range []string{message.ID, message.RequestID} {
 		if candidate = strings.TrimSpace(candidate); candidate != "" && candidate == modalID {
 			m.modal = nil
-			return nil
+			// Rust #55682: removing a resolved app-server request can close the
+			// last visible modal, which settles a pending permissions hold.
+			return m.settlePermissionPopup()
 		}
 	}
 	return nil
@@ -75,10 +78,11 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cm
 			body = "Complete verification on this device."
 		}
 		m.openModal(ModalRequestMsg{
-			ID:    firstNonEmpty(message.ID, message.RequestID),
-			Kind:  ModalKindElicitation,
-			Title: title,
-			Body:  body,
+			ID:              firstNonEmpty(message.ID, message.RequestID),
+			ServerRequestID: message.ServerRequestID,
+			Kind:            ModalKindElicitation,
+			Title:           title,
+			Body:            body,
 			Options: []ModalOption{
 				{ID: "accept", Label: "Verify", Shortcut: "y"},
 				{ID: "decline", Label: "Decline", Shortcut: "n"},
@@ -92,10 +96,11 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cm
 	}
 	if strings.TrimSpace(message.URL) != "" {
 		m.openModal(ModalRequestMsg{
-			ID:    firstNonEmpty(message.ID, message.RequestID),
-			Kind:  ModalKindElicitation,
-			Title: title,
-			Body:  elicitationURLBody(message),
+			ID:              firstNonEmpty(message.ID, message.RequestID),
+			ServerRequestID: message.ServerRequestID,
+			Kind:            ModalKindElicitation,
+			Title:           title,
+			Body:            elicitationURLBody(message),
 			Options: []ModalOption{
 				{ID: "accept", Label: "Allow", Shortcut: "y"},
 				{ID: "decline", Label: "Decline", Shortcut: "n"},
@@ -107,11 +112,12 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cm
 	form, err := bottompane.NewElicitationFormRequest(message.ServerName, firstNonEmpty(message.RequestID, message.ID), message.Message, message.RequestedSchema, message.Meta)
 	if err != nil {
 		m.openModal(ModalRequestMsg{
-			ID:      firstNonEmpty(message.ID, message.RequestID),
-			Kind:    ModalKindElicitation,
-			Title:   title,
-			Body:    "Unable to render MCP request: " + err.Error(),
-			Options: []ModalOption{{ID: "cancel", Label: "Cancel", Shortcut: "enter"}},
+			ID:              firstNonEmpty(message.ID, message.RequestID),
+			ServerRequestID: message.ServerRequestID,
+			Kind:            ModalKindElicitation,
+			Title:           title,
+			Body:            "Unable to render MCP request: " + err.Error(),
+			Options:         []ModalOption{{ID: "cancel", Label: "Cancel", Shortcut: "enter"}},
 		})
 		return m.queueNotification(chatwidget.ElicitationRequestedNotification(message.ServerName))
 	}
@@ -139,11 +145,12 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cm
 	}
 	options := elicitationOptionsForForm(form)
 	m.openModal(ModalRequestMsg{
-		ID:      firstNonEmpty(message.ID, message.RequestID),
-		Kind:    ModalKindElicitation,
-		Title:   title,
-		Body:    body,
-		Options: options,
+		ID:              firstNonEmpty(message.ID, message.RequestID),
+		ServerRequestID: message.ServerRequestID,
+		Kind:            ModalKindElicitation,
+		Title:           title,
+		Body:            body,
+		Options:         options,
 	})
 	if m.modal != nil {
 		m.modal.elicitation = form
@@ -178,11 +185,12 @@ func (m *Model) openAppLinkModal(message ElicitationRequestMsg, form *bottompane
 		}
 	}
 	m.openModal(ModalRequestMsg{
-		ID:      firstNonEmpty(message.ID, message.RequestID),
-		Kind:    ModalKindElicitation,
-		Title:   title,
-		Body:    strings.Join(view.Rows(firstPositive(m.width-4, 76)), "\n"),
-		Options: appLinkModalOptions(view),
+		ID:              firstNonEmpty(message.ID, message.RequestID),
+		ServerRequestID: message.ServerRequestID,
+		Kind:            ModalKindElicitation,
+		Title:           title,
+		Body:            strings.Join(view.Rows(firstPositive(m.width-4, 76)), "\n"),
+		Options:         appLinkModalOptions(view),
 	})
 	if m.modal != nil {
 		m.modal.appLink = view

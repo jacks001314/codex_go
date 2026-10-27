@@ -27,6 +27,55 @@ func bedrockTestState(profiles []appserver.BedrockAwsProfile, environment []apps
 	return state
 }
 
+// TestBedrockMethodMenuGroupsAPIKeyLikeRust pins #56023: detected credentials
+// fold manual API key entry under "Other AWS sign-in methods", while the
+// all-methods menu keeps it as a top-level option.
+func TestBedrockMethodMenuGroupsAPIKeyLikeRust(t *testing.T) {
+	region := "us-east-1"
+	cases := []struct {
+		name  string
+		state *bedrockState
+		want  []bedrockMethodKind
+	}{
+		{
+			name:  "profiles and environment",
+			state: bedrockTestState([]appserver.BedrockAwsProfile{{Name: "engineering", Region: &region}}, []appserver.BedrockEnvironmentCredential{{CredentialType: appserver.AwsCredentialTypeAccessKeys}}),
+			want:  []bedrockMethodKind{bedrockMethodProfile, bedrockMethodEnvironment, bedrockMethodOther},
+		},
+		{
+			name:  "environment only",
+			state: bedrockTestState(nil, []appserver.BedrockEnvironmentCredential{{CredentialType: appserver.AwsCredentialTypeBedrockAPIKey}}),
+			want:  []bedrockMethodKind{bedrockMethodEnvironment, bedrockMethodOther},
+		},
+		{
+			name: "other sign-in methods",
+			state: func() *bedrockState {
+				state := bedrockTestState(nil, nil)
+				state.view = bedrockViewMethodsAll
+				return state
+			}(),
+			want: []bedrockMethodKind{bedrockMethodManualProfile, bedrockMethodAccessKeys, bedrockMethodEnvironmentInstructions, bedrockMethodAPIKey},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			methods := tc.state.methods()
+			got := make([]bedrockMethodKind, 0, len(methods))
+			for _, method := range methods {
+				got = append(got, method.kind)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("methods = %#v, want %#v", got, tc.want)
+			}
+			for index := range got {
+				if got[index] != tc.want[index] {
+					t.Fatalf("methods = %#v, want %#v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestAuthOptionsIncludeBedrockOnlyWithAPIAndFeature(t *testing.T) {
 	options := AuthOptionsForPolicyWithBedrock(true, true, true)
 	if len(options) != 4 || options[3].Choice != AuthChoiceBedrock {

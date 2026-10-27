@@ -37,6 +37,8 @@ import (
 // (#46734), and moved agents.search to the upstream f3// pair, taking the pinned
 // size from 152 to 154, and T-b15 added global.focus_activity (#46734),
 // taking it to 155. #54381 added chat.open_presets, taking it to 156.
+// #57223 adds global.select_transcript as a config-only TuiKeymap field, so it
+// stays out of this catalog (Rust keeps it out of KEYMAP_ACTIONS too).
 const keymapCatalogEntryCount = 156
 
 // rustOnlyKeymapActions: Rust actions this Go tree does not register and whose
@@ -107,6 +109,12 @@ func splitAcceptedRename(t *testing.T, rename string) (string, string) {
 // in both directions. Dropping the catalog from either derivation fails here.
 func TestKeymapCatalogIsSingleSourceForConfigTargets(t *testing.T) {
 	seen := map[string]bool{}
+	// Config-only TuiKeymap fields are accepted targets without a setup entry
+	// (Rust #57223 keeps `global.select_transcript` out of KEYMAP_ACTIONS).
+	configOnly := map[string]bool{}
+	for _, descriptor := range keymapConfigOnlyActions {
+		configOnly[descriptor.Context+"."+descriptor.Action] = true
+	}
 	contexts := knownKeymapConfigContexts()
 	for _, descriptor := range keymapActionCatalog {
 		key := descriptor.Context + "." + descriptor.Action
@@ -128,7 +136,7 @@ func TestKeymapCatalogIsSingleSourceForConfigTargets(t *testing.T) {
 	for _, context := range sortedKeymapContexts() {
 		for action := range knownKeymapConfigActions(context) {
 			key := context + "." + action
-			if seen[key] {
+			if seen[key] || configOnly[key] {
 				continue
 			}
 			if fallback, ok := composerFallbackKeymapTargets[key]; ok {

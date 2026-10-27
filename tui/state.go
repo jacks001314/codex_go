@@ -40,6 +40,14 @@ type Message struct {
 	// UserPromptTextElements are the composer's structured byte-range elements
 	// relative to UserPrompt.
 	UserPromptTextElements []MessageTextElement
+	// AsyncQuestionReplies marks a user message that carries one or more desktop
+	// async-question replies. Rust #57292 renders these on a dedicated caption +
+	// Markdown answer surface instead of as ordinary user prose.
+	AsyncQuestionReplies []AsyncQuestionReply
+	// AsyncQuestions carries the structured questions attached to an async agent
+	// message. The transcript decorates their titles with the accent `?` prefix
+	// while preserving the Markdown source around them (Rust #57292).
+	AsyncQuestions []MessageAsyncQuestion
 	// TranscriptOnly marks a history entry that only the expanded transcript
 	// overlay renders, mirroring Rust's transcript-only history cells (a
 	// completed reasoning block belongs to Ctrl+T, not to the live scrollback).
@@ -72,6 +80,13 @@ type Message struct {
 	ImagePath string
 }
 
+// MessageAsyncQuestion is the transcript-facing projection of one structured
+// async question (Rust codex_protocol::items::AsyncUserInputQuestion).
+type MessageAsyncQuestion struct {
+	Title   string
+	Options []string
+}
+
 // MessageTextElement is a structured byte range inside a user prompt (a mention
 // or attachment placeholder) preserved for prompt restoration.
 type MessageTextElement struct {
@@ -101,8 +116,12 @@ type Options struct {
 }
 
 type State struct {
-	ThreadID                string
-	ThreadName              string
+	ThreadID   string
+	ThreadName string
+	// StartupThreadPending reports whether this process has not created or
+	// attached to a thread yet, so the first thread/start uses the launch's
+	// explicit permission choices (Rust StartupLaunchChoices).
+	StartupThreadPending    bool
 	Model                   string
 	ReasoningEffort         string
 	PlanMode                bool
@@ -154,6 +173,10 @@ type RateLimitStatus struct {
 func NewState(options *Options) *State {
 	state := &State{
 		Status: "idle",
+		// Rust StartupLaunchChoices: the first thread of this process uses the
+		// launch's explicit choices, while later sessions use resolved
+		// configuration.
+		StartupThreadPending: true,
 	}
 	if options != nil {
 		state.Model = strings.TrimSpace(options.Model)
@@ -188,6 +211,7 @@ func cloneStatusBool(value *bool) *bool {
 func (s *State) SetThreadID(threadID string) {
 	if s != nil {
 		s.ThreadID = strings.TrimSpace(threadID)
+		s.StartupThreadPending = false
 	}
 }
 
@@ -710,11 +734,11 @@ func formatStatusTokensCompact(value int64) string {
 	}
 	scaled := float64(value) / 1_000
 	suffix := "K"
-	if value >= 1_000_000_000_000 {
+	if value >= 999_500_000_000 {
 		scaled, suffix = float64(value)/1_000_000_000_000, "T"
-	} else if value >= 1_000_000_000 {
+	} else if value >= 999_500_000 {
 		scaled, suffix = float64(value)/1_000_000_000, "B"
-	} else if value >= 1_000_000 {
+	} else if value >= 999_500 {
 		scaled, suffix = float64(value)/1_000_000, "M"
 	}
 	decimals := 0

@@ -152,6 +152,11 @@ func (o *TranscriptOverlay) CancelFind() {
 		return
 	}
 	o.find = transcriptFind{index: -1}
+	if o.selectMode.active {
+		// Rust restore_select_search_origin: cancelling a search opened from
+		// selection mode restores the pre-search cursor and mark.
+		o.restoreSelectFindOrigin()
+	}
 	o.refreshFindContent()
 }
 
@@ -167,6 +172,9 @@ func (o *TranscriptOverlay) AcceptFind() bool {
 	}
 	o.find.editing = false
 	o.find.accepted = true
+	if line, ok := o.find.matchLine(); ok && o.selectMode.active {
+		o.acceptSelectFind(line)
+	}
 	o.refreshFindContent()
 	return true
 }
@@ -280,7 +288,7 @@ func (o *TranscriptOverlay) refreshFindMatches() {
 		return
 	}
 	folded := strings.ToLower(o.find.query)
-	for index, line := range strings.Split(o.content, "\n") {
+	for index, line := range o.plainLines {
 		if strings.Contains(strings.ToLower(line), folded) {
 			o.find.matches = append(o.find.matches, index)
 		}

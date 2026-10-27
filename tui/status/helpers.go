@@ -76,13 +76,13 @@ func FormatTokensCompact(value int64) string {
 	scaled := float64(value)
 	suffix := "K"
 	switch {
-	case value >= 1_000_000_000_000:
+	case value >= 999_500_000_000:
 		scaled = scaled / 1_000_000_000_000
 		suffix = "T"
-	case value >= 1_000_000_000:
+	case value >= 999_500_000:
 		scaled = scaled / 1_000_000_000
 		suffix = "B"
-	case value >= 1_000_000:
+	case value >= 999_500:
 		scaled = scaled / 1_000_000
 		suffix = "M"
 	default:

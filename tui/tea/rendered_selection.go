@@ -24,6 +24,7 @@ const (
 	renderedRegionFooter
 	renderedRegionWorkingTip
 	renderedRegionCompletionTip
+	renderedRegionWarnings
 	renderedRegionCount
 )
 
@@ -90,6 +91,34 @@ func (m *Model) captureRenderedSelectionRegions(sections []string, footerIndex i
 		}
 		m.captureRenderedRegion(renderedRegionFooter, footerIndex, 0, 0, y, m.width, len(footerText), footerText)
 	}
+}
+
+// captureWarningsSelectionRegion registers the painted warning body as a
+// source-backed selection surface. Only the body is selectable; the panel title
+// and footer hints stay outside the region (Rust #57271).
+func (m *Model) captureWarningsSelectionRegion(sections []string, warningIndex int) {
+	if m == nil {
+		return
+	}
+	if m.warningsView == nil || warningIndex < 0 || warningIndex >= len(sections) ||
+		!m.fullscreenTranscript || m.rawOutput {
+		m.clearRenderedRegion(renderedRegionWarnings)
+		return
+	}
+	rows := m.warningsView.BodyRows()
+	if len(rows) == 0 {
+		m.clearRenderedRegion(renderedRegionWarnings)
+		return
+	}
+	plain := make([]string, len(rows))
+	for index, row := range rows {
+		plain[index] = codextui.StripOSC8(utils.StripANSI(row))
+	}
+	row := m.warningsView.BodyTopRow()
+	y := sectionTop(sections, warningIndex) + row
+	left := m.warningsView.BodyLeft()
+	width := max(m.width-left, 1)
+	m.captureRenderedRegion(renderedRegionWarnings, warningIndex, row, left, y, width, len(rows), plain)
 }
 
 func (m *Model) captureRenderedRegion(kind renderedRegionKind, sectionIndex, sectionRow, x, y, width, height int, text []string) {

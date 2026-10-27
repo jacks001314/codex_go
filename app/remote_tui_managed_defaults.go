@@ -23,6 +23,15 @@ func (c *remoteAppServerTUIClient) remoteManagedThreadStartParams(ctx context.Co
 	if err != nil {
 		return params, err
 	}
+	// Rust #56090/#56516: the first thread of this process sends only explicit
+	// launch choices for permissions, so the app server resolves any saved
+	// client approval policy/reviewer from its own configuration. Explicit
+	// profile launches keep their resolved-configuration behavior.
+	if state != nil && state.StartupThreadPending && !remoteTUILaunchSelectedProfile(root) {
+		overrides := launchConfigOverrides(root)
+		applyStartupApprovalSelection(&params, resolveStartupApprovalSelection(launchTypedApprovalPolicy(root), overrides))
+		applyStartupApprovalsReviewer(&params, overrides)
+	}
 	cwd := strings.TrimSpace(params.CWD)
 	cliKVOverrides := remoteCLIConfigOverrideKeys(root)
 	harnessModelSet := root != nil && strings.TrimSpace(root.Shared.Model) != ""

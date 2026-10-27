@@ -10,6 +10,37 @@ import (
 	historycell "codex_go/tui/history_cell"
 )
 
+// handleWarningsViewMouse gives an unmodified wheel tick inside the painted
+// warning body to the viewer before the transcript sees it. Each tick moves
+// three rows (Rust #57271).
+func (m *Model) handleWarningsViewMouse(msg bubbletea.MouseMsg) bool {
+	if m == nil || m.warningsView == nil || msg.Action != bubbletea.MouseActionPress ||
+		msg.Alt || msg.Ctrl || msg.Shift {
+		return false
+	}
+	var rows int
+	switch msg.Button {
+	case bubbletea.MouseButtonWheelUp:
+		rows = -3
+	case bubbletea.MouseButtonWheelDown:
+		rows = 3
+	default:
+		return false
+	}
+	region := m.renderedSelection.regions[renderedRegionWarnings]
+	if region.w <= 0 || region.h <= 0 ||
+		msg.X < region.x || msg.X >= region.x+region.w ||
+		msg.Y < region.y || msg.Y >= region.y+region.h {
+		return false
+	}
+	// Rust's WarningsView::scroll_mouse consumes every wheel gesture inside a
+	// scrollable body, including ticks that are already clamped at an edge.
+	// Returning the movement result here would leak boundary ticks to the
+	// transcript.
+	m.warningsView.ScrollRows(rows)
+	return m.warningsView.MaxOffset() > 0
+}
+
 // Rust parity: codex-rs/tui/src/chatwidget/warnings.rs's `open_warnings` and the
 // bottom pane's `WarningsView` hosting (#48205/#48206). The viewer shows the
 // retained diagnostics one at a time without replacing the draft.
@@ -154,12 +185,21 @@ func (m *Model) warningsHints() bottompane.WarningsHints {
 			parts = append(parts, part)
 		}
 	}
+	scrollUp := label("list", "move_up")
+	if strings.TrimSpace(scrollUp) == "" {
+		scrollUp = "\u2191"
+	}
+	scrollDown := label("list", "move_down")
+	if strings.TrimSpace(scrollDown) == "" {
+		scrollDown = "\u2193"
+	}
 	return bottompane.WarningsHints{
 		Keep:       "k",
 		Cancel:     cancel,
 		Copy:       label("global", "copy"),
 		Navigation: strings.Join(parts, "/"),
-		Scroll:     label("list", "move_down"),
+		ScrollUp:   scrollUp,
+		ScrollDown: scrollDown,
 	}
 }
 
@@ -169,7 +209,7 @@ func (m *Model) renderWarningsView(width int) string {
 	if m == nil || m.warningsView == nil {
 		return ""
 	}
-	height := 12
+	height := 13
 	if m.height > 0 && m.height-2 < height {
 		height = m.height - 2
 	}

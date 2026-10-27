@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/mattn/go-runewidth"
+
+	"codex_go/gitutil"
 )
 
 // Rust parity: codex-rs/tui/src/resume_picker.rs.
@@ -108,6 +110,10 @@ type SessionFilterMode int
 
 const (
 	SessionFilterCWD SessionFilterMode = iota
+	// SessionFilterRepo keeps sessions whose working directory is the filter
+	// directory or the corresponding directory in a linked worktree of the same
+	// repository (Rust #56308).
+	SessionFilterRepo
 	SessionFilterAll
 )
 
@@ -118,16 +124,58 @@ func SessionFilterModeFromShowAll(showAll bool, filterCWD string) SessionFilterM
 	return SessionFilterCWD
 }
 
-func (m SessionFilterMode) Toggle(filterCWD string) SessionFilterMode {
-	switch m {
-	case SessionFilterCWD:
+// SessionFilterDirection selects which way a filter value cycles.
+type SessionFilterDirection int
+
+const (
+	SessionFilterPrevious SessionFilterDirection = iota
+	SessionFilterNext
+)
+
+// Change advances the filter in the given direction, mirroring Rust
+// SessionFilterMode::change (#56308). Repo is only reachable when linked
+// worktrees make it meaningful; cycling backwards from Cwd still moves to All.
+func (m SessionFilterMode) Change(direction SessionFilterDirection, filterCWD string, repoAvailable bool) SessionFilterMode {
+	hasCWD := strings.TrimSpace(filterCWD) != ""
+	switch {
+	case m == SessionFilterCWD && direction == SessionFilterNext && repoAvailable:
+		return SessionFilterRepo
+	case m == SessionFilterCWD:
 		return SessionFilterAll
-	case SessionFilterAll:
-		if strings.TrimSpace(filterCWD) != "" {
-			return SessionFilterCWD
-		}
+	case m == SessionFilterRepo && direction == SessionFilterNext:
+		return SessionFilterAll
+	case m == SessionFilterRepo:
+		return SessionFilterCWD
+	case m == SessionFilterAll && direction == SessionFilterPrevious && repoAvailable:
+		return SessionFilterRepo
+	case m == SessionFilterAll && hasCWD:
+		return SessionFilterCWD
 	}
 	return SessionFilterAll
+}
+
+// Toggle advances the filter forward in the legacy two-state way (no Repo).
+func (m SessionFilterMode) Toggle(filterCWD string) SessionFilterMode {
+	return m.Change(SessionFilterNext, filterCWD, false)
+}
+
+// SessionPickerRepoFilterAvailable reports whether the picker should offer the
+// Repo filter: the directory belongs to a repository with more than one
+// canonical linked-worktree directory (Rust local_repo_filter_available).
+func SessionPickerRepoFilterAvailable(cwd string) bool {
+	cwds, ok := gitutil.LinkedWorktreeCWDs(strings.TrimSpace(cwd))
+	if !ok {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, candidate := range cwds {
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			continue
+		}
+		seen[resolved] = true
+	}
+	return len(seen) > 1
 }
 
 type SessionListDensity int
@@ -178,13 +226,17 @@ func (c SessionPickerToolbarControl) Toggle() SessionPickerToolbarControl {
 }
 
 type SessionSummary struct {
-	ThreadID string
-	Path     string
-	Title    string
-	Preview  string
-	CWD      string
-	Branch   string
-	Provider string
+	// BackendID is the logical source that listed this row. Zero means the row
+	// came from the picker's own backend and inherits SessionPickerState.BackendID
+	// when selected (Rust #56543 row.backend_id).
+	BackendID BackendID
+	ThreadID  string
+	Path      string
+	Title     string
+	Preview   string
+	CWD       string
+	Branch    string
+	Provider  string
 	// Model is the thread's restored model from app-server metadata
 	// (Rust #43360): resuming or switching applies it so later turns use the
 	// thread's model instead of the local default.
@@ -208,14 +260,17 @@ type SessionPickerState struct {
 	FilterMode SessionFilterMode
 	FilterCWD  string
 	// FilterCWDs is the expanded directory filter (the requested directory plus
-	// linked worktrees' corresponding directories, Rust #43279). When empty the
-	// picker falls back to FilterCWD.
-	FilterCWDs     []string
-	ProviderFilter string
-	SortKey        SessionSortKey
-	Density        SessionListDensity
-	ToolbarFocus   SessionPickerToolbarControl
-	Expanded       map[string]bool
+	// linked worktrees' corresponding directories). It backs the Repo filter;
+	// the Cwd filter always uses FilterCWD alone (Rust #56308).
+	FilterCWDs []string
+	// RepoFilterAvailable offers the Repo filter only when the directory has
+	// more than one canonical linked-worktree directory (Rust #56308).
+	RepoFilterAvailable bool
+	ProviderFilter      string
+	SortKey             SessionSortKey
+	Density             SessionListDensity
+	ToolbarFocus        SessionPickerToolbarControl
+	Expanded            map[string]bool
 	// TranscriptPreviews caches the lazy conversation preview of each expanded
 	// session (Rust TranscriptPreviewState).
 	TranscriptPreviews map[string]TranscriptPreviewState
@@ -277,13 +332,15 @@ func (s *SessionPickerState) VisibleItems() []SessionSummary {
 				continue
 			}
 		}
-		if s.FilterMode == SessionFilterCWD {
-			itemCWD := cleanPathForCompare(item.CWD)
-			if len(filterCWDSet) > 0 {
-				if !filterCWDSet[itemCWD] {
-					continue
-				}
-			} else if filterCWD != "" && itemCWD != filterCWD {
+		switch s.FilterMode {
+		case SessionFilterCWD:
+			// Rust #56308: Cwd is directory-scoped, so linked worktrees no longer
+			// leak into it.
+			if filterCWD != "" && cleanPathForCompare(item.CWD) != filterCWD {
+				continue
+			}
+		case SessionFilterRepo:
+			if !s.repoFilterMatches(item, filterCWD, filterCWDSet) {
 				continue
 			}
 		}
@@ -391,7 +448,19 @@ func (s *SessionPickerState) ToggleFilter() {
 	if s == nil {
 		return
 	}
-	s.FilterMode = s.FilterMode.Toggle(s.FilterCWD)
+	s.ChangeFilter(SessionFilterNext)
+}
+
+// ChangeFilter cycles the filter in the given direction (Rust #56308).
+func (s *SessionPickerState) ChangeFilter(direction SessionFilterDirection) {
+	if s == nil {
+		return
+	}
+	next := s.FilterMode.Change(direction, s.FilterCWD, s.RepoFilterAvailable)
+	if next == s.FilterMode {
+		return
+	}
+	s.FilterMode = next
 	s.clampSelection()
 }
 
@@ -420,6 +489,12 @@ func (s *SessionPickerState) ToggleToolbarFocus() {
 }
 
 func (s *SessionPickerState) ChangeFocusedToolbarValue() {
+	s.ChangeFocusedToolbarValueDirection(SessionFilterNext)
+}
+
+// ChangeFocusedToolbarValueDirection changes the focused toolbar control,
+// honoring the direction for the filter cycle (Rust #56308).
+func (s *SessionPickerState) ChangeFocusedToolbarValueDirection(direction SessionFilterDirection) {
 	if s == nil {
 		return
 	}
@@ -427,7 +502,7 @@ func (s *SessionPickerState) ChangeFocusedToolbarValue() {
 	case SessionPickerToolbarSort:
 		s.ToggleSort()
 	default:
-		s.ToggleFilter()
+		s.ChangeFilter(direction)
 	}
 }
 
@@ -461,8 +536,12 @@ func (s *SessionPickerState) Selection() (SessionSelection, bool) {
 	if !ok {
 		return SessionSelection{}, false
 	}
+	backendID := item.BackendID
+	if backendID.IsZero() {
+		backendID = s.BackendID
+	}
 	selection := SessionSelection{
-		Target: SessionTarget{BackendID: s.BackendID, Path: item.Path, ThreadID: item.ThreadID, CWD: item.CWD},
+		Target: SessionTarget{BackendID: backendID, Path: item.Path, ThreadID: item.ThreadID, CWD: item.CWD},
 	}
 	switch s.Action {
 	case SessionPickerFork:
@@ -561,9 +640,12 @@ func (s *SessionPickerState) FilterControl(compact bool) string {
 	if compact || strings.TrimSpace(s.FilterCWD) == "" {
 		return "Filter:" + toolbarValue(filterModeLabel(s.FilterMode), true, focused)
 	}
-	return "Filter: " +
-		toolbarValue(filterModeLabel(SessionFilterCWD), s.FilterMode == SessionFilterCWD, focused) +
-		toolbarValue(filterModeLabel(SessionFilterAll), s.FilterMode == SessionFilterAll, focused)
+	values := "Filter: " +
+		toolbarValue(filterModeLabel(SessionFilterCWD), s.FilterMode == SessionFilterCWD, focused)
+	if s.RepoFilterAvailable {
+		values += toolbarValue(filterModeLabel(SessionFilterRepo), s.FilterMode == SessionFilterRepo, focused)
+	}
+	return values + toolbarValue(filterModeLabel(SessionFilterAll), s.FilterMode == SessionFilterAll, focused)
 }
 
 func (s *SessionPickerState) SortControl(compact bool) string {
@@ -591,10 +673,40 @@ func toolbarValue(label string, active bool, focused bool) string {
 }
 
 func filterModeLabel(mode SessionFilterMode) string {
-	if mode == SessionFilterAll {
+	switch mode {
+	case SessionFilterRepo:
+		return "Repo"
+	case SessionFilterAll:
 		return "All"
 	}
 	return "Cwd"
+}
+
+// repoFilterMatches reports whether an item is inside the repository scope:
+// the filter directory itself, a directory in the pre-expanded linked-worktree
+// set, or the corresponding directory of a linked checkout (Rust
+// PickerState::row_matches_filter for SessionFilterMode::Repo).
+func (s *SessionPickerState) repoFilterMatches(item SessionSummary, filterCWD string, filterCWDSet map[string]bool) bool {
+	itemCWD := cleanPathForCompare(item.CWD)
+	if filterCWD == "" {
+		return true
+	}
+	if itemCWD == filterCWD {
+		return true
+	}
+	if filterCWDSet[itemCWD] {
+		return true
+	}
+	rowIdentity, ok := gitutil.RepositoryIdentityForCWD(strings.TrimSpace(item.CWD))
+	if !ok {
+		return false
+	}
+	filterIdentity, ok := gitutil.RepositoryIdentityForCWD(strings.TrimSpace(s.FilterCWD))
+	if !ok {
+		return false
+	}
+	return rowIdentity.CommonDir == filterIdentity.CommonDir &&
+		rowIdentity.RelativeCWD == filterIdentity.RelativeCWD
 }
 
 func sortKeyLabel(key SessionSortKey) string {
@@ -951,6 +1063,14 @@ func cleanPathForCompare(path string) string {
 		cleaned = filepath.Clean(path)
 	}
 	return strings.ToLower(filepath.Clean(cleaned))
+}
+
+// PathsMatch reports whether two paths identify the same normalized location.
+// Rust parity: path_utils::paths_match_after_normalization.
+func PathsMatch(left string, right string) bool {
+	normalizedLeft := cleanPathForCompare(left)
+	normalizedRight := cleanPathForCompare(right)
+	return normalizedLeft != "" && normalizedLeft == normalizedRight
 }
 
 func compactPath(path string) string {

@@ -3819,7 +3819,7 @@ func TestModelSkillsManageWritesSummarizesAndReloads(t *testing.T) {
 	if model.modal != nil {
 		t.Fatalf("skills manager remained open after close")
 	}
-	if view := model.View(); !strings.Contains(view, "0 skills enabled, 1 skills disabled") {
+	if view := model.View(); !strings.Contains(view, "Disabled 1 skill") {
 		t.Fatalf("skills change summary missing:\n%s", view)
 	}
 }

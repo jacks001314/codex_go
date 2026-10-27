@@ -85,7 +85,7 @@ func (a UpdateAction) CommandArgs() (string, []string) {
 	case UpdateActionBrewUpgrade:
 		return "brew", []string{"upgrade", "--cask", "codex"}
 	case UpdateActionStandaloneUnix:
-		return "sh", []string{"-c", "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"}
+		return "sh", []string{"-c", `s=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s"`}
 	case UpdateActionStandaloneWin:
 		return "powershell", []string{"-ExecutionPolicy", "Bypass", "-c", "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"}
 	case UpdateActionDaemonPublicStable:

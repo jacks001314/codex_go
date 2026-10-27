@@ -162,13 +162,18 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 		t.Fatalf("esc did not exit search: %#v", model.agentsOverview.State)
 	}
 	model.Update(agentsKeyEvent('g'))
-	if model.agentsOverview.State.Grouping != agentsoverview.GroupingStatus {
-		t.Fatalf("g grouping = %v, want status", model.agentsOverview.State.Grouping)
+	if model.agentsOverview.State.Grouping != agentsoverview.GroupingDirectory {
+		t.Fatalf("g grouping = %v, want directory", model.agentsOverview.State.Grouping)
 	}
-	// Rust #44957: the toggle cycles on to model grouping.
+	// Rust #56308 inserts directory grouping before status; #44957 keeps the
+	// cycle ending on model grouping.
+	model.Update(agentsKeyEvent('g'))
+	if model.agentsOverview.State.Grouping != agentsoverview.GroupingStatus {
+		t.Fatalf("second g grouping = %v, want status", model.agentsOverview.State.Grouping)
+	}
 	model.Update(agentsKeyEvent('g'))
 	if model.agentsOverview.State.Grouping != agentsoverview.GroupingModel {
-		t.Fatalf("second g grouping = %v, want model", model.agentsOverview.State.Grouping)
+		t.Fatalf("third g grouping = %v, want model", model.agentsOverview.State.Grouping)
 	}
 }
 

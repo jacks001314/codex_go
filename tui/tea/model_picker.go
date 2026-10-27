@@ -52,10 +52,26 @@ func (m *Model) fetchModelsForPicker() bubbletea.Cmd {
 	m.nextModelsRequestID++
 	requestID := m.nextModelsRequestID
 	m.pendingModelsRequestID = requestID
+	cwd := m.modelListCWD()
 	return func() bubbletea.Msg {
-		options, err := m.onListModels(true)
+		options, err := m.onListModels(cwd, true)
 		return ModelsResultMsg{RequestID: requestID, Options: options, Err: err}
 	}
+}
+
+// modelListCWD is the working directory whose model catalog should be read
+// (Rust #55682: an attached session's project replaces the launch directory).
+func (m *Model) modelListCWD() string {
+	if m == nil {
+		return ""
+	}
+	if cwd := strings.TrimSpace(m.sessionCWD); cwd != "" {
+		return cwd
+	}
+	if m.State != nil {
+		return strings.TrimSpace(m.State.CWD)
+	}
+	return ""
 }
 
 // applyModelsResult applies a fetched model catalog to the picker options and
@@ -341,8 +357,9 @@ func (m *Model) fetchModelCatalog() bubbletea.Cmd {
 	m.nextModelCatalogRequestID++
 	requestID := m.nextModelCatalogRequestID
 	m.pendingModelCatalogRequestID = requestID
+	cwd := m.modelListCWD()
 	return func() bubbletea.Msg {
-		options, err := m.onListModels(true)
+		options, err := m.onListModels(cwd, true)
 		return ModelCatalogResultMsg{RequestID: requestID, Options: options, Err: err}
 	}
 }

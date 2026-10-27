@@ -181,9 +181,33 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("approval", "Approval", "cancel", "Cancel an elicitation request.", []string{"c"}),
 }
 
+// keymapConfigOnlyActions are bindings the Rust TuiKeymap struct exposes to
+// config but deliberately keeps out of `KEYMAP_ACTIONS`, so the keymap setup
+// editor and the catalog parity ledgers do not list them (Rust #57223:
+// `config/src/tui_keymap.rs` has `select_transcript`, while
+// `keymap_setup/actions.rs` does not). They stay remappable and unbindable.
+var keymapConfigOnlyActions = []KeymapAction{
+	keymapAction("global", "Global", "select_transcript", "Enter transcript selection mode.", []string{"leader ["}),
+}
+
 func KeymapActions(filter KeymapActionFilter) []KeymapAction {
 	actions := make([]KeymapAction, 0, len(keymapActionCatalog))
 	for _, action := range keymapActionCatalog {
+		if action.RequiredFeature == keymapFeatureFastMode && !filter.FastModeEnabled {
+			continue
+		}
+		action.DefaultBindings = append([]string(nil), action.DefaultBindings...)
+		actions = append(actions, action)
+	}
+	return actions
+}
+
+// KeymapConfigActions returns every action the root-config target lookup
+// accepts, including TuiKeymap fields such as `global.select_transcript` that
+// are not part of the `/keymap` catalog.
+func KeymapConfigActions(filter KeymapActionFilter) []KeymapAction {
+	actions := KeymapActions(filter)
+	for _, action := range keymapConfigOnlyActions {
 		if action.RequiredFeature == keymapFeatureFastMode && !filter.FastModeEnabled {
 			continue
 		}
@@ -227,6 +251,12 @@ func RenderKeymapCatalogWithConfig(filter KeymapActionFilter, config *KeymapConf
 
 func FindKeymapAction(context string, action string) (KeymapAction, bool) {
 	for _, descriptor := range keymapActionCatalog {
+		if descriptor.Context == context && descriptor.Action == action {
+			descriptor.DefaultBindings = append([]string(nil), descriptor.DefaultBindings...)
+			return descriptor, true
+		}
+	}
+	for _, descriptor := range keymapConfigOnlyActions {
 		if descriptor.Context == context && descriptor.Action == action {
 			descriptor.DefaultBindings = append([]string(nil), descriptor.DefaultBindings...)
 			return descriptor, true

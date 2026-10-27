@@ -695,23 +695,6 @@ func (m *Model) syncStatusControlsRuntime() {
 	m.statusControls.Runtime = m.statusControlsRuntime()
 }
 
-// modelSupportsFastMode reports whether the currently selected model exposes a
-// Fast/priority service tier (#39999). An empty tier list (uncatalogued model)
-// keeps the status value visible, while a catalogued model without a Fast tier
-// hides it.
-func modelSupportsFastMode(commands []bottompane.ServiceTierCommand) bool {
-	if len(commands) == 0 {
-		return true
-	}
-	for _, command := range commands {
-		if strings.EqualFold(strings.TrimSpace(command.Name), "fast") ||
-			strings.EqualFold(strings.TrimSpace(command.ID), "priority") {
-			return true
-		}
-	}
-	return false
-}
-
 func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 	cwd := ""
 	if m != nil {
@@ -744,12 +727,37 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		RawOutput:              m.rawOutput,
 		DaybreakEnabled:        m.daybreakEnabled,
 		SideConversationActive: m.inSideConversation(),
-		ModelSupportsFastMode:  modelSupportsFastMode(m.serviceTierCommands),
+		ProcessingTier:         m.processingTierDisplayName(),
 		ThreadTitle:            strings.TrimSpace(m.State.ThreadID),
 		TaskProgress:           m.goalTaskProgress(),
 		CodexVersion:           "codex_go",
 		RateLimitSnapshots:     cloneRateLimitSnapshots(m.rateLimitSnapshots),
 	}
+}
+
+// processingTierDisplayName mirrors Rust #57265: the catalog's tier name wins,
+// with Flex as the non-Bedrock fallback. An unset/default tier renders as empty;
+// the status item itself falls back to "Standard".
+func (m *Model) processingTierDisplayName() string {
+	if m == nil || m.State == nil {
+		return ""
+	}
+	id := strings.TrimSpace(m.State.ServiceTier)
+	if id == "" || id == codextui.ServiceTierDefaultRequestValue {
+		return ""
+	}
+	for _, command := range m.serviceTierCommands {
+		if strings.TrimSpace(command.ID) == id {
+			if name := strings.TrimSpace(command.Name); name != "" {
+				return name
+			}
+		}
+	}
+	provider := strings.ToLower(strings.TrimSpace(m.State.Provider))
+	if id == codextui.ServiceTierFlexRequestValue && !strings.HasPrefix(provider, "amazon-bedrock") {
+		return "Flex"
+	}
+	return ""
 }
 
 // modelDisplayName resolves the catalog display name for a model id and falls

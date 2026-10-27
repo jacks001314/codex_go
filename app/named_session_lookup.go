@@ -153,8 +153,8 @@ func verifiedNamedSessionLookupCursor(cursor string) bool {
 // revalidateRemoteSessionLabel re-reads a candidate so a stale list entry or a
 // renamed session is not selected (Rust lookup's thread/read step). It reports
 // skip for candidates the server cannot confirm or whose label no longer
-// matches; older servers that cannot read an unloaded thread keep the listed
-// entry.
+// matches. Rust #55682 makes an unloaded thread a skip for every server type
+// instead of falling back to the unverified list metadata.
 func revalidateRemoteSessionLabel(ctx context.Context, client *remoteAppServerTUIClient, thread *appserver.Thread, name string) (*appserver.Thread, bool, error) {
 	var response appserver.ThreadReadResponse
 	readErr := remoteSessionRequest(ctx, client, appserver.MethodThreadRead, appserver.ThreadReadParams{
@@ -163,12 +163,20 @@ func revalidateRemoteSessionLabel(ctx context.Context, client *remoteAppServerTU
 	}, &response)
 	if readErr != nil {
 		message := readErr.Error()
-		if strings.Contains(message, "thread not loaded: "+strings.TrimSpace(thread.ID)) {
-			// Compatibility with older servers that cannot read unloaded threads.
-			return thread, false, nil
-		}
-		if strings.Contains(message, "thread-store internal error") {
+		threadID := strings.TrimSpace(thread.ID)
+		if strings.Contains(message, "thread not loaded: "+threadID) {
 			return nil, true, nil
+		}
+		if strings.HasPrefix(message, "failed to read thread: thread-store internal error: session metadata ") &&
+			strings.Contains(message, " belongs to thread ") &&
+			strings.HasSuffix(message, ", expected "+threadID) {
+			return nil, true, nil
+		}
+		if thread.Path != nil {
+			path := strings.TrimSpace(*thread.Path)
+			if path != "" && strings.HasPrefix(message, "failed to read thread: thread-store internal error: failed to read session metadata "+path+": ") {
+				return nil, true, nil
+			}
 		}
 		return nil, false, readErr
 	}

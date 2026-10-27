@@ -129,11 +129,9 @@ type StatusControlsRuntime struct {
 	LastTokenUsage    StatusTokenUsage
 	TotalTokenUsage   StatusTokenUsage
 	ThreadID          string
-	FastMode          bool
-	// ModelSupportsFastMode is true when the currently selected model exposes a
-	// Fast/priority service tier. When false the fast-mode status item is
-	// omitted (Rust #39999 hides the value for catalogued unsupported models).
-	ModelSupportsFastMode bool
+	// ProcessingTier is the display name of the selected service tier. Rust
+	// #57265 renders "Standard" when no tier is selected.
+	ProcessingTier string
 	// DaybreakEnabled is the thread's Daybreak preference, gated by the
 	// cli_daybreak feature (Rust `ChatWidget::daybreak_enabled`, #49861).
 	DaybreakEnabled bool
@@ -705,10 +703,14 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 			return "", false
 		}
 		reasoning := StatusLineReasoningEffortLabel(s.Runtime.ReasoningEffort)
-		if reasoning == "" || reasoning == "default" {
-			return model, true
+		value := model
+		if reasoning != "" && reasoning != "default" {
+			value += " " + reasoning
 		}
-		return model + " " + reasoning, true
+		if tier, ok := nonEmptyTrimmed(s.Runtime.ProcessingTier); ok {
+			value += " " + tier
+		}
+		return value, true
 	case bottompane.StatusLineReasoning:
 		return StatusLineReasoningEffortLabel(s.Runtime.ReasoningEffort), true
 	case bottompane.StatusLineCurrentDir:
@@ -791,13 +793,10 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 	case bottompane.StatusLineSessionID:
 		return nonEmptyTrimmed(s.Runtime.ThreadID)
 	case bottompane.StatusLineFastMode:
-		if !s.Runtime.ModelSupportsFastMode {
-			return "", false
+		if tier, ok := nonEmptyTrimmed(s.Runtime.ProcessingTier); ok {
+			return tier, true
 		}
-		if s.Runtime.FastMode {
-			return "Fast on", true
-		}
-		return "Fast off", true
+		return "Standard", true
 	case bottompane.StatusLineDaybreak:
 		// Rust #49861: Daybreak is on only for the thread's own turns, so a
 		// side conversation always reports it as off.
@@ -1363,7 +1362,7 @@ func StatusLineItemDescription(item bottompane.StatusLineItem, previewData Statu
 	case bottompane.StatusLineSessionID:
 		return "Current thread identifier (omitted until thread starts)"
 	case bottompane.StatusLineFastMode:
-		return "Whether Fast mode is currently active"
+		return "Effective processing tier (Standard when unset)"
 	case bottompane.StatusLineDaybreak:
 		return "Whether Daybreak is enabled for this thread"
 	case bottompane.StatusLineRawOutput:
@@ -1414,7 +1413,7 @@ func TerminalTitleItemDescription(item TerminalTitleItem, previewData StatusSurf
 	case TerminalTitleSessionID:
 		return "Current thread identifier (omitted until thread starts)"
 	case TerminalTitleFastMode:
-		return "Whether Fast mode is currently active"
+		return "Effective processing tier (Standard when unset)"
 	case TerminalTitleDaybreak:
 		return "Whether Daybreak is enabled for this thread"
 	case TerminalTitleModel:

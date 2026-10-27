@@ -10,6 +10,7 @@ import (
 	"codex_go/eventmap"
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 )
@@ -433,11 +434,30 @@ func applyBufferedThreadItemToMessages(messages []codextui.Message, item *protoc
 		}
 		// Rust #46486: a desktop async-question reply renders as readable
 		// question-and-answer text instead of the raw reply envelope.
-		if display, ok := codextui.AsyncQuestionReplyDisplayText(text); ok {
-			text = display
+		if replies := codextui.ParseAsyncQuestionReplies(text); len(replies) > 0 {
+			display, _ := codextui.AsyncQuestionReplyDisplayText(text)
+			return append(messages, codextui.Message{
+				Role:                 codextui.RoleUser,
+				Text:                 display,
+				RawText:              display,
+				UserPrompt:           display,
+				AsyncQuestionReplies: replies,
+			})
 		}
 		return append(messages, codextui.Message{Role: codextui.RoleUser, Text: text, RawText: text})
 	case "agent_message":
+		if questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"]); len(questions) > 0 {
+			message := codextui.Message{
+				Role:           codextui.RoleAssistant,
+				Text:           strings.TrimSpace(item.Text),
+				RawText:        strings.TrimSpace(item.Text),
+				AsyncQuestions: messageAsyncQuestions(questions),
+			}
+			if strings.TrimSpace(message.Text) != "" {
+				return append(messages, message)
+			}
+			return messages
+		}
 		return mergeAssistantFinalToMessages(messages, item.Text)
 	case "plan":
 		return mergeAssistantFinalToMessages(messages, item.Text)

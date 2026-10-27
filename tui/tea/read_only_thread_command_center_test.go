@@ -28,6 +28,7 @@ func readOnlyCommandCenterModel(t *testing.T, options Options) *Model {
 
 func availableCommandCenterOptions() Options {
 	return Options{
+		LocalDaemonSession:      true,
 		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) { return nil, nil },
 	}
 }

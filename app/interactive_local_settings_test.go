@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"codex_go/cli"
+	"codex_go/config"
 	codextea "codex_go/tui/tea"
 )
 
@@ -79,6 +80,37 @@ func TestInteractiveReloadLocalSettingsKeepsLiveSettingsLikeRust(t *testing.T) {
 	}
 	if failed.NoAltScreen != live.NoAltScreen {
 		t.Fatal("failed reload changed the launcher-owned terminal flag")
+	}
+}
+
+// Rust #56091 (app/config_panel_tests.rs
+// `config_toggle_save_uses_host_config_and_applies_live_while_offline`): saving
+// a local preference must not rebuild execution settings, so an unresolvable
+// `model_provider` cannot block the write or the live apply. Go's settings
+// handler reloads the configuration layer stack directly
+// (interactiveLoadSettings), so the preference still round-trips.
+func TestInteractiveSettingsWriteSurvivesUnresolvableProviderLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	localSettingsWriteConfig(t, home, "[tui]\nauto_recap = true\n")
+
+	root := &cli.RootOptions{ConfigOverrides: []string{"model_provider=missing-provider"}}
+	write := interactiveSettingsWriteHandler(root)
+	result, err := write([]codextea.SettingsEdit{{KeyPath: "tui.auto_recap", Value: false}})
+	if err != nil {
+		t.Fatalf("settings write with an unresolvable provider failed: %v", err)
+	}
+	if result.AutoRecap == nil || *result.AutoRecap {
+		t.Fatalf("auto_recap = %v, want the saved false value to apply live", result.AutoRecap)
+	}
+	loaded, err := config.Load(home)
+	if err != nil {
+		t.Fatalf("reload persisted config: %v", err)
+	}
+	tuiValues, _ := loaded.Values["tui"].(map[string]any)
+	value, ok := tuiValues["auto_recap"].(bool)
+	if !ok || value {
+		t.Fatalf("persisted tui.auto_recap = %v, want false", value)
 	}
 }
 

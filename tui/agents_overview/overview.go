@@ -10,6 +10,7 @@ package agentsoverview
 
 import (
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -30,8 +31,15 @@ const (
 	GroupFinished              // not loaded / closed
 )
 
-// GroupForStatus mirrors Rust AgentsOverviewGroup::for_status.
+// GroupForStatus mirrors Rust AgentsOverviewGroup::for_thread for callers that
+// do not have subagent identity.
 func GroupForStatus(statusType string, waitingOnApproval, waitingOnUserInput bool) Group {
+	return GroupForThread(statusType, waitingOnApproval, waitingOnUserInput, false)
+}
+
+// GroupForThread mirrors Rust AgentsOverviewGroup::for_thread: a failed
+// subagent has finished its work and does not ask the user to act.
+func GroupForThread(statusType string, waitingOnApproval, waitingOnUserInput, isSubagent bool) Group {
 	switch strings.ToLower(strings.TrimSpace(statusType)) {
 	case "active":
 		if waitingOnApproval || waitingOnUserInput {
@@ -41,6 +49,9 @@ func GroupForStatus(statusType string, waitingOnApproval, waitingOnUserInput boo
 	case "idle":
 		return GroupReady
 	case "systemerror", "system_error", "error":
+		if isSubagent {
+			return GroupFinished
+		}
 		return GroupNeedsYou
 	default: // "notLoaded" and unknown statuses
 		return GroupFinished
@@ -75,6 +86,10 @@ const (
 	// GroupingProject groups by project directory (or repository when linked
 	// worktrees are enabled).
 	GroupingProject Grouping = iota
+	// GroupingDirectory groups by the canonical working directory of each task.
+	// Unlike the project grouping, linked worktrees stay in their own groups
+	// (Rust #56308 AgentsOverviewGrouping::Directory).
+	GroupingDirectory
 	// GroupingStatus groups by task status.
 	GroupingStatus
 	// GroupingModel groups by the task's model.
@@ -84,12 +99,16 @@ const (
 // Next returns the next grouping mode in the toggle cycle.
 func (g Grouping) Next() Grouping {
 	switch g {
+	case GroupingProject:
+		return GroupingDirectory
+	case GroupingDirectory:
+		return GroupingStatus
 	case GroupingStatus:
 		return GroupingModel
 	case GroupingModel:
 		return GroupingProject
 	default:
-		return GroupingStatus
+		return GroupingProject
 	}
 }
 
@@ -120,6 +139,8 @@ var statusFilterTabs = []struct {
 // agents_overview_render).
 func (g Grouping) Label() string {
 	switch g {
+	case GroupingDirectory:
+		return "group: directory"
 	case GroupingStatus:
 		return "group: status"
 	case GroupingModel:
@@ -132,6 +153,8 @@ func (g Grouping) Label() string {
 // DisplayLabel is the title-cased grouping shown in the command-center header.
 func (g Grouping) DisplayLabel() string {
 	switch g {
+	case GroupingDirectory:
+		return "Directory"
 	case GroupingStatus:
 		return "Status"
 	case GroupingModel:
@@ -145,6 +168,10 @@ func (g Grouping) DisplayLabel() string {
 // `tui.agents_overview_grouping` (Rust #50786 AgentsOverviewGrouping::as_str).
 func (g Grouping) ConfigValue() string {
 	switch g {
+	case GroupingDirectory:
+		// Directory grouping is view-local: older clients reject this value, so
+		// it is never written to configuration (Rust #56308).
+		return ""
 	case GroupingStatus:
 		return "status"
 	case GroupingModel:
@@ -152,6 +179,13 @@ func (g Grouping) ConfigValue() string {
 	default:
 		return "project"
 	}
+}
+
+// Persisted reports whether this grouping may be written to
+// `tui.agents_overview_grouping`. Directory grouping stays in memory so a
+// configuration file remains readable by older clients (Rust #56308).
+func (g Grouping) Persisted() bool {
+	return g != GroupingDirectory
 }
 
 // ParseGroupingConfig resolves a stored `tui.agents_overview_grouping` value.
@@ -211,6 +245,17 @@ func (g Group) StatusLabel(statusType string) string {
 	return g.Label()
 }
 
+// StatusLabelForRow keeps subagent failures out of the user-action error label.
+func (g Group) StatusLabelForRow(row *Row) string {
+	if row == nil {
+		return g.Label()
+	}
+	if row.IsSubagent && g == GroupFinished {
+		return g.Label()
+	}
+	return g.StatusLabel(row.StatusType)
+}
+
 // Dot returns the status marker glyph (Rust: red/green filled dots, cyan
 // hollow dot, dim check mark). Styling is applied by the renderer.
 func (g Group) Dot() string {
@@ -251,6 +296,9 @@ type Row struct {
 	StatusType   string
 	IsCurrent    bool
 	StatusActive bool // an active turn is running (enables ctrl+x stop)
+	// IsSubagent marks an orphan subagent row. Failed subagents are finished,
+	// not "Needs input" (Rust #57315).
+	IsSubagent bool
 	// HasVoice marks the task whose session owns the running voice
 	// conversation (Rust #47382).
 	HasVoice bool
@@ -395,6 +443,9 @@ type View struct {
 	// resolved group key/heading for every row.
 	worktreesEnabled bool
 	projectGroups    []projectGroup
+	// directoryGroupKeys carries the canonical directory identity per row for
+	// the Directory grouping (Rust #56308 directory_group_keys).
+	directoryGroupKeys []string
 
 	// rowOrder retains each row's status group and rank from the last listing so a
 	// refresh keeps a task's relative order while it stays in the same status
@@ -503,9 +554,58 @@ func (v *View) recomputeProjectGroups() {
 		return
 	}
 	v.projectGroups = make([]projectGroup, len(v.Rows))
+	v.directoryGroupKeys = make([]string, len(v.Rows))
 	for i := range v.Rows {
 		v.projectGroups[i] = projectGroupForRow(v.Rows[i], v.worktreesEnabled)
+		v.directoryGroupKeys[i] = directoryGroupKey(v.Rows[i].CWD, v.worktreesEnabled)
 	}
+}
+
+// directoryGroupKey resolves a row's Directory-grouping identity. With linked
+// worktrees enabled the key is the canonical path, so aliases of one directory
+// group together; otherwise the reported cwd is used unchanged (Rust #56308
+// directory_group_key).
+func directoryGroupKey(cwd string, worktreesEnabled bool) string {
+	cwd = strings.TrimSpace(cwd)
+	if worktreesEnabled && cwd != "" {
+		if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+			return resolved
+		}
+	}
+	return cwd
+}
+
+// directoryGroupAt returns a row's directory-grouping key, computing keys
+// defensively if rows were applied without a refresh.
+func (v *View) directoryGroupAt(index int) string {
+	if v == nil || index < 0 || index >= len(v.Rows) {
+		return ""
+	}
+	if len(v.directoryGroupKeys) != len(v.Rows) {
+		v.recomputeProjectGroups()
+	}
+	return v.directoryGroupKeys[index]
+}
+
+// formatDirectoryDisplay renders a directory for a group heading, using `~`
+// for the user's home directory (Rust status::helpers::format_directory_display).
+func formatDirectoryDisplay(directory string) string {
+	directory = strings.TrimSpace(directory)
+	if directory == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return directory
+	}
+	rel, err := filepath.Rel(home, directory)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return directory
+	}
+	if rel == "." {
+		return "~"
+	}
+	return "~" + string(filepath.Separator) + rel
 }
 
 // SetCreatingWorktree toggles the dashboard's "Creating worktree…" progress
@@ -799,6 +899,12 @@ func (v *View) VisibleIndices() []int {
 		// order within a group (Rust #44957).
 		v.stableSortByGroupKey(visible, func(index int) string {
 			return ModelName(v.Rows[index].Model)
+		})
+	case GroupingDirectory:
+		// Directory grouping: sort by canonical directory while preserving host
+		// recency order within a group (Rust #56308).
+		v.stableSortByGroupKey(visible, func(index int) string {
+			return v.directoryGroupAt(index)
 		})
 	case GroupingStatus:
 		// Rust #52946: rows keep their retained status-group order, so a progress
@@ -1152,7 +1258,8 @@ func (v *View) pageSelection(forward bool) {
 	v.Selected = visible[current]
 }
 
-// ToggleGrouping cycles project -> status -> model grouping (Rust #44957).
+// ToggleGrouping cycles project -> directory -> status -> model grouping
+// (Rust #44957, #56308).
 func (v *View) ToggleGrouping() {
 	if v == nil {
 		return
@@ -1177,6 +1284,8 @@ func (v *View) sameGroup(grouping Grouping, left int, right int) bool {
 		return v.Rows[left].Group == v.Rows[right].Group
 	case GroupingModel:
 		return ModelName(v.Rows[left].Model) == ModelName(v.Rows[right].Model)
+	case GroupingDirectory:
+		return v.directoryGroupAt(left) == v.directoryGroupAt(right)
 	default:
 		return v.projectGroupAt(left).equal(v.projectGroupAt(right))
 	}
@@ -1196,6 +1305,8 @@ func (v *View) groupHeading(grouping Grouping, index int) string {
 		return v.Rows[index].Group.Label()
 	case GroupingModel:
 		return ModelName(v.Rows[index].Model)
+	case GroupingDirectory:
+		return formatDirectoryDisplay(v.Rows[index].CWD)
 	default:
 		return v.projectGroupAt(index).heading
 	}

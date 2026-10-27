@@ -107,7 +107,7 @@ func daemonStartupExclusion(root *cli.RootOptions, agentsOverview bool) string {
 // input has no Go counterpart.
 func daemonConfigExclusion(root *cli.RootOptions) string {
 	if !daemonOverridesAreReplayable(daemonLaunchOverrides(root)) {
-		return "command-line configuration overrides (-c, --enable, --disable, or --search)"
+		return daemonConfigOverrideExclusion
 	}
 	if root.StrictConfig {
 		return "--strict-config"
@@ -118,10 +118,51 @@ func daemonConfigExclusion(root *cli.RootOptions) string {
 	return ""
 }
 
+// daemonConfigOverrideExclusion is Rust's config-exclusion reason for launch
+// overrides a shared server cannot replay.
+const daemonConfigOverrideExclusion = "command-line configuration overrides (-c, --enable, --disable, or --search)"
+
+// daemonConfigExclusionWithoutSearch is daemonConfigExclusion applied to the
+// overrides before --search is mapped to web_search (Rust #57268).
+func daemonConfigExclusionWithoutSearch(root *cli.RootOptions) string {
+	overrides, err := config.ParseOverrides(daemonRawLaunchOverridesWithoutSearch(root))
+	if err != nil || !daemonOverridesAreReplayable(overrides) {
+		return daemonConfigOverrideExclusion
+	}
+	if root != nil && root.StrictConfig {
+		return "--strict-config"
+	}
+	if root != nil && root.Shared.DangerouslyBypassHookTrust {
+		return "--dangerously-bypass-hook-trust"
+	}
+	return ""
+}
+
+// daemonSearchForcesEmbedded reports whether --search is the only configuration
+// exclusion preventing shared-daemon use (Rust #57268).
+func daemonSearchForcesEmbedded(root *cli.RootOptions) bool {
+	if root == nil || !root.Shared.Search {
+		return false
+	}
+	return daemonConfigExclusionWithoutSearch(root) == ""
+}
+
 // daemonRawLaunchOverrides renders the launch's configuration overrides the way
 // Rust's CliConfigOverrides does: `-c` plus the `--enable`/`--disable` feature
 // flags and `--search`'s web-search mode.
 func daemonRawLaunchOverrides(root *cli.RootOptions) []string {
+	raw := daemonRawLaunchOverridesWithoutSearch(root)
+	if root == nil || !root.Shared.Search {
+		return raw
+	}
+	return append(raw, `web_search="live"`)
+}
+
+// daemonRawLaunchOverridesWithoutSearch is the launch's configuration overrides
+// before the legacy --search flag is mapped to web_search. Rust #57268 compares
+// these against the full set to tell whether --search alone forces embedded
+// mode.
+func daemonRawLaunchOverridesWithoutSearch(root *cli.RootOptions) []string {
 	if root == nil {
 		return nil
 	}
@@ -131,9 +172,6 @@ func daemonRawLaunchOverrides(root *cli.RootOptions) []string {
 	}
 	for _, feature := range root.DisableFeatures {
 		raw = append(raw, "features."+strings.TrimSpace(feature)+"=false")
-	}
-	if root.Shared.Search {
-		raw = append(raw, `web_search="live"`)
 	}
 	return raw
 }

@@ -17,6 +17,11 @@ import (
 // TUIStartMetric mirrors Rust's `codex.tui.start` counter.
 const TUIStartMetric = "codex.tui.start"
 
+// TUIEmbeddedStartMetric mirrors Rust's `codex.tui.embedded_start` counter
+// (#57268), recorded with a bounded reason tag when the TUI falls back to the
+// embedded app server.
+const TUIEmbeddedStartMetric = "codex.tui.embedded_start"
+
 // TerminalSizeMetric mirrors Rust's `codex.tui.terminal_size` counter.
 const TerminalSizeMetric = "codex.tui.terminal_size"
 

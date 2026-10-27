@@ -56,9 +56,10 @@ func TestPreviewMarkdownLikeRust(t *testing.T) {
 	}
 }
 
-// TestModelGroupingLikeRust covers #44957: Ctrl+S cycles project -> status ->
-// model, model grouping sorts by model with "Unknown" for missing names, the
-// footer and details report the model, and the cycle wraps back to project.
+// TestModelGroupingLikeRust covers #44957/#56308: Ctrl+S cycles project ->
+// directory -> status -> model, model grouping sorts by model with "Unknown"
+// for missing names, the footer and details report the model, and the cycle
+// wraps back to project.
 func TestModelGroupingLikeRust(t *testing.T) {
 	rows := []Row{
 		{ThreadID: "t-1", Name: "alpha", CWD: "/work/a", Model: "gpt-5.4", Group: GroupWorking},
@@ -71,12 +72,16 @@ func TestModelGroupingLikeRust(t *testing.T) {
 		t.Fatalf("default grouping = %v, want project", view.State.Grouping)
 	}
 	view.ToggleGrouping()
+	if view.State.Grouping != GroupingDirectory {
+		t.Fatalf("first toggle = %v, want directory", view.State.Grouping)
+	}
+	view.ToggleGrouping()
 	if view.State.Grouping != GroupingStatus {
-		t.Fatalf("first toggle = %v, want status", view.State.Grouping)
+		t.Fatalf("second toggle = %v, want status", view.State.Grouping)
 	}
 	view.ToggleGrouping()
 	if view.State.Grouping != GroupingModel {
-		t.Fatalf("second toggle = %v, want model", view.State.Grouping)
+		t.Fatalf("third toggle = %v, want model", view.State.Grouping)
 	}
 
 	// Model grouping orders by model name, keeping host order within a group.
@@ -254,6 +259,7 @@ func TestProjectGroupingSortsByCWD(t *testing.T) {
 		t.Fatalf("project ordering = %v, want %v", got, want)
 	}
 	// status grouping keeps host order
+	view.ToggleGrouping()
 	view.ToggleGrouping()
 	if view.State.Grouping != GroupingStatus {
 		t.Fatalf("ToggleGrouping = %v, want status", view.State.Grouping)
@@ -500,6 +506,7 @@ func TestRenderDetailsShowsNoActivityPlaceholder(t *testing.T) {
 
 func TestRenderStatusGrouping(t *testing.T) {
 	view := New(sampleRows(), "", false)
+	view.ToggleGrouping()
 	view.ToggleGrouping()
 	lines := view.Render(120, 24)
 	joined := strings.Join(lines, "\n")

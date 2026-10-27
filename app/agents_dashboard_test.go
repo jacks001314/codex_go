@@ -336,13 +336,13 @@ func TestAgentsDashboardSearchAndGrouping(t *testing.T) {
 		t.Fatal("esc did not exit search")
 	}
 	model.Update(keyRunes('g'))
-	if model.view.State.Grouping != agentsoverview.GroupingStatus {
-		t.Fatalf("g grouping = %v, want status", model.view.State.Grouping)
+	if model.view.State.Grouping != agentsoverview.GroupingDirectory {
+		t.Fatalf("g grouping = %v, want directory", model.view.State.Grouping)
 	}
 	// Rust #45255: browsing ignores text input now that the task composer is
 	// gone, so the grouping mode and editor state stay untouched.
 	model.Update(keyRunes('z'))
-	if model.view.State.Grouping != agentsoverview.GroupingStatus || model.view.State.Searching || model.view.State.Input != "" {
+	if model.view.State.Grouping != agentsoverview.GroupingDirectory || model.view.State.Searching || model.view.State.Input != "" {
 		t.Fatalf("browsing mutated the view state: %#v", model.view.State)
 	}
 }

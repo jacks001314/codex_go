@@ -13,6 +13,7 @@ import (
 	codextui "codex_go/tui"
 	"codex_go/tui/bottom_pane"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/markdown"
 	"codex_go/tui/styles"
 )
 
@@ -21,6 +22,19 @@ import (
 // messages, suggested answers are selectable (with an appended editable Other
 // choice), and only an accepted local submission or an explicit skip removes
 // the question.
+
+// messageAsyncQuestions projects the composer's question metadata onto the
+// history message so live and loaded transcripts use the same renderer.
+func messageAsyncQuestions(questions []bottompane.AsyncUserInputQuestion) []codextui.MessageAsyncQuestion {
+	out := make([]codextui.MessageAsyncQuestion, 0, len(questions))
+	for _, question := range questions {
+		out = append(out, codextui.MessageAsyncQuestion{
+			Title:   question.Title,
+			Options: append([]string(nil), question.Options...),
+		})
+	}
+	return out
+}
 
 // asyncQuestionEditorActive reports whether the model holds pending questions.
 func (m *Model) asyncQuestionEditorActive() bool {
@@ -460,40 +474,59 @@ func appendRecoveredDraftText(current string, recovered string) string {
 	return current + "\n\n" + recovered
 }
 
+// composerCommandEscapeIndex reports where to insert a backslash so a draft
+// stops parsing as a shell or slash command. Path-like slash drafts retain
+// their action (Rust append_recovered_drafts).
+func composerCommandEscapeIndex(text string) (int, bool) {
+	offset := len(text) - len(strings.TrimLeft(text, " \t\r\n"))
+	trimmed := text[offset:]
+	if strings.HasPrefix(trimmed, "!") {
+		return offset, true
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		parsed := bottompane.ParseSlashName(trimmed)
+		if parsed.OK && strings.Contains(parsed.Name, "/") {
+			return 0, false
+		}
+		return offset, true
+	}
+	return 0, false
+}
+
 // escapeRecoveredCommandDraftText makes command-like saved text plain before
 // appending recovered answers. Path-like slash drafts retain their action.
 func escapeRecoveredCommandDraftText(text string) string {
 	prefix, body := splitComposerPrompt(text)
-	if prefix == composerPrefixNone {
+	if prefix == composerPrefixShell {
+		return "\\!" + body
+	}
+	index, ok := composerCommandEscapeIndex(text)
+	if !ok {
 		return text
 	}
-	if prefix == composerPrefixSlash {
-		parsed := bottompane.ParseSlashName(strings.TrimLeft(text, " \t\r\n"))
-		if parsed.OK && strings.Contains(parsed.Name, "/") {
-			return text
-		}
-	}
-	return "\\" + prefix.text() + body
+	return text[:index] + "\\" + text[index:]
 }
 
 // escapeComposerPromptForRecoveredDraft makes a command-like main draft plain
 // text before appending quoted answers, so the recovered text is not submitted
 // as shell or slash-command input.
 func (m *Model) escapeComposerPromptForRecoveredDraft() {
-	if m == nil || m.composerPrefix == composerPrefixNone {
+	if m == nil {
 		return
 	}
-	if m.composerPrefix == composerPrefixSlash {
-		parsed := bottompane.ParseSlashName(strings.TrimLeft(m.composerText(), " \t\r\n"))
-		if parsed.OK && strings.Contains(parsed.Name, "/") {
-			// Path-like slash drafts keep their normal submission action.
-			return
-		}
-	}
 	before := m.composer.Value()
-	prefix := m.composerPrefix.text()
-	m.composerPrefix = composerPrefixNone
-	m.composer.SetValue("\\" + prefix + before)
+	if m.composerPrefix == composerPrefixShell {
+		m.composerPrefix = composerPrefixNone
+		m.composer.SetValue("\\!" + before)
+		m.syncComposerElements(before)
+		m.refreshComposerPrompt()
+		return
+	}
+	index, ok := composerCommandEscapeIndex(before)
+	if !ok {
+		return
+	}
+	m.composer.SetValue(before[:index] + "\\" + before[index:])
 	m.syncComposerElements(before)
 	m.refreshComposerPrompt()
 }
@@ -552,7 +585,10 @@ func (m *Model) asyncQuestionBlockRows(question bottompane.AsyncUserInputQuestio
 	rows := 0
 	rows += len(wrapAsyncQuestionTitleLines(question.Title, width))
 	for index, label := range question.Options {
-		rows += len(wrapAsyncQuestionText(label, width, asyncQuestionChoicePrefixWidth(index)))
+		// Rust #57259 measures the same Markdown-rendered rows the renderer
+		// paints, so height, scrolling, and the option tip stay in sync.
+		prefix := strings.Repeat(" ", asyncQuestionChoicePrefixWidth(index))
+		rows += len(m.asyncQuestionChoiceLines(label, width, prefix))
 	}
 	rows += len(wrapAsyncQuestionText(m.asyncQuestions.OtherLabel(), width, asyncQuestionChoicePrefixWidth(len(question.Options))))
 	if m.asyncQuestions.UnansweredCount() > 1 {
@@ -619,6 +655,18 @@ func (m *Model) renderAsyncQuestionChoices(question bottompane.AsyncUserInputQue
 		}
 		prefix := marker + " " + strconv.Itoa(index+1) + ". "
 		prefixWidth := len([]rune(prefix))
+		if index < len(question.Options) {
+			// Named choices render Markdown and terminal hyperlinks, wrapped
+			// after the numbered prefix (Rust #57259).
+			for _, line := range m.asyncQuestionChoiceLines(label, width, prefix) {
+				if index == selected {
+					lines = append(lines, m.accentAsyncQuestionText(line))
+				} else {
+					lines = append(lines, line)
+				}
+			}
+			continue
+		}
 		for lineIndex, line := range wrapAsyncQuestionText(label, width, prefixWidth) {
 			text := line
 			if lineIndex == 0 {
@@ -632,6 +680,40 @@ func (m *Model) renderAsyncQuestionChoices(question bottompane.AsyncUserInputQue
 		}
 	}
 	return lines
+}
+
+// asyncQuestionChoiceLines renders one named suggestion as Markdown and prefixes
+// its first row with the numbered gutter. Continuation rows keep the hanging
+// indent, and overwide Markdown tokens wrap inside the content width.
+func (m *Model) asyncQuestionChoiceLines(label string, width int, prefix string) []string {
+	indent := codextui.DisplayWidth(prefix)
+	if width <= indent {
+		width = indent + 1
+	}
+	contentWidth := max(width-indent, 1)
+	rendered, err := markdown.RenderWithThemeCwd(label, contentWidth, m.activeTUITheme(), "")
+	if err == nil && strings.TrimSpace(rendered) != "" {
+		body := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
+		if len(body) > 0 {
+			out := make([]string, 0, len(body))
+			for index, line := range body {
+				if index == 0 {
+					out = append(out, prefix+line)
+					continue
+				}
+				out = append(out, strings.Repeat(" ", indent)+line)
+			}
+			return out
+		}
+	}
+	// Plain wrapping keeps the numbered row even when Markdown rendering
+	// produces no visible content (for example a whitespace-only label).
+	wrapped := wrapAsyncQuestionText(label, width, indent)
+	if len(wrapped) == 0 {
+		return []string{prefix}
+	}
+	wrapped[0] = prefix + wrapped[0]
+	return wrapped
 }
 
 // asyncQuestionHintLine renders the contextual submit/skip/navigation hints

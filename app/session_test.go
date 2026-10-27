@@ -420,10 +420,14 @@ func TestSessionResumeLast(t *testing.T) {
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
 	now := fixedAppSessionTime()
-	if err := store.Save(&session.Record{ID: "older", Preview: "old", CreatedAt: now, UpdatedAt: now, RecencyAt: now}); err != nil {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := store.Save(&session.Record{ID: "older", Preview: "old", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: wd}}); err != nil {
 		t.Fatalf("Save older returned error: %v", err)
 	}
-	if err := store.Save(&session.Record{ID: "newer", Preview: "new", CreatedAt: now, UpdatedAt: now.Add(time.Minute), RecencyAt: now.Add(time.Minute)}); err != nil {
+	if err := store.Save(&session.Record{ID: "newer", Preview: "new", CreatedAt: now, UpdatedAt: now.Add(time.Minute), RecencyAt: now.Add(time.Minute), Metadata: session.Metadata{CWD: wd}}); err != nil {
 		t.Fatalf("Save newer returned error: %v", err)
 	}
 
@@ -1011,13 +1015,19 @@ func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
 	now := fixedAppSessionTime()
+	// Rust #56308: --last is directory-scoped, so the fixtures live in the
+	// process working directory.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
 	saveAppSessionRecord(t, store, &session.Record{
 		ID:        "interactive",
 		Preview:   "interactive",
 		CreatedAt: now,
 		UpdatedAt: now,
 		RecencyAt: now,
-		Metadata:  session.Metadata{Source: "cli"},
+		Metadata:  session.Metadata{Source: "cli", CWD: wd},
 	})
 	saveAppSessionRecord(t, store, &session.Record{
 		ID:        "exec-newer",
@@ -1025,7 +1035,7 @@ func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now.Add(time.Minute),
 		RecencyAt: now.Add(time.Minute),
-		Metadata:  session.Metadata{Source: "exec"},
+		Metadata:  session.Metadata{Source: "exec", CWD: wd},
 	})
 	saveAppSessionRecord(t, store, &session.Record{
 		ID:        "archived-newest",
@@ -1034,7 +1044,7 @@ func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now.Add(2 * time.Minute),
 		RecencyAt: now.Add(2 * time.Minute),
-		Metadata:  session.Metadata{Source: "cli"},
+		Metadata:  session.Metadata{Source: "cli", CWD: wd},
 	})
 
 	var stdout bytes.Buffer

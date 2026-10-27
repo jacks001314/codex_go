@@ -76,9 +76,35 @@ func TestManageSkillsViewAndChangeSummary(t *testing.T) {
 		map[string]bool{"a": false, "b": true, "c": true},
 		map[string]bool{"a": true, "b": false},
 	)
-	if !changed || enabled != 1 || disabled != 1 || message != "1 skills enabled, 1 skills disabled" {
+	if !changed || enabled != 1 || disabled != 1 || message != "Enabled 1 skill, disabled 1 skill" {
 		t.Fatalf("summary = %d/%d/%q/%v", enabled, disabled, message, changed)
 	}
+}
+
+func TestManageSkillsChangeSummaryMatchesRustWording(t *testing.T) {
+	initial := map[string]bool{"a": false, "b": false, "c": true}
+	cases := []struct {
+		name     string
+		current  map[string]bool
+		want     string
+		changed  bool
+		enabled  int
+		disabled int
+	}{
+		{name: "enable only", current: map[string]bool{"a": true, "b": true, "c": true}, want: "Enabled 2 skills", changed: true, enabled: 2},
+		{name: "disable only", current: map[string]bool{"a": false, "b": false, "c": false}, want: "Disabled 1 skill", changed: true, disabled: 1},
+		{name: "mixed", current: map[string]bool{"a": true, "b": true, "c": false}, want: "Enabled 2 skills, disabled 1 skill", changed: true, enabled: 2, disabled: 1},
+		{name: "no changes", current: map[string]bool{"a": false, "b": false, "c": true}, want: "", changed: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enabled, disabled, message, changed := ManageSkillsChangeSummary(initial, tc.current)
+			if changed != tc.changed || enabled != tc.enabled || disabled != tc.disabled || message != tc.want {
+				t.Fatalf("summary = %d/%d/%q/%v, want %d/%d/%q/%v", enabled, disabled, message, changed, tc.enabled, tc.disabled, tc.want, tc.changed)
+			}
+		})
+	}
+
 }
 
 func TestSkillDisplayNameAndDescriptionUseInterfaceFallbacks(t *testing.T) {

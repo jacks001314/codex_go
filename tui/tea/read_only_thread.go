@@ -35,16 +35,16 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	m.notice = ""
 }
 
-// commandCenterAvailable mirrors Rust's ExternalWriterNotice
-// `command_center_available`: a session connected to a shared app server can
-// return to the command center (the embedded TUI marks the dashboard
-// unavailable), together with Rust's input gate that refuses an embedded
-// app-server target.
+// commandCenterAvailable mirrors Rust's AppServerTarget::supports_command_center
+// (#57281): a session connected to a local daemon or a remote App Server can
+// return to the command center, while the embedded TUI target cannot.
 func (m *Model) commandCenterAvailable() bool {
 	if m == nil {
 		return false
 	}
-	return !m.agentsOverviewEmbedded && m.onAgentsOverviewRefresh != nil
+	return (m.localDaemonSession || m.remoteAppServer) &&
+		!m.agentsOverviewEmbedded &&
+		m.onAgentsOverviewRefresh != nil
 }
 
 // agentsNavigationKeyAvailable mirrors Rust BottomPane::agents_navigation_key_available

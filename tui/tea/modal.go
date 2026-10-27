@@ -70,7 +70,11 @@ type ModalOption struct {
 }
 
 type ModalRequestMsg struct {
-	ID                string
+	ID string
+	// ServerRequestID identifies the app-server request whose answer this view
+	// collects. It is distinct from the local view ID used by request brokers,
+	// so serverRequest/resolved can dismiss the correct modal (Rust #55682).
+	ServerRequestID   string
 	Kind              ModalKind
 	Title             string
 	Body              string
@@ -83,11 +87,12 @@ type ModalRequestMsg struct {
 }
 
 type ApprovalRequestMsg struct {
-	ID      string
-	Title   string
-	Body    string
-	Command string
-	Options []ModalOption
+	ID              string
+	ServerRequestID string
+	Title           string
+	Body            string
+	Command         string
+	Options         []ModalOption
 }
 
 // AppLinkAction is one host-side effect of the app-link popup (Rust
@@ -137,13 +142,14 @@ type UserInputDecision struct {
 }
 
 type modalState struct {
-	id         string
-	kind       ModalKind
-	title      string
-	body       string
-	bodyOffset int
-	options    []ModalOption
-	selected   int
+	id              string
+	serverRequestID string
+	kind            ModalKind
+	title           string
+	body            string
+	bodyOffset      int
+	options         []ModalOption
+	selected        int
 	// optionScrollTop/optionVisibleRows track the rendered result viewport so
 	// page navigation uses the rows that actually fit (Rust #46680).
 	optionScrollTop   int
@@ -225,11 +231,12 @@ func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
 		options = DefaultApprovalOptions()
 	}
 	m.openModal(ModalRequestMsg{
-		ID:      message.ID,
-		Kind:    ModalKindApproval,
-		Title:   firstNonEmpty(message.Title, "Approval request"),
-		Body:    body,
-		Options: options,
+		ID:              message.ID,
+		ServerRequestID: message.ServerRequestID,
+		Kind:            ModalKindApproval,
+		Title:           firstNonEmpty(message.Title, "Approval request"),
+		Body:            body,
+		Options:         options,
 	})
 	return m.queueNotification(chatwidget.ExecApprovalRequestedNotification(message.Command))
 }
@@ -244,6 +251,7 @@ func (m *Model) openModal(message ModalRequestMsg) {
 	}
 	m.replaceModal(&modalState{
 		id:                strings.TrimSpace(message.ID),
+		serverRequestID:   strings.TrimSpace(message.ServerRequestID),
 		kind:              message.Kind,
 		title:             firstNonEmpty(message.Title, "Select an option"),
 		body:              strings.TrimSpace(message.Body),
@@ -700,8 +708,10 @@ func (m *Model) updateSessionPickerModal(message bubbletea.KeyMsg) bubbletea.Cmd
 		picker.SelectLast()
 	case bubbletea.KeyTab, bubbletea.KeyShiftTab:
 		picker.ToggleToolbarFocus()
-	case bubbletea.KeyLeft, bubbletea.KeyRight:
-		picker.ChangeFocusedToolbarValue()
+	case bubbletea.KeyLeft:
+		picker.ChangeFocusedToolbarValueDirection(codextui.SessionFilterPrevious)
+	case bubbletea.KeyRight:
+		picker.ChangeFocusedToolbarValueDirection(codextui.SessionFilterNext)
 	case bubbletea.KeyCtrlO:
 		picker.ToggleDensity()
 	case bubbletea.KeyCtrlE:
@@ -968,11 +978,12 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	}
 	if modal.kind == ModalKindPermissions {
 		m.modal = nil
+		m.permissionPopupPending = false
 		if cancelled {
 			m.notice = "Cancelled"
-			return nil
+			return m.settlePermissionPopup()
 		}
-		return m.applyPermissionsModalOption(response.OptionID)
+		return bubbletea.Batch(m.applyPermissionsModalOption(response.OptionID), m.settlePermissionPopup())
 	}
 	if modal.kind == ModalKindRateLimitSwitch {
 		m.modal = nil

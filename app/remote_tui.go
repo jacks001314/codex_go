@@ -432,7 +432,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// are built (the standalone `codex agents` dashboard drives the core
 	// directly instead of the tea model).
 	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
-	sessionPickerItems, sessionPickerNotice := interactiveRemoteSessionPickerItems(ctx, root, endpoint)
+	sessionPickerItems, sessionPickerNotice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
 	options := codextea.Options{
 		NoAltScreen:                  interactiveNoAltScreen(root, settings),
 		AlternateScreenMode:          settings.AlternateScreenMode,
@@ -544,6 +544,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		StartupConfigWarnings:   remoteTUIStartupConfigWarnings(settings.TUITheme),
 		TUIPet:                  settings.TUIPet,
 		CodexHome:               auth.DefaultCodexHome(),
+		HistoryPersistence:      settings.HistoryPersistence,
 		PetEnv:                  environmentMapFromEnviron(os.Environ()),
 		OnPostNotification:      interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
@@ -1523,7 +1524,7 @@ func runInteractiveRemotePrompt(ctx context.Context, root *cli.RootOptions, endp
 	return turnErr
 }
 
-func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint) ([]codextui.SessionSummary, string) {
+func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, backendID codextui.BackendID) ([]codextui.SessionSummary, string) {
 	client, err := openRemoteSessionClient(ctx, endpoint)
 	if err != nil {
 		return nil, ""
@@ -1531,36 +1532,54 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 	defer client.close()
 	provider := remoteTUIHistoryModelProvider(ctx, client, root)
 	items := []codextui.SessionSummary{}
+	catalog := codextui.NewThreadCatalog()
 	for _, archived := range []bool{false, true} {
+		catalog.Reset()
 		params := remoteTUIThreadListParams(root, archived)
 		if provider != "" {
 			params.ModelProviders = []string{provider}
 		}
-		var cursor *string
 		seenCursors := map[string]bool{}
 		for {
-			params.Cursor = cursor
+			request, ok := catalog.BeginPage(backendID, codextui.SessionPageLoadStoreDefault)
+			if !ok {
+				break
+			}
+			params.Cursor = request.Cursor
 			response, err := remoteThreadListWithCwdFallback(ctx, client, params)
 			if err != nil {
+				catalog.FinishPage(request, codextui.SessionPage{}, err)
 				if len(items) > 0 {
 					return items, "Could not load more sessions"
 				}
 				return nil, ""
 			}
-			for i := range response.Data {
-				if summary := remoteTUISessionSummaryFromThread(&response.Data[i], archived); summary != nil {
-					items = append(items, *summary)
+			page := codextui.SessionPage{
+				Rows:       codextui.SessionSummariesFromAppServerThreads(response.Data, archived),
+				NextCursor: response.NextCursor,
+			}
+			if page.NextCursor != nil {
+				next := strings.TrimSpace(*page.NextCursor)
+				if next == "" || seenCursors[next] {
+					page.NextCursor = nil
+				} else {
+					seenCursors[next] = true
 				}
 			}
-			if response.NextCursor == nil {
+			finished, finishErr, accepted := catalog.FinishPage(request, page, nil)
+			if !accepted {
 				break
 			}
-			next := strings.TrimSpace(*response.NextCursor)
-			if next == "" || seenCursors[next] {
+			if finishErr != nil {
+				if len(items) > 0 {
+					return items, "Could not load more sessions"
+				}
+				return nil, ""
+			}
+			items = append(items, finished.Rows...)
+			if finished.NextCursor == nil {
 				break
 			}
-			seenCursors[next] = true
-			cursor = response.NextCursor
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -1569,7 +1588,7 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 		}
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
-	return items, ""
+	return codextui.StampSessionSummariesBackend(items, backendID), ""
 }
 
 // remoteTUIHistoryModelProvider mirrors Rust #49161: an explicit CLI/profile
@@ -2603,17 +2622,15 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 	case itemType == "usermessage" || role == "user":
 		text := remoteTUIThreadItemUserText(item)
 		localImages, remoteImages := remoteTUIThreadItemPromptImages(item.Content)
-		return codextui.Message{
-			Role:                   codextui.RoleUser,
-			Text:                   text,
-			RawText:                text,
-			UserPrompt:             text,
-			UserPromptLocalImages:  localImages,
-			UserPromptRemoteImages: remoteImages,
-		}, strings.TrimSpace(text) != ""
+		return tuiUserMessageFromPrompt(text, localImages, remoteImages), hasVisibleTUIUserMessageText(text)
 	case itemType == "agentmessage" || itemType == "assistantmessage" || role == "assistant":
 		text := strings.TrimSpace(item.Text)
-		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, text != ""
+		return codextui.Message{
+			Role:           codextui.RoleAssistant,
+			Text:           text,
+			RawText:        text,
+			AsyncQuestions: tuiMessageAsyncQuestions(item.Data["questions"]),
+		}, text != ""
 	case itemType == "plan":
 		text := strings.TrimSpace(item.Text)
 		if text == "" {
@@ -3547,14 +3564,14 @@ func (c *remoteAppServerTUIClient) respondServerRequest(ctx context.Context, mes
 	if err := json.Unmarshal(message.ID, &id); err != nil {
 		return err
 	}
-	result, code, err := c.remoteServerRequestResult(ctx, appserver.ServerRequestMethod(strings.TrimSpace(message.Method)), message.Params)
+	result, code, err := c.remoteServerRequestResult(ctx, appserver.ServerRequestMethod(strings.TrimSpace(message.Method)), message.Params, id.String())
 	if err != nil {
 		return c.writeJSON(ctx, appserver.ErrorResponse(id, code, err.Error(), nil))
 	}
 	return c.writeJSON(ctx, appserver.OK(id, result))
 }
 
-func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context, method appserver.ServerRequestMethod, params json.RawMessage) (any, int, error) {
+func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context, method appserver.ServerRequestMethod, params json.RawMessage, requestID string) (any, int, error) {
 	switch method {
 	case appserver.ServerRequestCommandExecutionApproval:
 		var payload appserver.CommandExecutionRequestApprovalParams
@@ -3562,7 +3579,7 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 			return nil, -32602, err
 		}
 		c.sendSideParentRequestStatus(payload.ThreadID, codextea.SideParentStatusNeedsApproval)
-		result, err := c.commandExecutionApproval(ctx, &payload)
+		result, err := c.commandExecutionApproval(ctx, &payload, requestID)
 		return result, -32603, err
 	case appserver.ServerRequestFileChangeApproval:
 		var payload appserver.FileChangeRequestApprovalParams
@@ -3570,7 +3587,7 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 			return nil, -32602, err
 		}
 		c.sendSideParentRequestStatus(payload.ThreadID, codextea.SideParentStatusNeedsApproval)
-		result, err := c.fileChangeApproval(ctx, &payload)
+		result, err := c.fileChangeApproval(ctx, &payload, requestID)
 		return result, -32603, err
 	case appserver.ServerRequestPermissionsApproval:
 		var payload appserver.PermissionsRequestApprovalParams
@@ -3578,7 +3595,7 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 			return nil, -32602, err
 		}
 		c.sendSideParentRequestStatus(payload.ThreadID, codextea.SideParentStatusNeedsApproval)
-		result, err := c.permissionsApproval(ctx, &payload)
+		result, err := c.permissionsApproval(ctx, &payload, requestID)
 		return result, -32603, err
 	case appserver.ServerRequestToolUserInput:
 		var payload appserver.ToolRequestUserInputParams
@@ -3586,7 +3603,7 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 			return nil, -32602, err
 		}
 		c.sendSideParentRequestStatus(payload.ThreadID, codextea.SideParentStatusNeedsInput)
-		result, err := c.toolUserInput(ctx, &payload)
+		result, err := c.toolUserInput(ctx, &payload, requestID)
 		return result, -32603, err
 	case appserver.ServerRequestMCPElicitation:
 		var payload appserver.MCPElicitationRequestParams
@@ -3594,7 +3611,7 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 			return nil, -32602, err
 		}
 		c.sendSideParentRequestStatus(payload.ThreadID, codextea.SideParentStatusNeedsApproval)
-		result, err := c.mcpElicitation(ctx, &payload)
+		result, err := c.mcpElicitation(ctx, &payload, requestID)
 		return result, -32603, err
 	case appserver.ServerRequestDynamicToolCall:
 		var payload appserver.DynamicToolCallParams
@@ -3764,57 +3781,62 @@ func remoteDecodeServerRequestParams(params json.RawMessage, target any) error {
 	return nil
 }
 
-func (c *remoteAppServerTUIClient) commandExecutionApproval(ctx context.Context, params *appserver.CommandExecutionRequestApprovalParams) (*appserver.CommandExecutionRequestApprovalResponse, error) {
+func (c *remoteAppServerTUIClient) commandExecutionApproval(ctx context.Context, params *appserver.CommandExecutionRequestApprovalParams, requestID string) (*appserver.CommandExecutionRequestApprovalResponse, error) {
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
-		Title:   "Run command?",
-		Body:    remoteCommandExecutionApprovalBody(params),
-		Command: remoteCommandExecutionApprovalCommand(params),
-	})
+		Title:           "Run command?",
+		Body:            remoteCommandExecutionApprovalBody(params),
+		Command:         remoteCommandExecutionApprovalCommand(params),
+		ServerRequestID: requestID,
+	}, requestID)
 	if err != nil {
 		return nil, err
 	}
 	return &appserver.CommandExecutionRequestApprovalResponse{Decision: remoteCommandExecutionDecision(response)}, nil
 }
 
-func (c *remoteAppServerTUIClient) fileChangeApproval(ctx context.Context, params *appserver.FileChangeRequestApprovalParams) (*appserver.FileChangeRequestApprovalResponse, error) {
+func (c *remoteAppServerTUIClient) fileChangeApproval(ctx context.Context, params *appserver.FileChangeRequestApprovalParams, requestID string) (*appserver.FileChangeRequestApprovalResponse, error) {
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
-		Title: "Approve file changes?",
-		Body:  remoteFileChangeApprovalBody(params),
-	})
+		Title:           "Approve file changes?",
+		Body:            remoteFileChangeApprovalBody(params),
+		ServerRequestID: requestID,
+	}, requestID)
 	if err != nil {
 		return nil, err
 	}
 	return &appserver.FileChangeRequestApprovalResponse{Decision: remoteFileChangeDecision(response)}, nil
 }
 
-func (c *remoteAppServerTUIClient) applyPatchApproval(ctx context.Context, params *appserver.ApplyPatchApprovalParams) (*appserver.ApplyPatchApprovalResponse, error) {
+func (c *remoteAppServerTUIClient) applyPatchApproval(ctx context.Context, params *appserver.ApplyPatchApprovalParams, requestID string) (*appserver.ApplyPatchApprovalResponse, error) {
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
-		Title: "Apply patch?",
-		Body:  remoteApplyPatchApprovalBody(params),
-	})
+		Title:           "Apply patch?",
+		Body:            remoteApplyPatchApprovalBody(params),
+		ServerRequestID: requestID,
+	}, requestID)
 	if err != nil {
 		return nil, err
 	}
 	return &appserver.ApplyPatchApprovalResponse{Decision: remoteReviewDecision(response)}, nil
 }
 
-func (c *remoteAppServerTUIClient) execCommandApproval(ctx context.Context, params *appserver.ExecCommandApprovalParams) (*appserver.ExecCommandApprovalResponse, error) {
+func (c *remoteAppServerTUIClient) execCommandApproval(ctx context.Context, params *appserver.ExecCommandApprovalParams, requestID string) (*appserver.ExecCommandApprovalResponse, error) {
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
-		Title:   "Run command?",
-		Body:    remoteExecCommandApprovalBody(params),
-		Command: strings.Join(params.Command, " "),
-	})
+		Title:           "Run command?",
+		Body:            remoteExecCommandApprovalBody(params),
+		Command:         strings.Join(params.Command, " "),
+		ServerRequestID: requestID,
+	}, requestID)
 	if err != nil {
 		return nil, err
 	}
 	return &appserver.ExecCommandApprovalResponse{Decision: remoteReviewDecision(response)}, nil
 }
 
-func (c *remoteAppServerTUIClient) permissionsApproval(ctx context.Context, params *appserver.PermissionsRequestApprovalParams) (*appserver.PermissionsRequestApprovalResponse, error) {
+func (c *remoteAppServerTUIClient) permissionsApproval(ctx context.Context, params *appserver.PermissionsRequestApprovalParams, requestID string) (*appserver.PermissionsRequestApprovalResponse, error) {
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
-		Title: "Grant permissions?",
-		Body:  remotePermissionsApprovalBody(params),
-	})
+		Title:           "Grant permissions?",
+		Body:            remotePermissionsApprovalBody(params),
+		ServerRequestID: requestID,
+	}, requestID)
 	if err != nil {
 		return nil, err
 	}
@@ -3832,7 +3854,7 @@ func (c *remoteAppServerTUIClient) permissionsApproval(ctx context.Context, para
 	}, nil
 }
 
-func (c *remoteAppServerTUIClient) toolUserInput(ctx context.Context, params *appserver.ToolRequestUserInputParams) (*appserver.ToolRequestUserInputResponse, error) {
+func (c *remoteAppServerTUIClient) toolUserInput(ctx context.Context, params *appserver.ToolRequestUserInputParams, requestID string) (*appserver.ToolRequestUserInputResponse, error) {
 	questions := remoteUserInputQuestions(params)
 	if c == nil || c.brokers.userInput == nil || c.messages == nil {
 		return remoteEmptyUserInputResponse(questions), nil
@@ -3840,6 +3862,7 @@ func (c *remoteAppServerTUIClient) toolUserInput(ctx context.Context, params *ap
 	id, responses := c.brokers.userInput.registerRequest()
 	c.send(codextea.RequestUserInputMsg{
 		ID:               id,
+		ServerRequestID:  requestID,
 		Questions:        questions,
 		AutoResolutionMS: remoteAutoResolutionMS(params),
 	})
@@ -3855,7 +3878,7 @@ func (c *remoteAppServerTUIClient) toolUserInput(ctx context.Context, params *ap
 	}
 }
 
-func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *appserver.MCPElicitationRequestParams) (*appserver.MCPElicitationRequestResponse, error) {
+func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *appserver.MCPElicitationRequestParams, serverRequestID string) (*appserver.MCPElicitationRequestResponse, error) {
 	if params == nil {
 		params = &appserver.MCPElicitationRequestParams{}
 	}
@@ -3874,6 +3897,7 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 	}
 	c.send(codextea.ElicitationRequestMsg{
 		ID:              id,
+		ServerRequestID: serverRequestID,
 		ServerName:      serverName,
 		RequestID:       requestID,
 		ThreadID:        strings.TrimSpace(params.ThreadID),
@@ -3945,12 +3969,13 @@ func (c *remoteAppServerTUIClient) verifyUserVerification(ctx context.Context, p
 	return response.Proof, nil
 }
 
-func (c *remoteAppServerTUIClient) remoteApproval(ctx context.Context, message codextea.ApprovalRequestMsg) (codextea.ModalResponse, error) {
+func (c *remoteAppServerTUIClient) remoteApproval(ctx context.Context, message codextea.ApprovalRequestMsg, requestID string) (codextea.ModalResponse, error) {
 	if c == nil || c.brokers.approval == nil || c.messages == nil {
 		return codextea.ModalResponse{Kind: codextea.ModalKindApproval, Cancelled: true}, nil
 	}
 	id, responses := c.brokers.approval.registerRequest()
 	message.ID = id
+	message.ServerRequestID = requestID
 	c.send(message)
 	if ctx == nil {
 		ctx = context.Background()
@@ -4809,6 +4834,10 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return err
 		}
 		c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeClearActionable, "")
+		c.send(codextea.ServerRequestResolvedMsg{
+			ThreadID:  payload.ThreadID,
+			RequestID: payload.RequestID.String(),
+		})
 	case appserver.NotificationThreadClosed:
 		var payload appserver.ThreadClosedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

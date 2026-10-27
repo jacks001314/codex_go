@@ -25,42 +25,41 @@ func typeComposerRunes(t *testing.T, model *Model, text string) *Model {
 	return model
 }
 
-// TestComposerRendersSlashPrefixAsPromptMarker pins #54742: the leading `/`
-// moves into the prompt marker and out of the editable body while the
-// canonical draft keeps it.
-func TestComposerRendersSlashPrefixAsPromptMarker(t *testing.T) {
+// TestComposerKeepsSlashPrefixInEditableText pins #56021: the leading `/`
+// stays in the textarea and renders after the normal composer prompt.
+func TestComposerKeepsSlashPrefixInEditableText(t *testing.T) {
 	model := prefixTestModel(t)
 	model = typeComposerRunes(t, model, "/")
 
-	if model.composerPrefix != composerPrefixSlash {
-		t.Fatalf("prefix = %v, want slash", model.composerPrefix)
+	if model.composerPrefix != composerPrefixNone {
+		t.Fatalf("prefix = %v, want none", model.composerPrefix)
 	}
-	if body := model.composer.Value(); body != "" {
-		t.Fatalf("body = %q, want empty", body)
+	if body := model.composer.Value(); body != "/" {
+		t.Fatalf("body = %q, want /", body)
 	}
 	if text := model.composerText(); text != "/" {
 		t.Fatalf("composerText() = %q, want /", text)
 	}
-	if model.composer.Prompt != "/ " {
-		t.Fatalf("prompt = %q, want %q", model.composer.Prompt, "/ ")
+	if model.composer.Prompt != "> " {
+		t.Fatalf("prompt = %q, want %q", model.composer.Prompt, "> ")
 	}
 	if model.ComposerValue() != "/" {
 		t.Fatalf("ComposerValue() = %q, want /", model.ComposerValue())
 	}
 
 	model = typeComposerRunes(t, model, "help")
-	if body := model.composer.Value(); body != "help" {
-		t.Fatalf("body = %q, want help", body)
+	if body := model.composer.Value(); body != "/help" {
+		t.Fatalf("body = %q, want /help", body)
 	}
 	if text := model.composerText(); text != "/help" {
 		t.Fatalf("composerText() = %q, want /help", text)
 	}
 	view := model.View()
-	if !strings.Contains(view, "/ help") {
-		t.Fatalf("composer view is missing the slash prompt marker:\n%s", view)
+	if !strings.Contains(view, "> /help") {
+		t.Fatalf("composer view is missing the editable slash command:\n%s", view)
 	}
-	if model.composer.Value() != "help" {
-		t.Fatalf("body = %q, want the slash removed from the editable text", model.composer.Value())
+	if model.composer.Value() != "/help" {
+		t.Fatalf("body = %q, want the slash kept in the editable text", model.composer.Value())
 	}
 }
 
@@ -146,12 +145,12 @@ func TestComposerSubmitAndHistoryKeepPromptPrefix(t *testing.T) {
 	}
 }
 
-// TestComposerPromptImportAbsorbsPrefix pins setComposerPrompt, the path used
+// TestComposerPromptImportKeepsSlashText pins setComposerPrompt, the path used
 // by history, backtracking, queued-message restore and the external editor.
 func TestComposerPromptImportAbsorbsPrefix(t *testing.T) {
 	model := prefixTestModel(t)
 	model.setComposerPrompt("/review src")
-	if model.composerPrefix != composerPrefixSlash || model.composer.Value() != "review src" {
+	if model.composerPrefix != composerPrefixNone || model.composer.Value() != "/review src" {
 		t.Fatalf("imported prefix=%v body=%q", model.composerPrefix, model.composer.Value())
 	}
 
@@ -171,13 +170,12 @@ func TestComposerPromptImportAbsorbsPrefix(t *testing.T) {
 	}
 }
 
-// TestComposerSlashPromptKeepsTextElementOffsetsLikeRust pins #54742's
-// structured-element half: the prompt prefix is part of canonical text, while
-// the tracked range stays relative to the editable body.
+// TestComposerSlashPromptKeepsTextElementOffsetsLikeRust pins that slash text
+// stays in the editable body, so tracked ranges need no prompt shift.
 func TestComposerSlashPromptKeepsTextElementOffsetsLikeRust(t *testing.T) {
 	model := prefixTestModel(t)
 	model.setComposerPrompt("/tmp/$imagegen file")
-	model.registerComposerElement(model.composer.Value(), len("tmp/"), len("tmp/$imagegen"))
+	model.registerComposerElement(model.composer.Value(), len("/tmp/"), len("/tmp/$imagegen"))
 	if got := model.composerText(); got != "/tmp/$imagegen file" {
 		t.Fatalf("draft = %q, want /tmp/$imagegen file", got)
 	}
@@ -205,25 +203,25 @@ func TestComposerSlashPromptKeepsTextElementOffsetsLikeRust(t *testing.T) {
 }
 
 // TestComposerHistoryRecallRestoresTextElementsLikeRust covers the history
-// round trip required by #54742: recalling a slash-command prompt restores the
-// marker and keeps structured ranges aligned with the body.
+// round trip: recalling a slash-command prompt keeps structured ranges aligned
+// with the editable body.
 func TestComposerHistoryRecallRestoresTextElementsLikeRust(t *testing.T) {
 	model := prefixTestModel(t)
 	model.setComposerPrompt("/tmp/$imagegen file")
-	model.registerComposerElement(model.composer.Value(), len("tmp/"), len("tmp/$imagegen"))
+	model.registerComposerElement(model.composer.Value(), len("/tmp/"), len("/tmp/$imagegen"))
 
 	model.submitComposer()
 	updated, _ := model.Update(key(bubbletea.KeyUp))
 	model = updated.(*Model)
 
-	if model.composerPrefix != composerPrefixSlash || model.composer.Value() != "tmp/$imagegen file" {
+	if model.composerPrefix != composerPrefixNone || model.composer.Value() != "/tmp/$imagegen file" {
 		t.Fatalf("recalled prefix=%v body=%q", model.composerPrefix, model.composer.Value())
 	}
 	if len(model.composerElements) != 1 {
 		t.Fatalf("recalled elements = %#v, want one", model.composerElements)
 	}
 	element := model.composerElements[0]
-	if element.Start != len("tmp/") || element.End != len("tmp/$imagegen") || element.Placeholder != "$imagegen" {
+	if element.Start != len("/tmp/") || element.End != len("/tmp/$imagegen") || element.Placeholder != "$imagegen" {
 		t.Fatalf("recalled element = %#v", element)
 	}
 }

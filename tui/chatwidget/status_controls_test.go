@@ -37,26 +37,28 @@ func TestStatusControlsSetStatusRefreshesTitleWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestStatusLineFastModeHidesForUnsupportedCatalogModelLikeRust(t *testing.T) {
+func TestStatusLineProcessingTierMatchesRust(t *testing.T) {
 	cases := []struct {
-		name         string
-		fastMode     bool
-		supportsFast bool
-		want         string
-		wantOK       bool
+		name string
+		tier string
+		want string
 	}{
-		{name: "catalogued unsupported model hides fast mode", fastMode: true, supportsFast: false, want: "", wantOK: false},
-		{name: "supported model shows fast on", fastMode: true, supportsFast: true, want: "Fast on", wantOK: true},
-		{name: "supported model shows fast off", fastMode: false, supportsFast: true, want: "Fast off", wantOK: true},
+		{name: "unset renders standard", want: "Standard"},
+		{name: "catalog name wins", tier: "Fast", want: "Fast"},
+		{name: "flex fallback", tier: "Flex", want: "Flex"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			state := NewStatusControlsState(StatusControlsRuntime{FastMode: tc.fastMode, ModelSupportsFastMode: tc.supportsFast})
+			state := NewStatusControlsState(StatusControlsRuntime{ProcessingTier: tc.tier})
 			got, ok := state.StatusLineValueForItem(bottompane.StatusLineFastMode)
-			if ok != tc.wantOK || got != tc.want {
-				t.Fatalf("fast mode = %q ok=%v, want %q ok=%v", got, ok, tc.want, tc.wantOK)
+			if !ok || got != tc.want {
+				t.Fatalf("processing tier = %q ok=%v, want %q ok=true", got, ok, tc.want)
 			}
 		})
+	}
+	state := NewStatusControlsState(StatusControlsRuntime{ModelName: "gpt-5.4", ReasoningEffort: "high", ProcessingTier: "fast"})
+	if got, ok := state.StatusLineValueForItem(bottompane.StatusLineModelWithReasoning); !ok || got != "gpt-5.4 high fast" {
+		t.Fatalf("model-with-reasoning = %q ok=%v, want gpt-5.4 high fast", got, ok)
 	}
 }
 

@@ -1335,6 +1335,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		TUITheme:                   settings.TUITheme,
 		TUIPet:                     settings.TUIPet,
 		CodexHome:                  auth.DefaultCodexHome(),
+		HistoryPersistence:         settings.HistoryPersistence,
 		PetEnv:                     environmentMapFromEnviron(os.Environ()),
 		OnPostNotification:         interactiveNotificationPoster(stdout),
 		OnReadDebugConfig:          interactiveDebugConfigReader(root),
@@ -1443,14 +1444,24 @@ func interactiveAutoThreadTitle(prompt string) string {
 // managed_new_thread_defaults.rs, #44693); the ordering is preserved here.
 func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.State) appserver.ThreadStartParams {
 	threadStart := appserver.ThreadStartParams{
-		CWD:            strings.TrimSpace(state.CWD),
-		Model:          strings.TrimSpace(state.Model),
-		ApprovalPolicy: strings.TrimSpace(state.ApprovalPolicy),
-		Sandbox:        strings.TrimSpace(state.Sandbox),
+		CWD:     strings.TrimSpace(state.CWD),
+		Model:   strings.TrimSpace(state.Model),
+		Sandbox: strings.TrimSpace(state.Sandbox),
 	}
+	// Rust #56090/#56516: the bootstrap thread carries only explicit launch
+	// choices; the embedded server resolves the rest from the shared config.
+	overrides := launchConfigOverrides(root)
+	selection := resolveStartupApprovalSelection(launchTypedApprovalPolicy(root), overrides)
+	applyStartupApprovalSelection(&threadStart, selection)
+	applyStartupApprovalsReviewer(&threadStart, overrides)
 	if defaults, ok := interactiveProjectlessThreadDefaults(root, state); ok {
 		threadStart.Sandbox = string(defaults.SandboxMode)
-		threadStart.ApprovalPolicy = projectlessApprovalPolicyParam(defaults)
+		// Rust apply_projectless_approval_policy: only an otherwise-unset
+		// policy adopts the implicit granular default, and only when managed
+		// requirements allow it.
+		if selection.policy == nil && !selection.configOverride && startupApprovalPolicyAllowed(defaults.Requirements) {
+			threadStart.ApprovalPolicy = projectlessApprovalPolicyParam(defaults)
+		}
 	}
 	defaults, layers, hasManagedDefaults := localNewThreadModelDefaults(root, threadStart.CWD)
 	threadStart.ModelProvider = interactiveThreadStartModelProvider(root, state, layers)
@@ -1697,29 +1708,77 @@ func pickerMetricsAuthMode(resolved *auth.ResolvedAuth) string {
 	return "chatgpt"
 }
 
-func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func(bool) ([]codextui.ModelPickerOption, error) {
+func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+	var (
+		mu       sync.Mutex
+		cacheCWD string
+		cached   *interactiveModelListSource
+	)
+	return func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		cwd = strings.TrimSpace(cwd)
+		mu.Lock()
+		if cached == nil || cacheCWD != cwd {
+			source, err := newInteractiveModelListSource(root, hasChatGPTAccount, cwd)
+			if err != nil {
+				mu.Unlock()
+				return nil, err
+			}
+			cached, cacheCWD = source, cwd
+		}
+		source := cached
+		mu.Unlock()
+		presets := source.manager.ListModels(modelpkg.RefreshOnlineIfUncached)
+		var options []codextui.ModelPickerOption
+		if includeHidden {
+			options = codextui.ModelPickerOptionsFromPresetsIncludingHidden(presets)
+		} else {
+			options = codextui.ModelPickerOptionsFromPresets(presets)
+		}
+		return constrainAPIModelAccessPrograms(options, source.apiKeyAuth, source.values), nil
+	}
+}
+
+// interactiveModelListSource is the per-directory model catalog source. The
+// manager is reused while the session stays in one directory, and rebuilt when
+// an attached session moves to another project (Rust #55682).
+type interactiveModelListSource struct {
+	manager    *modelpkg.RemoteModelsManager
+	values     map[string]any
+	apiKeyAuth bool
+}
+
+func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool, cwd string) (*interactiveModelListSource, error) {
 	codexHome := auth.DefaultCodexHome()
-	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
-	if err != nil || loaded == nil {
-		return nil
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveModelListLoadOptions(root, cwd))
+	if err != nil {
+		return nil, fmt.Errorf("load model catalog config: %w", err)
+	}
+	if loaded == nil {
+		return nil, errors.New("load model catalog config: empty configuration")
 	}
 	providerInfo, err := modelpkg.ProviderInfoFromConfig(loaded.Values)
-	if err != nil || providerInfo == nil {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("resolve model provider: %w", err)
+	}
+	if providerInfo == nil {
+		return nil, errors.New("resolve model provider: no provider configured")
 	}
 	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
 	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
-	if err != nil || resolved == nil {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("resolve model catalog auth: %w", err)
+	}
+	if resolved == nil {
+		return nil, errors.New("resolve model catalog auth: no credential")
 	}
 	provider := modelpkg.CreateRuntimeProviderForID("", *providerInfo, &resolved.Auth)
 	apiProvider, err := provider.APIProvider()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("resolve model provider API: %w", err)
 	}
 	authHeaders, err := provider.APIAuth()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("resolve model provider auth: %w", err)
 	}
 	var base *modelpkg.ModelsResponse
 	if catalog := modelpkg.ModelsCatalogFromConfigValues(loaded.Values); catalog != nil {
@@ -1731,22 +1790,31 @@ func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func
 		ModelCatalog:                    base,
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
-		HasAuth:                         resolved != nil,
+		HasAuth:                         true,
 		MetricsAuthMode:                 pickerMetricsAuthMode(resolved),
 	})
 	if manager == nil {
-		return nil
+		return nil, errors.New("create model catalog manager")
 	}
-	return func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
-		presets := manager.ListModels(modelpkg.RefreshOnlineIfUncached)
-		var options []codextui.ModelPickerOption
-		if includeHidden {
-			options = codextui.ModelPickerOptionsFromPresetsIncludingHidden(presets)
-		} else {
-			options = codextui.ModelPickerOptionsFromPresets(presets)
-		}
-		return constrainAPIModelAccessPrograms(options, modelpkg.AuthUsesAPIKey(&resolved.Auth), loaded.Values), nil
+	return &interactiveModelListSource{
+		manager:    manager,
+		values:     loaded.Values,
+		apiKeyAuth: modelpkg.AuthUsesAPIKey(&resolved.Auth),
+	}, nil
+}
+
+// interactiveModelListLoadOptions resolves the config layer for the model
+// catalog of one working directory. The explicit session cwd wins over the
+// launch cwd so an attached project's provider/catalog settings apply.
+func interactiveModelListLoadOptions(root *cli.RootOptions, cwd string) *config.EffectiveOptions {
+	options := interactiveKeymapLoadOptions(root)
+	if options == nil {
+		options = &config.EffectiveOptions{}
 	}
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		options.CWD = cwd
+	}
+	return options
 }
 
 func interactiveMCPStartupMessages(ctx context.Context, service *mcp.MCPService, runner *codexexec.Runner, expectedServers []string) <-chan bubbletea.Msg {
@@ -2258,7 +2326,21 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		QuickDials:             quickDials,
 		PluginUserMarketplaces: userMarketplaces,
 		PluginGitMarketplaces:  gitMarketplaces,
+		HistoryPersistence:     interactiveHistoryPersistenceFromConfig(values),
 	}
+}
+
+// interactiveHistoryPersistenceFromConfig resolves `history.persistence`
+// (Rust HistoryPersistence, kebab-case). The config default is `save-all`.
+func interactiveHistoryPersistenceFromConfig(values map[string]any) string {
+	history, ok := values["history"].(map[string]any)
+	if !ok {
+		return "save-all"
+	}
+	if persistence, ok := history["persistence"].(string); ok && strings.EqualFold(strings.TrimSpace(persistence), "none") {
+		return "none"
+	}
+	return "save-all"
 }
 
 // interactiveAnimationsEnabled resolves the effective `tui.animations` value:
@@ -3156,7 +3238,7 @@ func interactiveApprovalReviewersFromStrings(values []string) []chatwidget.Appro
 		switch strings.ToLower(strings.TrimSpace(value)) {
 		case "user":
 			reviewer = chatwidget.ApprovalsReviewerUser
-		case "auto_review", "auto-review":
+		case "auto_review", "auto-review", "guardian_subagent":
 			reviewer = chatwidget.ApprovalsReviewerAutoReview
 		default:
 			continue
@@ -3285,7 +3367,7 @@ func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSumm
 	if err != nil {
 		return nil
 	}
-	return items
+	return codextui.StampSessionSummariesBackend(items, codextui.ProcessBackendID())
 }
 
 // interactiveHistoryModelProvider mirrors Rust #49161's history provider:
@@ -3703,14 +3785,7 @@ func interactiveSessionMessageFromItem(item session.Item, projection reasoningPr
 	case itemType == "usermessage" || role == "user":
 		text := interactiveSessionItemUserText(item)
 		localImages, remoteImages := interactiveSessionPromptImages(item.Content)
-		return codextui.Message{
-			Role:                   codextui.RoleUser,
-			Text:                   text,
-			RawText:                text,
-			UserPrompt:             text,
-			UserPromptLocalImages:  localImages,
-			UserPromptRemoteImages: remoteImages,
-		}, strings.TrimSpace(text) != ""
+		return tuiUserMessageFromPrompt(text, localImages, remoteImages), hasVisibleTUIUserMessageText(text)
 	case itemType == "imagegeneration" || itemType == "imagegenerationcall":
 		text := interactiveSessionItemImageGenerationText(item)
 		if text == "" {
@@ -3719,7 +3794,12 @@ func interactiveSessionMessageFromItem(item session.Item, projection reasoningPr
 		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}, true
 	case itemType == "agentmessage" || itemType == "assistantmessage" || role == "assistant":
 		text := strings.TrimSpace(item.Text)
-		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, text != ""
+		return codextui.Message{
+			Role:           codextui.RoleAssistant,
+			Text:           text,
+			RawText:        text,
+			AsyncQuestions: tuiMessageAsyncQuestions(item.Metadata["questions"]),
+		}, text != ""
 	case itemType == "plan":
 		text := strings.TrimSpace(item.Text)
 		if text == "" {

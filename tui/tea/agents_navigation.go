@@ -7,14 +7,15 @@ import (
 )
 
 // Rust parity: codex-rs/tui/src/bottom_pane/chat_composer/agents_navigation.rs
-// (#41917). Only local-daemon sessions enable the empty-prompt `Left`
-// shortcut. Draft contents, attachments, transient input surfaces, and explicit
-// editor/Vim remaps take precedence over navigation.
+// (#41917, #57281). Local-daemon and remote App Server sessions enable the
+// empty-prompt `Left` shortcut; embedded sessions keep the command center
+// unavailable. Draft contents, attachments, transient input surfaces, and
+// explicit editor/Vim remaps take precedence over navigation.
 
 // agentsNavigationAvailable reports whether a plain Left press should open the
 // agents overview instead of moving the composer cursor.
 func (m *Model) agentsNavigationAvailable() bool {
-	if m == nil || !m.localDaemonSession {
+	if m == nil || !m.commandCenterAvailable() {
 		return false
 	}
 	if m.modal != nil || m.overlay != nil || m.readOnlyThread || m.windowsSandboxSetupActive {

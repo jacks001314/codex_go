@@ -31,18 +31,25 @@ func TestAgentsOverviewGroupingPersistsLikeRust(t *testing.T) {
 		t.Fatalf("default grouping = %v, want project", model.agentsOverview.State.Grouping)
 	}
 
+	// Rust #56308: Directory participates in the cycle but is view-local, so it
+	// produces no write while still becoming the remembered grouping.
 	for _, want := range []struct {
 		value    string
 		grouping agentsoverview.Grouping
+		writes   bool
 	}{
-		{"status", agentsoverview.GroupingStatus},
-		{"model", agentsoverview.GroupingModel},
-		{"project", agentsoverview.GroupingProject},
+		{"", agentsoverview.GroupingDirectory, false},
+		{"status", agentsoverview.GroupingStatus, true},
+		{"model", agentsoverview.GroupingModel, true},
+		{"project", agentsoverview.GroupingProject, true},
 	} {
 		updated, command := model.Update(agentsKeyEvent('g'))
 		model = updated.(*Model)
-		if command == nil {
+		if want.writes && command == nil {
 			t.Fatalf("grouping toggle to %q returned no persistence command", want.value)
+		}
+		if !want.writes && command != nil {
+			t.Fatalf("directory grouping toggle returned a persistence command")
 		}
 		if model.agentsOverview.State.Grouping != want.grouping {
 			t.Fatalf("live grouping = %v, want %v", model.agentsOverview.State.Grouping, want.grouping)
@@ -50,9 +57,10 @@ func TestAgentsOverviewGroupingPersistsLikeRust(t *testing.T) {
 		if model.agentsOverviewGrouping != want.grouping {
 			t.Fatalf("remembered grouping = %v, want %v", model.agentsOverviewGrouping, want.grouping)
 		}
-		message := command()
-		updated, _ = model.Update(message)
-		model = updated.(*Model)
+		if command != nil {
+			updated, _ = model.Update(command())
+			model = updated.(*Model)
+		}
 	}
 
 	if len(edits) != 3 {
@@ -81,6 +89,8 @@ func TestAgentsOverviewGroupingSaveFailureLikeRust(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
+	updated, _ := model.Update(agentsKeyEvent('g')) // project -> directory (no write)
+	model = updated.(*Model)
 	updated, command := model.Update(agentsKeyEvent('g'))
 	model = updated.(*Model)
 	if model.agentsOverview.State.Grouping != agentsoverview.GroupingStatus {

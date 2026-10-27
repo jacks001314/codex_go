@@ -2,6 +2,7 @@ package tea
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 			return SkillsInventoryResultMsg{CWD: cwd, Response: response, Err: err}
 		}
 	}
-	items := filterSkillPopupItems(skillPopupItemsFromResponse(*m.skillsInventory, cwd), query)
+	items := filterSkillPopupItems(skillPopupItemsFromResponse(*m.skillsInventory, cwd), query, m.mentionUsage.frequencies())
 	selected := 0
 	if len(items) == 0 {
 		selected = -1
@@ -454,6 +455,7 @@ func (m *Model) insertMentionSelection(selection mentionsv2.Selection) {
 	if selection.Kind == mentionsv2.SelectionTool || selection.Kind == mentionsv2.SelectionFile {
 		m.registerComposerElement(text, insertStart, insertEnd)
 	}
+	m.mentionUsage.record(selection.Path)
 	if selection.Kind == mentionsv2.SelectionTool {
 		m.addComposerMentionBinding(insert + "|" + strings.TrimSpace(selection.Path))
 	}
@@ -505,6 +507,7 @@ func (m *Model) insertSelectedSkillPopupItem() bool {
 	text := replaceSkillPopupToken(m.composer.Value(), insert+" ")
 	m.composer.SetValue(text)
 	m.addComposerSkillMentionBinding(item)
+	m.mentionUsage.record(item.Path)
 	m.skillPopup = skillPopupState{}
 	return true
 }
@@ -678,10 +681,36 @@ func skillPopupItemsFromResponse(response appserver.SkillsListResponse, cwd stri
 	return items
 }
 
-func filterSkillPopupItems(items []skillPopupItem, query string) []skillPopupItem {
+type skillPopupMatchTier int
+
+const (
+	skillPopupTierExact skillPopupMatchTier = iota
+	skillPopupTierPrefix
+	skillPopupTierFuzzy
+)
+
+func (item skillPopupItem) matchTier(lowercaseQuery string) skillPopupMatchTier {
+	displayName := strings.ToLower(strings.TrimSpace(item.DisplayName))
+	insertName := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(item.Name), "$"))
+	switch {
+	case displayName == lowercaseQuery || insertName == lowercaseQuery:
+		return skillPopupTierExact
+	case strings.HasPrefix(displayName, lowercaseQuery) || strings.HasPrefix(insertName, lowercaseQuery):
+		return skillPopupTierPrefix
+	default:
+		return skillPopupTierFuzzy
+	}
+}
+
+// filterSkillPopupItems mirrors Rust SkillPopup::filtered (#55596): stronger
+// match tiers stay ahead of usage preferences, and confirmed selections rank
+// within a tier.
+func filterSkillPopupItems(items []skillPopupItem, query string, frequencies map[string]int) []skillPopupItem {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
-		return append([]skillPopupItem(nil), items...)
+		out := append([]skillPopupItem(nil), items...)
+		sortSkillPopupItems(out, "", frequencies)
+		return out
 	}
 	out := []skillPopupItem{}
 	for _, item := range items {
@@ -692,7 +721,30 @@ func filterSkillPopupItems(items []skillPopupItem, query string) []skillPopupIte
 			}
 		}
 	}
+	sortSkillPopupItems(out, query, frequencies)
 	return out
+}
+
+func sortSkillPopupItems(items []skillPopupItem, query string, frequencies map[string]int) {
+	if len(items) < 2 {
+		return
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		at, bt := skillPopupTierFuzzy, skillPopupTierFuzzy
+		if query != "" {
+			at = a.matchTier(query)
+			bt = b.matchTier(query)
+		}
+		if at != bt {
+			return at < bt
+		}
+		af, bf := frequencies[strings.TrimSpace(a.Path)], frequencies[strings.TrimSpace(b.Path)]
+		if af != bf {
+			return af > bf
+		}
+		return a.DisplayName < b.DisplayName
+	})
 }
 
 func skillPopupNameWidth(items []skillPopupItem) int {

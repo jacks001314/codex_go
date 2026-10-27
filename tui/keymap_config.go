@@ -897,7 +897,7 @@ func knownKeymapConfigContexts() map[string]struct{} {
 
 func knownKeymapConfigActions(context string) map[string]struct{} {
 	out := map[string]struct{}{}
-	for _, action := range keymapActionCatalog {
+	for _, action := range KeymapConfigActions(KeymapActionFilter{FastModeEnabled: true}) {
 		if action.Context == context {
 			out[action.Action] = struct{}{}
 		}

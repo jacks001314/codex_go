@@ -55,16 +55,15 @@ func TestAgentsNavigationOpensOverviewFromEmptyComposerLikeRust(t *testing.T) {
 	}
 }
 
-// Only LocalDaemon sessions enable the shortcut; embedded and remote sessions
-// keep Left for the composer.
-func TestAgentsNavigationRequiresLocalDaemonLikeRust(t *testing.T) {
+// Local-daemon and remote sessions enable the shortcut; embedded sessions keep
+// Left for the composer (Rust #57281 supports_command_center).
+func TestAgentsNavigationRequiresSharedAppServerLikeRust(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
 		options Options
 	}{
 		{name: "embedded", options: Options{}},
 		{name: "embedded dashboard", options: Options{AgentsOverviewEmbedded: true}},
-		{name: "remote", options: Options{RemoteAppServer: true, LocalSession: true}},
 	} {
 		model := agentsNavigationModel(t, testCase.options)
 		if strings.Contains(utils.StripANSI(model.View()), "for agents") {
@@ -75,6 +74,18 @@ func TestAgentsNavigationRequiresLocalDaemonLikeRust(t *testing.T) {
 		if command != nil || model.agentsOverview != nil {
 			t.Fatalf("%s session opened the agents overview", testCase.name)
 		}
+	}
+}
+
+func TestAgentsNavigationOpensOverviewForRemoteSessionLikeRust(t *testing.T) {
+	model := agentsNavigationModel(t, Options{RemoteAppServer: true})
+	if !strings.Contains(utils.StripANSI(model.View()), "for agents") {
+		t.Fatal("remote session is missing the agents footer hint")
+	}
+	updated, command := model.Update(key(bubbletea.KeyLeft))
+	model = updated.(*Model)
+	if command == nil || model.agentsOverview == nil {
+		t.Fatal("remote session did not open the agents overview")
 	}
 }
 

@@ -28,6 +28,35 @@ func TestInteractiveRemoteWorkloadIdentityRejectionLikeRust(t *testing.T) {
 	}
 }
 
+// TestLoadedUserReplyPreservesStructuredRepliesLikeRust mirrors Rust #57292:
+// remote and local history projections both keep the decoded reply pairs so the
+// transcript does not flatten the answer back into the user surface.
+func TestLoadedUserReplyPreservesStructuredRepliesLikeRust(t *testing.T) {
+	text := "<send_user_message_question_reply>\n" +
+		`[{"questionItemId":"one","question":"Which **database**?","answer":"Use **Postgres**."}]` +
+		"\n</send_user_message_question_reply>"
+	remote, ok := remoteTUIMessageFromThreadItem(appserver.ThreadItem{
+		ID: "remote-reply", Type: "userMessage", Text: text,
+	}, reasoningProjectionChatWidget, false)
+	if !ok || len(remote.AsyncQuestionReplies) != 1 {
+		t.Fatalf("remote reply = %#v ok=%v", remote, ok)
+	}
+	local, ok := interactiveSessionMessageFromItem(session.Item{
+		ID: "local-reply", Type: "user_message", Text: text,
+	}, reasoningProjectionChatWidget, false)
+	if !ok || len(local.AsyncQuestionReplies) != 1 {
+		t.Fatalf("local reply = %#v ok=%v", local, ok)
+	}
+	for name, message := range map[string]codextui.Message{"remote": remote, "local": local} {
+		if message.Text != "> Which **database**?\n\nUse **Postgres**." {
+			t.Fatalf("%s reply display = %q", name, message.Text)
+		}
+		if message.AsyncQuestionReplies[0].QuestionItemID != "one" {
+			t.Fatalf("%s reply identity = %#v", name, message.AsyncQuestionReplies[0])
+		}
+	}
+}
+
 // TestInteractiveHideRateLimitModelNudgeAcceptsRustAndLegacyTables pins the
 // notice suppression read: both Rust's `notice` table and the legacy Go
 // `notices` table are honored, with the Rust name winning when both exist.

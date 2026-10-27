@@ -43,6 +43,78 @@ func TestBaseCellsDisplayRawAndHyperlinks(t *testing.T) {
 	}
 }
 
+// TestUserMessagePresentationLikeRust mirrors Rust #57291: typed prompts use
+// the default plain presentation, while a spoken prompt keeps the red marker
+// and drops the whitespace the marker already supplies.
+func TestUserMessagePresentationLikeRust(t *testing.T) {
+	plain := NewUserPrompt("hello", nil, nil, nil)
+	if plain.IsSpoken() || plain.Presentation != UserMessagePresentationPlain {
+		t.Fatalf("new user prompt presentation = %v", plain.Presentation)
+	}
+	plainLines := plain.DisplayLines(40)
+	if !strings.Contains(strings.Join(plainLines, "\n"), ansiUserMessagePrefix) {
+		t.Fatalf("plain prompt marker = %#v", plainLines)
+	}
+
+	spoken := NewSpokenUserPrompt("  hello")
+	if !spoken.IsSpoken() || spoken.Presentation != UserMessagePresentationSpoken {
+		t.Fatalf("spoken prompt presentation = %v", spoken.Presentation)
+	}
+	spokenLines := spoken.DisplayLines(40)
+	if !strings.Contains(strings.Join(spokenLines, "\n"), ansiUserMessageSpoken) {
+		t.Fatalf("spoken prompt marker = %#v", spokenLines)
+	}
+	visible := utils.StripANSI(strings.Join(spokenLines, "\n"))
+	if !strings.Contains(visible, "\u203a hello") || strings.Contains(visible, "\u203a   hello") {
+		t.Fatalf("spoken prompt whitespace handling = %q", visible)
+	}
+}
+
+// TestAsyncQuestionReplyCellMarkdownLikeRust mirrors Rust #57292: the repeated
+// question becomes a two-row `↪ Re:` caption while the answer keeps Markdown
+// styling and hyperlinks.
+func TestAsyncQuestionReplyCellMarkdownLikeRust(t *testing.T) {
+	cell := NewAsyncQuestionReplyCell([]tui.AsyncQuestionReply{{
+		QuestionItemID: "question-1",
+		Question:       "*Which* database?",
+		Answer:         "Use **Postgres**.\n\nSee [the guide](https://example.com/docs).",
+	}}, "", "")
+	lines := cell.DisplayLines(48)
+	joined := strings.Join(lines, "\n")
+	plain := utils.StripANSI(joined)
+	if !strings.Contains(plain, "\u21aa Re: Which database?") {
+		t.Fatalf("caption missing:\n%s", plain)
+	}
+	if !strings.Contains(joined, "\x1b[3m") || !strings.Contains(joined, "\x1b[1m") {
+		t.Fatalf("answer lost Markdown styling:\n%q", joined)
+	}
+	if !strings.Contains(joined, "\x1b]8;;https://example.com/docs\x07") {
+		t.Fatalf("answer lost its hyperlink:\n%q", joined)
+	}
+	if raw := strings.Join(cell.RawLines(), "\n"); !strings.Contains(raw, "> *Which* database?") {
+		t.Fatalf("raw copy text = %q", raw)
+	}
+}
+
+// TestAsyncQuestionReplyCaptionClippedLikeRust keeps only two question rows and
+// marks the overflow with an ellipsis; the answer stays complete.
+func TestAsyncQuestionReplyCaptionClippedLikeRust(t *testing.T) {
+	question := strings.Repeat("very long question ", 8)
+	answer := strings.Repeat("answer line\n", 12)
+	cell := NewAsyncQuestionReplyCell([]tui.AsyncQuestionReply{{Question: question, Answer: answer}}, "", "")
+	lines := cell.DisplayLines(40)
+	plain := utils.StripANSI(strings.Join(lines, "\n"))
+	if strings.Count(plain, "Re:") != 1 {
+		t.Fatalf("caption prefix count = %d", strings.Count(plain, "Re:"))
+	}
+	if !strings.Contains(plain, "\u2026") {
+		t.Fatalf("overflowing caption is missing its ellipsis:\n%s", plain)
+	}
+	if strings.Count(plain, "answer line") != 12 {
+		t.Fatalf("answer was not kept complete:\n%s", plain)
+	}
+}
+
 func TestRawLinesFromSourceMatchesRustTranscriptSemantics(t *testing.T) {
 	if got := strings.Join(rawLinesFromSource("alpha\n\nbeta\n"), "|"); got != "alpha||beta" {
 		t.Fatalf("explicit blank lines = %q", got)

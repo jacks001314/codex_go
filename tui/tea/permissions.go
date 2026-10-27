@@ -213,11 +213,41 @@ func (m *Model) applyPermissionsCommand(args string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	// Rust #55682: every `/permissions` form holds queued prompts and routes
+	// through the app's permission guards instead of opening locally.
+	m.queueAutoSendSuppressed = true
+	m.permissionPopupPending = true
 	value := strings.TrimSpace(args)
 	if value == "" {
 		return m.openPermissionsMenu()
 	}
-	return m.selectPermissionProfileInline(value)
+	cmd := m.selectPermissionProfileInline(value)
+	m.permissionPopupPending = false
+	return bubbletea.Batch(cmd, m.settlePermissionPopup())
+}
+
+// settlePermissionPopup mirrors Rust's SettingsSelectionClosed ->
+// SettingsSelectionSettled chain: once no permissions view, modal, popup,
+// inline request, or server-confirmed profile change is outstanding, release
+// the queued-prompt hold and resume the queue. A rejection that leaves a
+// pending profile keeps the hold, exactly like Rust's `pending_server_profiles`
+// check (#55682).
+func (m *Model) settlePermissionPopup() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.permissionPopupPending = false
+	if m.modal != nil || m.slashPopup.Active || m.skillPopup.Active {
+		return nil
+	}
+	if strings.TrimSpace(m.pendingServerProfile) != "" || strings.TrimSpace(m.pendingPermissionProfileArgs) != "" {
+		return nil
+	}
+	if !m.queueAutoSendSuppressed {
+		return nil
+	}
+	m.queueAutoSendSuppressed = false
+	return m.submitNextQueued()
 }
 
 // selectPermissionProfileInline validates an inline `/permissions` request and
@@ -286,12 +316,22 @@ func (m *Model) closePermissionsModal() {
 		return
 	}
 	m.modal = nil
+	m.permissionPopupPending = false
 }
 
 func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	// Rust's OpenPermissionsPopup handler clears the pending flag as soon as the
+	// app takes ownership of the request (#55682).
+	if strings.TrimSpace(m.pendingServerProfile) != "" {
+		m.notice = "Wait for permissions to update before changing permissions."
+		m.permissionPopupPending = false
+		m.refreshTranscript()
+		return m.settlePermissionPopup()
+	}
+	m.permissionPopupPending = false
 	if m.onListPermissionProfiles == nil {
 		m.showPermissionsMenu(false)
 		return nil

@@ -47,13 +47,13 @@ func TestEditQueuedMessageAltUpRestoresMostRecentLikeRust(t *testing.T) {
 	}
 }
 
-// TestEditQueuedMessagePreservesSlashPromptElementsLikeRust pins #54742's
-// queue round trip: restoring a command with a mention must put the prompt
-// marker back and keep the element range relative to the editable body.
+// TestEditQueuedMessagePreservesSlashPromptElementsLikeRust pins the queue
+// round trip: restoring a command with a mention keeps the slash in the
+// editable body and preserves the element range.
 func TestEditQueuedMessagePreservesSlashPromptElementsLikeRust(t *testing.T) {
 	model := newEditQueuedMessageModel()
 	model.setComposerPrompt("/tmp/$imagegen file")
-	model.registerComposerElement(model.composer.Value(), len("tmp/"), len("tmp/$imagegen"))
+	model.registerComposerElement(model.composer.Value(), len("/tmp/"), len("/tmp/$imagegen"))
 	model.queueComposer(false)
 	if len(model.queued) != 1 {
 		t.Fatalf("seeded queue = %d, want 1", len(model.queued))
@@ -69,13 +69,13 @@ func TestEditQueuedMessagePreservesSlashPromptElementsLikeRust(t *testing.T) {
 
 	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
 	model = updated.(*Model)
-	if model.composerPrefix != composerPrefixSlash || model.composer.Value() != "tmp/$imagegen file" {
+	if model.composerPrefix != composerPrefixNone || model.composer.Value() != "/tmp/$imagegen file" {
 		t.Fatalf("restored prefix=%v body=%q", model.composerPrefix, model.composer.Value())
 	}
 	if len(model.composerElements) != 1 {
 		t.Fatalf("restored elements = %#v, want one", model.composerElements)
 	}
-	if element := model.composerElements[0]; element.Start != len("tmp/") || element.End != len("tmp/$imagegen") {
+	if element := model.composerElements[0]; element.Start != len("/tmp/") || element.End != len("/tmp/$imagegen") {
 		t.Fatalf("restored element = %#v", element)
 	}
 }

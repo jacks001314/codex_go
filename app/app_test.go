@@ -4469,7 +4469,7 @@ func TestRemoteServerRequestLongTailResponses(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result, code, err := client.remoteServerRequestResult(ctx, tc.method, json.RawMessage(tc.params))
+			result, code, err := client.remoteServerRequestResult(ctx, tc.method, json.RawMessage(tc.params), "")
 			if err == nil || code != tc.wantCode || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("result=%#v code=%d err=%v, want code=%d err containing %q", result, code, err, tc.wantCode, tc.wantErr)
 			}
@@ -4574,7 +4574,7 @@ func TestRemoteServerRequestChatGPTAuthRefreshUsesLocalAuth(t *testing.T) {
 	t.Setenv(auth.RefreshTokenURLEnvOverride, server.URL)
 
 	client := &remoteAppServerTUIClient{}
-	result, code, err := client.remoteServerRequestResult(context.Background(), appserver.ServerRequestChatGPTAuthTokensRefresh, json.RawMessage(`{"reason":"unauthorized","previousAccountId":"workspace-1"}`))
+	result, code, err := client.remoteServerRequestResult(context.Background(), appserver.ServerRequestChatGPTAuthTokensRefresh, json.RawMessage(`{"reason":"unauthorized","previousAccountId":"workspace-1"}`), "")
 	if err != nil || code != -32603 {
 		t.Fatalf("refresh result=%#v code=%d err=%v", result, code, err)
 	}
@@ -4739,12 +4739,16 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	items, notice := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{Shared: cli.SharedOptions{CWD: `D:\repo`}}, endpoint)
+	backendID := codextui.NewBackendID()
+	items, notice := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{Shared: cli.SharedOptions{CWD: `D:\repo`}}, endpoint, backendID)
 	if notice != "" {
 		t.Fatalf("session picker notice = %q, want empty", notice)
 	}
 	if len(items) != 2 || items[0].ThreadID != "thread-active" || items[1].ThreadID != "thread-archived" || !items[1].Archived {
 		t.Fatalf("remote session items = %#v", items)
+	}
+	if items[0].BackendID != backendID || items[1].BackendID != backendID {
+		t.Fatalf("remote session backends = (%v, %v), want %v", items[0].BackendID, items[1].BackendID, backendID)
 	}
 	initialize := remoteTUITestReadCapturedRequest(t, requests)
 	configRead := remoteTUITestReadCapturedRequest(t, requests)
@@ -4816,7 +4820,7 @@ func TestInteractiveRemoteSessionPickerPreservesItemsOnLaterPageFailureLikeRust(
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	items, notice := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{}, endpoint)
+	items, notice := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{}, endpoint, codextui.NewBackendID())
 	if len(items) != 1 || items[0].ThreadID != "thread-active" {
 		t.Fatalf("loaded session items = %#v, want the first page", items)
 	}

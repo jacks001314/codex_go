@@ -55,7 +55,7 @@ func TestUpdateAvailableUsesRustSemverRules(t *testing.T) {
 
 func TestUpdateActionCommandStringsMatchRust(t *testing.T) {
 	command, args := UpdateActionStandaloneUnix.CommandArgs()
-	if command != "sh" || len(args) != 2 || args[1] != "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh" {
+	if command != "sh" || len(args) != 2 || args[1] != `s=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s"` {
 		t.Fatalf("StandaloneUnix CommandArgs = %q %#v", command, args)
 	}
 	command, args = UpdateActionStandaloneWin.CommandArgs()

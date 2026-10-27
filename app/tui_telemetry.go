@@ -96,12 +96,71 @@ func startInteractiveTUITelemetry(root *cli.RootOptions, selectionReason string,
 	tags["multiplexer"] = codextui.TerminalMultiplexerTag(terminalInfo)
 	// Pass a copy: the context below drops the size buckets from the same map.
 	sink.Counter(codextui.TUIStartMetric, 1, cloneTUITelemetryTags(tags))
+	// Rust #57268: an embedded TUI records why the shared app server was not
+	// used, with a bounded tag value.
+	if appServerMode == "in_process" {
+		sink.Counter(codextui.TUIEmbeddedStartMetric, 1, map[string]string{
+			"reason": interactiveEmbeddedTUIStartReason(root, selectionReason),
+		})
+	}
 	// Rust returns the launch tags without the size buckets so the size-free
 	// context is reused by every terminal-size observation.
 	delete(tags, codextui.TerminalColumnsTag)
 	delete(tags, codextui.TerminalRowsTag)
 	telemetry.context = tags
 	return telemetry
+}
+
+// interactiveEmbeddedTUIStartReason mirrors Rust #57268's embedded_start reason
+// match. The values stay bounded so the tag cannot leak launch details.
+func interactiveEmbeddedTUIStartReason(root *cli.RootOptions, selectionReason string) string {
+	exclusion := daemonAutoStartExclusionReason
+	if exclusion == "" {
+		exclusion = daemonStartupExclusion(root, false)
+	}
+	switch {
+	case daemonElevatedLaunchExcluded(root, false):
+		return "windows_elevated"
+	case exclusion == "--no-daemon":
+		return "explicit_no_daemon"
+	case exclusion == "--profile":
+		return "profile"
+	case exclusion == "--oss":
+		return "oss"
+	case exclusion == "--strict-config":
+		return "strict_config"
+	case exclusion == "--dangerously-bypass-hook-trust":
+		return "bypass_hook_trust"
+	case exclusion == "workload identity":
+		return "workload_identity"
+	case exclusion == "executor selection (CODEX_EXEC_SERVER_URL)":
+		return "exec_server_url"
+	case exclusion == daemonConfigOverrideExclusion:
+		if daemonSearchForcesEmbedded(root) {
+			return "search"
+		}
+		return "config_override"
+	case exclusion == "Bedrock sign-in":
+		return "bedrock_sign_in"
+	case exclusion == wslDrvfsExclusion:
+		return "wsl_drvfs"
+	case exclusion == detachedLaunchRestrictionExclusion:
+		return "windows_detach_restricted"
+	case exclusion == "daemon feature settings":
+		return "daemon_compatibility"
+	case exclusion != "":
+		return "unclassified"
+	}
+	switch selectionReason {
+	case "auto_start_disabled":
+		return "auto_start_disabled_no_daemon"
+	case "auto_start", "existing_daemon":
+		return "daemon_connection_failed"
+	case "agents":
+		return "agents_no_daemon_discovered"
+	default:
+		return "unclassified"
+	}
 }
 
 func cloneTUITelemetryTags(tags map[string]string) map[string]string {

@@ -33,8 +33,18 @@ func (m *Model) applyThreadSettingsUpdated(msg ThreadSettingsUpdatedMsg) bubblet
 	// Rust #43340: the server confirming the thread's settings completes any
 	// pending named-profile selection.
 	m.pendingServerProfile = ""
+	previousCWD := strings.TrimSpace(m.sessionCWD)
 	m.applyThreadSettingsValues(msg.Settings)
-	return nil
+	// Rust #55682: a covering settings update settles the permissions hold so
+	// queued prompts resume once the confirmed profile is in place.
+	cmd := m.settlePermissionPopup()
+	if !m.hasChatGPTAccount && strings.TrimSpace(m.sessionCWD) != previousCWD {
+		// Rust #55682: the first attachment can change the project credentials,
+		// so an API-key model catalog from the launch directory must not carry
+		// over. Refresh the hidden-inclusive catalog for the attached cwd.
+		cmd = bubbletea.Batch(cmd, m.fetchModelCatalog())
+	}
+	return cmd
 }
 
 // applyThreadSettingsValues applies one settings snapshot to the TUI state

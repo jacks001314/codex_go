@@ -251,7 +251,9 @@ func TestLookupRemoteSessionByNameSkipsRenamedCandidates(t *testing.T) {
 	}
 }
 
-func TestLookupRemoteSessionByNameKeepsUnloadedThreadOnOlderServer(t *testing.T) {
+// Rust #55682: `thread not loaded` is a skip for every server type, so lookup
+// never falls back to unverified list metadata.
+func TestLookupRemoteSessionByNameSkipsUnloadedThreadLikeRust(t *testing.T) {
 	srv := namedLookupServer{
 		listPages: map[string][]any{"": {
 			map[string]any{"id": "thread-a", "name": "Kept", "recencyAt": 20},
@@ -260,7 +262,7 @@ func TestLookupRemoteSessionByNameKeepsUnloadedThreadOnOlderServer(t *testing.T)
 		readErrs: map[string]string{"thread-a": "thread not loaded: thread-a"},
 	}
 	threadID, err := lookupNamedSession(t, srv, "Kept", []sessionCollection{sessionCollectionActive})
-	if err != nil || threadID != "thread-a" {
-		t.Fatalf("lookup = %q err=%v", threadID, err)
+	if err != nil || threadID != "" {
+		t.Fatalf("lookup = %q err=%v, want the unloaded thread skipped", threadID, err)
 	}
 }

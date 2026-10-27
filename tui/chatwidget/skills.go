@@ -257,7 +257,25 @@ func ManageSkillsChangeSummary(initial map[string]bool, current map[string]bool)
 	if enabledCount == 0 && disabledCount == 0 {
 		return 0, 0, "", false
 	}
-	return enabledCount, disabledCount, intString(enabledCount) + " skills enabled, " + intString(disabledCount) + " skills disabled", true
+	enabledSuffix := "s"
+	if enabledCount == 1 {
+		enabledSuffix = ""
+	}
+	disabledSuffix := "s"
+	if disabledCount == 1 {
+		disabledSuffix = ""
+	}
+	message = ""
+	switch {
+	case enabledCount == 0:
+		message = "Disabled " + intString(disabledCount) + " skill" + disabledSuffix
+	case disabledCount == 0:
+		message = "Enabled " + intString(enabledCount) + " skill" + enabledSuffix
+	default:
+		message = "Enabled " + intString(enabledCount) + " skill" + enabledSuffix +
+			", disabled " + intString(disabledCount) + " skill" + disabledSuffix
+	}
+	return enabledCount, disabledCount, message, true
 }
 
 func skillsBrowserEntries(response appserver.SkillsListResponse, cwd string) ([]appserver.SkillsListEntry, []appserver.SkillErrorInfo) {

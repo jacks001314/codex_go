@@ -121,6 +121,11 @@ func (m *Model) persistAgentsOverviewGroupingCmd() bubbletea.Cmd {
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
+	// Rust #56308: Directory grouping is view-local, so it is never written to
+	// configuration that older clients cannot read.
+	if !m.agentsOverview.State.Grouping.Persisted() {
+		return nil
+	}
 	return m.writeSettings(settingsWriteKindAgentsOverviewGrouping, []SettingsEdit{{
 		KeyPath: "tui.agents_overview_grouping",
 		Value:   m.agentsOverview.State.Grouping.ConfigValue(),
@@ -827,7 +832,8 @@ func (m *Model) newAgentsOverviewSessionCmd() bubbletea.Cmd {
 		return nil
 	}
 	cwd := ""
-	if m.agentsOverview.State.Grouping == agentsoverview.GroupingProject {
+	if m.agentsOverview.State.Grouping == agentsoverview.GroupingProject ||
+		m.agentsOverview.State.Grouping == agentsoverview.GroupingDirectory {
 		if row := m.agentsOverview.SelectedRow(); row != nil {
 			cwd = strings.TrimSpace(row.CWD)
 		}

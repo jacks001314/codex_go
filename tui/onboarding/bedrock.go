@@ -119,25 +119,21 @@ func (s *bedrockState) methods() []bedrockMethod {
 		if len(s.environmentCredentials) > 0 {
 			methods = append(methods, bedrockMethod{kind: bedrockMethodEnvironment})
 		}
-		methods = append(methods, bedrockMethod{kind: bedrockMethodOther}, bedrockMethod{kind: bedrockMethodAPIKey})
+		methods = append(methods, bedrockMethod{kind: bedrockMethodOther})
 		return methods
 	}
 	if detected && len(s.environmentCredentials) > 0 {
 		return []bedrockMethod{
 			{kind: bedrockMethodEnvironment},
 			{kind: bedrockMethodOther},
-			{kind: bedrockMethodAPIKey},
 		}
 	}
-	methods := []bedrockMethod{
+	return []bedrockMethod{
 		{kind: bedrockMethodManualProfile},
 		{kind: bedrockMethodAccessKeys},
 		{kind: bedrockMethodEnvironmentInstructions},
+		{kind: bedrockMethodAPIKey},
 	}
-	if detected {
-		methods = append(methods, bedrockMethod{kind: bedrockMethodAPIKey})
-	}
-	return methods
 }
 
 func (s *bedrockState) isTextEntry() bool {
@@ -492,7 +488,7 @@ func (s *bedrockState) methodCopy(method bedrockMethod) (string, string) {
 		if s.view == bedrockViewEnvironmentInstructions {
 			return "Choose another sign-in method", ""
 		}
-		return "Other AWS sign-in methods", "Use another profile, access keys, or environment variables"
+		return "Other AWS sign-in methods", "Use another profile, access keys, environment variables, or a Bedrock API key"
 	case bedrockMethodManualProfile:
 		return "AWS profile", "Use AWS SSO or a named profile"
 	case bedrockMethodAccessKeys:

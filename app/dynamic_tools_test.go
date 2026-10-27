@@ -411,7 +411,7 @@ func TestRemoteServerRequestServesDynamicToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
-	result, code, err := client.remoteServerRequestResult(context.Background(), appserver.ServerRequestDynamicToolCall, params)
+	result, code, err := client.remoteServerRequestResult(context.Background(), appserver.ServerRequestDynamicToolCall, params, "")
 	if err != nil || code != 0 {
 		t.Fatalf("result=%#v code=%d err=%v", result, code, err)
 	}

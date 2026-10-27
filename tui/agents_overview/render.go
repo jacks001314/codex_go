@@ -628,7 +628,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		if used := spansWidth(spans); used < titleWidth {
 			spans = append(spans, span{text: strings.Repeat(" ", titleWidth-used), style: spanPlain})
 		}
-		status := truncateToWidth(row.Group.StatusLabel(row.StatusType), statusWidth)
+		status := truncateToWidth(row.Group.StatusLabelForRow(row), statusWidth)
 		spans = append(spans,
 			span{text: status, style: spanDim},
 			span{text: strings.Repeat(" ", max(statusWidth-runewidth.StringWidth(status), 1)), style: spanPlain},
@@ -641,7 +641,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		return spans
 	}
 	if projectGrouping {
-		spans = append(spans, span{text: "  " + row.Group.StatusLabel(row.StatusType), style: spanDim})
+		spans = append(spans, span{text: "  " + row.Group.StatusLabelForRow(row), style: spanDim})
 	}
 	return spans
 }
@@ -690,7 +690,7 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	lines = append(lines, []span{
 		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
 		{text: " ", style: spanPlain},
-		{text: row.Group.StatusLabel(row.StatusType), style: spanPlain},
+		{text: row.Group.StatusLabelForRow(row), style: spanPlain},
 	})
 	lines = append(lines, nil)
 	// Rust #50727: the model and reasoning effort sit at the top of the task

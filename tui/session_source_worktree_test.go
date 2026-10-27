@@ -51,8 +51,19 @@ func TestSessionPickerWorktreeCWDsExpandsLinkedCheckouts(t *testing.T) {
 	if got := SessionPickerWorktreeCWDs(primary, false); len(got) != 1 {
 		t.Fatalf("disabled expansion = %#v, want one directory", got)
 	}
+	// Rust #56308: Repo is only offered when multiple canonical linked-worktree
+	// directories exist.
+	if !SessionPickerRepoFilterAvailable(primary) {
+		t.Fatalf("Repo filter should be available for a linked checkout")
+	}
+	if SessionPickerRepoFilterAvailable(t.TempDir()) {
+		t.Fatalf("Repo filter offered for a non-repository directory")
+	}
 }
 
+// Rust #56308: the Cwd filter is directory-scoped again, the explicit Repo
+// filter covers linked worktrees of the same repository, and All ignores the
+// directory scope.
 func TestSessionPickerFiltersAgainstExpandedWorktreeCWDs(t *testing.T) {
 	primary := `D:\repo`
 	linked := `D:\repo-linked`
@@ -65,13 +76,34 @@ func TestSessionPickerFiltersAgainstExpandedWorktreeCWDs(t *testing.T) {
 	if picker.FilterMode != SessionFilterCWD {
 		t.Fatalf("filter mode = %v, want CWD", picker.FilterMode)
 	}
-	visible := picker.VisibleItems()
-	ids := make([]string, 0, len(visible))
-	for _, item := range visible {
-		ids = append(ids, item.ThreadID)
+	if ids := pickerVisibleIDs(picker); len(ids) != 1 || ids[0] != "primary" {
+		t.Fatalf("cwd visible ids = %#v, want primary only", ids)
 	}
-	if len(ids) != 2 || ids[0] != "primary" || ids[1] != "linked" {
-		t.Fatalf("visible ids = %#v, want primary and linked", ids)
+
+	// Repo is reached forward from Cwd when the filter is available.
+	picker.RepoFilterAvailable = true
+	picker.ChangeFilter(SessionFilterNext)
+	if picker.FilterMode != SessionFilterRepo {
+		t.Fatalf("forward cycle = %v, want Repo", picker.FilterMode)
+	}
+	if ids := pickerVisibleIDs(picker); len(ids) != 2 || ids[0] != "primary" || ids[1] != "linked" {
+		t.Fatalf("repo visible ids = %#v, want primary and linked", ids)
+	}
+	picker.ChangeFilter(SessionFilterNext)
+	if picker.FilterMode != SessionFilterAll {
+		t.Fatalf("forward cycle from Repo = %v, want All", picker.FilterMode)
+	}
+	if got := len(picker.VisibleItems()); got != 3 {
+		t.Fatalf("all visible items = %d, want 3", got)
+	}
+	// Backwards from All lands on Repo, then Cwd.
+	picker.ChangeFilter(SessionFilterPrevious)
+	if picker.FilterMode != SessionFilterRepo {
+		t.Fatalf("backward cycle = %v, want Repo", picker.FilterMode)
+	}
+	picker.ChangeFilter(SessionFilterPrevious)
+	if picker.FilterMode != SessionFilterCWD {
+		t.Fatalf("backward cycle from Repo = %v, want Cwd", picker.FilterMode)
 	}
 
 	// Without the expanded set the picker keeps the single-directory behavior.
@@ -79,6 +111,15 @@ func TestSessionPickerFiltersAgainstExpandedWorktreeCWDs(t *testing.T) {
 	if got := len(single.VisibleItems()); got != 1 {
 		t.Fatalf("single-directory visible items = %d, want 1", got)
 	}
+}
+
+func pickerVisibleIDs(picker *SessionPickerState) []string {
+	visible := picker.VisibleItems()
+	ids := make([]string, 0, len(visible))
+	for _, item := range visible {
+		ids = append(ids, item.ThreadID)
+	}
+	return ids
 }
 
 func runPickerGit(t *testing.T, dir string, args ...string) {

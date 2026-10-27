@@ -99,6 +99,10 @@ type ProjectlessFolderDefaults struct {
 	SandboxMode         sandbox.SandboxMode
 	ApprovalPolicy      sandbox.AskForApproval
 	Granular            sandbox.GranularApprovalConfig
+	// Requirements carries the managed requirements that admitted these
+	// defaults so the startup launch can also honor their approval-policy
+	// allow-list (Rust #56516).
+	Requirements *config.ConfigRequirements
 }
 
 // ProjectlessImplicitDefaults ports `projectless::apply_defaults`
@@ -141,7 +145,9 @@ func ProjectlessImplicitDefaults(in ProjectlessFolderTrustInputs) (ProjectlessFo
 			return ProjectlessFolderDefaults{}, false
 		}
 	}
-	return projectlessWorkspaceWriteDefaults(), true
+	defaults := projectlessWorkspaceWriteDefaults()
+	defaults.Requirements = in.Requirements
+	return defaults, true
 }
 
 // projectlessWorkspaceWriteDefaults is the default selection itself; kept

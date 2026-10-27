@@ -83,6 +83,7 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 			// (agents_overview_discovery::supports_shared_pinning).
 			Source:         agentsOverviewRowSource(string(thread.Source)),
 			ChildThreadIDs: append([]string(nil), childrenByRoot[strings.TrimSpace(thread.ID)]...),
+			IsSubagent:     agentsOverviewThreadIsSubagent(thread),
 		}
 		if thread.Model != nil {
 			row.Model = strings.TrimSpace(*thread.Model)
@@ -106,7 +107,7 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 				waitingUserInput = true
 			}
 		}
-		row.Group = agentsoverview.GroupForStatus(thread.Status.Type, waitingApproval, waitingUserInput)
+		row.Group = agentsoverview.GroupForThread(thread.Status.Type, waitingApproval, waitingUserInput, row.IsSubagent)
 		row.StatusType = strings.TrimSpace(thread.Status.Type)
 		row.StatusActive = strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active")
 		row.IsCurrent = strings.EqualFold(row.ThreadID, currentThreadID)
@@ -165,6 +166,7 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 			// rules see a real source instead of "unknown".
 			Source:         agentsOverviewRowSource(record.Metadata.Source),
 			ChildThreadIDs: append([]string(nil), childrenByRoot[strings.TrimSpace(string(record.ID))]...),
+			IsSubagent:     agentsOverviewRecordIsSubagent(record),
 		}
 		if branch, ok := record.Metadata.Git["branch"]; ok {
 			row.GitBranch = strings.TrimSpace(branch)
@@ -173,6 +175,9 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 		// dashboard listing skips history, so this is best-effort.
 		row.LastMessage = lastAgentMessagePreviewFromSessionItems(record.Items)
 		row.Group, row.StatusActive = localAgentGroupForRecord(record)
+		if row.IsSubagent && row.Group == agentsoverview.GroupNeedsYou {
+			row.Group = agentsoverview.GroupFinished
+		}
 		row.IsCurrent = strings.EqualFold(strings.TrimSpace(string(record.ID)), currentThreadID)
 		rows = append(rows, row)
 	}
@@ -234,10 +239,38 @@ func localAgentGroupForRecord(record *session.Record) (agentsoverview.Group, boo
 	case status == "inprogress" || status == "in_progress" || status == "running":
 		return agentsoverview.GroupWorking, true
 	case status == "error" || status == "failed" || strings.Contains(status, "error"):
+		if agentsOverviewRecordIsSubagent(record) {
+			return agentsoverview.GroupFinished, false
+		}
 		return agentsoverview.GroupNeedsYou, false
 	default:
 		return agentsoverview.GroupReady, false
 	}
+}
+
+func agentsOverviewThreadIsSubagent(thread *appserver.Thread) bool {
+	if thread == nil {
+		return false
+	}
+	if thread.ParentThreadID != nil && strings.TrimSpace(*thread.ParentThreadID) != "" {
+		return true
+	}
+	if thread.ThreadSource != nil && *thread.ThreadSource == appserver.ThreadSourceSubagent {
+		return true
+	}
+	return agentsOverviewSourceIsSubagent(string(thread.Source))
+}
+
+func agentsOverviewRecordIsSubagent(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	return strings.TrimSpace(string(record.ParentThreadID)) != "" || agentsOverviewSourceIsSubagent(record.Metadata.Source)
+}
+
+func agentsOverviewSourceIsSubagent(source string) bool {
+	source = strings.ToLower(strings.TrimSpace(source))
+	return strings.HasPrefix(source, "subagent") || strings.HasPrefix(source, "sub_agent") || strings.HasPrefix(source, "sub-agent")
 }
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import (
 func TestModelPickerAsyncFetchLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	m := NewModel(state, Options{
-		OnListModels: func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		OnListModels: func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 			return []codextui.ModelPickerOption{{ID: "gpt-fresh", Label: "Fresh", IsDefault: true}}, nil
 		},
 	})
@@ -64,7 +64,7 @@ func TestModelPickerRefreshFallsBackToDefaultLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.Model = "gpt-old"
 	m := NewModel(state, Options{
-		OnListModels: func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		OnListModels: func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 			return []codextui.ModelPickerOption{{ID: "gpt-fresh", Label: "Fresh", IsDefault: true}}, nil
 		},
 	})
@@ -83,7 +83,7 @@ func TestModelPickerRefreshFallsBackToDefaultLikeRust(t *testing.T) {
 func TestModelPickerRefreshPreservesReasoningSubmenuLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	m := NewModel(state, Options{
-		OnListModels: func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		OnListModels: func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 			return []codextui.ModelPickerOption{{
 				ID: "gpt-a", Label: "A",
 				SupportedReasoningEfforts: []codextui.ReasoningEffortOption{{Effort: "low", Label: "Low", IsDefault: true}},
