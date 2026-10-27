@@ -123,17 +123,9 @@ func (p *mathParser) displayOperator(symbol string) (mathLayout, bool) {
 func (p *mathParser) structuredCommand(name string) (mathLayout, bool) {
 	switch name {
 	case "begin":
-		remaining := strings.TrimLeftFunc(p.remaining, unicode.IsSpace)
-		if !strings.HasPrefix(remaining, "{aligned}") {
-			return mathLayout{}, false
-		}
-		p.remaining = remaining[len("{aligned}"):]
-		if strings.HasPrefix(strings.TrimLeftFunc(p.remaining, unicode.IsSpace), "[") {
-			return mathLayout{}, false
-		}
-		return p.aligned()
+		return p.grid()
 	case "boxed":
-		if !p.display {
+		if p.mode == mathModeInline {
 			return mathLayout{}, false
 		}
 		inner, ok := p.argument()
@@ -232,20 +224,45 @@ func (p *mathParser) structuredCommand(name string) (mathLayout, bool) {
 	}
 }
 
-// aligned mirrors Rust's `aligned`: display-only aligned blocks composed at their
-// first row's baseline, with alternate cells aligned left and right.
-func (p *mathParser) aligned() (mathLayout, bool) {
-	if !p.display {
+// grid mirrors Rust's `grid`: display-only `aligned` and `pmatrix` blocks.
+// Aligned blocks compose at their first row's baseline, with alternate cells
+// aligned left and right. Matrices center every cell and wrap the rows in
+// scalable parentheses, composing at the matrix midpoint.
+func (p *mathParser) grid() (mathLayout, bool) {
+	if p.mode == mathModeInline {
 		return mathLayout{}, false
 	}
+	remaining := strings.TrimLeftFunc(p.remaining, unicode.IsSpace)
+	if !strings.HasPrefix(remaining, "{") {
+		return mathLayout{}, false
+	}
+	name, rest, found := strings.Cut(remaining[1:], "}")
+	if !found {
+		return mathLayout{}, false
+	}
+	end := ""
+	matrix := false
+	switch name {
+	case "aligned":
+		end = `\end{aligned}`
+	case "pmatrix":
+		end = `\end{pmatrix}`
+		matrix = true
+	default:
+		return mathLayout{}, false
+	}
+	if !matrix && strings.HasPrefix(strings.TrimLeftFunc(rest, unicode.IsSpace), "[") {
+		return mathLayout{}, false
+	}
+	p.remaining = rest
 	rows := [][]mathLayout{}
 	cells := []mathLayout{}
 	widths := []int{}
 	for {
 		p.remaining = strings.TrimLeftFunc(p.remaining, unicode.IsSpace)
 		// A trailing row separator does not introduce an extra blank row.
-		if len(cells) == 0 && strings.HasPrefix(p.remaining, `\end{aligned}`) {
-			p.remaining = p.remaining[len(`\end{aligned}`):]
+		if len(cells) == 0 && strings.HasPrefix(p.remaining, end) {
+			p.remaining = p.remaining[len(end):]
 			break
 		}
 		// Bound empty columns and rows as well as their eventual rendered size.
@@ -259,6 +276,9 @@ func (p *mathParser) aligned() (mathLayout, bool) {
 		if len(cell.rows) == 1 {
 			cell.rows[0] = strings.TrimSpace(cell.rows[0])
 		}
+		if matrix && cell.width() == 0 {
+			return mathLayout{}, false
+		}
 		if len(widths) == len(cells) {
 			widths = append(widths, cell.width())
 		} else if cell.width() > widths[len(cells)] {
@@ -269,15 +289,21 @@ func (p *mathParser) aligned() (mathLayout, bool) {
 			p.remaining = p.remaining[1:]
 			continue
 		}
-		if strings.HasPrefix(p.remaining, `\end{aligned}`) {
-			p.remaining = p.remaining[len(`\end{aligned}`):]
+		if strings.HasPrefix(p.remaining, end) {
+			p.remaining = p.remaining[len(end):]
 			rows = append(rows, cells)
 			break
 		}
 		if !strings.HasPrefix(p.remaining, `\\`) {
 			return mathLayout{}, false
 		}
-		p.remaining = strings.TrimLeftFunc(p.remaining[2:], unicode.IsSpace)
+		next := p.remaining[2:]
+		if matrix {
+			// Only an adjacent star or spacing option belongs to a matrix row break.
+			p.remaining = strings.TrimPrefix(next, "*")
+		} else {
+			p.remaining = strings.TrimLeftFunc(next, unicode.IsSpace)
+		}
 		if strings.HasPrefix(p.remaining, "[") {
 			distance, remaining, found := strings.Cut(p.remaining[1:], "]")
 			if !found {
@@ -294,7 +320,14 @@ func (p *mathParser) aligned() (mathLayout, bool) {
 	}
 	output := []string{}
 	layoutBaseline := 0
+	maxContentWidth := mathMaxColumns
+	if matrix {
+		maxContentWidth = mathMaxColumns - 4
+	}
 	for _, rowCells := range rows {
+		if matrix && len(rowCells) != len(widths) {
+			return mathLayout{}, false
+		}
 		baseline := -1
 		for _, cell := range rowCells {
 			if baseline < 0 || cell.baseline > baseline {
@@ -324,25 +357,51 @@ func (p *mathParser) aligned() (mathLayout, bool) {
 					text = cell.rows[rowIndex]
 				}
 				leading := 0
-				if index%2 == 0 {
+				if matrix {
+					leading = (widths[index] - cell.width()) / 2
+				} else if index%2 == 0 {
 					leading = widths[index] - cell.width()
 				}
 				line.WriteString(strings.Repeat(" ", leading))
 				line.WriteString(text)
 				line.WriteString(strings.Repeat(" ", widths[index]-leading-codextui.DisplayWidth(text)))
 				if index+1 < len(rowCells) {
-					if index%2 == 0 {
+					if !matrix && index%2 == 0 {
 						line.WriteString(" ")
 					} else {
 						line.WriteString("  ")
 					}
 				}
 			}
-			if codextui.DisplayWidth(line.String()) > mathMaxColumns {
+			if codextui.DisplayWidth(line.String()) > maxContentWidth {
 				return mathLayout{}, false
 			}
-			output = append(output, strings.TrimRight(line.String(), " "))
+			rendered := line.String()
+			if !matrix {
+				rendered = strings.TrimRight(rendered, " ")
+			}
+			output = append(output, rendered)
 		}
+	}
+	if matrix {
+		if len(output) == 0 {
+			return mathLayout{}, false
+		}
+		last := len(output) - 1
+		layoutBaseline = last / 2
+		for index, line := range output {
+			left, right := "⎜", "⎟"
+			switch {
+			case last == 0:
+				left, right = "(", ")"
+			case index == 0:
+				left, right = "⎛", "⎞"
+			case index == last:
+				left, right = "⎝", "⎠"
+			}
+			output[index] = left + " " + line + " " + right
+		}
+		p.hasMatrix = true
 	}
 	return mathLayout{rows: output, baseline: layoutBaseline}, true
 }

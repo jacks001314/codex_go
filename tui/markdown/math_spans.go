@@ -10,8 +10,6 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
-
-	codextui "codex_go/tui"
 )
 
 // Rust parity: codex-rs/tui/src/markdown_render/math.rs's source scan
@@ -273,8 +271,14 @@ func (s *mathScanner) scan() {
 				continue
 			}
 		}
-		rendered, ok := mathRender(formula, display)
-		if !ok || !mathRenderFits(rendered, s.width, s.containers, containerIdx, start) {
+		mode := mathModeDisplay
+		if !display {
+			mode = mathModeInline
+		} else if mathInsideContainer(s.containers, containerIdx, start) {
+			mode = mathModeNestedDisplay
+		}
+		rendered, ok := mathRenderLayout(formula, mode)
+		if !ok || !mathRenderFits(rendered, mode, s.width) {
 			// Rust replaces every paired span that reaches the render stage with
 			// its source text when it cannot be rendered. Mask the source here so
 			// Markdown escape processing cannot mangle TeX such as `\[`, `\]`,
@@ -286,7 +290,7 @@ func (s *mathScanner) scan() {
 			continue
 		}
 		emitTo(start)
-		s.masked.WriteString(s.placeholderFor(rendered))
+		s.masked.WriteString(s.placeholderFor(rendered.text))
 		cursor = spanEnd
 		offset = spanEnd
 	}
@@ -357,22 +361,29 @@ func mathEndsOnBlankPrefix(text string) bool {
 // mathRenderFits mirrors Rust's rendered filter: a spatial (multi-line) layout is
 // kept only at the top level and only when every line fits the width minus four
 // columns.
-func mathRenderFits(rendered string, width int, containers [][2]int, containerIdx int, start int) bool {
-	if !strings.Contains(rendered, "\n") {
+// mathRenderFits mirrors Rust's spatial-layout gate: output with a required
+// width only renders as top-level display math, and only when the whole layout
+// fits the available width minus the four-column nested prefix. Single-row
+// output without a required width reflows like ordinary text.
+func mathRenderFits(rendered mathRendered, mode mathMode, width int) bool {
+	if !rendered.hasRequiredWidth {
 		return true
 	}
-	if containerIdx < len(containers) && start >= containers[containerIdx][0] && start < containers[containerIdx][1] {
+	if mode != mathModeDisplay {
 		return false
 	}
 	if width <= 0 {
 		return true
 	}
-	for _, line := range strings.Split(rendered, "\n") {
-		if codextui.DisplayWidth(line) > width-4 {
-			return false
-		}
-	}
-	return true
+	return rendered.requiredWidth <= width-4
+}
+
+// mathInsideContainer reports whether start falls inside the current Markdown
+// container range (Rust's `containers.peek().is_some_and(|range|
+// range.contains(&start))`).
+func mathInsideContainer(containers [][2]int, containerIdx int, start int) bool {
+	return containerIdx < len(containers) &&
+		start >= containers[containerIdx][0] && start < containers[containerIdx][1]
 }
 
 // matchByteIndexes lists the byte indexes of every occurrence of target in text.

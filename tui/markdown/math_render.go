@@ -81,17 +81,50 @@ func (l mathLayout) single() (string, bool) {
 	return "", false
 }
 
-// mathRender mirrors Rust's `render`: parse the trimmed source and join the rows,
-// rejecting input that is empty or produces only blank rows.
+// mathMode mirrors Rust's `MathMode`: inline math keeps compact limits, while
+// display math stacks them. Nested display math (inside lists and blockquotes)
+// keeps compact operator limits but still rejects spatial layouts in favor of
+// the verbatim source.
+type mathMode int
+
+const (
+	mathModeInline mathMode = iota
+	mathModeDisplay
+	mathModeNestedDisplay
+)
+
+// mathRendered mirrors Rust's `RenderedMath`: the laid-out text plus the width a
+// spatial layout needs in full. Output without a required width may reflow like
+// ordinary text.
+type mathRendered struct {
+	text             string
+	requiredWidth    int
+	hasRequiredWidth bool
+}
+
+// mathRender is the text-only shorthand the layout tests use: it renders inline
+// or top-level display math and reports whether the source was supported.
 func mathRender(source string, display bool) (string, bool) {
+	mode := mathModeInline
+	if display {
+		mode = mathModeDisplay
+	}
+	rendered, ok := mathRenderLayout(source, mode)
+	return rendered.text, ok
+}
+
+// mathRenderLayout mirrors Rust's `render`: parse the trimmed source and join
+// the rows, rejecting input that is empty or produces only blank rows. Spatial
+// layouts report the width they must keep to preserve their geometry.
+func mathRenderLayout(source string, mode mathMode) (mathRendered, bool) {
 	parser := &mathParser{
 		remaining:        strings.TrimSpace(source),
-		display:          display,
-		stackAnnotations: display,
+		mode:             mode,
+		stackAnnotations: mode != mathModeInline,
 	}
 	result, ok := parser.sequence(mathSeqInput)
 	if !ok {
-		return "", false
+		return mathRendered{}, false
 	}
 	blank := true
 	for _, row := range result.rows {
@@ -101,9 +134,14 @@ func mathRender(source string, display bool) (string, bool) {
 		}
 	}
 	if blank {
-		return "", false
+		return mathRendered{}, false
 	}
-	return strings.Join(result.rows, "\n"), true
+	rendered := mathRendered{text: strings.Join(result.rows, "\n")}
+	if parser.hasMatrix || len(result.rows) > 1 {
+		rendered.requiredWidth = result.width()
+		rendered.hasRequiredWidth = true
+	}
+	return rendered, true
 }
 
 type mathSeqEnd int
@@ -117,8 +155,9 @@ const (
 type mathParser struct {
 	remaining        string
 	depth            int
-	display          bool
+	mode             mathMode
 	stackAnnotations bool
+	hasMatrix        bool
 }
 
 func (p *mathParser) take() (rune, bool) {
@@ -278,10 +317,11 @@ func (p *mathParser) command() (mathLayout, bool) {
 	name := p.remaining[:length]
 	p.remaining = p.remaining[length:]
 	switch {
-	case (name == "sum" || name == "bigwedge") && p.stackAnnotations:
-		symbol := "∑"
-		if name == "bigwedge" {
-			symbol = "⋀"
+	case (name == "sum" || name == "bigwedge" || name == "int") && p.stackAnnotations &&
+		(name != "int" || p.mode == mathModeDisplay):
+		symbol, ok := mathSymbol(name)
+		if !ok {
+			return mathLayout{}, false
 		}
 		return p.displayOperator(symbol)
 	case name == "begin" || name == "boxed" || name == "underset" || name == "overset" ||
@@ -304,7 +344,7 @@ func (p *mathParser) command() (mathLayout, bool) {
 		if !ok {
 			return mathLayout{}, false
 		}
-		if !p.display {
+		if p.mode == mathModeInline {
 			return mathText("((" + numeratorText + ")/(" + denominatorText + "))"), true
 		}
 		width := codextui.DisplayWidth(numeratorText)
