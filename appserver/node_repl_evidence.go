@@ -8,6 +8,7 @@ import (
 	"codex_go/features"
 	"codex_go/mcp"
 	"codex_go/model"
+	"codex_go/state"
 	"codex_go/tool"
 	"codex_go/turn"
 )
@@ -97,7 +98,7 @@ func nodeReplReviewImageURLs(output *tool.Output) []string {
 
 // recordNodeReplReviewEvidence captures accepted, successful node_repl
 // code-mode results for Guardian review evidence (Rust #38397).
-func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID string, execution *turn.ToolExecutionResult) {
+func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID, turnID string, execution *turn.ToolExecutionResult) {
 	if r == nil || execution == nil || execution.Invocation == nil || execution.Output == nil {
 		return
 	}
@@ -107,19 +108,7 @@ func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID string, execution 
 	if !r.nodeReplBackedInvocation(execution.Invocation) {
 		return
 	}
-	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), "")
-	if active == nil || active.Params == nil {
-		return
-	}
-	cfg, err := r.effectiveConfigForTurn(active.Params)
-	if err != nil || cfg == nil {
-		return
-	}
-	modelInfo := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
-	nodeReplRequired := modelInfo != nil && modelInfo.NodeReplAutoReviewRequired
-	enhancedEnabled := features.Enabled(cfg.FeatureSettings(), "guardian_enhanced_node_repl_transcripts")
-	transcriptImages := features.Enabled(cfg.FeatureSettings(), "guardian_node_repl_transcript_images")
-	if codexctx.NodeReplReviewEvidenceModeFor(nodeReplRequired, enhancedEnabled, transcriptImages) == codexctx.NodeReplEvidenceDisabled {
+	if r.nodeReplEvidenceModeForTurn(strings.TrimSpace(threadID), turnID) == codexctx.NodeReplEvidenceDisabled {
 		return
 	}
 	blocks := nodeReplReviewTextBlocks(execution.Output)
@@ -131,6 +120,54 @@ func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID string, execution 
 	callID := strings.TrimSpace(execution.Invocation.CallID)
 	evidence := r.nodeReplEvidenceForThread(strings.TrimSpace(threadID))
 	evidence.RecordMultimodal(execution.Invocation.ToolName.Name, cellID, callID, blocks, imageURLs)
+}
+
+// nodeReplEvidenceModeForTurn resolves the reviewed turn's node_repl evidence
+// mode from its model policy and feature flags (Rust's
+// node_repl_review_evidence_mode). An empty turnID falls back to the thread's
+// active turn, matching Rust's use of the running turn's context.
+func (r *RuntimeRouter) nodeReplEvidenceModeForTurn(threadID, turnID string) codexctx.NodeReplReviewEvidenceMode {
+	if r == nil {
+		return codexctx.NodeReplEvidenceDisabled
+	}
+	threadID = strings.TrimSpace(threadID)
+	if strings.TrimSpace(turnID) == "" {
+		if active := r.threads.ActiveTurn(threadID); active != nil {
+			turnID = active.TurnID
+		}
+	}
+	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+	if active == nil || active.Params == nil {
+		return codexctx.NodeReplEvidenceDisabled
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return codexctx.NodeReplEvidenceDisabled
+	}
+	modelInfo := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
+	settings := cfg.FeatureSettings()
+	return codexctx.NodeReplReviewEvidenceModeFor(
+		nodeReplAutoReviewRequiredForModel(modelInfo),
+		features.Enabled(settings, "guardian_enhanced_node_repl_transcripts"),
+		features.Enabled(settings, "guardian_node_repl_transcript_images"),
+	)
+}
+
+// guardianNodeReplResultTokenLimit mirrors Rust's node_repl_result_token_limit
+// (#57176): enhanced node_repl transcripts admit the larger per-entry output
+// cap, while a disabled evidence mode keeps the ordinary tool entry cap.
+func (r *RuntimeRouter) guardianNodeReplResultTokenLimit(threadID string) int {
+	return guardianNodeReplResultTokenLimitForMode(r.nodeReplEvidenceModeForTurn(threadID, ""))
+}
+
+// guardianNodeReplResultTokenLimitForMode holds Rust's
+// node_repl_result_token_limit branch: the enhanced cap applies whenever any
+// node_repl evidence mode is enabled.
+func guardianNodeReplResultTokenLimitForMode(mode codexctx.NodeReplReviewEvidenceMode) int {
+	if mode == codexctx.NodeReplEvidenceDisabled {
+		return state.MaxToolEntryTokens
+	}
+	return codexctx.GuardianMaxNodeReplToolResultTokens
 }
 
 func (r *RuntimeRouter) nodeReplBackedInvocation(invocation *tool.Invocation) bool {

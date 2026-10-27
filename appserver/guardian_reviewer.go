@@ -1525,7 +1525,10 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 // preserves original entry numbering for JSON records (#43806, #51465).
 func (r *RuntimeRouter) guardianReviewTranscriptSelection(threadID string) guardianTranscriptSelection {
 	profile := state.SynchronousContextProfile()
-	profile.Transcript.EntryLimits.NodeReplOutputTokens = codexctx.GuardianMaxNodeReplToolResultTokens
+	// Rust #57176 resolves the node_repl output cap from the turn's evidence
+	// mode before transcript preparation; a disabled evidence mode keeps the
+	// ordinary tool entry cap.
+	profile.Transcript.EntryLimits.NodeReplOutputTokens = r.guardianNodeReplResultTokenLimit(threadID)
 	return r.guardianReviewTranscriptSelectionWithProfile(threadID, profile)
 }
 

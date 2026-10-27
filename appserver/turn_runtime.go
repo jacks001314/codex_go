@@ -2899,7 +2899,7 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		// The same call emits the diagnostic log record and the trace-safe span
 		// event; the wrapper's context carries the span the turn runs inside.
 		r.emitToolResultRecords(ctx, threadID, execution)
-		r.recordNodeReplReviewEvidence(threadID, execution)
+		r.recordNodeReplReviewEvidence(threadID, turnID, execution)
 		r.accountGoalToolProgressForCompletion(threadID, turnID, execution)
 		if item, ok := collaborationCompletedThreadItem(execution, threadID, turnID); ok {
 			completedAt := execution.FinishedAt

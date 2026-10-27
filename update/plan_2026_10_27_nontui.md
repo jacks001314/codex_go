@@ -84,6 +84,7 @@ TUI lane and are not modified here.
 | `#55692` | Tool-registration metrics carry the effective `incremental_tools` mode | `turn/tool_registration_metrics.go`, `turn/agent_loop.go`, `turn/runtime.go`, `appserver/turn_runtime.go`, like-Rust tests |
 | `#55644` | Pending injections interrupt `wait_agent` and `clock.sleep` | `turn/steer_mailbox.go`, `turn/tool_dispatcher.go`, `turn/agent_loop.go`, `tool/step_activity.go`, `tool/handlers.go`, `appserver/agent_controller.go`, `exec/agent_controller.go`, like-Rust tests |
 | `#57181` | Optional names on untrusted additional context validate before input admission | `turn/api.go`, `appserver/runtime_router.go`, like-Rust tests |
+| `#57176` | Sync Guardian transcripts resolve the node_repl output cap from the turn's evidence mode | `appserver/node_repl_evidence.go`, `appserver/guardian_reviewer.go`, `appserver/turn_runtime.go`, like-Rust test |
 
 Grounding notes:
 
@@ -161,6 +162,18 @@ Grounding notes:
   no behavior change. Go already splits those responsibilities across
   `appserver/agent_controller.go`, `appserver/agent_runtime.go`, and
   `exec/agent_controller.go`.
+
+`#57176` details: the synchronous transcript's node_repl output cap now
+follows Rust's `node_repl_result_token_limit` — 6,000 while node_repl evidence is
+enabled and the ordinary 1,000-token tool entry cap otherwise — instead of a
+hard-coded 6,000. Go applies the cap inside its single profile-driven
+collection/retention step, where Rust's `prepare_sync_content` runs before
+retention accounting, so the rendered text, token costs, and `original_bytes`
+agree. Resolving the mode also repaired evidence collection: it called
+`activeRuntimeTurnStateSnapshot` with an empty turn id and therefore never
+recorded accepted node_repl results. The dispatcher now passes the executed turn
+id, and the mode check uses `ComputerUseReviewRequired` as Rust's
+`node_repl_review_evidence_mode` does.
 
 `#57227` details: settings snapshots now persist `approvals_reviewer` and both
 named/unnamed permission profiles. `rollout.LatestPersistedResumeSettings`
@@ -742,7 +755,7 @@ deduplication for tool outputs.
 
 ## Pending in this window
 
-- About 113 non-TUI commits in `update/_cls_core.tsv` still need triage.
+- About 112 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
   `#57218` negotiated zstd in the remote app-server client (TUI-owned
   `app/remote_tui.go`; server side and `#57220` statistics are done),
@@ -871,6 +884,8 @@ deduplication for tool outputs.
 - For `#55545`: `go test ./rollout -run 'CompressedRolloutReadDiagnostic|FirstFrameContentSize' -count=1`,
   `go test ./appserver -run 'FeedbackReadAttachment' -count=1`, the full
   `go test ./rollout -count=1`, and `go build ./...` pass.
+- For `#57176`: `go test ./appserver -run 'Guardian|NodeRepl' -count=1`,
+  `go test ./state -count=1`, and `go build ./...` pass.
 - For `#57181`: `go test ./turn -run 'AdditionalContext' -count=1`,
   `go test ./appserver -run 'AdditionalContext|TurnSteer|TurnStart' -count=1`,
   `go test ./exec -run 'Agent|Steer|Wait' -count=1`, `go vet ./turn`, the full
