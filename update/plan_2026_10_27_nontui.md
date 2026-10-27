@@ -34,6 +34,7 @@ TUI lane and are not modified here.
 | `#57287` | Preserve parent tool declarations in MCP-disabled prediction forks | `features/features.go`, `appserver/protocol.go`, `appserver/thread_sample_protocol.go`, `appserver/prediction_parent_tools.go`, `appserver/runtime_router.go`, `appserver/thread_sample.go`, `appserver/turn_runtime.go`, `appserver/incremental_tools.go`, `turn/runtime.go`, like-Rust tests |
 | `#57270` | Load cloud config for sandbox and remote exec-server commands | `app/app.go`, sandbox/exec-server cloud-config tests |
 | `#57192` | Gate capability discovery V2 on executor version | `execserver/capability_discovery_v2_compat.go`, `execserver/client.go`, `appserver/executor_capability_discovery_v2.go`, `appserver/initialize.go`, `cmd/codex/main.go`, version tests |
+| `#56049` | Configured credential providers in remote credential masking | `network/proxy_credential_providers.go`, `execserver/network_policy.go`, `execserver/server.go`, `tool/unified_exec.go`, capability/masking tests |
 
 Grounding notes:
 
@@ -180,6 +181,20 @@ previous V2 inventory is dropped. `cmd/codex` stamps `environmentInfo`'s
 `executorVersion` from `appserver.CodexVersion()` at startup; unstamped builds
 report `0.0.0` and are incompatible, as in Rust.
 
+`#56049` details: `RemoteNetworkProxyConfig` now carries `credentialProviders`
+(the snake_case `CredentialProviderConfig` wire shape) alongside
+`credentialMasking`. Provider rules are dropped on decode whenever masking is
+disabled, and the executor copies them into its proxy settings so the
+executor-local broker resolves configured providers exactly like built-in
+ones; credential values and destination context still stay on the executor.
+`EnvironmentCapabilities` advertises `credentialMaskingCustomProviders` and
+`NetworkProxy()` projects the bits into Rust's `RemoteCredentialMasking`
+(disabled / built-in-only / with-configured-providers). Unified exec requests
+configured-provider masking, then downgrades to unmasked execution before the
+process starts when the executor accepts only built-in providers, emitting
+Rust's "unavailable for this network proxy configuration" warning; executors
+without masking at all keep the "does not support it" warning.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -210,6 +225,7 @@ report `0.0.0` and are incompatible, as in Rust.
   and `go build ./...` pass.
 - For `#57192`: `go test ./execserver -count=1` and
   `go test ./appserver -run 'CapabilityDiscoveryV2' -count=1` pass.
+- For `#56049`: `go test ./execserver ./tool -count=1` passes.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

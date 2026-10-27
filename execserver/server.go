@@ -533,10 +533,13 @@ type EnvironmentInfo struct {
 }
 
 type EnvironmentCapabilities struct {
-	NetworkProxyLaunch         bool `json:"networkProxyLaunch"`
-	CredentialMasking          bool `json:"credentialMasking,omitempty"`
-	CapabilityDiscoverySandbox bool `json:"capabilityDiscoverySandbox"`
-	CapabilityDiscoveryV2      bool `json:"capabilityDiscoveryV2"`
+	NetworkProxyLaunch bool `json:"networkProxyLaunch"`
+	CredentialMasking  bool `json:"credentialMasking,omitempty"`
+	// CredentialMaskingCustomProviders advertises that masking also accepts
+	// configured provider rules (Rust #56049).
+	CredentialMaskingCustomProviders bool `json:"credentialMaskingCustomProviders,omitempty"`
+	CapabilityDiscoverySandbox       bool `json:"capabilityDiscoverySandbox"`
+	CapabilityDiscoveryV2            bool `json:"capabilityDiscoveryV2"`
 	// ShellSnapshotV2 advertises process/start.shellSnapshot support.
 	ShellSnapshotV2 bool `json:"shellSnapshotV2"`
 	// Rust 646f7c0a91: whether this executor supports environmentConfig/read;
@@ -3864,6 +3867,9 @@ func localEnvironmentInfo() *EnvironmentInfo {
 	if home, err := os.UserHomeDir(); err == nil {
 		userHomeDir = home
 	}
+	// Configured provider rules travel with the launch, so masking support
+	// covers custom providers too (Rust #56049).
+	credentialMasking := (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && detected.ShellType == shell.ShellBash
 	return &EnvironmentInfo{
 		Shell:                ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
 		ExecutorVersion:      ExecServerExecutorVersion(),
@@ -3874,10 +3880,11 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		UserHomeDir:          userHomeDir,
 		TemporaryDirectories: localTemporaryDirectories(cwdPath),
 		Capabilities: EnvironmentCapabilities{
-			NetworkProxyLaunch:         true,
-			CredentialMasking:          (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && detected.ShellType == shell.ShellBash,
-			CapabilityDiscoverySandbox: true,
-			CapabilityDiscoveryV2:      true,
+			NetworkProxyLaunch:               true,
+			CredentialMasking:                credentialMasking,
+			CredentialMaskingCustomProviders: credentialMasking,
+			CapabilityDiscoverySandbox:       true,
+			CapabilityDiscoveryV2:            true,
 			// Local exec-servers do not own the unified-exec launch path, so they
 			// must not advertise executor-managed shell snapshots (Rust #39958).
 			ShellSnapshotV2: false,

@@ -27,13 +27,15 @@ const (
 // CredentialProviderConfig mirrors Rust CredentialProviderConfig
 // (network-proxy/src/credential_broker/provider_config.rs).
 type CredentialProviderConfig struct {
-	Env              []string
-	Patterns         []string
-	URLPrefixes      []string
-	URLPrefixFromEnv *string
-	Auth             []CredentialAuthMethod
-	Header           *string
-	Prefix           *string
+	// Rust serializes these fields with their snake_case names in the
+	// exec-server wire format (#56049).
+	Env              []string               `json:"env,omitempty"`
+	Patterns         []string               `json:"patterns,omitempty"`
+	URLPrefixes      []string               `json:"url_prefixes,omitempty"`
+	URLPrefixFromEnv *string                `json:"url_prefix_from_env,omitempty"`
+	Auth             []CredentialAuthMethod `json:"auth,omitempty"`
+	Header           *string                `json:"header,omitempty"`
+	Prefix           *string                `json:"prefix,omitempty"`
 }
 
 // CredentialDestination is a parsed, authorized injection destination

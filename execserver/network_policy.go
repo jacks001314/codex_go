@@ -175,36 +175,106 @@ func (d *ExecServerNetworkPolicyDecision) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// RemoteCredentialMasking reports the masking support of one executor or the
+// masking mode requested for a remote launch (Rust #56049).
+type RemoteCredentialMasking int
+
+const (
+	// RemoteCredentialMaskingDisabled means the executor does not mask
+	// credentials, or the caller did not request masking.
+	RemoteCredentialMaskingDisabled RemoteCredentialMasking = iota
+	// RemoteCredentialMaskingBuiltInOnly masks only when the configuration has
+	// no configured credential providers.
+	RemoteCredentialMaskingBuiltInOnly
+	// RemoteCredentialMaskingWithConfiguredProviders masks built-in and
+	// configured providers.
+	RemoteCredentialMaskingWithConfiguredProviders
+)
+
+// NetworkProxyCapabilities is the network-proxy feature set of one executor
+// (Rust EnvironmentCapabilities::network_proxy).
+type NetworkProxyCapabilities struct {
+	Launch            bool
+	CredentialMasking RemoteCredentialMasking
+}
+
+// NetworkProxy projects the capability bits into the masking mode the caller
+// should request.
+func (c EnvironmentCapabilities) NetworkProxy() NetworkProxyCapabilities {
+	mode := RemoteCredentialMaskingDisabled
+	if c.CredentialMasking {
+		if c.CredentialMaskingCustomProviders {
+			mode = RemoteCredentialMaskingWithConfiguredProviders
+		} else {
+			mode = RemoteCredentialMaskingBuiltInOnly
+		}
+	}
+	return NetworkProxyCapabilities{
+		Launch:            c.NetworkProxyLaunch,
+		CredentialMasking: mode,
+	}
+}
+
 type RemoteNetworkProxyConfig struct {
 	Enabled bool `json:"enabled"`
-	// CredentialMasking carries only built-in broker activation. Credentials,
-	// destination hints, custom providers, CAs, and MITM hooks stay local.
-	CredentialMasking              bool              `json:"credentialMasking,omitempty"`
-	EnableSOCKS5                   bool              `json:"enableSocks5"`
-	EnableSOCKS5UDP                bool              `json:"enableSocks5Udp"`
-	AllowUpstreamProxy             bool              `json:"allowUpstreamProxy"`
-	DangerouslyAllowAllUnixSockets bool              `json:"dangerouslyAllowAllUnixSockets"`
-	Mode                           string            `json:"mode"`
-	Domains                        map[string]string `json:"domains,omitempty"`
-	UnixSockets                    map[string]string `json:"unixSockets,omitempty"`
-	AllowLocalBinding              bool              `json:"allowLocalBinding"`
+	// CredentialMasking activates the executor-local broker. Credential values,
+	// destination hints, CAs, and MITM hooks stay local; only provider rules
+	// cross the wire (Rust #56049).
+	CredentialMasking bool `json:"credentialMasking,omitempty"`
+	// CredentialProviders carries configured provider rules to the executor.
+	// They are discarded when masking is off, even when this config is
+	// forwarded.
+	CredentialProviders            map[string]network.CredentialProviderConfig `json:"credentialProviders,omitempty"`
+	EnableSOCKS5                   bool                                        `json:"enableSocks5"`
+	EnableSOCKS5UDP                bool                                        `json:"enableSocks5Udp"`
+	AllowUpstreamProxy             bool                                        `json:"allowUpstreamProxy"`
+	DangerouslyAllowAllUnixSockets bool                                        `json:"dangerouslyAllowAllUnixSockets"`
+	Mode                           string                                      `json:"mode"`
+	Domains                        map[string]string                           `json:"domains,omitempty"`
+	UnixSockets                    map[string]string                           `json:"unixSockets,omitempty"`
+	AllowLocalBinding              bool                                        `json:"allowLocalBinding"`
+}
+
+// UnmarshalJSON drops provider rules sent with masking disabled (Rust #56049).
+func (c *RemoteNetworkProxyConfig) UnmarshalJSON(data []byte) error {
+	type alias RemoteNetworkProxyConfig
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if !decoded.CredentialMasking {
+		decoded.CredentialProviders = nil
+	}
+	*c = RemoteNetworkProxyConfig(decoded)
+	return nil
 }
 
 func RemoteNetworkProxyConfigFromProxyConfig(config network.ProxyConfig) (RemoteNetworkProxyConfig, error) {
-	return RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(config, false)
+	return RemoteNetworkProxyConfigFromProxyConfigWithCredentialMaskingMode(config, RemoteCredentialMaskingDisabled)
 }
 
-// RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking builds the
-// executor-visible proxy config. Credential masking may replace local broker
-// setup with a boolean activation when the broker is built-in and no
-// unsupported local-only features are present.
+// RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking requests
+// configured-provider masking when credentialMasking is true and disables it
+// otherwise. The caller negotiates the effective mode with the executor's
+// capabilities before launching a process.
 func RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(config network.ProxyConfig, credentialMasking bool) (RemoteNetworkProxyConfig, error) {
+	mode := RemoteCredentialMaskingDisabled
+	if credentialMasking {
+		mode = RemoteCredentialMaskingWithConfiguredProviders
+	}
+	return RemoteNetworkProxyConfigFromProxyConfigWithCredentialMaskingMode(config, mode)
+}
+
+// RemoteNetworkProxyConfigFromProxyConfigWithCredentialMaskingMode builds the
+// executor-visible proxy config for one masking mode. Built-in-only masking
+// falls back to an unmasked proxy when configured providers are present.
+func RemoteNetworkProxyConfigFromProxyConfigWithCredentialMaskingMode(config network.ProxyConfig, mode RemoteCredentialMasking) (RemoteNetworkProxyConfig, error) {
 	settings := config.Network
-	requestedMasking := credentialMasking
-	credentialMasking = credentialMasking &&
+	requestedMasking := mode != RemoteCredentialMaskingDisabled
+	credentialMasking := requestedMasking &&
 		settings.Enabled &&
 		settings.CredentialBroker &&
-		len(settings.CredentialProviders) == 0
+		(mode == RemoteCredentialMaskingWithConfiguredProviders || len(settings.CredentialProviders) == 0)
 	brokerOnlyMITM := requestedMasking &&
 		settings.CredentialBroker &&
 		!settings.DangerouslyAllowPlaintextCredentialInjection &&
@@ -233,9 +303,17 @@ func RemoteNetworkProxyConfigFromProxyConfigWithCredentialMasking(config network
 	// Rust #46004: the remote wire keeps a plain bool, so an omitted
 	// controller flag resolves to false for remote configuration.
 	allowAllUnixSockets := settings.DangerouslyAllowAllUnixSockets != nil && *settings.DangerouslyAllowAllUnixSockets
+	providers := map[string]network.CredentialProviderConfig(nil)
+	if credentialMasking && mode == RemoteCredentialMaskingWithConfiguredProviders && len(settings.CredentialProviders) > 0 {
+		providers = make(map[string]network.CredentialProviderConfig, len(settings.CredentialProviders))
+		for id, provider := range settings.CredentialProviders {
+			providers[id] = provider
+		}
+	}
 	return RemoteNetworkProxyConfig{
 		Enabled:                        settings.Enabled,
 		CredentialMasking:              credentialMasking,
+		CredentialProviders:            providers,
 		EnableSOCKS5:                   settings.EnableSocks5,
 		EnableSOCKS5UDP:                settings.EnableSocks5UDP,
 		AllowUpstreamProxy:             settings.AllowUpstreamProxy,
@@ -251,6 +329,9 @@ func (c RemoteNetworkProxyConfig) ProxyConfig() (network.ProxyConfig, error) {
 	settings := network.DefaultProxySettings()
 	settings.Enabled = c.Enabled
 	settings.SetCredentialBrokerEnabled(c.CredentialMasking)
+	if c.CredentialMasking {
+		settings.CredentialProviders = c.CredentialProviders
+	}
 	settings.EnableSocks5 = c.EnableSOCKS5
 	settings.EnableSocks5UDP = c.EnableSOCKS5UDP
 	settings.AllowUpstreamProxy = c.AllowUpstreamProxy

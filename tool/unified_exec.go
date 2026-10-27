@@ -692,12 +692,22 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 			m.releaseProcessID(processID)
 			return nil, fmt.Errorf("failed to query exec-server capabilities: %w", capabilityErr)
 		}
-		if !environmentInfo.Capabilities.NetworkProxyLaunch {
+		networkProxy := environmentInfo.Capabilities.NetworkProxy()
+		if !networkProxy.Launch {
 			_ = client.Close()
 			m.releaseProcessID(processID)
 			return nil, errors.New("selected exec-server does not support executor-local network proxy launches")
 		}
-		warnRemoteCredentialMaskingUnavailable(req, req.RemoteNetworkProxy.Proxy.CredentialMasking, environmentInfo.Capabilities.CredentialMasking)
+		// Rust #56049: an executor that masks only built-in providers cannot
+		// resolve configured provider rules, so fall back to unmasked execution
+		// before the process starts.
+		requestedMasking := req.RemoteNetworkProxy.Proxy.CredentialMasking
+		if len(req.RemoteNetworkProxy.Proxy.CredentialProviders) > 0 &&
+			networkProxy.CredentialMasking != execserver.RemoteCredentialMaskingWithConfiguredProviders {
+			req.RemoteNetworkProxy.Proxy.CredentialMasking = false
+			req.RemoteNetworkProxy.Proxy.CredentialProviders = nil
+		}
+		warnRemoteCredentialMaskingUnavailable(req, requestedMasking, networkProxy.CredentialMasking)
 	}
 	// Rust #49467 (`Feature::LoginShellPackagePath`): login startup can reset
 	// PATH, so a POSIX login shell re-derives its argv with the directories the
@@ -868,8 +878,8 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	return m.collect(ctx, process, yield, req.MaxOutputTokens)
 }
 
-func warnRemoteCredentialMaskingUnavailable(req *ShellRequest, requested bool, executorSupports bool) {
-	if req == nil || req.WarningSink == nil || !requested {
+func warnRemoteCredentialMaskingUnavailable(req *ShellRequest, requested bool, executorMasking execserver.RemoteCredentialMasking) {
+	if req == nil || req.WarningSink == nil || req.RemoteNetworkProxy == nil || !req.RemoteNetworkProxy.Proxy.Enabled || !requested {
 		return
 	}
 	environmentID := strings.TrimSpace(req.UnifiedExecEnvironmentID)
@@ -878,8 +888,10 @@ func warnRemoteCredentialMaskingUnavailable(req *ShellRequest, requested bool, e
 	}
 	var message string
 	switch {
-	case !executorSupports:
+	case executorMasking == execserver.RemoteCredentialMaskingDisabled:
 		message = fmt.Sprintf("Credential masking is unavailable on environment `%s` because its exec-server does not support it. This command will run with unmasked credentials.", environmentID)
+	case !req.RemoteNetworkProxy.Proxy.CredentialMasking:
+		message = fmt.Sprintf("Credential masking is unavailable for this network proxy configuration on environment `%s`. This command will run with unmasked credentials.", environmentID)
 	case req.Shell.Shell == nil:
 		shellName := ""
 		message = fmt.Sprintf("Credential masking is unavailable for shell `%s` on environment `%s`. This command will run with unmasked credentials.", shellName, environmentID)
