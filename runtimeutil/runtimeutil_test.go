@@ -79,6 +79,35 @@ func TestBudgetUsageReminderAndRearm(t *testing.T) {
 	}
 }
 
+func TestBudgetAdvisoryChargesWithoutExhaustingLikeRust(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{
+		LimitTokens:               10,
+		PrefillTokenWeight:        1,
+		SamplingTokenWeight:       1,
+		ReminderAtRemainingTokens: []int64{5},
+		Advisory:                  true,
+	})
+	exhausted, err := budget.RecordUsage(TokenUsage{OutputTokens: 12})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if exhausted {
+		t.Fatal("advisory budget reported exhaustion")
+	}
+	reminder := budget.PendingReminder("thread", "window")
+	if reminder == nil || reminder.RemainingTokens != 0 {
+		t.Fatalf("advisory reminder = %+v, want zero remaining", reminder)
+	}
+	exhausted, err = budget.RecordUsage(TokenUsage{OutputTokens: 100})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if exhausted {
+		t.Fatal("advisory budget reported exhaustion on a later call")
+	}
+}
+
 func TestBudgetRecordUsagePrefersProviderRolloutBudgetUnits(t *testing.T) {
 	budget := NewBudget()
 	budget.Configure(BudgetConfig{

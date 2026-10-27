@@ -27,6 +27,7 @@ func TestRolloutBudgetConfigResolvesLikeRust(t *testing.T) {
 		t.Fatalf("RolloutBudgetConfig() error = %v", err)
 	}
 	want := &RolloutBudgetConfig{
+		EnforceLimit:              true,
 		LimitTokens:               100000,
 		ReminderAtRemainingTokens: []int64{50000, 25000, 10000},
 		SamplingTokenWeight:       1.0,
@@ -53,6 +54,44 @@ func TestRolloutBudgetConfigDefaultsWeightsLikeRust(t *testing.T) {
 	}
 	if got.SamplingTokenWeight != 1.0 || got.PrefillTokenWeight != 1.0 {
 		t.Fatalf("weights = %v/%v, want 1.0/1.0 defaults", got.SamplingTokenWeight, got.PrefillTokenWeight)
+	}
+}
+
+func TestRolloutBudgetConfigEnforceLimitLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		toml map[string]any
+		want bool
+	}{
+		{name: "default enforces", toml: map[string]any{}, want: true},
+		{name: "explicit enforce", toml: map[string]any{"enforce_limit": true}, want: true},
+		{name: "advisory", toml: map[string]any{"enforce_limit": false}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			toml := map[string]any{
+				"enabled":                      true,
+				"limit_tokens":                 int64(1000),
+				"reminder_at_remaining_tokens": []any{int64(500)},
+			}
+			for key, value := range test.toml {
+				toml[key] = value
+			}
+			got, err := (&Config{Values: map[string]any{"features": map[string]any{"rollout_budget": toml}}}).RolloutBudgetConfig()
+			if err != nil {
+				t.Fatalf("RolloutBudgetConfig() error = %v", err)
+			}
+			if got.EnforceLimit != test.want {
+				t.Fatalf("EnforceLimit = %v, want %v", got.EnforceLimit, test.want)
+			}
+		})
+	}
+	if _, err := (&Config{Values: map[string]any{"features": map[string]any{"rollout_budget": map[string]any{
+		"enabled":                      true,
+		"limit_tokens":                 int64(1000),
+		"reminder_at_remaining_tokens": []any{int64(500)},
+		"enforce_limit":                "yes",
+	}}}}).RolloutBudgetConfig(); err == nil || !strings.Contains(err.Error(), "enforce_limit must be a boolean") {
+		t.Fatalf("non-bool enforce_limit error = %v", err)
 	}
 }
 

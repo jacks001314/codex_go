@@ -9,6 +9,9 @@ import (
 // (codex-rs core/src/config/mod.rs RolloutBudgetConfig), resolved from the
 // `features.rollout_budget` table.
 type RolloutBudgetConfig struct {
+	// EnforceLimit stops turns once the shared budget is exhausted. It defaults
+	// to true; false keeps accounting and reminders advisory (Rust #57187).
+	EnforceLimit              bool
 	LimitTokens               int64
 	ReminderAtRemainingTokens []int64
 	SamplingTokenWeight       float64
@@ -50,6 +53,13 @@ func (c *Config) RolloutBudgetConfig() (*RolloutBudgetConfig, error) {
 		return nil, fmt.Errorf("features.rollout_budget.limit_tokens is required when rollout_budget is enabled")
 	}
 
+	enforceLimit := true
+	if value, ok := toml["enforce_limit"].(bool); ok {
+		enforceLimit = value
+	} else if _, present := toml["enforce_limit"]; present {
+		return nil, fmt.Errorf("features.rollout_budget.enforce_limit must be a boolean")
+	}
+
 	limit, ok := int64ConfigValue(toml["limit_tokens"])
 	if !ok {
 		return nil, fmt.Errorf("features.rollout_budget.limit_tokens is required when rollout_budget is enabled")
@@ -84,6 +94,7 @@ func (c *Config) RolloutBudgetConfig() (*RolloutBudgetConfig, error) {
 		}
 	}
 	return &RolloutBudgetConfig{
+		EnforceLimit:              enforceLimit,
 		LimitTokens:               limit,
 		ReminderAtRemainingTokens: reminders,
 		SamplingTokenWeight:       sampling,

@@ -35,6 +35,7 @@ TUI lane and are not modified here.
 | `#57270` | Load cloud config for sandbox and remote exec-server commands | `app/app.go`, sandbox/exec-server cloud-config tests |
 | `#57192` | Gate capability discovery V2 on executor version | `execserver/capability_discovery_v2_compat.go`, `execserver/client.go`, `appserver/executor_capability_discovery_v2.go`, `appserver/initialize.go`, `cmd/codex/main.go`, version tests |
 | `#56049` | Configured credential providers in remote credential masking | `network/proxy_credential_providers.go`, `execserver/network_policy.go`, `execserver/server.go`, `tool/unified_exec.go`, capability/masking tests |
+| `#57187` | Advisory rollout budgets with optional limit enforcement | `config/rollout_budget.go`, `config/config.go`, `runtimeutil/budget.go`, `appserver/runtime_router.go`, config/budget tests |
 
 Grounding notes:
 
@@ -195,6 +196,13 @@ process starts when the executor accepts only built-in providers, emitting
 Rust's "unavailable for this network proxy configuration" warning; executors
 without masking at all keep the "does not support it" warning.
 
+`#57187` details: `features.rollout_budget.enforce_limit` defaults to `true`
+and is validated as a boolean. `false` keeps shared weighted-token accounting
+and `<rollout_budget>` reminders active (including the zero-remaining
+reminder) while `RecordUsage` never reports exhaustion, so the current and
+later turns continue; the Go budget models this as `BudgetConfig.Advisory`,
+whose zero value still enforces the limit.
+
 ## Pending in this window
 
 - Remaining ~240 non-TUI commits in `update/_cls_core.tsv` are still being
@@ -226,6 +234,7 @@ without masking at all keep the "does not support it" warning.
 - For `#57192`: `go test ./execserver -count=1` and
   `go test ./appserver -run 'CapabilityDiscoveryV2' -count=1` pass.
 - For `#56049`: `go test ./execserver ./tool -count=1` passes.
+- For `#57187`: `go test ./config ./runtimeutil -run 'RolloutBudget|Budget' -count=1` passes.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.

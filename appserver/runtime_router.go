@@ -662,6 +662,7 @@ func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
 		budget := runtimeutil.NewBudget()
 		budget.Configure(runtimeutil.BudgetConfig{
 			LimitTokens:               resolved.LimitTokens,
+			Advisory:                  !resolved.EnforceLimit,
 			PrefillTokenWeight:        resolved.PrefillTokenWeight,
 			SamplingTokenWeight:       resolved.SamplingTokenWeight,
 			ReminderAtRemainingTokens: resolved.ReminderAtRemainingTokens,

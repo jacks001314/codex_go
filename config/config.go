@@ -1415,7 +1415,7 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 	if rolloutBudget, ok := features["rollout_budget"].(map[string]any); ok {
 		// Mirrors Rust RolloutBudgetConfigToml (serde deny_unknown_fields).
 		known := map[string]bool{
-			"enabled": true, "limit_tokens": true, "reminder_at_remaining_tokens": true,
+			"enabled": true, "enforce_limit": true, "limit_tokens": true, "reminder_at_remaining_tokens": true,
 			"sampling_token_weight": true, "prefill_token_weight": true,
 		}
 		for key := range rolloutBudget {

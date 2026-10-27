@@ -36,7 +36,12 @@ func (u *TokenUsage) NonCachedInput() int64 {
 }
 
 type BudgetConfig struct {
-	LimitTokens               int64
+	LimitTokens int64
+	// Advisory keeps shared accounting and budget reminders active without
+	// stopping turns once the budget is exhausted (Rust
+	// `features.rollout_budget.enforce_limit = false`, #57187). The zero value
+	// enforces the limit.
+	Advisory                  bool
 	PrefillTokenWeight        float64
 	SamplingTokenWeight       float64
 	ReminderAtRemainingTokens []int64
@@ -78,7 +83,8 @@ func (b *Budget) Configure(config BudgetConfig) {
 }
 
 // RecordUsage charges usage against the shared rollout budget and reports
-// whether the configured budget is exhausted (also on later calls). When the
+// whether the configured budget is exhausted (also on later calls). Advisory
+// budgets keep charging but never report exhaustion. When the
 // provider includes `codex_rollout_budget_units`, those units are charged
 // directly; otherwise weighted input/output token accounting is used. Invalid
 // provider units are rejected as a fatal error, mirroring Rust's
@@ -100,7 +106,7 @@ func (b *Budget) RecordUsage(usage TokenUsage) (bool, error) {
 		units = float64(max64(usage.OutputTokens, 0))*b.config.SamplingTokenWeight + float64((&usage).NonCachedInput())*b.config.PrefillTokenWeight
 	}
 	b.used += units
-	return b.used >= float64(b.config.LimitTokens), nil
+	return !b.config.Advisory && b.used >= float64(b.config.LimitTokens), nil
 }
 
 func (b *Budget) PendingReminder(threadID string, windowID string) *BudgetReminder {
