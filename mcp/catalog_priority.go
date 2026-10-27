@@ -3,6 +3,8 @@ package mcp
 import (
 	"sort"
 	"strings"
+
+	managedconfig "codex_go/config"
 )
 
 // PluginAttribution mirrors Rust's McpPluginAttribution and stores plugin identity
@@ -88,6 +90,10 @@ type ResolvedCatalog struct {
 	Servers             map[string]ResolvedServer
 	Conflicts           []CatalogConflict
 	DisabledServerNames map[string]bool // name-level vetoes for subsequent builds
+	// RequirementsDisabledServerNames retains managed-requirements denials for
+	// subsequent builds (Rust #56266). Only a trusted host-owned Apps
+	// registration may replace one of these names.
+	RequirementsDisabledServerNames map[string]string
 }
 
 // ResolveCatalog resolves MCP server registrations from multiple sources into
@@ -99,15 +105,26 @@ type ResolvedCatalog struct {
 // When a source's disabled registration acts as a name-level veto, later sources
 // cannot re-enable the same name unless the disabled source was SelectedPlugin.
 func ResolveCatalog(actions []CatalogAction) *ResolvedCatalog {
-	return ResolveCatalogWithDisabled(nil, actions)
+	return ResolveCatalogWithState(nil, nil, actions)
 }
 
 // ResolveCatalogWithDisabled resolves MCP registrations with an initial set of
 // disabled server names (name-level vetoes from higher-priority tiers).
 func ResolveCatalogWithDisabled(initialDisabled map[string]bool, actions []CatalogAction) *ResolvedCatalog {
+	return ResolveCatalogWithState(initialDisabled, nil, actions)
+}
+
+// ResolveCatalogWithState resolves MCP registrations with the state carried from
+// a previous build: disabled server names and managed-requirements denials
+// (Rust #56266).
+func ResolveCatalogWithState(initialDisabled map[string]bool, initialRequirementsDisabled map[string]string, actions []CatalogAction) *ResolvedCatalog {
 	disabled := make(map[string]bool, len(initialDisabled))
 	for name := range initialDisabled {
 		disabled[name] = true
+	}
+	requirementsDisabled := make(map[string]string, len(initialRequirementsDisabled))
+	for name, reason := range initialRequirementsDisabled {
+		requirementsDisabled[name] = reason
 	}
 
 	// Sort actions by priority tier ascending, then by registration order descending
@@ -165,10 +182,25 @@ func ResolveCatalogWithDisabled(initialDisabled map[string]bool, actions []Catal
 		}
 		config := action.Config
 		persistDisabled := DisabledRegistrationIsNameVeto(action.Source)
-		if !config.Enabled || disabled[name] {
-			config.Enabled = false
-			if persistDisabled {
+		if !config.Enabled && persistDisabled {
+			switch reason := strings.TrimSpace(config.DisabledReason); {
+			case reason == managedconfig.MCPDisabledByRequirements:
+				requirementsDisabled[name] = reason
+			case reason == managedconfig.MCPDisabledByExplicitAndRequirements:
+				requirementsDisabled[name] = reason
 				disabled[name] = true
+			default:
+				disabled[name] = true
+			}
+		}
+		if disabled[name] {
+			config.Enabled = false
+		}
+		// Only trusted Apps may ignore a previous registration's requirements
+		// denial; keep it so a later custom replacement is still blocked.
+		if !isHostOwnedAppsSource(name, action.Source, &config) {
+			if _, denied := requirementsDisabled[name]; denied {
+				disableServerConfigByRequirements(&config)
 			}
 		}
 		servers[name] = ResolvedServer{
@@ -180,10 +212,20 @@ func ResolveCatalogWithDisabled(initialDisabled map[string]bool, actions []Catal
 	}
 
 	return &ResolvedCatalog{
-		Servers:             servers,
-		Conflicts:           conflicts,
-		DisabledServerNames: disabled,
+		Servers:                         servers,
+		Conflicts:                       conflicts,
+		DisabledServerNames:             disabled,
+		RequirementsDisabledServerNames: requirementsDisabled,
 	}
+}
+
+// isHostOwnedAppsSource mirrors McpServerSource::is_host_owned_apps for a
+// catalog action: only the compatibility source owns the Apps registration.
+func isHostOwnedAppsSource(name string, source CatalogSource, config *ServerConfig) bool {
+	if strings.TrimSpace(name) != CodexAppsServerName || config == nil || !config.IsLocalEnvironment() {
+		return false
+	}
+	return source == CatalogSourceCompatibility
 }
 
 // SourceFromRegistration derives the CatalogSource from a ServerRegistration.

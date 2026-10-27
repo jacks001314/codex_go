@@ -521,6 +521,20 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 		registration.Name = name
 		servers[name] = cloneRegistration(&registration)
 	}
+	// Rust #56266: an explicit disable must survive runtime overlays, which only
+	// replace a registration's transport and source. A requirements denial also
+	// has to outlive the registration it was applied to, unless a trusted
+	// host-owned Apps registration replaces it.
+	explicitlyDisabled := map[string]string{}
+	requirementsDisabled := map[string]bool{}
+	for name, registration := range servers {
+		if reason, ok := explicitMCPDisabledReason(&registration); ok {
+			explicitlyDisabled[name] = reason
+		}
+		if _, ok := requirementsMCPDisabledReason(&registration); ok {
+			requirementsDisabled[name] = true
+		}
+	}
 	if base.AppsEnabled && base.Auth != nil && base.Auth.UsesCodexBackend {
 		servers[CodexAppsServerName] = ServerRegistration{
 			Name:          CodexAppsServerName,
@@ -562,6 +576,23 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 			PluginHostRoot:    overlay.PluginHostRoot,
 			SelectionOrder:    overlay.SelectionOrder,
 		}
+	}
+	for name, reason := range explicitlyDisabled {
+		registration, ok := servers[name]
+		if !ok {
+			continue
+		}
+		registration.Config.Enabled = false
+		registration.Config.DisabledReason = reason
+		servers[name] = registration
+	}
+	for name := range requirementsDisabled {
+		registration, ok := servers[name]
+		if !ok || isHostOwnedCodexAppsRegistration(name, registration) {
+			continue
+		}
+		disableMCPRegistrationByRequirements(&registration)
+		servers[name] = registration
 	}
 	out := base
 	out.Servers = servers
@@ -682,12 +713,68 @@ func managedMCPRequirementMatches(requirement managedconfig.MCPServerRequirement
 	return requirement.Matches(strings.TrimSpace(server.Command), server.Args, strings.TrimSpace(server.URL))
 }
 
+// disableMCPRegistrationByRequirements mirrors McpServerConfig::disable_by_requirements
+// (Rust #56266): a requirements denial keeps an existing explicit disable
+// visible in the reason, and repeated filtering keeps the combined reason
+// instead of downgrading it.
 func disableMCPRegistrationByRequirements(registration *ServerRegistration) {
 	if registration == nil {
 		return
 	}
-	registration.Config.Enabled = false
-	registration.Config.DisabledReason = managedconfig.MCPDisabledByRequirements
+	disableServerConfigByRequirements(&registration.Config)
+}
+
+func disableServerConfigByRequirements(config *ServerConfig) {
+	if config == nil {
+		return
+	}
+	reason := managedconfig.MCPDisabledByRequirements
+	switch strings.TrimSpace(config.DisabledReason) {
+	case managedconfig.MCPDisabledByRequirements:
+		// Already denied only by requirements.
+	case managedconfig.MCPDisabledByExplicitAndRequirements:
+		reason = managedconfig.MCPDisabledByExplicitAndRequirements
+	default:
+		// An empty or custom reason with a disabled registration is an explicit
+		// disable, matching Rust's None/Unknown arms.
+		if !config.Enabled {
+			reason = managedconfig.MCPDisabledByExplicitAndRequirements
+		}
+	}
+	config.Enabled = false
+	config.DisabledReason = reason
+}
+
+// requirementsMCPDisabledReason reports whether a disabled registration was
+// denied by managed requirements and returns its reason. Selected plugin
+// registrations do not persist a name-level veto (Rust #56266).
+func requirementsMCPDisabledReason(registration *ServerRegistration) (string, bool) {
+	if registration == nil || registration.Config.Enabled {
+		return "", false
+	}
+	reason := strings.TrimSpace(registration.Config.DisabledReason)
+	if !managedconfig.MCPDisabledByManagedRequirements(reason) {
+		return "", false
+	}
+	if !DisabledRegistrationIsNameVeto(SourceFromRegistration(registration)) {
+		return "", false
+	}
+	return reason, true
+}
+
+// explicitMCPDisabledReason reports whether a registration was disabled without
+// managed requirements and returns the reason to keep across overlays. An
+// explicit disable stays effective when an overlay only replaces the transport
+// and source (Rust #56266).
+func explicitMCPDisabledReason(registration *ServerRegistration) (string, bool) {
+	if registration == nil || registration.Config.Enabled {
+		return "", false
+	}
+	reason := strings.TrimSpace(registration.Config.DisabledReason)
+	if managedconfig.MCPDisabledByManagedRequirements(reason) {
+		return reason, reason == managedconfig.MCPDisabledByExplicitAndRequirements
+	}
+	return registration.Config.DisabledReason, true
 }
 
 func appsEnabledFromRuntimeConfigValues(values map[string]any) bool {

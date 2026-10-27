@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"codex_go/auth"
+	managedconfig "codex_go/config"
 )
 
 func TestListStatusAndToolCall(t *testing.T) {
@@ -2056,5 +2057,37 @@ func TestMCPListServerStatusParamsServerNameLikeRust(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "serverName") {
 		t.Fatalf("omitted serverName should not be emitted: %s", encoded)
+	}
+}
+
+func TestOauthLoginRejectsRequirementsDisabledServerLikeRust(t *testing.T) {
+	reasons := []string{
+		managedconfig.MCPDisabledByRequirements,
+		managedconfig.MCPDisabledByExplicitAndRequirements,
+	}
+	for _, reason := range reasons {
+		reason := reason
+		t.Run(reason, func(t *testing.T) {
+			service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+				"docs": {Config: ServerConfig{URL: "https://example.test/mcp", Enabled: false, DisabledReason: reason}},
+			}})
+			_, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "docs"})
+			if !errors.Is(err, ErrInvalidMCPRequest) || err.Error() != "the MCP server is disabled by managed requirements" {
+				t.Fatalf("OauthLogin() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSetServerConfigRetainsRequirementsDisabledReasonForOauthLoginLikeRust(t *testing.T) {
+	service := NewMCPService(nil)
+	service.SetServerConfig("docs", &ServerConfig{
+		URL:            "https://example.test/mcp",
+		Enabled:        false,
+		DisabledReason: managedconfig.MCPDisabledByRequirements,
+	})
+	_, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "docs"})
+	if !errors.Is(err, ErrInvalidMCPRequest) || err.Error() != "the MCP server is disabled by managed requirements" {
+		t.Fatalf("OauthLogin() error = %v", err)
 	}
 }

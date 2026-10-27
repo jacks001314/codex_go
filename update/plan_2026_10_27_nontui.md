@@ -112,9 +112,14 @@ TUI lane and are not modified here.
 | `#55633` | Code Mode collaboration calls (`spawn_agent`, `send_message`, `followup_task`) are classified as plaintext, so their message receives the plaintext wrapper with sender and recipient attribution; ordinary direct calls stay encrypted | `agent/tools.go`, `agent/tools_test.go` |
 | `#57483` | Selected-thread rollout migration reads the state index first and skips rollout headers whose indexed owner and canonical filename agree that they belong to an unselected thread; selected, misnamed, conflicting and unindexed paths still get a header inspection, and a missing/busy database falls back to inspecting everything | `state/rollout_migration.go`, `rollout/rollout.go`, `rollout/migrate.go`, `app/app.go`, like-Rust tests |
 | `#56297` | Built-in dummy credentials carry the provider prefix, a visible `masked` marker and over 128 random alphanumeric bytes after it, copying no punctuation from the real credential; candidate dummies that duplicate or embed an already-issued credential or dummy are rejected instead of being registered | `network/proxy_credential_broker.go`, like-Rust tests |
+| `#56266` | Managed-requirements denials keep their reason across runtime overlays unless a trusted host-owned Apps registration replaces the server; an explicit disable that requirements also deny stays combined through repeated filtering; standalone MCP login HTTP clients reject requirements-denied servers | `mcp/catalog_priority.go`, `mcp/config.go`, `mcp/api.go`, `config/mcp_requirements.go`, like-Rust tests |
 
 Grounding notes:
 
+- For `#56266`, Rust's `RequirementSource` is represented by Go's fixed
+  disabled-reason strings (requirements vs explicit-and-requirements); Go does
+  not carry a separate source value, so retaining the reason string is the
+  faithful equivalent.
 - `#55723` is N/A: it only avoids one clone per recipient in Rust's
   `OutgoingMessageSender` fan-out (`repeat_n`); Go's notification fan-out has
   no per-recipient payload clone to remove, so delivery behavior is unchanged.
@@ -1210,6 +1215,14 @@ deduplication for tool outputs.
   candidate that duplicates an already-issued dummy. The rejection path also
   fixed a latent bug: a rejected first candidate used to be returned after the
   attempt loop instead of leaving the broker without a dummy.
+- For `#56266`: `go test ./mcp ./config -count=1` (mcp 15.7s),
+  `go vet ./mcp ./config` and `go build ./appserver ./app ./agent` pass.
+  Coverage pins repeated requirements filtering (requirements-only stays
+  requirements, explicit becomes combined and stays combined), explicit and
+  requirements denials surviving overlay transport/source replacement,
+  host-owned Apps bypassing a previous requirements denial while a later custom
+  replacement stays blocked, catalog requirements state carried across builds,
+  and `OauthLogin` rejecting both requirements reasons.
 - For `#56459`/`#56460`: `go test ./config ./features ./agentboard -count=1` and
   `go vet ./config ./features ./agentboard` pass. The config test covers the
   boolean and table forms plus profile override and unknown-field rejection;

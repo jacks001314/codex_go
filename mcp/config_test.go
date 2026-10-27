@@ -739,3 +739,142 @@ func TestServerConfigOAuthRefreshModeRoundTrips(t *testing.T) {
 		t.Fatalf("ServerConfig JSON = %s", encoded)
 	}
 }
+
+func TestDisableMCPRegistrationByRequirementsKeepsExplicitDisableLikeRust(t *testing.T) {
+	tests := []struct {
+		name         string
+		registration ServerRegistration
+		want         string
+	}{
+		{
+			name:         "requirements only stays requirements",
+			registration: ServerRegistration{Config: ServerConfig{Enabled: false, DisabledReason: managedconfig.MCPDisabledByRequirements}},
+			want:         managedconfig.MCPDisabledByRequirements,
+		},
+		{
+			name:         "explicit disable becomes combined",
+			registration: ServerRegistration{Config: ServerConfig{Enabled: false}},
+			want:         managedconfig.MCPDisabledByExplicitAndRequirements,
+		},
+		{
+			name:         "custom explicit reason becomes combined",
+			registration: ServerRegistration{Config: ServerConfig{Enabled: false, DisabledReason: "disabled by user"}},
+			want:         managedconfig.MCPDisabledByExplicitAndRequirements,
+		},
+		{
+			name:         "combined stays combined",
+			registration: ServerRegistration{Config: ServerConfig{Enabled: false, DisabledReason: managedconfig.MCPDisabledByExplicitAndRequirements}},
+			want:         managedconfig.MCPDisabledByExplicitAndRequirements,
+		},
+		{
+			name:         "enabled server becomes requirements only",
+			registration: ServerRegistration{Config: ServerConfig{Enabled: true}},
+			want:         managedconfig.MCPDisabledByRequirements,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			for attempt := 0; attempt < 2; attempt++ {
+				disableMCPRegistrationByRequirements(&test.registration)
+				if test.registration.Config.Enabled {
+					t.Fatalf("attempt %d left server enabled", attempt)
+				}
+				if got := test.registration.Config.DisabledReason; got != test.want {
+					t.Fatalf("attempt %d DisabledReason = %q, want %q", attempt, got, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestManagerRuntimeConfigPreservesDisableReasonsAcrossOverlaysLikeRust(t *testing.T) {
+	appsAuth := &RuntimeAuth{UsesCodexBackend: true, HTTPHeaders: map[string]string{"Authorization": "Bearer test"}}
+	deniedApps := func(reason string) RuntimeConfig {
+		return RuntimeConfig{
+			AppsEnabled:    true,
+			ChatGPTBaseURL: "https://chatgpt.test",
+			Auth:           appsAuth,
+			Servers: map[string]ServerRegistration{
+				CodexAppsServerName: {
+					Name:   CodexAppsServerName,
+					Source: "config",
+					Config: ServerConfig{URL: "https://custom.test/mcp", EnvironmentID: "local", Enabled: false, DisabledReason: reason},
+				},
+			},
+		}
+	}
+
+	t.Run("explicit disable survives overlay replacement", func(t *testing.T) {
+		base := RuntimeConfig{Servers: map[string]ServerRegistration{
+			"docs": {Name: "docs", Source: "config", Config: ServerConfig{Command: "base-docs", Enabled: false}},
+		}}
+		out := NewManager(nil).RuntimeConfig(base, []ConfigOverlay{{
+			Name:   "docs",
+			Source: CatalogSourceExtension,
+			Config: ServerConfig{Command: "ext-docs", Enabled: true},
+		}})
+		registration := out.Servers["docs"]
+		if registration.Config.Enabled {
+			t.Fatal("explicit disable must survive an overlay that replaces the transport")
+		}
+		if registration.Config.Command != "ext-docs" {
+			t.Fatalf("overlay transport not applied: %#v", registration.Config)
+		}
+	})
+
+	t.Run("requirements denial blocks a custom replacement", func(t *testing.T) {
+		base := RuntimeConfig{Servers: map[string]ServerRegistration{
+			"docs": {Name: "docs", Source: "config", Config: ServerConfig{Command: "base-docs", Enabled: false, DisabledReason: managedconfig.MCPDisabledByRequirements}},
+		}}
+		out := NewManager(nil).RuntimeConfig(base, []ConfigOverlay{{
+			Name:   "docs",
+			Source: CatalogSourceExtension,
+			Config: ServerConfig{Command: "ext-docs", Enabled: true},
+		}})
+		registration := out.Servers["docs"]
+		if registration.Config.Enabled || registration.Config.Command != "ext-docs" {
+			t.Fatalf("custom replacement should stay disabled: %#v", registration.Config)
+		}
+		if got := registration.Config.DisabledReason; got != managedconfig.MCPDisabledByRequirements {
+			t.Fatalf("DisabledReason = %q, want %q", got, managedconfig.MCPDisabledByRequirements)
+		}
+	})
+
+	t.Run("host-owned apps replacement bypasses requirements denial", func(t *testing.T) {
+		out := NewManager(nil).RuntimeConfig(deniedApps(managedconfig.MCPDisabledByRequirements), nil)
+		registration := out.Servers[CodexAppsServerName]
+		if !registration.Config.Enabled || registration.Config.DisabledReason != "" {
+			t.Fatalf("host-owned Apps replacement = %#v, want enabled", registration.Config)
+		}
+		if registration.Config.URL != "https://chatgpt.test/api/codex/ps/mcp" {
+			t.Fatalf("hosted Apps URL = %q", registration.Config.URL)
+		}
+	})
+
+	t.Run("later custom apps replacement stays blocked", func(t *testing.T) {
+		out := NewManager(nil).RuntimeConfig(deniedApps(managedconfig.MCPDisabledByRequirements), []ConfigOverlay{{
+			Name:   CodexAppsServerName,
+			Source: CatalogSourceExtension,
+			Config: ServerConfig{URL: "https://custom.test/mcp", EnvironmentID: "local", Enabled: true},
+		}})
+		registration := out.Servers[CodexAppsServerName]
+		if registration.Config.Enabled || registration.Config.URL != "https://custom.test/mcp" {
+			t.Fatalf("custom Apps replacement = %#v, want disabled custom registration", registration.Config)
+		}
+		if got := registration.Config.DisabledReason; got != managedconfig.MCPDisabledByRequirements {
+			t.Fatalf("DisabledReason = %q, want %q", got, managedconfig.MCPDisabledByRequirements)
+		}
+	})
+
+	t.Run("combined disable survives host-owned replacement", func(t *testing.T) {
+		out := NewManager(nil).RuntimeConfig(deniedApps(managedconfig.MCPDisabledByExplicitAndRequirements), nil)
+		registration := out.Servers[CodexAppsServerName]
+		if registration.Config.Enabled {
+			t.Fatal("explicit disable must keep the host-owned Apps replacement disabled")
+		}
+		if got := registration.Config.DisabledReason; got != managedconfig.MCPDisabledByExplicitAndRequirements {
+			t.Fatalf("DisabledReason = %q, want %q", got, managedconfig.MCPDisabledByExplicitAndRequirements)
+		}
+	})
+}

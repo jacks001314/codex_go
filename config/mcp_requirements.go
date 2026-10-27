@@ -9,6 +9,23 @@ import (
 
 const MCPDisabledByRequirements = "disabled by managed requirements"
 
+// MCPDisabledByExplicitAndRequirements marks a registration the user disabled
+// explicitly that managed requirements also deny (Rust #56266
+// McpServerDisabledReason::ExplicitAndRequirements). Keeping the explicit part
+// in the reason lets a later runtime overlay tell the two apart.
+const MCPDisabledByExplicitAndRequirements = "disabled by managed requirements (explicitly disabled)"
+
+// MCPDisabledByManagedRequirements reports whether a disabled reason comes from
+// managed requirements, alone or combined with an explicit disable.
+func MCPDisabledByManagedRequirements(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case MCPDisabledByRequirements, MCPDisabledByExplicitAndRequirements:
+		return true
+	default:
+		return false
+	}
+}
+
 type MCPServerIdentity struct {
 	Command *string
 	URL     *string

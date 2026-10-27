@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	managedconfig "codex_go/config"
 	"codex_go/sandbox"
 )
 
@@ -739,22 +740,25 @@ func (c *MCPToolCallContent) Map() map[string]any {
 }
 
 type MCPService struct {
-	mu            sync.Mutex
-	servers       map[string]MCPServerStatus
-	configs       map[string]ServerConfig
-	dynamicConfig map[string]bool
-	required      map[string]bool
-	starting      map[string]int
-	httpClients   map[string]*cachedMCPHTTPClient
-	stdioClients  map[string]*cachedMCPStdioClient
-	oauthLogins   map[string]*OAuthLoginServer
-	oauth         *OAuthStore
-	resourceCache *MCPResourceCache
-	elicitation   MCPElicitationHandler
-	progress      MCPProgressHandler
-	roots         MCPRootsProvider
-	oauthComplete MCPOAuthLoginCompletionHandler
-	invocations   *MCPInvocationRegistry
+	mu      sync.Mutex
+	servers map[string]MCPServerStatus
+	configs map[string]ServerConfig
+	// disabledConfigs retains disabled registrations so login and diagnostics can
+	// report why they are unavailable (Rust #56266).
+	disabledConfigs map[string]ServerConfig
+	dynamicConfig   map[string]bool
+	required        map[string]bool
+	starting        map[string]int
+	httpClients     map[string]*cachedMCPHTTPClient
+	stdioClients    map[string]*cachedMCPStdioClient
+	oauthLogins     map[string]*OAuthLoginServer
+	oauth           *OAuthStore
+	resourceCache   *MCPResourceCache
+	elicitation     MCPElicitationHandler
+	progress        MCPProgressHandler
+	roots           MCPRootsProvider
+	oauthComplete   MCPOAuthLoginCompletionHandler
+	invocations     *MCPInvocationRegistry
 	// oauthCompleteListeners let multiple in-process consumers observe the same
 	// login completion while the app-server handler remains installed.
 	oauthCompleteListeners map[uint64]MCPOAuthLoginCompletionHandlerFunc
@@ -834,7 +838,7 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry()}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, disabledConfigs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry()}
 	if runtime != nil {
 		// Rust reads `config.apps_mcp_product_sku.as_deref().unwrap_or(..)`; Go's
 		// runtime config cannot distinguish an absent SKU from an empty one, so
@@ -890,6 +894,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 				service.required[name] = true
 			}
 			if !registration.Config.Enabled {
+				service.disabledConfigs[name] = config
 				continue
 			}
 			if !mcpRegistrationEnvironmentAvailable(name, registration, runtime) {
@@ -996,6 +1001,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	oldOAuthLogins := s.oauthLoginsForCancelLocked()
 	s.servers = refreshed.servers
 	s.configs = refreshed.configs
+	s.disabledConfigs = refreshed.disabledConfigs
 	s.dynamicConfig = refreshed.dynamicConfig
 	s.required = refreshed.required
 	s.starting = refreshed.starting
@@ -1106,6 +1112,7 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 	oldOAuthLogin := s.deleteOAuthLoginLocked(name)
 	if config == nil {
 		delete(s.configs, name)
+		delete(s.disabledConfigs, name)
 		delete(s.dynamicConfig, name)
 		delete(s.required, name)
 		delete(s.servers, name)
@@ -1118,6 +1125,10 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 	}
 	if !config.Enabled {
 		delete(s.configs, name)
+		if s.disabledConfigs == nil {
+			s.disabledConfigs = map[string]ServerConfig{}
+		}
+		s.disabledConfigs[name] = cloneServerConfig(config)
 		delete(s.dynamicConfig, name)
 		if config.Required {
 			s.required[name] = true
@@ -1132,6 +1143,7 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 		cancelOAuthLogins([]*OAuthLoginServer{oldOAuthLogin})
 		return
 	}
+	delete(s.disabledConfigs, name)
 	cloned := cloneServerConfig(config)
 	if strings.TrimSpace(cloned.OAuthServerName) == "" {
 		cloned.OAuthServerName = name
@@ -2133,6 +2145,12 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	if err != nil {
 		return nil, err
 	}
+	// Rust #56266: a requirements denial also blocks the standalone login HTTP
+	// client (including its headers helper), so report it instead of minting an
+	// unusable authorization URL.
+	if config, ok := s.serverConfigIncludingDisabled(name); ok && managedconfig.MCPDisabledByManagedRequirements(config.DisabledReason) {
+		return nil, invalidMCPRequest("the MCP server is disabled by managed requirements")
+	}
 	// Rust #49276: the login attempt id is minted by the app-server when the
 	// login starts, returned in this response and echoed in the completion
 	// notification, so a client can match the two.
@@ -2814,6 +2832,21 @@ func withMCPToolCallIDsMeta(meta any, params *MCPToolCallParams) any {
 		out[mcpToolItemIDMetaKey] = itemID
 	}
 	return out
+}
+
+// serverConfigIncludingDisabled returns a configured server even when it is
+// disabled, so callers can report why (Rust #56266).
+func (s *MCPService) serverConfigIncludingDisabled(name string) (ServerConfig, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name = strings.TrimSpace(name)
+	if config, ok := s.configs[name]; ok {
+		return cloneServerConfig(&config), true
+	}
+	if config, ok := s.disabledConfigs[name]; ok {
+		return cloneServerConfig(&config), true
+	}
+	return ServerConfig{}, false
 }
 
 func (s *MCPService) serverConfig(name string) (ServerConfig, bool) {

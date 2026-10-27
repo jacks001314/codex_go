@@ -3,6 +3,8 @@ package mcp
 import (
 	"reflect"
 	"testing"
+
+	managedconfig "codex_go/config"
 )
 
 func TestCatalogSourcePriorityMatchesRustTiers(t *testing.T) {
@@ -261,5 +263,61 @@ func TestResolvedCatalogMatchesExpectedShape(t *testing.T) {
 		CredentialPolicy: CredentialPolicyHostFallbackAllowed,
 	}) {
 		t.Fatalf("resolved server = %#v", catalog.Servers["docs"])
+	}
+}
+
+func TestResolveCatalogPreservesRequirementsDenialsLikeRust(t *testing.T) {
+	first := ResolveCatalog([]CatalogAction{{
+		Name:   "docs",
+		Source: CatalogSourceConfig,
+		Config: ServerConfig{Command: "docs", Enabled: false, DisabledReason: managedconfig.MCPDisabledByRequirements},
+	}})
+	if first.Servers["docs"].Config.Enabled {
+		t.Fatal("requirements-denied config server should be disabled")
+	}
+	if got := first.RequirementsDisabledServerNames["docs"]; got != managedconfig.MCPDisabledByRequirements {
+		t.Fatalf("RequirementsDisabledServerNames[docs] = %q", got)
+	}
+
+	second := ResolveCatalogWithState(first.DisabledServerNames, first.RequirementsDisabledServerNames, []CatalogAction{{
+		Name:   "docs",
+		Source: CatalogSourceExtension,
+		Config: ServerConfig{Command: "ext-docs", Enabled: true},
+	}})
+	config := second.Servers["docs"].Config
+	if config.Enabled || config.Command != "ext-docs" {
+		t.Fatalf("custom replacement should stay disabled: %#v", config)
+	}
+	if got := config.DisabledReason; got != managedconfig.MCPDisabledByRequirements {
+		t.Fatalf("DisabledReason = %q, want %q", got, managedconfig.MCPDisabledByRequirements)
+	}
+}
+
+func TestResolveCatalogHostOwnedAppsBypassesRequirementsDenialLikeRust(t *testing.T) {
+	first := ResolveCatalog([]CatalogAction{{
+		Name:   CodexAppsServerName,
+		Source: CatalogSourceConfig,
+		Config: ServerConfig{URL: "https://custom.test/mcp", EnvironmentID: "local", Enabled: false, DisabledReason: managedconfig.MCPDisabledByRequirements},
+	}})
+	hosted := ResolveCatalogWithState(first.DisabledServerNames, first.RequirementsDisabledServerNames, []CatalogAction{{
+		Name:   CodexAppsServerName,
+		Source: CatalogSourceCompatibility,
+		Config: ServerConfig{URL: "https://chatgpt.test/api/codex/ps/mcp", EnvironmentID: "local", Enabled: true},
+	}})
+	if config := hosted.Servers[CodexAppsServerName].Config; !config.Enabled || config.DisabledReason != "" {
+		t.Fatalf("host-owned Apps replacement = %#v, want enabled", config)
+	}
+
+	custom := ResolveCatalogWithState(first.DisabledServerNames, first.RequirementsDisabledServerNames, []CatalogAction{{
+		Name:   CodexAppsServerName,
+		Source: CatalogSourceExtension,
+		Config: ServerConfig{URL: "https://custom.test/mcp", EnvironmentID: "local", Enabled: true},
+	}})
+	config := custom.Servers[CodexAppsServerName].Config
+	if config.Enabled {
+		t.Fatal("later custom Apps replacement must stay blocked")
+	}
+	if got := config.DisabledReason; got != managedconfig.MCPDisabledByRequirements {
+		t.Fatalf("DisabledReason = %q, want %q", got, managedconfig.MCPDisabledByRequirements)
 	}
 }
