@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -364,6 +365,40 @@ func (r *StateRuntime) QueryFeedbackLogsForThreads(ctx context.Context, threadID
 	if err := r.requireLogsDB(); err != nil {
 		return nil, err
 	}
+	return queryFeedbackLogsFromDB(ctx, r.logsDB, threadIDs)
+}
+
+// QueryLegacyFeedbackLogsForThreads reads logs from the previous SQLite home
+// location without creating or migrating its database (Rust #55978
+// `query_legacy_feedback_logs_for_threads`). Feedback falls back to this when
+// `log_dir` is unset or the current logs database has nothing for the thread.
+func (r *StateRuntime) QueryLegacyFeedbackLogsForThreads(ctx context.Context, threadIDs []string) ([]byte, error) {
+	if r == nil {
+		return []byte{}, nil
+	}
+	legacyPath, ok := r.sqlite.LegacyLogsDBPath()
+	if !ok {
+		return []byte{}, nil
+	}
+	threadIDs = uniqueStrings(threadIDs)
+	if len(threadIDs) == 0 {
+		return []byte{}, nil
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []byte{}, nil
+		}
+		return nil, fmt.Errorf("stat legacy feedback logs: %w", err)
+	}
+	db, err := r.sqlite.OpenReadOnly(ctx, legacyPath)
+	if err != nil {
+		return nil, fmt.Errorf("open legacy feedback logs: %w", err)
+	}
+	defer db.Close()
+	return queryFeedbackLogsFromDB(ctx, db, threadIDs)
+}
+
+func queryFeedbackLogsFromDB(ctx context.Context, logsDB *sql.DB, threadIDs []string) ([]byte, error) {
 	threadIDs = uniqueStrings(threadIDs)
 	if len(threadIDs) == 0 {
 		return []byte{}, nil
@@ -372,7 +407,7 @@ func (r *StateRuntime) QueryFeedbackLogsForThreads(ctx context.Context, threadID
 	processUUIDs := make(map[string]struct{})
 	for _, threadID := range threadIDs {
 		var processUUID sql.NullString
-		err := r.logsDB.QueryRowContext(ctx, `
+		err := logsDB.QueryRowContext(ctx, `
 SELECT process_uuid
 FROM logs
 WHERE thread_id = ? AND process_uuid IS NOT NULL
@@ -403,7 +438,7 @@ LIMIT 1`, threadID).Scan(&processUUID)
 		}
 	}
 	statement.WriteString(`) ORDER BY ts DESC, ts_nanos DESC, id DESC`)
-	rows, err := r.logsDB.QueryContext(ctx, statement.String(), args...)
+	rows, err := logsDB.QueryContext(ctx, statement.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query feedback logs: %w", err)
 	}

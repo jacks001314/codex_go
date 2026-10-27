@@ -67,21 +67,25 @@ type RuntimeServices struct {
 	LogDBHandler           *state.LogDBHandler
 	LogDBInstallation      *state.LogDBInstallation
 	CloseLogDBInstallation bool
-	ThreadExtras           *ThreadExtraService
-	Realtime               *realtime.Manager
-	FS                     *FSService
-	Remote                 *remotecontrol.Manager
-	Environment            *EnvironmentManager
-	Windows                *sandbox.WindowsManager
-	WindowsSetupRunner     WindowsSandboxSetupRunner
-	Feedback               *FeedbackSnapshot
-	Config                 *config.ConfigService
-	Account                *auth.AccountManager
-	AccountOAuthOptions    *auth.OAuthOptions
-	Hooks                  *HookRegistry
-	HooksDiscovery         *HookDiscoveryService
-	HookRunner             *HookRunner
-	Skills                 *SkillsService
+	// ConfiguredLogDir mirrors RuntimeRouterOptions.ConfiguredLogDir so the
+	// feedback collector can decide whether the legacy logs database is still
+	// the fallback source (Rust #55978).
+	ConfiguredLogDir    string
+	ThreadExtras        *ThreadExtraService
+	Realtime            *realtime.Manager
+	FS                  *FSService
+	Remote              *remotecontrol.Manager
+	Environment         *EnvironmentManager
+	Windows             *sandbox.WindowsManager
+	WindowsSetupRunner  WindowsSandboxSetupRunner
+	Feedback            *FeedbackSnapshot
+	Config              *config.ConfigService
+	Account             *auth.AccountManager
+	AccountOAuthOptions *auth.OAuthOptions
+	Hooks               *HookRegistry
+	HooksDiscovery      *HookDiscoveryService
+	HookRunner          *HookRunner
+	Skills              *SkillsService
 	// SkillInvocationContributors are extension contributors that may require
 	// host-owned skills; any one of them disables skip_host_skill_discovery
 	// (Rust #40631).
@@ -243,8 +247,12 @@ type RuntimeRouterOptions struct {
 	// EnvironmentProviderSnapshot pre-registers the executors configured in
 	// environments.toml (or the CODEX_EXEC_SERVER_URL fallback), mirroring Rust
 	// EnvironmentManager::from_codex_home.
-	EnvironmentProviderSnapshot         *execserver.EnvironmentProviderSnapshot
-	StateRuntime                        *state.StateRuntime
+	EnvironmentProviderSnapshot *execserver.EnvironmentProviderSnapshot
+	StateRuntime                *state.StateRuntime
+	// ConfiguredLogDir is the explicitly configured `log_dir` that receives
+	// logs_2.sqlite. Empty keeps logs beside the other runtime databases
+	// (Rust #55978 `Config::configured_log_dir`).
+	ConfiguredLogDir                    string
 	DBCorruptionMetrics                 *state.TaskMetrics
 	EnableLogDB                         bool
 	logDBInstallation                   *state.LogDBInstallation
@@ -1513,11 +1521,13 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	closeStateRuntime := false
 	var logDBInstallation *state.LogDBInstallation
 	closeLogDBInstallation := false
+	configuredLogDir := ""
 	if options != nil {
 		stateRuntime = options.StateRuntime
 		closeStateRuntime = options.closeStateRuntimeOnRouterClose
 		logDBInstallation = options.logDBInstallation
 		closeLogDBInstallation = options.closeLogDBInstallationOnRouterClose
+		configuredLogDir = options.ConfiguredLogDir
 	}
 	account := auth.NewAccountManager()
 	configService := config.NewConfigService(codexHome)
@@ -1572,6 +1582,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	services := RuntimeServices{
 		ThreadRouter:           threadRouter,
 		StateRuntime:           stateRuntime,
+		ConfiguredLogDir:       configuredLogDir,
 		CloseStateRuntime:      closeStateRuntime,
 		LogDBInstallation:      logDBInstallation,
 		CloseLogDBInstallation: closeLogDBInstallation,
@@ -1737,13 +1748,19 @@ func (r *RuntimeRouter) StartupError() error {
 	return r.startupErr
 }
 
-func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *RuntimeRouterOptions, sqliteHomeOverride string, enforceNFSDelete bool) (*state.StateRuntime, bool, error) {
+func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *RuntimeRouterOptions, sqliteHomeOverride string, logsHomeOverride string, enforceNFSDelete bool) (*state.StateRuntime, bool, error) {
 	if options != nil && options.StateRuntime != nil {
 		return options.StateRuntime, false, nil
 	}
 	sqliteConfig, err := state.SqliteConfigForCodexHomeWithOverride(codexHome, sqliteHomeOverride)
 	if err != nil {
 		return nil, false, err
+	}
+	if strings.TrimSpace(logsHomeOverride) != "" {
+		// Rust #55978 routes logs_2.sqlite to an explicitly configured log_dir
+		// unless managed requirements pin sqlite_home. The directory is created
+		// lazily when the logs database opens.
+		sqliteConfig = sqliteConfig.WithLocalLogsHome(logsHomeOverride)
 	}
 	sqliteConfig = sqliteConfig.WithNFSDeleteEnforcement(enforceNFSDelete)
 	if options != nil && options.DBCorruptionMetrics != nil {
@@ -12503,6 +12520,7 @@ func (r *RuntimeRouter) prepareFeedbackResponse(params FeedbackUploadParams, req
 		promptHash = &value
 	}
 	var logsOverride []byte
+	var legacyLogsOverride []byte
 	var rolloutPaths []string
 	var feedbackThreadIDs []string
 	var guardianFailures guardianReviewFailures
@@ -12530,10 +12548,23 @@ func (r *RuntimeRouter) prepareFeedbackResponse(params FeedbackUploadParams, req
 			feedbackThreadIDs = FeedbackThreadIDs(threadID, descendants)
 		}
 		if r.services.StateRuntime != nil && len(feedbackThreadIDs) > 0 {
-			if logs, err := r.services.StateRuntime.QueryFeedbackLogsForThreads(context.Background(), feedbackThreadIDs); err != nil {
+			queryCtx := context.Background()
+			if logs, err := r.services.StateRuntime.QueryFeedbackLogsForThreads(queryCtx, feedbackThreadIDs); err != nil {
 				slog.Warn("failed to query sqlite feedback logs", "thread_ids", strings.Join(feedbackThreadIDs, ", "), "error", err)
 			} else if len(logs) > 0 {
 				logsOverride = logs
+			}
+			// Earlier versions stored logs in sqlite_home/logs_2.sqlite. Keep this
+			// temporary read path so feedback includes logs from before the
+			// directory change (Rust #55978); read the old database when log_dir
+			// is unset or the current query returned no logs.
+			if r.services.ConfiguredLogDir == "" || len(logsOverride) == 0 {
+				legacyLogs, err := r.services.StateRuntime.QueryLegacyFeedbackLogsForThreads(queryCtx, feedbackThreadIDs)
+				if err != nil {
+					slog.Warn("failed to query legacy sqlite feedback logs", "thread_ids", strings.Join(feedbackThreadIDs, ", "), "error", err)
+				} else if len(legacyLogs) > 0 {
+					legacyLogsOverride = legacyLogs
+				}
 			}
 		}
 		rolloutThreadIDs = feedbackThreadIDs
@@ -12575,6 +12606,13 @@ func (r *RuntimeRouter) prepareFeedbackResponse(params FeedbackUploadParams, req
 		// for the reported thread and its descendants.
 		if guardianFailures.Attachment != nil {
 			historyAttachments = append(historyAttachments, *guardianFailures.Attachment)
+		}
+		if len(legacyLogsOverride) > 0 {
+			historyAttachments = append(historyAttachments, FeedbackAttachment{
+				Filename:    "codex-logs-legacy.log",
+				ContentType: "text/plain",
+				Buffer:      legacyLogsOverride,
+			})
 		}
 		historyAttachments = append(historyAttachments, DaemonLogAttachments(r.codexHomeForRollout())...)
 		if includeThreadIndex {

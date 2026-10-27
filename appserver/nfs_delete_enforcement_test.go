@@ -10,7 +10,7 @@ import (
 // the SqliteConfig that opens the state runtime, and stays off by default.
 func TestResolveDefaultStateRuntimeAppliesNFSDeleteEnforcementLikeRust(t *testing.T) {
 	for _, enforce := range []bool{false, true} {
-		runtime, owned, err := resolveDefaultStateRuntime(context.Background(), t.TempDir(), nil, "", enforce)
+		runtime, owned, err := resolveDefaultStateRuntime(context.Background(), t.TempDir(), nil, "", "", enforce)
 		if err != nil {
 			t.Fatalf("resolveDefaultStateRuntime(enforce=%v): %v", enforce, err)
 		}

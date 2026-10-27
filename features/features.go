@@ -236,6 +236,11 @@ var Registry = []Spec{
 	// free-form send_message_to_user_async tool without model catalog support.
 	{Key: "send_message_to_user_async", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
+	// Rust #56124: forward private reviewer items and interruptions to raw-event
+	// observers. Under development and off by default. Go's Guardian reviewer is
+	// an inline single request with no private session event stream or reviewer
+	// thread/turn identity, so the key keeps configuration parity only.
+	{Key: "guardian_recorded_items", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_enhanced_node_repl_transcripts", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_node_repl_transcript_images", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #46522): reuse encrypted parent

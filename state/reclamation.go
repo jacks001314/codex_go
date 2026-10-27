@@ -112,7 +112,6 @@ type sqliteReclamationWorker struct {
 	finished chan struct{}
 	closeOne sync.Once
 
-	home    string
 	targets []reclamationTarget
 
 	// Test seams; production leaves them unset. `probe` performs one pass and
@@ -139,7 +138,6 @@ func newSqliteReclamationWorker(config SqliteConfig) *sqliteReclamationWorker {
 	return &sqliteReclamationWorker{
 		shutdown: make(chan struct{}),
 		finished: make(chan struct{}),
-		home:     config.Home(),
 		targets:  targets,
 		metrics:  config.reclamationMetrics,
 		config:   config,
@@ -178,9 +176,11 @@ func (w *sqliteReclamationWorker) run() {
 		scheduled[i] = time.Now()
 		states[i] = reclamationState{batchPages: reclamationBatchPages}
 	}
-	var owner *flock.Flock
+	// Rust #55978 keeps one maintenance lock per database directory, because a
+	// configured logs home may be outside the SQLite home.
+	owners := map[string]*flock.Flock{}
 	defer func() {
-		if owner != nil {
+		for _, owner := range owners {
 			_ = owner.Unlock()
 		}
 	}()
@@ -191,27 +191,13 @@ func (w *sqliteReclamationWorker) run() {
 			return
 		case <-time.After(delay):
 		}
-		if owner == nil {
-			owned, err := tryReclamationOwnership(w.home)
-			if err != nil {
-				// Rust discards the error (`.ok().flatten()`): a home whose lock
-				// file cannot be opened simply never reclaims.
-				slog.Debug("sqlite reclamation could not take the maintenance lock", "error", err)
-				continue
-			}
-			if owned == nil {
-				// Another worker owns reclamation for this home.
-				continue
-			}
-			owner = owned
-		}
-		delay = w.visit(scheduled, states)
+		delay = w.visit(scheduled, states, owners)
 	}
 }
 
 // visit mirrors Rust `visit`: reclaim every due database, then sleep until the
 // earliest remaining deadline (IDLE_INTERVAL when nothing is scheduled).
-func (w *sqliteReclamationWorker) visit(scheduled []time.Time, states []reclamationState) time.Duration {
+func (w *sqliteReclamationWorker) visit(scheduled []time.Time, states []reclamationState, owners map[string]*flock.Flock) time.Duration {
 	for i, target := range w.targets {
 		started := time.Now()
 		if w.stopped() {
@@ -219,6 +205,23 @@ func (w *sqliteReclamationWorker) visit(scheduled []time.Time, states []reclamat
 		}
 		if scheduled[i].After(started) {
 			continue
+		}
+		home := filepath.Dir(target.path)
+		if _, ok := owners[home]; !ok {
+			owned, err := tryReclamationOwnership(home)
+			if err != nil {
+				// Rust discards the error (`.ok().flatten()`): a home whose lock
+				// file cannot be opened simply never reclaims.
+				slog.Debug("sqlite reclamation could not take the maintenance lock", "home", home, "error", err)
+				scheduled[i] = started.Add(w.idle())
+				continue
+			}
+			if owned == nil {
+				// Another worker owns reclamation for this home.
+				scheduled[i] = started.Add(w.idle())
+				continue
+			}
+			owners[home] = owned
 		}
 		result := w.probeFn()(context.Background(), target, reclamationOptions{
 			budget: reclamationBudget{
@@ -332,8 +335,15 @@ func tryReclamationOwnership(home string) (*flock.Flock, error) {
 func reclaimRuntimeDB(config SqliteConfig, ctx context.Context, target reclamationTarget, options reclamationOptions, shutdown <-chan struct{}) reclamationResult {
 	// Autovacuum and cleanup create a lot of load and contention on NFS, so a
 	// pass is skipped before a maintenance connection is opened (Rust #54417
-	// `9c84e89c`).
-	nfs, err := config.IsNFS()
+	// `9c84e89c`). A configured logs directory is probed independently
+	// (Rust #55978).
+	var nfs bool
+	var err error
+	if samePath(target.path, config.LogsDBPath()) {
+		nfs, err = config.LogsAreOnNFS()
+	} else {
+		nfs, err = config.IsNFS()
+	}
 	if err != nil {
 		return reclamationResult{err: err}
 	}
@@ -734,11 +744,10 @@ func classifyReclamationError(err error) string {
 // write before reading, so an intervening reclamation commit cannot make a
 // deferred read-to-write upgrade fail with SQLITE_BUSY_SNAPSHOT.
 func (c SqliteConfig) reclamationTargets() []reclamationTarget {
-	var targets []reclamationTarget
-	for _, spec := range runtimeDBSpecs {
-		if spec.backgroundReclamation {
-			targets = append(targets, reclamationTarget{label: spec.label, path: spec.path(c)})
-		}
+	paths := c.ReclamationDBPaths()
+	targets := make([]reclamationTarget, 0, len(paths))
+	for _, database := range paths {
+		targets = append(targets, reclamationTarget{label: database.Label, path: database.Path})
 	}
 	return targets
 }

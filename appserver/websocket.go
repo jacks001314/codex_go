@@ -191,21 +191,28 @@ func prepareSharedStateRuntime(ctx context.Context, codexHome string, options *R
 	if prepared.DBCorruptionMetrics == nil {
 		prepared.DBCorruptionMetrics = state.NewTaskMetrics()
 	}
+	// Managed policy applies to the database home and journal mode here, exactly
+	// like Rust's `config.sqlite_config()` (Rust #57225), and an explicitly
+	// configured log_dir moves logs_2.sqlite unless a managed sqlite_home wins
+	// (Rust #55978).
+	sqliteHomeOverride := ""
+	logsHomeOverride := ""
+	enforceNFSDelete := false
+	if cfg, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{IncludeManagedConfig: true}); err == nil {
+		sqliteHomeOverride = cfg.SQLiteHome()
+		enforceNFSDelete = cfg.UnsafeEnforceSQLiteJournalMode()
+		if logDir, configured := cfg.ConfiguredLogDir(); configured && !cfg.HasManagedSQLiteHomeRequirement() {
+			logsHomeOverride = logDir
+		}
+	}
+	prepared.ConfiguredLogDir = logsHomeOverride
 	if prepared.StateRuntime != nil {
 		if prepared.EnableLogDB && prepared.logDBInstallation == nil {
 			prepared.logDBInstallation = state.InstallLogDBHandler(prepared.StateRuntime)
 		}
 		return prepared, nil, nil
 	}
-	// Managed policy applies to the database home and journal mode here, exactly
-	// like Rust's `config.sqlite_config()` (Rust #57225).
-	sqliteHomeOverride := ""
-	enforceNFSDelete := false
-	if cfg, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{IncludeManagedConfig: true}); err == nil {
-		sqliteHomeOverride = cfg.SQLiteHome()
-		enforceNFSDelete = cfg.UnsafeEnforceSQLiteJournalMode()
-	}
-	runtime, _, err := resolveDefaultStateRuntime(ctx, codexHome, prepared, sqliteHomeOverride, enforceNFSDelete)
+	runtime, _, err := resolveDefaultStateRuntime(ctx, codexHome, prepared, sqliteHomeOverride, logsHomeOverride, enforceNFSDelete)
 	if err != nil {
 		return nil, nil, err
 	}

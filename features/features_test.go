@@ -32,6 +32,22 @@ func TestGuardianV3FeatureRegisteredLikeRust(t *testing.T) {
 	}
 }
 
+// TestGuardianRecordedItemsFeatureRegisteredLikeRust pins Rust #56124: the
+// reviewer raw-event forwarding flag is registered under development and off
+// by default.
+func TestGuardianRecordedItemsFeatureRegisteredLikeRust(t *testing.T) {
+	const key = "guardian_recorded_items"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	if got := StageFor(key); got != StageUnderDevelopment {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageUnderDevelopment)
+	}
+	if Defaults()[key] {
+		t.Fatalf("%s default = true, want false", key)
+	}
+}
+
 func TestPluginRecommendationsEnabledLikeRust(t *testing.T) {
 	for _, test := range []struct {
 		name   string

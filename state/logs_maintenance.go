@@ -3,8 +3,10 @@ package state
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 )
 
@@ -65,22 +67,73 @@ func (r *StateRuntime) runLogsMaintenance(done <-chan struct{}, period time.Dura
 			return
 		default:
 		}
-		if err := pruneLogsByAgeAndSize(ctx, r.logsDB, time.Now().Unix(), logDatabaseBudgetBytes); err != nil {
-			slog.Warn("failed to prune diagnostic logs", "error", err)
-		}
-		if firstSweep {
-			firstSweep = false
-			// Preserve the startup checkpoint without waiting for readers or writers.
-			if _, err := r.logsDB.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`); err != nil {
-				slog.Warn("failed to checkpoint diagnostic logs", "error", err)
-			}
-		}
+		r.pruneDiagnosticLogs(ctx, firstSweep)
+		firstSweep = false
 		select {
 		case <-done:
 			return
 		case <-time.After(period):
 		}
 	}
+}
+
+// pruneDiagnosticLogs prunes the current logs database and, when an explicit
+// logs home left one behind, the legacy database in the SQLite home (Rust
+// #55978). Both locations keep the same retention policy; a missing legacy
+// database is never created. Each prune keeps its own connection so the legacy
+// maintenance never touches the live logs connection.
+func (r *StateRuntime) pruneDiagnosticLogs(ctx context.Context, firstSweep bool) {
+	legacy := r.openLegacyLogsForCleanup(ctx)
+	pools := []*sql.DB{r.logsDB}
+	if legacy != nil {
+		defer legacy.Close()
+		pools = append(pools, legacy)
+	}
+	for _, db := range pools {
+		if err := pruneLogsByAgeAndSize(ctx, db, time.Now().Unix(), logDatabaseBudgetBytes); err != nil {
+			slog.Warn("failed to prune diagnostic logs", "error", err)
+		}
+		if firstSweep {
+			// Preserve the startup checkpoint without waiting for readers or writers.
+			if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`); err != nil {
+				slog.Warn("failed to checkpoint diagnostic logs", "error", err)
+			}
+		}
+	}
+}
+
+// openLegacyLogsForCleanup opens the previous logs database for maintenance
+// when it exists, without creating it or initializing its journal mode. A
+// failure is reported and skipped so the current database is still pruned
+// (Rust `open_legacy_logs_for_cleanup`).
+func (r *StateRuntime) openLegacyLogsForCleanup(ctx context.Context) *sql.DB {
+	if r == nil {
+		return nil
+	}
+	legacyPath, ok := r.sqlite.LegacyLogsDBPath()
+	if !ok {
+		return nil
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("failed to inspect legacy diagnostic logs", "error", err)
+		}
+		return nil
+	}
+	if r.sqlite.enforceDeleteOnNFS {
+		if nfs, err := r.sqlite.IsNFS(); err == nil && nfs {
+			// Managed DELETE enforcement blocks NFS databases; leave the legacy
+			// logs alone instead of opening a WAL database there (Rust #57225
+			// guard in `open_legacy_logs_for_cleanup`).
+			return nil
+		}
+	}
+	db, err := r.sqlite.OpenExistingReadWrite(ctx, legacyPath)
+	if err != nil {
+		slog.Warn("failed to open legacy diagnostic logs for cleanup", "error", err)
+		return nil
+	}
+	return db
 }
 
 // pruneLogsByAgeAndSize deletes logs older than the retention window, halving

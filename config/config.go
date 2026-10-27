@@ -160,6 +160,32 @@ func (c *Config) SQLiteHome() string {
 	return strings.TrimSpace(stringFromConfigValue(c.Values["sqlite_home"]))
 }
 
+// ConfiguredLogDir returns the explicitly configured `log_dir`, either from
+// user configuration or from managed requirements. It reports false when the
+// key is absent so callers can keep the default SQLite log location (Rust
+// Config::configured_log_dir, #55978).
+func (c *Config) ConfiguredLogDir() (string, bool) {
+	if c == nil || c.Values == nil {
+		return "", false
+	}
+	value, ok := c.Values["log_dir"]
+	if !ok {
+		return "", false
+	}
+	path := strings.TrimSpace(stringFromConfigValue(value))
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+// HasManagedSQLiteHomeRequirement reports whether managed requirements pin the
+// SQLite home. A required sqlite_home keeps every database, including logs,
+// there even when `log_dir` is configured (Rust #55978).
+func (c *Config) HasManagedSQLiteHomeRequirement() bool {
+	return c != nil && c.Requirements != nil && c.Requirements.SQLiteHome != nil
+}
+
 // UnsafeEnforceSQLiteJournalMode reports whether managed policy requires
 // existing NFS databases to be migrated to DELETE journaling (Rust #57225
 // `unsafe_enforce_sqlite_journal_mode`).

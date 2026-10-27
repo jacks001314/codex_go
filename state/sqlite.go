@@ -107,6 +107,10 @@ func (p *sqliteFilesystemProbe) isNFS(path string) (bool, error) {
 // freshly constructed config validates the same files independently.
 type SqliteConfig struct {
 	sqliteHome string
+	// logsHome is the explicitly configured directory for logs_2.sqlite
+	// (Rust #55978 `with_local_logs_home`). Empty keeps logs beside the other
+	// runtime databases.
+	logsHome   string
 	quickCheck *sqliteQuickCheckManager
 	// recoveryCollector receives the backups taken when a damaged database is
 	// rebuilt (Rust `collect_runtime_db_backups`, upstream 3620b2caf8 / #49701).
@@ -122,6 +126,9 @@ type SqliteConfig struct {
 	// filesystem is the probe shared with every copy of this config; a pass skips
 	// a home on NFS (Rust #54417 `9c84e89c`).
 	filesystem *sqliteFilesystemProbe
+	// logsFilesystem is the independent probe for a configured logs home
+	// (Rust #55978 logs_is_nfs); nil when logs share the SQLite home.
+	logsFilesystem *sqliteFilesystemProbe
 	// enforceDeleteOnNFS mirrors the managed
 	// `unsafe_enforce_sqlite_journal_mode` requirement (Rust #57225): existing
 	// WAL databases on NFS are migrated before a writable pool opens, and every
@@ -149,6 +156,27 @@ func (c SqliteConfig) WithCorruptionMetrics(metrics *TaskMetrics) SqliteConfig {
 // runtime that has no telemetry installed.
 func (c SqliteConfig) WithReclamationMetrics(metrics *TaskMetrics) SqliteConfig {
 	c.reclamationMetrics = metrics
+	return c
+}
+
+// WithLocalLogsHome selects the directory for logs_2.sqlite without accessing
+// it until the database is opened (Rust #55978). An empty home keeps the
+// default location beside the other runtime databases.
+func (c SqliteConfig) WithLocalLogsHome(home string) SqliteConfig {
+	home = strings.TrimSpace(home)
+	if home == "" {
+		return c
+	}
+	absolute, err := filepath.Abs(home)
+	if err != nil {
+		return c
+	}
+	c.logsHome = filepath.Clean(absolute)
+	probe := isNFSPath
+	if c.filesystem != nil && c.filesystem.probe != nil {
+		probe = c.filesystem.probe
+	}
+	c.logsFilesystem = newSqliteFilesystemProbe(probe)
 	return c
 }
 
@@ -196,6 +224,15 @@ func (c SqliteConfig) IsNFS() (bool, error) {
 	return c.filesystem.isNFS(c.sqliteHome)
 }
 
+// LogsAreOnNFS probes the selected logs directory independently from the
+// SQLite home (Rust #55978 `logs_are_on_nfs`).
+func (c SqliteConfig) LogsAreOnNFS() (bool, error) {
+	if c.logsFilesystem == nil || samePath(c.LogsHome(), c.sqliteHome) {
+		return c.IsNFS()
+	}
+	return c.logsFilesystem.isNFS(c.LogsHome())
+}
+
 func SqliteConfigForCodexHome(codexHome string) (SqliteConfig, error) {
 	return NewSqliteConfig(ResolveSQLiteHome(codexHome))
 }
@@ -227,7 +264,26 @@ func (c SqliteConfig) StateDBPath() string {
 }
 
 func (c SqliteConfig) LogsDBPath() string {
-	return filepath.Join(c.sqliteHome, LogsSQLiteFilename)
+	return filepath.Join(c.LogsHome(), LogsSQLiteFilename)
+}
+
+// LogsHome is the directory that holds logs_2.sqlite.
+func (c SqliteConfig) LogsHome() string {
+	if strings.TrimSpace(c.logsHome) != "" {
+		return c.logsHome
+	}
+	return c.sqliteHome
+}
+
+// LegacyLogsDBPath returns the previous logs database location when an
+// explicit logs home moved it. The second result is false when logs still live
+// in the SQLite home (Rust #55978 `legacy_logs_db_path`).
+func (c SqliteConfig) LegacyLogsDBPath() (string, bool) {
+	legacy := filepath.Join(c.sqliteHome, LogsSQLiteFilename)
+	if samePath(legacy, c.LogsDBPath()) {
+		return "", false
+	}
+	return legacy, true
 }
 
 func (c SqliteConfig) GoalsDBPath() string {
@@ -258,6 +314,22 @@ func (c SqliteConfig) RuntimeDBPaths() []RuntimeDBPath {
 	}
 	// Thread history is opened lazily and never opts into reclamation.
 	paths = append(paths, RuntimeDBPath{Label: "thread history DB", Path: c.ThreadHistoryDBPath()})
+	return paths
+}
+
+// ReclamationDBPaths returns the databases the background worker maintains:
+// every opted-in runtime database plus the legacy logs database when an
+// explicit logs home left one behind (Rust #55978).
+func (c SqliteConfig) ReclamationDBPaths() []RuntimeDBPath {
+	paths := make([]RuntimeDBPath, 0, len(runtimeDBSpecs)+1)
+	for _, spec := range runtimeDBSpecs {
+		if spec.backgroundReclamation {
+			paths = append(paths, RuntimeDBPath{Label: spec.label, Path: spec.path(c), BackgroundReclamation: true})
+		}
+	}
+	if legacy, ok := c.LegacyLogsDBPath(); ok {
+		paths = append(paths, RuntimeDBPath{Label: "legacy log DB", Path: legacy, BackgroundReclamation: true})
+	}
 	return paths
 }
 
@@ -356,6 +428,9 @@ func initializeConnectionSettings(ctx context.Context, conn driver.Conn, require
 // the journal and vacuum modes are database-scoped, so they are initialized once
 // by the opener and otherwise preserved (#54389 `1ef30bcb`).
 func (c SqliteConfig) OpenReadWrite(ctx context.Context, path string) (*sql.DB, error) {
+	if err := c.prepareLogsDirectory(path); err != nil {
+		return nil, err
+	}
 	dsn, err := sqliteFileDSN(path, false)
 	if err != nil {
 		return nil, err
@@ -410,9 +485,16 @@ func (c SqliteConfig) isNFSDirectory(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	absoluteLogsHome, err := filepath.Abs(c.LogsHome())
+	if err != nil {
+		return false, err
+	}
 	absoluteDirectory, err := filepath.Abs(directory)
 	if err != nil {
 		return false, err
+	}
+	if absoluteDirectory == absoluteLogsHome {
+		return c.LogsAreOnNFS()
 	}
 	if absoluteDirectory == absoluteHome {
 		return c.IsNFS()
@@ -554,8 +636,44 @@ func initializeDatabaseSettings(ctx context.Context, db *sql.DB, policy sqliteJo
 	return nil
 }
 
+// prepareLogsDirectory defers creating the configured logs directory until its
+// database is opened, so login/logout and config reads never touch an
+// unavailable log_dir (Rust #55978).
+func (c SqliteConfig) prepareLogsDirectory(path string) error {
+	if strings.TrimSpace(c.logsHome) == "" || !samePath(path, c.LogsDBPath()) {
+		return nil
+	}
+	if err := os.MkdirAll(c.logsHome, 0o700); err != nil {
+		return fmt.Errorf("create logs directory: %w", err)
+	}
+	return nil
+}
+
+// OpenExistingReadWrite opens an existing database for maintenance without
+// creating it and without initializing its journal or vacuum modes (Rust #55978
+// `open_legacy_logs_for_cleanup`).
+func (c SqliteConfig) OpenExistingReadWrite(ctx context.Context, path string) (*sql.DB, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("stat sqlite database: %w", err)
+	}
+	dsn, err := sqliteFileDSNWithMode(path, "rw", false)
+	if err != nil {
+		return nil, err
+	}
+	db, err := OpenSQLite(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	return db, nil
+}
+
 // OpenReadOnly opens an existing database without creating or modifying it.
 func (c SqliteConfig) OpenReadOnly(ctx context.Context, path string) (*sql.DB, error) {
+	if err := c.prepareLogsDirectory(path); err != nil {
+		return nil, err
+	}
 	dsn, err := sqliteFileDSN(path, true)
 	if err != nil {
 		return nil, err
@@ -570,6 +688,19 @@ func (c SqliteConfig) OpenReadOnly(ctx context.Context, path string) (*sql.DB, e
 }
 
 func sqliteFileDSN(path string, readOnly bool) (string, error) {
+	mode := "rwc"
+	if readOnly {
+		mode = "ro"
+	}
+	return sqliteFileDSNWithMode(path, mode, !readOnly)
+}
+
+// sqliteFileDSNWithMode builds a `file:` DSN for an explicit SQLite open mode
+// ("ro", "rw", or "rwc"). pragmas adds the connection-scoped settings every
+// writable Codex pool uses; maintenance connections leave them off so a busy
+// legacy database never blocks the background sweep (Rust #55978 opens legacy
+// cleanup with a zero busy timeout).
+func sqliteFileDSNWithMode(path string, mode string, pragmas bool) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("sqlite database path is required")
@@ -584,9 +715,14 @@ func sqliteFileDSN(path string, readOnly bool) (string, error) {
 	}
 	u := &url.URL{Scheme: "file", Path: uriPath}
 	query := u.Query()
-	if readOnly {
-		query.Set("mode", "ro")
-	} else {
+	query.Set("mode", mode)
+	if mode == "ro" {
+		// sqlx defaults read-only pools to a 5s busy timeout (Rust
+		// `open_read_only_pool` with `busy_timeout: None`), which lets feedback
+		// reads wait for a concurrent maintenance connection.
+		query.Add("_pragma", "busy_timeout(5000)")
+	}
+	if pragmas {
 		// Connection-scoped PRAGMAs only: `journal_mode` and `auto_vacuum` are
 		// database-scoped and are initialized by initializeDatabaseSettings so an
 		// existing database keeps its journal and vacuum modes without taking the

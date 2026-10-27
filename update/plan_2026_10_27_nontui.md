@@ -113,6 +113,7 @@ TUI lane and are not modified here.
 | `#57483` | Selected-thread rollout migration reads the state index first and skips rollout headers whose indexed owner and canonical filename agree that they belong to an unselected thread; selected, misnamed, conflicting and unindexed paths still get a header inspection, and a missing/busy database falls back to inspecting everything | `state/rollout_migration.go`, `rollout/rollout.go`, `rollout/migrate.go`, `app/app.go`, like-Rust tests |
 | `#56297` | Built-in dummy credentials carry the provider prefix, a visible `masked` marker and over 128 random alphanumeric bytes after it, copying no punctuation from the real credential; candidate dummies that duplicate or embed an already-issued credential or dummy are rejected instead of being registered | `network/proxy_credential_broker.go`, like-Rust tests |
 | `#56266` | Managed-requirements denials keep their reason across runtime overlays unless a trusted host-owned Apps registration replaces the server; an explicit disable that requirements also deny stays combined through repeated filtering; standalone MCP login HTTP clients reject requirements-denied servers | `mcp/catalog_priority.go`, `mcp/config.go`, `mcp/api.go`, `config/mcp_requirements.go`, like-Rust tests |
+| `#55978` | `logs_2.sqlite` moves to an explicitly configured `log_dir` (user config or managed requirements) unless a managed `sqlite_home` requirement pins the database home; other databases stay in `sqlite_home` and an unset `log_dir` keeps the old location. The logs directory is created only when its database opens, so an unavailable `log_dir` never blocks login/config reads. Existing logs stay in place: feedback falls back to them as `codex-logs-legacy.log`, and retention pruning plus page reclamation cover both locations with independent maintenance locks and NFS probes | `config/config.go`, `state/sqlite.go`, `state/logs.go`, `state/logs_maintenance.go`, `state/reclamation.go`, `appserver/websocket.go`, `appserver/runtime_router.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -120,6 +121,22 @@ Grounding notes:
   disabled-reason strings (requirements vs explicit-and-requirements); Go does
   not carry a separate source value, so retaining the reason string is the
   faithful equivalent.
+- `#55978` route the logs database through `SqliteConfig.LogsHome` and keep
+  the legacy read path: Go's `log_dir` is a plain path, and Rust's Unix-only
+  `LocalLogsDir` shared cleanup lock has no Go equivalent because `MkdirAll` is
+  idempotent and no directory-cleanup guard is used here. Legacy maintenance
+  opens the old database in `mode=rw` with no busy timeout, matching Rust's
+  `open_legacy_logs_for_cleanup`, while the feedback fallback stays read-only.
+  `doctor` path reporting for a configured logs home stays with the TUI lane.
+- `#56124`'s reviewer-event forwarding is structurally N/A: Rust installs a
+  parent observer on a private Guardian review *session* and forwards its
+  `RawResponseItem`/`TurnAborted` events under the reviewer's own thread and
+  turn IDs. Go's Guardian reviewer is an inline single Responses request inside
+  the parent turn; it creates no reviewer session or turn, emits no private
+  event stream, and has no separate reviewer identity to preserve. Emitting the
+  reviewer's response items on the parent identity would corrupt the parent's
+  raw-event stream, so the `guardian_recorded_items` feature key is registered
+  for configuration parity only.
 - `#55723` is N/A: it only avoids one clone per recipient in Rust's
   `OutgoingMessageSender` fan-out (`repeat_n`); Go's notification fan-out has
   no per-recipient payload clone to remove, so delivery behavior is unchanged.
@@ -1232,5 +1249,14 @@ deduplication for tool outputs.
   `go build ./appserver ./model ./tool ./agent ./turn ./features ./codexapi ./rollout` pass.
   The helper test mirrors Rust's `session_tests.rs` (parent scoping, 64-byte
   limit, stable and distinct parents, non-guardian source, missing parent).
+- For `#55978`: `go test ./state -count=1` (59.2s),
+  `go test ./config -count=1`, `go test ./appserver -run 'Feedback|StateRuntime|LogDB|SQLite|NFS|Logs' -count=1`,
+  `go test ./app -run 'NFS|Migrate|SQLite' -count=1`, `go vet ./state ./config` and
+  `go build ./app ./appserver ./agent ./config ./state` pass. Coverage pins
+  logs-only routing with the legacy fingerprint, lazy directory creation and an
+  unusable `log_dir`, legacy feedback fallback plus its `codex-logs-legacy.log`
+  attachment, legacy retention pruning that never creates a missing database,
+  per-directory reclamation locks, app-server routing from `log_dir`, and the
+  managed `sqlite_home` override.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.
