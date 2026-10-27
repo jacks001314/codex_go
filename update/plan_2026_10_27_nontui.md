@@ -51,6 +51,8 @@ TUI lane and are not modified here.
 | `#56494` | Channel upserts on message boards (`upsert_channel`; `description` on `create_channel`) | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, `agentboard/upsert_channel_test.go`, `agentboard/tools_test.go` |
 | `#57212` | zstd-compressed code-mode gRPC responses for clients that advertise support | `codemode/grpc_zstd.go`, `codemode/grpc_stdio_host.go`, `codemode/grpc_session_provider.go`, `codemode/grpc_process_provider.go`, `codemode/grpc_zstd_test.go` |
 | `#55846` | Measure Guardian review latency once on the monotonic clock | `appserver/guardian_reviewer.go`, `appserver/guardian_review_metrics.go`, like-Rust test |
+| `#57220` | Log WebSocket compression payload statistics | `appserver/websocket_compression_stats.go`, `appserver/websocket_compression.go`, `appserver/websocket.go`, like-Rust test |
+| `#55958` | Preserve provider catalogs across failed refreshes | `model/models_endpoint.go`, `model/gateway_auth.go`, `auth/gateway_login.go`, `auth/gateway_manager.go`, like-Rust tests |
 
 Grounding notes:
 
@@ -428,21 +430,42 @@ monotonic clock; non-positive or unrepresentable intervals saturate at zero.
 Go records no Guardian analytics `completion_latency_ms`, so the one captured
 interval is the metric's only consumer.
 
+`#57220` details: the transport now pairs its TX and RX zstd codecs with one
+connection identity (`ID`, `Kind`) and accumulates uncompressed/compressed byte
+totals, message counts, and the saved percentage. A listener-created connection
+is logged every 60 seconds and once more when it closes; the native-client codec
+pair helper exposes the same statistics for client transports to reuse. Only
+successfully decoded messages contribute RX statistics, so a rejected frame
+cannot inflate the payload totals. `#57218` (remote app-server client zstd
+negotiation) is implemented in `app/remote_tui.go`, which the TUI lane owns;
+this lane supplies the shared statistics/codec pairing it can consume.
+
+`#55958` details: a failed refresh of an explicit provider catalog no longer
+clears the last successful models, ETag, freshness, or persisted cache entry.
+Only rejected access does: HTTP 401/403, `RefreshTokenFailedError`, and a
+gateway sign-in that is actually required. Transient failures (network,
+timeout, 429, 503, 404, malformed bodies) and a sign-in already in progress
+preserve the snapshot. Go now keeps the two interactive-sign-in outcomes typed:
+`auth.ErrGatewayLoginRequired` invalidates, `auth.ErrGatewayLoginInProgress`
+does not, and `composeGatewayAuth` preserves both instead of replacing every
+issuer error with the generic message. Rejection also resets `fetched` so
+`RefreshOnlineIfUncached` retries; a successful empty response stays
+authoritative.
+
 ## Pending in this window
 
 - About 170 non-TUI commits in `update/_cls_core.tsv` still need triage.
   The largest identified gaps, in rough value order, are:
-  `#57218`/`#57220` negotiated zstd plus compression statistics in the remote
-  app-server client (Go only compresses on the server side), `#57178` FedRAMP
-  key routing across provider, model discovery, analytics, and realtime,
-  `#55591` per-turn Guardian approval blocking time, `#56461`/`#55973`
-  message-board silent append and host-selected tool catalogs (the append tool
-  depends on selection), `#57201`/`#57207` critical-path capture, `#55958`
-  provider catalog preservation across failed refreshes, `#55957`/`#55968`
-  cloud catalog refresh on auth change and failure backoff, `#56530` catalog
-  size histograms, `#55631` frozen cloud skill snapshots, and `#55847`
-  retained-analytics bounds. Items already verified as having no Go
-  counterpart are listed above.
+  `#57218` negotiated zstd in the remote app-server client (TUI-owned
+  `app/remote_tui.go`; server side and `#57220` statistics are done),
+  `#57178` FedRAMP key routing across provider, model discovery, analytics,
+  and realtime, `#55591` per-turn Guardian approval blocking time,
+  `#56461`/`#55973` message-board silent append and host-selected tool catalogs
+  (the append tool depends on selection), `#57201`/`#57207` critical-path
+  capture, `#55957`/`#55968` cloud catalog refresh on auth change and failure
+  backoff, `#56530` catalog size histograms, `#55631` frozen cloud skill
+  snapshots, and `#55847` retained-analytics bounds. Items already verified as
+  having no Go counterpart are listed above.
 
 ## Verification
 
@@ -509,3 +532,8 @@ interval is the metric's only consumer.
 - Plus, for `#57313`/`#56309`/`#57263`: `go test ./model ./sandbox -count=1` and
   `go test ./appserver -run 'Permission|Granular|Schema' -count=1` pass in the
   isolated worktree.
+- For `#57220`: `go test ./appserver -run 'WebsocketZstdCodecPair|NextNativeWebsocket|ZstdStreamCodec|WebsocketCompression' -count=1`
+  passes; the full `go test ./model -count=1` and `go build ./...` pass.
+- For `#55958`: `go test ./model -run 'PreservesExplicitCatalog|InvalidatesExplicitCatalog|PersistsEmptyExplicitCatalog|ComposeGatewayAuth' -count=1`
+  and `go test ./auth -run 'GatewayAuthManagerWithoutInteractiveLogin|GatewayAuthManagerRefresh|GatewayAuthManagerReauthorizes' -count=1`
+  pass; the full `go test ./model -count=1` passes.
