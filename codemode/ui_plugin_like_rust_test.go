@@ -444,3 +444,53 @@ func TestUIPluginHostMessagesRejectUnknownOrNullFields(t *testing.T) {
 		}
 	}
 }
+
+func TestUIPluginExecutorClosesMissingAndAlreadyClosedInstancesLikeRust(t *testing.T) {
+	outputs := make(chan uiPluginQueuedOutput, 8)
+	commands := make(chan uiPluginCommand, 4)
+	fatal := make(chan error, 1)
+	done := make(chan struct{})
+	go runUIPluginExecutor(commands, outputs, fatal, done)
+
+	missing := newUIPluginInstance(1)
+	commands <- uiPluginCommand{
+		kind:     uiPluginCommandTurn,
+		message:  uiPluginHostMessage{Type: "dispatch", ID: 0, Export: "default", ReturnMode: uiPluginReturnSync},
+		instance: missing,
+	}
+	closed := newUIPluginInstance(2)
+	closed.closed.Store(true)
+	commands <- uiPluginCommand{
+		kind:     uiPluginCommandTurn,
+		message:  uiPluginHostMessage{Type: "initialize", Source: "export default () => 'ok'"},
+		instance: closed,
+	}
+	close(commands)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not stop")
+	}
+	close(outputs)
+	var packets []uiPluginOutboundPacket
+	for output := range outputs {
+		packets = append(packets, output.packets...)
+	}
+	if len(packets) != 3 {
+		t.Fatalf("packets = %v", packets)
+	}
+	if packets[0].Instance != 1 || packets[0].Message.(map[string]any)["code"] != uiPluginErrExecutionFailed {
+		t.Fatalf("missing engine error = %#v", packets[0])
+	}
+	if packets[1].Instance != 1 || packets[1].Message.(map[string]any)["type"] != "closed" {
+		t.Fatalf("missing engine close = %#v", packets[1])
+	}
+	if packets[2].Instance != 2 || packets[2].Message.(map[string]any)["type"] != "closed" {
+		t.Fatalf("closed initialize close = %#v", packets[2])
+	}
+	select {
+	case err := <-fatal:
+		t.Fatalf("executor fatal = %v", err)
+	default:
+	}
+}

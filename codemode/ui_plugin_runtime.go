@@ -272,8 +272,11 @@ func runUIPluginExecutor(commands <-chan uiPluginCommand, outputs chan<- uiPlugi
 			continue
 		}
 		if instance.closed.Load() {
-			if _, ok := engines[instance.id]; ok {
+			_, hasEngine := engines[instance.id]
+			if hasEngine {
 				delete(engines, instance.id)
+			}
+			if hasEngine || command.message.Type == "initialize" {
 				if err := sendUIPluginClose(outputs, instance, nil); err != nil {
 					fatal <- err
 					return
