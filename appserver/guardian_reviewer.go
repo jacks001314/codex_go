@@ -1062,8 +1062,11 @@ reviewAttempt:
 		ThreadID:           threadID,
 		TurnID:             turnID,
 		Originator:         "guardian",
-		OutputSchema:       guardianAssessmentOutputSchema(),
-		ClientMetadata:     r.reviewClientMetadata(threadID, turnID, targetItemID),
+		// Rust scopes a Guardian review session's Responses cache to the
+		// reviewed parent thread (guardian_prompt_cache_key override).
+		PromptCacheKey: guardianPromptCacheKeyOverride(guardianReviewerName, threadID),
+		OutputSchema:   guardianAssessmentOutputSchema(),
+		ClientMetadata: r.reviewClientMetadata(threadID, turnID, targetItemID),
 	}
 	if r.permissionProfile != nil {
 		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)

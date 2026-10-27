@@ -1,9 +1,10 @@
 # 2026-10-27 non-TUI sync window
 
 Upstream window: `8196bcdc18..c587d6e54c`, extended by
-`c587d6e54c..6fe77fc123`, then by `eec8bde1e9..6b3b67d71f` (Rust `codex` at
-`6b3b67d71f`; the newest non-TUI commits are `#57451`, `#57455`, `#57452`,
-`#57462`, `#57458`, `#57468`, and the `#57474` regression test).
+`c587d6e54c..6fe77fc123`, then by `eec8bde1e9..6b3b67d71f`, and finally by
+`6b3b67d71f..75667b341a` (Rust `codex` at `75667b341a`; the newest non-TUI
+commits are `#57451`, `#57455`, `#57452`, `#57462`, `#57458`, `#57468`,
+`#57474`, `#57476`, and `#57478`).
 This lane owns non-TUI core packages only. `tui/`, `app/agents_dashboard.go`,
 `app/tui_telemetry.go` and `update/plan_2026_10_27.md` belong to the parallel
 TUI lane and are not modified here.
@@ -104,6 +105,7 @@ TUI lane and are not modified here.
 | `#57455` | Multi-agent Guardian classification is centralized in `IsStateChangingMultiAgentTool`: an explicit configured namespace must match exactly, while an absent namespace accepts the default `""`/`functions` spellings; both call sites keep their own enablement gate | `tool/guardian_scope.go`, `tool/guardian_scope_test.go`, `agent/tools_v2.go` |
 | `#57452` | `policy_capacity_unavailable` is a distinct terminal capacity failure with the display `Policy-restricted capacity is unavailable. Please try again later.`; HTTP 503, `response.failed`, and WebSocket capacity events preserve the classification and `Retry-After`, stream retries and Guardian retries follow that advice, telemetry reports `policy-restricted capacity unavailable`, analytics map it to `policyCapacityUnavailable`/`policy_capacity_unavailable` with no HTTP status, and rollout decoding preserves both spellings | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_agent.go`, `model/responses_stream.go`, `appserver/guardian_reviewer.go`, `appserver/turn_runtime.go`, `rollout/codex_error_info.go`, re-vendored precomputed exports, like-Rust tests |
 | `#57462` | Code Mode always renders the tool description before the namespace description, then the declaration suffix; `code_mode_tool_description_first` is a removed compatibility flag and its config/plumbing are deleted | `features/features.go`, `config/config.go`, `tool/code_mode_exec.go`, `turn/tools.go`, `exec/exec.go`, `appserver/runtime_router.go`, updated ordering tests |
+| `#57476` | Guardian reviewer session helpers: basic-source detection (Go's existing `guardianTurnStart`) and a parent-thread-scoped Responses prompt cache key `guardian:{threadID}` on review requests, matching Rust's `prompt_cache_key_override_for_review_session` (guardian source only, parent required, overrides the fork cache key) | `appserver/guardian_session.go`, `appserver/guardian_reviewer.go`, `appserver/guardian_session_like_rust_test.go` |
 
 Grounding notes:
 
@@ -174,6 +176,25 @@ Grounding notes:
   only the synchronous `modelGuardianReviewer`, so it has no
   `GuardianV2Config`/`async_scorer` observation path or score cache to classify.
   The synchronous review gate and the shared classifier are implemented.
+- `#57476`'s crate relocation is N/A: Go has no `codex-guardian-reviewer`
+  crate, so the reviewer name and basic-session detection already live in
+  `appserver` (`guardianTurnStart` covers both the guardian originator and the
+  `x-openai-subagent: guardian` metadata used by Go's in-process reviewer). The
+  move's one live behavior that Go lacked is the prompt cache key: review
+  requests previously omitted `prompt_cache_key` entirely. They now send
+  `guardian:{threadID}` through `guardianPromptCacheKeyOverride`, the exact
+  Rust format, so the reviewer conversation is cached per reviewed parent
+  thread and cannot collide with that thread's own cache key. Go's shared
+  in-process reviewer prewarm has no parent-thread scope, so only review
+  requests carry the override.
+- `#57478` is N/A: Go's Guardian approval request is already centralized as
+  `state.Action`/`state.ActionAnnotations` with the appserver action builders
+  (`commandApprovalAction`, `applyPatchApprovalAction`,
+  `nativeToolGuardianAction`). `EnvironmentID` travels on the action, and
+  credential-bearing fields (`Arguments`, `NativeCall`, permission payloads)
+  are excluded from JSON and never formatted into logs, so there is no
+  reviewer-crate boundary, crate-local environment lookup, or credential-safe
+  `Debug` implementation to relocate.
 - `#57474` is a Rust test-only regression over behavior already ported by
   `#57448`. The Go equivalent in
   `appserver/guardian_native_history_incremental_like_rust_test.go` drives two
@@ -1141,5 +1162,10 @@ deduplication for tool outputs.
 - For `#57474`: `go test ./appserver -run TestGuardianNativeEncryptedHistoryAcrossReviewsLikeRust -count=1`,
   `go test ./appserver -run 'GuardianNative|NativeMultiAgent|Guardian' -count=1`, and `go test ./state -count=1`
   pass. This also re-verifies the `#57448` transcript rules for both namespace spellings.
+- For `#57476`: `go test ./appserver -run 'TestGuardianPromptCacheKeyScopedToParentThreadLikeRust|TestGuardianReviewRequestUsesParentScopedPromptCacheKeyLikeRust' -count=1`,
+  `go test ./appserver -run 'Guardian|NativeMultiAgent' -count=1`, and
+  `go build ./appserver ./model ./tool ./agent ./turn ./features ./codexapi ./rollout` pass.
+  The helper test mirrors Rust's `session_tests.rs` (parent scoping, 64-byte
+  limit, stable and distinct parents, non-guardian source, missing parent).
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.
