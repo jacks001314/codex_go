@@ -162,6 +162,13 @@ func nonEmptyEnvVar(name string) string {
 
 // ensureBedrockLoginAllowed mirrors AccountRequestProcessor::ensure_bedrock_login_allowed.
 func (r *RuntimeRouter) ensureBedrockLoginAllowed() error {
+	return r.ensureProviderLoginAllowed("Amazon Bedrock login")
+}
+
+// ensureProviderLoginAllowed applies the host-owned/external-auth and
+// login-method policy gates shared by the cloud provider setup RPCs
+// (Rust AccountRequestProcessor::ensure_provider_login_allowed).
+func (r *RuntimeRouter) ensureProviderLoginAllowed(operation string) error {
 	if auth.IsWorkloadIdentitySelected() {
 		return jsonRPCInvalidRequest("Configured external authentication is owned by the app-server host and cannot be changed through account RPCs.")
 	}
@@ -173,7 +180,7 @@ func (r *RuntimeRouter) ensureBedrockLoginAllowed() error {
 		return err
 	}
 	if !cfg.IsLoginMethodAllowed(config.ForcedLoginMethodAPI) {
-		return jsonRPCInvalidRequest("Amazon Bedrock login is disabled. Use ChatGPT login instead.")
+		return jsonRPCInvalidRequest(operation + " is disabled. Use ChatGPT login instead.")
 	}
 	return nil
 }

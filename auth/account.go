@@ -75,6 +75,7 @@ const (
 	AccountAPIKey        AccountType = "apiKey"
 	AccountChatGPT       AccountType = "chatgpt"
 	AccountAmazonBedrock AccountType = "amazonBedrock"
+	AccountGcp           AccountType = "gcp"
 )
 
 type Account struct {
@@ -111,6 +112,10 @@ func (a *Account) MarshalJSON() ([]byte, error) {
 			Type                        AccountType `json:"type"`
 			UsesCodexManagedCredentials bool        `json:"usesCodexManagedCredentials"`
 		}{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: a.UsesCodexManagedCredentials})
+	case AccountGcp:
+		return json.Marshal(struct {
+			Type AccountType `json:"type"`
+		}{Type: AccountGcp})
 	default:
 		type accountAlias Account
 		return json.Marshal(accountAlias(*a))

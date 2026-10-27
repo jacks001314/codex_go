@@ -2270,6 +2270,217 @@ func configReadCWD(params *ConfigReadParams) string {
 	return strings.TrimSpace(*params.CWD)
 }
 
+// ProviderSetting is one `model_providers.<id>.<key>` field in a provider
+// setup write. A nil Value clears the field from the user configuration.
+type ProviderSetting struct {
+	Key   string
+	Value *string
+}
+
+// PreparedProviderWrite is a validated provider setup write together with the
+// active user layer version it was previewed against.
+type PreparedProviderWrite struct {
+	Edits           []ConfigEdit
+	ExpectedVersion string
+}
+
+// PrepareProviderConfig mirrors Rust ConfigManager::prepare_provider_config
+// (#57394): it validates a provider setup against the effective layer stack
+// without writing, rejects settings pinned by requirements, and returns the
+// previewed provider table plus the user version to commit.
+func (s *ConfigService) PrepareProviderConfig(providerID string, settings []ProviderSetting) (*PreparedProviderWrite, map[string]any, error) {
+	return s.PrepareProviderConfigForCWD("", providerID, settings)
+}
+
+// PrepareProviderConfigForCWD is PrepareProviderConfig with the app-server's
+// startup working directory. Rust previews against the complete startup layer
+// stack (including packaged defaults and project config), which the RPC layer
+// list hides, and resolves project config relative to that cwd.
+func (s *ConfigService) PrepareProviderConfigForCWD(cwd string, providerID string, settings []ProviderSetting) (*PreparedProviderWrite, map[string]any, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return nil, nil, fmt.Errorf("%w: provider id is required", ErrInvalidConfigRequest)
+	}
+	layers, err := s.startupConfigLayers(cwd, s.currentProfile())
+	if err != nil {
+		return nil, nil, err
+	}
+	s.mu.Lock()
+	requirements := cloneRequirements(s.requirements)
+	s.mu.Unlock()
+	requiredProvider := ""
+	if requirements != nil && requirements.ModelProvider != nil {
+		requiredProvider = strings.TrimSpace(*requirements.ModelProvider)
+	}
+	var edits []ConfigEdit
+	if requiredProvider == "" {
+		edits = append(edits, ConfigEdit{KeyPath: "model_provider", Value: providerID, MergeStrategy: MergeReplace})
+	} else if requiredProvider != providerID {
+		return nil, nil, configWriteErrorf(ConfigWriteRequirementReadonly, "Cannot select `%s` because requirements set `model_provider` to `%s`.", providerID, requiredProvider)
+	}
+	for _, setting := range settings {
+		keyPath := "model_providers." + providerID + "." + setting.Key
+		value := any(nil)
+		if setting.Value != nil {
+			value = *setting.Value
+		}
+		edits = append(edits, ConfigEdit{KeyPath: keyPath, Value: value, MergeStrategy: MergeReplace})
+	}
+	for i := range edits {
+		if err := validateWritableKeyPath(edits[i].KeyPath, edits[i].Value); err != nil {
+			return nil, nil, err
+		}
+		if err := rejectRequirementForPath(requirements, edits[i].KeyPath); err != nil {
+			return nil, nil, err
+		}
+	}
+	userIndex, userValues, expectedVersion := activeUserLayer(layers)
+	if userValues == nil {
+		userValues = map[string]any{}
+	}
+	pending := cloneMap(userValues)
+	for i := range edits {
+		applyEdit(pending, &edits[i])
+	}
+	previewLayers := cloneLayers(layers)
+	if userIndex >= 0 {
+		previewLayers[userIndex].Config = cloneMap(pending)
+	} else {
+		previewLayers = append(previewLayers, Layer{Name: LayerSource{Type: LayerSourceUser}, Version: expectedVersion, Config: cloneMap(pending)})
+	}
+	effective, _ := mergeConfigLayers(previewLayers)
+	for _, edit := range edits {
+		actual, present := valueAtPath(effective, edit.KeyPath)
+		expected := edit.Value
+		matches := expected == nil && !present
+		if expected != nil {
+			matches = present && valuesEqual(actual, expected)
+		}
+		if matches {
+			continue
+		}
+		source := overridingLayerForPath(previewLayers, edit.KeyPath)
+		if source == "" {
+			source = "Overridden by another configuration layer"
+		}
+		return nil, nil, configWriteErrorf(ConfigWriteLayerReadonly, "Cannot configure `%s`: %s", edit.KeyPath, source)
+	}
+	providers, _ := effective["model_providers"].(map[string]any)
+	providerTable, _ := providers[providerID].(map[string]any)
+	return &PreparedProviderWrite{Edits: edits, ExpectedVersion: expectedVersion}, cloneMap(providerTable), nil
+}
+
+func activeUserLayer(layers []Layer) (int, map[string]any, string) {
+	for i := len(layers) - 1; i >= 0; i-- {
+		if layers[i].Name.Type != LayerSourceUser {
+			continue
+		}
+		values, _ := layers[i].Config.(map[string]any)
+		return i, values, layers[i].Version
+	}
+	return -1, nil, configVersion(map[string]any{})
+}
+
+func rejectRequirementForPath(requirements *ConfigRequirements, keyPath string) error {
+	if requirements == nil {
+		return nil
+	}
+	parts := splitKeyPath(keyPath)
+	if len(parts) == 0 {
+		return nil
+	}
+	switch parts[0] {
+	case "model_provider":
+		if requirements.ModelProvider != nil {
+			return configWriteErrorf(ConfigWriteRequirementReadonly, "`model_provider` is managed by requirements and cannot be changed")
+		}
+	case "model_providers":
+		if len(parts) > 1 {
+			if _, ok := requirements.ModelProviders[parts[1]]; ok {
+				return configWriteErrorf(ConfigWriteRequirementReadonly, "`model_providers.%s` is managed by requirements and cannot be changed", parts[1])
+			}
+		}
+	}
+	return nil
+}
+
+// startupConfigLayers loads the complete layer stack Rust previews against:
+// packaged defaults, user, project (when cwd is a trusted project), profile,
+// and managed layers. Read's IncludeLayers response hides packaged defaults and
+// has no project layer without a cwd, so previewing from it would both omit a
+// real override source and misreport one.
+func (s *ConfigService) startupConfigLayers(cwd string, profile string) ([]Layer, error) {
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		return s.readLayersForCWD(cwd, profile)
+	}
+	userConfigPath, err := s.currentUserConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	userValues, err := loadConfigFile(ConfigPath(s.codexHome))
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(profile) != "" {
+		if _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
+			return nil, err
+		}
+	}
+	userLayer := Layer{
+		Name:    LayerSource{Type: LayerSourceUser, File: userConfigPath, Profile: stringPtrIfNotEmpty(profile)},
+		Version: configVersion(userValues),
+		Config:  cloneMap(userValues),
+	}
+	return s.readLayers(userLayer), nil
+}
+
+// overridingLayerForPath returns Rust's override_message for the
+// highest-precedence layer that supplies keyPath.
+func overridingLayerForPath(layers []Layer, keyPath string) string {
+	for i := len(layers) - 1; i >= 0; i-- {
+		values, ok := layers[i].Config.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, present := valueAtPath(values, keyPath); !present {
+			continue
+		}
+		return configOverrideMessage(layers[i].Name)
+	}
+	return ""
+}
+
+// configOverrideMessage mirrors Rust app-server override_message
+// (config_manager_service.rs).
+func configOverrideMessage(source LayerSource) string {
+	switch source.Type {
+	case LayerSourcePackagedDefaults:
+		return fmt.Sprintf("Overridden by packaged defaults: %s", source.File)
+	case LayerSourceMDM:
+		return fmt.Sprintf("Overridden by managed policy (MDM): %s", source.Domain)
+	case LayerSourceSystem:
+		return fmt.Sprintf("Overridden by managed config (system): %s", source.File)
+	case LayerSourceEnterpriseManaged:
+		return fmt.Sprintf("Overridden by enterprise-managed config: %s", source.Name)
+	case LayerSourceProject:
+		return fmt.Sprintf("Overridden by project config: %s/config.toml", source.DotCodexFolder)
+	case LayerSourceSessionFlags:
+		return "Overridden by session flags"
+	case LayerSourceUser:
+		return fmt.Sprintf("Overridden by user config: %s", source.File)
+	case LayerSourceLegacyManagedConfigFromFile:
+		return fmt.Sprintf("Overridden by legacy managed_config.toml: %s", source.File)
+	case LayerSourceLegacyManagedConfigFromMDM:
+		return "Overridden by legacy managed configuration from MDM"
+	default:
+		name := strings.TrimSpace(string(source.Type))
+		if name == "" {
+			name = "another configuration layer"
+		}
+		return fmt.Sprintf("Overridden by %s", name)
+	}
+}
+
 func (s *ConfigService) WriteValue(params *ConfigValueWriteParams) (*ConfigWriteResponse, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err

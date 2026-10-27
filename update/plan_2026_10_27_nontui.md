@@ -1,6 +1,7 @@
 # 2026-10-27 non-TUI sync window
 
-Upstream window: `8196bcdc18..c587d6e54c` (Rust `codex` at `c587d6e54c`).
+Upstream window: `8196bcdc18..c587d6e54c`, extended by
+`c587d6e54c..6fe77fc123` (Rust `codex` at `6fe77fc123`).
 This lane owns non-TUI core packages only. `tui/`, `app/agents_dashboard.go`,
 `app/tui_telemetry.go` and `update/plan_2026_10_27.md` belong to the parallel
 TUI lane and are not modified here.
@@ -59,13 +60,18 @@ TUI lane and are not modified here.
 | `#55973` | Let consumers select message-board tools | `agentboard/tools.go`, `agentboard/append_test.go` |
 | `#56461` | Silent message-board `append` without subscriptions or notifications | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, like-Rust tests |
 | `#55591` | Measure Guardian approval blocking time per turn | `appserver/guardian_review_blocking.go`, `appserver/guardian_reviewer.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/thread_shell_command.go`, `telemetry/metric_names.go`, like-Rust tests |
+| `#56265` | Built-in Google Cloud Vertex AI provider, `gcp` account type, Vertex catalog and capabilities | `model/provider_info.go`, `model/provider.go`, `model/provider_config.go`, `model/auth.go`, `appserver/protocol.go`, `appserver/schema.go`, `appserver/rust_protocol_surface_test.go`, `auth/account.go`, `model/gcp_test.go` |
+| `#56560` | `model_providers.gcp.project_id`/`location` override the environment | `model/provider_info.go`, `model/provider_config.go`, `model/gcp_test.go` |
+| `#57188` | `model_providers.gcp.credential_file` for command auth | `model/provider_info.go`, `model/auth.go`, `model/provider_config.go`, `model/gcp_test.go` |
+| `#57394` | Experimental `account/gcp/setup`; `config/read` reloads requirements and republishes the network policy | `appserver/gcp.go`, `appserver/gcp_test.go`, `appserver/runtime_router.go`, `appserver/bedrock.go`, `config/api.go`, `config/gcp_prepare_test.go`, `app/app.go` |
 
 Grounding notes:
 
 - `#56234` (prompt telemetry ordering) is structurally N/A: Go never wires
   `RunUserPromptSubmit` into turns, so there is no pre-hook telemetry path to
   order against. Recorded in `update/plan_2026_09_11.md`.
-- `#57293` GCP/Vertex picker portion is N/A: the Go build has no GCP provider.
+- `#57293` GCP/Vertex picker portion is now covered by the `#56265` provider
+  catalog (only Vertex-capable models are listed for `gcp`).
 - `#57249` directory/featured prefetch sites do not exist in Go; only the
   suggested-plugin prewarm path is gated.
 - `#56263` is N/A: Go has no marketplace allowed-source/host-pattern policy
@@ -544,6 +550,38 @@ client still admits only Codex-backend auth, so API-key analytics event
 eligibility (`can_send_with_api_key_auth`) remains a separate gap; the URL
 resolution plumbing is in place for when that gate is widened.
 
+`#56265`/`#56560`/`#57188`/`#57394` details: the Go port now ships the built-in
+`gcp` provider (`model_provider = "gcp"`). The Vertex AI OpenAI-compatible
+endpoint prefers `model_providers.gcp.project_id`/`location` over
+`GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION`, defaults the location to
+`global`, and preserves an explicit `base_url`. A configured empty project or
+location is rejected rather than falling back to the environment.
+`credential_file` must be absolute and is injected as
+`GOOGLE_APPLICATION_CREDENTIALS` only into the provider auth command's
+environment, so token refreshes keep the override without mutating the parent
+process. The runtime provider reports account type `gcp` with
+`requiresOpenaiAuth: false`, forces Responses-direct tool mode, disables
+Responses Lite/custom tools/web search/image generation/reasoning summaries,
+keeps function tools, namespaces and client-side tool search, and uses remote
+compaction V2. Its catalog is limited to `gpt-6-astra`, `gpt-6-luna`,
+`gpt-6.1-sol`, and `gpt-6.1-terra`.
+
+`account/gcp/setup` is experimental and mirrors Rust: provider login policy is
+checked first, the write is previewed against the complete startup layer stack
+(packaged/user/project/profile), a custom `base_url` is rejected, credentials
+are verified under the application network permit, and the user layer is then
+committed against its previewed version (a concurrent write yields
+`configVersionConflict`). Failures carry structured reasons
+(`gcloudNotInstalled`, `credentialFileInvalid`, `authCommandFailed`) or a
+`config_write_error_code`. Success cancels active logins and invalidates the
+model catalog so the next `model/list` rebuilds the Vertex catalog. The default
+`gcloud` command runs in the app-server startup cwd (`--cd` or the process cwd,
+plumbed as `RuntimeRouterOptions.StartupCWD`), never `CODEX_HOME`. `config/read`
+now reloads `requirements.toml` and republishes the application network policy
+on every call, matching Rust's `ConfigManager::read`; this revokes outstanding
+permits, which the network-revocation test now triggers through `config/read`
+like the Rust test.
+
 ## Pending in this window
 
 - About 170 non-TUI commits in `update/_cls_core.tsv` still need triage.
@@ -643,3 +681,8 @@ resolution plumbing is in place for when that gate is widened.
   and `go test ./appserver -run 'RealtimeStartOptions|Analytics|Catalog|ImageGeneration|WebSearch|HistoryNotes' -count=1`
   pass, as do the full `go test ./auth ./model ./config ./doctor ./exec -count=1`
   runs and `go build ./...`.
+- For `#56265`/`#56560`/`#57188`/`#57394`: `go test ./appserver -run GCP -count=1`,
+  the full `go test ./appserver -count=1` (245.2s), `go test ./app -count=1`,
+  and `go test ./model ./config ./auth -count=1` pass; `go build ./...` passes.
+  `go vet ./appserver ./model ./config ./auth` reports only the pre-existing
+  `appserver/thread_sample.go:220` context-leak warning.

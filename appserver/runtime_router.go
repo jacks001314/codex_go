@@ -123,16 +123,20 @@ type RuntimeServices struct {
 	TurnMetrics           telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
-	VoiceMetrics                 telemetry.CounterDurationSink
-	AnalyticsRPCTransport        telemetry.AppServerRPCTransport
-	BrowserOpen                  func(string) error
-	CustomSkills                 *skillprovider.Registry
-	UnifiedExec                  *tool.UnifiedExecManager
-	CodeModeProvider             tool.CodeModeRemoteProvider
-	DisableCodeModeFallback      bool
-	ManagedNetwork               *network.PreparedProxyManagedNetwork
-	ManagedNetworkRequirements   *config.NetworkRequirements
-	DefaultCWD                   string
+	VoiceMetrics               telemetry.CounterDurationSink
+	AnalyticsRPCTransport      telemetry.AppServerRPCTransport
+	BrowserOpen                func(string) error
+	CustomSkills               *skillprovider.Registry
+	UnifiedExec                *tool.UnifiedExecManager
+	CodeModeProvider           tool.CodeModeRemoteProvider
+	DisableCodeModeFallback    bool
+	ManagedNetwork             *network.PreparedProxyManagedNetwork
+	ManagedNetworkRequirements *config.NetworkRequirements
+	DefaultCWD                 string
+	// StartupCWD is the app-server's startup working directory (Rust
+	// Config.cwd): the process cwd or the `--cd` override. Provider setup
+	// resolves credential paths and project config against it.
+	StartupCWD                   string
 	LocalEnvironmentEnabled      *bool
 	WorkspaceCodexPluginsEnabled *bool
 	WaitForEnvironmentToolConfig *tool.WaitForEnvironmentToolConfig
@@ -233,6 +237,9 @@ type RuntimeRouterOptions struct {
 	CodeModeHostProgram                 string
 	DisableCodeModeInProcessFallback    bool
 	FeatureEnablement                   map[string]bool
+	// StartupCWD is the app-server's startup working directory (Rust
+	// Config.cwd); empty means the process working directory.
+	StartupCWD string
 	// EnvironmentProviderSnapshot pre-registers the executors configured in
 	// environments.toml (or the CODEX_EXEC_SERVER_URL fallback), mirroring Rust
 	// EnvironmentManager::from_codex_home.
@@ -328,6 +335,11 @@ type RuntimeRouter struct {
 	// background refresh"), so the revision marks a reconciliation still owed.
 	// Guarded by authRevisionMu.
 	modelCatalogAuthRevision uint64
+	// modelCatalogInvalidated marks a provider configuration change (for
+	// example account/gcp/setup) that requires the next model/list to reload the
+	// catalog even though the account itself did not change. Guarded by
+	// authRevisionMu.
+	modelCatalogInvalidated bool
 	// startupModelProviderRoute is the provider route the app server retained
 	// when it started. model/list and background catalog refreshes must keep
 	// validating it against current managed requirements (Rust #46917).
@@ -1214,12 +1226,19 @@ func (r *RuntimeRouter) authStoreOptions() *auth.StoreOptions {
 // auth/config error keeps the bundled static catalog (the LazyModelsManager
 // fallback), matching the previous NewModelService(nil) behavior.
 func accountScopedModelsManager(codexHome string, configService *config.ConfigService) model.ModelsManager {
+	return accountScopedModelsManagerForCWD(codexHome, configService, "")
+}
+
+// accountScopedModelsManagerForCWD is accountScopedModelsManager with the
+// app-server startup working directory, which the default GCP command auth
+// binds to.
+func accountScopedModelsManagerForCWD(codexHome string, configService *config.ConfigService, cwd string) model.ModelsManager {
 	build := func() (model.ModelsManager, error) {
 		read, err := configService.Read(&config.ConfigReadParams{})
 		if err != nil || read == nil {
 			return nil, err
 		}
-		return buildAccountScopedModelsManager(codexHome, read, configService.Requirements())
+		return buildAccountScopedModelsManagerForCWD(codexHome, read, configService.Requirements(), cwd)
 	}
 	return model.NewLazyModelsManager(build)
 }
@@ -1286,6 +1305,17 @@ func resolveAccountScopedCatalogProvider(codexHome string, read *config.ConfigRe
 // belongs to (Rust #46508 resolves the effective credentials before comparing
 // identities).
 func accountScopedCatalogIdentity(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse) (string, error) {
+	_, providerInfo, err := accountScopedProviderInfo(read, "")
+	if err != nil || providerInfo == nil {
+		return "", err
+	}
+	// GCP serves a static, credential-independent catalog (Rust
+	// GcpModelProvider::models_manager), so its identity intentionally stays
+	// empty: the config/account revision and model_catalog.invalidate drive
+	// reloads without executing gcloud on every comparison.
+	if providerInfo.IsGCP() {
+		return "", nil
+	}
 	inputs, err := resolveAccountScopedCatalogProvider(codexHome, read, requirements)
 	if err != nil || inputs == nil {
 		return "", err
@@ -1293,18 +1323,60 @@ func accountScopedCatalogIdentity(codexHome string, read *config.ConfigReadRespo
 	return model.ModelsCatalogIdentity(inputs.providerInfo, inputs.authSnapshot, inputs.authHeaders, inputs.residency), nil
 }
 
+// accountScopedProviderInfo resolves the effective provider selection without
+// resolving credentials.
+func accountScopedProviderInfo(read *config.ConfigReadResponse, cwd string) (string, *model.ProviderInfo, error) {
+	if read == nil {
+		return "", nil, errors.New("config read is required")
+	}
+	providerID := strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
+	providerInfo, err := model.ProviderForConfigIDForCWD(
+		read.Config,
+		providerID,
+		strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")),
+		cwd,
+	)
+	if err != nil || providerInfo == nil {
+		return providerID, nil, err
+	}
+	return providerID, providerInfo, nil
+}
+
 // buildAccountScopedModelsManager resolves the account-scoped catalog manager
 // from an already-read effective config plus the managed requirements.
 func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse) (model.ModelsManager, error) {
+	return buildAccountScopedModelsManagerForCWD(codexHome, read, requirements, "")
+}
+
+// buildAccountScopedModelsManagerForCWD is buildAccountScopedModelsManager with
+// the app-server startup working directory (Rust binds the default GCP auth
+// command to it).
+func buildAccountScopedModelsManagerForCWD(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse, cwd string) (model.ModelsManager, error) {
+	providerID, providerInfo, err := accountScopedProviderInfo(read, cwd)
+	if err != nil || providerInfo == nil {
+		return nil, err
+	}
+	cfg := &config.Config{Values: read.Config}
+	if providerInfo.IsGCP() {
+		// Rust builds the catalog through provider.models_manager(), and GCP
+		// returns a static filtered Vertex catalog instead of a remote manager.
+		// Building it must not execute the credential command.
+		var base *model.ModelsResponse
+		if catalog := model.ModelsCatalogFromConfigValues(read.Config); catalog != nil {
+			base = catalog
+		}
+		runtimeProvider := model.CreateRuntimeProviderForID(providerID, *providerInfo, nil)
+		manager := runtimeProvider.ModelsManager(base)
+		model.SetAPIKeyModelDiscoveryEnabled(manager, features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery"))
+		return manager, nil
+	}
 	inputs, err := resolveAccountScopedCatalogProvider(codexHome, read, requirements)
 	if err != nil || inputs == nil {
 		return nil, err
 	}
-	providerInfo := inputs.providerInfo
 	apiProvider := *inputs.apiProvider
 	authHeaders := *inputs.authHeaders
 	authSnapshot := inputs.authSnapshot
-	cfg := &config.Config{Values: read.Config}
 	var base *model.ModelsResponse
 	if catalog := model.ModelsCatalogFromConfigValues(read.Config); catalog != nil {
 		base = catalog
@@ -1490,6 +1562,13 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	threadRouter := NewRouter(store)
 	// Rust #47900: LocalThreadStore defaults new threads to paginated history.
 	threadRouter.SetDefaultHistoryMode(ThreadHistoryPaginated)
+	startupCWD := ""
+	if options != nil {
+		startupCWD = strings.TrimSpace(options.StartupCWD)
+	}
+	if startupCWD == "" {
+		startupCWD = processCWD()
+	}
 	services := RuntimeServices{
 		ThreadRouter:           threadRouter,
 		StateRuntime:           stateRuntime,
@@ -1513,7 +1592,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 			IncludeDefaultRoots: true,
 		}),
 		Plugins:               pluginService,
-		Models:                model.NewModelService(accountScopedModelsManager(codexHome, configService)),
+		Models:                model.NewModelService(accountScopedModelsManagerForCWD(codexHome, configService, startupCWD)),
 		Permissions:           sandbox.NewPermissionProfileService(nil),
 		MCP:                   mcp.NewMCPService(nil),
 		Features:              features.NewFeatureService(nil),
@@ -1530,6 +1609,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		TurnMetrics:           runtimeMetrics,
 		VoiceMetrics:          runtimeMetrics,
 		DefaultCWD:            codexHome,
+		StartupCWD:            startupCWD,
 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
 	}
@@ -2922,6 +3002,7 @@ func experimentalAPIMethod(method Method) bool {
 	case MethodBedrockCheckGovCloudRequirements,
 		MethodBedrockDiscover,
 		MethodBedrockSetup,
+		MethodGcpSetup,
 		MethodCollaborationModeList,
 		MethodEnvironmentAdd,
 		MethodEnvironmentInfo,
@@ -3459,6 +3540,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		return r.handleBedrockSetup(request)
 	case MethodBedrockCheckGovCloudRequirements:
 		return r.handleBedrockCheckGovCloudRequirements(request)
+	case MethodGcpSetup:
+		return r.handleGcpSetup(request)
 	case MethodCancelLoginAccount:
 		return r.handleCancelLoginAccount(request)
 	case MethodAccountSessionsAdd:
@@ -4174,6 +4257,8 @@ func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
 	// missing model or config service is still "nothing left to reload").
 	r.authRevisionMu.Lock()
 	r.modelCatalogAuthRevision = r.authRevision
+	invalidated := r.modelCatalogInvalidated
+	r.modelCatalogInvalidated = false
 	r.authRevisionMu.Unlock()
 	if r.services.Models == nil || r.services.Config == nil {
 		return
@@ -4187,16 +4272,18 @@ func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
 		return
 	}
 	requirements := r.services.Config.Requirements()
-	current, err := accountScopedCatalogIdentity(codexHome, read, requirements)
+	current, currentErr := accountScopedCatalogIdentity(codexHome, read, requirements)
 	running := r.services.Models.CatalogIdentity()
 	// An empty identity on either side cannot be compared: Go skips the
 	// credential check and leaves the manager's own claim check to
-	// RefreshAfterAuthChange below.
-	if err != nil || current == "" || running == "" || current == running {
+	// RefreshAfterAuthChange below. A config invalidation (for example
+	// account/gcp/setup changing model_provider) must rebuild regardless, because
+	// a static provider catalog like GCP's has no identity to compare.
+	if !invalidated && (currentErr != nil || current == "" || running == "" || current == running) {
 		r.services.Models.RefreshAfterAuthChange()
 		return
 	}
-	manager, err := buildAccountScopedModelsManager(codexHome, read, requirements)
+	manager, err := buildAccountScopedModelsManagerForCWD(codexHome, read, requirements, r.startupCWD())
 	if err != nil || manager == nil {
 		// Rust keeps the existing cache or bundled fallback when discovery fails.
 		r.services.Models.RefreshAfterAuthChange()
@@ -4221,7 +4308,7 @@ func (r *RuntimeRouter) modelCatalogRefreshPending() bool {
 	}
 	r.authRevisionMu.Lock()
 	defer r.authRevisionMu.Unlock()
-	return r.modelCatalogAuthRevision != r.authRevision
+	return r.modelCatalogInvalidated || r.modelCatalogAuthRevision != r.authRevision
 }
 
 func (r *RuntimeRouter) maybeDispatchQueuedSubmissionIfIdle(threadID string) {
@@ -5599,6 +5686,21 @@ func (r *RuntimeRouter) effectiveThreadStartCWD(params *ThreadStartParams) strin
 		return effectiveThreadStartCWD(params, processCWD())
 	}
 	return effectiveThreadStartCWD(params, r.threadStartDefaultCWD())
+}
+
+// startupCWD resolves the app-server's startup working directory. Production
+// routers record it from the process cwd or `--cd`; embedded/test routers fall
+// back to DefaultCWD and finally the process cwd.
+func (r *RuntimeRouter) startupCWD() string {
+	if r != nil {
+		if cwd := strings.TrimSpace(r.services.StartupCWD); cwd != "" {
+			return cwd
+		}
+		if cwd := strings.TrimSpace(r.services.DefaultCWD); cwd != "" {
+			return cwd
+		}
+	}
+	return processCWD()
 }
 
 func (r *RuntimeRouter) threadStartDefaultCWD() string {
@@ -12472,7 +12574,22 @@ func (r *RuntimeRouter) handleConfigRead(request *Request) (*config.ConfigReadRe
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireConfig().Read(&params)
+	service := r.requireConfig()
+	// Rust ConfigManager::read loads the latest managed requirements and
+	// republishes the application network policy on every config/read, so a
+	// requirements.toml written after startup takes effect without a restart
+	// and revokes outstanding permits.
+	if strings.TrimSpace(service.CodexHome()) != "" {
+		if err := service.ReloadRequirementsFromHome(); err != nil {
+			return nil, err
+		}
+	}
+	response, err := service.Read(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.refreshApplicationNetworkPolicy()
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleConfigValueWrite(request *Request) (*config.ConfigWriteResponse, error) {
@@ -13113,6 +13230,8 @@ func authAccountFromProviderAccount(account *model.ProviderAccount) *auth.Accoun
 			Type:                        auth.AccountAmazonBedrock,
 			UsesCodexManagedCredentials: bedrockUsesCodexManagedCredentials(account.CredentialSource),
 		}
+	case "gcp":
+		return &auth.Account{Type: auth.AccountGcp}
 	default:
 		return nil
 	}

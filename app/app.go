@@ -1354,6 +1354,16 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	if err != nil {
 		return err
 	}
+	// Rust Config.cwd is the app-server startup directory: the `--cd` override
+	// when present, otherwise the process working directory.
+	if root != nil {
+		if cwd := strings.TrimSpace(root.Shared.CWD); cwd != "" {
+			if abs, absErr := filepath.Abs(cwd); absErr == nil {
+				cwd = abs
+			}
+			runtimeOptions.StartupCWD = cwd
+		}
+	}
 	// Rust #47620/#47648 host wiring: environments.toml (or the
 	// CODEX_EXEC_SERVER_URL fallback) pre-registers the configured executors and
 	// a malformed file fails app-server startup.

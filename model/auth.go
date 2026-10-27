@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -74,7 +77,12 @@ func applySignedRequestBody(request *http.Request, body []byte) {
 
 func ResolveProviderAuth(snapshot *auth.AuthDotJSON, provider ProviderInfo) (AuthHeaders, error) {
 	if provider.Auth != nil {
-		return ResolveProviderCommandAuth(context.Background(), provider.Auth)
+		authInfo := *provider.Auth
+		if provider.IsGCP() && provider.CredentialFile != nil {
+			authInfo.Env = cloneAuthEnv(authInfo.Env)
+			authInfo.Env[GCPCredentialFileEnvVar] = *provider.CredentialFile
+		}
+		return ResolveProviderCommandAuth(context.Background(), &authInfo)
 	}
 	if bearer, err := bearerTokenForProvider(provider); err != nil {
 		return AuthHeaders{}, err
@@ -184,6 +192,9 @@ func ResolveProviderCommandAuth(ctx context.Context, info *ProviderAuthInfo) (Au
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(execCtx, resolveProviderAuthProgram(command, info.CWD), info.Args...)
+	if len(info.Env) > 0 {
+		cmd.Env = append(os.Environ(), sortedEnvAssignments(info.Env)...)
+	}
 	if cwd := strings.TrimSpace(info.CWD); cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -215,15 +226,16 @@ func providerAuthCommandError(err error, stderr string) error {
 	if err == nil {
 		return nil
 	}
-	message := "provider auth command failed: " + err.Error()
+	// Preserve the underlying error so callers can classify spawn failures
+	// (for example exec.ErrNotFound for a missing gcloud).
 	stderr = strings.TrimSpace(stderr)
 	if stderr == "" {
-		return errors.New(message)
+		return fmt.Errorf("provider auth command failed: %w", err)
 	}
 	if len(stderr) > maxProviderAuthCommandErrorOutput {
 		stderr = stderr[:maxProviderAuthCommandErrorOutput] + "..."
 	}
-	return errors.New(message + ": " + stderr)
+	return fmt.Errorf("provider auth command failed: %w: %s", err, stderr)
 }
 
 func providerAuthCommandTimeout(info *ProviderAuthInfo) time.Duration {
@@ -310,4 +322,27 @@ func fedrampFromMap(values map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// cloneAuthEnv copies a provider auth command environment.
+func cloneAuthEnv(env map[string]string) map[string]string {
+	out := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		out[key] = value
+	}
+	return out
+}
+
+// sortedEnvAssignments renders KEY=VALUE pairs in a stable order.
+func sortedEnvAssignments(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, key+"="+env[key])
+	}
+	return out
 }

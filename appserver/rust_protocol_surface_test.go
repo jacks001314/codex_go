@@ -147,6 +147,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodLoginAccount):                           true,
 		string(MethodBedrockDiscover):                        true,
 		string(MethodBedrockSetup):                           true,
+		string(MethodGcpSetup):                               true,
 		string(MethodBedrockCheckGovCloudRequirements):       true,
 		string(MethodCancelLoginAccount):                     true,
 		string(MethodAccountSessionsAdd):                     true,

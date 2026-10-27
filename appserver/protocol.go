@@ -181,6 +181,7 @@ const (
 	MethodBedrockDiscover                        Method = "account/bedrock/discover"
 	MethodBedrockSetup                           Method = "account/bedrock/setup"
 	MethodBedrockCheckGovCloudRequirements       Method = "account/bedrock/checkGovCloudRequirements"
+	MethodGcpSetup                               Method = "account/gcp/setup"
 	MethodCancelLoginAccount                     Method = "account/login/cancel"
 	MethodAccountSessionsAdd                     Method = "account/sessions/add"
 	MethodAccountSessionsList                    Method = "account/sessions/list"

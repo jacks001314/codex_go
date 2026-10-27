@@ -98,6 +98,9 @@ func CreateRuntimeProviderForID(providerID string, info ProviderInfo, snapshot *
 	if (&info).IsAmazonBedrock() {
 		return &AmazonBedrockProvider{info: info, auth: snapshot}
 	}
+	if (&info).IsGCP() {
+		return &GCPProvider{info: info, auth: snapshot}
+	}
 	configured := &ConfiguredProvider{providerID: providerID, info: info, auth: snapshot}
 	if info.GatewayOAuth != nil {
 		// Rust constructs the gateway credential manager eagerly and reports
@@ -801,4 +804,101 @@ func authHasChatGPTAccount(snapshot *auth.AuthDotJSON) bool {
 	default:
 		return false
 	}
+}
+
+// GCPProvider is the runtime provider for Google Cloud Vertex AI's
+// OpenAI-compatible endpoint (Rust model-provider gcp::GcpModelProvider).
+type GCPProvider struct {
+	info ProviderInfo
+	auth *auth.AuthDotJSON
+}
+
+func (p *GCPProvider) Info() ProviderInfo { return p.info }
+
+func (p *GCPProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		ImageGeneration:   false,
+		WebSearch:         false,
+		ExternalWebAccess: false,
+		RemoteCompaction:  RemoteCompactionV2,
+	}
+}
+
+func (p *GCPProvider) ApprovalReviewPreferredModel() string { return "gpt-6-luna" }
+
+func (p *GCPProvider) MemoryExtractionPreferredModel() string { return "gpt-6-luna" }
+
+func (p *GCPProvider) MemoryConsolidationPreferredModel() string { return "gpt-6.1-terra" }
+
+func (p *GCPProvider) SupportsAttestation() bool { return false }
+
+func (p *GCPProvider) AccountState() (ProviderAccountState, error) {
+	return ProviderAccountState{
+		Account:            &ProviderAccount{Type: "gcp"},
+		RequiresOpenAIAuth: false,
+	}, nil
+}
+
+func (p *GCPProvider) RuntimeBaseURL() (string, error) {
+	if baseURL := strings.TrimSpace(p.info.BaseURL); baseURL != "" {
+		return baseURL, nil
+	}
+	return GCPRuntimeBaseURL(&p.info, os.Getenv(GCPProjectEnvVar), os.Getenv(GCPLocationEnvVar))
+}
+
+func (p *GCPProvider) APIProvider() (APIProvider, error) {
+	baseURL, err := p.RuntimeBaseURL()
+	if err != nil {
+		return APIProvider{}, err
+	}
+	info := p.info
+	info.BaseURL = baseURL
+	return info.ToAPIProvider("")
+}
+
+func (p *GCPProvider) APIProviderAndAuth() (APIProvider, AuthHeaders, error) {
+	apiProvider, err := p.APIProvider()
+	if err != nil {
+		return APIProvider{}, AuthHeaders{}, err
+	}
+	authHeaders, err := p.APIAuth()
+	if err != nil {
+		return APIProvider{}, AuthHeaders{}, err
+	}
+	return apiProvider, authHeaders, nil
+}
+
+func (p *GCPProvider) APIAuth() (AuthHeaders, error) {
+	headers, err := ResolveProviderAuth(p.auth, p.info)
+	if err != nil || len(headers.Headers) == 0 {
+		return AuthHeaders{}, errors.New("Google Cloud credentials are unavailable or expired. Run `gcloud auth application-default login` to reauthenticate")
+	}
+	return headers, nil
+}
+
+func (p *GCPProvider) GatewayAuthManager() (*auth.GatewayAuthManager, error) {
+	return nil, nil
+}
+
+func (p *GCPProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager {
+	catalog := BundledModelsResponse()
+	if configCatalog != nil {
+		catalog = *configCatalog
+	}
+	allowed := map[string]struct{}{
+		"gpt-6-astra": {}, "gpt-6-luna": {}, "gpt-6.1-sol": {}, "gpt-6.1-terra": {},
+	}
+	filtered := ModelsResponse{Models: make([]ModelInfo, 0, len(catalog.Models))}
+	for _, item := range catalog.Models {
+		if _, ok := allowed[item.Slug]; !ok {
+			continue
+		}
+		// Vertex supports function tools, namespaces, and client-side tool
+		// search, but not Responses Lite or custom tools.
+		item.UseResponsesLite = false
+		item.ToolMode = ToolModeDirect
+		item.ApplyPatchToolType = ""
+		filtered.Models = append(filtered.Models, item)
+	}
+	return NewStaticModelsManager(filtered)
 }
