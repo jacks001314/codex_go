@@ -127,6 +127,12 @@ func composeGatewayAuth(ctx context.Context, config *GatewayOAuthConfig, provide
 	}
 	token, err := provider.ResolveAccessToken(ctx)
 	if err != nil {
+		// Rust compose_auth preserves the two interactive-sign-in outcomes: a
+		// required sign-in means the credential was rejected, while a sign-in
+		// already in flight is only an invalid request.
+		if errors.Is(err, auth.ErrGatewayLoginRequired) || errors.Is(err, auth.ErrGatewayLoginInProgress) {
+			return AuthHeaders{}, err
+		}
 		return AuthHeaders{}, errors.New("Gateway OAuth authentication failed; check the gateway configuration and credential store.")
 	}
 	name, value, err := gatewayAuthHeader(config, token)

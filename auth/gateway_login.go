@@ -19,6 +19,11 @@ import (
 // one browser sign-in may run at a time.
 var ErrGatewayLoginInProgress = errors.New("provider OAuth login is already in progress")
 
+// ErrGatewayLoginRequired mirrors Rust OAuthSessionError::LoginRequired: the
+// credential needs an interactive sign-in before it can be used. Background
+// consumers treat this as rejected access, unlike a sign-in already in flight.
+var ErrGatewayLoginRequired = errors.New("Gateway sign-in required. Choose Sign in or Reconnect, then retry your request")
+
 // ErrGatewayLoginCanceled mirrors Rust's canceled sign-in error text.
 var ErrGatewayLoginCanceled = errors.New("Gateway sign-in was canceled")
 

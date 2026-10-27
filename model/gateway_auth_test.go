@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"codex_go/auth"
 )
 
 type stubGatewayTokenProvider struct {
@@ -113,6 +115,23 @@ func TestComposeGatewayAuthFailuresLikeRust(t *testing.T) {
 	_, err := composeGatewayAuth(context.Background(), cookieConfig, stubGatewayTokenProvider{token: "not a cookie,value"}, primary)
 	if err == nil || err.Error() != "gateway OAuth token is not a valid cookie value" {
 		t.Fatalf("cookie token error = %v", err)
+	}
+}
+
+// Mirrors Rust combined_auth: a required sign-in and a sign-in already in
+// flight keep their typed identity so refresh policy can tell them apart, while
+// other issuer failures stay sanitized.
+func TestComposeGatewayAuthPreservesSignInOutcomesLikeRust(t *testing.T) {
+	primary := BearerAuthHeaders("primary-token", "", false)
+	for _, want := range []error{auth.ErrGatewayLoginRequired, auth.ErrGatewayLoginInProgress} {
+		provider := stubGatewayTokenProvider{err: want}
+		_, err := composeGatewayAuth(context.Background(), gatewayHeaderConfig("x-gateway-token", ""), provider, primary)
+		if !errors.Is(err, want) {
+			t.Fatalf("composeGatewayAuth() error = %v, want %v", err, want)
+		}
+		if err.Error() != want.Error() {
+			t.Fatalf("composeGatewayAuth() text = %q, want %q", err.Error(), want.Error())
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-﻿package auth
+package auth
 
 // Gateway credential manager.
 //
@@ -32,6 +32,9 @@ type gatewayRefreshPolicy struct {
 	// from the token the failed request used.
 	rejectedAccessToken string
 	afterRejection      bool
+	// withoutInteractiveLogin reports ErrGatewayLoginRequired instead of
+	// opening a browser (Rust `without_interactive_login`).
+	withoutInteractiveLogin bool
 }
 
 func (p gatewayRefreshPolicy) canReuse(token *gatewayStoredToken) bool {
@@ -92,6 +95,13 @@ func (m *GatewayAuthManager) ResolveAccessToken(ctx context.Context) (string, er
 	return m.resolve(ctx, gatewayRefreshPolicy{})
 }
 
+// ResolveAccessTokenWithoutLogin resolves a cached or refreshable access token
+// but never opens a browser. Missing credentials report ErrGatewayLoginRequired
+// so background consumers can prompt explicitly (Rust without_interactive_login).
+func (m *GatewayAuthManager) ResolveAccessTokenWithoutLogin(ctx context.Context) (string, error) {
+	return m.resolve(ctx, gatewayRefreshPolicy{withoutInteractiveLogin: true})
+}
+
 // RefreshAccessToken recovers after a request rejected rejectedAccessToken,
 // reusing a usable replacement from storage or refreshing/authorizing.
 func (m *GatewayAuthManager) RefreshAccessToken(ctx context.Context, rejectedAccessToken string) (string, error) {
@@ -123,6 +133,17 @@ func (m *GatewayAuthManager) resolve(ctx context.Context, policy gatewayRefreshP
 	}
 	if !authorize {
 		return token, nil
+	}
+	if policy.withoutInteractiveLogin {
+		// Rust login_required_error: a request that needs sign-in re-prompts even
+		// after an earlier NotReady notification was dismissed.
+		if !m.publishStatus(GatewayAuthStatus{Kind: GatewayAuthStatusNotReady}, gatewayTokenFingerprint(m.cache.token)) && m.control != nil {
+			m.control.broadcast(GatewayAuthStatusChange{
+				Config: m.config,
+				Status: GatewayAuthStatus{Kind: GatewayAuthStatusNotReady},
+			})
+		}
+		return "", ErrGatewayLoginRequired
 	}
 	// Rust #47170: a request that needs the browser flow reports NotReady before
 	// the interactive authorization starts, so clients can prompt explicitly.

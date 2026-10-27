@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/auth"
 	"codex_go/metrics"
 )
 
@@ -34,6 +36,41 @@ type ModelsEndpointResponse struct {
 	Models      []ModelInfo
 	ETag        string
 	NotModified bool
+}
+
+// modelsEndpointHTTPError keeps a failed catalog response's HTTP status
+// available to refresh policy without changing the diagnostic text.
+type modelsEndpointHTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *modelsEndpointHTTPError) Error() string {
+	if e == nil {
+		return "models API request failed"
+	}
+	if e.Body == "" {
+		return fmt.Sprintf("models API request failed with status %d", e.StatusCode)
+	}
+	return fmt.Sprintf("models API request failed with status %d: %s", e.StatusCode, e.Body)
+}
+
+// modelsCatalogRefreshRejected reports whether a failed catalog refresh means
+// the current credentials were rejected. Transient and malformed-response
+// errors preserve the prior successful catalog (Rust #55958).
+func modelsCatalogRefreshRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *modelsEndpointHTTPError
+	if errors.As(err, &statusErr) && (statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden) {
+		return true
+	}
+	if errors.Is(err, auth.ErrGatewayLoginRequired) {
+		return true
+	}
+	var refreshErr *auth.RefreshTokenFailedError
+	return errors.As(err, &refreshErr)
 }
 
 type HTTPModelsEndpoint struct {
@@ -155,12 +192,14 @@ func (e *HTTPModelsEndpoint) ListModels(ctx context.Context, etag string) (*Mode
 		return nil, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		statusErr := &modelsEndpointHTTPError{StatusCode: response.StatusCode}
 		if catalogURL != "" {
 			// Suppress response diagnostics that could expose credentials
 			// (Rust #46561).
-			return nil, fmt.Errorf("models API request failed with status %d", response.StatusCode)
+			return nil, statusErr
 		}
-		return nil, fmt.Errorf("models API request failed with status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		statusErr.Body = strings.TrimSpace(string(body))
+		return nil, statusErr
 	}
 	models, err := decodeModelsEndpointResponse(body)
 	if err != nil {
@@ -533,10 +572,14 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 			m.mu.Unlock()
 			m.renewCacheTTLIfNeeded()
 		}
-		if err != nil && m.explicitProviderCatalog {
+		// A failed fetch is not an authoritative empty catalog. Keep the last
+		// successful provider snapshot (with its ETag and freshness) unless the
+		// access was explicitly rejected (Rust #55958).
+		if err != nil && m.explicitProviderCatalog && modelsCatalogRefreshRejected(err) {
 			m.mu.Lock()
 			m.remoteModels = nil
 			m.etag = ""
+			m.fetched = false
 			cachePath := m.cachePath
 			clientVersion := m.cacheClientVersion
 			identity := m.identity
