@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -84,6 +85,54 @@ func TestRuntimeRouterRetainedContextRecordsThreadInstructionsLikeRust(t *testin
 	}
 	if got := router.retainedContextForThread("thread-unknown"); got != nil {
 		t.Fatalf("unknown thread context = %#v, want nil", got)
+	}
+}
+
+// Mirrors Rust's retained-message capture: an item that only carries its
+// persisted response item (an explicit goal instruction, for one) contributes
+// the text held by its raw content, and its classification proves completeness.
+func TestRuntimeRouterRetainsRawOnlyInstructionLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	threadID := session.ThreadID("thread-retained-raw-only")
+	instruction := "<codex_internal_context source=\"user_goal\">\nUser set the goal: \"Keep it private.\"\n</codex_internal_context>"
+	raw, err := json.Marshal(map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []map[string]any{
+			{"type": "input_text", "text": instruction},
+		},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []string{"user.goal"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal instruction: %v", err)
+	}
+	if err := store.Create(&session.Record{
+		ID:        threadID,
+		SessionID: string(threadID),
+		Items: []session.Item{
+			{ID: "user-goal-1", Type: "message", Role: "user", Raw: raw},
+		},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	context := router.retainedContextForThread(string(threadID))
+	if context == nil {
+		t.Fatal("retainedContextForThread() = nil, want the raw-only instruction")
+	}
+	if got := retainedOrderedTexts(context.OrderedEntries()); !reflect.DeepEqual(got, []string{instruction}) {
+		t.Fatalf("retained instructions = %#v, want the raw-only instruction", got)
+	}
+	for _, ordered := range context.OrderedEntries() {
+		if ordered.Entry.UserMessage == nil {
+			continue
+		}
+		if !ordered.Entry.UserMessage.Complete {
+			t.Fatalf("raw-only instruction completeness = false, want the classification to prove it")
+		}
 	}
 }
 

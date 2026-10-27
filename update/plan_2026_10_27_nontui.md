@@ -95,6 +95,7 @@ TUI lane and are not modified here.
 | `#57439` | Guardian reviewer marker, routing-hint suppression and ChatGPT parent credits follow the OpenAI provider and auth instead of the base URL; header-based auth counts as Codex-backend auth, while API-key and other providers stay excluded | `model/responses_agent.go`, like-Rust request/provider tests |
 | `#57448` | Native MAv2 calls (`spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`) in the configured namespace stay native in Guardian history, with a paired evidence-only output in delivery and budgeting and whole-item omission past the cap | `appserver/guardian_native_multi_agent_call.go`, `appserver/guardian_reviewer.go`, `state/guardian_profile.go`, `state/guardian_transcript.go`, `state/guardian.go`, like-Rust tests |
 | `#57441` | Feature `guardian_native_multi_agent_history` (under development, off) for native MAv2 calls in Guardian history | `features/features.go`, registration test |
+| `#57430` | A user-origin goal set after a worker's first Guardian review reaches that worker's later review root authorization as `User set the goal: …`; an automatic-origin goal never does, and the earlier review stays unchanged | `appserver/retained_context.go` (raw-only message text), `appserver/guardian_goal_provenance_like_rust_test.go`, `appserver/retained_context_test.go` |
 | `#57425` | Guardian root request preparation is centralized: a 16-message shared cap, legacy-checkpoint copies deduplicated after truncation, verified-answer and incomplete-context notices, and all user restrictions preserved during handoff filtering | `appserver/guardian_root_context.go`, `appserver/agent_runtime.go`, `appserver/guardian_root_handoff.go`, `appserver/retained_context.go`, `state/guardian_retained_context.go`, `context/user_goal.go`, like-Rust tests |
 | `#57420` | Thread item `started_at_ms`/`completed_at_ms` are optional nullable in the TypeScript exports so older servers can omit them | `appserver/schema/precomputed/app-server-exports-stable.json.zst`, `appserver/schema/precomputed/app-server-exports-experimental.json.zst`, pinned SHA-256 values re-anchored in `appserver/schema_test.go` |
 
@@ -1072,3 +1073,8 @@ deduplication for tool outputs.
   and the full `go test ./state -count=1` pass. The full `go test ./appserver -count=1`
   (313.6s) also passes. The regression test mirrors Rust's ID-less checkpoint: one
   capped user excerpt, both incomplete-evidence notices, and no duplicate legacy copy.
+- For `#57430`: `go test ./appserver -run 'TestGuardianRootAuthorizationIncludesLaterUserGoalLikeRust|TestRuntimeRouterRetainsRawOnlyInstructionLikeRust' -count=1`,
+  `go test ./appserver -run 'Retained|Guardian|Goal' -count=1`, and the non-TUI build pass. Upstream's Rust
+  commit is test-only. Porting it exposed that raw-only user messages (persisted goal instructions) were missing
+  from retained evidence, so `retainedRecordForSessionItem` now derives text from the message content and falls
+  back to the item preview for legacy items.

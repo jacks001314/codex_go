@@ -299,6 +299,20 @@ func retainedRecordForSessionItem(item *session.Item, index int, metadata *retai
 		return retainedSessionItemRecord{}, false
 	}
 	text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
+	if hasResponseItem {
+		// Rust joins the message's text content entries; a raw-only item (an
+		// explicit goal instruction, for one) carries its text here rather than
+		// in the item preview.
+		parts := make([]string, 0, len(responseItem.ContentTexts))
+		for index, contentType := range responseItem.ContentTypes {
+			if contentType == "input_text" || contentType == "output_text" {
+				parts = append(parts, responseItem.ContentTexts[index])
+			}
+		}
+		if len(parts) > 0 {
+			text = strings.TrimSpace(strings.Join(parts, "\n"))
+		}
+	}
 	if text == "" {
 		return retainedSessionItemRecord{}, false
 	}
@@ -898,6 +912,8 @@ type sessionItemResponseItemFields struct {
 	Role         string
 	ContentTypes []string
 	ContentKinds []string
+	// ContentTexts holds each content entry's text, empty for a non-text entry.
+	ContentTexts []string
 	// Phase is the assistant message phase Rust persists with the record.
 	Phase *string
 }
@@ -913,6 +929,7 @@ func sessionItemResponseItemFieldsFromItem(item *session.Item) (sessionItemRespo
 		Phase   *string `json:"phase"`
 		Content []struct {
 			Type string `json:"type"`
+			Text string `json:"text"`
 		} `json:"content"`
 		Metadata struct {
 			Kinds []string `json:"content_item_kinds"`
@@ -924,6 +941,7 @@ func sessionItemResponseItemFieldsFromItem(item *session.Item) (sessionItemRespo
 	fields := sessionItemResponseItemFields{
 		Role:         strings.TrimSpace(payload.Role),
 		ContentTypes: make([]string, 0, len(payload.Content)),
+		ContentTexts: make([]string, 0, len(payload.Content)),
 		ContentKinds: payload.Metadata.Kinds,
 		Phase:        payload.Phase,
 	}
@@ -933,6 +951,7 @@ func sessionItemResponseItemFieldsFromItem(item *session.Item) (sessionItemRespo
 	}
 	for _, content := range payload.Content {
 		fields.ContentTypes = append(fields.ContentTypes, strings.TrimSpace(content.Type))
+		fields.ContentTexts = append(fields.ContentTexts, content.Text)
 	}
 	return fields, true
 }
