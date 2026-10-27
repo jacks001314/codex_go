@@ -65,6 +65,11 @@ type activeRuntimeTurn struct {
 	ConnectionID string
 	RunConfig    *appTurnRunConfig
 	SteerCount   int
+	// TaskStarted records that a reserved automatic wake passed the
+	// post-discovery revalidation and now owns its reserved mail (Rust sets
+	// `ActiveTurn.task` at the same boundary). Before it is set, an interrupt
+	// rejects the reservation without emitting a terminal turn event.
+	TaskStarted bool
 	// AnalyticsRootTurnID is the trusted root captured for this turn. A nil
 	// pointer with AnalyticsRootTurnIDCaptured set means the root is unknown or
 	// ambiguous. Events read this live state when they are emitted (Rust #40486).
@@ -1563,6 +1568,12 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// Rust #46508: a user turn refreshes a catalog that belongs to other
 	// credentials before it samples.
 	r.refreshModelCatalogAfterAuthChange()
+	// Rust #56330: discovery can outlive an interrupt or a settings update. A
+	// reserved wake must still own admission, and automatic turns must still be
+	// permitted, before its mail is consumed.
+	if !r.revalidateAutomaticWakeTurn(ctx, threadID, turnID, params) {
+		return
+	}
 	startedAtMS := startedAt.UnixMilli()
 	appTurn := appTurnFromTurnRecord(record, nil, TurnStatusInProgress, nil, nil)
 	appTurn.Items = []ThreadItem{}
@@ -3869,7 +3880,13 @@ func (r *RuntimeRouter) interruptRuntimeTurnIfNoPendingInput(threadID string, tu
 	if active == nil || active.ID != strings.TrimSpace(turnID) {
 		return nil, false
 	}
-	if mailbox := r.requireSteerMailbox(); mailbox != nil && mailbox.HasPending(threadID, turnID) {
+	mailbox := r.requireSteerMailbox()
+	if mailbox != nil && (mailbox.IsTurnFinishing(threadID, turnID) || mailbox.HasPending(threadID, turnID)) {
+		return nil, false
+	}
+	if state := r.threads.ActiveTurn(threadID); automaticWakeReservation(state) {
+		// Rust requires a registered task for this conditional interrupt; a
+		// wake reservation is not one.
 		return nil, false
 	}
 	return r.cancelActiveRuntimeTurn(threadID, turnID)

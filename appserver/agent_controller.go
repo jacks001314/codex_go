@@ -1042,6 +1042,7 @@ func (r *RuntimeRouter) maybeWakeRootForPendingAgentMessages(threadID string) {
 	params := &turn.TurnStartParams{
 		ThreadID:             threadID,
 		AdditionalInputItems: items,
+		AutomaticWake:        true,
 	}
 	if previous, ok := r.runtimePreviousTurnContext(threadID, record); ok {
 		params.Model = strings.TrimSpace(previous.Model)
@@ -1063,7 +1064,7 @@ func (r *RuntimeRouter) runtimeAgentMessageWakeEligible(threadID string, record 
 	if strings.TrimSpace(string(record.ParentThreadID)) != "" || runtimeRecordIsSubagent(record) {
 		return false
 	}
-	if runtimeAgentMessagesInterrupted(record) {
+	if r.runtimeAgentWakesStopped(threadID) || runtimeAgentMessagesInterrupted(record) {
 		return false
 	}
 	settings := r.threadSettingsForTurn(threadID)
@@ -1094,6 +1095,133 @@ func runtimeCollaborationModeIsPlan(settings *Settings) bool {
 	}
 	mode := collaborationModeFromAnyMap(settings.CollaborationMode)
 	return mode != nil && mode.Mode == ModeKindPlan
+}
+
+// automaticWakeReservation reports whether the active turn is a reserved
+// automatic wake that has not yet started its task. Rust #56330's
+// `take_active_turn` clears such a reservation instead of aborting a task, and
+// the reservation must keep its mail for an explicit follow-up.
+func automaticWakeReservation(active *activeRuntimeTurn) bool {
+	return active != nil && active.Params != nil && active.Params.AutomaticWake && !active.TaskStarted
+}
+
+// runtimeAgentWakesStopped reports whether an interrupted wake reservation is
+// still blocking automatic turns. Rust models this with AgentStatus::Interrupted
+// on the session; Go persists no turn for a rejected reservation, so the stop
+// is tracked until the next admitted turn reports the thread as running.
+func (r *RuntimeRouter) runtimeAgentWakesStopped(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	r.agentWakeStateMu.Lock()
+	defer r.agentWakeStateMu.Unlock()
+	return r.agentWakeStopped[threadID]
+}
+
+func (r *RuntimeRouter) markRuntimeAgentWakesStopped(threadID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.agentWakeStateMu.Lock()
+	defer r.agentWakeStateMu.Unlock()
+	if r.agentWakeStopped == nil {
+		r.agentWakeStopped = map[string]bool{}
+	}
+	r.agentWakeStopped[threadID] = true
+}
+
+// clearRuntimeAgentWakeStopped mirrors Rust replacing AgentStatus::Interrupted
+// with Running when a new turn starts, which makes later mail eligible again.
+func (r *RuntimeRouter) clearRuntimeAgentWakeStopped(threadID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.agentWakeStateMu.Lock()
+	defer r.agentWakeStateMu.Unlock()
+	delete(r.agentWakeStopped, threadID)
+}
+
+// revalidateAutomaticWakeTurn mirrors Rust #56330's post-discovery check. Model
+// discovery can outlive an interrupt or a settings update, so a reserved wake
+// must recheck that it still owns admission and that automatic turns are still
+// permitted before its mail is consumed. The turn parameters captured at
+// admission remain the configuration this turn runs with.
+func (r *RuntimeRouter) revalidateAutomaticWakeTurn(ctx context.Context, threadID string, turnID string, params *turn.TurnStartParams) bool {
+	if r == nil || params == nil || !params.AutomaticWake {
+		return true
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if ctx != nil && ctx.Err() != nil {
+		r.rejectAutomaticWakeReservation(threadID, turnID, false)
+		return false
+	}
+	active := r.threads.ActiveTurn(threadID)
+	if active == nil || active.TurnID != turnID {
+		// An interrupt already rejected the reservation and preserved its mail.
+		return false
+	}
+	if runtimeCollaborationModeIsPlan(r.threadSettingsForTurn(threadID)) {
+		// Plan mode cannot accept an automatic turn. Keep the mail queued for an
+		// explicit follow-up instead of running the reserved work.
+		r.rejectAutomaticWakeReservation(threadID, turnID, false)
+		return false
+	}
+	if !r.threads.UpdateTurn(threadID, turnID, func(active *activeRuntimeTurn) { active.TaskStarted = true }) {
+		return false
+	}
+	return true
+}
+
+// rejectAutomaticWakeReservation atomically gives up a wake reservation and
+// returns its mail to the front of the queue. stopped records an interrupt,
+// which must also block later agent messages from restarting automatic work
+// (Rust #56330 take_active_turn / mark_interrupted).
+func (r *RuntimeRouter) rejectAutomaticWakeReservation(threadID string, turnID string, stopped bool) (*activeRuntimeTurn, bool) {
+	if r == nil {
+		return nil, false
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	active, ok := r.threads.ConsumeTurnIf(threadID, turnID, false, automaticWakeReservation)
+	if !ok {
+		return nil, false
+	}
+	if active.Cancel != nil {
+		active.Cancel()
+	}
+	if r.networkApproval != nil {
+		r.networkApproval.cancelPendingForTurn(threadID, turnID)
+		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
+	}
+	r.clearPendingUnifiedExecItems(threadID, turnID)
+	r.requeueRuntimeAgentMessages(threadID, active.Params.AdditionalInputItems)
+	if stopped {
+		r.markRuntimeAgentWakesStopped(threadID)
+	}
+	r.releaseRuntimeTurnRecord(threadID, turnID)
+	r.clearActiveDiffTracker(threadID, turnID)
+	r.scheduleThreadIdleUnload(threadID)
+	return active, true
+}
+
+// releaseRuntimeTurnRecord removes a rejected reservation from the turn
+// service without persisting a terminal turn.
+func (r *RuntimeRouter) releaseRuntimeTurnRecord(threadID string, turnID string) {
+	if r == nil || r.services.Turns == nil {
+		return
+	}
+	_ = r.services.Turns.Complete(&turn.TurnCompleteParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		Status:   string(TurnStatusInterrupted),
+	})
 }
 
 func (r *RuntimeRouter) requeueRuntimeAgentMessages(threadID string, items []any) {

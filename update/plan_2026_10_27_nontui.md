@@ -14,6 +14,7 @@ TUI lane and are not modified here.
 
 | Upstream | Requirement | Go change |
 | --- | --- | --- |
+| `#56330` | Interrupts and Plan mode stop reserved agent-message wakes: an interrupt during model discovery rejects the unstarted reservation without a terminal event, preserves its mail for an explicit turn, and blocks later automatic wakes until a new turn starts. Plan mode rejects the wake but does not mark the thread stopped. Accepted wakes keep their admission configuration, and finishing turns stay running and persist only `TurnComplete`. | `turn/api.go`, `appserver/turn_runtime.go`, `appserver/thread_manager.go`, `appserver/agent_controller.go`, `appserver/runtime_router.go`, `appserver/agent_message_wake_controls_like_rust_test.go` |
 | `#56284` | Supported thread originators (`codex_work_cca`, `codex_work_web`, `codex_work_desktop`, `codex_work_mobile`, `chatgpt_cca`) select isolated model managers before thread model metadata is resolved. Each partition sends its own `originator` header, reuses its manager, keeps separate in-memory and `models_cache.<originator>.json` disk catalogs, and shares runtime API-key discovery policy; unsupported originators retain the default manager. Thread startup and actual turns use the selected catalog’s instructions and `apply_patch_tool_type`. | `model/models_originator.go`, `model/models_endpoint.go`, `model/lazy_models.go`, `model/api.go`, `model/catalog.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/agent_runtime.go`, like-Rust tests |
 | `#57242` | Default thread unload delay is 1 minute | `config/config.go`, unload-delay test |
 | `#56525` | Drop the 1 MiB explicit model-catalog response cap | `model/models_endpoint.go`, catalog URL test |
@@ -1389,3 +1390,20 @@ deduplication for tool outputs.
   an empty cache, and a fresh reload publishing login-generation-only changes.
 - Broader non-TUI verification: `go build ./execserver ./appserver ./config ./memories ./memorylock ./state ./exec ./auth ./model ./context ./retainedctx ./features ./turn ./tool`
   and `go test ./tool ./turn ./features ./agent ./state ./model ./codexapi ./rollout -count=1` pass.
+- For `#56330`: `go build ./appserver/... ./turn/... ./app/...`,
+  `go test ./turn ./model ./app -count=1`, and
+  `go test ./appserver -run 'AgentMessage|AgentMailbox|QueueOnly|HostMailbox|IdleLifecycle|Originator|TurnStart|Interrupt|WakeReservation|FinishingTurn|AutomaticWake' -count=1`
+  pass. The full `go test ./appserver -count=1` fails only in the pre-existing
+  Windows baseline tests
+  `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`,
+  `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`, and
+  `TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust`,
+  which also fail at clean HEAD `e7a4e94d`; `go vet ./appserver` reports only the
+  pre-existing `thread_sample.go:220` cancel leak. Coverage pins interrupt
+  rejection of an unstarted wake reservation with queued-mail preservation and
+  no terminal notification, Plan-mode rejection without a stopped status,
+  admission-configuration reuse, explicit-turn consumption with the feature
+  disabled or a stopped reservation, finishing-turn interrupt protection with
+  exactly one persisted `task_complete` under both feature settings, mail
+  requeue on admission conflict, and runtime-build failure requeueing the wake's
+  mail without an aborted turn.

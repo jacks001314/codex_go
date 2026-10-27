@@ -632,6 +632,26 @@ func (m *ThreadManager) ConsumeTurnTracked(threadID string, turnID string, clear
 	return active, true
 }
 
+// ConsumeTurnIf atomically takes the active turn only when accept approves it.
+// Automatic wake reservations use it so an interrupt and the post-discovery
+// revalidation cannot both consume the same reservation.
+func (m *ThreadManager) ConsumeTurnIf(threadID string, turnID string, clearDiff bool, accept func(*activeRuntimeTurn) bool) (*activeRuntimeTurn, bool) {
+	if m == nil || accept == nil {
+		return nil, false
+	}
+	m.turnsMu.Lock()
+	defer m.turnsMu.Unlock()
+	active := m.active[threadID]
+	if active == nil || active.TurnID != turnID || !accept(active) {
+		return nil, false
+	}
+	delete(m.active, threadID)
+	if clearDiff {
+		delete(m.diffs, activeTurnDiffKey(threadID, active.TurnID))
+	}
+	return active, true
+}
+
 func (m *ThreadManager) DiffTracker(threadID string, turnID string) *runtimeutil.DiffTracker {
 	if m == nil {
 		return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -161,7 +162,7 @@ func newAgentMessageWakeTestRouter(t *testing.T, wakeEnabled bool) (*RuntimeRout
 	writeAgentWakeFeature(t, home, wakeEnabled)
 	cwd := t.TempDir()
 	now := time.Now().UTC()
-	store := session.NewStore(t.TempDir())
+	store := session.NewStore(filepath.Join(home, "sessions"))
 	root := &session.Record{
 		ID:        "root",
 		SessionID: "root",

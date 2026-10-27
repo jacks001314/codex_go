@@ -301,6 +301,10 @@ type TurnStartParams struct {
 	// wire (matching Rust, which never sends it in the Responses metadata).
 	InitiatingAgentPath  string `json:"-"`
 	AdditionalInputItems []any  `json:"-"`
+	// AutomaticWake marks an internal turn started by queue-only inter-agent
+	// mail (Rust `TurnStartKind::Automatic`). The runtime revalidates the
+	// reservation after model discovery before any of its mail is consumed.
+	AutomaticWake bool `json:"-"`
 	// Trace carries the W3C trace context of the request that started this turn
 	// (Rust TurnInputRequest::with_trace), so the model request continues the
 	// caller's trace.

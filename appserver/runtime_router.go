@@ -291,6 +291,12 @@ type RuntimeRouter struct {
 	// its automatic root turn. Without it, concurrent deliveries could both
 	// observe an idle thread and race to consume the same queue.
 	agentWakeMu sync.Mutex
+	// agentWakeStateMu guards agentWakeStopped, the in-memory "interrupted"
+	// status an interrupted wake reservation installs. It is separate from
+	// agentWakeMu because turn admission holds agentWakeMu while it starts the
+	// turn that clears this state.
+	agentWakeStateMu sync.Mutex
+	agentWakeStopped map[string]bool
 	// turnAdmissionMu makes turn admission observe the same settings snapshot
 	// that a concurrent thread/settings/update commits. Automatic starts cannot
 	// validate against one mode and then run after another settings write.
@@ -7594,9 +7600,23 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := r.runPendingSessionStartHook(context.Background(), params); err != nil {
 		return nil, err
 	}
+	// Rust samples queued agent mail into the next admitted turn. When
+	// wake_on_agent_messages is disabled (or a wake was rejected), preserved mail
+	// waits here until the user starts a turn explicitly. An automatic wake
+	// already owns its mail and must not drain the queue twice.
+	var drainedAgentMessages []any
+	if !params.AutomaticWake {
+		drainedAgentMessages = r.drainRuntimeAgentMessages(params.ThreadID)
+		if len(drainedAgentMessages) > 0 {
+			params.AdditionalInputItems = append(drainedAgentMessages, params.AdditionalInputItems...)
+		}
+	}
 	reservedRuntime := false
 	if r.hasRuntimeThreadStore() {
 		if err := r.reserveRuntimeThread(params.ThreadID); err != nil {
+			if len(drainedAgentMessages) > 0 {
+				r.requeueRuntimeAgentMessages(params.ThreadID, drainedAgentMessages)
+			}
 			return nil, err
 		}
 		reservedRuntime = true
@@ -7605,6 +7625,9 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err != nil {
 		if reservedRuntime {
 			r.clearActiveRuntimeTurn(params.ThreadID, "")
+		}
+		if len(drainedAgentMessages) > 0 {
+			r.requeueRuntimeAgentMessages(params.ThreadID, drainedAgentMessages)
 		}
 		return nil, err
 	}
@@ -8898,6 +8921,35 @@ func (r *RuntimeRouter) abortRuntimeTurnForManualCompaction(threadID string) {
 // compaction abort (`handlers::compact` -> `abort_all_tasks(Replaced)`) uses
 // `replaced`.
 func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, requestedAtMS *uint64, reason string) (*turn.TurnInterruptResponse, error) {
+	if r.hasRuntimeThreadStore() {
+		if active := r.threads.ActiveTurn(threadID); active != nil && active.TurnID == turnID {
+			// A wake reserves work before it registers a task. Stopping the
+			// reservation must preserve its mail without emitting a terminal event
+			// for work that never started; only an interrupt stops later automatic
+			// turns (Rust marks interrupted for Interrupted/BudgetLimited, while
+			// Replaced still drops the reservation).
+			if automaticWakeReservation(active) {
+				stopped := reason == turnAbortReasonInterrupted
+				if stopped {
+					if _, err := r.requireTurns().Interrupt(&turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID}); err != nil {
+						return nil, turnInterruptRuntimeError(err)
+					}
+				}
+				r.rejectAutomaticWakeReservation(threadID, turnID, stopped)
+				return &turn.TurnInterruptResponse{}, nil
+			}
+			// Rust #56330: a finishing turn has detached its task but has not
+			// persisted completion yet. An interrupt must leave it running so
+			// capacity eviction cannot close the rollout writer, and its only
+			// terminal event is TurnComplete. Replacement still aborts it so manual
+			// compaction can take the thread.
+			if reason == turnAbortReasonInterrupted {
+				if mailbox := r.requireSteerMailbox(); mailbox != nil && mailbox.IsTurnFinishing(threadID, turnID) {
+					return &turn.TurnInterruptResponse{}, nil
+				}
+			}
+		}
+	}
 	if r.hasRuntimeThreadStore() && r.activeRuntimeTurnIsReview(threadID, turnID) {
 		if active, ok := r.cancelActiveRuntimeTurn(threadID, turnID); ok {
 			analytics := analyticsContextFromActiveRuntimeTurn(active)
@@ -19257,11 +19309,19 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
 		return
 	}
+	// Rust replaces AgentStatus::Interrupted with Running when a turn starts,
+	// so an explicit follow-up re-enables later automatic wakes.
+	r.clearRuntimeAgentWakeStopped(params.ThreadID)
 	r.updateActiveRuntimeTurnAnalytics(params.ThreadID, response.Turn.ID, connectionID, nil)
 	go func() {
 		defer r.threads.TurnWorkerDone()
 		runtime, err := r.buildTurnRuntimeContext(ctx, paramsCopy, response.Turn.ID)
 		if err != nil {
+			if paramsCopy.AutomaticWake {
+				if _, rejected := r.rejectAutomaticWakeReservation(paramsCopy.ThreadID, response.Turn.ID, false); rejected {
+					return
+				}
+			}
 			if ctx.Err() == nil {
 				r.clearActiveRuntimeTurn(paramsCopy.ThreadID, response.Turn.ID)
 				r.emitTurnRuntimeError(paramsCopy.ThreadID, response.Turn.ID, err)
@@ -19269,6 +19329,9 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 			return
 		}
 		if runtime == nil {
+			if paramsCopy.AutomaticWake {
+				r.rejectAutomaticWakeReservation(paramsCopy.ThreadID, response.Turn.ID, false)
+			}
 			r.clearActiveRuntimeTurn(paramsCopy.ThreadID, response.Turn.ID)
 			return
 		}
