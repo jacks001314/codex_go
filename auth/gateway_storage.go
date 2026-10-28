@@ -1,4 +1,4 @@
-﻿package auth
+package auth
 
 // Gateway credential storage and the cross-process exchange lock.
 //
@@ -100,6 +100,21 @@ func (s *gatewayAuthStorage) save(credentialID string, value string) error {
 	return nil
 }
 
+// delete removes the persisted grant and reports whether one was present
+// (Rust OAuthSessionManager::logout).
+func (s *gatewayAuthStorage) delete(credentialID string) (bool, error) {
+	name, err := gatewayCredentialSecretName(credentialID)
+	if err != nil {
+		return false, err
+	}
+	scope := safety.GlobalScope()
+	removed, err := s.backend.Delete(&scope, name)
+	if err != nil {
+		return false, errors.New("failed to remove provider OAuth credentials")
+	}
+	return removed, nil
+}
+
 // lockGatewayCredentials mirrors Rust `storage::lock_credentials`: one stable
 // sidecar lock, retried every 50 ms for up to 60 s, so a concurrent
 // configuration cannot rewrite the encrypted file mid-exchange.
@@ -132,4 +147,3 @@ func openGatewayCredentialLockFile(path string) (*os.File, error) {
 	}
 	return file, nil
 }
-

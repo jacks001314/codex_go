@@ -108,6 +108,37 @@ func (m *GatewayAuthManager) RefreshAccessToken(ctx context.Context, rejectedAcc
 	return m.resolve(ctx, gatewayRefreshPolicy{afterRejection: true, rejectedAccessToken: rejectedAccessToken})
 }
 
+// Logout removes the persisted grant and its in-memory copy without contacting
+// the issuer, then publishes NotReady so subscribers prompt for a new sign-in
+// (Rust OAuthSessionManager::logout). It reports whether a stored grant
+// existed.
+func (m *GatewayAuthManager) Logout(ctx context.Context) (bool, error) {
+	if m == nil {
+		return false, errors.New("provider OAuth manager is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	lock, err := lockGatewayCredentials(m.codexHome)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = lock.release() }()
+	removed, err := m.storage.delete(m.CredentialID())
+	if err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	m.cache.token = nil
+	m.cache.pending = nil
+	m.mu.Unlock()
+	m.publishStatus(GatewayAuthStatus{Kind: GatewayAuthStatusNotReady}, "")
+	return removed, nil
+}
+
 // GatewayCredentials is one resolved access token together with the identity
 // of the exact OAuth grant that supplied it (Rust OAuthRequestCredentials).
 type GatewayCredentials struct {
