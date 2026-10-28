@@ -567,11 +567,12 @@ func publicRemoteResponseForGeneration(response RuntimeResponse, generation uint
 		cellID = "g" + strconv.FormatUint(generation, 10) + ":" + cellID
 	}
 	return tool.CodeModeRemoteResponse{
-		CellID:         cellID,
-		State:          state,
-		ContentItems:   items,
-		ErrorText:      errorText,
-		HostDurationNS: response.CodeModeHostDurationNS,
+		CellID:              cellID,
+		State:               state,
+		ContentItems:        items,
+		ErrorText:           errorText,
+		ResultBufferedForNS: response.ResultBufferedForNS,
+		HostDurationNS:      response.CodeModeHostDurationNS,
 	}
 }
 

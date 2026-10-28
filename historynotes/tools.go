@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"codex_go/model"
 	"codex_go/tool"
 )
 
@@ -232,23 +233,37 @@ func (a Action) ValidateArguments(arguments map[string]any) error {
 // Tools returns the nine history/notes executors for the supplied backend,
 // session, and current agent name (Rust HistoryNotesExtension::tools).
 func Tools(backend *Backend, sessionID string, currentAgentName string) []tool.Executor {
+	return ToolsWithCatalog(backend, sessionID, currentAgentName, nil, nil)
+}
+
+// ToolsWithCatalog mirrors Rust HistoryNotesExtension::tools with the acting
+// model catalog entries (#56313). Descriptions, parameter schemas, and
+// namespace descriptions are applied per tool; runtime arguments and transport
+// stay harness-owned.
+func ToolsWithCatalog(backend *Backend, sessionID string, currentAgentName string, history *model.HistoryToolMessages, notes *model.NotesToolMessages) []tool.Executor {
 	out := make([]tool.Executor, 0, len(allActions))
 	for _, action := range allActions {
-		out = append(out, NewToolExecutor(action, backend, sessionID, currentAgentName))
+		out = append(out, newToolExecutorWithCatalog(action, backend, sessionID, currentAgentName, history, notes))
 	}
 	return out
 }
 
 // NewToolExecutor builds one history/notes tool executor (Rust HistoryNotesTool).
 func NewToolExecutor(action Action, backend *Backend, sessionID string, currentAgentName string) tool.Executor {
+	return newToolExecutorWithCatalog(action, backend, sessionID, currentAgentName, nil, nil)
+}
+
+func newToolExecutorWithCatalog(action Action, backend *Backend, sessionID string, currentAgentName string, history *model.HistoryToolMessages, notes *model.NotesToolMessages) tool.Executor {
 	actionName := action
-	return tool.NewExecutorFunc(tool.Spec{
+	spec := tool.Spec{
 		Name:                 tool.NamespacedName(action.Namespace(), action.Name()),
 		Description:          action.Description(),
 		InputSchema:          action.Parameters(),
 		Parallel:             action.SupportsParallel(),
 		NamespaceDescription: action.NamespaceDescription(),
-	}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+	}
+	spec = applyHistoryNotesCatalog(action, spec, history, notes)
+	return tool.NewExecutorFunc(spec, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
 		arguments := map[string]any{}
 		if invocation != nil {
 			if err := invocation.DecodeArguments(&arguments); err != nil {
@@ -263,6 +278,32 @@ func NewToolExecutor(action Action, backend *Backend, sessionID string, currentA
 			return nil, tool.RespondToModel(err.Error())
 		}
 		return historyNotesToolOutput(result)
+	})
+}
+
+// applyHistoryNotesCatalog applies one action catalog entry plus the namespace
+// description for its namespace (Rust #56313).
+func applyHistoryNotesCatalog(action Action, spec tool.Spec, history *model.HistoryToolMessages, notes *model.NotesToolMessages) tool.Spec {
+	var message *model.ToolMessage
+	var namespaceDescription *string
+	if action.Namespace() == historyNamespace {
+		if history != nil {
+			message = history.Tool(action.Name())
+			namespaceDescription = history.NamespaceDescription
+		}
+	} else if notes != nil {
+		message = notes.Tool(action.Name())
+		namespaceDescription = notes.NamespaceDescription
+	}
+	if namespaceDescription != nil {
+		spec.NamespaceDescription = *namespaceDescription
+	}
+	if message == nil {
+		return spec
+	}
+	return tool.ApplyCatalogToolOverride(spec, &tool.CatalogToolOverride{
+		Description: message.Description,
+		Parameters:  message.Parameters,
 	})
 }
 

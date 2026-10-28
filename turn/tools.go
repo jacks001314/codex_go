@@ -227,9 +227,12 @@ type ToolRegistryOptions struct {
 	RequestUserInputAsyncParameters  *string
 	// MCPResourceMessages carries the model catalog's `mcp_resources` entries
 	// for the built-in resource helpers (Rust #47677).
-	MCPResourceMessages  *model.McpResourceToolMessages
-	DisableWaitAgent     bool
-	DisableDirectMessage bool
+	MCPResourceMessages *model.McpResourceToolMessages
+	// ContextManagementMessages carries the model catalog entries for
+	// new_context and get_context_remaining (Rust #56313).
+	ContextManagementMessages *model.ContextManagementToolMessages
+	DisableWaitAgent          bool
+	DisableDirectMessage      bool
 	// MessageBoard, when set, registers the shared discussion board's ten
 	// collaboration tools for this turn's caller (Rust
 	// `install_agent_message_board`). The host owns board selection, the tool
@@ -514,6 +517,16 @@ func execCommandLoginParameter(options *ToolRegistryOptions) bool {
 	return allow
 }
 
+// contextManagementCatalogOverride converts one context-management catalog
+// entry into the tool package override shape (Rust #56313).
+func contextManagementCatalogOverride(messages *model.ContextManagementToolMessages, toolName string) *tool.CatalogToolOverride {
+	message := messages.Tool(toolName)
+	if message == nil {
+		return nil
+	}
+	return &tool.CatalogToolOverride{Description: message.Description, Parameters: message.Parameters}
+}
+
 func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	if options == nil {
 		options = DefaultToolRegistryOptions("")
@@ -541,6 +554,8 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			DisableGetContextRemaining:     options.DisableGetContextRemaining,
 			NonfatalClockReadErrors:        options.NonfatalClockReadErrors,
 			NewContextWindow:               options.NewContextWindow,
+			NewContextCatalog:              contextManagementCatalogOverride(options.ContextManagementMessages, "new_context"),
+			GetContextRemainingCatalog:     contextManagementCatalogOverride(options.ContextManagementMessages, "get_context_remaining"),
 		}); err != nil {
 			return nil, err
 		}

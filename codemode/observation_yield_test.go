@@ -146,7 +146,10 @@ func (e *releaseEngine) Close() error { return nil }
 // script had already produced must still reach the termination caller and a later
 // observer in the terminated event, exactly once, even with an immediate yield
 // timeout and a canceled yield signal. Repetition exercises both select outcomes
-// (the runtime's own completion racing the termination).
+// (the runtime's own completion racing the termination). Rust #55653 makes the
+// two outcomes distinguishable: a termination that claims an already-committed
+// completion reports it as a buffered Result, while one that wins the race
+// reports Terminated.
 func TestSessionRuntimeTerminationPreservesProducedOutputLikeRust(t *testing.T) {
 	for iteration := 0; iteration < 50; iteration++ {
 		engine := newReleaseEngine()
@@ -180,8 +183,13 @@ func TestSessionRuntimeTerminationPreservesProducedOutputLikeRust(t *testing.T) 
 		if err != nil {
 			t.Fatalf("Wait() error = %v", err)
 		}
-		if observed.Response.Variant != "Terminated" {
-			t.Fatalf("iteration %d: observer response = %#v, want terminated", iteration, observed.Response)
+		switch terminated.Response.Variant {
+		case "Terminated", "Result":
+		default:
+			t.Fatalf("iteration %d: termination variant = %q, want Terminated or Result", iteration, terminated.Response.Variant)
+		}
+		if observed.Response.Variant != terminated.Response.Variant {
+			t.Fatalf("iteration %d: observer variant = %q, termination caller saw %q", iteration, observed.Response.Variant, terminated.Response.Variant)
 		}
 		if got := concatenatedItemText(observed.Response.ContentItems); got != "queued output" {
 			t.Fatalf("iteration %d: observer output = %q, want the queued output once", iteration, got)

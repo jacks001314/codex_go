@@ -393,15 +393,22 @@ func containsSubmittedAnswer(answers []string, value string) bool {
 }
 
 type GetContextRemainingHandler struct {
-	status func() compact.TokenStatus
+	status  func() compact.TokenStatus
+	catalog *CatalogToolOverride
 }
 
 func NewGetContextRemainingHandler(status func() compact.TokenStatus) *GetContextRemainingHandler {
 	return &GetContextRemainingHandler{status: status}
 }
 
+// NewGetContextRemainingHandlerWithCatalog mirrors Rust get_context_remaining
+// catalog overrides (#56313).
+func NewGetContextRemainingHandlerWithCatalog(status func() compact.TokenStatus, catalog *CatalogToolOverride) *GetContextRemainingHandler {
+	return &GetContextRemainingHandler{status: status, catalog: catalog}
+}
+
 func (h *GetContextRemainingHandler) Spec() Spec {
-	return Spec{Name: PlainName("get_context_remaining"), Description: "Returns context tokens left before compaction.", Parallel: true}
+	return ApplyCatalogToolOverride(Spec{Name: PlainName("get_context_remaining"), Description: "Returns context tokens left before compaction.", Parallel: true}, h.catalog)
 }
 
 func (h *GetContextRemainingHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
@@ -424,17 +431,24 @@ func (h *GetContextRemainingHandler) Execute(ctx context.Context, invocation *In
 // The request callback performs the window reset through the turn runtime.
 type ContextWindowHandler struct {
 	request func()
+	catalog *CatalogToolOverride
 }
 
 func NewContextWindowHandler(request func()) *ContextWindowHandler {
 	return &ContextWindowHandler{request: request}
 }
 
+// NewContextWindowHandlerWithCatalog mirrors Rust new_context_window catalog
+// overrides (#56313).
+func NewContextWindowHandlerWithCatalog(request func(), catalog *CatalogToolOverride) *ContextWindowHandler {
+	return &ContextWindowHandler{request: request, catalog: catalog}
+}
+
 func (h *ContextWindowHandler) Spec() Spec {
-	return Spec{
+	return ApplyCatalogToolOverride(Spec{
 		Name:        PlainName("new_context"),
 		Description: "Start a new context window. Does not clear, reset, or otherwise affect environment state.",
-	}
+	}, h.catalog)
 }
 
 func (h *ContextWindowHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
@@ -700,6 +714,10 @@ type CoreHandlerOptions struct {
 	// tool errors.
 	NonfatalClockReadErrors bool
 	NewContextWindow        func()
+	// NewContextCatalog and GetContextRemainingCatalog carry the acting model
+	// catalog entries for the context-management tools (Rust #56313).
+	NewContextCatalog          *CatalogToolOverride
+	GetContextRemainingCatalog *CatalogToolOverride
 }
 
 func RegisterCoreHandlers(registry *Registry, planStore *PlanStore, status func() compact.TokenStatus, responder UserInputResponder) error {
@@ -723,7 +741,7 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 		handlers = append(handlers, handler)
 	}
 	if !options.DisableGetContextRemaining {
-		handlers = append(handlers, NewGetContextRemainingHandler(options.ContextStatus))
+		handlers = append(handlers, NewGetContextRemainingHandlerWithCatalog(options.ContextStatus, options.GetContextRemainingCatalog))
 	}
 	if !options.DisableUpdatePlan {
 		handlers = append(handlers, NewPlanHandler(options.PlanStore))
@@ -738,7 +756,7 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 		handlers = append(handlers, NewClockSleepHandlerWithOptions(options.ClockProvider, options.ThreadID, options.NonfatalClockReadErrors))
 	}
 	if options.NewContextWindow != nil {
-		handlers = append(handlers, NewContextWindowHandler(options.NewContextWindow))
+		handlers = append(handlers, NewContextWindowHandlerWithCatalog(options.NewContextWindow, options.NewContextCatalog))
 	}
 	for _, handler := range handlers {
 		if err := registry.Register(handler); err != nil {

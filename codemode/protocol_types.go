@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -216,6 +217,10 @@ type RuntimeResponse struct {
 	CellID       CellID        `json:"cell_id"`
 	ContentItems []ContentItem `json:"content_items"`
 	ErrorText    *string       `json:"error_text,omitempty"`
+	// ResultBufferedForNS measures how long a completed Result waited for
+	// retrieval (Rust #55653's `result_buffered_for`). Immediate delivery
+	// reports zero, and non-Result responses never carry a measurement.
+	ResultBufferedForNS uint64 `json:"result_buffered_for_ns,omitempty"`
 	// CodeModeHostDurationNS is the host's own measurement of the request
 	// (Rust #46288's `code_mode_host_duration_ns`): elapsed monotonic time from
 	// receipt of the Execute/Wait/Terminate request until its outcome is ready,
@@ -248,6 +253,9 @@ func (r RuntimeResponse) MarshalJSON() ([]byte, error) {
 	}
 	if variant == "Result" {
 		body["error_text"] = r.ErrorText
+		// Rust's wire payload always serializes the buffering measurement for a
+		// Result and defaults it to zero when an older host omits it (#55653).
+		body["result_buffered_for_ns"] = r.ResultBufferedForNS
 	}
 	return json.Marshal(map[string]any{variant: body})
 }
@@ -265,6 +273,9 @@ func (r *RuntimeResponse) UnmarshalJSON(data []byte) error {
 			CellID       CellID        `json:"cell_id"`
 			ContentItems []ContentItem `json:"content_items"`
 			ErrorText    *string       `json:"error_text"`
+			// Optional for compatibility with older hosts; absent decodes as zero
+			// (Rust's `#[serde(default)]`).
+			ResultBufferedForNS *uint64 `json:"result_buffered_for_ns"`
 			// Rust's host payload requires the measurement; zero is valid but
 			// absent is not (MissingCodeModeHostDuration).
 			CodeModeHostDurationNS *uint64 `json:"code_mode_host_duration_ns"`
@@ -281,6 +292,10 @@ func (r *RuntimeResponse) UnmarshalJSON(data []byte) error {
 			r.CellID = decoded.CellID
 			r.ContentItems = decoded.ContentItems
 			r.ErrorText = decoded.ErrorText
+			r.ResultBufferedForNS = 0
+			if decoded.ResultBufferedForNS != nil {
+				r.ResultBufferedForNS = *decoded.ResultBufferedForNS
+			}
 			r.CodeModeHostDurationNS = *decoded.CodeModeHostDurationNS
 			return nil
 		default:
@@ -308,6 +323,16 @@ func (o *WaitOutcome) RuntimeResponse() RuntimeResponse {
 		return RuntimeResponse{}
 	}
 	return o.Response
+}
+
+// ResultBufferedFor reports how long a completed result waited for retrieval
+// (Rust #55653's `WaitOutcome::result_buffered_for`). ok is false when this wait
+// did not retrieve a completed result.
+func (o *WaitOutcome) ResultBufferedFor() (time.Duration, bool) {
+	if o == nil || o.Variant != "LiveCell" || o.Response.Variant != "Result" {
+		return 0, false
+	}
+	return time.Duration(o.Response.ResultBufferedForNS), true
 }
 
 func (o WaitOutcome) MarshalJSON() ([]byte, error) {

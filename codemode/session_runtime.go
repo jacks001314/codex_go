@@ -146,7 +146,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 		deadline = time.Duration(ProtocolDefaultWaitYieldTimeMS) * time.Millisecond
 	}
 	if cell, ok := r.cells.Get(cellID); ok && cell.Status != CellRunning {
-		outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell), startedAt))
+		outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt))
 		return &outcome, nil
 	}
 	wakeup := r.wakeup(cellID)
@@ -166,7 +166,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 		outcome := MissingCell(response)
 		return &outcome, nil
 	}
-	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell), startedAt))
+	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt))
 	return &outcome, nil
 }
 
@@ -201,7 +201,7 @@ func (r *SessionRuntime) Terminate(request TerminateRequest) (*WaitOutcome, erro
 	}
 	r.releaseEngine(cellID.String())
 	r.signal(cellID.String())
-	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell), startedAt))
+	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt))
 	return &outcome, nil
 }
 
@@ -404,14 +404,17 @@ func (r *SessionRuntime) completeCellFromEngine(cellID CellID, outcome engineOut
 		return RuntimeResponse{}, appendErr
 	}
 	r.releaseEngine(cellID.String())
-	if cell, ok := r.cells.Get(cellID.String()); ok && cell.Status != CellRunning {
-		r.signal(cellID.String())
-		return withHostDuration(runtimeResponseFromCell(cell), startedAt), nil
-	}
-	if _, err := r.cells.Complete(cellID.String(), "", execErr); err != nil {
+	// Completing and checking the terminal phase happen under one store lock so
+	// a termination that claimed the cell cannot be overwritten by a late
+	// completion (Rust #55653 keeps a single linearization point).
+	cell, completed, err := r.cells.CompleteIfRunning(cellID.String(), "", execErr)
+	if err != nil {
 		return RuntimeResponse{}, err
 	}
 	r.signal(cellID.String())
+	if !completed {
+		return withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt), nil
+	}
 	return withHostDuration(Result(cellID, cloneContentItems(items), errorText(execErr)), startedAt), nil
 }
 
@@ -438,7 +441,7 @@ func (r *SessionRuntime) signal(cellID string) {
 	}
 }
 
-func runtimeResponseFromCell(cell *Cell) RuntimeResponse {
+func runtimeResponseFromCell(cell *Cell, now time.Time) RuntimeResponse {
 	if cell == nil {
 		return Result("", nil, stringPtrLocal("exec cell not found"))
 	}
@@ -452,11 +455,19 @@ func runtimeResponseFromCell(cell *Cell) RuntimeResponse {
 		return Yielded(cellID, items)
 	case CellTerminated:
 		return Terminated(cellID, items)
-	case CellFailed:
-		return Result(cellID, items, stringPtrLocal(cell.Error))
-	default:
-		return Result(cellID, items, nil)
 	}
+	var response RuntimeResponse
+	if cell.Status == CellFailed {
+		response = Result(cellID, items, stringPtrLocal(cell.Error))
+	} else {
+		response = Result(cellID, items, nil)
+	}
+	// Rust #55653: a Result retrieved after completion reports how long it was
+	// buffered; immediate delivery keeps the zero default.
+	if buffered, ok := cell.ResultBufferedFor(now); ok {
+		response.ResultBufferedForNS = uint64(buffered.Nanoseconds())
+	}
+	return response
 }
 
 func errorText(err error) *string {

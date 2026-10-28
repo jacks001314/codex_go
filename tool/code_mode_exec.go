@@ -269,6 +269,10 @@ type CodeModeRemoteResponse struct {
 	State        string
 	ContentItems []map[string]any
 	ErrorText    string
+	// ResultBufferedForNS is how long the host kept a completed result before
+	// this wait retrieved it (Rust #55653's `result_buffered_for`). Zero means
+	// immediate delivery; waits without a completed result have no value.
+	ResultBufferedForNS uint64
 	// HostDurationNS is the code-mode host's own measurement of the request
 	// (Rust #46288's `code_mode_host_duration_ns`), used for the overhead
 	// breakdown in the response header.
@@ -283,12 +287,16 @@ type codeModeCell struct {
 	completed bool
 	// startedAt anchors the response header's wall time (Rust's
 	// `CodeModeToolOutput::new` takes the elapsed time from the handler).
-	startedAt  time.Time
-	mu         sync.Mutex
-	items      []map[string]any
-	texts      []string
-	cursor     int
-	terminated bool
+	startedAt time.Time
+	// completedAt records when the script published its terminal outcome so a
+	// later wait or termination reports how long the result stayed buffered
+	// (Rust #55653).
+	completedAt time.Time
+	mu          sync.Mutex
+	items       []map[string]any
+	texts       []string
+	cursor      int
+	terminated  bool
 }
 
 type codeModeExecOptions struct {
@@ -869,6 +877,7 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 			runErr = nil
 		}
 		cell.output, cell.err, cell.completed = output, runErr, true
+		cell.completedAt = time.Now()
 		close(cell.done)
 		e.cellsMu.Unlock()
 	}()
@@ -1348,6 +1357,9 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		if hostDuration != nil {
 			output.Data["code_mode_host_duration_ns"] = response.HostDurationNS
 		}
+		if response.State != "yielded" && response.State != "terminated" {
+			output.Data["result_buffered_for_ns"] = response.ResultBufferedForNS
+		}
 		output = truncateCodeModeOutput(output, maxTokens)
 		return applyCodeModeHeader(output, "Script failed", modelWallTime, hostDuration, showOverhead), nil
 	}
@@ -1364,6 +1376,8 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		status = "Script running with cell ID " + response.CellID
 		output.Data["cell_id"] = response.CellID
 		output.Data["running"] = true
+	} else if response.State != "terminated" {
+		output.Data["result_buffered_for_ns"] = response.ResultBufferedForNS
 	}
 	output = truncateCodeModeOutput(output, maxTokens)
 	return applyCodeModeHeader(output, status, modelWallTime, hostDuration, showOverhead), nil
@@ -1878,6 +1892,11 @@ func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell) (*
 		output.Data["cell_id"] = cellID
 		output.Body = e.cellDelta(cell)
 		output.Data["content_items"] = e.cellContentDelta(cell)
+		if !cell.completedAt.IsZero() {
+			// Rust #55653: a Result retrieved after completion reports how long
+			// it was buffered; the Terminated variant never carries it.
+			output.Data["result_buffered_for_ns"] = uint64(time.Since(cell.completedAt).Nanoseconds())
+		}
 	}
 	return output, err
 }
@@ -2081,7 +2100,11 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 			e.exec.cellsMu.Unlock()
 			return nil, RespondToModel(fmt.Sprintf("exec cell %s is already terminating", params.CellID))
 		}
-		cell.terminated = true
+		// A termination that claims an already-completed result keeps it as a
+		// Result so its buffering measurement survives (Rust #55653).
+		if !cell.completed {
+			cell.terminated = true
+		}
 		e.exec.cellsMu.Unlock()
 		cell.cancel()
 	}
@@ -2103,7 +2126,9 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		return nil, ctx.Err()
 	case <-cell.done:
 		output, runErr := e.exec.consumeCell(params.CellID, cell)
-		if params.Terminate && output != nil {
+		// A termination that only claimed an already-completed result keeps the
+		// completed observation (Rust #55653).
+		if params.Terminate && cell.terminated && output != nil {
 			output.Success = true
 			if output.Data == nil {
 				output.Data = map[string]any{}

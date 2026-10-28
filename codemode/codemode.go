@@ -1228,6 +1228,10 @@ type Cell struct {
 	Error     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// CompletedAt records when the cell produced its terminal Result, so waits
+	// and terminations can report how long that result stayed buffered
+	// (Rust #55653).
+	CompletedAt time.Time
 }
 
 type CellStore struct {
@@ -1248,6 +1252,32 @@ func (s *CellStore) SetClock(clock func() time.Time) {
 		return
 	}
 	s.now = clock
+}
+
+// Now reports the store's clock so callers stamping elapsed buffering use the
+// same time source as the cells (Rust #55653's paused-clock tests).
+func (s *CellStore) Now() time.Time {
+	if s == nil {
+		return time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.now()
+}
+
+// ResultBufferedFor reports how long this cell's terminal result waited for
+// retrieval (Rust #55653). ok is false unless the cell produced a Result.
+func (c *Cell) ResultBufferedFor(now time.Time) (time.Duration, bool) {
+	if c == nil || c.CompletedAt.IsZero() {
+		return 0, false
+	}
+	if c.Status != CellCompleted && c.Status != CellFailed {
+		return 0, false
+	}
+	if now.Before(c.CompletedAt) {
+		return 0, true
+	}
+	return now.Sub(c.CompletedAt), true
 }
 
 func (s *CellStore) Start(id string, source string) (*Cell, error) {
@@ -1278,23 +1308,50 @@ func (s *CellStore) AppendOutput(id string, output string) (*Cell, error) {
 }
 
 func (s *CellStore) Complete(id string, output string, err error) (*Cell, error) {
+	cell, _, err := s.completeIfRunning(id, output, err)
+	return cell, err
+}
+
+// CompleteIfRunning records a finished script only while the cell is still
+// running. A cell that was terminated or already completed keeps its status,
+// which is the Go equivalent of Rust #55653 completion commit rejecting a cell
+// whose phase is no longer Running.
+func (s *CellStore) CompleteIfRunning(id string, output string, err error) (*Cell, bool, error) {
+	return s.completeIfRunning(id, output, err)
+}
+
+func (s *CellStore) completeIfRunning(id string, output string, err error) (*Cell, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cell := s.cells[id]
 	if cell == nil {
-		return nil, fmt.Errorf("%w: %s", ErrCellNotFound, id)
+		return nil, false, fmt.Errorf("%w: %s", ErrCellNotFound, id)
+	}
+	now := s.now().UTC()
+	if cell.Status == CellTerminated {
+		// A termination that already claimed the cell keeps its status; output
+		// the script had produced still belongs to the terminated event.
+		if output != "" {
+			cell.Output += output
+			cell.UpdatedAt = now
+		}
+		return cloneCell(cell), false, nil
+	}
+	if cell.Status != CellRunning {
+		return cloneCell(cell), false, nil
 	}
 	if output != "" {
 		cell.Output += output
 	}
-	cell.UpdatedAt = s.now().UTC()
+	cell.UpdatedAt = now
+	cell.CompletedAt = now
 	if err != nil {
 		cell.Status = CellFailed
 		cell.Error = err.Error()
 	} else {
 		cell.Status = CellCompleted
 	}
-	return cloneCell(cell), nil
+	return cloneCell(cell), true, nil
 }
 
 func (s *CellStore) Terminate(id string) (*Cell, error) {
@@ -1303,6 +1360,11 @@ func (s *CellStore) Terminate(id string) (*Cell, error) {
 	cell := s.cells[id]
 	if cell == nil {
 		return nil, fmt.Errorf("%w: %s", ErrCellNotFound, id)
+	}
+	// A termination that claims an already-completed result keeps it as a
+	// Result so its buffering measurement survives (Rust #55653).
+	if cell.Status == CellCompleted || cell.Status == CellFailed {
+		return cloneCell(cell), nil
 	}
 	cell.Status = CellTerminated
 	cell.UpdatedAt = s.now().UTC()

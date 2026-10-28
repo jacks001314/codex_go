@@ -549,7 +549,35 @@ func hostRuntimeResponse(cellID CellID, output *tool.Output, err error) RuntimeR
 			return Terminated(cellID, items)
 		}
 	}
-	return Result(cellID, items, nil)
+	response := Result(cellID, items, nil)
+	// The in-process host measures buffering with the same cells its exec/wait
+	// handlers own (Rust #55653).
+	response.ResultBufferedForNS = uint64DataValue(output, "result_buffered_for_ns")
+	return response
+}
+
+// uint64DataValue reads a uint64-style tool output data field.
+func uint64DataValue(output *tool.Output, key string) uint64 {
+	if output == nil || output.Data == nil {
+		return 0
+	}
+	switch value := output.Data[key].(type) {
+	case uint64:
+		return value
+	case int:
+		if value > 0 {
+			return uint64(value)
+		}
+	case int64:
+		if value > 0 {
+			return uint64(value)
+		}
+	case float64:
+		if value > 0 {
+			return uint64(value)
+		}
+	}
+	return 0
 }
 
 func hostContentItems(output *tool.Output) []ContentItem {

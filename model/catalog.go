@@ -295,10 +295,100 @@ type ConfirmationPolicies struct {
 	ComputerUse *string `json:"computer_use,omitempty"`
 }
 
+// HistoryToolMessages mirrors Rust protocol::openai_models::HistoryToolMessages
+// (#56313): model-owned history namespace and public tool definitions. Runtime
+// data and tool identity remain with the consumers.
+type HistoryToolMessages struct {
+	NamespaceDescription *string      `json:"namespace_description,omitempty"`
+	ListWindows          *ToolMessage `json:"list_windows,omitempty"`
+	ListItems            *ToolMessage `json:"list_items,omitempty"`
+	ReadItem             *ToolMessage `json:"read_item,omitempty"`
+	SearchContents       *ToolMessage `json:"search_contents,omitempty"`
+}
+
+// NotesToolMessages mirrors Rust protocol::openai_models::NotesToolMessages
+// (#56313).
+type NotesToolMessages struct {
+	NamespaceDescription *string      `json:"namespace_description,omitempty"`
+	ListFilesByPrefix    *ToolMessage `json:"list_files_by_prefix,omitempty"`
+	ReadFile             *ToolMessage `json:"read_file,omitempty"`
+	SearchContents       *ToolMessage `json:"search_contents,omitempty"`
+	AppendToFile         *ToolMessage `json:"append_to_file,omitempty"`
+	WriteFile            *ToolMessage `json:"write_file,omitempty"`
+}
+
+// Tool returns the catalog message for one history tool name, or nil when the
+// catalog does not override it.
+func (h *HistoryToolMessages) Tool(toolName string) *ToolMessage {
+	if h == nil {
+		return nil
+	}
+	switch strings.TrimSpace(toolName) {
+	case "list_windows":
+		return h.ListWindows
+	case "list_items":
+		return h.ListItems
+	case "read_item":
+		return h.ReadItem
+	case "search_contents":
+		return h.SearchContents
+	}
+	return nil
+}
+
+// Tool returns the catalog message for one notes tool name, or nil when the
+// catalog does not override it.
+func (n *NotesToolMessages) Tool(toolName string) *ToolMessage {
+	if n == nil {
+		return nil
+	}
+	switch strings.TrimSpace(toolName) {
+	case "list_files_by_prefix":
+		return n.ListFilesByPrefix
+	case "read_file":
+		return n.ReadFile
+	case "search_contents":
+		return n.SearchContents
+	case "append_to_file":
+		return n.AppendToFile
+	case "write_file":
+		return n.WriteFile
+	}
+	return nil
+}
+
+// Tool returns the catalog message for one context-management tool, or nil.
+func (c *ContextManagementToolMessages) Tool(toolName string) *ToolMessage {
+	if c == nil {
+		return nil
+	}
+	switch strings.TrimSpace(toolName) {
+	case "new_context":
+		return c.NewContext
+	case "get_context_remaining":
+		return c.GetContextRemaining
+	}
+	return nil
+}
+
+// ContextManagementToolMessages mirrors Rust protocol::openai_models::
+// ContextManagementToolMessages (#56313).
+type ContextManagementToolMessages struct {
+	NewContext          *ToolMessage `json:"new_context,omitempty"`
+	GetContextRemaining *ToolMessage `json:"get_context_remaining,omitempty"`
+}
+
 // ToolMessages mirrors Rust protocol::openai_models::ToolMessages (#41461):
 // model-owned descriptions for built-in tools.
 type ToolMessages struct {
-	SendUserMessageAsync *ToolMessage `json:"send_user_message_async,omitempty"`
+	// History and Notes carry the Memento V2 history/notes definitions,
+	// independent of runtime namespace aliases (Rust #56313).
+	History *HistoryToolMessages `json:"history,omitempty"`
+	Notes   *NotesToolMessages   `json:"notes,omitempty"`
+	// ContextManagement carries new_context and get_context_remaining
+	// (Rust #56313).
+	ContextManagement    *ContextManagementToolMessages `json:"context_management,omitempty"`
+	SendUserMessageAsync *ToolMessage                   `json:"send_user_message_async,omitempty"`
 	// IndirectDescriptionPrefixes adds model-owned guidance to namespace
 	// documentation in Code Mode prompts, ALL_TOOLS, and tool search results
 	// without altering direct tool specifications (Rust #47642).
@@ -426,6 +516,33 @@ func (m *ModelMessages) MCPResources() *McpResourceToolMessages {
 		return nil
 	}
 	return m.Tools.McpResources
+}
+
+// HistoryTools returns the Memento V2 history tool overrides, or nil when the
+// catalog does not define them (Rust #56313).
+func (m *ModelMessages) HistoryTools() *HistoryToolMessages {
+	if m == nil || m.Tools == nil {
+		return nil
+	}
+	return m.Tools.History
+}
+
+// NotesTools returns the Memento V2 notes tool overrides, or nil when the
+// catalog does not define them (Rust #56313).
+func (m *ModelMessages) NotesTools() *NotesToolMessages {
+	if m == nil || m.Tools == nil {
+		return nil
+	}
+	return m.Tools.Notes
+}
+
+// ContextManagementTools returns the context-window control tool overrides, or
+// nil when the catalog does not define them (Rust #56313).
+func (m *ModelMessages) ContextManagementTools() *ContextManagementToolMessages {
+	if m == nil || m.Tools == nil {
+		return nil
+	}
+	return m.Tools.ContextManagement
 }
 
 // CodeMode returns the active model's Code Mode tool-message overrides.
@@ -2093,6 +2210,9 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 			tools.MultiAgent = cloneMultiAgentToolMessages(tools.MultiAgent)
 			tools.McpResources = cloneMcpResourceToolMessages(tools.McpResources)
 			tools.CodeMode = cloneCodeModeToolMessages(tools.CodeMode)
+			tools.History = cloneHistoryToolMessages(tools.History)
+			tools.Notes = cloneNotesToolMessages(tools.Notes)
+			tools.ContextManagement = cloneContextManagementToolMessages(tools.ContextManagement)
 			messages.Tools = &tools
 		}
 		out.ModelMessages = &messages
@@ -2109,6 +2229,43 @@ func cloneToolMessage(in *ToolMessage) *ToolMessage {
 	out.Description = cloneStringPointer(in.Description)
 	out.Parameters = cloneStringPointer(in.Parameters)
 	return &out
+}
+
+func cloneHistoryToolMessages(in *HistoryToolMessages) *HistoryToolMessages {
+	if in == nil {
+		return nil
+	}
+	return &HistoryToolMessages{
+		NamespaceDescription: cloneStringPointer(in.NamespaceDescription),
+		ListWindows:          cloneToolMessage(in.ListWindows),
+		ListItems:            cloneToolMessage(in.ListItems),
+		ReadItem:             cloneToolMessage(in.ReadItem),
+		SearchContents:       cloneToolMessage(in.SearchContents),
+	}
+}
+
+func cloneNotesToolMessages(in *NotesToolMessages) *NotesToolMessages {
+	if in == nil {
+		return nil
+	}
+	return &NotesToolMessages{
+		NamespaceDescription: cloneStringPointer(in.NamespaceDescription),
+		ListFilesByPrefix:    cloneToolMessage(in.ListFilesByPrefix),
+		ReadFile:             cloneToolMessage(in.ReadFile),
+		SearchContents:       cloneToolMessage(in.SearchContents),
+		AppendToFile:         cloneToolMessage(in.AppendToFile),
+		WriteFile:            cloneToolMessage(in.WriteFile),
+	}
+}
+
+func cloneContextManagementToolMessages(in *ContextManagementToolMessages) *ContextManagementToolMessages {
+	if in == nil {
+		return nil
+	}
+	return &ContextManagementToolMessages{
+		NewContext:          cloneToolMessage(in.NewContext),
+		GetContextRemaining: cloneToolMessage(in.GetContextRemaining),
+	}
 }
 
 func cloneCodeModeToolMessages(in *CodeModeToolMessages) *CodeModeToolMessages {

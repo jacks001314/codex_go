@@ -16271,6 +16271,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			// `mcp_resources` entries.
 			options.MCPResourceMessages = turnModelInfo.ModelMessages.MCPResources()
 			options.CodeModeMessages = turnModelInfo.ModelMessages.CodeMode()
+			// Rust #56313: the context-window control tools take the catalog
+			// context_management entries.
+			options.ContextManagementMessages = turnModelInfo.ModelMessages.ContextManagementTools()
 		}
 	}
 	if requestUserInputAsyncAvailable(freeformAsyncRootAgent, requestUserInputEnabled, catalogTools) {
@@ -16679,7 +16682,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if cfg != nil {
 		contextManaged := r.experimentalContextManagementEligible(cfg, params)
 		if tokenBudget, tokenErr := cfg.TokenBudgetConfig(); contextManaged || (tokenErr == nil && tokenBudget != nil && tokenBudget.UseHistoryNotesExtension) {
-			historyNotesTools = r.historyNotesToolsForTurn(cfg, params, threadID)
+			historyNotesTools = r.historyNotesToolsForTurn(cfg, params, threadID, turnModelInfo)
 		}
 	}
 	extraTools := append(goalToolExecutors, historyNotesTools...)
@@ -16787,12 +16790,16 @@ func runtimeThreadSourceIsInternal(record *session.Record) bool {
 // extension gate is enabled, the provider is OpenAI, and the auth uses the
 // Codex backend. A backend/auth resolution failure disables the surface rather
 // than failing the turn.
-func (r *RuntimeRouter) historyNotesToolsForTurn(cfg *config.Config, params *turn.TurnStartParams, threadID string) []tool.Executor {
+func (r *RuntimeRouter) historyNotesToolsForTurn(cfg *config.Config, params *turn.TurnStartParams, threadID string, modelInfo *model.ModelInfo) []tool.Executor {
 	backend, sessionID, agentName, ok := r.historyNotesBackendForTurn(cfg, params, threadID)
 	if !ok {
 		return nil
 	}
-	return historynotes.Tools(backend, sessionID, agentName)
+	var messages *model.ModelMessages
+	if modelInfo != nil {
+		messages = modelInfo.ModelMessages
+	}
+	return historynotes.ToolsWithCatalog(backend, sessionID, agentName, messages.HistoryTools(), messages.NotesTools())
 }
 
 // experimentalContextManagementEligible reports whether the experimental
