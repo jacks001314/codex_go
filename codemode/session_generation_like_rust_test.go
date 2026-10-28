@@ -2,15 +2,18 @@ package codemode
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	codemodev1 "codex_go/codemode/grpc"
 	"codex_go/tool"
 
 	"github.com/coder/websocket"
+	"google.golang.org/grpc"
 )
 
 // Mirrors Rust #57615: the code-mode host allocates cell generations across
@@ -81,4 +84,46 @@ func TestWebSocketProviderSharesCellGenerationsAcrossSessionsLikeRust(t *testing
 	}
 	_ = second.Close()
 	_ = provider.Close()
+}
+
+// Mirrors Rust #57615's gRPC host coverage: generations are allocated by the
+// gRPC provider, so the replacement session's first cell is not reported with
+// the previous session's ID.
+func TestGrpcCodeModeProviderSharesCellGenerationsAcrossSessionsLikeRust(t *testing.T) {
+	server := grpc.NewServer()
+	codemodev1.RegisterCodeModeHostServer(server, &grpcSessionHostServer{})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen error = %v", err)
+	}
+	defer listener.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	provider := NewGrpcCodeModeSessionProvider("http://"+listener.Addr().String(), &http.Client{Transport: http.DefaultTransport})
+	defer provider.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	first := provider.NewSession(&recordingGrpcDelegate{})
+	response, err := first.Execute(ctx, tool.CodeModeRemoteExecuteRequest{ToolCallID: "call-1", Source: "test"}, nil)
+	if err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if response.CellID != "cell-1" {
+		t.Fatalf("first cell id = %q, want cell-1", response.CellID)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+
+	second := provider.NewSession(&recordingGrpcDelegate{})
+	response, err = second.Execute(ctx, tool.CodeModeRemoteExecuteRequest{ToolCallID: "call-2", Source: "test"}, nil)
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if response.CellID != "g2:cell-1" {
+		t.Fatalf("second cell id = %q, want g2:cell-1", response.CellID)
+	}
+	_ = second.Close()
 }
