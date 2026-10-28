@@ -140,21 +140,15 @@ func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []st
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("failed to create marketplace install directory %s: %w", parent, err)
 	}
-	stagingParent := filepath.Join(parent, ".staging")
-	if err := os.MkdirAll(stagingParent, 0o755); err != nil {
-		return fmt.Errorf("failed to create marketplace staging directory %s: %w", stagingParent, err)
-	}
-	cleanupMarketplaceStaging(stagingParent, time.Now())
-	stagedRoot, err := os.MkdirTemp(stagingParent, "marketplace-add-")
+	// Remove abandoned staging directories from earlier operations, then keep
+	// the owner lock for validation, installation and rollback (Rust #55689).
+	cleanupMarketplaceStaging(parent, time.Now())
+	staged, err := newMarketplaceStagingDir(parent)
 	if err != nil {
-		return fmt.Errorf("failed to create temporary marketplace directory in %s: %w", stagingParent, err)
+		return fmt.Errorf("failed to create temporary marketplace directory in %s: %w", parent, err)
 	}
-	keepStaged := false
-	defer func() {
-		if !keepStaged {
-			_ = os.RemoveAll(stagedRoot)
-		}
-	}()
+	defer staged.Close()
+	stagedRoot := staged.Path()
 
 	if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, stagedRoot, automatic); err != nil {
 		return err
@@ -170,13 +164,11 @@ func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []st
 		if err := replaceMarketplaceDestination(stagedRoot, destination); err != nil {
 			return err
 		}
-		keepStaged = true
 		return nil
 	}
 	if err := os.Rename(stagedRoot, destination); err != nil {
 		return fmt.Errorf("failed to install marketplace at %s: %w", destination, err)
 	}
-	keepStaged = true
 	return nil
 }
 
