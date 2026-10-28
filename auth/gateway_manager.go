@@ -108,6 +108,72 @@ func (m *GatewayAuthManager) RefreshAccessToken(ctx context.Context, rejectedAcc
 	return m.resolve(ctx, gatewayRefreshPolicy{afterRejection: true, rejectedAccessToken: rejectedAccessToken})
 }
 
+// GatewayCredentials is one resolved access token together with the identity
+// of the exact OAuth grant that supplied it (Rust OAuthRequestCredentials).
+type GatewayCredentials struct {
+	AccessToken     string
+	AuthorizationID string
+}
+
+// CredentialID returns the stable storage identity of this OAuth grant scope:
+// one entry per codex home, issuer, client, resource, and scope set
+// (Rust OAuthSessionManager::credential_id).
+func (m *GatewayAuthManager) CredentialID() string {
+	if m == nil {
+		return ""
+	}
+	return gatewayCredentialID(m.codexHome, m.config)
+}
+
+// AuthorizationID identifies the persisted sign-in without refreshing an
+// expired access token. Refresh preserves this ID; explicit login creates a
+// new one (Rust OAuthSessionManager::authorization_id).
+func (m *GatewayAuthManager) AuthorizationID(ctx context.Context) (string, error) {
+	if m == nil {
+		return "", errors.New("provider OAuth manager is unavailable")
+	}
+	if err := validateGatewayAuthConfig(m.config); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cache.token == nil && m.cache.pending == nil {
+		token, err := m.loadToken()
+		if err != nil {
+			return "", err
+		}
+		m.cache.token = token
+	}
+	token := m.cache.pending
+	if token == nil {
+		token = m.cache.token
+	}
+	if token == nil || strings.TrimSpace(token.AuthorizationID) == "" {
+		return "", ErrGatewayLoginRequired
+	}
+	return token.AuthorizationID, nil
+}
+
+// ResolveCredentialsWithoutLogin resolves a cached or refreshable access token
+// but never opens a browser, returning the grant identity captured with it.
+func (m *GatewayAuthManager) ResolveCredentialsWithoutLogin(ctx context.Context) (GatewayCredentials, error) {
+	accessToken, err := m.ResolveAccessTokenWithoutLogin(ctx)
+	if err != nil {
+		return GatewayCredentials{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, token := range []*gatewayStoredToken{m.cache.pending, m.cache.token} {
+		if token != nil && token.AccessToken == accessToken {
+			return GatewayCredentials{AccessToken: accessToken, AuthorizationID: token.AuthorizationID}, nil
+		}
+	}
+	return GatewayCredentials{AccessToken: accessToken}, nil
+}
+
 func (m *GatewayAuthManager) resolve(ctx context.Context, policy gatewayRefreshPolicy) (string, error) {
 	if m == nil {
 		return "", errors.New("provider OAuth manager is unavailable")
@@ -208,7 +274,7 @@ func (m *GatewayAuthManager) refresh(ctx context.Context, policy gatewayRefreshP
 			resource:     m.config.Resource,
 		}, &response)
 		if oauthErr == nil {
-			stored, err := response.intoStored(refreshToken)
+			stored, err := response.intoStored(m.cache.token)
 			if err != nil {
 				return "", false, err
 			}
@@ -264,7 +330,9 @@ func gatewayTokensEqual(left *gatewayStoredToken, right *gatewayStoredToken) boo
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
-	if left.AccessToken != right.AccessToken || left.RefreshToken != right.RefreshToken {
+	if left.AccessToken != right.AccessToken ||
+		left.AuthorizationID != right.AuthorizationID ||
+		left.RefreshToken != right.RefreshToken {
 		return false
 	}
 	switch {
@@ -390,7 +458,7 @@ func (m *GatewayAuthManager) authorizeWithURL(ctx context.Context, onURL func(st
 		_ = errors.As(oauthErr, &typed)
 		return "", gatewayEndpointError(typed, m.config, "authorization_code", redirectURI)
 	}
-	pending, err := response.intoStored("")
+	pending, err := response.intoStored(nil)
 	if err != nil {
 		return "", err
 	}

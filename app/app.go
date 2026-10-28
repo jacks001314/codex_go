@@ -638,6 +638,9 @@ func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts 
 	if err != nil {
 		return nil, err
 	}
+	if bootstrap.RequiresRemoteConfig() {
+		return cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, nil)
+	}
 	snapshot, err := auth.NewStoreWithOptions(codexHome, authStoreOptionsFromLoadedConfig(bootstrap)).Load()
 	if err != nil {
 		return nil, err
@@ -650,7 +653,15 @@ func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts 
 // leaves the loader unset for non-enterprise identities and limits bootstrap
 // requests with the configuration's application network policy.
 func cloudConfigBundleLoaderForRun(ctx context.Context, codexHome string, bootstrap *config.Config, snapshot *auth.AuthDotJSON) (*config.CloudConfigLoader, error) {
-	if bootstrap == nil || !sandboxCloudConfigEligibleAuth(snapshot) {
+	if bootstrap == nil {
+		return nil, nil
+	}
+	// Rust bundle_loader.rs selects a configured customer-hosted config server
+	// before consulting ChatGPT plan eligibility.
+	if bootstrap.RequiresRemoteConfig() {
+		return configServerCloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, bootstrap.Requirements.ConfigServer)
+	}
+	if !sandboxCloudConfigEligibleAuth(snapshot) {
 		return nil, nil
 	}
 	authHeaders, err := model.AuthHeadersFromAuth(*snapshot)
@@ -900,15 +911,22 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	var cloudConfigBundle *config.CloudConfigLoader
 	var resolved *auth.ResolvedAuth
 	if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth {
-		storeOptions := authStoreOptionsFromLoadedConfig(bootstrapConfig)
-		resolved, err = auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
-		if err != nil {
-			return err
-		}
-		if resolved != nil {
-			cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, &resolved.Auth)
+		if bootstrapConfig.RequiresRemoteConfig() {
+			cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, nil)
 			if err != nil {
 				return err
+			}
+		} else {
+			storeOptions := authStoreOptionsFromLoadedConfig(bootstrapConfig)
+			resolved, err = auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
+			if err != nil {
+				return err
+			}
+			if resolved != nil {
+				cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, &resolved.Auth)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1480,10 +1498,28 @@ func loadAppServerConfig(codexHome string, opts cli.AppServerOptions, root *cli.
 		loadOpts.CWD = root.Shared.CWD
 		loadOpts.StrictConfig = loadOpts.StrictConfig || root.StrictConfig
 	}
+	bootstrap, err := config.LoadEffectiveWithOptions(codexHome, loadOpts)
+	if err != nil || !bootstrap.RequiresRemoteConfig() {
+		return bootstrap, err
+	}
+	// Rust #56314: a locally required configuration server supplies the managed
+	// bundle applied at startup, independent of ChatGPT sign-in.
+	loader, err := configServerCloudConfigBundleLoaderForRun(context.Background(), codexHome, bootstrap, bootstrap.Requirements.ConfigServer)
+	if err != nil {
+		return nil, err
+	}
+	loadOpts.IncludeManagedConfig = true
+	loadOpts.ManagedConfigPath = filepath.Join(codexHome, "managed_config.toml")
+	loadOpts.CloudConfigBundle = loader
 	return config.LoadEffectiveWithOptions(codexHome, loadOpts)
 }
 
 func appServerRequirements(codexHome string, loadedConfig *config.Config) (*config.ConfigRequirements, error) {
+	if loadedConfig != nil && loadedConfig.RequiresRemoteConfig() {
+		// The remotely delivered bundle owns managed policy for a config server;
+		// re-reading the local file would drop its requirements.
+		return loadedConfig.Requirements, nil
+	}
 	var requirements *config.ConfigRequirements
 	if allow, ok, err := appServerAllowRemoteControlFromEffectiveConfig(loadedConfig); err != nil {
 		return nil, err

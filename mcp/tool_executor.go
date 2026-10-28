@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"codex_go/jsonschema"
 	"codex_go/tool"
 	"codex_go/utils"
 )
@@ -321,14 +320,10 @@ func (e *ToolExecutor) MCPServerName() string {
 
 func (e *ToolExecutor) Spec() tool.Spec {
 	name := e.resolvedToolName()
-	parameters := jsonschema.NormalizeWithBudget(cloneAnyMap(e.toolInfo.InputSchema), e.toolInputSchemaMaxBytes)
-	// Mirrors Rust agent_plugin_mcp_tool_to_responses_api_tool: Agent Plugins
-	// v1 tools that still exceed the serialized-size cap after normalization
-	// degrade to an accept-anything object schema instead of reaching the
-	// model oversized.
-	if e.agentPlugin && len(mustMarshalJSON(parameters)) > maxSerializedMCPToolBytes {
-		parameters = map[string]any{"type": "object", "additionalProperties": true}
-	}
+	// The normalized parameters come from this manager shared definition index
+	// (Rust #55724), so schema normalization is not repeated for every session
+	// that sees the same catalog. Cloning keeps the shared definition immutable.
+	parameters := cloneAnyMap(e.resolvedToolDefinition().parameters)
 	return tool.Spec{
 		Name:        name,
 		Description: firstNonEmptyMCP(e.toolInfo.Description, e.toolInfo.Title),
@@ -342,6 +337,15 @@ func (e *ToolExecutor) Spec() tool.Spec {
 		Parallel:            e.parallel,
 		ReadOnlyHint:        cloneBoolPtrMCP(e.readOnlyHint),
 	}
+}
+
+// resolvedToolDefinition returns the immutable normalized definition for this
+// executor. Without a manager the executor still normalizes locally.
+func (e *ToolExecutor) resolvedToolDefinition() *mcpToolDefinition {
+	if e.service != nil && e.service.sharedDefinitions != nil {
+		return e.service.sharedDefinitions.getOrCreate(e.toolInfo, e.serverName, e.agentPlugin, e.toolInputSchemaMaxBytes)
+	}
+	return newMCPToolDefinition(e.toolInfo, e.agentPlugin, e.toolInputSchemaMaxBytes)
 }
 
 func maxIntMCP(left, right int) int {

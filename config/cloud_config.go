@@ -263,9 +263,10 @@ func (b *CloudConfigBundleBinding) Status() CloudConfigBundleBindingStatus {
 // CloudConfigBundleSnapshot pairs a loaded bundle with the policy revision
 // binding it was resolved from.
 type CloudConfigBundleSnapshot struct {
-	Bundle  *CloudConfigBundle
-	Err     error
-	Binding *CloudConfigBundleBinding
+	Bundle       *CloudConfigBundle
+	Err          error
+	Binding      *CloudConfigBundleBinding
+	ConfigServer *ConfigServer
 }
 
 // ObserveRemoteBundle suspends enterprise MCP admission before a changed
@@ -385,6 +386,9 @@ type CloudConfigLoader struct {
 	load   func() (*CloudConfigBundle, error)
 	bundle *CloudConfigBundle
 	err    error
+	// configServer is the customer-hosted configuration server this loader
+	// fetches from, if any (Rust CloudConfigBundleLoader::config_server).
+	configServer *ConfigServer
 	// snapshot, when set, returns the published enterprise policy snapshot
 	// instead of fetching through load (Rust #49269
 	// CloudConfigBundleLoader::snapshot_getter).
@@ -432,11 +436,43 @@ func (l *CloudConfigLoader) GetSnapshot() CloudConfigBundleSnapshot {
 	if l == nil {
 		return CloudConfigBundleSnapshot{}
 	}
+	l.mu.Lock()
+	server := cloneConfigServer(l.configServer)
+	l.mu.Unlock()
+	var snapshot CloudConfigBundleSnapshot
 	if l.snapshot != nil {
-		return l.snapshot()
+		snapshot = l.snapshot()
+	} else {
+		bundle, err := l.Get()
+		snapshot = CloudConfigBundleSnapshot{Bundle: bundle, Err: err}
 	}
-	bundle, err := l.Get()
-	return CloudConfigBundleSnapshot{Bundle: bundle, Err: err}
+	if snapshot.Err == nil && server != nil {
+		snapshot.ConfigServer = server
+	}
+	return snapshot
+}
+
+// WithConfigServer records the customer-hosted configuration server this
+// loader fetched from (Rust CloudConfigBundleLoader::with_config_server).
+func (l *CloudConfigLoader) WithConfigServer(server *ConfigServer) *CloudConfigLoader {
+	if l == nil {
+		return l
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.configServer = cloneConfigServer(server)
+	return l
+}
+
+// ConfigServer reports the customer-hosted configuration server behind this
+// loader, if any.
+func (l *CloudConfigLoader) ConfigServer() *ConfigServer {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cloneConfigServer(l.configServer)
 }
 
 // WithEMAPolicySnapshots attaches the enterprise policy owner and the snapshot
@@ -565,6 +601,9 @@ func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequireme
 	if managedRequirements != nil {
 		managedRequirements.CliAuthCredentialsStore = nil
 		managedRequirements.ChatgptBaseURL = nil
+		// Rust ConfigRequirementsToml.config_server is local-only: cloud
+		// requirements may not redirect managed configuration.
+		managedRequirements.ConfigServer = nil
 	}
 
 	// Permission profiles in requirements are executable policy definitions,
@@ -608,6 +647,9 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	}
 	if out == nil {
 		return cloneRequirements(overlay)
+	}
+	if out.ConfigServer == nil && overlay.ConfigServer != nil {
+		out.ConfigServer = cloneConfigServer(overlay.ConfigServer)
 	}
 	if overlay.AllowedApprovalPolicies != nil {
 		out.AllowedApprovalPolicies = cloneSlice(overlay.AllowedApprovalPolicies)

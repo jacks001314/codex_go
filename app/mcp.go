@@ -896,34 +896,42 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 	}
 	publishApplicationNetworkPolicy(bootstrap)
 	s.httpClient = policyHTTPClient(bootstrap, codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0))
-	snapshot, err := auth.NewStoreWithOptions(s.codexHome, authStoreOptionsFromLoadedConfig(bootstrap)).Load()
-	if err != nil {
-		return nil, err
-	}
-	if !mcpCLICloudConfigEligibleAuth(snapshot) {
-		return mcpCLIConfigFromValues(bootstrap.Values), nil
-	}
-	authHeaders, err := model.AuthHeadersFromAuth(*snapshot)
-	if err != nil {
-		return nil, err
-	}
-	loader := config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
-		loadCtx, cancel := context.WithTimeout(contextOrBackground(ctx), 15*time.Second)
-		defer cancel()
-		policy := publishApplicationNetworkPolicy(bootstrap)
-		return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
-			CodexHome:          s.codexHome,
-			BaseURL:            bootstrap.ChatGPTBaseURL(),
-			ChatGPTUserID:      auth.ChatGPTUserIDFromAuth(snapshot),
-			AccountID:          auth.AccountIDFromAuthForRestrictions(snapshot),
-			HTTPClient:         s.httpClient,
-			FallbackHTTPClient: bootstrapFallbackHTTPClient(bootstrap, 0),
-			NetworkPolicy:      &policy,
-			Authorize: func(requestCtx context.Context, request *http.Request) error {
-				return authHeaders.Apply(requestCtx, request, nil)
-			},
+	var loader *config.CloudConfigLoader
+	if bootstrap.RequiresRemoteConfig() {
+		loader, err = configServerCloudConfigBundleLoaderForRun(ctx, s.codexHome, bootstrap, bootstrap.Requirements.ConfigServer)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		snapshot, err := auth.NewStoreWithOptions(s.codexHome, authStoreOptionsFromLoadedConfig(bootstrap)).Load()
+		if err != nil {
+			return nil, err
+		}
+		if !mcpCLICloudConfigEligibleAuth(snapshot) {
+			return mcpCLIConfigFromValues(bootstrap.Values), nil
+		}
+		authHeaders, err := model.AuthHeadersFromAuth(*snapshot)
+		if err != nil {
+			return nil, err
+		}
+		loader = config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
+			loadCtx, cancel := context.WithTimeout(contextOrBackground(ctx), 15*time.Second)
+			defer cancel()
+			policy := publishApplicationNetworkPolicy(bootstrap)
+			return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
+				CodexHome:          s.codexHome,
+				BaseURL:            bootstrap.ChatGPTBaseURL(),
+				ChatGPTUserID:      auth.ChatGPTUserIDFromAuth(snapshot),
+				AccountID:          auth.AccountIDFromAuthForRestrictions(snapshot),
+				HTTPClient:         s.httpClient,
+				FallbackHTTPClient: bootstrapFallbackHTTPClient(bootstrap, 0),
+				NetworkPolicy:      &policy,
+				Authorize: func(requestCtx context.Context, request *http.Request) error {
+					return authHeaders.Apply(requestCtx, request, nil)
+				},
+			})
 		})
-	})
+	}
 	loaded, err := config.LoadEffectiveWithOptions(s.codexHome, &config.EffectiveOptions{
 		RawOverrides:         append([]string(nil), overrides...),
 		IncludeManagedConfig: true,

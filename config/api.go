@@ -568,27 +568,32 @@ type ConfigRequirements struct {
 	// Permissions carries the managed [permissions] profile catalog from
 	// requirements (Rust ConfigRequirementsToml.permissions, #39752). It is
 	// internal and not part of the app-server wire ConfigRequirements schema.
-	Permissions                     map[string]any            `json:"-"`
-	AllowedWebSearchModes           []WebSearchMode           `json:"allowedWebSearchModes,omitempty"`
-	AllowManagedHooksOnly           *bool                     `json:"allowManagedHooksOnly,omitempty"`
-	AllowBrowserAndComputerUse      *bool                     `json:"allowBrowserAndComputerUse,omitempty"`
-	AllowAppshots                   *bool                     `json:"allowAppshots,omitempty"`
-	AllowRemoteControl              *bool                     `json:"allowRemoteControl,omitempty"`
-	ComputerUse                     *ComputerUseRequirements  `json:"computerUse,omitempty"`
-	BrowserUse                      *BrowserUseRequirements   `json:"browserUse,omitempty"`
-	InAppBrowser                    *InAppBrowserRequirements `json:"inAppBrowser,omitempty"`
-	AutoReview                      *AutoReviewRequirements   `json:"autoReview,omitempty"`
-	FeatureRequirements             map[string]bool           `json:"featureRequirements,omitempty"`
-	Hooks                           *ManagedHooksRequirements `json:"hooks,omitempty"`
-	EnforceResidency                *ResidencyRequirement     `json:"enforceResidency,omitempty"`
-	Application                     *ApplicationRequirements  `json:"application,omitempty"`
-	Network                         *NetworkRequirements      `json:"network,omitempty"`
-	Models                          *ModelsRequirements       `json:"models,omitempty"`
-	AllowedLoginMethods             []ForcedLoginMethod       `json:"allowedLoginMethods,omitempty"`
-	AllowedChatGPTWorkspaces        []string                  `json:"allowedChatGPTWorkspaces,omitempty"`
-	CliAuthCredentialsStore         *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore,omitempty"`
-	ChatgptBaseURL                  *string                   `json:"chatgptBaseUrl,omitempty"`
-	AdditionalDeveloperInstructions *string                   `json:"additionalDeveloperInstructions,omitempty"`
+	Permissions                map[string]any            `json:"-"`
+	AllowedWebSearchModes      []WebSearchMode           `json:"allowedWebSearchModes,omitempty"`
+	AllowManagedHooksOnly      *bool                     `json:"allowManagedHooksOnly,omitempty"`
+	AllowBrowserAndComputerUse *bool                     `json:"allowBrowserAndComputerUse,omitempty"`
+	AllowAppshots              *bool                     `json:"allowAppshots,omitempty"`
+	AllowRemoteControl         *bool                     `json:"allowRemoteControl,omitempty"`
+	ComputerUse                *ComputerUseRequirements  `json:"computerUse,omitempty"`
+	BrowserUse                 *BrowserUseRequirements   `json:"browserUse,omitempty"`
+	InAppBrowser               *InAppBrowserRequirements `json:"inAppBrowser,omitempty"`
+	AutoReview                 *AutoReviewRequirements   `json:"autoReview,omitempty"`
+	FeatureRequirements        map[string]bool           `json:"featureRequirements,omitempty"`
+	Hooks                      *ManagedHooksRequirements `json:"hooks,omitempty"`
+	EnforceResidency           *ResidencyRequirement     `json:"enforceResidency,omitempty"`
+	Application                *ApplicationRequirements  `json:"application,omitempty"`
+	Network                    *NetworkRequirements      `json:"network,omitempty"`
+	Models                     *ModelsRequirements       `json:"models,omitempty"`
+	AllowedLoginMethods        []ForcedLoginMethod       `json:"allowedLoginMethods,omitempty"`
+	AllowedChatGPTWorkspaces   []string                  `json:"allowedChatGPTWorkspaces,omitempty"`
+	CliAuthCredentialsStore    *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore,omitempty"`
+	ChatgptBaseURL             *string                   `json:"chatgptBaseUrl,omitempty"`
+	// ConfigServer is the local managed requirement selecting a customer-hosted
+	// configuration server (Rust ConfigRequirementsToml.config_server). Only
+	// local managed requirements may configure it, so it stays off the
+	// app-server wire schema and is dropped from cloud-managed layers.
+	ConfigServer                    *ConfigServer `json:"-"`
+	AdditionalDeveloperInstructions *string       `json:"additionalDeveloperInstructions,omitempty"`
 	// GuardianPolicyConfig is the managed `guardian_policy_config` requirement
 	// (Rust ConfigRequirementsToml.guardian_policy_config): it replaces the
 	// `# Policy Configuration` section of the Guardian reviewer prompt. Like
@@ -4027,6 +4032,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.Apps = apps.CloneAppsRequirements(requirements.Apps)
 	clone.CliAuthCredentialsStore = cloneAuthCredentialsStoreMode(requirements.CliAuthCredentialsStore)
 	clone.ChatgptBaseURL = cloneStringPtr(requirements.ChatgptBaseURL)
+	clone.ConfigServer = cloneConfigServer(requirements.ConfigServer)
 	clone.ModelProvider = cloneStringPtr(requirements.ModelProvider)
 	clone.ModelProviders = cloneAnyMapOrNil(requirements.ModelProviders)
 	clone.SQLiteHome = cloneStringPtr(requirements.SQLiteHome)

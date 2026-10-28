@@ -468,6 +468,15 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		baseURL := strings.TrimSpace(value)
 		out.ChatgptBaseURL = &baseURL
 	}
+	// Rust ConfigRequirementsToml.config_server: a customer-hosted managed
+	// configuration server is a local administration requirement.
+	if nested, ok := mapAnyKey(values, "config_server", "configServer"); ok {
+		server, err := ConfigServerFromMap(nested)
+		if err != nil {
+			return nil, fmt.Errorf("config_server: %w", err)
+		}
+		out.ConfigServer = server
+	}
 	// Rust #44650: managed model provider selection and definitions.
 	if value, ok := stringAnyKey(values, "model_provider", "modelProvider"); ok && strings.TrimSpace(value) != "" {
 		provider := strings.TrimSpace(value)
@@ -1188,6 +1197,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowedChatGPTWorkspaces == nil &&
 			value.CliAuthCredentialsStore == nil &&
 			value.ChatgptBaseURL == nil &&
+			value.ConfigServer == nil &&
 			value.ModelProvider == nil &&
 			value.ModelProviders == nil &&
 			value.SQLiteHome == nil &&

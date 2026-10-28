@@ -133,19 +133,26 @@ func TestGatewayTokenResponseLikeRust(t *testing.T) {
 	lifetime := uint64(3600)
 	stored, err := gatewayTokenResponse{
 		AccessToken: "token-1", TokenType: "Bearer", ExpiresIn: &lifetime, RefreshToken: "refresh-2",
-	}.intoStored("refresh-1")
+	}.intoStored(&gatewayStoredToken{RefreshToken: "refresh-1", AuthorizationID: "grant-1"})
 	if err != nil {
 		t.Fatalf("intoStored() error = %v", err)
 	}
 	if stored.AccessToken != "token-1" || stored.RefreshToken != "refresh-2" || stored.ExpiresAt == nil {
 		t.Fatalf("stored = %#v", stored)
 	}
+	if stored.AuthorizationID != "grant-1" {
+		t.Fatalf("refresh must preserve the authorization id, got %q", stored.AuthorizationID)
+	}
 	if !gatewayTokenIsUsable(stored) {
 		t.Fatal("a fresh token must be usable")
 	}
-	kept, err := gatewayTokenResponse{AccessToken: "token-2"}.intoStored("refresh-1")
+	kept, err := gatewayTokenResponse{AccessToken: "token-2"}.intoStored(&gatewayStoredToken{RefreshToken: "refresh-1", AuthorizationID: "grant-1"})
 	if err != nil || kept.RefreshToken != "refresh-1" || kept.ExpiresAt != nil {
 		t.Fatalf("missing rotation = %#v, %v", kept, err)
+	}
+	fresh, err := gatewayTokenResponse{AccessToken: "token-3"}.intoStored(nil)
+	if err != nil || fresh.AuthorizationID == "" {
+		t.Fatalf("a fresh grant must create an authorization id: %#v, %v", fresh, err)
 	}
 	expired := time.Now().Unix() - 1
 	if gatewayTokenIsUsable(gatewayStoredToken{AccessToken: "old", ExpiresAt: &expired}) {
@@ -159,7 +166,7 @@ func TestGatewayTokenResponseLikeRust(t *testing.T) {
 		"wrong type":           {AccessToken: "t", TokenType: "mac"},
 		"zero lifetime":        {AccessToken: "t", ExpiresIn: ptrUint64(0)},
 	} {
-		if _, err := response.intoStored(""); err == nil {
+		if _, err := response.intoStored(nil); err == nil {
 			t.Fatalf("%s must be rejected", name)
 		}
 	}

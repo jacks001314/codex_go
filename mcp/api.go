@@ -780,6 +780,9 @@ type MCPService struct {
 	// resourceGeneration advances when resource catalogs and contents must be
 	// refreshed even if the connection set is reused (Rust #46033).
 	resourceGeneration uint64
+	// sharedDefinitions shares immutable normalized tool definitions within this
+	// manager without keeping completed sessions alive (Rust #55724).
+	sharedDefinitions *sharedMCPDefinitions
 	// authChangeSource, when set, lets opted-in stdio servers receive auth
 	// change notifications (Rust #43428).
 	authChangeSource    MCPAuthChangeSource
@@ -853,7 +856,7 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, disabledConfigs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry()}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, disabledConfigs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry(), sharedDefinitions: newSharedMCPDefinitions()}
 	if runtime != nil {
 		// Rust reads `config.apps_mcp_product_sku.as_deref().unwrap_or(..)`; Go's
 		// runtime config cannot distinguish an absent SKU from an empty one, so

@@ -39,7 +39,7 @@ type CloudConfigHTTPDoer interface {
 // even without a policy owner, so a bootstrap client that was handed an
 // unrestricted policy still cannot reach another URL.
 func scopeCloudConfigFetchOptions(opts CloudConfigFetchOptions) CloudConfigFetchOptions {
-	endpoint, err := cloudConfigBundleEndpoint(opts.BaseURL)
+	endpoint, err := cloudConfigBundleEndpointForOptions(opts)
 	if err != nil {
 		return opts
 	}
@@ -53,20 +53,40 @@ func scopeCloudConfigFetchOptions(opts CloudConfigFetchOptions) CloudConfigFetch
 	}
 	policy = policy.RestrictToEndpoints([]*url.URL{parsed})
 	if opts.HTTPClient != nil {
-		opts.HTTPClient = &network.PolicyHTTPDoer{Policy: policy, Next: opts.HTTPClient}
+		// A real client keeps its CheckRedirect rules (config-server fetches
+		// must not follow redirects), so bind the policy at the transport
+		// instead of replacing the redirect hook.
+		if client, ok := opts.HTTPClient.(*http.Client); ok {
+			opts.HTTPClient = network.PolicyHTTPClient(policy, client)
+		} else {
+			opts.HTTPClient = &network.PolicyHTTPDoer{Policy: policy, Next: opts.HTTPClient}
+		}
 	}
 	if opts.FallbackHTTPClient != nil {
-		opts.FallbackHTTPClient = &network.PolicyHTTPDoer{Policy: policy, Next: opts.FallbackHTTPClient}
+		if client, ok := opts.FallbackHTTPClient.(*http.Client); ok {
+			opts.FallbackHTTPClient = network.PolicyHTTPClient(policy, client)
+		} else {
+			opts.FallbackHTTPClient = &network.PolicyHTTPDoer{Policy: policy, Next: opts.FallbackHTTPClient}
+		}
 	}
 	return opts
 }
 
 type CloudConfigFetchOptions struct {
-	CodexHome     string
-	BaseURL       string
-	ChatGPTUserID string
-	AccountID     string
-	HTTPClient    CloudConfigHTTPDoer
+	CodexHome string
+	BaseURL   string
+	// EndpointURL, when set, is the exact managed-configuration bundle URL
+	// instead of the ChatGPT WHAM route derived from BaseURL. Custom config
+	// servers use it to fetch <base_url>/codex/config/bundle.
+	EndpointURL string
+	// CacheNamespace, when set, scopes the signed cache file to
+	// managed-config-<namespace>.json (Rust
+	// CloudConfigBundleCache::for_source). The namespace must already combine
+	// the endpoint and authorization identity.
+	CacheNamespace string
+	ChatGPTUserID  string
+	AccountID      string
+	HTTPClient     CloudConfigHTTPDoer
 	// FallbackHTTPClient, when set, retries the GET through the system proxy
 	// after the primary client fails to connect or times out (Rust #46562).
 	FallbackHTTPClient CloudConfigHTTPDoer
@@ -136,7 +156,7 @@ func loadCloudConfigBundleAttempt(ctx context.Context, opts CloudConfigFetchOpti
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	endpoint, err := cloudConfigBundleEndpoint(opts.BaseURL)
+	endpoint, err := cloudConfigBundleEndpointForOptions(opts)
 	if err != nil {
 		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInternal, nil, err.Error())
 	}
@@ -232,16 +252,45 @@ func cloudConfigBundleEndpoint(baseURL string) (string, error) {
 	return parsed.String(), nil
 }
 
+// cloudConfigBundleEndpointForOptions resolves the bundle endpoint, preferring
+// an explicit customer-hosted endpoint over the ChatGPT WHAM route.
+func cloudConfigBundleEndpointForOptions(opts CloudConfigFetchOptions) (string, error) {
+	if endpoint := strings.TrimSpace(opts.EndpointURL); endpoint != "" {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return "", errors.New("invalid cloud config bundle endpoint")
+		}
+		return parsed.String(), nil
+	}
+	return cloudConfigBundleEndpoint(opts.BaseURL)
+}
+
 func validateCloudConfigBundle(bundle CloudConfigBundle, baseDir string) error {
-	if _, err := CloudConfigLayersFromBundle(bundle, baseDir); err != nil {
-		return err
+	// Rust #56314 validation.rs: report generic failures so invalid TOML,
+	// requirements, and provider settings never expose delivered contents.
+	if _, err := CloudConfigLayersFromFragments(bundle.ConfigTOML.EnterpriseManaged, baseDir); err != nil {
+		return errors.New("invalid cloud config bundle: invalid TOML")
 	}
 	for _, fragment := range bundle.RequirementsTOML.EnterpriseManaged {
+		if _, err := ParseCloudConfigFlatTOML(fragment.Contents); err != nil {
+			return errors.New("invalid cloud config bundle: invalid requirements")
+		}
 		if _, err := ParseRequirementsTOML([]byte(fragment.Contents)); err != nil {
-			return fmt.Errorf("%w: failed to parse cloud requirements fragment %s (%s): %s", ErrInvalidCloudConfig, fragment.Name, fragment.ID, err)
+			return errors.New("invalid cloud config bundle: invalid requirements")
 		}
 	}
 	return nil
+}
+
+// cloudConfigBundleCachePath returns the signed cache location. A source
+// namespace uses Rust's managed-config-<namespace>.json name and otherwise the
+// existing ChatGPT cache location is preserved.
+func cloudConfigBundleCachePath(opts CloudConfigFetchOptions) string {
+	name := cloudConfigBundleCacheFilename
+	if namespace := strings.TrimSpace(opts.CacheNamespace); namespace != "" {
+		name = "managed-config-" + namespace + ".json"
+	}
+	return filepath.Join(opts.CodexHome, name)
 }
 
 func loadCloudConfigBundleCache(opts CloudConfigFetchOptions) *CloudConfigBundle {
@@ -250,7 +299,7 @@ func loadCloudConfigBundleCache(opts CloudConfigFetchOptions) *CloudConfigBundle
 	if userID == "" || accountID == "" {
 		return nil
 	}
-	data, err := os.ReadFile(filepath.Join(opts.CodexHome, cloudConfigBundleCacheFilename))
+	data, err := os.ReadFile(cloudConfigBundleCachePath(opts))
 	if err != nil {
 		return nil
 	}
@@ -315,8 +364,9 @@ func prepareCloudConfigBundleCache(opts CloudConfigFetchOptions, bundle CloudCon
 	if err := os.MkdirAll(opts.CodexHome, 0o700); err != nil {
 		return nil, err
 	}
-	destination := filepath.Join(opts.CodexHome, cloudConfigBundleCacheFilename)
-	temporary, err := os.CreateTemp(opts.CodexHome, cloudConfigBundleCacheFilename+".tmp-")
+	cachePath := cloudConfigBundleCachePath(opts)
+	destination := cachePath
+	temporary, err := os.CreateTemp(opts.CodexHome, filepath.Base(cachePath)+".tmp-")
 	if err != nil {
 		return nil, err
 	}
