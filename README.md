@@ -227,3 +227,12 @@ docs                              设计和技术选型文档
 - [plan.md](./plan.md)：迁移进度和待办
 - [desgn.md](./desgn.md)：迁移设计草案
 - [docs/tui_tech_selection.md](./docs/tui_tech_selection.md)：TUI 技术选型
+
+## 许可证
+
+本项目基于上游 [OpenAI Codex](https://github.com/openai/codex) 的 Apache-2.0 许可实现，同样以 Apache License 2.0 发布。
+
+- [LICENSE](./LICENSE)：Apache License, Version 2.0 全文
+- [NOTICE](./NOTICE)：上游来源、修改声明，以及发布包内附带的 ripgrep、bubblewrap、Opus 等第三方组件许可信息
+
+分发二进制或 npm 包时必须一并携带 `LICENSE` 与 `NOTICE`（`scripts/release.ps1`、`scripts/release.sh`、`npm/scripts/build-packages.mjs` 已自动打包）。

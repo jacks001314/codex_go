@@ -1,0 +1,50 @@
+Codex Go
+Copyright 2026 The codex_go Authors
+
+This product is a Go implementation of OpenAI Codex. It is derived from the
+OpenAI Codex project (https://github.com/openai/codex), Copyright 2025 OpenAI,
+which is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Modifications: codex_go reimplements the upstream Rust CLI, TUI, app-server,
+MCP, plugin, sandbox and session behavior in Go, and adds its own packages,
+schemas, tests and release tooling. Individual files do not carry a per-file
+change notice; the repository history and the alignment records under update/
+and parity/ document what differs from the upstream project.
+
+The NOTICE file of the upstream project is reproduced below, as required by
+Section 4(d) of the Apache License, Version 2.0.
+
+------------------------------------------------------------------------------
+
+OpenAI Codex
+Copyright 2025 OpenAI
+
+This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
+Copyright (c) 2016-2022 Florian Dehau
+Copyright (c) 2023-2025 The Ratatui Developers
+
+------------------------------------------------------------------------------
+
+Third-party components bundled in release artifacts
+
+Every release archive and npm package also contains the components below. They
+are not covered by the Apache License, Version 2.0; each remains under its own
+license. The pinned versions, digests and download locations are recorded in
+the manifests under third_party/.
+
+* ripgrep 15.2.0 (https://github.com/BurntSushi/ripgrep), MIT OR Unlicense.
+  Shipped as the codex-path search backend; see third_party/ripgrep/sources.json.
+
+* bubblewrap 0.13.0 (https://github.com/containers/bubblewrap),
+  LGPL-2.0-or-later. Shipped as the Linux sandbox launcher; see
+  third_party/bwrap/sources.json. The corresponding source is the unmodified
+  upstream release tarball
+  (https://github.com/containers/bubblewrap/releases/download/v0.13.0/bubblewrap-0.13.0.tar.xz),
+  which is built unmodified by third_party/bwrap/prepare_bwrap.py and can be
+  obtained from that URL or requested from the distributor for at least three
+  years after the last distribution of the binary.
+
+* Opus 1.5.2 (https://opus-codec.org), BSD-3-Clause. Linked into the packaged
+  voice runtime; see third_party/voice/sources.json.
+
+The Apache License, Version 2.0 text that governs this project is in LICENSE.
