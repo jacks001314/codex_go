@@ -70,6 +70,12 @@ type Request struct {
 	// "exec"; the embedded TUI overrides it with "user" and the goal runtime
 	// with "goal". Empty keeps the exec default.
 	TurnTrigger string
+	// PromptCacheKey selects the Responses prompt_cache_key body field for this
+	// run and its child agents (Rust StartThreadOptions.prompt_cache_key,
+	// #55587). The zero value keeps the session-derived key,
+	// CustomPromptCacheKey sends a caller key, and OmitPromptCacheKey leaves the
+	// field out. Session identity headers are unaffected.
+	PromptCacheKey model.PromptCacheKey
 	// ResponsesAPIClientMetadata adds per-turn Responses client metadata on top
 	// of the configured metadata (for example misalignment_override).
 	ResponsesAPIClientMetadata map[string]string
@@ -568,7 +574,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		IncludeTimingMetrics:              includeTimingMetrics,
 		BetaFeaturesHeader:                betaFeaturesHeader,
 		ItemIDsEnabled:                    itemIDsEnabled,
-		PromptCacheKey:                    threadID,
+		PromptCacheKey:                    execPromptCacheKey(req, threadID),
 		ServiceTier:                       serviceTier,
 		Instructions:                      instructions,
 		ClientMetadata:                    clientMetadata,
@@ -2524,6 +2530,19 @@ func baseInstructionsForRequest(req *Request, cfg *config.Config) (string, error
 		return review.ReviewPrompt, nil
 	}
 	return baseInstructionsForConfig(cfg)
+}
+
+// execPromptCacheKey applies the run's prompt-cache-key policy (#55587). An
+// omitted key is the empty string because the Responses payload elides it.
+func execPromptCacheKey(req *Request, sessionDerived string) string {
+	if req == nil {
+		return sessionDerived
+	}
+	key, ok := req.PromptCacheKey.Resolve(sessionDerived)
+	if !ok {
+		return ""
+	}
+	return key
 }
 
 func newThreadID() string {
