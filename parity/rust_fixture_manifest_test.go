@@ -157,7 +157,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// mailbox, guardian, incremental-tool, MCP-EMA/sharing, skill-catalog
 			// dedup, critical-path, GCP/Bedrock, hooks-CWD and remote-environment
 			// fixtures landed across the intervening sync windows.
-			Files: 389,
+			// Re-anchored to upstream e8e6a922c0: `scenarios_reserved_spawn.rs`
+			// (#57586) plus the reserved-child fixtures landed in this window.
+			Files: 403,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

@@ -14,6 +14,9 @@ const (
 	DefaultMemoriesMinRateLimitRemainingPercent   = int64(25)
 	DefaultMemoriesMaxRawMemoriesForConsolidation = 256
 	DefaultMemoriesMaxUnusedDays                  = int64(30)
+	// DefaultMemoriesConsolidationServiceTier keeps background consolidation on
+	// the standard tier (Rust #57568: SERVICE_TIER_DEFAULT_REQUEST_VALUE).
+	DefaultMemoriesConsolidationServiceTier = "default"
 )
 
 // MemoryVersion selects the memory namespace (Rust MemoryVersion, #43797). An
@@ -72,6 +75,9 @@ type MemoriesConfig struct {
 	MinRateLimitRemainingPercent   int64
 	ExtractModel                   *string
 	ConsolidationModel             *string
+	// ConsolidationServiceTier is the service tier for background memory
+	// consolidation, independent of the session's tier (Rust #57568).
+	ConsolidationServiceTier string
 }
 
 func DefaultMemoriesConfig() MemoriesConfig {
@@ -84,6 +90,7 @@ func DefaultMemoriesConfig() MemoriesConfig {
 		MaxRolloutsPerStartup:          DefaultMemoriesMaxRolloutsPerStartup,
 		MinRolloutIdleHours:            DefaultMemoriesMinRolloutIdleHours,
 		MinRateLimitRemainingPercent:   DefaultMemoriesMinRateLimitRemainingPercent,
+		ConsolidationServiceTier:       DefaultMemoriesConsolidationServiceTier,
 	}
 }
 
@@ -122,7 +129,28 @@ func (c *Config) memoriesFromValues() MemoriesConfig {
 	result.MinRateLimitRemainingPercent = clampMemoryInt(memoryInt(values, "min_rate_limit_remaining_percent", result.MinRateLimitRemainingPercent), 0, 100)
 	result.ExtractModel = memoryString(values, "extract_model")
 	result.ConsolidationModel = memoryString(values, "consolidation_model")
+	if tier := memoryString(values, "consolidation_service_tier"); tier != nil {
+		result.ConsolidationServiceTier = NormalizeConsolidationServiceTier(*tier)
+	}
 	return result
+}
+
+// NormalizeConsolidationServiceTier applies the request aliases Rust accepts for
+// service tiers (Rust #57568: `ServiceTier::from_request_value`). Unknown values
+// are kept verbatim, like Rust's `map_or(tier, ...)`.
+func NormalizeConsolidationServiceTier(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch trimmed {
+	case "fast", "priority":
+		return "priority"
+	case "flex":
+		return "flex"
+	default:
+		if trimmed == "" {
+			return DefaultMemoriesConsolidationServiceTier
+		}
+		return trimmed
+	}
 }
 
 func memoryBool(values map[string]any, key string, fallback bool) bool {

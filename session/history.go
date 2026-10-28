@@ -274,11 +274,17 @@ func messageInputItem(item *Item, options *HistoryBuildOptions) map[string]any {
 	if len(content) == 0 {
 		return nil
 	}
-	return map[string]any{
+	input := map[string]any{
 		"type":    "message",
 		"role":    role,
 		"content": content,
 	}
+	// Rust #57538: host-assigned user input ids (`msg_input_<uuid>`) and the
+	// generated `msg_<uuid>` ids survive history replay.
+	if id := strings.TrimSpace(item.ResponseItemID); id != "" {
+		input["id"] = id
+	}
+	return input
 }
 
 func toolCallInputItem(item *Item) map[string]any {

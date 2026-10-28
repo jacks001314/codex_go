@@ -43,6 +43,7 @@ import (
 	"codex_go/model"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
+	"codex_go/protocol"
 	"codex_go/review"
 	"codex_go/rollout"
 	"codex_go/runtimeutil"
@@ -54,6 +55,7 @@ import (
 	"codex_go/tool"
 	"codex_go/turn"
 	"codex_go/utils"
+	"github.com/google/uuid"
 )
 
 type activeRuntimeTurn struct {
@@ -79,6 +81,10 @@ type activeRuntimeTurn struct {
 	// step. Mid-turn environment updates replace it only when the next step is
 	// captured, so an in-flight step's model context and skills tools agree.
 	StepCapabilities *runtimeStepCapabilitySnapshot
+	// Runtime is this turn's assembled runtime. A mid-turn dynamic-tool
+	// replacement publishes the new catalog here so the next sampling step uses
+	// it while calls from the previous step keep their executors (Rust #57553).
+	Runtime *turn.Runtime
 	// UserInputRequested records that the model asked the user for input during
 	// this turn; the MCP request metadata reports it
 	// (Rust TurnMetadataState::mark_user_input_requested_during_turn). The
@@ -4282,7 +4288,7 @@ func (r *RuntimeRouter) appendRuntimeCompactedWithResponse(threadID string, turn
 	// this is the new window, not the replaced one.
 	windowNumber := uint64PtrAppserver(r.windowNumberForThread(threadID))
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		resume := checkpointResumeMetadata(recorder.Path(), turnID)
+		resume := checkpointResumeMetadata(recorder.Path(), threadID, turnID)
 		var latest *rollout.TokenUsageRecord
 		if lines, _, loadErr := rollout.Load(recorder.Path()); loadErr == nil {
 			latest = rollout.LatestTokenUsageRecord(lines)
@@ -4304,24 +4310,42 @@ func (r *RuntimeRouter) appendRuntimeCompactedWithResponse(threadID string, turn
 // (`rollout.ReconstructTurnAttribution`), which keeps the checkpoint and the
 // reader in agreement. An unknown attribution stays absent rather than becoming
 // an empty object.
-func checkpointResumeMetadata(rolloutPath string, turnID string) *rollout.CompactionResumeMetadata {
+func checkpointResumeMetadata(rolloutPath string, threadID string, turnID string) *rollout.CompactionResumeMetadata {
 	resume := &rollout.CompactionResumeMetadata{}
 	if id := strings.TrimSpace(turnID); id != "" {
 		resume.LastStartedTurnID = &id
 	}
-	resume.TurnAttribution = checkpointTurnAttribution(rolloutPath)
+	lines := checkpointRolloutLines(rolloutPath)
+	resume.TurnAttribution = rollout.ReconstructTurnAttribution(lines)
+	// Rust #57553: the checkpoint carries the producing thread's persisted
+	// dynamic-tool catalog so compaction never drops a replacement or a clear.
+	if id := strings.TrimSpace(threadID); id != "" {
+		tools, _ := rollout.LatestDynamicTools(lines)
+		if tools == nil {
+			tools = []json.RawMessage{}
+		}
+		resume.DynamicTools = &rollout.DynamicToolsSnapshot{ThreadID: id, Tools: tools}
+	}
 	return resume
 }
 
-// checkpointTurnAttribution reconstructs the provenance of the newest surviving
-// regular turn from the thread's rollout, or nil when the rollout carries none.
-func checkpointTurnAttribution(rolloutPath string) *rollout.TurnAttribution {
+func checkpointRolloutLines(rolloutPath string) []rollout.Line {
 	rolloutPath = strings.TrimSpace(rolloutPath)
 	if rolloutPath == "" {
 		return nil
 	}
 	lines, _, err := rollout.Load(rolloutPath)
-	if err != nil || len(lines) == 0 {
+	if err != nil {
+		return nil
+	}
+	return lines
+}
+
+// checkpointTurnAttribution reconstructs the provenance of the newest surviving
+// regular turn from the thread's rollout, or nil when the rollout carries none.
+func checkpointTurnAttribution(rolloutPath string) *rollout.TurnAttribution {
+	lines := checkpointRolloutLines(rolloutPath)
+	if len(lines) == 0 {
 		return nil
 	}
 	return rollout.ReconstructTurnAttribution(lines)
@@ -5257,6 +5281,10 @@ func (r *RuntimeRouter) sessionItemForImageGeneration(threadID string, item *mod
 		data["revisedPrompt"] = revisedPrompt
 		data["revised_prompt"] = revisedPrompt
 	}
+	if generationID := firstNonEmpty(stringFromMap(data, "generationId"), stringFromMap(data, "generation_id")); generationID != "" {
+		data["generationId"] = generationID
+		data["generation_id"] = generationID
+	}
 	if strings.TrimSpace(result) != "" {
 		if codexHome := r.codexHomeForImageGeneration(); codexHome != "" {
 			if savedPath, err := eventmap.SaveImageGenerationResult(codexHome, threadID, itemID, result); err == nil {
@@ -5495,13 +5523,14 @@ func runtimeUserPromptSessionItemWithPreparedContent(turnID string, params *turn
 		clientID = params.ClientUserMessageID
 	}
 	return session.Item{
-		ID:        runtimeUserPromptSessionItemID(turnID),
-		Type:      "message",
-		Role:      "user",
-		Text:      prompt,
-		Content:   content,
-		CreatedAt: createdAt,
-		Data:      userPromptThreadItemData(dataContent),
+		ID:             runtimeUserPromptSessionItemID(turnID),
+		ResponseItemID: userInputResponseItemID(userItemUUIDFromTurnStart(params)),
+		Type:           "message",
+		Role:           "user",
+		Text:           prompt,
+		Content:        content,
+		CreatedAt:      createdAt,
+		Data:           userPromptThreadItemData(dataContent),
 		Metadata: appTurnMetadata(turnID, map[string]any{
 			"clientId":            clientID,
 			"client_user_message": clientID,
@@ -12397,6 +12426,26 @@ func (r *RuntimeRouter) modelContextWindowForModel(modelID string) *int64 {
 	return &value
 }
 
+// userInputResponseItemID mirrors Rust #57538's admitted user input identity: a
+// host-assigned UUID becomes the reserved `msg_input_<uuid>` id, otherwise a
+// fresh `msg_<uuid-v7>` id is minted for the admitted input.
+func userInputResponseItemID(hostUUID string) string {
+	if trimmed := strings.TrimSpace(hostUUID); trimmed != "" {
+		return protocol.AdmittedUserInputItemID(trimmed)
+	}
+	if id, err := uuid.NewV7(); err == nil {
+		return "msg_" + id.String()
+	}
+	return "msg_" + uuid.NewString()
+}
+
+func userItemUUIDFromTurnStart(params *turn.TurnStartParams) string {
+	if params == nil {
+		return ""
+	}
+	return params.UserItemUUID
+}
+
 func appTurnMetadata(turnID string, extra map[string]any) map[string]any {
 	metadata := map[string]any{"turnId": turnID}
 	for key, value := range extra {
@@ -12421,6 +12470,10 @@ func sessionItemFromTurnSteer(params *turn.TurnSteerParams) (session.Item, bool)
 	if itemID == "" {
 		itemID = "steer-" + safeIdentifier(params.ExpectedTurnID) + "-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
 	}
+	// Rust #57538: identical steered inputs stay distinct by keeping the
+	// Responses item identity (host uuid or a fresh `msg_` id) separate from the
+	// UI item id.
+	responseItemID := userInputResponseItemID(params.UserItemUUID)
 	metadata := appTurnMetadata(params.ExpectedTurnID, map[string]any{
 		"clientId":            params.ClientUserMessageID,
 		"client_user_message": params.ClientUserMessageID,
@@ -12430,14 +12483,15 @@ func sessionItemFromTurnSteer(params *turn.TurnSteerParams) (session.Item, bool)
 		metadata["additionalContext"] = additionalContextMetadata(params.AdditionalContext)
 	}
 	return session.Item{
-		ID:        itemID,
-		Type:      "message",
-		Role:      "user",
-		Text:      text,
-		Content:   content,
-		CreatedAt: now,
-		Data:      runtimeUserInputThreadItemData(params.Prompt, params.Input),
-		Metadata:  metadata,
+		ID:             itemID,
+		ResponseItemID: responseItemID,
+		Type:           "message",
+		Role:           "user",
+		Text:           text,
+		Content:        content,
+		CreatedAt:      now,
+		Data:           runtimeUserInputThreadItemData(params.Prompt, params.Input),
+		Metadata:       metadata,
 	}, true
 }
 
@@ -12459,7 +12513,7 @@ func (r *RuntimeRouter) inputItemsFromTurnSteer(params *turn.TurnSteerParams, no
 			}},
 		})
 	}
-	if item := userMessageInputItemFromTurnUserInputs(params.Prompt, params.Input); item != nil {
+	if item := userMessageInputItemFromTurnUserInputs(params.Prompt, params.Input, userInputResponseItemID(params.UserItemUUID)); item != nil {
 		prepared := prepareSteerUserMessageItem(item)
 		items = append(items, prepared[0])
 		if noticeEnabled && len(prepared) > 1 {
@@ -12522,7 +12576,7 @@ func prepareSteerUserMessageItem(item any) []any {
 	return []any{message, notice}
 }
 
-func userMessageInputItemFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) any {
+func userMessageInputItemFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput, responseItemID ...string) any {
 	content := inputContentFromTurnUserInputs(prompt, inputs)
 	if len(content) == 0 {
 		return nil
@@ -12531,6 +12585,10 @@ func userMessageInputItemFromTurnUserInputs(prompt string, inputs []turn.TurnUse
 		"type":    "message",
 		"role":    "user",
 		"content": content,
+	}
+	if len(responseItemID) > 0 && strings.TrimSpace(responseItemID[0]) != "" {
+		// Rust #57538: the admitted user input keeps its Responses item id.
+		item["id"] = strings.TrimSpace(responseItemID[0])
 	}
 	// Annotate the user message with harness-owned content kinds aligned with its
 	// content entries (mirrors Rust Session::response_item_from_user_input #40196:
@@ -12598,7 +12656,7 @@ func (r *RuntimeRouter) preparedUserMessageInputItem(turnID string, params *turn
 	if r == nil || params == nil {
 		return userMessageInputItemFromTurnUserInputs(promptFromTurnStart(params), params.Input), nil
 	}
-	item := userMessageInputItemFromTurnUserInputs(promptFromTurnStart(params), params.Input)
+	item := userMessageInputItemFromTurnUserInputs(promptFromTurnStart(params), params.Input, userInputResponseItemID(userItemUUIDFromTurnStart(params)))
 	if item == nil {
 		return nil, nil
 	}

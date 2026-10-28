@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"codex_go/audioutil"
 )
 
 const approxBytesPerToken = 4
@@ -26,6 +28,7 @@ type ContentItemKind string
 const (
 	ContentInputText        ContentItemKind = "input_text"
 	ContentInputImage       ContentItemKind = "input_image"
+	ContentInputAudio       ContentItemKind = "input_audio"
 	ContentEncryptedContent ContentItemKind = "encrypted_content"
 )
 
@@ -37,6 +40,7 @@ type FunctionCallOutputContentItem struct {
 	// truncation keeps these items intact instead of resolving them.
 	FileID           string
 	Detail           *string
+	AudioURL         string
 	EncryptedContent string
 }
 
@@ -91,88 +95,264 @@ func FormattedTruncateText(content string, policy TruncationPolicy) string {
 	if len(content) <= (&policy).ByteBudget() {
 		return content
 	}
+	return formatTruncatedText(content, policy, nil)
+}
+
+// formatTruncatedText prefixes the truncation warning and remaps boundary text
+// offsets into the rendered snippet. Rust #57584
+// `codex_utils_output_truncation::format_truncated_text`.
+func formatTruncatedText(content string, policy TruncationPolicy, boundaries []OutputBoundary) string {
 	originalTokenCount := ApproxTokenCount(content)
 	totalLines := countLines(content)
-	result := TruncateText(content, policy)
-	return fmt.Sprintf("Warning: truncated output (original token count: %d)\nTotal output lines: %d\n\n%s", originalTokenCount, totalLines, result)
+	header := fmt.Sprintf("Warning: truncated output (original token count: %d)\nTotal output lines: %d\n\n", originalTokenCount, totalLines)
+	snippet, edit := truncateTextWithPlan(content, policy)
+	if edit != nil {
+		for i := range boundaries {
+			boundaries[i].TextOffset = renderedOffset(edit, boundaries[i].TextOffset, len(header))
+		}
+	}
+	return header + snippet
 }
 
 func TruncateText(content string, policy TruncationPolicy) string {
+	out, _ := truncateTextWithPlan(content, policy)
+	return out
+}
+
+// truncateTextWithPlan returns the truncated text and, for token budgets, the
+// edit that produced it so callers can remap annotated offsets. Only
+// token-budget callers supply boundaries that need remapping, matching Rust
+// #57584 `truncate_text_with_plan`.
+func truncateTextWithPlan(content string, policy TruncationPolicy) (string, *TextTruncation) {
 	if policy.Mode == PolicyTokens {
-		out, _ := TruncateMiddleWithTokenBudget(content, policy.Limit)
-		return out
+		edit := PlanTokenTruncation(content, policy.Limit)
+		if edit == nil {
+			return content, nil
+		}
+		return edit.Apply(content), edit
 	}
-	return TruncateMiddleChars(content, policy.Limit)
+	return TruncateMiddleChars(content, policy.Limit), nil
 }
 
-func FormattedTruncateTextContentItemsWithPolicy(items []FunctionCallOutputContentItem, policy TruncationPolicy) ([]FunctionCallOutputContentItem, *int) {
-	textSegments := make([]string, 0)
+// OutputBoundary is an uncharged position in the original logical output.
+// Token-boundary formatters update the item index and UTF-8 text offset to the
+// rendered position, including when content at that position was omitted.
+//
+// At entry, item indices are clamped to the end of the input, text offsets
+// round down to an in-bounds UTF-8 boundary, and offsets on non-text items are
+// zeroed. Positions preceding an earlier boundary move to that position,
+// preserving caller order. On return, boundaries refer to the rendered items;
+// an end boundary precedes any generated omission notices. Rust #57584
+// `OutputBoundary`.
+type OutputBoundary struct {
+	ItemIndex  int
+	TextOffset int
+}
+
+// FormattedTruncateFunctionOutputItemsWithPolicy formats text-only output as a
+// whole observation, including the truncation warning. Mixed text and audio
+// output is charged against the budget in order while images, file references
+// and encrypted content are preserved.
+func FormattedTruncateFunctionOutputItemsWithPolicy(
+	items []FunctionCallOutputContentItem,
+	policy TruncationPolicy,
+	estimateAudioTokenCount func(string) int,
+) []FunctionCallOutputContentItem {
+	return formattedOutput(items, policy, estimateAudioTokenCount, nil)
+}
+
+// FormattedOutputAtTokenBoundaries is FormattedTruncateFunctionOutputItemsWithPolicy
+// with zero-width boundaries for callers that have already dropped output.
+func FormattedOutputAtTokenBoundaries(
+	items []FunctionCallOutputContentItem,
+	maxTokens int,
+	estimateAudioTokenCount func(string) int,
+	boundaries []OutputBoundary,
+) []FunctionCallOutputContentItem {
+	normalizeBoundaries(items, boundaries)
+	return formattedOutput(items, TokensPolicy(maxTokens), estimateAudioTokenCount, boundaries)
+}
+
+// MixedOutputAtTokenBoundaries budgets items in input order even if a caller
+// previously dropped every media item.
+func MixedOutputAtTokenBoundaries(
+	items []FunctionCallOutputContentItem,
+	maxTokens int,
+	estimateAudioTokenCount func(string) int,
+	boundaries []OutputBoundary,
+) []FunctionCallOutputContentItem {
+	normalizeBoundaries(items, boundaries)
+	return truncateOutputItems(items, TokensPolicy(maxTokens), estimateAudioTokenCount, boundaries)
+}
+
+func formattedOutput(
+	items []FunctionCallOutputContentItem,
+	policy TruncationPolicy,
+	estimateAudioTokenCount func(string) int,
+	boundaries []OutputBoundary,
+) []FunctionCallOutputContentItem {
+	combinedLen := 0
+	allText := true
 	for i := range items {
-		item := &items[i]
-		if item.Kind == ContentInputText {
-			textSegments = append(textSegments, item.Text)
+		if items[i].Kind != ContentInputText {
+			allText = false
+			break
 		}
+		if combinedLen != 0 {
+			combinedLen++
+		}
+		combinedLen += len(items[i].Text)
 	}
-	if len(textSegments) == 0 {
-		return cloneItems(items), nil
+	if !allText {
+		return truncateOutputItems(items, policy, estimateAudioTokenCount, boundaries)
 	}
-	combined := strings.Join(textSegments, "\n")
-	if len(combined) <= (&policy).ByteBudget() {
-		return cloneItems(items), nil
+	if combinedLen <= (&policy).ByteBudget() {
+		return cloneItems(items)
 	}
-	originalTokenCount := ApproxTokenCount(combined)
-	out := []FunctionCallOutputContentItem{{
+
+	var combined strings.Builder
+	combined.Grow(combinedLen)
+	nextBoundary := 0
+	for index := range items {
+		if combined.Len() != 0 {
+			combined.WriteByte('\n')
+		}
+		for nextBoundary < len(boundaries) && boundaries[nextBoundary].ItemIndex == index {
+			boundaries[nextBoundary].ItemIndex = 0
+			boundaries[nextBoundary].TextOffset += combined.Len()
+			nextBoundary++
+		}
+		combined.WriteString(items[index].Text)
+	}
+	// A boundary after the last item belongs at the end of the merged text.
+	for i := nextBoundary; i < len(boundaries); i++ {
+		boundaries[i].ItemIndex = 0
+		boundaries[i].TextOffset = combined.Len()
+	}
+	return []FunctionCallOutputContentItem{{
 		Kind: ContentInputText,
-		Text: FormattedTruncateText(combined, policy),
+		Text: formatTruncatedText(combined.String(), policy, boundaries),
 	}}
-	for i := range items {
-		item := &items[i]
-		switch item.Kind {
-		case ContentInputImage, ContentEncryptedContent:
-			out = append(out, *item)
-		}
-	}
-	return out, &originalTokenCount
 }
 
+func normalizeBoundaries(items []FunctionCallOutputContentItem, boundaries []OutputBoundary) {
+	previousIndex, previousOffset := 0, 0
+	for i := range boundaries {
+		itemIndex := boundaries[i].ItemIndex
+		if itemIndex < 0 {
+			itemIndex = 0
+		}
+		if itemIndex > len(items) {
+			itemIndex = len(items)
+		}
+		textOffset := 0
+		if itemIndex < len(items) && items[itemIndex].Kind == ContentInputText {
+			offset := boundaries[i].TextOffset
+			if offset < 0 {
+				offset = 0
+			}
+			textOffset = floorCharBoundary(items[itemIndex].Text, offset)
+		}
+		if itemIndex > previousIndex || (itemIndex == previousIndex && textOffset > previousOffset) {
+			previousIndex, previousOffset = itemIndex, textOffset
+		}
+		boundaries[i].ItemIndex = previousIndex
+		boundaries[i].TextOffset = previousOffset
+	}
+}
+
+// TruncateFunctionOutputItemsWithPolicy applies the byte/token budget without
+// changing success metadata or media ordering.
 func TruncateFunctionOutputItemsWithPolicy(items []FunctionCallOutputContentItem, policy TruncationPolicy) []FunctionCallOutputContentItem {
+	return truncateOutputItems(items, policy, audioutil.EstimateAudioTokenCount, nil)
+}
+
+func truncateOutputItems(
+	items []FunctionCallOutputContentItem,
+	policy TruncationPolicy,
+	estimateAudioTokenCount func(string) int,
+	boundaries []OutputBoundary,
+) []FunctionCallOutputContentItem {
 	out := make([]FunctionCallOutputContentItem, 0, len(items))
 	remainingBudget := (&policy).ByteBudget()
 	if policy.Mode == PolicyTokens {
 		remainingBudget = (&policy).TokenBudget()
 	}
 	omittedTextItems := 0
+	omittedAudioItems := 0
+	nextBoundary := 0
 
 	for i := range items {
 		item := &items[i]
+		itemOut := len(out)
+		itemPolicy := TruncationPolicy{Mode: policy.Mode, Limit: remainingBudget}
+		var textEdit *TextTruncation
+		keep := false
 		switch item.Kind {
 		case ContentInputText:
-			if remainingBudget == 0 {
+			switch {
+			case item.Text == "":
+				// Empty text contributes no model content but still consumes an
+				// API array slot.
+			case remainingBudget == 0:
 				omittedTextItems++
-				continue
+			default:
+				cost := len(item.Text)
+				if policy.Mode == PolicyTokens {
+					cost = ApproxTokenCount(item.Text)
+				}
+				if cost <= remainingBudget {
+					remainingBudget -= cost
+					keep = true
+					break
+				}
+				var snippet string
+				snippet, textEdit = truncateTextWithPlan(item.Text, itemPolicy)
+				if snippet == "" {
+					omittedTextItems++
+				} else {
+					truncated := *item
+					truncated.Text = snippet
+					out = append(out, truncated)
+				}
+				remainingBudget = 0
 			}
-			cost := len(item.Text)
-			if policy.Mode == PolicyTokens {
-				cost = ApproxTokenCount(item.Text)
+		case ContentInputImage, ContentEncryptedContent:
+			keep = true
+		case ContentInputAudio:
+			tokenCost := 0
+			if estimateAudioTokenCount != nil {
+				tokenCost = estimateAudioTokenCount(item.AudioURL)
+			}
+			cost := tokenCost
+			if policy.Mode == PolicyBytes {
+				cost = ApproxBytesForTokens(tokenCost)
 			}
 			if cost <= remainingBudget {
-				out = append(out, *item)
 				remainingBudget -= cost
-				continue
-			}
-			snippetPolicy := TruncationPolicy{Mode: policy.Mode, Limit: remainingBudget}
-			snippet := TruncateText(item.Text, snippetPolicy)
-			if snippet == "" {
-				omittedTextItems++
+				keep = true
 			} else {
-				truncated := *item
-				truncated.Text = snippet
-				out = append(out, truncated)
+				omittedAudioItems++
 			}
-			remainingBudget = 0
-		case ContentInputImage, ContentEncryptedContent:
+		}
+		for nextBoundary < len(boundaries) && boundaries[nextBoundary].ItemIndex == i {
+			boundaries[nextBoundary].ItemIndex = itemOut
+			if textEdit != nil {
+				boundaries[nextBoundary].TextOffset = renderedOffset(textEdit, boundaries[nextBoundary].TextOffset, 0)
+			} else if !keep {
+				boundaries[nextBoundary].TextOffset = 0
+			}
+			nextBoundary++
+		}
+		if keep {
 			out = append(out, *item)
 		}
+	}
+	// End boundaries precede generated omission counts: counts are not original
+	// content and must never move a collector notice away from its source.
+	for i := nextBoundary; i < len(boundaries); i++ {
+		boundaries[i].ItemIndex = len(out)
+		boundaries[i].TextOffset = 0
 	}
 
 	if omittedTextItems > 0 {
@@ -181,7 +361,27 @@ func TruncateFunctionOutputItemsWithPolicy(items []FunctionCallOutputContentItem
 			Text: fmt.Sprintf("[omitted %d text items ...]", omittedTextItems),
 		})
 	}
+	if omittedAudioItems > 0 {
+		out = append(out, FunctionCallOutputContentItem{
+			Kind: ContentInputText,
+			Text: fmt.Sprintf("[omitted %d audio items ...]", omittedAudioItems),
+		})
+	}
 	return out
+}
+
+func renderedOffset(edit *TextTruncation, boundary int, headerBytes int) int {
+	if boundary == 0 {
+		return 0
+	}
+	if boundary <= edit.RemovedStart {
+		return headerBytes + boundary
+	}
+	removedAfterBoundary := 0
+	if boundary > edit.RemovedEnd {
+		removedAfterBoundary = boundary - edit.RemovedEnd
+	}
+	return headerBytes + edit.RemovedStart + len(edit.Marker) + removedAfterBoundary
 }
 
 // TextTruncation is the head/tail edit a token truncation performs: the byte
@@ -191,6 +391,29 @@ type TextTruncation struct {
 	RemovedStart int
 	RemovedEnd   int
 	Marker       string
+}
+
+// Apply applies the planned edit to the string it was planned from (Rust
+// `TextTruncation::apply`).
+func (t *TextTruncation) Apply(original string) string {
+	if t == nil {
+		return original
+	}
+	start := t.RemovedStart
+	if start < 0 {
+		start = 0
+	}
+	if start > len(original) {
+		start = len(original)
+	}
+	end := t.RemovedEnd
+	if end < start {
+		end = start
+	}
+	if end > len(original) {
+		end = len(original)
+	}
+	return original[:start] + t.Marker + original[end:]
 }
 
 // PlanTokenTruncation plans the head/tail token truncation without applying it,

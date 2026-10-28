@@ -80,6 +80,9 @@ type PermissionPromptPermissionMessages struct {
 	// DeniedReads wraps the harness-owned denied-reads facts with exactly one
 	// `{{ denied_reads }}` placeholder (Rust #57263).
 	DeniedReads *string
+	// ApprovedCommandPrefixSaved is a plain-text heading for the saved-prefix
+	// notice (Rust #57599). Invalid headings fall back to the bundled marker.
+	ApprovedCommandPrefixSaved *string
 }
 
 // PermissionPromptApprovalMessages mirrors Rust
@@ -89,6 +92,12 @@ type PermissionPromptApprovalMessages struct {
 	OnRequestAutoReview *string
 	Never               *string
 	UnlessTrusted       *string
+	// RequestPermissions replaces the first line of the request_permissions tool
+	// instructions when it is a valid single-line heading (Rust #57581).
+	RequestPermissions *string
+	// AutoReviewSuffix introduces the harness-owned auto-review guidance
+	// (Rust #57581).
+	AutoReviewSuffix *string
 	// Granular carries the catalog's granular-approval templates (Rust
 	// #57325). Templates are preserved verbatim; consumers validate size and
 	// markers before rendering.
@@ -261,7 +270,7 @@ func approvalPromptText(config *PermissionPromptConfig) string {
 	case PermissionPromptApprovalNever:
 		text = permissionPromptApprovalNever
 	case PermissionPromptApprovalUnlessTrusted:
-		text = withRequestPermissions(permissionPromptApprovalUnlessTrusted, config.RequestPermissionsToolEnabled)
+		text = withRequestPermissions(config, permissionPromptApprovalUnlessTrusted)
 	case PermissionPromptApprovalGranular:
 		text = granularText(config)
 	default:
@@ -271,7 +280,7 @@ func approvalPromptText(config *PermissionPromptConfig) string {
 		}
 		sections := []string{strings.TrimSuffix(onRequestRule, "\n")}
 		if config.RequestPermissionsToolEnabled {
-			sections = append(sections, requestPermissionsToolText())
+			sections = append(sections, approvalToolText(config))
 		}
 		if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes, approvedPrefixTemplate(config)); prefixes != "" {
 			sections = append(sections, prefixes)
@@ -279,7 +288,7 @@ func approvalPromptText(config *PermissionPromptConfig) string {
 		text = strings.Join(sections, "\n\n")
 	}
 	if config.ApprovalsReviewer == PermissionPromptAutoReview && config.ApprovalPolicy != PermissionPromptApprovalNever {
-		text = strings.TrimSuffix(text, "\n") + "\n\n" + autoReviewText()
+		text = strings.TrimSuffix(text, "\n") + "\n\n" + approvalAutoReviewText(config)
 	}
 	return text
 }
@@ -318,7 +327,7 @@ func granularText(config *PermissionPromptConfig) string {
 		sections = append(sections, strings.TrimSuffix(permissionPromptApprovalOnRequestRuleRequestPermission, "\n"))
 	}
 	if config.RequestPermissionsToolEnabled {
-		sections = append(sections, requestPermissionsToolText())
+		sections = append(sections, approvalToolText(config))
 	}
 	if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes, approvedPrefixTemplate(config)); prefixes != "" {
 		sections = append(sections, prefixes)
@@ -335,12 +344,89 @@ func granularCategoryAllowed(categories []string, category string) bool {
 	return false
 }
 
-func withRequestPermissions(text string, enabled bool) string {
-	if !enabled {
+func withRequestPermissions(config *PermissionPromptConfig, text string) string {
+	if config == nil || !config.RequestPermissionsToolEnabled {
 		return text
 	}
-	return text + "\n\n" + requestPermissionsToolText()
+	return text + "\n\n" + approvalToolText(config)
 }
+
+// approvalToolText replaces the bundled request_permissions heading with a
+// validated catalog heading while keeping the instruction body (Rust #57581).
+func approvalToolText(config *PermissionPromptConfig) string {
+	bundled := requestPermissionsToolText()
+	var heading string
+	if config != nil && config.ApprovalMessages != nil {
+		heading = ValidApprovalHeading(config.ApprovalMessages.RequestPermissions)
+	}
+	if heading == "" {
+		return bundled
+	}
+	if index := strings.IndexAny(bundled, "\r\n"); index >= 0 {
+		return heading + bundled[index:]
+	}
+	return heading
+}
+
+// approvalAutoReviewText prepends a validated catalog heading to the bundled
+// auto-review guidance (Rust #57581).
+func approvalAutoReviewText(config *PermissionPromptConfig) string {
+	bundled := autoReviewText()
+	var heading string
+	if config != nil && config.ApprovalMessages != nil {
+		heading = ValidApprovalHeading(config.ApprovalMessages.AutoReviewSuffix)
+	}
+	if heading == "" {
+		return bundled
+	}
+	return heading + "\n\n" + bundled
+}
+
+// ValidApprovalHeading reports the catalog heading when it is a bounded,
+// single-line plain-text heading (Rust #57581 ApprovalInstructions::valid_heading).
+func ValidApprovalHeading(value *string) string {
+	if value == nil {
+		return ""
+	}
+	text := *value
+	if len(text) > maxApprovalHeadingBytes || strings.TrimSpace(text) == "" {
+		return ""
+	}
+	for _, char := range text {
+		if unicode.IsControl(char) || char == '\u2028' || char == '\u2029' {
+			return ""
+		}
+	}
+	if strings.ContainsAny(text, "{}") ||
+		strings.Contains(text, PermissionInstructionsOpenTag) ||
+		strings.Contains(text, PermissionInstructionsCloseTag) {
+		return ""
+	}
+	return text
+}
+
+// ValidSavedPrefixHeading bounds the standalone saved-prefix heading
+// (Rust #57599): plain text, no markup-like characters.
+func ValidSavedPrefixHeading(value *string) string {
+	if value == nil {
+		return ""
+	}
+	text := *value
+	if len(text) > maxApprovalHeadingBytes || strings.TrimSpace(text) == "" {
+		return ""
+	}
+	for _, char := range text {
+		if unicode.IsControl(char) || char == '\u2028' || char == '\u2029' {
+			return ""
+		}
+	}
+	if strings.ContainsAny(text, "<>{}") {
+		return ""
+	}
+	return text
+}
+
+const maxApprovalHeadingBytes = 500
 
 func requestPermissionsToolText() string {
 	return "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."

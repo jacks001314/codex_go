@@ -122,6 +122,12 @@ func isChatGPTCookieURL(target *url.URL) bool {
 	return isAllowedChatGPTHost(strings.ToLower(target.Hostname()))
 }
 
+// IsAllowedChatGPTHost reports whether host is an allowed ChatGPT host
+// (Rust codex_http_client::is_allowed_chatgpt_host).
+func IsAllowedChatGPTHost(host string) bool {
+	return isAllowedChatGPTHost(strings.ToLower(strings.TrimSpace(host)))
+}
+
 func isAllowedChatGPTHost(host string) bool {
 	switch host {
 	case "chatgpt.com", "chat.openai.com", "chatgpt-staging.com":

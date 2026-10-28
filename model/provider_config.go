@@ -64,6 +64,13 @@ func gcpAuthCommand() string {
 // policy that cannot describe a usable provider rejects the request instead of
 // silently passing the comparison.
 func RequiredModelProviderDefinition(providerID string, definition any) (*ProviderInfo, error) {
+	return RequiredModelProviderDefinitionWithBaseURL(providerID, definition, "")
+}
+
+// RequiredModelProviderDefinitionWithBaseURL is the retained-thread form: the
+// built-in OpenAI provider's inference endpoint comes from the thread route so
+// a catalog-only override never redirects inference (Rust #57567).
+func RequiredModelProviderDefinitionWithBaseURL(providerID string, definition any, openAIBaseURL string) (*ProviderInfo, error) {
 	providerID = strings.TrimSpace(providerID)
 	if providerID == "" {
 		return nil, nil
@@ -80,8 +87,8 @@ func RequiredModelProviderDefinition(providerID string, definition any) (*Provid
 	if !ok {
 		return nil, nil
 	}
-	if isBedrockProviderID(providerID) || providerID == GCPProviderID {
-		merged, err := MergeConfiguredProviders(BuiltInProviders(""), map[string]ProviderInfo{providerID: provider})
+	if isBedrockProviderID(providerID) || providerID == GCPProviderID || providerID == OpenAIProviderID {
+		merged, err := MergeConfiguredProviders(BuiltInProviders(openAIBaseURL), map[string]ProviderInfo{providerID: provider})
 		if err != nil {
 			return nil, err
 		}
@@ -188,10 +195,11 @@ func ConfiguredProviderMap(value any) (map[string]ProviderInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("model_providers.%s: %w", id, err)
 		}
-		if !isBedrockProviderID(id) && id != GCPProviderID {
+		if !isBedrockProviderID(id) && id != GCPProviderID && id != OpenAIProviderID {
 			// Mirrors Rust validate_model_providers (config/src/config_toml.rs):
 			// aws is only supported for the two bundled Bedrock providers and
-			// a custom provider name must not be empty.
+			// a custom provider name must not be empty. The built-in OpenAI
+			// provider accepts a catalog-only override (Rust #57567).
 			if provider.AWS != nil {
 				return nil, fmt.Errorf("model_providers.%s: provider aws is only supported for `%s` or `%s`", id, AmazonBedrockProviderID, AmazonBedrockRuntimeProviderID)
 			}
@@ -263,7 +271,15 @@ func IsBedrockProviderID(id string) bool {
 
 func validateReservedModelProviderIDs(rawProviders map[string]any) error {
 	var conflicts []string
-	for id := range rawProviders {
+	for id, raw := range rawProviders {
+		if id == OpenAIProviderID {
+			// Rust #57567: `[model_providers.openai]` may only set
+			// `model_catalog_url`; everything else stays built-in.
+			if !openAIProviderCatalogOnlyOverride(raw) {
+				conflicts = append(conflicts, "`"+id+"`")
+			}
+			continue
+		}
 		if reservedModelProviderIDs[id] && !isReservedProviderOverrideID(id) {
 			conflicts = append(conflicts, "`"+id+"`")
 		}
@@ -273,6 +289,21 @@ func validateReservedModelProviderIDs(rawProviders map[string]any) error {
 	}
 	sort.Strings(conflicts)
 	return fmt.Errorf("model_providers contains reserved built-in provider IDs: %s. Built-in providers cannot be overridden. Rename your custom provider (for example, `openai-custom`).", strings.Join(conflicts, ", "))
+}
+
+// openAIProviderCatalogOnlyOverride reports whether an
+// `[model_providers.openai]` block only sets `model_catalog_url`.
+func openAIProviderCatalogOnlyOverride(raw any) bool {
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	provider, err := providerInfoFromConfig(values, false)
+	if err != nil || provider == nil {
+		return false
+	}
+	provider.ModelCatalogURL = ""
+	return provider.isZero()
 }
 
 func ProviderInfoFromConfig(values map[string]any) (*ProviderInfo, error) {

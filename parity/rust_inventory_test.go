@@ -136,6 +136,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"docs",
 		"exec",
 		"exec-server",
+		"exec-server-cli",
 		"exec-server-protocol",
 		"execpolicy",
 		"ext",

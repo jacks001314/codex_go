@@ -46,6 +46,8 @@ func TestRustExecServerProtocolSurfaceAgainstGo(t *testing.T) {
 		execserver.MethodFSCanonicalize,
 		execserver.MethodFSReadDirectory,
 		execserver.MethodFSWalk,
+		execserver.MethodFSWatchMissing,
+		execserver.MethodFSMissingChanged,
 		execserver.MethodFSRemove,
 		execserver.MethodFSCopy,
 		execserver.MethodCapabilityRootsDiscover,

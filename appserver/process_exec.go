@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	osexec "os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -298,11 +299,13 @@ func (s *ProcessService) waitProcess(ctx context.Context, process *managedProces
 		err = process.cmd.Wait()
 	}
 	process.exitCode, _ = commandExecExitCode(ctx, err)
+	drainTimedOut := false
+	var ptyHandle *ptyHandle
 	if process.pty != nil {
 		waitForPTYOutputAfterExit(process.outputActivity, process.outputDone)
 		_ = process.pty.ClosePTY()
-		waitForPTYOutputDone(process.pty, process.outputDone)
-		_ = process.pty.Cleanup()
+		drainTimedOut = waitForPTYOutputDone(process.pty, process.outputDone)
+		ptyHandle = process.pty
 	}
 	if process.cancel != nil {
 		process.cancel()
@@ -317,15 +320,37 @@ func (s *ProcessService) waitProcess(ctx context.Context, process *managedProces
 			stdoutText = ""
 			stderrText = ""
 		}
+		// A drain deadline that expired after fully capturing the requested cap
+		// did not lose output (Rust #57569).
+		outputIncomplete := processStreamOutputIncomplete(drainTimedOut, process.stdout) ||
+			processStreamOutputIncomplete(drainTimedOut, process.stderr)
 		notify(NotificationProcessExited, &ProcessExitedNotification{
-			ProcessHandle:    process.handle,
-			ExitCode:         process.exitCode,
-			Stdout:           stdoutText,
-			StdoutCapReached: process.stdout.CapReached(),
-			Stderr:           stderrText,
-			StderrCapReached: process.stderr.CapReached(),
+			ProcessHandle:       process.handle,
+			ExitCode:            process.exitCode,
+			OutputDrainTimedOut: boolPointerForProcessExit(outputIncomplete),
+			Stdout:              stdoutText,
+			StdoutCapReached:    process.stdout.CapReached(),
+			Stderr:              stderrText,
+			StderrCapReached:    process.stderr.CapReached(),
 		})
 	}
+	// Rust #57569: deliver the exit notification before Windows console cleanup,
+	// because ClosePseudoConsole can block until surviving clients disconnect.
+	if ptyHandle != nil {
+		if runtime.GOOS == "windows" {
+			go func() { _ = ptyHandle.Cleanup() }()
+		} else {
+			_ = ptyHandle.Cleanup()
+		}
+	}
+}
+
+func boolPointerForProcessExit(value bool) *bool {
+	return &value
+}
+
+func processStreamOutputIncomplete(drainTimedOut bool, buffer *commandExecOutputBuffer) bool {
+	return drainTimedOut && !buffer.CapSatisfied()
 }
 
 func (s *ProcessService) activeProcess(handle string) (*managedProcess, error) {

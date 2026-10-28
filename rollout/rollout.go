@@ -84,7 +84,10 @@ type Item struct {
 	Data       map[string]any  `json:"data,omitempty"`
 	Raw        json.RawMessage `json:"raw,omitempty"`
 	ResponseID string          `json:"response_id,omitempty"`
-	Metadata   map[string]any  `json:"metadata,omitempty"`
+	// ResponseItemID is the Responses item identity when it differs from ID
+	// (Rust #57538).
+	ResponseItemID string         `json:"response_item_id,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 type ContentPart struct {
@@ -1102,6 +1105,90 @@ func (r *Recorder) AppendRetainedContext(event retainedctx.RetainedContextEvent,
 	})
 }
 
+// AppendDynamicToolsUpdated persists a complete dynamic-tool catalog for
+// subsequent model steps (Rust #57553 RolloutItem::DynamicToolsUpdated). An
+// empty catalog is persisted explicitly so a clear survives resume.
+func (r *Recorder) AppendDynamicToolsUpdated(threadID string, tools []json.RawMessage, now time.Time) error {
+	if tools == nil {
+		tools = []json.RawMessage{}
+	}
+	payload, err := json.Marshal(DynamicToolsSnapshot{
+		ThreadID: strings.TrimSpace(threadID),
+		Tools:    tools,
+	})
+	if err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return r.AppendLine(Line{
+		Type:      "dynamic_tools_updated",
+		Timestamp: now.UTC().Format(time.RFC3339Nano),
+		Payload:   payload,
+	})
+}
+
+// LatestDynamicTools returns the catalog the next model step must use (Rust
+// #57553 `latest_dynamic_tools`). It prefers the newest update or compaction
+// snapshot that belongs to this rollout's thread, preserving explicit clears,
+// and otherwise falls back to the creation metadata.
+func LatestDynamicTools(lines []Line) ([]json.RawMessage, bool) {
+	var metadata *SessionMeta
+	for i := range lines {
+		if lines[i].Meta != nil {
+			metadata = lines[i].Meta
+			break
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		var snapshot *DynamicToolsSnapshot
+		switch lines[i].Type {
+		case "dynamic_tools_updated":
+			var decoded DynamicToolsSnapshot
+			if err := json.Unmarshal(lines[i].Payload, &decoded); err != nil {
+				continue
+			}
+			snapshot = &decoded
+		case "compacted":
+			snapshot = compactedDynamicToolsSnapshot(lines[i].Payload)
+		default:
+			continue
+		}
+		if snapshot == nil {
+			continue
+		}
+		if metadata != nil && strings.TrimSpace(metadata.ID) != "" && snapshot.ThreadID != metadata.ID {
+			continue
+		}
+		tools := snapshot.Tools
+		if len(tools) == 0 {
+			return []json.RawMessage{}, true
+		}
+		return cloneRawMessages(tools), true
+	}
+	if metadata != nil && metadata.DynamicTools != nil {
+		if len(metadata.DynamicTools) == 0 {
+			return []json.RawMessage{}, true
+		}
+		return cloneRawMessages(metadata.DynamicTools), true
+	}
+	return nil, false
+}
+
+func compactedDynamicToolsSnapshot(payload json.RawMessage) *DynamicToolsSnapshot {
+	if len(payload) == 0 {
+		return nil
+	}
+	var compacted struct {
+		ResumeMetadata *CompactionResumeMetadata `json:"resume_metadata"`
+	}
+	if err := json.Unmarshal(payload, &compacted); err != nil || compacted.ResumeMetadata == nil {
+		return nil
+	}
+	return compacted.ResumeMetadata.DynamicTools
+}
+
 // RetainedContextEvents returns the sparse retained-context events a rollout
 // carries, oldest first. A resumed thread restores its newest checkpoint's
 // snapshot and then replays these; re-recording an event the checkpoint already
@@ -1282,6 +1369,17 @@ type CompactionResumeMetadata struct {
 	// TurnAttribution is the provenance of the newest regular turn, independent
 	// of continuation eligibility. Rust #51402 (`state.turn_attribution`).
 	TurnAttribution *TurnAttribution `json:"turn_attribution,omitempty"`
+	// DynamicTools is the producing thread's persisted dynamic-tool catalog at
+	// checkpoint time (Rust #57553 CompactionResumeMetadata::dynamic_tools).
+	// An explicit resume override is not persisted here.
+	DynamicTools *DynamicToolsSnapshot `json:"dynamic_tools,omitempty"`
+}
+
+// DynamicToolsSnapshot is one thread's dynamic-tool catalog, including an
+// empty catalog after an explicit clear (Rust #57553).
+type DynamicToolsSnapshot struct {
+	ThreadID string            `json:"thread_id"`
+	Tools    []json.RawMessage `json:"tools"`
 }
 
 func (r *Recorder) AppendCompacted(message string, replacement []Item, now time.Time) error {
@@ -2341,7 +2439,9 @@ func canonicalResponseItemPayload(item *Item) (any, bool) {
 	if !ok || object == nil {
 		return nil, false
 	}
-	if strings.TrimSpace(item.ID) != "" {
+	if responseItemID := strings.TrimSpace(item.ResponseItemID); responseItemID != "" {
+		object["id"] = responseItemID
+	} else if strings.TrimSpace(item.ID) != "" {
 		object["id"] = item.ID
 	}
 	if object["type"] == "message" {

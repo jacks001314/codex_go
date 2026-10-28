@@ -1437,6 +1437,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 		status := firstNonEmpty(threadItemStringFromData(i.Data, "status"), i.Status)
 		revisedPrompt := threadItemStringPtrFromData(i.Data, "revisedPrompt", "revised_prompt")
 		transparentBackground := threadItemBoolPtrFromData(i.Data, "transparentBackground", "transparent_background")
+		generationID := threadItemStringPtrFromData(i.Data, "generationId", "generation_id")
 		savedPath := threadItemStringPtrFromData(i.Data, "savedPath", "saved_path")
 		inputImages := threadItemInputImagesFromData(i.Data)
 		// Rust #54398 (ext/items/src/image_generation.rs `GeneratedImageRef`): an
@@ -1452,6 +1453,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 				RevisedPrompt         *string `json:"revisedPrompt"`
 				FileID                string  `json:"fileId"`
 				TransparentBackground *bool   `json:"transparentBackground"`
+				GenerationID          *string `json:"generationId"`
 				SavedPath             *string `json:"savedPath,omitempty"`
 				InputImages           []any   `json:"inputImages,omitempty"`
 			}{
@@ -1461,6 +1463,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 				RevisedPrompt:         revisedPrompt,
 				FileID:                fileID,
 				TransparentBackground: transparentBackground,
+				GenerationID:          generationID,
 				SavedPath:             savedPath,
 				InputImages:           inputImages,
 			})
@@ -1472,6 +1475,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 			RevisedPrompt         *string `json:"revisedPrompt"`
 			Result                string  `json:"result"`
 			TransparentBackground *bool   `json:"transparentBackground"`
+			GenerationID          *string `json:"generationId"`
 			SavedPath             *string `json:"savedPath,omitempty"`
 			InputImages           []any   `json:"inputImages,omitempty"`
 		}{
@@ -1481,6 +1485,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 			RevisedPrompt:         revisedPrompt,
 			Result:                firstNonEmpty(threadItemStringFromData(i.Data, "result"), i.Text),
 			TransparentBackground: transparentBackground,
+			GenerationID:          generationID,
 			SavedPath:             savedPath,
 			InputImages:           inputImages,
 		})
@@ -6635,6 +6640,7 @@ func normalizeHistoryUnionData(payload map[string]any, marker string) map[string
 	copyHistoryAlias(data, "revisedPrompt", "revised_prompt")
 	copyHistoryAlias(data, "savedPath", "saved_path")
 	copyHistoryAlias(data, "transparentBackground", "transparent_background")
+	copyHistoryAlias(data, "generationId", "generation_id")
 	copyHistoryAlias(data, "arguments", "input", "rawArguments", "raw_arguments")
 	return data
 }

@@ -32,23 +32,21 @@ func TestSplitStringRespectsUTF8Boundaries(t *testing.T) {
 	}
 }
 
-func TestFormattedContentItemsMergesTextAndPreservesOpaqueItems(t *testing.T) {
-	detail := "high"
+// Rust #57584 replaced the old text-merge helper with a unified formatter: for
+// mixed output it budgets text in order and preserves opaque items without a
+// truncation warning.
+func TestFormattedMixedOutputPreservesEncryptedContent(t *testing.T) {
+	encrypted := FunctionCallOutputContentItem{Kind: ContentEncryptedContent, EncryptedContent: "enc_opaque"}
 	items := []FunctionCallOutputContentItem{
-		{Kind: ContentInputText, Text: "abcd"},
-		{Kind: ContentInputImage, ImageURL: "img:one", Detail: &detail},
-		{Kind: ContentInputText, Text: "efgh"},
-		{Kind: ContentEncryptedContent, EncryptedContent: "enc_opaque"},
+		{Kind: ContentInputText, Text: "abcdefgh"},
+		encrypted,
 	}
-	output, original := FormattedTruncateTextContentItemsWithPolicy(items, BytesPolicy(4))
-	if original == nil || *original != 3 {
-		t.Fatalf("original token count = %v", original)
-	}
-	if len(output) != 3 || output[0].Kind != ContentInputText || output[1].Kind != ContentInputImage || output[2].Kind != ContentEncryptedContent {
+	output := FormattedTruncateFunctionOutputItemsWithPolicy(items, BytesPolicy(2), func(string) int { return 0 })
+	if len(output) != 2 || output[0].Kind != ContentInputText || output[0].Text != "a\u20266 chars truncated\u2026h" {
 		t.Fatalf("output items = %#v", output)
 	}
-	if !strings.Contains(output[0].Text, "truncated output") {
-		t.Fatalf("merged text = %q", output[0].Text)
+	if output[1].Kind != ContentEncryptedContent || output[1].EncryptedContent != "enc_opaque" {
+		t.Fatalf("encrypted item = %#v", output[1])
 	}
 }
 

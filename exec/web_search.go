@@ -54,15 +54,25 @@ func (r *Runner) webSearchOptionsForRun(
 		return nil, err
 	}
 	return &turn.WebSearchOptions{
-		SessionID:       strings.TrimSpace(threadID),
-		Model:           strings.TrimSpace(modelID),
-		Provider:        apiProvider,
-		Auth:            authHeaders,
-		HTTPClient:      r.httpClientForConfig(cfg),
-		InputItems:      append([]any(nil), inputItems...),
-		Settings:        codexapi.SearchSettingsForMode(mode, execWebSearchToolConfig(cfg)),
-		MaxOutputTokens: turn.WebSearchMaxOutputTokens(&modelInfo, cfg.ToolOutputTokenLimit()),
+		SessionID:                strings.TrimSpace(threadID),
+		Model:                    strings.TrimSpace(modelID),
+		Provider:                 apiProvider,
+		Auth:                     authHeaders,
+		HTTPClient:               r.httpClientForConfig(cfg),
+		InputItems:               append([]any(nil), inputItems...),
+		Settings:                 codexapi.SearchSettingsForMode(mode, execWebSearchToolConfig(cfg)),
+		MaxOutputTokens:          turn.WebSearchMaxOutputTokens(&modelInfo, cfg.ToolOutputTokenLimit()),
+		SupportsLiteratureSearch: execModelIncludesExperimentalTool(modelInfo, turn.LiteratureSearchQueryToolName),
 	}, nil
+}
+
+func execModelIncludesExperimentalTool(modelInfo model.ModelInfo, name string) bool {
+	for _, supported := range modelInfo.ExperimentalSupportedTools {
+		if strings.TrimSpace(supported) == strings.TrimSpace(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func execWebSearchMode(cfg *config.Config, forceLive bool) codexapi.WebSearchMode {

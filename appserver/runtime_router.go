@@ -127,16 +127,22 @@ type RuntimeServices struct {
 	TurnMetrics           telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
-	VoiceMetrics               telemetry.CounterDurationSink
-	AnalyticsRPCTransport      telemetry.AppServerRPCTransport
-	BrowserOpen                func(string) error
-	CustomSkills               *skillprovider.Registry
-	UnifiedExec                *tool.UnifiedExecManager
-	CodeModeProvider           tool.CodeModeRemoteProvider
-	DisableCodeModeFallback    bool
-	ManagedNetwork             *network.PreparedProxyManagedNetwork
-	ManagedNetworkRequirements *config.NetworkRequirements
-	DefaultCWD                 string
+	VoiceMetrics            telemetry.CounterDurationSink
+	AnalyticsRPCTransport   telemetry.AppServerRPCTransport
+	BrowserOpen             func(string) error
+	CustomSkills            *skillprovider.Registry
+	UnifiedExec             *tool.UnifiedExecManager
+	CodeModeProvider        tool.CodeModeRemoteProvider
+	DisableCodeModeFallback bool
+	// AllowPersistentDynamicToolUpdates is the host opt-in that lets a persistent
+	// thread replace its dynamic-tool catalog between model steps while keeping
+	// the replacement durable (Rust #57553
+	// `Config::allow_persistent_dynamic_tool_updates`). Hosts that cannot restore
+	// the catalog on resume must leave it false.
+	AllowPersistentDynamicToolUpdates bool
+	ManagedNetwork                    *network.PreparedProxyManagedNetwork
+	ManagedNetworkRequirements        *config.NetworkRequirements
+	DefaultCWD                        string
 	// StartupCWD is the app-server's startup working directory (Rust
 	// Config.cwd): the process cwd or the `--cd` override. Provider setup
 	// resolves credential paths and project config against it.
@@ -452,11 +458,16 @@ type RuntimeRouter struct {
 	serverRequestGuards   map[string]*ThreadStatusActiveGuard
 	executedToolCallsMu   sync.Mutex
 	executedToolCalls     map[string]*turn.ExecutedToolCallRecorder
-	newContextWindowMu    sync.Mutex
-	newContextWindowReq   map[string]bool
-	contextWindowMu       sync.Mutex
-	contextWindowIDs      map[string]string
-	windowNumbers         map[string]uint64
+	// invocationRegistries holds the live V2 tool-call registry of each thread
+	// (Rust #57586 HostToolInvocationLookup). Host child creation looks a call up
+	// here before preparing or starting a reserved child.
+	invocationRegistriesMu sync.Mutex
+	invocationRegistries   map[string]*agent.InvocationRegistry
+	newContextWindowMu     sync.Mutex
+	newContextWindowReq    map[string]bool
+	contextWindowMu        sync.Mutex
+	contextWindowIDs       map[string]string
+	windowNumbers          map[string]uint64
 	// threadSampleCancels tracks in-flight thread/sample requests by connection
 	// and JSON-RPC request id so thread/sample/cancel can stop only that sample.
 	threadSampleMu      sync.Mutex
@@ -15763,10 +15774,18 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		codeModeYieldTime = turnConfig.CodeModeDefaultExecYieldTime()
 	}
 	allowedTools := r.threadAllowedToolsForThread(params.ThreadID)
+	// Rust #57586 installs HostToolInvocationLookup on V2 threads so a host can
+	// resolve a live call before creating a reserved child.
+	invocationRegistry := r.turnInvocationRegistry(params.ThreadID, turnConfig)
 	// Rust #57433: the turn's tool router reviews opted-in native calls before
 	// dispatch, seeing the arguments pre-tool hooks produced.
 	router.SetGuardianReview(r.nativeToolGuardianReview(params.ThreadID, turnID))
-	return turn.NewRuntime(&turn.RuntimeOptions{
+	dynamicCaller := dynamicToolServerRequestCaller{broker: r.requireServerRequests()}
+	var dynamicTools []turn.DynamicToolSpec
+	if params != nil {
+		dynamicTools = params.CloneDynamicTools()
+	}
+	turnRuntime := turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
 		Router:                       router,
 		ToolRegistrationMetrics:      r.services.TurnMetrics,
@@ -15809,7 +15828,21 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		// at a commentary or partial-answer boundary.
 		DeferMailboxPreemption:      turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "defer_mailbox_preemption"),
 		IndirectDescriptionPrefixes: indirectPrefixes,
-	}), nil
+		DynamicToolCaller:           dynamicCaller,
+		DynamicToolThreadID:         strings.TrimSpace(params.ThreadID),
+		DynamicToolTurnID:           strings.TrimSpace(turnID),
+		DynamicTools:                dynamicTools,
+		DynamicToolStepRefresh:      r.services.AllowPersistentDynamicToolUpdates,
+		InvocationRegistry:          invocationRegistry,
+	})
+	// A replacement accepted while this turn is running publishes onto this
+	// runtime, which refreshes the tool list before the next sampling step.
+	if turnRuntime != nil && strings.TrimSpace(params.ThreadID) != "" && strings.TrimSpace(turnID) != "" {
+		r.threads.UpdateTurn(params.ThreadID, turnID, func(active *activeRuntimeTurn) {
+			active.Runtime = turnRuntime
+		})
+	}
+	return turnRuntime, nil
 }
 
 func indirectDescriptionPrefixesFromModel(in *model.IndirectDescriptionPrefixes) *tool.IndirectDescriptionPrefixes {
@@ -16590,8 +16623,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.MessageBoard = boardOptions
 		}
 	}
+	// The caller stays configured even for an empty catalog so a mid-turn
+	// replacement can register new dynamic tools on this turn's router
+	// (Rust #57553).
+	options.DynamicToolCaller = dynamicToolServerRequestCaller{broker: r.requireServerRequests()}
 	if params != nil && len(params.DynamicTools) > 0 {
-		options.DynamicToolCaller = dynamicToolServerRequestCaller{broker: r.requireServerRequests()}
 		options.DynamicTools = params.CloneDynamicTools()
 	}
 	options.ContextStatus = r.contextStatusForThread(threadID)

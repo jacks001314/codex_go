@@ -63,6 +63,9 @@ type CodexPackageLayout struct {
 // runtime package (codex-package.json).
 type CodexPackageManifest struct {
 	Version string `json:"version"`
+	// ExecServer is the package-relative standalone executor path advertised by
+	// newer packages (Rust #57590). Older packages leave it empty.
+	ExecServer string `json:"execServer,omitempty"`
 }
 
 type InstallMethod struct {
@@ -303,7 +306,8 @@ func (c *InstallContext) PackageManifest() *CodexPackageManifest {
 		return nil
 	}
 	var manifest struct {
-		Version string `json:"version"`
+		Version    string `json:"version"`
+		ExecServer string `json:"execServer"`
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil
@@ -311,7 +315,23 @@ func (c *InstallContext) PackageManifest() *CodexPackageManifest {
 	if !validPackageManifestVersion(manifest.Version) {
 		return nil
 	}
-	return &CodexPackageManifest{Version: manifest.Version}
+	return &CodexPackageManifest{Version: manifest.Version, ExecServer: strings.TrimSpace(manifest.ExecServer)}
+}
+
+// ExecServerPath resolves the advertised standalone executor for this package.
+// It reports false when the package predates the advertisement or the named
+// file is missing, which installers treat as "no executor to verify".
+func (c *InstallContext) ExecServerPath() (string, bool) {
+	manifest := c.PackageManifest()
+	if manifest == nil || manifest.ExecServer == "" || c.PackageLayout == nil {
+		return "", false
+	}
+	path := filepath.Join(c.PackageLayout.PackageDir, filepath.FromSlash(manifest.ExecServer))
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return path, true
 }
 
 func validPackageManifestVersion(version string) bool {

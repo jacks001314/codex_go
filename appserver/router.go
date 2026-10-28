@@ -850,7 +850,7 @@ func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string
 	// The Router-level path starts no turn of its own, so `last_started_turn_id`
 	// stays absent; the reader falls back to the saved attribution's own turn id
 	// and Rust's standalone compaction turn has no Go counterpart here.
-	resume := checkpointResumeMetadata(recorder.Path(), "")
+	resume := checkpointResumeMetadata(recorder.Path(), string(threadID), "")
 	return recorder.AppendCompactedWithResumeMetadata(message, items, nil, resume, windowNumber, now)
 }
 

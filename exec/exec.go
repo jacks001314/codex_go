@@ -3120,7 +3120,8 @@ func protocolImageGenerationItemFromAgentItem(item *model.AgentItem) protocol.Th
 	revisedPrompt := firstNonEmpty(execStringFromAny(data["revisedPrompt"]), execStringFromAny(data["revised_prompt"]))
 	savedPath := firstNonEmpty(execStringFromAny(data["savedPath"]), execStringFromAny(data["saved_path"]))
 	transparentBackground := execBoolPtrFromAny(firstExecAny(data, "transparentBackground", "transparent_background"))
-	built := protocol.ImageGenerationItem(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath, transparentBackground)
+	generationID := execStringPtrFromAny(firstExecAny(data, "generationId", "generation_id"))
+	built := protocol.ImageGenerationItemWithID(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath, transparentBackground, generationID)
 	// Rust #38024: usage-limit failures ride on the item as a typed failure.
 	if failure := data["failure"]; failure != nil {
 		if built.Metadata == nil {
@@ -5994,6 +5995,24 @@ func execStringFromAny(value any) string {
 	default:
 		return fmt.Sprint(typed)
 	}
+}
+
+func execStringPtrFromAny(value any) *string {
+	if value == nil {
+		return nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		if stringer, isStringer := value.(fmt.Stringer); isStringer {
+			text = stringer.String()
+		} else {
+			return nil
+		}
+	}
+	if text == "" {
+		return nil
+	}
+	return &text
 }
 
 func execBoolPtrFromAny(value any) *bool {

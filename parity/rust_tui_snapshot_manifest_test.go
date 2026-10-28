@@ -43,8 +43,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// panel directory is new; the per-directory counts below follow).
 	// Round-91 re-anchor to head e16b631d08: #54742 added the
 	// history-search absorbed-slash composer snapshot (1433 total).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1437 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1437", got)
+	// Re-anchored to upstream e8e6a922c0: the colourless-shading (#57554) and
+	// Vim-register (#57564) snapshots plus the resume-picker backend-failure
+	// snapshot landed in this window (1437 -> 1452).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1452 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1452", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -85,6 +88,16 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 func rustTUISnapshotManifest() []rustTUISnapshotDir {
 	return []rustTUISnapshotDir{
 		{
+			Path:     "tui/src/resume_picker/snapshots",
+			Files:    1,
+			Owner:    "tui/resume_picker, tui/app",
+			Focus:    "resume picker source listing with a partially failed backend",
+			Priority: []string{"app", "history"},
+			Required: []string{
+				"tui/src/resume_picker/snapshots/codex_tui__resume_picker__sources__tests__partial_backend_failure.snap",
+			},
+		},
+		{
 			Path:     "tui/src/analytics/snapshots",
 			Files:    27,
 			Owner:    "tui/analytics, backend-client",
@@ -107,7 +120,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-pinned to upstream 18e28fe1b9: #48621 removed follow-up prompt
 			// suggestions from the TUI, so the prompt-suggestion request-history
 			// snapshot is gone and the dir now holds 85 files.
-			Files:    93,
+			Files:    94,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -140,7 +153,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// two startup-warning summaries into the warnings-viewer snapshots.
 			// #48121 added the command-center draft-handoff snapshot.
 			// #48135 added the remapped-left external-writer view snapshot.
-			Files:    76,
+			Files:    80,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -171,7 +184,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// mention menu above history, the status-surface layouts and the
 			// warning-notice styles.
 			// #54742 added the history-search absorbed-slash snapshot.
-			Files:    31,
+			Files:    30,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},
@@ -180,7 +193,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__snapshot_tests__voice_composer.snap",
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__footer_state__tests__transcript_find_copy_footer.snap",
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__warning_notice__tests__warning_notice_styles.snap",
-				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__history_search__paste_tests__history_search_absorbed_slash.snap",
+				// Re-anchored to upstream e8e6a922c0: the absorbed-slash
+				// history-search snapshot was retired with the composer changes.
 			},
 		},
 		{
@@ -199,7 +213,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46680-#46710 added the shared picker presentation and filled-tab
 			// snapshots; #46734/#46749/#46751 added the clipped mention popup,
 			// the customized shortcut overlays and the narrow warnings view.
-			Files:    255,
+			Files:    257,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -295,7 +309,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// warnings-summary presentation and #46752 added the tmux
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
 			// snapshot; #48116 added the two Max-reasoning footer snapshots.
-			Files:    334,
+			Files:    336,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -314,7 +328,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// ordering snapshots; #46711/#46731 added the history-projection and
 			// dynamic-activity ones; #46732/#46734 added the transcript-copy
 			// outcomes and the completion-only replay exploration group.
-			Files:    82,
+			Files:    83,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal, async question reply, and history snapshots",
 			Priority: []string{"approval", "history"},
@@ -410,7 +424,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/markdown_render/snapshots",
-			Files:    26,
+			Files:    27,
 			Owner:    "tui/markdown_render, tui/mermaid",
 			Focus:    "markdown render web-link labels, Unicode math (inline/display/accents), and Mermaid text rendering",
 			Priority: []string{"markdown"},
@@ -466,7 +480,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// guard.
 			// #48562 removed the clear-UI fast-status and thread-read-model
 			// header snapshots with the boxed card.
-			Files:    197,
+			Files:    200,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -499,7 +513,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// text helpers, follow control, prompt header, search,
 			// selection hints, composer gap, and the compact/detailed copy
 			// presentations.
-			Files:    46,
+			Files:    47,
 			Owner:    "tui/transcript_view",
 			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
 			Priority: []string{"history", "app", "composer"},

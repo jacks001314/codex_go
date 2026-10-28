@@ -108,11 +108,16 @@ func (r *RuntimeRouter) loadedExecPolicy() *execpolicy.Policy {
 }
 
 // approvedCommandPrefixSavedText renders Rust's ApprovedCommandPrefixSaved
-// fragment body for the newly approved prefixes.
-func approvedCommandPrefixSavedText(added [][]string) string {
+// fragment body for the newly approved prefixes. A valid catalog heading is
+// placed after the bundled marker so older clients can still trim the notice
+// (Rust #57599).
+func approvedCommandPrefixSavedText(added [][]string, heading string) string {
 	rendered := sandbox.FormatAllowPrefixes(execpolicy.CanonicalCommandPrefixes(added))
 	if strings.TrimSpace(rendered) == "" {
 		return ""
+	}
+	if heading != "" && heading != approvedCommandPrefixSavedMessagePrefix {
+		return approvedCommandPrefixSavedMessagePrefix + "\n" + heading + "\n" + rendered
 	}
 	return approvedCommandPrefixSavedMessagePrefix + "\n" + rendered
 }

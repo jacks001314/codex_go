@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/model"
 	"codex_go/tool"
 	"codex_go/tooltiming"
@@ -54,6 +55,9 @@ type ToolDispatcherOptions struct {
 	// turn profile.
 	CriticalPathTiming bool
 	TimingState        *TimingState
+	// InvocationRegistry opts this turn into live tool-call lookup and unique
+	// active call IDs (Rust #57586). A nil registry leaves dispatch unchanged.
+	InvocationRegistry *agent.InvocationRegistry
 }
 
 // Rust #44661 trace-safe milestones. They carry identifiers and tool names
@@ -158,6 +162,7 @@ type ToolDispatcher struct {
 	timingState        *TimingState
 	stepBatch          *tooltiming.Batch
 	stepGate           *tooltiming.Gate
+	invocationRegistry *agent.InvocationRegistry
 }
 
 type ToolExecutionResult struct {
@@ -407,6 +412,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		tracer:                      options.Tracer,
 		criticalPathTiming:          options.CriticalPathTiming,
 		timingState:                 options.TimingState,
+		invocationRegistry:          options.InvocationRegistry,
 	}
 }
 
@@ -858,7 +864,50 @@ func (d *ToolDispatcher) finishDirectTiming(guard *tooltiming.ToolGuard, admitte
 	}
 }
 
+// reserveInvocation claims this call's ID before admission. Rust reserves in
+// ToolCallRuntime::dispatch and activates after pre-tool hooks (#57586).
+func (d *ToolDispatcher) reserveInvocation(invocation *tool.Invocation) (*agent.InvocationReservation, error) {
+	if d == nil || d.invocationRegistry == nil || invocation == nil {
+		return nil, nil
+	}
+	return d.invocationRegistry.Reserve(d.turnID, invocation.CallID)
+}
+
+// rejectedInvocationResult reports a duplicate active call ID as a model-facing
+// failed tool result, mirroring Rust's FunctionCallError::RespondToModel.
+func (d *ToolDispatcher) rejectedInvocationResult(invocation *tool.Invocation, err error) *ToolExecutionResult {
+	finishedAt := d.nowUTC()
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	output := &tool.Output{
+		CallID:      invocation.CallID,
+		ToolName:    invocation.ToolName,
+		Success:     false,
+		Body:        message,
+		CompletedAt: finishedAt,
+	}
+	result := &ToolExecutionResult{
+		Invocation:      invocation,
+		Output:          output,
+		Response:        ToolResponseFromOutput(invocation, output),
+		StartedAt:       finishedAt,
+		FinishedAt:      finishedAt,
+		HandlerExecuted: false,
+	}
+	if d.onToolCompleted != nil {
+		d.onToolCompleted(context.Background(), result)
+	}
+	return result
+}
+
 func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {
+	reservation, reservationErr := d.reserveInvocation(invocation)
+	if reservationErr != nil {
+		return d.rejectedInvocationResult(invocation, reservationErr), nil
+	}
+	defer reservation.Release()
 	toolCtx, cancel := context.WithCancelCause(ctx)
 	invocation.Cancel = cancel
 	defer func() {
@@ -1002,14 +1051,21 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	// was actually reached, which the goal extension uses to distinguish a
 	// handler-executed failure from a pre-tool-hook block (#41454).
 	handlerReached := false
+	var invocationGuard *agent.InvocationGuard
 	startedAfterPreHooks := func(updated *tool.Invocation) {
 		handlerReached = true
+		if invocationGuard == nil {
+			invocationGuard = reservation.Activate()
+		}
 		if d.onToolStarted != nil {
 			d.onToolStarted(toolCtx, updated, startedAt)
 		}
 	}
 	telemetryTags := d.router.TelemetryTags(invocation)
 	output, dispatchErr := d.router.DispatchWithHooksAfterPreHooks(dispatchCtx, invocation, d.hooks, startedAfterPreHooks)
+	// Rust revokes host access once the handler returns, before the finish
+	// notification, so a completed call is never observable as live (#57586).
+	invocationGuard.Release()
 	// Rust ToolCallOutcome::Failed { handler_executed: true } is produced only
 	// when the executor returned an error (dispatch error), not when the handler
 	// completed with a success=false output. A blocked pre-tool hook leaves

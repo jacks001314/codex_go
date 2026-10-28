@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"codex_go/network"
 )
 
 const (
@@ -1148,6 +1150,21 @@ func BuiltInProviders(openAIBaseURL string) map[string]ProviderInfo {
 func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[string]ProviderInfo) (map[string]ProviderInfo, error) {
 	out := cloneProviderMap(providers)
 	for key, provider := range configured {
+		if key == OpenAIProviderID {
+			// Rust #57567: the built-in provider keeps its identity,
+			// authentication, and inference routing; only catalog routing is
+			// configurable through `[model_providers.openai]`.
+			if catalogURL := provider.ModelCatalogURL; catalogURL != "" {
+				if err := validateBuiltinOpenAICatalogURL(catalogURL); err != nil {
+					return nil, err
+				}
+				if builtIn, ok := out[key]; ok {
+					builtIn.ModelCatalogURL = catalogURL
+					out[key] = builtIn
+				}
+			}
+			continue
+		}
 		if key == GCPProviderID {
 			builtIn := out[key]
 			if err := MergeGCPProviderOverrides(&builtIn, provider); err != nil {
@@ -1190,6 +1207,24 @@ func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[
 		}
 	}
 	return out, nil
+}
+
+// validateBuiltinOpenAICatalogURL enforces Rust #57567's catalog destination
+// rules for the built-in OpenAI provider: HTTPS, an allowed ChatGPT host, and
+// no embedded credentials.
+func validateBuiltinOpenAICatalogURL(catalogURL string) error {
+	const message = "model_providers.openai.model_catalog_url must use an allowed ChatGPT host. If you need to use a 3rd party host, configure a custom model_provider"
+	parsed, err := url.Parse(catalogURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return errors.New(message)
+	}
+	if parsed.User != nil {
+		return errors.New(message)
+	}
+	if !network.IsAllowedChatGPTHost(parsed.Hostname()) {
+		return errors.New(message)
+	}
+	return nil
 }
 
 func IsAzureResponsesProvider(name, baseURL string) bool {

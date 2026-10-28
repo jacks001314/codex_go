@@ -192,13 +192,19 @@ func waitForPTYOutputAfterExit(activity <-chan struct{}, done <-chan struct{}) {
 	}
 }
 
-func waitForPTYOutputDone(handle *ptyHandle, done <-chan struct{}) {
+// waitForPTYOutputDone waits for the reader to observe EOF. It reports whether
+// the post-exit drain deadline expired first; the caller turns that into
+// `outputDrainTimedOut` unless the requested byte cap was fully captured
+// (Rust #57569).
+func waitForPTYOutputDone(handle *ptyHandle, done <-chan struct{}) bool {
 	if done == nil {
-		return
+		return false
 	}
+	drainTimedOut := false
 	select {
 	case <-done:
 	case <-time.After(ptyOutputDrainTimeout):
+		drainTimedOut = true
 		if handle != nil {
 			_ = handle.CloseReader()
 		}
@@ -207,6 +213,7 @@ func waitForPTYOutputDone(handle *ptyHandle, done <-chan struct{}) {
 	if handle != nil {
 		_ = handle.CloseReader()
 	}
+	return drainTimedOut
 }
 
 func monitorPTYContext(ctxDone <-chan struct{}, processDone <-chan struct{}, process *ptyProcess) {

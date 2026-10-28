@@ -232,11 +232,15 @@ type TurnStartParams struct {
 	ThreadID string `json:"threadId"`
 	// DisabledPluginIDs replaces this thread's disabled plugin IDs. Omitted or
 	// null preserves the saved list; an empty list clears it (Rust #44905).
-	DisabledPluginIDs    *[]string         `json:"disabledPluginIds,omitempty"`
-	Input                []TurnUserInput   `json:"input,omitempty"`
-	ToolOutput           *TurnToolOutput   `json:"toolOutput,omitempty"`
-	Prompt               string            `json:"prompt,omitempty"`
-	ClientUserMessageID  string            `json:"clientUserMessageId,omitempty"`
+	DisabledPluginIDs   *[]string       `json:"disabledPluginIds,omitempty"`
+	Input               []TurnUserInput `json:"input,omitempty"`
+	ToolOutput          *TurnToolOutput `json:"toolOutput,omitempty"`
+	Prompt              string          `json:"prompt,omitempty"`
+	ClientUserMessageID string          `json:"clientUserMessageId,omitempty"`
+	// UserItemUUID is the host-assigned UUID for this input's Responses item
+	// (Rust #57538 TurnInputRequest::user_item_uuid). It is never part of the
+	// app-server wire; in-process hosts set it directly.
+	UserItemUUID         string            `json:"-"`
 	ResponsesAPIMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
 	// ResponsesAPIMetadataPatch adds or overwrites individual client
 	// metadata entries without replacing the map. It is applied after
@@ -473,12 +477,15 @@ func asciiLetter(value byte) bool {
 }
 
 type TurnSteerParams struct {
-	ThreadID             string            `json:"threadId"`
-	ExpectedTurnID       string            `json:"expectedTurnId"`
-	Input                []TurnUserInput   `json:"input,omitempty"`
-	Prompt               string            `json:"prompt,omitempty"`
-	ApprovalsReviewer    *string           `json:"approvalsReviewer,omitempty"`
-	ClientUserMessageID  string            `json:"clientUserMessageId,omitempty"`
+	ThreadID            string          `json:"threadId"`
+	ExpectedTurnID      string          `json:"expectedTurnId"`
+	Input               []TurnUserInput `json:"input,omitempty"`
+	Prompt              string          `json:"prompt,omitempty"`
+	ApprovalsReviewer   *string         `json:"approvalsReviewer,omitempty"`
+	ClientUserMessageID string          `json:"clientUserMessageId,omitempty"`
+	// UserItemUUID is the host-assigned UUID for this steer's Responses item
+	// (Rust #57538); it is never part of the app-server wire.
+	UserItemUUID         string            `json:"-"`
 	ResponsesAPIMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
 	// ResponsesAPIMetadataPatch adds or overwrites individual client
 	// metadata entries without replacing the map. It is applied after

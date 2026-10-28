@@ -82,22 +82,25 @@ type ThreadSectionAppearance struct {
 }
 
 type Item struct {
-	ID               string          `json:"id"`
-	Type             string          `json:"type"`
-	Role             string          `json:"role,omitempty"`
-	Text             string          `json:"text,omitempty"`
-	Name             string          `json:"name,omitempty"`
-	Namespace        string          `json:"namespace,omitempty"`
-	CallID           string          `json:"call_id,omitempty"`
-	Status           string          `json:"status,omitempty"`
-	Content          []ContentPart   `json:"content,omitempty"`
-	Data             map[string]any  `json:"data,omitempty"`
-	Raw              json.RawMessage `json:"raw,omitempty"`
-	CreatedAt        time.Time       `json:"created_at"`
-	ResponseID       string          `json:"response_id,omitempty"`
-	Metadata         map[string]any  `json:"metadata,omitempty"`
-	CreatedAtOrdinal uint64          `json:"created_at_ordinal,omitempty"`
-	UpdatedAtOrdinal uint64          `json:"updated_at_ordinal,omitempty"`
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
+	Role       string          `json:"role,omitempty"`
+	Text       string          `json:"text,omitempty"`
+	Name       string          `json:"name,omitempty"`
+	Namespace  string          `json:"namespace,omitempty"`
+	CallID     string          `json:"call_id,omitempty"`
+	Status     string          `json:"status,omitempty"`
+	Content    []ContentPart   `json:"content,omitempty"`
+	Data       map[string]any  `json:"data,omitempty"`
+	Raw        json.RawMessage `json:"raw,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	ResponseID string          `json:"response_id,omitempty"`
+	// ResponseItemID is the Responses API item identity when it differs from
+	// the thread-item id (Rust #57538 keeps the two separate for user messages).
+	ResponseItemID   string         `json:"response_item_id,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
+	CreatedAtOrdinal uint64         `json:"created_at_ordinal,omitempty"`
+	UpdatedAtOrdinal uint64         `json:"updated_at_ordinal,omitempty"`
 }
 
 func (s *Store) ListItems(threadID ThreadID, options ListItemsOptions) (*ItemPage, error) {

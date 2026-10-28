@@ -293,6 +293,29 @@ type Store interface {
 	Resolve(request ResolveRequest) (AttachmentMetadata, error)
 }
 
+// ResolvableStore is a Store that can confirm whether a file reference is
+// still available (Rust #57585 `AttachmentStore::is_resolvable`). Returning
+// false asserts the file is confirmed missing; backend and access errors must
+// keep the reference, so implementations report true when unsure.
+type ResolvableStore interface {
+	Store
+	IsResolvable(fileID string) bool
+}
+
+// IsResolvable reports whether fileID should stay in a model request. Stores
+// that do not implement ResolvableStore - including InlineStore and stores that
+// only know provider-owned IDs - retain every reference, matching Rust's
+// default trait method.
+func IsResolvable(store Store, fileID string) bool {
+	if store == nil {
+		return true
+	}
+	if checker, ok := store.(ResolvableStore); ok {
+		return checker.IsResolvable(fileID)
+	}
+	return true
+}
+
 // InlineStore leaves attachments inline instead of storing them, mirroring Rust
 // `InlineAttachmentStore`. It is the default store for every host.
 type InlineStore struct{}

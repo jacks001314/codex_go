@@ -34,7 +34,15 @@ type WebSearchOptions struct {
 	InputItems      []any
 	Settings        *codexapi.SearchSettings
 	MaxOutputTokens *uint64
+	// SupportsLiteratureSearch gates the `literature_search_query` command and
+	// its schema property on the active model's experimental tool list
+	// (Rust #57542).
+	SupportsLiteratureSearch bool
 }
+
+// LiteratureSearchQueryToolName is the model capability that enables
+// literature search in the standalone web tool.
+const LiteratureSearchQueryToolName = "literature_search_query"
 
 type WebSearchHandler struct {
 	options WebSearchOptions
@@ -51,7 +59,7 @@ func (h *WebSearchHandler) Spec() tool.Spec {
 	return tool.Spec{
 		Name:                 tool.NamespacedName(WebSearchNamespace, WebSearchRunTool),
 		Description:          webRunDescription,
-		InputSchema:          webSearchCommandsSchema(),
+		InputSchema:          webSearchCommandsSchema(h.options.SupportsLiteratureSearch),
 		Exposure:             tool.ExposureModelVisible,
 		Parallel:             true,
 		NamespaceDescription: "Tool for accessing the internet.",
@@ -72,6 +80,11 @@ func (h *WebSearchHandler) Execute(ctx context.Context, invocation *tool.Invocat
 	}
 	if err := json.Unmarshal([]byte(args), &commands); err != nil {
 		return nil, err
+	}
+	if !h.options.SupportsLiteratureSearch && len(commands.LiteratureSearchQuery) > 0 {
+		// Rust #57542: report the gated command back to the model instead of
+		// forwarding it to the search service.
+		return nil, fmt.Errorf("literature_search_query is unavailable for this model")
 	}
 	response, err := h.search(ctx, &commands)
 	if err != nil {
@@ -206,6 +219,9 @@ func webSearchCommandAction(commands *codexapi.SearchCommands) map[string]any {
 		return map[string]any{"type": "other"}
 	}
 	queries := webSearchQueries(commands.SearchQuery)
+	if len(queries) == 0 {
+		queries = webSearchQueries(commands.LiteratureSearchQuery)
+	}
 	if len(queries) == 0 {
 		queries = webSearchQueries(commands.ImageQuery)
 	}
@@ -544,13 +560,18 @@ func addHeaderValues(dst http.Header, src http.Header) {
 	}
 }
 
-func webSearchCommandsSchema() map[string]any {
-	return map[string]any{
+func webSearchCommandsSchema(supportsLiteratureSearch bool) map[string]any {
+	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"search_query": map[string]any{
 				"type":        "array",
 				"description": "Query the internet search engine for a given list of queries.",
+				"items":       webSearchQuerySchema(),
+			},
+			"literature_search_query": map[string]any{
+				"type":        "array",
+				"description": "Search for scientific papers. Open relevant papers and cite the primary sources you use.",
 				"items":       webSearchQuerySchema(),
 			},
 			"image_query": map[string]any{
@@ -637,6 +658,12 @@ func webSearchCommandsSchema() map[string]any {
 			},
 		},
 	}
+	if !supportsLiteratureSearch {
+		if properties, ok := schema["properties"].(map[string]any); ok {
+			delete(properties, LiteratureSearchQueryToolName)
+		}
+	}
+	return schema
 }
 
 func webSearchQuerySchema() map[string]any {

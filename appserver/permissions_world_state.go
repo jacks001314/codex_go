@@ -92,6 +92,10 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 				OnRequestAutoReview: messages.OnRequestAutoReview,
 				Never:               messages.Never,
 				UnlessTrusted:       messages.UnlessTrusted,
+				// Rust #57581: catalog headings customize the request_permissions
+				// section and the auto-review introduction.
+				RequestPermissions: messages.RequestPermissions,
+				AutoReviewSuffix:   messages.AutoReviewSuffix,
 			}
 			if granular := messages.Granular; granular != nil {
 				options.ApprovalMessages.Granular = &sandbox.PermissionPromptGranularApprovalMessages{
@@ -111,6 +115,8 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 				WritableRoots:    messages.WritableRoots,
 				OmittedPaths:     messages.OmittedPaths,
 				DeniedReads:      messages.DeniedReads,
+				// Rust #57599: heading for the saved command-prefix notice.
+				ApprovedCommandPrefixSaved: messages.ApprovedCommandPrefixSaved,
 			}
 		}
 	}
@@ -191,6 +197,16 @@ func granularApprovalConfigForTurn(cfg *config.Config, params *turn.TurnStartPar
 	}
 }
 
+// savedPrefixHeadingForModel resolves the catalog heading for the standalone
+// saved-prefix notice (Rust #57599). Invalid values fall back to the bundled
+// marker.
+func savedPrefixHeadingForModel(modelInfo *model.ModelInfo) string {
+	if modelInfo == nil || modelInfo.ModelMessages == nil || modelInfo.ModelMessages.Permissions == nil {
+		return ""
+	}
+	return sandbox.ValidSavedPrefixHeading(modelInfo.ModelMessages.Permissions.ApprovedCommandPrefixSaved)
+}
+
 // permissionsWorldStateInputItem ports Rust PermissionsState: it returns the
 // developer fragment when the instructions hash changed (or the section was
 // absent or unknown), and updates the persisted snapshot.
@@ -215,7 +231,7 @@ func (r *RuntimeRouter) permissionsWorldStateInputItem(
 		// Rust sends CompactPermissionsState (section id
 		// `approved_command_prefixes`) in this mode: only newly approved
 		// prefixes are reported.
-		return r.compactPermissionsWorldStateUpdate(record, state, threadID)
+		return r.compactPermissionsWorldStateUpdate(record, state, threadID, savedPrefixHeadingForModel(modelInfo))
 	}
 	options := r.permissionPromptOptionsForTurn(threadID, params, modelInfo, cfg)
 	rendered, hash := r.permissionsInstructionsForTurn(params, cfg, options)
@@ -236,7 +252,7 @@ func (r *RuntimeRouter) permissionsWorldStateInputItem(
 			case len(added) == 0:
 				// Nothing changed.
 			case prefixSubset(previous.ApprovedCommandPrefixes, current.ApprovedCommandPrefixes):
-				savedPrefixes = approvedCommandPrefixSavedText(added)
+				savedPrefixes = approvedCommandPrefixSavedText(added, savedPrefixHeadingForModel(modelInfo))
 			default:
 				// A removed prefix re-renders the full instructions, matching
 				// Rust's fallthrough.
@@ -281,12 +297,13 @@ func (r *RuntimeRouter) compactPermissionsWorldStateUpdate(
 	record *session.Record,
 	state *session.WorldState,
 	threadID string,
+	heading string,
 ) (any, error) {
 	current := r.approvedCommandPrefixesForThread(threadID)
 	previous, previousKind := decodeApprovedCommandPrefixes(state.ApprovedCommandPrefixes)
 	emit := ""
 	if previousKind == "current" {
-		emit = approvedCommandPrefixSavedText(addedCommandPrefixes(current, previous))
+		emit = approvedCommandPrefixSavedText(addedCommandPrefixes(current, previous), heading)
 	}
 	if current == nil {
 		// Persist an empty set rather than null so the section reads as a set.

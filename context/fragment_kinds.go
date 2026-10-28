@@ -37,6 +37,9 @@ const (
 	// ImagePreparationErrorKind classifies an image whose preparation failed
 	// before the request (Rust `ImagePreparationError::KIND`).
 	ImagePreparationErrorKind = "images.preparation_error"
+	// ImageUnavailableKind classifies the placeholder that replaced a file image
+	// confirmed missing at request time (Rust #57585 `images.unavailable`).
+	ImageUnavailableKind = "images.unavailable"
 	// UnknownContentKind is the classification a legacy item carries when the
 	// harness did not annotate its content (Rust `"" | "unknown"`).
 	UnknownContentKind = "unknown"

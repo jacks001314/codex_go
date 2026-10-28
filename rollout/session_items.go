@@ -19,16 +19,17 @@ func ItemFromSessionItem(item *session.Item) *Item {
 		return nil
 	}
 	out := &Item{
-		ID:         item.ID,
-		Type:       item.Type,
-		Role:       item.Role,
-		Text:       item.Text,
-		Name:       item.Name,
-		CallID:     item.CallID,
-		Data:       cloneAnyMap(item.Data),
-		Raw:        append(json.RawMessage(nil), item.Raw...),
-		ResponseID: item.ResponseID,
-		Metadata:   cloneAnyMap(item.Metadata),
+		ID:             item.ID,
+		Type:           item.Type,
+		Role:           item.Role,
+		Text:           item.Text,
+		Name:           item.Name,
+		CallID:         item.CallID,
+		Data:           cloneAnyMap(item.Data),
+		Raw:            append(json.RawMessage(nil), item.Raw...),
+		ResponseID:     item.ResponseID,
+		ResponseItemID: item.ResponseItemID,
+		Metadata:       cloneAnyMap(item.Metadata),
 	}
 	if len(item.Content) > 0 {
 		out.Content = make([]ContentPart, len(item.Content))
@@ -425,6 +426,13 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 		createdAt = time.Now().UTC()
 	}
 	items, rolloutTurns := sessionItemsFromRolloutLines(lines, createdAt)
+	// Rust #57553: a resumed thread uses the newest dynamic-tool catalog in its
+	// rollout, including an explicit clear, instead of only the creation
+	// metadata.
+	dynamicTools := cloneRawMessages(meta.DynamicTools)
+	if latest, ok := LatestDynamicTools(lines); ok {
+		dynamicTools = cloneRawMessages(latest)
+	}
 	updatedAt := createdAt
 	recencyAt := createdAt
 	if info, statErr := os.Stat(path); statErr == nil {
@@ -462,7 +470,7 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 			AgentNickname:              meta.AgentNickname,
 			AgentRole:                  meta.AgentRole,
 			AgentPath:                  meta.AgentPath,
-			DynamicTools:               cloneRawMessages(meta.DynamicTools),
+			DynamicTools:               dynamicTools,
 			SelectedCapabilityRoots:    cloneRawMessages(meta.SelectedCapabilityRoots),
 			MultiAgentVersion:          meta.MultiAgentVersion,
 			ContextWindow:              append(json.RawMessage(nil), meta.ContextWindow...),
@@ -1916,18 +1924,19 @@ func SessionItemFromRolloutItem(item *Item, createdAt time.Time, index int) sess
 		metadata["turnId"] = turnID
 	}
 	sessionItem := session.Item{
-		ID:         firstNonEmptyString(item.ID, fallbackItemID(index)),
-		Type:       firstNonEmptyString(itemType, "raw_response_item"),
-		Role:       role,
-		Text:       text,
-		Name:       item.Name,
-		CallID:     item.CallID,
-		Content:    sessionContentPartsFromRollout(item.Content),
-		Data:       cloneAnyMap(item.Data),
-		Raw:        append(json.RawMessage(nil), item.Raw...),
-		CreatedAt:  createdAt,
-		ResponseID: item.ResponseID,
-		Metadata:   metadata,
+		ID:             firstNonEmptyString(item.ID, fallbackItemID(index)),
+		Type:           firstNonEmptyString(itemType, "raw_response_item"),
+		Role:           role,
+		Text:           text,
+		Name:           item.Name,
+		CallID:         item.CallID,
+		Content:        sessionContentPartsFromRollout(item.Content),
+		Data:           cloneAnyMap(item.Data),
+		Raw:            append(json.RawMessage(nil), item.Raw...),
+		CreatedAt:      createdAt,
+		ResponseID:     item.ResponseID,
+		ResponseItemID: item.ResponseItemID,
+		Metadata:       metadata,
 	}
 	if sessionItem.Role == "user" && strings.HasPrefix(strings.TrimSpace(sessionItem.Text), "<turn_aborted>") {
 		sessionItem.Metadata["kind"] = "turn_aborted"

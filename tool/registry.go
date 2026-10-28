@@ -547,6 +547,29 @@ func (r *Registry) SetExposure(name ToolName, exposure Exposure) bool {
 	return true
 }
 
+// ReplaceSpec updates a registered tool's model-visible spec while keeping its
+// executor and registration order. Dynamic-tool replacement uses it so a
+// pending call for the previous catalog still dispatches (Rust #57553).
+func (r *Registry) ReplaceSpec(spec Spec) bool {
+	if r == nil {
+		return false
+	}
+	key := spec.Name.Key()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.executors[key]; !ok {
+		return false
+	}
+	if _, ok := r.specs[key]; !ok {
+		return false
+	}
+	if spec.InputSchemaMaxBytes < r.defaultInputSchemaMaxBytes {
+		spec.InputSchemaMaxBytes = r.defaultInputSchemaMaxBytes
+	}
+	r.specs[key] = spec
+	return true
+}
+
 func (r *Registry) ModelVisibleSpecs() []Spec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

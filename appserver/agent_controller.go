@@ -99,6 +99,24 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 }
 
 func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnAgentArgs) (*agent.SpawnAgentResult, error) {
+	return c.spawnAgentWithReservedID(ctx, args, "")
+}
+
+// SpawnReservedAgent creates a child under a host-reserved thread ID. Core still
+// derives the parent, session and path; the host commits membership and
+// deduplicates retries (Rust #57586 HostThreadSpawnReservation).
+func (c *runtimeAgentController) SpawnReservedAgent(ctx context.Context, args *agent.SpawnAgentArgs, reservedThreadID session.ThreadID) (*agent.SpawnAgentResult, error) {
+	reservedThreadID = session.ThreadID(strings.TrimSpace(string(reservedThreadID)))
+	if reservedThreadID == "" {
+		return nil, fmt.Errorf("reserved child startup requires a reserved thread ID")
+	}
+	if c != nil && reservedThreadID == session.ThreadID(strings.TrimSpace(c.parentID)) {
+		return nil, fmt.Errorf("reservation does not match prepared child")
+	}
+	return c.spawnAgentWithReservedID(ctx, args, reservedThreadID)
+}
+
+func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, args *agent.SpawnAgentArgs, reservedThreadID session.ThreadID) (*agent.SpawnAgentResult, error) {
 	if args == nil {
 		args = &agent.SpawnAgentArgs{}
 	}
@@ -155,7 +173,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextDuplicatePath, forkMode)
 		}
 	}
-	threadID := newThreadID()
+	threadID := reservedThreadID
+	if threadID == "" {
+		threadID = newThreadID()
+	}
 	now := time.Now().UTC()
 	// Rust #46075: build the child from the invoking step's captured settings.
 	// A settings update during the active turn changes the turn's live model,

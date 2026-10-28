@@ -13,17 +13,21 @@ type SearchRequest struct {
 }
 
 type SearchCommands struct {
-	SearchQuery    []SearchQuery         `json:"search_query,omitempty"`
-	ImageQuery     []SearchQuery         `json:"image_query,omitempty"`
-	Open           []OpenOperation       `json:"open,omitempty"`
-	Click          []ClickOperation      `json:"click,omitempty"`
-	Find           []FindOperation       `json:"find,omitempty"`
-	Screenshot     []ScreenshotOperation `json:"screenshot,omitempty"`
-	Finance        []FinanceOperation    `json:"finance,omitempty"`
-	Weather        []WeatherOperation    `json:"weather,omitempty"`
-	Sports         []SportsOperation     `json:"sports,omitempty"`
-	Time           []TimeOperation       `json:"time,omitempty"`
-	ResponseLength *SearchResponseLength `json:"response_length,omitempty"`
+	SearchQuery []SearchQuery `json:"search_query,omitempty"`
+	// LiteratureSearchQuery searches scientific papers (Rust #57542). The
+	// standalone web tool only exposes it for models that list
+	// `literature_search_query` in experimental_supported_tools.
+	LiteratureSearchQuery []SearchQuery         `json:"literature_search_query,omitempty"`
+	ImageQuery            []SearchQuery         `json:"image_query,omitempty"`
+	Open                  []OpenOperation       `json:"open,omitempty"`
+	Click                 []ClickOperation      `json:"click,omitempty"`
+	Find                  []FindOperation       `json:"find,omitempty"`
+	Screenshot            []ScreenshotOperation `json:"screenshot,omitempty"`
+	Finance               []FinanceOperation    `json:"finance,omitempty"`
+	Weather               []WeatherOperation    `json:"weather,omitempty"`
+	Sports                []SportsOperation     `json:"sports,omitempty"`
+	Time                  []TimeOperation       `json:"time,omitempty"`
+	ResponseLength        *SearchResponseLength `json:"response_length,omitempty"`
 }
 
 type SearchQuery struct {

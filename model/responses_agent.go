@@ -2566,6 +2566,7 @@ func responsesInputItemsWithStore(request *AgentRequest, store attachmentstore.S
 		items = stripResponseInputItemIDs(items)
 	}
 	items = prepareResponseInputImagesWithStore(items, store, responsesImagePrepOrigin(request))
+	items = replaceUnresolvableImageFiles(items, store)
 	return items
 }
 
@@ -2723,6 +2724,155 @@ func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.
 		return
 	}
 	block["image_url"] = prepared.URL
+}
+
+// UnavailableImagePlaceholder replaces a file image the attachment store
+// confirms is missing at request time (Rust #57585). Saved history keeps the
+// original reference; only the prepared request is projected.
+const UnavailableImagePlaceholder = "[image unavailable]"
+
+// replaceUnresolvableImageFiles checks every distinct file image in the
+// prepared request concurrently and replaces the confirmed-missing ones with a
+// text placeholder in messages and tool outputs. References whose store cannot
+// answer (including the inline default) are retained, matching Rust #57585.
+func replaceUnresolvableImageFiles(items []any, store attachmentstore.Store) []any {
+	if len(items) == 0 || store == nil {
+		return items
+	}
+	candidates := map[string]struct{}{}
+	for _, item := range items {
+		collectFileImageIDs(item, candidates)
+	}
+	if len(candidates) == 0 {
+		return items
+	}
+	ids := make([]string, 0, len(candidates))
+	for fileID := range candidates {
+		ids = append(ids, fileID)
+	}
+	sort.Strings(ids)
+	var missing sync.Map
+	var wait sync.WaitGroup
+	for _, fileID := range ids {
+		fileID := fileID
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if !attachmentstore.IsResolvable(store, fileID) {
+				missing.Store(fileID, true)
+			}
+		}()
+	}
+	wait.Wait()
+	unavailable := map[string]bool{}
+	missing.Range(func(key, _ any) bool {
+		fileID, _ := key.(string)
+		unavailable[fileID] = true
+		return true
+	})
+	if len(unavailable) == 0 {
+		return items
+	}
+	for _, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		replaceUnavailableImagesInItem(itemMap, unavailable)
+	}
+	return items
+}
+
+// collectFileImageIDs walks the request shapes that carry image references:
+// message `content`, and `output`/`content_items` for tool outputs.
+func collectFileImageIDs(value any, ids map[string]struct{}) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if fileImageID(typed) != "" {
+			ids[fileImageID(typed)] = struct{}{}
+			return
+		}
+		for _, key := range []string{"content", "output", "content_items"} {
+			if child, ok := typed[key]; ok {
+				collectFileImageIDs(child, ids)
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			collectFileImageIDs(child, ids)
+		}
+	}
+}
+
+// fileImageID returns the file reference of an image block, or "" when the
+// block is not a file image.
+func fileImageID(block map[string]any) string {
+	if !isResponseImageBlock(block) {
+		return ""
+	}
+	fileID, _ := block["file_id"].(string)
+	return strings.TrimSpace(fileID)
+}
+
+func isResponseImageBlock(block map[string]any) bool {
+	itemType, _ := block["type"].(string)
+	return itemType == "input_image" || itemType == "image"
+}
+
+func replaceUnavailableImagesInItem(item map[string]any, unavailable map[string]bool) {
+	if content, ok := item["content"].([]any); ok {
+		for index, part := range content {
+			block, ok := part.(map[string]any)
+			if !ok || !unavailableFileImage(block, unavailable) {
+				continue
+			}
+			content[index] = map[string]any{"type": "input_text", "text": UnavailableImagePlaceholder}
+			setResponseContentItemKind(item, index, contextfrag.ImageUnavailableKind)
+		}
+	}
+	for _, key := range []string{"output", "content_items"} {
+		if child, ok := item[key]; ok {
+			replaceUnavailableImagesInOutput(child, unavailable)
+		}
+	}
+}
+
+func replaceUnavailableImagesInOutput(value any, unavailable map[string]bool) {
+	switch typed := value.(type) {
+	case []any:
+		for index, part := range typed {
+			block, ok := part.(map[string]any)
+			if ok && unavailableFileImage(block, unavailable) {
+				typed[index] = map[string]any{"type": "input_text", "text": UnavailableImagePlaceholder}
+				continue
+			}
+			replaceUnavailableImagesInOutput(part, unavailable)
+		}
+	case map[string]any:
+		for _, key := range []string{"content", "output", "content_items"} {
+			if child, ok := typed[key]; ok {
+				replaceUnavailableImagesInOutput(child, unavailable)
+			}
+		}
+	}
+}
+
+func unavailableFileImage(block map[string]any, unavailable map[string]bool) bool {
+	return unavailable[fileImageID(block)]
+}
+
+// setResponseContentItemKind reclassifies a replaced message content item so
+// annotations keep matching the projection (Rust `AnnotatedContent`).
+func setResponseContentItemKind(item map[string]any, index int, kind string) {
+	metadata, _ := item["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata == nil {
+		return
+	}
+	kinds, _ := metadata["content_item_kinds"].([]any)
+	if index < 0 || index >= len(kinds) {
+		return
+	}
+	kinds[index] = kind
 }
 
 // gateContentItemKinds clears content_item_kinds from every request item when

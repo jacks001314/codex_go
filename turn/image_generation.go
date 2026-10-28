@@ -182,7 +182,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, err.Error()), nil
 	}
-	result, transparentBackground, requestID, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
+	result, transparentBackground, generationID, requestID, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
 	if err != nil {
 		if requestID == "" {
 			requestID = imageGenerationErrorRequestID(err)
@@ -239,6 +239,12 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	if transparentBackground != nil {
 		data["transparentBackground"] = *transparentBackground
 		data["transparent_background"] = *transparentBackground
+	}
+	if generationID != nil && strings.TrimSpace(*generationID) != "" {
+		// Rust #57552: expose the backend-provided generation id on the item and
+		// persist it through rollout and thread history.
+		data["generationId"] = *generationID
+		data["generation_id"] = *generationID
 	}
 	if savedPath != "" {
 		data["savedPath"] = savedPath
@@ -373,9 +379,9 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	}, inputImages, nil
 }
 
-func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, string, error) {
+func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, *string, string, error) {
 	if request == nil {
-		return "", nil, "", fmt.Errorf("image request is nil")
+		return "", nil, nil, "", fmt.Errorf("image request is nil")
 	}
 	var response *codexapi.ImageResponse
 	var requestID string
@@ -386,18 +392,18 @@ func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, reques
 	case imageGenerationRequestEdit:
 		response, requestID, err = h.postImageRequest(ctx, "images/edits", request.edit, turnID)
 	default:
-		return "", nil, "", fmt.Errorf("unknown image request kind %q", request.kind)
+		return "", nil, nil, "", fmt.Errorf("unknown image request kind %q", request.kind)
 	}
 	if err != nil {
-		return "", nil, requestID, err
+		return "", nil, nil, requestID, err
 	}
 	if response == nil || len(response.Data) == 0 {
-		return "", nil, requestID, &imageGenerationRequestError{
+		return "", nil, nil, requestID, &imageGenerationRequestError{
 			message:   "image generation returned no image data",
 			requestID: requestID,
 		}
 	}
-	return response.Data[0].B64JSON, transparentBackgroundValue(response.Background), requestID, nil
+	return response.Data[0].B64JSON, transparentBackgroundValue(response.Background), response.Data[0].GenerationID, requestID, nil
 }
 
 // observeImageGenerationRequestID records the nested ImageGen request id for

@@ -65,17 +65,32 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 		ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
 	})
 	return &turn.WebSearchOptions{
-		SessionID:       threadID,
-		Model:           modelProviderConfig.Model,
-		Originator:      turnOriginator(params),
-		TurnMetadata:    metadata[codexapi.ClientCodexTurnMetadataHeader],
-		Provider:        apiProvider,
-		Auth:            authHeaders,
-		HTTPClient:      r.httpClientForConfig(cfg),
-		InputItems:      r.webSearchInputItemsForTurn(threadID, params),
-		Settings:        webSearchSettingsFromConfig(cfg, mode),
-		MaxOutputTokens: turn.WebSearchMaxOutputTokens(modelInfo, cfg.ToolOutputTokenLimit()),
+		SessionID:                threadID,
+		Model:                    modelProviderConfig.Model,
+		Originator:               turnOriginator(params),
+		TurnMetadata:             metadata[codexapi.ClientCodexTurnMetadataHeader],
+		Provider:                 apiProvider,
+		Auth:                     authHeaders,
+		HTTPClient:               r.httpClientForConfig(cfg),
+		InputItems:               r.webSearchInputItemsForTurn(threadID, params),
+		Settings:                 webSearchSettingsFromConfig(cfg, mode),
+		MaxOutputTokens:          turn.WebSearchMaxOutputTokens(modelInfo, cfg.ToolOutputTokenLimit()),
+		SupportsLiteratureSearch: modelIncludesExperimentalTool(modelInfo, turn.LiteratureSearchQueryToolName),
 	}, nil
+}
+
+// modelIncludesExperimentalTool reports whether the catalog model lists the
+// capability in experimental_supported_tools (Rust #57542).
+func modelIncludesExperimentalTool(modelInfo *model.ModelInfo, name string) bool {
+	if modelInfo == nil || strings.TrimSpace(name) == "" {
+		return false
+	}
+	for _, supported := range modelInfo.ExperimentalSupportedTools {
+		if strings.TrimSpace(supported) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func appStandaloneWebSearchEnabled(capabilities model.ProviderCapabilities, info *model.ModelInfo, featureSettings map[string]bool) bool {

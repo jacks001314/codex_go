@@ -52,8 +52,11 @@ type daemonPackageManifest struct {
 	Target        string `json:"target"`
 	Variant       string `json:"variant"`
 	Entrypoint    string `json:"entrypoint"`
-	ResourcesDir  string `json:"resourcesDir"`
-	PathDir       string `json:"pathDir"`
+	// ExecServer advertises the packaged standalone executor (Rust #57590).
+	// Older packages omit the key and remain installable.
+	ExecServer   *string `json:"execServer"`
+	ResourcesDir string  `json:"resourcesDir"`
+	PathDir      string  `json:"pathDir"`
 }
 
 // prepareDaemonInstallForTest and executableIdentityForPrepare exist so tests
@@ -474,6 +477,13 @@ func requiredPackageArtifacts(manifest *daemonPackageManifest, goos string) []st
 		filepath.ToSlash(filepath.Join(filepath.Dir(entrypoint), codeModeHostExecutableNameFor(goos))),
 		filepath.ToSlash(filepath.Join(packagePathDir(manifest), defaultRGCommandNameFor(goos))),
 	}
+	if manifest.ExecServer != nil {
+		execServer := strings.TrimSpace(*manifest.ExecServer)
+		if execServer == "" {
+			execServer = filepath.ToSlash(filepath.Join(filepath.Dir(entrypoint), "codex-exec-server"+executableSuffixFor(goos)))
+		}
+		names = append(names, filepath.ToSlash(filepath.FromSlash(execServer)))
+	}
 	switch goos {
 	case "windows":
 		resources := filepath.ToSlash(filepath.FromSlash(strings.TrimSpace(manifest.ResourcesDir)))
@@ -505,6 +515,13 @@ func codeModeHostExecutableNameFor(goos string) string {
 		return "codex-code-mode-host.exe"
 	}
 	return "codex-code-mode-host"
+}
+
+func executableSuffixFor(goos string) string {
+	if goos == "windows" {
+		return ".exe"
+	}
+	return ""
 }
 
 // packagePathDir is the directory whose bundled command shims the CLI puts on

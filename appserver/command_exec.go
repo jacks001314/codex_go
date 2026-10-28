@@ -667,7 +667,7 @@ func (s *CommandExecService) waitCommandExec(ctx context.Context, connectionID s
 	if ptySession != nil {
 		waitForPTYOutputAfterExit(outputActivity, outputDone)
 		_ = ptySession.ClosePTY()
-		waitForPTYOutputDone(ptySession, outputDone)
+		_ = waitForPTYOutputDone(ptySession, outputDone)
 		_ = ptySession.Cleanup()
 	}
 	if cancel != nil {
@@ -1076,6 +1076,18 @@ func (b *commandExecOutputBuffer) CapReached() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.capReached
+}
+
+// CapSatisfied reports whether the requested byte cap was fully captured. A
+// fully captured cap means a post-exit drain deadline did not lose output
+// (Rust #57569).
+func (b *commandExecOutputBuffer) CapSatisfied() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.limit != nil && b.data.Len() == *b.limit
 }
 
 var _ io.Writer = (*commandExecOutputBuffer)(nil)

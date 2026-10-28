@@ -50,4 +50,7 @@ type ImageResponse struct {
 
 type ImageData struct {
 	B64JSON string `json:"b64_json"`
+	// GenerationID is the backend-provided image generation identifier
+	// (Rust #57552: `ImageData::generation_id` parsed from `generation_id`).
+	GenerationID *string `json:"generation_id,omitempty"`
 }

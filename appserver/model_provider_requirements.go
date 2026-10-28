@@ -147,7 +147,7 @@ func (r *RuntimeRouter) checkModelProviderRoute(route threadModelProviderRoute) 
 	if !hasDefinition {
 		return nil
 	}
-	required, err := model.RequiredModelProviderDefinition(route.providerID, definition)
+	required, err := model.RequiredModelProviderDefinitionWithBaseURL(route.providerID, definition, route.provider.BaseURL)
 	if err != nil {
 		return configLoadInvalidRequest(err)
 	}

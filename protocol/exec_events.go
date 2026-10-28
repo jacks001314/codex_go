@@ -159,9 +159,12 @@ type ThreadItem struct {
 	RevisedPrompt         string         `json:"revised_prompt,omitempty"`
 	SavedPath             string         `json:"saved_path,omitempty"`
 	TransparentBackground *bool          `json:"transparent_background,omitempty"`
-	Success               *bool          `json:"success,omitempty"`
-	Items                 []TodoItem     `json:"items,omitempty"`
-	Metadata              map[string]any `json:"metadata,omitempty"`
+	// GenerationID is the backend-provided image generation identifier
+	// (Rust #57552). It is omitted for older records that predate the field.
+	GenerationID *string        `json:"generation_id,omitempty"`
+	Success      *bool          `json:"success,omitempty"`
+	Items        []TodoItem     `json:"items,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 type TodoItem struct {
@@ -275,20 +278,32 @@ func ImageGenerationItem(id string, status string, revisedPrompt string, savedPa
 	if len(transparentBackground) > 0 {
 		transparent = transparentBackground[0]
 	}
+	return ImageGenerationItemWithID(id, status, revisedPrompt, savedPath, transparent, nil)
+}
+
+// ImageGenerationItemWithID builds an image-generation item that also carries
+// the backend-provided generation id (Rust #57552).
+func ImageGenerationItemWithID(id string, status string, revisedPrompt string, savedPath string, transparentBackground *bool, generationID *string) ThreadItem {
+	metadata := map[string]any{
+		"status":         status,
+		"revisedPrompt":  revisedPrompt,
+		"revised_prompt": revisedPrompt,
+		"savedPath":      savedPath,
+		"saved_path":     savedPath,
+	}
+	if generationID != nil && *generationID != "" {
+		metadata["generationId"] = *generationID
+		metadata["generation_id"] = *generationID
+	}
 	return ThreadItem{
 		ID:                    id,
 		Type:                  "imageGeneration",
 		Status:                status,
 		RevisedPrompt:         revisedPrompt,
 		SavedPath:             savedPath,
-		TransparentBackground: transparent,
-		Metadata: map[string]any{
-			"status":         status,
-			"revisedPrompt":  revisedPrompt,
-			"revised_prompt": revisedPrompt,
-			"savedPath":      savedPath,
-			"saved_path":     savedPath,
-		},
+		TransparentBackground: transparentBackground,
+		GenerationID:          generationID,
+		Metadata:              metadata,
 	}
 }
 

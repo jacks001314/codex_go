@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/audioutil"
 	contextfrag "codex_go/context"
 	"codex_go/utils"
 
@@ -1734,7 +1735,20 @@ func truncateCodeModeOutput(output *Output, maxTokens int) *Output {
 	if output == nil {
 		return nil
 	}
-	truncated := utils.FormattedTruncateText(output.Body, utils.TokensPolicy(maxTokens))
+	policy := utils.TokensPolicy(maxTokens)
+	if items, ok := codeModeTruncationItems(output); ok {
+		truncated := utils.FormattedTruncateFunctionOutputItemsWithPolicy(items, policy, audioutil.EstimateAudioTokenCount)
+		if sameCodeModeContentItems(items, truncated) {
+			return output
+		}
+		output.Body = codeModeContentItemsText(truncated)
+		if output.Data == nil {
+			output.Data = map[string]any{}
+		}
+		output.Data["content_items"] = codeModeContentItemMaps(truncated)
+		return output
+	}
+	truncated := utils.FormattedTruncateText(output.Body, policy)
 	if truncated == output.Body {
 		return output
 	}
@@ -1743,6 +1757,111 @@ func truncateCodeModeOutput(output *Output, maxTokens int) *Output {
 		output.Data["content_items"] = []map[string]any{{"type": "input_text", "text": output.Body}}
 	}
 	return output
+}
+
+// codeModeTruncationItems converts code-mode's map-shaped content items into
+// the shared truncation type. It reports false when the output has no typed
+// items or carries a shape this path does not understand, so callers keep the
+// text-only fallback.
+func codeModeTruncationItems(output *Output) ([]utils.FunctionCallOutputContentItem, bool) {
+	if output == nil || output.Data == nil {
+		return nil, false
+	}
+	parts, ok := codeModeContentParts(output.Data["content_items"])
+	if !ok {
+		return nil, false
+	}
+	items := make([]utils.FunctionCallOutputContentItem, 0, len(parts))
+	for _, part := range parts {
+		kind := utils.ContentItemKind(strings.TrimSpace(codeModeStringValue(part["type"])))
+		item := utils.FunctionCallOutputContentItem{Kind: kind}
+		switch kind {
+		case utils.ContentInputText:
+			item.Text = codeModeStringValue(part["text"])
+		case utils.ContentInputImage:
+			item.ImageURL = codeModeStringValue(part["image_url"])
+			item.FileID = codeModeStringValue(part["file_id"])
+			if detail := codeModeStringValue(part["detail"]); detail != "" {
+				item.Detail = &detail
+			}
+		case utils.ContentInputAudio:
+			item.AudioURL = codeModeStringValue(part["audio_url"])
+		case utils.ContentEncryptedContent:
+			item.EncryptedContent = codeModeStringValue(part["encrypted_content"])
+		default:
+			return nil, false
+		}
+		items = append(items, item)
+	}
+	return items, true
+}
+
+func codeModeStringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprint(value)
+}
+
+// codeModeContentItemMaps renders truncation results back into the map shape
+// code mode passes through Data["content_items"].
+func codeModeContentItemMaps(items []utils.FunctionCallOutputContentItem) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		switch item.Kind {
+		case utils.ContentInputText:
+			out = append(out, map[string]any{"type": "input_text", "text": item.Text})
+		case utils.ContentInputImage:
+			image := map[string]any{"type": "input_image"}
+			if item.ImageURL != "" {
+				image["image_url"] = item.ImageURL
+			}
+			if item.FileID != "" {
+				image["file_id"] = item.FileID
+			}
+			if item.Detail != nil {
+				image["detail"] = *item.Detail
+			}
+			out = append(out, image)
+		case utils.ContentInputAudio:
+			out = append(out, map[string]any{"type": "input_audio", "audio_url": item.AudioURL})
+		case utils.ContentEncryptedContent:
+			out = append(out, map[string]any{"type": "encrypted_content", "encrypted_content": item.EncryptedContent})
+		}
+	}
+	return out
+}
+
+func sameCodeModeContentItems(left, right []utils.FunctionCallOutputContentItem) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		a, b := left[i], right[i]
+		if a.Kind != b.Kind || a.Text != b.Text || a.ImageURL != b.ImageURL || a.FileID != b.FileID || a.AudioURL != b.AudioURL || a.EncryptedContent != b.EncryptedContent {
+			return false
+		}
+		if (a.Detail == nil) != (b.Detail == nil) || (a.Detail != nil && *a.Detail != *b.Detail) {
+			return false
+		}
+	}
+	return true
+}
+
+// codeModeContentItemsText derives the legacy text body the way Rust's
+// `function_call_output_content_items_to_text` does: non-blank text segments
+// joined by newlines.
+func codeModeContentItemsText(items []utils.FunctionCallOutputContentItem) string {
+	segments := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Kind == utils.ContentInputText && strings.TrimSpace(item.Text) != "" {
+			segments = append(segments, item.Text)
+		}
+	}
+	return strings.Join(segments, "\n")
 }
 
 func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell) (*Output, error) {

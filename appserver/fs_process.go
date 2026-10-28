@@ -178,12 +178,16 @@ type ProcessOutputDeltaNotification struct {
 }
 
 type ProcessExitedNotification struct {
-	ProcessHandle    string `json:"processHandle"`
-	ExitCode         int32  `json:"exitCode"`
-	Stdout           string `json:"stdout"`
-	StdoutCapReached bool   `json:"stdoutCapReached"`
-	Stderr           string `json:"stderr"`
-	StderrCapReached bool   `json:"stderrCapReached"`
+	ProcessHandle string `json:"processHandle"`
+	ExitCode      int32  `json:"exitCode"`
+	// OutputDrainTimedOut reports that output collection hit its post-exit
+	// deadline before seeing EOF or reaching the requested byte cap on either
+	// stream (Rust #57569). Older servers omit the field.
+	OutputDrainTimedOut *bool  `json:"outputDrainTimedOut,omitempty"`
+	Stdout              string `json:"stdout"`
+	StdoutCapReached    bool   `json:"stdoutCapReached"`
+	Stderr              string `json:"stderr"`
+	StderrCapReached    bool   `json:"stderrCapReached"`
 }
 
 type CommandExecParams struct {

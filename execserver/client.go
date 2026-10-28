@@ -66,6 +66,9 @@ type Client struct {
 	// session. A registry lookup that returns a different executor must not
 	// resume this session against it.
 	executorPublicKey *RemotePublicKey
+	// missingWatches receives `fs/missingChanged` invalidation for the newest
+	// observation registered through WatchMissing (Rust #57598).
+	missingWatches map[uint64]chan struct{}
 }
 
 type inFlightMetadataRequest struct {
@@ -1785,6 +1788,77 @@ func (c *Client) FSGetMetadata(ctx context.Context, params *FSGetMetadataParams)
 	return c.fsGetMetadataCoalesced(ctx, &normalized)
 }
 
+// WatchMissing registers an unsandboxed observation over the executor's own
+// filesystem (Rust #57598). When the executor acknowledges coverage, the
+// returned channel closes on the first relevant change, connection loss or
+// supersession. An unsupported executor returns a nil channel.
+func (c *Client) WatchMissing(ctx context.Context, params *FSWatchMissingParams) (*FSWatchMissingResponse, <-chan struct{}, error) {
+	if params == nil {
+		return nil, nil, errors.New("fs/watchMissing params are required")
+	}
+	normalized := FSWatchMissingParams{WatchID: params.WatchID, Missing: make([]string, 0, len(params.Missing))}
+	for _, raw := range params.Missing {
+		path, err := normalizeFSPathForWire(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("fs/watchMissing missing path: %w", err)
+		}
+		normalized.Missing = append(normalized.Missing, path)
+	}
+	if params.Present != nil {
+		path, err := normalizeFSPathForWire(*params.Present)
+		if err != nil {
+			return nil, nil, fmt.Errorf("fs/watchMissing present path: %w", err)
+		}
+		normalized.Present = &path
+	}
+	changed := make(chan struct{})
+	c.mu.Lock()
+	if c.missingWatches == nil {
+		c.missingWatches = map[uint64]chan struct{}{}
+	}
+	previous := c.missingWatches[normalized.WatchID]
+	c.missingWatches[normalized.WatchID] = changed
+	c.mu.Unlock()
+	if previous != nil {
+		close(previous)
+	}
+	var response FSWatchMissingResponse
+	if err := c.call(ctx, MethodFSWatchMissing, &normalized, &response); err != nil {
+		c.forgetMissingWatch(normalized.WatchID, changed)
+		return nil, nil, fmt.Errorf("fs/watchMissing: %w", err)
+	}
+	if !response.Watching {
+		c.forgetMissingWatch(normalized.WatchID, changed)
+		return &response, nil, nil
+	}
+	return &response, changed, nil
+}
+
+func (c *Client) forgetMissingWatch(watchID uint64, changed chan struct{}) {
+	c.mu.Lock()
+	registered := c.missingWatches[watchID]
+	if registered == changed {
+		delete(c.missingWatches, watchID)
+	}
+	c.mu.Unlock()
+	if registered == changed {
+		close(changed)
+	}
+}
+
+// invalidateMissingWatches completes every registered observation. Connection
+// loss invalidates coverage because the executor connection that verified it is
+// gone (Rust #57598).
+func (c *Client) invalidateMissingWatches() {
+	c.mu.Lock()
+	watches := c.missingWatches
+	c.missingWatches = nil
+	c.mu.Unlock()
+	for _, changed := range watches {
+		close(changed)
+	}
+}
+
 func (c *Client) fsGetMetadataCoalesced(ctx context.Context, params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -2005,6 +2079,7 @@ func (c *Client) Close() error {
 		c.cleanup()
 		c.recoverMu.Unlock()
 	}
+	c.invalidateMissingWatches()
 	c.failTerminal(errors.New("exec-server client is closed"))
 	return err
 }
@@ -2204,6 +2279,9 @@ func (c *Client) recoverConnection(ctx context.Context) error {
 			c.conn = conn
 			c.executorRegistrationID = strings.TrimSpace(metadata.executorRegistrationID)
 			c.mu.Unlock()
+			// Observations verified on the lost connection are no longer covered
+			// until the client re-registers them (Rust #57598).
+			c.invalidateMissingWatches()
 			go c.readLoop(conn)
 			return nil
 		}
@@ -2512,6 +2590,24 @@ func (c *Client) handleNotification(method string, raw json.RawMessage) error {
 			return nil
 		}
 		emitNetworkPolicyDecisionAudit(params)
+		return nil
+	case MethodFSMissingChanged:
+		if err := requireNotificationFields(raw, "watchId"); err != nil {
+			return err
+		}
+		var params FSMissingChangedNotification
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		changed := c.missingWatches[params.WatchID]
+		if changed != nil {
+			delete(c.missingWatches, params.WatchID)
+		}
+		c.mu.Unlock()
+		if changed != nil {
+			close(changed)
+		}
 		return nil
 	default:
 		return nil

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/codemode"
 	"codex_go/codexapi"
 	"codex_go/model"
@@ -68,6 +70,22 @@ type RuntimeOptions struct {
 	// IndirectDescriptionPrefixes carries the active model's indirect namespace
 	// guidance for Code Mode rendering (Rust #47642).
 	IndirectDescriptionPrefixes *tool.IndirectNamespacePrefixes
+	// DynamicToolCaller, DynamicToolThreadID, and DynamicToolTurnID let a later
+	// ReplaceDynamicTools register executors for a new catalog (Rust #57553).
+	DynamicToolCaller   DynamicToolCaller
+	DynamicToolThreadID string
+	DynamicToolTurnID   string
+	// DynamicTools is the catalog registered in Router when the runtime was
+	// built, used to recognize tools owned by this thread.
+	DynamicTools []DynamicToolSpec
+	// DynamicToolStepRefresh rebuilds the model-visible tool list before every
+	// sampling step, so a mid-turn replacement applies to the following step
+	// (Rust #57553).
+	DynamicToolStepRefresh bool
+	// InvocationRegistry opts this turn into live V2 tool-call lookup and unique
+	// active call IDs (Rust #57586 HostToolInvocationLookup). A nil registry
+	// leaves dispatch unchanged.
+	InvocationRegistry *agent.InvocationRegistry
 }
 
 type Runtime struct {
@@ -90,6 +108,13 @@ type Runtime struct {
 	allowedTools                 *[]string
 	codeModeMessagesForModel     func(model string) *model.CodeModeToolMessages
 	codeModeDefaultExecYieldTime time.Duration
+	dynamicToolMu                sync.Mutex
+	dynamicToolCaller            DynamicToolCaller
+	dynamicToolThreadID          string
+	dynamicToolTurnID            string
+	dynamicToolNames             map[string]tool.ToolName
+	dynamicToolStepRefresh       bool
+	invocationRegistry           *agent.InvocationRegistry
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -105,6 +130,17 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		executedToolCalls = NewExecutedToolCallRecorder()
 	}
 	executedToolCalls.SetToolMetadataMetrics(options.ToolMetadataMetrics)
+	dynamicTools := make(map[string]tool.ToolName)
+	for _, entry := range dynamicToolEntries(options.DynamicTools) {
+		if entry.function == nil {
+			continue
+		}
+		_, spec, err := newDynamicToolExecutor(nil, entry.namespace, entry.function)
+		if err != nil {
+			continue
+		}
+		dynamicTools[spec.Name.Key()] = spec.Name
+	}
 	return &Runtime{
 		agent:                        options.Agent,
 		router:                       options.Router,
@@ -125,6 +161,12 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		allowedTools:                 options.AllowedTools,
 		codeModeMessagesForModel:     options.CodeModeMessagesForModel,
 		codeModeDefaultExecYieldTime: options.CodeModeDefaultExecYieldTime,
+		dynamicToolCaller:            options.DynamicToolCaller,
+		dynamicToolThreadID:          strings.TrimSpace(options.DynamicToolThreadID),
+		dynamicToolTurnID:            strings.TrimSpace(options.DynamicToolTurnID),
+		dynamicToolNames:             dynamicTools,
+		dynamicToolStepRefresh:       options.DynamicToolStepRefresh,
+		invocationRegistry:           options.InvocationRegistry,
 	}
 }
 
@@ -133,6 +175,73 @@ func (r *Runtime) DeferredToolNamespaces() map[string]string {
 		return nil
 	}
 	return r.router.DeferredToolNamespaces()
+}
+
+// ReplaceDynamicTools publishes a new dynamic-tool catalog on this turn's
+// router (Rust #57553). Tools removed from the catalog are hidden from later
+// model steps but keep their executors so calls already emitted by the previous
+// step still dispatch; a new or updated tool becomes visible on the next step.
+// An empty catalog clears the catalog.
+func (r *Runtime) ReplaceDynamicTools(tools []DynamicToolSpec) error {
+	if r == nil || r.router == nil {
+		return errors.New("turn runtime has no tool registry")
+	}
+	registry := r.router.Registry()
+	if registry == nil {
+		return errors.New("turn runtime has no tool registry")
+	}
+	if err := ValidateDynamicTools(tools); err != nil {
+		return err
+	}
+	r.dynamicToolMu.Lock()
+	defer r.dynamicToolMu.Unlock()
+	next := make(map[string]tool.ToolName, len(tools))
+	options := &DynamicToolRegistryOptions{
+		Caller:   r.dynamicToolCaller,
+		ThreadID: r.dynamicToolThreadID,
+		TurnID:   r.dynamicToolTurnID,
+	}
+	for _, entry := range dynamicToolEntries(tools) {
+		executor, spec, err := newDynamicToolExecutor(options, entry.namespace, entry.function)
+		if err != nil {
+			return err
+		}
+		if executor == nil {
+			continue
+		}
+		key := spec.Name.Key()
+		if current, ok := registry.Spec(spec.Name); ok && isDynamicToolSpec(current) {
+			// Keep the executor that served the previous step so a pending call
+			// for this name still runs with its original schema.
+			registry.ReplaceSpec(spec)
+			next[key] = spec.Name
+			continue
+		}
+		if _, exists := registry.Lookup(spec.Name); exists {
+			// A built-in tool owns this name; RegisterExternal would skip it.
+			continue
+		}
+		if _, err := registry.RegisterExternal(executor); err != nil {
+			return err
+		}
+		next[key] = spec.Name
+	}
+	for key, name := range r.dynamicToolNames {
+		if _, ok := next[key]; ok {
+			continue
+		}
+		current, ok := registry.Spec(name)
+		if !ok || !isDynamicToolSpec(current) {
+			continue
+		}
+		registry.SetExposure(name, tool.ExposureHidden)
+	}
+	r.dynamicToolNames = next
+	return nil
+}
+
+func isDynamicToolSpec(spec tool.Spec) bool {
+	return spec.Search != nil && spec.Search.Source != nil && spec.Search.Source.Name == dynamicToolSearchSourceName
 }
 
 func (r *Runtime) StandaloneWebSearchRegistered() bool {
@@ -316,9 +425,11 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		visibleSpecs = r.modelVisibleSpecsForRequest(effectiveToolMode)
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
-	if r.codeModeMessagesForModel != nil {
+	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh {
 		loopRequest.ToolsForStep = func(modelID string) []any {
-			r.applyCodeModeMessagesForModel(modelID)
+			if r.codeModeMessagesForModel != nil {
+				r.applyCodeModeMessagesForModel(modelID)
+			}
 			return buildTools()
 		}
 	}
@@ -356,6 +467,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Tracer:                      loopRequest.Tracer,
 			CriticalPathTiming:          loopRequest.CriticalPathTiming,
 			TimingState:                 loopRequest.Timing,
+			InvocationRegistry:          r.invocationRegistry,
 		}),
 		MaxTurns:               r.maxTurns,
 		Now:                    r.now,

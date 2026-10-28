@@ -55,6 +55,8 @@ const (
 	MethodFSWriteFile             = "fs/writeFile"
 	MethodFSCreateDirectory       = "fs/createDirectory"
 	MethodFSGetMetadata           = "fs/getMetadata"
+	MethodFSWatchMissing          = "fs/watchMissing"
+	MethodFSMissingChanged        = "fs/missingChanged"
 	MethodFSCanonicalize          = "fs/canonicalize"
 	MethodFSReadDirectory         = "fs/readDirectory"
 	MethodFSWalk                  = "fs/walk"
@@ -251,6 +253,9 @@ type Server struct {
 	v2Discovery               *v2DiscoveryManager
 	shellSnapshots            *shellSnapshotManager
 	credentialBrokers         network.RemoteCredentialBrokerCache
+	// missingWatch holds the newest missing-path observation for this
+	// connection (Rust #57598 missing_watch.rs).
+	missingWatch missingWatchState
 }
 
 // SetPreferMXC records the startup CLI sandbox preference
@@ -543,6 +548,9 @@ type EnvironmentCapabilities struct {
 	CredentialMaskingCustomProviders bool `json:"credentialMaskingCustomProviders,omitempty"`
 	CapabilityDiscoverySandbox       bool `json:"capabilityDiscoverySandbox"`
 	CapabilityDiscoveryV2            bool `json:"capabilityDiscoveryV2"`
+	// FSWatchMissing advertises `fs/watchMissing` on this physical connection
+	// (Rust #57598). Only Linux executors can observe missing paths.
+	FSWatchMissing bool `json:"fsWatchMissing,omitempty"`
 	// ShellSnapshotV2 advertises process/start.shellSnapshot support.
 	ShellSnapshotV2 bool `json:"shellSnapshotV2"`
 	// Rust 646f7c0a91: whether this executor supports environmentConfig/read;
@@ -796,6 +804,25 @@ type FSGetMetadataResponse struct {
 	Size         int64 `json:"size"`
 	CreatedAtMS  int64 `json:"createdAtMs"`
 	ModifiedAtMS int64 `json:"modifiedAtMs"`
+}
+
+// FSWatchMissingParams registers one unsandboxed metadata observation per
+// connection (Rust #57598 FsWatchMissingParams). A newer watchId supersedes the
+// prior watch.
+type FSWatchMissingParams struct {
+	WatchID uint64   `json:"watchId"`
+	Missing []string `json:"missing"`
+	Present *string  `json:"present,omitempty"`
+}
+
+type FSWatchMissingResponse struct {
+	Watching bool `json:"watching"`
+}
+
+// FSMissingChangedNotification invalidates the observation identified by
+// watchId (Rust #57598 FsMissingChangedNotification).
+type FSMissingChangedNotification struct {
+	WatchID uint64 `json:"watchId"`
 }
 
 type FSCanonicalizeParams struct {
@@ -1203,6 +1230,9 @@ func (s *Server) setConnectionState(notify processNotifier, requests *serverRequ
 	if previousRequests != nil && previousRequests != requests {
 		previousRequests.close()
 	}
+	// A missing-path observation is scoped to one physical connection, so a
+	// new connection or another session attachment invalidates it (Rust #57598).
+	s.invalidateMissingWatch()
 	for _, process := range processes {
 		process.mu.Lock()
 		process.notify = notify
@@ -1243,6 +1273,7 @@ func (s *Server) shutdown() {
 		break
 	}
 	s.mu.Unlock()
+	s.invalidateMissingWatch()
 	if s.shellSnapshots != nil {
 		s.shellSnapshots.close()
 	}
@@ -1680,6 +1711,22 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := getMetadata(&params)
 		return result, mapFSRequestError(err)
+	case MethodFSWatchMissing:
+		var params FSWatchMissingParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		for _, missing := range params.Missing {
+			if err := validateWirePathURI(missing); err != nil {
+				return nil, requestError(-32602, "invalid params: missing must be an absolute file URI: "+err.Error())
+			}
+		}
+		if params.Present != nil {
+			if err := validateWirePathURI(*params.Present); err != nil {
+				return nil, requestError(-32602, "invalid params: present must be an absolute file URI: "+err.Error())
+			}
+		}
+		return s.serverForConnection(ctx).watchMissing(&params, processNotifierFromContext(ctx)), nil
 	case MethodFSCanonicalize:
 		var params FSCanonicalizeParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -1764,7 +1811,7 @@ func execServerMethodFamily(method string) string {
 	case MethodHTTPRequest:
 		return "http"
 	case MethodFSReadFile, MethodFSOpen, MethodFSReadBlock, MethodFSWriteBlock, MethodFSClose, MethodFSWriteFile, MethodFSCreateDirectory,
-		MethodFSGetMetadata, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk, MethodFSRemove, MethodFSCopy:
+		MethodFSGetMetadata, MethodFSWatchMissing, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk, MethodFSRemove, MethodFSCopy:
 		return "filesystem"
 	default:
 		return ""
@@ -3889,6 +3936,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			CredentialMaskingCustomProviders: credentialMasking,
 			CapabilityDiscoverySandbox:       true,
 			CapabilityDiscoveryV2:            true,
+			FSWatchMissing:                   runtime.GOOS == "linux",
 			// Local exec-servers do not own the unified-exec launch path, so they
 			// must not advertise executor-managed shell snapshots (Rust #39958).
 			ShellSnapshotV2: false,

@@ -411,8 +411,11 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 		},
 		PhaseTwo: &appServerMemoryConsolidator{
 			router: r, providerID: providerID, originator: record.Metadata.Originator,
-			parentProfile: parentProfile, serviceTier: stringPtrIfNotEmpty(serviceTier),
-			serviceTierSet: serviceTier != "",
+			parentProfile: parentProfile,
+			// Rust #57568: consolidation uses its own configured tier (default
+			// standard) instead of inheriting the session's tier.
+			serviceTier:    stringPtrIfNotEmpty(memoryConfig.ConsolidationServiceTier),
+			serviceTierSet: strings.TrimSpace(memoryConfig.ConsolidationServiceTier) != "",
 		},
 		// The consolidation metrics land on the runtime's task metrics, the same
 		// sink the per-turn counters use (Rust's MemoryStartupContext holds the

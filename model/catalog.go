@@ -144,10 +144,48 @@ type ApprovalMessages struct {
 	OnRequestAutoReview *string `json:"on_request_auto_review,omitempty"`
 	Never               *string `json:"never,omitempty"`
 	UnlessTrusted       *string `json:"unless_trusted,omitempty"`
+	// RequestPermissions is an optional replacement heading for the
+	// request_permissions tool instructions (Rust #57581).
+	RequestPermissions *string `json:"request_permissions,omitempty"`
+	// AutoReviewSuffix introduces harness-owned automatic review guidance
+	// (Rust #57581).
+	AutoReviewSuffix *string `json:"auto_review_suffix,omitempty"`
 	// Granular carries optional catalog templates for harness-owned granular
 	// approval facts (Rust #57325). The templates are preserved verbatim;
 	// validation and rendering are consumer concerns.
 	Granular *GranularApprovalMessages `json:"granular,omitempty"`
+}
+
+// UnmarshalJSON accepts Rust's `request_permissions_tool` alias for
+// `request_permissions` (Rust #57581).
+func (m *ApprovalMessages) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		OnRequest              *string                   `json:"on_request"`
+		OnRequestAutoReview    *string                   `json:"on_request_auto_review"`
+		Never                  *string                   `json:"never"`
+		UnlessTrusted          *string                   `json:"unless_trusted"`
+		RequestPermissions     *string                   `json:"request_permissions"`
+		RequestPermissionsTool *string                   `json:"request_permissions_tool"`
+		AutoReviewSuffix       *string                   `json:"auto_review_suffix"`
+		Granular               *GranularApprovalMessages `json:"granular"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	requestPermissions := raw.RequestPermissions
+	if requestPermissions == nil {
+		requestPermissions = raw.RequestPermissionsTool
+	}
+	*m = ApprovalMessages{
+		OnRequest:           raw.OnRequest,
+		OnRequestAutoReview: raw.OnRequestAutoReview,
+		Never:               raw.Never,
+		UnlessTrusted:       raw.UnlessTrusted,
+		RequestPermissions:  requestPermissions,
+		AutoReviewSuffix:    raw.AutoReviewSuffix,
+		Granular:            raw.Granular,
+	}
+	return nil
 }
 
 // GranularApprovalMessages mirrors Rust protocol::openai_models::
@@ -187,6 +225,9 @@ type PermissionMessages struct {
 	// placeholder for the harness-owned denial explanation and path list
 	// (Rust #57263).
 	DeniedReads *string `json:"denied_reads,omitempty"`
+	// ApprovedCommandPrefixSaved is a plain-text heading for the saved-prefix
+	// notice (Rust #57599).
+	ApprovedCommandPrefixSaved *string `json:"approved_command_prefix_saved,omitempty"`
 }
 
 // GuardianV2ModelConfig mirrors Rust

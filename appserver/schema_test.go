@@ -165,10 +165,10 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// timestamps changed both precomputed exports.
 		// Re-vendored from upstream 6a6e2fb1f0 (#57452): both exports gained the
 		// policyCapacityUnavailable protocol value.
-		// Re-anchored to upstream 4d3ed3f3b4: `accountSession/list` and
-		// `accountSession/switch` now appear in the protocol exports.
-		{"stable", stablePrecomputedExports, "600bebdc4d327932a3fec84b52a0b82dd765a91c61cb73346e13869de2e97cac"},
-		{"experimental", experimentalPrecomputedExports, "8284545376b6250a0a71a185395287e31b22cb00b6ed69161f39d2652f84fa29"},
+		// Re-anchored to upstream e8e6a922c0: the exports gained the process
+		// `outputDrainTimedOut` and saved-command-prefix heading schema changes.
+		{"stable", stablePrecomputedExports, "f1dd2e77afb6c2ff10d3dcbf71c6034f511ef44e4388b6c2c45747bea3565944"},
+		{"experimental", experimentalPrecomputedExports, "314b7c7a91b3b461430611c37c11980d2c328a8e32abf4a9b4d0e9dcb1593616"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

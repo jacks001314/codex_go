@@ -188,6 +188,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"file-system",
 		"exec-server-protocol",
 		"exec-server",
+		"exec-server-cli",
 		"exec-server/tests/support",
 		"execpolicy",
 		"ext/agent",
@@ -333,7 +334,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// client and suite surfaces after the intervening sync windows
 		// (accountSession/list and accountSession/switch in
 		// app-server-protocol/src/protocol/common.rs).
-		{Path: "Cargo.toml", SHA256: "80b5d1de8eb3431b16e97fad56c4e0dd4c03b247026e6cb976d031acdb83f0bc"},
+		// Re-anchored to upstream e8e6a922c0: Cargo.toml gained the
+		// exec-server-cli member (#57589/#57590).
+		{Path: "Cargo.toml", SHA256: "47087649747b97d4db20e1154e2861962b2f786f0f87f89aba499aedfcf31d07"},
 		{Path: "cli/src/lib.rs", SHA256: "bc73cee3f5714a1ab90ca8853bbaa74f16dc5abd6edc6bb888d8648b6c49f14a"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -358,7 +361,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// the additional-tool declaration backing storage; no wire change.
 		// Round-110 re-anchor to head e389b2444c: Responses Lite incremental
 		// tool declarations and the pre-turn compaction/config refresh changes.
-		{Path: "core/src/client.rs", SHA256: "5296f323c72ddd27db79c211eb1b773ac85a0a7fd3273546a1e7ea890363a846"},
+		// Re-anchored to upstream e8e6a922c0: request preparation substitutes
+		// unavailable images (#57585) and the catalog-heading metadata changed.
+		{Path: "core/src/client.rs", SHA256: "55da538d19f186cf01e508f6fa9cde0ae8335a1c0f781265a235d08180f186ff"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
@@ -378,7 +383,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Re-pinned to upstream 95ec468619 (round-89 pin advance): the core suite
 		// module dropped its windows_sandbox module declaration when #51678 moved
 		// that file to core/tests/windows_sandbox.rs.
-		{Path: "core/tests/suite/mod.rs", SHA256: "da941c56087578fb2fce6c0e55c39b56f5b628f135488b7a6a8b17c8ff7a2c8a"},
+		// Re-anchored to upstream e8e6a922c0: the reserved-child spawn suite
+		// joined the module list (#57586).
+		{Path: "core/tests/suite/mod.rs", SHA256: "5d53476eeb77995e367807a5a10b57c3d9dfeebf9d41f04ba50cbad4e3b37a39"},
 	}
 }
 
