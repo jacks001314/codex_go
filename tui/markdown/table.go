@@ -218,6 +218,13 @@ func restoreRenderedTables(rendered string, tables []sourceTable, width int, lin
 						out = append(out, indent+l)
 					}
 				} else {
+					// Rust's start_table pushes a blank line whenever the
+					// preceding block queued one (markdown_render.rs,
+					// start_table). Glamour drops that separator when a code
+					// block is followed directly by our table marker.
+					if len(out) > 0 && !renderedLineBlank(out[len(out)-1]) {
+						out = append(out, "")
+					}
 					out = append(out, rendered...)
 				}
 			}

@@ -33,9 +33,9 @@ type FinalMessageSeparator struct {
 	ElapsedSeconds *int64
 	RuntimeMetrics *RuntimeMetricsSummary
 	// CompletedAt is the local completion time, when the turn reported one. Rust
-	// #43558 shows "done <time>" after the final answer; times use a twelve-hour
-	// clock unless the host prefers 24-hour time, other local days add the date,
-	// and other years add the year.
+	// shows the timestamp after the final answer; times use a twelve-hour clock
+	// unless the host prefers 24-hour time, other local days add the date, and
+	// other years add the year.
 	CompletedAt *time.Time
 	// ClockFormat captures the host's 12/24-hour preference. Nil uses the
 	// process-wide detected preference.
@@ -115,7 +115,7 @@ func (c FinalMessageSeparator) labelParts() []string {
 		if c.ClockFormat != nil {
 			format = *c.ClockFormat
 		}
-		parts = append(parts, "done "+formatCompletionTime(*c.CompletedAt, c.displayDate(), format))
+		parts = append(parts, formatCompletionTime(*c.CompletedAt, c.displayDate(), format))
 	}
 	if c.RuntimeMetrics != nil {
 		if label := RuntimeMetricsLabel(*c.RuntimeMetrics); label != "" {

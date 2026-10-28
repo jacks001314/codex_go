@@ -228,6 +228,7 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	if text == "" {
 		return "", nil
 	}
+	text = revealHeadingMarkers(text)
 	if width <= 0 {
 		width = defaultWidth
 	}
@@ -282,6 +283,7 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 		out = colorTaskListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
 	}
 	out = styleBareWebURLs(out, linkSGR)
+	out = collapseBlockBlankLines(out)
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID, width)
 	out = restoreRenderedTables(out, tables, width, linkSGR)
 	out = restoreMathPlaceholders(out, mathPlaceholders)

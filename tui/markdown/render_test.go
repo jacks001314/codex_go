@@ -101,12 +101,14 @@ func TestRenderWithThemeStylesInlineMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	clean := utils.StripANSI(rendered)
-	for _, literal := range []string{"# Title", "**bold**", "*italic*", "## Subheading"} {
+	// Rust paints the ATX markers as part of the heading (start_heading), so
+	// "# Title" and "## Subheading" stay visible in styled output.
+	for _, literal := range []string{"**bold**", "*italic*"} {
 		if strings.Contains(clean, literal) {
 			t.Fatalf("markdown marker %q leaked into styled output:\n%s", literal, clean)
 		}
 	}
-	for _, want := range []string{"Title", "bold", "italic", "Subheading"} {
+	for _, want := range []string{"# Title", "## Subheading", "bold", "italic", "code"} {
 		if !strings.Contains(clean, want) {
 			t.Fatalf("styled content missing %q:\n%s", want, clean)
 		}

@@ -99,6 +99,18 @@ func (c ExecCell) DisplayLinesWithTheme(width int, themeID string) []string {
 	return c.commandDisplayLinesWithTheme(width, themeID)
 }
 
+// CompactDisplayLinesWithTheme renders the owned alternate-screen transcript.
+// Rust's exec_cell::compact keeps the command header on one row: the first
+// source line (plus " …" when the command has more lines) is clipped to the
+// cell width with an ellipsis. Inline scrollback keeps the wrapping renderer
+// from exec_cell::render.
+func (c ExecCell) CompactDisplayLinesWithTheme(width int, themeID string) []string {
+	if c.IsExploringCell() || len(c.Calls) != 1 {
+		return c.DisplayLinesWithTheme(width, themeID)
+	}
+	return commandCallDisplayLinesStyledMode(width, c.Calls[0], themeID, strings.TrimSpace(themeID) != "", true)
+}
+
 // ActivityDisclosure reports the inline detail control for this group. Rust
 // parity: ExecCell::activity_disclosure. Exploring groups always expose generic
 // details; a completed command reports the retained output lines its compact
@@ -279,6 +291,10 @@ func (c ExecCell) commandDisplayLinesStyled(width int, themeID string, styled bo
 }
 
 func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, styled bool) []string {
+	return commandCallDisplayLinesStyledMode(width, call, themeID, styled, false)
+}
+
+func commandCallDisplayLinesStyledMode(width int, call ExecCall, themeID string, styled bool, compact bool) []string {
 	width = max(width, 1)
 	success := call.Output != nil && call.Output.ExitCode == 0
 	// Rust #54433: a nonzero exit is a neutral compact outcome, so the marker
@@ -318,7 +334,12 @@ func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, sty
 			headerPrefix += title + " "
 		}
 	}
-	lines := commandHeaderLines(headerPrefix, cmdDisplay, width, themeID, styled)
+	var lines []string
+	if compact {
+		lines = []string{commandCompactHeaderLine(headerPrefix, cmdDisplay, width, themeID, styled)}
+	} else {
+		lines = commandHeaderLines(headerPrefix, cmdDisplay, width, themeID, styled)
+	}
 	if call.Output != nil {
 		if !call.IsUserShellCommand() {
 			// Rust #46492: agent command output uses the shared three-row preview
@@ -389,6 +410,23 @@ func dimOutputUnlessStyled(line string) string {
 		return line
 	}
 	return ansiWrap(ansiDim, line)
+}
+
+// commandCompactHeaderLine mirrors exec_cell::compact_command_lines: keep the
+// first source line, append " …" when more lines exist, then clip the whole
+// header (prefix included) to the cell width.
+func commandCompactHeaderLine(prefix string, command string, width int, themeID string, styled bool) string {
+	command = strings.ReplaceAll(command, "\r\n", "\n")
+	first, hasMore := command, false
+	if index := strings.IndexByte(command, '\n'); index >= 0 {
+		first = command[:index]
+		hasMore = strings.TrimSpace(command[index+1:]) != ""
+	}
+	header := prefix + highlightCommandLine(first, themeID, styled)
+	if hasMore {
+		header += " \u2026"
+	}
+	return tui.TruncateWithEllipsis(header, max(width, 1))
 }
 
 func commandHeaderLines(prefix string, command string, width int, themeID string, styled bool) []string {

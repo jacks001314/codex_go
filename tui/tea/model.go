@@ -2524,6 +2524,11 @@ type Model struct {
 	completedThreadIDs               map[string]bool
 	pendingThreadName                bool
 	taskStartedAt                    time.Time
+	// lastTurnElapsedSeconds holds the pause-aware turn clock captured when the
+	// completion notification arrives. The local runner emits turn.completed
+	// before TurnCompletedMsg, and marking the turn idle resets taskStartedAt;
+	// the captured value lets the completion footer keep Rust's "Worked for …".
+	lastTurnElapsedSeconds *int64
 	// statusTimer is the pause-aware clock independent of the optional status
 	// row (Rust #41913).
 	statusTimer codextui.StatusTimer
@@ -6208,6 +6213,22 @@ func (m *Model) shouldSubmitOnTab() bool {
 	return !strings.HasPrefix(input, "!")
 }
 
+// captureTurnElapsed records the pause-aware turn clock before the completion
+// notification marks the turn idle and clears taskStartedAt. TurnCompletedMsg
+// arrives afterwards; Rust's footer still reports "Worked for …" because its
+// completion handler owns both steps.
+func (m *Model) captureTurnElapsed() {
+	if m == nil || m.taskStartedAt.IsZero() {
+		return
+	}
+	elapsed := m.statusTimer.ElapsedAt(m.currentTime())
+	if elapsed <= 0 {
+		return
+	}
+	value := int64(elapsed.Seconds())
+	m.lastTurnElapsedSeconds = &value
+}
+
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	questionDrafts := m.takeQuestionDrafts()
 	m.clearSafetyBuffering()
@@ -6283,6 +6304,9 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	var elapsedSeconds *int64
 	if message.DurationMS != nil && *message.DurationMS >= 0 {
 		value := *message.DurationMS / 1000
+		elapsedSeconds = &value
+	} else if m.lastTurnElapsedSeconds != nil {
+		value := *m.lastTurnElapsedSeconds
 		elapsedSeconds = &value
 	} else if !m.taskStartedAt.IsZero() {
 		// Rust #41913: a completion without a protocol duration falls back to
@@ -6420,6 +6444,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		if m.showTooltips {
 			cmd = bubbletea.Batch(cmd, turnTipDelayCmd(turnTipWorkingDelay))
 		}
+		m.lastTurnElapsedSeconds = nil
 		m.setStatus("running")
 		// Rust #54047: a replayed in-progress turn restores its elapsed time, so
 		// the timer starts at the turn's `started_at` instead of zero. A live
@@ -6517,6 +6542,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			m.refreshTranscript()
 			return cmd
 		}
+		m.captureTurnElapsed()
 		m.setStatus("idle")
 		m.turnTips.observeTurnCompleted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), true, m.turnFinalAnswerSeen)
 	case "turn.failed", "error":
@@ -7251,7 +7277,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 		// OrphanHistoryWhileActiveExec).
 		state.MessageIndex = m.upsertHistoryMessageWithActivity(
 			state.MessageIndex,
-			cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+			m.execCellDisplayLines(cell, width),
 			cell.RawLines(),
 			nil,
 			cell.ActivityDisclosure(width),
@@ -7275,7 +7301,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	m.flushActiveExecCell()
 	state.MessageIndex = m.upsertHistoryMessageWithActivity(
 		state.MessageIndex,
-		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		m.execCellDisplayLines(cell, width),
 		cell.RawLines(),
 		nil,
 		cell.ActivityDisclosure(width),
@@ -7343,7 +7369,7 @@ func (m *Model) rerenderActiveExecCell() {
 	cell := *m.activeExecCell
 	m.activeExecCellMessageIndex = m.upsertHistoryMessageWithActivity(
 		m.activeExecCellMessageIndex,
-		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		m.execCellDisplayLines(cell, width),
 		cell.RawLines(),
 		cell.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
 		cell.ActivityDisclosure(width),
@@ -7779,6 +7805,18 @@ func planStepStatusFromString(status string) historycell.StepStatus {
 	}
 }
 
+// execCellDisplayLines renders an exec cell for the active transcript surface.
+// The owned alternate-screen transcript uses Rust's compact command preview
+// (one clipped header row); inline scrollback keeps the wrapping renderer used
+// by terminal-owned scrollback.
+func (m *Model) execCellDisplayLines(cell execcell.ExecCell, width int) []string {
+	themeID := m.activeTUITheme()
+	if m != nil && !m.noAltScreen {
+		return cell.CompactDisplayLinesWithTheme(width, themeID)
+	}
+	return cell.DisplayLinesWithTheme(width, themeID)
+}
+
 func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *protocol.ThreadItem) {
 	if m == nil || state == nil {
 		return
@@ -7804,7 +7842,7 @@ func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *pro
 	cell := execcell.NewExecCell(call, m.progressEffectsEnabled())
 	state.MessageIndex = m.upsertHistoryMessageWithActivity(
 		state.MessageIndex,
-		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		m.execCellDisplayLines(cell, width),
 		cell.RawLines(),
 		nil,
 		cell.ActivityDisclosure(width),
@@ -7900,7 +7938,7 @@ func (m *Model) renderToolCallFailure(state *toolCallDisplayState, message strin
 	cell := execcell.NewExecCell(call, m.progressEffectsEnabled())
 	state.MessageIndex = m.upsertHistoryMessageWithActivity(
 		state.MessageIndex,
-		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		m.execCellDisplayLines(cell, width),
 		cell.RawLines(),
 		nil,
 		cell.ActivityDisclosure(width),

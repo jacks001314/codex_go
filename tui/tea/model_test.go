@@ -2047,9 +2047,10 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 	view = model.View()
 	// Rust #43558: the final-message cell shows dim completion metadata instead
 	// of a horizontal rule.
-	model.Update(TurnCompletedMsg{ThreadID: "thread-1"})
+	durationMS := int64(0)
+	model.Update(TurnCompletedMsg{ThreadID: "thread-1", DurationMS: &durationMS})
 	view = model.View()
-	if !strings.Contains(view, "done ") {
+	if !strings.Contains(view, "Worked for <1s") {
 		t.Fatalf("assistant output after command should use the Rust final-message separator:\n%s", view)
 	}
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 2 {
@@ -9027,9 +9028,10 @@ func TestModelCompletedCommandsRenderIndividuallyLikeRust(t *testing.T) {
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "Done")})
-	model.Update(TurnCompletedMsg{ThreadID: "thread-1"})
+	durationMS := int64(0)
+	model.Update(TurnCompletedMsg{ThreadID: "thread-1", DurationMS: &durationMS})
 	view = model.View()
-	if !strings.Contains(view, "done ") {
+	if !strings.Contains(view, "Worked for <1s") {
 		t.Fatalf("assistant output after the commands should use the final-message separator:\n%s", view)
 	}
 }

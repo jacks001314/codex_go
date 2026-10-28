@@ -440,17 +440,17 @@ func TestFinalMessageSeparatorCompletionTimestampLikeRust(t *testing.T) {
 		{
 			name:        "same day uses twelve hour clock",
 			completedAt: time.Date(2026, 9, 12, 14, 32, 0, 0, time.Local),
-			want:        "done 2:32 PM",
+			want:        "2:32 PM",
 		},
 		{
 			name:        "other day adds the date",
 			completedAt: time.Date(2026, 9, 10, 9, 5, 0, 0, time.Local),
-			want:        "done Sep 10 at 9:05 AM",
+			want:        "Sep 10 at 9:05 AM",
 		},
 		{
 			name:        "other year adds the year",
 			completedAt: time.Date(2025, 12, 31, 23, 5, 0, 0, time.Local),
-			want:        "done Dec 31, 2025 at 11:05 PM",
+			want:        "Dec 31, 2025 at 11:05 PM",
 		},
 	}
 	for _, tc := range cases {
@@ -486,7 +486,7 @@ func TestFinalMessageSeparatorWrapsMetadataOnNarrowTerminals(t *testing.T) {
 		t.Fatalf("narrow separator did not wrap: %#v", lines)
 	}
 	combined := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
-	for _, want := range []string{"Worked for 1h 1m 40s", "done 2:32 PM", "Local tools: 3 calls (4.2s)"} {
+	for _, want := range []string{"Worked for 1h 1m 40s", "2:32 PM", "Local tools: 3 calls (4.2s)"} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("wrapped separator missing %q: %#v", want, lines)
 		}

@@ -159,6 +159,46 @@ func TestExecCellDisplayMatchesRustContinuationAndOutputLayout(t *testing.T) {
 	}
 }
 
+// Rust's alternate-screen transcript uses exec_cell::compact for a single
+// command: only the first source line is shown, a multi-line command gets a
+// trailing ellipsis, and overlong headers clip instead of wrapping.
+func TestExecCellCompactDisplayKeepsOneHeaderRowLikeRust(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-1",
+		Command: []string{"bash", "-lc", "printf 'first row'\nprintf 'second row'"},
+		Output: &CommandOutput{
+			ExitCode:         0,
+			AggregatedOutput: "first row\nsecond row\n",
+		},
+		Source: ExecSourceAgent,
+	}, false)
+
+	lines := cell.CompactDisplayLinesWithTheme(80, "dracula")
+	clean := strings.Split(utils.StripANSI(strings.Join(lines, "\n")), "\n")
+	if len(clean) < 2 {
+		t.Fatalf("compact display lost output rows: %#v", clean)
+	}
+	if got := clean[0]; !strings.HasPrefix(got, "\u2022 Ran ") || !strings.HasSuffix(got, " …") {
+		t.Fatalf("compact header = %q, want a clipped first line with ellipsis", got)
+	}
+	if strings.Contains(clean[0], "\u2502") || strings.Contains(clean[0], "second row") {
+		t.Fatalf("compact header wrapped or leaked the second source line: %q", clean[0])
+	}
+
+	long := NewExecCell(ExecCall{
+		CallID:  "call-2",
+		Command: []string{"bash", "-lc", strings.Repeat("abcdef", 20)},
+		Source:  ExecSourceAgent,
+	}, false)
+	header := long.CompactDisplayLinesWithTheme(32, "dracula")[0]
+	if width := tui.DisplayWidth(utils.StripANSI(header)); width > 32 {
+		t.Fatalf("compact header width = %d, want <= 32: %q", width, utils.StripANSI(header))
+	}
+	if !strings.HasSuffix(utils.StripANSI(header), "…") {
+		t.Fatalf("overlong compact header = %q, want ellipsis", utils.StripANSI(header))
+	}
+}
+
 // Rust #46680: syntax-highlighted diff/output text keeps its foreground colors
 // instead of being wrapped in the dim SGR.
 func TestExecCellDoesNotDimSyntaxHighlightedOutputLikeRust(t *testing.T) {

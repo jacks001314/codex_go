@@ -88,7 +88,7 @@ func TestMarkdownProseKeepsFallbacksWithoutThemeColorsLikeRust(t *testing.T) {
 	plain := proseLines(t, "")
 	plainHeading := lineContaining(t, plain, "Head")
 	// Rust keeps the modifier-only heading style when the syntax theme is empty.
-	if !strings.HasPrefix(plainHeading, "\x1b[4;1m\x1b[0m\x1b[4;1m\x1b[0m\x1b[4;1mHead\x1b[0m") {
+	if !strings.HasPrefix(plainHeading, "\x1b[4;1m\x1b[0m\x1b[4;1m\x1b[0m\x1b[4;1m#\x1b[0m\x1b[4;1m Head\x1b[0m") {
 		t.Fatalf("unthemed heading = %q, want the modifier-only heading", plainHeading)
 	}
 	if ordered := lineContaining(t, plain, "1. first"); !strings.Contains(ordered, "\x1b[38;5;12m1. \x1b[39mfirst") {
