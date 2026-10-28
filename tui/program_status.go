@@ -253,13 +253,35 @@ func currentTerminalProgramStatusSupport() terminalProgramStatusSupport {
 	return terminalProgramStatusSupportVal
 }
 
+// minVTEVersionWithSafeOSC is the VTE release whose parser safely ignores
+// unknown OSC sequences (Rust terminal_program_status.rs, #57612). Versions are
+// VTE's own encoding (major*10_000 + minor*100 + micro), so 0.54 is 5400.
+const minVTEVersionWithSafeOSC uint32 = 5400
+
+// terminalBackendReportsStatus reports whether the detected backend can safely
+// receive OSC 7501. A VTE older than 0.54 lacks the unknown-OSC parser, so the
+// status sequences are withheld even when the application identifies itself as
+// iTerm2 or another supported terminal. Missing or unknown versions keep the
+// existing behavior, matching Rust's `is_none_or`.
+func terminalBackendReportsStatus(terminal *shell.TerminalInfo) bool {
+	if terminal == nil || terminal.Backend == nil {
+		return true
+	}
+	if terminal.Backend.Kind != shell.TerminalBackendVTE {
+		return true
+	}
+	version := terminal.Backend.Version
+	return version == nil || *version >= minVTEVersionWithSafeOSC
+}
+
 func terminalProgramStatusSupportFor(terminal *shell.TerminalInfo, stdoutIsTerm bool, screenActive bool) terminalProgramStatusSupport {
-	osc21337 := stdoutIsTerm &&
+	osc7501 := stdoutIsTerm && terminalBackendReportsStatus(terminal)
+	osc21337 := osc7501 &&
 		terminal != nil &&
 		terminal.Name == shell.TerminalIterm2 &&
 		terminal.Multiplexer == nil &&
 		!screenActive
-	return terminalProgramStatusSupport{osc7501: stdoutIsTerm, osc21337: osc21337}
+	return terminalProgramStatusSupport{osc7501: osc7501, osc21337: osc21337}
 }
 
 // SetTerminalProgramStatusSupportForTest pins terminal protocol support in

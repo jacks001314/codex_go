@@ -46,6 +46,43 @@ func TestTerminalProgramStatusProtocolsLikeRust(t *testing.T) {
 			screenActive:   true,
 			want:           terminalProgramStatusSupport{osc7501: true},
 		},
+		{
+			// Rust #57612: VTE before 0.54 has no safe unknown-OSC parser.
+			name: "old VTE backend suppresses status",
+			terminal: &shell.TerminalInfo{
+				Name:    shell.TerminalGnomeTerminal,
+				Backend: &shell.TerminalBackend{Kind: shell.TerminalBackendVTE, Version: vteVersion(5300)},
+			},
+			stdoutTerminal: true,
+			want:           terminalProgramStatusSupport{},
+		},
+		{
+			name: "VTE 0.54 boundary enables status",
+			terminal: &shell.TerminalInfo{
+				Name:    shell.TerminalGnomeTerminal,
+				Backend: &shell.TerminalBackend{Kind: shell.TerminalBackendVTE, Version: vteVersion(5400)},
+			},
+			stdoutTerminal: true,
+			want:           terminalProgramStatusSupport{osc7501: true},
+		},
+		{
+			name: "unknown VTE version keeps status",
+			terminal: &shell.TerminalInfo{
+				Name:    shell.TerminalGnomeTerminal,
+				Backend: &shell.TerminalBackend{Kind: shell.TerminalBackendVTE},
+			},
+			stdoutTerminal: true,
+			want:           terminalProgramStatusSupport{osc7501: true},
+		},
+		{
+			name: "old VTE suppresses iTerm status too",
+			terminal: &shell.TerminalInfo{
+				Name:    shell.TerminalIterm2,
+				Backend: &shell.TerminalBackend{Kind: shell.TerminalBackendVTE, Version: vteVersion(5300)},
+			},
+			stdoutTerminal: true,
+			want:           terminalProgramStatusSupport{},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,3 +93,5 @@ func TestTerminalProgramStatusProtocolsLikeRust(t *testing.T) {
 		})
 	}
 }
+
+func vteVersion(version uint32) *uint32 { return &version }
