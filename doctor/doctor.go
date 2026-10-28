@@ -150,7 +150,11 @@ type Options struct {
 	// Feedback bounds each database integrity scan when collecting a feedback
 	// attachment (Rust #40688): an incomplete clean scan becomes a warning
 	// rather than a failure.
-	Feedback      bool
+	Feedback bool
+	// NetworkOnly limits the report to effective configuration, network
+	// environment, provider HTTP reachability and Responses WebSocket checks
+	// (Rust #57606 `codex doctor --network-only`).
+	NetworkOnly   bool
 	CodexHome     string
 	Root          cli.RootOptions
 	DispatchPaths *cli.DispatchPaths
@@ -197,6 +201,9 @@ func (b *Builder) Build(opts *Options) *Report {
 		codexHome = auth.DefaultCodexHome()
 	}
 	cwd := doctorCWD(opts)
+	if opts.NetworkOnly {
+		return b.networkOnlyReport(codexHome, opts)
+	}
 	checks := []*DoctorCheck{
 		b.timed(systemCheck),
 		b.timed(func() *DoctorCheck { return diskCheck(codexHome, cwd) }),
@@ -225,6 +232,34 @@ func (b *Builder) Build(opts *Options) *Report {
 	if runtime.GOOS == "windows" {
 		checks = append(checks, b.timed(func() *DoctorCheck { return windowsDevDriveCheck(cwd) }))
 	}
+	return b.newReport(checks)
+}
+
+// networkOnlyReport runs the focused network diagnostic set (Rust #57606):
+// effective configuration, network environment, provider HTTP reachability and
+// Responses WebSocket checks. Unrelated diagnostics such as database and MCP
+// scans are skipped. A configuration load failure reports the redacted error
+// and stops before probing any guessed network target.
+func (b *Builder) networkOnlyReport(codexHome string, opts *Options) *Report {
+	start := b.now()
+	configResult := configCheck(codexHome, opts)
+	loadDuration := b.now().Sub(start)
+	if configResult.Status == CheckStatusFail {
+		configResult.Detail("network diagnostics: effective network configuration is unavailable")
+		return b.newReport([]*DoctorCheck{configResult})
+	}
+	configResult.Detail(fmt.Sprintf("configuration load ms: %d", loadDuration.Milliseconds()))
+	configResult.DurationMS = loadDuration.Milliseconds()
+	checks := []*DoctorCheck{
+		configResult,
+		b.timed(func() *DoctorCheck { return networkCheck(codexHome, opts) }),
+		b.timed(func() *DoctorCheck { return websocketReachabilityCheck(codexHome, opts) }),
+		b.timed(func() *DoctorCheck { return b.providerReachabilityCheck(codexHome, opts) }),
+	}
+	return b.newReport(checks)
+}
+
+func (b *Builder) newReport(checks []*DoctorCheck) *Report {
 	return &Report{
 		SchemaVersion: 1,
 		GeneratedAt:   b.now().UTC().Format(time.RFC3339),

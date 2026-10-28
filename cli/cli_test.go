@@ -1914,6 +1914,18 @@ func TestParseDoctorFeedbackFlag(t *testing.T) {
 	}
 }
 
+// TestParseDoctorNetworkOnlyFlag pins Rust #57606: `codex doctor
+// --network-only` limits the report to the focused network diagnostics.
+func TestParseDoctorNetworkOnlyFlag(t *testing.T) {
+	opts := &DoctorOptions{}
+	if err := parseDoctor([]string{"--json", "--network-only"}, opts); err != nil {
+		t.Fatalf("parseDoctor error = %v", err)
+	}
+	if !opts.JSON || !opts.NetworkOnly {
+		t.Fatalf("parseDoctor flags = %#v, want JSON+NetworkOnly", opts)
+	}
+}
+
 // Mirrors Rust #46543's hidden doctor probe flag: the helper path is parsed in
 // both the separated and `=` forms, and an unknown doctor option still fails.
 func TestParseDoctorProbeFilesystemPathFlag(t *testing.T) {

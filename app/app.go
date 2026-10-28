@@ -116,13 +116,14 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 			return &ExitError{Code: doctor.ProbeFilesystemPathExitCode(path), Silent: true}
 		}
 		report, err := doctor.Run(&doctor.Options{
-			JSON:     parsed.Doctor.JSON,
-			Summary:  parsed.Doctor.Summary,
-			All:      parsed.Doctor.All,
-			NoColor:  parsed.Doctor.NoColor,
-			ASCII:    parsed.Doctor.ASCII,
-			Feedback: parsed.Doctor.Feedback,
-			Root:     parsed.Root,
+			JSON:        parsed.Doctor.JSON,
+			Summary:     parsed.Doctor.Summary,
+			All:         parsed.Doctor.All,
+			NoColor:     parsed.Doctor.NoColor,
+			ASCII:       parsed.Doctor.ASCII,
+			Feedback:    parsed.Doctor.Feedback,
+			NetworkOnly: parsed.Doctor.NetworkOnly,
+			Root:        parsed.Root,
 			DispatchPaths: func() *cli.DispatchPaths {
 				if runOpts == nil || runOpts.DispatchPaths == nil {
 					return nil

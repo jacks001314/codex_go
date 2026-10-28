@@ -495,6 +495,9 @@ type DoctorOptions struct {
 	NoColor  bool
 	ASCII    bool
 	Feedback bool
+	// NetworkOnly restricts the report to config, network environment,
+	// provider HTTP reachability and Responses WebSocket checks (Rust #57606).
+	NetworkOnly bool
 	// ProbeFilesystemPath is the hidden, internal isolated filesystem probe
 	// (Rust #46543): doctor exits with the probe's status before loading
 	// configuration.
@@ -3330,6 +3333,8 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 			doctor.ASCII = true
 		case arg == "--feedback":
 			doctor.Feedback = true
+		case arg == "--network-only":
+			doctor.NetworkOnly = true
 		case arg == "--probe-filesystem-path":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
