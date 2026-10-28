@@ -304,6 +304,10 @@ func (p *mathParser) command() (mathLayout, bool) {
 			return mathText(" "), true
 		case '!':
 			return mathText(""), true
+		case '%':
+			// Rust #57501: `\%` is a literal percent sign in inline and
+			// display math, so `$3.8\%$` renders as `3.8%`.
+			return mathText("%"), true
 		case '{':
 			return mathText("{"), true
 		case '}':

@@ -22,6 +22,9 @@ func TestMathRenderInlineLikeRust(t *testing.T) {
 		{source: `\underset{x\ge0}{\min} x`, want: "(min)_{x≥0} x"},
 		{source: `\left\langle\hat H\right\rangle`, want: "⟨H\u0302⟩"},
 		{source: `\lfloor x\rfloor`, want: "⌊ x⌋"},
+		// Rust #57501: an escaped percent sign is a literal percent.
+		{source: `3.8\%`, want: "3.8%"},
+		{source: `100000 \times 3.8\%`, want: "100000 × 3.8%"},
 	}
 	for _, testCase := range cases {
 		got, ok := mathRender(testCase.source, false)
