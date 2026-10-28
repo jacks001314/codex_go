@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"codex_go/execserver"
 	"codex_go/utils"
 )
 
@@ -170,4 +171,29 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	}, nil
 }
 
+// HookEnvironmentIDs reports the environment the image is read from (Rust
+// `Tool::environments_for_input` for view_image). An unresolvable selector
+// leaves the hook inventory unscoped so Execute reports its own error.
+func (h *ViewImageHandler) HookEnvironmentIDs(invocation *Invocation) []string {
+	if invocation == nil {
+		return nil
+	}
+	var args ViewImageArgs
+	if err := invocation.DecodeArguments(&args); err != nil {
+		return nil
+	}
+	var environmentCheck *UnifiedExecEnvironmentCheck
+	var environmentFileSystems EnvironmentFileSystemProvider
+	if h != nil {
+		environmentCheck = h.options.EnvironmentCheck
+		environmentFileSystems = h.options.EnvironmentFileSystems
+	}
+	id, err := resolveToolEnvironmentID(environmentCheck, environmentFileSystems, args.EnvironmentID, viewImageUnavailableMessage)
+	if err != nil {
+		return nil
+	}
+	return []string{firstNonEmptyString(strings.TrimSpace(id), execserver.LocalEnvironmentID)}
+}
+
 var _ Executor = (*ViewImageHandler)(nil)
+var _ HookEnvironmentSelector = (*ViewImageHandler)(nil)

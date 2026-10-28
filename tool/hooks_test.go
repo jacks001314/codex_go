@@ -33,6 +33,69 @@ func TestRouterDispatchWithHooksBlocksBeforeTool(t *testing.T) {
 	}
 }
 
+type environmentScopedTestExecutor struct {
+	*ExecutorFunc
+}
+
+// HookEnvironmentIDs derives the target from the call arguments so the test
+// can prove the router captures them before a PreToolUse input rewrite.
+func (e *environmentScopedTestExecutor) HookEnvironmentIDs(invocation *Invocation) []string {
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := invocation.DecodeArguments(&args); err != nil {
+		return nil
+	}
+	if strings.Contains(args.Command, "original") {
+		return []string{"env-a"}
+	}
+	return []string{"env-b"}
+}
+
+type environmentRecordingHooks struct {
+	pre  []string
+	post []string
+}
+
+func (h *environmentRecordingHooks) RunPreToolUse(_ context.Context, _ *Invocation, payload *PreToolUsePayload) (*PreToolUseHookOutcome, error) {
+	h.pre = append([]string(nil), payload.TargetEnvironments...)
+	return &PreToolUseHookOutcome{UpdatedInput: map[string]any{"command": "echo rewritten"}}, nil
+}
+
+func (h *environmentRecordingHooks) RunPostToolUse(_ context.Context, _ *Invocation, payload *PostToolUsePayload) (*PostToolUseHookOutcome, error) {
+	h.post = append([]string(nil), payload.TargetEnvironments...)
+	return nil, nil
+}
+
+// Rust captures the invocation environments before PreToolUse and reuses them
+// for PostToolUse (`ToolInvocation::environments`), so an input rewrite cannot
+// retarget the environment-scoped hooks.
+func TestRouterDispatchWithHooksCapturesTargetEnvironmentsLikeRust(t *testing.T) {
+	registry := NewRegistry()
+	executor := &environmentScopedTestExecutor{ExecutorFunc: NewExecutorFunc(Spec{Name: PlainName("Bash")}, func(ctx context.Context, invocation *Invocation) (*Output, error) {
+		return &Output{Success: true, Body: "ok"}, nil
+	})}
+	if err := registry.Register(executor); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	hooks := &environmentRecordingHooks{}
+	router := NewRouter(registry)
+
+	if _, err := router.DispatchWithHooks(context.Background(), &Invocation{
+		CallID:   "call-1",
+		ToolName: PlainName("Bash"),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"command":"echo original"}`},
+	}, hooks); err != nil {
+		t.Fatalf("DispatchWithHooks() error = %v", err)
+	}
+	if len(hooks.pre) != 1 || hooks.pre[0] != "env-a" {
+		t.Fatalf("pre targets = %#v", hooks.pre)
+	}
+	if len(hooks.post) != 1 || hooks.post[0] != "env-a" {
+		t.Fatalf("post targets = %#v, want the pre-tool capture", hooks.post)
+	}
+}
+
 func TestRouterDispatchWithHooksRewritesInput(t *testing.T) {
 	registry := NewRegistry()
 	var command string

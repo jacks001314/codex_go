@@ -195,10 +195,14 @@ type MCPToolApprovalPromptOptions struct {
 // MCPToolApprovalRequest is the turn-scoped context an approval handler needs to
 // surface and record a decision.
 type MCPToolApprovalRequest struct {
-	Server        string
-	Tool          string
-	Arguments     any
-	Annotations   *RuntimeToolAnnotations
+	Server      string
+	Tool        string
+	Arguments   any
+	Annotations *RuntimeToolAnnotations
+	// EnvironmentID is the environment that owns the MCP server (Rust
+	// ApprovalAction::McpToolCall's environment_id), used to scope the
+	// PermissionRequest hook to that environment's managed hooks.
+	EnvironmentID string
 	ConnectorID   string
 	ConnectorName string
 	// ConnectorDescription is the connector's own description from the tool
@@ -635,6 +639,7 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		Tool:                    toolName,
 		Arguments:               arguments,
 		Annotations:             annotations,
+		EnvironmentID:           e.mcpService().serverEnvironmentID(server),
 		ConnectorID:             e.connectorID,
 		ConnectorName:           e.connectorName,
 		ConnectorDescription:    e.connectorDescription,

@@ -744,6 +744,21 @@ func (e *ToolExecutor) PreToolUsePayload(invocation *tool.Invocation) (*tool.Pre
 	}, true
 }
 
+// HookEnvironmentIDs reports the environment that owns the MCP server (Rust
+// `McpHandler::environments_for_input` -> `server_environment_id`). Executor-
+// discovered servers without a runtime config stay unscoped.
+func (e *ToolExecutor) HookEnvironmentIDs(invocation *tool.Invocation) []string {
+	_ = invocation
+	if e == nil {
+		return nil
+	}
+	id := e.mcpService().serverEnvironmentID(e.resolvedServerName())
+	if id == "" {
+		return nil
+	}
+	return []string{id}
+}
+
 // mcpToolContext captures the model-visible MCP tool details and its source
 // classification for tool lifecycle extensions (Rust McpToolContext, #40976).
 // The executable client is never exposed.
@@ -1249,4 +1264,5 @@ func mcpLogPreview(body string) string {
 var _ tool.Executor = (*ToolExecutor)(nil)
 var _ tool.PreToolUsePayloadProvider = (*ToolExecutor)(nil)
 var _ tool.PostToolUsePayloadProvider = (*ToolExecutor)(nil)
+var _ tool.HookEnvironmentSelector = (*ToolExecutor)(nil)
 var _ tool.HookInputUpdater = (*ToolExecutor)(nil)

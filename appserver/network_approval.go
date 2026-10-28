@@ -209,7 +209,7 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 		hookToolCWD = localHookToolCWD(key.environmentID, ownerCall.trigger.CWD)
 	}
 	if verdict, ok := s.router.permissionRequestHookVerdict(ctx, active.threadID, active.turnID, approvalID, "Bash", nil,
-		map[string]any{"command": hookCommand, "description": hookCommand}, hookToolCWD); ok && verdict != nil {
+		map[string]any{"command": hookCommand, "description": hookCommand}, hookToolCWD, key.environmentID); ok && verdict != nil {
 		switch verdict.Kind {
 		case HookPermissionRequestAllow:
 			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,

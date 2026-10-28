@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"codex_go/applypatch"
+	"codex_go/execserver"
 	"codex_go/sandbox"
 )
 
@@ -69,6 +70,10 @@ type ApplyPatchApprovalRequest struct {
 	Action  *applypatch.Action
 	Changes []map[string]any
 	CWD     string
+	// EnvironmentID is the resolved environment the patch executes against
+	// (Rust ApplyPatchRequest.turn_environment.selection.environment_id). The
+	// implicit local environment is reported as `local`.
+	EnvironmentID string
 	// Patch is the raw patch body the approval applies, reported to
 	// PermissionRequest hooks as `command` (Rust ApprovalAction::ApplyPatch's
 	// permission_request_payload).
@@ -145,6 +150,10 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	// Rust #20647: the patch resolves to a turn environment and executes on that
 	// environment's filesystem, so a remote selection patches the executor's
 	// files instead of the host process filesystem.
+	resolvedEnvironmentID, err := resolveToolEnvironmentID(environmentCheck, environmentFileSystems, action.EnvironmentID, applyPatchUnavailableMessage)
+	if err != nil {
+		return nil, RespondToModel(err.Error())
+	}
 	fileSystem, err := ResolveToolEnvironmentFileSystem(environmentCheck, environmentFileSystems, action.EnvironmentID, applyPatchUnavailableMessage, e.cwd())
 	if err != nil {
 		return nil, RespondToModel(err.Error())
@@ -215,11 +224,12 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	changes := applyPatchFileChanges(action, cwd)
 	if e.approval != nil {
 		decision, approvalErr := e.approval(ctx, &ApplyPatchApprovalRequest{
-			Action:     action,
-			Changes:    changes,
-			CWD:        cwd,
-			Patch:      patch,
-			Invocation: invocation,
+			Action:        action,
+			Changes:       changes,
+			CWD:           cwd,
+			EnvironmentID: firstNonEmptyString(resolvedEnvironmentID, execserver.LocalEnvironmentID),
+			Patch:         patch,
+			Invocation:    invocation,
 		})
 		if approvalErr != nil {
 			body := "Patch approval request failed: " + approvalErr.Error()
@@ -371,6 +381,32 @@ func (e *ApplyPatchExecutor) PostToolUsePayload(invocation *Invocation, output *
 		ToolInput:    map[string]any{"command": command},
 		ToolResponse: response,
 	}, true
+}
+
+// HookEnvironmentIDs reports the environment the patch resolves to (Rust
+// `Tool::environments_for_input` for apply_patch). An unresolvable patch leaves
+// the hook inventory unscoped so the executor can report its own verification
+// error.
+func (e *ApplyPatchExecutor) HookEnvironmentIDs(invocation *Invocation) []string {
+	patch, ok := applyPatchPayloadCommand(invocation)
+	if !ok {
+		return nil
+	}
+	action, err := applypatch.Parse(patch)
+	if err != nil {
+		return nil
+	}
+	var environmentCheck *UnifiedExecEnvironmentCheck
+	var environmentFileSystems EnvironmentFileSystemProvider
+	if e != nil {
+		environmentCheck = e.environmentCheck
+		environmentFileSystems = e.environmentFileSystems
+	}
+	id, err := resolveToolEnvironmentID(environmentCheck, environmentFileSystems, action.EnvironmentID, applyPatchUnavailableMessage)
+	if err != nil {
+		return nil
+	}
+	return []string{firstNonEmptyString(strings.TrimSpace(id), execserver.LocalEnvironmentID)}
 }
 
 func (e *ApplyPatchExecutor) WithUpdatedHookInput(invocation *Invocation, updatedInput any) (*Invocation, error) {
@@ -592,4 +628,5 @@ func applyPatchErrorMessage(err error) string {
 var _ Executor = (*ApplyPatchExecutor)(nil)
 var _ PreToolUsePayloadProvider = (*ApplyPatchExecutor)(nil)
 var _ PostToolUsePayloadProvider = (*ApplyPatchExecutor)(nil)
+var _ HookEnvironmentSelector = (*ApplyPatchExecutor)(nil)
 var _ HookInputUpdater = (*ApplyPatchExecutor)(nil)

@@ -682,6 +682,12 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if err != nil {
 		return nil, RespondToModel(err.Error())
 	}
+	// Rust's ExecCommand approval (and its PermissionRequest hook) names the
+	// environment the command runs in, so the resolved id must be visible before
+	// the approval callback. The implicit local executor is `local`.
+	if environment != nil {
+		req.UnifiedExecEnvironmentID = environment.ID
+	}
 	if req.ApprovalRequired {
 		if e.approval != nil {
 			decision, approvalErr := e.approval(ctx, &ShellApprovalRequest{Request: req, Invocation: invocation})
@@ -766,7 +772,6 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		}
 	}
 	if environment != nil {
-		req.UnifiedExecEnvironmentID = environment.ID
 		req.UnifiedExecRemoteURL = environment.ExecServerURL
 		req.UnifiedExecNoiseProvider = environment.NoiseProvider
 		req.UnifiedExecInitializeTimeout = environment.ExecServerInitializeTimeout
@@ -1384,6 +1389,29 @@ func (e *ShellExecutor) PreToolUsePayload(invocation *Invocation) (*PreToolUsePa
 	}, true
 }
 
+// HookEnvironmentIDs reports the environment the command will run in (Rust
+// `Tool::environments_for_input` for exec_command). The implicit local executor
+// is named `local`, matching Rust's LOCAL_ENVIRONMENT_ID selection, so a call
+// cannot run another environment's managed hooks.
+func (e *ShellExecutor) HookEnvironmentIDs(invocation *Invocation) []string {
+	args, err := decodeExecCommandInvocation(invocation)
+	if err != nil {
+		return nil
+	}
+	environment, err := e.resolveUnifiedExecEnvironment(args.EnvironmentID)
+	if err != nil {
+		return nil
+	}
+	if environment == nil {
+		return []string{execserver.LocalEnvironmentID}
+	}
+	id := strings.TrimSpace(environment.ID)
+	if id == "" {
+		return []string{execserver.LocalEnvironmentID}
+	}
+	return []string{id}
+}
+
 func (e *ShellExecutor) PostToolUsePayload(invocation *Invocation, output *Output) (*PostToolUsePayload, bool) {
 	args, err := decodeExecCommandInvocation(invocation)
 	if err != nil || strings.TrimSpace(args.Cmd) == "" {
@@ -1796,4 +1824,5 @@ func updatedHookCommand(updatedInput any) (string, error) {
 var _ Executor = (*ShellExecutor)(nil)
 var _ PreToolUsePayloadProvider = (*ShellExecutor)(nil)
 var _ PostToolUsePayloadProvider = (*ShellExecutor)(nil)
+var _ HookEnvironmentSelector = (*ShellExecutor)(nil)
 var _ HookInputUpdater = (*ShellExecutor)(nil)

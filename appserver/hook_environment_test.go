@@ -10,6 +10,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/session"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -19,6 +20,123 @@ type fakeEnvironmentHookCall struct {
 	Env           map[string]string
 	InputJSON     string
 	Timeout       time.Duration
+}
+
+// Rust environment_hook_sources: environment-owned handlers only run for the
+// environments the call targets (`target_environments`).
+func TestFilterHooksForTargetEnvironmentsLikeRust(t *testing.T) {
+	environmentA := "env-a"
+	environmentB := "env-b"
+	hooks := []HookMetadata{
+		{EventName: HookEventPreToolUse},
+		{EventName: HookEventPreToolUse, EnvironmentID: &environmentA},
+		{EventName: HookEventPreToolUse, EnvironmentID: &environmentB},
+	}
+	filtered := filterHooksForTargetEnvironments(hooks, []string{"env-a"})
+	if len(filtered) != 2 || filtered[0].EnvironmentID != nil || ptrStringValue(filtered[1].EnvironmentID) != "env-a" {
+		t.Fatalf("filtered hooks = %#v", filtered)
+	}
+	unscoped := filterHooksForTargetEnvironments(hooks, nil)
+	if len(unscoped) != 3 {
+		t.Fatalf("unscoped hooks = %#v, want every environment hook", unscoped)
+	}
+}
+
+// The tool hook adapter must not run another environment's managed hook for a
+// call that targets one environment.
+func TestToolHookAdapterFiltersEnvironmentHooksByTargetLikeRust(t *testing.T) {
+	sources := []environmentHookSource{
+		{EnvironmentID: "env-a", CWD: "/repo-a", Hooks: HookEvents{PreToolUse: []config.ConfiguredHookGroup{{Matcher: stringPointer("^Bash$"), Hooks: []config.ConfiguredHookHandler{environmentCommandHook("echo a", nil)}}}}},
+		{EnvironmentID: "env-b", CWD: "/repo-b", Hooks: HookEvents{PreToolUse: []config.ConfiguredHookGroup{{Matcher: stringPointer("^Bash$"), Hooks: []config.ConfiguredHookHandler{environmentCommandHook("echo b", nil)}}}}},
+	}
+	executorA := &fakeEnvironmentHookExecutor{}
+	executorB := &fakeEnvironmentHookExecutor{}
+	discovered := discoverEnvironmentHooks(sources, 0, map[string]HookEnvironmentExecutor{"env-a": executorA, "env-b": executorB})
+	adapter := NewToolHookAdapter(NewHookRunner(), discovered.Handlers, "thread-1", "turn-1", "/host")
+	if _, err := adapter.RunPreToolUse(context.Background(), &tool.Invocation{CallID: "call-1", ToolName: tool.PlainName("exec_command")}, &tool.PreToolUsePayload{
+		ToolName:           &tool.HookToolName{Name: "Bash"},
+		ToolInput:          map[string]any{"command": "ls"},
+		TargetEnvironments: []string{"env-b"},
+	}); err != nil {
+		t.Fatalf("RunPreToolUse() error = %v", err)
+	}
+	if len(executorA.calls) != 0 {
+		t.Fatalf("env-a hooks ran for an env-b call: %#v", executorA.calls)
+	}
+	if len(executorB.calls) != 1 {
+		t.Fatalf("env-b hooks = %#v", executorB.calls)
+	}
+}
+
+// Rust thread.list_hooks reads the session's retained environment snapshot, so
+// the listing keeps environment declarations after the turn finishes.
+func TestHooksListThreadIncludesPersistedEnvironmentHooksAfterTurnLikeRust(t *testing.T) {
+	home := t.TempDir()
+	threadCWD := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := time.Now().UTC()
+	record := &session.Record{
+		ID: "thread-1", SessionID: "thread-1",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: threadCWD},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "bash"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "env-1", ExecServerURL: "ws://127.0.0.1:1"}); err != nil {
+		t.Fatalf("add environment: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD:     threadCWD,
+		Hooks:          NewHookRegistry(),
+		HooksDiscovery: NewHookDiscoveryService(home),
+		ThreadRouter:   NewRouter(store),
+		Environment:    manager,
+	})
+	t.Cleanup(func() { router.Close() })
+	if err := router.threads.RetainLiveThread(store, record); err != nil {
+		t.Fatalf("retain live thread: %v", err)
+	}
+	params := &turn.TurnStartParams{
+		ThreadID: "thread-1",
+		CWD:      threadCWD,
+		Environments: []map[string]any{{
+			"environmentId": "env-1",
+			"cwd":           "/remote",
+			"config": map[string]any{"state": "ready", "config": map[string]any{
+				"environment_hooks": map[string]any{
+					"UserPromptSubmit": []any{map[string]any{
+						"hooks": []any{map[string]any{"type": "command", "command": "echo listed"}},
+					}},
+				},
+			}},
+		}},
+	}
+	// The turn finished: only the persisted selections remain.
+	if err := router.persistTurnEnvironmentSelections(params); err != nil {
+		t.Fatalf("persist environment selections: %v", err)
+	}
+	threadID := "thread-1"
+	response := router.Handle(requestWithParams(t, IntID(1), MethodHooksList, HookListParams{ThreadID: &threadID}))
+	if response.Error != nil {
+		t.Fatalf("hooks/list threadId error = %+v", response.Error)
+	}
+	result := response.Result.(*HookListResponse)
+	var listed *HookMetadata
+	for i := range result.Data {
+		for j := range result.Data[i].Hooks {
+			if ptrStringValue(result.Data[i].Hooks[j].EnvironmentID) == "env-1" {
+				listed = &result.Data[i].Hooks[j]
+			}
+		}
+	}
+	if listed == nil {
+		t.Fatalf("environment hook missing from %+v", result.Data)
+	}
+	if listed.SourcePath != "<environment:env-1>/requirements.toml" || listed.EventName != HookEventUserPromptSubmit {
+		t.Fatalf("listed environment hook = %#v", *listed)
+	}
 }
 
 type fakeEnvironmentHookExecutor struct {

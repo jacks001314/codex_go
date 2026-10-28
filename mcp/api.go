@@ -2941,6 +2941,17 @@ func (s *MCPService) ServerConfigForServer(name string) (ServerConfig, bool) {
 	return s.serverConfig(name)
 }
 
+// serverEnvironmentID reports the environment that owns one runtime server
+// (Rust McpRuntimeContext::server_environment_id). Servers without a runtime
+// configuration report no owner.
+func (s *MCPService) serverEnvironmentID(server string) string {
+	config, ok := s.ServerConfigForServer(server)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(config.EffectiveEnvironmentID())
+}
+
 func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string) (*stdioInventory, error) {
 	// Rust #48143: an executor-discovered declaration may only reach a remote
 	// HTTP transport that needs no host environment headers, helpers or bearer

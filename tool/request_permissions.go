@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"codex_go/execserver"
 	"codex_go/sandbox"
 )
 
@@ -170,7 +171,37 @@ func cloneRequestPermissions(values map[string]any) map[string]any {
 	return out
 }
 
+// HookEnvironmentIDs reports the environment the request is scoped to (Rust
+// `Tool::environments_for_input` for request_permissions). An unresolvable
+// selector leaves the hook inventory unscoped so Execute reports its own error.
+func (e *RequestPermissionsExecutor) HookEnvironmentIDs(invocation *Invocation) []string {
+	if invocation == nil || invocation.Payload.Kind != PayloadFunction {
+		return nil
+	}
+	var args struct {
+		Reason             string         `json:"reason"`
+		EnvironmentID      *string        `json:"environment_id"`
+		EnvironmentIDCamel *string        `json:"environmentId"`
+		Permissions        map[string]any `json:"permissions"`
+	}
+	if err := invocation.DecodeArguments(&args); err != nil {
+		return nil
+	}
+	var environmentCheck *UnifiedExecEnvironmentCheck
+	var environmentFileSystems EnvironmentFileSystemProvider
+	if e != nil {
+		environmentCheck = e.EnvironmentCheck
+		environmentFileSystems = e.EnvironmentFileSystems
+	}
+	id, err := resolveToolEnvironmentID(environmentCheck, environmentFileSystems, requestPermissionsEnvironmentID(args), requestPermissionsUnavailableMessage)
+	if err != nil {
+		return nil
+	}
+	return []string{firstNonEmptyString(strings.TrimSpace(id), execserver.LocalEnvironmentID)}
+}
+
 var _ Executor = (*RequestPermissionsExecutor)(nil)
+var _ HookEnvironmentSelector = (*RequestPermissionsExecutor)(nil)
 
 // RegisterRequestPermissionsTool registers the request_permissions executor
 // with the given reviewer, replacing any previous registration.

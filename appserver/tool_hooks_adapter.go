@@ -51,7 +51,7 @@ func (a *ToolHookAdapter) RunPreToolUse(ctx context.Context, invocation *tool.In
 		ToolUseID:      toolUseID,
 		ToolInput:      payload.ToolInput,
 		ToolCWD:        payload.ToolCWD,
-		Hooks:          a.Hooks,
+		Hooks:          filterHooksForTargetEnvironments(a.Hooks, payload.TargetEnvironments),
 	})
 	if err != nil {
 		return nil, err
@@ -73,13 +73,17 @@ func (a *ToolHookAdapter) RunPreToolUse(ctx context.Context, invocation *tool.In
 // action and returns the folded verdict (Rust
 // hook_runtime::run_permission_request_hooks). A nil verdict means no matching
 // hook decided, so the caller continues with its normal approval flow.
-func (a *ToolHookAdapter) RunPermissionRequest(ctx context.Context, runIDSuffix string, toolName string, matcherAliases []string, toolInput any, toolCWD *string) (*HookPermissionRequestDecision, error) {
+func (a *ToolHookAdapter) RunPermissionRequest(ctx context.Context, runIDSuffix string, toolName string, matcherAliases []string, toolInput any, toolCWD *string, targetEnvironment string) (*HookPermissionRequestDecision, error) {
 	if a == nil || a.Runner == nil {
 		return nil, nil
 	}
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" {
 		return nil, nil
+	}
+	var targetEnvironments []string
+	if environmentID := strings.TrimSpace(targetEnvironment); environmentID != "" {
+		targetEnvironments = []string{environmentID}
 	}
 	result, err := a.Runner.RunPermissionRequest(ctx, &HookPermissionRequestRequest{
 		ThreadID:       a.ThreadID,
@@ -94,7 +98,7 @@ func (a *ToolHookAdapter) RunPermissionRequest(ctx context.Context, runIDSuffix 
 		RunIDSuffix:    strings.TrimSpace(runIDSuffix),
 		ToolInput:      toolInput,
 		ToolCWD:        toolCWD,
-		Hooks:          a.Hooks,
+		Hooks:          filterHooksForTargetEnvironments(a.Hooks, targetEnvironments),
 	})
 	if err != nil {
 		return nil, err
@@ -127,7 +131,7 @@ func (a *ToolHookAdapter) RunPostToolUse(ctx context.Context, invocation *tool.I
 		ToolInput:      payload.ToolInput,
 		ToolResponse:   payload.ToolResponse,
 		ToolCWD:        payload.ToolCWD,
-		Hooks:          a.Hooks,
+		Hooks:          filterHooksForTargetEnvironments(a.Hooks, payload.TargetEnvironments),
 	})
 	if err != nil {
 		return nil, err
@@ -151,4 +155,34 @@ func firstHookString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// filterHooksForTargetEnvironments scopes environment-owned managed hooks to
+// the environments the call targets (Rust
+// hook_environment_executor::environment_hook_sources). An empty target list
+// keeps every environment hook eligible (Rust `ToolEnvironments::All`), and
+// hooks that are not environment-owned always stay.
+func filterHooksForTargetEnvironments(hooks []HookMetadata, targetEnvironments []string) []HookMetadata {
+	if len(hooks) == 0 || len(targetEnvironments) == 0 {
+		return hooks
+	}
+	targets := make(map[string]struct{}, len(targetEnvironments))
+	for _, id := range targetEnvironments {
+		if id = strings.TrimSpace(id); id != "" {
+			targets[id] = struct{}{}
+		}
+	}
+	if len(targets) == 0 {
+		return hooks
+	}
+	filtered := make([]HookMetadata, 0, len(hooks))
+	for _, hook := range hooks {
+		if hook.EnvironmentID != nil {
+			if _, ok := targets[strings.TrimSpace(*hook.EnvironmentID)]; !ok {
+				continue
+			}
+		}
+		filtered = append(filtered, hook)
+	}
+	return filtered
 }

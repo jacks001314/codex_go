@@ -16,6 +16,12 @@ type HookToolName struct {
 type PreToolUsePayload struct {
 	ToolName  *HookToolName
 	ToolInput any
+	// TargetEnvironments is the internal hook-dispatch scope for one call: the
+	// execution environments the call resolves to before it runs (Rust
+	// `ToolInvocation::environments.hook_ids()`). It is not part of the hook
+	// input JSON. An empty list keeps every environment hook eligible, which is
+	// Rust's `ToolEnvironments::All`.
+	TargetEnvironments []string
 	// ToolCWD is the local command's resolved execution directory, reported as
 	// the hook input's cwd (Rust #57198). Remote commands leave it nil so the
 	// hook keeps the host working directory; hook processes always run in the
@@ -56,6 +62,10 @@ type PostToolUsePayload struct {
 	ToolUseID    string
 	ToolInput    any
 	ToolResponse any
+	// TargetEnvironments mirrors PreToolUsePayload.TargetEnvironments. Rust
+	// captures the call's environments before PreToolUse and reuses them after
+	// the tool runs, so an input rewrite cannot retarget the hooks.
+	TargetEnvironments []string
 	// ToolCWD is the local command's execution directory retained for hook
 	// input (Rust #57203). Remote commands leave it nil.
 	ToolCWD *string
@@ -89,6 +99,17 @@ type PreToolUsePayloadProvider interface {
 
 type PostToolUsePayloadProvider interface {
 	PostToolUsePayload(invocation *Invocation, output *Output) (*PostToolUsePayload, bool)
+}
+
+// HookEnvironmentSelector is implemented by tool executors that can name the
+// execution environments a call targets before it runs (Rust
+// `Tool::environments_for_input` and `Tool::live_environment_resolver`). The
+// router copies the ids onto the hook payloads so environment-owned hooks only
+// run for the environment that owns the call. Executors that cannot name an
+// environment keep the unscoped inventory, matching Rust's
+// `ToolEnvironments::All`.
+type HookEnvironmentSelector interface {
+	HookEnvironmentIDs(invocation *Invocation) []string
 }
 
 type HookInputUpdater interface {
@@ -127,7 +148,11 @@ func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation 
 	}
 
 	current := cloneInvocation(invocation)
+	// Rust resolves the invocation's environments before PreToolUse and keeps
+	// them for PostToolUse, so hook scoping is stable across input rewrites.
+	targetEnvironments := hookTargetEnvironments(executor, current)
 	if payload, ok := preToolUsePayload(executor, current); ok {
+		payload.TargetEnvironments = targetEnvironments
 		outcome, err := hooks.RunPreToolUse(ctx, current, payload)
 		if err != nil {
 			return nil, hookRunnerError(err)
@@ -166,6 +191,7 @@ func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation 
 
 	if output.Success {
 		if payload, ok := postToolUsePayload(executor, current, output); ok {
+			payload.TargetEnvironments = targetEnvironments
 			outcome, err := hooks.RunPostToolUse(ctx, current, payload)
 			if err != nil {
 				return nil, hookRunnerError(err)
@@ -189,6 +215,38 @@ func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation 
 		}
 	}
 	return output, nil
+}
+
+// hookTargetEnvironments resolves the environment scope of one call. An
+// executor without a selector, or one that names no concrete environment,
+// leaves the inventory unscoped (Rust `ToolEnvironments::All` -> empty
+// `hook_ids`).
+func hookTargetEnvironments(executor Executor, invocation *Invocation) []string {
+	selector, ok := executor.(HookEnvironmentSelector)
+	if !ok {
+		return nil
+	}
+	ids := selector.HookEnvironmentIDs(invocation)
+	if len(ids) == 0 {
+		return nil
+	}
+	targets := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		targets = append(targets, id)
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	return targets
 }
 
 func preToolUsePayload(executor Executor, invocation *Invocation) (*PreToolUsePayload, bool) {

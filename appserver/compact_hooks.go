@@ -110,16 +110,27 @@ func (r *RuntimeRouter) hooksForTurn(params *turn.TurnStartParams) []HookMetadat
 	return append(hooks, discovered.Handlers...)
 }
 
-// hooksForThreadTurn is hooksForTurn for callers that only know the thread. The
-// active turn's environment selections are the only environment snapshot this
-// process retains, so a thread with no running turn falls back to local hooks.
+// hooksForThreadTurn is hooksForTurn for callers that only know the thread.
 func (r *RuntimeRouter) hooksForThreadTurn(threadID string, cwd string) []HookMetadata {
 	if r == nil {
 		return nil
 	}
+	return r.hooksForTurn(r.threadEnvironmentHookParams(threadID, cwd))
+}
+
+// threadEnvironmentHookParams returns the environment selections that scope a
+// thread's hook inventory. Rust thread.list_hooks reads the session's retained
+// turn-environment snapshot, which survives a finished turn; Go persists the
+// selections on the thread record, so they stand in for that snapshot while no
+// turn is running.
+func (r *RuntimeRouter) threadEnvironmentHookParams(threadID string, cwd string) *turn.TurnStartParams {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
 	params := r.activeTurnParams(threadID)
 	if params == nil {
-		return r.hooksForCWD(cwd, threadID)
+		params = &turn.TurnStartParams{ThreadID: threadID, Environments: r.threadEnvironmentSelections(threadID)}
 	}
 	if strings.TrimSpace(params.CWD) == "" {
 		params.CWD = cwd
@@ -127,7 +138,7 @@ func (r *RuntimeRouter) hooksForThreadTurn(threadID string, cwd string) []HookMe
 	if strings.TrimSpace(params.ThreadID) == "" {
 		params.ThreadID = threadID
 	}
-	return r.hooksForTurn(params)
+	return params
 }
 
 func nextHookDisplayOrder(hooks []HookMetadata) int64 {

@@ -21,8 +21,8 @@ import (
 // the session/persistent remembered choices, asks the client through the
 // `tool/requestUserInput` surface, and records the answer.
 type appserverMCPToolApprovalHandler struct {
-	router         *RuntimeRouter
-	service        *mcp.MCPService
+	router  *RuntimeRouter
+	service *mcp.MCPService
 	// responder receives the calling MCP tool's ID so the approval wait is
 	// charged to that invocation (Rust #57207).
 	responder      tool.UserInputCallIDResponder
@@ -281,7 +281,7 @@ func (h *appserverMCPToolApprovalHandler) runPermissionRequestHooks(ctx context.
 	if strings.TrimSpace(toolName) == "" {
 		return mcp.MCPToolApprovalDeny, nil, false
 	}
-	verdict, ok := h.router.permissionRequestHookVerdict(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), toolName, aliases, mcpToolCallHookToolInput(request.Arguments), nil)
+	verdict, ok := h.router.permissionRequestHookVerdict(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), toolName, aliases, mcpToolCallHookToolInput(request.Arguments), nil, request.EnvironmentID)
 	if !ok || verdict == nil {
 		return mcp.MCPToolApprovalDeny, nil, false
 	}

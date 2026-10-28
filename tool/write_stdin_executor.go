@@ -152,6 +152,29 @@ func (e *WriteStdinExecutor) PostToolUsePayload(_ *Invocation, output *Output) (
 	}, true
 }
 
+// HookEnvironmentIDs reports the environment that owns the terminal session
+// (Rust `Tool::live_environment_resolver` -> `terminal_session_for_input`). The
+// router captures it before the tool runs, while the session is still live.
+func (e *WriteStdinExecutor) HookEnvironmentIDs(invocation *Invocation) []string {
+	if e == nil || e.manager == nil || invocation == nil {
+		return nil
+	}
+	var args WriteStdinArgs
+	if err := invocation.DecodeArguments(&args); err != nil {
+		return nil
+	}
+	process, err := e.manager.process(args.SessionID)
+	if err != nil || process == nil {
+		return nil
+	}
+	id := strings.TrimSpace(process.environmentID)
+	if id == "" {
+		return nil
+	}
+	return []string{id}
+}
+
 var _ Executor = (*WriteStdinExecutor)(nil)
 var _ PreToolUsePayloadProvider = (*WriteStdinExecutor)(nil)
 var _ PostToolUsePayloadProvider = (*WriteStdinExecutor)(nil)
+var _ HookEnvironmentSelector = (*WriteStdinExecutor)(nil)
