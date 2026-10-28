@@ -26,7 +26,7 @@ var responsesAPIProxyExit = os.Exit
 
 type responsesAPIProxyServer struct {
 	opts        *cli.ResponsesAPIProxyOptions
-	authHeader  string
+	auth        responsesProxyAuth
 	upstreamURL *url.URL
 	httpClient  *http.Client
 	dumper      *responsesAPIProxyDumper
@@ -78,6 +78,7 @@ func newResponsesAPIProxyServer(opts *cli.ResponsesAPIProxyOptions, stdin io.Rea
 	if err != nil {
 		return nil, err
 	}
+	auth := responsesProxyAPIKeyAuth{header: authHeader}
 	upstreamValue := firstNonEmptyLocal(opts.UpstreamURL, "https://api.openai.com/v1/responses")
 	upstreamURL, err := url.Parse(upstreamValue)
 	if err != nil {
@@ -91,9 +92,9 @@ func newResponsesAPIProxyServer(opts *cli.ResponsesAPIProxyOptions, stdin io.Rea
 	}
 	proxy := &responsesAPIProxyServer{
 		opts:        opts,
-		authHeader:  authHeader,
+		auth:        auth,
 		upstreamURL: upstreamURL,
-		httpClient:  &http.Client{Timeout: 0},
+		httpClient:  responsesProxyUpstreamClient(auth),
 	}
 	if strings.TrimSpace(opts.DumpDir) != "" {
 		if err := os.MkdirAll(opts.DumpDir, 0o755); err != nil {
@@ -198,7 +199,14 @@ func (s *responsesAPIProxyServer) forward(w http.ResponseWriter, r *http.Request
 		return err
 	}
 	copyForwardHeaders(upstreamReq.Header, r.Header)
-	upstreamReq.Header.Set("Authorization", s.authHeader)
+	authHeader := ""
+	if s.auth != nil {
+		authHeader, err = s.auth.Header(r.Context())
+		if err != nil {
+			return err
+		}
+	}
+	upstreamReq.Header.Set("Authorization", authHeader)
 	upstreamReq.Host = s.upstreamURL.Host
 	response, err := s.httpClient.Do(upstreamReq)
 	if err != nil {
@@ -257,31 +265,13 @@ func (w *flushWriter) Write(data []byte) (int, error) {
 }
 
 func readResponsesAPIProxyAuthHeader(stdin io.Reader) (string, error) {
-	data, err := io.ReadAll(io.LimitReader(stdin, responsesAPIProxyAuthHeaderBufferSize+1))
+	token, err := readResponsesProxyCredential(stdin, responsesAPIProxyAuthHeaderBufferSize, validateResponsesProxyAPIKeyToken, func() error {
+		return fmt.Errorf("API key is too large to fit in the %d-byte buffer", responsesAPIProxyAuthHeaderBufferSize)
+	})
 	if err != nil {
 		return "", err
 	}
-	sawNewline := false
-	if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
-		data = data[:idx+1]
-		sawNewline = true
-	}
-	capacity := responsesAPIProxyAuthHeaderBufferSize - len("Bearer ")
-	if len(data) >= capacity && !sawNewline {
-		return "", fmt.Errorf("API key is too large to fit in the %d-byte buffer", responsesAPIProxyAuthHeaderBufferSize)
-	}
-	for len(data) > 0 && (data[len(data)-1] == '\n' || data[len(data)-1] == '\r') {
-		data = data[:len(data)-1]
-	}
-	if len(data) == 0 {
-		return "", errors.New("API key must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)")
-	}
-	for _, b := range data {
-		if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-' || b == '_') {
-			return "", errors.New("API key may only contain ASCII letters, numbers, '-' or '_'")
-		}
-	}
-	return "Bearer " + string(data), nil
+	return "Bearer " + string(token), nil
 }
 
 func copyForwardHeaders(dst http.Header, src http.Header) {
