@@ -31,7 +31,7 @@ func TestUserPromptLongURLWrapsPreservingGutterAndBackground(t *testing.T) {
 		}
 	}
 	for _, line := range lines {
-		if !strings.Contains(line, ansiUserMessageBackground) {
+		if !strings.Contains(line, codextui.HistoryPromptSGR(codextui.DetectStdoutColorLevel())) {
 			t.Fatalf("user row lost background: %q", line)
 		}
 	}

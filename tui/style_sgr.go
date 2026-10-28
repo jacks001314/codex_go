@@ -38,6 +38,45 @@ func DefaultBackgroundRGB() (RGB, bool) {
 	return background, ok
 }
 
+// HistoryPromptSGR renders Rust's `style::history_prompt_style` background for
+// submitted prompts: a 16% (dark) or 2% (light) blend toward the terminal
+// background. Terminals that do not answer the default-color probe keep the
+// surface shaded with the ANSI DarkGray fallback (Rust #57554).
+func HistoryPromptSGR(level StdoutColorLevel) string {
+	_, terminalBG, known := defaultTerminalColorsRGB()
+	if !known {
+		return "\x1b[100m"
+	}
+	codes := sgrColorCodes(bestHistoryPromptFill(terminalBG, level), false, level)
+	if len(codes) == 0 {
+		return ""
+	}
+	return "\x1b[" + strings.Join(codes, ";") + "m"
+}
+
+// HistoryPromptAccentAllowed reports whether user-message element accents may
+// be painted on the submitted-prompt surface. Rust's `user_message_element_style`
+// keeps the terminal's default foreground when the surface is the ANSI DarkGray
+// fallback or resolves to a terminal-owned ANSI-16 colour (Rust #57554).
+func HistoryPromptAccentAllowed(level StdoutColorLevel) bool {
+	_, terminalBG, known := defaultTerminalColorsRGB()
+	if !known {
+		return false
+	}
+	fill := bestHistoryPromptFill(terminalBG, level)
+	return fill.Index == nil || *fill.Index >= 16
+}
+
+func bestHistoryPromptFill(terminalBG RGB, level StdoutColorLevel) TerminalColor {
+	top := RGB{R: 255, G: 255, B: 255}
+	alpha := 0.16
+	if IsLight(terminalBG) {
+		top = RGB{}
+		alpha = 0.02
+	}
+	return BestColorForLevel(BlendRGB(top, terminalBG, alpha), level)
+}
+
 // SGRForStyle renders one style spec as an SGR prefix. An unresolved colour
 // falls back to the terminal default (39/49), matching Rust's Color::Reset.
 func SGRForStyle(spec StyleSpec, level StdoutColorLevel) string {

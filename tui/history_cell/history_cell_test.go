@@ -128,6 +128,13 @@ func TestRawLinesFromSourceMatchesRustTranscriptSemantics(t *testing.T) {
 }
 
 func TestUserAndAgentMessageCells(t *testing.T) {
+	restoreColors := tui.SetDefaultTerminalColorsForTest(&tui.DefaultColors{
+		FG: tui.RGBColor{R: 229, G: 229, B: 229},
+		BG: tui.RGBColor{},
+	})
+	defer restoreColors()
+	restoreLevel := tui.SetStdoutColorLevelForTest(tui.ColorANSI256)
+	defer restoreLevel()
 	user := NewUserPrompt("hello\nworld\n", nil, nil, []string{"https://example.com/image.png", "https://example.com/2.png"})
 	display := user.DisplayLines(40)
 	joined := strings.Join(display, "\n")

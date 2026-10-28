@@ -13,13 +13,12 @@ import (
 // Rust parity: codex-rs/tui/src/history_cell/messages.rs.
 
 const (
-	ansiUserMessageBackground = "\x1b[48;5;235m"
-	ansiUserMessagePrefix     = "\x1b[1;2m"
-	ansiUserMessageSpoken     = "\x1b[1;31m"
-	ansiUserMessageSpokenEnd  = "\x1b[22;39m"
-	ansiUserMessagePrefixEnd  = "\x1b[22m"
-	ansiUserMessageReset      = "\x1b[0m"
-	ansiUserMessageMention    = "\x1b[36m"
+	ansiUserMessagePrefix    = "\x1b[1;2m"
+	ansiUserMessageSpoken    = "\x1b[1;31m"
+	ansiUserMessageSpokenEnd = "\x1b[22;39m"
+	ansiUserMessagePrefixEnd = "\x1b[22m"
+	ansiUserMessageReset     = "\x1b[0m"
+	ansiUserMessageMention   = "\x1b[36m"
 )
 
 var userMessageMentionRE = regexp.MustCompile(`[$@][A-Za-z0-9][A-Za-z0-9_-]*`)
@@ -288,6 +287,11 @@ func styleUserMessageMentions(text string) string {
 	if !strings.ContainsAny(text, "$@") {
 		return text
 	}
+	if !tui.HistoryPromptAccentAllowed(tui.DetectStdoutColorLevel()) {
+		// Rust #57554: without a resolved surface fill the terminal's default
+		// foreground is kept instead of painting an element accent.
+		return text
+	}
 	var sb strings.Builder
 	cursor := 0
 	for _, loc := range userMessageMentionRE.FindAllStringIndex(text, -1) {
@@ -359,7 +363,7 @@ func styleUserMessageLine(content string, width int) string {
 	if padding < 0 {
 		padding = 0
 	}
-	return ansiUserMessageBackground + content + strings.Repeat(" ", padding) + ansiUserMessageReset
+	return tui.HistoryPromptSGR(tui.DetectStdoutColorLevel()) + content + strings.Repeat(" ", padding) + ansiUserMessageReset
 }
 
 // UserMessageSurfaceBlankLine is one full-width row painted with the user
