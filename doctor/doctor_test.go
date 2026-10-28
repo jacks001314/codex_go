@@ -1969,7 +1969,7 @@ func TestWebsocketReachabilityWarnsOnImmediateCloseLikeRust(t *testing.T) {
 	for _, want := range []string{
 		"handshake result: HTTP 101",
 		"immediate close code: 1008",
-		"immediate close reason: blocked",
+		"immediate close reason: present (redacted)",
 	} {
 		if !containsDetail(check, want) {
 			t.Fatalf("missing detail %q in %#v", want, check.Details)

@@ -3262,7 +3262,7 @@ func websocketReachabilityCheck(codexHome string, opts *Options) *DoctorCheck {
 	cfg, err := loadEffectiveConfigForDoctor(codexHome, opts)
 	if err != nil {
 		return NewCheck("network.websocket_reachability", "websocket", CheckStatusWarning, "Responses WebSocket config could not be loaded").
-			Detail("config error: " + err.Error())
+			Detail("config error: [redacted]")
 	}
 	providerID := effectiveProviderIDForDoctor(opts, cfg)
 	provider, err := model.ProviderForConfigID(configValuesForDoctor(cfg), providerID, stringConfigValueForDoctor(cfg, "openai_base_url"))
@@ -3323,7 +3323,7 @@ func websocketReachabilityCheckFromProvider(providerID string, provider *model.P
 	details = append(details, websocketDNSAddressFamilyDetails(endpoint)...)
 	headers, err := websocketProbeHeaders(context.Background(), endpoint, apiProvider.Headers, apiAuth)
 	if err != nil {
-		return websocketProbeWarning("Responses WebSocket auth could not be resolved", details, "auth resolution failed: "+err.Error())
+		return websocketProbeWarning("Responses WebSocket auth could not be resolved", details, "auth resolution failed: [redacted]")
 	}
 	timeout := provider.EffectiveWebsocketConnectTimeout()
 	probeCtx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -3352,12 +3352,14 @@ func websocketReachabilityCheckFromProvider(providerID string, provider *model.P
 	immediateClose, readErr := websocketImmediateCloseForDoctor(conn, websocketImmediateCloseGrace)
 	_ = conn.Close(websocket.StatusNormalClosure, "doctor probe completed")
 	if readErr != nil {
-		return websocketProbeWarning("Responses WebSocket failed; HTTPS fallback may still work", details, "handshake stream error: failed to read websocket probe event: "+readErr.Error())
+		// Rust #57597: the upgrade evidence collected above is kept, but the
+		// raw stream error may echo wire values, so only its category is shown.
+		return websocketProbeWarning("Responses WebSocket failed; HTTPS fallback may still work", details, "handshake stream error: [redacted]")
 	}
 	if immediateClose != nil {
 		details = append(details,
 			"immediate close code: "+immediateClose.Code,
-			"immediate close reason: "+immediateClose.Reason,
+			"immediate close reason: "+closeReasonDetail(immediateClose.Reason),
 		)
 		return NewCheck("network.websocket_reachability", "websocket", CheckStatusWarning, "Responses WebSocket closed immediately after handshake").
 			DetailsList(details).
@@ -3463,12 +3465,46 @@ func websocketHandshakeErrorDetail(response *http.Response, err error) string {
 		if statusText == "" {
 			statusText = strings.TrimSpace(response.Status)
 		}
-		return fmt.Sprintf("handshake API error: %d %s", response.StatusCode, statusText)
+		// Rust #57597: rejected upgrades keep their status but never echo the
+		// server body or headers, which can carry credentials.
+		return fmt.Sprintf("handshake API error: %d %s [redacted]", response.StatusCode, statusText)
 	}
 	if err != nil {
-		return "handshake transport error: " + err.Error()
+		return "handshake transport error: " + websocketTransportErrorCategory(err) + ": [redacted]"
 	}
 	return "handshake transport error"
+}
+
+// websocketTransportErrorCategory keeps the failure category while hiding the
+// wire values in the underlying error (Rust websocket_error_detail #57597).
+func websocketTransportErrorCategory(err error) string {
+	var verificationError *tls.CertificateVerificationError
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostnameError x509.HostnameError
+	var recordHeaderError tls.RecordHeaderError
+	switch {
+	case errors.As(err, &verificationError),
+		errors.As(err, &unknownAuthority),
+		errors.As(err, &hostnameError),
+		errors.As(err, &recordHeaderError):
+		return "TLS handshake failed"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+	var operationError *net.OpError
+	if errors.As(err, &operationError) && operationError.Op == "dial" {
+		return "connection failed"
+	}
+	return "network error"
+}
+
+// closeReasonDetail reports whether a close frame carried a reason without
+// exposing its value (Rust close_reason_detail #57597).
+func closeReasonDetail(reason string) string {
+	if reason == "" {
+		return "empty"
+	}
+	return "present (redacted)"
 }
 
 func websocketHeaderPresent(headers http.Header, names ...string) bool {
