@@ -179,6 +179,24 @@ func itemsCarryToolCall(items []any) bool {
 	return false
 }
 
+// itemsCarryItemID reports whether the wire input still carries the response
+// item with the given id.
+func itemsCarryItemID(items []any, id string) bool {
+	for _, item := range items {
+		switch value := item.(type) {
+		case *model.AgentItem:
+			if value != nil && value.ID == id {
+				return true
+			}
+		case model.AgentItem:
+			if value.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func itemTypes(items []any) []string {
 	types := make([]string, 0, len(items))
 	for _, item := range items {
@@ -230,6 +248,15 @@ func TestAgentLoopPreemptsForMailboxMailAtBoundaryLikeRust(t *testing.T) {
 			}
 			if itemsCarryToolCall(agent.requests[1].InputItems) {
 				t.Fatalf("dropped tool call reached the follow-up request: %v", itemTypes(agent.requests[1].InputItems))
+			}
+			// Rust #55969: mailbox preemption retains the completed boundary item
+			// and the response id so the follow-up continues incrementally instead
+			// of discarding what the model already produced.
+			if !itemsCarryItemID(agent.requests[1].InputItems, testCase.boundary.ID) {
+				t.Fatalf("completed boundary item missing from the follow-up request: %v", itemTypes(agent.requests[1].InputItems))
+			}
+			if got := agent.requests[1].PreviousResponseID; got != "resp-boundary" {
+				t.Fatalf("follow-up previous_response_id = %q, want resp-boundary", got)
 			}
 			if !itemsCarryAgentMail(agent.requests[1].InputItems) {
 				t.Fatalf("queued mail missing from the follow-up request: %v", itemTypes(agent.requests[1].InputItems))

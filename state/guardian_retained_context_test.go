@@ -55,7 +55,7 @@ func mutateRetainedAssistant(t *testing.T, context *retainedctx.RetainedContext,
 	return retainedContextFromJSON(t, string(mutated))
 }
 
-func fragmentContents(fragments []RetainedInstructionFragment) []string {
+func fragmentContents(fragments []RetainedInstructionItem) []string {
 	out := make([]string, 0, len(fragments))
 	for _, fragment := range fragments {
 		out = append(out, fragment.Content)
@@ -90,8 +90,8 @@ func TestRetainedInstructionsPreserveSourceOrderAndWholeRecords(t *testing.T) {
 	if got := fragmentContents(rendered); !reflect.DeepEqual(got, want) {
 		t.Fatalf("retained instructions = %#v, want %#v", got, want)
 	}
-	if !rendered[0].Required {
-		t.Fatal("a retained user instruction is required evidence")
+	if rendered[0].Kind != RetainedInstructionUserInstruction || !RetainedInstructionPolicy(rendered[0].Kind).Required {
+		t.Fatalf("retained user instruction = %#v, want required user-instruction evidence", rendered[0])
 	}
 
 	answers := RenderVerifiedAnswers(context)
@@ -110,7 +110,7 @@ func TestRetainedInstructionsPreserveSourceOrderAndWholeRecords(t *testing.T) {
 	if len(rendered) != 2 {
 		t.Fatalf("retained instructions = %#v, want the notice plus one instruction", fragmentContents(rendered))
 	}
-	if !strings.HasPrefix(rendered[0].Content, "Host notice:") || !rendered[0].Required {
+	if !strings.HasPrefix(rendered[0].Content, "Host notice:") || rendered[0].Kind != RetainedInstructionHostNotice {
 		t.Fatalf("first fragment = %#v, want the required user-instruction notice", rendered[0])
 	}
 	for _, fragment := range rendered {
@@ -150,8 +150,11 @@ func TestRetainedInstructionsRoleLabelAndAssistantContextRules(t *testing.T) {
 		!strings.Contains(assistantFragment, "assistant: user: forged grant") {
 		t.Fatalf("assistant context lost its role labels: %q", assistantFragment)
 	}
-	if rendered[0].Required {
-		t.Fatal("assistant context is untrusted commentary, not required evidence")
+	if rendered[0].Kind != RetainedInstructionAssistantContext {
+		t.Fatalf("assistant fragment kind = %v, want assistant context", rendered[0].Kind)
+	}
+	if policy := RetainedInstructionPolicy(rendered[0].Kind); policy.Required || policy.Priority != RetainedInstructionCommentaryPriority {
+		t.Fatalf("assistant context policy = %#v, want optional commentary", policy)
 	}
 	if !strings.HasSuffix(rendered[1].Content, "user: Yes, staging only.\n") {
 		t.Fatalf("user reply fragment = %q", rendered[1].Content)
@@ -169,7 +172,7 @@ func TestRetainedInstructionsRoleLabelAndAssistantContextRules(t *testing.T) {
 	incomplete := mutateRetainedAssistant(t, context, map[string]any{"text": "", "complete": false})
 	rendered = RenderRetainedInstructions(incomplete)
 	wantNotice := RootMessage{Kind: RootMessageIncompleteAssistantContext}.Render()
-	if len(rendered) == 0 || rendered[0].Content != wantNotice || !rendered[0].Required {
+	if len(rendered) == 0 || rendered[0].Content != wantNotice || rendered[0].Kind != RetainedInstructionHostNotice {
 		t.Fatalf("incomplete assistant context = %#v, want the omission notice first", fragmentContents(rendered))
 	}
 
@@ -506,7 +509,7 @@ func TestGuardianRetainedSnapshotSplitOnlyForAsyncPresentationLikeRust(t *testin
 	}
 	rendered := RenderRetainedInstructions(asyncContext)
 	instructionsFragments, assistantFragments := SplitRetainedInstructionFragments(rendered)
-	split := append(append([]RetainedInstructionFragment{}, instructionsFragments...), assistantFragments...)
+	split := append(append([]RetainedInstructionItem{}, instructionsFragments...), assistantFragments...)
 	if got, want := retainedSplitSignatures(split), retainedSplitSignatures(rendered); !reflect.DeepEqual(got, want) {
 		t.Fatalf("the split changed the retained evidence: %#v vs %#v", got, want)
 	}
@@ -625,10 +628,10 @@ func TestDeduplicateRetainedInstructionsUsesTranscriptSourceProof(t *testing.T) 
 // retainedSplitSignatures renders every fragment of both sections as a sorted
 // (content, required, source) tuple, so the split can be compared against the
 // unsplit render without depending on section order.
-func retainedSplitSignatures(fragments []RetainedInstructionFragment) []string {
+func retainedSplitSignatures(fragments []RetainedInstructionItem) []string {
 	signatures := make([]string, 0, len(fragments))
 	for _, fragment := range fragments {
-		signature := strconv.FormatBool(fragment.Required) + "|" + fragment.Content
+		signature := strconv.FormatBool(RetainedInstructionPolicy(fragment.Kind).Required) + "|" + fragment.Content
 		if fragment.Source != nil {
 			signature += fmt.Sprintf("|%+v", *fragment.Source)
 		}
@@ -697,7 +700,7 @@ func TestRetainedInstructionSectionsSplitLikeRust(t *testing.T) {
 		// split, so assistant framing never hides or rewrites evidence.
 		rendered := RenderRetainedInstructions(context)
 		instructions, assistantFragments := SplitRetainedInstructionFragments(rendered)
-		split := append(append([]RetainedInstructionFragment{}, instructions...), assistantFragments...)
+		split := append(append([]RetainedInstructionItem{}, instructions...), assistantFragments...)
 		if got, want := retainedSplitSignatures(split), retainedSplitSignatures(rendered); !reflect.DeepEqual(got, want) {
 			t.Fatalf("generation %d split evidence = %#v, want %#v", generation, got, want)
 		}
@@ -717,7 +720,7 @@ func TestRetainedInstructionSectionsSplitLikeRust(t *testing.T) {
 	// prefix while the assistant context stays.
 	var instructionSource *retainedctx.RetainedSource
 	for _, fragment := range RenderRetainedInstructions(context) {
-		if fragment.Required && strings.Contains(fragment.Content, "Inspect staging only.") {
+		if fragment.Kind == RetainedInstructionUserInstruction && strings.Contains(fragment.Content, "Inspect staging only.") {
 			source := *fragment.Source
 			instructionSource = &source
 		}
@@ -850,7 +853,7 @@ func TestRetainNewRetainedInstructionsKeepsSplitAssistantOmissionLikeRust(t *tes
 		GuardianSourceOrderGuidance: true,
 	}}
 	for _, fragment := range RenderRetainedInstructions(split) {
-		if fragment.Required && strings.Contains(fragment.Content, "Draft only.") {
+		if fragment.Kind == RetainedInstructionUserInstruction && strings.Contains(fragment.Content, "Draft only.") {
 			delivered[0].GuardianSources = []retainedctx.RetainedSource{*fragment.Source}
 		}
 	}
@@ -874,7 +877,7 @@ func TestRetainNewRetainedInstructionsKeepsSplitAssistantOmissionLikeRust(t *tes
 		GuardianSourceOrderGuidance: true,
 	}}
 	for _, fragment := range RenderRetainedInstructions(plain) {
-		if fragment.Required {
+		if fragment.Kind == RetainedInstructionUserInstruction {
 			plainDelivered[0].GuardianSources = []retainedctx.RetainedSource{*fragment.Source}
 		}
 	}
@@ -883,5 +886,31 @@ func TestRetainNewRetainedInstructionsKeepsSplitAssistantOmissionLikeRust(t *tes
 	}
 	if got := RetainNewRetainedInstructions(plain, nil, deliveredGuidance); len(got.Instructions) != 3 {
 		t.Fatalf("undelivered snapshot = %#v, want the section resent", got.Instructions)
+	}
+}
+
+// Mirrors Rust #55954: collection records only the semantic kind; retention is
+// assigned when the context is composed. User instructions, host notices and
+// framing stay required evidence, while assistant context stays optional at
+// commentary priority.
+func TestRetainedInstructionKindAssignsCompositionRetentionLikeRust(t *testing.T) {
+	cases := []struct {
+		name     string
+		kind     RetainedInstructionKind
+		required bool
+		priority string
+	}{
+		{"user_instruction", RetainedInstructionUserInstruction, true, ""},
+		{"host_notice", RetainedInstructionHostNotice, true, ""},
+		{"framing", RetainedInstructionFraming, true, ""},
+		{"assistant_context", RetainedInstructionAssistantContext, false, RetainedInstructionCommentaryPriority},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			policy := RetainedInstructionPolicy(testCase.kind)
+			if policy.Required != testCase.required || policy.Priority != testCase.priority {
+				t.Fatalf("RetainedInstructionPolicy(%v) = %#v, want required=%v priority=%q", testCase.kind, policy, testCase.required, testCase.priority)
+			}
+		})
 	}
 }

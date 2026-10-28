@@ -63,13 +63,54 @@ type RetainedSourceOrderLabel struct {
 	Entry retainedctx.RetainedContextEntry
 }
 
-// RetainedInstructionFragment mirrors Rust's `Budgeted<String>` item for this
-// section: the rendered content, whether it is required evidence, and the
-// captured source revision used for redelivery decisions.
-type RetainedInstructionFragment struct {
-	Content  string
+// RetainedInstructionKind is the semantic family of a collected retained
+// fragment, recorded before any budget policy is applied (Rust #55954's
+// `RetainedInstructionKind`).
+type RetainedInstructionKind int
+
+const (
+	// RetainedInstructionUserInstruction is a retained user grant or revocation.
+	RetainedInstructionUserInstruction RetainedInstructionKind = iota
+	// RetainedInstructionAssistantContext is an original assistant message kept
+	// only as untrusted context for interpreting the user's reply.
+	RetainedInstructionAssistantContext
+	// RetainedInstructionHostNotice is a host-generated omission notice.
+	RetainedInstructionHostNotice
+	// RetainedInstructionFraming is one of the section's own markers.
+	RetainedInstructionFraming
+)
+
+// RetainedInstructionCommentaryPriority is Rust's
+// `BudgetPriority::Commentary`, the priority optional retained context keeps
+// when request budgeting has to drop something.
+const RetainedInstructionCommentaryPriority = "commentary"
+
+// RetainedInstructionRetention is the budget policy assigned to a collected
+// item when the context is composed (Rust `Retention`). Required evidence is
+// preserved ahead of optional context; optional items carry a budget priority.
+type RetainedInstructionRetention struct {
 	Required bool
-	Source   *retainedctx.RetainedSource
+	// Priority is set only when Required is false.
+	Priority string
+}
+
+// RetainedInstructionPolicy mirrors Rust #55954's composition-time mapping:
+// user instructions, host notices and framing stay required evidence, while
+// assistant context is optional at commentary priority.
+func RetainedInstructionPolicy(kind RetainedInstructionKind) RetainedInstructionRetention {
+	if kind == RetainedInstructionAssistantContext {
+		return RetainedInstructionRetention{Priority: RetainedInstructionCommentaryPriority}
+	}
+	return RetainedInstructionRetention{Required: true}
+}
+
+// RetainedInstructionItem is one collected retained fragment: its rendered
+// content, semantic kind and captured source revision, before budgeting
+// (Rust #55954's `RetainedInstructionItem`).
+type RetainedInstructionItem struct {
+	Content string
+	Kind    RetainedInstructionKind
+	Source  *retainedctx.RetainedSource
 }
 
 // RenderedVerifiedAnswers mirrors Rust's `RenderedVerifiedAnswers`.
@@ -136,7 +177,7 @@ func RetainedAssistantMessage(message *retainedctx.RetainedUserMessage) (RootMes
 // RenderRetainedInstructions mirrors Rust's `render_retained_instructions`:
 // bounded originals in acceptance order, placeholder-free omission notices, and
 // verified answers deferred to the answers section.
-func RenderRetainedInstructions(context *retainedctx.RetainedContext) []RetainedInstructionFragment {
+func RenderRetainedInstructions(context *retainedctx.RetainedContext) []RetainedInstructionItem {
 	if context == nil {
 		return nil
 	}
@@ -144,7 +185,7 @@ func RenderRetainedInstructions(context *retainedctx.RetainedContext) []Retained
 	complete := context.UserMessagesComplete()
 	assistantOmitted := context.HasOmittedAssistantMessages()
 	budget := utils.ApproxBytesForTokens(retainedInstructionTokens)
-	var fragments []RetainedInstructionFragment
+	var fragments []RetainedInstructionItem
 	for _, labeled := range RetainedSourceOrderLabels(context) {
 		var source *retainedctx.RetainedSource
 		if stableOrder {
@@ -156,7 +197,7 @@ func RenderRetainedInstructions(context *retainedctx.RetainedContext) []Retained
 			text := "Retained source order: " + labeled.Label + "\n" +
 				RootMessage{Kind: RootMessageUser, Text: message.Text}.Render()
 			if message.Complete && len(text) <= budget {
-				fragments = append(fragments, RetainedInstructionFragment{Content: text, Required: true, Source: source})
+				fragments = append(fragments, RetainedInstructionItem{Content: text, Kind: RetainedInstructionUserInstruction, Source: source})
 			} else {
 				complete = false
 			}
@@ -170,7 +211,7 @@ func RenderRetainedInstructions(context *retainedctx.RetainedContext) []Retained
 			if assistant, ok := RetainedAssistantMessage(message); ok {
 				text := "Retained source order: " + labeled.Label + "\n" + assistant.Render()
 				if len(text) <= budget {
-					fragments = append(fragments, RetainedInstructionFragment{Content: text, Source: source})
+					fragments = append(fragments, RetainedInstructionItem{Content: text, Kind: RetainedInstructionAssistantContext, Source: source})
 					continue
 				}
 			}
@@ -178,12 +219,12 @@ func RenderRetainedInstructions(context *retainedctx.RetainedContext) []Retained
 		}
 	}
 	if !complete {
-		fragments = append([]RetainedInstructionFragment{{Content: retainedUserInstructionsNotice, Required: true}}, fragments...)
+		fragments = append([]RetainedInstructionItem{{Content: retainedUserInstructionsNotice, Kind: RetainedInstructionHostNotice}}, fragments...)
 	}
 	if assistantOmitted {
-		fragments = append([]RetainedInstructionFragment{{
-			Content:  RootMessage{Kind: RootMessageIncompleteAssistantContext}.Render(),
-			Required: true,
+		fragments = append([]RetainedInstructionItem{{
+			Content: RootMessage{Kind: RootMessageIncompleteAssistantContext}.Render(),
+			Kind:    RetainedInstructionHostNotice,
 		}}, fragments...)
 	}
 	return fragments
@@ -323,14 +364,14 @@ func RetainedAssistantOmissionNotice() string {
 }
 
 // SplitRetainedInstructionFragments mirrors the partition in Rust's
-// `deduplicate_transcript_instructions`: assistant originals carry the optional
-// commentary retention and the assistant omission notice is matched as the
-// exact host-rendered text, so both leave the instruction prefix while the
+// `deduplicate_transcript_instructions`: assistant originals compose to the
+// optional commentary retention and the assistant omission notice is matched as
+// the exact host-rendered text, so both leave the instruction prefix while the
 // required documented evidence stays.
-func SplitRetainedInstructionFragments(fragments []RetainedInstructionFragment) (instructions []RetainedInstructionFragment, assistantContext []RetainedInstructionFragment) {
+func SplitRetainedInstructionFragments(fragments []RetainedInstructionItem) (instructions []RetainedInstructionItem, assistantContext []RetainedInstructionItem) {
 	notice := RetainedAssistantOmissionNotice()
 	for _, fragment := range fragments {
-		if !fragment.Required || fragment.Content == notice {
+		if !RetainedInstructionPolicy(fragment.Kind).Required || fragment.Content == notice {
 			assistantContext = append(assistantContext, fragment)
 			continue
 		}
@@ -343,21 +384,22 @@ func SplitRetainedInstructionFragments(fragments []RetainedInstructionFragment) 
 // section over the given fragments. Rust inserts the markers only when an
 // assistant original or its notice survives, so an empty family renders no
 // section at all.
-func retainedAssistantContextSectionItems(fragments []RetainedInstructionFragment) []string {
+func retainedAssistantContextSectionItems(fragments []RetainedInstructionItem) []string {
 	if len(fragments) == 0 {
 		return nil
 	}
-	items := make([]string, 0, len(fragments)+2)
-	items = append(items, retainedAssistantContextStart+"\n")
+	items := make([]RetainedInstructionItem, 0, len(fragments)+2)
+	items = append(items, RetainedInstructionItem{Content: retainedAssistantContextStart, Kind: RetainedInstructionFraming})
 	for _, fragment := range fragments {
-		items = append(items, fragment.Content+"\n")
+		items = append(items, fragment)
 	}
-	return append(items, retainedAssistantContextEnd+"\n")
+	items = append(items, RetainedInstructionItem{Content: retainedAssistantContextEnd, Kind: RetainedInstructionFraming})
+	return retainedInstructionSectionLines(items)
 }
 
 // retainedInstructionSectionPair splits rendered fragments into the two marked
 // sections without applying delivery deduplication.
-func retainedInstructionSectionPair(fragments []RetainedInstructionFragment, legacy bool) RetainedInstructionSections {
+func retainedInstructionSectionPair(fragments []RetainedInstructionItem, legacy bool) RetainedInstructionSections {
 	instructions, assistantContext := SplitRetainedInstructionFragments(fragments)
 	return RetainedInstructionSections{
 		Instructions:     retainedInstructionsSectionItems(instructions, legacy),
@@ -440,7 +482,7 @@ func HasSplitAssistantOmission(context *retainedctx.RetainedContext) bool {
 
 // splitAssistantOmission reports whether the assistant-context family carries
 // the host omission notice.
-func splitAssistantOmission(assistantContext []RetainedInstructionFragment) bool {
+func splitAssistantOmission(assistantContext []RetainedInstructionItem) bool {
 	notice := RetainedAssistantOmissionNotice()
 	for _, fragment := range assistantContext {
 		if fragment.Content == notice {
@@ -455,17 +497,29 @@ func splitAssistantOmission(assistantContext []RetainedInstructionFragment) bool
 // the banners even when no fragment survives, because Rust's
 // `remove_delivered_instructions` only empties the section's user content and
 // leaves the section in place.
-func retainedInstructionsSectionItems(fragments []RetainedInstructionFragment, legacy bool) []string {
+func retainedInstructionsSectionItems(fragments []RetainedInstructionItem, legacy bool) []string {
 	start := retainedUserInstructionsStart
 	if legacy {
 		start = retainedUserInstructionsLegacyStart
 	}
-	items := make([]string, 0, len(fragments)+2)
-	items = append(items, start+"\n")
+	items := make([]RetainedInstructionItem, 0, len(fragments)+2)
+	items = append(items, RetainedInstructionItem{Content: start, Kind: RetainedInstructionFraming})
 	for _, fragment := range fragments {
-		items = append(items, fragment.Content+"\n")
+		items = append(items, fragment)
 	}
-	return append(items, retainedUserInstructionsEnd+"\n")
+	items = append(items, RetainedInstructionItem{Content: retainedUserInstructionsEnd, Kind: RetainedInstructionFraming})
+	return retainedInstructionSectionLines(items)
+}
+
+// retainedInstructionSectionLines renders a section's items the way Rust's
+// composition appends one newline to each item's own trailing newline
+// (`format!("{}\n", item.content)`).
+func retainedInstructionSectionLines(items []RetainedInstructionItem) []string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, item.Content+"\n")
+	}
+	return lines
 }
 
 // RemoveDeliveredRetainedInstructions mirrors
@@ -475,8 +529,8 @@ func retainedInstructionsSectionItems(fragments []RetainedInstructionFragment, l
 // fragments without a source (legacy positional labels and the omission
 // notices) are always kept. Host metadata whose revision changed, is
 // incomplete, or is missing cannot prove delivery.
-func RemoveDeliveredRetainedInstructions(fragments []RetainedInstructionFragment, transcriptSources []retainedctx.RetainedSource, reviewerHistory []*retainedctx.HarnessMetadata) []RetainedInstructionFragment {
-	kept := make([]RetainedInstructionFragment, 0, len(fragments))
+func RemoveDeliveredRetainedInstructions(fragments []RetainedInstructionItem, transcriptSources []retainedctx.RetainedSource, reviewerHistory []*retainedctx.HarnessMetadata) []RetainedInstructionItem {
+	kept := make([]RetainedInstructionItem, 0, len(fragments))
 	for _, fragment := range fragments {
 		if fragment.Source != nil && retainedSourceDelivered(*fragment.Source, transcriptSources, reviewerHistory) {
 			continue
