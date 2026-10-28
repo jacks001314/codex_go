@@ -223,6 +223,17 @@ type HookMetadata struct {
 	// discovery and reused on every dispatch (Rust #49379). Nil for match-all
 	// and exact-name matchers, and for handlers built outside discovery.
 	compiledMatcher *regexp.Regexp
+	// environmentCWD is the working directory of the execution environment
+	// that owns this handler. It scopes both the hook process and the "cwd"
+	// field of its input (Rust HandlerSourcePath::Environment, #56304).
+	environmentCWD string
+	// withholdTranscript drops controller-owned transcript paths from this
+	// handler's hook input (Rust HandlerSourcePath::Environment::event_input).
+	withholdTranscript bool
+	// environmentExecutor runs this handler on its owning execution
+	// environment. Nil means the handler runs in this process: host-local
+	// hooks and local environment hooks both keep the local command runner.
+	environmentExecutor HookEnvironmentExecutor
 }
 
 func (m *HookMetadata) Validate() error {

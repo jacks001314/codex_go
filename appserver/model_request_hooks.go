@@ -20,7 +20,7 @@ func (r *RuntimeRouter) modelRequestHookCallback(threadID string, cwd string) tu
 		if r == nil || ctx == nil {
 			return
 		}
-		hooks := r.hooksForCWD(cwd, threadID)
+		hooks := r.hooksForThreadTurn(threadID, cwd)
 		if len(hooks) == 0 {
 			return
 		}

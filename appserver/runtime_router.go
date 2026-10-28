@@ -3990,7 +3990,7 @@ func (r *RuntimeRouter) interruptHooksForCWD(cwd string, threadID string) []Hook
 	if r == nil {
 		return nil
 	}
-	hooks := r.hooksForCWD(cwd, threadID)
+	hooks := r.hooksForThreadTurn(threadID, cwd)
 	out := make([]HookMetadata, 0, len(hooks))
 	for _, hook := range hooks {
 		if hook.EventName == HookEventInterrupt {
@@ -5251,7 +5251,7 @@ func (r *RuntimeRouter) runSessionEndHookOnce(record *session.Record, reason str
 	}
 	r.sessionEnded[threadID] = struct{}{}
 	r.sessionEndMu.Unlock()
-	hooks := r.hooksForCWD(record.Metadata.CWD, threadID)
+	hooks := r.hooksForThreadTurn(threadID, record.Metadata.CWD)
 	if len(hooks) == 0 {
 		return
 	}
@@ -11329,13 +11329,27 @@ func (r *RuntimeRouter) handleHooksList(request *Request) (*HookListResponse, er
 		if len(params.CWDs) != 0 {
 			return nil, jsonRPCInvalidRequest("specify either threadId or cwds")
 		}
-		cwd, err := r.loadedThreadHookCWD(strings.TrimSpace(*params.ThreadID))
+		threadID := strings.TrimSpace(*params.ThreadID)
+		cwd, err := r.loadedThreadHookCWD(threadID)
 		if err != nil {
 			return nil, err
 		}
-		// Go carries no per-environment hook declarations, so a thread's cwd
-		// inventory is its complete hook inventory (Rust #56553).
 		params = HookListParams{CWDs: []string{cwd}}
+		registry := r.requireHooks().List(&params)
+		discovery := r.configureHookDiscovery()
+		discovered := discovery.Discover(&params, r.services.DefaultCWD)
+		merged := MergeHookListResponses(registry, discovered)
+		// A loaded thread also lists the hooks declared by its ready
+		// environments (Rust list_with_environment_hooks, #56304). The active
+		// turn's selections are the environment snapshot this process keeps.
+		if sources, remote := r.environmentHookSourcesForTurn(r.activeTurnParams(threadID)); len(sources) > 0 {
+			environment := discoverEnvironmentHooks(sources, nextHookDisplayOrderFromEntries(merged.Data), environmentHookExecutors(remote))
+			merged = MergeHookListResponses(merged, &HookListResponse{Data: environment.Entries})
+		}
+		// Rust catalog_processor.rs hooks_to_info: builtin bundled cleanup
+		// hooks stay available to the engine but are omitted from the public
+		// hooks list.
+		return hideBuiltinHooks(merged), nil
 	}
 	registry := r.requireHooks().List(&params)
 	discovery := r.configureHookDiscovery()
@@ -19542,7 +19556,7 @@ func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID str
 	if r == nil || params == nil || !r.hookRunnerConfigured() {
 		return nil
 	}
-	hooks := r.hooksForCWD(params.CWD, params.ThreadID)
+	hooks := r.hooksForTurn(params)
 	adapter := NewToolHookAdapter(r.requireHookRunner(), hooks, params.ThreadID, turnID, params.CWD)
 	// Rust reports the issuing step's model and permission mode to the pre/post
 	// tool-use hooks (hook_runtime::run_pre_tool_use_hooks). Go captures the

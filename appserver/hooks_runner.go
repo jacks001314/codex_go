@@ -142,18 +142,26 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 
 		var runResult *hookCommandRunResult
 		if metadata.HandlerType == HookHandlerMCPTool {
-			runResult = r.runMcpToolHook(ctx, metadata, request)
+			runResult = r.runMcpToolHook(ctx, metadata, request, hookMetadataInputJSON(metadata, request.InputJSON))
 		} else {
-			runResult = r.runCommand(ctx, metadata, request.InputJSON, request.CWD)
+			runResult = r.runHandlerCommand(ctx, metadata, request)
 		}
 		completed := completedHookSummary(metadata, runResult, hookRunStatus(request.EventName, runResult), hookOutputEntries(request.EventName, runResult))
 		completed = hookSummaryWithRunIDSuffix(completed, request.RunIDSuffix)
 		effect := hookRunEffect(request.EventName, runResult)
-		if request.EventName == HookEventPermissionRequest && !hookTrustAllowsExecution(&metadata) {
-			// Rust can_apply_control_effects: an untrusted handler's verdict is
-			// never applied, even though its run and output are still reported.
-			effect.PermissionRequestAllow = false
-			effect.PermissionRequestDeny = nil
+		if request.EventName == HookEventPermissionRequest {
+			switch {
+			case !hookTrustAllowsExecution(&metadata):
+				// Rust can_apply_control_effects: an untrusted handler's verdict
+				// is never applied, even though its run and output are still
+				// reported.
+				effect.PermissionRequestAllow = false
+				effect.PermissionRequestDeny = nil
+			case metadata.EnvironmentID != nil:
+				// Environment authority may restrict the controller's policy,
+				// never grant it (Rust permission_request.rs #56304).
+				effect.PermissionRequestAllow = false
+			}
 		}
 		mergeHookRunEffect(result, effect)
 		emitHookRunMetrics(r.Metrics, &completed)
@@ -178,6 +186,84 @@ func (r *HookRunner) Preview(request *HookRunRequest) []HookRunSummary {
 		out = append(out, hookSummaryWithRunIDSuffix(runningHookSummary(metadata, r.now()), request.RunIDSuffix))
 	}
 	return out
+}
+
+// runHandlerCommand executes one selected command handler. Handlers owned by
+// an execution environment see that environment's cwd, never the controller's
+// transcript paths, and run on the environment's executor when it is remote.
+func (r *HookRunner) runHandlerCommand(ctx context.Context, metadata HookMetadata, request *HookRunRequest) *hookCommandRunResult {
+	if request == nil {
+		return nil
+	}
+	inputJSON := hookMetadataInputJSON(metadata, request.InputJSON)
+	if metadata.environmentExecutor != nil {
+		return r.runEnvironmentCommand(ctx, metadata, inputJSON)
+	}
+	cwd := request.CWD
+	if environmentCWD := strings.TrimSpace(metadata.environmentCWD); environmentCWD != "" {
+		cwd = environmentNativeCWD(environmentCWD)
+	}
+	return r.runCommand(ctx, metadata, inputJSON, cwd)
+}
+
+func hookMetadataInputJSON(metadata HookMetadata, inputJSON string) string {
+	if !metadata.withholdTranscript {
+		return inputJSON
+	}
+	return environmentHookInputJSON(inputJSON, metadata.environmentCWD)
+}
+
+// runEnvironmentCommand runs a command hook on its owning execution
+// environment through the executor seam installed during discovery.
+func (r *HookRunner) runEnvironmentCommand(ctx context.Context, metadata HookMetadata, inputJSON string) *hookCommandRunResult {
+	started := r.now()
+	startedAt := started.UTC().UnixMilli()
+	timeoutSec := metadata.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = defaultDiscoveredHookTimeoutSec
+	}
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	if err := verifyPluginHookTrustAtRun(metadata.pluginTrust, time.Until(deadline), fmt.Sprintf("hook timed out after %ds", timeoutSec)); err != nil {
+		completed := r.now()
+		return &hookCommandRunResult{
+			StartedAt:   startedAt,
+			CompletedAt: completed.UTC().UnixMilli(),
+			DurationMS:  completed.Sub(started).Milliseconds(),
+			Error:       stringPointer(err.Error()),
+		}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	execCtx, cancel := context.WithTimeout(ctx, max(time.Until(deadline), 0))
+	defer cancel()
+	output, err := metadata.environmentExecutor.Execute(
+		execCtx,
+		ptrStringValue(metadata.EnvironmentID),
+		ptrStringValue(metadata.Command),
+		metadata.Env,
+		inputJSON,
+		max(time.Until(deadline), 0),
+	)
+	completed := r.now()
+	result := &hookCommandRunResult{
+		StartedAt:   startedAt,
+		CompletedAt: completed.UTC().UnixMilli(),
+		DurationMS:  completed.Sub(started).Milliseconds(),
+	}
+	if err != nil {
+		result.Error = stringPointer(err.Error())
+		return result
+	}
+	if output == nil {
+		result.Error = stringPointer("environment hook executor returned no output")
+		return result
+	}
+	exitCode := output.ExitCode
+	result.ExitCode = &exitCode
+	result.Stdout = output.Stdout
+	result.Stderr = output.Stderr
+	return result
 }
 
 func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inputJSON string, cwd string) *hookCommandRunResult {
@@ -276,7 +362,7 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 // runMcpToolHook executes an mcp_tool hook (Rust #38705): the argument
 // template is expanded against the hook event JSON, then the executor's
 // returned text is interpreted with ordinary command-hook output semantics.
-func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, request *HookRunRequest) *hookCommandRunResult {
+func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, request *HookRunRequest, inputJSON string) *hookCommandRunResult {
 	started := r.now()
 	startedAt := started.UTC().UnixMilli()
 	timeoutSec := metadata.TimeoutSec
@@ -300,8 +386,8 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 		return result
 	}
 	var hookEvent any
-	if strings.TrimSpace(request.InputJSON) != "" {
-		if err := json.Unmarshal([]byte(request.InputJSON), &hookEvent); err != nil {
+	if strings.TrimSpace(inputJSON) != "" {
+		if err := json.Unmarshal([]byte(inputJSON), &hookEvent); err != nil {
 			result.Error = stringPointer("failed to parse hook event input")
 			return result
 		}

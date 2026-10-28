@@ -9,6 +9,8 @@ import (
 
 	"codex_go/compact"
 	"codex_go/session"
+	"codex_go/tool"
+	"codex_go/turn"
 )
 
 var ErrCompactHookStopped = errors.New("compact hook stopped")
@@ -85,7 +87,87 @@ func (r *RuntimeRouter) runPostCompactHooks(ctx context.Context, hookCtx *compac
 }
 
 func (r *RuntimeRouter) compactHooksForCWD(cwd string, threadID string) []HookMetadata {
-	return r.hooksForCWD(cwd, threadID)
+	return r.hooksForThreadTurn(threadID, cwd)
+}
+
+// hooksForTurn returns the turn's hook inventory, including hooks declared by
+// its ready execution environments (Rust with_environment_hooks, #56304).
+func (r *RuntimeRouter) hooksForTurn(params *turn.TurnStartParams) []HookMetadata {
+	if r == nil || params == nil {
+		return nil
+	}
+	hooks := r.hooksForCWD(params.CWD, params.ThreadID)
+	// Rust's hooks engine is disabled wholesale when the hooks feature is off,
+	// so environment declarations stay dormant too.
+	if !r.configureHookDiscoveryForThread(params.ThreadID).hooksFeatureEnabled(params.CWD) {
+		return hooks
+	}
+	sources, remote := r.environmentHookSourcesForTurn(params)
+	if len(sources) == 0 {
+		return hooks
+	}
+	discovered := discoverEnvironmentHooks(sources, nextHookDisplayOrder(hooks), environmentHookExecutors(remote))
+	return append(hooks, discovered.Handlers...)
+}
+
+// hooksForThreadTurn is hooksForTurn for callers that only know the thread. The
+// active turn's environment selections are the only environment snapshot this
+// process retains, so a thread with no running turn falls back to local hooks.
+func (r *RuntimeRouter) hooksForThreadTurn(threadID string, cwd string) []HookMetadata {
+	if r == nil {
+		return nil
+	}
+	params := r.activeTurnParams(threadID)
+	if params == nil {
+		return r.hooksForCWD(cwd, threadID)
+	}
+	if strings.TrimSpace(params.CWD) == "" {
+		params.CWD = cwd
+	}
+	if strings.TrimSpace(params.ThreadID) == "" {
+		params.ThreadID = threadID
+	}
+	return r.hooksForTurn(params)
+}
+
+func nextHookDisplayOrder(hooks []HookMetadata) int64 {
+	order := int64(0)
+	for _, hook := range hooks {
+		if hook.DisplayOrder >= order {
+			order = hook.DisplayOrder + 1
+		}
+	}
+	return order
+}
+
+func nextHookDisplayOrderFromEntries(entries []HookListEntry) int64 {
+	order := int64(0)
+	for _, entry := range entries {
+		for _, hook := range entry.Hooks {
+			if hook.DisplayOrder >= order {
+				order = hook.DisplayOrder + 1
+			}
+		}
+	}
+	return order
+}
+
+// environmentHookExecutors builds the executor map passed to environment hook
+// discovery. Local environments are absent, so their handlers keep the local
+// command runner.
+func environmentHookExecutors(remote map[string]tool.UnifiedExecEnvironment) map[string]HookEnvironmentExecutor {
+	if len(remote) == 0 {
+		return nil
+	}
+	executor := newAppServerHookEnvironmentExecutor(remote)
+	if executor == nil {
+		return nil
+	}
+	executors := make(map[string]HookEnvironmentExecutor, len(remote))
+	for environmentID := range remote {
+		executors[environmentID] = executor
+	}
+	return executors
 }
 
 func (r *RuntimeRouter) hooksForCWD(cwd string, threadID string) []HookMetadata {

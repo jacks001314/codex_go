@@ -51,7 +51,7 @@ func (r *HookRunner) scheduleAsyncHook(ctx context.Context, request *HookRunRequ
 			return
 		default:
 		}
-		runResult := r.runCommand(ctx, metadata, request.InputJSON, request.CWD)
+		runResult := r.runHandlerCommand(ctx, metadata, request)
 		completed := completedHookSummary(metadata, runResult, hookRunStatus(request.EventName, runResult), hookOutputEntries(request.EventName, runResult))
 		completed = hookSummaryWithRunIDSuffix(completed, request.RunIDSuffix)
 		select {
