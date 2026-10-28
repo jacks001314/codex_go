@@ -225,6 +225,28 @@ func (c ExecCall) IsUnifiedExecInteraction() bool {
 	return c.Source == ExecSourceUnifiedExecInteraction
 }
 
+// IsUnifiedExecSource mirrors Rust chatwidget::exec_state::is_unified_exec_source:
+// both unified-exec lifecycle phases share the live status row instead of a
+// transcript cell for non-standard commands.
+func IsUnifiedExecSource(source ExecCommandSource) bool {
+	return source == ExecSourceUnifiedExecStartup || source == ExecSourceUnifiedExecInteraction
+}
+
+// IsStandardToolCall mirrors Rust chatwidget::exec_state::is_standard_tool_call:
+// a command with no parsed actions, or any unknown action, does not produce an
+// active exec cell in the transcript.
+func IsStandardToolCall(parsed []ParsedCommand) bool {
+	if len(parsed) == 0 {
+		return false
+	}
+	for _, action := range parsed {
+		if action.Kind == ParsedUnknown {
+			return false
+		}
+	}
+	return true
+}
+
 // isExploringCall mirrors Rust ExecCell::is_exploring_call: an agent command
 // whose parsed actions are only file reads, listings, or searches.
 func isExploringCall(call ExecCall) bool {

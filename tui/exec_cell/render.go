@@ -108,7 +108,7 @@ func (c ExecCell) CompactDisplayLinesWithTheme(width int, themeID string) []stri
 	if c.IsExploringCell() || len(c.Calls) != 1 {
 		return c.DisplayLinesWithTheme(width, themeID)
 	}
-	return commandCallDisplayLinesStyledMode(width, c.Calls[0], themeID, strings.TrimSpace(themeID) != "", true)
+	return commandCallDisplayLinesStyledMode(width, c.Calls[0], themeID, strings.TrimSpace(themeID) != "", true, c.AnimationsEnabled, time.Now())
 }
 
 // ActivityDisclosure reports the inline detail control for this group. Rust
@@ -180,7 +180,7 @@ func userShellOutputTruncated(call ExecCall, width int) bool {
 }
 
 func callDisplayLines(call ExecCall, width int) []string {
-	return commandCallDisplayLinesStyled(width, call, "", false)
+	return commandCallDisplayLinesStyled(width, call, "", false, false, time.Now())
 }
 
 func (c ExecCell) TranscriptLines(width int) []string {
@@ -287,22 +287,38 @@ func (c ExecCell) commandDisplayLinesStyled(width int, themeID string, styled bo
 	if len(c.Calls) != 1 {
 		return nil
 	}
-	return commandCallDisplayLinesStyled(width, c.Calls[0], themeID, styled)
+	return commandCallDisplayLinesStyled(width, c.Calls[0], themeID, styled, c.AnimationsEnabled, time.Now())
 }
 
-func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, styled bool) []string {
-	return commandCallDisplayLinesStyledMode(width, call, themeID, styled, false)
+func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, styled bool, animationsEnabled bool, now time.Time) []string {
+	return commandCallDisplayLinesStyledMode(width, call, themeID, styled, false, animationsEnabled, now)
 }
 
-func commandCallDisplayLinesStyledMode(width int, call ExecCall, themeID string, styled bool, compact bool) []string {
+func commandCallDisplayLinesStyledMode(width int, call ExecCall, themeID string, styled bool, compact bool, animationsEnabled bool, now time.Time) []string {
 	width = max(width, 1)
 	success := call.Output != nil && call.Output.ExitCode == 0
 	// Rust #54433: a nonzero exit is a neutral compact outcome, so the marker
 	// keeps bold without the red styling and the title reports the exit status
 	// instead of labelling the command as failed.
 	nonzeroExit := call.Output != nil && call.Output.ExitCode != 0
+	// Rust exec_cell::render::activity_marker: an in-flight call spins the
+	// activity indicator (or the static bullet when progress effects are off),
+	// while a finished call freezes the outcome marker.
 	bullet := "•"
-	if styled {
+	if call.Output == nil {
+		mode := tui.MotionModeFromAnimationsEnabled(animationsEnabled)
+		trueColor := tui.DetectStdoutColorLevel() == tui.ColorTrue
+		indicator := tui.ActivityIndicator
+		if styled {
+			indicator = tui.ActivityIndicatorStyled
+		}
+		if glyph, ok := indicator(call.StartTime, mode, tui.ReducedMotionStaticBullet, trueColor, now); ok && glyph != "" {
+			bullet = glyph
+			if styled && glyph == "◦" {
+				bullet = ansiWrap(ansiDim, bullet)
+			}
+		}
+	} else if styled {
 		switch {
 		case nonzeroExit:
 			bullet = ansiWrap(ansiBold, bullet)

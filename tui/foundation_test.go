@@ -169,7 +169,7 @@ func TestStatusIndicatorRendering(t *testing.T) {
 	if !strings.Contains(lines[0], "Working (1m 01s") {
 		t.Fatalf("status line = %q", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], "  - cargo") || !strings.Contains(lines[1], "…") {
+	if !strings.HasPrefix(lines[1], "  └ cargo") || !strings.Contains(lines[1], "…") {
 		t.Fatalf("details line = %q", lines[1])
 	}
 }

@@ -207,7 +207,9 @@ func (s *StatusIndicator) Render(width int, now time.Time) []string {
 	}
 	line += ")"
 	if strings.TrimSpace(s.InlineMessage) != "" {
-		line += " \u2022 " + strings.TrimSpace(s.InlineMessage)
+		// Rust separates the inline context from the elapsed/interrupt segment
+		// with a middle dot, keeping the interrupt affordance in place.
+		line += " \u00b7 " + strings.TrimSpace(s.InlineMessage)
 	}
 	if width > 0 {
 		line = TruncateWithEllipsis(line, width)
@@ -216,7 +218,9 @@ func (s *StatusIndicator) Render(width int, now time.Time) []string {
 	if strings.TrimSpace(s.Details) == "" || width <= 0 {
 		return lines
 	}
-	prefix := "  - "
+	// Rust DETAILS_PREFIX keeps the detail block on the same tree glyph as the
+	// exec-cell output rows.
+	prefix := "  \u2514 "
 	contentWidth, ok := UsableContentWidth(width, DisplayWidth(prefix))
 	if !ok {
 		return lines

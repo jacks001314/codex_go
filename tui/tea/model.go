@@ -2524,6 +2524,10 @@ type Model struct {
 	completedThreadIDs               map[string]bool
 	pendingThreadName                bool
 	taskStartedAt                    time.Time
+	// statusIndicatorHidden mirrors Rust bottom_pane::hide_status_indicator: a
+	// streamed assistant tail owns the surface, so the inline working row is
+	// removed until tool activity or commentary completion re-shows it.
+	statusIndicatorHidden bool
 	// lastTurnElapsedSeconds holds the pause-aware turn clock captured when the
 	// completion notification arrives. The local runner emits turn.completed
 	// before TurnCompletedMsg, and marking the turn idle resets taskStartedAt;
@@ -5970,6 +5974,9 @@ func (m *Model) syncTaskRunningTimer() {
 		if m.taskStartedAt.IsZero() {
 			now := m.currentTime()
 			m.taskStartedAt = now
+			// A fresh turn starts with the working row visible (Rust
+			// set_task_running(true) creates the indicator).
+			m.statusIndicatorHidden = false
 			// A new turn resets elapsed time but keeps an outstanding modal's
 			// pause state (Rust #41913).
 			m.statusTimer.ResetAt(0, now)
@@ -5983,6 +5990,7 @@ func (m *Model) syncTaskRunningTimer() {
 	}
 	m.taskStartedAt = time.Time{}
 	m.workingHeaderStartedAt = time.Time{}
+	m.statusIndicatorHidden = false
 }
 
 // syncStatusTimerPause keeps modal wait time out of the status clock. Called
@@ -5999,8 +6007,45 @@ func (m *Model) syncStatusTimerPause(now time.Time) {
 	m.statusTimer.ResumeAt(now)
 }
 
-func (m *Model) renderWorkingIndicator() string {
+// ensureStatusIndicator mirrors Rust BottomPane::ensure_status_indicator: a
+// running tool or command re-shows the inline working row that a streamed
+// assistant message hid.
+func (m *Model) ensureStatusIndicator() {
 	if m == nil || !m.isTaskRunning() {
+		return
+	}
+	m.statusIndicatorHidden = false
+}
+
+// hideStatusIndicator mirrors Rust BottomPane::hide_status_indicator: the
+// streamed assistant tail replaces the working row while it owns the surface.
+func (m *Model) hideStatusIndicator() {
+	if m == nil {
+		return
+	}
+	m.statusIndicatorHidden = true
+}
+
+// unifiedExecStatusInlineMessage mirrors Rust's unified_exec_footer summary
+// text (bottom_pane/unified_exec_footer.rs): the single-line status row reuses
+// the same copy as the dedicated footer.
+func (m *Model) unifiedExecStatusInlineMessage() string {
+	if m == nil {
+		return ""
+	}
+	count := len(m.commandLifecycle.UnifiedExecProcesses)
+	if count == 0 {
+		return ""
+	}
+	plural := ""
+	if count != 1 {
+		plural = "s"
+	}
+	return fmt.Sprintf("%d background terminal%s running \u00b7 /ps to view \u00b7 /stop to close", count, plural)
+}
+
+func (m *Model) renderWorkingIndicator() string {
+	if m == nil || !m.isTaskRunning() || m.statusIndicatorHidden {
 		return ""
 	}
 	now := m.currentTime()
@@ -6036,6 +6081,10 @@ func (m *Model) renderWorkingIndicator() string {
 	}
 	indicator.InterruptHint = m.interruptHintBinding()
 	indicator.SetInterruptHintVisible(indicator.InterruptHint != "")
+	// Rust BottomPane::sync_status_inline_message feeds the shared
+	// UnifiedExecFooter::summary_text into the status row, so background
+	// terminals stay visible while the command runs.
+	indicator.InlineMessage = m.unifiedExecStatusInlineMessage()
 	width := m.width
 	if width > 2 {
 		width -= 2
@@ -6056,12 +6105,19 @@ func (m *Model) renderWorkingIndicator() string {
 		}
 	}
 	header := strings.TrimSpace(indicator.Header)
-	lines[0] = "\u2022 " + lines[0]
+	// Rust status_indicator_widget.rs prefixes the row with activity_indicator:
+	// the progress effect blinks/shimmer the bullet and reduced motion shows no
+	// marker at all (ReducedMotionIndicator::Hidden).
+	prefix := ""
+	if glyph, ok := m.activityIndicatorGlyph(now, m.statusIndicatorStartTime()); ok {
+		prefix = glyph + " "
+	}
+	lines[0] = prefix + lines[0]
 	lines[0] = fitTerminalLine(lines[0], m.width)
 	if !m.mcpStartupActive {
-		plainPrefix := "\u2022 " + header
+		plainPrefix := prefix + header
 		if strings.HasPrefix(lines[0], plainPrefix) {
-			lines[0] = "\u2022 " + m.renderWorkingHeader(header) + strings.TrimPrefix(lines[0], plainPrefix)
+			lines[0] = prefix + m.renderWorkingHeader(header) + strings.TrimPrefix(lines[0], plainPrefix)
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -6075,6 +6131,32 @@ func (m *Model) progressEffectsEnabled() bool {
 		return false
 	}
 	return m.animationsEnabled && m.effects.Progress
+}
+
+// statusIndicatorStartTime mirrors Rust StatusIndicator::lines passing
+// `Some(self.timer.last_resume_at)` to the activity indicator so a resume
+// restarts the blink phase.
+func (m *Model) statusIndicatorStartTime() *time.Time {
+	if m == nil {
+		return nil
+	}
+	started := m.statusTimer.LastResumeAt
+	if started.IsZero() {
+		return nil
+	}
+	return &started
+}
+
+// activityIndicatorGlyph mirrors Rust motion::activity_indicator with the
+// caller's reduced-motion fallback. The status row hides the marker entirely in
+// reduced motion; exec cells keep the static bullet.
+func (m *Model) activityIndicatorGlyph(now time.Time, startTime *time.Time) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	mode := codextui.MotionModeFromAnimationsEnabled(m.progressEffectsEnabled())
+	trueColor := codextui.DetectStdoutColorLevel() == codextui.ColorTrue
+	return codextui.ActivityIndicatorStyled(startTime, mode, codextui.ReducedMotionHidden, trueColor, now)
 }
 
 func (m *Model) renderWorkingHeader(header string) string {
@@ -6786,6 +6868,9 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			}
 		} else if strings.EqualFold(strings.TrimSpace(item.Phase), messagePhaseCommentary) {
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
+			// Rust streaming.rs restores the status row once a commentary
+			// stream is committed while the turn continues.
+			m.ensureStatusIndicator()
 		} else if strings.EqualFold(strings.TrimSpace(item.Phase), messagePhasePartialAnswer) {
 			// Rust #51241 ("Add a partial answer message phase"): a partial
 			// answer is stable answer text that more output or tools may follow,
@@ -6802,6 +6887,8 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 				return m.deliverVoiceSpeech(item.ID, speech)
 			}
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
+			// Partial answers keep the turn alive, so Rust restores the row.
+			m.ensureStatusIndicator()
 		} else {
 			if speech, ok := m.VoiceConversation.TakeVoiceSpeech(item.ID, item.Text); ok {
 				// The spoken answer arrives as a voice caption, so it is not
@@ -7223,6 +7310,16 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	}
 	inProgress := commandExecutionInProgress(item.Status)
 	if inProgress {
+		// Rust command_lifecycle.rs ensures the status indicator while a
+		// command runs, even after a streamed answer hid it.
+		m.ensureStatusIndicator()
+		// Rust keeps unified-exec commands that have no parsed actions out of
+		// the transcript (command_lifecycle.rs is_standard_tool_call): the
+		// status row owns the live progress and the background-terminal footer
+		// instead of a duplicate "Running" cell.
+		if execcell.IsUnifiedExecSource(call.Source) && !execcell.IsStandardToolCall(call.Parsed) {
+			return
+		}
 		started := state.StartedAt
 		call.StartTime = &started
 	} else {
@@ -7551,6 +7648,9 @@ func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool)
 		cell = historycell.NewMcpToolCall(id, state.Invocation, mcpToolResultFromProtocolItem(item))
 		m.Transcript.needsFinalMessageSeparator = true
 	} else {
+		// Rust tool_lifecycle.rs keeps the working row visible for in-flight
+		// MCP calls.
+		m.ensureStatusIndicator()
 		cell = historycell.NewActiveMcpToolCall(id, state.Invocation)
 	}
 	width := m.width
@@ -7587,6 +7687,9 @@ func (m *Model) renderWebSearchItem(item *protocol.ThreadItem, completed bool) {
 		cell = historycell.NewWebSearchCall(id, item.Query, webSearchActionFromProtocolItem(item))
 		m.Transcript.needsFinalMessageSeparator = true
 	} else {
+		// Rust tool_lifecycle.rs keeps the working row visible for an active
+		// web search.
+		m.ensureStatusIndicator()
 		cell = historycell.NewActiveWebSearchCall(id, item.Query)
 	}
 	width := m.width
@@ -7834,6 +7937,10 @@ func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *pro
 		Output:   output,
 		Source:   execcell.ExecSourceAgent,
 		Duration: duration,
+	}
+	if output == nil {
+		// Rust tool_lifecycle.rs ensures the indicator for in-flight tools.
+		m.ensureStatusIndicator()
 	}
 	if output == nil && !state.StartedAt.IsZero() {
 		started := state.StartedAt
@@ -10818,6 +10925,9 @@ func (m *Model) appendAssistantDelta(itemID string, delta string) {
 		return
 	}
 	m.markSafetyBufferingAgentMessageStarted()
+	// Rust streaming.rs sync_active_stream_tail hides the status row while the
+	// assistant tail streams; the transcript itself owns that surface.
+	m.hideStatusIndicator()
 	m.Transcript.appendAssistantDelta(m.State, itemID, delta, m.width)
 }
 
@@ -10826,6 +10936,9 @@ func (m *Model) mergeAssistantFinal(text string) {
 		return
 	}
 	m.markSafetyBufferingAgentMessageStarted()
+	// Rust streaming.rs keeps the row hidden after a final answer completes;
+	// the next tool or commentary restores it.
+	m.hideStatusIndicator()
 	m.Transcript.mergeAssistantFinal(m.State, text, m.width)
 	m.flushDeferredSubAgentActivity()
 }

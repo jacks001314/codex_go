@@ -58,10 +58,10 @@ func TestStatusIndicatorWidgetStateDetailsAndInlineMatchRust(t *testing.T) {
 	if !strings.Contains(lines[0], "thinking (1m 01s") || !strings.Contains(lines[0], "running tests") {
 		t.Fatalf("header line = %q", lines[0])
 	}
-	if !strings.Contains(lines[0], "\u2022 esc to interrupt") || !strings.Contains(lines[0], "\u2022 running tests") {
+	if !strings.Contains(lines[0], "\u2022 esc to interrupt") || !strings.Contains(lines[0], "\u00b7 running tests") {
 		t.Fatalf("Rust separators missing from header line = %q", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], "  - Cargo") {
+	if !strings.HasPrefix(lines[1], "  \u2514 Cargo") {
 		t.Fatalf("details line = %q", lines[1])
 	}
 }

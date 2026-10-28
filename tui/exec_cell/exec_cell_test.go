@@ -517,3 +517,43 @@ func TestExecCellExploringSummaryUsesNeutralNonzeroExitCountsLikeRust(t *testing
 		t.Fatalf("exploration header = %q, want the count appended to the header", strings.SplitN(got, "\n", 2)[0])
 	}
 }
+
+// TestActiveExecCellSpinsWhileRunningLikeRust covers exec_cell::render: an
+// in-flight call uses the activity marker (blinking bullet, or the static
+// bullet under reduced motion) instead of a frozen outcome glyph.
+func TestActiveExecCellSpinsWhileRunningLikeRust(t *testing.T) {
+	restore := tui.SetStdoutColorLevelForTest(tui.ColorANSI16)
+	defer restore()
+	start := time.Now().Add(-700 * time.Millisecond)
+	cell := NewExecCell(ExecCall{
+		CallID:    "run-1",
+		Command:   []string{"echo", "done"},
+		Source:    ExecSourceAgent,
+		StartTime: &start,
+	}, true)
+	if got := cell.DisplayLines(80)[0]; !strings.HasPrefix(got, "\u25e6 Running echo done") {
+		t.Fatalf("active marker = %q, want the off-phase activity glyph", got)
+	}
+	cell.AnimationsEnabled = false
+	// Reduced motion keeps the static bullet (ReducedMotionIndicator::StaticBullet).
+	if got := cell.DisplayLines(80)[0]; !strings.HasPrefix(got, "\u2022 Running echo done") {
+		t.Fatalf("reduced-motion marker = %q", got)
+	}
+}
+
+// TestUnifiedExecCommandClassificationLikeRust covers
+// chatwidget::exec_state::is_standard_tool_call / is_unified_exec_source.
+func TestUnifiedExecCommandClassificationLikeRust(t *testing.T) {
+	if IsStandardToolCall(nil) || IsStandardToolCall([]ParsedCommand{{Kind: ParsedUnknown, Cmd: "powershell -NoProfile"}}) {
+		t.Fatal("unknown actions must not count as standard tool calls")
+	}
+	if !IsStandardToolCall([]ParsedCommand{{Kind: ParsedRead, Name: "README.md"}}) {
+		t.Fatal("read actions must count as standard tool calls")
+	}
+	if !IsUnifiedExecSource(ExecSourceUnifiedExecStartup) || !IsUnifiedExecSource(ExecSourceUnifiedExecInteraction) {
+		t.Fatal("unified exec lifecycle sources must be recognized")
+	}
+	if IsUnifiedExecSource(ExecSourceAgent) || IsUnifiedExecSource(ExecSourceUserShell) {
+		t.Fatal("agent and user-shell sources are not unified exec")
+	}
+}

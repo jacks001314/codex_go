@@ -1,6 +1,10 @@
 package tui
 
-import "time"
+import (
+	"fmt"
+	"math"
+	"time"
+)
 
 // Rust parity: codex-rs/tui/src/motion.rs.
 
@@ -37,6 +41,49 @@ func ActivityIndicator(startTime *time.Time, mode MotionMode, reduced ReducedMot
 	default:
 		return AnimatedActivityIndicator(startTime, trueColor, now), true
 	}
+}
+
+// ActivityIndicatorStyled mirrors Rust motion::activity_indicator where the
+// returned span carries style: on truecolor terminals the glyph pulses through
+// shimmer.rs' process-start sweep, while plain-text callers keep using
+// ActivityIndicator so raw transcript rows stay free of escape sequences.
+func ActivityIndicatorStyled(startTime *time.Time, mode MotionMode, reduced ReducedMotionIndicator, trueColor bool, now time.Time) (string, bool) {
+	glyph, ok := ActivityIndicator(startTime, mode, reduced, trueColor, now)
+	if !ok || mode == MotionReduced || !trueColor {
+		return glyph, ok
+	}
+	if styled, styledOK := shimmerIndicatorGlyph(glyph, now); styledOK {
+		return styled, true
+	}
+	return glyph, true
+}
+
+// shimmerIndicatorGlyph mirrors shimmer.rs::shimmer_spans for the one-cell
+// activity indicator: a two-second sweep synchronized to process start that
+// blends the terminal background into the foreground and always bolds the glyph.
+func shimmerIndicatorGlyph(glyph string, now time.Time) (string, bool) {
+	fg, bg, ok := defaultTerminalColorsRGB()
+	if !ok {
+		return "", false
+	}
+	const (
+		padding       = 10.0
+		sweepSeconds  = 2.0
+		bandHalfWidth = 5.0
+	)
+	period := float64(DisplayWidth(glyph)) + padding*2
+	elapsed := now.Sub(processStart)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	position := math.Mod(elapsed.Seconds(), sweepSeconds) / sweepSeconds * period
+	distance := math.Abs(padding - position)
+	intensity := 0.0
+	if distance <= bandHalfWidth {
+		intensity = 0.5 * (1 + math.Cos(math.Pi*(distance/bandHalfWidth)))
+	}
+	color := BlendRGB(bg, fg, intensity*0.9)
+	return fmt.Sprintf("\x1b[1;38;2;%d;%d;%dm%s\x1b[0m", color.R, color.G, color.B, glyph), true
 }
 
 func AnimatedActivityIndicator(startTime *time.Time, trueColor bool, now time.Time) string {

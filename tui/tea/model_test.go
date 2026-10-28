@@ -349,12 +349,13 @@ func TestModelWorkingIndicatorShimmerKeepsTextAndLayout(t *testing.T) {
 		t.Fatalf("animation changed the status text or layout: %q != %q", got, utils.StripANSI(second))
 	}
 
-	// Reduced motion renders the header verbatim (no shimmer styling).
+	// Reduced motion renders the header verbatim (no shimmer styling) and, like
+	// Rust's ReducedMotionIndicator::Hidden, drops the activity marker entirely.
 	disabled := false
 	reduced := NewModel(state, Options{Width: 80, Height: 18, AnimationsEnabled: &disabled})
 	reduced.taskStartedAt = start
 	reduced.now = func() time.Time { return start }
-	if got := reduced.renderWorkingIndicator(); !strings.Contains(got, "\u2022 Working") {
+	if got := utils.StripANSI(reduced.renderWorkingIndicator()); !strings.HasPrefix(got, "Working (") {
 		t.Fatalf("reduced-motion indicator = %q", got)
 	}
 }
