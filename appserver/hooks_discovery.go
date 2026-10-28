@@ -114,25 +114,7 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 		return
 	}
 	managed := read.Requirements.Hooks
-	events := []struct {
-		name   HookEventName
-		groups []config.ConfiguredHookGroup
-	}{
-		{HookEventPreModelRequest, managed.PreModelRequest},
-		{HookEventPostModelRequest, managed.PostModelRequest},
-		{HookEventPreToolUse, managed.PreToolUse},
-		{HookEventPermissionRequest, managed.PermissionRequest},
-		{HookEventPostToolUse, managed.PostToolUse},
-		{HookEventPreCompact, managed.PreCompact},
-		{HookEventPostCompact, managed.PostCompact},
-		{HookEventSessionStart, managed.SessionStart},
-		{HookEventSessionEnd, managed.SessionEnd},
-		{HookEventUserPromptSubmit, managed.UserPromptSubmit},
-		{HookEventSubagentStart, managed.SubagentStart},
-		{HookEventSubagentStop, managed.SubagentStop},
-		{HookEventStop, managed.Stop},
-		{HookEventInterrupt, managed.Interrupt},
-	}
+	events := hookEventsFromManagedRequirements(managed).matcherGroups()
 	displayOrder := int64(len(entry.Hooks))
 	for _, event := range events {
 		for groupIndex, group := range event.groups {

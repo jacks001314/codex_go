@@ -31,6 +31,10 @@ const (
 // policy, the resolved permission profile, and the selected capability roots
 // for the attachment.
 type EnvironmentConfig struct {
+	// EnvironmentHooks are the hooks from this environment's effective managed
+	// requirements, mirroring Rust protocol::EnvironmentConfig
+	// environment_hooks (#56302). Inferred thread configurations start empty.
+	EnvironmentHooks HookEvents
 	// AllowLoginShell reports whether shell tools may start login shells in
 	// this environment.
 	AllowLoginShell bool
@@ -200,6 +204,19 @@ func environmentConfigFromAny(value any) (*EnvironmentConfig, error) {
 		return nil, fmt.Errorf("environment configuration must be an object")
 	}
 	config := &EnvironmentConfig{}
+	if raw, present := object["environment_hooks"]; present {
+		hooks, err := hookEventsFromAny(raw)
+		if err != nil {
+			return nil, err
+		}
+		config.EnvironmentHooks = hooks
+	} else if raw, present := object["environmentHooks"]; present {
+		hooks, err := hookEventsFromAny(raw)
+		if err != nil {
+			return nil, err
+		}
+		config.EnvironmentHooks = hooks
+	}
 	if raw, present := object["allow_login_shell"]; present {
 		config.AllowLoginShell = boolFromAny(raw)
 	} else if raw, present := object["allowLoginShell"]; present {
@@ -366,6 +383,9 @@ func environmentConfigToAny(config *EnvironmentConfig) map[string]any {
 		"allow_login_shell":       config.AllowLoginShell,
 		"selectedCapabilityRoots": roots,
 	}
+	if !config.EnvironmentHooks.IsEmpty() {
+		out["environment_hooks"] = hookEventsToAny(config.EnvironmentHooks)
+	}
 	if len(config.ShellEnvironmentPolicy) > 0 {
 		out["shell_environment_policy"] = cloneShellEnvironmentPolicy(config.ShellEnvironmentPolicy)
 	}
@@ -459,6 +479,7 @@ func cloneEnvironmentConfig(config *EnvironmentConfig) *EnvironmentConfig {
 		return nil
 	}
 	clone := *config
+	clone.EnvironmentHooks = cloneHookEvents(config.EnvironmentHooks)
 	if config.ShellEnvironmentPolicy != nil {
 		clone.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(config.ShellEnvironmentPolicy)
 	}
@@ -479,4 +500,23 @@ func environmentConfigPermissionProfile(config *EnvironmentConfig) *sandbox.Perm
 		return nil
 	}
 	return config.PermissionProfile
+}
+
+// String mirrors Rust's Debug implementation for EnvironmentConfig (#56302):
+// hook contents are summarized as a handler count and the shell environment
+// policy is redacted.
+func (config *EnvironmentConfig) String() string {
+	if config == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf(
+		"EnvironmentConfig{environment_hooks: %d handlers, allow_login_shell: %t, workspace_roots: %v, permission_profile_id: %q, shell_environment_policy: <redacted>, exec_policy: %v, mcp_policy: %v, selected_capability_roots: %v}",
+		config.EnvironmentHooks.HandlerCount(),
+		config.AllowLoginShell,
+		config.WorkspaceRoots,
+		config.ActivePermissionProfile,
+		config.ExecPolicy,
+		config.McpPolicy,
+		config.SelectedCapabilityRoots,
+	)
 }
