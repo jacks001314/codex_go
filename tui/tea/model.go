@@ -2053,6 +2053,11 @@ type Model struct {
 	// composer (ctrl-k / ctrl-u / kill_whole_line cut into it; ctrl-y yanks it
 	// back), mirroring Rust bottom_pane/textarea.rs kill_buffer.
 	composerKillBuffer string
+	// composerKillBufferImages carries the local image attachments whose
+	// placeholders were cut into composerKillBuffer, with ranges relative to
+	// the buffer text. A yank rehydrates them with fresh labels (Rust #57502
+	// kill_buffer_images / KillBufferSnapshot.images).
+	composerKillBufferImages []composerKillBufferImage
 	// vimPendingOp tracks a pending Vim line operator (d or y) waiting for its
 	// repeat key, enabling dd / yy / cc.
 	vimPendingOp string

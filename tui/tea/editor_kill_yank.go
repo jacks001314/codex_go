@@ -1,8 +1,22 @@
 package tea
 
 import (
+	"sort"
+	"strconv"
+	"strings"
+
+	bottompane "codex_go/tui/bottom_pane"
 	bubbletea "github.com/charmbracelet/bubbletea"
 )
+
+// composerKillBufferImage records a local image attachment whose placeholder
+// was cut into the composer kill buffer. Start and End are byte offsets inside
+// the kill buffer text (Rust #57502 chat_composer::KillBufferSnapshot.images).
+type composerKillBufferImage struct {
+	Start int
+	End   int
+	Path  string
+}
 
 // applyEditorKillYankKey dispatches the composer editor kill/yank actions that
 // the bubbletea textarea does not handle natively, mirroring Rust
@@ -77,13 +91,57 @@ func (m *Model) killComposerWholeLine() {
 
 // yankComposerKillBuffer pastes the kill buffer at the cursor.
 func (m *Model) yankComposerKillBuffer() {
-	if m.composerKillBuffer == "" {
+	if m == nil || m.composerKillBuffer == "" {
 		return
 	}
+	before := m.composer.Value()
 	offset := m.vimValueByteOffset()
-	value := m.composer.Value()
-	m.composer.SetValue(value[:offset] + m.composerKillBuffer + value[offset:])
-	m.vimSetCursorAtByteOffset(offset + len(m.composerKillBuffer))
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(before) {
+		offset = len(before)
+	}
+	killed := m.composerKillBuffer
+	images := m.composerKillBufferImages
+	if m.isVimReplaceMode() {
+		// Rust keeps Vim Replace's per-character recovery: rehydrating element
+		// placeholders would break it, so the yank inserts plain text.
+		images = nil
+	}
+	var builder strings.Builder
+	builder.Grow(len(before) + len(killed))
+	builder.WriteString(before[:offset])
+	position := 0
+	var restored []ComposerTextElement
+	for _, image := range images {
+		if image.Start < position || image.End > len(killed) || image.Start >= image.End {
+			continue
+		}
+		builder.WriteString(killed[position:image.Start])
+		placeholder := m.nextLocalImageLabel()
+		start := builder.Len()
+		builder.WriteString(placeholder)
+		restored = append(restored, ComposerTextElement{
+			Start:       start,
+			End:         start + len(placeholder),
+			Placeholder: placeholder,
+		})
+		m.attachments = append(m.attachments, bottompane.ComposerAttachment{
+			Kind: bottompane.AttachmentImage,
+			Path: image.Path,
+		})
+		position = image.End
+	}
+	builder.WriteString(killed[position:])
+	builder.WriteString(before[offset:])
+	after := builder.String()
+	m.composer.SetValue(after)
+	m.composerElements = transformComposerElements(m.composerElements, before, after)
+	for _, element := range restored {
+		m.composerElements = append(m.composerElements, element)
+	}
+	m.vimSetCursorAtByteOffset(offset + len(after) - len(before))
 }
 
 // editorKillRange removes [start, end) from the composer value, storing it in
@@ -101,6 +159,87 @@ func (m *Model) editorKillRange(start, end int) {
 		return
 	}
 	m.composerKillBuffer = value[start:end]
-	m.composer.SetValue(value[:start] + value[end:])
+	m.composerKillBufferImages = m.killBufferImagesWithin(start, end)
+	after := value[:start] + value[end:]
+	m.composer.SetValue(after)
+	m.composerElements = transformComposerElements(m.composerElements, value, after)
 	m.vimSetCursorAtByteOffset(start)
+}
+
+// killBufferImagesWithin collects the local images whose placeholder elements
+// fall inside the killed range, with ranges relative to the new kill buffer.
+func (m *Model) killBufferImagesWithin(start int, end int) []composerKillBufferImage {
+	if m == nil || len(m.composerElements) == 0 || len(m.attachments) == 0 {
+		return nil
+	}
+	paths := m.localImagePlaceholderPaths()
+	if len(paths) == 0 {
+		return nil
+	}
+	var images []composerKillBufferImage
+	for _, element := range m.composerElements {
+		if element.Start < start || element.End > end || element.Start >= element.End {
+			continue
+		}
+		path, ok := paths[element.Placeholder]
+		if !ok {
+			continue
+		}
+		images = append(images, composerKillBufferImage{
+			Start: element.Start - start,
+			End:   element.End - start,
+			Path:  path,
+		})
+	}
+	sort.Slice(images, func(i int, j int) bool { return images[i].Start < images[j].Start })
+	return images
+}
+
+// localImagePlaceholderPaths maps each local image's [Image #N] placeholder to
+// its path, numbering them like Rust's local_image_label_text across the
+// composer's local and remote images.
+func (m *Model) localImagePlaceholderPaths() map[string]string {
+	if m == nil || len(m.attachments) == 0 {
+		return nil
+	}
+	remote := 0
+	for _, attachment := range m.attachments {
+		if attachment.Kind == bottompane.AttachmentRemoteImage {
+			remote++
+		}
+	}
+	paths := make(map[string]string)
+	local := 0
+	for _, attachment := range m.attachments {
+		if attachment.Kind != bottompane.AttachmentImage || strings.TrimSpace(attachment.Path) == "" {
+			continue
+		}
+		local++
+		paths[localImageLabelText(remote+local)] = attachment.Path
+	}
+	return paths
+}
+
+// nextLocalImageLabel returns the placeholder the next local image receives,
+// mirroring Rust local_image_label_text(remote + local + 1).
+func (m *Model) nextLocalImageLabel() string {
+	remote := 0
+	local := 0
+	if m != nil {
+		for _, attachment := range m.attachments {
+			switch attachment.Kind {
+			case bottompane.AttachmentRemoteImage:
+				remote++
+			case bottompane.AttachmentImage:
+				local++
+			}
+		}
+	}
+	return localImageLabelText(remote + local + 1)
+}
+
+// localImageLabelText renders a local image placeholder like Rust's
+// local_image_label_text.
+func localImageLabelText(index int) string {
+	return "[Image #" + strconv.Itoa(index) + "]"
 }

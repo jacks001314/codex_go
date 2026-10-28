@@ -6,6 +6,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 // These tests verify the composer editor kill/yank actions (ctrl-k / ctrl-u /
@@ -164,5 +165,81 @@ func TestEditorKillWholeLineAndYankLikeRust(t *testing.T) {
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "line zero\nline one\nline two" {
 		t.Fatalf("ctrl-y value = %q, want restored line zero\\nline one\\nline two", got)
+	}
+}
+
+// TestKillBufferRestoresLocalImagesLikeRust pins #57502: killing text that
+// contains an image placeholder keeps the image path, and yanking it back after
+// the composer was replaced re-attaches the image with a fresh label.
+func TestKillBufferRestoresLocalImagesLikeRust(t *testing.T) {
+	const killedImage = "/tmp/killed-image.png"
+	m := vimTestModel("[Image #1] restore me ")
+	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: killedImage}}
+	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
+	m.composer.SetCursor(len(m.composer.Value()))
+
+	m.killComposerToLineStart()
+	if got := m.composer.Value(); got != "" {
+		t.Fatalf("value after kill = %q, want empty composer", got)
+	}
+	if got := m.composerKillBuffer; got != "[Image #1] restore me " {
+		t.Fatalf("kill buffer = %q, want [Image #1] restore me ", got)
+	}
+	if len(m.composerKillBufferImages) != 1 {
+		t.Fatalf("kill buffer images = %#v, want one image", m.composerKillBufferImages)
+	}
+	if image := m.composerKillBufferImages[0]; image != (composerKillBufferImage{Start: 0, End: 10, Path: killedImage}) {
+		t.Fatalf("kill buffer image = %#v, want placeholder range of %s", image, killedImage)
+	}
+	if len(m.composerElements) != 0 {
+		t.Fatalf("elements after kill = %#v, want none", m.composerElements)
+	}
+
+	// Submitting clears the draft and its attachments but keeps the kill buffer.
+	m.resetComposer()
+	m.composerElements = nil
+	m.attachments = nil
+
+	const otherImage = "/tmp/other-image.png"
+	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: otherImage}}
+	m.composer.SetValue("[Image #1] ")
+	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
+	m.composer.SetCursor(len(m.composer.Value()))
+
+	m.yankComposerKillBuffer()
+	if got := m.composer.Value(); got != "[Image #1] [Image #2] restore me " {
+		t.Fatalf("value after yank = %q, want [Image #1] [Image #2] restore me ", got)
+	}
+	if len(m.attachments) != 2 || m.attachments[0].Path != otherImage || m.attachments[1].Path != killedImage {
+		t.Fatalf("attachments after yank = %#v, want %s then %s", m.attachments, otherImage, killedImage)
+	}
+	if len(m.composerElements) != 2 {
+		t.Fatalf("elements after yank = %#v, want two image elements", m.composerElements)
+	}
+	if element := m.composerElements[1]; element.Start != 11 || element.End != 21 || element.Placeholder != "[Image #2]" {
+		t.Fatalf("restored element = %#v, want [Image #2] at 11..21", element)
+	}
+}
+
+// TestKillBufferImageYankStaysPlainTextInVimReplaceLikeRust pins #57502's
+// guard: Vim Replace needs per-character recovery, so its yank inserts the
+// killed text verbatim without rehydrating image placeholders.
+func TestKillBufferImageYankStaysPlainTextInVimReplaceLikeRust(t *testing.T) {
+	m := vimTestModel("")
+	m.vimReplaceMode = true
+	m.composerKillBuffer = "[Image #1] plain"
+	m.composerKillBufferImages = []composerKillBufferImage{{Start: 0, End: 10, Path: "/tmp/killed-image.png"}}
+	m.composer.SetValue("hi")
+	m.composer.SetCursor(len("hi"))
+
+	m.yankComposerKillBuffer()
+	if got := m.composer.Value(); got != "hi[Image #1] plain" {
+		t.Fatalf("value after replace-mode yank = %q, want hi[Image #1] plain", got)
+	}
+	if len(m.attachments) != 0 {
+		t.Fatalf("attachments after replace-mode yank = %#v, want none", m.attachments)
+	}
+	if len(m.composerElements) != 0 {
+		t.Fatalf("elements after replace-mode yank = %#v, want none", m.composerElements)
 	}
 }
