@@ -28,13 +28,17 @@ const (
 type ClipboardEnvironment struct {
 	HerdrSession bool
 	SSHSession   bool
+	// ForwardedX11 marks an SSH session with a forwarded X display. Rust
+	// #57504 uses the forwarded display's clipboard instead of the Windows host
+	// clipboard, so WSLg must not be bypassed in that case.
+	ForwardedX11 bool
 	WSLSession   bool
 	TmuxSession  bool
 }
 
 func ClipboardCopyOrder(environment ClipboardEnvironment) []ClipboardBackend {
 	order := []ClipboardBackend{ClipboardNative}
-	if environment.WSLSession {
+	if environment.WSLSession && !environment.ForwardedX11 {
 		// Rust #53453 (codex-rs/tui/src/clipboard_copy.rs:221-229): prefer the Windows
 		// clipboard on WSL. Contacting WSLg for native setup can block forever, so the
 		// Windows backend is attempted before the native one.
@@ -52,9 +56,12 @@ type NativeClipboardCopyFunc func(string) (*ClipboardLease, error)
 type ClipboardCopyFunc func(string) error
 
 func ClipboardEnvironmentFromMap(env map[string]string, wslSession bool) ClipboardEnvironment {
+	sshSession := envValueSet(env, "SSH_TTY") || envValueSet(env, "SSH_CONNECTION")
 	return ClipboardEnvironment{
 		HerdrSession: env["HERDR_ENV"] == "1",
-		SSHSession:   envValueSet(env, "SSH_TTY") || envValueSet(env, "SSH_CONNECTION"),
+		SSHSession:   sshSession,
+		// Rust #57504: a nonempty DISPLAY in an SSH session is X11 forwarding.
+		ForwardedX11: sshSession && env["DISPLAY"] != "",
 		WSLSession:   wslSession,
 		TmuxSession:  envValueSet(env, "TMUX") || envValueSet(env, "TMUX_PANE"),
 	}
@@ -91,10 +98,11 @@ func CopyToClipboardWith(
 
 	// Rust #53453 (codex-rs/tui/src/clipboard_copy.rs:221-229): on WSL, attempt the
 	// Windows clipboard before the native one. Native (WSLg) setup can block forever, so
-	// it is only used as the Windows backend's fallback.
+	// it is only used as the Windows backend's fallback. Rust #57504: an SSH session
+	// with a forwarded X display copies to that display instead of the Windows host.
 	var lease *ClipboardLease
 	var nativeErr error
-	if environment.WSLSession {
+	if environment.WSLSession && !environment.ForwardedX11 {
 		if wslErr := wslCopy(text); wslErr != nil {
 			fallbackLease, fallbackErr := nativeCopy(text)
 			if fallbackErr == nil {

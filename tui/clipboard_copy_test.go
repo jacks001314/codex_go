@@ -268,3 +268,47 @@ func (c *clipboardCopyCalls) wslOK(string) error {
 	c.wsl++
 	return nil
 }
+
+// Rust #57504: an SSH session in WSL with X11 forwarding uses the forwarded
+// display's native clipboard instead of the Windows host clipboard.
+func TestClipboardCopyWithWSLForwardedX11UsesNativeLikeRust(t *testing.T) {
+	calls := clipboardCopyCalls{}
+	lease, err := CopyToClipboardWith(
+		"hello",
+		ClipboardEnvironment{SSHSession: true, WSLSession: true, ForwardedX11: true},
+		calls.tmuxOK,
+		calls.oscOK,
+		calls.nativeOK,
+		func(string) error {
+			t.Fatal("forwarded X11 must not write to the Windows host clipboard")
+			return nil
+		},
+	)
+	if err != nil || lease == nil {
+		t.Fatalf("forwarded X11 copy = lease %#v err %v", lease, err)
+	}
+	if calls.native != 1 || calls.wsl != 0 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestClipboardEnvironmentDetectsForwardedX11LikeRust(t *testing.T) {
+	ssh := map[string]string{"SSH_CONNECTION": "127.0.0.1 1 127.0.0.1 2"}
+	cases := []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{name: "ssh with display", env: map[string]string{"SSH_CONNECTION": ssh["SSH_CONNECTION"], "DISPLAY": ":0"}, want: true},
+		{name: "ssh with empty display", env: map[string]string{"SSH_CONNECTION": ssh["SSH_CONNECTION"], "DISPLAY": ""}, want: false},
+		{name: "ssh without display", env: ssh, want: false},
+		{name: "local display is not forwarded", env: map[string]string{"DISPLAY": ":0"}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClipboardEnvironmentFromMap(tc.env, true).ForwardedX11; got != tc.want {
+				t.Fatalf("ForwardedX11 = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
