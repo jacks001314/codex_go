@@ -34,6 +34,40 @@ func TestRemoteProtocolCommandExecutionPreservesLifecycle(t *testing.T) {
 	}
 }
 
+// TestRemoteProtocolCommandExecutionCarriesCommandActions covers Rust's
+// command_execution_command_and_parsed contract: the TUI renders the app
+// server's parsed actions instead of re-parsing the raw command, so a shell
+// alias the executor reports as Unknown stays Unknown.
+func TestRemoteProtocolCommandExecutionCarriesCommandActions(t *testing.T) {
+	item := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id":      "call-1",
+		"type":    "commandExecution",
+		"command": "ls",
+		"status":  "inProgress",
+		"commandActions": []any{
+			map[string]any{"type": "unknown", "command": "ls"},
+		},
+	}, false)
+	if item.CommandActions == nil {
+		t.Fatalf("commandActions were dropped: %#v", item)
+	}
+	actions := *item.CommandActions
+	if len(actions) != 1 || actions[0].Type != "unknown" || actions[0].Command != "ls" {
+		t.Fatalf("commandActions = %#v, want one unknown action", actions)
+	}
+
+	// A payload that omits the field keeps the TUI's local-parse fallback.
+	without := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id":      "call-2",
+		"type":    "commandExecution",
+		"command": "ls",
+		"status":  "inProgress",
+	}, false)
+	if without.CommandActions != nil {
+		t.Fatalf("absent commandActions should stay nil, got %#v", *without.CommandActions)
+	}
+}
+
 func TestRemoteProtocolReviewItemUsesReviewText(t *testing.T) {
 	item := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
 		"id": "review-turn", "type": "enteredReviewMode", "review": "changes against 'main'",

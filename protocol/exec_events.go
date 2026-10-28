@@ -103,6 +103,17 @@ type ThreadError struct {
 	Kind string `json:"-"`
 }
 
+// CommandAction is the command-execution display action supplied by the app
+// server (Rust's `CommandAction`). The TUI renders these instead of re-parsing
+// the raw command so a shell alias the executor cannot classify stays Unknown.
+type CommandAction struct {
+	Type    string `json:"type"`
+	Command string `json:"command,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Query   string `json:"query,omitempty"`
+}
+
 type ThreadItem struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
@@ -142,23 +153,29 @@ type ThreadItem struct {
 	AgentPath         string                       `json:"agent_path,omitempty"`
 	// Model and ReasoningEffort are the resolved settings of a started sub-agent
 	// activity (Rust #51463); older records and other activity kinds omit them.
-	Model                 *string        `json:"model,omitempty"`
-	ReasoningEffort       *string        `json:"reasoning_effort,omitempty"`
-	Arguments             *any           `json:"arguments,omitempty"`
-	Result                *MCPToolResult `json:"result,omitempty"`
-	CallError             *MCPToolError  `json:"error,omitempty"`
-	Command               string         `json:"command,omitempty"`
-	PluginID              string         `json:"plugin_id,omitempty"`
-	ScriptPath            string         `json:"script_path,omitempty"`
-	AggregatedOutput      *string        `json:"aggregated_output,omitempty"`
-	ExitCode              *int           `json:"exit_code,omitempty"`
-	Status                string         `json:"status,omitempty"`
-	Stdout                string         `json:"stdout,omitempty"`
-	Stderr                string         `json:"stderr,omitempty"`
-	AutoApproved          *bool          `json:"auto_approved,omitempty"`
-	RevisedPrompt         string         `json:"revised_prompt,omitempty"`
-	SavedPath             string         `json:"saved_path,omitempty"`
-	TransparentBackground *bool          `json:"transparent_background,omitempty"`
+	Model           *string        `json:"model,omitempty"`
+	ReasoningEffort *string        `json:"reasoning_effort,omitempty"`
+	Arguments       *any           `json:"arguments,omitempty"`
+	Result          *MCPToolResult `json:"result,omitempty"`
+	CallError       *MCPToolError  `json:"error,omitempty"`
+	Command         string         `json:"command,omitempty"`
+	// CommandActions preserves the app server's parsed display actions for a
+	// commandExecution item. A nil pointer means the payload omitted them, so
+	// the TUI keeps its local-parse fallback; a present-but-empty slice keeps
+	// Rust's "no standard action" result instead of re-deriving one. It stays
+	// in-process: the exec/SDK JSON shape does not carry command actions.
+	CommandActions        *[]CommandAction `json:"-"`
+	PluginID              string           `json:"plugin_id,omitempty"`
+	ScriptPath            string           `json:"script_path,omitempty"`
+	AggregatedOutput      *string          `json:"aggregated_output,omitempty"`
+	ExitCode              *int             `json:"exit_code,omitempty"`
+	Status                string           `json:"status,omitempty"`
+	Stdout                string           `json:"stdout,omitempty"`
+	Stderr                string           `json:"stderr,omitempty"`
+	AutoApproved          *bool            `json:"auto_approved,omitempty"`
+	RevisedPrompt         string           `json:"revised_prompt,omitempty"`
+	SavedPath             string           `json:"saved_path,omitempty"`
+	TransparentBackground *bool            `json:"transparent_background,omitempty"`
 	// GenerationID is the backend-provided image generation identifier
 	// (Rust #57552). It is omitted for older records that predate the field.
 	GenerationID *string        `json:"generation_id,omitempty"`

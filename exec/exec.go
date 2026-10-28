@@ -1035,13 +1035,21 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 	if command == "" {
 		return
 	}
-	c.emit(protocol.ItemStarted(protocol.CommandExecutionItem(
+	item := protocol.CommandExecutionItem(
 		firstNonEmpty(invocation.CallID, "command-execution"),
 		command,
 		"",
 		nil,
 		"in_progress",
-	)))
+	)
+	// Rust emits ExecCommandSource::UnifiedExecStartup for exec_command, so the
+	// TUI tracks the live process for the background-terminal footer and skips
+	// the duplicate "Running" cell for non-standard commands. The plain `shell`
+	// tool stays on the agent source.
+	if invocation.ToolName.Key() == tool.DefaultExecCommandToolName {
+		item.Metadata = map[string]any{"source": "unifiedExecStartup"}
+	}
+	c.emit(protocol.ItemStarted(item))
 }
 
 func (c *execStreamEventCollector) ToolCompleted(_ context.Context, execution *turn.ToolExecutionResult) {

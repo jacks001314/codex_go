@@ -1,18 +1,25 @@
 package tea
 
 import (
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/rivo/uniseg"
+
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 // vimDraftSnapshot captures the composer draft before a Vim edit so undo/redo
-// can restore it across normal-mode commands and insert sessions.
+// can restore it across normal-mode commands and insert sessions. Structured
+// elements and attachments ride along so undo/redo restore exact mention
+// bindings and image attachments (Rust #57564).
 type vimDraftSnapshot struct {
-	value string
+	value       string
+	elements    []ComposerTextElement
+	attachments []bottompane.ComposerAttachment
 }
 
 // vimReplaceRecoveryEntry records one replace-mode keystroke so Backspace can
@@ -49,7 +56,22 @@ func (m *Model) vimCurrentDraftSnapshot() vimDraftSnapshot {
 	if m == nil {
 		return vimDraftSnapshot{}
 	}
-	return vimDraftSnapshot{value: m.composer.Value()}
+	return vimDraftSnapshot{
+		value:       m.composer.Value(),
+		elements:    cloneComposerTextElements(m.composerElements),
+		attachments: cloneComposerAttachments(m.attachments),
+	}
+}
+
+// restoreVimDraftSnapshot installs a snapshot's text, elements and attachments.
+func (m *Model) restoreVimDraftSnapshot(snapshot vimDraftSnapshot) {
+	if m == nil {
+		return
+	}
+	m.composer.SetValue(snapshot.value)
+	m.composerElements = cloneComposerTextElements(snapshot.elements)
+	m.attachments = cloneComposerAttachments(snapshot.attachments)
+	m.vimSetCursorAtByteOffset(len(snapshot.value))
 }
 
 // vimBeginEdit opens a Vim edit transaction when none is active and reports
@@ -99,8 +121,7 @@ func (m *Model) vimApplyUndo() bool {
 	m.vimRedoStack = append(m.vimRedoStack, m.vimCurrentDraftSnapshot())
 	snapshot := m.vimUndoStack[len(m.vimUndoStack)-1]
 	m.vimUndoStack = m.vimUndoStack[:len(m.vimUndoStack)-1]
-	m.composer.SetValue(snapshot.value)
-	m.vimSetCursorAtByteOffset(len(snapshot.value))
+	m.restoreVimDraftSnapshot(snapshot)
 	return true
 }
 
@@ -115,8 +136,7 @@ func (m *Model) vimApplyRedo() bool {
 	}
 	snapshot := m.vimRedoStack[len(m.vimRedoStack)-1]
 	m.vimRedoStack = m.vimRedoStack[:len(m.vimRedoStack)-1]
-	m.composer.SetValue(snapshot.value)
-	m.vimSetCursorAtByteOffset(len(snapshot.value))
+	m.restoreVimDraftSnapshot(snapshot)
 	return true
 }
 
@@ -537,7 +557,10 @@ func (m *Model) deleteVimCharAtCursor() {
 	startedEdit := m.vimBeginEdit()
 	end := vimNextGraphemeBoundary(value, offset)
 	m.recordVimDelete(value[offset:end])
-	m.composer.SetValue(value[:offset] + value[end:])
+	m.vimCaptureRegister(value, offset, end, value[offset:end], false)
+	next := value[:offset] + value[end:]
+	m.composer.SetValue(next)
+	m.composerElements = transformComposerElements(m.composerElements, value, next)
 	m.vimSetCursorAtByteOffset(offset)
 	m.vimFinishEdit(startedEdit)
 }
@@ -553,11 +576,23 @@ func (m *Model) recordVimDelete(deleted string) {
 	m.vimLastDeleteWord = utf8.RuneCountInString(deleted) > 1 || strings.ContainsAny(deleted, " \t")
 	m.vimHasLastReplace = false
 	m.vimLastReplaceText = nil
+	m.vimHasLastPaste = false
 }
 
-// applyVimDotRepeat replays the last completed Vim delete (`.`), mirroring Rust
-// vim_normal.repeat_last_change (#40521). When no complete edit is recorded the
-// key is a no-op.
+// recordVimPaste makes a completed paste the change `.` repeats.
+func (m *Model) recordVimPaste() {
+	m.vimHasLastPaste = true
+	m.vimHasLastDelete = false
+	m.vimLastDeleteWord = false
+	m.vimHasLastReplace = false
+	m.vimLastReplaceText = nil
+	m.clearVimFindChange()
+}
+
+// applyVimDotRepeat replays the last completed Vim change (`.`): a find
+// delete/change, a Replace-mode overwrite, a paste, or a delete, mirroring Rust
+// vim_normal.repeat_last_change (#40521, #57564). When no complete edit is
+// recorded the key is a no-op.
 func (m *Model) applyVimDotRepeat() bool {
 	if m == nil {
 		return false
@@ -588,6 +623,11 @@ func (m *Model) applyVimDotRepeat() bool {
 			m.replaceVimCharAdvancing(ch)
 		}
 		m.vimFinishEdit(startedEdit)
+		return true
+	}
+	if m.vimHasLastPaste && m.vimYank != "" {
+		// Like Vim, `.` repeats the paste with the current register.
+		m.pasteVimAfterCursorWithRecord(false)
 		return true
 	}
 	if !m.vimHasLastDelete {
@@ -622,6 +662,7 @@ func (m *Model) recordVimReplaceChange() {
 	m.vimLastDeleteWord = false
 	m.vimHasLastReplace = true
 	m.vimLastReplaceText = text
+	m.vimHasLastPaste = false
 	m.clearVimFindChange()
 }
 
@@ -641,7 +682,10 @@ func (m *Model) deleteVimWordAtCursor() {
 		return
 	}
 	startedEdit := m.vimBeginEdit()
-	m.composer.SetValue(value[:startByte] + value[endByte:])
+	m.vimCaptureRegister(value, startByte, endByte, value[startByte:endByte], false)
+	next := value[:startByte] + value[endByte:]
+	m.composer.SetValue(next)
+	m.composerElements = transformComposerElements(m.composerElements, value, next)
 	m.vimSetCursorAtByteOffset(startByte)
 	m.vimFinishEdit(startedEdit)
 }
@@ -661,6 +705,7 @@ func (m *Model) replaceVimCharAtCursor(ch rune) {
 	replacement := string(ch)
 	next := value[:offset] + replacement + value[end:]
 	m.composer.SetValue(next)
+	m.composerElements = transformComposerElements(m.composerElements, value, next)
 	if ch == '\n' {
 		m.vimSetCursorAtByteOffset(offset + len(replacement))
 	} else {
@@ -716,7 +761,9 @@ func (m *Model) absorbVimReplacePromptPrefix() {
 	}
 	entry.absorbedPrefix = true
 	m.composerPrefix = prefix
+	before := m.composer.Value()
 	m.composer.SetValue(rest)
+	m.composerElements = transformComposerElements(m.composerElements, before, rest)
 	m.setComposerCursorOffset(0)
 	m.refreshComposerPrompt()
 }
@@ -731,7 +778,10 @@ func (m *Model) backspaceVimReplacePromptPrefix() bool {
 		if entry.absorbedPrefix && entry.replacement == []rune(m.composerPrefix.text())[0] {
 			m.vimReplaceRecovery = m.vimReplaceRecovery[:index]
 			if !entry.appended && entry.original != 0 {
-				m.composer.SetValue(string(entry.original) + m.composer.Value())
+				before := m.composer.Value()
+				after := string(entry.original) + before
+				m.composer.SetValue(after)
+				m.composerElements = transformComposerElements(m.composerElements, before, after)
 			}
 		}
 	}
@@ -756,7 +806,9 @@ func (m *Model) replaceVimText(start, end int, text string) {
 	if start < 0 || end < start || end > len(value) {
 		return
 	}
-	m.composer.SetValue(value[:start] + text + value[end:])
+	after := value[:start] + text + value[end:]
+	m.composer.SetValue(after)
+	m.composerElements = transformComposerElements(m.composerElements, value, after)
 }
 
 // restoreVimReplacedCharacter implements replace-mode Backspace recovery: the
@@ -782,7 +834,9 @@ func (m *Model) restoreVimReplacedCharacter() {
 	} else {
 		value = value[:start] + string(entry.original) + value[start+len(replacement):]
 	}
+	before := m.composer.Value()
 	m.composer.SetValue(value)
+	m.composerElements = transformComposerElements(m.composerElements, before, value)
 	m.vimSetCursorAtByteOffset(start)
 }
 
@@ -797,8 +851,11 @@ func (m *Model) deleteVimToLineEnd() {
 		return
 	}
 	startedEdit := m.vimBeginEdit()
-	next := value[:offset] + value[offset+len(line)-col:]
+	end := offset + len(line) - col
+	m.vimCaptureRegister(value, offset, end, value[offset:end], false)
+	next := value[:offset] + value[end:]
 	m.composer.SetValue(next)
+	m.composerElements = transformComposerElements(m.composerElements, value, next)
 	m.vimSetCursorAtByteOffset(offset)
 	m.vimFinishEdit(startedEdit)
 }
@@ -811,8 +868,6 @@ func (m *Model) deleteVimLine() {
 	if row < 0 || row >= len(lines) {
 		return
 	}
-	m.vimYank = lines[row]
-	m.vimYankLinewise = true
 	startedEdit := m.vimBeginEdit()
 	offset := 0
 	for i := 0; i < row; i++ {
@@ -822,21 +877,31 @@ func (m *Model) deleteVimLine() {
 	if row < len(lines)-1 {
 		end++
 	}
+	m.vimCaptureRegister(value, offset, end, lines[row], true)
 	next := value[:offset] + value[end:]
 	m.composer.SetValue(next)
+	m.composerElements = transformComposerElements(m.composerElements, value, next)
 	m.vimSetCursorAtByteOffset(offset)
 	m.vimFinishEdit(startedEdit)
 }
 
 // yankVimLine stores the current line in the Vim yank buffer (Y / yy).
 func (m *Model) yankVimLine() {
-	m.vimYank = m.vimCurrentLine()
-	m.vimYankLinewise = true
+	value := m.composer.Value()
+	start := m.vimLineStartByteOffset()
+	m.vimCaptureRegister(value, start, start+len(m.vimCurrentLine()), m.vimCurrentLine(), true)
 }
 
 // pasteVimAfterCursor inserts the yank buffer after the cursor (p). Linewise
 // yanks paste on the following line, matching Vim and Rust #44742.
 func (m *Model) pasteVimAfterCursor() {
+	m.pasteVimAfterCursorWithRecord(true)
+}
+
+// pasteVimAfterCursorWithRecord performs the paste and, when record is set,
+// stores the register generation for dot-repeat. Dot replay passes false so a
+// repeated paste does not rewrite the recorded change.
+func (m *Model) pasteVimAfterCursorWithRecord(record bool) {
 	if m.vimYank == "" {
 		return
 	}
@@ -844,23 +909,70 @@ func (m *Model) pasteVimAfterCursor() {
 	value := m.composer.Value()
 	if m.vimYankLinewise {
 		lineEnd := m.vimLineStartByteOffset() + len(m.vimCurrentLine())
-		insertAt := lineEnd
-		inserted := m.vimYank
-		if insertAt < len(value) && value[insertAt] == '\n' {
-			insertAt++
-			inserted += "\n"
+		if lineEnd < len(value) && value[lineEnd] == '\n' {
+			// Rust inserts the register after the existing newline and only adds
+			// a trailing newline when the yank does not already carry one.
+			suffix := ""
+			if !strings.HasSuffix(m.vimYank, "\n") {
+				suffix = "\n"
+			}
+			_, contentStart := m.insertComposerRegisterText(m.vimYank, m.vimRegisterSpans(m.vimYank), lineEnd+1, "", suffix)
+			m.vimSetCursorAtByteOffset(contentStart)
 		} else {
-			inserted = "\n" + inserted
+			// Pasting after the last line prefixes the newline and drops the
+			// register's own trailing newline (Rust trim_end_matches('\n')).
+			text := strings.TrimRight(m.vimYank, "\n")
+			_, contentStart := m.insertComposerRegisterText(text, m.vimRegisterSpans(text), lineEnd, "\n", "")
+			m.vimSetCursorAtByteOffset(contentStart)
 		}
-		m.composer.SetValue(value[:insertAt] + inserted + value[insertAt:])
-		m.vimSetCursorAtByteOffset(insertAt + len(inserted))
+		if record {
+			m.recordVimPaste()
+		}
 		m.vimFinishEdit(startedEdit)
 		return
 	}
 	offset := m.vimValueByteOffset()
-	m.composer.SetValue(value[:offset] + m.vimYank + value[offset:])
-	m.vimSetCursorAtByteOffset(offset + len(m.vimYank))
+	m.insertComposerRegisterText(m.vimYank, m.vimRegisterSpans(m.vimYank), offset, "", "")
+	if record {
+		m.recordVimPaste()
+	}
 	m.vimFinishEdit(startedEdit)
+}
+
+// vimCaptureRegister stores text as the Vim register together with the
+// structured elements and local images inside value[start:end) (Rust #57564).
+func (m *Model) vimCaptureRegister(value string, start int, end int, text string, linewise bool) {
+	m.storeComposerRegister(text, linewise, m.vimElementsWithin(start, end), m.killBufferImagesWithin(start, end))
+}
+
+// vimRegisterSpans resolves the live register payloads for the given register
+// text.
+func (m *Model) vimRegisterSpans(text string) []composerRegisterSpan {
+	if m == nil {
+		return nil
+	}
+	return composerRegisterSpans(text, m.vimRegisterElements, m.composerKillBufferImages)
+}
+
+// vimElementsWithin returns the composer elements fully inside [start, end)
+// with ranges relative to start.
+func (m *Model) vimElementsWithin(start int, end int) []ComposerTextElement {
+	if m == nil || len(m.composerElements) == 0 {
+		return nil
+	}
+	var elements []ComposerTextElement
+	for _, element := range m.composerElements {
+		if element.Start < start || element.End > end || element.Start >= element.End {
+			continue
+		}
+		elements = append(elements, ComposerTextElement{
+			Start:       element.Start - start,
+			End:         element.End - start,
+			Placeholder: element.Placeholder,
+		})
+	}
+	sort.Slice(elements, func(i int, j int) bool { return elements[i].Start < elements[j].Start })
+	return elements
 }
 
 // vimWordMotion moves the cursor by word boundaries on the current line.
@@ -1263,6 +1375,7 @@ func (m *Model) recordVimFindChange(operator string, kind int, forward bool, tar
 	m.vimLastDeleteWord = false
 	m.vimHasLastReplace = false
 	m.vimLastReplaceText = nil
+	m.vimHasLastPaste = false
 }
 
 func (m *Model) clearVimFindChange() {
@@ -1601,8 +1714,7 @@ func (m *Model) vimOperatorLineMotion(direction int) {
 	op := m.vimPendingOp
 	m.applyVimOperatorValueRange(start, end)
 	if op == "d" || op == "y" {
-		m.vimYank = strings.TrimSuffix(value[start:end], "\n")
-		m.vimYankLinewise = true
+		m.vimCaptureRegister(value, start, end, strings.TrimSuffix(value[start:end], "\n"), true)
 	}
 }
 
@@ -1645,16 +1757,19 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 	switch op {
 	case "d":
 		m.recordVimDelete(value[start:end])
+		m.vimCaptureRegister(value, start, end, value[start:end], false)
 		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
+		m.composerElements = transformComposerElements(m.composerElements, value, next)
 		m.vimSetCursorAtByteOffset(start)
 		m.vimFinishEdit(startedEdit)
 	case "y":
-		m.vimYank = value[start:end]
-		m.vimYankLinewise = false
+		m.vimCaptureRegister(value, start, end, value[start:end], false)
 	case "c":
+		m.vimCaptureRegister(value, start, end, value[start:end], false)
 		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
+		m.composerElements = transformComposerElements(m.composerElements, value, next)
 		m.vimSetCursorAtByteOffset(start)
 		m.vimInsert = true
 		// Keep the transaction open so Esc commits the change + insert session

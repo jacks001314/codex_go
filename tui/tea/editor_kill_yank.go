@@ -86,7 +86,7 @@ func (m *Model) killComposerWholeLine() {
 	if end < len(m.composer.Value()) {
 		end++
 	}
-	m.editorKillRange(lineStart, end)
+	m.editorKillRangeWithKind(lineStart, end, true)
 }
 
 // yankComposerKillBuffer pastes the kill buffer at the cursor.
@@ -94,60 +94,32 @@ func (m *Model) yankComposerKillBuffer() {
 	if m == nil || m.composerKillBuffer == "" {
 		return
 	}
-	before := m.composer.Value()
-	offset := m.vimValueByteOffset()
-	if offset < 0 {
-		offset = 0
+	elements := m.vimRegisterElements
+	if m.composerKillBuffer != m.vimYank {
+		// A caller replaced the kill buffer directly; only its image payloads
+		// are known to belong to the text.
+		elements = nil
 	}
-	if offset > len(before) {
-		offset = len(before)
+	spans := composerRegisterSpans(m.composerKillBuffer, elements, m.composerKillBufferImages)
+	if m.isVimReplaceMode() && len(spans) > 0 {
+		// Rust's rich yank goes through replace_range, which resets Replace's
+		// per-character recovery; the pasted elements stay atomic.
+		m.clearVimReplaceRecovery()
 	}
-	killed := m.composerKillBuffer
-	images := m.composerKillBufferImages
-	if m.isVimReplaceMode() {
-		// Rust keeps Vim Replace's per-character recovery: rehydrating element
-		// placeholders would break it, so the yank inserts plain text.
-		images = nil
-	}
-	var builder strings.Builder
-	builder.Grow(len(before) + len(killed))
-	builder.WriteString(before[:offset])
-	position := 0
-	var restored []ComposerTextElement
-	for _, image := range images {
-		if image.Start < position || image.End > len(killed) || image.Start >= image.End {
-			continue
-		}
-		builder.WriteString(killed[position:image.Start])
-		placeholder := m.nextLocalImageLabel()
-		start := builder.Len()
-		builder.WriteString(placeholder)
-		restored = append(restored, ComposerTextElement{
-			Start:       start,
-			End:         start + len(placeholder),
-			Placeholder: placeholder,
-		})
-		m.attachments = append(m.attachments, bottompane.ComposerAttachment{
-			Kind: bottompane.AttachmentImage,
-			Path: image.Path,
-		})
-		position = image.End
-	}
-	builder.WriteString(killed[position:])
-	builder.WriteString(before[offset:])
-	after := builder.String()
-	m.composer.SetValue(after)
-	m.composerElements = transformComposerElements(m.composerElements, before, after)
-	for _, element := range restored {
-		m.composerElements = append(m.composerElements, element)
-	}
-	m.vimSetCursorAtByteOffset(offset + len(after) - len(before))
+	m.insertComposerRegisterText(m.composerKillBuffer, spans, m.vimValueByteOffset(), "", "")
 }
 
 // editorKillRange removes [start, end) from the composer value, storing it in
 // the single-entry kill buffer (byte offsets; cursor columns are byte-based
 // like SetCursor).
 func (m *Model) editorKillRange(start, end int) {
+	m.editorKillRangeWithKind(start, end, false)
+}
+
+// editorKillRangeWithKind removes [start, end) and stores it as the single-entry
+// register. linewise mirrors Rust's KillBufferKind for whole-line kills, which
+// makes a later Vim p paste as a line.
+func (m *Model) editorKillRangeWithKind(start, end int, linewise bool) {
 	value := m.composer.Value()
 	if start < 0 {
 		start = 0
@@ -158,8 +130,7 @@ func (m *Model) editorKillRange(start, end int) {
 	if start >= end {
 		return
 	}
-	m.composerKillBuffer = value[start:end]
-	m.composerKillBufferImages = m.killBufferImagesWithin(start, end)
+	m.storeComposerRegister(value[start:end], linewise, m.vimElementsWithin(start, end), m.killBufferImagesWithin(start, end))
 	after := value[:start] + value[end:]
 	m.composer.SetValue(after)
 	m.composerElements = transformComposerElements(m.composerElements, value, after)

@@ -221,10 +221,10 @@ func TestKillBufferRestoresLocalImagesLikeRust(t *testing.T) {
 	}
 }
 
-// TestKillBufferImageYankStaysPlainTextInVimReplaceLikeRust pins #57502's
-// guard: Vim Replace needs per-character recovery, so its yank inserts the
-// killed text verbatim without rehydrating image placeholders.
-func TestKillBufferImageYankStaysPlainTextInVimReplaceLikeRust(t *testing.T) {
+// TestKillBufferImageYankRestoresRichObjectsInVimReplaceLikeRust pins #57564's
+// replacement for #57502's plain-text guard: a rich yank rehydrates its image
+// element atomically in Vim Replace mode instead of inserting placeholder text.
+func TestKillBufferImageYankRestoresRichObjectsInVimReplaceLikeRust(t *testing.T) {
 	m := vimTestModel("")
 	m.vimReplaceMode = true
 	m.composerKillBuffer = "[Image #1] plain"
@@ -236,10 +236,10 @@ func TestKillBufferImageYankStaysPlainTextInVimReplaceLikeRust(t *testing.T) {
 	if got := m.composer.Value(); got != "hi[Image #1] plain" {
 		t.Fatalf("value after replace-mode yank = %q, want hi[Image #1] plain", got)
 	}
-	if len(m.attachments) != 0 {
-		t.Fatalf("attachments after replace-mode yank = %#v, want none", m.attachments)
+	if len(m.attachments) != 1 || m.attachments[0].Path != "/tmp/killed-image.png" {
+		t.Fatalf("attachments after replace-mode yank = %#v, want the killed image", m.attachments)
 	}
-	if len(m.composerElements) != 0 {
-		t.Fatalf("elements after replace-mode yank = %#v, want none", m.composerElements)
+	if len(m.composerElements) != 1 || m.composerElements[0].Placeholder != "[Image #1]" {
+		t.Fatalf("elements after replace-mode yank = %#v, want one [Image #1] element", m.composerElements)
 	}
 }

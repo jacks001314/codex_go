@@ -40,8 +40,8 @@ func TestConsecutiveUserPromptsShareBackgroundBlockLikeRust(t *testing.T) {
 		t.Fatalf("prompts at %d/%d, want exactly one shared separator row:\n%s", first, second, strings.Join(lines, "\n"))
 	}
 	separator := lines[first+1]
-	if !strings.Contains(separator, "\x1b[48;5;235m") {
-		t.Fatalf("shared separator is not painted with the prompt surface: %q", separator)
+	if surface := userPromptSurfaceSGR(); surface == "" || !strings.Contains(separator, surface) {
+		t.Fatalf("shared separator is not painted with the prompt surface %q: %q", surface, separator)
 	}
 	if visible := utils.StripANSI(separator); visible != strings.Repeat(" ", 40) {
 		t.Fatalf("shared separator is not a full-width blank row: %q", visible)
@@ -64,7 +64,7 @@ func TestVisibleAssistantSeparatesUserPromptsLikeRust(t *testing.T) {
 		t.Fatalf("assistant did not separate the prompts:\n%s", strings.Join(lines, "\n"))
 	}
 	beforeSecond := lines[second-2]
-	if strings.Contains(beforeSecond, "\x1b[48;5;235m") {
+	if surface := userPromptSurfaceSGR(); surface != "" && strings.Contains(beforeSecond, surface) {
 		t.Fatalf("prompt block separator was incorrectly grouped: %q", beforeSecond)
 	}
 }

@@ -5498,6 +5498,12 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			status,
 		)
 		item.CallID = id
+		// Rust's TUI renders the app server's parsed command actions verbatim
+		// (command_execution_command_and_parsed); carrying them here keeps a
+		// shell alias such as `ls` Unknown under PowerShell, as in Rust.
+		if actions, ok := remoteProtocolCommandActions(payload); ok {
+			item.CommandActions = &actions
+		}
 		// Carry the command execution source so the TUI can group consecutive
 		// successful Agent / unified-exec startup commands (Rust #38921).
 		item.Metadata = map[string]any{"source": firstNonEmptyLocal(remotePayloadString(payload, "source"), string(appserver.CommandExecutionSourceAgent))}
@@ -5602,6 +5608,53 @@ func remoteUserMessageText(payload appserver.ThreadItemPayload) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// remoteProtocolCommandActions decodes a commandExecution payload's
+// `commandActions` array. It reports false when the payload omitted the field
+// so the TUI can fall back to parsing the raw command.
+func remoteProtocolCommandActions(payload map[string]any) ([]protocol.CommandAction, bool) {
+	value, ok := payload["commandActions"]
+	if !ok || value == nil {
+		return nil, false
+	}
+	actionFields := func(entry any) map[string]any {
+		switch typed := entry.(type) {
+		case map[string]any:
+			return typed
+		default:
+			return nil
+		}
+	}
+	build := func(entries []any) []protocol.CommandAction {
+		actions := make([]protocol.CommandAction, 0, len(entries))
+		for _, entry := range entries {
+			fields := actionFields(entry)
+			if fields == nil {
+				continue
+			}
+			actions = append(actions, protocol.CommandAction{
+				Type:    remotePayloadString(fields, "type"),
+				Command: remotePayloadString(fields, "command"),
+				Name:    remotePayloadString(fields, "name"),
+				Path:    remotePayloadString(fields, "path"),
+				Query:   remotePayloadString(fields, "query"),
+			})
+		}
+		return actions
+	}
+	switch typed := value.(type) {
+	case []any:
+		return build(typed), true
+	case []map[string]any:
+		entries := make([]any, 0, len(typed))
+		for _, entry := range typed {
+			entries = append(entries, entry)
+		}
+		return build(entries), true
+	default:
+		return nil, false
+	}
 }
 
 func remotePayloadString(payload map[string]any, key string) string {

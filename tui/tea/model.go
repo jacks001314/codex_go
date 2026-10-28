@@ -2045,13 +2045,20 @@ type Model struct {
 	// normally until Esc). Rust starts the composer in Vim normal mode when
 	// /vim is enabled (bottom_pane/chat_composer.rs).
 	vimInsert bool
-	// vimYank is the line yank buffer for Vim normal mode (Y yanks the current
-	// line, p pastes it after the cursor).
+	// vimYank is the text of the single-entry composer register for Vim normal
+	// mode (yanks and kills store it, p pastes it after the cursor). The
+	// Ctrl-Y kill buffer below is the same register.
 	vimYank         string
 	vimYankLinewise bool
+	// vimRegisterElements holds the structured elements of the Vim register
+	// with ranges relative to vimYank; composerKillBufferImages holds the local
+	// images inside it. A paste re-registers the elements and re-attaches
+	// images under fresh labels (Rust #57564 rich Vim register).
+	vimRegisterElements []ComposerTextElement
 	// composerKillBuffer is the single-entry editor kill buffer for the
 	// composer (ctrl-k / ctrl-u / kill_whole_line cut into it; ctrl-y yanks it
-	// back), mirroring Rust bottom_pane/textarea.rs kill_buffer.
+	// back), mirroring Rust bottom_pane/textarea.rs kill_buffer. Vim yanks and
+	// deletes store it too, so ctrl-y restores rich register contents.
 	composerKillBuffer string
 	// composerKillBufferImages carries the local image attachments whose
 	// placeholders were cut into composerKillBuffer, with ranges relative to
@@ -2122,10 +2129,13 @@ type Model struct {
 	// vimHasLastDelete and vimLastDeleteWord record the last completed Vim
 	// delete for dot-repeat (`.`): vimLastDeleteWord mirrors the Rust
 	// VimCommandState::last_change word-delete edit (#40521).
-	vimHasLastDelete      bool
-	vimLastDeleteWord     bool
-	vimHasLastReplace     bool
-	vimLastReplaceText    []rune
+	vimHasLastDelete   bool
+	vimLastDeleteWord  bool
+	vimHasLastReplace  bool
+	vimLastReplaceText []rune
+	// vimHasLastPaste records the last Vim paste for dot-repeat (`.`), which
+	// replays with the live register like Vim (Rust #57564).
+	vimHasLastPaste       bool
 	petRuntime            *petRuntime
 	petCodexHome          string
 	petEnv                map[string]string
@@ -7316,7 +7326,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	call := execcell.ExecCall{
 		CallID:  firstNonEmpty(state.CallID, state.ID),
 		Command: shellScriptCommandForDisplay(item.Command),
-		Parsed:  parsedCommandsForExecCell(item.Command),
+		Parsed:  parsedCommandsForExecCellItem(item),
 		Source:  execCommandSourceForItem(item),
 	}
 	inProgress := commandExecutionInProgress(item.Status)
@@ -8443,7 +8453,54 @@ func shellScriptCommandForDisplay(command string) []string {
 // parsedCommandsForExecCell mirrors Rust core's parse_command feeding the TUI
 // ExecCell: the display-only actions (read/listFiles/search/unknown) derived
 // from the command's argv. Rust computes these once in core and forwards them
-// on the exec event; Go derives them at the display site from the same argv.
+// on the exec event; Go derives them at the display site from the same argv
+// when the event does not carry them.
+
+// parsedCommandsForExecCellItem prefers the app server's command actions, as
+// Rust's chatwidget does (command_execution_command_and_parsed). Re-parsing the
+// raw command would label a shell alias such as `ls` as a list action even
+// when the executor parsed it as Unknown, which changes whether the TUI paints
+// a live "Exploring" cell for a unified-exec command.
+func parsedCommandsForExecCellItem(item *protocol.ThreadItem) []execcell.ParsedCommand {
+	if item == nil {
+		return nil
+	}
+	if item.CommandActions != nil {
+		return parsedCommandsFromActions(*item.CommandActions, item.Command)
+	}
+	return parsedCommandsForExecCell(item.Command)
+}
+
+func parsedCommandsFromActions(actions []protocol.CommandAction, command string) []execcell.ParsedCommand {
+	if len(actions) == 0 {
+		return nil
+	}
+	parsed := make([]execcell.ParsedCommand, 0, len(actions))
+	for _, action := range actions {
+		kind := execcell.ParsedUnknown
+		switch strings.ToLower(strings.TrimSpace(action.Type)) {
+		case "read":
+			kind = execcell.ParsedRead
+		case "listfiles", "list_files":
+			kind = execcell.ParsedListFiles
+		case "search":
+			kind = execcell.ParsedSearch
+		}
+		cmd := strings.TrimSpace(action.Command)
+		if cmd == "" {
+			cmd = command
+		}
+		parsed = append(parsed, execcell.ParsedCommand{
+			Kind:  kind,
+			Name:  action.Name,
+			Cmd:   cmd,
+			Path:  action.Path,
+			Query: action.Query,
+		})
+	}
+	return parsed
+}
+
 func parsedCommandsForExecCell(command string) []execcell.ParsedCommand {
 	actions := shell.ParseDisplayCommands(shell.SplitCommandLine(command))
 	if len(actions) == 0 {
@@ -11175,10 +11232,19 @@ func isGroupableUserPrompt(message codextui.Message) bool {
 // isUserSurfaceBlankLine reports whether a rendered row is an empty row painted
 // with the user prompt surface.
 func isUserSurfaceBlankLine(line string) bool {
-	if !strings.Contains(line, "\x1b[48;5;235m") {
+	surface := userPromptSurfaceSGR()
+	if surface == "" || !strings.Contains(line, surface) {
 		return false
 	}
 	return strings.TrimSpace(utils.StripANSI(line)) == ""
+}
+
+// userPromptSurfaceSGR is the submitted-prompt background currently painted by
+// the history cells. Rust #57554 falls back to ANSI DarkGray when the terminal
+// never answers the palette probe, so grouping must not assume the blended
+// 256-colour fill.
+func userPromptSurfaceSGR() string {
+	return codextui.HistoryPromptSGR(codextui.DetectStdoutColorLevel())
 }
 
 // flattenTranscriptDisplayLines turns embedded newlines into separate display
