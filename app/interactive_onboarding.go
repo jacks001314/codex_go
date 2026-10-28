@@ -105,7 +105,16 @@ func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFl
 		ForcedWorkspaces: loaded.EffectiveChatGPTWorkspaces(),
 		NoAltScreen:      noAltScreen,
 	}
-	if features.Enabled(loaded.FeatureSettings(), "bedrock_setup_wizard") {
+	// Rust #57626 should_show_bedrock_setup_wizard: the wizard is available
+	// whenever the effective provider is `openai`, whether it was selected
+	// explicitly or left implicit. A custom provider stays excluded even when it
+	// requires OpenAI auth, so the id comparison is the gate and
+	// RequiresOpenAIAuth alone is not.
+	effectiveProviderID := strings.TrimSpace(providerID)
+	if effectiveProviderID == "" {
+		effectiveProviderID = modelpkg.OpenAIProviderID
+	}
+	if features.Enabled(loaded.FeatureSettings(), "bedrock_setup_wizard") && effectiveProviderID == modelpkg.OpenAIProviderID {
 		discover, setup, loginAPIKey, loginAccessKeys, checkGovCloud := interactiveBedrockCallbacks(codexHome)
 		options.BedrockAllowed = true
 		options.BedrockDiscover = discover
