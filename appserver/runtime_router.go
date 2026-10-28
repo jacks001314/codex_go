@@ -2028,7 +2028,7 @@ func (r *RuntimeRouter) buildOtelProvider(codexHome string, options *RuntimeRout
 
 // installOtelProvider publishes a provider's pipelines: the task metrics
 // exporter, the exported log records, and the request tracer. A nil provider
-// only records that tracing is off.
+// records that tracing is off and removes the previously installed tracer.
 func (r *RuntimeRouter) installOtelProvider(provider *telemetry.OtelProvider, metrics *state.TaskMetrics) {
 	if r == nil {
 		return
@@ -2036,6 +2036,16 @@ func (r *RuntimeRouter) installOtelProvider(provider *telemetry.OtelProvider, me
 	r.otelProviderMu.Lock()
 	r.otelProvider = provider
 	r.otelProviderMu.Unlock()
+	// Rust #57657: a reload that disables tracing must also remove the
+	// previous tracer instead of leaving its spans recording forever, so the
+	// request tracer is installed (or cleared) before the nil-provider guard.
+	if r.services.ThreadRouter != nil {
+		var tracer *telemetry.Tracer
+		if provider != nil {
+			tracer = provider.Tracer()
+		}
+		r.services.ThreadRouter.SetTracer(tracer)
+	}
 	if provider == nil {
 		return
 	}
@@ -2051,11 +2061,6 @@ func (r *RuntimeRouter) installOtelProvider(provider *telemetry.OtelProvider, me
 	// handlers installed before it (the sqlite log handler wraps the same way).
 	if logsHandler := provider.LogsHandler(state.SlogTerminalHandler()); logsHandler != nil {
 		slog.SetDefault(slog.New(logsHandler))
-	}
-	// Rust instruments every app-server request with an `app_server.request`
-	// span; the router owns the transport-level request entry point.
-	if tracer := provider.Tracer(); tracer != nil && r.services.ThreadRouter != nil {
-		r.services.ThreadRouter.SetTracer(tracer)
 	}
 }
 
@@ -5200,7 +5205,13 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		}
 	case MethodThreadUnarchive:
 		if response, ok := result.(*ThreadUnarchiveResponse); ok && response.Thread != nil {
-			r.notify(NotificationThreadUnarchived, &ThreadIDNotification{ThreadID: response.Thread.ID})
+			restored := response.RestoredThreadIDs
+			if len(restored) == 0 {
+				restored = []session.ThreadID{session.ThreadID(response.Thread.ID)}
+			}
+			for _, threadID := range restored {
+				r.notify(NotificationThreadUnarchived, &ThreadIDNotification{ThreadID: string(threadID)})
+			}
 		}
 	case MethodThreadDelete:
 		for _, threadID := range session.DeleteOrderForSubtree(lifecycleIDsWithFallback(request, lifecycleIDs)) {
@@ -9136,16 +9147,6 @@ func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	// Rust #42602: detached review delivery is deprecated. Emit the
-	// connection-scoped notice before validation so callers still see it when
-	// the request is later rejected.
-	if reviewDeliveryDetached(&params) {
-		details := "Use thread/start followed by review/start with delivery \"inline\" for a separate review thread, or thread/fork followed by turn/start with your own review instructions."
-		r.notifyToConnection(request.normalizedConnectionID(), NotificationDeprecationNotice, &DeprecationNoticeNotification{
-			Summary: "review/start with delivery \"detached\" is deprecated and will be removed in a future release.",
-			Details: &details,
-		})
-	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -9153,16 +9154,9 @@ func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartRespon
 	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
 		return nil, err
 	}
-	reviewThreadID, err := r.prepareDetachedReviewThread(request, &params)
-	if err != nil {
-		return nil, err
-	}
 	response, err := r.requireReviews().Start(&params)
 	if err != nil {
 		return nil, err
-	}
-	if reviewThreadID != "" {
-		response.ReviewThreadID = reviewThreadID
 	}
 	if err := r.persistEnteredReviewMode(&params, response); err != nil {
 		return nil, err
@@ -9170,49 +9164,6 @@ func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartRespon
 	r.notifyEnteredReviewMode(&params, response)
 	r.startReviewRuntimeAsync(&params, response, request.normalizedConnectionID())
 	return response, nil
-}
-
-func (r *RuntimeRouter) prepareDetachedReviewThread(request *Request, params *review.StartParams) (string, error) {
-	if r == nil || request == nil || params == nil || !reviewDeliveryDetached(params) {
-		return "", nil
-	}
-	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
-		return "", nil
-	}
-	parentID := session.ThreadID(strings.TrimSpace(params.ThreadID))
-	parent, err := r.threadRecord(parentID, true, false)
-	if err != nil {
-		return "", threadReadError(string(parentID), err)
-	}
-	if threadUsesPaginatedHistory(parent) {
-		return "", jsonRPCInvalidRequest("paginated threads do not support detached review")
-	}
-	if err := r.ensureDetachedReviewParentMaterialized(parentID); err != nil {
-		return "", err
-	}
-	forkParams := ThreadForkParams{
-		ThreadID:     string(parentID),
-		ExcludeTurns: true,
-		Model:        r.detachedReviewModelOverride(),
-	}
-	forkRequest, err := requestWithRuntimeParams(request, forkParams)
-	if err != nil {
-		return "", err
-	}
-	forkRequest.Method = MethodThreadFork
-	result, err := r.handleThreadLifecycleRuntime(forkRequest)
-	if err != nil {
-		return "", err
-	}
-	response, ok := result.(*ThreadForkResponse)
-	if !ok || response.Thread == nil {
-		return "", nil
-	}
-	return response.Thread.ID, nil
-}
-
-func (r *RuntimeRouter) detachedReviewModelOverride() *string {
-	return r.reviewModelOverride()
 }
 
 func (r *RuntimeRouter) reviewModelOverride() *string {
@@ -9225,25 +9176,6 @@ func (r *RuntimeRouter) reviewModelOverride() *string {
 	}
 	modelID := strings.TrimSpace(firstNonEmpty(stringFromMap(read.Config, "review_model"), stringFromMap(read.Config, "reviewModel")))
 	return stringPtrIfNotEmpty(modelID)
-}
-
-func reviewDeliveryDetached(params *review.StartParams) bool {
-	return params != nil && params.Delivery != nil && strings.TrimSpace(*params.Delivery) == "detached"
-}
-
-func (r *RuntimeRouter) ensureDetachedReviewParentMaterialized(threadID session.ThreadID) error {
-	record, err := r.threadRecord(threadID, true, true)
-	if err != nil {
-		return threadReadError(string(threadID), err)
-	}
-	if !unmaterializedThread(record) {
-		return nil
-	}
-	now := record.CreatedAt
-	if now.IsZero() {
-		now = r.services.ThreadRouter.now().UTC()
-	}
-	return r.services.ThreadRouter.createThreadRollout(record, now)
 }
 
 func (r *RuntimeRouter) notifyEnteredReviewMode(params *review.StartParams, response *review.StartResponse) {
@@ -13016,8 +12948,45 @@ func (r *RuntimeRouter) handleConfigRead(request *Request) (*config.ConfigReadRe
 	if err != nil {
 		return nil, err
 	}
+	redactConfigReadOtel(response)
 	r.refreshApplicationNetworkPolicy()
 	return response, nil
+}
+
+// redactConfigReadOtel masks OTEL exporter header values in the effective
+// config and every included source layer (Rust #57654). The core config keeps
+// the raw values for the runtime exporters.
+func redactConfigReadOtel(response *config.ConfigReadResponse) {
+	if response == nil {
+		return
+	}
+	if otel, ok := response.Config["otel"]; ok {
+		config.RedactOtelExporterHeaders(otel)
+	}
+	for index := range response.Layers {
+		values, ok := response.Layers[index].Config.(map[string]any)
+		if !ok {
+			continue
+		}
+		if otel, ok := values["otel"]; ok {
+			config.RedactOtelExporterHeaders(otel)
+		}
+	}
+}
+
+// redactConfigWriteOtel masks OTEL headers in write-override metadata, whose
+// effective value can point at an exporter or an individual credential.
+func redactConfigWriteOtel(response *config.ConfigWriteResponse) {
+	if response == nil || response.OverriddenMetadata == nil {
+		return
+	}
+	values, ok := response.OverriddenMetadata.EffectiveValue.(map[string]any)
+	if !ok {
+		return
+	}
+	if otel, ok := values["otel"]; ok {
+		config.RedactOtelExporterHeaders(otel)
+	}
 }
 
 func (r *RuntimeRouter) handleConfigValueWrite(request *Request) (*config.ConfigWriteResponse, error) {
@@ -13029,6 +12998,7 @@ func (r *RuntimeRouter) handleConfigValueWrite(request *Request) (*config.Config
 	if err != nil {
 		return nil, err
 	}
+	redactConfigWriteOtel(response)
 	// Rust config_value_write runs handle_config_mutation after the write.
 	r.clearConfigDerivedCaches()
 	return response, nil
@@ -13043,6 +13013,7 @@ func (r *RuntimeRouter) handleConfigBatchWrite(request *Request) (*config.Config
 	if err != nil {
 		return nil, err
 	}
+	redactConfigWriteOtel(response)
 	r.applyConfigBatchWriteMutation(&params)
 	return response, nil
 }

@@ -136,6 +136,13 @@ func requirementStartupWarnings(values map[string]any, requirements *ConfigRequi
 				managedRequirementSource))
 		}
 	}
+	// Rust apply_otel_requirements reports one structured warning when a
+	// managed OTEL value replaces a conflicting configured value.
+	if otelRequirementsConflict(values, requirements.Otel) {
+		warnings = append(warnings, fmt.Sprintf(
+			"Configured values under `otel` are overridden by requirements from %s.",
+			managedRequirementSource))
+	}
 	// Rust managed_features::parse_feature_requirements: a legacy alias warns in
 	// favor of the canonical key, and an unknown key is ignored with a warning.
 	// `auto_review` is the canonicalized alias of `guardian_approval` and stays

@@ -51,7 +51,14 @@ func ParseRequirementsTOMLWithPathContext(data []byte, context *ConfigPathContex
 			return nil, err
 		}
 	}
-	return configRequirementsFromValidatedMap(values)
+	requirements, err := configRequirementsFromValidatedMap(values)
+	if err != nil {
+		return nil, err
+	}
+	if err := resolveOtelRequirementPaths(requirements, context); err != nil {
+		return nil, err
+	}
+	return requirements, nil
 }
 
 func parseRequirementsTOMLValues(data []byte) (map[string]any, error) {
@@ -534,6 +541,13 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 			return nil, err
 		}
 		out.Plugins = parsed
+	}
+	if nested, ok := mapAnyKey(values, "otel"); ok {
+		parsed, err := otelRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.Otel = parsed
 	}
 	if nested, ok := mapAnyKey(values, "apps"); ok {
 		parsed, err := apps.AppsRequirementsFromMap(nested)
@@ -1193,6 +1207,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.Application == nil &&
 			value.Network == nil &&
 			value.Models == nil &&
+			otelRequirementsEmpty(value.Otel) &&
 			value.AllowedLoginMethods == nil &&
 			value.AllowedChatGPTWorkspaces == nil &&
 			value.CliAuthCredentialsStore == nil &&

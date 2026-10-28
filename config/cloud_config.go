@@ -672,6 +672,9 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	if overlay.AllowedWebSearchModes != nil {
 		out.AllowedWebSearchModes = cloneSlice(overlay.AllowedWebSearchModes)
 	}
+	if !otelRequirementsEmpty(overlay.Otel) {
+		out.Otel = mergeOtelRequirements(out.Otel, overlay.Otel)
+	}
 	if overlay.AllowManagedHooksOnly != nil {
 		out.AllowManagedHooksOnly = cloneBoolPtr(overlay.AllowManagedHooksOnly)
 	}

@@ -7714,18 +7714,13 @@ func TestRuntimeRouterReviewStartEmitsEnteredReviewModeLikeRust(t *testing.T) {
 	}
 }
 
-func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
+func TestRuntimeRouterReviewStartRunsInlineOnlyLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
-	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte("review_model = \"gpt-review\"\n"), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
 	sink := NewNotificationBuffer()
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
 		Reviews:      review.NewService(),
 		ThreadStatus: NewThreadStatusManager(),
-		Config:       config.NewConfigService(home),
 	})
 	router.SetNotificationSink(sink)
 
@@ -7734,15 +7729,10 @@ func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
 		t.Fatalf("thread start = %+v", threadStart)
 	}
 	parentThread := threadStart.Result.(*ThreadStartResponse).Thread
-	if parentThread.Path == nil {
-		t.Fatal("parent thread path missing")
-	}
-	if _, err := os.Stat(*parentThread.Path); !os.IsNotExist(err) {
-		t.Fatalf("parent rollout should start unmaterialized, stat err = %v", err)
-	}
 	baselineNotifications := len(sink.List())
+
 	detached := "detached"
-	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+	rejected := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
 		ThreadID: parentThread.ID,
 		Delivery: &detached,
 		Target: review.APITarget{
@@ -7750,37 +7740,42 @@ func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
 			Instructions: "detached review",
 		},
 	}))
+	if rejected.Error == nil || rejected.Error.Code != -32602 {
+		t.Fatalf("detached review = %+v, want invalid params", rejected)
+	}
+	for _, notification := range sink.List()[baselineNotifications:] {
+		if notification != nil && notification.Method == NotificationThreadStarted {
+			t.Fatalf("detached review forked a thread: %#v", notification.Params)
+		}
+	}
+
+	inline := "inline"
+	reviewStart := router.Handle(requestWithParams(t, IntID(3), MethodReviewStart, review.StartParams{
+		ThreadID: parentThread.ID,
+		Delivery: &inline,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "inline review",
+		},
+	}))
 	if reviewStart.Error != nil {
 		t.Fatalf("review start = %+v", reviewStart)
 	}
-	if _, err := os.Stat(*parentThread.Path); err != nil {
-		t.Fatalf("parent rollout should be materialized before detached fork: %v", err)
-	}
 	response := reviewStart.Result.(*review.StartResponse)
-	if response.ReviewThreadID == "" || response.ReviewThreadID == parentThread.ID {
-		t.Fatalf("reviewThreadId = %q, parent = %q", response.ReviewThreadID, parentThread.ID)
+	if response.ReviewThreadID != parentThread.ID {
+		t.Fatalf("reviewThreadId = %q, want parent %q", response.ReviewThreadID, parentThread.ID)
 	}
 	if response.Turn.ID == "" || len(response.Turn.Items) != 1 {
 		t.Fatalf("review turn = %+v", response.Turn)
 	}
 
-	startedThread := findThreadStartedNotificationAfter(t, sink, baselineNotifications, response.ReviewThreadID)
-	if startedThread.Thread.SessionID != response.ReviewThreadID {
-		t.Fatalf("review thread sessionId = %q, want %q", startedThread.Thread.SessionID, response.ReviewThreadID)
+	started := waitForItemStarted(t, sink, response.Turn.ID)
+	startedItem := notificationItemMap(t, started.Item)
+	if started.ThreadID != parentThread.ID || started.TurnID != response.Turn.ID {
+		t.Fatalf("entered review notification = %#v", started)
 	}
-	if len(startedThread.Thread.Turns) != 0 {
-		t.Fatalf("detached review thread/started turns = %+v, want omitted", startedThread.Thread.Turns)
-	}
-	readReviewThread := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: response.ReviewThreadID}))
-	if readReviewThread.Error != nil {
-		t.Fatalf("review thread should be readable: %+v", readReviewThread.Error)
-	}
-	reviewRecord, err := store.Read(session.ThreadID(response.ReviewThreadID), true, false)
-	if err != nil {
-		t.Fatalf("read review record: %v", err)
-	}
-	if reviewRecord.Metadata.Model != "gpt-review" {
-		t.Fatalf("review thread model = %q, want gpt-review", reviewRecord.Metadata.Model)
+	if startedItem["type"] != "enteredReviewMode" || startedItem["review"] != "inline review" {
+		t.Fatalf("entered review item = %#v", startedItem)
 	}
 	parentRecord, err := store.Read(session.ThreadID(parentThread.ID), true, false)
 	if err != nil {
@@ -7788,15 +7783,6 @@ func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
 	}
 	if parentRecord.Metadata.Model != "gpt-parent" {
 		t.Fatalf("parent thread model = %q, want gpt-parent", parentRecord.Metadata.Model)
-	}
-
-	started := waitForItemStarted(t, sink, response.Turn.ID)
-	startedItem := notificationItemMap(t, started.Item)
-	if started.ThreadID != response.ReviewThreadID || started.TurnID != response.Turn.ID {
-		t.Fatalf("entered review notification = %#v", started)
-	}
-	if startedItem["type"] != "enteredReviewMode" || startedItem["review"] != "detached review" {
-		t.Fatalf("entered review item = %#v", startedItem)
 	}
 }
 
@@ -7814,7 +7800,7 @@ func TestRuntimeRouterReviewStartRejectsDetachedDeliveryForPaginatedParentLikeRu
 		Delivery: &detached,
 		Target:   review.APITarget{Type: "custom", Instructions: "detached review"},
 	}))
-	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "paginated threads do not support detached review" {
+	if response.Error == nil || response.Error.Code != -32602 || response.Error.Message != `invalid review request: unknown review delivery variant "detached", expected "inline"` {
 		t.Fatalf("review response = %+v", response)
 	}
 }

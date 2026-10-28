@@ -86,10 +86,13 @@ func (p *StartParams) Validate() error {
 		return err
 	}
 	if p.Delivery != nil {
+		// Rust #57667 removed the detached variant: `review/start` only runs
+		// inline on the supplied thread. Omitted, null and "inline" are the
+		// accepted shapes; anything else fails deserialization in Rust.
 		switch strings.TrimSpace(*p.Delivery) {
-		case "", "inline", "detached":
+		case "", "inline":
 		default:
-			return fmt.Errorf("%w: unsupported review delivery %q", ErrInvalidRequest, *p.Delivery)
+			return fmt.Errorf("%w: unknown review delivery variant %q, expected \"inline\"", ErrInvalidRequest, *p.Delivery)
 		}
 	}
 	return nil
@@ -216,12 +219,9 @@ func (s *Service) Start(params *StartParams) (*StartResponse, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	reviewThreadID := params.ThreadID
-	if params.Delivery != nil && strings.TrimSpace(*params.Delivery) == "detached" {
-		reviewThreadID = "review-" + params.ThreadID
-	}
+	// Rust #57667: reviews always run inline on the supplied thread.
 	turnID := "review-" + params.ThreadID
-	return &StartResponse{Turn: buildReviewTurn(turnID, UserFacingHintForTarget(params.Target.ToTarget()), s.now), ReviewThreadID: reviewThreadID}, nil
+	return &StartResponse{Turn: buildReviewTurn(turnID, UserFacingHintForTarget(params.Target.ToTarget()), s.now), ReviewThreadID: params.ThreadID}, nil
 }
 
 func buildReviewTurn(turnID string, displayText string, now func() time.Time) Turn {

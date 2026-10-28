@@ -2843,12 +2843,75 @@ func (r *Router) handleThreadUnarchive(request *Request) (*ThreadUnarchiveRespon
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Unarchive(session.ThreadID(params.ThreadID))
+	root := session.ThreadID(params.ThreadID)
+	// Rust #57635: archiving a thread archives its spawned descendants, so
+	// unarchiving restores the whole subtree. Discovery is best effort: a
+	// failure falls back to restoring only the requested thread.
+	threadIDs := r.unarchiveSubtreeThreadIDs(root)
+	response, err := r.unarchiveSingleThread(root)
+	if err != nil {
+		return nil, err
+	}
+	response.RestoredThreadIDs = []session.ThreadID{root}
+	for _, threadID := range threadIDs[1:] {
+		// An active descendant was not archived with the parent (or was
+		// unarchived independently already); leave it alone.
+		if !r.threadIsArchived(threadID) {
+			continue
+		}
+		if _, err := r.unarchiveSingleThread(threadID); err != nil {
+			slog.Warn("failed to unarchive spawned descendant thread", "thread_id", threadID, "error", err)
+			continue
+		}
+		response.RestoredThreadIDs = append(response.RestoredThreadIDs, threadID)
+	}
+	return response, nil
+}
+
+// unarchiveSubtreeThreadIDs returns the root followed by its spawned
+// descendants. Rust falls back to the root alone when descendant discovery
+// fails, and so does Go.
+func (r *Router) unarchiveSubtreeThreadIDs(root session.ThreadID) []session.ThreadID {
+	threadIDs, err := r.archiveSubtreeThreadIDs(root)
+	if err != nil || len(threadIDs) == 0 {
+		return []session.ThreadID{root}
+	}
+	if threadIDs[0] != root {
+		out := make([]session.ThreadID, 0, len(threadIDs)+1)
+		out = append(out, root)
+		for _, threadID := range threadIDs {
+			if threadID != root {
+				out = append(out, threadID)
+			}
+		}
+		return out
+	}
+	return threadIDs
+}
+
+// threadIsArchived reports whether the thread's persisted record is archived.
+// Descendant restoration only needs this flag, not a hydrated thread, so it
+// mirrors ThreadStore::read_thread(include_archived) by falling back to the
+// archived rollout when the store has no record (Rust #57635).
+func (r *Router) threadIsArchived(threadID session.ThreadID) bool {
+	if r == nil || r.store == nil || threadID == "" {
+		return false
+	}
+	if record, err := r.store.Read(threadID, true, false); err == nil && record != nil {
+		return record.Archived
+	}
+	record, err := r.readThreadRecordFromRollout(threadID, true, false)
+	return err == nil && record != nil && record.Archived
+}
+
+// unarchiveSingleThread restores one thread's record and owned rollouts.
+func (r *Router) unarchiveSingleThread(threadID session.ThreadID) (*ThreadUnarchiveResponse, error) {
+	record, err := r.store.Unarchive(threadID)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, threadStoreMutationError("unarchive", err)
 		}
-		archivedRecord, readErr := r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, false)
+		archivedRecord, readErr := r.readThreadRecordFromRollout(threadID, true, false)
 		if readErr != nil || !archivedRecord.Archived {
 			return nil, threadStoreMutationError("unarchive", err)
 		}

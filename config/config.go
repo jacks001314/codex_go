@@ -476,6 +476,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	applyManagedAuthBackendOverride(values, requirements)
 	applyManagedModelProviderOverride(values, requirements)
 	applyManagedExactOverrides(values, requirements)
+	applyManagedOtelOverrides(values, requirements)
 	if err := applyManagedConstrainedOverrides(values, requirements); err != nil {
 		return nil, err
 	}

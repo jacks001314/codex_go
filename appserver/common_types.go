@@ -99,8 +99,9 @@ type RequestPermissionProfile = GrantedPermissionProfile
 type ReviewDelivery string
 
 const (
-	ReviewDeliveryInline   ReviewDelivery = "inline"
-	ReviewDeliveryDetached ReviewDelivery = "detached"
+	// Reviews only run inline on the supplied thread (Rust #57667 removed the
+	// detached variant from the protocol enum).
+	ReviewDeliveryInline ReviewDelivery = "inline"
 )
 
 type ConversationTextRole string

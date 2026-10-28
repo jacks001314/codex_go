@@ -2344,6 +2344,11 @@ func (p *ThreadUnarchiveParams) Validate() error {
 
 type ThreadUnarchiveResponse struct {
 	Thread *Thread `json:"thread"`
+	// RestoredThreadIDs lists the root followed by every spawned descendant this
+	// request unarchived. It is in-process only: Rust's response carries just
+	// the root thread and the ids travel on `thread/unarchived` notifications
+	// (#57635).
+	RestoredThreadIDs []session.ThreadID `json:"-"`
 }
 
 type ThreadDeleteParams struct {

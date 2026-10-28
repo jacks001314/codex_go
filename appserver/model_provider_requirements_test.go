@@ -203,7 +203,6 @@ func TestManagedModelProviderChangeRejectsAllRetainedThreadEntryPoints(t *testin
 
 	writeManagedProviderRequirements(t, home, strings.Replace(managedProviderRequirements, `model_provider = "gateway"`, `model_provider = "other"`, 1))
 
-	detached := "detached"
 	queuedID := "queued-1"
 	blockedObjective := "Blocked objective"
 	cases := []struct {
@@ -214,7 +213,6 @@ func TestManagedModelProviderChangeRejectsAllRetainedThreadEntryPoints(t *testin
 		{"turn/start", MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Input: []turn.TurnUserInput{{Text: "continue"}}}},
 		{"turn/steer", MethodTurnSteer, turn.TurnSteerParams{ThreadID: threadID, ExpectedTurnID: "turn-1", Input: []turn.TurnUserInput{{Text: "continue"}}}},
 		{"review/start inline", MethodReviewStart, &review.StartParams{ThreadID: threadID, Target: review.APITarget{Type: "custom", Instructions: "Review this change."}}},
-		{"review/start detached", MethodReviewStart, &review.StartParams{ThreadID: threadID, Target: review.APITarget{Type: "custom", Instructions: "Review this change."}, Delivery: &detached}},
 		{"thread/compact/start", MethodThreadCompactStart, &ThreadCompactStartParams{ThreadID: threadID}},
 		{"thread/queue/start", MethodThreadQueueStart, &ThreadQueueStartParams{ThreadID: threadID, QueuedSubmissionID: &queuedID}},
 		{"thread/goal/set", MethodThreadGoalSet, &GoalSetParams{ThreadID: threadID, Objective: &blockedObjective}},

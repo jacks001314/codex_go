@@ -625,7 +625,9 @@ type ConfigRequirements struct {
 	AllowLoginShell                *bool   `json:"allowLoginShell,omitempty"`
 	// Feedback is the managed feedback-collection requirement (Rust
 	// ConfigRequirementsToml.feedback).
-	Feedback   *FeedbackRequirements           `json:"feedback,omitempty"`
+	Feedback *FeedbackRequirements `json:"feedback,omitempty"`
+	// Otel carries managed OpenTelemetry requirements (Rust #57638/#57649/#57658).
+	Otel       *OtelRequirements               `json:"otel,omitempty"`
 	MCPServers map[string]MCPServerRequirement `json:"-"`
 	Plugins    map[string]PluginRequirements   `json:"-"`
 	// Apps carries the managed app requirements (Rust
@@ -671,6 +673,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		CheckForUpdateOnStartup              *bool                          `json:"checkForUpdateOnStartup"`
 		AllowLoginShell                      *bool                          `json:"allowLoginShell"`
 		Feedback                             *FeedbackRequirements          `json:"feedback"`
+		Otel                                 *OtelRequirements              `json:"otel"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
@@ -707,6 +710,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		CheckForUpdateOnStartup:              cloneBoolPtr(r.CheckForUpdateOnStartup),
 		AllowLoginShell:                      cloneBoolPtr(r.AllowLoginShell),
 		Feedback:                             cloneFeedbackRequirements(r.Feedback),
+		Otel:                                 redactedOtelRequirements(r.Otel),
 	})
 }
 
@@ -2577,6 +2581,15 @@ func (s *ConfigService) rejectManagedAuthWrite(keyPath string) error {
 		return nil
 	}
 	parts := splitKeyPath(keyPath)
+	if len(parts) == 0 {
+		return nil
+	}
+	// Managed OTEL requirements pin exact fields, including individual
+	// span-attribute and tracestate entries, while unmanaged siblings stay
+	// writable (Rust #57658).
+	if field := otelRequirementForConfigPath(s.requirements.Otel, parts); field != "" {
+		return configWriteErrorf(ConfigWriteRequirementReadonly, "`%s` is managed by requirements and cannot be changed", field)
+	}
 	if len(parts) != 1 {
 		// Provider IDs may contain dots, so compare the remaining path against
 		// the managed provider IDs (Rust #44650).
@@ -2696,13 +2709,37 @@ func (s *ConfigService) overriddenMetadataAfterWrite(edits []ConfigEdit) *Overri
 		if origin.Name.Precedence() <= userPrecedence {
 			continue
 		}
+		effectiveValue := effective
+		if parts := splitKeyPath(keyPath); len(parts) > 0 && parts[0] == "otel" {
+			if redacted, ok := redactedOtelValueAtPath(read.Config, parts); ok {
+				effectiveValue = redacted
+			}
+		}
 		return &OverriddenMetadata{
 			Message:         fmt.Sprintf("%s was written but is overridden by a higher-priority config layer", keyPath),
 			OverridingLayer: origin,
-			EffectiveValue:  effective,
+			EffectiveValue:  effectiveValue,
 		}
 	}
 	return nil
+}
+
+// redactedOtelValueAtPath mirrors Rust #57654's write-override redaction: mask
+// the complete effective `otel` table before extracting the written path, so an
+// overridden exporter or an individual header credential (whose name may itself
+// contain dots) never reaches the response.
+func redactedOtelValueAtPath(values map[string]any, parts []string) (any, bool) {
+	otel, ok := values["otel"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	redacted := cloneMap(otel)
+	RedactOtelExporterHeaders(redacted)
+	value := getAtPath(map[string]any{"otel": redacted}, parts)
+	if value == nil {
+		return nil, false
+	}
+	return value, true
 }
 
 // credentialProviderSourceOverride mirrors #44241's override reporting: a write
@@ -4042,6 +4079,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.CheckForUpdateOnStartup = cloneBoolPtr(requirements.CheckForUpdateOnStartup)
 	clone.AllowLoginShell = cloneBoolPtr(requirements.AllowLoginShell)
 	clone.Feedback = cloneFeedbackRequirements(requirements.Feedback)
+	clone.Otel = cloneOtelRequirements(requirements.Otel)
 	return &clone
 }
 
