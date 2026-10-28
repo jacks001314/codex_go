@@ -75,11 +75,6 @@ for (const target of targets) {
   const codeModeHostName = target.goos === "windows" ? "codex-code-mode-host.exe" : "codex-code-mode-host";
   run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", path.join(binDir, codeModeHostName), "./cmd/codex-code-mode-host"], { env });
   try { chmodSync(path.join(binDir, codeModeHostName), 0o755); } catch {}
-  // The standalone executor ships beside the entrypoint and is advertised in
-  // codex-package.json (Rust #57589/#57590).
-  const execServerName = target.goos === "windows" ? "codex-exec-server.exe" : "codex-exec-server";
-  run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", path.join(binDir, execServerName), "./cmd/codex-exec-server"], { env });
-  try { chmodSync(path.join(binDir, execServerName), 0o755); } catch {}
   if (target.goos === "windows") {
     const resourcesDir = path.join(targetDir, "codex-resources");
     mkdirSync(resourcesDir, { recursive: true });
@@ -93,7 +88,6 @@ for (const target of targets) {
     target: target.targetTriple,
     variant: "codex",
     entrypoint: `bin/${executableName}`,
-    execServer: `bin/${execServerName}`,
     resourcesDir: "codex-resources",
     pathDir: "codex-path",
   }, null, 2)}\n`);

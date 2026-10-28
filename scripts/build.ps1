@@ -123,17 +123,6 @@ $hostArguments += "./cmd/codex-code-mode-host"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Built $HostOutput"
 
-# The standalone executor shares its startup with `codex exec-server` and is
-# shipped beside the entrypoint (Rust #57589/#57590).
-$ExecServerOutput = Join-Path (Split-Path -Parent $Output) "codex-exec-server$Extension"
-$execServerArguments = @("build", "-trimpath", "-buildvcs=false", "-ldflags", $ldflags, "-o", $ExecServerOutput)
-if ($Race) { $execServerArguments += "-race" }
-if ($Rebuild) { $execServerArguments += "-a" }
-$execServerArguments += "./cmd/codex-exec-server"
-& go @execServerArguments
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Write-Host "==> Built $ExecServerOutput"
-
 # The voice helper ships inside the package's private voice runtime. It is
 # stamped with the same identity as the CLI so the same-build handshake holds.
 $VoiceBinDir = Join-Path (Split-Path -Parent $Output) "codex-resources/voice/bin"
@@ -194,7 +183,6 @@ if ((Split-Path -Leaf $OutputDir) -eq "bin") {
         target        = $Triple
         variant       = "codex"
         entrypoint    = "codex$Extension"
-        execServer    = "codex-exec-server$Extension"
         resourcesDir  = "codex-resources"
         pathDir       = "codex-path"
     }
