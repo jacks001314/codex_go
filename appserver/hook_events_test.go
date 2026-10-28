@@ -188,3 +188,67 @@ func TestEnvironmentConfigStringReportsHookHandlerCount(t *testing.T) {
 		t.Fatalf("String() = %q leaked shell policy values", rendered)
 	}
 }
+
+// Mirrors Rust #56304 readiness validation: environment configurations whose
+// required hooks cannot load are rejected before the attachment is accepted.
+func TestEnvironmentSelectionRejectsUnloadableEnvironmentHooks(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler map[string]any
+		matcher string
+	}{
+		{
+			name:    "invalid matcher",
+			matcher: "(",
+			handler: map[string]any{"type": "command", "command": "echo ok"},
+		},
+		{
+			name:    "empty command",
+			matcher: "Bash",
+			handler: map[string]any{"type": "command", "command": "   "},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := validateEnvironmentSelectionConfig("env-1", map[string]any{
+				"config": map[string]any{
+					"environment_hooks": map[string]any{
+						"PreToolUse": []any{map[string]any{
+							"matcher": test.matcher,
+							"hooks":   []any{test.handler},
+						}},
+					},
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "failed to load required managed hooks for environment `env-1`") {
+				t.Fatalf("error = %v, want required-hook load failure", err)
+			}
+		})
+	}
+}
+
+func TestEnvironmentSelectionAcceptsLoadableEnvironmentHooks(t *testing.T) {
+	normalized, err := validateEnvironmentSelectionConfig("env-1", map[string]any{
+		"config": map[string]any{
+			"environment_hooks": map[string]any{
+				"PreToolUse": []any{map[string]any{
+					"matcher": "Bash",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "echo ok"},
+						map[string]any{"type": "mcp_tool", "server": "security", "tool": "scan"},
+					},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("validateEnvironmentSelectionConfig() error = %v", err)
+	}
+	parsed, err := environmentConfigStateFromAnyMap(normalized)
+	if err != nil {
+		t.Fatalf("environmentConfigStateFromAnyMap() error = %v", err)
+	}
+	if got := parsed.Config.EnvironmentHooks.HandlerCount(); got != 2 {
+		t.Fatalf("handler count = %d, want 2", got)
+	}
+}

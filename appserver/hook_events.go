@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"codex_go/config"
 )
@@ -361,6 +362,36 @@ func validateHookEventHandlers(events HookEvents) error {
 }
 
 const maxInt64Value = int64(^uint64(0) >> 1)
+
+// validateEnvironmentHooks mirrors Rust validate_environment_hooks (#56304):
+// an attachment whose required hooks cannot load is rejected before the
+// configuration is accepted. Go reports the Rust-equivalent load failures
+// (invalid matchers and empty commands); handler kinds Go cannot execute yet
+// stay accepted because Rust loads them.
+func validateEnvironmentHooks(environmentID string, hooks HookEvents) error {
+	if hooks.IsEmpty() {
+		return nil
+	}
+	var problems []string
+	for _, event := range hooks.matcherGroups() {
+		for _, group := range event.groups {
+			if matcher := normalizedHookMatcher(event.name, group.Matcher); matcher != nil {
+				if err := validateHookMatcherPattern(*matcher); err != nil {
+					problems = append(problems, fmt.Sprintf("invalid matcher %q in %s: %v", *matcher, event.name, err))
+				}
+			}
+			for _, handler := range group.Hooks {
+				if handler.Type == string(HookHandlerCommand) && strings.TrimSpace(managedHookCommand(handler)) == "" {
+					problems = append(problems, fmt.Sprintf("skipping empty hook command for %s", event.name))
+				}
+			}
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("failed to load required managed hooks for environment `%s`: %s", environmentID, strings.Join(problems, "; "))
+}
 
 // mcpHookInputRepresentable mirrors Rust's representable() check: null cannot
 // be written to TOML and unsigned values above i64::MAX cannot round-trip.

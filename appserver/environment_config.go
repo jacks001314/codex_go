@@ -424,6 +424,9 @@ func validateEnvironmentConfigForSelection(environmentID string, config *Environ
 	if config == nil {
 		return nil
 	}
+	if err := validateEnvironmentHooks(environmentID, config.EnvironmentHooks); err != nil {
+		return err
+	}
 	if len(config.SelectedCapabilityRoots) > maxSelectedCapabilityRoots {
 		return fmt.Errorf("environment readiness contains more than %d selected capability roots", maxSelectedCapabilityRoots)
 	}
