@@ -140,11 +140,16 @@ func (t *stalledRemoteTransport) Write(_ context.Context, _ any) error { return 
 func (t *stalledRemoteTransport) Close() error { return nil }
 
 type fakeRemoteSessionProvider struct {
-	connection *remoteConnection
+	connection  *remoteConnection
+	generations atomic.Uint64
 }
 
 func (p *fakeRemoteSessionProvider) connect(context.Context) (*remoteConnection, error) {
 	return p.connection, nil
+}
+
+func (p *fakeRemoteSessionProvider) nextGeneration() uint64 {
+	return p.generations.Add(1)
 }
 
 func withShortHostWaitTimeout(t *testing.T, fn func()) {

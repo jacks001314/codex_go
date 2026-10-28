@@ -20,6 +20,8 @@ func (p *retryingAdmissionTestProvider) connect(context.Context) (*remoteConnect
 	return nil, status.Error(codes.Unavailable, "no healthy upstream")
 }
 
+func (*retryingAdmissionTestProvider) nextGeneration() uint64 { return 1 }
+
 func (*retryingAdmissionTestProvider) sessionAdmissionRetries() int {
 	return grpcSessionAdmissionAttempts
 }

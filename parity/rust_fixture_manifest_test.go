@@ -59,7 +59,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// Re-anchored to upstream 4d3ed3f3b4: the CLI suite gained the
 			// rollout-trace reducer, queued-message and NFS-database migration
 			// fixtures plus their support modules.
-			Files: 48,
+			// Re-anchored to upstream 68b67f0ff4: `codex doctor --network-only`
+			// added the human success and config-failure snapshots (#57606).
+			Files: 50,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{

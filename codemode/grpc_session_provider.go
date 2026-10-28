@@ -32,9 +32,10 @@ type GrpcCodeModeSessionProvider struct {
 	endpoint   string
 	httpClient *http.Client
 
-	mu          sync.Mutex
-	connection  *remoteConnection
-	nextSession atomic.Uint64
+	mu                 sync.Mutex
+	connection         *remoteConnection
+	nextSession        atomic.Uint64
+	nextCellGeneration atomic.Uint64
 }
 
 func NewGrpcCodeModeSessionProvider(endpoint string, httpClient *http.Client) *GrpcCodeModeSessionProvider {
@@ -60,6 +61,12 @@ func (p *GrpcCodeModeSessionProvider) TakeUnavailableWarning(string) string { re
 func (p *GrpcCodeModeSessionProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
 	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
+}
+
+// nextGeneration keeps replacement sessions from reusing cell IDs after a
+// thread reload (Rust #57615).
+func (p *GrpcCodeModeSessionProvider) nextGeneration() uint64 {
+	return p.nextCellGeneration.Add(1)
 }
 
 func (p *GrpcCodeModeSessionProvider) Prewarm(ctx context.Context) error {

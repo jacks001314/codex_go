@@ -27,14 +27,15 @@ import (
 type GrpcProcessProvider struct {
 	program string
 
-	mu          sync.Mutex
-	connection  *remoteConnection
-	process     *exec.Cmd
-	stdin       io.WriteCloser
-	stdout      io.ReadCloser
-	nextSession atomic.Uint64
-	warned      atomic.Bool
-	available   error
+	mu                 sync.Mutex
+	connection         *remoteConnection
+	process            *exec.Cmd
+	stdin              io.WriteCloser
+	stdout             io.ReadCloser
+	nextSession        atomic.Uint64
+	nextCellGeneration atomic.Uint64
+	warned             atomic.Bool
+	available          error
 }
 
 func NewGrpcProcessProvider(program string) *GrpcProcessProvider {
@@ -62,6 +63,12 @@ func (p *GrpcProcessProvider) TakeUnavailableWarning(effectiveToolMode string) s
 func (p *GrpcProcessProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
 	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
+}
+
+// nextGeneration keeps a reloaded thread's replacement session from reusing
+// cell IDs owned by its previous session (Rust #57615).
+func (p *GrpcProcessProvider) nextGeneration() uint64 {
+	return p.nextCellGeneration.Add(1)
 }
 
 func (p *GrpcProcessProvider) Prewarm(ctx context.Context) error {

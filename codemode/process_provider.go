@@ -24,11 +24,12 @@ const localHostStartupTimeout = 30 * time.Second
 type ProcessProvider struct {
 	program string
 
-	mu          sync.Mutex
-	connection  *remoteConnection
-	nextSession atomic.Uint64
-	warned      atomic.Bool
-	available   error
+	mu                 sync.Mutex
+	connection         *remoteConnection
+	nextSession        atomic.Uint64
+	nextCellGeneration atomic.Uint64
+	warned             atomic.Bool
+	available          error
 }
 
 func NewProcessProvider(program string) *ProcessProvider {
@@ -56,6 +57,13 @@ func (p *ProcessProvider) TakeUnavailableWarning(effectiveToolMode string) strin
 func (p *ProcessProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
 	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
+}
+
+// nextGeneration matches Rust's host-wide session ordinal: a replacement
+// session gets a fresh generation so its cell IDs never collide with the
+// previous session's (Rust #57615).
+func (p *ProcessProvider) nextGeneration() uint64 {
+	return p.nextCellGeneration.Add(1)
 }
 
 func (p *ProcessProvider) Prewarm(ctx context.Context) error {

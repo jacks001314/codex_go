@@ -363,7 +363,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// tool declarations and the pre-turn compaction/config refresh changes.
 		// Re-anchored to upstream e8e6a922c0: request preparation substitutes
 		// unavailable images (#57585) and the catalog-heading metadata changed.
-		{Path: "core/src/client.rs", SHA256: "55da538d19f186cf01e508f6fa9cde0ae8335a1c0f781265a235d08180f186ff"},
+		// Re-anchored to upstream 68b67f0ff4: model providers and catalogs share
+		// runtime authentication through ProviderAuthContext (#57607).
+		{Path: "core/src/client.rs", SHA256: "5ef6f7136cdb85c9b40ef83dbc4570ffe510cb961edd9a575bcde6c1591ced29"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.

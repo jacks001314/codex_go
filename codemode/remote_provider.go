@@ -50,13 +50,18 @@ type WebSocketProvider struct {
 	url        string
 	httpClient *http.Client
 
-	mu          sync.Mutex
-	connection  *remoteConnection
-	nextSession atomic.Uint64
+	mu                 sync.Mutex
+	connection         *remoteConnection
+	nextSession        atomic.Uint64
+	nextCellGeneration atomic.Uint64
 }
 
 type remoteSessionProvider interface {
 	connect(context.Context) (*remoteConnection, error)
+	// nextGeneration allocates the next cell generation. The counter belongs to
+	// the provider rather than a session so that a reloaded thread's replacement
+	// session cannot reuse cell IDs from its previous session (Rust #57615).
+	nextGeneration() uint64
 }
 
 type remoteTransport interface {
@@ -76,6 +81,10 @@ func (p *WebSocketProvider) TakeUnavailableWarning(string) string { return "" }
 func (p *WebSocketProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
 	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
+}
+
+func (p *WebSocketProvider) nextGeneration() uint64 {
+	return p.nextCellGeneration.Add(1)
 }
 
 func (p *WebSocketProvider) Prewarm(ctx context.Context) error {
@@ -519,7 +528,7 @@ func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
 		return nil, fmt.Errorf("code mode session is shutting down")
 	}
 	s.openedOn = connection
-	s.generation++
+	s.generation = s.provider.nextGeneration()
 	s.mu.Unlock()
 	connection.SetDelegate(s.id, s.delegateForGeneration(s.generation))
 	return connection, nil
