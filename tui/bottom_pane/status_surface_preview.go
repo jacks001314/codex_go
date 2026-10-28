@@ -48,6 +48,8 @@ const (
 	StatusPreviewModelWithReasoning  StatusSurfacePreviewItem = "model-with-reasoning"
 	StatusPreviewReasoning           StatusSurfacePreviewItem = "reasoning"
 	StatusPreviewTaskProgress        StatusSurfacePreviewItem = "task-progress"
+	StatusPreviewProfile             StatusSurfacePreviewItem = "profile"
+	StatusPreviewProvider            StatusSurfacePreviewItem = "provider"
 )
 
 type StatusPreviewValue struct {
@@ -109,6 +111,8 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewModel,
 		StatusPreviewModelWithReasoning,
 		StatusPreviewReasoning,
+		StatusPreviewProfile,
+		StatusPreviewProvider,
 		StatusPreviewTaskProgress,
 	}
 }
@@ -279,6 +283,10 @@ func StatusSurfacePreviewPlaceholder(item StatusSurfacePreviewItem) string {
 		return "medium"
 	case StatusPreviewTaskProgress:
 		return "Tasks 0/0"
+	case StatusPreviewProfile:
+		return "profile: <name>"
+	case StatusPreviewProvider:
+		return "provider: <id>"
 	default:
 		return ""
 	}

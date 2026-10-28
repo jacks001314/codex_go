@@ -49,6 +49,11 @@ const (
 	StatusLineThreadTitle
 	StatusLineWorkspaceHeadline
 	StatusLineTaskProgress
+	// StatusLineProfile is the named config profile selected for this
+	// invocation (Rust #57516). It is omitted when no profile is selected.
+	StatusLineProfile
+	// StatusLineProvider is the model provider id of the active thread.
+	StatusLineProvider
 )
 
 type StatusLineAccent string
@@ -180,7 +185,7 @@ func (l StatusLine) RenderStyled(threadColorSGR string, accentColorSGR func(Stat
 
 func StatusLineAccentForItem(item StatusLineItem) StatusLineAccent {
 	switch item {
-	case StatusLineModelName, StatusLineModelWithReasoning, StatusLineReasoning:
+	case StatusLineModelName, StatusLineModelWithReasoning, StatusLineReasoning, StatusLineProvider:
 		return StatusLineAccentModel
 	case StatusLineCurrentDir, StatusLineProjectRoot:
 		return StatusLineAccentPath
@@ -194,7 +199,7 @@ func StatusLineAccentForItem(item StatusLineItem) StatusLineAccent {
 		return StatusLineAccentUsage
 	case StatusLineFiveHourLimit, StatusLineWeeklyLimit:
 		return StatusLineAccentLimit
-	case StatusLineCodexVersion, StatusLineHostname, StatusLineSessionID:
+	case StatusLineCodexVersion, StatusLineHostname, StatusLineSessionID, StatusLineProfile:
 		return StatusLineAccentMetadata
 	case StatusLineFastMode, StatusLineDaybreak, StatusLineRawOutput, StatusLinePermissions, StatusLineApprovalMode:
 		return StatusLineAccentMode

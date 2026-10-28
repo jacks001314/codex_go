@@ -115,6 +115,10 @@ func ParseStatusLineItem(id string) (StatusLineItem, bool) {
 		return StatusLineWorkspaceHeadline, true
 	case "task-progress":
 		return StatusLineTaskProgress, true
+	case "profile":
+		return StatusLineProfile, true
+	case "provider", "model-provider":
+		return StatusLineProvider, true
 	default:
 		return 0, false
 	}
@@ -184,6 +188,10 @@ func StatusLineItemID(item StatusLineItem) string {
 		return "workspace-headline"
 	case StatusLineTaskProgress:
 		return "task-progress"
+	case StatusLineProfile:
+		return "profile"
+	case StatusLineProvider:
+		return "provider"
 	default:
 		return ""
 	}
@@ -253,6 +261,10 @@ func StatusLineItemPreviewItem(item StatusLineItem) StatusSurfacePreviewItem {
 		return StatusPreviewWorkspaceHeadline
 	case StatusLineTaskProgress:
 		return StatusPreviewTaskProgress
+	case StatusLineProfile:
+		return StatusPreviewProfile
+	case StatusLineProvider:
+		return StatusPreviewProvider
 	default:
 		return ""
 	}
@@ -295,6 +307,8 @@ func StatusLineItemDescription(item StatusLineItem, previewData StatusSurfacePre
 		StatusLineThreadTitle:         "Current thread title, or thread identifier when unnamed",
 		StatusLineWorkspaceHeadline:   "Workspace notification headline (Enterprise workspaces only; omitted when unavailable)",
 		StatusLineTaskProgress:        "Latest task progress from update_plan (omitted until available)",
+		StatusLineProfile:             "Config profile selected with --profile (omitted when unset)",
+		StatusLineProvider:            "Model provider for the active thread",
 	}
 	return descriptions[item]
 }

@@ -94,6 +94,8 @@ const (
 	StatusPreviewModelWithReasoning  StatusSurfacePreviewItem = "model-with-reasoning"
 	StatusPreviewReasoning           StatusSurfacePreviewItem = "reasoning"
 	StatusPreviewTaskProgress        StatusSurfacePreviewItem = "task-progress"
+	StatusPreviewProfile             StatusSurfacePreviewItem = "profile"
+	StatusPreviewProvider            StatusSurfacePreviewItem = "provider"
 )
 
 type PreviewValue struct {
@@ -261,6 +263,10 @@ func ParseStatusLineItem(id string) (bottompane.StatusLineItem, bool) {
 		return bottompane.StatusLineWorkspaceHeadline, true
 	case "task-progress":
 		return bottompane.StatusLineTaskProgress, true
+	case "profile":
+		return bottompane.StatusLineProfile, true
+	case "provider", "model-provider":
+		return bottompane.StatusLineProvider, true
 	default:
 		return 0, false
 	}
@@ -330,6 +336,10 @@ func StatusLineItemID(item bottompane.StatusLineItem) string {
 		return "workspace-headline"
 	case bottompane.StatusLineTaskProgress:
 		return "task-progress"
+	case bottompane.StatusLineProfile:
+		return "profile"
+	case bottompane.StatusLineProvider:
+		return "provider"
 	default:
 		return ""
 	}
@@ -525,6 +535,10 @@ func StatusLineItemPreviewItem(item bottompane.StatusLineItem) StatusSurfacePrev
 		return StatusPreviewWorkspaceHeadline
 	case bottompane.StatusLineTaskProgress:
 		return StatusPreviewTaskProgress
+	case bottompane.StatusLineProfile:
+		return StatusPreviewProfile
+	case bottompane.StatusLineProvider:
+		return StatusPreviewProvider
 	default:
 		return ""
 	}
@@ -579,6 +593,8 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewModel,
 		StatusPreviewModelWithReasoning,
 		StatusPreviewReasoning,
+		StatusPreviewProfile,
+		StatusPreviewProvider,
 		StatusPreviewTaskProgress,
 	}
 }
@@ -870,6 +886,10 @@ func statusSurfacePlaceholder(item StatusSurfacePreviewItem) string {
 		return "medium"
 	case StatusPreviewTaskProgress:
 		return "Tasks 0/0"
+	case StatusPreviewProfile:
+		return "profile: <name>"
+	case StatusPreviewProvider:
+		return "provider: <id>"
 	default:
 		return ""
 	}

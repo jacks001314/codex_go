@@ -735,6 +735,8 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		Permissions:                   strings.TrimSpace(m.State.Sandbox),
 		ApprovalMode:                  strings.TrimSpace(m.State.ApprovalPolicy),
 		ThreadID:                      strings.TrimSpace(m.State.ThreadID),
+		Profile:                       strings.TrimSpace(m.profile),
+		ModelProviderID:               strings.TrimSpace(m.State.Provider),
 		RawOutput:                     m.rawOutput,
 		DaybreakEnabled:               m.daybreakEnabled,
 		SideConversationActive:        m.inSideConversation(),

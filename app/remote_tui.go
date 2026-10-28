@@ -438,6 +438,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
 	sessionPickerItems, sessionPickerNotice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
 	options := codextea.Options{
+		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings),
 		AlternateScreenMode:          settings.AlternateScreenMode,
 		WindowsTerminalMappedInput:   codextea.WindowsTerminalMappedInputEnabled(),

@@ -1118,6 +1118,9 @@ type Options struct {
 	// `never` keeps the terminal-owned inline buffer.
 	AlternateScreenMode string
 	Placeholder         string
+	// Profile is the named config profile selected for this invocation
+	// (Rust #57516), shown by the status line's profile item.
+	Profile             string
 	ModelPickerOptions  []codextui.ModelPickerOption
 	ServiceTierCommands []bottompane.ServiceTierCommand
 	// ServiceTierRequirements carries the server's configRequirements/read
@@ -1980,6 +1983,8 @@ type Model struct {
 	serviceTierRequirements *config.ConfigRequirementsReadResponse
 	sessionItems            []codextui.SessionSummary
 	sessionCWD              string
+	// profile is the named config profile from --profile (Rust #57516).
+	profile                 string
 	sessionPickerLoadNotice string
 	// sessionWorkspaceRoots mirrors the active thread's server-authoritative
 	// runtime workspace roots (Rust #46494). Client config paths belong to the
@@ -2742,6 +2747,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		serviceTierRequirements:         options.ServiceTierRequirements,
 		sessionItems:                    append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                      strings.TrimSpace(options.SessionPickerCWD),
+		profile:                         strings.TrimSpace(options.Profile),
 		sessionPickerLoadNotice:         strings.TrimSpace(options.SessionPickerNotice),
 		sessionPickerDensity:            normalizeSessionPickerDensityTea(options.SessionPickerView),
 		agentsOverviewGrouping:          agentsoverview.ParseGroupingConfig(options.AgentsOverviewGrouping),

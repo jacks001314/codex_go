@@ -528,3 +528,60 @@ func TestStatusLineProjectRootUsesRootNameLikeRust(t *testing.T) {
 		t.Fatalf("project root fallback = %q ok=%v", got, ok)
 	}
 }
+
+// Rust #57516: the status line gains a profile item and a provider item. The
+// profile is omitted when unset, the provider waits for an active thread, and
+// the setup picker offers both (with model-provider as a provider alias).
+func TestStatusLineProfileAndProviderItemsLikeRust(t *testing.T) {
+	item, ok := ParseStatusLineItem("profile")
+	if !ok || item != bottompane.StatusLineProfile {
+		t.Fatalf("ParseStatusLineItem(profile) = %v ok=%v", item, ok)
+	}
+	for _, alias := range []string{"provider", "model-provider"} {
+		item, ok := ParseStatusLineItem(alias)
+		if !ok || item != bottompane.StatusLineProvider {
+			t.Fatalf("ParseStatusLineItem(%q) = %v ok=%v", alias, item, ok)
+		}
+	}
+	if got := StatusLineItemID(bottompane.StatusLineProfile); got != "profile" {
+		t.Fatalf("profile ID = %q", got)
+	}
+	if got := StatusLineItemID(bottompane.StatusLineProvider); got != "provider" {
+		t.Fatalf("provider ID = %q", got)
+	}
+
+	unset := NewStatusControlsState(StatusControlsRuntime{ModelProviderID: "openai"})
+	if _, ok := unset.StatusLineValueForItem(bottompane.StatusLineProfile); ok {
+		t.Fatal("profile item rendered without a selected profile")
+	}
+	if _, ok := unset.StatusLineValueForItem(bottompane.StatusLineProvider); ok {
+		t.Fatal("provider item rendered before a thread is active")
+	}
+
+	active := NewStatusControlsState(StatusControlsRuntime{
+		ThreadID:        "thread-1",
+		Profile:         "work",
+		ModelProviderID: "amazon-bedrock",
+	})
+	if got, ok := active.StatusLineValueForItem(bottompane.StatusLineProfile); !ok || got != "profile: work" {
+		t.Fatalf("profile item = %q ok=%v", got, ok)
+	}
+	if got, ok := active.StatusLineValueForItem(bottompane.StatusLineProvider); !ok || got != "provider: amazon-bedrock" {
+		t.Fatalf("provider item = %q ok=%v", got, ok)
+	}
+
+	data := DefaultStatusSurfacePreviewData()
+	if got, ok := data.ValueFor(StatusPreviewProfile); !ok || got != "profile: <name>" {
+		t.Fatalf("profile preview = %q ok=%v", got, ok)
+	}
+	if got, ok := data.ValueFor(StatusPreviewProvider); !ok || got != "provider: <id>" {
+		t.Fatalf("provider preview = %q ok=%v", got, ok)
+	}
+	// Rust appends the items to the enum, so task-progress precedes them.
+	if !orderedRightAfter(StatusLineItemIDs(AllStatusLineItems()), "task-progress", "profile") {
+		t.Fatalf("setup order = %v, want profile after task-progress", StatusLineItemIDs(AllStatusLineItems()))
+	}
+	if !orderedRightAfter(StatusLineItemIDs(AllStatusLineItems()), "profile", "provider") {
+		t.Fatalf("setup order = %v, want provider after profile", StatusLineItemIDs(AllStatusLineItems()))
+	}
+}

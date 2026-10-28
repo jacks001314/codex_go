@@ -163,6 +163,11 @@ type StatusControlsRuntime struct {
 	// ThreadUsageNativeUSDMicros is the ENT26 native dollar amount; nil means
 	// unknown rather than zero.
 	ThreadUsageNativeUSDMicros *int64
+	// Profile is the named config profile selected for this invocation by
+	// --profile (Rust #57516); empty omits the status item.
+	Profile string
+	// ModelProviderID is the active thread's model provider id.
+	ModelProviderID string
 }
 
 type StatusControlsState struct {
@@ -858,6 +863,23 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 		return nonEmptyTrimmed(s.Runtime.WorkspaceHeadline)
 	case bottompane.StatusLineTaskProgress:
 		return nonEmptyTrimmed(s.Runtime.TaskProgress)
+	case bottompane.StatusLineProfile:
+		profile, ok := nonEmptyTrimmed(s.Runtime.Profile)
+		if !ok {
+			return "", false
+		}
+		return "profile: " + profile, true
+	case bottompane.StatusLineProvider:
+		// Rust #57516 gates the provider on the active thread, matching
+		// statusModelProvider.
+		if strings.TrimSpace(s.Runtime.ThreadID) == "" {
+			return "", false
+		}
+		provider, ok := nonEmptyTrimmed(s.Runtime.ModelProviderID)
+		if !ok {
+			return "", false
+		}
+		return "provider: " + provider, true
 	default:
 		return "", false
 	}
@@ -1345,6 +1367,10 @@ func AllStatusLineItems() []bottompane.StatusLineItem {
 		bottompane.StatusLineThreadTitle,
 		bottompane.StatusLineWorkspaceHeadline,
 		bottompane.StatusLineTaskProgress,
+		// Rust #57516 appends the profile and provider items after task
+		// progress, so the setup popup lists them last.
+		bottompane.StatusLineProfile,
+		bottompane.StatusLineProvider,
 	}
 }
 
@@ -1460,6 +1486,10 @@ func StatusLineItemDescription(item bottompane.StatusLineItem, previewData Statu
 		return "Workspace notification headline (Enterprise workspaces only; omitted when unavailable)"
 	case bottompane.StatusLineTaskProgress:
 		return "Latest task progress from update_plan (omitted until available)"
+	case bottompane.StatusLineProfile:
+		return "Config profile selected with --profile (omitted when unset)"
+	case bottompane.StatusLineProvider:
+		return "Model provider for the active thread"
 	default:
 		return ""
 	}
@@ -1564,6 +1594,10 @@ func statusLineItemForPreviewItem(item StatusSurfacePreviewItem) (bottompane.Sta
 		return bottompane.StatusLineThreadCredits, true
 	case StatusPreviewEstimatedThreadCost:
 		return bottompane.StatusLineEstimatedThreadCost, true
+	case StatusPreviewProfile:
+		return bottompane.StatusLineProfile, true
+	case StatusPreviewProvider:
+		return bottompane.StatusLineProvider, true
 	case StatusPreviewThreadName:
 		return bottompane.StatusLineThreadName, true
 	case StatusPreviewSessionID:

@@ -1211,6 +1211,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		stopSession:      voiceStop,
 	})
 	options := codextea.Options{
+		// Rust #57516: the status line's profile item reports the profile
+		// selected with --profile.
+		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings),
 		AlternateScreenMode:          settings.AlternateScreenMode,
 		WindowsTerminalMappedInput:   codextea.WindowsTerminalMappedInputEnabled(),
@@ -5024,6 +5027,16 @@ func interactiveStringFromConfig(values map[string]any, key string) string {
 	}
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+// interactiveStringFromSharedProfile returns the --profile value selected for
+// this invocation, which is the name Rust #57516 reports for the active user
+// config layer's profile.
+func interactiveStringFromSharedProfile(root *cli.RootOptions) string {
+	if root == nil {
+		return ""
+	}
+	return strings.TrimSpace(root.Shared.Profile)
 }
 
 func interactiveDefaultModel() string {
