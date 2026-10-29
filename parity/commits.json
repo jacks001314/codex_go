@@ -15099,9 +15099,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "audited #46108: Go never persisted bundled-plugin exclusions and has no Sites migration wait, so the removal half is already absent; the new runtime guard already lives in plugin/curated_routing.go:107 pluginEligibleForRuntimeLocked and plugin/curated_routing.go:130 routePluginDetails fed by plugin/curated_routing.go:181 enabledPluginDetailsSnapshot, which backs plugin/api.go:2175 EnabledCapabilities, plugin/api.go:2752 EnabledHookSources, plugin/api.go:2785 EnabledSkillRoots and plugin/mcp_contributions.go:24, so sites@openai-bundled is suppressed whenever a cached sites@openai-curated-remote entry exists and the remote catalog is active, enabled or disabled, with bundled fallback when the remote bundle is missing; added plugin/sites_runtime_guard_like_rust_test.go:14 matrix (enabled remote, disabled remote, missing remote) over skill roots and hook sources plus :40 for the inactive remote catalog; verified go build ./... and go test ./plugin; residual: plugin/api.go:2886 Install still rejects a plugin ineligible for the active auth route, a generic routing guard Rust keeps elsewhere, so installing sites@openai-bundled beside a cached remote install fails instead of silently no-oping"
    ]
   },
   {

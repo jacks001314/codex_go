@@ -2430,6 +2430,35 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
   semantics. Residual: the `fdinfo`/`statx` acquisition itself is only
   compile-checked here because no Linux host or WSL is available.
 
-Status after reconciliation: `2086 complete`, `409 not_applicable`,
-`430 audit_pending`, `220 regression_pending`, `4 partial`,
+### Sites bundled fallback uses the runtime compatibility guard (Round 925)
+
+- Upstream `108e6a6dbeed` (#46108) deletes the persisted bundled-plugin
+  exclusions, the Sites migration check and the initial migration wait, and
+  replaces them with one runtime guard: while the remote global catalog is
+  active, a cached remote Sites install suppresses `sites@openai-bundled` even
+  when that remote entry is disabled, and a missing remote bundle keeps the
+  bundled fallback.
+- The removal half is already absent in Go: there is no exclusion state file,
+  no Sites migration bookkeeping and no migration wait on the local
+  plugin-config reload path.
+- The guard half already exists as the runtime routing layer:
+  `pluginEligibleForRuntimeLocked` and `routePluginDetails` feed
+  `enabledPluginDetailsSnapshot`, which backs `EnabledCapabilities`,
+  `EnabledHookSources`, `EnabledSkillRoots` and the MCP contributions. A cached
+  `sites@openai-curated-remote` entry therefore suppresses the bundled plugin
+  for every loaded surface, enabled or not, and only while the remote catalog
+  is active.
+- Added `plugin/sites_runtime_guard_like_rust_test.go`, the Go counterpart of
+  Rust's expanded agent-turn Sites matrix: enabled remote supersedes bundled,
+  disabled remote does not reactivate bundled, missing remote bundle preserves
+  bundled, plus an inactive-remote-catalog case that keeps the bundled plugin.
+  Each case is asserted over the skill-root and hook-source surfaces.
+- Verified with `go build ./...` and `go test ./plugin`.
+- Residual: `PluginService.Install` still rejects a plugin that is ineligible
+  for the active auth route (the generic routing guard, not the deleted Sites
+  exclusion guard), so installing `sites@openai-bundled` beside a cached remote
+  install returns an error instead of a silent no-op install.
+
+Status after reconciliation: `2087 complete`, `409 not_applicable`,
+`429 audit_pending`, `220 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
