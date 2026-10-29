@@ -18931,9 +18931,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 953 (complete): doctor/color.go ports Rust's looks_copyable classification (http/https/wss URLs, ~/ and ./, ../, / paths, plus Windows-only drive-absolute (C:\\logs, D:/goals), UNC (\\\\server\\share\\logs), Win32 (\\\\?\\C:\\logs, \\\\?\\UNC\\server\\share\\logs), DOS device (\\\\.\\pipe\\codex) and NT (\\??\\C:\\logs) forms, while \\DosDevices\\C:\\logs and \\rooted stay plain). highlightActions colors recognized paths and URLs red (xterm 196) on failed checks and cyan (117) otherwise, treats backticked spans as one code unit including spaces, and styleDetailText keeps trailing punctuation and whitespace while also dimming falsy values (240), coloring ok green (10) and byte units. doctor/render.go applies the highlight to row descriptions, detail values, PATH entries and remedies. Options.Color is derived by Run only when stdout is a terminal with color support, and is disabled by --no-color, NO_COLOR, TERM=dumb, JSON mode or non-file writers; the terminal diagnostic summary now shares doctorColorEnabledForEnv, and unstyled output stays byte-identical. Tests: TestDoctorCopyableItemsUseCheckStatusLikeRust, TestDoctorCopyableHighlightLeavesPlainTextWhenColorDisabledLikeRust, TestDoctorCopyableHighlightPreservesPunctuationAndWhitespaceLikeRust, TestDoctorLooksCopyableWindowsFormsLikeRust, TestDoctorColorEnabledMatchesTerminalSignalsLikeRust. Verified go build ./...; go test ./doctor ./app -count=1; go test ./parity -run 'TestAlignment|TestRustErrorCodeSurfaceAgainstGo' -count=1. Residual: Go's doctor rows keep plain OK/!!/XX markers and unstyled group titles/labels, a pre-existing structural difference outside this commit, so only copyable-item coloring is aligned here."
    ]
   },
   {

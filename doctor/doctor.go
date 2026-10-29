@@ -147,6 +147,10 @@ type Options struct {
 	All     bool
 	NoColor bool
 	ASCII   bool
+	// Color enables ANSI styling in the human report. Run derives it from the
+	// terminal state unless --no-color or NO_COLOR disables it (Rust #47358
+	// HumanOutputOptions::color_enabled); tests leave it off for plain output.
+	Color bool
 	// Feedback bounds each database integrity scan when collecting a feedback
 	// attachment (Rust #40688): an incomplete clean scan becomes a warning
 	// rather than a failure.
@@ -188,6 +192,7 @@ func Run(opts *Options, stdout io.Writer) (*Report, error) {
 		}
 		return report, nil
 	}
+	opts.Color = doctorColorEnabled(opts, stdout)
 	_, err := io.WriteString(stdout, RenderHuman(report, opts))
 	return report, err
 }
@@ -3734,7 +3739,7 @@ func terminalColorOutputSummary(inputs *terminalCheckInputs) string {
 	noColorFlag := inputs.NoColorFlag
 	_, noColorEnv := env["NO_COLOR"]
 	term := strings.TrimSpace(env["TERM"])
-	if !noColorFlag && !noColorEnv && term != "dumb" && inputs.StdoutIsTerminal && inputs.StreamSupportsColor {
+	if !noColorFlag && doctorColorEnabledForEnv(env, inputs.StdoutIsTerminal) && inputs.StreamSupportsColor {
 		return "enabled"
 	}
 	reason := "disabled"

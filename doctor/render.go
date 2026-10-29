@@ -132,7 +132,8 @@ func checksForUnknownGroup(report *Report) []*DoctorCheck {
 }
 
 func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
-	fmt.Fprintf(out, "  %s %-12s %s\n", statusMarker(displayStatusForCheck(check), opts), check.Category, rowSummary(check))
+	status := displayStatusForCheck(check)
+	fmt.Fprintf(out, "  %s %-12s %s\n", statusMarker(status, opts), check.Category, highlightActions(rowSummary(check), status, opts))
 	if opts.Summary {
 		return
 	}
@@ -149,7 +150,7 @@ func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 			writeFeatureFlags(out, check, opts)
 			continue
 		case isDoctorDatabaseLabel(label):
-			writeDatabaseDetail(out, check, label)
+			writeDatabaseDetail(out, check, label, opts)
 			continue
 		case isDoctorDatabaseIntegrityLabel(label):
 			continue
@@ -164,10 +165,10 @@ func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 		case label == "enabled feature flags" || label == "feature flag overrides":
 			continue
 		}
-		writeDetail(out, check, detail)
+		writeDetail(out, check, detail, opts)
 	}
 	for _, remedy := range issueRemedies(check) {
-		fmt.Fprintf(out, "    -> %s\n", redactDoctorDetail(remedy))
+		fmt.Fprintf(out, "    -> %s\n", highlightActions(redactDoctorDetail(remedy), status, opts))
 	}
 }
 
@@ -180,9 +181,10 @@ func writePathEntries(out *strings.Builder, check *DoctorCheck, prefix string, o
 	if opts == nil || !opts.All {
 		shown = minInt(shown, 3)
 	}
-	fmt.Fprintf(out, "      %-24s %s\n", fmt.Sprintf("PATH entries (%d)", len(entries)), humanizeDoctorDetailValue(redactDoctorDetail(entries[0])))
+	status := displayStatusForCheck(check)
+	fmt.Fprintf(out, "      %-24s %s\n", fmt.Sprintf("PATH entries (%d)", len(entries)), styleDetailText(humanizeDoctorDetailValue(redactDoctorDetail(entries[0])), status, opts))
 	for _, entry := range entries[1:shown] {
-		fmt.Fprintf(out, "      %-24s %s\n", "", humanizeDoctorDetailValue(redactDoctorDetail(entry)))
+		fmt.Fprintf(out, "      %-24s %s\n", "", styleDetailText(humanizeDoctorDetailValue(redactDoctorDetail(entry)), status, opts))
 	}
 	if shown < len(entries) {
 		fmt.Fprintf(out, "      %-24s %s\n", "", "... (full list with --all)")
@@ -293,7 +295,7 @@ func isDoctorDatabaseIntegrityLabel(label string) bool {
 	return strings.HasSuffix(label, " DB integrity")
 }
 
-func writeDatabaseDetail(out *strings.Builder, check *DoctorCheck, label string) {
+func writeDatabaseDetail(out *strings.Builder, check *DoctorCheck, label string, opts *Options) {
 	value, ok := doctorDetailValue(check, label)
 	if !ok {
 		return
@@ -302,7 +304,7 @@ func writeDatabaseDetail(out *strings.Builder, check *DoctorCheck, label string)
 	if integrity, integrityOK := doctorDetailValue(check, label+" integrity"); integrityOK {
 		value += " | integrity " + integrity
 	}
-	fmt.Fprintf(out, "      %-24s %s\n", label, value)
+	fmt.Fprintf(out, "      %-24s %s\n", label, styleDetailText(value, displayStatusForCheck(check), opts))
 }
 
 func writeRolloutDetail(out *strings.Builder, label string, detail string) {
@@ -349,7 +351,7 @@ func rolloutFilesBytesAndAverage(value string) (uint64, uint64, uint64, bool) {
 	return files, totalBytes, averageBytes, true
 }
 
-func writeDetail(out *strings.Builder, check *DoctorCheck, detail string) {
+func writeDetail(out *strings.Builder, check *DoctorCheck, detail string, opts *Options) {
 	label, value := splitDetail(redactDoctorDetail(detail))
 	label = doctorDisplayLabel(label)
 	value = humanizeDoctorDetailValue(value)
@@ -358,11 +360,11 @@ func writeDetail(out *strings.Builder, check *DoctorCheck, detail string) {
 		value = humanizeDoctorDetailValue(redactDoctorDetail(*issue.Measured))
 	}
 	if issue != nil && issue.Expected != nil {
-		value = value + " (expected " + redactDoctorDetail(*issue.Expected) + ")"
+		value = styleDetailText(value, displayStatusForCheck(check), opts) + " (expected " + redactDoctorDetail(*issue.Expected) + ")"
 		fmt.Fprintf(out, "    > %-24s %s\n", label, value)
 		return
 	}
-	fmt.Fprintf(out, "      %-24s %s\n", label, value)
+	fmt.Fprintf(out, "      %-24s %s\n", label, styleDetailText(value, displayStatusForCheck(check), opts))
 }
 
 func doctorDisplayLabel(label string) string {

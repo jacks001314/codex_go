@@ -2760,6 +2760,17 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `tui/tea/recap_tail_spacing_like_rust_test.go` covers the trailing recap, completed and live follow-ups, inline mode, and a single-row viewport; existing recap command tests continue to cover generated recaps.
 - Verified with `go build ./...`, `go test ./tui/tea ./tui ./tui/history_cell -count=1`.
 
-Status after reconciliation: `2115 complete`, `440 not_applicable`,
-`381 audit_pending`, `210 regression_pending`, `3 partial`,
+### Status-aware copyable highlighting in `codex doctor` (Round 953)
+
+- Rust #47358 colors recognized paths and URLs red for failed checks and cyan otherwise, and widens Windows path recognition to drive-absolute, UNC, Win32, DOS device and NT forms (#47358, complete).
+- `doctor/color.go:192` ports `looks_copyable`: URLs, `~/`, `./`, `../` and `/` paths plus, on Windows only, `C:\logs`/`D:/goals`, `\\server\share\logs`, `\\?\C:\logs`, `\\?\UNC\...`, `\\.\pipe\codex` and `\??\C:\logs`; `\DosDevices\C:\logs` and `\rooted` stay plain.
+- `doctor/color.go:53` (`highlightActions`) and `:67` (`styleDetailText`) alternate backticked code spans with plain tokens: code spans keep their spaces and are colored as one unit, plain tokens strip and reattach trailing `,.:;)` punctuation and whitespace, failed checks use red 196 for copyable items while `--flags` and non-failing copyable items use cyan 117. Detail values additionally dim falsy tokens (240), color `ok` green (10) and byte units.
+- `doctor/render.go:136` styles row descriptions, `:363`/`:367` detail values, `:185` PATH entries, `:307` database details and `:171` remedies.
+- `doctor/doctor.go:195` derives `Options.Color` from a terminal stdout with color support; `--no-color`, `NO_COLOR`, `TERM=dumb`, JSON mode and non-file writers keep the previous byte-identical plain output, and the terminal diagnostic summary shares the same predicate.
+- Tests: `TestDoctorCopyableItemsUseCheckStatusLikeRust`, `TestDoctorCopyableHighlightLeavesPlainTextWhenColorDisabledLikeRust`, `TestDoctorCopyableHighlightPreservesPunctuationAndWhitespaceLikeRust`, `TestDoctorLooksCopyableWindowsFormsLikeRust`, `TestDoctorColorEnabledMatchesTerminalSignalsLikeRust`.
+- Verified with `go build ./...`, `go test ./doctor ./app -count=1`, `go test ./parity -run 'TestAlignment|TestRustErrorCodeSurfaceAgainstGo' -count=1`.
+- Residual: Go's doctor rows still use plain `OK`/`!!`/`XX` markers and unstyled group titles and labels; that structural difference predates this commit, so only copyable-item coloring is aligned here.
+
+Status after reconciliation: `2116 complete`, `440 not_applicable`,
+`380 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
