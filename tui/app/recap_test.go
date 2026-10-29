@@ -84,12 +84,12 @@ func TestRecapHistoryPreservesLatestUserTurnWhenLatestResponseIsOversized(t *tes
 }
 
 func TestRecapHistoryCapsUTF8BytesWithoutSplittingCharacters(t *testing.T) {
-	content := strings.Repeat("鏈€鏂般伄閫叉崡\U0001f31f", RecapPromptMaxBytes)
+	content := strings.Repeat("最新の進捗\U0001f31f", RecapPromptMaxBytes)
 	history := RecapHistory(recapMessages(recapUser(content)))
 	if prompt := RecapPrompt(history); len(prompt) > RecapPromptMaxBytes {
 		t.Fatalf("prompt bytes = %d, want <= %d", len(prompt), RecapPromptMaxBytes)
 	}
-	if !strings.HasPrefix(history, "Pending user request: 鏈€鏂般伄閫叉崡\U0001f31f") {
+	if !strings.HasPrefix(history, "Pending user request: 最新の進捗\U0001f31f") {
 		t.Fatalf("history = %q", history)
 	}
 	if !utf8.ValidString(history) {
@@ -172,6 +172,16 @@ func TestRecapOutputSchemaRequiresSummaryAndNullableNextAction(t *testing.T) {
 	required, ok := schema["required"].([]string)
 	if !ok || len(required) != 2 || required[0] != "summary" || required[1] != "next_action" {
 		t.Fatalf("required = %#v", schema["required"])
+	}
+}
+
+// TestRecapDelayMatchesRustThirtyMinutes pins #45089's automatic recap delay.
+func TestRecapDelayMatchesRustThirtyMinutes(t *testing.T) {
+	if RecapDelay != 30*time.Minute {
+		t.Fatalf("RecapDelay = %v, want 30m", RecapDelay)
+	}
+	if RecapRetryDelay != 30*time.Second {
+		t.Fatalf("RecapRetryDelay = %v, want 30s", RecapRetryDelay)
 	}
 }
 

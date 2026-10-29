@@ -12,7 +12,7 @@ import (
 // RecapHeading labels a generated conversation recap.
 const RecapHeading = "Conversation recap"
 
-// ThreadRecapHistoryCell renders a generated recap with a hanging "鈫?Recap:"
+// ThreadRecapHistoryCell renders a generated recap with a hanging "↳ Recap:"
 // indent and an optional separately-styled "Next:" line (Rust
 // #45089/#45090 notices.rs ThreadRecapHistoryCell).
 type ThreadRecapHistoryCell struct {
@@ -32,7 +32,7 @@ func (c ThreadRecapHistoryCell) WithNextAction(nextAction *string) ThreadRecapHi
 	return c
 }
 
-// recapPrefix is Rust's hanging indent and label: "  鈫?Recap: ".
+// recapPrefix is Rust's hanging indent and label: "  ↳ Recap: ".
 const recapPrefix = "  \u21b3 Recap: "
 
 func (c ThreadRecapHistoryCell) DisplayLines(width int) []string {
