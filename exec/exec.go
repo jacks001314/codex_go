@@ -48,6 +48,7 @@ import (
 	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
+	"codex_go/utils"
 	"codex_go/worktree"
 
 	"github.com/google/uuid"
@@ -2862,15 +2863,27 @@ func execHumanSandboxSummary(resolution *config.SandboxPermissionProfileResoluti
 	if profile == nil {
 		return "read-only"
 	}
-	if profile.Disabled {
-		return "danger-full-access"
+	convention := utils.NativePathConvention()
+	cwdURI, err := utils.FromAbsoluteNativePath(cwd, convention)
+	if err != nil {
+		// Rust #45852 summarizes the profile directly; keep the legacy tag only
+		// when the working directory cannot be represented as an executor path.
+		return sandbox.SandboxPolicyTag(profile.LegacySandboxPolicy(), cwd)
 	}
-	policy := profile.LegacySandboxPolicy()
-	summary := sandbox.SandboxPolicyTag(policy, cwd)
-	if policy != nil && policy.Kind == "external-sandbox" && policy.HasFullNetworkAccess() {
-		return summary + " (network access enabled)"
+	var roots []*utils.PathURI
+	if resolution != nil {
+		for _, root := range resolution.WorkspaceRoots {
+			uri, rootErr := utils.FromAbsoluteNativePath(root, convention)
+			if rootErr != nil {
+				continue
+			}
+			roots = append(roots, uri)
+		}
 	}
-	return summary
+	if len(roots) == 0 {
+		roots = []*utils.PathURI{cwdURI}
+	}
+	return sandbox.SummarizePermissionProfile(profile, cwdURI, roots)
 }
 
 func effectiveReasoningSummary(cfg *config.Config) string {

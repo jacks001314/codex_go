@@ -5,7 +5,52 @@ import (
 
 	"codex_go/config"
 	"codex_go/sandbox"
+	"codex_go/utils"
 )
+
+// StatusPermissionSummary mirrors Rust status_permission_summary (#45852). The
+// full permission summary is collapsed into the concise label the status card
+// feeds to StatusPermissionsLabel.
+func StatusPermissionSummary(permissionProfile *sandbox.PermissionProfile, cwd *utils.PathURI, workspaceRoots []*utils.PathURI) string {
+	summary := sandbox.SummarizePermissionProfile(permissionProfile, cwd, workspaceRoots)
+	if details, ok := strings.CutPrefix(summary, "read-only"); ok {
+		if strings.Contains(details, "(network access enabled)") {
+			return "read-only with network access"
+		}
+		return "read-only"
+	}
+	if details, ok := strings.CutPrefix(summary, "workspace-write"); ok {
+		if strings.Contains(details, "(network access enabled)") {
+			return "workspace with network access"
+		}
+		return "workspace"
+	}
+	if summary == "custom permissions (network access enabled)" {
+		return "custom permissions with network access"
+	}
+	return summary
+}
+
+// WorkspaceRootSuffix mirrors Rust workspace_root_suffix (#45852): every
+// workspace root other than the working directory is rendered in its own
+// inferred native path convention.
+func WorkspaceRootSuffix(workspaceRoots []*utils.PathURI, cwd *utils.PathURI) string {
+	cwdURI := ""
+	if cwd != nil {
+		cwdURI = cwd.String()
+	}
+	extraRoots := make([]string, 0, len(workspaceRoots))
+	for _, root := range workspaceRoots {
+		if root == nil || root.String() == cwdURI {
+			continue
+		}
+		extraRoots = append(extraRoots, root.NativePathString())
+	}
+	if len(extraRoots) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(extraRoots, ", ") + "]"
+}
 
 func StatusApprovalLabel(approvalPolicy sandbox.AskForApproval, approvalsReviewer config.ApprovalsReviewer, approval string) string {
 	if approvalPolicy == sandbox.ApprovalOnRequest {
