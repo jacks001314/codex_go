@@ -16348,9 +16348,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Appserver already reads the captured snapshot: RuntimeRouter.threadEnvironmentSelections (appserver/runtime_router.go:15282) returns activeTurnParams(threadID), and activeTurnParams clones the params stored by registerActiveRuntimeTurn, so later settings writes cannot reach the running turn; after the turn ends it falls back to the persisted runtime_environments metadata. Added regression appserver/active_turn_environment_selections_like_rust_test.go TestThreadEnvironmentSelectionsUseTurnStartSnapshotLikeRust (turn-start snapshot wins, persisted selection applies once the turn ends) next to the existing MCP snapshot test. Verified: go test ./appserver -run TestThreadEnvironmentSelectionsUseTurnStartSnapshotLikeRust and go test ./appserver -run EnvironmentSelections|EnvironmentPolicy|EnvironmentCapability."
    ]
   },
   {

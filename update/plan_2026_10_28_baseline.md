@@ -2280,6 +2280,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Residual: Rust also requires a caller-owned private desktop name so the desktop outlives the short-lived wrapper (`--windows-sandbox-private-desktop-name`); Go still has the wrapper child create its own desktop and accepts the marker flag as a no-op.
 - Verified with `go build ./...`, `go vet ./app ./exec ./agent ./execserver ./tool ./sandbox/windowssandbox`, `go test ./sandbox/...`, `go test ./tool`, `go test ./execserver`, and `go test ./appserver -run 'Sandbox|Windows|ExecutorSkill'`.
 
-Status after reconciliation: `2073 complete`, `408 not_applicable`,
-`436 audit_pending`, `228 regression_pending`, `4 partial`,
+### Fix active-turn environment selection lookup (Round 912)
+
+- Upstream (`cd2f9ca69239`, #46557) makes `active_turn_environment_selections` read `initial_environments` so hosts authorize steering against the environment snapshot captured at turn start.
+- Go already reads that snapshot: `RuntimeRouter.threadEnvironmentSelections` returns `activeTurnParams(threadID)`, and `activeTurnParams` clones the params stored by `registerActiveTurnRuntimeTurn`, so a selection saved for the next turn cannot rewrite the running turn; once the turn ends the lookup falls back to the persisted `runtime_environments` metadata.
+- Regression: `appserver/active_turn_environment_selections_like_rust_test.go` adds `TestThreadEnvironmentSelectionsUseTurnStartSnapshotLikeRust`, which registers a turn with `env-initial`, mutates the caller's params to `env-next`, asserts the turn keeps `env-initial`, and asserts the persisted `env-saved` selection applies after the turn ends. It complements the existing MCP snapshot test.
+- Verified with `go test ./appserver -run TestThreadEnvironmentSelectionsUseTurnStartSnapshotLikeRust` and `go test ./appserver -run 'EnvironmentSelections|EnvironmentPolicy|EnvironmentCapability'`.
+
+Status after reconciliation: `2074 complete`, `408 not_applicable`,
+`435 audit_pending`, `228 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
