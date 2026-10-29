@@ -28619,9 +28619,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #52081 starts lifecycle listeners for persisted multi-agent v2 children even with no initialized clients, defers attachment until an earlier runtime cleanup finishes, keeps ephemeral children loaded, and raised the default unload delay to 30 minutes. Go implements the listener as the retained-thread idle lifecycle: ThreadManager.SetThreadRetainedHook arms scheduleThreadIdleUnload when a persisted child becomes live, so a child created after the client disconnects still unloads (TestIdleChildCreatedWithoutClientDisconnectsLikeRust); turn admission pins residency and awaitPendingThreadUnload makes a resume/turn start wait for or reject against an in-flight eviction (TestIdleLifecycleWaitsForPendingCleanupLikeRust); ephemeral children and roots stay resident (TestIdleLifecycleKeepsEphemeralAndRootThreadsLikeRust), while the per-thread zero-delay override still evicts an ephemeral non-subagent (TestIdleEphemeralThreadWithZeroOverrideUnloadsLikeRust, TestIdleEphemeralSubagentStaysLoadedEvenWithZeroOverrideLikeRust); queued mail survives eviction (TestIdleUnloadPreservesQueuedMailLikeRust). The 30-minute default this commit introduced was superseded by Rust #57242 back to one minute, which config.ThreadUnloadDelaySecs already matches (config/thread_unload_delay_like_rust_test.go). Round 970 additionally records closed transports so a start that outlives its connection cannot pin a dead subscriber (#50380). Verified with go test ./appserver -run 'TestIdle|TestThreadUnloadDelay' -count=1."
    ]
   },
   {

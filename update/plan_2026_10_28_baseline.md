@@ -2590,7 +2590,7 @@ Session-only model and reasoning selection (#45831, complete).
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
 Status after reconciliation: `2104 complete`, `410 not_applicable`,
-`423 audit_pending`, `210 regression_pending`, `2 partial`,
+`423 audit_pending`, `209 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
 
 ### Read-only summary history fallback (Round 936)
@@ -2915,6 +2915,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestThreadStartFinishingAfterConnectionCloseStillUnloadsLikeRust` (disconnect before publish, then no subscriber, idle unload, empty `thread/loaded/list`, `thread/closed`), `TestThreadStartWithLiveConnectionSubscribesThenUnloadsLikeRust`, `TestInitializeReopensClosedConnectionLikeRust`.
 - Residual: `idleThreadEvictable` admits only persistent non-subagent children (existing #52081 policy), so Go keeps root and ephemeral-root threads resident and Rust's ephemeral `thread/start` unload-by-idle path has no Go counterpart; the fix covers every thread Go can evict.
 - Verified with `go test ./appserver -run 'Idle|ThreadLifecycle|ThreadLoad|ThreadStart|ConnectionClosed|WorkspaceSwitch|AccountSession|ThreadClosed' -count=1`. Full `go test ./appserver` fails only on the pre-existing Rust-checkout protocol/manifest drift and `RuntimeRouter` analytics timeouts, reproduced without these changes.
-Status after reconciliation: `2132 complete`, `442 not_applicable`,
+### Disconnected multi-agent v2 child cleanup (Round 971)
+
+- Rust #52081 starts lifecycle listeners for persisted multi-agent v2 children created after the client disconnects, defers attachment until an earlier runtime cleanup finishes, keeps ephemeral children loaded, and raised the default unload delay to 30 minutes (#52081, complete).
+- Go realizes the listener as the retained-thread idle lifecycle: `appserver/thread_manager.go` invokes the retained hook from `RetainLiveThread`/`LiveThreadRetention.Commit`, and `appserver/thread_idle_lifecycle.go` arms `scheduleThreadIdleUnload`, pins residency during admission, and blocks resume/turn start on `awaitPendingThreadUnload`.
+- The 30-minute default was superseded by Rust #57242 back to one minute; `config/config.go:2161` already matches it, so no delay change was needed here.
+- Round 970 (this session) added the closed-connection guard so a start that outlives its connection cannot re-attach a dead subscriber.
+- Tests: `TestIdleChildCreatedWithoutClientDisconnectsLikeRust`, `TestIdleLifecycleWaitsForPendingCleanupLikeRust`, `TestIdleLifecycleKeepsEphemeralAndRootThreadsLikeRust`, `TestIdleEphemeralThreadWithZeroOverrideUnloadsLikeRust`, `TestIdleEphemeralSubagentStaysLoadedEvenWithZeroOverrideLikeRust`, `TestIdleUnloadPreservesQueuedMailLikeRust`, `TestThreadUnloadDelayDefaultsToOneMinuteLikeRust`.
+- Verified with `go test ./appserver -run 'TestIdle|TestThreadUnloadDelay' -count=1`.
+Status after reconciliation: `2133 complete`, `442 not_applicable`,
 `361 audit_pending`, `210 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
