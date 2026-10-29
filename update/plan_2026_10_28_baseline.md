@@ -774,6 +774,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regression `model/access_programs_test.go`: two online refreshes with an unchanged catalog ETag replace the access metadata in the presets and in the persisted models cache, mirroring Rust `online_refresh_updates_access_programs_with_unchanged_etag`.
 - Tests: `go test ./model -count=1`; `go test ./appserver -run 'ModelList|ModelSummary|ModelCatalog' -count=1`.
 
-Status after reconciliation: `1975 complete`, `385 not_applicable`,
-`509 audit_pending`, `280 regression_pending`, `0 partial`,
+### Wire up the native Windows MXC helper entry point (Round 788)
+
+- `cmd/internal/codexmain` now dispatches `--__codex-windows-mxc` before ordinary CLI parsing: the internal helper table moved into `dispatchInternalHelper` and the MXC branch sits after the argv0 aliases and before the file-system helper, mirroring Rust `arg0_dispatch`. The helper consumes no further arguments and returns the child exit code.
+- `sandbox/mxc.RunMain` (Rust `run_main`) prints `MXC sandbox execution requires Windows` and exits 1 off Windows, and reports every other failure as `MXC launcher: <error>`; `DecodeCommandArgs` now collapses every transport/serde failure into Rust's opaque `invalid MXC launcher request` so payload values never reach stderr.
+- The Windows helper reads the filtered wrapper environment through `GetEnvironmentStringsW` with strict UTF-16 validation - unpaired surrogates in names or values are rejected instead of being silently replaced by Go's lossy decode - skips the per-drive `=` entries, then resolves the command cwd, volume roots (including UNC roots) and platform read roots.
+- `sandbox/mxc/request_windows.go` adds `NativeRequest`/`BuildRequest` mirroring Rust `policy::build_request`: CreateProcess quoting of the exact argv, `working_directory` from the helper cwd (separate from `sandbox_policy_cwd`), the filtered child env or nil, `registryRead`, the readwrite/readonly/denied lists from `PrepareFileSystemPolicy`, the network policies with `network_specified`/`network_mode_specified`, and Rust #44903's desktop UI policy (`disable=false` plus `base_process_ui isolation=desktop`) that keeps clipboard, input-injection and system-control restrictions.
+- Architecture gap: Go has no binding to MXC's native SDK, so `launch` fails closed with `native MXC is unavailable on this executor` after the whole request is validated, matching the existing executor-side gate instead of degrading to a weaker backend.
+- Tests: `sandbox/mxc/run_test.go`, `run_windows_test.go`, `run_other_test.go`, `request_windows_test.go` (Rust wrapper regression: exact argv, Windows quoting, separate policy/command cwd, explicit env forwarding), and `cmd/internal/codexmain/dispatch_mxc_test.go`; `go test ./sandbox/... ./cmd/... -count=1` and `go build ./cmd/... ./sandbox/... ./execserver/...` pass.
+
+Status after reconciliation: `1976 complete`, `385 not_applicable`,
+`508 audit_pending`, `280 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
