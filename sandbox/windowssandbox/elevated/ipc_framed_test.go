@@ -3,6 +3,7 @@ package elevated
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -57,7 +58,7 @@ func TestFramedJSONUsesRustTaggedShape(t *testing.T) {
 	}
 	got := string(payload)
 	for _, want := range []string{
-		`"version":4`,
+		fmt.Sprintf(`"version":%d`, IPCProtocolVersion),
 		`"type":"error"`,
 		`"stage":"spawn_child"`,
 		`"windows_error_code":1312`,
@@ -82,15 +83,16 @@ func TestSpawnRequestSerializesPermissionProfile(t *testing.T) {
 	msg := &FramedMessage{
 		Version: IPCProtocolVersion,
 		Message: Message{SpawnRequest: &SpawnRequest{
-			Command:           []string{"cmd.exe", "/c", "ver"},
-			CWD:               `C:\workspace`,
-			Env:               map[string]string{"TEMP": `C:\tmp`},
-			PermissionProfile: &profile,
-			WorkspaceRoots:    []string{`C:\workspace`},
-			CodexHome:         `C:\codex`,
-			RealCodexHome:     `C:\Users\codex`,
-			CapSIDs:           []string{"S-1-15-3-1024-1"},
-			TimeoutMS:         &timeout,
+			Command:            []string{"cmd.exe", "/c", "ver"},
+			CWD:                `C:\workspace`,
+			Env:                map[string]string{"TEMP": `C:\tmp`},
+			PermissionProfile:  &profile,
+			WorkspaceRoots:     []string{`C:\workspace`},
+			CodexHome:          `C:\codex`,
+			RealCodexHome:      `C:\Users\codex`,
+			CapSIDs:            []string{"S-1-15-3-1024-1"},
+			TimeoutMS:          &timeout,
+			PrivateDesktopName: "CodexSandboxDesktop-0123456789abcdef0123456789abcdef",
 		}},
 	}
 	payload, err := json.Marshal(msg)
@@ -126,6 +128,9 @@ func TestSpawnRequestSerializesPermissionProfile(t *testing.T) {
 	}
 	if decoded.Message.SpawnRequest.PermissionProfile.SandboxPolicy.Kind != coresandbox.SandboxWorkspaceWrite {
 		t.Fatalf("decoded profile = %#v", decoded.Message.SpawnRequest.PermissionProfile)
+	}
+	if got := decoded.Message.SpawnRequest.PrivateDesktopName; got != "CodexSandboxDesktop-0123456789abcdef0123456789abcdef" {
+		t.Fatalf("private desktop name = %q", got)
 	}
 }
 

@@ -2883,6 +2883,16 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestQueuedMessageEditHintUsesPrimaryShortcutLikeRust`, `TestQueuedMessageEditAcceptsBothDefaultShortcutsLikeRust`, `TestAsyncQuestionHintsFollowResolvedShortcutLikeRust`, `TestPendingInputPreviewRendersQueues` (default, configured order, custom chord, unbound).
 - Verified with `go test ./tui/bottom_pane ./tui ./tui/tea -count=1`.
 
-Status after reconciliation: `2129 complete`, `442 not_applicable`,
-`365 audit_pending`, `210 regression_pending`, `3 partial`,
+### Reused Windows sandbox private desktops (Round 967)
+
+- Rust #40672 keeps parent-owned private desktops alive across command-runner exits and idle gaps, reusing them only when the sandbox account and effective permissions match (#40672, complete).
+- `sandbox/windowssandbox/desktop_policy.go:11` adds the policy key over write capabilities, capability SIDs, network/proxy policy, read/write roots, and deny-read/deny-write paths; order, duplicates and `..` spellings normalize while every effective permission change selects a separate desktop.
+- `sandbox/windowssandbox/desktop_windows.go:59` validates the `CodexSandboxDesktop-` prefix and 1-32 hex nonce, `:74` opens an existing desktop without creating or falling back to `Default`, and `:92`/`:106` own the shared cache and legacy reopen path.
+- `sandbox/windowssandbox/elevated/ipc_framed.go:17` bumps the runner protocol to 5 and carries `private_desktop_name`; `sandbox/windowssandbox/elevated_impl.go:104`/`:210` select the shared desktop per sandbox account, and `sandbox/windowssandbox/bin/command_runner/win/run_windows.go:231` opens it before spawning.
+- Legacy capture and PTY/pipe launches pass the selected desktop through `ProcessSpawnRequest`/`PipeSpawnRequest`/`conpty.SpawnRequest`, so runner exits no longer destroy a policy-equivalent desktop.
+- Tests: `TestPrivateDesktopNameValidationLikeRust`, `TestOpeningMissingPrivateDesktopDoesNotCreateLikeRust`, `TestSharedPrivateDesktopSurvivesLaunchHandlesAndConcurrentRequestsLikeRust`, `TestLegacyDesktopReusesOnlyEquivalentPermissionsLikeRust`, `TestElevatedDesktopPolicySeparatesEffectivePermissionsLikeRust`.
+- Verified with `go test ./sandbox/... -count=1`, `go build ./...`, and `GOOS=linux go build ./sandbox/...`.
+
+Status after reconciliation: `2130 complete`, `442 not_applicable`,
+`364 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

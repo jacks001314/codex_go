@@ -23,12 +23,13 @@ type ProcessStdio struct {
 }
 
 type ProcessSpawnRequest struct {
-	Token             uintptr
-	Command           []string
-	CWD               string
-	Env               map[string]string
-	LogsBaseDir       string
-	Stdio             *ProcessStdio
+	Token       uintptr
+	Command     []string
+	CWD         string
+	Env         map[string]string
+	LogsBaseDir string
+	Stdio       *ProcessStdio
+	Desktop     *LaunchDesktop
 }
 
 type CreatedProcess struct {
@@ -41,13 +42,14 @@ type CreatedProcess struct {
 }
 
 type PipeSpawnRequest struct {
-	Token             uintptr
-	Command           []string
-	CWD               string
-	Env               map[string]string
-	StdinMode         StdinMode
-	StderrMode        StderrMode
-	LogsBaseDir       string
+	Token       uintptr
+	Command     []string
+	CWD         string
+	Env         map[string]string
+	StdinMode   StdinMode
+	StderrMode  StderrMode
+	LogsBaseDir string
+	Desktop     *LaunchDesktop
 }
 
 type PipeSpawnHandles struct {

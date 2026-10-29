@@ -1,5 +1,7 @@
 package conpty
 
+import "codex_go/sandbox/windowssandbox"
+
 type Instance struct {
 	pseudoConsole uintptr
 	inputRead     uintptr
@@ -9,13 +11,14 @@ type Instance struct {
 }
 
 type SpawnRequest struct {
-	Token             uintptr
-	Command           []string
-	CWD               string
-	Env               map[string]string
-	LogsBaseDir       string
-	Columns           int16
-	Rows              int16
+	Token       uintptr
+	Command     []string
+	CWD         string
+	Env         map[string]string
+	LogsBaseDir string
+	Columns     int16
+	Rows        int16
+	Desktop     *windowssandbox.LaunchDesktop
 }
 
 func (i *Instance) RawHandle() uintptr {

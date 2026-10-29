@@ -65,14 +65,19 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 	); err != nil {
 		return nil, err
 	}
+	desktop, err := PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, req.DenyWritePaths, context.LogsBaseDir)
+	if err != nil {
+		return nil, err
+	}
 	handles, err := SpawnProcessWithPipesWithToken(PipeSpawnRequest{
-		Token:             security.Token,
-		Command:           req.Command,
-		CWD:               req.CWD,
-		Env:               context.Env,
-		StdinMode:         StdinModeClosed,
-		StderrMode:        StderrModeSeparate,
-		LogsBaseDir:       context.LogsBaseDir,
+		Token:       security.Token,
+		Command:     req.Command,
+		CWD:         req.CWD,
+		Env:         context.Env,
+		StdinMode:   StdinModeClosed,
+		StderrMode:  StderrModeSeparate,
+		LogsBaseDir: context.LogsBaseDir,
+		Desktop:     desktop,
 	})
 	if err != nil {
 		return nil, err

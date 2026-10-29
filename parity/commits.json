@@ -2231,9 +2231,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 6/10; needs review: DesktopPolicy, open_private, prepare_legacy, shared_private_desktop_for_user"
+    "Parent-owned private desktops are cached by sandbox account SID plus effective permissions (write capabilities, capability SIDs, network/proxy policy, read/write roots, deny paths); only validated CodexSandboxDesktop names can be reopened, and the runner never creates or falls back to Default. The elevated IPC (v5) carries private_desktop_name, and legacy capture plus PTY/pipe spawns reuse the same policy-aware desktop. Tests: go test ./sandbox/... -count=1"
    ]
   },
   {

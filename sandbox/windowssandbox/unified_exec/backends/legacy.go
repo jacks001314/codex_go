@@ -50,13 +50,18 @@ func runLegacyBackendPTY(req *windowssandbox.CaptureRequest) (*windowssandbox.Ca
 	); err != nil {
 		return nil, err
 	}
+	desktop, err := windowssandbox.PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, req.DenyWritePaths, context.LogsBaseDir)
+	if err != nil {
+		return nil, err
+	}
 
 	process, instance, err := conpty.SpawnProcessAsUserWithToken(conpty.SpawnRequest{
-		Token:             security.Token,
-		Command:           req.Command,
-		CWD:               req.CWD,
-		Env:               context.Env,
-		LogsBaseDir:       context.LogsBaseDir,
+		Token:       security.Token,
+		Command:     req.Command,
+		CWD:         req.CWD,
+		Env:         context.Env,
+		LogsBaseDir: context.LogsBaseDir,
+		Desktop:     desktop,
 	})
 	if err != nil {
 		return nil, err

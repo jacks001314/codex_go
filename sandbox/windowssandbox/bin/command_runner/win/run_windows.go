@@ -228,13 +228,19 @@ func spawnIPCProcess(request *elevated.SpawnRequest) (*ipcSpawnedProcess, error)
 		_ = windowssandbox.AllowNullDevice(sid)
 	}
 	effectiveCWD := effectiveRunnerCWD(request.CWD, request.CodexHome)
+	desktop, err := windowssandbox.OpenPrivateLaunchDesktop(request.PrivateDesktopName)
+	if err != nil {
+		_ = windowssandbox.CloseTokenHandle(token)
+		return nil, fmt.Errorf("runner: missing parent-owned private desktop: %w", err)
+	}
 	if request.TTY {
 		created, instance, err := conpty.SpawnProcessAsUserWithToken(conpty.SpawnRequest{
-			Token:             token,
-			Command:           request.Command,
-			CWD:               effectiveCWD,
-			Env:               request.Env,
-			LogsBaseDir:       request.CodexHome,
+			Token:       token,
+			Command:     request.Command,
+			CWD:         effectiveCWD,
+			Env:         request.Env,
+			LogsBaseDir: request.CodexHome,
+			Desktop:     desktop,
 		})
 		if err != nil {
 			_ = windowssandbox.CloseTokenHandle(token)
@@ -264,13 +270,14 @@ func spawnIPCProcess(request *elevated.SpawnRequest) (*ipcSpawnedProcess, error)
 		stdinMode = windowssandbox.StdinModeOpen
 	}
 	handles, err := windowssandbox.SpawnProcessWithPipesWithToken(windowssandbox.PipeSpawnRequest{
-		Token:             token,
-		Command:           request.Command,
-		CWD:               effectiveCWD,
-		Env:               request.Env,
-		StdinMode:         stdinMode,
-		StderrMode:        windowssandbox.StderrModeSeparate,
-		LogsBaseDir:       request.CodexHome,
+		Token:       token,
+		Command:     request.Command,
+		CWD:         effectiveCWD,
+		Env:         request.Env,
+		StdinMode:   stdinMode,
+		StderrMode:  windowssandbox.StderrModeSeparate,
+		LogsBaseDir: request.CodexHome,
+		Desktop:     desktop,
 	})
 	if err != nil {
 		_ = windowssandbox.CloseTokenHandle(token)

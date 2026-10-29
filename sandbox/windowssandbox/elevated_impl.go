@@ -7,6 +7,26 @@ import (
 	"codex_go/sandbox/windowssandbox/elevated"
 )
 
+func elevatedDesktopPolicyForCapture(capture *CaptureRequest, permissions *ResolvedWindowsSandboxPermissions, envMap map[string]string, capabilitySIDs []string) (DesktopPolicy, error) {
+	request := &SandboxSetupRequest{
+		CodexHome:     capture.CodexHome,
+		CommandCWD:    capture.CWD,
+		Env:           envMap,
+		ProxyEnforced: capture.ProxyEnforced,
+		Permissions:   permissions,
+	}
+	overrides := SetupRootOverrides{
+		ReadRoots:                        cloneStrings(capture.ReadRootsOverride),
+		ReadRootsSet:                     capture.ReadRootsOverrideSet,
+		ReadRootsIncludePlatformDefaults: capture.ReadRootsIncludePlatformDefaults,
+		WriteRoots:                       cloneStrings(capture.WriteRootsOverride),
+		WriteRootsSet:                    capture.WriteRootsOverrideSet,
+		DenyReadPaths:                    cloneStrings(capture.DenyReadPaths),
+		DenyWritePaths:                   cloneStrings(capture.DenyWritePaths),
+	}
+	return NewElevatedDesktopPolicy(request, overrides, capabilitySIDs, "")
+}
+
 type ElevatedSandboxProfileCaptureRequest struct {
 	Capture CaptureRequest
 }
@@ -49,6 +69,10 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 	if err != nil {
 		return nil, err
 	}
+	desktopPolicy, err := elevatedDesktopPolicyForCapture(capture, permissions, envMap, context.CapSIDs)
+	if err != nil {
+		return nil, err
+	}
 	var timeout *uint64
 	if capture.TimeoutMS != nil {
 		value := uint64(*capture.TimeoutMS)
@@ -72,7 +96,13 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 		creds,
 		capture.Command,
 		func(creds elevated.SandboxCredentials) (*elevated.RunnerTransport, error) {
-			return elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", spawnRequest)
+			request := spawnRequest
+			name, err := SharedPrivateDesktopForUser(creds.Username, desktopPolicy)
+			if err != nil {
+				return nil, err
+			}
+			request.PrivateDesktopName = name
+			return elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", request)
 		},
 		func() (elevated.SandboxCredentials, error) {
 			refreshed, err := refreshLogonSandboxCredsForPermissions(
@@ -138,6 +168,10 @@ func RunWindowsSandboxCaptureForPermissionProfileElevated(req *ElevatedSandboxPr
 	if err != nil {
 		return nil, err
 	}
+	desktopPolicy, err := elevatedDesktopPolicyForCapture(capture, permissions, envMap, context.CapSIDs)
+	if err != nil {
+		return nil, err
+	}
 	var timeout *uint64
 	if capture.TimeoutMS != nil {
 		value := uint64(*capture.TimeoutMS)
@@ -168,7 +202,13 @@ func RunWindowsSandboxCaptureForPermissionProfileElevated(req *ElevatedSandboxPr
 		capture.Command,
 		func(creds elevated.SandboxCredentials) (*elevated.RunnerTransport, error) {
 			_ = LogNote(capture.CodexHome, fmt.Sprintf("elevated runner transport attempt: user=%s cwd=%s", creds.Username, capture.CWD))
-			transport, err := elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", spawnRequest)
+			request := spawnRequest
+			name, err := SharedPrivateDesktopForUser(creds.Username, desktopPolicy)
+			if err != nil {
+				return nil, err
+			}
+			request.PrivateDesktopName = name
+			transport, err := elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", request)
 			if err != nil {
 				_ = LogNote(capture.CodexHome, "elevated runner transport failed: "+err.Error())
 				return nil, err

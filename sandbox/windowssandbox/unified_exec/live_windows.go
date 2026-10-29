@@ -71,6 +71,10 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 	); err != nil {
 		return nil, err
 	}
+	desktop, err := windowssandbox.PrepareLegacyLaunchDesktop(security, spawnContext.Permissions, spawnContext.CurrentDir, spawnContext.Env, capture.DenyWritePaths, spawnContext.LogsBaseDir)
+	if err != nil {
+		return nil, err
+	}
 
 	var process *windowssandbox.CreatedProcess
 	var instance *conpty.Instance
@@ -79,11 +83,12 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 	var readers []io.ReadCloser
 	if capture.TTY {
 		process, instance, err = conpty.SpawnProcessAsUserWithToken(conpty.SpawnRequest{
-			Token:             security.Token,
-			Command:           capture.Command,
-			CWD:               capture.CWD,
-			Env:               spawnContext.Env,
-			LogsBaseDir:       spawnContext.LogsBaseDir,
+			Token:       security.Token,
+			Command:     capture.Command,
+			CWD:         capture.CWD,
+			Env:         spawnContext.Env,
+			LogsBaseDir: spawnContext.LogsBaseDir,
+			Desktop:     desktop,
 		})
 		if err != nil {
 			return nil, err
@@ -108,13 +113,14 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 			stdinMode = windowssandbox.StdinModeOpen
 		}
 		pipeHandles, err = windowssandbox.SpawnProcessWithPipesWithToken(windowssandbox.PipeSpawnRequest{
-			Token:             security.Token,
-			Command:           capture.Command,
-			CWD:               capture.CWD,
-			Env:               spawnContext.Env,
-			StdinMode:         stdinMode,
-			StderrMode:        windowssandbox.StderrModeSeparate,
-			LogsBaseDir:       spawnContext.LogsBaseDir,
+			Token:       security.Token,
+			Command:     capture.Command,
+			CWD:         capture.CWD,
+			Env:         spawnContext.Env,
+			StdinMode:   stdinMode,
+			StderrMode:  windowssandbox.StderrModeSeparate,
+			LogsBaseDir: spawnContext.LogsBaseDir,
+			Desktop:     desktop,
 		})
 		if err != nil {
 			return nil, err
