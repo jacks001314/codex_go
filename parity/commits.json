@@ -25420,9 +25420,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #50129 adds SYSTEMROOT, TEMP and TMP to the remote stdio MCP allowlist inside rmcp-client::stdio_server_launcher::ExecutorStdioServerLauncher::remote_env_policy, where a Unix orchestrator launches a stdio MCP server on a Windows executor. Go has no remote stdio launcher: mcp/stdio_env.go createEnvForMCPServer covers only the local placement, and localStdioEnvVarNames rejects `env_vars` entries with source `remote` (\"which requires remote MCP stdio\"), so no code path builds a remote environment allowlist to extend. update/plan_2026_10_06.md:102 and :293 record the same conclusion. Verified that the only remaining `source: remote` handling is the rejection above (mcp/stdio_env.go:102) and TestCreateEnvForMCPServerRejectsRemoteSourceLikeRust."
    ]
   },
   {

@@ -2942,6 +2942,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go has no client-side continuation-eligibility comparison to annotate: `model/responses_agent.go` sends the accumulated input with an optional caller-resolved `previous_response_id`, and `model/agent_metrics.go:424` classifies sends only as `incremental/previous_response`, `full/connection_reused` or `full/initial`.
 - The per-item and per-property reasons therefore have no Go code path; diagnostics stay bounded metadata with no request contents or identifiers. The same architecture difference was recorded for `#46051` (Round 705).
 - Verified with `go test ./model -run 'WebsocketContinuation|ContinuationMetric|PrewarmUsesWebSocket' -count=1`.
-Status after reconciliation: `2134 complete`, `443 not_applicable`,
-`361 audit_pending`, `207 regression_pending`, `4 partial`,
+### Windows environment for remote MCP servers (Round 974)
+
+- Rust #50129 extends the remote stdio MCP allowlist with `SYSTEMROOT`/`TEMP`/`TMP` inside `ExecutorStdioServerLauncher::remote_env_policy`, for a Unix orchestrator launching a stdio server on a Windows executor (#50129, not applicable).
+- Go has no remote stdio launcher: `mcp/stdio_env.go` implements only the local placement, and `localStdioEnvVarNames` rejects `env_vars` entries with `source: remote` ("which requires remote MCP stdio"), so there is no remote allowlist to extend.
+- The same conclusion was recorded in `update/plan_2026_10_06.md:102` and `:293`.
+- Verified with `go test ./mcp -run TestCreateEnvForMCPServerRejectsRemoteSourceLikeRust -count=1`.
+Status after reconciliation: `2134 complete`, `444 not_applicable`,
+`360 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
