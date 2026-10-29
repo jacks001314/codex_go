@@ -19471,9 +19471,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go retains the confirmed delivered assistant text from function_call_output harness metadata at the original call's position (appserver/retained_context.go deliveredAssistantRecords, :584), matching Rust `ContextManager::record_retained_message`: the bounded text is captured before post-tool hooks, so a blocked, aborted or truncated result keeps it.",
+    "The call is resolved from the thread record plus the items seen so far, the retained message carries the call's turn id and message id, and its source comes from the call's harness metadata (`RetainedInputSourceFromMetadata`); an inherited worker call is skipped unless inherited user messages are retained.",
+    "Checkpoint restore re-records delivered assistant messages from item metadata (appserver/guardian_root_context.go:555 builds the delivered map before mirroring the root snapshot), keeping assistant/approval ordering after compaction and resume.",
+    "Tests: TestRuntimeRouterRetainsDeliveredAssistantMessageLikeRust and TestRuntimeRouterSkipsInheritedDeliveredAssistantMessageForWorkerLikeRust."
    ]
   },
   {

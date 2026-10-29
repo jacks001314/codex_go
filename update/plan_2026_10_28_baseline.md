@@ -2848,6 +2848,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `AgentControlInit`, `StatusSubscription` and `ensure_agent_known` have no Go counterparts to add: Go has no dyn-trait hand-off, and the router owns the live registry, so inspection, watching and thread-id generation resolve against the same runtime.
 - Verified with `go build ./...` and `go test ./appserver -run 'TestRuntimeAgentController|TestAgentController' -count=1`.
 
-Status after reconciliation: `2124 complete`, `441 not_applicable`,
-`371 audit_pending`, `210 regression_pending`, `3 partial`,
+### Delivered assistant messages in Guardian retained context (Round 963)
+
+- Rust #47585 retains the confirmed assistant text carried by a messaging tool result's metadata at the original call's position in thread-owned Guardian context, recovers it when restoring checkpoints, and honours the call's inherited-context status (#47585, complete).
+- Go already implements this: `appserver/retained_context.go:584` (`deliveredAssistantRecords`) resolves the call from the thread record plus the items seen so far, builds the retained message with the call's turn id and message id, and takes the source from the call's harness metadata; an inherited worker call is skipped unless inherited user messages are retained.
+- Checkpoint restore recovers the same text from item metadata (`appserver/guardian_root_context.go:555`), so a blocked, aborted or truncated result, compaction, and resume all keep the assistant message ahead of its approval.
+- Tests: `TestRuntimeRouterRetainsDeliveredAssistantMessageLikeRust`, `TestRuntimeRouterSkipsInheritedDeliveredAssistantMessageForWorkerLikeRust`.
+- Verified with `go test ./appserver -run 'TestRuntimeRouterRetainsDeliveredAssistantMessageLikeRust|TestRuntimeRouterSkipsInheritedDeliveredAssistantMessageForWorkerLikeRust' -count=1`.
+
+Status after reconciliation: `2125 complete`, `441 not_applicable`,
+`370 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
