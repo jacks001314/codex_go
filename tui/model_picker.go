@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 
 	"codex_go/model"
@@ -275,6 +276,72 @@ func (o ModelPickerOption) EffectiveReasoningEfforts() []ReasoningEffortOption {
 
 func (o ModelPickerOption) NeedsReasoningPicker() bool {
 	return len(o.EffectiveReasoningEfforts()) > 1
+}
+
+// IsAdvancedReasoningEffort reports whether a choice belongs to the explicit
+// Max/Ultra submenu (Rust model_popups::is_advanced_reasoning_effort).
+func IsAdvancedReasoningEffort(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "max", "ultra":
+		return true
+	default:
+		return false
+	}
+}
+
+// AdvancedReasoningEfforts returns the Max/Ultra choices for a model. Rust's
+// open_advanced_reasoning_popup shows only those choices (Max before Ultra)
+// and falls back to an advanced default when the catalog has no explicit list.
+func (o ModelPickerOption) AdvancedReasoningEfforts() []ReasoningEffortOption {
+	options := o.EffectiveReasoningEfforts()
+	advanced := make([]ReasoningEffortOption, 0, len(options))
+	for _, option := range options {
+		if !IsAdvancedReasoningEffort(option.Effort) {
+			continue
+		}
+		if strings.TrimSpace(option.Label) == "" {
+			option.Label = ReasoningEffortLabel(option.Effort)
+		}
+		advanced = append(advanced, option)
+	}
+	sort.SliceStable(advanced, func(i, j int) bool {
+		return !strings.EqualFold(advanced[i].Effort, "ultra") && strings.EqualFold(advanced[j].Effort, "ultra")
+	})
+	return advanced
+}
+
+// RequiresAdvancedReasoningPicker mirrors the Rust parent-row check: any
+// supported advanced choice, or an advanced default when the catalog omits the
+// supported list, opens the explicit advanced submenu.
+func (o ModelPickerOption) RequiresAdvancedReasoningPicker() bool {
+	if len(o.SupportedReasoningEfforts) > 0 {
+		for _, option := range o.SupportedReasoningEfforts {
+			if IsAdvancedReasoningEffort(option.Effort) {
+				return true
+			}
+		}
+		return false
+	}
+	return IsAdvancedReasoningEffort(o.DefaultReasoningEffort)
+}
+
+// DirectReasoningEffort reports the effort a model row accepts without opening
+// a reasoning submenu (Rust model_popups direct_effort). Advanced rows always
+// require the submenu so the main model picker never carries the session-only
+// shortcut for Max/Ultra.
+func (o ModelPickerOption) DirectReasoningEffort() (string, bool) {
+	if o.RequiresAdvancedReasoningPicker() {
+		return "", false
+	}
+	efforts := o.EffectiveReasoningEfforts()
+	switch len(efforts) {
+	case 0:
+		return strings.TrimSpace(o.DefaultReasoningEffort), true
+	case 1:
+		return strings.TrimSpace(efforts[0].Effort), true
+	default:
+		return "", false
+	}
 }
 
 func (o ModelPickerOption) DefaultReasoning() string {

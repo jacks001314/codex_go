@@ -1320,15 +1320,16 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		// /experimental is populated from the embedded app server's catalog
 		// resolved through the same config service (Rust
 		// experimental_features::fetch).
-		OnReadExperimentalFeatures: interactiveLocalExperimentalFeatures(root),
-		OnWriteMemorySettings:      interactiveMemorySettingsWriteHandler(root),
-		OnResetMemories:            interactiveMemoryResetHandler(),
-		OnSubmitFeedback:           interactiveFeedbackSubmitHandler(),
-		OnReadIDEContext:           interactiveIDEContextReader,
-		OnApproveAutoReviewDenial:  interactiveApproveAutoReviewDenialHandler(),
-		OnStartWindowsSandboxSetup: interactiveWindowsSandboxSetupHandler(root),
-		OnReadWindowsSandboxState:  interactiveLocalWindowsSandboxStateHandler(root),
-		FeatureSettings:            settings.FeatureSettings,
+		OnReadExperimentalFeatures:       interactiveLocalExperimentalFeatures(root),
+		OnWriteMemorySettings:            interactiveMemorySettingsWriteHandler(root),
+		OnResetMemories:                  interactiveMemoryResetHandler(),
+		OnSubmitFeedback:                 interactiveFeedbackSubmitHandler(),
+		OnReadIDEContext:                 interactiveIDEContextReader,
+		OnApproveAutoReviewDenial:        interactiveApproveAutoReviewDenialHandler(),
+		OnStartWindowsSandboxSetup:       interactiveWindowsSandboxSetupHandler(root),
+		OnReadWindowsSandboxState:        interactiveLocalWindowsSandboxStateHandler(root),
+		FeatureSettings:                  settings.FeatureSettings,
+		MultiAgentV2MaxConcurrentThreads: settings.MultiAgentV2MaxConcurrentThreads,
 		// Rust #49861: a fresh session starts from the configured Daybreak
 		// preference before any thread/resume reports the stored one.
 		DaybreakDefault:     settings.DaybreakDefault,
@@ -2328,9 +2329,17 @@ func interactiveServiceTierRequirements() *config.ConfigRequirementsReadResponse
 func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWriteResult {
 	var values map[string]any
 	featureSettings := map[string]bool{}
+	maxConcurrentThreads := 0
 	if loaded != nil {
 		values = loaded.Values
 		featureSettings = loaded.FeatureSettings()
+		agentsMax := 0
+		if agents, err := loaded.AgentsConfig(""); err == nil && agents != nil {
+			agentsMax = agents.MaxConcurrentThreadsPerSession
+		}
+		if v2, err := loaded.MultiAgentV2Config(agentsMax); err == nil && v2 != nil {
+			maxConcurrentThreads = v2.MaxConcurrentThreadsPerSession
+		}
 	}
 	userMarketplaces, gitMarketplaces := interactivePluginMarketplacesFromConfig(values)
 	// A missing `tui.presets` table is a real empty set, not "keep the live
@@ -2345,7 +2354,8 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 	// activate (markdown_render::preferences::init).
 	markdown.InitRenderingFromConfig(config.TuiRenderingFromValues(values))
 	return codextea.SettingsWriteResult{
-		FeatureSettings: featureSettings,
+		FeatureSettings:                  featureSettings,
+		MultiAgentV2MaxConcurrentThreads: maxConcurrentThreads,
 		// Rust #49861/#49856: the configured default for a *new* thread
 		// (Config::daybreak_enabled). The TUI's bootstrap thread is persistent,
 		// so Rust's `!config.ephemeral` guard always holds here.

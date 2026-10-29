@@ -2570,6 +2570,18 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Guardian exclusion now uses `guardianReviewTurn` (`appserver/runtime_router.go:207`), which combines the turn marker with the recorded Guardian session source (`session.GuardianReviewSource` / `internal_guardian`), matching `is_basic_session_source`.
 - Residual: approval waits reuse the executor built for the issuing step instead of re-reading a model snapshot.
 
-Status after reconciliation: `2095 complete`, `409 not_applicable`,
-`428 audit_pending`, `214 regression_pending`, `3 partial`,
+### Session-only model selection (Round 934)
+
+Session-only model and reasoning selection (#45831, complete).
+
+- Final model rows, single-effort rows, the reasoning submenu, and the explicit Max/Ultra submenu now advertise the `s` secondary shortcut with the upstream footer `enter default/apply · s session · esc back`.
+- The shortcut is suppressed for Reserve models and whenever any configured `list` action already claims `s`, matching Rust's keymap conflict guard.
+- A secondary selection produces a `session_model` picker decision whose `ResolveModelSelection` plan updates the active thread settings and leaves `Persist` empty. The embedded TUI therefore performs no config write, while the remote path sends `thread/settings/update` without `config/batchWrite`.
+- Plan mode changes only `PlanModeReasoningEffort` for non-Ultra choices; Ultra updates both the current and Plan efforts. The picker appends the upstream `for this session only` confirmation without entering the Plan-scope submenu.
+- Added `tui/tea/session_model_selection_like_rust_test.go` and `app/session_model_selection_like_rust_test.go` covering direct, reasoning, advanced, conflict, Plan, Ultra, local, and remote behavior.
+- Ultra choices reproduce Rust's `ultra_reasoning_concurrency_warning`: with 8 or more configured V2 concurrent threads, the session-only path appends the warning including the `max_threads - 1` subagent count. The limit is wired from config into both embedded and remote TUI options.
+- Verified with `go build ./...`, `go test ./tui/...`, and the targeted app model-selection tests.
+
+Status after reconciliation: `2096 complete`, `409 not_applicable`,
+`428 audit_pending`, `214 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

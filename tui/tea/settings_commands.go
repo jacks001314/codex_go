@@ -550,6 +550,9 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 			m.refreshStatusControls()
 		}
 	}
+	if result.MultiAgentV2MaxConcurrentThreads > 0 {
+		m.multiAgentV2MaxConcurrentThreads = result.MultiAgentV2MaxConcurrentThreads
+	}
 	if result.UseMemories != nil {
 		m.useMemories = *result.UseMemories
 	}

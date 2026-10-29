@@ -61,6 +61,11 @@ type ModalOption struct {
 	DisabledReason       string
 	DisabledGutterMarker string
 	Shortcut             string
+	// SecondaryShortcut is a second key that accepts the selected final model
+	// or reasoning row without saving defaults (Rust #45831).
+	SecondaryShortcut string
+	// SecondaryFooterHint replaces the view footer while this row is selected.
+	SecondaryFooterHint string
 	// DisplayShortcut overrides the key hint painted after the label when it
 	// differs from the routing shortcut (Rust ApprovalOption.display_shortcut).
 	// The exec-approval decline row binds Esc/n but displays "esc".
@@ -167,6 +172,11 @@ type modalState struct {
 	// armedOptionID tracks an option whose RequireConfirmation gate has been
 	// passed once; a second activation runs it (Rust #44744).
 	armedOptionID string
+	// sessionOnlyRequested routes the next picker response through Rust's
+	// AppEvent::SelectSessionModel path instead of the persistent default path.
+	sessionOnlyRequested bool
+	// advancedReasoning marks the Max/Ultra-only reasoning submenu (Rust #45831).
+	advancedReasoning bool
 
 	elicitation *bottompane.ElicitationFormRequest
 	// notice carries a form-validation error (for example a missing required
@@ -392,6 +402,8 @@ func normalizeModalOptions(options []ModalOption) []ModalOption {
 			DisabledReason:       strings.TrimSpace(option.DisabledReason),
 			DisabledGutterMarker: strings.TrimSpace(option.DisabledGutterMarker),
 			Shortcut:             strings.ToLower(strings.TrimSpace(option.Shortcut)),
+			SecondaryShortcut:    strings.ToLower(strings.TrimSpace(option.SecondaryShortcut)),
+			SecondaryFooterHint:  strings.TrimSpace(option.SecondaryFooterHint),
 			DisplayShortcut:      strings.ToLower(strings.TrimSpace(option.DisplayShortcut)),
 			Disabled:             option.Disabled,
 			RequireConfirmation:  option.RequireConfirmation,
@@ -579,6 +591,14 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 		key := strings.ToLower(string(message.Runes))
 		if key == "" {
 			return nil
+		}
+		if m.modal.selected >= 0 && m.modal.selected < len(m.modal.options) {
+			selected := m.modal.options[m.modal.selected]
+			if !selected.Disabled && strings.EqualFold(selected.SecondaryShortcut, key) {
+				m.modal.sessionOnlyRequested = true
+				m.disarmModalOption()
+				return m.respondModal(false)
+			}
 		}
 		for i, option := range m.modal.options {
 			if option.Disabled {
@@ -1504,6 +1524,24 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 	if cancelled || modal == nil {
 		return nil, "", true
 	}
+	if modal.sessionOnlyRequested {
+		switch {
+		case modal.modelReasoning != nil:
+			effort, ok := modal.modelReasoning.EffortByID(optionID)
+			if !ok {
+				return nil, "", true
+			}
+			return m.resolveSessionModelPickerSelection(modal.modelReasoning.Model.ID, effort.Effort)
+		case modal.modelPicker != nil:
+			option, ok := modal.modelPicker.OptionByID(optionID)
+			if !ok {
+				return nil, "", true
+			}
+			return m.resolveSessionModelPickerSelection(option.ID, option.DefaultReasoning())
+		default:
+			return nil, "", true
+		}
+	}
 	if modal.sessionAction != nil {
 		selection := *modal.sessionAction
 		if optionID != "confirm" {
@@ -1575,6 +1613,10 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 	option, ok := modal.modelPicker.OptionByID(optionID)
 	if !ok {
 		return nil, "", true
+	}
+	if option.RequiresAdvancedReasoningPicker() {
+		m.openAdvancedReasoningPicker(option)
+		return nil, "", false
 	}
 	if option.NeedsReasoningPicker() {
 		m.openModelReasoningPicker(option)
@@ -1930,6 +1972,11 @@ func (m *Model) renderModal() string {
 		footerDefault = "Press enter to confirm or esc to cancel"
 	}
 	footer := firstNonEmpty(m.modal.footerHint, footerDefault)
+	if m.modal.selected >= 0 && m.modal.selected < len(m.modal.options) {
+		if hint := strings.TrimSpace(m.modal.options[m.modal.selected].SecondaryFooterHint); hint != "" {
+			footer = hint
+		}
+	}
 	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
 		footer = firstNonEmpty(m.modal.footerHint, "space toggle \u00b7 enter save \u00b7 esc cancel")
 	} else if m.modal.kind == ModalKindExperimental {

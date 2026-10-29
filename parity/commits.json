@@ -14247,9 +14247,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "SelectionSecondaryAction ported into tui/bottom_pane (non-searchable enabled rows only, footer hint override, tests mirror secondary_action_respects_search_disabled_rows_and_dismissal); picker s-shortcut wiring, AppEvent.SelectSessionModel, session-only confirmation and plan-mode default restore still pending because tui/tea/model.go carries uncommitted in-flight work"
+    "Round 934: final model, direct-effort, reasoning, and advanced Max/Ultra picker rows expose the s shortcut through session_model decisions with empty Persist; any configured list binding for s suppresses it. Plan mode changes only the Plan effort except Ultra updates both, local selection performs no config write, and the remote path sends thread/settings/update without config/batchWrite. Ultra selections also append Rust's multi-agent concurrency warning at 8 or more configured V2 threads. Tests: tui/tea/session_model_selection_like_rust_test.go and app/session_model_selection_like_rust_test.go; go test ./tui/... and targeted app tests pass."
    ]
   },
   {

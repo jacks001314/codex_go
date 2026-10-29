@@ -89,6 +89,13 @@ func ResolveModelSelection(decision *PickerDecision) (ModelSelectionPlan, bool) 
 		// The rate-limit nudge updates the thread context without persisting a
 		// default (Rust chatwidget/rate_limits.rs).
 		return ModelSelectionPlan{ThreadModel: &model, ThreadEffort: optionalEffort(effort)}, true
+	case "session_model":
+		if model == "" {
+			return ModelSelectionPlan{}, false
+		}
+		// Rust #45831 SelectSessionModel only syncs the active thread. The
+		// empty Persist list is the contract that keeps saved defaults intact.
+		return ModelSelectionPlan{ThreadModel: &model, ThreadEffort: optionalEffort(effort)}, true
 	default:
 		return ModelSelectionPlan{}, false
 	}

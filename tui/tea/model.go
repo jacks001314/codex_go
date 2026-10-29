@@ -332,6 +332,10 @@ type SettingsEdit struct {
 
 type SettingsWriteResult struct {
 	FeatureSettings   map[string]bool
+	// MultiAgentV2MaxConcurrentThreads carries
+	// features.multi_agent_v2.max_concurrent_threads_per_session for the
+	// Ultra reasoning warning (Rust #45831).
+	MultiAgentV2MaxConcurrentThreads int
 	UseMemories       *bool
 	GenerateMemories  *bool
 	FeedbackEnabled   *bool
@@ -1555,6 +1559,9 @@ type Options struct {
 	InitialMessages       <-chan bubbletea.Msg
 	InitialHistoryCells   []historycell.HistoryCell
 	FeatureSettings       map[string]bool
+	// MultiAgentV2MaxConcurrentThreads feeds the Ultra reasoning concurrency
+	// warning in the session-only model picker (Rust #45831).
+	MultiAgentV2MaxConcurrentThreads int
 	UseMemories           *bool
 	GenerateMemories      *bool
 	FeedbackEnabled       *bool
@@ -2093,6 +2100,7 @@ type Model struct {
 	pendingMCPInventoryMessageIndex int
 	pendingMCPInventoryDetail       bool
 	featureSettings                 map[string]bool
+	multiAgentV2MaxConcurrentThreads int
 	disablePasteBurst               bool
 	personality                     chatwidget.Personality
 	tuiTheme                        string
@@ -2897,6 +2905,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
 		initialMessages:                 options.InitialMessages,
 		featureSettings:                 cloneBoolMapTea(options.FeatureSettings),
+		multiAgentV2MaxConcurrentThreads: options.MultiAgentV2MaxConcurrentThreads,
 		daybreakEnabled:                 daybreakFeatureEnabledForAccount(options.FeatureSettings, options.HasChatGPTAccount, state.AccountDisplay) && options.DaybreakDefault,
 		disablePasteBurst:               options.DisablePasteBurst,
 		windowsTerminalMappedInput:      options.WindowsTerminalMappedInput,

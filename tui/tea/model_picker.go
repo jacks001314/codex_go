@@ -21,12 +21,7 @@ func (m *Model) openModelPicker() bubbletea.Cmd {
 	}
 	modalOptions := make([]ModalOption, 0, len(picker.Options))
 	for i, option := range picker.Options {
-		modalOptions = append(modalOptions, ModalOption{
-			ID:          option.ID,
-			Label:       modelPickerLabel(option),
-			Description: option.Description,
-			Shortcut:    modelPickerShortcut(i),
-		})
+		modalOptions = append(modalOptions, m.modelPickerModalOption(option, i))
 	}
 	m.openModal(ModalRequestMsg{
 		ID:      "model-picker",
@@ -194,8 +189,12 @@ func (m *Model) refreshModelPicker() {
 	if m.modal.modelReasoning != nil && m.modal.modelReasoning.Model.ID != "" {
 		for _, option := range m.modelPickerOpts {
 			if option.ID == m.modal.modelReasoning.Model.ID {
+				if m.modal.advancedReasoning {
+					option, _ = m.advancedReasoningModelOption(option)
+				}
 				if refreshed := codextui.NewModelReasoningPicker(option, m.State.EffectiveReasoningEffort()); refreshed != nil {
 					m.modal.modelReasoning = refreshed
+					m.modal.options = m.modelReasoningModalOptions(refreshed)
 				}
 				break
 			}
@@ -217,12 +216,7 @@ func (m *Model) refreshModelPicker() {
 	m.modal.modelPicker.Select(selected)
 	modalOptions := make([]ModalOption, 0, len(picker.Options))
 	for i, option := range picker.Options {
-		modalOptions = append(modalOptions, ModalOption{
-			ID:          option.ID,
-			Label:       modelPickerLabel(option),
-			Description: option.Description,
-			Shortcut:    modelPickerShortcut(i),
-		})
+		modalOptions = append(modalOptions, m.modelPickerModalOption(option, i))
 	}
 	m.modal.options = modalOptions
 }
@@ -248,29 +242,7 @@ func (m *Model) openModelReasoningPicker(option codextui.ModelPickerOption) {
 		m.notice = strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model))
 		return
 	}
-	modalOptions := make([]ModalOption, 0, len(picker.Options))
-	for i, effort := range picker.Options {
-		label := effort.Label
-		if label == "" {
-			label = codextui.ReasoningEffortLabel(effort.Effort)
-		}
-		markers := []string{}
-		if effort.IsCurrent {
-			markers = append(markers, "current")
-		}
-		if effort.IsDefault {
-			markers = append(markers, "default")
-		}
-		if len(markers) > 0 {
-			label += " (" + strings.Join(markers, ", ") + ")"
-		}
-		modalOptions = append(modalOptions, ModalOption{
-			ID:          effort.Effort,
-			Label:       label,
-			Description: effort.Description,
-			Shortcut:    modelPickerShortcut(i),
-		})
-	}
+	modalOptions := m.modelReasoningModalOptions(picker)
 	m.openModal(ModalRequestMsg{
 		ID:      "model-reasoning-picker",
 		Kind:    ModalKindPicker,
@@ -281,6 +253,44 @@ func (m *Model) openModelReasoningPicker(option codextui.ModelPickerOption) {
 	if m.modal != nil {
 		m.modal.modelReasoning = picker
 		m.modal.selected = picker.Selected
+		m.modal.advancedReasoning = false
+	}
+}
+
+func (m *Model) advancedReasoningModelOption(option codextui.ModelPickerOption) (codextui.ModelPickerOption, bool) {
+	choices := option.AdvancedReasoningEfforts()
+	if len(choices) == 0 {
+		return option, false
+	}
+	option.SupportedReasoningEfforts = choices
+	option.DefaultReasoningEffort = choices[0].Effort
+	return option, true
+}
+
+// openAdvancedReasoningPicker mirrors Rust open_advanced_reasoning_popup: the
+// parent model row opens a Max/Ultra-only submenu where every final choice has
+// the session-only shortcut.
+func (m *Model) openAdvancedReasoningPicker(option codextui.ModelPickerOption) {
+	option, ok := m.advancedReasoningModelOption(option)
+	if !ok {
+		m.openModelReasoningPicker(option)
+		return
+	}
+	picker := codextui.NewModelReasoningPicker(option, m.State.EffectiveReasoningEffort())
+	if picker == nil || len(picker.Options) == 0 {
+		return
+	}
+	m.openModal(ModalRequestMsg{
+		ID:      "advanced-reasoning-picker",
+		Kind:    ModalKindPicker,
+		Title:   "Advanced Reasoning",
+		Body:    "\u26a0 Consumes usage limits faster",
+		Options: m.modelReasoningModalOptions(picker),
+	})
+	if m.modal != nil {
+		m.modal.modelReasoning = picker
+		m.modal.selected = picker.Selected
+		m.modal.advancedReasoning = true
 	}
 }
 
