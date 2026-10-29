@@ -866,6 +866,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - The contract half of the change is already satisfied: a server missing from the inventory maps still reports empty `tools`/`resources`/`resourceTemplates` and the `Unsupported` auth status, and `paginateMCPStatuses` keeps the server-name filter and cursor behavior. Existing coverage: `TestListStatusAndToolCall`, `TestMCPStatusPaginationInvalidRequestErrors`, `TestMCPServerStatusDetailZeroValueMatchesToolsAndAuthOnly`, `TestMCPServerStatusWireIncludesStateAndError`.
 - Tests: `go test ./mcp -run 'TestListStatusAndToolCall|TestMCPStatusPagination|TestMCPServerStatusDetailZeroValue|TestMCPServerStatusWireIncludesStateAndError' -count=1` passes.
 
-Status after reconciliation: `1987 complete`, `389 not_applicable`,
-`501 audit_pending`, `272 regression_pending`, `0 partial`,
+### Report model default reasoning effort in tool analytics (Round 801)
+
+- #45445 was mostly present already: `codex_command_execution_event` and `codex_plugin_measurement_event` carry `model_slug`/`reasoning_effort`, `RuntimeRouter.rememberToolItemModelContext` captures the invoking step at item start and keeps the first context (so a repeated start notification or a mid-run model switch cannot retarget the event), the carried context stays in a router-side map rather than the serialized protocol items, and `tool/shell_executor.go` stamps `PluginMeasurementBatch.ModelSlug`/`ReasoningEffort` for plugin metrics.
+- The gap was Rust's `effective_reasoning_effort()` fallback: Go only used the explicit run-config effort, so a default-effort turn emitted `reasoning_effort: null` where Rust reports the model's default reasoning level.
+- `RuntimeRouter.modelInvocationContextForRunConfig` now consults the model catalog's `default_reasoning_level` when the step selected no effort, and both the start-time capture (`modelInvocationContextForTurn`) and the completion-time fallback in `emitCommandExecutionAnalyticsEvent` resolve labels through it.
+- New regression `TestCommandExecutionAnalyticsReportsModelDefaultReasoningLikeRust` (fails before the fallback with an empty effort); existing `TestCommandExecutionAnalyticsUsesTheInvokingModelLikeRust`, `TestPluginMeasurementEventCarriesTheInvokingModelLikeRust` and `TestShellExecutorPluginMeasurementsCarryTheInvokingModelLikeRust` cover the rest.
+- Tests: `go test ./appserver -run 'ModelAttribution|CommandExecutionAnalytics|PluginMeasurementEventCarries' -count=1` passes. The two fileChange analytics failures visible under a broader `Analytics` filter reproduce with this change reverted, so they are pre-existing.
+
+Status after reconciliation: `1988 complete`, `389 not_applicable`,
+`501 audit_pending`, `271 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

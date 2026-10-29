@@ -12915,9 +12915,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go parity verified and completed. Most of #45445 was already present: telemetry.CodexCommandExecutionEventParams and the plugin measurement input/event carry model_slug and reasoning_effort, turn_runtime captures the invoking step's model at item start via rememberToolItemModelContext (first context wins, so a repeated start notification or a mid-run model switch cannot retarget the event), the carried context lives only in a router-side map so serialized protocol items and generated schemas are untouched, and tool/shell_executor.go stamps PluginMeasurementBatch.ModelSlug/ReasoningEffort for plugin metrics. The remaining gap was Rust's effective_reasoning_effort fallback: Go only used the explicit run-config effort, so default-effort turns emitted a null label. New RuntimeRouter.modelInvocationContextForRunConfig resolves the model catalog's default_reasoning_level when the step selected none and is used by modelInvocationContextForTurn and by the completion-time fallback in emitCommandExecutionAnalyticsEvent. Regressions: TestCommandExecutionAnalyticsUsesTheInvokingModelLikeRust, TestPluginMeasurementEventCarriesTheInvokingModelLikeRust, TestShellExecutorPluginMeasurementsCarryTheInvokingModelLikeRust, and the new TestCommandExecutionAnalyticsReportsModelDefaultReasoningLikeRust (verified failing before the fallback with an empty effort). go test ./appserver -run 'ModelAttribution|CommandExecutionAnalytics|PluginMeasurementEventCarries' passes; the two fileChange analytics failures seen under a broader Analytics filter reproduce with this change reverted and are pre-existing."
    ]
   },
   {
