@@ -2227,6 +2227,12 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Residual: without cgo, a `proc_listpgrppids` failure reports a generic error rather than the platform errno.
 - Verification: `go test ./processgroup ./mcp ./tool ./gitutil -count=1`, `go test ./appserver -run 'Command|Hook|Process|Exec|Kill' -count=1`, and `GOOS=darwin`/`GOOS=linux` builds of every touched package succeed.
 
-Status after reconciliation: `2067 complete`, `407 not_applicable`,
-`441 audit_pending`, `230 regression_pending`, `4 partial`,
+### Drop the runningboard allowance from Seatbelt defaults (Round 905)
+
+- Rust #46532 removes the `com.apple.runningboard` allow line from `codex-rs/sandboxing/src/seatbelt_read_only_platform_defaults.sbpl`.
+- Go has no Seatbelt platform-defaults asset: `sandbox/seatbelt.go` builds every policy as `(version 1)` plus `(allow default)` and then adds explicit deny rules, so it never enumerates macOS system services and never granted `com.apple.runningboard`.
+- Nothing to remove or retest; recorded as `not_applicable`, consistent with the earlier record for the same profile file (`75388bf3`).
+
+Status after reconciliation: `2067 complete`, `408 not_applicable`,
+`440 audit_pending`, `230 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -16120,9 +16120,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only profile edit: #46532 removes the com.apple.runningboard allow line from codex-rs/sandboxing/src/seatbelt_read_only_platform_defaults.sbpl. Go has no Seatbelt platform-defaults asset: sandbox/seatbelt.go builds the policy as (version 1)/(allow default) plus explicit deny rules (buildSeatbeltPolicyWithManagedNetwork, sandbox/seatbelt.go:63-186) and never lists macOS system services, so runningboard was never granted there. Nothing to remove or retest; consistent with the earlier not_applicable record for the same profile file (75388bf3)."
    ]
   },
   {
