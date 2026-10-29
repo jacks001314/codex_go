@@ -2589,8 +2589,8 @@ Session-only model and reasoning selection (#45831, complete).
 - #40504 is superseded by #42667 and therefore `not_applicable`; Go has no plan-type Trusted Access URL routing.
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
-Status after reconciliation: `2101 complete`, `410 not_applicable`,
-`426 audit_pending`, `210 regression_pending`, `2 partial`,
+Status after reconciliation: `2102 complete`, `410 not_applicable`,
+`425 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
 
 ### Read-only summary history fallback (Round 936)
@@ -2614,3 +2614,12 @@ Profile workspace roots keep executor path conventions and spelling (#45863, com
 - `execserver` converts roots only at the native boundary and rejects non-URI or foreign-convention roots (`TestFilesystemWireSandboxPathsRequirePathURIsLikeRust`).
 - Added `TestEffectiveWorkspaceRootsPreserveWindowsSpellingLikeRust` for `C:\Work\Profile` versus `C:\work\profile` and the UNC equivalents.
 - Verified with `go test ./config -count=1`, targeted `appserver` workspace-root tests, `go test ./execserver -run 'TestFilesystemWireSandboxPathsRequirePathURIsLikeRust|TestFilesystemWirePathsRequirePathURIsLikeRust' -count=1`, and `go test ./sandbox/... -count=1`.
+
+### Keybinding validation errors (Round 938)
+
+Invalid `tui.keymap` bindings keep their specific validation reason (#49910, complete).
+
+- Go's `parseKeybindingsConfigValue` already branches on the value type (single string, `[]string`, `[]any`), so `NormalizeKeybindingSpec` errors reach the caller intact; `KeymapConfigFromConfigValues` adds the `tui.keymap.<context>.<action>` key. There is no untagged-enum fallback that could replace the reason with a generic failure.
+- Added `TestKeymapConfigPreservesKeybindingValidationErrorsLikeRust` for unknown keys in single and list form, an invalid chord stroke, and an overly long chord, pinning both the reason and `tui.keymap.editor.insert_newline`.
+- Go's `codex mcp list` uses a standalone MCP store and does not construct the TUI keymap, so invalid bindings surface when the TUI loads its keymap instead of on every CLI command; the error-preservation behavior is otherwise aligned.
+- Verified with `go test ./tui -count=1` and `go vet ./tui`.

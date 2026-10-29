@@ -24972,9 +24972,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust 819efd72 (#49910) replaced untagged keybinding deserialization with value-typed visitors so validation failures keep their reason and configuration key. Go's tui/keymap_config.go already dispatches parseKeybindingsConfigValue by value type (string, []string, []any) and returns NormalizeKeybindingSpec's specific error, which KeymapConfigFromConfigValues wraps as tui.keymap.<context>.<action>; there is no untagged-enum fallback that could hide the reason. Added TestKeymapConfigPreservesKeybindingValidationErrorsLikeRust covering unknown keys in single and list form, an invalid ctrl chord stroke, and an overly long chord, asserting both the reason and tui.keymap.editor.insert_newline. Go's mcp list uses a standalone MCP store that does not construct the TUI keymap, so invalid keybindings are reported when the TUI loads its keymap rather than on every CLI command; the error-preservation behavior itself is aligned. Tests: go test ./tui -run 'TestKeymapConfigPreservesKeybindingValidationErrorsLikeRust|TestKeymapConfigFromConfigValues' -count=1; go test ./tui -count=1"
    ]
   },
   {

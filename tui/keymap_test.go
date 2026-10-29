@@ -222,6 +222,40 @@ queue = []
 	}
 }
 
+// Mirrors Rust #49910: single-string and list keybinding forms keep the
+// specific validation error and the affected configuration key instead of
+// collapsing into a generic untagged-enum failure.
+func TestKeymapConfigPreservesKeybindingValidationErrorsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "unknown key single", value: `'backslash'`, wantErr: "unknown key `backslash` in keybinding `backslash`"},
+		{name: "unknown key list", value: `['ctrl-j', 'backslash']`, wantErr: "unknown key `backslash` in keybinding `backslash`"},
+		{name: "invalid chord stroke", value: `'ctrl-x ctrl-unknown'`, wantErr: "unknown key `unknown`"},
+		{name: "overly long chord", value: `'ctrl-x ctrl-s ctrl-t'`, wantErr: "key chords may contain at most 2 strokes"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var values map[string]any
+			input := "[tui.keymap.editor]\ninsert_newline = " + testCase.value + "\n"
+			if err := toml.Unmarshal([]byte(input), &values); err != nil {
+				t.Fatalf("toml.Unmarshal error = %v", err)
+			}
+			_, err := KeymapConfigFromConfigValues(values)
+			if err == nil {
+				t.Fatal("KeymapConfigFromConfigValues() error = nil")
+			}
+			if !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("error = %q, want %q", err, testCase.wantErr)
+			}
+			if !strings.Contains(err.Error(), "tui.keymap.editor.insert_newline") {
+				t.Fatalf("error = %q, want the affected configuration key", err)
+			}
+		})
+	}
+}
+
 func TestKeymapConfigRejectsConflictWithEffectiveDefaultBinding(t *testing.T) {
 	config := NewKeymapConfig()
 	if err := config.Set("composer", "submit", []string{"ctrl-s"}); err != nil {
