@@ -614,16 +614,19 @@ moved to `complete`: `#42749` (`tui/tea/thread_title_automatic.go`), `#42889`
 the tests that pin it; the six affected packages pass in a clean archived
 snapshot.
 
-Status after reconciliation: `1902 complete`, `381 not_applicable`,
-`579 audit_pending`, `287 regression_pending`, `0 partial`,
-`6 blocked_precondition`.
-- `parity/commits.json`: 3155 entries, `rustToInclusive` advanced.
-- `parity/baseline.json`: verified/target commit, frozen date, plan, blockers.
-- `parity/domains.json`, `parity/contracts/manifest.json`: target commit.
-- `parity.json`: baseline/upstream head, tag, generated date.
-- `parity/alignment_control_test.go`, `parity/parity_manifest_test.go`: constants.
-- `README.md`: audited target and record link.
+### Trusted access, doctor PATH, and host policy sweep (Round 763)
 
+Eight more entries moved to `complete`: `#41005` (`mcp/api.go` trusted access),
+`#42324` (`doctor/doctor.go`), `#42417` (`config/api.go`), `#43558`
+(`tui/history_cell/separators.go`), `#43603` (`tui/tea/size_monitor.go`),
+`#46490` (`model/gateway_auth.go`), `#46503`
+(`tui/tea/status_controls.go`), and `#47410` (`app/application_network.go`).
+Each evidence string cites the implementation site, the behaviour, and the
+package tests that pin it.
+
+Status after reconciliation: `1910 complete`, `381 not_applicable`,
+`571 audit_pending`, `287 regression_pending`, `0 partial`,
+`6 blocked_precondition`.
 `certificationReady` remains `false` because the ledger still contains partial,
 blocked, and audit-pending entries; the flag is derived from that evidence by
 `TestAlignmentCertificationReadinessIsDerivedFromEvidence`.

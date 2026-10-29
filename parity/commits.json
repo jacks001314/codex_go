@@ -3216,9 +3216,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: add_trusted_access_context, from_runtime, local_http_client"
+    "Round 763 (audit): #41005 implemented at mcp/api.go:810 - // TrustedAccess, when set, attaches host-owned openai/entitlementContext Behaviour: host-owned openai/entitlementContext metadata is attached only to eligible plugin MCP calls, with unknown status falling back and service snapshots deriving trusted access. Regression contract: mcp/api_test.go (TestTrustedAccessContextFetchesAndAttachesLikeRust|TestTrustedAccessContextUnknownFallbackLikeRust|TestMCPTrustedAccessAttachmentEligibilityLikeRust|TestServiceTrustedAccessFromSnapshotLikeRust); verify with `go test ./mcp -run 'TestTrustedAccessContextFetchesAndAttachesLikeRust|TestTrustedAccessContextUnknownFallbackLikeRust|TestMCPTrustedAccessAttachmentEligibilityLikeRust|TestServiceTrustedAccessFromSnapshotLikeRust' -count=1`."
    ]
   },
   {
@@ -6253,9 +6253,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/4; needs review: system_path"
+    "Round 763 (audit): #42324 implemented at doctor/doctor.go:778 - if doctorManagedByNPM(exe) { Behaviour: PATH entries are treated as untrusted data: the npm update helper they select is never executed, and a missing package-root provenance downgrades the check to a warning with remediation. Regression contract: doctor/doctor_test.go (TestInstallCheckReportsNPMRootMatchLikeRust|TestInstallCheckDeduplicatesPathEntriesLikeRust|TestInstallCheckReportsMissingNPMPackageRootLikeRust); verify with `go test ./doctor -run 'TestInstallCheckReportsNPMRootMatchLikeRust|TestInstallCheckDeduplicatesPathEntriesLikeRust|TestInstallCheckReportsMissingNPMPackageRootLikeRust' -count=1`."
    ]
   },
   {
@@ -6819,9 +6819,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: ApplicationNetworkRequirementsToml, ApplicationRequirementsToml"
+    "Round 763 (audit): #42417 implemented at config/api.go:1154 -  Behaviour: managed application network requirements parse and validate separately from agent network permissions and are carried through the config. Regression contract: config/requirements_file_test.go (TestApplicationNetworkRequirementsParseAndValidate|TestLoadRequirementsFileRejectsMixedCanonicalAndLegacyNetworkShapesLikeRust); verify with `go test ./config -run 'TestApplicationNetworkRequirementsParseAndValidate|TestLoadRequirementsFileRejectsMixedCanonicalAndLegacyNetworkShapesLikeRust' -count=1`."
    ]
   },
   {
@@ -9063,9 +9063,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: completion_cell, group_completed_turn_items"
+    "Round 763 (audit): #43558 implemented at tui/history_cell/separators.go:56 - // WithCompletedAt attaches the turn's local completion time (Rust #43558). Behaviour: the final-message separator records the turn completion time and renders short durations, retaining elapsed time when no timestamp is available. Regression contract: tui/history_cell/separators_like_rust_test.go (TestCompletionLabelShowsShortDurationsLikeRust|TestCompletionWithoutTimestampRetainsElapsedLikeRust); verify with `go test ./tui/history_cell -run 'TestCompletionLabelShowsShortDurationsLikeRust|TestCompletionWithoutTimestampRetainsElapsedLikeRust' -count=1`."
    ]
   },
   {
@@ -9219,9 +9219,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/5; needs review: take_resize"
+    "Round 763 (audit): #43603 implemented at tui/tea/size_monitor.go:12 - // Rust parity: codex-rs/tui/src/tui/size_monitor.rs (#43603). tmux can drop Behaviour: under tmux the TUI polls the terminal size on a gated tick and synthesizes a missed resize instead of querying geometry every frame. Regression contract: tui/tea/size_monitor_test.go (TestTerminalSizePollRecoversMissedResize|TestTerminalSizeMonitorGate|TestTerminalSizeMonitorTickGate); verify with `go test ./tui/tea -run 'TestTerminalSizePollRecoversMissedResize|TestTerminalSizeMonitorGate|TestTerminalSizeMonitorTickGate' -count=1`."
    ]
   },
   {
@@ -15712,9 +15712,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/5; needs review: AuthRuntimeConfig, seed_gateway_auth"
+    "Round 763 (audit): #46490 implemented at model/gateway_auth.go:7 - // model-provider/src/shared_state.rs::gateway_auth (#46490). Behaviour: gateway auth composes with primary provider authentication, preserves sign-in outcomes, shares a manager, and participates in catalog identity. Regression contract: model/gateway_auth_test.go (TestComposeGatewayAuthHeaderAndCookieLikeRust|TestComposeGatewayAuthPreservesSignInOutcomesLikeRust|TestSharedGatewayAuthManagerLikeRust|TestModelsCatalogIdentityIncludesGatewayOAuthLikeRust); verify with `go test ./model -run 'TestComposeGatewayAuthHeaderAndCookieLikeRust|TestComposeGatewayAuthPreservesSignInOutcomesLikeRust|TestSharedGatewayAuthManagerLikeRust|TestModelsCatalogIdentityIncludesGatewayOAuthLikeRust' -count=1`."
    ]
   },
   {
@@ -15820,9 +15820,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/3; needs review: show_model_selection_view"
+    "Round 763 (audit): #46503 implemented at tui/tea/status_controls.go:786 - func (m *Model) modelDisplayName(modelID string) string { Behaviour: TUI model surfaces resolve the catalog display name instead of the raw model id. Regression contract: tui/tea/model_test.go (TestModelDisplayNameSurfacesLikeRust); verify with `go test ./tui/tea -run 'TestModelDisplayNameSurfacesLikeRust' -count=1`."
    ]
   },
   {
@@ -19147,9 +19147,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/9; needs review: application_network_policy_denial, can_retry_connection_attempt, create_client_for_route_without_request_logging_async, is_auth_error, is_policy_denial"
+    "Round 763 (audit): #47410 implemented at app/application_network.go:18 - // publishApplicationNetworkPolicy publishes the policy composed from the Behaviour: the CLI host publishes the application network policy composed from managed requirements, binds it to every config it produces, and the MCP CLI store inherits the same policy. Regression contract: app/application_network_test.go (TestCLIHostPublishesApplicationNetworkPolicyLikeRust|TestMCPCLIStoreBindsApplicationNetworkPolicyLikeRust); verify with `go test ./app -run 'TestCLIHostPublishesApplicationNetworkPolicyLikeRust|TestMCPCLIStoreBindsApplicationNetworkPolicyLikeRust' -count=1`."
    ]
   },
   {
