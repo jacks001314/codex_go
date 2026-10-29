@@ -768,6 +768,12 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Architecture note: Go applies the saved budget while building the notification item rather than during Rust's record-time truncation pass, and its session/rollout builders do not mint a separate rollout entry for a notify response item.
 - Tests: `turn/code_mode_notify_budget_like_rust_test.go` covers the originating budget across a model switch, raw full text, late delivery after exec returned, the mailbox gate, and the model-request sidecar; `go test ./turn ./tool` and `go build ./turn ./exec ./appserver ./app` pass.
 
-Status after reconciliation: `1974 complete`, `385 not_applicable`,
-`509 audit_pending`, `281 regression_pending`, `0 partial`,
+### Model discovery keeps access-program metadata across refreshes (Round 787)
+
+- `model/catalog.go` / `model/api.go` already carried `available_access_programs` through `ModelInfo`, `ModelPreset`, and the app-server `model/list` shape: unknown cyber names are dropped while decoding, absent/null metadata stays `nil`, and an empty `cyber` array stays distinct and serializes as `availableAccessPrograms: null` versus `{"cyber":[]}`.
+- New regression `model/access_programs_test.go`: two online refreshes with an unchanged catalog ETag replace the access metadata in the presets and in the persisted models cache, mirroring Rust `online_refresh_updates_access_programs_with_unchanged_etag`.
+- Tests: `go test ./model -count=1`; `go test ./appserver -run 'ModelList|ModelSummary|ModelCatalog' -count=1`.
+
+Status after reconciliation: `1975 complete`, `385 not_applicable`,
+`509 audit_pending`, `280 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

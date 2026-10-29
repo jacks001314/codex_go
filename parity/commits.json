@@ -12147,9 +12147,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 787 (regression): #44893 was already implemented (ModelInfo/ModelPreset carry optional available_access_programs, unknown cyber names are dropped on decode, missing and empty lists stay distinct, and app-server model/list emits availableAccessPrograms with an explicit null when absent). This round adds the missing cache regression: TestRemoteModelsManagerRefreshesAccessProgramsWithUnchangedETagLikeRust drives two online refreshes with a stable catalog ETag, asserting the granted then revoked cyber lists reach both the presets and the persisted models cache. Validation: go test ./model -count=1; go test ./appserver -run 'ModelList|ModelSummary|ModelCatalog' -count=1."
    ]
   },
   {

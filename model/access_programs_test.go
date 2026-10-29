@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 )
 
@@ -118,5 +119,57 @@ func TestModelSummarySerializesAvailableAccessProgramsLikeRust(t *testing.T) {
 	emptyCyber, ok := emptyPrograms["cyber"].([]any)
 	if !ok || len(emptyCyber) != 0 {
 		t.Fatalf("empty cyber = %#v, want empty array", emptyPrograms["cyber"])
+	}
+}
+
+// Rust #44893: caller-specific access metadata can change while the catalog
+// ETag stays the same, and the refreshed metadata must reach both the presets
+// and the persisted models cache.
+func TestRemoteModelsManagerRefreshesAccessProgramsWithUnchangedETagLikeRust(t *testing.T) {
+	granted := ModelInfo{
+		Slug:           "access-programs",
+		DisplayName:    "Access Programs",
+		Visibility:     VisibilityVisible,
+		SupportedInAPI: true,
+		AvailableAccessPrograms: &ModelAccessPrograms{Cyber: []CyberAccessProgram{
+			CyberAccessProgramStandard,
+			CyberAccessProgramDaybreakBlue,
+		}},
+	}
+	revoked := granted
+	revoked.AvailableAccessPrograms = &ModelAccessPrograms{Cyber: []CyberAccessProgram{}}
+	endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{
+		{Models: []ModelInfo{granted}, ETag: "stable-catalog-etag"},
+		{Models: []ModelInfo{revoked}, ETag: "stable-catalog-etag"},
+	}}
+	manager := NewRemoteModelsManager(&ModelsResponse{}, endpoint)
+	cacheDir := t.TempDir()
+	manager.ConfigureCache(cacheDir)
+
+	check := func(stage string, want int) {
+		t.Helper()
+		presets := manager.ListModels(RefreshOnline)
+		if len(presets) != 1 || presets[0].Model != "access-programs" {
+			t.Fatalf("%s: presets = %#v", stage, presets)
+		}
+		if presets[0].AvailableAccessPrograms == nil || len(presets[0].AvailableAccessPrograms.Cyber) != want {
+			t.Fatalf("%s: access programs = %#v, want %d", stage, presets[0].AvailableAccessPrograms, want)
+		}
+	}
+
+	check("granted", 2)
+	check("revoked", 0)
+	if endpoint.calls != 2 || endpoint.etags[1] != "stable-catalog-etag" {
+		t.Fatalf("calls/etags = %d/%#v", endpoint.calls, endpoint.etags)
+	}
+	cache, err := readModelsCache(filepath.Join(cacheDir, modelsCacheFilename))
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	if cache.ETag != "stable-catalog-etag" || len(cache.Models) != 1 {
+		t.Fatalf("cache = %#v", cache)
+	}
+	if cache.Models[0].AvailableAccessPrograms == nil || len(cache.Models[0].AvailableAccessPrograms.Cyber) != 0 {
+		t.Fatalf("cached access programs = %#v", cache.Models[0].AvailableAccessPrograms)
 	}
 }
