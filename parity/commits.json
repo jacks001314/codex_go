@@ -13107,9 +13107,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Inline `$...$`/`\\(...\\)` and display math already rendered in Go; this round closed #45501's streaming boundary. Added markdown.MathDisplayTailStart (span crossing the boundary, or an unterminated standalone display within maxMathBytes, forces the span into the mutable tail) and wired it into streamCore.activeTailSourceStart so an open display is never committed to scrollback before its closer. Tests: TestMathInlineWrapsLikeRustSnapshots (Rust's wide/narrow inline snapshots), TestMathDisplayTailStartLikeRust, TestFileCitationPathBetweenInlineMathLikeRust (α/tmp/$x$/report.mdβ), TestStreamedDisplayMathStaysMutableLikeRust and TestStreamedDisplayMathSurvivesResizeLikeRust. go test ./tui/markdown ./tui/streaming ./tui ./tui/history_cell ./tui/chatwidget pass."
    ]
   },
   {

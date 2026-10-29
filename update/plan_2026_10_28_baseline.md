@@ -910,6 +910,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - codex_go has no Cargo/Bazel lockfiles and relies on the Go standard library TLS stack (`crypto/tls`); a repo-wide search finds no `rustls`, `aws-lc`, or `webpki` references in `go.mod`, `go.sum`, or build files.
 - Marked `not_applicable`; no Go change or new test surface.
 
-Status after reconciliation: `1991 complete`, `390 not_applicable`,
-`500 audit_pending`, `268 regression_pending`, `0 partial`,
+### Render inline TeX math as Unicode in the TUI (#45501) (Round 806)
+
+- Inline and display TeX rendering was already ported, so this round closed the streaming boundary the commit pinned. Rust filters its incremental render-cache boundary so it never lands inside a display equation; Go renders the stable prefix from a source offset instead of a cached line prefix.
+- `tui/markdown/math_spans.go`: added `MathDisplayTailStart(source, boundary, width)`, which reports the earliest display span start a stable boundary must retreat to. A span strictly crossing the boundary, or an unterminated standalone display still inside `maxMathBytes` (Rust's `pending_start`), holds the whole span back; inline math and oversized openers never hold.
+- `tui/streaming/controller.go`: `activeTailSourceStart` now folds that boundary in, so an open display equation stays in the mutable tail and is never committed to scrollback in its verbatim form.
+- Tests: Rust's wide and narrow inline snapshots, the boundary-filter cases, the file citation path between two inline formulas (`α/tmp/$x$/report.mdβ`), and streamed-vs-whole-source comparisons across `$$`/`\[` delimiters, widths 16/40, and a mid-stream resize.
+- Verified with `go test ./tui/markdown ./tui/streaming ./tui ./tui/history_cell ./tui/chatwidget`.
+
+Status after reconciliation: `1992 complete`, `390 not_applicable`,
+`500 audit_pending`, `267 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
