@@ -1257,6 +1257,28 @@ Consumer Top chats table and dashboard card (#45768, part 2).
   -count=1`, `go test ./tui/tea -count=1`, `go vet ./chatgptapi
   ./tui/analytics ./tui/tea`, and `go build ./...`.
 
+### Account profile data layer (#45769, part 1) (Round 843)
+
+Account profile data layer (#45769, part 1).
+
+- `chatgptapi/profile.go` adds `AccountProfile`, `ProfileIdentity`,
+  `ProfileMetadata`, `ProfileStats`, `ProfileInvocation` and
+  `ProfileInvocationKind`, plus `GetAccountProfile` on the existing
+  `/api/codex/profiles/me` route.
+- `ProfileStats` embeds `TokenUsageProfileStats`, so the summary reuses the
+  token totals, streaks, longest turn and daily buckets, and adds fast-mode
+  usage, most-used reasoning effort, skill counts, thread totals and the top
+  plugin/skill invocations.
+- Optional fields stay pointers (absence is not zero), percentages keep the
+  backend decimal text through `json.Number`, and unknown invocation kinds
+  decode as `Unknown` without discarding the rest of the statistics.
+- JSON failures, empty bodies and a missing `stats` object all map to
+  `Invalid account profile response.`; HTTP status errors pass through.
+- Tests cover the empty payload, the full payload with a future invocation kind,
+  a zero `total_threads` distinct from a missing one, malformed bodies and the
+  request route.
+- Verified with `go test ./chatgptapi -count=1` and `go vet ./chatgptapi`.
+
 Status after reconciliation: `2017 complete`, `395 not_applicable`,
-`477 audit_pending`, `258 regression_pending`, `2 partial`,
+`476 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

@@ -13947,9 +13947,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 4/23; needs review: AccountProfile, ProfileIdentity, ProfileInvocation, ProfileInvocationKind, ProfileMetadata"
+    "Rust #45769 adds an account Summary tab. Part 1 (Round 843) ports the profile data layer. chatgptapi/profile.go adds AccountProfile (profile, metadata, stats), ProfileIdentity (display_name, username), ProfileMetadata (stats_as_of, stats_error), ProfileStats, ProfileInvocation and ProfileInvocationKind, and GetAccountProfile. ProfileStats embeds TokenUsageProfileStats so the summary and the token report share lifetime/peak tokens, streaks, the longest turn and daily buckets, and adds fast_mode_usage_percentage, most_used_reasoning_effort with its percentage, unique_skills_used, total_skills_used, total_threads and top_invocations. Optional fields stay pointers so absence stays distinct from zero, percentages keep the backend decimal text via json.Number, and unrecognized invocation kinds decode as Unknown without failing the remaining statistics. GetAccountProfile GETs the same /api/codex/profiles/me route as the token usage read (including the /wham prefix for the ChatGPT path style), requires the stats object, and maps JSON failures, empty bodies and a missing stats object to \"Invalid account profile response.\" while passing HTTP status errors through. Tests cover an empty stats object, a full payload with a future invocation kind, a zero total_threads distinct from a missing one, malformed and empty bodies, and the route. Part 2 (Round 844) adds the Summary section, its activity charts, profile loading and navigation. Verified with go test ./chatgptapi -count=1 and go vet ./chatgptapi."
    ]
   },
   {
