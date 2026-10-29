@@ -2731,9 +2731,20 @@ Fifteen ledger entries are Rust-only build, Bazel, Cargo, or test-layout changes
 - `#43325` sorts keys in the Rust Cargo/Bazel schema generator; Go does not run that generator and `parity/config_schema_surface_test.go` compares schema properties rather than key order.
 - No code change was required. Verified with `go test ./parity -run 'TestAlignment' -count=1`.
 
-Status after reconciliation: `2113 complete`, `435 not_applicable`,
-`388 audit_pending`, `210 regression_pending`, `3 partial`,
+### Release and dependency audits (Round 950)
+
+Five Rust release/dependency entries have no Go counterpart (not applicable).
+
+- `#42288` patches rules_rs to fetch pinned zlib packages from Ubuntu snapshots; Go has no Bazel workspace.
+- `#42383` and `#49096` bump rmcp and h2 in Cargo/Bazel lockfiles; Go implements MCP and HTTP with its own packages.
+- `#43604` removes `base_instructions` from Rust's bundled `models.json` and filters it in the Rust release workflow; Go has no bundled catalog asset and reads the runtime catalog payload.
+- `#44062` fixes Rust's Bazel voice build and release packaging; Go's `release.yml` uses `third_party/voice/prepare_opus.py` instead of Bazel.
+- No code change was required. Verified with `go test ./parity -run 'TestAlignment' -count=1`.
+
+Status after reconciliation: `2113 complete`, `440 not_applicable`,
+`383 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
+
 
 
 

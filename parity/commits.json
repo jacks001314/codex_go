@@ -6121,9 +6121,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 950: Bazel dependency mirror update that patches rules_rs to fetch pinned Linux zlib packages from dated Ubuntu snapshots. Go has no Bazel workspace or rules_rs dependency, so no artifact source changes."
    ]
   },
   {
@@ -6602,9 +6602,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 950: Cargo and Bazel lockfile bump of rmcp/rmcp-macros from 3.1.3 to 3.2.0. Go implements MCP client/server behavior in the mcp package without rmcp; no Go dependency or wire behavior changes."
    ]
   },
   {
@@ -9231,9 +9231,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 950: removes base_instructions from Rust bundled models-manager/models.json and filters it in the rust-release-prepare workflow. Go has no bundled models.json release asset; model/catalog.go builds its catalog from the runtime catalog payload (base_instructions remains an optional extension field), so the release-workflow change has no Go counterpart."
    ]
   },
   {
@@ -10299,9 +10299,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 950: Rust release pipeline fixes (Bazel -c opt voice host build, release-workflow path resolution, runtime.json permissions, PYTHONPATH for codex_package.archive). Go release.yml does not use Bazel and prepares the only native voice asset through third_party/voice/prepare_opus.py, so these Rust packaging steps do not apply."
    ]
   },
   {
@@ -22929,9 +22929,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 950: Cargo and Bazel lockfile bump of h2 from 0.4.16 to 0.4.19. Go uses its own HTTP stack (net/http and its websocket implementation) and has no Cargo/Bazel lockfiles to update."
    ]
   },
   {
