@@ -74,14 +74,19 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 	r.startupPrewarmMu.Unlock()
 
 	modelID := strings.TrimSpace(response.Model)
+	serviceTier := ""
+	if response.ServiceTier != nil {
+		serviceTier = strings.TrimSpace(*response.ServiceTier)
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
 		defer cancel()
 		var responseID string
 		status := "failed"
 		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
-			Model:      modelID,
-			Originator: "session_startup",
+			Model:       modelID,
+			ServiceTier: serviceTier,
+			Originator:  "session_startup",
 		})
 		if err == nil {
 			status = "ready"
@@ -171,6 +176,7 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 		status := "failed"
 		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
 			Model:            modelID,
+			ServiceTier:      strings.TrimSpace(record.Metadata.ServiceTier),
 			Instructions:     instructions,
 			InputItems:       historyItems,
 			ThreadID:         threadID,

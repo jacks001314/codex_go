@@ -953,18 +953,14 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if websocketReady {
 		return nil, nil
 	}
-	modelID := strings.TrimSpace(request.Model)
-	if modelID == "" {
-		modelID = "gpt-5.5"
+	// Rust #47635: the warmup request is built exactly like a turn request so
+	// the preconnect carries the effective service tier, routing hint, hosted
+	// tools and Responses Lite tool metadata the caller captured. The handshake
+	// itself runs before any of the turn's tool discovery can block it.
+	apiRequest, err := r.buildResponsesAgentRequest(request, true)
+	if err != nil {
+		return nil, err
 	}
-	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: "", Input: r.gateContentItemKinds(responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
-		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
-	}
-	apiRequest.Input, _ = prependResponsesBaseInstructions(apiRequest.Input, responsesInstructions(request), request.ThreadID)
-	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
-	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
-	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request, r.Metrics)
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
 	if err != nil {
 		return nil, err
@@ -979,23 +975,53 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	dialStartedAt := time.Now()
-	// Rust #46506: a secure WebSocket handshake reuses the HTTP factory's
-	// ChatGPT cookie store, while an explicit Cookie header still wins.
-	headers := network.WebsocketHandshakeCookies(endpoint, httpRequest.Header)
-	conn, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: headers})
-	if response != nil {
-		// A rejected upgrade can refresh infrastructure cookies exactly like an
-		// HTTP response.
-		network.StoreChatGPTResponseCookies(endpoint, response.Header)
-	}
-	// The prewarm handshake reports the same attempt telemetry, with a fresh
-	// connection and no retry.
-	r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), "", "")
-	if err != nil {
+	// Rust #47635: preconnect recovers authentication failures exactly like a
+	// turn's websocket connect. The recovery plan cursor bounds the retries.
+	recovery := &authRecoveryState{}
+	recoveryMode, recoveryPhase := "", ""
+	var conn *websocket.Conn
+	for {
+		dialStartedAt := time.Now()
+		// Rust #46506: a secure WebSocket handshake reuses the HTTP factory's
+		// ChatGPT cookie store, while an explicit Cookie header still wins.
+		headers := network.WebsocketHandshakeCookies(endpoint, httpRequest.Header)
+		var response *http.Response
+		conn, response, err = websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: headers})
+		if response != nil {
+			// A rejected upgrade can refresh infrastructure cookies exactly like
+			// an HTTP response.
+			network.StoreChatGPTResponseCookies(endpoint, response.Header)
+		}
+		// The prewarm handshake reports the same attempt telemetry, with a fresh
+		// connection and no transport retry.
+		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase)
+		if err == nil {
+			break
+		}
 		if response != nil && response.StatusCode == http.StatusUpgradeRequired {
 			r.disableWebsockets()
 			return nil, nil
+		}
+		if response != nil && response.StatusCode == http.StatusUnauthorized {
+			debug := authRecoveryDebug{
+				RequestID:     responseHeaderValue(response.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
+				CFRay:         responseHeaderValue(response.Header, "cf-ray"),
+				AuthError:     responseHeaderValue(response.Header, "x-openai-authorization-error"),
+				AuthErrorCode: responseAuthorizationErrorCode(response.Header),
+			}
+			mode, phase, refreshErr := r.recoverUnauthorizedAuth(ctx, recovery, debug)
+			if refreshErr == nil {
+				recoveryMode, recoveryPhase = string(mode), string(phase)
+				httpRequest, err = r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
+				if err != nil {
+					return nil, err
+				}
+				endpoint, err = websocketURLFromHTTP(httpRequest.URL)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 		}
 		if response != nil {
 			return nil, fmt.Errorf("responses websocket handshake failed: HTTP %d: %w", response.StatusCode, err)

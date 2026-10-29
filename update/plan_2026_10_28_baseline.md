@@ -2995,6 +2995,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestNativeVerificationContinuationValidatesAndPreservesLikeRust`, `TestNativeVerificationContinuationRejectsBeforePromptingLikeRust`, `TestNativeVerificationContinuationRejectsUnsupportedModesLikeRust`, `TestNativeVerificationContinuationBacksOffStateOnlyRoundsLikeRust`, `TestNativeVerificationContinuationDoesNotRestartAfterProofLikeRust`, `TestNativeVerificationContinuationPreservesAuthChallengesLikeRust`.
 - Verified with `go test ./mcp -count=1`, `go vet ./mcp`, and `go build ./...`.
 
+### Startup WebSocket preconnect overlap (Round 982)
+
+- Rust #47635 overlaps the startup WebSocket prewarm handshake with tool capture, carries model/service-tier routing hints, recovers auth failures during preconnect and falls back to HTTP on 426 (#47635, partial).
+- `model/responses_agent.go` `Prewarm` now builds the warmup through `buildResponsesAgentRequest`, so `generate=false` carries finalized tool/Responses Lite metadata and the effective service tier; guardian reviewer preconnects keep draining `service_tier` and the routing hint, while ordinary Codex-backend preconnects send `model=<model>;tier=<tier>`.
+- Preconnect recovers a 401 handshake through `recoverUnauthorizedAuth` and retries the dial (bounded by the recovery cursor); 426 still disables websockets and returns `nil`.
+- `appserver/session_startup_prewarm.go` passes the thread's selected service tier to the base and history prewarms.
+- Tests: `model/prewarm_preconnect_like_rust_test.go` (routing hint and `service_tier`, guardian omission, 401 refresh retry, finalized `additional_tools` declarations). Verified with `go test ./model -count=1` and `go test ./appserver -run Prewarm -count=1`.
+- Residual: Rust's startup prewarm captures its own turn-scoped tools during the handshake; Go's startup hook runs at thread/start before MCP discovery and has no such snapshot, so the base warmup carries only caller-supplied tools.
+
 Status after reconciliation: `2143 complete`, `449 not_applicable`,
-`347 audit_pending`, `206 regression_pending`, `4 partial`,
+`347 audit_pending`, `205 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
