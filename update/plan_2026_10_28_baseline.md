@@ -1039,6 +1039,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Remaining gap: Rust also seeds from a macOS CodexCLI.app bundle and compares identity against `CodexCLI.app/Contents/MacOS/codex`; Go has no bundle layout detection (`install.PackageLayoutFromExe`), tracked by Rust #42068 (audit_pending). The cargo-only CLI start/restart/bootstrap integration tests have no Go harness.
 - Verified with `go test ./appserverdaemon -count=1`.
 
-Status after reconciliation: `2002 complete`, `392 not_applicable`,
-`492 audit_pending`, `261 regression_pending`, `2 partial`,
+### macOS CLI bundle install detection (Round 821)
+
+- Rust #42068 detects a CLI running from `CodexCLI.app/Contents/MacOS` and resolves the outer standalone package layout from the sibling `bin` directory, keeping standalone install detection, bundled resources, and path entries intact.
+- `install.PackageLayoutFromExe` now has the same `MacOS` branch: it requires the `Contents` and `CodexCLI.app` containers, derives the package from `<bundle parent>/bin`, and reuses the shared bin-directory and `codex-package.json` checks. `standaloneInstallMethod` and the resources/path accessors follow from `PackageDir`.
+- New regressions in `install/bundle_like_rust_test.go`: the ported Rust layout/method test (fails with the branch disabled) and a structural test rejecting `Other.app` bundles and a `MacOS` directory without `Contents`.
+- Verified with `go test ./install -count=1`.
+
+Status after reconciliation: `2003 complete`, `392 not_applicable`,
+`491 audit_pending`, `261 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

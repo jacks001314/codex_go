@@ -5448,9 +5448,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #42068 recognizes an executable under `CodexCLI.app/Contents/MacOS` and resolves the surrounding standalone package layout from the sibling `bin` directory, so a CLI launched through the macOS app bundle still reports standalone install detection plus its bundled resources and path entries. `install/context.go` (`PackageLayoutFromExe`) now has the same `MacOS` branch: it walks up to `Contents` and `CodexCLI.app`, rejects any other structure, derives the package from `<bundle parent>/bin`, and then applies the shared checks (bin directory exists, `codex-package.json` present) so `ResourcesDir` and `PathDir` are reported exactly as for a `bin/codex` launch. Because `standaloneInstallMethod` reads `layout.PackageDir`, install-method detection (`InstallStandalone` with `ReleaseDir` and resources) and the package path/resources accessors follow automatically, matching Rust. New regressions in `install/bundle_like_rust_test.go`: `TestBundleExecutablePreservesPackageLayoutAndInstallMethodLikeRust` ports Rust `bundle_executable_preserves_package_layout_and_install_method` (bundle executable inside `packages/standalone/releases/test`, asserting package/bin/resources/path dirs plus the standalone method's release dir, resources, and target platform) and fails with the new branch disabled; `TestBundleLayoutRequiresTheCodexCLIAppContainerLikeRust` pins the structural check, so `Other.app/Contents/MacOS` or a `CodexCLI.app/MacOS` without `Contents` yields no layout. Verified with `go test ./install -count=1` (whole package passes)."
    ]
   },
   {
