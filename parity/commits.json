@@ -4744,9 +4744,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 978: Go keeps verified request-user-input answers in retainedctx.RetainedContext, independent of the model-visible history that compaction replaces. appserver/retained_context.go verifiedAnswerRecorderForTurn records each accepted answer (appserver/verified_answer_test.go TestRuntimeRouterRecordsVerifiedAnswersLikeRust) and persists it as a sparse rollout fact; TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust restores it without compaction, and retainedctx.RetainedContext.Rollback removes answers at the rolled-back turn boundary (retainedctx/retained_context_test.go TestRetainedEvidencePreservesOrderThroughRecoveryCheckpointAndRollback). The reviewer reads this retained evidence through guardianRetainedContextForTurn, so compaction cannot drop the answers. Verified with go test ./appserver -run TestRuntimeRouterRecordsVerifiedAnswersLikeRust|TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust|TestModelGuardianReviewerIncludesVerifiedAnswersLikeRust|TestGuardianReviewHistorySurvivesCompactionAndRollbackLikeRust -count=1 and go test ./retainedctx -run TestRetainedEvidencePreservesOrderThroughRecoveryCheckpointAndRollback -count=1"
    ]
   },
   {
@@ -4768,9 +4768,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 978: Rust #41857 makes an accepted Guardian answer visible when its recorded tool call exists in either the current history or retained review history. Go retains the accepted answers directly rather than filtering them by a tool-call lookup: verifiedAnswerRecorderForTurn stores them in retainedctx and guardianRetainedContextForTurn supplies them to the reviewer. The rollout-restart test covers restoration independent of the current model window, while RetainedContext.Rollback provides the explicit-rollback removal boundary. tests: TestRuntimeRouterRecordsVerifiedAnswersLikeRust, TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust, TestModelGuardianReviewerIncludesVerifiedAnswersLikeRust, TestGuardianReviewHistorySurvivesCompactionAndRollbackLikeRust. Verified with go test ./appserver -run TestRuntimeRouterRecordsVerifiedAnswersLikeRust|TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust|TestModelGuardianReviewerIncludesVerifiedAnswersLikeRust|TestGuardianReviewHistorySurvivesCompactionAndRollbackLikeRust -count=1"
    ]
   },
   {

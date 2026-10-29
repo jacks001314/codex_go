@@ -2964,6 +2964,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #50105 moves composer footer construction, mode resolution, hint overrides, quit hints, and custom height into `footer_state.rs` without behavior changes (#50105, complete). Go already has the equivalent `composer.FooterState` in `tui/bottom_pane/chat_composer/footer_state.go` plus `tui/bottom_pane/footer.go` props/rendering; `TestFooterStateFlashContextAndQuitReminderMatchRustCore` covers context order, flash/quit expiry, and mode reset.
 - Rust #50219 bounds tmux input-option probes to one second (#50219, not applicable). Go has no tmux `show-options`/`set-option` probe for terminal input setup; Bubble Tea owns mouse and keyboard modes, and the only tmux subprocesses are explicit clipboard-copy operations in `tui/clipboard_tmux.go`. The same structural N/A is recorded in `update/plan_2026_10_07.md:1345`.
 - Verified with `go test ./tui/bottom_pane/chat_composer -run TestFooterStateFlashContextAndQuitReminderMatchRustCore -count=1` and `go test ./tui/tui -count=1`.
-Status after reconciliation: `2138 complete`, `446 not_applicable`,
-`354 audit_pending`, `207 regression_pending`, `4 partial`,
+### Guardian verified answers across compaction (Round 978)
+
+- Rust #41852 preserves trusted user answers across compaction by matching recorded answers against retained review history (#41852, complete). Go records accepted answers directly in `retainedctx.RetainedContext` through `verifiedAnswerRecorderForTurn`, persists them as sparse rollout facts, and the reviewer reads that context independently of the model-visible window; `RetainedContext.Rollback` removes answers at the rolled-back turn boundary.
+- Rust #41857 also matches the current conversation so answers survive when the original tool call exists only there (#41857, complete). Go does not filter answers by locating the original tool call: accepted answers are retained directly and restored after restart, which covers both current and retained history while preserving rollback semantics.
+- Tests: `TestRuntimeRouterRecordsVerifiedAnswersLikeRust`, `TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust`, `TestModelGuardianReviewerIncludesVerifiedAnswersLikeRust`, `TestGuardianReviewHistorySurvivesCompactionAndRollbackLikeRust`, and `TestRetainedEvidencePreservesOrderThroughRecoveryCheckpointAndRollback`.
+- Verified with `go test ./appserver -run 'TestRuntimeRouterRecordsVerifiedAnswersLikeRust|TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust|TestModelGuardianReviewerIncludesVerifiedAnswersLikeRust|TestGuardianReviewHistorySurvivesCompactionAndRollbackLikeRust' -count=1` and `go test ./retainedctx -run TestRetainedEvidencePreservesOrderThroughRecoveryCheckpointAndRollback -count=1`.
+Status after reconciliation: `2140 complete`, `446 not_applicable`,
+`352 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
