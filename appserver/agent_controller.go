@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -985,7 +984,7 @@ func (c *runtimeAgentController) InterruptAgent(ctx context.Context, args *agent
 	return &agent.InterruptAgentResult{PreviousStatus: agent.V2AgentStatusValue(previous)}, nil
 }
 
-func (c *runtimeAgentController) ListAgents(ctx context.Context, args *agent.ListAgentsArgs) (*agent.ListAgentsResult, error) {
+func (c *runtimeAgentController) ListAgents(ctx context.Context, args *agent.ListAgentsArgs) ([]agent.LiveAgent, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -993,19 +992,22 @@ func (c *runtimeAgentController) ListAgents(ctx context.Context, args *agent.Lis
 	if args != nil && args.PathPrefix != nil {
 		prefix = runtimeCanonicalAgentPath(c.scopePath, *args.PathPrefix)
 	}
-	result := &agent.ListAgentsResult{Agents: []agent.ListedAgent{}}
+	live := []agent.LiveAgent{}
 	if prefix == "" || strings.HasPrefix("/root", prefix) {
-		result.Agents = append(result.Agents, agent.ListedAgent{AgentName: "/root", AgentStatus: "running"})
+		live = append(live, agent.LiveAgent{
+			ThreadID: c.rootID,
+			Metadata: agent.Metadata{ThreadID: c.rootID, Path: "/root"},
+			Status:   agent.AgentMessageStatus{Kind: agent.AgentMessageStatusRunning},
+		})
 	}
 	for _, metadata := range c.registry.LiveAgents() {
 		path := string(metadata.Path)
 		if prefix != "" && !agent.AgentPath(path).MatchesPrefix(agent.AgentPath(prefix)) {
 			continue
 		}
-		result.Agents = append(result.Agents, agent.ListedAgent{AgentName: path, AgentStatus: agent.V2AgentStatusValue(c.status(metadata.ThreadID))})
+		live = append(live, agent.LiveAgent{ThreadID: metadata.ThreadID, Metadata: metadata, Status: c.status(metadata.ThreadID)})
 	}
-	sort.Slice(result.Agents, func(i int, j int) bool { return result.Agents[i].AgentName < result.Agents[j].AgentName })
-	return result, nil
+	return live, nil
 }
 
 func (r *RuntimeRouter) enqueueRuntimeAgentMessage(threadID string, item any) {

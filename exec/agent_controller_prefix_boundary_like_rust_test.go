@@ -17,12 +17,13 @@ func TestExecAgentControllerListAgentsPathPrefixRespectsSegmentsLikeRust(t *test
 	}}
 	names := func(prefix string) []string {
 		t.Helper()
-		listed, err := controller.ListAgents(context.Background(), &agent.ListAgentsArgs{PathPrefix: &prefix})
+		live, err := controller.ListAgents(context.Background(), &agent.ListAgentsArgs{PathPrefix: &prefix})
 		if err != nil {
 			t.Fatalf("ListAgents(%q): %v", prefix, err)
 		}
-		out := make([]string, 0, len(listed.Agents))
-		for _, item := range listed.Agents {
+		listed := agent.ListedAgentsFromLive(live)
+		out := make([]string, 0, len(listed))
+		for _, item := range listed {
 			out = append(out, item.AgentName)
 		}
 		return out

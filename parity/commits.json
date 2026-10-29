@@ -16300,9 +16300,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agent/tools_v2.go adds the shared LiveAgent type (thread id, Metadata, status) and changes V2ToolController.ListAgents to return []LiveAgent; ListedAgentsFromLive now owns the agent_name formatting and the thread-id fallback for pathless records, mirroring Rust list_agents.rs. Controllers exec/agent_controller.go:1350, appserver/agent_controller.go:988 and agent/role_controller.go:104 return live records, and MemoryToolController returns LiveAgent too. Tests agent/list_agents_live_agent_like_rust_test.go: TestListedAgentsFromLiveFallsBackToThreadIDLikeRust, TestListAgentsHandlerFormatsLiveRecordsLikeRust; updated exec/exec_test.go, exec and appserver agent_controller_prefix_boundary_like_rust_test.go, appserver/agent_controller_test.go. Verified with go build ./..., go test ./agent -count=1, go test ./exec -run ListAgents|MultiAgent|AgentController, go test ./appserver -run ListAgents|AgentController|PrefixBoundary."
    ]
   },
   {

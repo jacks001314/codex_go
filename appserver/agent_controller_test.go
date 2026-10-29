@@ -643,8 +643,9 @@ func TestRuntimeAgentControllerV2RegistersCanonicalPathAndImplementsTools(t *tes
 	if !ok || metadata.Path != "/root/worker" {
 		t.Fatalf("registry metadata = %#v/%t", metadata, ok)
 	}
-	listed, err := controller.ListAgents(context.Background(), &agent.ListAgentsArgs{})
-	if err != nil || len(listed.Agents) != 2 || listed.Agents[0].AgentName != "/root" || listed.Agents[1].AgentName != "/root/worker" {
+	live, err := controller.ListAgents(context.Background(), &agent.ListAgentsArgs{})
+	listed := agent.ListedAgentsFromLive(live)
+	if err != nil || len(listed) != 2 || listed[0].AgentName != "/root" || listed[1].AgentName != "/root/worker" {
 		t.Fatalf("listed = %#v, err=%v", listed, err)
 	}
 }

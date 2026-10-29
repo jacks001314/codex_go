@@ -3592,8 +3592,9 @@ func TestExecAgentControllerV2LifecyclePathsAndSingleRollout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := make([]string, 0, len(list.Agents))
-	for _, item := range list.Agents {
+	listed := agent.ListedAgentsFromLive(list)
+	names := make([]string, 0, len(listed))
+	for _, item := range listed {
 		names = append(names, item.AgentName)
 	}
 	if !slices.Contains(names, "/root") || !slices.Contains(names, "/root/worker") || !slices.Contains(names, "/root/worker/nested") {
@@ -4029,7 +4030,8 @@ func TestExecAgentControllerInterruptGenerationAndConcurrencyLimit(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range list.Agents {
+	listed := agent.ListedAgentsFromLive(list)
+	for _, item := range listed {
 		if item.AgentName == spawned.TaskName {
 			encoded, _ := json.Marshal(item.AgentStatus)
 			if !strings.Contains(string(encoded), "completed") {
@@ -4038,7 +4040,7 @@ func TestExecAgentControllerInterruptGenerationAndConcurrencyLimit(t *testing.T)
 			return
 		}
 	}
-	t.Fatalf("spawned agent missing from %#v", list)
+	t.Fatalf("spawned agent missing from %#v", listed)
 }
 
 func TestExecAgentControllerV2InterruptMissingTargetReturnsError(t *testing.T) {

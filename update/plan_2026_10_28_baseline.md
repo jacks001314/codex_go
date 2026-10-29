@@ -2263,6 +2263,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Regression: `appserver/unix_socket_control_socket_like_rust_test.go` adds `TestControlSocketAdvertisesUnfragmentedMessageLimitLikeRust`, `TestManagedShutdownSocketAdvertisesUnfragmentedMessageLimitLikeRust`, and `TestRejectedShutdownSocketOmitsUnfragmentedMessageLimitLikeRust`.
 - Verified with `go build ./appserver`, `GOOS=darwin go test -c ./appserver`, and `go test ./appserver -run 'UnixSocket|ControlSocket|Socket|Websocket' -count=1`.
 
-Status after reconciliation: `2071 complete`, `408 not_applicable`,
-`437 audit_pending`, `229 regression_pending`, `4 partial`,
+### Return LiveAgent records from agent listing (Round 910)
+
+- Upstream (`c6f5d9e9b5d9`, #46553) makes `LocalAgentControl::list_agents` return shared `LiveAgent` records (thread id, metadata, status) and moves the `ListedAgent` conversion into the `list_agents` tool handler, keeping the response fields and adding a thread-id fallback for agents without a path.
+- `agent/tools_v2.go` adds `LiveAgent` and changes `V2ToolController.ListAgents` to return `[]LiveAgent`; `ListedAgentsFromLive` now formats `agent_name` from the record path, falls back to the thread id, converts the status, and sorts by name.
+- The exec, appserver (`runtimeAgentController`), role-aware, and memory controllers return live records; the root entry carries the root thread id with the `/root` path.
+- Regression: `agent/list_agents_live_agent_like_rust_test.go` adds `TestListedAgentsFromLiveFallsBackToThreadIDLikeRust` and `TestListAgentsHandlerFormatsLiveRecordsLikeRust`; the exec/appserver controller tests now convert through the shared helper.
+- Verified with `go build ./...`, `go test ./agent -count=1`, `go test ./exec -run 'ListAgents|MultiAgent|AgentController'`, and `go test ./appserver -run 'ListAgents|AgentController|PrefixBoundary'`.
+
+Status after reconciliation: `2072 complete`, `408 not_applicable`,
+`436 audit_pending`, `229 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

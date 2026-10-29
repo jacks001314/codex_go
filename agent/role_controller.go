@@ -101,7 +101,7 @@ func (c *RoleAwareToolController) InterruptAgent(ctx context.Context, args *Inte
 	return delegate.InterruptAgent(ctx, args)
 }
 
-func (c *RoleAwareToolController) ListAgents(ctx context.Context, args *ListAgentsArgs) (*ListAgentsResult, error) {
+func (c *RoleAwareToolController) ListAgents(ctx context.Context, args *ListAgentsArgs) ([]LiveAgent, error) {
 	delegate, ok := c.delegate.(V2ToolController)
 	if !ok {
 		return nil, fmt.Errorf("multi-agent v2 controller is unavailable")

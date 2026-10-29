@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +37,7 @@ type V2ToolController interface {
 	FollowupTask(context.Context, *FollowupTaskArgs) error
 	WaitForActivity(context.Context, *WaitForActivityArgs) (*WaitForActivityResult, error)
 	InterruptAgent(context.Context, *InterruptAgentArgs) (*InterruptAgentResult, error)
-	ListAgents(context.Context, *ListAgentsArgs) (*ListAgentsResult, error)
+	ListAgents(context.Context, *ListAgentsArgs) ([]LiveAgent, error)
 }
 
 type SendMessageArgs struct {
@@ -84,6 +85,15 @@ type ListAgentsArgs struct {
 type ListedAgent struct {
 	AgentName   string `json:"agent_name"`
 	AgentStatus any    `json:"agent_status"`
+}
+
+// LiveAgent mirrors Rust agent::types::LiveAgent (#46553): the control plane
+// reports the live record (thread id, spawn metadata, and status) and the
+// list_agents tool handler formats it for the model.
+type LiveAgent struct {
+	ThreadID string
+	Metadata Metadata
+	Status   AgentMessageStatus
 }
 
 type ListAgentsResult struct {
@@ -501,7 +511,10 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 	case multiAgentV2List:
 		var args ListAgentsArgs
 		if err = invocation.DecodeArguments(&args); err == nil {
-			result, err = e.controller.ListAgents(ctx, &args)
+			var live []LiveAgent
+			if live, err = e.controller.ListAgents(ctx, &args); err == nil {
+				result = &ListAgentsResult{Agents: ListedAgentsFromLive(live)}
+			}
 		}
 	default:
 		err = fmt.Errorf("unknown multi-agent v2 tool %q", e.kind)
@@ -561,6 +574,23 @@ func V2AgentStatusValue(status AgentMessageStatus) any {
 	default:
 		return string(status.Kind)
 	}
+}
+
+// ListedAgentsFromLive mirrors Rust #46553's list_agents handler: the control
+// plane returns LiveAgent records and the handler formats them, keeping the
+// agent path as agent_name and falling back to the thread id when the live
+// record has no path.
+func ListedAgentsFromLive(live []LiveAgent) []ListedAgent {
+	agents := make([]ListedAgent, 0, len(live))
+	for _, entry := range live {
+		name := strings.TrimSpace(string(entry.Metadata.Path))
+		if name == "" {
+			name = entry.ThreadID
+		}
+		agents = append(agents, ListedAgent{AgentName: name, AgentStatus: V2AgentStatusValue(entry.Status)})
+	}
+	sort.SliceStable(agents, func(i int, j int) bool { return agents[i].AgentName < agents[j].AgentName })
+	return agents
 }
 
 func validateTargetMessage(target, message string) error {
@@ -661,7 +691,7 @@ func (c *MemoryToolController) InterruptAgent(_ context.Context, args *Interrupt
 	return &InterruptAgentResult{PreviousStatus: V2AgentStatusValue(previous)}, nil
 }
 
-func (c *MemoryToolController) ListAgents(_ context.Context, args *ListAgentsArgs) (*ListAgentsResult, error) {
+func (c *MemoryToolController) ListAgents(_ context.Context, args *ListAgentsArgs) ([]LiveAgent, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ensure()
@@ -669,14 +699,18 @@ func (c *MemoryToolController) ListAgents(_ context.Context, args *ListAgentsArg
 	if args != nil && args.PathPrefix != nil {
 		prefix = strings.TrimSpace(*args.PathPrefix)
 	}
-	result := &ListAgentsResult{Agents: []ListedAgent{{AgentName: "/root", AgentStatus: "running"}}}
+	live := []LiveAgent{{
+		ThreadID: "root",
+		Metadata: Metadata{ThreadID: "root", Path: "/root"},
+		Status:   AgentMessageStatus{Kind: AgentMessageStatusRunning},
+	}}
 	for id, status := range c.statuses {
 		name := "/root/" + id
 		if prefix == "" || strings.HasPrefix(name, prefix) {
-			result.Agents = append(result.Agents, ListedAgent{AgentName: name, AgentStatus: V2AgentStatusValue(status)})
+			live = append(live, LiveAgent{ThreadID: id, Metadata: Metadata{ThreadID: id, Path: AgentPath(name)}, Status: status})
 		}
 	}
-	return result, nil
+	return live, nil
 }
 
 var _ V2ToolController = (*MemoryToolController)(nil)

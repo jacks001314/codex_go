@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1347,7 +1346,7 @@ func (c *execAgentController) InterruptAgent(ctx context.Context, args *agent.In
 	return &agent.InterruptAgentResult{PreviousStatus: agent.V2AgentStatusValue(previous)}, nil
 }
 
-func (c *execAgentController) ListAgents(ctx context.Context, args *agent.ListAgentsArgs) (*agent.ListAgentsResult, error) {
+func (c *execAgentController) ListAgents(ctx context.Context, args *agent.ListAgentsArgs) ([]agent.LiveAgent, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -1357,19 +1356,26 @@ func (c *execAgentController) ListAgents(ctx context.Context, args *agent.ListAg
 	}
 	s := c.shared()
 	s.mu.Lock()
-	result := &agent.ListAgentsResult{Agents: []agent.ListedAgent{}}
+	live := []agent.LiveAgent{}
 	if prefix == "" || strings.HasPrefix("/root", prefix) {
-		result.Agents = append(result.Agents, agent.ListedAgent{AgentName: "/root", AgentStatus: "running"})
+		live = append(live, agent.LiveAgent{
+			ThreadID: "root",
+			Metadata: agent.Metadata{ThreadID: "root", Path: "/root"},
+			Status:   agent.AgentMessageStatus{Kind: agent.AgentMessageStatusRunning},
+		})
 	}
 	for _, task := range s.tasks {
 		if prefix != "" && !agent.AgentPath(task.path).MatchesPrefix(agent.AgentPath(prefix)) {
 			continue
 		}
-		result.Agents = append(result.Agents, agent.ListedAgent{AgentName: task.path, AgentStatus: agent.V2AgentStatusValue(task.status)})
+		live = append(live, agent.LiveAgent{
+			ThreadID: task.id,
+			Metadata: agent.Metadata{ThreadID: task.id, Path: agent.AgentPath(task.path)},
+			Status:   task.status,
+		})
 	}
 	s.mu.Unlock()
-	sort.Slice(result.Agents, func(i, j int) bool { return result.Agents[i].AgentName < result.Agents[j].AgentName })
-	return result, nil
+	return live, nil
 }
 
 func (c *execAgentController) shutdown() {
