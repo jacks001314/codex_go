@@ -667,6 +667,13 @@ Eight more entries moved to `complete`: `#44650` (`config/config.go`),
 (`sandbox/windowssandbox/desktop_windows.go`), and `#46116`
 (`tui/chatwidget/tool_lifecycle.go`).
 
-Status after reconciliation: `1942 complete`, `381 not_applicable`,
-`539 audit_pending`, `287 regression_pending`, `0 partial`,
+### Async question lifecycle and cloud skills snapshot (Round 768)
+
+Three more entries moved to `complete`: `#42891` and `#44328`
+(`tui/tea/async_questions.go`) and `#47074` (`app/app.go`). The async-question
+tests cover notification, markdown, cross-client dismissal, and prompt-driven
+clearing; the cloud-skills snapshot test pins the startup failure path.
+
+Status after reconciliation: `1945 complete`, `381 not_applicable`,
+`536 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

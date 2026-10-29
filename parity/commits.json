@@ -7875,9 +7875,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/5; needs review: add_async_questions, handle_question_key, push_async_questions, question_summary"
+    "Round 768 (audit): #42891 implemented at tui/tea/async_questions.go:21 - // (#42889/#42891/#42894/#42897/#42903): questions arrive on async agent Behaviour: asynchronous app-server questions are integrated into the TUI: they arrive collapsed with a summary, raise notifications and fallback titles, render markdown, dismiss when answered elsewhere, and preserve other drafts. Regression contract: tui/tea/async_questions_test.go (TestAsyncQuestionsNotifyLikeRust|TestAsyncQuestionNotificationTitleFallbacksLikeRust|TestAsyncQuestionsAnsweredOnAnotherClientDismissesLikeRust|TestAsyncQuestionsAnsweredOnAnotherClientKeepsOtherDraftsLikeRust); verify with `go test ./tui/tea -run 'TestAsyncQuestionsNotifyLikeRust|TestAsyncQuestionNotificationTitleFallbacksLikeRust|TestAsyncQuestionsAnsweredOnAnotherClientDismissesLikeRust|TestAsyncQuestionsAnsweredOnAnotherClientKeepsOtherDraftsLikeRust' -count=1`."
    ]
   },
   {
@@ -10995,9 +10995,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: UserMessageSource, clear_pending_questions, on_review_started, queue_user_message_with_options_and_source"
+    "Round 768 (audit): #44328 implemented at tui/tea/async_questions.go:410 - func (m *Model) clearAsyncQuestionsForNewPrompt() { Behaviour: accepting a new prompt clears the pending async questions (and their notification) so stale question state cannot survive the new turn. Regression contract: tui/tea/async_questions_test.go (TestAsyncQuestionsClearedByNewPrompt|TestThreadTurnEndClearsAsyncQuestionNotificationLikeRust); verify with `go test ./tui/tea -run 'TestAsyncQuestionsClearedByNewPrompt|TestThreadTurnEndClearsAsyncQuestionNotificationLikeRust' -count=1`."
    ]
   },
   {
@@ -17827,9 +17827,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 8/25; needs review: CLOUD_SKILLS_WORLD_STATE_ID, CachedExecutorCatalog, CachedExecutorDiscoveryCatalog, CloudResourceCache, CloudSkillGeneration"
+    "Round 768 (audit): #47074 implemented at app/app.go:1616 - if snapshot := strings.TrimSpace(opts.CloudSkillsSnapshot); snapshot != \"\" { Behaviour: a host-supplied cloud skills snapshot is consumed at startup, and an invalid snapshot fails startup the way Rust does instead of silently ignoring it. Regression contract: app/cloud_skills_snapshot_test.go (TestAppServerCloudSkillsSnapshotFailsStartupLikeRust); verify with `go test ./app -run 'TestAppServerCloudSkillsSnapshotFailsStartupLikeRust' -count=1`."
    ]
   },
   {
