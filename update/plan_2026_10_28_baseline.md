@@ -1106,6 +1106,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - windowsSandboxModeFromConfigValues reports no legacy setup mode for mxc, so an mxc selection never enters windowsSandbox/setupStart; the app-server projection emits ["elevated","mxc"] and never the setup-only spellings.
 - Verification only this round: go test ./config -run 'Windows' -count=1 and go test ./appserver -run 'WindowsSandbox|ConfigRequirements' -count=1 both pass, backed by config/windows_sandbox_implementation_test.go, config/windows_requirements_test.go, config/startup_warnings_test.go and appserver/windows_sandbox_mxc_test.go.
 
-Status after reconciliation: `2008 complete`, `393 not_applicable`,
-`487 audit_pending`, `259 regression_pending`, `2 partial`,
+### Shared Bash/Zsh startup script exported for reuse (Round 829)
+
+## Round 829 - #45749 Extract reusable Bash and Zsh startup scripts
+
+- Rust exposes shell_startup_script from codex-shell-command: the shared interactive Zsh/Bash profile seeds, empty for every other shell type, with POSIX sh ENV handling left in snapshot capture.
+- Go had the two bodies only as capture-private constants; shell/startup.go now exports ShellStartupScript and snapshotStartupPrefix consumes it, keeping the sh prefix inside capture.
+- shell/startup_test.go pins the exact script bytes, the empty result for sh/powershell/cmd, and that interactive capture starts with the shared script while non-interactive capture does not.
+- Verified: go test ./shell -count=1, go test ./execserver -run 'Snapshot' -count=1, go build ./... .
+
+Status after reconciliation: `2009 complete`, `393 not_applicable`,
+`487 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

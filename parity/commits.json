@@ -13827,9 +13827,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #45749 extracts shell_startup_script from the snapshot-capture crate path (codex-shell-command/src/startup.rs): it returns the interactive Zsh .zshrc loader, the Bash .bashrc loader guarded by BASH_ENV, and an empty script for every other shell type, and interactive snapshot capture now calls it instead of embedding the two bodies (POSIX sh ENV handling stays in capture, and callers keep ownership of login startup flags and shell lifecycle). Go carried the same two bodies only as capture-private constants in shell/snapshot_scripts.go; this round adds shell/startup.go with the exported ShellStartupScript (Zsh/Bash bodies verbatim, empty for sh/powershell/cmd) and routes snapshotStartupPrefix through it while leaving the POSIX sh prefix built from posixEnvPathExpansionFunction plus snapshotShStartupScript inside capture, matching Rust's split. Regression: shell/startup_test.go pins the exact byte-for-byte Bash and Zsh scripts and the empty result for sh/powershell/cmd, and asserts interactive capture starts with the shared script while a non-interactive capture does not contain it. Verified with go test ./shell -count=1, go test ./execserver -run 'Snapshot' -count=1 and go build ./... ."
    ]
   },
   {
