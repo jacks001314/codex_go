@@ -13431,9 +13431,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Seatbelt previously never received the prepared managed-network context, so its Unix-domain-socket policy came only from explicit extra grants and an allow-all prepared grant had no effect. `sandbox/seatbelt.go` now parses the context's `allowUnixSockets`/`dangerouslyAllowAllUnixSockets`, gives that prepared policy precedence, normalizes and deduplicates absolute socket paths (resolving macOS aliases for existing paths), preserves explicit extra grants, and ignores relative entries. A restricted prepared list emits one `(allow system-socket (socket-domain AF_UNIX))` plus `UNIX_SOCKET_PATH_<n>` scoped bind/outbound rules; the explicit allow-all grant emits the broad AF_UNIX bind/outbound rules without path parameters; an empty prepared list emits no AF_UNIX grant. `sandbox.BuildCommandRunPlan` decodes the context on macOS and passes it to the Seatbelt argv builder, while the existing no-context builder stays behavior-compatible. Tests: `sandbox/seatbelt_test.go` (prepared+explicit precedence, relative-path rejection, empty allowlist, allow-all without unrestricted IP networking, malformed JSON) and `execserver/managed_network_unix_sockets_darwin_like_rust_test.go` (macOS `prepareExecProcess` wiring for restricted and allow-all grants). Verified with `go test ./sandbox -count=1`, `go test ./execserver -run 'PrepareExecProcess|ManagedNetwork' -count=1`, `go vet ./sandbox`, and `GOOS=darwin GOARCH=arm64 go test -c` for both `./sandbox` and `./execserver`."
    ]
   },
   {

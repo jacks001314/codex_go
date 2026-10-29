@@ -1001,6 +1001,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Existing regression coverage already freezes this contract: `eventmap/content_item_wire_test.go`, `appserver/image_reference_test.go`, `context/tool_output_parts_test.go`, and `utils/output_boundaries_like_rust_test.go`.
 - Verified with `go test ./eventmap -run 'ContentItem|Image' -count=1`, `go test ./appserver -run 'ImageReference|InputImage|UserInput' -count=1`, `go test ./utils -run 'OutputBoundar|Truncate.*Image|Image' -count=1`, and `go test ./context -run 'Image|ToolOutput|TypedFragment' -count=1`.
 
-Status after reconciliation: `2000 complete`, `392 not_applicable`,
-`494 audit_pending`, `263 regression_pending`, `0 partial`,
+### Honor prepared Unix socket permissions in Seatbelt (#45548) (Round 817)
+
+- Seatbelt previously ignored the prepared managed-network context entirely: the policy used only explicit extra socket grants, so prepared allowlists were omitted and an allow-all grant had no effect.
+- `sandbox/seatbelt.go` now parses the context's `allowUnixSockets` and `dangerouslyAllowAllUnixSockets`, gives the prepared policy precedence, and preserves explicit extra grants. Absolute paths are normalized, deduplicated, and sorted; relative entries are ignored; existing macOS paths resolve their top-level aliases.
+- A restricted prepared list emits one `(allow system-socket (socket-domain AF_UNIX))` plus `UNIX_SOCKET_PATH_<n>` scoped bind/outbound rules. The allow-all grant emits the broad AF_UNIX bind/outbound rules without path parameters. An empty prepared list emits no AF_UNIX grant.
+- `sandbox.BuildCommandRunPlan` decodes the managed-network context on macOS and passes it to the Seatbelt builder. The no-context builder remains behavior-compatible, and the daemon-socket deny still follows every socket allowance.
+- Tests: `sandbox/seatbelt_test.go` covers prepared-plus-explicit precedence, relative-path rejection, empty allowlists, allow-all without unrestricted IP networking, and malformed JSON; `execserver/managed_network_unix_sockets_darwin_like_rust_test.go` covers macOS `prepareExecProcess` wiring for restricted and allow-all grants.
+- Verified with `go test ./sandbox -count=1`, `go test ./execserver -run 'PrepareExecProcess|ManagedNetwork' -count=1`, `go vet ./sandbox`, and `GOOS=darwin GOARCH=arm64 go test -c` for both `./sandbox` and `./execserver`.
+
+Status after reconciliation: `2001 complete`, `392 not_applicable`,
+`493 audit_pending`, `263 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
