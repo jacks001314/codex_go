@@ -9830,9 +9830,10 @@ type voiceMeterSample struct {
 	speaker    uint8
 }
 
-// pushVoiceMeterSample records one intensity pair for the voice strip. A quiet
-// channel is released immediately instead of waiting for old peaks to scroll
-// out, matching the Rust sampler.
+// pushVoiceMeterSample records one intensity pair for the voice strip. Quiet
+// samples scroll into the history like any other frame, so earlier activity
+// stays visible until it ages out (Rust #44928) instead of being cleared by the
+// first silent frame on that channel.
 func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) {
 	if m == nil {
 		return
@@ -9842,14 +9843,6 @@ func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) 
 	}
 	microphone := chatwidget.VoiceMeterIntensity(microphonePeak)
 	speaker := chatwidget.VoiceMeterIntensity(speakerPeak)
-	for index := range m.audioMeterHistory {
-		if microphone == 0 {
-			m.audioMeterHistory[index].microphone = 0
-		}
-		if speaker == 0 {
-			m.audioMeterHistory[index].speaker = 0
-		}
-	}
 	if len(m.audioMeterHistory) >= chatwidget.VoiceMeterHistoryCapacity {
 		m.audioMeterHistory = m.audioMeterHistory[1:]
 	}

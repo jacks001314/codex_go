@@ -771,3 +771,52 @@ func TestModelVoiceStopFailureRecordsAppServerRequest(t *testing.T) {
 		t.Fatalf("failure metric = %#v", failure)
 	}
 }
+
+// Rust #44928: a quiet sample scrolls into the meter history instead of
+// clearing the channel's earlier activity, so recent speech stays visible until
+// it ages out of a full history window.
+func TestModelVoiceMeterHistoryKeepsQuietSamplesLikeRust(t *testing.T) {
+	model, _, _ := newVoiceTestModel(t)
+	model.realtimeHelperAttached = true
+	model.VoiceConversation.MarkVoiceBackendStarted()
+	model.VoiceConversation.MarkVoiceWebRTCConnected()
+
+	full := chatwidget.VoiceMeterIntensity(chatwidget.VoiceMeterFullScale)
+	model.onVoicePeaks = func() (uint16, uint16) { return chatwidget.VoiceMeterFullScale, 0 }
+	model.sampleVoicePeaks()
+	model.onVoicePeaks = func() (uint16, uint16) { return 0, chatwidget.VoiceMeterFullScale }
+	model.sampleVoicePeaks()
+
+	history := model.audioMeterHistory
+	if len(history) != 2 {
+		t.Fatalf("history = %#v", history)
+	}
+	if history[0].microphone != full || history[0].speaker != 0 {
+		t.Fatalf("quiet microphone sample cleared earlier speech: %#v", history)
+	}
+	if history[1].microphone != 0 || history[1].speaker != full {
+		t.Fatalf("quiet microphone sample was not appended: %#v", history)
+	}
+	// The earlier microphone peak still renders after the quiet frame.
+	meterLine := model.voiceStripLines(80)[1]
+	if !strings.Contains(meterLine, "█") {
+		t.Fatalf("earlier speech disappeared from %q", meterLine)
+	}
+
+	// A full history window of quiet samples eventually returns to silence.
+	model.onVoicePeaks = func() (uint16, uint16) { return 0, 0 }
+	for frame := 0; frame < chatwidget.VoiceMeterHistoryCapacity; frame++ {
+		model.sampleVoicePeaks()
+	}
+	if len(model.audioMeterHistory) != chatwidget.VoiceMeterHistoryCapacity {
+		t.Fatalf("history length = %d", len(model.audioMeterHistory))
+	}
+	for _, sample := range model.audioMeterHistory {
+		if sample.microphone != 0 || sample.speaker != 0 {
+			t.Fatalf("history kept stale activity: %#v", model.audioMeterHistory)
+		}
+	}
+	if meterLine := model.voiceStripLines(80)[1]; strings.Contains(meterLine, "█") {
+		t.Fatalf("meter did not settle to silence: %q", meterLine)
+	}
+}
