@@ -1865,6 +1865,23 @@ Add the experimental rollout compression trigger endpoint (#46020, closure).
   codex home instead of scheduling a pass with nowhere to run.
 - `go test ./appserver -run RolloutCompress` passes.
 
-Status after reconciliation: `2038 complete`, `400 not_applicable`,
-`458 audit_pending`, `250 regression_pending`, `3 partial`,
+### Allow browser cleanup hooks on interrupt (Round 873)
+
+# Round 873 - browser cleanup hooks on interrupt
+
+Rust #46029 (`2b2b0fa870429d52b53c61dda73cb0608f6fabae`) allows the curated remote browser cleanup hook to fire on interrupt, not just Stop/SubagentStop, while keeping the registered-connector and empty-input guards on raw Apps tool names.
+
+## What was already true in Go
+
+`appserver/bundled_hooks.go` already listed `HookEventInterrupt` for `browser@openai-curated-remote` and `appserver/runtime_router.go` already scheduled executor cleanup hooks with `HookEventInterrupt` on the interrupt path, filtering via `interruptHooksForCWD`.
+
+## Gap closed
+
+- New `appserver/bundled_hooks_interrupt_like_rust_test.go` mirrors the Rust table: registered interrupted app allowed; colliding connector rejected; manifest-provided arguments rejected.
+- Extended `TestExecutorPluginHookSourcesAdmitAppTargetsLikeRust` with `Interrupt` rows for the registered target, a colliding connector, and manifest arguments, so intake-and-routing is pinned for the interrupt event.
+
+Verification: `go test ./appserver -run 'ExecutorPluginHookSources|AllowlistedBundled|Interrupt|CleanupHook'` passes; `gofmt -l` clean on both touched test files.
+
+Status after reconciliation: `2039 complete`, `400 not_applicable`,
+`457 audit_pending`, `250 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

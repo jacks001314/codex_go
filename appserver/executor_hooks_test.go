@@ -91,6 +91,9 @@ func TestExecutorPluginHookSourcesAdmitAppTargetsLikeRust(t *testing.T) {
 	}{
 		{name: "registered stop target", event: "Stop", connectorID: "connector_openai_browser", input: map[string]any{}, meta: routing, want: true},
 		{name: "registered subagent target", event: "SubagentStop", connectorID: "connector_openai_browser", input: map[string]any{}, meta: routing, want: true},
+		{name: "registered interrupt target", event: "Interrupt", connectorID: "connector_openai_browser", input: map[string]any{}, meta: routing, want: true},
+		{name: "colliding interrupt connector", event: "Interrupt", connectorID: "connector_other_browser", input: map[string]any{}, meta: routing},
+		{name: "interrupt manifest arguments", event: "Interrupt", connectorID: "connector_openai_browser", input: map[string]any{"untrusted": true}, meta: routing},
 		{name: "colliding connector", event: "Stop", connectorID: "connector_other_browser", input: map[string]any{}, meta: routing},
 		{name: "unavailable connector", event: "Stop", connectorID: "", input: map[string]any{}, meta: routing},
 		{name: "manifest arguments", event: "Stop", connectorID: "connector_openai_browser", input: map[string]any{"untrusted": true}, meta: routing},

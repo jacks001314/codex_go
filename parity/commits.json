@@ -14703,9 +14703,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/bundled_hooks_interrupt_like_rust_test.go + Interrupt rows in executor_hooks_test.go pin #46029; go test ./appserver -run 'ExecutorPluginHookSources|AllowlistedBundled|Interrupt|CleanupHook' passes"
    ]
   },
   {
