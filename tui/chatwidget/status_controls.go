@@ -725,9 +725,11 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 		if !ok {
 			return "", false
 		}
+		// Rust's model_with_reasoning_display_name always appends the label,
+		// including the default label (chatwidget/status_surfaces.rs).
 		reasoning := StatusLineReasoningEffortLabel(s.Runtime.ReasoningEffort)
 		value := model
-		if reasoning != "" && reasoning != "default" {
+		if reasoning != "" {
 			value += " " + reasoning
 		}
 		if tier, ok := nonEmptyTrimmed(s.Runtime.ProcessingTier); ok {

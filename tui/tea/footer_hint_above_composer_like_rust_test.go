@@ -7,16 +7,15 @@ import (
 	codextui "codex_go/tui"
 )
 
-// Rust #47096: owned/fullscreen layouts reserve the hint row immediately above
-// the composer, while inline rendering keeps it after the composer.
-func TestFooterHintsSitAboveComposerInFullscreenLikeRust(t *testing.T) {
+// Rust keeps the passive hint row (and the status line above it) below the
+// composer block; only the `?` shortcut overlay takes the space above the input.
+func TestFooterHintSitsBelowComposerLikeRust(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		fullscreen bool
-		beforeComp bool
 	}{
-		{name: "fullscreen", fullscreen: true, beforeComp: true},
-		{name: "inline", fullscreen: false, beforeComp: false},
+		{name: "fullscreen", fullscreen: true},
+		{name: "inline", fullscreen: false},
 	} {
 		fullscreen := testCase.fullscreen
 		model := NewModel(codextui.NewState(nil), Options{
@@ -25,14 +24,14 @@ func TestFooterHintsSitAboveComposerInFullscreenLikeRust(t *testing.T) {
 			FullscreenTranscript: &fullscreen,
 			Placeholder:          "COMPOSER-MARKER",
 		})
-		view := model.View()
-		footerIndex := strings.Index(view, footerHelpText)
+		view := strings.TrimRight(model.View(), "\n")
+		footerIndex := strings.LastIndex(view, footerHelpText)
 		composerIndex := strings.Index(view, "COMPOSER-MARKER")
 		if footerIndex < 0 || composerIndex < 0 {
 			t.Fatalf("%s view missing footer/composer:\n%s", testCase.name, view)
 		}
-		if got := footerIndex < composerIndex; got != testCase.beforeComp {
-			t.Fatalf("%s footer before composer = %v, want %v:\n%s", testCase.name, got, testCase.beforeComp, view)
+		if footerIndex < composerIndex {
+			t.Fatalf("%s footer rendered above the composer:\n%s", testCase.name, view)
 		}
 	}
 }

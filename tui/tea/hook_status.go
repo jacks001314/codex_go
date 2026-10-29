@@ -87,14 +87,6 @@ func (m *Model) renderHookStatus(now time.Time) string {
 	return "\u2022 " + summary
 }
 
-func (m *Model) hookActivityNeedsReflow(now time.Time, width int) bool {
-	summary := m.runningHookSummary(now)
-	if summary == "" {
-		return false
-	}
-	return codextui.DisplayWidth("  \u2514 "+summary) > max(width, 1)
-}
-
 // renderHookSummaryText folds hook activity into the working row after the
 // reveal delay, using animation-gated shimmer (Rust HookStatus).
 func (m *Model) renderHookSummaryText(summary string, now time.Time) string {

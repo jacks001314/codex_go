@@ -112,10 +112,15 @@ func TestUsageNoticeReplacesPassiveFooterLikeRust(t *testing.T) {
 		t.Fatalf("notice disappeared with a draft/running turn: %q", footer)
 	}
 
+	// An open slash popup owns the space above the composer, so the quota
+	// notice yields; Rust keeps the running-task queue hint on the footer row.
 	model.slashPopup.Active = true
 	footer, _ = model.footerHelpLine()
-	if !strings.Contains(footer, footerHelpText) {
-		t.Fatalf("popup footer = %q, want passive hints", footer)
+	if strings.Contains(footer, "5h limit") {
+		t.Fatalf("popup footer kept the usage notice: %q", footer)
+	}
+	if !strings.Contains(footer, "to queue message") {
+		t.Fatalf("popup footer = %q, want the queue hint", footer)
 	}
 }
 

@@ -31,7 +31,7 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 		}
 	}
 	card := state.RenderStatusCard()
-	for _, want := range []string{"gcode (v0.145.0)", "Model:", "gpt-test", "Agents.md:", "AGENTS.md", "Account:", "dev@example.com (plus)", "Thread name:", "Release triage", "Session:", "thread-1", "Limits:"} {
+	for _, want := range []string{"OpenAI Codex (v0.145.0)", "Model:", "gpt-test", "Agents.md:", "AGENTS.md", "Account:", "dev@example.com (plus)", "Thread name:", "Release triage", "Session:", "thread-1", "Limits:"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card = %q, missing %q", card, want)
 		}

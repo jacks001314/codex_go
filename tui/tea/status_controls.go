@@ -805,23 +805,17 @@ func (m *Model) renderStatusHeader() string {
 	if m == nil {
 		return ""
 	}
-	base := ""
 	result := m.refreshStatusControls()
-	if m.statusLineConfiguredByUser && m.statusControls != nil && m.statusControls.StatusLineConfigured && result.StatusLineRendered && strings.TrimSpace(result.StatusLineText) != "" {
-		if m.statusLineUseColors {
-			threadColor := ""
-			if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
-				threadColor = codextui.ThreadColorSGR(codextui.ThreadColorForTheme(threadID, m.tuiTheme))
-			}
-			base = result.StatusLine.RenderStyled(threadColor, func(accent bottompane.StatusLineAccent) string {
-				return statusLineAccentSGR(m.tuiTheme, accent)
-			}, true)
-		} else {
-			base = result.StatusLineText
+	base := ""
+	if result.StatusLineRendered {
+		accent := func(value bottompane.StatusLineAccent) string {
+			return statusLineAccentSGR(m.tuiTheme, value)
 		}
-	} else if m.State != nil {
-		// Rust's status line shows the model's catalog display name.
-		base = m.State.RenderStatusLineWithModelName(m.modelDisplayName(m.State.Model))
+		threadColor := ""
+		if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
+			threadColor = codextui.ThreadColorSGR(codextui.ThreadColorForTheme(threadID, m.tuiTheme))
+		}
+		base = result.StatusLine.RenderStyled(threadColor, accent, false)
 	}
 	return m.attachPlanModeStatusIndicator(base)
 }

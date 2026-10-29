@@ -3,6 +3,7 @@ package tea
 import (
 	"strings"
 	"testing"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
@@ -18,7 +19,13 @@ func prefixTestModel(t *testing.T) *Model {
 
 func typeComposerRunes(t *testing.T, model *Model, text string) *Model {
 	t.Helper()
+	// Space the keystrokes like a person typing: the paste-burst detector treats
+	// sub-8ms character runs as pasted input and would turn the trailing Enter
+	// into a newline.
+	clock := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	model.now = func() time.Time { return clock }
 	for _, r := range text {
+		clock = clock.Add(20 * time.Millisecond)
 		updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}})
 		model = updated.(*Model)
 	}
@@ -40,8 +47,8 @@ func TestComposerKeepsSlashPrefixInEditableText(t *testing.T) {
 	if text := model.composerText(); text != "/" {
 		t.Fatalf("composerText() = %q, want /", text)
 	}
-	if model.composer.Prompt != "> " {
-		t.Fatalf("prompt = %q, want %q", model.composer.Prompt, "> ")
+	if model.composer.Prompt != "› " {
+		t.Fatalf("prompt = %q, want %q", model.composer.Prompt, "› ")
 	}
 	if model.ComposerValue() != "/" {
 		t.Fatalf("ComposerValue() = %q, want /", model.ComposerValue())
@@ -55,7 +62,7 @@ func TestComposerKeepsSlashPrefixInEditableText(t *testing.T) {
 		t.Fatalf("composerText() = %q, want /help", text)
 	}
 	view := model.View()
-	if !strings.Contains(view, "> /help") {
+	if !strings.Contains(view, "› /help") {
 		t.Fatalf("composer view is missing the editable slash command:\n%s", view)
 	}
 	if model.composer.Value() != "/help" {
@@ -96,8 +103,8 @@ func TestComposerBackspaceRemovesPromptPrefix(t *testing.T) {
 		if model.composerText() != "" {
 			t.Fatalf("%q: composerText() = %q, want empty", marker, model.composerText())
 		}
-		if model.composer.Prompt != "> " {
-			t.Fatalf("%q: prompt = %q, want %q", marker, model.composer.Prompt, "> ")
+		if model.composer.Prompt != "› " {
+			t.Fatalf("%q: prompt = %q, want %q", marker, model.composer.Prompt, "› ")
 		}
 	}
 

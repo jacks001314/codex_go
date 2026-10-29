@@ -7,13 +7,11 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
-	"codex_go/tui/chatwidget"
 	"codex_go/utils"
 )
 
-func composerTipTestModel(t *testing.T, width int) *Model {
+func startupTipTestModel(t *testing.T, width int, fullscreen bool) *Model {
 	t.Helper()
-	fullscreen := true
 	show := true
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:                width,
@@ -21,69 +19,46 @@ func composerTipTestModel(t *testing.T, width int) *Model {
 		FullscreenTranscript: &fullscreen,
 		ShowTooltips:         &show,
 	})
-	model.composerTips = newComposerTipState(42, nil)
+	model.addStartupSessionHeader("1.0.0")
 	model.View()
 	model.activityFollow = true
 	return model
 }
 
-// Rust #46931: composer-gap catalog tips are stable across redraws and must
-// fit on one row.
-func TestComposerTipsStableAndSingleRowLikeRust(t *testing.T) {
-	model := composerTipTestModel(t, 80)
-	first, ok := model.composerTipLine()
-	if !ok {
-		t.Fatal("no composer tip selected")
-	}
-	second, ok := model.composerTipLine()
-	if !ok || second != first {
-		t.Fatalf("tip changed across redraws: %q -> %q", first, second)
-	}
-	plain := utils.StripANSI(first)
-	if strings.Contains(plain, "\n") || codextui.DisplayWidth(first) > 78 {
-		t.Fatalf("tip is not a single fitting row: %q width=%d", plain, codextui.DisplayWidth(first))
+// Rust #47954: the startup tip lives in the transcript, so the fullscreen
+// composer gap stays blank and the passive footer keeps `? for shortcuts`.
+func TestStartupTipStaysOutOfFullscreenComposerGapLikeRust(t *testing.T) {
+	model := startupTipTestModel(t, 100, true)
+	view := model.View()
+	if strings.Contains(view, "**Tip:**") || strings.Contains(view, "Tip: ") {
+		t.Fatalf("fullscreen composer gap rendered a startup tip:\n%s", view)
 	}
 	footer, _ := model.footerHelpLine()
-	if footer != first {
-		t.Fatalf("footer = %q, want composer tip %q", footer, first)
+	if footer != footerHelpText {
+		t.Fatalf("footer = %q, want %q", footer, footerHelpText)
 	}
 }
 
-func TestComposerTipsYieldToUsageDraftAndRunningLikeRust(t *testing.T) {
-	model := composerTipTestModel(t, 100)
-	model.rateLimitSnapshots = map[string]chatwidget.RateLimitSnapshot{
-		"codex": {
-			LimitID:  "codex",
-			PlanType: "plus",
-			Primary:  usageNoticeWindowPtr(92, 300, nil),
-		},
+// The retained startup tip row keeps rendering in the inline transcript.
+func TestStartupTipRendersInInlineTranscriptLikeRust(t *testing.T) {
+	model := startupTipTestModel(t, 100, false)
+	found := false
+	for _, message := range model.State.Messages {
+		if !message.StartupTip {
+			continue
+		}
+		found = true
+		if !strings.Contains(message.Text, "Tip:") {
+			t.Fatalf("startup tip row = %q", message.Text)
+		}
 	}
-	footer, _ := model.footerHelpLine()
-	if !strings.Contains(footer, "⚠") {
-		t.Fatalf("usage notice did not outrank the tip: %q", footer)
-	}
-
-	model.rateLimitSnapshots = nil
-	tip, tipOK := model.composerTipLine()
-	if !tipOK {
-		t.Fatal("no composer tip selected before interaction checks")
-	}
-	model.composer.SetValue("draft")
-	footer, _ = model.footerHelpLine()
-	if footer == tip {
-		t.Fatalf("draft kept a composer tip: %q", footer)
-	}
-
-	model.composer.SetValue("")
-	model.State.SetStatus("running")
-	footer, _ = model.footerHelpLine()
-	if footer == tip {
-		t.Fatalf("running turn kept a composer tip: %q", footer)
+	if !found {
+		t.Fatal("inline transcript dropped the startup tip row")
 	}
 }
 
 func TestComposerGapCtrlClickOpensOSC8LinkLikeRust(t *testing.T) {
-	model := composerTipTestModel(t, 100)
+	model := startupTipTestModel(t, 100, true)
 	line := "Tip: " + codextui.OSC8Hyperlink("https://example.com/docs", "docs") + " end"
 	model.renderedSelection.regions[renderedRegionFooter] = renderedRegion{
 		kind: renderedRegionFooter,
@@ -115,33 +90,10 @@ func TestComposerGapCtrlClickOpensOSC8LinkLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #46931: a startup announcement is preferred until the first user turn,
-// then stays dismissed even if history is cleared.
-func TestComposerTipsPreferAnnouncementUntilFirstTurnLikeRust(t *testing.T) {
-	model := composerTipTestModel(t, 100)
-	announcement := "Welcome **back** to Codex"
-	model.composerTips = newComposerTipState(42, &announcement)
-	line, ok := model.composerTipLine()
-	if !ok || !strings.Contains(utils.StripANSI(line), "Welcome back to Codex") {
-		t.Fatalf("announcement tip = %q ok=%v", line, ok)
-	}
-
-	model.State.AddMessage(codextui.RoleUser, "first turn")
-	line, ok = model.composerTipLine()
-	if !ok || strings.Contains(utils.StripANSI(line), "Welcome back") {
-		t.Fatalf("announcement survived the first turn: %q ok=%v", line, ok)
-	}
-
-	model.State.Messages = nil
-	line, ok = model.composerTipLine()
-	if !ok || strings.Contains(utils.StripANSI(line), "Welcome back") {
-		t.Fatalf("cleared history restored the announcement: %q ok=%v", line, ok)
-	}
-}
-
-func TestStartupAnnouncementFetchInjectsBeforeFirstTurnLikeRust(t *testing.T) {
-	model := composerTipTestModel(t, 100)
-	model.composerTips = newComposerTipState(42, nil)
+// A fetched announcement replaces the transcript tip while the session is still
+// at its first turn; Rust prewarms the same cache before the first frame.
+func TestStartupAnnouncementReplacesTranscriptTipLikeRust(t *testing.T) {
+	model := startupTipTestModel(t, 100, false)
 	model.onFetchStartupAnnouncement = func() (string, bool) {
 		return "Fetched **announcement**", true
 	}
@@ -150,14 +102,24 @@ func TestStartupAnnouncementFetchInjectsBeforeFirstTurnLikeRust(t *testing.T) {
 		t.Fatal("startup announcement command missing")
 	}
 	model.Update(cmd())
-	line, ok := model.composerTipLine()
-	if !ok || !strings.Contains(utils.StripANSI(line), "Fetched announcement") {
-		t.Fatalf("fetched announcement = %q ok=%v", line, ok)
+	tip := utils.StripANSI(startupTipMessageText(model))
+	if !strings.Contains(tip, "Fetched announcement") {
+		t.Fatalf("transcript tip = %q", tip)
 	}
 
 	model.State.AddMessage(codextui.RoleUser, "first turn")
-	line, ok = model.composerTipLine()
-	if !ok || strings.Contains(utils.StripANSI(line), "Fetched announcement") {
-		t.Fatalf("fetched announcement survived the first turn: %q ok=%v", line, ok)
+	model.Update(StartupAnnouncementMsg{Text: "Late **announcement**", OK: true})
+	tip = utils.StripANSI(startupTipMessageText(model))
+	if strings.Contains(tip, "Late announcement") {
+		t.Fatalf("announcement replaced the tip after the first turn: %q", tip)
 	}
+}
+
+func startupTipMessageText(model *Model) string {
+	for _, message := range model.State.Messages {
+		if message.StartupTip {
+			return message.Text
+		}
+	}
+	return ""
 }

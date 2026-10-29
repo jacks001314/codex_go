@@ -82,8 +82,10 @@ func TestNestedConfirmationRetainsParentPickerLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.title != "Child Confirm" || len(model.modalParents) != 1 {
 		t.Fatalf("modal stack = child %#v parents=%d", model.modal, len(model.modalParents))
 	}
+	// Rust retains the whole view stack below the centered child, so the
+	// backdrop is the parent picker (the composer is already replaced by it).
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "Child Confirm") || !strings.Contains(view, "COMPOSER-MARKER") {
+	if !strings.Contains(view, "Child Confirm") || !strings.Contains(view, "Parent Picker") {
 		t.Fatalf("nested overlay missing child/backdrop:\n%s", view)
 	}
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
@@ -95,14 +97,23 @@ func TestNestedConfirmationRetainsParentPickerLikeRust(t *testing.T) {
 	}
 }
 
-// TestEveryBottomPaneModalUsesCenteredOverlayLikeRust covers the Rust #50504
-// kind matrix. A View-level session-picker field is the only full-screen
-// surface; ordinary pickers still use the centered overlay.
-func TestEveryBottomPaneModalUsesCenteredOverlayLikeRust(t *testing.T) {
-	kinds := []ModalKind{
-		ModalKindExperimental,
-		ModalKindRateLimitSwitch,
+// TestConfirmationKindsUseCenteredOverlayLikeRust covers the Rust rule that
+// only `SelectionViewParams::confirmation()` views float over their backdrop
+// (ViewPresentation::Centered); ordinary pickers stay inline in the bottom pane.
+func TestConfirmationKindsUseCenteredOverlayLikeRust(t *testing.T) {
+	for _, kind := range []ModalKind{
+		ModalKindGeneric,
 		ModalKindReview,
+		ModalKindRunningTaskExit,
+		ModalKindMisalignment,
+		ModalKindRateLimitSwitch,
+	} {
+		if !modalCenteredOverlayKind(kind) {
+			t.Fatalf("confirmation kind %q bypasses the centered overlay", kind)
+		}
+	}
+	for _, kind := range []ModalKind{
+		ModalKindExperimental,
 		ModalKindSkills,
 		ModalKindManageSkills,
 		ModalKindExternalImport,
@@ -118,11 +129,8 @@ func TestEveryBottomPaneModalUsesCenteredOverlayLikeRust(t *testing.T) {
 		ModalKindGoal,
 		ModalKindPresets,
 		ModalKindConfig,
-		ModalKindMisalignment,
 		ModalKindWindowsSandbox,
-		ModalKindRunningTaskExit,
 		ModalKindWorktree,
-		ModalKindGeneric,
 		ModalKindApproval,
 		ModalKindElicitation,
 		ModalKindPermissions,
@@ -132,17 +140,17 @@ func TestEveryBottomPaneModalUsesCenteredOverlayLikeRust(t *testing.T) {
 		ModalKindUserInput,
 		ModalKindVoiceChannels,
 		ModalKindPicker,
-	}
-	for _, kind := range kinds {
-		if !modalCenteredOverlayKind(kind) {
-			t.Fatalf("modal kind %q bypasses the centered overlay", kind)
+	} {
+		if modalCenteredOverlayKind(kind) {
+			t.Fatalf("picker kind %q should render inline", kind)
 		}
 	}
 }
 
-// TestWindowsSandboxDialogRetainsBackdropLikeRust covers a specialized direct
-// prompt renderer that previously bypassed the shared overlay.
-func TestWindowsSandboxDialogRetainsBackdropLikeRust(t *testing.T) {
+// TestWindowsSandboxPromptReplacesComposerLikeRust covers the Windows sandbox
+// prompt, which Rust builds with `SelectionViewParams::picker()` and therefore
+// renders inline in place of the composer.
+func TestWindowsSandboxPromptReplacesComposerLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:       80,
 		Height:      24,
@@ -154,8 +162,8 @@ func TestWindowsSandboxDialogRetainsBackdropLikeRust(t *testing.T) {
 		SetupChoiceRequired: true,
 	})
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "COMPOSER-MARKER") {
-		t.Fatalf("sandbox prompt removed the composer backdrop:\n%s", view)
+	if strings.Contains(view, "COMPOSER-MARKER") {
+		t.Fatalf("sandbox picker should replace the composer:\n%s", view)
 	}
 	if !strings.Contains(view, "Set up default sandbox") {
 		t.Fatalf("sandbox prompt missing its actions:\n%s", view)

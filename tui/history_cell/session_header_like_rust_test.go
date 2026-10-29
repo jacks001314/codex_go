@@ -30,7 +30,7 @@ func TestSessionHeaderOmitsRandomizedGreetingLikeRust(t *testing.T) {
 	displayLines := header.DisplayLines(80)
 	display := strings.Join(displayLines, "\n")
 	// Rust #48562: every session header uses the compact borderless layout.
-	if !strings.Contains(display, ">_ gcode (v1.2.3)") || !strings.Contains(display, `D:\repo`) {
+	if !strings.Contains(display, ">_ OpenAI Codex (v1.2.3)") || !strings.Contains(display, `D:\repo`) {
 		t.Fatalf("display header = %q", display)
 	}
 	if strings.Contains(display, "model:") {

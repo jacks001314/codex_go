@@ -11,7 +11,6 @@ import (
 	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
-	"codex_go/utils"
 )
 
 func automaticTitleModel(t *testing.T, renameErr error, suggestion string) (*Model, *[]string, *int) {
@@ -135,14 +134,17 @@ func TestAutomaticThreadTitlePendingShowsNoProgressSpinnerLikeRust(t *testing.T)
 	}
 	model.refreshStatusControls()
 
-	view := utils.StripANSI(model.View())
+	model.View()
+	footerText := strings.Join(model.renderedSelection.regions[renderedRegionFooter].text, "\n")
 	statusLine, ok := model.statusControls.StatusLineValueForItem(bottompane.StatusLineThreadTitle)
 	if !ok || statusLine != "Fix the login timeout" {
 		t.Fatalf("thread title status line = %q, %v", statusLine, ok)
 	}
 	for _, frame := range chatwidget.TerminalTitleSpinnerFrames {
-		if strings.Contains(view, frame) {
-			t.Fatalf("footer rendered title-generation spinner %q:\n%s", frame, view)
+		// The settled welcome blossom is braille art, so only the footer,
+		// status line, and terminal title must stay spinner-free.
+		if strings.Contains(footerText, frame) {
+			t.Fatalf("footer rendered title-generation spinner %q\nfooter=%q", frame, footerText)
 		}
 		if strings.Contains(statusLine, frame) {
 			t.Fatalf("status line rendered title-generation spinner: %q", statusLine)

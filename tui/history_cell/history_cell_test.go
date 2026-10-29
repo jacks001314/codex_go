@@ -691,7 +691,7 @@ func TestPatchSearchAndSessionHistoryCells(t *testing.T) {
 
 	header := NewSessionHeader("gpt-5", "high", `D:\repo\project`, "1.2.3").WithYoloMode(true)
 	headerDisplay := strings.Join(header.DisplayLines(80), "\n")
-	for _, want := range []string{">_ gcode (v1.2.3)", "project", "permissions: YOLO mode"} {
+	for _, want := range []string{">_ OpenAI Codex (v1.2.3)", "project", "permissions: YOLO mode"} {
 		if !strings.Contains(headerDisplay, want) {
 			t.Fatalf("session header missing %q:\n%s", want, headerDisplay)
 		}

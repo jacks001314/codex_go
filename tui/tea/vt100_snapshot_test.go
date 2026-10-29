@@ -37,8 +37,6 @@ func TestModelVT100TerminalSnapshotMainView(t *testing.T) {
 	model := NewModel(state, Options{Width: 82, Height: 18})
 
 	assertVT100Snapshot(t, model.View(), 82, 24, `
-Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | Sandb…
-
 › summarize the repo
 
 
@@ -50,10 +48,12 @@ Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | Sand
 
 
 
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands
-> Ask gcode
->
->`)
+
+
+› Ask Codex to do anything
+
+  gpt-5 high · D:\qax\reagent\dev\codex_go\tui\tea
+  ? for shortcuts`)
 }
 
 func TestModelVT100TerminalSnapshotApprovalModal(t *testing.T) {
@@ -66,23 +66,24 @@ func TestModelVT100TerminalSnapshotApprovalModal(t *testing.T) {
 	})
 
 	assertVT100Snapshot(t, model.View(), 76, 24, `
-Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: de…
 No messages yet.
 
 
-                     ╭───────────────────────────────╮
-                     │Run command?                   │
-                     │  Reason: needs tests          │
-                     │  Working directory: D:\repo   │
-                     │  go test ./...                │
-                     │› 1. Allow for this turn (y)   │
-                     │  2. Allow for this session (a)│
-                     │  3. Deny (d)                  │
-                     │Esc cancel | Enter choose      │
-enter send · ctrl+j n╰───────────────────────────────╯uit · /help commands
-> Ask gcode
->
->`)
+
+
+
+
+
+
+  Run command?
+
+  Reason: needs tests
+  Working directory: D:\repo
+  $ go test ./...
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for this command in this session (a)
+  3. No, and tell Codex what to do differently (esc)
+  Press enter to confirm or esc to cancel`)
 }
 
 func assertVT100Snapshot(t *testing.T, view string, width int, height int, want string) {

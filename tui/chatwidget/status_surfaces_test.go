@@ -9,7 +9,7 @@ import (
 
 func TestStatusSurfaceSelectionsDefaultsAliasesAndInvalids(t *testing.T) {
 	selection := NewStatusSurfaceSelections(nil, nil)
-	if !reflect.DeepEqual(selection.StatusLineItems, []bottompane.StatusLineItem{bottompane.StatusLineModelWithReasoning, bottompane.StatusLineCurrentDir}) {
+	if !reflect.DeepEqual(selection.StatusLineItems, []bottompane.StatusLineItem{bottompane.StatusLineModelWithReasoning, bottompane.StatusLineCurrentDir, bottompane.StatusLineThreadName}) {
 		t.Fatalf("default status items = %#v", selection.StatusLineItems)
 	}
 	if !reflect.DeepEqual(selection.TerminalTitleItems, []TerminalTitleItem{TerminalTitleSpinner, TerminalTitleThreadName, TerminalTitleProject}) {

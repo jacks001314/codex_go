@@ -39,7 +39,7 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 	// the compact borderless title/directory layout; the boxed model row is gone.
 	lines := []string{
 		"",
-		"  >_ gcode " + c.versionLabel(),
+		"  >_ OpenAI Codex " + c.versionLabel(),
 		"     " + c.formatDirectoryLimit(width-5),
 	}
 	if c.YoloMode {
@@ -53,7 +53,7 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 
 func (c SessionHeaderHistoryCell) RawLines() []string {
 	lines := []string{
-		"gcode " + c.versionLabel(),
+		"OpenAI Codex " + c.versionLabel(),
 		"model: " + strings.TrimSpace(c.Model+reasoningSuffix(c.ReasoningEffort)),
 		"directory: " + c.formatDirectory(0),
 	}

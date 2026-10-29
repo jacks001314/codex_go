@@ -6,6 +6,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 
@@ -23,56 +24,71 @@ const composerWheelRows = 3
 // and scrolling rules. Inline mode keeps the terminal-owned layout: finalized
 // output stays in scrollback and the composer remains a fixed three rows.
 func (m *Model) composerBounded() bool {
-	return m != nil && m.ownedScreen && !m.rawOutput
+	// Rust grows the composer with the draft in every transcript mode; only raw
+	// output keeps the fixed single-row prompt.
+	return m != nil && !m.rawOutput
 }
 
 // composerContentRows returns the number of wrapped prompt rows Bubbles will
 // paint for the current draft. It ports the textarea's wrap pass so the model
 // can reserve the same height and locate the caret row without reading the
 // widget's private viewport.
+// composerRowsCache memoizes composerContentRows for one draft and width.
+type composerRowsCache struct {
+	valid bool
+	value string
+	width int
+	rows  int
+}
+
 func (m *Model) composerContentRows() int {
 	if m == nil {
 		return defaultComposerHeight
 	}
 	value := m.composer.Value()
 	if value == "" {
-		return defaultComposerHeight
+		return 1
 	}
 	width := m.composer.Width()
+	if m.composerContentRowsCache.valid && m.composerContentRowsCache.width == width && m.composerContentRowsCache.value == value {
+		return m.composerContentRowsCache.rows
+	}
 	rows := 0
 	for _, line := range strings.Split(value, "\n") {
 		rows += composerWrappedRowCount([]rune(line), width)
 	}
-	return max(rows, defaultComposerHeight)
+	rows = max(rows, 1)
+	m.composerContentRowsCache = composerRowsCache{valid: true, value: value, width: width, rows: rows}
+	return rows
 }
 
-// composerTargetRows returns the textarea height reserved below the
-// transcript. The cap covers the whole composer, including the painted border,
-// matching Rust's ComposerRenderOptions::max_height.
+// composerChromeRows counts the rows the composer presentation spends outside
+// the prompt text: the shaded padding rows plus the status and hint rows.
+const composerChromeRows = 4
+
+// composerTargetRows returns the prompt rows reserved below the transcript.
+// Rust caps the whole composer presentation (padding, status, and hint rows
+// included) at two thirds of the screen with an eight-row floor, so the prompt
+// itself gets whatever is left (app/owned_transcript.rs::max_composer_height).
 func (m *Model) composerTargetRows() int {
 	if m == nil || !m.composerBounded() {
-		return defaultComposerHeight
+		return 1
 	}
 	content := m.composerContentRows()
 	maxRows := max(m.height*2/3, 8)
 	if maxRows > m.height {
 		maxRows = m.height
 	}
-	if m.regionChromeEnabled() {
-		maxRows -= 2
-	}
-	maxRows = max(maxRows, defaultComposerHeight)
+	maxRows -= composerChromeRows
+	maxRows = max(maxRows, 1)
 	return min(content, maxRows)
 }
 
-// composerSectionRows includes the rounded border painted by
+// composerSectionRows includes the shaded padding rows painted by
 // renderComposerRegion.
 func (m *Model) composerSectionRows() int {
-	rows := m.composerTargetRows()
-	if m.regionChromeEnabled() {
-		rows += 2
-	}
-	return rows
+	// The shaded block carries one blank row above and below the prompt.
+	return m.composerTargetRows() + 2
 }
 
 // resetComposerFollow resumes caret following after editor input. Manual wheel
@@ -222,22 +238,61 @@ func (m *Model) renderComposerWindow() string {
 	for _, row := range rows[scroll:min(scroll+target, len(rows))] {
 		visible = append(visible, row)
 	}
+	// Rust paints the live prefix once at the textarea's top row; wrapped and
+	// scrolled rows keep the LIVE_PREFIX_COLS gutter as plain spaces.
+	m.paintComposerPromptGutter(visible)
 	for len(visible) < target {
 		visible = append(visible, "")
 	}
 	m.applyComposerSelectionHighlight(visible, scroll)
 	m.annotateComposerWindowHyperlinks(visible, scroll)
 	if scroll > 0 {
-		visible[0] = appendComposerScrollArrow(visible[0], "↑")
+		visible[0] = composerScrollArrowLine(visible[0], "↑", m.width)
 	}
 	if scroll+target < total {
-		visible[len(visible)-1] = appendComposerScrollArrow(visible[len(visible)-1], "↓")
+		visible[len(visible)-1] = composerScrollArrowLine(visible[len(visible)-1], "↓", m.width)
 	}
 	return strings.Join(visible, "\n")
 }
 
-func appendComposerScrollArrow(line string, arrow string) string {
-	return line + lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+arrow)
+// paintComposerPromptGutter keeps the prompt glyph on the first visible row and
+// replaces it with an equal-width gutter on every other row.
+func (m *Model) paintComposerPromptGutter(visible []string) {
+	if m == nil || len(visible) <= 1 {
+		return
+	}
+	prompt := m.composer.Prompt
+	if prompt == "" {
+		return
+	}
+	promptWidth := max(codextui.DisplayWidth(prompt), 1)
+	gutter := strings.Repeat(" ", promptWidth)
+	plainPrompt := ansi.Strip(prompt)
+	for i := 1; i < len(visible); i++ {
+		// The textarea styles the prompt, so the raw row starts with escape
+		// sequences. Compare the painted text and drop the whole prompt span
+		// with its styling to keep the shaded block background intact.
+		if !strings.HasPrefix(ansi.Strip(visible[i]), plainPrompt) {
+			continue
+		}
+		visible[i] = ansi.TruncateLeft(visible[i], promptWidth, gutter)
+	}
+}
+
+// composerScrollArrowLine paints the hidden-row arrow in the composer's right
+// margin column, matching Rust's textarea_rect.right() placement.
+func composerScrollArrowLine(line string, arrow string, width int) string {
+	if width <= 1 {
+		return line
+	}
+	if ansi.StringWidth(line) > width-1 {
+		line = ansi.Truncate(line, width-1, "")
+	}
+	pad := width - 1 - ansi.StringWidth(line)
+	if pad < 0 {
+		pad = 0
+	}
+	return line + strings.Repeat(" ", pad) + lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(arrow)
 }
 
 // composerWrappedRowCount mirrors Bubbles textarea.wrap. Keeping the count in

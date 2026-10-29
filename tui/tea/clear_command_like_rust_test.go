@@ -43,7 +43,7 @@ func TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust(t *testing.T) {
 				t.Fatalf("clear state = thread %q messages %d status %q", state.ThreadID, len(state.Messages), state.Status)
 			}
 			// Rust #48562 re-inserts the compact borderless header after /clear.
-			if view := model.View(); !strings.Contains(view, ">_ gcode (vdev)") || strings.Contains(view, "No messages yet.") {
+			if view := model.View(); !strings.Contains(view, ">_ OpenAI Codex (vdev)") || strings.Contains(view, "No messages yet.") {
 				t.Fatalf("View() missing fresh session header:\n%s", view)
 			}
 		})

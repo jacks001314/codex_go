@@ -58,7 +58,7 @@ func TestDaybreakNoticeOnNewThreadAndResumeLikeRust(t *testing.T) {
 		Messages: []codextui.Message{{Role: codextui.RoleUser, Text: "replayed"}},
 	})
 	if len(resumed.State.Messages) < 3 ||
-		!strings.Contains(resumed.State.Messages[0].Text, ">_ gcode") ||
+		!strings.Contains(resumed.State.Messages[0].Text, ">_ OpenAI Codex") ||
 		!strings.Contains(resumed.State.Messages[1].Text, chatwidget.DaybreakNewTurnsNotice) ||
 		resumed.State.Messages[2].Text != "replayed" {
 		t.Fatalf("resumed messages = %#v", resumed.State.Messages)

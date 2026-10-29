@@ -8,9 +8,10 @@ import (
 	"codex_go/utils"
 )
 
-// Rust #47096: owned transcripts clip the shared hint row before activity and
-// previews, while the composer keeps its rows on short terminals.
-func TestShortFullscreenClipsHintsBeforeActivityLikeRust(t *testing.T) {
+// Rust owned_transcript packs the frame into the terminal: the transcript and
+// the flexible activity row yield rows before the composer loses any, and the
+// composer keeps its shaded block, status line, and passive footer hint.
+func TestShortFullscreenClipsTranscriptBeforeActivityLikeRust(t *testing.T) {
 	fullscreen := true
 	newModel := func(height int) *Model {
 		state := codextui.NewState(nil)
@@ -24,35 +25,25 @@ func TestShortFullscreenClipsHintsBeforeActivityLikeRust(t *testing.T) {
 		})
 	}
 
-	model := newModel(8)
-	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "COMPOSER-MARKER") {
-		t.Fatalf("short view clipped the composer:\n%s", view)
-	}
-	if strings.Contains(view, footerHelpText) {
-		t.Fatalf("short view kept hints before activity:\n%s", view)
-	}
-	if !strings.Contains(view, "Working (") {
-		t.Fatalf("short view clipped activity before hints:\n%s", view)
-	}
-	if lines := strings.Count(strings.TrimRight(view, "\n"), "\n") + 1; lines > 8 {
-		t.Fatalf("short view rows = %d, want <= 8:\n%s", lines, view)
+	for _, height := range []int{5, 6, 7, 8, 12} {
+		view := utils.StripANSI(newModel(height).View())
+		if !strings.Contains(view, "COMPOSER-MARKER") {
+			t.Fatalf("height %d clipped the composer:\n%s", height, view)
+		}
+		if !strings.Contains(view, footerHelpText) {
+			t.Fatalf("height %d dropped the passive footer hint:\n%s", height, view)
+		}
+		if lines := strings.Count(strings.TrimRight(view, "\n"), "\n") + 1; lines > height {
+			t.Fatalf("height %d rendered %d rows:\n%s", height, lines, view)
+		}
 	}
 
-	tighter := utils.StripANSI(newModel(7).View())
-	if !strings.Contains(tighter, "COMPOSER-MARKER") {
-		t.Fatalf("tighter view clipped the composer:\n%s", tighter)
+	// The activity row is flexible: it survives while the transcript yields.
+	if view := utils.StripANSI(newModel(7).View()); !strings.Contains(view, "Working (") {
+		t.Fatalf("height 7 dropped activity before the transcript:\n%s", view)
 	}
-	if strings.Contains(tighter, "Working (") {
-		t.Fatalf("tighter view kept activity after hints were clipped:\n%s", tighter)
-	}
-	if lines := strings.Count(strings.TrimRight(tighter, "\n"), "\n") + 1; lines > 7 {
-		t.Fatalf("tighter view rows = %d, want <= 7:\n%s", lines, tighter)
-	}
-
-	roomy := utils.StripANSI(newModel(12).View())
-	if !strings.Contains(roomy, footerHelpText) || !strings.Contains(roomy, "Working (") {
-		t.Fatalf("roomy fullscreen view dropped hints/activity:\n%s", roomy)
+	if view := utils.StripANSI(newModel(6).View()); strings.Contains(view, "Working (") {
+		t.Fatalf("height 6 kept activity after the transcript was clipped:\n%s", view)
 	}
 
 	inline := false

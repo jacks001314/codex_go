@@ -61,7 +61,11 @@ type ModalOption struct {
 	DisabledReason       string
 	DisabledGutterMarker string
 	Shortcut             string
-	Disabled             bool
+	// DisplayShortcut overrides the key hint painted after the label when it
+	// differs from the routing shortcut (Rust ApprovalOption.display_shortcut).
+	// The exec-approval decline row binds Esc/n but displays "esc".
+	DisplayShortcut string
+	Disabled        bool
 	// RequireConfirmation arms the option on its first activation and only
 	// runs it on a second activation (Rust SelectionItem
 	// require_explicit_confirmation, #44744). Destructive options such as
@@ -165,6 +169,10 @@ type modalState struct {
 	armedOptionID string
 
 	elicitation *bottompane.ElicitationFormRequest
+	// notice carries a form-validation error (for example a missing required
+	// field) inside the dialog surface. Rust renders these in the form itself
+	// rather than in the footer notice row.
+	notice string
 	// userVerification marks the openai/userVerification elicitation so its
 	// title and request details carry terminal hyperlinks (Rust #51458).
 	userVerification bool
@@ -211,11 +219,66 @@ type modalState struct {
 }
 
 func DefaultApprovalOptions() []ModalOption {
+	// Mirrors Rust's ExecApprovalOptions labels and key hints
+	// (bottom_pane/approval_overlay.rs).
 	return []ModalOption{
-		{ID: "allow_once", Label: "Allow for this turn", Shortcut: "y"},
-		{ID: "allow_session", Label: "Allow for this session", Shortcut: "a"},
-		{ID: "deny", Label: "Deny", Shortcut: "d"},
+		{ID: "allow_once", Label: "Yes, proceed", Shortcut: "y"},
+		{ID: "allow_session", Label: "Yes, and don't ask again for this command in this session", Shortcut: "a"},
+		{ID: "deny", Label: "No, and tell Codex what to do differently", Shortcut: "d", DisplayShortcut: "esc"},
 	}
+}
+
+// modalShowsOptionShortcut mirrors Rust's ApprovalOverlay row suffix: only
+// approval-style surfaces append the key hint to the option label.
+func (m *Model) modalShowsOptionShortcut() bool {
+	if m == nil || m.modal == nil {
+		return false
+	}
+	switch m.modal.kind {
+	case ModalKindApproval, ModalKindElicitation, ModalKindPermissions:
+		return true
+	default:
+		return false
+	}
+}
+
+// modalOptionIndent mirrors Rust's menu-surface inset: elicitation and
+// request-user-input views render their rows inside a two-column inset, while
+// the approval overlay paints its option rows at the left edge.
+func (m *Model) modalOptionIndent() string {
+	if m == nil || m.modal == nil {
+		return ""
+	}
+	switch m.modal.kind {
+	case ModalKindElicitation, ModalKindUserInput:
+		return "  "
+	default:
+		return ""
+	}
+}
+
+func (m *Model) modalOptionLabel(option ModalOption) string {
+	label := option.Label
+	if option.Disabled {
+		label += " [disabled]"
+	}
+	if hint := m.modalOptionShortcutHint(option); hint != "" {
+		label += " (" + hint + ")"
+	}
+	return label
+}
+
+// modalOptionShortcutHint mirrors Rust's ApprovalOption.display_shortcut: the
+// hint painted after the label prefers DisplayShortcut and falls back to the
+// routing key.
+func (m *Model) modalOptionShortcutHint(option ModalOption) string {
+	if !m.modalShowsOptionShortcut() {
+		return ""
+	}
+	if option.DisplayShortcut != "" {
+		return option.DisplayShortcut
+	}
+	return option.Shortcut
 }
 
 func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
@@ -224,7 +287,7 @@ func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
 		if body != "" {
 			body += "\n"
 		}
-		body += strings.TrimSpace(message.Command)
+		body += "$ " + strings.TrimSpace(message.Command)
 	}
 	options := message.Options
 	if len(options) == 0 {
@@ -329,6 +392,7 @@ func normalizeModalOptions(options []ModalOption) []ModalOption {
 			DisabledReason:       strings.TrimSpace(option.DisabledReason),
 			DisabledGutterMarker: strings.TrimSpace(option.DisabledGutterMarker),
 			Shortcut:             strings.ToLower(strings.TrimSpace(option.Shortcut)),
+			DisplayShortcut:      strings.ToLower(strings.TrimSpace(option.DisplayShortcut)),
 			Disabled:             option.Disabled,
 			RequireConfirmation:  option.RequireConfirmation,
 		})
@@ -1552,7 +1616,7 @@ func (m *Model) resolveElicitationModal(modal *modalState, optionID string, canc
 		}
 		decision, err := request.Submit()
 		if err != nil {
-			m.notice = err.Error()
+			modal.notice = err.Error()
 			return nil, false
 		}
 		return elicitationDecisionFromBottomPane(decision), true
@@ -1561,7 +1625,7 @@ func (m *Model) resolveElicitationModal(modal *modalState, optionID string, canc
 	case "accept":
 		decision, err := request.Submit()
 		if err != nil {
-			m.notice = err.Error()
+			modal.notice = err.Error()
 			return nil, false
 		}
 		return elicitationDecisionFromBottomPane(decision), true
@@ -1727,11 +1791,16 @@ func clampModalInt(value int, low int, high int) int {
 
 // modalOptionBudget returns the rows available to the picker's result
 // viewport. The status and footer rows stay visible and the transcript keeps
-// its minimum height.
+// its minimum height. Rust caps every popup list at MAX_POPUP_ROWS (8) rows so
+// pickers keep a uniform size regardless of terminal height
+// (bottom_pane/popup_consts.rs).
 func (m *Model) modalOptionBudget(prefixRows int, suffixRows int) int {
-	maxRows := max(m.height-6, 4)
-	return max(maxRows-prefixRows-suffixRows, 1)
+	available := max(m.height-6-prefixRows-suffixRows, 1)
+	return min(available, modalMaxOptionRows)
 }
+
+// modalMaxOptionRows mirrors Rust's MAX_POPUP_ROWS.
+const modalMaxOptionRows = 8
 
 // modalOptionWindow keeps the selected option visible and reserves rows for
 // the ↑/↓ overflow indicators when the result viewport is smaller than the
@@ -1746,11 +1815,7 @@ func modalOptionWindow(total int, selected int, scrollTop int, budget int) (star
 	if total <= budget {
 		return 0, total, false, false
 	}
-	rows = budget
-	if budget >= 3 {
-		rows = budget - 2
-	}
-	rows = max(rows, 1)
+	rows = max(budget, 1)
 	selected = clampModalInt(selected, 0, total-1)
 	start = clampModalInt(scrollTop, 0, total-rows)
 	if selected < start {
@@ -1812,6 +1877,12 @@ func (m *Model) renderModal() string {
 	var builder strings.Builder
 	title := m.modal.title
 	body := m.modal.body
+	if m.modal.notice != "" {
+		if strings.TrimSpace(body) != "" {
+			body += "\n"
+		}
+		body += m.modal.notice
+	}
 	footerNote := m.modal.footerNote
 	if m.modal.userVerification {
 		// Rust #51458 renders the verification title and request details with
@@ -1833,16 +1904,32 @@ func (m *Model) renderModal() string {
 			BreakWords: true,
 		}), "\n")
 	}
+	builder.WriteString("  ")
 	builder.WriteString(title)
 	builder.WriteString("\n")
+	if body != "" || len(m.modal.options) > 0 {
+		// Rust's pickers keep a one-row header gap between the title and the
+		// result list (selection_picker_layout header_gap).
+		builder.WriteString("\n")
+	}
 	if m.modal.kind == ModalKindMisalignment {
 		body = m.renderMisalignmentBody()
 	}
 	if body != "" {
 		builder.WriteString(indentLines(body, "  "))
 		builder.WriteString("\n")
+		if m.modalOptionIndent() != "" {
+			builder.WriteString("\n")
+		}
 	}
-	footer := firstNonEmpty(m.modal.footerHint, "Esc cancel | Enter choose")
+	footerDefault := "Esc cancel | Enter choose"
+	if m.modal.kind == ModalKindPicker {
+		footerDefault = "enter select \u00b7 esc back"
+	}
+	if m.modal.kind == ModalKindApproval {
+		footerDefault = "Press enter to confirm or esc to cancel"
+	}
+	footer := firstNonEmpty(m.modal.footerHint, footerDefault)
 	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
 		footer = firstNonEmpty(m.modal.footerHint, "space toggle \u00b7 enter save \u00b7 esc cancel")
 	} else if m.modal.kind == ModalKindExperimental {
@@ -1880,8 +1967,27 @@ func (m *Model) renderModal() string {
 	)
 	m.modal.optionScrollTop = start
 	m.modal.optionVisibleRows = visible
-	if above {
-		builder.WriteString("\u2191\n")
+	overflow := len(m.modal.options) > optionBudget
+	if overflow {
+		// Rust reserves one indicator row above and below the result list
+		// (selection_picker_layout) and paints the arrow when the window is
+		// scrolled, leaving the row blank at the ends of the list.
+		if above {
+			builder.WriteString("\u2191\n")
+		} else {
+			builder.WriteString("\n")
+		}
+	}
+	// Rust's list rows pair the numbered label with a description column
+	// (selection_row_layout): the name column is padded, there is no dash, and
+	// the selected row fills the pane width. Approval rows keep their key hint.
+	nameWidth := 0
+	for i := start; i < start+visible && i < len(m.modal.options); i++ {
+		option := m.modal.options[i]
+		label := m.modalOptionLabel(option)
+		if width := codextui.DisplayWidth(label); width > nameWidth {
+			nameWidth = width
+		}
 	}
 	for i := start; i < start+visible && i < len(m.modal.options); i++ {
 		option := m.modal.options[i]
@@ -1894,13 +2000,8 @@ func (m *Model) renderModal() string {
 				check = "[x] "
 			}
 		}
-		line := prefix + check + option.Label
-		if option.Disabled {
-			line += " [disabled]"
-		}
-		if option.Shortcut != "" && option.Shortcut != "enter" {
-			line += " (" + option.Shortcut + ")"
-		}
+		label := m.modalOptionLabel(option)
+		line := m.modalOptionIndent() + prefix + check + label
 		description := option.Description
 		if option.DisabledReason != "" {
 			if description != "" {
@@ -1909,22 +2010,28 @@ func (m *Model) renderModal() string {
 			description += option.DisabledReason
 		}
 		if description != "" {
-			line += " - " + description
+			pad := nameWidth - codextui.DisplayWidth(label)
+			if pad < 0 {
+				pad = 0
+			}
+			line += strings.Repeat(" ", pad+2) + description
 		}
 		if selected {
-			line = codextui.RenderSelectedRow(line)
+			line = codextui.RenderSelectedRowFilled(line, max(m.width, 1))
 		}
 		builder.WriteString(line)
 		builder.WriteString("\n")
 	}
-	if below {
+	if overflow && below {
 		builder.WriteString("\u2193\n")
-	}
-	if footerNote != "" {
-		builder.WriteString(footerNote)
+	} else if overflow {
 		builder.WriteString("\n")
 	}
-	builder.WriteString(footer)
+	if footerNote != "" {
+		builder.WriteString("  " + footerNote)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("  " + footer)
 	return strings.TrimRight(builder.String(), "\n")
 }
 
@@ -1974,8 +2081,12 @@ func (m *Model) renderResponsiveModalOptions(optionBudget int) string {
 		if index == m.modal.selected && option.SelectedDescription != "" {
 			description = option.SelectedDescription
 		}
+		name := option.Label
+		if hint := m.modalOptionShortcutHint(option); hint != "" {
+			name += " (" + hint + ")"
+		}
 		rows = append(rows, bottompane.GenericDisplayRow{
-			Name:           option.Label,
+			Name:           name,
 			NamePrefix:     prefix,
 			Description:    description,
 			DisabledReason: option.DisabledReason,
@@ -1986,14 +2097,23 @@ func (m *Model) renderResponsiveModalOptions(optionBudget int) string {
 	if width <= 0 {
 		width = max(m.width, 1)
 	}
-	start, visible, above, below := modalOptionWindow(
-		len(rows),
-		m.modal.selected,
-		m.modal.optionScrollTop,
-		optionBudget,
+	// Wrapped descriptions can render more lines than options, so shrink the
+	// option budget until the rendered rows plus their overflow indicators fit.
+	budget := optionBudget
+	var (
+		start   int
+		visible int
+		above   bool
+		below   bool
+		lines   []string
 	)
-	var lines []string
 	for {
+		start, visible, above, below = modalOptionWindow(
+			len(rows),
+			m.modal.selected,
+			m.modal.optionScrollTop,
+			budget,
+		)
 		state := bottompane.ScrollState{
 			SelectedIdx:  m.modal.selected,
 			ScrollTop:    start,
@@ -2008,6 +2128,11 @@ func (m *Model) renderResponsiveModalOptions(optionBudget int) string {
 			m.modal.columnWidth,
 			m.modal.descriptionLayout,
 		)
+		if indent := m.modalOptionIndent(); indent != "" {
+			for i := range lines {
+				lines[i] = indent + lines[i]
+			}
+		}
 		indicatorRows := 0
 		if above {
 			indicatorRows++
@@ -2015,23 +2140,31 @@ func (m *Model) renderResponsiveModalOptions(optionBudget int) string {
 		if below {
 			indicatorRows++
 		}
-		if len(lines)+indicatorRows <= optionBudget || visible <= 1 {
+		overflowRows := len(lines) + indicatorRows - budget
+		if overflowRows <= 0 || visible <= 1 {
 			break
 		}
-		start, visible, above, below = modalOptionWindow(
-			len(rows),
-			m.modal.selected,
-			start,
-			max(visible+indicatorRows-1, 1),
-		)
+		budget = max(budget-overflowRows, 1)
 	}
 	m.modal.optionScrollTop = start
 	m.modal.optionVisibleRows = visible
-	if above {
-		lines = append([]string{"\u2191"}, lines...)
+	// Rust reserves an indicator row above and below the result list whenever
+	// the list overflows the popup (selection_picker_layout), painting the
+	// arrow only while the window is scrolled off either end.
+	overflow := len(rows) > visible
+	if overflow {
+		marker := " "
+		if above {
+			marker = "\u2191"
+		}
+		lines = append([]string{marker}, lines...)
 	}
-	if below {
-		lines = append(lines, "\u2193")
+	if overflow {
+		marker := " "
+		if below {
+			marker = "\u2193"
+		}
+		lines = append(lines, marker)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2102,11 +2235,16 @@ func (m *Model) renderThemePickerModal() string {
 	}
 	layout := codextui.ComputeThemePreviewLayout(contentWidth)
 	var builder strings.Builder
+	// Rust's theme picker paints its header, search row, and footer with the
+	// standard two-column popup inset; result rows keep the selection marker at
+	// the left edge.
+	const themePickerInset = "  "
+	builder.WriteString(themePickerInset)
 	builder.WriteString(m.modal.title)
 	builder.WriteString("\n")
 	subtitle := strings.TrimSpace(m.modal.themeSubtitle)
 	if subtitle != "" {
-		builder.WriteString(renderThemePickerDimLine(subtitle, contentWidth))
+		builder.WriteString(renderThemePickerDimLine(themePickerInset+subtitle, contentWidth))
 		builder.WriteString("\n")
 	}
 	builder.WriteString("\n")
@@ -2143,6 +2281,8 @@ func (m *Model) renderThemePickerModal() string {
 		themeBudget -= len(previewRows) + 1
 	}
 	themeBudget = max(themeBudget, 1)
+	// Rust caps every popup at MAX_POPUP_ROWS (bottom_pane/popup_consts.rs).
+	themeBudget = min(themeBudget, 8)
 
 	indices := picker.FilteredIndices(m.modal.themeFilter)
 	selectedPosition := 0
@@ -2160,7 +2300,7 @@ func (m *Model) renderThemePickerModal() string {
 	)
 	m.modal.themeScrollTop = start
 	m.modal.themeVisibleRows = visible
-	prompt := renderThemePickerSearchPrompt(m.modal.themeFilter, listWidth)
+	prompt := themePickerInset + renderThemePickerSearchPrompt(m.modal.themeFilter, listWidth)
 	listRows := []string{prompt}
 	if above {
 		listRows = append(listRows, "\u2191")
@@ -2189,7 +2329,7 @@ func (m *Model) renderThemePickerModal() string {
 		}
 	}
 	builder.WriteString("\n")
-	builder.WriteString(renderThemePickerDimLine(firstNonEmpty(m.modal.footerHint, "enter select \u00b7 esc back"), contentWidth))
+	builder.WriteString(renderThemePickerDimLine(themePickerInset+firstNonEmpty(m.modal.footerHint, "enter select \u00b7 esc back"), contentWidth))
 	return strings.TrimRight(builder.String(), "\n")
 }
 

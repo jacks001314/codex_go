@@ -34,7 +34,7 @@ func assertBorderlessHeader(t *testing.T, message codextui.Message) {
 	if message.Role != codextui.RoleHistory {
 		t.Fatalf("header role = %q, want history", message.Role)
 	}
-	for _, want := range []string{">_ gcode (v1.2.3)", `D:\repo\project`} {
+	for _, want := range []string{">_ OpenAI Codex (v1.2.3)", `D:\repo\project`} {
 		if !strings.Contains(message.Text, want) {
 			t.Fatalf("display header missing %q: %q", want, message.Text)
 		}
@@ -44,7 +44,7 @@ func assertBorderlessHeader(t *testing.T, message codextui.Message) {
 			t.Fatalf("borderless display header carries %q: %q", unwanted, message.Text)
 		}
 	}
-	for _, want := range []string{"gcode (v1.2.3)", "model: gpt-5 high", "directory: "} {
+	for _, want := range []string{"OpenAI Codex (v1.2.3)", "model: gpt-5 high", "directory: "} {
 		if !strings.Contains(message.RawText, want) {
 			t.Fatalf("raw header missing %q: %q", want, message.RawText)
 		}
@@ -65,7 +65,7 @@ func TestClearReinsertsBorderlessSessionHeaderLikeRust(t *testing.T) {
 	}
 	assertBorderlessHeader(t, model.State.Messages[0])
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, ">_ gcode (v1.2.3)") || !strings.Contains(view, `D:\repo\project`) {
+	if !strings.Contains(view, ">_ OpenAI Codex (v1.2.3)") || !strings.Contains(view, `D:\repo\project`) {
 		t.Fatalf("cleared view missing the fresh header:\n%s", view)
 	}
 	if strings.Contains(view, "old transcript") {
@@ -83,12 +83,12 @@ func TestClearHeaderHonorsRawOutputModeLikeRust(t *testing.T) {
 	model.Update(key(bubbletea.KeyEnter))
 
 	view := utils.StripANSI(model.View())
-	for _, want := range []string{"gcode (v1.2.3)", "model: gpt-5 high", `directory: D:\repo\project`} {
+	for _, want := range []string{"OpenAI Codex (v1.2.3)", "model: gpt-5 high", `directory: D:\repo\project`} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("raw cleared view missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, ">_ gcode") {
+	if strings.Contains(view, ">_ OpenAI Codex") {
 		t.Fatalf("raw cleared view kept the rich title:\n%s", view)
 	}
 }

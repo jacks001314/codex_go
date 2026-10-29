@@ -10,6 +10,7 @@ import (
 	"codex_go/features"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/chatwidget"
 )
 
 const slashPopupMaxRows = 8
@@ -164,7 +165,11 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		// independently.
 		ServiceTierCommandsEnabled: len(m.serviceTierCommands) > 0,
 		GoalCommandEnabled:         features.Enabled(m.featureSettings, "goals"),
-		AllowElevateSandbox:        m.windowsSandboxSetup != nil,
+		// Rust only advertises /setup-default-sandbox while the legacy
+		// restricted-token sandbox is active and elevation is available
+		// (chatwidget/slash_dispatch.rs builtin_command_flags).
+		AllowElevateSandbox: m.windowsSandboxSetup != nil &&
+			m.windowsSandboxLevel == chatwidget.WindowsSandboxLevelUnelevated,
 		// Rust #50756: build the unfiltered catalog so side-unavailable commands
 		// can be carried as disabled rows instead of being dropped, and mark
 		// them here.
@@ -401,7 +406,9 @@ func slashPopupDisplayDescription(item slashCommandPopupItem) string {
 
 func slashPopupRenderLine(item slashCommandPopupItem, selected bool, nameWidth int, width int) string {
 	prefix := codextui.SelectionPrefix(selected)
-	availableDescription := width - codextui.DisplayWidth(prefix) - nameWidth - 1
+	// Rust's selection popups place descriptions two columns past the widest
+	// name (`compute_desc_col` adds 2).
+	availableDescription := width - codextui.DisplayWidth(prefix) - nameWidth - 2
 	if availableDescription < 0 {
 		availableDescription = 0
 	}
@@ -411,14 +418,14 @@ func slashPopupRenderLine(item slashCommandPopupItem, selected bool, nameWidth i
 	if item.Unavailable {
 		// Rust #50756 dims the disabled row and never draws the selection marker.
 		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-		return prefix + dim.Render(rawName+" "+description)
+		return prefix + dim.Render(rawName+"  "+description)
 	}
 	if selected {
-		return codextui.RenderSelectedRow(prefix + rawName + " " + description)
+		return codextui.RenderSelectedRow(prefix + rawName + "  " + description)
 	}
 	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	descriptionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	return prefix + nameStyle.Render(rawName) + " " + descriptionStyle.Render(description)
+	return prefix + nameStyle.Render(rawName) + "  " + descriptionStyle.Render(description)
 }
 
 func padRightDisplay(value string, width int) string {

@@ -64,7 +64,7 @@ func TestRunningHookFoldsIntoWorkingRowLikeRust(t *testing.T) {
 }
 
 // TestLongRunningHookReflowsBelowWorkingRowLikeRust keeps a too-wide summary
-// on its own activity line.
+// on its own `\u2514` activity line, truncated to the row width like Rust.
 func TestLongRunningHookReflowsBelowWorkingRowLikeRust(t *testing.T) {
 	now := time.Unix(260, 0)
 	state := codextui.NewState(nil)
@@ -80,8 +80,11 @@ func TestLongRunningHookReflowsBelowWorkingRowLikeRust(t *testing.T) {
 	})
 	now = now.Add(hookStatusRevealDelay)
 	view := strings.ToLower(model.View())
-	if !strings.Contains(view, "working") || !strings.Contains(view, "checking a deliberately long") {
+	if !strings.Contains(view, "working") || !strings.Contains(view, "\u2514") || !strings.Contains(view, "checking a delib") {
 		t.Fatalf("reflowed hook activity missing:\n%s", model.View())
+	}
+	if strings.Contains(view, "checking a deliberately long") {
+		t.Fatalf("over-wide hook summary was not truncated:\n%s", model.View())
 	}
 }
 

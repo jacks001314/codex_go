@@ -14,8 +14,8 @@ func TestTranscriptImageViewFillsTerminalHeight(t *testing.T) {
 		model := NewModel(codextui.NewState(nil), Options{Width: size[0], Height: size[1]})
 		view := model.View()
 		rows := strings.Count(view, "\n") + 1
-		if rows != size[1]-1 {
-			t.Fatalf("%dx%d view rows = %d, want terminal height minus the reserved cursor row", size[0], size[1], rows)
+		if rows != size[1] {
+			t.Fatalf("%dx%d view rows = %d, want the full terminal height", size[0], size[1], rows)
 		}
 		if model.transcriptImageFrameRows != rows {
 			t.Fatalf("%dx%d recorded frame rows = %d, want %d", size[0], size[1], model.transcriptImageFrameRows, rows)
@@ -61,7 +61,7 @@ func TestTranscriptImagePositionMatchesInlineRendererLikeRust(t *testing.T) {
 			}
 		case strings.Contains(line, "Generated Image"):
 			generatedRow = index
-		case strings.Contains(line, "Ask gcode"):
+		case strings.Contains(line, "Ask Codex to do anything"):
 			composerRow = index
 		}
 	}

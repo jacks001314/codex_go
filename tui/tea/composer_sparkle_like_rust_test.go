@@ -52,7 +52,7 @@ func TestFreshAstraTaskShowsComposerStarfieldLikeRust(t *testing.T) {
 		t.Fatalf("sparkle phase after render = %v, want visible", model.sparkle.phase)
 	}
 	plain := utils.StripANSI(view)
-	if !strings.Contains(plain, "Ask gcode") {
+	if !strings.Contains(plain, "Ask Codex to do anything") {
 		t.Fatalf("starfield replaced the placeholder:\n%s", plain)
 	}
 }

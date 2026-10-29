@@ -101,6 +101,21 @@ func SGRForStyle(spec StyleSpec, level StdoutColorLevel) string {
 	return "\x1b[" + strings.Join(codes, ";") + "m"
 }
 
+// BackgroundSGR renders a background-only SGR prefix. Rust paints block fills
+// with `Style::default().bg(color)`, which emits no foreground code, so a fill
+// must not also reset the terminal's default foreground. An unresolved colour
+// or a terminal without colour support yields no prefix.
+func BackgroundSGR(color TerminalColor, level StdoutColorLevel) string {
+	if level <= ColorUnknown || (color.RGB == nil && color.Index == nil) {
+		return ""
+	}
+	codes := sgrColorCodes(color, false, level)
+	if len(codes) == 0 {
+		return ""
+	}
+	return "\x1b[" + strings.Join(codes, ";") + "m"
+}
+
 func sgrColorCodes(color TerminalColor, foreground bool, level StdoutColorLevel) []string {
 	parameter := "48"
 	if foreground {

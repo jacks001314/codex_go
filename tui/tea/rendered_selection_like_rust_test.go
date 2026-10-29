@@ -51,22 +51,28 @@ func dragFooterSelection(t *testing.T, model *Model, from, to string) bubbletea.
 }
 
 // Rust #52270: footer text can be selected and copied without touching the
-// composer draft.
+// composer draft. An empty composer shows the passive hint row, so that is the
+// footer text a drag can reach.
 func TestRenderedFooterSelectionCopiesPlainTextLikeRust(t *testing.T) {
 	model, copied := renderedSelectionModel(t, Options{})
-	model.composer.SetValue("draft stays")
 	_ = model.View()
 
-	cmd := dragFooterSelection(t, model, "enter send", "newline")
+	cmd := dragFooterSelection(t, model, "? for shortcuts", "shortcuts")
 	runTeaCmd(t, model, cmd)
 	if view := model.View(); !strings.Contains(view, "\x1b[7m") {
 		t.Fatalf("footer selection was not highlighted:\n%s", utils.StripANSI(view))
 	}
-	if !strings.HasPrefix(*copied, "enter send") || !strings.Contains(*copied, "ctrl") {
+	if !strings.HasPrefix(*copied, "? for") {
 		t.Fatalf("copied footer text = %q", *copied)
 	}
-	if got := model.composer.Value(); got != "draft stays" {
+	if got := model.composer.Value(); got != "" {
 		t.Fatalf("composer draft = %q, want unchanged", got)
+	}
+
+	// The composer keeps accepting input after a footer selection.
+	_, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("x")})
+	if got := model.composer.Value(); got != "x" {
+		t.Fatalf("composer draft after typing = %q, want x", got)
 	}
 }
 
@@ -104,7 +110,7 @@ func TestRenderedSelectionInvalidatesChangedRegionLikeRust(t *testing.T) {
 // Ctrl+C copy control.
 func TestRenderedSelectionKeyboardCopyLikeRust(t *testing.T) {
 	model, copied := renderedSelectionModel(t, Options{CopyOnSelect: "never"})
-	cmd := dragFooterSelection(t, model, "enter send", "ctrl+j")
+	cmd := dragFooterSelection(t, model, "? for", "shortcuts")
 	if cmd != nil {
 		t.Fatal("copy_on_select=never copied on release")
 	}
@@ -113,7 +119,7 @@ func TestRenderedSelectionKeyboardCopyLikeRust(t *testing.T) {
 	}
 	_, copyCmd := model.Update(key(bubbletea.KeyCtrlC))
 	runTeaCmd(t, model, copyCmd)
-	if !strings.Contains(*copied, "enter send") {
+	if !strings.Contains(*copied, "? for") {
 		t.Fatalf("Ctrl+C copied %q", *copied)
 	}
 	if model.renderedSelection.active {
@@ -156,8 +162,8 @@ func TestRenderedSelectionWheelClearsAndScrollsLikeRust(t *testing.T) {
 		t.Fatalf("footer region not registered: %#v", region)
 	}
 	line := region.text[0]
-	start := findDisplayColumn(line, "enter send")
-	end := findDisplayColumn(line, "newline")
+	start := findDisplayColumn(line, "? for")
+	end := findDisplayColumn(line, "shortcuts")
 	if start < 0 || end < 0 {
 		t.Fatalf("footer text not found in %q", line)
 	}

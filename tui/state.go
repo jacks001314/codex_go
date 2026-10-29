@@ -401,7 +401,9 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	// only once a thread is attached, and shows it verbatim (including the
 	// built-in providers).
 	provider := statusModelProvider(s.Provider, s.ThreadID)
-	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
+	// Rust status/card.rs falls back to "none" when no reasoning override or
+	// config effort is set, so an unset effort prints "reasoning none".
+	reasoning := displayValue(s.EffectiveReasoningEffort(), "none")
 	// Rust #49145: the reasoning summaries setting is client-owned, so the card
 	// keeps it only while no server connection owns the model settings.
 	modelDetails := "reasoning " + reasoning
@@ -409,7 +411,7 @@ func (s *State) RenderStatusCardWidth(width int) string {
 		modelDetails += ", summaries auto"
 	}
 	model := displayValue(s.Model, "default") + " (" + modelDetails + ")"
-	header := ">_ gcode"
+	header := ">_ OpenAI Codex"
 	if version := strings.TrimSpace(s.CLIVersion); version != "" {
 		header += " (v" + version + ")"
 	}

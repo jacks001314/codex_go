@@ -39,30 +39,30 @@ func composerWheel(button bubbletea.MouseButton, y int) bubbletea.MouseMsg {
 	}
 }
 
-// TestOwnedComposerCapsLongDraftsLikeRust pins #50109: the fullscreen composer
-// grows with the draft but never exceeds two thirds of the screen, and the
-// whole section (including its rounded border) respects the cap.
+// TestOwnedComposerCapsLongDraftsLikeRust pins #50109: the composer grows with
+// the draft but the whole presentation (padding, status, and hint rows) never
+// exceeds two thirds of the screen.
 func TestOwnedComposerCapsLongDraftsLikeRust(t *testing.T) {
 	model := newOwnedComposerModel(t, 30)
-	if got, want := model.composer.Height(), 18; got != want {
-		t.Fatalf("composer height = %d, want %d (two thirds of 30 minus the two border rows)", got, want)
+	if got, want := model.composer.Height(), 16; got != want {
+		t.Fatalf("composer height = %d, want %d (two thirds of 30 minus the padding, status, and hint rows)", got, want)
 	}
 	if model.composerTopRow <= 0 {
 		t.Fatalf("composer top row = %d, want a painted position below the transcript", model.composerTopRow)
 	}
-	if got, want := model.composerSectionRows(), 20; got != want {
+	if got, want := model.composerSectionRows(), 18; got != want {
 		t.Fatalf("composer section rows = %d, want %d", got, want)
 	}
 
 	short := newOwnedComposerModel(t, 12)
-	if got, want := short.composer.Height(), 8; got != want {
-		t.Fatalf("small-screen composer height = %d, want the eight-row floor %d", got, want)
+	if got, want := short.composer.Height(), 4; got != want {
+		t.Fatalf("small-screen composer height = %d, want the eight-row floor minus the chrome rows %d", got, want)
 	}
 
 	wrapped := newOwnedComposerModel(t, 30)
 	wrapped.composer.SetValue(strings.Repeat("wrapped-row ", 400))
 	wrapped.View()
-	if got, want := wrapped.composer.Height(), 18; got != want {
+	if got, want := wrapped.composer.Height(), 16; got != want {
 		t.Fatalf("wrapped composer height = %d, want %d", got, want)
 	}
 	if wrapped.composerContentRows() <= wrapped.composerTargetRows() {
@@ -81,12 +81,12 @@ func TestOwnedComposerWheelBrowsesWithoutMovingCaretOrTranscriptLikeRust(t *test
 	if transcriptOffset <= 0 {
 		t.Fatalf("fixture transcript offset = %d, want a scrollable transcript", transcriptOffset)
 	}
-	if got, want := model.composerScroll, 12; got != want {
+	if got, want := model.composerScroll, 14; got != want {
 		t.Fatalf("initial composer scroll = %d, want the caret-following bottom %d", got, want)
 	}
 
 	model.Update(composerWheel(bubbletea.MouseButtonWheelUp, model.composerTopRow+1))
-	if got, want := model.composerScroll, 9; got != want {
+	if got, want := model.composerScroll, 11; got != want {
 		t.Fatalf("composer scroll after wheel up = %d, want %d", got, want)
 	}
 	if !model.composerManual {
@@ -100,7 +100,7 @@ func TestOwnedComposerWheelBrowsesWithoutMovingCaretOrTranscriptLikeRust(t *test
 	}
 
 	rendered := model.View()
-	if !strings.Contains(rendered, "draft-row-09") {
+	if !strings.Contains(rendered, "draft-row-11") {
 		t.Fatalf("wheeled-up composer is missing the first visible row:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "draft-row-29") {
@@ -112,7 +112,7 @@ func TestOwnedComposerWheelBrowsesWithoutMovingCaretOrTranscriptLikeRust(t *test
 
 	model.Update(composerWheel(bubbletea.MouseButtonWheelDown, model.composerTopRow+1))
 	rendered = model.View()
-	if got, want := model.composerScroll, 12; got != want {
+	if got, want := model.composerScroll, 14; got != want {
 		t.Fatalf("composer scroll after wheel down = %d, want %d", got, want)
 	}
 	if !strings.Contains(rendered, "draft-row-29") {
@@ -132,7 +132,7 @@ func TestOwnedComposerWheelDownAtBottomIsConsumedLikeRust(t *testing.T) {
 	model := newOwnedComposerModel(t, 30)
 	transcriptOffset := model.TranscriptYOffset()
 	model.Update(composerWheel(bubbletea.MouseButtonWheelDown, model.composerTopRow+1))
-	if got, want := model.composerScroll, 12; got != want {
+	if got, want := model.composerScroll, 14; got != want {
 		t.Fatalf("composer scroll at bottom = %d, want %d", got, want)
 	}
 	if got := model.TranscriptYOffset(); got != transcriptOffset {
@@ -153,7 +153,7 @@ func TestOwnedComposerResizeClampsScrollLikeRust(t *testing.T) {
 	}
 	model.resize(120, 20)
 	model.View()
-	if got, want := model.composer.Height(), 11; got != want {
+	if got, want := model.composer.Height(), 9; got != want {
 		t.Fatalf("resized composer height = %d, want %d", got, want)
 	}
 	if got, want := model.composerScroll, 0; got != want {
@@ -164,15 +164,15 @@ func TestOwnedComposerResizeClampsScrollLikeRust(t *testing.T) {
 		model.Update(composerWheel(bubbletea.MouseButtonWheelDown, model.composerTopRow+1))
 	}
 	model.View()
-	if got, want := model.composerScroll, 19; got != want {
+	if got, want := model.composerScroll, 21; got != want {
 		t.Fatalf("bottom scroll at 20 rows = %d, want %d", got, want)
 	}
 	model.resize(120, 40)
 	model.View()
-	if got, want := model.composer.Height(), 24; got != want {
+	if got, want := model.composer.Height(), 22; got != want {
 		t.Fatalf("grown composer height = %d, want %d", got, want)
 	}
-	if got, want := model.composerScroll, 6; got != want {
+	if got, want := model.composerScroll, 8; got != want {
 		t.Fatalf("scroll after growth = %d, want clamped %d", got, want)
 	}
 }
@@ -194,7 +194,7 @@ func TestOwnedComposerEditingResumesCaretFollowingLikeRust(t *testing.T) {
 		t.Fatal("editor input must resume caret following")
 	}
 	model.View()
-	if got, want := model.composerScroll, 12; got != want {
+	if got, want := model.composerScroll, 14; got != want {
 		t.Fatalf("composer scroll after input = %d, want caret-following %d", got, want)
 	}
 
@@ -220,14 +220,14 @@ func TestOwnedComposerTranscriptWheelStillScrollsTranscript(t *testing.T) {
 	}
 }
 
-// TestInlineComposerKeepsFixedHeightLikeRustScope ensures the owned-screen
-// changes do not alter the inline layout.
-func TestInlineComposerKeepsFixedHeightLikeRustScope(t *testing.T) {
+// TestInlineComposerGrowsWithDraftLikeRust keeps the inline renderer on the same
+// growth rule: the prompt expands with the draft even without the owned screen.
+func TestInlineComposerGrowsWithDraftLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 30, NoAltScreen: true})
 	model.composer.SetValue(strings.Repeat("inline row\n", 40))
 	model.View()
-	if got, want := model.composer.Height(), defaultComposerHeight; got != want {
-		t.Fatalf("inline composer height = %d, want the fixed %d", got, want)
+	if got, want := model.composer.Height(), 16; got != want {
+		t.Fatalf("inline composer height = %d, want %d", got, want)
 	}
 }

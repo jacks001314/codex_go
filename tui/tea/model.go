@@ -61,7 +61,7 @@ const (
 	minTranscriptHeight   = 3
 	maxBottomLines        = 6
 	regionChromeMinWidth  = 100
-	footerHelpText        = "enter send \u00b7 ctrl+j newline \u00b7 ctrl+g editor \u00b7 ctrl+c quit \u00b7 /help commands"
+	footerHelpText        = "? for shortcuts"
 	mcpStartupFinishLag   = 4 * time.Second
 	// imagePasteRepeatWindow mirrors Rust's IMAGE_PASTE_REPEAT_WINDOW (#51411):
 	// the sliding window that suppresses auto-repeat image-paste presses.
@@ -1687,12 +1687,16 @@ type Model struct {
 	// moving the caret (Rust #50109). composerTopRow is the zero-based screen
 	// row where the composer section starts, and composerRows includes its
 	// painted border.
-	composerScroll     int
-	composerManual     bool
-	composerTopRow     int
-	composerRows       int
-	composerLastValue  string
-	composerLastCursor int
+	composerScroll int
+	composerManual bool
+	composerTopRow int
+	composerRows   int
+	// composerContentRowsCache memoizes the composer wrap pass. A frame asks
+	// for the prompt height several times (layout, reserved rows, scroll,
+	// selection), and each pass is linear in the draft.
+	composerContentRowsCache composerRowsCache
+	composerLastValue        string
+	composerLastCursor       int
 	// composerSelection tracks mouse-selected editable text; composerTextTopRow
 	// and composerTextLeft locate its painted textarea inside the frame.
 	composerSelection composerTextSelection
@@ -1876,8 +1880,12 @@ type Model struct {
 	// backtrack tracks the Esc-to-edit-prompt state machine (Rust
 	// app_backtrack::BacktrackState) and escBacktrackHint advertises the second
 	// Esc in the composer footer once it is primed.
-	backtrack         tuiapp.BacktrackState
-	escBacktrackHint  bool
+	backtrack        tuiapp.BacktrackState
+	escBacktrackHint bool
+	// shortcutOverlay mirrors Rust FooterMode::ShortcutOverlay: pressing `?`
+	// on an empty composer swaps the passive hint row for the shortcut
+	// reference until the next key.
+	shortcutOverlay   bool
 	rateLimitWarnings chatwidget.RateLimitWarningState
 	warningDisplay    chatwidget.WarningDisplayState
 
@@ -1963,9 +1971,9 @@ type Model struct {
 	// turnTips mirrors Rust's `App::turn_tips`: the foreground turn's tip
 	// cadence and exposure state (see turn_tips.go).
 	turnTips turnTips
-	// composerTips selects the stable, fitting fullscreen composer-gap tip
-	// (Rust #46931).
-	composerTips composerTipState
+	// composerTips holds the prewarmed startup announcement tip that feeds the
+	// transcript session header (Rust #47954).
+	composerTips composerTips
 	// warningsView hosts the retained-warnings viewer while it is open
 	// (#48205/#48206); warningsFlash shows a copy result in its footer.
 	warningsView  *bottompane.WarningsView
@@ -2636,6 +2644,10 @@ type Model struct {
 	activeKeyChord         string
 
 	composerPasteEnterUntil *time.Time
+	// composerPasteBurst mirrors Rust's PasteBurst for the main composer: a
+	// rapid unbracketed paste arrives as individual rune events, so the burst
+	// detector keeps newlines inside the paste instead of submitting them.
+	composerPasteBurst bottompane.PasteBurst
 	// composerLastCharAt is when the composer last received a character event,
 	// mirroring Rust PasteBurst's plain-char timestamp (Rust #45454): a Tab that
 	// follows a short prefix - including a single Unicode rune inserted without a
@@ -2664,9 +2676,12 @@ type transcriptMessageKey struct {
 	expanded       bool
 	transcriptOnly bool
 	rawReasoning   bool
+	imagePath      string
+	hasActivities  bool
 }
 
 type transcriptMessageCacheEntry struct {
+	valid bool
 	key   transcriptMessageKey
 	lines []string
 }
@@ -2679,6 +2694,48 @@ type transcriptMessageCacheEntry struct {
 // history (Rust parity: committed history cells cache their display lines).
 type transcriptMessageCache struct {
 	messages []transcriptMessageCacheEntry
+	// lastContentLen sizes the next frame's builder so re-rendering a long
+	// transcript does not repeatedly grow and copy the output buffer.
+	lastContentLen int
+	// layout memoizes the joined transcript, its message ranges, and its image
+	// placements. It is validated with the same per-message key scan as the
+	// line cache, so it can only be reused when nothing that feeds the layout
+	// changed; the win is skipping the per-message join on a static frame.
+	layout transcriptLayoutCacheEntry
+	// rangesOnly memoizes renderTranscriptMessagesWithRanges, the image-free
+	// projection used by the pinned prompt header on every frame. Only message
+	// render inputs and layout flags take part in its key, which is exactly the
+	// contract of that projection (no image resolution, no disclosure rows).
+	rangesOnly rangesOnlyCacheEntry
+}
+
+type transcriptLayoutCacheEntry struct {
+	valid              bool
+	variant            string
+	width              int
+	themeID            string
+	raw                bool
+	expandedHistory    bool
+	expandedKey        string
+	cwd                string
+	rawReasoning       bool
+	disclosureControls bool
+	hideStartupTips    bool
+	content            string
+	ranges             [][2]int
+	plans              []transcriptImagePlan
+}
+
+type rangesOnlyCacheEntry struct {
+	valid           bool
+	width           int
+	themeID         string
+	raw             bool
+	expandedHistory bool
+	cwd             string
+	rawReasoning    bool
+	content         string
+	ranges          [][2]int
 }
 
 type toolCallDisplayState struct {
@@ -2737,10 +2794,11 @@ func NewModel(state *codextui.State, options Options) *Model {
 		}
 	}
 	composer := textarea.New()
-	composer.Prompt = "> "
-	composer.Placeholder = firstNonEmpty(options.Placeholder, "Ask gcode")
+	composer.Prompt = "\u203a "
+	composer.Placeholder = firstNonEmpty(options.Placeholder, "Ask Codex to do anything")
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 0
+	applyComposerTextareaStyles(&composer)
 	composer.SetHeight(defaultComposerHeight)
 	composer.SetWidth(defaultWidth)
 	composer.Focus()
@@ -2926,7 +2984,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadSessionTranscript:         options.OnReadSessionTranscript,
 		disableAutoRecap:                options.AutoRecap != nil && !*options.AutoRecap,
 		promptSuggestionsEnabled:        options.PromptSuggestions != nil && *options.PromptSuggestions,
-		composerPlaceholder:             firstNonEmpty(options.Placeholder, "Ask gcode"),
+		composerPlaceholder:             firstNonEmpty(options.Placeholder, "Ask Codex to do anything"),
 		showRawReasoning:                options.ShowRawReasoning,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
@@ -3133,7 +3191,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	// The initial refresh above ran before the terminal environment was
 	// installed. Re-render now so resumed image entries can reserve preview rows.
 	model.refreshTranscript()
-	model.composerTips = newComposerTipState(uint64(time.Now().UnixNano()), options.StartupAnnouncement)
+	model.composerTips = newComposerTips(options.StartupAnnouncement)
 	return model
 }
 
@@ -3303,6 +3361,9 @@ func (m *Model) Init() bubbletea.Cmd {
 	if m.animEngine != nil {
 		commands = append(commands, m.animEngine.TickCmd())
 	}
+	// Rust StatusIndicatorWidget::render owns the live row's frame cadence
+	// (32 ms while progress/shimmer animate, one second otherwise).
+	commands = append(commands, m.statusRowTickCmd())
 	if m.statusControls != nil {
 		commands = append(commands, m.applyTerminalTitleResult(m.statusControls.RefreshTerminalTitle()))
 	}
@@ -3422,6 +3483,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		dashboard.pollReports()
 		return m, dashboard.nextPollCmd()
+	case statusRowTickMsg:
+		return m, m.statusRowTickCmd()
 	case anim.TickMsg:
 		if m.animEngine != nil {
 			cmd := m.animEngine.Advance()
@@ -4038,6 +4101,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// notice's advertised keys (R retry, exit, transcript).
 			return m, m.handleReadOnlyThreadKey(msg, keySpecFromKeyMsg(msg))
 		}
+		if handled, cmd := m.handleShortcutOverlayKey(msg); handled {
+			return m, cmd
+		}
 		if m.renderedSelection.active {
 			if msg.Type == bubbletea.KeyCtrlC {
 				cmd := m.copyRenderedSelection(false)
@@ -4441,40 +4507,39 @@ func (m *Model) View() string {
 		m.hideTranscriptImages()
 		return m.renderSessionPickerModal()
 	}
+	// Rust centers only confirmation views (SelectionViewParams::confirmation):
+	// the dialog floats over the retained composer while ordinary pickers stay
+	// inline in the bottom pane.
 	if m.modal != nil && modalCenteredOverlayKind(m.modal.kind) {
 		return m.renderCenteredModalOverlay()
 	}
 	m.refreshTranscript()
 	m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
 
-	chrome := m.regionChromeEnabled()
 	statusLine := m.renderStatusHeader()
 	if m.renderedSelection.active && m.renderedSelection.region != renderedRegionStatus {
 		// Reuse the existing status row so the selectable footer and tip rows
 		// keep their painted positions while the selection hint is visible.
 		statusLine = "Selecting text \u00b7 esc cancel"
 	}
-	status := m.statusStyle.Render(fitTerminalLine(statusLine, m.width))
+	// Rust's bottom pane owns no header rows: the transcript starts at the top
+	// of the viewport and the status line sits below the composer.
+	m.transcriptContentTopRow = 0
 	transcript := m.transcript.View()
-	if chrome {
-		status = m.renderStatusRegion(status)
-		transcript = m.renderActivityRegion(transcript)
+	transcript = m.applyPinnedPromptHeader(transcript, 0)
+	sections := []string{}
+	transcriptIndex := -1
+	if transcript != "" {
+		transcriptIndex = 0
+		sections = append(sections, transcript)
 	}
-	// The activity heading is painted above the transcript viewport, while the
-	// status region occupies the rows before it.
-	m.transcriptContentTopRow = sectionHeight(status)
-	if chrome {
-		m.transcriptContentTopRow++
-	}
-	transcript = m.applyPinnedPromptHeader(transcript, sectionHeight(status))
-	sections := []string{status, transcript}
 	composerIndex := -1
 	footerIndex := -1
 	previewIndex := -1
 	workingIndex := -1
 	hudIndex := -1
 	warningBodyIndex := -1
-	footerBeforeComposer := false
+	statusIndex := -1
 	if bottom := m.renderBottomPane(); bottom != "" {
 		previewIndex = len(sections)
 		sections = append(sections, m.bottomStyle.Render(bottom))
@@ -4501,8 +4566,10 @@ func (m *Model) View() string {
 		} else if banner := m.renderSecuritySetupBanner(); banner != "" {
 			sections = append(sections, m.bottomStyle.Render(banner))
 		}
-		if hook := m.renderHookStatus(m.currentTime()); hook != "" &&
-			(!m.isTaskRunning() || m.hookActivityNeedsReflow(m.currentTime(), max(m.width-2, 1))) {
+		// Rust folds hook activity into the status row (inline, or a
+		// `  \u2514 ` overflow line), so the standalone hook row is only needed
+		// while that row is hidden.
+		if hook := m.renderHookStatus(m.currentTime()); hook != "" && !m.statusRowVisible() {
 			sections = append(sections, m.footerStyle.Render(hook))
 		}
 		if working := m.renderWorkingIndicator(); working != "" {
@@ -4518,45 +4585,51 @@ func (m *Model) View() string {
 		if notice := m.renderSafetyRecourseNotice(); notice != "" {
 			sections = append(sections, m.bottomStyle.Render(notice))
 		}
-		footerLine, footerAlreadyStyled := m.footerHelpLine()
-		footerBeforeComposer = m.fullscreenTranscript && !m.rawOutput
-		if footerBeforeComposer {
-			footerIndex = len(sections)
-			sections = append(sections, m.renderFooterHelpSection(footerLine, footerAlreadyStyled))
-		}
-		composer := m.renderComposerWindow()
-		composer = m.applyComposerSparkle(composer, m.currentTime())
-		if !m.composerBounded() {
-			composer = m.annotateInlineComposerHyperlinks(composer)
-		}
-		if chrome {
-			composer = m.renderComposerRegion(composer)
-		}
-		m.composerTopRow = 0
-		for _, section := range sections {
-			m.composerTopRow += sectionHeight(section)
-		}
-		m.composerRows = m.composerSectionRows()
-		m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
-		m.composerTextTopRow = m.composerTopRow
-		m.composerTextLeft = 0
-		if chrome {
-			m.composerTextTopRow++
-			m.composerTextLeft = 2
-		}
-		composerIndex = len(sections)
-		sections = append(sections, composer)
-		if m.vimSearchMode {
-			sections = append(sections, m.renderVimSearchFooter())
-		}
+		// Rust anchors command/skill suggestions directly above the composer.
 		if popup := m.renderSkillPopup(); popup != "" {
 			sections = append(sections, popup)
 		}
 		if popup := m.renderSlashPopup(); popup != "" {
 			sections = append(sections, popup)
 		}
+		overlay := m.renderShortcutOverlay()
+		if overlay != "" {
+			sections = append(sections, m.bottomStyle.Render(overlay))
+		}
+		// Rust paints the composer as a full-width shaded block with a blank
+		// padding row above and below the prompt. The row above the block stays
+		// blank (Rust #47954 moved startup tips into the transcript), and a
+		// suggestion popup sits directly on the composer instead of using it.
+		// The overlay already ends with its own blank row, so the composer's
+		// shaded padding row is the single gap Rust paints above the prompt.
+		if m.popupRowCount() == 0 && overlay == "" {
+			sections = append(sections, "")
+		}
+		composer := m.renderComposerWindow()
+		composer = m.applyComposerSparkle(composer, m.currentTime())
+		composer = m.annotateInlineComposerHyperlinks(composer)
+		composer = m.renderComposerRegion(composer)
+		m.composerTopRow = 0
+		for _, section := range sections {
+			m.composerTopRow += sectionHeight(section)
+		}
+		m.composerRows = m.composerSectionRows()
+		m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
+		m.composerTextTopRow = m.composerTopRow + 1
+		m.composerTextLeft = 0
+		composerIndex = len(sections)
+		sections = append(sections, composer)
+		if strings.TrimSpace(statusLine) != "" {
+			statusIndex = len(sections)
+			sections = append(sections, m.renderStatusLineSection(statusLine))
+		}
+		if m.vimSearchMode {
+			sections = append(sections, m.renderVimSearchFooter())
+		}
 	}
-	if strings.TrimSpace(m.notice) != "" {
+	// A notice shares the composer's rows, so a bottom-pane view (modal or
+	// picker) replaces it entirely.
+	if strings.TrimSpace(m.notice) != "" && m.modal == nil {
 		sections = append(sections, m.footerStyle.Render(m.notice))
 	}
 	for _, line := range m.voiceStripLines(m.width) {
@@ -4571,19 +4644,32 @@ func (m *Model) View() string {
 	if m.ideContext.Enabled {
 		sections = append(sections, m.footerStyle.Render("IDE context"))
 	}
-	if !footerBeforeComposer {
+	if !m.composerSurfaceSuppressed() {
 		footerLine, footerAlreadyStyled := m.footerHelpLine()
 		footerIndex = len(sections)
 		sections = append(sections, m.renderFooterHelpSection(footerLine, footerAlreadyStyled))
 	}
-	if footerBeforeComposer {
-		sections = clipOwnedSectionsToHeight(sections, m.height, &footerIndex, &previewIndex, &hudIndex, &workingIndex, &composerIndex)
+	if m.ownedScreen {
+		// Rust's flex layout keeps the frame inside the terminal: the transcript
+		// and flexible activity rows shrink before the composer does.
+		sections = clipSectionsToHeight(
+			sections,
+			m.height,
+			&transcriptIndex,
+			&composerIndex,
+			&statusIndex,
+			&footerIndex,
+			&workingIndex,
+			&hudIndex,
+			&previewIndex,
+			&warningBodyIndex,
+		)
 	}
-	m.captureRenderedSelectionRegions(sections, footerIndex)
-	m.captureTurnTipSelectionRegions(sections, workingIndex)
+	m.captureRenderedSelectionRegions(sections, statusIndex, footerIndex)
+	m.captureTurnTipSelectionRegions(sections, workingIndex, transcriptIndex)
 	m.captureWarningsSelectionRegion(sections, warningBodyIndex)
 	sections = m.applyRenderedSelection(sections)
-	sections = m.insertWelcomeBlossom(sections, composerIndex, 1)
+	sections = m.insertWelcomeBlossom(sections, composerIndex, transcriptIndex)
 	rendered := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	m.transcriptImageFrameRows = strings.Count(rendered, "\n") + 1
 	m.publishTranscriptImages()
@@ -4593,6 +4679,11 @@ func (m *Model) View() string {
 func (m *Model) footerHelpLine() (string, bool) {
 	footerLine := footerHelpText
 	footerAlreadyStyled := false
+	if m.shortcutOverlay {
+		// Rust paints the close hint in the passive row while the reference is
+		// open (shortcut_overlay::close_hint).
+		return "? / " + PlainKey(bubbletea.KeyEsc).Label() + " close", false
+	}
 	if searchLine, ok := m.historySearchFooterLine(); ok {
 		footerLine = searchLine
 		footerAlreadyStyled = true
@@ -4614,22 +4705,23 @@ func (m *Model) footerHelpLine() (string, bool) {
 			// prefers half its width over the passive key hints.
 			footerLine = usageNotice
 		} else {
+			agentsHint := ""
 			if m.agentsNavigationAvailable() {
-				footerLine = PlainKey(bubbletea.KeyLeft).Label() + " for agents \u00b7 " + footerLine
+				agentsHint = PlainKey(bubbletea.KeyLeft).Label() + " for agents"
+			}
+			hint := m.passiveFooterHintText()
+			switch {
+			case agentsHint != "" && hint != "":
+				footerLine = agentsHint + " \u00b7 " + hint
+			case agentsHint != "":
+				footerLine = agentsHint
+			default:
+				footerLine = hint
 			}
 			// Rust #48205/#48206: the passive hint row right-aligns the retained
 			// warning count (with its open-warnings shortcut) when it fits.
 			m.warningDisplay.SyncWarnings(m.retainedWarningCells())
-			warningApplies := m.passiveWarningNoticeApplies()
-			if warningApplies && m.warningDisplay.WarningCount() > 0 {
-				footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
-			} else if tip, ok := m.composerTipLine(); ok {
-				// Rust #46931: a complete single-row catalog tip owns the
-				// fullscreen gap when no interaction, warning, or usage notice
-				// takes it.
-				footerLine = tip
-				footerAlreadyStyled = true
-			} else if warningApplies {
+			if m.passiveWarningNoticeApplies() {
 				footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
 			}
 		}
@@ -4637,11 +4729,37 @@ func (m *Model) footerHelpLine() (string, bool) {
 	return footerLine, footerAlreadyStyled
 }
 
+// passiveFooterHintText mirrors Rust's `FooterMode` hint selection for the
+// passive footer row: `? for shortcuts` belongs to an empty composer, a draft
+// swaps it for the queue hint while a task runs, and otherwise the row stays
+// empty (Rust still reserves it).
+func (m *Model) passiveFooterHintText() string {
+	if m == nil {
+		return ""
+	}
+	if !m.composerIsEmpty() {
+		if m.isTaskRunning() {
+			return PlainKey(bubbletea.KeyTab).Label() + " to queue message"
+		}
+		return ""
+	}
+	return footerHelpText
+}
+
 func (m *Model) renderFooterHelpSection(footerLine string, alreadyStyled bool) string {
-	line := fitTerminalLine(footerLine, m.width)
+	// Rust indents the passive hint row by LIVE_PREFIX_COLS (2) so it lines up
+	// with the composer text and the status line.
+	line := "  " + fitTerminalLine(footerLine, max(m.width-2, 1))
 	if alreadyStyled {
 		return line
 	}
+	return m.footerStyle.Render(line)
+}
+
+// renderStatusLineSection paints the persistent status line below the composer
+// at the same two-column indent Rust uses for the footer hint row.
+func (m *Model) renderStatusLineSection(status string) string {
+	line := "  " + fitTerminalLine(status, max(m.width-2, 1))
 	return m.footerStyle.Render(line)
 }
 
@@ -4786,12 +4904,17 @@ func (m *Model) renderActivityRegion(content string) string {
 }
 
 func (m *Model) renderComposerRegion(content string) string {
-	return lipgloss.NewStyle().
-		Width(max(m.width-4, 1)).
-		Padding(0, 1).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
-		Render(content)
+	// Rust paints the composer with `user_message_style()` (`chat_composer.rs`
+	// Block::default().style(style).render(composer_rect, buf)): a full-width
+	// shaded block with one blank padding row above and below the prompt, no
+	// border or gutter. The textarea's two-column prompt gutter supplies the
+	// left inset.
+	width := max(m.width, 1)
+	body := "\n" + content + "\n"
+	if bgSGR, ok := composerSurfaceSGR(); ok {
+		return paintComposerSurface(body, bgSGR, width)
+	}
+	return lipgloss.NewStyle().Width(width).Render(body)
 }
 
 // annotateComposerHyperlinks wraps visible HTTP(S) URLs in each rendered
@@ -5374,8 +5497,24 @@ func (m *Model) noteComposerRunes(runes []rune, now time.Time) {
 	// Tab arriving right after a short prefix is still part of the burst.
 	m.composerLastCharAt = &now
 	if len(runes) <= 1 {
+		// Rapid single-rune events are how an unbracketed paste reaches the
+		// model; once the burst detector sees paste-like typing, newlines in
+		// the same burst must be inserted instead of submitting (Rust #45116).
+		if _, pasteLike := m.composerPasteBurst.OnPlainCharNoHold(now); pasteLike {
+			m.extendComposerPasteWindow(now)
+			return
+		}
+		// Terminal readers hand a paste over in chunks, so consecutive chars
+		// can be more than PasteBurstCharInterval apart even though the burst
+		// never ended. Rust keeps extending burst_window_until on every plain
+		// char while the burst is active; slide our window the same way while
+		// it is still open.
+		if m.composerPasteEnterUntil != nil && !now.After(*m.composerPasteEnterUntil) {
+			m.extendComposerPasteWindow(now)
+		}
 		return
 	}
+	m.composerPasteBurst.ClearAfterExplicitPaste()
 	m.extendComposerPasteWindow(now)
 }
 
@@ -6139,7 +6278,7 @@ func (m *Model) unifiedExecStatusInlineMessage() string {
 }
 
 func (m *Model) renderWorkingIndicator() string {
-	if m == nil || !m.isTaskRunning() || m.statusIndicatorHidden {
+	if m == nil || !m.statusRowVisible() {
 		return ""
 	}
 	now := m.currentTime()
@@ -6156,23 +6295,20 @@ func (m *Model) renderWorkingIndicator() string {
 			m.statusTimer.LastResumeAt.After(m.taskStartedAt)) {
 		m.statusTimer.ResetAt(0, m.taskStartedAt)
 	}
+	// Rust StatusIndicatorWidget::lines keeps every owner on one line: the
+	// activity marker, the header, the elapsed/interrupt segment, optional
+	// inline context, and hook activity. statusIndicatorState applies the owner
+	// precedence (compaction, guardian review, safety recourse, unified-exec
+	// wait, MCP startup, then the streaming reasoning summary).
+	state := m.statusIndicatorState()
 	indicator := codextui.NewStatusIndicator(now)
+	indicator.Header = state.Header
+	indicator.Details = state.Details
+	if state.DetailsMaxLines > 0 {
+		indicator.DetailsMaxLines = state.DetailsMaxLines
+	}
 	indicator.PausedElapsed = m.statusTimer.ElapsedAt(now)
 	indicator.Paused = true
-	if m.mcpStartupActive && strings.TrimSpace(m.mcpStartupHeader) != "" {
-		indicator.Header = m.mcpStartupHeader
-	} else if strings.EqualFold(strings.TrimSpace(m.workingStatusHeader), "Waiting for background terminal") {
-		// Rust #43921: the wait streak owns the status row and shows the tracked
-		// command as its detail until the process is flushed.
-		indicator.Header = strings.TrimSpace(m.workingStatusHeader)
-		if wait := m.commandLifecycle.UnifiedExecWait; wait != nil && strings.TrimSpace(wait.CommandDisplay) != "" {
-			indicator.Details = strings.TrimSpace(wait.CommandDisplay)
-			indicator.DetailsMaxLines = 1
-		}
-	} else if header := strings.TrimSpace(m.workingStatusHeader); header != "" {
-		// Rust #43921: stream the latest reasoning summary line as the status row.
-		indicator.Header = header
-	}
 	indicator.InterruptHint = m.interruptHintBinding()
 	indicator.SetInterruptHintVisible(indicator.InterruptHint != "")
 	// Rust BottomPane::sync_status_inline_message feeds the shared
@@ -6184,12 +6320,7 @@ func (m *Model) renderWorkingIndicator() string {
 		width -= 2
 	}
 	lines := indicator.Render(width, now)
-	if len(lines) == 0 {
-		return ""
-	}
-	if summary := m.runningHookSummary(now); summary != "" && !m.hookActivityNeedsReflow(now, width) {
-		lines = append(lines, m.footerStyle.Render("  \u2514 ")+m.renderHookSummaryText(summary, now))
-	}
+	lines = m.appendHookStatusToRow(lines, width, now)
 	// Rust #48352: a random tip appears beneath the working status once the turn
 	// has run for the working delay; exposure is counted only once it rendered.
 	if m.turnTipsAllowed() {
@@ -6914,7 +7045,11 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		// Rust #40492: an unnamed thread gets a provisional title from the first
 		// user message and starts one background title request.
 		userText, _ := idecontext.ExtractPromptRequestWithOffset(firstNonEmpty(item.Text, item.Message))
-		countdownCmd = bubbletea.Batch(countdownCmd, m.startAutomaticThreadTitle(userText))
+		// Rust keeps the desktop question-reply envelope out of title
+		// generation; otherwise the JSON envelope becomes the thread name.
+		if len(codextui.ParseAsyncQuestionReplies(userText)) == 0 {
+			countdownCmd = bubbletea.Batch(countdownCmd, m.startAutomaticThreadTitle(userText))
+		}
 	case "agent_message":
 		// Rust #43055: an assistant response returns /copy to response copying.
 		m.statusCopyTargets = nil
@@ -8974,11 +9109,18 @@ func (m *Model) startupSessionTooltip() string {
 		parsed := auth.PlanTypeFromString(raw)
 		plan = &parsed
 	}
-	tip, ok := codextui.GetTooltipWithKeymap(plan, m.sessionShowFastStatus(), m.keymapConfig)
-	if !ok {
-		return ""
+	fastMode := m.sessionShowFastStatus()
+	// Rust prewarms the announcement cache before the first frame, so the
+	// transcript tip prefers it over the static catalog.
+	if prewarmed := strings.TrimSpace(m.composerTips.announcement); prewarmed != "" {
+		if tip, ok := codextui.SelectStartupTooltip(plan, fastMode, &prewarmed, nil); ok {
+			return tip
+		}
 	}
-	return tip
+	if tip, ok := codextui.GetTooltipWithKeymap(plan, fastMode, m.keymapConfig); ok {
+		return tip
+	}
+	return ""
 }
 
 func (m *Model) applyHistoryCell(cell historycell.HistoryCell) {
@@ -9046,6 +9188,13 @@ func (m *Model) renderRetryActivity() {
 	if message == "" {
 		return
 	}
+	// Rust compaction.rs sets the status-row header ("Compacting context" plus
+	// the "Making room to continue." detail), so a visible status row owns live
+	// compaction and the transcript fallback would duplicate it.
+	if m.compactionActive && strings.HasPrefix(message, CompactionStatusHeader) && m.statusRowVisible() {
+		m.dropRetryActivityRow()
+		return
+	}
 	if m.compactionActive && strings.HasPrefix(message, "Compacting context") {
 		message = m.compactionActivityText(message)
 	}
@@ -9061,6 +9210,22 @@ func (m *Model) renderRetryActivity() {
 	}
 	cell := historycell.NewInfoEvent(message, "")
 	m.retryMessageIndex = m.upsertHistoryMessage(m.retryMessageIndex, cell.DisplayLines(width), cell.RawLines())
+	m.refreshTranscript()
+}
+
+// dropRetryActivityRow removes the transcript fallback row without clearing the
+// stored message, so a later render can rebuild it once the status row hides.
+func (m *Model) dropRetryActivityRow() {
+	if m == nil {
+		return
+	}
+	if m.State == nil || m.retryMessageIndex < 0 || m.retryMessageIndex >= len(m.State.Messages) {
+		m.retryMessageIndex = -1
+		return
+	}
+	m.State.Messages = append(m.State.Messages[:m.retryMessageIndex], m.State.Messages[m.retryMessageIndex+1:]...)
+	m.State.BumpMessagesRevision()
+	m.retryMessageIndex = -1
 	m.refreshTranscript()
 }
 
@@ -10122,14 +10287,9 @@ func (m *Model) resize(width int, height int) {
 	defer m.observeTerminalSizeForTelemetry()
 	m.transcript.Width = m.width
 	m.transcript.Height = m.transcriptHeightForLayout()
-	composerWidth := m.width
-	if m.regionChromeEnabled() {
-		composerWidth = max(m.width-6, 1)
-	}
-	if m.composerBounded() {
-		// Leave two columns beside the prompt for the hidden-row arrows.
-		composerWidth = max(composerWidth-2, 1)
-	}
+	// Rust sizes the textarea to the composer width minus the right margin; the
+	// prompt gutter is part of the widget's own width.
+	composerWidth := max(m.width-1, 1)
 	m.composer.SetWidth(composerWidth)
 	m.composer.SetHeight(m.composerTargetRows())
 	// The startup warnings summary is width-sensitive (Rust reflows it on
@@ -10144,12 +10304,11 @@ func (m *Model) resize(width int, height int) {
 // exceeds the terminal height; otherwise the renderer overflows the screen and
 // the terminal auto-scrolls the frame.
 func (m *Model) transcriptHeightForLayout() int {
-	transcriptHeight := m.height - 3 - m.bottomReservedRows()
-	if m.regionChromeEnabled() {
-		// The activity heading and composer border use three additional rows.
-		transcriptHeight -= 3
-	}
-	return max(transcriptHeight, minTranscriptHeight)
+	// Rust fills the terminal: the transcript takes whatever the bottom pane
+	// leaves, and the bottom pane is measured by bottomReservedRows. On short
+	// terminals the transcript may collapse to zero rows so the composer and
+	// its hints stay on screen.
+	return max(m.height-m.bottomReservedRows(), 0)
 }
 
 // bottomReservedRows returns the rows the bottom sections occupy below the
@@ -10159,24 +10318,99 @@ func (m *Model) bottomReservedRows() int {
 	if m == nil {
 		return defaultComposerHeight
 	}
-	if modal := m.renderModal(); modal != "" {
-		return len(strings.Split(strings.TrimRight(modal, "\n"), "\n"))
-	}
-	rows := m.composerTargetRows()
+	// Mirrors the section order in View(): banner sections, then either the
+	// modal/notice surface or the composer stack (gap row, shaded block,
+	// status line, footer hint).
+	rows := 0
 	if bottom := m.renderBottomPane(); bottom != "" {
 		rows += sectionHeight(bottom)
+	}
+	if modal := m.renderModal(); modal != "" {
+		return rows + sectionHeight(modal)
+	}
+	if m.noticeRowReplacesComposer() {
+		return rows + m.replacedComposerRows()
 	}
 	if hud := m.renderQuickDialHUD(); hud != "" {
 		rows += sectionHeight(hud)
 	}
 	if working := m.renderWorkingIndicator(); working != "" {
-		rows += len(strings.Split(strings.TrimRight(working, "\n"), "\n"))
+		rows += sectionHeight(working)
 	}
-	if hook := m.renderHookStatus(m.currentTime()); hook != "" &&
-		(!m.isTaskRunning() || m.hookActivityNeedsReflow(m.currentTime(), max(m.width-2, 1))) {
+	if hook := m.renderHookStatus(m.currentTime()); hook != "" && !m.statusRowVisible() {
 		rows += sectionHeight(hook)
 	}
-	return rows + m.popupRowCount()
+	overlay := m.renderShortcutOverlay()
+	if overlay != "" {
+		rows += sectionHeight(overlay)
+	}
+	popupRows := m.popupRowCount()
+	rows += popupRows
+	if popupRows == 0 && overlay == "" {
+		rows++ // blank gap row above the composer
+	}
+	rows += m.composerSectionRows() // shaded block: content + two pad rows
+	rows++                          // status line
+	return rows + m.trailingBottomRows()
+}
+
+// trailingBottomRows counts the optional rows View paints after the composer
+// (or after the surface that replaced it) plus the passive footer hint.
+func (m *Model) trailingBottomRows() int {
+	rows := 0
+	if strings.TrimSpace(m.notice) != "" {
+		rows++
+	}
+	rows += len(m.voiceStripLines(m.width))
+	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
+		rows++
+	}
+	if agentLabel := strings.TrimSpace(m.activeAgentLabel); agentLabel != "" && agentLabel != strings.TrimSpace(m.notice) {
+		rows++
+	}
+	if m.ideContext.Enabled {
+		rows++
+	}
+	if !m.composerSurfaceSuppressed() {
+		rows++
+	}
+	return rows
+}
+
+// composerSurfaceSuppressed reports whether a dialog or a notice replaced the
+// composer; Rust renders no passive footer hint in that case.
+func (m *Model) composerSurfaceSuppressed() bool {
+	if m == nil {
+		return false
+	}
+	return m.renderModal() != "" || m.noticeRowReplacesComposer()
+}
+
+// noticeRowReplacesComposer reports whether View() renders a notice in place of
+// the composer (external editor, Windows sandbox setup, warnings viewer, or a
+// read-only thread).
+func (m *Model) noticeRowReplacesComposer() bool {
+	if m == nil {
+		return false
+	}
+	return m.editorActive || m.windowsSandboxSetupActive || m.warningsView != nil || m.readOnlyThread
+}
+
+// replacedComposerRows returns the row count of the notice that replaces the
+// composer, plus the trailing footer rows.
+func (m *Model) replacedComposerRows() int {
+	rows := 0
+	switch {
+	case m.editorActive:
+		rows = 1
+	case m.windowsSandboxSetupActive:
+		rows = sectionHeight(m.renderWindowsSandboxSetupStatus())
+	case m.warningsView != nil:
+		rows = sectionHeight(m.renderWarningsView(m.width))
+	default:
+		rows = sectionHeight(m.renderReadOnlyThreadNotice())
+	}
+	return rows + m.trailingBottomRows()
 }
 
 // popupRowCount returns the number of rows the slash and skill popups
@@ -10211,6 +10445,7 @@ func (m *Model) transcriptRenderCached(state *codextui.State, width int) (string
 		m.transcriptImageResolver(width, false),
 		m.transcriptDisclosureLayoutEnabled(),
 		m.ownedScreen && !m.rawOutput,
+		fmt.Sprintf("main|%s|%t", m.transcriptImageProtocol(), m.transcriptDisclosureLayoutEnabled()),
 	)
 	m.transcriptImagePlans = plans
 	return content, ranges
@@ -10235,6 +10470,7 @@ func (m *Model) renderTranscriptWithExpandedMessages(state *codextui.State, widt
 		m.transcriptImageResolver(width, revealViewedImages),
 		m.transcriptDisclosureLayoutEnabled(),
 		m.ownedScreen && !m.rawOutput,
+		fmt.Sprintf("expanded|%s|%t", m.transcriptImageProtocol(), revealViewedImages),
 	)
 	m.transcriptImagePlans = plans
 	return content, ranges
@@ -11235,18 +11471,108 @@ func renderTranscriptWithExpandedMessages(cache *transcriptMessageCache, state *
 // shows, so a caller can highlight a message in place (Rust pager overlay
 // cells).
 func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string, showRawReasoning bool) (string, [][2]int) {
-	return renderTranscriptMessagesWithRangesAndExpansion(cache, state, raw, width, themeID, expandedHistory, nil, cwd, showRawReasoning)
+	if cache != nil && state != nil {
+		entry := cache.rangesOnly
+		if entry.valid && entry.width == width && entry.themeID == themeID && entry.raw == raw &&
+			entry.expandedHistory == expandedHistory && entry.cwd == cwd && entry.rawReasoning == showRawReasoning &&
+			transcriptCacheKeysMatch(cache, state, width, themeID, raw, expandedHistory, showRawReasoning) {
+			return entry.content, entry.ranges
+		}
+	}
+	content, ranges := renderTranscriptMessagesWithRangesAndExpansion(cache, state, raw, width, themeID, expandedHistory, nil, cwd, showRawReasoning)
+	if cache != nil && state != nil {
+		cache.rangesOnly = rangesOnlyCacheEntry{
+			valid:           true,
+			width:           width,
+			themeID:         themeID,
+			raw:             raw,
+			expandedHistory: expandedHistory,
+			cwd:             cwd,
+			rawReasoning:    showRawReasoning,
+			content:         content,
+			ranges:          ranges,
+		}
+	}
+	return content, ranges
+}
+
+// transcriptCacheKeysMatch reports whether every message still maps to the
+// cached render inputs for the image-free projection.
+func transcriptCacheKeysMatch(cache *transcriptMessageCache, state *codextui.State, width int, themeID string, raw bool, expandedHistory bool, showRawReasoning bool) bool {
+	if cache == nil || len(cache.messages) != len(state.Messages) {
+		return false
+	}
+	for i, message := range state.Messages {
+		key := transcriptMessageKey{
+			role:           message.Role,
+			text:           message.Text,
+			rawText:        message.RawText,
+			transcriptText: message.TranscriptText,
+			width:          width,
+			themeID:        themeID,
+			raw:            raw,
+			expanded:       expandedHistory,
+			transcriptOnly: message.TranscriptOnly,
+			rawReasoning:   showRawReasoning,
+		}
+		entry := cache.messages[i]
+		if !entry.valid || entry.key != key {
+			return false
+		}
+	}
+	return true
 }
 
 func renderTranscriptMessagesWithRangesAndExpansion(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool) (string, [][2]int) {
-	content, ranges, _ := renderTranscriptLayout(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning, nil, false, false)
+	content, ranges, _ := renderTranscriptLayout(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning, nil, false, false, "plain")
 	return content, ranges
 }
 
 // renderTranscriptLayout renders the transcript and, when resolveImage is set,
 // reserves layout-only rows below entries whose local artifact can be
 // previewed. Image rows join the message's range but carry no searchable text.
-func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage, disclosureControls bool, hideStartupTips bool) (string, [][2]int, []transcriptImagePlan) {
+// writeTranscriptLines appends lines joined by newline while trimming trailing
+// newlines exactly like strings.TrimRight(strings.Join(lines, "\n"), "\r\n").
+// It writes straight into the builder so a frame over a long transcript does
+// not allocate one intermediate string per message.
+func writeTranscriptLines(builder *strings.Builder, lines []string) {
+	end := len(lines)
+	for end > 0 && strings.TrimRight(lines[end-1], "\r\n") == "" {
+		end--
+	}
+	if end == 0 {
+		return
+	}
+	for index := 0; index < end-1; index++ {
+		builder.WriteString(lines[index])
+		builder.WriteByte('\n')
+	}
+	builder.WriteString(strings.TrimRight(lines[end-1], "\r\n"))
+}
+
+// expandedMessagesKey fingerprints an expanded-message set so the layout cache
+// can tell two disclosure states apart without re-rendering to find out.
+func expandedMessagesKey(expanded map[int]bool) string {
+	if len(expanded) == 0 {
+		return ""
+	}
+	var fingerprint uint64
+	count := 0
+	for index, value := range expanded {
+		if !value {
+			continue
+		}
+		// Order-independent mix: map iteration order must not change the key.
+		fingerprint ^= (uint64(index) + 1) * 1099511628211
+		count++
+	}
+	if count == 0 {
+		return ""
+	}
+	return strconv.FormatUint(fingerprint, 16) + "/" + strconv.Itoa(count)
+}
+
+func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage, disclosureControls bool, hideStartupTips bool, cacheVariant string) (string, [][2]int, []transcriptImagePlan) {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet.", nil, nil
 	}
@@ -11256,16 +11582,30 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 	if width < 20 {
 		width = 20
 	}
+	expandedKey := expandedMessagesKey(expandedMessages)
+	if cache != nil {
+		entry := cache.layout
+		if entry.valid &&
+			entry.variant == cacheVariant &&
+			entry.width == width && entry.themeID == themeID && entry.raw == raw &&
+			entry.expandedHistory == expandedHistory && entry.expandedKey == expandedKey &&
+			entry.cwd == cwd && entry.rawReasoning == showRawReasoning &&
+			entry.disclosureControls == disclosureControls && entry.hideStartupTips == hideStartupTips &&
+			transcriptCacheKeysMatch(cache, state, width, themeID, raw, expandedHistory, showRawReasoning) {
+			return entry.content, entry.ranges, entry.plans
+		}
+	}
 	var builder strings.Builder
+	if cache != nil && cache.lastContentLen > 0 {
+		builder.Grow(cache.lastContentLen)
+	}
 	ranges := make([][2]int, len(state.Messages))
 	var plans []transcriptImagePlan
 	line := 0
 	first := true
 	previousVisibleUserPrompt := false
 	for i, message := range state.Messages {
-		if hideStartupTips && message.StartupTip && strings.TrimSpace(message.Text) != "" {
-			continue
-		}
+		hiddenTip := hideStartupTips && message.StartupTip && strings.TrimSpace(message.Text) != ""
 		expanded := expandedHistory || expandedMessages[i]
 		key := transcriptMessageKey{
 			role:           message.Role,
@@ -11278,23 +11618,26 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 			expanded:       expanded,
 			transcriptOnly: message.TranscriptOnly,
 			rawReasoning:   showRawReasoning,
+			imagePath:      message.ImagePath,
+			hasActivities:  len(normalizeActivityIDs(message.ActivityIDs)) > 0,
 		}
 		var lines []string
-		if cache != nil && i < len(cache.messages) && cache.messages[i].key == key {
+		if cache != nil && i < len(cache.messages) && cache.messages[i].valid && cache.messages[i].key == key {
 			lines = cache.messages[i].lines
 		} else {
 			lines = transcriptMessageDisplayLines(message, width, themeID, expanded, cwd, showRawReasoning)
 			lines = flattenTranscriptDisplayLines(lines)
 			if cache != nil {
-				entry := transcriptMessageCacheEntry{key: key, lines: lines}
-				if i < len(cache.messages) {
-					cache.messages[i] = entry
-				} else {
-					cache.messages = append(cache.messages, entry)
+				// Entries are addressed by message position, not append order:
+				// a hidden startup tip skips its slot instead of shifting every
+				// later message onto the wrong entry.
+				for len(cache.messages) <= i {
+					cache.messages = append(cache.messages, transcriptMessageCacheEntry{})
 				}
+				cache.messages[i] = transcriptMessageCacheEntry{valid: true, key: key, lines: lines}
 			}
 		}
-		if len(lines) == 0 {
+		if hiddenTip || len(lines) == 0 {
 			continue
 		}
 		writeLines := lines
@@ -11318,7 +11661,7 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 				line++
 			}
 		}
-		builder.WriteString(strings.TrimRight(strings.Join(writeLines, "\n"), "\r\n"))
+		writeTranscriptLines(&builder, writeLines)
 		ranges[i] = [2]int{line, line + len(writeLines)}
 		line += len(writeLines)
 		previousVisibleUserPrompt = isGroupableUserPrompt(message)
@@ -11346,7 +11689,27 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 	if builder.Len() == 0 {
 		return "No messages yet.", nil, nil
 	}
-	return builder.String(), ranges, plans
+	content := builder.String()
+	if cache != nil {
+		cache.lastContentLen = len(content)
+		cache.layout = transcriptLayoutCacheEntry{
+			valid:              true,
+			variant:            cacheVariant,
+			width:              width,
+			themeID:            themeID,
+			raw:                raw,
+			expandedHistory:    expandedHistory,
+			expandedKey:        expandedKey,
+			cwd:                cwd,
+			rawReasoning:       showRawReasoning,
+			disclosureControls: disclosureControls,
+			hideStartupTips:    hideStartupTips,
+			content:            content,
+			ranges:             ranges,
+			plans:              plans,
+		}
+	}
+	return content, ranges, plans
 }
 
 // isGroupableUserPrompt reports whether a message is an ordinary visible user

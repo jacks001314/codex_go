@@ -70,7 +70,7 @@ func renderedRegionHash(text []string) string {
 // captureRenderedSelectionRegions records the painted status and footer rows
 // for the next gesture. A changed region invalidates a selection in that
 // region, while unrelated regions stay live.
-func (m *Model) captureRenderedSelectionRegions(sections []string, footerIndex int) {
+func (m *Model) captureRenderedSelectionRegions(sections []string, statusIndex int, footerIndex int) {
 	if m == nil || len(sections) == 0 {
 		return
 	}
@@ -81,8 +81,16 @@ func (m *Model) captureRenderedSelectionRegions(sections []string, footerIndex i
 		}
 		return
 	}
-	statusText := renderedRegionLines(sections[0])
-	m.captureRenderedRegion(renderedRegionStatus, 0, 0, 0, 0, m.width, len(statusText), statusText)
+	if statusIndex >= 0 && statusIndex < len(sections) {
+		statusText := renderedRegionLines(sections[statusIndex])
+		y := 0
+		for _, section := range sections[:statusIndex] {
+			y += sectionHeight(section)
+		}
+		m.captureRenderedRegion(renderedRegionStatus, statusIndex, 0, 0, y, m.width, len(statusText), statusText)
+	} else {
+		m.clearRenderedRegion(renderedRegionStatus)
+	}
 	if footerIndex >= 0 && footerIndex < len(sections) {
 		footerText := renderedRegionLines(sections[footerIndex])
 		y := 0
@@ -156,7 +164,7 @@ func (m *Model) captureRenderedRegion(kind renderedRegionKind, sectionIndex, sec
 // captureTurnTipSelectionRegions registers the painted working and completion
 // tip rows for the same read-only selection path as status and footer text
 // (Rust #53152).
-func (m *Model) captureTurnTipSelectionRegions(sections []string, workingIndex int) {
+func (m *Model) captureTurnTipSelectionRegions(sections []string, workingIndex int, transcriptIndex int) {
 	if m == nil {
 		return
 	}
@@ -166,7 +174,7 @@ func (m *Model) captureTurnTipSelectionRegions(sections []string, workingIndex i
 		return
 	}
 	m.captureTurnTipSelectionRegion(renderedRegionWorkingTip, sections, workingIndex)
-	m.captureTurnTipSelectionRegion(renderedRegionCompletionTip, sections, 1)
+	m.captureTurnTipSelectionRegion(renderedRegionCompletionTip, sections, transcriptIndex)
 }
 
 func (m *Model) captureTurnTipSelectionRegion(kind renderedRegionKind, sections []string, sectionIndex int) {

@@ -35,11 +35,11 @@ func (p composerPrefix) len() int {
 	return len(p.text())
 }
 
-// prompt is what the textarea prints in front of the first line. The plain
-// composer keeps its historical "> " marker.
+// prompt is what the textarea prints in front of the first line. Rust's
+// composer draws a bold `\u203a` (`›`) and one space before the draft.
 func (p composerPrefix) prompt() string {
 	if p == composerPrefixNone {
-		return "> "
+		return "\u203a "
 	}
 	return p.text() + " "
 }

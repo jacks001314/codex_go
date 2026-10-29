@@ -45,7 +45,7 @@ func TestModelViewRendersState(t *testing.T) {
 	view := model.View()
 	cleanView := utils.StripANSI(view)
 
-	for _, want := range []string{"Thread: thread-1", "Model: gpt-test", "› hello", "• hi there", "enter send"} {
+	for _, want := range []string{"gpt-test", "› hello", "• hi there", footerHelpText} {
 		if !strings.Contains(cleanView, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
@@ -145,7 +145,7 @@ func TestModelStatusCommandAddsRustStyleHistoryCell(t *testing.T) {
 		t.Fatalf("status messages = %#v", state.Messages)
 	}
 	raw := state.Messages[0].RawText
-	for _, want := range []string{"gcode (v0.145.0)", "Thread name:", "Status parity", "Session:", "thread-status"} {
+	for _, want := range []string{">_ OpenAI Codex (v0.145.0)", "Thread name:", "Status parity", "Session:", "thread-status"} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("status output missing %q:\n%s", want, raw)
 		}
@@ -168,13 +168,18 @@ func TestModelViewSeparatesWideTerminalRegions(t *testing.T) {
 	model := NewModel(state, Options{Width: 120, Height: 28})
 
 	view := utils.StripANSI(model.View())
-	for _, want := range []string{" ACTIVITY ─", "╭", "╰", "Ask gcode"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("wide view missing region chrome %q:\n%s", want, view)
+	for _, notWant := range []string{" ACTIVITY ─", "╭", "╰"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("wide view kept retired region chrome %q:\n%s", notWant, view)
 		}
 	}
-	if got := model.composer.Width(); got >= model.width {
-		t.Fatalf("composer width = %d, want room for border within terminal width %d", got, model.width)
+	if !strings.Contains(view, "Ask Codex to do anything") {
+		t.Fatalf("wide view missing the composer placeholder:\n%s", view)
+	}
+	// The shaded block spans the terminal; only the prompt gutter and the
+	// one-column right reserve narrow the editable textarea.
+	if got, want := model.composer.Width(), model.width-3; got != want {
+		t.Fatalf("composer width = %d, want %d", got, want)
 	}
 }
 
@@ -196,7 +201,7 @@ func TestModelViewCanShowRustStyleSessionHeader(t *testing.T) {
 	view := model.View()
 	// Rust #48513: a bound greeting renders the compact welcome banner instead of
 	// the model/directory card.
-	for _, want := range []string{"gcode", "(v0.142.5)", `D:\repo`} {
+	for _, want := range []string{"OpenAI Codex", "(v0.142.5)", `D:\repo`} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
@@ -324,7 +329,7 @@ func TestModelWorkingIndicatorMatchesRust(t *testing.T) {
 	if strings.Contains(view, "Thinking") {
 		t.Fatalf("Working indicator should not render a separate Thinking line:\n%s", view)
 	}
-	if !strings.Contains(view, "Ask gcode") {
+	if !strings.Contains(view, "Ask Codex to do anything") {
 		t.Fatalf("composer should remain visible below Working indicator:\n%s", view)
 	}
 }
@@ -1459,7 +1464,7 @@ func TestModelRawCommandTogglesScrollback(t *testing.T) {
 	state.AddHistoryLines([]string{"• Tool call", "  | display"}, []string{"Tool call", "display"})
 	model := NewModel(state, Options{
 		Width:           80,
-		Height:          12,
+		Height:          20,
 		StatusLineItems: []string{"raw-output"},
 	})
 
@@ -4212,7 +4217,7 @@ func TestModelApprovalModalRespondsToShortcut(t *testing.T) {
 		Command: "go test ./...",
 	})
 	view := model.View()
-	for _, want := range []string{"Run command?", "go test ./...", "Allow for this turn", "Deny"} {
+	for _, want := range []string{"Run command?", "$ go test ./...", "Yes, proceed (y)", "No, and tell Codex what to do differently (esc)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("approval modal missing %q:\n%s", want, view)
 		}
@@ -4228,7 +4233,7 @@ func TestModelApprovalModalRespondsToShortcut(t *testing.T) {
 	if strings.Contains(model.View(), "Run command?") {
 		t.Fatalf("modal should be closed:\n%s", model.View())
 	}
-	if !strings.Contains(model.View(), "Deny") {
+	if !strings.Contains(model.View(), "No, and tell Codex what to do differently") {
 		t.Fatalf("notice should include selected label:\n%s", model.View())
 	}
 }
@@ -5296,13 +5301,13 @@ func TestModelModalSelectionRendersColorBar(t *testing.T) {
 	})
 
 	view := model.View()
-	for _, want := range []string{"\x1b[", codextui.NumberedSelectionPrefix(0, true) + "Allow for this turn"} {
+	for _, want := range []string{"\x1b[", codextui.NumberedSelectionPrefix(0, true) + "Yes, proceed (y)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("modal selected row missing %q:\n%s", want, view)
 		}
 	}
 	model.Update(key(bubbletea.KeyDown))
-	if view := model.View(); !strings.Contains(view, codextui.NumberedSelectionPrefix(1, true)+"Allow for this session") {
+	if view := model.View(); !strings.Contains(view, codextui.NumberedSelectionPrefix(1, true)+"Yes, and don't ask again for this command in this session (a)") {
 		t.Fatalf("modal selected row did not move color bar:\n%s", view)
 	}
 }
@@ -7352,21 +7357,22 @@ func TestModelUsageCommandOpensMenuAndShowsAnalytics(t *testing.T) {
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	for _, want := range []string{"Usage", "Account usage and resets.", "Show usage", "Redeem reset", "2 available."} {
+	for _, want := range []string{"Usage", "Account usage and resets.", "View analytics", "Browse account usage and activity.", "Redeem reset", "2 available."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("usage menu missing %q:\n%s", want, view)
 		}
 	}
 
 	model.Update(key(bubbletea.KeyEnter))
-	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
-		t.Fatalf("history count = %d, want 1; messages=%#v", got, state.Messages)
+	dashboard := model.analyticsDashboard
+	if dashboard == nil || !dashboard.active {
+		t.Fatalf("usage menu did not open analytics; notice=%q", model.notice)
 	}
-	raw := state.Messages[0].RawText
-	for _, want := range []string{"/usage daily", "Token activity", "Token activity unavailable"} {
-		if !strings.Contains(raw, want) {
-			t.Fatalf("usage history missing %q:\n%s", want, raw)
-		}
+	if dashboard.section != analytics.AnalyticsSectionSummary {
+		t.Fatalf("analytics section = %v, want summary", dashboard.section)
+	}
+	if got := countRole(state.Messages, codextui.RoleHistory); got != 0 {
+		t.Fatalf("history count = %d, want none; messages=%#v", got, state.Messages)
 	}
 }
 
@@ -8845,6 +8851,11 @@ func typeText(t *testing.T, model *Model, value string) {
 			t.Fatalf("Update returned %T, want *Model", updated)
 		}
 		model = next
+		// Tests type at machine speed; the paste-burst detector would otherwise
+		// treat the synthetic keystroke run as pasted text and turn the next
+		// Enter or Tab into literal input.
+		model.composerPasteBurst.ClearAfterExplicitPaste()
+		model.clearComposerPasteWindow()
 	}
 }
 

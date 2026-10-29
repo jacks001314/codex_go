@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/lipgloss"
 
 	bottompane "codex_go/tui/bottom_pane"
 )
@@ -43,15 +44,16 @@ type ComposerComponent struct {
 // newComposerComponent initializes the composer sub-component.
 func newComposerComponent(placeholder string) ComposerComponent {
 	composer := textarea.New()
-	composer.Prompt = "> "
+	composer.Prompt = "\u203a "
 	if placeholder != "" {
 		composer.Placeholder = placeholder
 	} else {
-		composer.Placeholder = "Ask gcode"
+		composer.Placeholder = "Ask Codex to do anything"
 	}
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 0
-	composer.SetHeight(defaultComposerHeight)
+	applyComposerTextareaStyles(&composer)
+	composer.SetHeight(1)
 	composer.SetWidth(defaultWidth)
 	composer.Focus()
 	return ComposerComponent{
@@ -168,4 +170,15 @@ func (c *ComposerComponent) SetValue(value string) {
 	if c != nil {
 		c.textarea.SetValue(value)
 	}
+}
+
+// applyComposerTextareaStyles drops Bubbles' cursor-line background. Rust
+// paints the composer draft on the shaded user-message block with no per-row
+// highlight, so the cursor's row must not turn into its own darker band.
+func applyComposerTextareaStyles(composer *textarea.Model) {
+	if composer == nil {
+		return
+	}
+	composer.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	composer.BlurredStyle.CursorLine = lipgloss.NewStyle()
 }

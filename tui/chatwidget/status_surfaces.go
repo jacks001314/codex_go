@@ -10,7 +10,7 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-var DefaultStatusLineItems = []string{"model-with-reasoning", "current-dir"}
+var DefaultStatusLineItems = []string{"model-with-reasoning", "current-dir", "thread-name"}
 
 // DefaultTerminalTitleItems mirrors Rust's DEFAULT_TERMINAL_TITLE_ITEMS.
 // Unnamed threads omit thread-name until a name is available, so the default

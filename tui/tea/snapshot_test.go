@@ -24,17 +24,33 @@ func TestModelTerminalSnapshots(t *testing.T) {
 		state.AddMessage(codextui.RoleAssistant, "I am checking the files.")
 		model := NewModel(state, Options{Width: 104, Height: 20})
 
-		got := normalizeTerminalSnapshot(model.View())
+		view := model.View()
+		got := normalizeTerminalSnapshot(view)
+		// Rust has no app-level chrome rows: the transcript owns the viewport,
+		// the composer is a shaded full-width block, and the status line sits
+		// directly below it.
 		for _, want := range []string{
-			"Thread: thread-wide",
-			" ACTIVITY ─────────",
-			"╭────────────────",
-			"│ > Ask gcode",
-			"╰────────────────",
+			"› inspect the workspace",
+			"• I am checking the files.",
+			"› Ask Codex to do anything",
+			"  gpt-5 high · ",
+			"  ? for shortcuts",
 		} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("wide snapshot missing %q:\n%s", want, got)
 			}
+		}
+		for _, unwanted := range []string{"Thread:", "ACTIVITY", "╭", "> Ask gcode"} {
+			if strings.Contains(got, unwanted) {
+				t.Fatalf("wide snapshot kept legacy chrome %q:\n%s", unwanted, got)
+			}
+		}
+		// The frame must fill the terminal exactly. normalizeTerminalSnapshot
+		// trims the blank row Rust paints before the first transcript cell, so
+		// measure the raw view for the row budget.
+		raw := strings.ReplaceAll(view, "\r\n", "\n")
+		if lines := strings.Count(raw, "\n") + 1; lines != 20 {
+			t.Fatalf("wide snapshot rows = %d, want 20:\n%s", lines, got)
 		}
 		for _, line := range strings.Split(got, "\n") {
 			if len([]rune(line)) > 104 {
@@ -57,8 +73,6 @@ func TestModelTerminalSnapshots(t *testing.T) {
 		model := NewModel(state, Options{Width: 82, Height: 18})
 
 		assertTerminalSnapshot(t, model.View(), `
-Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sandbo…
-
 › summarize the repo
 
 
@@ -70,10 +84,12 @@ Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sandb
 
 
 
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands
-> Ask gcode
->
->`)
+
+
+› Ask Codex to do anything
+
+  gpt-5 high · D:\qax\reagent\dev\codex_go\tui\tea
+  ? for shortcuts`)
 	})
 
 	t.Run("approval modal", func(t *testing.T) {
@@ -86,23 +102,24 @@ enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands
 		})
 
 		assertTerminalSnapshot(t, model.View(), `
-Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: de…
 No messages yet.
 
 
-                     ╭───────────────────────────────╮
-                     │Run command?                   │
-                     │  Reason: needs tests          │
-                     │  Working directory: D:\repo   │
-                     │  go test ./...                │
-                     │› 1. Allow for this turn (y)   │
-                     │  2. Allow for this session (a)│
-                     │  3. Deny (d)                  │
-                     │Esc cancel | Enter choose      │
-enter send · ctrl+j n╰───────────────────────────────╯uit · /help commands
-> Ask gcode
->
->`)
+
+
+
+
+
+
+  Run command?
+
+  Reason: needs tests
+  Working directory: D:\repo
+  $ go test ./...
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for this command in this session (a)
+  3. No, and tell Codex what to do differently (esc)
+  Press enter to confirm or esc to cancel`)
 	})
 
 	t.Run("session picker", func(t *testing.T) {
@@ -168,23 +185,24 @@ enter send · ctrl+j n╰──────────────────�
 		})
 
 		assertTerminalSnapshot(t, model.View(), `
-Thread: new | Status: idle | Model: default | Approval: default | Sandbox: de…
 No messages yet.
 
 
-          ╭───────────────────────────────────────────────────────╮
-          │Request user input                                     │
-          │  Scope                                                │
-          │  Question 1/1 (1 unanswered) · auto-resolves in 1m 00s│
-          │  Where should this apply?                             │
-          │› 1. Plan (1) - Only update the plan.                  │
-          │  2. All (2) - Apply everywhere.                       │
-          │Esc cancel | Enter choose                              │
-          ╰───────────────────────────────────────────────────────╯
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands
-> Ask gcode
->
->`)
+
+
+
+
+
+
+  Request user input
+
+  Scope
+  Question 1/1 (1 unanswered) · auto-resolves in 1m 00s
+  Where should this apply?
+
+  › 1. Plan  Only update the plan.
+    2. All   Apply everywhere.
+  Esc cancel | Enter choose`)
 	})
 }
 

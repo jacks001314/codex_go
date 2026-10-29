@@ -31,8 +31,7 @@ func (m *Model) openModelPicker() bubbletea.Cmd {
 	m.openModal(ModalRequestMsg{
 		ID:      "model-picker",
 		Kind:    ModalKindPicker,
-		Title:   "Select Model",
-		Body:    "Pick the model for following turns.",
+		Title:   "Select Model and Effort",
 		Options: modalOptions,
 	})
 	if m.modal != nil {

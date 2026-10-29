@@ -444,10 +444,7 @@ func TestAsyncQuestionsExpandAnswerAndAdvance(t *testing.T) {
 		t.Fatalf("expanded editor missing:\n%s", view)
 	}
 
-	for _, r := range "Postgres" {
-		updated, _ = model.Update(keyRunes(r))
-		model = updated.(*Model)
-	}
+	typeText(t, model, "Postgres")
 	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
 	model = updated.(*Model)
 
