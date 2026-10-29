@@ -2840,6 +2840,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Test: `TestAgentLoopRefreshesInstructionsBeforeStepToolsLikeRust` pins the provider-before-tools ordering and that the refreshed instructions and rebuilt tools both reach the second sampling request.
 - Verified with `go test ./turn -run 'TestAgentLoopRefreshesInstructionsBeforeStepToolsLikeRust|TestAgentLoopRebuildsToolsForLaterModelStepsLikeRust' -count=1`.
 
-Status after reconciliation: `2123 complete`, `441 not_applicable`,
-`372 audit_pending`, `210 regression_pending`, `3 partial`,
+### Agent operations routed through the control trait (Round 962)
+
+- Rust #47520 reshapes the agent control API: tool-facing spawn/send/wait stay on `AgentControl`, resume/close/watch/inspect move to `LocalAgentRuntime`, admission, usage accounting, completion notification and shared settings become synchronous trait methods, and `AgentControlInit` hands the parent controller to delegated and guardian sessions (#47520, complete).
+- Go already splits the surface the same way: `agent/tools.go:46` `ToolController` carries spawn/send/wait/resume/close for the agent tools, while turn admission, usage accounting, notification fan-out and the shared service tier live on `RuntimeRouter`.
+- Delegated and guardian sessions inherit the parent runtime by construction: `runtimeAgentController` is built from the parent router and thread (`appserver/agent_controller.go`, `newRuntimeAgentControllerForTurn`), and `rootServiceTierForSpawn` mirrors Rust's `service_tier()`, so there is no separate controller object to hand down.
+- `AgentControlInit`, `StatusSubscription` and `ensure_agent_known` have no Go counterparts to add: Go has no dyn-trait hand-off, and the router owns the live registry, so inspection, watching and thread-id generation resolve against the same runtime.
+- Verified with `go build ./...` and `go test ./appserver -run 'TestRuntimeAgentController|TestAgentController' -count=1`.
+
+Status after reconciliation: `2124 complete`, `441 not_applicable`,
+`371 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

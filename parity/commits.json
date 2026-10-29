@@ -19336,9 +19336,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/17; needs review: AgentControlInit, StatusSubscription, ensure_agent_known, ensure_execution_capacity_for_turn_start, generate_thread_id"
+    "Rust-only API reshape: `AgentControl` keeps the tool-facing spawn/send/wait calls, resume/close/watch/inspect move to `LocalAgentRuntime`, and admission, usage accounting, completion notifications and the shared service tier become synchronous/infallible trait methods. Go already splits the same surface: agent/tools.go `ToolController` exposes spawn/send/wait/resume/close for the agent tools, while every other operation lives on `RuntimeRouter` (turn admission, usage accounting, notification fan-out, service tier).",
+    "Delegated and guardian sessions inherit the parent runtime by construction: runtimeAgentController is built from the parent router/parent thread (appserver/agent_controller.go newRuntimeAgentControllerForTurn) and rootServiceTierForSpawn mirrors Rust `service_tier()`; there is no separate controller object to hand down.",
+    "No AgentControlInit/StatusSubscription equivalents are needed: Go has no dyn-trait hand-off, and the router owns the live runtime, so status and inspection resolve against the same registry.",
+    "Verified with `go build ./...` and `go test ./appserver -run 'TestRuntimeAgentController|TestAgentController' -count=1`."
    ]
   },
   {
