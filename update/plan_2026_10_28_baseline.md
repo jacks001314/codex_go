@@ -790,6 +790,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regression `tui/tea/voice_test.go` `TestModelVoiceMeterHistoryKeepsQuietSamplesLikeRust`: a loud microphone frame followed by a quiet microphone / speaker-only frame keeps the earlier peak and still renders activity, the two channels stay independent, and a full quiet window settles both the history and the rendered meter to silence.
 - Rust's insta snapshot for this case only changed in content, so the Rust TUI snapshot manifest file counts are unaffected; `go test ./tui/tea -count=1`, `go test ./tui/chatwidget -run 'Voice|Meter' -count=1` and `go test ./tui/bottom_pane -run Voice -count=1` pass.
 
-Status after reconciliation: `1977 complete`, `385 not_applicable`,
-`507 audit_pending`, `280 regression_pending`, `0 partial`,
+### Drop TUI world-writable scans that Go never had (Round 790)
+
+- Rust #44933 deletes TUI-local Windows world-writable scanning: the startup scan in `app/startup.rs`, the permission-change scan in `app/event_dispatch.rs`, the `OpenWorldWritableWarningConfirmation`/`StartupWorldWritableScanCompleted`/`SkipNextWorldWritableScan`/`UpdateWorldWritableWarningAcknowledged` events, the warning dialog and acknowledgement state in `chatwidget/windows_sandbox_prompts.rs` and `chatwidget/settings.rs`, the permission-shortcut gate, the scan telemetry helper, and the color-probe wait on `startup_world_writable_scan_pending`.
+- Go's TUI never implemented any of it: `rg -ni 'world.?writable' tui/` matches only the app-server notification routing name `ServerNotificationWindowsWorldWritableWarning`, which Rust keeps too, and `tui/terminal_default_colors*.go` probes OSC 10/11 directly with no startup-scan gate.
+- `hide_world_writable_warning` still exists on both sides (Rust `config/src/types.rs`, Go `config/config.go`), and the server-side audit/warning path (`sandbox/windowssandbox`, `sandbox/windows.go` `WindowsSandboxWarning`, app-server `windows/worldWritableWarning`) is retained by Rust after this commit, so it stays in Go as well.
+- Nothing to remove or add; no new regression is meaningful because the deleted behavior has no Go surface.
+
+Status after reconciliation: `1977 complete`, `386 not_applicable`,
+`506 audit_pending`, `280 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

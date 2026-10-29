@@ -12291,9 +12291,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 790: #44933 only deletes TUI-local Windows world-writable scanning. Rust removed the startup scan in app/startup.rs, the permission-change scan in app/event_dispatch.rs, the AppEvent variants (OpenWorldWritableWarningConfirmation, StartupWorldWritableScanCompleted, SkipNextWorldWritableScan, UpdateWorldWritableWarningAcknowledged), the warning dialog and acknowledgement state in chatwidget/windows_sandbox_prompts.rs and chatwidget/settings.rs, the permission-shortcut gate, the scan telemetry helper in windows_sandbox.rs, and the color-probe wait on startup_world_writable_scan_pending. Go's TUI never implemented any of that: rg -ni 'world.?writable' over tui/ matches only the app-server notification routing name ServerNotificationWindowsWorldWritableWarning in tui/app/app_server_event_targets.go, which Rust keeps as well, and the terminal color probe in tui/terminal_default_colors*.go is a standalone OSC 10/11 query with no startup-scan gate. hide_world_writable_warning still exists on both sides (Rust config/src/types.rs, Go config/config.go) and the server-side audit/warning path stays in sandbox/windowssandbox plus sandbox/windows.go WindowsSandboxWarning with the app-server windows/worldWritableWarning notification, all of which Rust retains after this commit. Nothing to remove or add in Go; no new regression is meaningful because the deleted behavior has no Go surface. Validation: rg -ni 'world.?writable' tui/ returns the routing constant only; go test ./tui/... not required for an evidence-only audit."
    ]
   },
   {
