@@ -51,6 +51,10 @@ func cleanUpLegacyWindowsSandbox(report func(string)) error {
 	if !elevated {
 		return errors.New("sandbox cleanup requires administrator privileges")
 	}
+	// The legacy path has no pinned Codex home, so it keeps every sandbox
+	// directory and its filesystem permissions (Rust
+	// clean_up_legacy_windows_sandbox -> clean_up_packaged_windows_sandbox(None)).
+	report("skipping sandbox directories: no pinned home")
 	var failures []string
 	for _, step := range []struct {
 		name string
@@ -61,8 +65,6 @@ func cleanUpLegacyWindowsSandbox(report func(string)) error {
 		{"remove hidden-user entries", func() error {
 			return unhideSandboxUsers([]string{OfflineUsername, OnlineUsername})
 		}},
-		{"remove sandbox users", func() error { return removeLegacySandboxUsers(report) }},
-		{"remove sandbox group", removeLegacySandboxGroup},
 	} {
 		if err := step.run(); err != nil {
 			message := fmt.Sprintf("%s: failed, %v", step.name, err)
@@ -72,9 +74,36 @@ func cleanUpLegacyWindowsSandbox(report func(string)) error {
 		}
 		report(step.name + ": completed")
 	}
+	if err := removeLegacySandboxUsers(report); err != nil {
+		failures = append(failures, err.Error())
+	}
+	if err := removeLegacySandboxGroupAfter(failures, report, removeLegacySandboxGroup); err != nil {
+		failures = append(failures, err.Error())
+	}
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
 	}
+	return nil
+}
+
+// removeLegacySandboxGroupAfter keeps the machine-wide sandbox group while any
+// earlier cleanup step failed, so a retry can still resolve the sandbox
+// accounts (Rust uninstall_windows::finish removes the group only when cleanup
+// produced no errors).
+func removeLegacySandboxGroupAfter(failures []string, report func(string), remove func() error) error {
+	if report == nil {
+		report = func(string) {}
+	}
+	if len(failures) > 0 {
+		report("retaining sandbox group until cleanup finishes")
+		return nil
+	}
+	if err := remove(); err != nil {
+		message := fmt.Sprintf("remove sandbox group: failed, %v", err)
+		report(message)
+		return errors.New(message)
+	}
+	report("remove sandbox group: completed")
 	return nil
 }
 
@@ -86,10 +115,14 @@ func removeLegacySandboxUsers(report func(string)) error {
 		report = func(string) {}
 	}
 	var failures []string
+	fail := func(message string) {
+		report(message)
+		failures = append(failures, message)
+	}
 	for _, name := range []string{OfflineUsername, OnlineUsername} {
 		sid, exists, err := lookupLocalUserSID(name)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("look up sandbox account %s: %v", name, err))
+			fail(fmt.Sprintf("look up sandbox account %s: %v", name, err))
 			continue
 		}
 		if !exists {
@@ -97,17 +130,17 @@ func removeLegacySandboxUsers(report func(string)) error {
 			continue
 		}
 		if err := deleteUserProfile(sid); err != nil {
-			failures = append(failures, fmt.Sprintf("remove sandbox profile %s: %v", name, err))
+			fail(fmt.Sprintf("remove %s profile and account: failed, %v", name, err))
 			continue
 		}
 		namePtr, err := windows.UTF16PtrFromString(name)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("remove sandbox account %s: %v", name, err))
+			fail(fmt.Sprintf("remove %s profile and account: failed, %v", name, err))
 			continue
 		}
 		status, _, _ := procNetUserDel.Call(0, uintptr(unsafe.Pointer(namePtr)))
 		if code := uint32(status); code != 0 && code != nerrUserNotFound {
-			failures = append(failures, fmt.Sprintf("remove sandbox account %s: code %d", name, code))
+			fail(fmt.Sprintf("remove %s profile and account: failed, code %d", name, code))
 			continue
 		}
 		report(fmt.Sprintf("removed %s profile and account", name))
