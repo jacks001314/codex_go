@@ -94,7 +94,11 @@ type GitMarketplaceMaterializer struct {
 	Automatic bool
 }
 
-type GitMarketplaceRevisionResolver struct{}
+type GitMarketplaceRevisionResolver struct {
+	// Automatic isolates background marketplace/plugin git operations from
+	// repository-scoped or command-scoped Git configuration (Rust #39520).
+	Automatic bool
+}
 
 type MarketplaceRevisionResolverFunc func(source *ParsedMarketplaceSource) (string, error)
 
@@ -210,7 +214,7 @@ func (r *GitMarketplaceRevisionResolver) MarketplaceRevision(source *ParsedMarke
 	if source.RefName != nil && strings.TrimSpace(*source.RefName) != "" {
 		ref = strings.TrimSpace(*source.RefName)
 	}
-	output, err := runMarketplaceGitOutput(nil, false, "ls-remote", source.URL, ref)
+	output, err := runMarketplaceGitOutput(nil, r != nil && r.Automatic, "ls-remote", source.URL, ref)
 	if err != nil {
 		return "", err
 	}

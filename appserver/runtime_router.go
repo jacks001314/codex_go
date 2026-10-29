@@ -1788,6 +1788,10 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		account.ApplyAuthSnapshot(&resolved.Auth)
 	}
 	router.configureMCPFromConfig()
+	// Rust #42149: app-server startup synchronizes Git marketplaces selected
+	// from the effective merged configuration. If the user's configuration is
+	// invalid, Rust keeps the same defaults loader for the activation reload.
+	router.startPluginStartupTasks()
 	if stateRuntime != nil {
 		// Mirrors Rust thread_manager.rs: when background_paginated_rollout_
 		// migration is enabled, inspect rollouts on startup and migrate legacy
@@ -11628,7 +11632,27 @@ func (r *RuntimeRouter) handleMarketplaceUpgrade(request *Request) (*plugin.Mark
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, err := r.requirePlugins().UpgradeMarketplace(&params)
+	// Rust #42149: upgrade the Git marketplaces selected from the effective
+	// merged configuration, and reload that same configuration before
+	// activating a downloaded snapshot.
+	var (
+		response *plugin.MarketplaceUpgradeResponse
+		err      error
+	)
+	if r.services.Config == nil {
+		response, err = r.requirePlugins().UpgradeMarketplace(&params)
+	} else {
+		var values map[string]any
+		var reload plugin.MarketplaceConfigReload
+		values, reload, err = r.marketplaceUpgradeConfig()
+		if err == nil {
+			marketplaceName := ""
+			if params.MarketplaceName != nil {
+				marketplaceName = *params.MarketplaceName
+			}
+			response, err = r.requirePlugins().UpgradeConfiguredMarketplaces(values, marketplaceName, reload)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -11638,6 +11662,35 @@ func (r *RuntimeRouter) handleMarketplaceUpgrade(request *Request) (*plugin.Mark
 		r.effectivePluginsChanged()
 	}
 	return response, nil
+}
+
+// marketplaceUpgradeConfig returns the effective merged configuration used to
+// select Git marketplaces plus a reloader bound to the same loader, so the
+// activation check observes layers and overrides exactly like the initial
+// selection (Rust #42149).
+func (r *RuntimeRouter) marketplaceUpgradeConfig() (map[string]any, plugin.MarketplaceConfigReload, error) {
+	readParams := &config.ConfigReadParams{}
+	if cwd := r.threadStartDefaultCWD(); cwd != "" {
+		readParams.CWD = &cwd
+	}
+	read, err := r.services.Config.Read(readParams)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read config for marketplace upgrade: %w", err)
+	}
+	if read == nil {
+		return nil, nil, errors.New("config read for marketplace upgrade returned no values")
+	}
+	reload := func() (map[string]any, error) {
+		reloaded, err := r.services.Config.Read(readParams)
+		if err != nil {
+			return nil, err
+		}
+		if reloaded == nil {
+			return nil, errors.New("config reload returned no values")
+		}
+		return reloaded.Config, nil
+	}
+	return read.Config, reload, nil
 }
 
 func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListResponse, error) {
@@ -13689,6 +13742,55 @@ func (r *RuntimeRouter) maybeStartCuratedRepoSync(force bool) {
 		return
 	}
 	r.services.Plugins.StartCuratedRepoSync(r.effectivePluginsChanged)
+}
+
+// startPluginStartupTasks starts the startup-only plugin synchronization
+// tasks. Rust selects this loader from the merged configuration and preserves
+// it for activation reloads (#42149).
+func (r *RuntimeRouter) startPluginStartupTasks() {
+	if r == nil || r.services.Plugins == nil || r.services.Config == nil {
+		return
+	}
+	cwd := strings.TrimSpace(r.services.StartupCWD)
+	readParams := &config.ConfigReadParams{}
+	if cwd != "" {
+		readParams.CWD = &cwd
+	}
+	readCurrent := func() (map[string]any, error) {
+		read, err := r.services.Config.Read(readParams)
+		if err != nil {
+			return nil, err
+		}
+		if read == nil {
+			return nil, errors.New("config read for plugin startup returned no values")
+		}
+		return read.Config, nil
+	}
+	readDefaults := func() (map[string]any, error) {
+		read, err := r.services.Config.ReadDefaults(cwd)
+		if err != nil {
+			return nil, err
+		}
+		if read == nil {
+			return nil, errors.New("default config read for plugin startup returned no values")
+		}
+		return read.Config, nil
+	}
+	values, err := readCurrent()
+	reload := readCurrent
+	if err != nil {
+		values, err = readDefaults()
+		if err != nil {
+			slog.Warn("failed to read config for plugin startup tasks", "error", err)
+			return
+		}
+		reload = readDefaults
+	}
+	cfg := &config.Config{Values: values}
+	if !features.Enabled(cfg.FeatureSettings(), "plugins") {
+		return
+	}
+	r.services.Plugins.StartConfiguredMarketplaceAutoUpgrade(values, reload, r.effectivePluginsChanged)
 }
 
 func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResponse, error) {

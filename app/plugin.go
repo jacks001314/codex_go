@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"syscall"
@@ -547,7 +548,22 @@ func runPluginMarketplaceList(ctx *pluginCLIContext, opts *cli.PluginMarketplace
 }
 
 func runPluginMarketplaceUpgrade(ctx *pluginCLIContext, opts *cli.PluginMarketplaceOptions, stdout io.Writer) error {
-	outcome, err := ctx.service.UpgradeMarketplace(&plugin.MarketplaceUpgradeParams{MarketplaceName: stringPtrIfNotEmptyLocal(opts.Name)})
+	// Rust #42149: the CLI upgrades the Git marketplaces selected from its
+	// effective configuration (including non-user layers and -c overrides) and
+	// reloads with the same loader before activation.
+	cwd, _ := os.Getwd()
+	load := func() (map[string]any, error) {
+		loaded, err := config.LoadEffective(ctx.codexHome, opts.ConfigOverrides, nil, nil, cwd)
+		if err != nil {
+			return nil, err
+		}
+		return loaded.Values, nil
+	}
+	values, err := load()
+	if err != nil {
+		return err
+	}
+	outcome, err := ctx.service.UpgradeConfiguredMarketplaces(values, opts.Name, load)
 	if err != nil {
 		return err
 	}
@@ -686,7 +702,12 @@ func pluginMarketplaceUpgradeError(errors []plugin.MarketplaceUpgradeErrorInfo) 
 	if len(errors) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%d upgrade failure(s) occurred.", len(errors))
+	var details strings.Builder
+	for _, item := range errors {
+		fmt.Fprintf(&details, "Failed to upgrade marketplace `%s`: %s\n", item.MarketplaceName, item.Message)
+	}
+	fmt.Fprintf(&details, "%d upgrade failure(s) occurred.", len(errors))
+	return fmt.Errorf("%s", details.String())
 }
 
 func stringValueOrEmptyLocal(value *string) string {

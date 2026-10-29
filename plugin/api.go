@@ -1399,6 +1399,7 @@ type PluginService struct {
 	marketplacePluginMaterializer MarketplacePluginMaterializer
 	marketplaceRevision           MarketplaceRevisionResolver
 	marketplaceConfigPath         string
+	marketplaceStartupUpgradeBusy bool
 	suggestedProvider             SuggestedPluginProvider
 	suggestedProviderKey          string
 	suggestedCache                *SuggestedPluginList

@@ -702,6 +702,10 @@ Closed six audits, three with new code. `#42142` adds the Plus/Team five-hour 50
 
 Closed the app-link approval trio. `#42056` passes the resolved Codex Apps link into `AppToolPolicy` (link `default_tools_approval_mode` sits between per-tool and app defaults) and resolves `approvals_reviewer` from link, then connector, then `_default`, gated by managed requirements, while elicitation routing keeps the link unset as Rust does. `#42133` scopes remembered session approvals by server, connector, tool, and link, so a different link or the legacy no-selector path asks again. `#42134` adds `link_id` and `link_is_implicit` to native approval elicitation meta using the reserved `implicit_link::` prefix; the persistent-approval meta also carries `link_id`. Coverage lives in `mcp/tool_approval_link_like_rust_test.go` and `appserver/mcp_app_link_settings_like_rust_test.go`. Next up: `#42149` Git marketplace upgrades, `#42207` TUI reconnects while threads close, `#44746` startup folder trust, and the remaining `#42104`/`#42137` audits.
 
-Status after reconciliation: `1966 complete`, `382 not_applicable`,
-`514 audit_pending`, `287 regression_pending`, `0 partial`,
+### sync: upgrade Git marketplaces from merged configuration (#42149) (Round 776)
+
+Closed `#42149` end to end. Explicit upgrades now select Git marketplaces from the effective merged configuration (system/managed/project plus CLI layers) and stage the download before activation; the initiating loader is reused for a final definition check, so a changed source/ref/sparse set, a removed marketplace, or an unreadable config rolls back to the previous snapshot instead of activating it. App-server startup runs the same synchronization as a background task with automatic Git isolation and refreshes derived plugin state only when roots changed; if the initial user config is invalid it keeps Rust's defaults-loader fallback (`ConfigService.ReadDefaults` ignores user and project layers while retaining packaged defaults and managed configuration). The CLI upgrade preserves `-c` overrides through both selection and the activation reload. New coverage: `plugin/marketplace_upgrade_like_rust_test.go`, `appserver/marketplace_upgrade_config_test.go`, and the CLI override case in `app/plugin_cli_test.go`.
+
+Status after reconciliation: `1967 complete`, `382 not_applicable`,
+`513 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

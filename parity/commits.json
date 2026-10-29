@@ -5856,9 +5856,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/5; needs review: ConfigLayerReload, PluginStartupConfig, config_builder, for_cwd"
+    "plugin.UpgradeConfiguredMarketplaces selects Git marketplaces from the effective merged configuration and reloads through the initiating loader before activation, rolling back on a changed/removed definition or reload failure; startup uses PluginService.StartConfiguredMarketplaceAutoUpgrade with automatic Git isolation and refreshes derived plugin state; appserver startPluginStartupTasks preserves the defaults loader (ConfigService.ReadDefaults ignores invalid user/project layers) after an invalid initial config; the CLI upgrade keeps -c overrides on both selection and activation reload. Tests: plugin TestUpgradeConfiguredMarketplaces*; appserver TestMarketplaceUpgradeUsesManagedLayers, TestMarketplaceUpgradeReloadFailureRollsBack, TestPluginStartupAutoUpgradesMergedMarketplaces, TestPluginStartupFallsBackToDefaultsAfterInvalidConfig; app TestPluginMarketplaceUpgradeUsesConfigOverridesLikeRust. go test ./plugin ./config and targeted ./appserver ./app suites pass."
    ]
   },
   {

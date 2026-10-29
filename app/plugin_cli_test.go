@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -194,6 +195,82 @@ func pluginCLIRemoteBundleForTest(t *testing.T, pluginName string) []byte {
 		t.Fatalf("Close(gzip) error = %v", err)
 	}
 	return output.Bytes()
+}
+
+// TestPluginMarketplaceUpgradeUsesConfigOverridesLikeRust covers Rust #42149's
+// CLI path: a -c override can define the Git marketplace selected for upgrade,
+// and the loader used for selection also verifies the definition before
+// activation without writing it into the user's config.toml.
+func TestPluginMarketplaceUpgradeUsesConfigOverridesLikeRust(t *testing.T) {
+	home := shortCLITempDir(t)
+	t.Setenv("CODEX_HOME", home)
+	source := initPluginCLIGitMarketplace(t)
+	override := fmt.Sprintf(`marketplaces.debug={source_type="git",source=%q}`, source)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"-c", override, "plugin", "marketplace", "upgrade", "--json"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("marketplace upgrade returned error: %v; stdout = %s; stderr = %s", err, stdout.String(), stderr.String())
+	}
+	var output struct {
+		SelectedMarketplaces []string `json:"selectedMarketplaces"`
+		UpgradedRoots        []string `json:"upgradedRoots"`
+		Errors               []any    `json:"errors"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("Unmarshal upgrade output error = %v; stdout = %s", err, stdout.String())
+	}
+	root := filepath.Join(home, plugin.InstalledMarketplacesDir, "debug")
+	if len(output.SelectedMarketplaces) != 1 || output.SelectedMarketplaces[0] != "debug" {
+		t.Fatalf("selected = %#v", output.SelectedMarketplaces)
+	}
+	if len(output.UpgradedRoots) != 1 || filepath.Clean(output.UpgradedRoots[0]) != root {
+		t.Fatalf("roots = %#v, want %q", output.UpgradedRoots, root)
+	}
+	if len(output.Errors) != 0 {
+		t.Fatalf("errors = %#v", output.Errors)
+	}
+	manifest, err := os.ReadFile(filepath.Join(root, ".agents", "plugins", "marketplace.json"))
+	if err != nil || string(manifest) != `{"name":"debug","plugins":[]}` {
+		t.Fatalf("installed manifest = %q, %v", manifest, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("upgrade wrote config.toml, stat error = %v", err)
+	}
+}
+
+// shortCLITempDir keeps Windows marketplace staging paths below legacy path
+// limits while the test exercises a real git clone.
+func shortCLITempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "cg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func initPluginCLIGitMarketplace(t *testing.T) string {
+	t.Helper()
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, ".agents", "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".agents", "plugins", "marketplace.json"), []byte(`{"name":"debug","plugins":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "--quiet"},
+		{"add", "."},
+		{"-c", "user.name=Codex Tests", "-c", "user.email=codex@example.com", "commit", "-m", "marketplace"},
+	} {
+		command := exec.Command("git", args...)
+		command.Dir = source
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, output)
+		}
+	}
+	return source
 }
 
 func TestPluginMarketplaceLifecycle(t *testing.T) {

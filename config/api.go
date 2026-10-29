@@ -2136,18 +2136,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		if err != nil {
 			return nil, err
 		}
-		values, origins := mergeConfigLayers(layers)
-		s.applyFeatureEnablementDefaults(values, origins)
-		applySupportedFeatureEnablement(values)
-		if err := s.validateMCPEMAAuthConfig(layers, values); err != nil {
-			return nil, err
-		}
-		s.recordStartupWarnings(values)
-		response := &ConfigReadResponse{Config: values, Origins: origins}
-		if params.IncludeLayers {
-			response.Layers = cloneLayers(rpcLayers(layers))
-		}
-		return response, nil
+		return s.readResponseForLayers(layers, params)
 	}
 	userConfigPath, err := s.currentUserConfigPath()
 	if err != nil {
@@ -2168,6 +2157,26 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		Config:  cloneMap(userValues),
 	}
 	layers := s.readLayers(userLayer)
+	return s.readResponseForLayers(layers, params)
+}
+
+// ReadDefaults mirrors Rust's ConfigManager::load_default_config for the
+// plugin startup tasks: user and project configuration are ignored, while
+// packaged defaults and enterprise-managed layers stay active. Rust selects
+// this loader when the initial app-server config load is invalid (#42149).
+func (s *ConfigService) ReadDefaults(cwd string) (*ConfigReadResponse, error) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		cwd = strings.TrimSpace(s.codexHome)
+	}
+	layers, err := s.readLayersForCWDOptions(cwd, "", true, true)
+	if err != nil {
+		return nil, err
+	}
+	return s.readResponseForLayers(layers, &ConfigReadParams{})
+}
+
+func (s *ConfigService) readResponseForLayers(layers []Layer, params *ConfigReadParams) (*ConfigReadResponse, error) {
 	values, origins := mergeConfigLayers(layers)
 	s.applyFeatureEnablementDefaults(values, origins)
 	applySupportedFeatureEnablement(values)
@@ -2176,7 +2185,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 	}
 	s.recordStartupWarnings(values)
 	response := &ConfigReadResponse{Config: values, Origins: origins}
-	if params.IncludeLayers {
+	if params != nil && params.IncludeLayers {
 		response.Layers = cloneLayers(rpcLayers(layers))
 	}
 	return response, nil
@@ -2805,21 +2814,34 @@ func (s *ConfigService) readLayers(userLayer Layer) []Layer {
 }
 
 func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, error) {
+	return s.readLayersForCWDOptions(cwd, profile, false, false)
+}
+
+// readLayersForCWDOptions loads the effective layer stack for a workspace.
+// ignoreUserConfig and ignoreProjectConfig mirror Rust's LoaderOverrides used
+// by the plugin startup fallback loader (#42149).
+func (s *ConfigService) readLayersForCWDOptions(cwd string, profile string, ignoreUserConfig bool, ignoreProjectConfig bool) ([]Layer, error) {
 	userPath := ConfigPath(s.codexHome)
-	userValues, err := loadConfigFile(userPath)
-	if err != nil {
-		return nil, err
+	userValues := map[string]any{}
+	if !ignoreUserConfig {
+		var err error
+		userValues, err = loadConfigFile(userPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 	packagedDefaults := s.packagedDefaultsLayerForRead()
 	layers := []Layer{}
 	if packagedDefaults != nil {
 		layers = append(layers, *packagedDefaults)
 	}
-	layers = append(layers, Layer{
-		Name:    LayerSource{Type: LayerSourceUser, File: userPath},
-		Version: configVersion(userValues),
-		Config:  cloneMap(userValues),
-	})
+	if !ignoreUserConfig {
+		layers = append(layers, Layer{
+			Name:    LayerSource{Type: LayerSourceUser, File: userPath},
+			Version: configVersion(userValues),
+			Config:  cloneMap(userValues),
+		})
+	}
 	managedLayers := s.managedLayersForRead()
 	// Rust #44241: the project sanitizer reads the credential-broker state and
 	// provider env bindings from the trusted layers (packaged defaults, user,
@@ -2841,7 +2863,7 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 	// like the loader does (Rust config/src/loader/mod.rs:995-1031).
 	brokerState := CredentialBrokerProjectStateForValuesWithRequirements(trustedBrokerValues, s.requirements)
 	trustedProviderEnvKeys := CredentialBrokerProviderEnvKeys(trustedBrokerValues)
-	if ProjectConfigEnabled(userValues, cwd) {
+	if !ignoreProjectConfig && ProjectConfigEnabled(userValues, cwd) {
 		for _, dotCodexFolder := range ProjectDotCodexFolders(cwd) {
 			path := filepath.Join(dotCodexFolder, "config.toml")
 			projectValues, exists, err := loadConfigFileIfExists(path)
@@ -2864,7 +2886,7 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 			})
 		}
 	}
-	if strings.TrimSpace(profile) != "" {
+	if !ignoreUserConfig && strings.TrimSpace(profile) != "" {
 		profileLayer, err := s.profileLayer(profile)
 		if err != nil {
 			return nil, err
