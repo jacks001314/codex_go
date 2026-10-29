@@ -14943,9 +14943,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go already renders completion footers without the `done` prefix: tui/history_cell/separators.go labelParts appends formatCompletionTime and the runtime-metrics label, and formatCompletionTime emits only the twelve-hour time (`2:32 PM`), the date form (`Sep 6 at 2:32 PM`), or the year form (`Sep 6, 2000 at 2:32 PM`), matching Rust separators.rs after #46067; a repository-wide search finds no `done <time>` footer text, and tui/history_cell separator/completion tests (including TestCompletionLabelShowsShortDurationsLikeRust) pass"
    ]
   },
   {

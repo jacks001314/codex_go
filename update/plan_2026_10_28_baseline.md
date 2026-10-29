@@ -1697,6 +1697,19 @@ Bound model catalog decode errors and classify request timeouts (#45928, not app
   The five-second deadline (`modelsEndpointRefreshTimeout`) is a
   `context.WithTimeout` whose expiry aborts the request and is swallowed.
 
-Status after reconciliation: `2028 complete`, `400 not_applicable`,
-`464 audit_pending`, `254 regression_pending`, `3 partial`,
+### Remove the `done` prefix from TUI completion timestamps (#46067) (Round 863)
+
+Remove the `done` prefix from TUI completion timestamps (#46067, closure).
+
+- Go `tui/history_cell/separators.go` already appends only the formatted
+  timestamp to the completion footer: `formatCompletionTime` renders `2:32 PM`
+  for the current day, `Sep 6 at 2:32 PM` within the year, and
+  `Sep 6, 2000 at 2:32 PM` for older turns, so footers read
+  `Worked for 2m 5s · 2:32 PM`.
+- A repository-wide search finds no `done <time>` completion text in the Go TUI,
+  and the separator/completion tests (including
+  `TestCompletionLabelShowsShortDurationsLikeRust`) pass.
+
+Status after reconciliation: `2029 complete`, `400 not_applicable`,
+`463 audit_pending`, `254 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
