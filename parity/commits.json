@@ -13671,9 +13671,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #45684 collapses the duplicated model-selection fields (model, reasoning_effort, default_review_model_id, catalog_contains_auto_review, model_overridden, model_override) that GuardianReviewSessionConfig and GuardianReviewSessionParams carried separately into the single guardian_reviewer::ReviewModel and reads session execution, analytics metadata and failed-review records from that struct; behaviour is unchanged. Go already stores the same selection as one model.ApprovalReviewModel value in guardianReviewPlan.Selection (field for field the Rust ReviewModel) produced by guardianReviewPlanForTurn/SelectApprovalReviewModel, and every downstream read goes through it: the review request copies Model and ReasoningEffort from plan.Selection, the failed-review capture takes feedbackCapture.model from plan.Selection.Model, and the image context window plus the catalog-hash helper (guardianReviewModelForTurn feeding guardianReviewModelHashForTurn) derive the model from the same selection, so no site re-resolves a piece of the selection independently. Regression: appserver/guardian_review_model_like_rust_test.go registers a parent model whose catalog entry declares auto_review_model_override with both the preferred review model and the override present in the catalog, then asserts guardianReviewPlanForTurn returns the whole struct (Model and ModelOverride = override, ReasoningEffort = low, DefaultReviewModelID = preferred, CatalogContainsAutoReview = true, ModelOverridden = true), the emitted review request uses exactly that model and effort, and guardianReviewModelHashForTurn resolves the override model's CompHash. Verified with go test ./appserver -run 'Guardian' -count=1, go test ./model -count=1, go test ./appserver -count=1 (three pre-existing unrelated RuntimeRouter analytics/fingerprint tests time out, including TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust which also fails in a clean worktree of the previous HEAD) and go build ./... ."
    ]
   },
   {

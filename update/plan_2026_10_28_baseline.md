@@ -1078,6 +1078,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Regression: `appserver/guardian_denial_lifecycle_like_rust_test.go` seeds `MaxConsecutiveDenialsPerTurn-1` denials, asserts a control turn reaches the limit, then shows turn start, completion and abort each clear the window, and uses a stub reviewer to prove the hook is a no-op when no accounting exists.
 - Verified with `go test ./appserver -run 'Guardian|GuardianReview|GuardianTurn' -count=1`, `go test ./appserver -count=1` (only the two known unrelated RuntimeRouter analytics tests fail), and `go build ./...`.
 
-Status after reconciliation: `2005 complete`, `393 not_applicable`,
-`488 audit_pending`, `261 regression_pending`, `2 partial`,
+### Guardian review sessions carry one ReviewModel struct (Round 826)
+
+## Round 826 - #45684 Pass ReviewModel through guardian review sessions
+
+- Rust only refactors: the six duplicated review-model fields on GuardianReviewSessionConfig/GuardianReviewSessionParams collapse into one guardian_reviewer::ReviewModel; session execution, analytics metadata and failed-review records read from it. Behaviour unchanged.
+- Go already threads a single model.ApprovalReviewModel through guardianReviewPlan.Selection (guardianReviewPlanForTurn / SelectApprovalReviewModel) and reads the review request, failed-review capture, image context window and catalog-hash helper from it; no production change needed.
+- Added appserver/guardian_review_model_like_rust_test.go: parent auto_review_model_override plus preferred and override models in the catalog, then asserts the entire selection struct survives, the review request uses its Model/ReasoningEffort, and the hash helper resolves the override model's CompHash.
+- Verified: go test ./appserver -run 'Guardian' -count=1, go test ./model -count=1, go test ./appserver -count=1, go build ./... . Three unrelated RuntimeRouter analytics/fingerprint tests time out, including TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust which also fails on a clean worktree of the previous HEAD.
+
+Status after reconciliation: `2006 complete`, `393 not_applicable`,
+`487 audit_pending`, `261 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
