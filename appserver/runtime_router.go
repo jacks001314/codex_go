@@ -201,6 +201,17 @@ func guardianTurnStart(params *turn.TurnStartParams) bool {
 	return strings.EqualFold(strings.TrimSpace(params.ResponsesAPIMetadata["x-openai-subagent"]), "guardian")
 }
 
+// guardianReviewTurn mirrors Rust is_basic_session_source for #41072: the turn
+// parameters may carry the Guardian marker, and every turn of an established
+// Guardian review thread inherits the recorded session source.
+func (r *RuntimeRouter) guardianReviewTurn(threadID string, params *turn.TurnStartParams) bool {
+	if guardianTurnStart(params) {
+		return true
+	}
+	record := r.runtimeRecordForThread(threadID)
+	return record != nil && guardianReviewerSessionSource(record.Metadata.Source)
+}
+
 func (r *RuntimeRouter) configureEnvironmentHTTPPolicy() {
 	if r == nil || r.services.Environment == nil || r.services.Config == nil {
 		return
@@ -16569,7 +16580,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	}
 	// Rust omits the confirmation-policies request metadata for Guardian review
 	// sessions (is_basic_session_source), so the actor tools are the main model's.
-	options.SuppressActorConfirmationPolicies = guardianTurnStart(params)
+	options.SuppressActorConfirmationPolicies = r.guardianReviewTurn(threadID, params)
 	if options.Shell != nil && cfg != nil {
 		options.Shell.Validation.AdditionalPermissionsAllowed = features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals")
 		if policy := strings.TrimSpace(stringConfigValue(cfg, "approval_policy")); policy != "" {

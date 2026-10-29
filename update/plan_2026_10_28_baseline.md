@@ -2561,6 +2561,15 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `appserver/turn_runtime.go:12850` forwards the structured body unchanged to the `function_call_output` item, so inline images reach the model request.
 - `turn/tool_output_body_like_rust_test.go` and `appserver/turn_tool_output_structured_like_rust_test.go` cover both wire forms, round trip, remote image rejection, file references and oversized structured output.
 
-Status after reconciliation: `2094 complete`, `409 not_applicable`,
-`428 audit_pending`, `215 regression_pending`, `3 partial`,
+### Confirmation policies for actor MCP tools (Round 933)
+
+- Rust #41072 forwards Browser Use and Computer Use confirmation-policy Markdown in `openai/confirmation_policies` metadata for `node_repl`/`cua_repl` calls, empty when the issuing model has none, and omits other servers and Guardian sessions.
+- Go already implements the whole path: `mcp/tool_executor.go:23` defines the metadata key, `:719` builds the verbatim object, `turn/tools.go:1197` maps the catalog documents, `model/catalog.go:2043` clears them on instruction overrides, and `appserver/runtime_router.go:16543` uses the turn's model snapshot.
+- Coverage already existed for verbatim text, partial documents, empty and nil policies, Browser connector eligibility, other connectors, non-`node_repl` servers and Guardian suppression (`mcp/tool_executor_test.go`, `turn/tools_test.go`, `model/catalog_test.go`).
+- New `appserver/guardian_confirmation_policies_like_rust_test.go` pins the Guardian turn marker (originator and `x-openai-subagent`) that suppresses the metadata.
+- Guardian exclusion now uses `guardianReviewTurn` (`appserver/runtime_router.go:207`), which combines the turn marker with the recorded Guardian session source (`session.GuardianReviewSource` / `internal_guardian`), matching `is_basic_session_source`.
+- Residual: approval waits reuse the executor built for the issuing step instead of re-reading a model snapshot.
+
+Status after reconciliation: `2095 complete`, `409 not_applicable`,
+`428 audit_pending`, `214 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

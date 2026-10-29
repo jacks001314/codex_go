@@ -3372,9 +3372,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "mcp/tool_executor.go:23 ConfirmationPoliciesMetaKey and :719 actorConfirmationPoliciesMeta forward verbatim browser_use and computer_use for node_repl, cua_repl and the Browser connector, send an empty object when the issuing model has no policies and omit other servers; turn/tools.go:1197 maps catalog policies and model/catalog.go:2043 clears overrides; appserver/runtime_router.go:16583 now suppresses via :207 guardianReviewTurn which also honors the recorded Guardian session source, not only the turn marker; mcp/tool_executor_test.go, turn/tools_test.go, model/catalog_test.go and appserver/guardian_confirmation_policies_like_rust_test.go cover the matrix; residual: approval waits reuse the executor built for the issuing step rather than re-reading a model snapshot"
    ]
   },
   {
