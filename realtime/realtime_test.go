@@ -1108,6 +1108,73 @@ func TestV3BackendReasoningStatusAppendsQuietCommentary(t *testing.T) {
 	if content := message["content"].([]any)[0].(map[string]any); len(content["text"].(string)) > 256+len("[STATUS] ") {
 		t.Fatalf("status text was not bounded: %d bytes", len(content["text"].(string)))
 	}
+	// Relaying the status is context-only: it must not request a response or
+	// otherwise write anything else to the realtime session.
+	select {
+	case extra := <-outbound:
+		if extra["type"] == "response.create" {
+			t.Fatalf("reasoning status triggered response.create: %#v", extra)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestV3BackendReasoningStatusDisabledSendsNothingLikeRust(t *testing.T) {
+	const threadID = "thread-v3-status-off"
+	outbound := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(response, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		if _, _, err := conn.Read(request.Context()); err != nil {
+			return
+		}
+		for _, payload := range []string{
+			`{"type":"session.started","session":{"id":"sess-status-off"}}`,
+			`{"type":"delegation.created","item":{"type":"delegation","target":"client","id":"delegation-off","content":[]}}`,
+		} {
+			if err := conn.Write(request.Context(), websocket.MessageText, []byte(payload)); err != nil {
+				return
+			}
+		}
+		for {
+			_, payload, err := conn.Read(request.Context())
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err == nil {
+				outbound <- message
+			}
+		}
+	}))
+	defer server.Close()
+
+	manager := NewManager()
+	manager.SetTransportBackend(&TransportBackendConfig{WebsocketBaseURL: server.URL})
+	events := make(chan Event, 8)
+	manager.SetEventSink(func(_ string, event Event) { events <- event })
+	version := VersionV3
+	if _, _, err := manager.Start(&StartParams{
+		ThreadID:       threadID,
+		OutputModality: OutputAudio,
+		Version:        &version,
+	}); err != nil {
+		t.Fatalf("start V3 realtime: %v", err)
+	}
+	waitRealtimeEvent(t, events, func(event Event) bool {
+		return event.Type == "handoff.requested" && event.HandoffID == "delegation-off"
+	})
+	if err := manager.SendReasoningStatus(threadID, "should not be relayed"); err != nil {
+		t.Fatalf("SendReasoningStatus: %v", err)
+	}
+	select {
+	case message := <-outbound:
+		t.Fatalf("disabled reasoning status wrote %#v", message)
+	case <-time.After(300 * time.Millisecond):
+	}
 }
 
 func TestStartParamsBackendReasoningStatusDefaultsFalseAndRoundTrips(t *testing.T) {

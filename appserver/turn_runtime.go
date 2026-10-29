@@ -540,7 +540,7 @@ type responsesStreamNotificationState struct {
 	activeItemID              string
 	activeAgentItemID         string
 	activeReasoningItemID     string
-	reasoningSummaryByItem    map[string]string
+	reasoningSummaryByItem    map[string]map[int]string
 	planMode                  bool
 	planItemID                string
 	planParser                map[string]*proposedPlanStreamParser
@@ -573,7 +573,7 @@ func newResponsesStreamNotificationState(planMode bool, turnID string) *response
 		planParser:             map[string]*proposedPlanStreamParser{},
 		startedAgentItems:      map[string]bool{},
 		agentItemPhases:        map[string]string{},
-		reasoningSummaryByItem: map[string]string{},
+		reasoningSummaryByItem: map[string]map[int]string{},
 	}
 }
 
@@ -650,16 +650,43 @@ func (s *responsesStreamNotificationState) reasoningItemID(values ...string) str
 	return "reasoning-" + safeIdentifier(fallback)
 }
 
-// takeReasoningSummary returns and clears the completed item's accumulated
-// public summary. Raw reasoning deltas are never stored here.
+// takeReasoningSummary returns and clears the completed item's last non-empty
+// public summary part. Raw reasoning deltas are never stored here. Rust #47377
+// selects the last non-empty entry of the completed item's `summary_text`.
 func (s *responsesStreamNotificationState) takeReasoningSummary(itemID string) string {
-	if s == nil || len(s.reasoningSummaryByItem) == 0 {
+	if s == nil {
 		return ""
 	}
 	itemID = strings.TrimSpace(itemID)
-	summary := strings.TrimSpace(s.reasoningSummaryByItem[itemID])
+	parts := s.reasoningSummaryByItem[itemID]
 	delete(s.reasoningSummaryByItem, itemID)
-	return summary
+	lastIndex := -1
+	for index := range parts {
+		if index > lastIndex {
+			lastIndex = index
+		}
+	}
+	for index := lastIndex; index >= 0; index-- {
+		if summary := strings.TrimSpace(parts[index]); summary != "" {
+			return summary
+		}
+	}
+	return ""
+}
+
+// recordReasoningSummaryDelta accumulates a public summary delta under its
+// summary part index, matching Rust's `summary_text` entries so the realtime
+// status relay can pick the last non-empty part (Rust #47377).
+func (s *responsesStreamNotificationState) recordReasoningSummaryDelta(itemID string, summaryIndex int, delta string) {
+	if s == nil || delta == "" {
+		return
+	}
+	parts := s.reasoningSummaryByItem[itemID]
+	if parts == nil {
+		parts = map[int]string{}
+		s.reasoningSummaryByItem[itemID] = parts
+	}
+	parts[summaryIndex] += delta
 }
 
 func (s *responsesStreamNotificationState) agentMessageItemID(turnID string, values ...string) string {
@@ -1088,7 +1115,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			return
 		}
 		itemID := state.reasoningItemID(event.ReasoningDelta.ItemID, event.ItemID)
-		state.reasoningSummaryByItem[itemID] += event.ReasoningDelta.Delta
+		state.recordReasoningSummaryDelta(itemID, *event.ReasoningDelta.SummaryIndex, event.ReasoningDelta.Delta)
 		r.notify(NotificationReasoningSummaryTextDelta, &ReasoningSummaryTextDeltaNotification{
 			ThreadID:     threadID,
 			TurnID:       turnID,

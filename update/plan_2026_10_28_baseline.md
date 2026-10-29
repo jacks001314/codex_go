@@ -2780,6 +2780,22 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Verified on Windows with `go build ./...` and `go test ./sandbox/... -count=1`.
 - Residual: the test validates DACL contents instead of replaying Rust's `AccessCheck` simulation for a second logon, because `x/sys/windows` exposes no `AccessCheck` binding.
 
-Status after reconciliation: `2117 complete`, `440 not_applicable`,
-`379 audit_pending`, `210 regression_pending`, `3 partial`,
+### Agent metadata restore read overlap (Round 955, not applicable)
+
+- Rust #47369 overlaps up to eight per-descendant `read_stored_thread` calls while restoring V2 agent identities (#47369, not applicable).
+- Go has no per-descendant read to overlap: `RuntimeRouter.runtimeAgentRegistry` (`appserver/agent_controller.go:1309`) takes one `Store.AllRecords` snapshot (`session/store.go:1481`) and registers each descendant's stored agent path, nickname and role in record order, so path and nickname assignment is already graph-ordered and no thread is read twice.
+- No other Go path loops over descendants issuing storage reads when a V2 root is resumed.
+- Residual difference outside this commit: `Store.loadAllLocked` (`session/store.go:1850`) reads record files serially and drops the whole snapshot when one record is unreadable, so a single corrupt descendant prevents every restore instead of Rust's warn-and-continue; that is thread-store error granularity, not read scheduling.
+- Verified with `go build ./...` and `go test ./appserver -run 'Agent|Registry' -count=1`.
+
+### Realtime V3 reasoning status relay (Round 956)
+
+- Rust #47377 adds opt-in `backend_reasoning_status` (default false) that relays public reasoning summaries as `[STATUS]` commentary context for active server-managed realtime V3 delegations (#47377, complete).
+- `realtime.StartParams` already carried `backendReasoningStatus` (omitted when false) and `realtime/wire.go:358` only writes `delegation.context.append` for an active, non-client-managed V3 delegation, bounded to 256 bytes at a character boundary.
+- `appserver/turn_runtime.go:680` now stores public summary deltas per summary part index (`recordReasoningSummaryDelta`), and `:656` (`takeReasoningSummary`) returns the last non-empty trimmed part of the completed reasoning item instead of the concatenation of every part; raw reasoning deltas remain unrecorded.
+- Tests: `TestResponsesStreamReasoningSummaryUsesLastNonEmptyPartLikeRust`, `TestResponsesStreamReasoningSummaryPartsAccumulateIndependentlyLikeRust`, `TestResponsesStreamReasoningSummaryIsConsumedOnce`, `TestV3BackendReasoningStatusAppendsQuietCommentary` (also asserts no `response.create`), `TestV3BackendReasoningStatusDisabledSendsNothingLikeRust`, `TestStartParamsBackendReasoningStatusDefaultsFalseAndRoundTrips`.
+- Verified with `go build ./...`, `go test ./appserver -run 'ReasoningSummary|ReasoningStatus' -count=1` and `go test ./realtime -count=1`.
+
+Status after reconciliation: `2118 complete`, `441 not_applicable`,
+`377 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

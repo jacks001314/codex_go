@@ -18991,9 +18991,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 955 (not applicable): Rust #47369 overlaps up to eight per-descendant read_stored_thread calls while restoring V2 agent identities. Go has no per-descendant read to overlap: RuntimeRouter.runtimeAgentRegistry (appserver/agent_controller.go:1309) takes one Store.AllRecords snapshot (session/store.go:1481, an in-process index load) and registers each descendant's stored agent path, nickname and role in record order, so path and nickname assignment is already graph-ordered and no thread is read twice. No other Go path loops over descendants issuing storage reads when a V2 root is resumed. Residual difference outside this commit: Store.loadAllLocked (session/store.go:1850) reads record files serially and drops the whole snapshot on one unreadable record, so a single corrupt descendant prevents every restore instead of Rust's warn-and-continue; that is thread-store error granularity, not the read scheduling this commit changed. Verified by inspecting appserver/agent_controller.go:1309 and session/store.go:1481/1850, plus go build ./... and go test ./appserver -run 'Agent|Registry' -count=1."
    ]
   },
   {
@@ -19015,9 +19015,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: RealtimeEventText, send_reasoning_status"
+    "Round 956 (complete): realtime.StartParams already carried backendReasoningStatus (omitted when false, matching Rust's skip_serializing_if), and realtime/wire.go sendReasoningStatus only relays it for an active server-managed V3 delegation via delegation.context.append on the commentary channel with a [STATUS] prefix and a 256-byte char-boundary bound. This round aligns summary selection with Rust #47377: responsesStreamNotificationState now keeps public summary deltas per summary part index (recordReasoningSummaryDelta) instead of concatenating every part, and takeReasoningSummary returns the last non-empty trimmed part of the completed reasoning item, so earlier parts and trailing empty parts are never relayed while raw reasoning deltas are still not stored. Tests: TestResponsesStreamReasoningSummaryUsesLastNonEmptyPartLikeRust, TestResponsesStreamReasoningSummaryPartsAccumulateIndependentlyLikeRust, TestResponsesStreamReasoningSummaryIsConsumedOnce, TestV3BackendReasoningStatusAppendsQuietCommentary (now also asserts no response.create is written), TestV3BackendReasoningStatusDisabledSendsNothingLikeRust, and TestStartParamsBackendReasoningStatusDefaultsFalseAndRoundTrips. Verified with go build ./...; go test ./appserver -run 'ReasoningSummary|ReasoningStatus' -count=1; go test ./realtime -count=1."
    ]
   },
   {
