@@ -14055,9 +14055,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #45796 only changes the Python SDK artifacts: scripts/update_sdk_artifacts.py maps UrlUserInput to the stable ImageUserInput name, the generated v2_all.py renames that Pydantic class and updates the UserInput union, and the Python test asserts the stable exported names. codex_go does not vendor sdk/python (there is no sdk directory), so there is no generated Python binding to rename and no artifact script to adjust. The protocol behaviour behind the rename, image references carried by file ID through inputs and tool outputs, is already tracked by #45794 (7b8b17b97a), which is complete. No Go code or test change is required."
    ]
   },
   {

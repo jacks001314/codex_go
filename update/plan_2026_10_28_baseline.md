@@ -1425,6 +1425,17 @@ Analytics plan history menu and Vim navigation (#45772).
   ./tui/chatwidget ./chatgptapi -count=1`, `go vet ./features
   ./tui/bottom_pane ./tui/tea ./tui/analytics`, and `go build ./...`.
 
-Status after reconciliation: `2020 complete`, `395 not_applicable`,
-`474 audit_pending`, `258 regression_pending`, `2 partial`,
+### Python SDK ImageUserInput rename (Round 850)
+
+Python SDK `ImageUserInput` rename (#45796, not applicable).
+
+- The commit only touches `sdk/python`: the artifact script mapping, the
+  generated Pydantic `UrlUserInput` class/union, and its Python test.
+- codex_go does not vendor `sdk/python` (no `sdk` directory), so there is no
+  generated Python binding or artifact script to update.
+- The underlying protocol behaviour (file-ID image references in inputs and
+  tool outputs) is already covered by #45794, which is complete.
+
+Status after reconciliation: `2020 complete`, `396 not_applicable`,
+`473 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
