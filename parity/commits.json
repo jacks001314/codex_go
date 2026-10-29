@@ -13851,9 +13851,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: managed_proxy_routing, managed_proxy_routing_for_windows_sandbox"
+    "Rust #45757 tracks the Windows sandbox implementation (SandboxType) separately from the legacy setup level, feeds managed_proxy_routing_for_windows_sandbox(windows_sandbox_type) into NetworkProxySpec::start_proxy so a WindowsMxc selection gets dedicated proxy listeners in sessions, app-server command execution and the sandbox CLI, retains the network policy decider across proxy rebuilds, and adds a sandbox CLI execution path through the MXC transform. Go's half already exists where it can: sandbox.Plan carries SandboxTypeWindowsMxc versus SandboxTypeWindowsRestrictedToken (sandbox/run.go) derived from WindowsSandboxLevel Mxc (sandbox/tags.go), pinned by sandbox/sandbox_state_wire_test.go; the legacy setup mode stays separate (windowsSandboxModeFromConfigValues returns nothing for mxc). The routing half has no Go counterpart: a repository-wide search finds no ManagedProxyRouting, dedicated-listener or managed_proxy_routing symbol in the network package or anywhere else, Go's network proxy starts from its own supervisor without routing modes, the Go CLI has no debug-sandbox subcommand, and the MXC launcher never runs (sandbox/mxc always fails closed with native MXC unavailable), so no MXC proxy route is ever created to need dedicated listeners. Verified with go test ./sandbox -run 'SandboxState|Windows|Mxc' -count=1, go test ./config -run 'Windows' -count=1 and go test ./appserver -run 'WindowsSandbox|SandboxState|WindowsMxc' -count=1, all passing."
    ]
   },
   {

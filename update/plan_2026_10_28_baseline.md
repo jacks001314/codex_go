@@ -1124,6 +1124,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - codemode/array_sort_like_rust_test.go still pins the shared observable behaviour: a mutating comparator neither throws nor leaves a stale element, and [3,1,2].sort((a,b)=>a-b) emits [1,2,3].
 - Verified: go test ./codemode -count=1.
 
-Status after reconciliation: `2009 complete`, `394 not_applicable`,
-`486 audit_pending`, `258 regression_pending`, `2 partial`,
+### Managed proxy routing for Windows MXC not applicable in Go (Round 831)
+
+## Round 831 - #45757 Wire Windows sandbox selection into managed proxy routing
+
+- Rust tracks the Windows sandbox implementation separately from the legacy setup level and passes managed proxy routing for WindowsMxc into proxy startup, adds dedicated listeners, retains the policy decider across rebuilds and adds an MXC branch in the sandbox CLI.
+- Go already carries SandboxTypeWindowsMxc versus SandboxTypeWindowsRestrictedToken in the sandbox plan and keeps the legacy setup mode separate; the routing half has no counterpart: no ManagedProxyRouting/dedicated-listener symbols exist, there is no debug-sandbox CLI, and the MXC launcher fails closed so no MXC proxy route is ever created - not_applicable.
+- Verified: go test ./sandbox -run 'SandboxState|Windows|Mxc' -count=1, go test ./config -run 'Windows' -count=1, go test ./appserver -run 'WindowsSandbox|SandboxState|WindowsMxc' -count=1.
+
+Status after reconciliation: `2009 complete`, `395 not_applicable`,
+`485 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
