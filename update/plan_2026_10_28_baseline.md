@@ -2813,6 +2813,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `config/embedded_network_policy_test.go`, `app/application_network_test.go`, `exec/application_network_test.go`, `appserver/application_network_test.go`.
 - Verified with `go build ./...`; `go test ./config ./appserver ./exec -run 'EmbeddedNetworkPolicy|HostPolicy|LivePolicy|ApplicationNetworkPolicy' -count=1`; `go test ./app -run 'ApplicationNetworkPolicy|LivePolicy|MCPCLIStore|ChatGPTLoginOAuthOptions|InteractiveAuthOnboarding' -count=1`; and `go test ./otelinit ./network -count=1`.
 
-Status after reconciliation: `2120 complete`, `441 not_applicable`,
-`375 audit_pending`, `210 regression_pending`, `3 partial`,
+### Per-backend gateway OAuth decryption cache (Round 959)
+
+- Rust #47413 gives `LocalSecretsBackend` one bounded cache per backend for `GatewayOAuth` snapshots, reuses decrypted secrets only while the file path, ciphertext hash and keyring passphrase hash all match, invalidates the entry on write, and hides the cache from `Debug` (#47413, complete).
+- Go already ships this behaviour as part of the later generic cache (`safety/secrets.go:150`, `:262`): `LocalBackend.gatewayCache` is a `*localFileCache` so copies of one backend share exactly one snapshot, while `LocalNamespaceMCPOAuth` keeps the process-wide `mcpOAuthSecretsCache` as in Rust's `MCP_OAUTH_CACHE`.
+- `safety/secrets.go:311` still hashes the ciphertext and the keyring passphrase before reusing a snapshot, and `:371` drops the entry when a save rewrote the same path, so an independent manager or an external edit is never served stale plaintext.
+- Rust's hand-written `Debug` exists only because the derive would print the cache; `LocalBackend` has no exported fields and no `String`/`GoString`/`LogValue`, so cached plaintext cannot leak through formatting.
+- Tests: `TestLocalGatewayCacheIsScopedToBackendLikeRust`, `TestLocalSecretCacheReusesPlaintextLikeRust`, `TestLocalSecretCacheDetectsExternalChangesLikeRust`, `TestLocalSecretCacheStillChecksKeyringLikeRust`.
+- Verified with `go test ./safety -run 'TestLocalSecretCache|TestLocalGatewayCache' -count=1`.
+
+Status after reconciliation: `2121 complete`, `441 not_applicable`,
+`374 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

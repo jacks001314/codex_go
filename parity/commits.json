@@ -19173,9 +19173,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Per-backend gateway snapshot: LocalBackend.gatewayCache (safety/secrets.go:150, :262) is shared by copies of the backend and invalidated on save (:371), matching Rust CachedSecrets/gateway_cache.",
+    "Reuse requires matching path, SHA-256 ciphertext and keyring passphrase hashes (:311); MCP OAuth keeps the process-wide cache like Rust's MCP_OAUTH_CACHE. Tests: TestLocalGatewayCacheIsScopedToBackendLikeRust, TestLocalSecretCacheStillChecksKeyringLikeRust, TestLocalSecretCacheDetectsExternalChangesLikeRust.",
+    "LocalBackend has only unexported fields and no String/GoString/LogValue, so cached plaintext never reaches debug formatting (Rust's hand-written Debug omits the cache)."
    ]
   },
   {
