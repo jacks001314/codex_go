@@ -25,15 +25,22 @@ func validateDaemonSocketMountIsolation(directory string, mountinfo []byte) erro
 		if len(fields) < 5 {
 			return errors.New("cannot establish app-server socket mount isolation")
 		}
-		root := unescapeMountinfoPath(fields[3])
-		destination := unescapeMountinfoPath(fields[4])
-		if !filepath.IsAbs(root) || !filepath.IsAbs(destination) {
-			continue
+		// Every destination is validated because it decides nested mounts and
+		// aliases. Only a path root can alias the socket directory: namespace
+		// mounts have roots such as mnt:[inode] or net:[inode] and are checked
+		// by destination alone (Rust #46535).
+		destination, err := mountinfoPath(fields[4])
+		if err != nil {
+			return errors.New("cannot establish app-server socket mount isolation")
+		}
+		root, rootErr := mountinfoPath(fields[3])
+		if rootErr != nil {
+			root = ""
 		}
 		if destination == directory || strings.HasPrefix(destination, directory+string(filepath.Separator)) {
 			return daemonSocketMountError(destination)
 		}
-		if (root == directory || strings.HasPrefix(root, directory+string(filepath.Separator))) &&
+		if root != "" && (root == directory || strings.HasPrefix(root, directory+string(filepath.Separator))) &&
 			!strings.HasPrefix(destination, "/mnt/wslg/distro") {
 			return daemonSocketMountError(destination)
 		}
@@ -45,12 +52,39 @@ func daemonSocketMountError(path string) error {
 	return fmt.Errorf("app-server socket directory has an unsupported host mount at %s; remove the bind-mount alias or nested mount before starting the sandbox", path)
 }
 
-func unescapeMountinfoPath(value string) string {
-	replacer := strings.NewReplacer(
-		`\040`, " ",
-		`\011`, "\t",
-		`\012`, "\n",
-		`\134`, `\`,
-	)
-	return replacer.Replace(value)
+// mountinfoPath decodes one mountinfo path field and requires an absolute
+// result (Rust `mount_path`): only the four standard escapes are accepted, so a
+// malformed destination rejects sandbox startup instead of being skipped.
+func mountinfoPath(value string) (string, error) {
+	var decoded strings.Builder
+	decoded.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		if value[index] != '\\' {
+			decoded.WriteByte(value[index])
+			continue
+		}
+		if index+3 >= len(value) {
+			return "", errInvalidMountinfoPath
+		}
+		switch value[index+1 : index+4] {
+		case "040":
+			decoded.WriteByte(' ')
+		case "011":
+			decoded.WriteByte('\t')
+		case "012":
+			decoded.WriteByte('\n')
+		case "134":
+			decoded.WriteByte('\\')
+		default:
+			return "", errInvalidMountinfoPath
+		}
+		index += 3
+	}
+	path := decoded.String()
+	if !filepath.IsAbs(path) {
+		return "", errInvalidMountinfoPath
+	}
+	return path, nil
 }
+
+var errInvalidMountinfoPath = errors.New("invalid mountinfo path")

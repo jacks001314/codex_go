@@ -2240,6 +2240,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `app/embedded_reasoning_test.go`: `TestNewTUIThreadReasoningDefaultsLikeRust` pins the empty default, concurrent-only feature forwarding without a summary override (embedded and remote thread config), and an explicit `auto` value.
 - Verification: `go test ./app -run 'Reasoning|LaunchSetting|NewTUIThread' -count=1` passes.
 
-Status after reconciliation: `2068 complete`, `408 not_applicable`,
-`439 audit_pending`, `230 regression_pending`, `4 partial`,
+### Allow namespace mounts in Linux socket checks (Round 907)
+
+- `sandbox/linuxsandbox/daemon_mounts.go`: every mount destination is now validated, and a root is treated as a filesystem path only when it parses as one, so namespace mounts with `mnt:[inode]` or `net:[inode]` roots are checked by destination alone instead of aborting sandbox startup (Rust #46535).
+- `mountinfoPath` replaces the lenient unescape helper: only the four standard escapes are accepted and the decoded destination must be absolute, so a relative destination or a malformed escape rejects startup (Rust `mount_path`). Destination ancestry, nested mounts, socket aliases, and the WSLg exclusion are unchanged.
+- `sandbox/linuxsandbox/daemon_mounts_test.go`: `TestValidateDaemonSocketMountIsolationNamespaceMountsLikeRust` accepts unrelated mount/network namespaces and rejects a nested namespace mount, a relative destination, and an invalid destination escape. `TestValidateDaemonSocketMountIsolationNamespaceMountKeepsAliasChecksLikeRust` proves a real socket alias is still rejected next to an unrelated namespace mount.
+- Verification: `gofmt` clean, `GOOS=linux go vet ./sandbox/linuxsandbox` and `GOOS=linux go test -c ./sandbox/linuxsandbox` succeed; the same logic re-run without the linux build tag on POSIX path semantics passes every case on this Windows host.
+
+Status after reconciliation: `2069 complete`, `408 not_applicable`,
+`438 audit_pending`, `230 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -16156,9 +16156,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #46535 parity: sandbox/linuxsandbox/daemon_mounts.go now validates every mount destination and only treats a root as a filesystem path when it parses as one, so namespace mounts with mnt:[inode] or net:[inode] roots are checked by destination alone instead of aborting startup. mountinfoPath replaces the lenient unescape helper: only the four standard escapes are accepted and the decoded destination must be absolute, so a relative destination or a malformed escape rejects startup (Rust mount_path). Destination ancestry, nested mounts, socket aliases and the WSLg exclusion are unchanged. Tests: TestValidateDaemonSocketMountIsolationNamespaceMountsLikeRust (unrelated mount/network namespaces accepted; nested namespace mount, relative destination and invalid escape rejected) and TestValidateDaemonSocketMountIsolationNamespaceMountKeepsAliasChecksLikeRust (a real alias is still rejected next to an unrelated namespace mount). Verification: gofmt clean, GOOS=linux go vet and go test -c ./sandbox/linuxsandbox succeed, and the same logic re-run without the linux build tag on POSIX path semantics passes every case on this Windows host."
    ]
   },
   {
