@@ -15844,9 +15844,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Multi-Agent V2 catalog parameter schemas: the model layer already carried ToolMessage.parameters plus MultiAgentToolParametersOverride and the agent executors already validated overrides (object root, supported subset via jsonschema.SubsetSchema, bundled encrypted properties retained or the override falls back). This round closed the mid-turn model change: agent/tools.go:352 adds MultiAgentToolOverrideStore (mutex-guarded overrides) and agent/tools_v2.go:127 overrideFor reads the live store when registered, so a replacement changes the tool schema without re-registering. turn/runtime.go:88 adds RuntimeOptions.MultiAgentOverridesForModel and calls it inside ToolsForStep (:440) so every later sampling step refreshes before rebuilding the tool list. appserver/runtime_router.go:16872 creates the store for every Multi-Agent V2 turn (even when admission could not resolve the model), records it on the active turn (appserver/turn_runtime.go:110), and appserver/runtime_router.go:15989 multiAgentOverrideRefresher resolves the step model through the catalog and replaces the store, wired at :16127. Tests: agent/tools_v2_overrides_test.go TestMultiAgentV2OverrideStoreRefreshesForModelChangeLikeRust (first schema, replacement schema, encryption marker retained, cleared store restores bundled parameters); turn/agent_loop_test.go TestRuntimeRefreshesMultiAgentCatalogOverridesForStepModelLikeRust (refresh receives the second step model). Existing coverage still passes: agent/tools_v2_overrides_test.go plain/namespaced/code-mode exposure, invalid fallback, unknown entries; model/catalog_test.go parsing and cloning. Verified: go test ./agent ./turn -count=1 ok; go test ./appserver -run TurnStepSettings|StepCapabilities|MultiAgent -count=1 ok; go build ./... ok; negative check removing the ToolsForStep refresh fails the new turn test."
    ]
   },
   {

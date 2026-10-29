@@ -117,6 +117,22 @@ type multiAgentV2ToolExecutor struct {
 	guardianNativeMultiAgentReview bool
 	// toolOverrides carries the catalog's per-tool overrides (Rust #46505).
 	toolOverrides map[string]MultiAgentToolOverride
+	// overrideStore carries the turn's live catalog overrides when a mid-turn
+	// model change may replace them (Rust #46505).
+	overrideStore *MultiAgentToolOverrideStore
+}
+
+// overrideFor returns the catalog override for a tool, preferring the live
+// store so a mid-turn model change reaches the next step's schema.
+func (e *multiAgentV2ToolExecutor) overrideFor(toolName string) (MultiAgentToolOverride, bool) {
+	if e != nil && e.overrideStore != nil {
+		return e.overrideStore.Get(toolName)
+	}
+	if e == nil {
+		return MultiAgentToolOverride{}, false
+	}
+	override, ok := e.toolOverrides[toolName]
+	return override, ok
 }
 
 // RequiresGuardianReview mirrors Rust MultiAgentV2ToolOverrides: with native
@@ -174,6 +190,7 @@ func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHa
 			exposeSpawnModelOverrides:      options.ExposeSpawnModelOverrides,
 			guardianNativeMultiAgentReview: options.GuardianNativeMultiAgentReview,
 			toolOverrides:                  options.ToolOverrides,
+			overrideStore:                  options.ToolOverrideStore,
 		}); err != nil {
 			return err
 		}
@@ -201,7 +218,7 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 		// catalog description while keeping runtime guidance (Rust #46297):
 		// missing/null keeps the bundled text, an empty string suppresses the
 		// static text, and the usage hint is appended either way.
-		if override, ok := e.toolOverrides[string(e.kind)]; ok && override.Description != nil {
+		if override, ok := e.overrideFor(string(e.kind)); ok && override.Description != nil {
 			spec.Description = *override.Description
 		}
 		// Rust #26114: state the inherited-model default whenever the model
@@ -282,7 +299,7 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 			}, []string{"agent_name", "agent_status"}),
 		}}, []string{"agents"})
 	}
-	if override, ok := e.toolOverrides[string(e.kind)]; ok {
+	if override, ok := e.overrideFor(string(e.kind)); ok {
 		applyMultiAgentToolOverride(&spec, e.kind, override)
 	}
 	return spec

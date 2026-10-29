@@ -58,6 +58,52 @@ func TestMultiAgentV2CatalogOverridesApplyLikeRust(t *testing.T) {
 	}
 }
 
+// TestMultiAgentV2OverrideStoreRefreshesForModelChangeLikeRust mirrors Rust
+// #46505's mid-turn model change: the tool specification reads the turn's live
+// override store, so replacing the store publishes the new model's schema on
+// the next step without re-registering the tools.
+func TestMultiAgentV2OverrideStoreRefreshesForModelChangeLikeRust(t *testing.T) {
+	first := `{"type":"object","properties":{"target":{"type":"string"},"message":{"type":"string"}},"required":["target","message"]}`
+	second := `{"type":"object","properties":{"target":{"type":"string"},"message":{"type":"string"},"model_override":{"type":"string"}},"required":["target","message"]}`
+	store := NewMultiAgentToolOverrideStore(map[string]MultiAgentToolOverride{
+		"send_message": {Parameters: &first},
+	})
+	registry := tool.NewRegistry()
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller:        &limitV2Controller{MemoryToolController: NewMemoryToolController()},
+		Version:           VersionV2,
+		Exposure:          tool.ExposureModelVisible,
+		ToolOverrideStore: store,
+	}); err != nil {
+		t.Fatalf("RegisterMultiAgentHandlersWithOptions() error = %v", err)
+	}
+	send, ok := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, "send_message"))
+	if !ok {
+		t.Fatal("send_message was not registered")
+	}
+	if properties, _ := send.Spec().InputSchema["properties"].(map[string]any); properties["model_override"] != nil {
+		t.Fatalf("first model schema has the second model's property: %#v", properties)
+	}
+
+	store.Replace(map[string]MultiAgentToolOverride{
+		"send_message": {Parameters: &second},
+	})
+	properties, _ := send.Spec().InputSchema["properties"].(map[string]any)
+	if properties["model_override"] == nil {
+		t.Fatalf("replacement store did not update the tool schema: %#v", properties)
+	}
+	if message, _ := properties["message"].(map[string]any); message["encrypted"] != true {
+		t.Fatalf("encryption marker lost on refresh: %#v", message)
+	}
+
+	// Clearing the store restores the bundled parameters.
+	store.Replace(nil)
+	properties, _ = send.Spec().InputSchema["properties"].(map[string]any)
+	if len(properties) != 2 || properties["target"] == nil || properties["model_override"] != nil {
+		t.Fatalf("cleared store kept catalog parameters: %#v", properties)
+	}
+}
+
 // TestMultiAgentV2SpawnEmptyDescriptionSuppressesStaticTextLikeRust covers Rust
 // #46297's empty-string rule: an explicit empty description suppresses the
 // bundled static text without disabling the tool, and the usage hint survives.

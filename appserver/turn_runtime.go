@@ -104,6 +104,10 @@ type activeRuntimeTurn struct {
 	// critical-path registry so Guardian review and user waits can attribute
 	// their blocking time to the owning tool invocation (Rust #57201/#57207).
 	Timing *turn.TimingState
+	// MultiAgentOverrides is the turn's live Multi-Agent V2 catalog override
+	// store. A mid-turn model change replaces its contents so the next sampling
+	// step publishes that model's tool schemas (Rust #46505).
+	MultiAgentOverrides *agent.MultiAgentToolOverrideStore
 }
 
 // recordRuntimeTurnResponseID stores the turn's newest response id (Rust #45441).

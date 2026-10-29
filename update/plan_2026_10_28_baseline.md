@@ -2183,6 +2183,17 @@ Closed #46504 (907b751eabc0) by adding the last missing piece: the Windows nativ
 - Tests: `tui/terminal_default_colors_windows_test.go:88`, `:108`, `:131`.
 - Verified: `go test ./tui -count=1` ok; negative check removing the class gate fails `TestNativePaletteFallbackHonorsConsoleClassLikeRust`.
 
-Status after reconciliation: `2063 complete`, `406 not_applicable`,
-`442 audit_pending`, `234 regression_pending`, `4 partial`,
+### Refresh Multi-Agent V2 catalog schemas on mid-turn model changes (Round 900)
+
+Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter schemas follow a mid-turn model change.
+
+- `agent/tools.go:352` `MultiAgentToolOverrideStore` keeps the turn's overrides behind a mutex; `agent/tools_v2.go:127` `overrideFor` reads the live store, so replacing it updates the tool schema without re-registering executors.
+- `turn/runtime.go:88` `RuntimeOptions.MultiAgentOverridesForModel` runs inside `ToolsForStep`, so each later sampling step refreshes before the tool list is rebuilt.
+- `appserver/runtime_router.go:16872` creates the store for every Multi-Agent V2 turn and records it on the active turn (`appserver/turn_runtime.go:110`); `multiAgentOverrideRefresher` (`appserver/runtime_router.go:15989`, wired at `:16127`) resolves the step model's catalog and replaces the store.
+- Existing behavior retained: object-root/subset validation, encrypted-property annotations, bundled fallback for invalid or missing overrides.
+- Tests: `agent/tools_v2_overrides_test.go` `TestMultiAgentV2OverrideStoreRefreshesForModelChangeLikeRust`; `turn/agent_loop_test.go` `TestRuntimeRefreshesMultiAgentCatalogOverridesForStepModelLikeRust`.
+- Verified: `go test ./agent ./turn -count=1` ok; `go test ./appserver -run 'TurnStepSettings|StepCapabilities|MultiAgent' -count=1` ok; `go build ./...` ok; negative check removing the step refresh fails the new turn test.
+
+Status after reconciliation: `2064 complete`, `406 not_applicable`,
+`442 audit_pending`, `233 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

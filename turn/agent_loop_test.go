@@ -196,6 +196,41 @@ func TestAgentLoopRebuildsToolsForLaterModelStepsLikeRust(t *testing.T) {
 	}
 }
 
+// TestRuntimeRefreshesMultiAgentCatalogOverridesForStepModelLikeRust mirrors
+// Rust #46505 step settings: the Multi-Agent V2 catalog overrides are resolved
+// again for every later sampling step's model, so a mid-turn model change
+// publishes that model's tool schemas.
+func TestRuntimeRefreshesMultiAgentCatalogOverridesForStepModelLikeRust(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	var refreshed []string
+	runtime := NewRuntime(&RuntimeOptions{
+		Agent:    agent,
+		Router:   tool.NewRouter(registry),
+		MaxTurns: 3,
+		MultiAgentOverridesForModel: func(modelID string) {
+			refreshed = append(refreshed, modelID)
+		},
+	})
+	if _, err := runtime.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run echo",
+		Model:  "first-model",
+		StepSettings: func() *AgentStepSettings {
+			return &AgentStepSettings{Model: "second-model"}
+		},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(refreshed) == 0 || refreshed[0] != "second-model" {
+		t.Fatalf("override refresh models = %#v", refreshed)
+	}
+}
+
 func TestAgentLoopMidTurnCompactionRollsOverLikeRust(t *testing.T) {
 	agent := &rollOverLoopAgent{}
 	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, MaxTurns: 3})

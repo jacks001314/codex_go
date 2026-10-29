@@ -82,6 +82,10 @@ type RuntimeOptions struct {
 	// sampling step, so a mid-turn replacement applies to the following step
 	// (Rust #57553).
 	DynamicToolStepRefresh bool
+	// MultiAgentOverridesForModel, when set, refreshes the turn's Multi-Agent V2
+	// catalog overrides for the sampling step's model, so a mid-turn model
+	// change selects that model's tool schemas (Rust #46505).
+	MultiAgentOverridesForModel func(model string)
 	// InvocationRegistry opts this turn into live V2 tool-call lookup and unique
 	// active call IDs (Rust #57586 HostToolInvocationLookup). A nil registry
 	// leaves dispatch unchanged.
@@ -114,6 +118,7 @@ type Runtime struct {
 	dynamicToolTurnID            string
 	dynamicToolNames             map[string]tool.ToolName
 	dynamicToolStepRefresh       bool
+	multiAgentOverridesForModel  func(model string)
 	invocationRegistry           *agent.InvocationRegistry
 }
 
@@ -166,6 +171,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		dynamicToolTurnID:            strings.TrimSpace(options.DynamicToolTurnID),
 		dynamicToolNames:             dynamicTools,
 		dynamicToolStepRefresh:       options.DynamicToolStepRefresh,
+		multiAgentOverridesForModel:  options.MultiAgentOverridesForModel,
 		invocationRegistry:           options.InvocationRegistry,
 	}
 }
@@ -426,10 +432,13 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		visibleSpecs = r.modelVisibleSpecsForRequest(effectiveToolMode)
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
-	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh {
+	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil {
 		loopRequest.ToolsForStep = func(modelID string) []any {
 			if r.codeModeMessagesForModel != nil {
 				r.applyCodeModeMessagesForModel(modelID)
+			}
+			if r.multiAgentOverridesForModel != nil {
+				r.multiAgentOverridesForModel(strings.TrimSpace(modelID))
 			}
 			return buildTools()
 		}

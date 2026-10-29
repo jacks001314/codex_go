@@ -130,8 +130,11 @@ type ToolRegistryOptions struct {
 	// AgentToolOverrides carries the model catalog's per-tool Multi-Agent V2
 	// overrides (Rust ModelMessages::multi_agent_tool_*, #46505).
 	AgentToolOverrides map[string]agent.MultiAgentToolOverride
-	AgentRoles         map[string]agent.RoleConfig
-	AgentDefaults      agent.SpawnDefaults
+	// AgentToolOverrideStore carries the same overrides through a store the
+	// turn can replace when a mid-turn model change selects a different catalog.
+	AgentToolOverrideStore *agent.MultiAgentToolOverrideStore
+	AgentRoles             map[string]agent.RoleConfig
+	AgentDefaults          agent.SpawnDefaults
 	// AgentGuardianNativeMultiAgentReview opts state-changing MAv2 calls into
 	// synchronous Guardian review (Rust #57451).
 	AgentGuardianNativeMultiAgentReview bool
@@ -700,6 +703,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			DisableWaitAgent:               options.DisableWaitAgent,
 			DisableDirectMessage:           options.DisableDirectMessage,
 			ToolOverrides:                  options.AgentToolOverrides,
+			ToolOverrideStore:              options.AgentToolOverrideStore,
 			GuardianNativeMultiAgentReview: options.AgentGuardianNativeMultiAgentReview,
 		}); err != nil {
 			return nil, err

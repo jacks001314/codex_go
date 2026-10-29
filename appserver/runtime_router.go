@@ -15981,6 +15981,42 @@ func (r *RuntimeRouter) buildTurnRuntime(params *turn.TurnStartParams, turnID st
 	return r.buildTurnRuntimeContext(context.Background(), params, turnID)
 }
 
+// multiAgentOverrideRefresher returns the per-step refresh that replaces the
+// turn's Multi-Agent V2 catalog overrides with the sampling step's model
+// catalog, so a mid-turn model change publishes that model's tool schemas on
+// the next step (Rust #46505 step settings). It returns nil when the turn has
+// no override store, leaving unaffected turns on their turn-start tool list.
+func (r *RuntimeRouter) multiAgentOverrideRefresher(params *turn.TurnStartParams, turnID string, cfg *config.Config) func(string) {
+	if r == nil || params == nil || cfg == nil {
+		return nil
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return nil
+	}
+	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+	if active == nil || active.MultiAgentOverrides == nil {
+		return nil
+	}
+	store := active.MultiAgentOverrides
+	originator := params.Originator
+	lastModel := ""
+	return func(modelID string) {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" || modelID == lastModel {
+			return
+		}
+		lastModel = modelID
+		info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
+		if info == nil {
+			store.Replace(nil)
+			return
+		}
+		store.Replace(turn.MultiAgentToolOverridesFromCatalog(info.ModelMessages))
+	}
+}
+
 func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *turn.TurnStartParams, turnID string) (*turn.Runtime, error) {
 	if r.services.TurnRuntime != nil {
 		return r.services.TurnRuntime, nil
@@ -16088,6 +16124,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		DynamicToolTurnID:           strings.TrimSpace(turnID),
 		DynamicTools:                dynamicTools,
 		DynamicToolStepRefresh:      r.services.AllowPersistentDynamicToolUpdates,
+		MultiAgentOverridesForModel: r.multiAgentOverrideRefresher(params, turnID, turnConfig),
 		InvocationRegistry:          invocationRegistry,
 	})
 	// A replacement accepted while this turn is running publishes onto this
@@ -16828,6 +16865,17 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				// Multi-Agent V2 description and parameter overrides.
 				if turnModelInfo != nil {
 					options.AgentToolOverrides = turn.MultiAgentToolOverridesFromCatalog(turnModelInfo.ModelMessages)
+				}
+				// The store lets a mid-turn model change replace the overrides
+				// before the next sampling step, including a model the turn could
+				// not resolve at admission.
+				store := agent.NewMultiAgentToolOverrideStore(options.AgentToolOverrides)
+				options.AgentToolOverrideStore = store
+				if threadID != "" && strings.TrimSpace(turnID) != "" {
+					trimmedTurnID := strings.TrimSpace(turnID)
+					r.threads.UpdateTurn(threadID, trimmedTurnID, func(active *activeRuntimeTurn) {
+						active.MultiAgentOverrides = store
+					})
 				}
 				if v2Config.NonCodeModeOnly {
 					options.AgentExposure = tool.ExposureDirectModelOnly
