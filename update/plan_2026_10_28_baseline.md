@@ -904,6 +904,12 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Before this change the empty-workspace and invalid-method cases failed; the running-policy case already passed because the service cached requirements.
 - Tests: `go test ./config -count=1` passes; `go test ./appserver -count=1` shows only the three pre-existing analytics/fingerprint failures; `go test ./app -run 'Requirement|Login|Managed|RemoteTUI|Daemon|Workspace' -count=1` passes.
 
-Status after reconciliation: `1991 complete`, `389 not_applicable`,
-`501 audit_pending`, `268 regression_pending`, `0 partial`,
+### Skip Rust-only TLS dependency bump (#45489) (Round 805)
+
+- Upstream `e5a20948` is a dependency-only bump in `codex-rs/Cargo.lock` and `MODULE.bazel.lock` (rustls, rustls-webpki, aws-lc-rs, aws-lc-sys).
+- codex_go has no Cargo/Bazel lockfiles and relies on the Go standard library TLS stack (`crypto/tls`); a repo-wide search finds no `rustls`, `aws-lc`, or `webpki` references in `go.mod`, `go.sum`, or build files.
+- Marked `not_applicable`; no Go change or new test surface.
+
+Status after reconciliation: `1991 complete`, `390 not_applicable`,
+`500 audit_pending`, `268 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

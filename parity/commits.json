@@ -13023,9 +13023,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only dependency bump: updates rustls 0.23.36->0.23.45, rustls-webpki 0.103.13->0.103.15, aws-lc-rs 1.16.2->1.18.1, aws-lc-sys 0.39.0->0.45.0 in codex-rs/Cargo.lock plus MODULE.bazel.lock metadata. codex_go has no Cargo/Bazel lockfiles and uses Go stdlib crypto/tls (no rustls/aws-lc/webpki deps in go.mod/go.sum), so there is nothing to pin or regenerate."
    ]
   },
   {
