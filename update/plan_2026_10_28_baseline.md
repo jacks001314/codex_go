@@ -993,6 +993,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Regression coverage: `appserver/tool_event_origin_test.go` covers exact-evidence requirements, Code Mode child calls, and null/conflict cases; `telemetry/turn_event_test.go` checks the wire payload.
 - Verified with `go test ./appserver -run 'ToolEvent|SampledOutputToolCallID|ToolItem|CodeMode' -count=1` and `go test ./telemetry -run 'ToolEventType|CommandExecution|TurnEvent' -count=1`.
 
-Status after reconciliation: `1999 complete`, `392 not_applicable`,
-`494 audit_pending`, `264 regression_pending`, `0 partial`,
+### Use a shared flattened image reference (#45543) (Round 816)
+
+- The upstream commit is an internal Rust representation refactor: both image payload variants now hold a flattened shared `ImageReference::Inline { image_url }`, while the commit explicitly keeps the existing `image_url` JSON shape. A Go-side mirror of this Rust-only enum would add no observable contract.
+- Go already stores the flattened form directly. `eventmap.ContentItem.Wire`/`RustJSON` emit `type`, `image_url` (or `file_id`, the later shared reference form), and `detail` in Rust's order; `appserver` round-trips the same `input_image` blocks through user input, thread history, notifications, and Responses requests.
+- Image consumers preserve references without reinterpretation: `context` tool-output partitioning, `utils` output truncation, and the app-server image URL validation all read the inline reference rather than assuming a nested object.
+- Existing regression coverage already freezes this contract: `eventmap/content_item_wire_test.go`, `appserver/image_reference_test.go`, `context/tool_output_parts_test.go`, and `utils/output_boundaries_like_rust_test.go`.
+- Verified with `go test ./eventmap -run 'ContentItem|Image' -count=1`, `go test ./appserver -run 'ImageReference|InputImage|UserInput' -count=1`, `go test ./utils -run 'OutputBoundar|Truncate.*Image|Image' -count=1`, and `go test ./context -run 'Image|ToolOutput|TypedFragment' -count=1`.
+
+Status after reconciliation: `2000 complete`, `392 not_applicable`,
+`494 audit_pending`, `263 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

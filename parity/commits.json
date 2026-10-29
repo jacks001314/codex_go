@@ -13395,9 +13395,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "This upstream change is an internal Rust representation refactor: `ContentItem::InputImage` and `FunctionCallOutputContentItem::InputImage` now hold a shared flattened `ImageReference::Inline { image_url }`, and the commit explicitly preserves the existing `image_url` wire format. Go already models the flattened observable representation directly: `eventmap.ContentItem` carries `ImageURL`/`FileID` and its `Wire`/`RustJSON` helpers emit `type`, `image_url` or `file_id`, and `detail` in the same shape; `appserver` consumes and produces the same `input_image` blocks for user input, history, notifications, and Responses requests, and `utils.FunctionCallOutputContentItem` preserves inline and file image items through truncation. The shared Rust-only enum therefore needs no Go mirror. Existing regression coverage: `eventmap/content_item_wire_test.go` (exact wire/Rust JSON shape and file-reference authority), `eventmap` typed-content tests, `appserver/image_reference_test.go` (URL and file image references across v2 history and Responses API), `context/tool_output_parts_test.go`, and `utils/output_boundaries_like_rust_test.go`. Verified with `go test ./eventmap -run 'ContentItem|Image' -count=1`, `go test ./appserver -run 'ImageReference|InputImage|UserInput' -count=1`, `go test ./utils -run 'OutputBoundar|Truncate.*Image|Image' -count=1`, and `go test ./context -run 'Image|ToolOutput|TypedFragment' -count=1`."
    ]
   },
   {
