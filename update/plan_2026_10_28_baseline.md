@@ -874,6 +874,17 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regression `TestCommandExecutionAnalyticsReportsModelDefaultReasoningLikeRust` (fails before the fallback with an empty effort); existing `TestCommandExecutionAnalyticsUsesTheInvokingModelLikeRust`, `TestPluginMeasurementEventCarriesTheInvokingModelLikeRust` and `TestShellExecutorPluginMeasurementsCarryTheInvokingModelLikeRust` cover the rest.
 - Tests: `go test ./appserver -run 'ModelAttribution|CommandExecutionAnalytics|PluginMeasurementEventCarries' -count=1` passes. The two fileChange analytics failures visible under a broader `Analytics` filter reproduce with this change reverted, so they are pre-existing.
 
-Status after reconciliation: `1988 complete`, `389 not_applicable`,
-`501 audit_pending`, `271 regression_pending`, `0 partial`,
+### Route clipboard copies through tmux and reject empty selections (Round 802)
+
+- #45457 was partly synced already (`8521fa23`, `b6d1171a`): native copying runs first, tmux/Herdr/SSH sessions still forward after a successful native write, and OSC 52 is the fallback when the native write fails. Three gaps remained.
+- `tui/clipboard.go` now rejects an empty selection with Rust's `nothing to copy: the selected content is empty` before any backend runs, and `terminalClipboardCopyWith` applies the 100,000-byte terminal payload limit to tmux copies (`tmux clipboard payload too large (N bytes; max 100000)`), keeping the OSC 52 fallback and Rust's combined `tmux clipboard: ...; OSC 52 fallback: ...` error.
+- New `tui/clipboard_tmux.go` mirrors `clipboard_copy/tmux.rs`: `TmuxClipboardCopy` resolves `tmux` and `PATH` through trusted system locations, requires `TMUX_PANE`, checks `show-options -gv set-clipboard`, resolves the pane's `#{session_id}`, lists `#{client_activity} #{client_name}` for that session, picks the last most-active client (Rust's `max_by_key` tie-break) and requires a non-empty `Ms: (string)` capability before `load-buffer -w -t <client> -` with the text on stdin. `TmuxClipboardTarget` is the injectable core, replacing the unused `TmuxClipboardCopyReady` helper.
+- `WriteTerminalClipboard(text, true)` now forwards through that backend (Rust's tmux branch) instead of always writing a DCS-wrapped OSC 52 sequence; the outer routing layer keeps OSC 52 as the fallback and passes the tmux session through, and the non-tmux path still wraps when `TMUX` is set, matching Rust's `osc52_copy`.
+- `envutil` trusted helper discovery adds the Nix system profiles (`/run/current-system/sw/bin`, `/nix/var/nix/profiles/default/bin`, both resolving into the trusted `/nix/store` root) and the WSL PowerShell directory (`/mnt/c/Windows/System32/WindowsPowerShell/v1.0`).
+- New regressions: `TestTmuxClipboardTargetAcceptsForwardingConfigurationLikeRust`, `TestTmuxClipboardTargetRejectsDisabledForwardingLikeRust`, `TestTmuxClipboardTargetRequiresNonemptyMsCapabilityLikeRust`, `TestTmuxClipboardTargetRejectsNoAttachedClientLikeRust`, `TestTmuxClipboardCopyTargetsMostActiveClientAndSendsStdinLikeRust` (exact argv sequence plus stdin payload), `TestTmuxClipboardCopyRequiresCurrentPaneLikeRust`, `TestClipboardCopyRejectsEmptySelectionWithoutTouchingClipboardsLikeRust`, `TestClipboardCopyWithOversizedTmuxPayloadMatchesRust` (exactly at the limit vs one byte over), `TestClipboardCopyWithOversizedTmuxPayloadReportsBothBackends`, `TestClipboardCopyWithTmuxFailingFallsBackToOSC52LikeRust`, and `TestTrustedExecutableDirectoriesIncludeNixAndWSLPowerShellLikeRust`.
+- Rust's `chatwidget/interaction.rs` lease-retention change is not applicable: Go's clipboard writers own no X11 ownership handle, so there is no `clipboard_lease` to retain across a terminal-only copy.
+- Tests: `go test ./tui/... ./envutil -count=1` and `go vet ./tui ./envutil` pass.
+
+Status after reconciliation: `1989 complete`, `389 not_applicable`,
+`501 audit_pending`, `270 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

@@ -12951,9 +12951,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 802 (implementation): empty selections now fail with Rust's `nothing to copy` error before any backend, tmux copies honor the 100,000-byte terminal limit, and `tui/clipboard_tmux.go` implements Rust's `clipboard_copy/tmux.rs` (trusted tmux/PATH resolution, TMUX_PANE, set-clipboard, pane session_id, most-active attached client, Ms capability, load-buffer via stdin), wired through `WriteTerminalClipboard(text, tmux)`. `envutil` adds the Nix system profiles and the WSL PowerShell directory. Regressions: TestTmuxClipboardTarget*, TestTmuxClipboardCopyTargetsMostActiveClientAndSendsStdinLikeRust, TestTmuxClipboardCopyRequiresCurrentPaneLikeRust, TestClipboardCopyRejectsEmptySelectionWithoutTouchingClipboardsLikeRust, TestClipboardCopyWithOversizedTmuxPayloadMatchesRust, TestClipboardCopyWithOversizedTmuxPayloadReportsBothBackends, TestClipboardCopyWithTmuxFailingFallsBackToOSC52LikeRust, TestTrustedExecutableDirectoriesIncludeNixAndWSLPowerShellLikeRust. Tests: go test ./tui/... ./envutil -count=1."
    ]
   },
   {
