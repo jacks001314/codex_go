@@ -57,6 +57,8 @@ func (m *Model) applyUsageModalOption(optionID string) bubbletea.Cmd {
 	switch chatwidget.UsageMenuAction(optionID) {
 	case chatwidget.UsageMenuActionShowTokenActivity:
 		return m.openTokenActivity(chatwidget.TokenActivityDaily)
+	case chatwidget.UsageMenuActionOpenAnalytics:
+		return m.openAnalyticsDashboard()
 	case chatwidget.UsageMenuActionOpenRateLimitReset:
 		return m.openRateLimitResetView()
 	case chatwidget.UsageMenuActionConsumeRateLimitReset, chatwidget.UsageMenuActionRetryRateLimitReset:

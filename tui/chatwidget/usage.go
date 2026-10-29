@@ -25,6 +25,7 @@ type UsageMenuAction string
 
 const (
 	UsageMenuActionShowTokenActivity       UsageMenuAction = "show_token_activity"
+	UsageMenuActionOpenAnalytics           UsageMenuAction = "open_analytics"
 	UsageMenuActionOpenRateLimitReset      UsageMenuAction = "open_rate_limit_reset"
 	UsageMenuActionConsumeRateLimitReset   UsageMenuAction = "consume_rate_limit_reset"
 	UsageMenuActionRetryRateLimitReset     UsageMenuAction = "retry_rate_limit_reset"
@@ -135,6 +136,34 @@ func NewUsageMenuView(state UsageMenuState) SelectionView {
 		state.AvailableRateLimitResetCredits != nil &&
 		*state.AvailableRateLimitResetCredits == 0
 
+	items := []SelectionItem{
+		{
+			Name:            "Show usage",
+			Description:     "Usage history.",
+			Action:          UsageMenuActionShowTokenActivity,
+			DismissOnSelect: true,
+		},
+		{
+			Name:            "Redeem reset",
+			Description:     resetDescription,
+			Disabled:        !resetActionEnabled,
+			Action:          UsageMenuActionOpenRateLimitReset,
+			DismissOnSelect: true,
+		},
+	}
+	// Rust #45764: ChatGPT accounts get the full-screen analytics dashboard
+	// between the token activity and reset entries.
+	if state.HasChatGPTAccount {
+		items = append(items, SelectionItem{})
+		copy(items[2:], items[1:])
+		items[1] = SelectionItem{
+			Name:            "Explore analytics",
+			Description:     "Browse account usage and activity.",
+			Action:          UsageMenuActionOpenAnalytics,
+			DismissOnSelect: true,
+		}
+	}
+
 	return SelectionView{
 		ViewID:   UsageMenuViewID,
 		Title:    "Usage",
@@ -152,21 +181,7 @@ func NewUsageMenuView(state UsageMenuState) SelectionView {
 			return 0
 		}(),
 		AllowCancel: true,
-		Items: []SelectionItem{
-			{
-				Name:            "Show usage",
-				Description:     "Usage history.",
-				Action:          UsageMenuActionShowTokenActivity,
-				DismissOnSelect: true,
-			},
-			{
-				Name:            "Redeem reset",
-				Description:     resetDescription,
-				Disabled:        !resetActionEnabled,
-				Action:          UsageMenuActionOpenRateLimitReset,
-				DismissOnSelect: true,
-			},
-		},
+		Items:       items,
 	}
 }
 

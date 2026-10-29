@@ -109,3 +109,24 @@ func AnalyticsStatusLine(account AnalyticsLoad[AccountKind]) string {
 func AnalyticsReportRangeLabel(rangeIndex int) string {
 	return strconv.Itoa(AnalyticsSectionDays(rangeIndex)) + "d"
 }
+
+// AnalyticsDayHasDetails reports whether one day of the selected range carries
+// a nonzero breakdown value, which is what enables inline details for the tool
+// and activity sections (Rust AnalyticsView::day_has_details).
+func AnalyticsDayHasDetails(history *AccountAnalyticsHistory, start time.Time, dayIndex int) bool {
+	if history == nil || dayIndex < 0 {
+		return false
+	}
+	date := start.AddDate(0, 0, dayIndex)
+	for _, day := range history.Data {
+		if day.Date.Format("2006-01-02") != date.Format("2006-01-02") {
+			continue
+		}
+		for _, value := range day.Values {
+			if value.Value != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -1754,6 +1754,13 @@ type Model struct {
 	overlay              *chatwidget.TranscriptOverlay
 	slashPopup           slashCommandPopup
 	agentsOverview       *agentsoverview.View
+	// analyticsDashboard is the retained /usage analytics view. It keeps its
+	// navigation state across open/close and cancels pending loads on close
+	// (Rust #45764 App::retained_analytics).
+	analyticsDashboard *analyticsDashboard
+	// analyticsLive builds the account analytics client. It is nil in normal
+	// use, which signs in through the local ChatGPT store.
+	analyticsLive func(endDate time.Time) *analytics.Live
 	// agentsOverviewRemoved tombstones archived/deleted tasks so a delayed
 	// dynamic-tool registration cannot restore their rows (Rust #46946).
 	agentsOverviewRemoved  map[string]bool
@@ -3393,6 +3400,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 	}
 	switch msg := message.(type) {
+	case analyticsPollMsg:
+		dashboard := m.analyticsDashboard
+		if dashboard == nil || !dashboard.active || dashboard.generation != msg.generation {
+			return m, nil
+		}
+		dashboard.pollReports()
+		return m, dashboard.nextPollCmd()
 	case anim.TickMsg:
 		if m.animEngine != nil {
 			cmd := m.animEngine.Advance()
@@ -3971,6 +3985,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 					m.editMainTranscriptFindQuery(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: msg.Runes})
 					return m, nil
 				}
+				// Rust #45764: the analytics dashboard owns the screen, so a
+				// paste can never reach the retained composer draft.
+				if m.analyticsDashboard != nil && m.analyticsDashboard.active {
+					return m, nil
+				}
 				// Rust #44027: the dashboard composer owns typing/paste while
 				// the overview is open.
 				if m.agentsOverview != nil {
@@ -3991,6 +4010,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.overlay != nil {
 			return m, m.updateTranscriptOverlayKey(msg)
+		}
+		if m.analyticsDashboard != nil && m.analyticsDashboard.active {
+			m.analyticsDashboard.handleKey(m, msg)
+			return m, m.analyticsDashboard.nextPollCmd()
 		}
 		if m.agentsOverview != nil {
 			return m, m.updateAgentsOverviewKey(msg)
@@ -4387,6 +4410,10 @@ func (m *Model) View() string {
 			m.syncTranscriptOverlay()
 		}
 		return m.overlay.View()
+	}
+	if m.analyticsDashboard != nil && m.analyticsDashboard.active {
+		m.hideTranscriptImages()
+		return m.analyticsDashboard.render(m, m.width, m.height)
 	}
 	if m.agentsOverview != nil {
 		m.hideTranscriptImages()

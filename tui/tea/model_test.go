@@ -7456,6 +7456,7 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 		t.Fatalf("usage menu disabled reset missing:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeyDown))
 	if !strings.Contains(model.View(), codextui.NumberedSelectionPrefix(0, true)+"Show usage") {
 		t.Fatalf("disabled reset should be skipped:\n%s", model.View())
 	}
@@ -7469,6 +7470,7 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 	})
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyEnter))
 	view = model.View()
@@ -7487,6 +7489,7 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 	})
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyEnter))
 	if view = model.View(); !strings.Contains(view, "Reset your current monthly usage limit.") {
@@ -7518,6 +7521,7 @@ func TestModelUsageRateLimitResetCallbacks(t *testing.T) {
 
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyDown))
 	_, cmd := model.Update(key(bubbletea.KeyEnter))
 	if cmd == nil {

@@ -11,14 +11,19 @@ func TestUsageMenuViewResetAvailability(t *testing.T) {
 		HasChatGPTAccount:              true,
 		AvailableRateLimitResetCredits: &two,
 	})
-	if view.ViewID != UsageMenuViewID || view.Title != "Usage" || len(view.Items) != 2 {
+	// Rust #45764 inserts "Explore analytics" between token activity and the
+	// reset entry for ChatGPT accounts.
+	if view.ViewID != UsageMenuViewID || view.Title != "Usage" || len(view.Items) != 3 {
 		t.Fatalf("usage view = %#v", view)
 	}
-	if view.Items[1].Disabled || view.Items[1].Action != UsageMenuActionOpenRateLimitReset {
-		t.Fatalf("reset item = %#v", view.Items[1])
+	if view.Items[1].Name != "Explore analytics" || view.Items[1].Action != UsageMenuActionOpenAnalytics {
+		t.Fatalf("analytics item = %#v", view.Items[1])
 	}
-	if view.Items[1].Description != "2 available." {
-		t.Fatalf("reset description = %q", view.Items[1].Description)
+	if view.Items[2].Disabled || view.Items[2].Action != UsageMenuActionOpenRateLimitReset {
+		t.Fatalf("reset item = %#v", view.Items[2])
+	}
+	if view.Items[2].Description != "2 available." {
+		t.Fatalf("reset description = %q", view.Items[2].Description)
 	}
 	if view.RefreshResetAvailability {
 		t.Fatal("available credits should not request refresh")
@@ -31,19 +36,23 @@ func TestUsageMenuViewResetAvailability(t *testing.T) {
 		RefreshWhenKnownResetCreditsZero: true,
 		NextRefreshResetAvailabilityID:   7,
 	})
-	if !view.Items[1].Disabled || view.Items[1].Description != "None available." {
-		t.Fatalf("known zero reset item = %#v", view.Items[1])
+	if !view.Items[2].Disabled || view.Items[2].Description != "None available." {
+		t.Fatalf("known zero reset item = %#v", view.Items[2])
 	}
 	if !view.RefreshResetAvailability || view.RefreshResetAvailabilityID != 7 {
 		t.Fatalf("refresh metadata = %#v", view)
 	}
 
 	view = NewUsageMenuView(UsageMenuState{HasChatGPTAccount: true})
-	if view.Items[1].Disabled || view.Items[1].Description != "Check availability." {
-		t.Fatalf("unknown reset item = %#v", view.Items[1])
+	if view.Items[2].Disabled || view.Items[2].Description != "Check availability." {
+		t.Fatalf("unknown reset item = %#v", view.Items[2])
 	}
 
 	view = NewUsageMenuView(UsageMenuState{})
+	// Signed-out accounts have no analytics dashboard, same as Rust.
+	if len(view.Items) != 2 || view.Items[1].Action != UsageMenuActionOpenRateLimitReset {
+		t.Fatalf("signed-out items = %#v", view.Items)
+	}
 	if !view.Items[1].Disabled || view.Items[1].Description != "None available." {
 		t.Fatalf("signed out reset item = %#v", view.Items[1])
 	}
@@ -127,15 +136,19 @@ func TestUsageRuntimeKnownZeroRefreshMatchesRust(t *testing.T) {
 	if !opened.RefreshResetAvailability || opened.RefreshResetAvailabilityID == 0 {
 		t.Fatalf("open usage result = %#v", opened)
 	}
-	if !opened.View.Items[1].Disabled || opened.View.Items[1].Description != "None available." {
-		t.Fatalf("known zero reset item = %#v", opened.View.Items[1])
+	// Rust #45764 inserts "Explore analytics" at index 1 for ChatGPT accounts.
+	if opened.View.Items[1].Action != UsageMenuActionOpenAnalytics {
+		t.Fatalf("analytics item = %#v", opened.View.Items[1])
+	}
+	if !opened.View.Items[2].Disabled || opened.View.Items[2].Description != "None available." {
+		t.Fatalf("known zero reset item = %#v", opened.View.Items[2])
 	}
 	failedView, ok := state.FinishUsageMenuRateLimitRefresh(opened.RefreshResetAvailabilityID, RateLimitResetCreditsRefresh{Failed: true})
 	if !ok {
 		t.Fatal("failed refresh was not accepted")
 	}
-	if !failedView.Items[1].Disabled || failedView.Items[1].Description != "None available." {
-		t.Fatalf("failed refresh should preserve cached zero = %#v", failedView.Items[1])
+	if !failedView.Items[2].Disabled || failedView.Items[2].Description != "None available." {
+		t.Fatalf("failed refresh should preserve cached zero = %#v", failedView.Items[2])
 	}
 
 	opened = state.OpenUsageMenu()
@@ -143,8 +156,8 @@ func TestUsageRuntimeKnownZeroRefreshMatchesRust(t *testing.T) {
 	if !ok {
 		t.Fatal("successful refresh was not accepted")
 	}
-	if updatedView.Items[1].Disabled || updatedView.Items[1].Description != "1 available." {
-		t.Fatalf("successful refresh did not enable reset = %#v", updatedView.Items[1])
+	if updatedView.Items[2].Disabled || updatedView.Items[2].Description != "1 available." {
+		t.Fatalf("successful refresh did not enable reset = %#v", updatedView.Items[2])
 	}
 }
 

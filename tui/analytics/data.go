@@ -231,6 +231,15 @@ func CreditGroupIndices(plan auth.PlanType) []int {
 	return indices
 }
 
+// AnalyticsGroupingAt maps a dashboard grouping position onto its grouping.
+// Positions come from AnalyticsGroupOptions and the credit-group indices.
+func AnalyticsGroupingAt(index int) AccountAnalyticsGrouping {
+	if index < 0 || index >= len(accountAnalyticsGroupings) {
+		return AccountAnalyticsGroupingSurface
+	}
+	return accountAnalyticsGroupings[index]
+}
+
 // analyticsAmount keeps tiny refunds visible while avoiding noise on ordinary
 // credit amounts (Rust analytics/data.rs amount).
 func analyticsAmount(value float64) string {

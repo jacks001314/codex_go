@@ -69,6 +69,9 @@ func TestRateLimitResetConfirmationUsesConfirmHintLikeRust(t *testing.T) {
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
 	model.Update(key(bubbletea.KeyDown))
+	// Rust #45764 places "Explore analytics" between token activity and the
+	// reset entry.
+	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyEnter))
 	if model.modal == nil {
 		t.Fatal("reset confirmation did not open")
