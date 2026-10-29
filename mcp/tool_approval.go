@@ -178,11 +178,16 @@ func MCPToolApprovalResponseCancels(response *tool.UserInputResponse, questionID
 }
 
 // MCPToolApprovalKey identifies a remembered approval. Rust keys on the server,
-// the tool, and the connector/plugin identity; Go's MCP service configuration is
-// already resolved per server, so the server/tool pair is exact within a thread.
+// the connector, the account link, and the tool.
 type MCPToolApprovalKey struct {
 	Server string
 	Tool   string
+	// ConnectorID scopes a remembered approval to the app connector that served
+	// the call (Rust McpToolApprovalKey::connector_id).
+	ConnectorID string
+	// LinkID scopes a remembered approval to the app account link that was
+	// approved (Rust #42133). Empty means the call used no link selector.
+	LinkID string
 }
 
 // MCPToolApprovalPromptOptions mirrors Rust's McpToolApprovalPromptOptions after
@@ -222,6 +227,10 @@ type MCPToolApprovalRequest struct {
 	// mode, and the key both for session-remembered approvals and (when the
 	// elicitation feature is on) for the persistent policy amendment.
 	SessionKey *MCPToolApprovalKey
+	// LinkID is the resolved app account link for a Codex Apps call (Rust
+	// #42056/#42134). It selects link-specific approval settings and scopes the
+	// approval key.
+	LinkID string
 	// AllowSessionRemember / AllowPersistentApproval mirror Rust's
 	// session_mcp_tool_approval_key / persistent_mcp_tool_approval_key (nil for
 	// non-Auto modes).
@@ -361,7 +370,7 @@ func MCPPermissionProfileGrantsFullDiskWrite(profile *sandbox.PermissionProfile)
 
 // MCPSessionToolApprovalKey ports Rust session_mcp_tool_approval_key: only Auto
 // mode offers a session-remembered approval.
-func MCPSessionToolApprovalKey(mode apps.AppToolApproval, serverName string, toolName string) (MCPToolApprovalKey, bool) {
+func MCPSessionToolApprovalKey(mode apps.AppToolApproval, serverName string, toolName string, connectorID string, linkID string) (MCPToolApprovalKey, bool) {
 	if NormalizeAppToolApprovalMode(mode) != apps.AppToolApprovalAuto {
 		return MCPToolApprovalKey{}, false
 	}
@@ -370,7 +379,12 @@ func MCPSessionToolApprovalKey(mode apps.AppToolApproval, serverName string, too
 	if serverName == "" || toolName == "" {
 		return MCPToolApprovalKey{}, false
 	}
-	return MCPToolApprovalKey{Server: serverName, Tool: toolName}, true
+	return MCPToolApprovalKey{
+		Server:      serverName,
+		Tool:        toolName,
+		ConnectorID: strings.TrimSpace(connectorID),
+		LinkID:      strings.TrimSpace(linkID),
+	}, true
 }
 
 // MCPToolApprovalPromptOptionsFor ports Rust mcp_tool_approval_prompt_options:
@@ -582,7 +596,7 @@ func runtimeToolAnnotations(annotations any) *RuntimeToolAnnotations {
 // approveToolCallIfNeeded ports the decision half of Rust
 // maybe_request_mcp_tool_approval: it returns a denied tool output when the call
 // must not run, and nil when the call may proceed.
-func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID string, arguments any) (*tool.Output, error) {
+func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID string, arguments any, linkID string) (*tool.Output, error) {
 	options := e.toolApproval
 	if options == nil || options.Handler == nil {
 		return nil, nil
@@ -590,6 +604,11 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 	server := e.resolvedServerName()
 	toolName := e.resolvedRemoteToolName()
 	annotations := runtimeToolAnnotations(e.toolInfo.Annotations)
+	var destructiveHint, openWorldHint *bool
+	if annotations != nil {
+		destructiveHint = annotations.DestructiveHint
+		openWorldHint = annotations.OpenWorldHint
+	}
 	mode := NormalizeAppToolApprovalMode(e.mcpService().ToolApprovalMode(server, toolName))
 	if IsCodexAppsMCPServerName(server) {
 		if options.AppPolicy == nil {
@@ -601,10 +620,11 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		// runs.
 		policy := options.AppPolicy.Policy(apps.AppToolPolicyInput{
 			ConnectorID:     e.connectorID,
+			LinkID:          strings.TrimSpace(linkID),
 			ToolName:        toolName,
 			ToolTitle:       e.toolInfo.Title,
-			DestructiveHint: annotations.DestructiveHint,
-			OpenWorldHint:   annotations.OpenWorldHint,
+			DestructiveHint: destructiveHint,
+			OpenWorldHint:   openWorldHint,
 		})
 		if !policy.Enabled {
 			body := MCPToolCallBlockedByAppConfigurationMessage
@@ -628,7 +648,7 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 	if !RequiresMCPToolApprovalForMode(annotations, mode) {
 		return nil, nil
 	}
-	sessionKey, allowSessionRemember := MCPSessionToolApprovalKey(mode, server, toolName)
+	sessionKey, allowSessionRemember := MCPSessionToolApprovalKey(mode, server, toolName, e.connectorID, linkID)
 	var sessionKeyPtr *MCPToolApprovalKey
 	if allowSessionRemember {
 		key := sessionKey
@@ -651,6 +671,7 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		CallID:                  callID,
 		HookToolName:            e.hookToolName(),
 		SessionKey:              sessionKeyPtr,
+		LinkID:                  strings.TrimSpace(linkID),
 		AllowSessionRemember:    allowSessionRemember,
 		AllowPersistentApproval: allowSessionRemember,
 	})

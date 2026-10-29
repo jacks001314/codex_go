@@ -139,7 +139,7 @@ func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context
 		return mcp.MCPToolApprovalOutcome{Decision: decision}, hookErr
 	}
 	if h.router != nil {
-		if reviewer := h.router.approvalsReviewerForTurn(h.threadID, h.turnID); reviewer.RoutesToGuardian() {
+		if reviewer := h.mcpToolApprovalReviewer(request); reviewer.RoutesToGuardian() {
 			decision, err := h.reviewViaGuardian(ctx, request)
 			return mcp.MCPToolApprovalOutcome{Decision: decision}, err
 		}
@@ -359,6 +359,29 @@ func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context,
 	}
 }
 
+// mcpToolApprovalReviewer resolves the reviewer for one MCP tool approval,
+// honoring the app account link's approvals_reviewer before the connector, the
+// apps default, and the thread-level reviewer (Rust #42056). Rust passes the
+// link only on this approval path; elicitation routing keeps link_id unset.
+func (h *appserverMCPToolApprovalHandler) mcpToolApprovalReviewer(request *mcp.MCPToolApprovalRequest) state.Reviewer {
+	if h == nil || h.router == nil || request == nil {
+		return state.ReviewerUser
+	}
+	reviewer := h.router.approvalsReviewerForTurn(h.threadID, h.turnID)
+	cfg := h.router.effectiveMCPConfigForThread(h.threadID)
+	model := ""
+	if active := h.router.activeTurnParams(h.threadID); active != nil {
+		model = strings.TrimSpace(active.Model)
+	}
+	if model == "" {
+		if settings := h.router.threadSettingsForTurn(h.threadID); settings != nil {
+			model = strings.TrimSpace(threadSettingsModel(settings))
+		}
+	}
+	resolved := mcpApprovalsReviewerForElicitation(cfg, string(reviewer), request.Server, request.ConnectorID, request.LinkID, model)
+	return state.ReviewerFromString(resolved)
+}
+
 func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
 	ctx context.Context,
 	request *mcp.MCPToolApprovalRequest,
@@ -397,6 +420,12 @@ func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
 	}
 	if connectorID := strings.TrimSpace(request.ConnectorID); connectorID != "" {
 		meta["connector_id"] = connectorID
+	}
+	// Rust #42134: the elicited approval carries the selected account link and
+	// whether the Apps service synthesized it implicitly.
+	if linkID := strings.TrimSpace(request.LinkID); linkID != "" {
+		meta["link_id"] = linkID
+		meta["link_is_implicit"] = mcp.IsImplicitAppLinkID(linkID)
 	}
 	switch {
 	case request.AllowSessionRemember && request.AllowPersistentApproval:
@@ -455,6 +484,9 @@ func (h *appserverMCPToolApprovalHandler) persistApproval(request *mcp.MCPToolAp
 	meta := map[string]any{"tool_name": strings.TrimSpace(request.Tool)}
 	if connectorID := strings.TrimSpace(request.ConnectorID); connectorID != "" {
 		meta["connector_id"] = connectorID
+	}
+	if linkID := strings.TrimSpace(request.LinkID); linkID != "" {
+		meta["link_id"] = linkID
 	}
 	persistRequest := &mcp.MCPElicitationRequest{
 		ServerName: strings.TrimSpace(request.Server),

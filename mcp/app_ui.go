@@ -94,6 +94,15 @@ func mcpToolPreferredModelDisplayMode(meta any) (McpAppDisplayMode, bool) {
 	}
 }
 
+// ImplicitAppLinkIDPrefix is the Codex Apps service's reserved prefix for
+// implicit account links (Rust #42134).
+const ImplicitAppLinkIDPrefix = "implicit_link::"
+
+// IsImplicitAppLinkID reports whether a resolved app link ID is implicit.
+func IsImplicitAppLinkID(linkID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(linkID), ImplicitAppLinkIDPrefix)
+}
+
 // MCPToolCallLinkID returns the trusted `_codex_apps` link id for a Codex Apps
 // tool call, when the descriptor carries one (Rust's MCP_TOOL_LINK_ID_META_KEY).
 func MCPToolCallLinkID(meta any) string {

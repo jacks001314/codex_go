@@ -129,7 +129,7 @@ func TestMCPApprovalsReviewerResolutionPerServerConnectorLikeRust(t *testing.T) 
 			} else {
 				cfg.Requirements = nil
 			}
-			got := mcpApprovalsReviewerForElicitation(cfg, "user", tc.server, tc.connector, tc.model)
+			got := mcpApprovalsReviewerForElicitation(cfg, "user", tc.server, tc.connector, "", tc.model)
 			if got != tc.expected {
 				t.Fatalf("reviewer = %q, want %q", got, tc.expected)
 			}
@@ -149,12 +149,12 @@ func TestMCPApprovalsReviewerRespectsManagedRequirementsLikeRust(t *testing.T) {
 	}
 	// Connector asks for "user" but managed requirements only allow
 	// auto_review, so the fallback reviewer wins.
-	if got := mcpApprovalsReviewerForElicitation(cfg, "auto_review", "codex_apps", "calendar", ""); got != "auto_review" {
+	if got := mcpApprovalsReviewerForElicitation(cfg, "auto_review", "codex_apps", "calendar", "", ""); got != "auto_review" {
 		t.Fatalf("reviewer = %q, want auto_review", got)
 	}
 	// Requirements permitting the connector reviewer let it win.
 	cfg.Requirements = &config.ConfigRequirements{AllowedApprovalsReviewers: []config.ApprovalsReviewer{config.ApprovalsReviewerAutoReview, config.ApprovalsReviewer("user")}}
-	if got := mcpApprovalsReviewerForElicitation(cfg, "auto_review", "codex_apps", "calendar", ""); got != "user" {
+	if got := mcpApprovalsReviewerForElicitation(cfg, "auto_review", "codex_apps", "calendar", "", ""); got != "user" {
 		t.Fatalf("reviewer = %q, want user", got)
 	}
 }

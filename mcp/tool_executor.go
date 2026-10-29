@@ -400,7 +400,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	}
 	// Rust mcp_tool_call.rs maybe_request_mcp_tool_approval: a custom MCP server
 	// can require the user to approve a call before it runs.
-	if denied, err := e.approveToolCallIfNeeded(ctx, invocation.CallID, arguments); err != nil || denied != nil {
+	if denied, err := e.approveToolCallIfNeeded(ctx, invocation.CallID, arguments, linkID); err != nil || denied != nil {
 		return denied, err
 	}
 	callParams := &MCPToolCallParams{

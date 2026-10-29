@@ -5412,9 +5412,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "App account links now drive MCP tool approvals end to end. The executor resolves the Apps account selector before approval and passes it into policy evaluation and the approval request, so AppToolPolicy applies link-specific default_tools_approval_mode after managed and per-tool settings and before the app default, matching Rust. The approval handler resolves approvals_reviewer through the link entry first, then the connector entry, then the apps _default entry, and falls back to the thread reviewer when managed requirements reject the configured value; elicitation callers keep the link unset exactly as Rust does. Covered by TestToolApprovalUsesAppLinkSettingsLikeRust, TestMCPApprovalsReviewerUsesAppLinkLayerLikeRust, and TestMCPToolApprovalReviewerResolvesAppLinkLikeRust. Verified with go test ./mcp -count=1, go test ./appserver -run 'MCPApprovals|MCPToolApproval|Elicitation|MCPElicitation' -count=1, and go build ./mcp ./appserver ./apps."
    ]
   },
   {
@@ -5748,9 +5748,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Session MCP approvals are scoped by server, connector, tool, and the resolved app account link. MCPSessionToolApprovalKey now carries ConnectorID and LinkID, so remembering an Apps call for one link no longer approves the same tool under another link or under the legacy no-selector path, matching Rust's McpToolApprovalKey. TestToolApprovalUsesAppLinkSettingsLikeRust asserts distinct keys per link and per connector, that prompt mode offers no session key, and that an auto-mode request carries the implicit link in its session key. Verified with go test ./mcp -count=1, go test ./appserver -run 'MCPApprovals|MCPToolApproval|Elicitation|MCPElicitation' -count=1, and go build ./mcp ./appserver ./apps."
    ]
   },
   {
@@ -5760,9 +5760,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Native MCP tool approval elicitations preserve the selected app account link: the request meta carries link_id and link_is_implicit whenever a link was resolved, with implicit detection using the Codex Apps reserved implicit_link:: prefix, and both keys are omitted when the call has no link, matching Rust's build_mcp_tool_approval_elicitation_meta. The persistent-approval request meta also carries link_id. TestMCPToolApprovalElicitationCarriesAppLinkLikeRust covers an explicit link, an implicit link, and no link. Verified with go test ./mcp -count=1, go test ./appserver -run 'MCPApprovals|MCPToolApproval|Elicitation|MCPElicitation' -count=1, and go build ./mcp ./appserver ./apps."
    ]
   },
   {

@@ -121,7 +121,7 @@ func TestToolApprovalReportsCancellationProvenanceLikeRust(t *testing.T) {
 					}),
 				},
 			})
-			denied, err := executor.approveToolCallIfNeeded(context.Background(), "call-1", map[string]any{})
+			denied, err := executor.approveToolCallIfNeeded(context.Background(), "call-1", map[string]any{}, "")
 			if err != nil {
 				t.Fatalf("approveToolCallIfNeeded() error = %v", err)
 			}

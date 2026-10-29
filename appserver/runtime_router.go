@@ -15128,7 +15128,7 @@ func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, con
 	// per server/per connector from the apps config layers, validated against
 	// the managed approvals_reviewer requirements, before falling back to the
 	// thread-level reviewer.
-	authority.ApprovalsReviewer = mcpApprovalsReviewerForElicitation(cfg, authority.ApprovalsReviewer, serverName, connectorID, params.Model)
+	authority.ApprovalsReviewer = mcpApprovalsReviewerForElicitation(cfg, authority.ApprovalsReviewer, serverName, connectorID, "", params.Model)
 	return authority
 }
 
@@ -15219,10 +15219,10 @@ func (r *RuntimeRouter) publishedMCPServiceForThread(threadID string) *mcp.MCPSe
 // mcpApprovalsReviewerForElicitation mirrors Rust's
 // mcp_approvals_reviewer_from_layers (codex-rs/core/src/connectors.rs): a
 // model listed in auto_review.required_on_models always uses auto_review; for
-// the codex-apps MCP server the connector-level approvals_reviewer (then the
-// apps default) is used when the managed requirements permit it; otherwise the
-// thread-level reviewer applies.
-func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, serverName, connectorID, model string) string {
+// the codex-apps MCP server the account link's approvals_reviewer, then the
+// connector's, then the apps default is used when the managed requirements
+// permit it; otherwise the thread-level reviewer applies.
+func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, serverName, connectorID, linkID, model string) string {
 	defaultReviewer = strings.TrimSpace(defaultReviewer)
 	if defaultReviewer == "" {
 		defaultReviewer = "user"
@@ -15233,7 +15233,7 @@ func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, ser
 	if !mcp.IsCodexAppsMCPServerName(serverName) {
 		return defaultReviewer
 	}
-	reviewer := connectorApprovalsReviewerFromConfig(cfg, connectorID)
+	reviewer := connectorApprovalsReviewerFromConfig(cfg, connectorID, linkID)
 	if reviewer == "" {
 		return defaultReviewer
 	}
@@ -15243,10 +15243,11 @@ func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, ser
 	return reviewer
 }
 
-// connectorApprovalsReviewerFromConfig reads the connector-level
-// approvals_reviewer from the effective apps config (connector-specific entry,
-// then the `_default` entry). Mirrors Rust apps_config_from_layer_stack.
-func connectorApprovalsReviewerFromConfig(cfg *config.Config, connectorID string) string {
+// connectorApprovalsReviewerFromConfig reads the approvals_reviewer from the
+// effective apps config: the account link's entry (Rust #42056), then the
+// connector-specific entry, then the `_default` entry. Mirrors Rust
+// apps_config_from_layer_stack.
+func connectorApprovalsReviewerFromConfig(cfg *config.Config, connectorID, linkID string) string {
 	if cfg == nil || cfg.Values == nil {
 		return ""
 	}
@@ -15255,8 +15256,18 @@ func connectorApprovalsReviewerFromConfig(cfg *config.Config, connectorID string
 		return ""
 	}
 	connectorID = strings.TrimSpace(connectorID)
+	linkID = strings.TrimSpace(linkID)
 	if connectorID != "" {
 		if appValues, ok := raw[connectorID].(map[string]any); ok {
+			if linkID != "" {
+				if links, ok := appValues["links"].(map[string]any); ok {
+					if linkValues, ok := links[linkID].(map[string]any); ok {
+						if reviewer := firstNonEmpty(stringFromMap(linkValues, "approvals_reviewer"), stringFromMap(linkValues, "approvalsReviewer")); reviewer != "" {
+							return reviewer
+						}
+					}
+				}
+			}
 			if reviewer := firstNonEmpty(stringFromMap(appValues, "approvals_reviewer"), stringFromMap(appValues, "approvalsReviewer")); reviewer != "" {
 				return reviewer
 			}
