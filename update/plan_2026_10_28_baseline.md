@@ -1023,6 +1023,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Tests: `setup_runtime_like_rust_test.go` (parent runtime selection with case-variant env scrubbing, registered not materializing helpers, legacy materializing them, registered helper roots creating no directory, explicit bin read root preserved), `elevated/runner_pipe_test.go` (registered uses the app-contained runner), `elevated/runner_metrics_test.go`, `bin/setup_main/win/setup_runtime_like_rust_windows_test.go`, `setup_ownership_like_rust_windows_test.go`, and `appserver/runtime_router_test.go` (`TestRuntimeRouterWindowsSandboxSetupStartWithoutCWDHasNoWorkspaceRootsLikeRust`).
 - Verified with `go build ./...`, `go test ./sandbox/... ./execserver -count=1`, `go test ./appserver -run 'WindowsSandbox' -count=1`, and `go vet ./sandbox/windowssandbox/... ./execserver`.
 
-Status after reconciliation: `2001 complete`, `392 not_applicable`,
-`492 audit_pending`, `263 regression_pending`, `1 partial`,
+### attachment store session plumbing (Round 819)
+
+- Rust #45556 replaces `AttachmentStore::persist` with `upload`/`resolve`, moves the image store into session services, and hands the thread manager's store to every spawned session. Go already had the full API surface (`UploadRequest`/`UploadResult`, `ResolveRequest.DownloadURLTTL`, metadata with digest/size/mime/image dimensions, categorized errors, redacting debug output) and the four Rust lib regressions.
+- The missing contract was session plumbing: `ThreadManager` owned a configured store that no turn ever read, so every turn silently fell back to the inline default.
+- `appserver/agent_runtime.go` (`responsesAgentForTurn`) now sets `agent.ImageStore = r.threads.AttachmentStore()`, the Go equivalent of Rust's `SessionSpawnArgs::image_store` from `ThreadManagerState::image_store`.
+- Delegated subagent turns are turns on the same router, so they inherit the parent's store, matching Rust's `Arc<dyn AttachmentStore>` clone in `run_codex_thread_interactive`. `exec` keeps the inline default like Rust's `passthrough_image_store()`, and a host-injected `RuntimeServices.Agent` remains a Go-only override that keeps its own store.
+- New regressions in `appserver/attachment_store_session_like_rust_test.go`: a turn's runner carries the thread manager's store, a child-thread turn resolves the parent's store, and a real SSE turn uploads through the store with the outbound request carrying its file id instead of inline base64. All three fail with the assignment removed.
+- Verified with `go build ./...`, `go test ./attachmentstore ./eventmap ./model -count=1`, and `go test ./appserver -run 'ThreadManagerAttachmentStore' -count=1`; the full appserver run differs only by the two pre-existing unrelated analytics/fingerprint timeouts, which also fail with this change disabled.
+
+Status after reconciliation: `2002 complete`, `392 not_applicable`,
+`492 audit_pending`, `262 regression_pending`, `1 partial`,
 `6 blocked_precondition`.
