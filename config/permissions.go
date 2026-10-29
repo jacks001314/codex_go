@@ -968,7 +968,10 @@ func (b *permissionProfileBuilder) effectiveWorkspaceRootsFor(workspaceRoots []s
 		}
 		key := resolved
 		if uri, ok := utils.InferredPathURI(resolved); ok {
-			key = uri.IdentityKey()
+			// Rust #45863: preserve the URI spelling so a Windows or UNC case
+			// change is not folded away by deduplication. Separator and other
+			// URI normalization still apply through String.
+			key = uri.String()
 		}
 		if seen[key] {
 			return nil

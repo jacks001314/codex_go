@@ -14319,9 +14319,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: ProfileWorkspaceRoot, as_uri"
+    "Rust 83dc7d11 (#45863) keeps executor profile roots as path URIs so foreign conventions survive and Windows/UNC spelling is not folded. Go never projects profile roots onto the controller host: compileConfigPermissionProfile resolves configured roots through the owning ConfigPathContext and SandboxPermissionProfileResolution carries those convention-aware roots into materialization, status summaries and exec requests, while thread settings persist only runtime roots (validated separately on resume, #43848) and permission profiles travel as JSON. The concrete spelling bug was in permissionProfileBuilder.effectiveWorkspaceRootsFor, which deduplicated runtime and profile roots by PathURI.IdentityKey and therefore merged a case-only Windows or UNC change; it now keys on PathURI.String, preserving spelling while still normalizing separators. config/path_context_test.go adds TestEffectiveWorkspaceRootsPreserveWindowsSpellingLikeRust for C:\\Work\\Profile vs C:\\work\\profile and UNC equivalents. The legacy turn-context workspace_roots field is already omitted by rollout recording, so unrepresentable roots cannot drop the compiled profile, and execserver rejects non-URI or foreign roots at the native Windows boundary (TestFilesystemWireSandboxPathsRequirePathURIsLikeRust). Tests: go test ./config -count=1; go test ./appserver -run 'WorkspaceRoots|PermissionProfile|EffectiveWorkspace' -count=1; go test ./execserver -run 'TestFilesystemWireSandboxPathsRequirePathURIsLikeRust|TestFilesystemWirePathsRequirePathURIsLikeRust' -count=1; go test ./sandbox/... -count=1"
    ]
   },
   {

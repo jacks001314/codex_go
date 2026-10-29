@@ -2589,8 +2589,8 @@ Session-only model and reasoning selection (#45831, complete).
 - #40504 is superseded by #42667 and therefore `not_applicable`; Go has no plan-type Trusted Access URL routing.
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
-Status after reconciliation: `2100 complete`, `410 not_applicable`,
-`427 audit_pending`, `210 regression_pending`, `2 partial`,
+Status after reconciliation: `2101 complete`, `410 not_applicable`,
+`426 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
 
 ### Read-only summary history fallback (Round 936)
@@ -2603,3 +2603,14 @@ Read-only conversations now recover from turn summaries when history paging fail
 - When both history loads fail, the command center returns `Couldn't load this conversation. Please try again.` and keeps the current conversation; the session picker still reports the underlying error.
 - Added `TestInteractiveRemoteReadOnlySummaryHistoryFallbackLikeRust` (limit/view/order/notice on both attach paths), `TestInteractiveRemoteReadOnlyHistoryFailureLikeRust` (legacy no-fallback and both-fail preservation), and `TestReadOnlySummaryHistoryNoticeLikeRust` (tea transcript notice, including the quiet complete-snapshot case).
 - Verified with `go build ./...`, `go test ./app -run 'Remote|SessionPicker|ReadOnly|Agent' -count=1`, `go test ./tui/... -count=1`, and `go vet ./app ./tui/tea`.
+
+### Executor path URIs in profile workspace roots (Round 937)
+
+Profile workspace roots keep executor path conventions and spelling (#45863, complete).
+
+- Go already resolves configured profile roots through the owning `ConfigPathContext` and carries the resulting convention-aware roots into materialization, status summaries, and exec requests; permission profiles travel as JSON and thread settings persist only runtime roots, so profile roots are never projected onto the controller host.
+- `permissionProfileBuilder.effectiveWorkspaceRootsFor` deduplicated runtime and profile roots by `PathURI.IdentityKey`, which folded a case-only Windows or UNC spelling change. It now keys on `PathURI.String`, preserving spelling while still normalizing separators.
+- The legacy turn-context `workspace_roots` field is already omitted by rollout recording, so unrepresentable profile roots cannot drop the compiled permission profile.
+- `execserver` converts roots only at the native boundary and rejects non-URI or foreign-convention roots (`TestFilesystemWireSandboxPathsRequirePathURIsLikeRust`).
+- Added `TestEffectiveWorkspaceRootsPreserveWindowsSpellingLikeRust` for `C:\Work\Profile` versus `C:\work\profile` and the UNC equivalents.
+- Verified with `go test ./config -count=1`, targeted `appserver` workspace-root tests, `go test ./execserver -run 'TestFilesystemWireSandboxPathsRequirePathURIsLikeRust|TestFilesystemWirePathsRequirePathURIsLikeRust' -count=1`, and `go test ./sandbox/... -count=1`.

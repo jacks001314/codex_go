@@ -159,6 +159,47 @@ func TestCompilePermissionProfileResolvesConfiguredRootsWithContext(t *testing.T
 	}
 }
 
+// Mirrors Rust #45863: profile workspace roots keep their Windows and UNC
+// spelling through deduplication, so a case-only change is not collapsed.
+func TestEffectiveWorkspaceRootsPreserveWindowsSpellingLikeRust(t *testing.T) {
+	context, err := NewConfigPathContext(
+		utils.ConventionWindows,
+		"file:///C:/work/project",
+		"file:///C:/Users/user",
+	)
+	if err != nil {
+		t.Fatalf("NewConfigPathContext() error = %v", err)
+	}
+	profiles := map[string]any{
+		"scoped": map[string]any{
+			"workspace_roots": map[string]any{
+				`C:\Work\Profile`:        true,
+				`C:\work\profile`:        true,
+				`\\server\share\Project`: true,
+				`\\server\share\project`: true,
+			},
+		},
+	}
+	builder, err := compileConfigPermissionProfile(profiles, "scoped", map[string]bool{}, context)
+	if err != nil {
+		t.Fatalf("compileConfigPermissionProfile() error = %v", err)
+	}
+	roots, err := builder.effectiveWorkspaceRootsFor(nil, `C:\work\project`)
+	if err != nil {
+		t.Fatalf("effectiveWorkspaceRootsFor() error = %v", err)
+	}
+	wantRoots := []string{
+		`C:\work\project`,
+		`C:\Work\Profile`,
+		`C:\work\profile`,
+		`\\server\share\Project`,
+		`\\server\share\project`,
+	}
+	if !reflect.DeepEqual(roots, wantRoots) {
+		t.Fatalf("workspace roots = %#v, want %#v", roots, wantRoots)
+	}
+}
+
 func TestUnsafeWorkspaceGlobFailsClosedToRootDeny(t *testing.T) {
 	context, err := NewNativeConfigPathContext(t.TempDir())
 	if err != nil {
