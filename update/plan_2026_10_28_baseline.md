@@ -2959,6 +2959,11 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #50035 follows `tools/list` pagination in legacy MCP mode (#50035, complete). Go passes `NextCursor` unconditionally from both `listMCPHTTPTools` and `listMCPStdioTools` into `collectMCPPaginatedWithLimitAndMeta`; `TestMCPReadOnlyToolsRequestMetadataLikeRust` exercises both protocol modes over two pages.
 - Rust #50052 preserves question context in recovered TUI answer drafts (#50052, complete). `bottompane.AsyncQuestions.TakePendingDrafts`/`recoveredQuestionDraft` already quotes sanitized 512-byte-bounded titles and keeps answers untruncated; `tui/tea/async_questions.go` separates recovered entries with blank lines while retaining composer elements. Tests cover sanitization, UTF-8 truncation, turn-end recovery, and command-prefix escaping.
 - Verified with `go test ./appserver -run TestExpandMcpArgumentTemplateMatchesRust -count=1`, `go test ./mcp -run TestMCPReadOnlyToolsRequestMetadataLikeRust -count=1`, `go test ./tui/bottom_pane -run TestAsyncQuestionsTakePendingDrafts -count=1`, and `go test ./tui/tea -run TestTurnEndRecoversAsyncQuestionDraftsLikeRust -count=1`.
-Status after reconciliation: `2137 complete`, `445 not_applicable`,
-`356 audit_pending`, `207 regression_pending`, `4 partial`,
+### Composer footer and tmux probe audits (Round 977)
+
+- Rust #50105 moves composer footer construction, mode resolution, hint overrides, quit hints, and custom height into `footer_state.rs` without behavior changes (#50105, complete). Go already has the equivalent `composer.FooterState` in `tui/bottom_pane/chat_composer/footer_state.go` plus `tui/bottom_pane/footer.go` props/rendering; `TestFooterStateFlashContextAndQuitReminderMatchRustCore` covers context order, flash/quit expiry, and mode reset.
+- Rust #50219 bounds tmux input-option probes to one second (#50219, not applicable). Go has no tmux `show-options`/`set-option` probe for terminal input setup; Bubble Tea owns mouse and keyboard modes, and the only tmux subprocesses are explicit clipboard-copy operations in `tui/clipboard_tmux.go`. The same structural N/A is recorded in `update/plan_2026_10_07.md:1345`.
+- Verified with `go test ./tui/bottom_pane/chat_composer -run TestFooterStateFlashContextAndQuitReminderMatchRustCore -count=1` and `go test ./tui/tui -count=1`.
+Status after reconciliation: `2138 complete`, `446 not_applicable`,
+`354 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

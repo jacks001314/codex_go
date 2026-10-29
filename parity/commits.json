@@ -25360,9 +25360,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/7; needs review: clear_quit_shortcut_hint, custom_footer_height, quit_shortcut_hint_visible, set_footer_hint_override, show_quit_shortcut_hint"
+    "Round 977: Rust #50105 is a behavior-preserving refactor that moves footer property construction, mode resolution, hint overrides, quit hints, and custom footer height into footer_state.rs. Go already owns the equivalent state and behavior in tui/bottom_pane/chat_composer/footer_state.go (FooterState modes, context indicators, flash/quit expiry) and tui/bottom_pane/footer.go (props and rendering), with TestFooterStateFlashContextAndQuitReminderMatchRustCore covering context order, status line, flash expiry, quit reminder expiry, and mode reset. No observable behavior changed upstream. Verified with go test ./tui/bottom_pane/chat_composer -run TestFooterStateFlashContextAndQuitReminderMatchRustCore -count=1"
    ]
   },
   {
@@ -25600,9 +25600,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 977: Rust #50219 bounds tmux input-option probes (mouse capture and extended-keys discovery) because a hung tmux child can block TUI input setup. Go does not spawn tmux for terminal input options: tui/tui contains no tmux show-options/set-option probe, and Bubble Tea owns mouse/keyboard mode setup. Go tmux subprocesses are limited to clipboard forwarding in tui/clipboard_tmux.go, where show-options is part of an explicit copy operation rather than startup input configuration. The structural N/A was already recorded in update/plan_2026_10_07.md:1345; there is no probe deadline to implement. Verified with go test ./tui/tui -count=1"
    ]
   },
   {
