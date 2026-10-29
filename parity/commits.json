@@ -4092,9 +4092,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/5; needs review: RolloutCompressionMode, rollout_contains_prefix"
+    "Round 948: superseded upstream and covered by Go compressed-rollout readers. The Rust baseline no longer defines RolloutCompressionMode or references local_thread_store_shared_compression (its feature spec is Stage::Removed), and the compression pass no longer skips referenced rollouts or fork pointers, so shared lineages compress exactly as rollout/compression.go already does. Go reads those compressed shared rollouts directly: FirstSessionMeta decodes zstd metadata, ExistingRolloutPath resolves plain/zst siblings, ReadRolloutPrefix returns decoded prefixes, MaterializeRolloutForReference publishes a plain sibling before a HistoryPosition records offsets, and RolloutByteLength validates cutoff bounds against the decoded length (the correctness equivalent of Rust rollout_contains_prefix header fast path). Tests: rollout/read_rollout_prefix_like_rust_test.go and state/thread_history_fork_test.go compressed-lineage materialization. Verified with go test ./rollout -run ReadRolloutPrefix|Compression -count=1 and go test ./state -run PreparePaginatedFork -count=1."
    ]
   },
   {
@@ -4824,9 +4824,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 948: Rust pins GStreamer, codec, native-library and build-tool archives for its Bazel voice runtime. Go pins only the native input its CGO-free helper needs: third_party/voice/sources.json records the Opus 1.5.2 source URL, SHA-256 and byte size plus the pinned ninja build tool, and prepare_opus.py verifies digest and size before extraction, rejects unsupported platforms, reuses an existing build unless --force, and writes a built.json completion receipt with source and library digests. No GStreamer or libffi archive is needed because voicehost/opus.go loads only a packaged libopus through purego and voicehost/runtime_package.go inspects that helper/codec pair."
    ]
   },
   {
@@ -4836,9 +4836,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 948: third_party/voice/prepare_opus.py is the Go build recipe for the packaged codec: it configures CMake with the pinned Ninja build program, builds the Opus shared library for windows/darwin/linux into a per-platform prefix, copies the library and headers into third_party/voice/build/<goos>-<goarch>, logs every command, and records build state in built.json. voicehost/opus.go loads that library via purego so release builds stay CGO-free; no libffi/GStreamer prefix is built because the Go helper does not use them."
    ]
   },
   {
@@ -4872,9 +4872,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 948: Rust-only Cygwin/MSVC libffi build fix. Go Windows voice preparation drives native CMake+Ninja for libopus (third_party/voice/prepare_opus.py) and loads no libffi, so cygpath translation, libtool environment, /cygdrive rejection and Opus NEON target wiring have no Go counterpart."
    ]
   },
   {
@@ -5004,9 +5004,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 948: Cargo/Bazel workspace refactor that moves the Rust schema generator binary into codex-config-schema while keeping codex-rs/core/config.schema.json as its output. Go consumes that schema through parity/config_schema_surface_test.go and its own jsonschema package, and has no Cargo binary target or justfile recipe to relocate; no behavior or wire format changes."
    ]
   },
   {
@@ -5100,9 +5100,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 948: Rust repository tooling test that exercises a mocked git ls-files through the Rust formatter and rustfmt invocation. Go formatting uses gofmt and has no Rust formatter discovery code; the change contains no product behavior."
    ]
   },
   {
@@ -6048,9 +6048,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 948: Rust packages a GStreamer-based voice runtime and this commit adds its Linux ELF/GStreamer plugin closure preparer with relative runtime paths. Go helper is a standalone process that ships and loads only libopus through purego (voicehost/opus.go, voicehost/runtime_package.go); it has no GStreamer plugin closure, RPATH rewrite or ELF dependency selection to prepare."
    ]
   },
   {
@@ -6060,9 +6060,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 948: Rust Windows preparer validates PE32+ metadata with dumpbin and copies a GStreamer DLL closure. Go helper resolves libopus.dll from the package voice directory via purego and has no GStreamer, delayed-import, forwarded-export or DLL closure handling; voicehost/runtime_package.go only inspects helper and codec presence."
    ]
   },
   {

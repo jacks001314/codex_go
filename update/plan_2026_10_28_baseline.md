@@ -2711,7 +2711,18 @@ Paginated `thread/fork` lineage references are now validated against the canonic
 - Tests: `TestPreparePaginatedForkAcceptsRolloutUnderSymlinkedSessionsRoot`, `TestPreparePaginatedForkRejectsReferenceEscapingSymlinkedSessionsRoot`, and `TestThreadForkAcceptsRolloutUnderSymlinkedSessionsRootLikeRust`. They use directory symlinks where permitted and fall back to Windows junctions, so all three execute on this host.
 - Verified with `go build ./...`, `go test ./state -count=1`, and `go test ./appserver -run 'Fork|History|Resume' -count=1`.
 
-Status after reconciliation: `2111 complete`, `414 not_applicable`,
-`411 audit_pending`, `210 regression_pending`, `3 partial`,
+### Shared compression and voice/tooling audits (Round 948)
+
+Eight ledger entries were re-audited; shared-lineage compression is covered by the later design and the remaining entries are Rust build/test infrastructure.
+
+- `#41357` (complete): the Rust baseline removed `RolloutCompressionMode`, and `local_thread_store_shared_compression` is `Stage::Removed`; compression now includes shared lineages, matching `rollout/compression.go`. Go reads compressed shared rollouts through `FirstSessionMeta`, `ExistingRolloutPath`, `ReadRolloutPrefix`, `MaterializeRolloutForReference`, and `RolloutByteLength`, covered by `read_rollout_prefix_like_rust_test.go` and the fork-lineage tests.
+- `#41890` (complete): `third_party/voice/prepare_opus.py` is Go's codec build recipe — pinned Ninja, CMake build into a per-platform prefix, logged commands, and a `built.json` receipt; `voicehost/opus.go` loads the result through purego.
+- `#41884`, `#41894`, `#42208`, `#42209` (not applicable): these add Rust's Bazel GStreamer/libffi source pinning, Cygwin/MSVC libffi build fixes, and ELF/PE GStreamer runtime preparers. The Go helper ships and loads only a packaged `libopus` (`voicehost/opus.go`, `voicehost/runtime_package.go`), so there is no GStreamer closure or libffi toolchain to prepare.
+- `#41915`, `#41925` (not applicable): Cargo/Bazel schema-generator relocation and a Rust formatter test; no Go product behavior.
+- Verified with `go test ./rollout -run 'ReadRolloutPrefix|Compression' -count=1`, `go test ./state -run 'PreparePaginatedFork' -count=1`, and `go test ./parity -run 'TestAlignment' -count=1`.
+
+Status after reconciliation: `2113 complete`, `420 not_applicable`,
+`403 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
+
 
