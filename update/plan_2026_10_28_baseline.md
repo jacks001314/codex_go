@@ -2642,3 +2642,17 @@ Usage and credit links now target `https://chatgpt.com/settings/usage` (#49874, 
 - `tui/state.go` renders the new URL in the status card usage row, with the status and auth tests updated.
 - No Go code still references the old `chatgpt.com/codex/settings/usage` path.
 - Verified with `go test ./model -count=1`, `go test ./app -run 'Banner|Backend' -count=1`, and `go test ./tui -run 'Status|Usage|Auth' -count=1`.
+
+
+### Interrupt lifecycle callbacks (Round 941)
+
+Interrupt callbacks now finish before interrupted terminal events (#49475, complete).
+
+- Go's `Interrupt` hooks are the local analogue of Rust's `on_turn_abort` lifecycle contributor. The explicit `turn/interrupt` path already ran them synchronously before scheduling `turn/completed`.
+- The Guardian conditional interruption path, the review-interruption path, and router shutdown cancelled turns without running the interrupt hook. They now call `runInterruptHook` before persisting the abort marker and publishing the interrupted lifecycle.
+- Added `TestInterruptCallbackCompletesBeforeTurnAbortedLikeRust`, which holds the Interrupt hook open and verifies that explicit interrupt, conditional Guardian interrupt, and shutdown emit no `turn/completed` until the hook completes. It also asserts the hook runs exactly once for each path.
+- Verified with `go build ./...` and the targeted appserver lifecycle and Guardian tests. The full `go test ./appserver -count=1` run completed without abort-lifecycle failures but still hit two unrelated 2-second timeout tests (`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust` and `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`), both of which reproduce in isolation. `go vet ./appserver` still reports the pre-existing context-cancel warning in `appserver/thread_sample.go:220`, also unrelated.
+
+Status after reconciliation: `2105 complete`, `410 not_applicable`,
+`422 audit_pending`, `210 regression_pending`, `2 partial`,
+`6 blocked_precondition`.

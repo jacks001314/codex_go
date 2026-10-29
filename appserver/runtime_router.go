@@ -2627,6 +2627,8 @@ func (r *RuntimeRouter) close() error {
 		r.clearPendingUnifiedExecItems(active.ThreadID, active.TurnID)
 		_, _ = r.requireTurns().Interrupt(&turn.TurnInterruptParams{ThreadID: active.ThreadID, TurnID: active.TurnID})
 		analytics := analyticsContextFromActiveRuntimeTurn(active)
+		// Rust #49475: abort callbacks complete before the terminal event.
+		r.runInterruptHook(active)
 		if active.Params != nil && turnStartReviewRuntime(active.Params) {
 			r.finishReviewRuntimeInterrupted(active.ThreadID, active.TurnID, active.StartedAtMS, analytics)
 		} else {
@@ -4039,15 +4041,24 @@ func (r *RuntimeRouter) runInterruptHook(active *activeRuntimeTurn) {
 	if r == nil || active == nil {
 		return
 	}
-	cwd := ""
-	model := ""
-	permissionMode := ""
-	var params *turn.TurnStartParams
-	if active.Params != nil {
-		params = active.Params
-		cwd = strings.TrimSpace(params.CWD)
+	params := cloneTurnStartParams(active.Params)
+	if params == nil {
+		params = &turn.TurnStartParams{ThreadID: active.ThreadID}
 	}
-	model, permissionMode = r.hookTurnAttribution(params)
+	if strings.TrimSpace(params.ThreadID) == "" {
+		params.ThreadID = active.ThreadID
+	}
+	cwd := strings.TrimSpace(params.CWD)
+	if cwd == "" {
+		if record, err := r.threadRecord(session.ThreadID(active.ThreadID), true, false); err == nil && record != nil {
+			cwd = strings.TrimSpace(record.Metadata.CWD)
+		}
+	}
+	if cwd == "" {
+		cwd = strings.TrimSpace(r.services.DefaultCWD)
+	}
+	params.CWD = cwd
+	model, permissionMode := r.hookTurnAttribution(params)
 	hooks := r.interruptHooksForCWD(cwd, active.ThreadID)
 	if len(hooks) > 0 {
 		_, err := r.requireHookRunner().RunInterrupt(context.Background(), &HookInterruptRequest{
@@ -9249,6 +9260,8 @@ func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, req
 			if analytics != nil && requestedAtMS != nil {
 				analytics.ExplicitClientInterruptRequestedAtMS = requestedAtMS
 			}
+			// Rust #49475: abort callbacks complete before the terminal event.
+			r.runInterruptHook(active)
 			r.finishReviewRuntimeInterrupted(threadID, turnID, active.StartedAtMS, analytics)
 			return &turn.TurnInterruptResponse{}, nil
 		}

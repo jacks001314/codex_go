@@ -23951,9 +23951,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Interrupt lifecycle hooks now finish before interrupted terminal events for explicit, Guardian conditional, review, and shutdown aborts; appserver/abort_lifecycle_like_rust_test.go blocks each path and verifies one callback before turn/completed."
    ]
   },
   {
