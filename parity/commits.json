@@ -13335,9 +13335,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: account_name_from_sid, process_package_family, with_owner_impersonation"
+    "Upstream hardening targets hand-written unsafe Windows FFI and the Windows sandbox provisioning service. Go has no counterpart for most of it, and the invariants are already guaranteed elsewhere: (1) `process_package_family`/`GetCurrentPackageFamilyName` feed `windows-sandbox-service` client-vs-service identity checks, and Go ships no provisioning service (it has no package-family comparison at all); Go's package query is `windowssandbox.QueryPackageName` (`GetPackageFullName`), which already bounds the allocation (`packageNameMaxLength`), requires a terminating NUL, rejects embedded NULs, and validates UTF-16. (2) `token_user.rs` now bounds the TokenUser query and validates SID pointer/revision/length before copying; Go's `getUserSIDBytes` uses x/sys `Token.GetTokenUser`, rejects nil/invalid SIDs, and `copySIDBytes` copies into owned storage, with `SID.IsValid` bounding revision and subauthority count (length <= 68). (3) `account_name_from_sid` (SidTypeUser + non-empty domain) belongs to the provisioning service; Go's `LookupAccountNameForSID` only resolves the built-in Users alias for group membership. (4) The firewall COM drop guard is already Go's shape: `withFirewallRules` pins the OS thread, `defer`s `ole.CoUninitialize()` immediately after a successful `CoInitializeEx`, and defers every release. (5) The package-lifecycle directory guard is service-only; Go has no package lifecycle. Verified with `go test ./sandbox/windowssandbox/... -count=1`."
    ]
   },
   {

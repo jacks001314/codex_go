@@ -966,6 +966,16 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - The Rust outbound-notification owner guard is N/A in Go: the sink dispatch is synchronous, so there is no queue capacity wait during which the account can change.
 - Verified with `go test ./appserver -count=1`, which shows only the three pre-existing analytics/fingerprint failures.
 
-Status after reconciliation: `1997 complete`, `391 not_applicable`,
-`496 audit_pending`, `265 regression_pending`, `0 partial`,
+### Harden and share Windows sandbox identity helpers (#45533) (Round 813)
+
+- Upstream hardens hand-written unsafe Windows FFI plus the Windows sandbox provisioning service. Go has neither the unsafe SID-copy code nor the service, and its existing helpers already provide the same invariants.
+- Package identity: Rust adds a shared `process_package_family` bounded to 256 UTF-16 units for service client-vs-service comparison. Go has no provisioning service or package-family comparison; its query is `windowssandbox.QueryPackageName` (`GetPackageFullName`), which already bounds the allocation, requires a terminating NUL, rejects embedded NULs, and validates UTF-16.
+- Token user SID: Rust bounds the `TokenUser` query and validates pointer, revision, and length before copying. Go's `getUserSIDBytes` uses x/sys `Token.GetTokenUser`, rejects nil/invalid SIDs, and `copySIDBytes` copies into owned storage; `SID.IsValid` already bounds the revision and subauthority count (so length <= 68).
+- Account name: Rust's `account_name_from_sid` (SidTypeUser, non-empty domain, `DOMAIN\Name`) is service-only. Go's `LookupAccountNameForSID` resolves the built-in Users alias for group membership.
+- Firewall COM: Go's `withFirewallRules` pins the OS thread, defers `ole.CoUninitialize()` immediately after a successful `CoInitializeEx`, and defers every release, which is the drop-guard behavior Rust introduced.
+- Package lifecycle directory guard: service-only; Go has no package lifecycle.
+- Verified with `go test ./sandbox/windowssandbox/... -count=1`.
+
+Status after reconciliation: `1997 complete`, `392 not_applicable`,
+`495 audit_pending`, `265 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
