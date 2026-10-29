@@ -1097,6 +1097,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Added appserver/guardian_routing_cancellation_like_rust_test.go: cancelled context plus full access yields Abort with no fast decision and no model call; a live context approves and records exactly one fast decision.
 - Verified: go test ./appserver -run 'Guardian' -count=1, go test ./appserver -count=1 (three pre-existing unrelated RuntimeRouter failures), go build ./... .
 
-Status after reconciliation: `2007 complete`, `393 not_applicable`,
-`487 audit_pending`, `260 regression_pending`, `2 partial`,
+### Windows sandbox implementations separated from legacy setup modes (Round 828)
+
+## Round 828 - #45737 Separate Windows sandbox implementations from legacy setup modes
+
+- Rust splits WindowsSandboxSetupMode (elevated/unelevated, the setup RPC choice) from the new WindowsSandboxImplementation (elevated/unelevated/mxc) used by allowed_windows_sandbox_implementations, and documents that mxc clients skip the legacy setup/readiness APIs.
+- Go already implements the split in repo commit 0793a694 (ancestor of HEAD): config.WindowsSandboxImplementation with validation, requirements parsing/projection, and ResolveAllowedWindowsSandboxSetupMode comparing the requested setup mode against the implementation allow-list.
+- windowsSandboxModeFromConfigValues reports no legacy setup mode for mxc, so an mxc selection never enters windowsSandbox/setupStart; the app-server projection emits ["elevated","mxc"] and never the setup-only spellings.
+- Verification only this round: go test ./config -run 'Windows' -count=1 and go test ./appserver -run 'WindowsSandbox|ConfigRequirements' -count=1 both pass, backed by config/windows_sandbox_implementation_test.go, config/windows_requirements_test.go, config/startup_warnings_test.go and appserver/windows_sandbox_mxc_test.go.
+
+Status after reconciliation: `2008 complete`, `393 not_applicable`,
+`487 audit_pending`, `259 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

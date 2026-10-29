@@ -13755,9 +13755,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #45737 splits the legacy WindowsSandboxSetupMode (elevated/unelevated, the setup RPC choice) from the new WindowsSandboxImplementation (elevated/unelevated/mxc) carried by allowed_windows_sandbox_implementations, retypes the requirements mapping and its test assertions, and documents that clients selecting mxc skip the legacy setup and readiness APIs and use the standard command/exec streaming path. Go already implements this in repo commit 0793a694, an ancestor of HEAD: config.WindowsSandboxImplementation carries elevated/unelevated/mxc, ParseWindowsSandboxImplementation accepts all three and rejects the setup-only disabled/default spellings plus unknown entries, ConfigRequirements and ConfigRequirementsReadResponse project the field as implementation values (the projection test asserts [\"elevated\",\"mxc\"]), the TOML parser rejects mxc/disabled/default inside [windows].allowed_sandbox_implementations exactly as Rust's TOML enum does, and ResolveAllowedWindowsSandboxSetupMode compares the requested legacy setup mode against the implementation allow-list while windowsSandboxModeFromConfigValues reports no setup mode for mxc, so an mxc selection never enters windowsSandbox/setupStart. Regression coverage already present: config/windows_sandbox_implementation_test.go (parsing, TOML validation, app-server projection), config/windows_requirements_test.go, config/startup_warnings_test.go and appserver/windows_sandbox_mxc_test.go. Verified with go test ./config -run 'Windows' -count=1 and go test ./appserver -run 'WindowsSandbox|ConfigRequirements' -count=1, both passing."
    ]
   },
   {
