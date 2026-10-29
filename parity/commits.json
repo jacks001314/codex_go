@@ -28731,9 +28731,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Equivalent implementation present: tui/tea/plugins.go toggles the selected item of filteredItems(), so a toggle works while the plugin browser search filter is active, and the filter state survives refresh/install flows (TestPluginBrowserSearchToggleAndDetailFlow, TestPluginBrowserCoalescesRapidToggleWrites). Tests: go test ./tui/tea -run Plugin -count=1"
    ]
   },
   {
@@ -29381,9 +29381,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Equivalent implementation present: CombineSelectedCapabilityRoots refreshes a persisted thread-owned root from the matching live/owner-provided root (same root id and environment id) while preserving persisted roots the executor no longer reports; TestCombineSelectedCapabilityRootsRefreshesMatchingLiveRootsLikeRust freezes both halves. Tests: go test ./appserver -run CapabilityRoots -count=1"
    ]
   },
   {
@@ -30307,9 +30307,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Equivalent implementation present: the agent controller registers a spawned child as provisional and calls cleanupProvisionalSpawn when the spawn never completes, discarding the child and closing its edge; TestProvisionalSpawnCleanupDiscardsChildAndClosesEdgeLikeRust covers it. Tests: go test ./appserver -run Provisional -count=1"
    ]
   },
   {
