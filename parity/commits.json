@@ -5676,9 +5676,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/6; needs review: new_active_hook_cell, new_completed_hook_cell, running_status_summary, set_hook_status_message, update_hook_status_message"
+    "Round 761 (audit): #42118 implemented at tui/tea/hook_status.go:42 - // runningHookSummary mirrors HookCell::running_status_summary: only revealed Behaviour: hook activity stays hidden for 300ms, runs independently of the turn, folds into the working row, reflows when long, and collapses concurrent hooks into one summary. Regression contract: tui/tea/hook_status_like_rust_test.go (TestFastHookStaysHiddenLikeRust|TestRunningHookIsIndependentOfTurnLikeRust|TestConcurrentHooksCollapseToSummaryLikeRust); verify with `go test ./tui/tea -run 'TestFastHookStaysHiddenLikeRust|TestRunningHookIsIndependentOfTurnLikeRust|TestConcurrentHooksCollapseToSummaryLikeRust' -count=1`."
    ]
   },
   {
@@ -6638,9 +6638,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: apply_live_thread_settings"
+    "Round 761 (audit): #42386 implemented at appserver/protocol.go:717 - // ThreadEnvironment reports an environment selected by a loaded thread, Behaviour: loaded threads expose their selected environments (environment id, cwd, runtime workspace roots) in app-server responses, independent of connection status. Regression contract: appserver/protocol_test.go (TestThreadEnvironmentsFromRecord); verify with `go test ./appserver -run 'TestThreadEnvironmentsFromRecord' -count=1`."
    ]
   },
   {
@@ -8403,9 +8403,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/11; needs review: footer_hint_key_style, footer_hint_label_style, freeze_snapshot, is_active_writer_error, is_external_writer_view"
+    "Round 761 (audit): #43253 implemented at tui/tea/read_only_thread.go:12 - // Rust parity: codex-rs/tui/src/chatwidget/rendering.rs ExternalWriterNotice Behaviour: a conversation owned by another app opens as a read-only history snapshot: the composer becomes a notice, R retries the resume, and all other input is ignored. Regression contract: tui/tea/read_only_thread_test.go (TestReadOnlyResumeShowsNoticeAndBlocksInput|TestReadOnlyResumeKeysAdvertised); verify with `go test ./tui/tea -run 'TestReadOnlyResumeShowsNoticeAndBlocksInput|TestReadOnlyResumeKeysAdvertised' -count=1`."
    ]
   },
   {
@@ -9267,9 +9267,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/8; needs review: add_server_version_warning, new_server_version_warning, server_codex_home, update_server_version_overview_notice"
+    "Round 761 (audit): #43622 implemented at tui/status/remote_connection.go:75 - // Rust parity: codex-rs/tui/src/status/remote_connection.rs (#43622). Behaviour: a connected server older than the CLI produces a version warning notice that is deduplicated per service identity. Regression contract: tui/status/remote_connection_notice_test.go (TestServerVersionNoticeUsesClientReleasePolicyLikeRust|TestPendingServerVersionNoticeDedupAndServiceIdentity); verify with `go test ./tui/status -run 'TestServerVersionNoticeUsesClientReleasePolicyLikeRust|TestPendingServerVersionNoticeDedupAndServiceIdentity' -count=1`."
    ]
   },
   {
@@ -19075,9 +19075,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 25/44; needs review: ConnectionInner, HttpClientBackend, ProxyRouting, RequestBuilder, StartupSyncHttpClient"
+    "Round 761 (audit): #47389 implemented at network/policy_http.go:50 - // PolicyHTTPDoer executes requests under an application network policy. Behaviour: managed HTTP transports check each destination before route resolution, retain a permit while the body is consumed, guard WebSocket dials, release permits, and surface a non-retryable policy denial. Regression contract: network/policy_http_test.go (TestPolicyHTTPClientGuardsWebSocketDialLikeRust|TestPolicyHTTPDoerEnforcesEndpointScopeLikeRust|TestPolicyHTTPDoerRevocationAbortsBodyReadsLikeRust); verify with `go test ./network -run 'TestPolicyHTTPClientGuardsWebSocketDialLikeRust|TestPolicyHTTPDoerEnforcesEndpointScopeLikeRust|TestPolicyHTTPDoerRevocationAbortsBodyReadsLikeRust' -count=1`."
    ]
   },
   {
@@ -19123,9 +19123,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/29; needs review: ApplicationPolicyLoad, HttpClientTlsConfig, LocalApplicationRequirements, SharedTransport, auth_with_http_client_factory"
+    "Round 761 (audit): #47407 implemented at appserver/application_network.go:19 - // destinationPolicyFromApplicationRequirements mirrors Rust's Behaviour: app-server derives its destination policy from managed application requirements, restricts traffic to allowed domains, and applies it to remote control and runtime-router account clients with auth-owner revocation. Regression contract: appserver/application_network_test.go (TestDestinationPolicyFromApplicationRequirementsLikeRust|TestRuntimeRouterEnforcesApplicationNetworkPolicyLikeRust|TestRemoteControlBackendHonorsApplicationNetworkPolicyLikeRust); verify with `go test ./appserver -run 'TestDestinationPolicyFromApplicationRequirementsLikeRust|TestRuntimeRouterEnforcesApplicationNetworkPolicyLikeRust|TestRemoteControlBackendHonorsApplicationNetworkPolicyLikeRust' -count=1`."
    ]
   },
   {
@@ -21549,9 +21549,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: agents_navigation_available"
+    "Round 761 (audit): #48132 implemented at tui/tea/read_only_thread.go:50 - // agentsNavigationKeyAvailable mirrors Rust BottomPane::agents_navigation_key_available Behaviour: Left opens the command center from a read-only conversation when the session supports one, still falls back to Escape, and is ignored when modified or when a keymap binding claims it. Regression contract: tui/tea/read_only_thread_command_center_test.go (TestReadOnlyViewReturnsToCommandCenterWithLeftOrEscape|TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable|TestReadOnlyViewIgnoresModifiedLeftLikeRust); verify with `go test ./tui/tea -run 'TestReadOnlyViewReturnsToCommandCenterWithLeftOrEscape|TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable|TestReadOnlyViewIgnoresModifiedLeftLikeRust' -count=1`."
    ]
   },
   {
@@ -25368,9 +25368,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 8/11; needs review: AttachRequest, AttachResponse, RpcStatus"
+    "Round 761 (audit): #50113 implemented at cloudclient/client.go:1 - // Package cloudclient is the native gRPC client for the Codex cloud Behaviour: the native gRPC cloud client validates endpoints and credentials, encodes the wire envelope, supports resume and attach, and never retries. Regression contract: cloudclient/client_test.go (TestClientResumeAndAttachLikeRust|TestClientEndpointValidationLikeRust|TestWireEnvelopeLikeRust); verify with `go test ./cloudclient -run 'TestClientResumeAndAttachLikeRust|TestClientEndpointValidationLikeRust|TestWireEnvelopeLikeRust' -count=1`."
    ]
   },
   {

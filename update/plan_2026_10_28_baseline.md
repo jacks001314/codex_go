@@ -591,10 +591,20 @@ entries resolved to a dedicated Go file plus package tests and moved to
 implementation site and the regression test that verifies it; the four
 affected packages pass in a clean archived snapshot.
 
-Status after reconciliation: `1886 complete`, `381 not_applicable`,
-`595 audit_pending`, `287 regression_pending`, `0 partial`,
-`6 blocked_precondition`.
+### Transport policy and read-only view sweep (Round 761)
 
+Eight more cited entries resolved to a dedicated Go file plus package tests and
+moved to `complete`: `#42118` (`tui/tea/hook_status.go`), `#42386`
+(`appserver/protocol.go`), `#43253` and `#48132` (`tui/tea/read_only_thread.go`),
+`#43622` (`tui/status/remote_connection.go`), `#47389`
+(`network/policy_http.go`), `#47407` (`appserver/application_network.go`), and
+`#50113` (`cloudclient/client.go`). Each evidence string names the
+implementation site, the behaviour, and the regression test; the five affected
+packages pass in a clean archived snapshot.
+
+Status after reconciliation: `1894 complete`, `381 not_applicable`,
+`587 audit_pending`, `287 regression_pending`, `0 partial`,
+`6 blocked_precondition`.
 ## Files updated
 
 - `parity/commits.json`: 3155 entries, `rustToInclusive` advanced.
