@@ -7431,9 +7431,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/10; needs review: finish_thread_title_generation, refresh_thread_title_progress_for_time_tick, set_thread_title_generation_pending, sync_thread_title_progress, terminal_title_spinner_frame_at"
+    "Round 762 (audit): #42749 implemented at tui/tea/thread_title_automatic.go:20 - // startAutomaticThreadTitle applies the provisional name and starts one bounded Behaviour: automatic thread titles replace the provisional name only while it is still current, preserve manual renames, clear the provisional name on rename failure, bound the provisional text, and do not show a spinner. Regression contract: tui/tea/thread_title_automatic_test.go (TestAutomaticThreadTitleReplacesProvisionalLikeRust|TestAutomaticThreadTitlePreservesManualRenameLikeRust|TestAutomaticThreadTitleRenameFailureClearsProvisionalLikeRust|TestProvisionalThreadTitleBoundsLikeRust); verify with `go test ./tui/tea -run 'TestAutomaticThreadTitleReplacesProvisionalLikeRust|TestAutomaticThreadTitlePreservesManualRenameLikeRust|TestAutomaticThreadTitleRenameFailureClearsProvisionalLikeRust|TestProvisionalThreadTitleBoundsLikeRust' -count=1`."
    ]
   },
   {
@@ -7791,9 +7791,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/3; needs review: restore_review_context"
+    "Round 762 (audit): #42852 implemented at appserver/guardian_reviewer.go:653 - // incompatible parent checkpoint (Rust #42852). Behaviour: a Guardian session is reset when its parent compacts, a new compaction replaces the seed, oversized parent summaries are bounded, and the encrypted replay cache budget matches Rust. Regression contract: appserver/guardian_compaction_reuse_test.go (TestGuardianSessionRunnerResetAfterParentCompaction|TestGuardianSessionRunnerNewCompactionReplacesSeed|TestGuardianParentCompactionResponseIDBoundsOversizedSummary|TestGuardianParentCompactionUsesEncryptedReplayCacheBudgetLikeRust); verify with `go test ./appserver -run 'TestGuardianSessionRunnerResetAfterParentCompaction|TestGuardianSessionRunnerNewCompactionReplacesSeed|TestGuardianParentCompactionResponseIDBoundsOversizedSummary|TestGuardianParentCompactionUsesEncryptedReplayCacheBudgetLikeRust' -count=1`."
    ]
   },
   {
@@ -7863,9 +7863,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 13/30; needs review: ComposerDraft, QuestionSubmission, current_cursor, flush_pending_input, handles_key_as_editing"
+    "Round 762 (audit): #42889 implemented at app/interactive.go:2517 - // interactiveQuestionEscBack resolves the configured `tui.question_esc_back` Behaviour: `tui.question_esc_back` defaults to enabled and honours an explicit false override, matching Rust Tui::default. Regression contract: app/question_esc_back_test.go (TestInteractiveQuestionEscBackHonorsConfig); verify with `go test ./app -run 'TestInteractiveQuestionEscBackHonorsConfig' -count=1`."
    ]
   },
   {
@@ -16204,9 +16204,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/10; needs review: PluginMeasurementReference, RemoteInstalledPluginsAuthIdentity, RemotePluginMeasurementCache, fetch_measurement_reference_bundle, from_auth"
+    "Round 762 (audit): #46542 implemented at plugin/plugin_measurement_references.go:11 - // MaxCachedMeasurementReferences bounds the thread-scoped measurement cache, Behaviour: authenticated remote plugin measurement references cache per auth identity, reuse immutable versions, retire released files, share concurrent preparations, and report sanitized failures. Regression contract: plugin/plugin_measurement_references_test.go (TestMeasurementCacheReusesAuthenticatedVersionLikeRust|TestMeasurementCacheScopesByAuthIdentityAndRetiresFilesLikeRust|TestMeasurementCacheSharesConcurrentPreparationLikeRust|TestMeasurementCacheReportsSanitizedPreparationFailureLikeRust); verify with `go test ./plugin -run 'TestMeasurementCacheReusesAuthenticatedVersionLikeRust|TestMeasurementCacheScopesByAuthIdentityAndRetiresFilesLikeRust|TestMeasurementCacheSharesConcurrentPreparationLikeRust|TestMeasurementCacheReportsSanitizedPreparationFailureLikeRust' -count=1`."
    ]
   },
   {
@@ -16913,9 +16913,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 10/52; needs review: ActivityTranscriptLines, KEY_CHORD_TIMEOUT, KeymapContextSet, active_activity_ids, active_cell_hyperlink_lines_with"
+    "Round 762 (audit): #46734 implemented at tui/tea/transcript_disclosure.go:1 - package tea Behaviour: transcript activities expose per-activity detail controls: click/keyboard expansion, focus styling, control-column hit testing with truncation, wheel scrolling of expanded details, and no control for short completed execs. Regression contract: tui/tea/transcript_disclosure_like_rust_test.go (TestTranscriptDisclosureClickExpandsLikeRust|TestTranscriptActivityFocusStylesDisclosureLikeRust|TestTranscriptDisclosureControlTruncatesToWidthLikeRust|TestCompletedShortExecCellHasNoDisclosureLikeRust); verify with `go test ./tui/tea -run 'TestTranscriptDisclosureClickExpandsLikeRust|TestTranscriptActivityFocusStylesDisclosureLikeRust|TestTranscriptDisclosureControlTruncatesToWidthLikeRust|TestCompletedShortExecCellHasNoDisclosureLikeRust' -count=1`."
    ]
   },
   {
@@ -17263,9 +17263,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/5; needs review: center_help_lines, group_lines"
+    "Round 762 (audit): #46882 implemented at tui/agents_overview/overview.go:1 - // Package agentsoverview implements the interactive agents-overview dashboard Behaviour: the command center renders grouped headers, a search row above the task list, empty and loading states, notices that replace the footer, and key-chord hints that override notices, with grapheme-safe clipping. Regression contract: tui/agents_overview/command_center_layout_like_rust_test.go (TestAgentCenterHeaderShowsGroupingLikeRust|TestAgentCenterSearchRowAboveTaskListLikeRust|TestAgentCenterNoticeReplacesFooterLikeRust|TestAgentCenterKeyChordHintOverridesNoticeLikeRust); verify with `go test ./tui/agents_overview -run 'TestAgentCenterHeaderShowsGroupingLikeRust|TestAgentCenterSearchRowAboveTaskListLikeRust|TestAgentCenterNoticeReplacesFooterLikeRust|TestAgentCenterKeyChordHintOverridesNoticeLikeRust' -count=1`."
    ]
   },
   {
@@ -23602,9 +23602,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/8; needs review: EditTarget, edit_target, insert_element_at_target, insert_str, insert_str_at_target"
+    "Round 762 (audit): #49357 implemented at tui/tea/composer_paste.go:11 - // insertComposerPaste integrates pasted text into the composer. Behaviour: a multiline paste on a Markdown blockquote line continues the `> ` marker on every pasted line and appends two unquoted newlines, while shell input stays literal and non-blockquote pastes are unchanged. Regression contract: tui/tea/composer_paste_test.go (TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust|TestComposerBlockquotePasteUsesCursorLineAndPreservesSuffixLikeRust|TestComposerBlockquotePasteRejectsPartialMarkerLikeRust|TestComposerBlockquotePasteEmbeddedAnswerStartsNextBlockLikeRust); verify with `go test ./tui/tea -run 'TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust|TestComposerBlockquotePasteUsesCursorLineAndPreservesSuffixLikeRust|TestComposerBlockquotePasteRejectsPartialMarkerLikeRust|TestComposerBlockquotePasteEmbeddedAnswerStartsNextBlockLikeRust' -count=1`."
    ]
   },
   {
@@ -28179,9 +28179,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 6/14; needs review: GLOB_SCAN_PROGRAM, codex_and_launcher_dependencies, critical_dependencies, materialize_temporary_paths, prepare_file_system_policy"
+    "Round 762 (audit): #51831 implemented at sandbox/integrity/policy.go:22 - // PreparedPolicy mirrors Rust `sandbox_integrity::PreparedPolicy` Behaviour: the integrity policy resolves writable roots and deny-read globs once per effective policy, expands home globs against the command environment, and matches aliases and canonical paths with fail-closed path conventions. Regression contract: sandbox/integrity/policy_home_like_rust_test.go (TestPreparePolicyExpandsHomeGlobLikeRust|TestPreparePolicyUsesCommandEnvironmentLikeRust|TestReadDenyMatcherChecksAliasAndCanonicalLikeRust|TestReadDenyMatcherFailsClosedOnIncompatiblePathConventionLikeRust); verify with `go test ./sandbox/integrity -run 'TestPreparePolicyExpandsHomeGlobLikeRust|TestPreparePolicyUsesCommandEnvironmentLikeRust|TestReadDenyMatcherChecksAliasAndCanonicalLikeRust|TestReadDenyMatcherFailsClosedOnIncompatiblePathConventionLikeRust' -count=1`."
    ]
   },
   {

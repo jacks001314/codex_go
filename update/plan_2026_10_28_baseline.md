@@ -602,11 +602,21 @@ moved to `complete`: `#42118` (`tui/tea/hook_status.go`), `#42386`
 implementation site, the behaviour, and the regression test; the five affected
 packages pass in a clean archived snapshot.
 
-Status after reconciliation: `1894 complete`, `381 not_applicable`,
-`587 audit_pending`, `287 regression_pending`, `0 partial`,
-`6 blocked_precondition`.
-## Files updated
+### Thread title, transcript detail, and integrity sweep (Round 762)
 
+Eight more entries cleared the implementation-plus-regression-test bar and
+moved to `complete`: `#42749` (`tui/tea/thread_title_automatic.go`), `#42889`
+(`app/interactive.go`), `#42852` (`appserver/guardian_reviewer.go`), `#46734`
+(`tui/tea/transcript_disclosure.go`), `#46882`
+(`tui/agents_overview/overview.go`), `#49357` (`tui/tea/composer_paste.go`),
+`#51831` (`sandbox/integrity/policy.go`), and `#46542`
+(`plugin/plugin_measurement_references.go`). Evidence records the behaviour and
+the tests that pin it; the six affected packages pass in a clean archived
+snapshot.
+
+Status after reconciliation: `1902 complete`, `381 not_applicable`,
+`579 audit_pending`, `287 regression_pending`, `0 partial`,
+`6 blocked_precondition`.
 - `parity/commits.json`: 3155 entries, `rustToInclusive` advanced.
 - `parity/baseline.json`: verified/target commit, frozen date, plan, blockers.
 - `parity/domains.json`, `parity/contracts/manifest.json`: target commit.
