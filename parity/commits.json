@@ -19159,9 +19159,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/9; needs review: ForkNetwork, with_embedded_network_policy"
+    "Host-owned config.EmbeddedNetworkPolicy (effective+local controllers) is reused by exec Runner and its subagents, the TUI runner/MCP/telemetry/model-list, the MCP CLI store, and appserver RuntimeRouter (Rust activate/bind_config/with_embedded_network_policy).",
+    "Reload, recovery and failed-reload withdrawal reach pre-existing transports; tests: config/embedded_network_policy_test.go, app/application_network_test.go, exec/application_network_test.go, appserver/application_network_test.go.",
+    "Rust ForkNetwork is not applicable: Go worktree runs do not fork an embedded app-server; cloud bootstrap keeps exact-endpoint scoping in config/cloud_config_storage.go."
    ]
   },
   {

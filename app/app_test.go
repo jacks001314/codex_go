@@ -1878,7 +1878,7 @@ command = "codex-go-missing-mcp-test"
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 
-	service, statuses, expectedServers := interactiveMCPRuntime(&cli.RootOptions{})
+	service, statuses, expectedServers := interactiveMCPRuntime(&cli.RootOptions{}, nil)
 	if service == nil {
 		t.Fatal("interactiveMCPRuntime returned nil service for configured MCP server")
 	}
@@ -1937,7 +1937,7 @@ env = { INTERACTIVE_MCP_STARTUP_BLOCK_HELPER = "1" }
 	}
 
 	start := time.Now()
-	service, statuses, expectedServers := interactiveMCPRuntime(&cli.RootOptions{})
+	service, statuses, expectedServers := interactiveMCPRuntime(&cli.RootOptions{}, nil)
 	if service == nil {
 		t.Fatal("interactiveMCPRuntime returned nil service")
 	}

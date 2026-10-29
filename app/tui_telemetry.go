@@ -39,6 +39,7 @@ func buildTUIMetricSink(cfg *config.Config) (tuiMetricSink, func(), bool) {
 		Config:                  cfg,
 		ServiceVersion:          doctor.Version(),
 		DefaultAnalyticsEnabled: true,
+		NetworkPolicy:           cfg.NetworkPolicy(),
 	})
 	if err != nil || provider == nil || provider.Metrics() == nil {
 		return nil, nil, false
@@ -73,12 +74,13 @@ func (t interactiveTUITelemetry) close() {
 // startInteractiveTUITelemetry mirrors Rust's startup orchestration: build the
 // TUI's OTEL provider, record `codex.tui.start`, and return the launch context
 // without the terminal size buckets.
-func startInteractiveTUITelemetry(root *cli.RootOptions, selectionReason string, appServerMode string) interactiveTUITelemetry {
+func startInteractiveTUITelemetry(root *cli.RootOptions, selectionReason string, appServerMode string, owner *config.EmbeddedNetworkPolicy) interactiveTUITelemetry {
 	telemetry := interactiveTUITelemetry{}
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
 		return telemetry
 	}
+	publishHostApplicationNetworkPolicy(owner, loaded)
 	telemetry.exporter = loaded.Otel().MetricsExporter
 	telemetry.analyticsEnabled = loaded.AnalyticsEnabledValue()
 	sink, shutdown, ok := openTUIMetricSink(loaded)

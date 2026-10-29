@@ -149,7 +149,12 @@ type RuntimeServices struct {
 	// StartupCWD is the app-server's startup working directory (Rust
 	// Config.cwd): the process cwd or the `--cd` override. Provider setup
 	// resolves credential paths and project config against it.
-	StartupCWD                   string
+	StartupCWD string
+	// EmbeddedNetworkPolicy is the policy owner supplied by an in-process
+	// embedder. When set, the router publishes into the same effective/local
+	// controllers and its transports observe the embedder's reloads (Rust
+	// `ConfigManager::with_embedded_network_policy`).
+	EmbeddedNetworkPolicy        *config.EmbeddedNetworkPolicy
 	LocalEnvironmentEnabled      *bool
 	WorkspaceCodexPluginsEnabled *bool
 	WaitForEnvironmentToolConfig *tool.WaitForEnvironmentToolConfig
@@ -264,6 +269,10 @@ type RuntimeRouterOptions struct {
 	// StartupCWD is the app-server's startup working directory (Rust
 	// Config.cwd); empty means the process working directory.
 	StartupCWD string
+	// EmbeddedNetworkPolicy is the in-process embedder's policy owner. The
+	// router reuses its controllers instead of creating private ones (Rust
+	// `ConfigManager::with_embedded_network_policy`).
+	EmbeddedNetworkPolicy *config.EmbeddedNetworkPolicy
 	// EnvironmentProviderSnapshot pre-registers the executors configured in
 	// environments.toml (or the CODEX_EXEC_SERVER_URL fallback), mirroring Rust
 	// EnvironmentManager::from_codex_home.
@@ -923,8 +932,8 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		agentRegistries:         map[string]*agent.Registry{},
 		agentActivity:           map[string]chan string{},
 		agentMessages:           map[string][]any{},
-		networkPolicy:           network.NewNetworkPolicyController(),
-		localNetworkPolicy:      network.NewNetworkPolicyController(),
+		networkPolicy:           embeddedEffectiveNetworkPolicy(services.EmbeddedNetworkPolicy),
+		localNetworkPolicy:      embeddedLocalNetworkPolicy(services.EmbeddedNetworkPolicy),
 		messageBoardHandles:     map[string]agentboard.Board{},
 	}
 	router.allowedSymlinkedCodexHome = allowedSymlinkedCodexHomeForConfigService(configService)
@@ -1763,6 +1772,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		VoiceMetrics:          runtimeMetrics,
 		DefaultCWD:            codexHome,
 		StartupCWD:            startupCWD,
+		EmbeddedNetworkPolicy: embeddedNetworkPolicyFromOptions(options),
 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
 	}

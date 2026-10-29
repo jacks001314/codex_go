@@ -404,7 +404,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	if interactiveRemoteEndpointIsLocal(endpoint) {
 		appServerMode = "local_daemon"
 	}
-	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, endpoint, interactiveRemoteEndpointIsExplicitRemote(root)), appServerMode)
+	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, endpoint, interactiveRemoteEndpointIsExplicitRemote(root)), appServerMode, nil)
 	defer tuiTelemetry.close()
 	// Rust #39082/#44746: query remote project config layers before starting a
 	// thread and persist accepted trust through config/batchWrite on the remote

@@ -26,6 +26,35 @@ func destinationPolicyFromApplicationRequirements(application *config.Applicatio
 	return config.DestinationPolicyForApplicationRequirements(application)
 }
 
+// embeddedEffectiveNetworkPolicy reuses the in-process embedder's controller
+// when it supplied one (Rust `ConfigManager::with_embedded_network_policy`).
+func embeddedEffectiveNetworkPolicy(owner *config.EmbeddedNetworkPolicy) *network.NetworkPolicyController {
+	if owner != nil {
+		if controller := owner.EffectiveController(); controller != nil {
+			return controller
+		}
+	}
+	return network.NewNetworkPolicyController()
+}
+
+// embeddedLocalNetworkPolicy mirrors the effective helper for the pre-cloud
+// login/cloud-bootstrap controller.
+func embeddedLocalNetworkPolicy(owner *config.EmbeddedNetworkPolicy) *network.NetworkPolicyController {
+	if owner != nil {
+		if controller := owner.LocalController(); controller != nil {
+			return controller
+		}
+	}
+	return network.NewNetworkPolicyController()
+}
+
+func embeddedNetworkPolicyFromOptions(options *RuntimeRouterOptions) *config.EmbeddedNetworkPolicy {
+	if options == nil {
+		return nil
+	}
+	return options.EmbeddedNetworkPolicy
+}
+
 // applicationNetworkRequirements returns the effective managed application
 // requirements, or nil when the host has none.
 func (r *RuntimeRouter) applicationNetworkRequirements() *config.ApplicationRequirements {

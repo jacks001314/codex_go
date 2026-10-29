@@ -34,6 +34,7 @@ import (
 	"codex_go/features"
 	"codex_go/mcp"
 	modelpkg "codex_go/model"
+	codexnetwork "codex_go/network"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
 	"codex_go/protocol"
@@ -1147,6 +1148,14 @@ func isRealTerminal(value any) bool {
 
 func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	state := interactiveUIState(root)
+	// The embedded TUI owns one policy pair for its lifetime (Rust
+	// `EmbeddedNetworkPolicy`): the runner's model/executor clients and the MCP
+	// runtime all bind it, so a later config load or account change reaches the
+	// transports that already exist.
+	hostNetworkPolicy := config.NewEmbeddedNetworkPolicy()
+	if err := hostNetworkPolicy.LoadLocal(auth.DefaultCodexHome()); err != nil {
+		slog.Warn("failed to load local application network requirements", "error", err)
+	}
 	// Rust #51510: the TUI bootstrap carries the live local settings into the new
 	// thread (app/new_session.rs load_new_session_config plus
 	// session_lifecycle.rs `self.local_settings = local_settings`). A failed
@@ -1157,7 +1166,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	settings = interactiveScreenReaderAnimationSettings(settings)
 	// Rust #53859: the embedded TUI records one codex.tui.start observation and
 	// keeps its size-free launch tags for later terminal-size observations.
-	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, nil, false), "in_process")
+	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, nil, false), "in_process", hostNetworkPolicy)
 	defer tuiTelemetry.close()
 	accountDisplay, workspaceDisplay, hasChatGPTAccount, requiresOpenAIAuth := interactiveStatusAccount(root)
 	state.AccountDisplay = accountDisplay
@@ -1182,10 +1191,16 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	if err != nil {
 		return err
 	}
+	if runner != nil {
+		runner.NetworkPolicy = hostNetworkPolicy
+	}
+	if sideRunner != nil {
+		sideRunner.NetworkPolicy = hostNetworkPolicy
+	}
 	sideCoordinator := newInteractiveLocalSideCoordinator(store)
 	defer sideCoordinator.CloseAll()
 	pluginService := interactivePluginService()
-	mcpService, mcpStatuses, mcpExpectedServers := interactiveMCPRuntime(root)
+	mcpService, mcpStatuses, mcpExpectedServers := interactiveMCPRuntime(root, hostNetworkPolicy)
 	if runner != nil && mcpService != nil {
 		runner.MCPService = mcpService
 	}
@@ -1342,7 +1357,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		// Rust #51253: the server requirements the model catalog is constrained
 		// with, read by interactiveLoadSettings alongside the other preferences.
 		ServiceTierRequirements: settings.ServiceTierRequirements,
-		OnListModels:            interactiveOnListModels(root, hasChatGPTAccount),
+		OnListModels:            interactiveOnListModels(root, hasChatGPTAccount, hostNetworkPolicy),
 		Personality:             settings.Personality,
 		Notifications:           settings.Notifications,
 		NotificationMethod:      settings.NotificationMethod,
@@ -1649,12 +1664,13 @@ func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State
 	return threadID, nil
 }
 
-func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycell.McpServerStatus, []string) {
+func interactiveMCPRuntime(root *cli.RootOptions, owner *config.EmbeddedNetworkPolicy) (*mcp.MCPService, []historycell.McpServerStatus, []string) {
 	codexHome := auth.DefaultCodexHome()
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
 		return nil, nil, nil
 	}
+	publishHostApplicationNetworkPolicy(owner, loaded)
 	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
 	var runtimeAuth *mcp.RuntimeAuth
 	if resolved, resolveErr := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve(); resolveErr == nil && resolved != nil {
@@ -1663,6 +1679,9 @@ func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycel
 	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(loaded.Values, codexHome, runtimeAuth, loaded.Requirements)
 	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
 		return nil, nil, nil
+	}
+	if owner != nil {
+		runtimeConfig.HTTPClient = codexnetwork.PolicyHTTPClient(owner.Effective(), codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0))
 	}
 	service := mcp.NewMCPService(runtimeConfig)
 	configuredStatuses := service.ConfiguredStatuses()
@@ -1769,7 +1788,7 @@ func pickerMetricsAuthMode(resolved *auth.ResolvedAuth) string {
 	return "chatgpt"
 }
 
-func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool, owner *config.EmbeddedNetworkPolicy) func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 	var (
 		mu       sync.Mutex
 		cacheCWD string
@@ -1779,7 +1798,7 @@ func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func
 		cwd = strings.TrimSpace(cwd)
 		mu.Lock()
 		if cached == nil || cacheCWD != cwd {
-			source, err := newInteractiveModelListSource(root, hasChatGPTAccount, cwd)
+			source, err := newInteractiveModelListSource(root, hasChatGPTAccount, cwd, owner)
 			if err != nil {
 				mu.Unlock()
 				return nil, err
@@ -1808,7 +1827,7 @@ type interactiveModelListSource struct {
 	apiKeyAuth bool
 }
 
-func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool, cwd string) (*interactiveModelListSource, error) {
+func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool, cwd string, owner *config.EmbeddedNetworkPolicy) (*interactiveModelListSource, error) {
 	codexHome := auth.DefaultCodexHome()
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveModelListLoadOptions(root, cwd))
 	if err != nil {
@@ -1817,6 +1836,7 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 	if loaded == nil {
 		return nil, errors.New("load model catalog config: empty configuration")
 	}
+	publishHostApplicationNetworkPolicy(owner, loaded)
 	providerInfo, err := modelpkg.ProviderInfoFromConfig(loaded.Values)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model provider: %w", err)
@@ -1845,7 +1865,7 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 	if catalog := modelpkg.ModelsCatalogFromConfigValues(loaded.Values); catalog != nil {
 		base = catalog
 	}
-	endpoint := modelpkg.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
+	endpoint := modelpkg.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, hostPolicyHTTPClient(owner, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0)))
 	endpoint.CatalogURL = strings.TrimSpace(providerInfo.ModelCatalogURL)
 	manager := modelpkg.NewRemoteModelsManagerWithOptions(&modelpkg.RemoteModelsManagerOptions{
 		ModelCatalog:                    base,

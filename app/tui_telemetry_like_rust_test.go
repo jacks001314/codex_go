@@ -61,7 +61,7 @@ func TestInteractiveTUIStartTelemetryLikeRust(t *testing.T) {
 	}
 	t.Cleanup(func() { openTUIMetricSink = previousSink })
 
-	telemetry := startInteractiveTUITelemetry(&cli.RootOptions{}, "auto_start_disabled", "in_process")
+	telemetry := startInteractiveTUITelemetry(&cli.RootOptions{}, "auto_start_disabled", "in_process", nil)
 	var start *recordingTUISinkCall
 	for index := range sink.all {
 		if sink.all[index].name == codextui.TUIStartMetric {

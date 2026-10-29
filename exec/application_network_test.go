@@ -114,3 +114,47 @@ func TestExecPolicyHTTPClientForConfigEnforcesApplicationPolicyLikeRust(t *testi
 		t.Fatal("policyHTTPClientForConfig(nil) returned nil")
 	}
 }
+
+// The in-process TUI and worktree hosts reuse one Runner policy across config
+// reloads; subagent runners inherit the same owner so their config loads keep
+// publishing into the live generation.
+func TestExecRunnerKeepsHostPolicyAcrossConfigRebuildsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte(`
+[application.network]
+`), 0o600); err != nil {
+		t.Fatalf("write requirements.toml: %v", err)
+	}
+	owner := config.NewEmbeddedNetworkPolicy()
+	restricted, err := config.LoadEffectiveWithOptions(home, nil)
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions() error = %v", err)
+	}
+	restricted.ApplicationNetworkPolicyOwner = owner
+	publishApplicationNetworkPolicy(restricted)
+	live := restricted.NetworkPolicy()
+	if _, err := live.Acquire(execTestURL(t, "https://anything.example/v1")); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("restricted policy error = %v", err)
+	}
+
+	unrestricted, err := config.LoadEffectiveWithOptions(t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions(unrestricted) error = %v", err)
+	}
+	unrestricted.ApplicationNetworkPolicyOwner = owner
+	publishApplicationNetworkPolicy(unrestricted)
+	if _, err := live.Acquire(execTestURL(t, "https://anything.example/v1")); err != nil {
+		t.Fatalf("existing policy after reload error = %v", err)
+	}
+
+	runner := &Runner{NetworkPolicy: owner}
+	clone := runner.cloneForSubagent()
+	if clone == nil || clone.NetworkPolicy != owner {
+		t.Fatal("a subagent runner did not inherit the host policy owner")
+	}
+
+	owner.Unavailable()
+	if _, err := live.Acquire(execTestURL(t, "https://anything.example/v1")); !errors.Is(err, network.ErrNetworkPolicyUnavailable) {
+		t.Fatalf("existing policy after failed reload error = %v, want unavailable", err)
+	}
+}

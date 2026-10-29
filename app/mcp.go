@@ -873,20 +873,27 @@ func cloneStringMap(values map[string]string) map[string]string {
 type mcpCLIStore struct {
 	codexHome  string
 	httpClient *http.Client
+	// policy is the host-owned live policy every config this store loads
+	// republishes into (Rust `EmbeddedNetworkPolicy`), so the clients already
+	// built from an earlier load observe later reloads and failures.
+	policy *config.EmbeddedNetworkPolicy
 }
 
 func newMCPCLIStore(codexHome string) *mcpCLIStore {
-	return &mcpCLIStore{codexHome: codexHome}
+	policy := config.NewEmbeddedNetworkPolicy()
+	_ = policy.LoadLocal(codexHome)
+	return &mcpCLIStore{codexHome: codexHome, policy: policy}
 }
 
 func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
 	loaded, err := config.LoadEffective(s.codexHome, overrides, nil, nil)
 	if err != nil {
+		s.policy.Unavailable()
 		return nil, err
 	}
 	// The host publishes its application network policy for the config and every
 	// client it builds from that config binds it.
-	publishApplicationNetworkPolicy(loaded)
+	publishHostApplicationNetworkPolicy(s.policy, loaded)
 	s.httpClient = policyHTTPClient(loaded, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0))
 	return mcpCLIConfigFromValues(loaded.Values), nil
 }
@@ -894,9 +901,10 @@ func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
 func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcpCLIConfig, error) {
 	bootstrap, err := config.LoadEffective(s.codexHome, overrides, nil, nil)
 	if err != nil {
+		s.policy.Unavailable()
 		return nil, err
 	}
-	publishApplicationNetworkPolicy(bootstrap)
+	publishHostApplicationNetworkPolicy(s.policy, bootstrap)
 	s.httpClient = policyHTTPClient(bootstrap, codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0))
 	var loader *config.CloudConfigLoader
 	if bootstrap.RequiresRemoteConfig() {
@@ -919,7 +927,7 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 		loader = config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
 			loadCtx, cancel := context.WithTimeout(contextOrBackground(ctx), 15*time.Second)
 			defer cancel()
-			policy := publishApplicationNetworkPolicy(bootstrap)
+			policy := publishHostApplicationNetworkPolicy(s.policy, bootstrap)
 			return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
 				CodexHome:          s.codexHome,
 				BaseURL:            bootstrap.ChatGPTBaseURL(),
@@ -943,7 +951,7 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 	if err != nil {
 		return nil, err
 	}
-	publishApplicationNetworkPolicy(loaded)
+	publishHostApplicationNetworkPolicy(s.policy, loaded)
 	s.httpClient = policyHTTPClient(loaded, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0))
 	return mcpCLIConfigFromValues(loaded.Values), nil
 }

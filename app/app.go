@@ -1395,6 +1395,16 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	if err != nil {
 		return err
 	}
+	// The app-server owns one policy pair for its lifetime (Rust
+	// ConfigManager::with_embedded_network_policy). Caller-provided transports
+	// and the router publish into the same controllers, so a requirements
+	// reload or failure reaches clients that already exist.
+	networkOwner := config.NewEmbeddedNetworkPolicy()
+	if err := networkOwner.LoadLocal(codexHome); err != nil {
+		slog.Warn("failed to load local application network requirements", "error", err)
+	}
+	networkOwner.Activate(loadedConfig)
+	runtimeOptions.EmbeddedNetworkPolicy = networkOwner
 	// Rust Config.cwd is the app-server startup directory: the `--cd` override
 	// when present, otherwise the process working directory.
 	if root != nil {

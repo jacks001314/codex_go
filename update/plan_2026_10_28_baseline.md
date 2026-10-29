@@ -2804,6 +2804,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Not carried: `available_in_plans` (Go's `ModelInfo` has no plan-type field; access comes from the runtime catalog payload) and the catalog-embedded `model_messages`/collaboration-mode text with its Rust scenario snapshots. At the `7ac60816` baseline the canonical `collaboration-mode-templates/templates/default.md` is unchanged, and `TestRustCollaborationModeTemplatesMatchGo` keeps Go pinned to it.
 - Verified with `go build ./...`, `go test ./model -count=1` and `go test ./parity -run 'CollaborationMode|TestAlignment' -count=1`.
 
-Status after reconciliation: `2119 complete`, `441 not_applicable`,
-`376 audit_pending`, `210 regression_pending`, `3 partial`,
+### Shared embedded network policy across CLI and TUI (Round 958)
+
+- Rust #47411 makes the embedded network policy one host-owned object: startup activates the effective and local controllers once and hands the same pair to exec, the TUI, the MCP runtime and the app-server runtime, so reloads and load failures can no longer desynchronise them (#47411, complete).
+- `config/embedded_network_policy.go:33` adds `EmbeddedNetworkPolicy` with `LoadLocal`, `Activate`, `BindConfig`, `Invalidate` and `Unavailable`; `config/config.go:43` adds `ApplicationNetworkPolicyOwner`, and `config/network_policy.go:81` (`BindApplicationNetworkPolicy`) reuses the host owner instead of building a private controller on each reload.
+- `exec/application_network.go` and `app/application_network.go:37` (`publishHostApplicationNetworkPolicy`) publish through that owner, `exec.Runner.NetworkPolicy` is inherited by subagents, and the invalidate path revokes outstanding operations when a config load fails; `appserver/application_network.go:51` reuses the embedder's effective and local controllers rather than creating private ones.
+- `ForkNetwork` is not applicable: Go has no fork/exec hand-off of the network policy.
+- Tests: `config/embedded_network_policy_test.go`, `app/application_network_test.go`, `exec/application_network_test.go`, `appserver/application_network_test.go`.
+- Verified with `go build ./...`; `go test ./config ./appserver ./exec -run 'EmbeddedNetworkPolicy|HostPolicy|LivePolicy|ApplicationNetworkPolicy' -count=1`; `go test ./app -run 'ApplicationNetworkPolicy|LivePolicy|MCPCLIStore|ChatGPTLoginOAuthOptions|InteractiveAuthOnboarding' -count=1`; and `go test ./otelinit ./network -count=1`.
+
+Status after reconciliation: `2120 complete`, `441 not_applicable`,
+`375 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

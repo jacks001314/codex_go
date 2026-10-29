@@ -123,7 +123,12 @@ type Runner struct {
 	MaxToolTurns     int
 	UseResponsesAPI  bool
 	HTTPClient       model.HTTPDoer
-	Now              func() time.Time
+	// NetworkPolicy is the host-owned live application policy. A host that runs
+	// several turns shares one owner so every config load republishes into the
+	// generation its existing clients already hold (Rust
+	// `EmbeddedNetworkPolicy`). Nil keeps the per-run policy.
+	NetworkPolicy *config.EmbeddedNetworkPolicy
+	Now           func() time.Time
 	// UnifiedExecEnvironments carries the executors configured in
 	// environments.toml (or the CODEX_EXEC_SERVER_URL fallback) for a host that
 	// runs turns in-process. Rust builds an EnvironmentManager from CODEX_HOME in
@@ -194,6 +199,7 @@ func (r *Runner) cloneForSubagent() *Runner {
 		MaxToolTurns:            r.MaxToolTurns,
 		UseResponsesAPI:         r.UseResponsesAPI,
 		HTTPClient:              r.HTTPClient,
+		NetworkPolicy:           r.NetworkPolicy,
 		Now:                     r.Now,
 		UnifiedExecEnvironments: append([]tool.UnifiedExecEnvironment(nil), r.UnifiedExecEnvironments...),
 		goalMu:                  &sync.Mutex{},
@@ -246,7 +252,13 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		StrictConfig:    req.Root.StrictConfig || req.Exec.StrictConfig,
 	})
 	if err != nil {
+		if r.NetworkPolicy != nil {
+			r.NetworkPolicy.Unavailable()
+		}
 		return nil, err
+	}
+	if r.NetworkPolicy != nil {
+		cfg.ApplicationNetworkPolicyOwner = r.NetworkPolicy
 	}
 	// The run publishes the application network policy its own transports bind
 	// (Rust EmbeddedNetworkPolicy::activate).

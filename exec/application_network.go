@@ -24,7 +24,13 @@ func publishApplicationNetworkPolicy(cfg *config.Config) *network.NetworkPolicyC
 	if cfg == nil {
 		return nil
 	}
-	controller := cfg.BindApplicationNetworkPolicy()
+	var controller *network.NetworkPolicyController
+	if owner := cfg.ApplicationNetworkPolicyOwner; owner != nil {
+		owner.Activate(cfg)
+		controller = owner.EffectiveController()
+	} else {
+		controller = cfg.BindApplicationNetworkPolicy()
+	}
 	// Rust #47408: the AWS SDK's credential and region requests use the
 	// application client, so the run installs the policy-bound one.
 	if cfg.RestrictsApplicationTraffic() {

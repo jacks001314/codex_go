@@ -40,6 +40,12 @@ type Config struct {
 	// generation publishes, so a transport can tell whether binding it would
 	// restrict anything. It is never serialized.
 	ApplicationDestinationPolicy *network.DestinationPolicy `json:"-"`
+	// ApplicationNetworkPolicyOwner is the host-owned live policy this config
+	// was resolved under (Rust `EmbeddedNetworkPolicy`). Configs rebuilt by the
+	// same host carry it forward so existing clients observe policy reloads and
+	// failures instead of each load creating a private generation. It is never
+	// serialized.
+	ApplicationNetworkPolicyOwner *EmbeddedNetworkPolicy `json:"-"`
 	// isProjectless records that configuration discovery found no project-root
 	// marker, no Git checkout root and no project-local config directory
 	// (Rust #46328 ConfigLayerStack::is_projectless). Discovery that was

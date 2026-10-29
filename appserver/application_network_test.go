@@ -291,3 +291,30 @@ func TestRuntimeRouterEnforcesApplicationNetworkPolicyLikeRust(t *testing.T) {
 		t.Fatal("an unrestricted policy left the AWS application client installed")
 	}
 }
+
+// Rust parity: ConfigManager::with_embedded_network_policy replaces the
+// router's private controllers with the embedder's pair, so caller-owned and
+// in-process transports observe the same generation.
+func TestRuntimeRouterUsesEmbeddedNetworkPolicyLikeRust(t *testing.T) {
+	owner := config.NewEmbeddedNetworkPolicy()
+	router := NewRuntimeRouter(RuntimeServices{EmbeddedNetworkPolicy: owner})
+	if router.networkPolicy != owner.EffectiveController() {
+		t.Fatal("the router did not reuse the embedder's effective controller")
+	}
+	if router.localNetworkPolicy != owner.LocalController() {
+		t.Fatal("the router did not reuse the embedder's local controller")
+	}
+
+	cfg := &config.Config{Requirements: &config.ConfigRequirements{Application: &config.ApplicationRequirements{
+		Network: &config.ApplicationNetworkRequirements{Enabled: true},
+	}}}
+	owner.Activate(cfg)
+	policy := router.applicationNetworkPolicyHandle()
+	if _, err := policy.Acquire(appServerTestURL(t, "https://denied.example/v1")); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("router policy after activation error = %v", err)
+	}
+	owner.Activate(&config.Config{})
+	if _, err := policy.Acquire(appServerTestURL(t, "https://anything.example/v1")); err != nil {
+		t.Fatalf("router policy after unrestricted reload error = %v", err)
+	}
+}

@@ -23,8 +23,22 @@ func publishApplicationNetworkPolicy(cfg *config.Config) network.NetworkPolicy {
 	if cfg == nil {
 		return network.UnmanagedNetworkPolicy()
 	}
+	if owner := cfg.ApplicationNetworkPolicyOwner; owner != nil {
+		return owner.Activate(cfg)
+	}
 	cfg.BindApplicationNetworkPolicy()
 	return cfg.NetworkPolicy()
+}
+
+// publishHostApplicationNetworkPolicy publishes through the host-owned policy
+// when the caller has one, so every config the host loads shares the same live
+// generation (Rust `EmbeddedNetworkPolicy::activate`). Without an owner it
+// keeps the per-config behavior used by one-shot commands.
+func publishHostApplicationNetworkPolicy(owner *config.EmbeddedNetworkPolicy, cfg *config.Config) network.NetworkPolicy {
+	if owner != nil {
+		return owner.Activate(cfg)
+	}
+	return publishApplicationNetworkPolicy(cfg)
 }
 
 // policyHTTPClient publishes the host policy for the config when it has none yet
@@ -43,4 +57,15 @@ func policyHTTPClient(cfg *config.Config, client *http.Client) *http.Client {
 		return client
 	}
 	return network.PolicyHTTPClient(cfg.NetworkPolicy(), client)
+}
+
+// hostPolicyHTTPClient binds the host owner's live policy to a client even when
+// the current generation is unrestricted, so a later reload that restricts
+// destinations also reaches this client. A nil owner keeps the per-config
+// behavior.
+func hostPolicyHTTPClient(owner *config.EmbeddedNetworkPolicy, client *http.Client) *http.Client {
+	if owner == nil {
+		return client
+	}
+	return network.PolicyHTTPClient(owner.Effective(), client)
 }

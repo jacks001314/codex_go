@@ -78,6 +78,10 @@ func (c *Config) SetApplicationDestinationPolicy(policy network.DestinationPolic
 // `EmbeddedNetworkPolicy::activate`). The effective requirements come from the
 // config's requirements snapshot, which is nil when the host has none.
 func (c *Config) BindApplicationNetworkPolicy() *network.NetworkPolicyController {
+	if c != nil && c.ApplicationNetworkPolicyOwner != nil {
+		c.ApplicationNetworkPolicyOwner.Activate(c)
+		return c.ApplicationNetworkPolicyOwner.EffectiveController()
+	}
 	controller := network.NewNetworkPolicyController()
 	if c == nil {
 		return controller
