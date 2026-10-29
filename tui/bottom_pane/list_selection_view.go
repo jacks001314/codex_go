@@ -19,6 +19,17 @@ type ListSelectionToggle struct {
 	Placeholder string
 }
 
+// ListSelectionSecondaryAction is a second way to accept the highlighted row,
+// sharing its dismissal behavior (Rust #45831 SelectionSecondaryAction).
+type ListSelectionSecondaryAction struct {
+	// Key is the single-character shortcut that triggers the action.
+	Key string
+	// Run performs the action; nil keeps the row's footer hint only.
+	Run func()
+	// FooterHint replaces the view footer while this row is selected.
+	FooterHint string
+}
+
 type ListSelectionItem struct {
 	ID                   string
 	Label                string
@@ -32,6 +43,7 @@ type ListSelectionItem struct {
 	Default              bool
 	DismissOnSelect      bool
 	Toggle               *ListSelectionToggle
+	SecondaryAction      *ListSelectionSecondaryAction
 }
 
 type ListSelectionResult struct {
@@ -217,6 +229,35 @@ func (v *ListSelectionView) AcceptSelected() (ListSelectionResult, bool) {
 	return result, true
 }
 
+// AcceptSecondarySelected runs the selected row's secondary action, mirroring
+// Rust #45831 SelectionActionKind::Secondary: a disabled row or a row without a
+// secondary action accepts nothing.
+func (v *ListSelectionView) AcceptSecondarySelected() (ListSelectionResult, bool) {
+	actual := v.SelectedActualIndex()
+	if actual < 0 || actual >= len(v.Items) || !selectionItemEnabled(v.Items[actual]) || v.Items[actual].SecondaryAction == nil {
+		return ListSelectionResult{}, false
+	}
+	item := v.Items[actual]
+	if item.SecondaryAction.Run != nil {
+		item.SecondaryAction.Run()
+	}
+	result := ListSelectionResult{Item: item, ActualIndex: actual, Accepted: true}
+	v.Completion = &result
+	return result, true
+}
+
+// ActiveFooterHint reports the hint for the selected row: a secondary action's
+// hint wins over the view footer, matching Rust active_footer_hint.
+func (v *ListSelectionView) ActiveFooterHint() string {
+	if v == nil {
+		return ""
+	}
+	if item, ok := v.SelectedItem(); ok && item.SecondaryAction != nil {
+		return item.SecondaryAction.FooterHint
+	}
+	return v.FooterHint
+}
+
 func (v *ListSelectionView) Cancel() (ListSelectionResult, bool) {
 	if v == nil || !v.AllowCancel {
 		return ListSelectionResult{}, false
@@ -256,6 +297,15 @@ func (v *ListSelectionView) HandleKey(key string) (ListSelectionResult, bool) {
 			v.ApplyFilter()
 		}
 	default:
+		// Rust #45831: searchable views swallow plain characters, so the
+		// secondary shortcut only applies to non-searchable lists.
+		if !v.Searchable && len([]rune(key)) == 1 {
+			if item, ok := v.SelectedItem(); ok &&
+				item.SecondaryAction != nil &&
+				strings.EqualFold(strings.TrimSpace(item.SecondaryAction.Key), key) {
+				return v.AcceptSecondarySelected()
+			}
+		}
 		if v.Searchable && len([]rune(key)) == 1 {
 			v.SearchQuery += key
 			v.ApplyFilter()
@@ -299,8 +349,8 @@ func (v *ListSelectionView) Rows(width int) []string {
 	if strings.TrimSpace(v.FooterNote) != "" {
 		rows = append(rows, v.FooterNote)
 	}
-	if strings.TrimSpace(v.FooterHint) != "" {
-		rows = append(rows, v.FooterHint)
+	if hint := v.ActiveFooterHint(); strings.TrimSpace(hint) != "" {
+		rows = append(rows, hint)
 	}
 	return rows
 }
