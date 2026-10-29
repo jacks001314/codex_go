@@ -13299,9 +13299,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Upstream change is release tooling for the Python SDK: `sdk/python/scripts/update_sdk_artifacts.py` gains a directory source for `stage-runtime` and `.github/workflows/rust-release-windows.yml` stages the wheel from the package directory. The Go repository has no `sdk/` tree, no `update_sdk_artifacts.py`/`stage-runtime` command, and no Python wheel staging in `.github/workflows/release.yml` (workflows are macOS/SQLite platform gates, parity baseline, and release). Nothing exists to port or regress, so the round is recorded as not applicable rather than a silent skip."
    ]
   },
   {
@@ -13323,9 +13323,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/7; needs review: AccountNotification, CachedWorkspaceRouting, send_account_notification"
+    "The Go app-server already exposed `account/read.workspaceRouting` (`auth.WorkspaceRouting`/`AccountRoutingOverride` on `auth.GetAccountResponse`), discovered and cached `accounts/check` routing per credential/owner generation (`appserver/workspace_routing.go`), validated discovered origins against required `chatgpt_base_url`, surfaced discovery errors with retry on the next read, notified newly initialized connections after routing was ready, and discarded stale results on owner/config changes. The one missing behaviour was Rust #45529's selection gate: a saved token-backed ChatGPT login without a selected workspace must report `workspaceRouting: null` without calling `accounts/check`, because Rust's `get_account_id()` returns `None` there. Go returned `workspace routing requires a ChatGPT account id` instead. `workspaceRoutingForAccountRead` now returns nil routing for chatgpt/chatgptAuthTokens without an account id and keeps the error for personal-access-token auth, whose id Rust always materializes. Regressions: `TestRuntimeRouterGetAccountWithoutSelectedWorkspaceReturnsNullRoutingLikeRust` (null routing, zero accounts/check calls) and `TestWorkspaceRoutingRequiresPersonalAccessTokenAccountIDLikeRust`. The Rust notification-queue owner guard is N/A in Go: notifications dispatch synchronously to the sink with no bounded outbound queue to wait on. Verified with `go test ./appserver -count=1` (only the three known analytics/fingerprint failures, unchanged from a clean tree) plus the targeted workspace-routing suite."
    ]
   },
   {

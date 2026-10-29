@@ -951,6 +951,21 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Coverage: `execserver/windows_mxc_test.go` asserts the pipe, TTY, managed-network and network-proxy shapes fail closed, the new argv0/private-desktop message, and that the advertised capability serializes as `"windowsMxc":false`.
 - Verified with `go test ./execserver -count=1`, `go test ./sandbox/mxc -count=1`, `go test ./tool -count=1`, and `go build ./...`.
 
-Status after reconciliation: `1996 complete`, `390 not_applicable`,
-`498 audit_pending`, `265 regression_pending`, `0 partial`,
+### Stage Python runtime wheels from package directories (#45526) (Round 811)
+
+- Rust #45526 is Python release tooling: `sdk/python/scripts/update_sdk_artifacts.py` accepts a package directory for `stage-runtime`, validates layout, rejects overlapping/symlinked/non-regular entries, and `rust-release-windows.yml` stages the runtime wheel from that directory.
+- The Go repository has no `sdk/` tree, no `update_sdk_artifacts.py`, and no `stage-runtime` command; `.github/workflows` only carries `macos-platform-gates.yml`, `sqlite-platform-gates.yml`, `parity-baseline.yml`, and `release.yml`, none of which stage Python wheels.
+- Recorded as not applicable: there is no artifact-staging code path in Go to change, and no regression target to compare against.
+
+### Expose selected workspace routing in app-server account reads (#45529) (Round 812)
+
+- The app-server half was already implemented: `account/read` carries `workspaceRouting` (workspace id, resolved HTTPS origin, `us`/`us_cr`/`NO_CONSTRAINT` override), `appserver/workspace_routing.go` discovers through `accounts/check` and caches per credential and owner generation, validates discovered origins against a required `chatgpt_base_url`, returns discovery errors that a later read retries, notifies initialized connections once routing is ready, and discards results from a superseded owner or configuration.
+- One gap remained in the selection gate: Rust skips discovery entirely when `get_account_id()` is `None`, so a saved ChatGPT login without a selected workspace returns `workspaceRouting: null` and never calls `accounts/check`. Go reported `workspace routing requires a ChatGPT account id` for that credential.
+- `workspaceRoutingForAccountRead` now returns nil routing for `chatgpt`/`chatgptAuthTokens` credentials without an account id, and keeps the error only for `personal-access-token` auth (the one mode Rust always gives an id).
+- New regressions in `appserver/workspace_routing_selection_gate_like_rust_test.go`: `TestRuntimeRouterGetAccountWithoutSelectedWorkspaceReturnsNullRoutingLikeRust` (null routing with zero backend calls) and `TestWorkspaceRoutingRequiresPersonalAccessTokenAccountIDLikeRust`.
+- The Rust outbound-notification owner guard is N/A in Go: the sink dispatch is synchronous, so there is no queue capacity wait during which the account can change.
+- Verified with `go test ./appserver -count=1`, which shows only the three pre-existing analytics/fingerprint failures.
+
+Status after reconciliation: `1997 complete`, `391 not_applicable`,
+`496 audit_pending`, `265 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
