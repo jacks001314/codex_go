@@ -1112,11 +1112,22 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		if err != nil {
 			return err
 		}
+		device, mountID, err := daemonSocketIdentity(daemonDirectory)
+		if err != nil {
+			return fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
+		}
 		mountinfo, err := os.ReadFile("/proc/self/mountinfo")
 		if err != nil {
 			return fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
 		}
-		if err := validateDaemonSocketMountIsolation(daemonDirectory, mountinfo); err != nil {
+		// The WSLg duplicate view is masked separately below, so an alias there is
+		// not exposed. Rust only passes masked_root when the WSLg distro mask is
+		// actually in effect (`bwrap.rs:426`), so an unmasked view still rejects.
+		maskedRoot := ""
+		if wslgMask {
+			maskedRoot = wslgDistroRoot
+		}
+		if err := validateDaemonSocketMountIsolation(daemonDirectory, device, mountID, mountinfo, maskedRoot); err != nil {
 			return err
 		}
 		args = append(args, "--tmpfs", daemonDirectory)

@@ -9,34 +9,37 @@ import (
 
 func TestValidateDaemonSocketMountIsolationLikeRust(t *testing.T) {
 	directory := "/tmp/codex-daemon-1000"
+	root := "22 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
 	cases := []struct {
 		name     string
-		mount    string
+		mounts   string
+		device   string
+		mountID  string
 		wantFail bool
 	}{
-		{"ordinary root", "22 1 8:1 / / rw - ext4 /dev/sda1 rw", false},
-		{"nested mount", "30 22 8:2 / /tmp/codex-daemon-1000/nested rw - tmpfs tmpfs rw", true},
-		{"bind alias", "31 22 8:2 /tmp/codex-daemon-1000 /mnt/evil rw - ext4 /dev/sda2 rw", true},
-		{"wslg view", "32 22 0:40 / /mnt/wslg/distro rw - overlay overlay rw", false},
+		{"ordinary root", root, "8:1", "22", false},
+		{"nested mount", root + "30 22 8:2 / /tmp/codex-daemon-1000/nested rw - tmpfs tmpfs rw\n", "8:1", "22", true},
+		{"bind alias", root + "31 22 8:1 /tmp/codex-daemon-1000 /mnt/evil rw - ext4 /dev/sda1 rw\n", "8:1", "22", true},
+		{"wslg view", root + "32 22 0:40 / /mnt/wslg/distro rw - overlay overlay rw\n", "8:1", "22", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateDaemonSocketMountIsolation(directory, []byte(tc.mount+"\n"))
+			err := validateDaemonSocketMountIsolation(directory, tc.device, tc.mountID, []byte(tc.mounts), "")
 			if tc.wantFail && err == nil {
-				t.Fatalf("mount %q was accepted", tc.mount)
+				t.Fatalf("mountinfo %q was accepted", tc.mounts)
 			}
 			if !tc.wantFail && err != nil {
-				t.Fatalf("mount %q error = %v", tc.mount, err)
+				t.Fatalf("mountinfo %q error = %v", tc.mounts, err)
 			}
 			if tc.wantFail && !strings.Contains(err.Error(), "unsupported host mount") {
-				t.Fatalf("mount %q error = %v", tc.mount, err)
+				t.Fatalf("mountinfo %q error = %v", tc.mounts, err)
 			}
 		})
 	}
 }
 
 func TestValidateDaemonSocketMountIsolationRejectsMalformedMountinfo(t *testing.T) {
-	if err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", []byte("broken line\n")); err == nil {
+	if err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", "0:1", "", []byte("broken line\n"), ""); err == nil {
 		t.Fatal("malformed mountinfo was accepted")
 	}
 }
@@ -62,7 +65,7 @@ func TestValidateDaemonSocketMountIsolationNamespaceMountsLikeRust(t *testing.T)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mounts := "1 0 0:1 / / rw - ext4 disk rw\n" + tc.mount + "\n"
-			err := validateDaemonSocketMountIsolation(directory, []byte(mounts))
+			err := validateDaemonSocketMountIsolation(directory, "0:1", "", []byte(mounts), "")
 			if tc.wantFail && err == nil {
 				t.Fatalf("mount %q was accepted", tc.mount)
 			}
@@ -79,7 +82,7 @@ func TestValidateDaemonSocketMountIsolationNamespaceMountKeepsAliasChecksLikeRus
 	mounts := "1 0 0:1 / / rw - ext4 disk rw\n" +
 		"2 1 0:2 net:[4026531840] /run/netns/example rw - nsfs nsfs rw\n" +
 		"3 1 0:1 /tmp/codex-daemon-1000 /alias rw - ext4 disk rw\n"
-	err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", []byte(mounts))
+	err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", "0:1", "", []byte(mounts), "")
 	if err == nil {
 		t.Fatal("socket alias behind an unrelated namespace mount was accepted")
 	}

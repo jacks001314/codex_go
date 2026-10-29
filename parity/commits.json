@@ -15171,9 +15171,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "ported #46125 private-tmp daemon socket isolation: sandbox/linuxsandbox/daemon_mount_identity_linux.go:18 daemonSocketIdentity reads fdinfo mnt_id with a statx STATX_MNT_ID fallback on the opened socket directory; sandbox/linuxsandbox/daemon_mounts.go:38 validateDaemonSocketMountIsolation selects the containing mount by mount id, walks its ancestry (validateDaemonMountAncestry at :141) and only derives aliases between mounts of the socket device, so private and stacked tmp mounts pass while covered mounts, exposed aliases and nested mounts reject; sandbox/linuxsandbox/linux.go:1126 passes the WSLg mask only when the WSLg distro mask is in effect like Rust bwrap.rs:426; new tests sandbox/linuxsandbox/daemon_mounts_private_tmp_like_rust_test.go:31,63,73,89,104,118,151 plus updated sandbox/linuxsandbox/daemon_mounts_test.go:10,41,52,81; verified with GOOS=linux go build ./sandbox/... GOOS=linux go test -c ./sandbox/linuxsandbox and an untagged POSIX-path copy go test (all pass); residual: the fdinfo and statx mount-id acquisition itself is compile-checked only on Windows"
    ]
   },
   {

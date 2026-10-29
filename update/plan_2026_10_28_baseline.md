@@ -2398,6 +2398,38 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Verified with `go test ./appserver -run Sender|Retained|Guardian` and
   `go test ./state ./retainedctx`.
 
-Status after reconciliation: `2085 complete`, `409 not_applicable`,
-`431 audit_pending`, `220 regression_pending`, `4 partial`,
+### Daemon socket isolation accepts private tmp mounts (Round 924)
+
+- Upstream `1bd1bfa7ca4c` (#46125) found that systemd `PrivateTmp` style
+  bind mounts leave hidden entries in `/proc/self/mountinfo`, so the Linux
+  sandbox rejected socket layouts that actually isolate the daemon correctly.
+- `sandbox/linuxsandbox/daemon_mount_identity_linux.go` now opens the rendezvous
+  directory and reads its mount ID from the descriptor's `fdinfo` entry, with a
+  `statx(AT_EMPTY_PATH, STATX_MNT_ID)` fallback for kernels that omit it, plus
+  the `major:minor` mount device; both feed the mount check.
+- `sandbox/linuxsandbox/daemon_mounts.go` selects the containing mount by that
+  ID and walks its ancestry towards the namespace root, so a mount hidden by a
+  newer overmount is rejected while the visible one is accepted. Aliases are
+  only derived between mounts of the socket's own device, matching Rust. Private
+  tmpfs/bind `/tmp` layouts and stacked mounts now pass, while covered mounts,
+  exposed aliases, socket aliases and nested mounts still fail startup. With no
+  mount ID the conservative rule stays: every candidate mount must agree on one
+  backing location and no alias is assumed hidden.
+- `sandbox/linuxsandbox/linux.go` passes the WSLg distro mask only when that
+  mask is actually in effect, mirroring Rust `bwrap.rs:426`, so an unmasked
+  `/mnt/wslg/distro` alias still rejects instead of being silently allowed.
+- Ported the Rust `daemon_mounts_tests.rs` table in
+  `sandbox/linuxsandbox/daemon_mounts_private_tmp_like_rust_test.go` (private
+  tmpfs, stacked mounts, covered open mount, ancestor overmount, PrivateTmp
+  bind with exposed aliases, masked WSLg alias, and the eight-case
+  reject-only-compromising-layouts table run with and without a mount ID) and
+  updated the existing cases in `sandbox/linuxsandbox/daemon_mounts_test.go`.
+- Verified with `GOOS=linux go build ./sandbox/...` and
+  `GOOS=linux go test -c ./sandbox/linuxsandbox`; the mount-validation tests
+  also run on Windows through an untagged copy rewritten to POSIX `path`
+  semantics. Residual: the `fdinfo`/`statx` acquisition itself is only
+  compile-checked here because no Linux host or WSL is available.
+
+Status after reconciliation: `2086 complete`, `409 not_applicable`,
+`430 audit_pending`, `220 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
