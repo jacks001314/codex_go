@@ -14727,9 +14727,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: this commit hardens Rust's CoreFoundation managed-preference loader (config/src/loader/macos.rs: CFPreferencesAppValueIsForced checks before and after CFPreferencesCopyAppValue, CFString type enforcement). Go has no macOS managed-preference loader at all: config/local_layers.go:59-66 records that Go has no disk-backed MDM/enterprise-managed layer and no macOS managed admin requirements, and the exec-server composes user + trusted project + file legacy managed layers only; config/api.go keeps LayerSourceLegacyManagedConfigFromMDM/LayerSourceMDM as ordering/display source names fed by the host, never read from CoreFoundation. There is no CFPreferences call site to guard, and adding one would introduce an untestable darwin+cgo surface with no callers."
    ]
   },
   {

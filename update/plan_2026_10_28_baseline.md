@@ -1882,6 +1882,18 @@ Rust #46029 (`2b2b0fa870429d52b53c61dda73cb0608f6fabae`) allows the curated remo
 
 Verification: `go test ./appserver -run 'ExecutorPluginHookSources|AllowlistedBundled|Interrupt|CleanupHook'` passes; `gofmt -l` clean on both touched test files.
 
-Status after reconciliation: `2039 complete`, `400 not_applicable`,
-`457 audit_pending`, `250 regression_pending`, `3 partial`,
+### Force macOS managed preferences (Round 874)
+
+# Round 874 - forced macOS managed preferences
+
+Rust #46032 (`73bf1812722f9b6fdbfac4997b2d96d7b64ff7c3`) hardens the CoreFoundation managed-preference loader: `CFPreferencesAppValueIsForced` must hold before and after reading `config_toml_base64` / `requirements_toml_base64`, and non-`CFString` values are rejected as `InvalidData`.
+
+## Why this is not applicable
+
+Go has no macOS managed-preference loader to harden. `config/local_layers.go` records the structural difference explicitly: no disk-backed MDM/enterprise-managed layer and no macOS managed admin requirements; the exec-server stack is user + trusted project + file-backed legacy managed config. `config/api.go` keeps `LayerSourceMDM` / `LayerSourceLegacyManagedConfigFromMDM` only as ordering and display source names supplied by the host, never read from CoreFoundation.
+
+Adding a darwin+cgo `CFPreferences` reader would create a call site with no callers in the Go composition and could not be exercised on the supported build targets, so the commit is recorded as `not_applicable` rather than drifting into a parallel unused layer.
+
+Status after reconciliation: `2039 complete`, `401 not_applicable`,
+`456 audit_pending`, `250 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
