@@ -1087,6 +1087,16 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Added appserver/guardian_review_model_like_rust_test.go: parent auto_review_model_override plus preferred and override models in the catalog, then asserts the entire selection struct survives, the review request uses its Model/ReasoningEffort, and the hash helper resolves the override model's CompHash.
 - Verified: go test ./appserver -run 'Guardian' -count=1, go test ./model -count=1, go test ./appserver -count=1, go build ./... . Three unrelated RuntimeRouter analytics/fingerprint tests time out, including TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust which also fails on a clean worktree of the previous HEAD.
 
-Status after reconciliation: `2006 complete`, `393 not_applicable`,
-`487 audit_pending`, `261 regression_pending`, `2 partial`,
+### Guardian approval routing honours cancellation before fast approvals (Round 827)
+
+## Round 827 - #45693 Move Guardian approval routing into the reviewer extension
+
+- Rust relocates approval routing into Guardian's ReviewRequest::decide (contributor routing, cached-approval validation, synchronous fallback, cancellation) and reports Abort when the tracked operation was cancelled before or during routing.
+- Go keeps a single routing decision point in modelGuardianReviewer.Review, so no re-architecture is needed; the missing behaviour was cancellation precedence, which now returns DecisionAborted instead of a fast-path Approved when the context is already cancelled.
+- Rust's cached-approval branch and contributor registry have no Go counterpart: Go's reviewer is synchronous-only with no cached-score approvals (documented in guardian_async_approval_like_rust_test.go).
+- Added appserver/guardian_routing_cancellation_like_rust_test.go: cancelled context plus full access yields Abort with no fast decision and no model call; a live context approves and records exactly one fast decision.
+- Verified: go test ./appserver -run 'Guardian' -count=1, go test ./appserver -count=1 (three pre-existing unrelated RuntimeRouter failures), go build ./... .
+
+Status after reconciliation: `2007 complete`, `393 not_applicable`,
+`487 audit_pending`, `260 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

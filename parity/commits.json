@@ -13683,9 +13683,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #45693 moves approval routing into codex-guardian-reviewer's ReviewRequest::decide: contributor routing, cached-approval validation, the synchronous fallback and review cancellation now live in one place, routing returns Abort when the tracked operation was cancelled before contributors run, and an operation that races cancellation is converted to Abort after reporting and cleanup. Go has one routing decision point already, modelGuardianReviewer.Review, which owns the full-access approval, the user-mode node_repl fast path, the required-review (fresh_required) route and the synchronous model review, so the structural move needs no re-architecture. What Go lacked was the cancellation precedence: Review now returns state.DecisionAborted with no error when ctx is already cancelled before routing, so a cancelled approval operation can no longer be reported as Approved by the full-access or user-approval-mode fast paths; a review cancelled while running already flows through finishAborted (store.Abort plus aborted metrics). Rust's cached-approval branch (ApprovalDecision::Allow re-validating the bound action before recording approved) and its contributor registry have no Go counterpart because Go's reviewer is synchronous-only with no cached-score approvals, as documented in guardian_async_approval_like_rust_test.go. Regression: appserver/guardian_routing_cancellation_like_rust_test.go calls Review with an already-cancelled context and full access enabled and asserts DecisionAborted with no fast decision and no model call, then shows the same reviewer approves and records exactly one fast decision with a live context. Verified with go test ./appserver -run 'Guardian' -count=1, go test ./appserver -count=1 (only the three pre-existing unrelated RuntimeRouter analytics/fingerprint failures) and go build ./... ."
    ]
   },
   {
