@@ -1486,6 +1486,35 @@ Bounded WSL terminal detection (#45811).
 - Verified with `go test ./tui/tui -count=2`, `go vet ./tui/tui`, and
   `go build ./...`.
 
-Status after reconciliation: `2022 complete`, `396 not_applicable`,
-`471 audit_pending`, `258 regression_pending`, `2 partial`,
+### Windows sandbox policy and executor hosts (Round 853)
+
+Windows sandbox policy and per-thread executor hosts (#45813).
+
+- `tui/windows_sandbox.go` now carries Rust's TUI `WindowsSandboxConfig`:
+  `Mode` from `[windows] sandbox` or the legacy
+  `elevated_windows_sandbox` / `experimental_windows_sandbox` /
+  `enable_experimental_windows_sandbox` flags, `Allows`, `RequiresElevated`,
+  and `Level`. A managed policy that disallows the configured mode falls back
+  with elevated preferred, and an unloaded policy denies every choice instead
+  of defaulting to allowed.
+- `WindowsSandboxPolicyFromImplementations` converts
+  `allowedWindowsSandboxImplementations`, dropping MXC because it is not a TUI
+  setup mode and preserving the difference between a null list (no
+  restriction) and an empty list (nothing allowed).
+- `tui/app/windows_sandbox_host.go` adds `WindowsSandboxHost`
+  (`local`/`mixed`/`remote`/`unknown`) and `HostFromEnvironments`; missing or
+  empty environment lists classify as `unknown` since a server-local
+  connection can still select remote executors.
+- `ThreadSessionState.WindowsSandboxHost` is set by
+  `SessionStateForThreadRead` from the new `ThreadReadSnapshot.Environments`, so
+  start/resume/fork/replay paths keep the host classification with the thread.
+- Tests mirror `windows_sandbox_tests.rs` (policy table, managed fallback,
+  legacy flag precedence, default denial, level mapping) and
+  `windows_sandbox_host_from_observed_environments`, including remote host
+  restore for a replayed thread.
+- Verified with `go test ./tui/ ./tui/app/ ./config/ ./tui/chatwidget
+  -count=1`, `go vet ./tui/ ./tui/app/`, and `go build ./...`.
+
+Status after reconciliation: `2023 complete`, `396 not_applicable`,
+`470 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

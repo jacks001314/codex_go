@@ -14151,9 +14151,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: WindowsSandboxConfig, from_responses, host_from_environments, requires_elevated"
+    "tui/windows_sandbox.go ports WindowsSandboxConfig (from_responses, allows, requires_elevated, level) and tui/app adds WindowsSandboxHost + HostFromEnvironments, stored on ThreadSessionState via ThreadReadSnapshot.Environments; tables mirror windows_sandbox_tests.rs and windows_sandbox_host_from_observed_environments"
    ]
   },
   {
