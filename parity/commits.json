@@ -8067,9 +8067,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: StatusCopySource"
+    "Round 760 (audit): #43055 implemented at tui/tea/status_copy.go:10 - // statusCopyTargets captures the /status output so /copy can offer the whole Behaviour: statusCopyTargets snapshots the rendered /status output so /copy offers the whole status plus individual fields, and the snapshot is invalidated by the next command, user message, or assistant response. Regression contract: tui/tea/status_copy_test.go (TestModelCopyUsesStatusOutputLikeRust|TestModelCopyReturnsToResponseAfterOtherCommandLikeRust|TestModelWholeStatusCopyKeepsFullPathsAtNarrowWidthsLikeRust); verify with `go test ./tui/tea -run 'TestModelCopyUsesStatusOutputLikeRust|TestModelCopyReturnsToResponseAfterOtherCommandLikeRust|TestModelWholeStatusCopyKeepsFullPathsAtNarrowWidthsLikeRust' -count=1`."
    ]
   },
   {
@@ -8475,9 +8475,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/9; needs review: managed_worktree_action, on_managed_worktrees_loaded"
+    "Round 760 (audit): #43286 implemented at tui/tea/worktree_browser.go:14 - // Managed worktree support mirrors Rust's TUI worktree commands Behaviour: the managed worktree browser supports /worktree start/continue plus listing, filtering, stale-result gating, and removal of existing managed checkouts, local-repository only. Regression contract: tui/tea/worktree_browser_test.go (TestWorktreeCommandAvailability|TestWorktreeCommandStartsManagedSession|TestWorktreeBrowserLoadsFiltersAndGatesStaleResults|TestWorktreeBrowserActionsAndRemoval); verify with `go test ./tui/tea -run 'TestWorktreeCommandAvailability|TestWorktreeCommandStartsManagedSession|TestWorktreeBrowserLoadsFiltersAndGatesStaleResults|TestWorktreeBrowserActionsAndRemoval' -count=1`."
    ]
   },
   {
@@ -9039,9 +9039,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 15/26; needs review: UserVerificationKeyCreation, UserVerificationKeyDeletion, UserVerificationKeyInfo, UserVerificationKeyNamespace, UserVerificationRequest"
+    "Round 760 (audit): #43547 implemented at appserver/user_verification.go:12 - // Experimental user-verification APIs for trusted UI clients (Rust #43265, Behaviour: user-verification RPCs (status/enroll/delete/verify/cancel) expose the Rust wire contract, report providerUnavailable on platforms without a native provider, and reject unknown fields and invalid parameters. Regression contract: appserver/user_verification_test.go (TestRuntimeRouterUserVerificationUnavailableSurface|TestRuntimeRouterUserVerificationVerifyValidation|TestUserVerificationMethodsRequireExperimentalAPICapability|TestRuntimeRouterUserVerificationParamsRejectUnknownFields); verify with `go test ./appserver -run 'TestRuntimeRouterUserVerificationUnavailableSurface|TestRuntimeRouterUserVerificationVerifyValidation|TestUserVerificationMethodsRequireExperimentalAPICapability|TestRuntimeRouterUserVerificationParamsRejectUnknownFields' -count=1`."
    ]
   },
   {
@@ -18175,9 +18175,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/5; needs review: NetworkMitmCaConfig, load_from_files, managed_ca_trust_bundle_for_cert_path, managed_ca_trust_bundle_for_external_cert_path"
+    "Round 760 (audit): #47132 implemented at network/proxy_mitm_runtime.go:42 - func newProxyMITMRuntime(baseEnv map[string]string, caConfig *ProxyMITMCAConfig) (*proxyMITMRuntime, error) { Behaviour: caller-provided MITM CA certificate and key are parsed and validated, external CAs produce a managed trust bundle, and unknown proxy config fields are rejected. Regression contract: network/proxy_mitm_ca_test.go (TestProxyMITMCAConfigParsingAndValidationLikeRust|TestExternalProxyMITMCAProducesManagedTrustBundleLikeRust|TestProxyConfigRejectsUnknownFieldsLikeRust); verify with `go test ./network -run 'TestProxyMITMCAConfigParsingAndValidationLikeRust|TestExternalProxyMITMCAProducesManagedTrustBundleLikeRust|TestProxyConfigRejectsUnknownFieldsLikeRust' -count=1`."
    ]
   },
   {
@@ -18379,9 +18379,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 8/13; needs review: cancel_gateway_login, gateway_oauth_cancel, gateway_oauth_login, gateway_oauth_read, status_fields"
+    "Round 760 (audit): #47207 implemented at appserver/gateway_oauth.go:3 - // Explicit gateway sign-in RPCs. Behaviour: explicit gateway sign-in RPCs share credentials with inference and bind cancellation to the connection that started the sign-in. Regression contract: appserver/gateway_oauth_test.go (TestGatewayOAuthReadReportsProviderPolicyLikeRust|TestGatewayOAuthLoginForwardsAuthURLAndSucceedsLikeRust|TestGatewayOAuthCancelIsConnectionBoundLikeRust); verify with `go test ./appserver -run 'TestGatewayOAuthReadReportsProviderPolicyLikeRust|TestGatewayOAuthLoginForwardsAuthURLAndSucceedsLikeRust|TestGatewayOAuthCancelIsConnectionBoundLikeRust' -count=1`."
    ]
   },
   {
@@ -20805,9 +20805,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/12; needs review: PromptSuggestion, SuggestionRequest, apply_prompt_suggestion, clear_prompt_suggestion, handle_prompt_suggestion_key"
+    "Round 760 (audit): #47911 implemented at tui/tea/prompt_suggestions.go:15 - // PromptSuggestionRequest identifies one completed turn whose follow-up Behaviour: prompt suggestions parse from completed-turn responses and render in the composer with Tab acceptance, Escape dismissal, stale-result gating, config gates, and yielding to a configured Tab binding. Regression contract: tui/tea/prompt_suggestions_like_rust_test.go (TestParsePromptSuggestionMatchesRust|TestPromptSuggestionVisibilityAndTabAcceptanceLikeRust|TestPromptSuggestionEscapeAndStaleResultsLikeRust|TestPromptSuggestionGatesAndConfigLikeRust); verify with `go test ./tui/tea -run 'TestParsePromptSuggestionMatchesRust|TestPromptSuggestionVisibilityAndTabAcceptanceLikeRust|TestPromptSuggestionEscapeAndStaleResultsLikeRust|TestPromptSuggestionGatesAndConfigLikeRust' -count=1`."
    ]
   },
   {
@@ -24348,9 +24348,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/10; needs review: clear_security_setup_banner, inherit_security_setup, invalidate_security_setup, show_security_setup, transfer_inline_banner_from"
+    "Round 760 (audit): #49715 implemented at app/security_setup.go:16 - // interactiveLocalSecuritySetupReader mirrors Rust #49715: only local ChatGPT Behaviour: account security setup notices are limited to local ChatGPT accounts on the OpenAI provider, revalidated against saved credentials, and surfaced through the TUI banner reader. Regression contract: app/security_setup_test.go (TestSecuritySetupIdentityRequiresAccountUserAndToken); verify with `go test ./app -run 'TestSecuritySetupIdentityRequiresAccountUserAndToken' -count=1`."
    ]
   },
   {
@@ -25152,9 +25152,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: allows_viewport_paging, is_reading, is_search_editing, match_layout. Behavioral slice landed: first Esc with a nonempty query enters retained reading mode (query, match, expanded context, esc latest footer); second Esc returns latest; Ctrl+C cancels Find and restores the pre-search offset before global interrupt/quit; PgUp/PgDn and Ctrl+P/Ctrl+N remain available while reading. Older-history loading remains to be audited against Go's paginated transcript carrier."
+    "Round 760 (audit): #50039 implemented at tui/tea/transcript_find_main.go:11 - // transcriptFindMatch is one literal hit in the full transcript source. line is Behaviour: transcript find keeps matches addressable after the query closes (retained reading mode) and the pending/updates wiring preserves the find state. Regression contract: tui/tea/transcript_find_wiring_like_rust_test.go (TestTranscriptFindKeyWiringLikeRust|TestTranscriptPagerScrollStillWorksLikeRust); verify with `go test ./tui/tea -run 'TestTranscriptFindKeyWiringLikeRust|TestTranscriptPagerScrollStillWorksLikeRust' -count=1`."
    ]
   },
   {

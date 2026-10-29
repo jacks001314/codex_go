@@ -577,8 +577,22 @@ its coverage are located. Targeted package tests pass in a clean archived
 snapshot: `./mcp ./tui/bottom_pane ./network ./remotecontrol ./context
 ./tui/agents_overview ./config ./app ./tui/tea ./appserver`.
 
-Status after reconciliation: `1878 complete`, `381 not_applicable`,
-`603 audit_pending`, `287 regression_pending`, `0 partial`,
+### Subject-keyword implementation sweep (Round 760)
+
+For the remaining cited entries the PR comment was not next to the real
+implementation, so each subject was re-searched by feature keywords. Eight
+entries resolved to a dedicated Go file plus package tests and moved to
+`complete`: `#43055` (`tui/tea/status_copy.go`), `#43286`
+(`tui/tea/worktree_browser.go`), `#43547` (`appserver/user_verification.go`),
+`#47132` (`network/proxy_mitm_runtime.go`), `#47207`
+(`appserver/gateway_oauth.go`), `#47911` (`tui/tea/prompt_suggestions.go`),
+`#49715` (`app/security_setup.go`), `#50039`
+(`tui/tea/transcript_find_main.go`). Each evidence string names the
+implementation site and the regression test that verifies it; the four
+affected packages pass in a clean archived snapshot.
+
+Status after reconciliation: `1886 complete`, `381 not_applicable`,
+`595 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
 
 ## Files updated
