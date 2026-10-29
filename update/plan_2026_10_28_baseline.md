@@ -844,6 +844,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - #45409 was already implemented. `mcp/api.go` `withMCPToolCallIDsMeta` replaces stale `threadId`/`sessionId`/`windowId`/`itemId` values in the `tools/call` `_meta` document and passes a non-object meta through; `appserver/runtime_router.go` fills `SessionID` from the thread record and `WindowID` from the current conversation window, and `tool/code_mode_exec.go` keeps `OriginItemIDContextKey` and `OriginWindowIDContextKey` on a cell across waits and compaction.
 - Existing regressions: `TestRuntimeRouterMCPRequestMetadataReportsCallIDsLikeRust` (direct MCP call metadata over a real loopback server), `TestMCPToolCallMetaCallIDsLikeRust` (merge, omitted item, session-less call, non-object passthrough), and the code-mode origin tests for resumed cells. `go test ./appserver -run MCPRequestMetadata`, `go test ./mcp -run MCPToolCallMetaCallIDs`, and `go test ./tool -run Origin` pass.
 
-Status after reconciliation: `1985 complete`, `388 not_applicable`,
-`504 audit_pending`, `272 regression_pending`, `0 partial`,
+### Cancel code mode timers cleared after firing (Round 798)
+
+- #45399 was a real Go gap. Go scheduled each `setTimeout` with `time.AfterFunc` and only decremented its `pending` counter when `time.Timer.Stop` succeeded, so a timer that had already fired but whose completion had not been consumed still invoked its callback after `clearTimeout`, and the counter drifted.
+- `tool/code_mode_exec.go` now treats membership in the timer map as the source of truth: `clearTimeout` always stops and removes the timer and decrements `pending`, and the completion loop drops a queued fire whose timer is gone. That matches Rust, where `clear_timeout` removes `pending_timeouts` regardless of whether the Tokio sleep already fired, and `invoke_timeout_callback` then finds nothing. Cell completion keeps stopping every remaining timer through the existing deferred cleanup, mirroring the dropped `AbortOnDropHandle`.
+- New regressions: `TestCodeModeExecClearTimeoutDropsQueuedTimerFire` (50 zero-delay `setTimeout`/`clearTimeout` rounds inside one synchronous block; fails against the old code with stray `must-not-run` output) and `TestCodeModeExecCellCompletionCancelsPendingTimers` (a 60s timer neither holds completion open nor emits output).
+- Tests: `go test ./tool -count=1` passes, and the timer tests pass under `-race`.
+
+Status after reconciliation: `1986 complete`, `388 not_applicable`,
+`503 audit_pending`, `272 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

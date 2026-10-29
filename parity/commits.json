@@ -12795,9 +12795,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go parity implemented: tool/code_mode_exec.go treats map presence as the source of truth for scheduled timers - clearTimeout always releases the time.Timer and decrements the pending count (matching Rust, which removes pending_timeouts even after the sleep fired), and the completion loop drops a queued fire whose timer was already cleared instead of invoking its callback. Cell completion keeps stopping every remaining timer through the existing deferred cleanup, mirroring the dropped AbortOnDropHandle. New regression tests: TestCodeModeExecClearTimeoutDropsQueuedTimerFire (reproduces the pre-fix stray \"must-not-run\" output over 50 zero-delay clearTimeout rounds; verified failing against the old code) and TestCodeModeExecCellCompletionCancelsPendingTimers (a 60s timer does not hold completion open and the cell closes). go test ./tool -count=1 and the timer tests under -race pass."
    ]
   },
   {
