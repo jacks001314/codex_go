@@ -2662,6 +2662,16 @@ A cold resume now restores history committed by the previous writer (#49599, com
 - Added `TestResumeRefreshesStaleHistoryUnderWriterLikeRust` (late append survives, pre-acquisition snapshot is not mutated) and `TestResumeRefreshKeepsRolloutFallbackLikeRust` (missing store record keeps the rollout snapshot).
 - Verified with `go test ./appserver -run 'TestResume|TestThreadResume' -count=1`. The full `go test ./appserver -count=1` run still hits three unrelated 2-second timeout tests that fail identically on the unmodified tree: `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`, `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`, and `TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust`. `go vet ./appserver` still reports the pre-existing context-cancel warning in `appserver/thread_sample.go:220`.
 
-Status after reconciliation: `2106 complete`, `410 not_applicable`,
-`421 audit_pending`, `210 regression_pending`, `2 partial`,
+### Command-center session retention (Round 943)
+
+The agent command center now keeps discovered sessions for the TUI's lifetime (#42104, complete).
+
+- Go already seeded up to 20 recent root sessions beside the loaded list, retried with `updated_at` when a server rejects `recency_at`, kept loaded rows when the recent listing failed, and merged the shared pinned section.
+- The remaining gap was membership retention: `ApplyRefresh` rebuilt the dashboard only from the latest listing, so a session that left the loaded/recent window disappeared even though this TUI had discovered it. Rust retains `agents_overview.threads` until an archive/delete removes it.
+- `tui/tea/agents_overview.go` now merges each refresh into `agentsOverviewKnownRows`/`agentsOverviewKnownOrder`: fresh rows keep server order and update metadata, previously discovered rows follow as `notLoaded`/Finished, and archived/deleted tombstones are never resurrected.
+- Added `TestAgentsOverviewRetainsDiscoveredSessionsLikeRust` (retention after the recent window shrinks, metadata refresh, tombstone removal).
+- Verified with `go test ./tui/tea ./tui/agents_overview -count=1`.
+
+Status after reconciliation: `2107 complete`, `410 not_applicable`,
+`420 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

@@ -1793,7 +1793,12 @@ type Model struct {
 	analyticsTaskThreads analytics.AnalyticsTaskDescendantLister
 	// agentsOverviewRemoved tombstones archived/deleted tasks so a delayed
 	// dynamic-tool registration cannot restore their rows (Rust #46946).
-	agentsOverviewRemoved  map[string]bool
+	agentsOverviewRemoved map[string]bool
+	// agentsOverviewKnownRows retains sessions this TUI has discovered so the
+	// command center keeps them after they leave the server's loaded/recent
+	// window (Rust #42104 AgentsOverviewThreads membership).
+	agentsOverviewKnownRows  map[string]agentsoverview.Row
+	agentsOverviewKnownOrder []string
 	agentsOverviewNotice   string
 	agentsOverviewBusy     bool
 	agentsOverviewRefresh  int

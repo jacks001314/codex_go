@@ -5592,9 +5592,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/7; needs review: AgentsOverviewThreadRefresh, apply_runtime_policy_overrides, refresh_changed_agents_overview_threads, repaint_agents_overview, resume_config_for_target"
+    "Round 943: the command center seeds up to 20 recent root sessions beside the loaded list, retries the seed with updated_at when a server rejects recency_at, keeps loaded rows when the recent listing fails, and seeds pinned rows from the shared section (app/agents_dashboard.go listRecentThreads/listRecentThreadsForSourceKinds). The TUI now retains each discovered session for its lifetime: tui/tea/agents_overview.go mergeAgentsOverviewRows keeps rows that leave the loaded/recent window as unloaded Finished rows, refreshes metadata from later listings, and never resurrects archived/deleted tombstones. Cold resumes from the overview reuse the existing resume-config, cwd selection, and explicit permission-override paths. Tests: TestAgentsOverviewRetainsDiscoveredSessionsLikeRust; existing recent-seed/recency-fallback coverage in app/agents_dashboard_last_message_test.go and app/agents_overview_pin_tui_test.go. go test ./tui/tea ./tui/agents_overview -count=1 and targeted ./app dashboard tests pass."
    ]
   },
   {

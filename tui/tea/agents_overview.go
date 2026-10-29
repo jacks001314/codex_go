@@ -364,6 +364,7 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		}
 		message.rows = rows
 	}
+	message.rows = m.mergeAgentsOverviewRows(message.rows)
 	switch {
 	case message.pinErr != nil:
 		// Rust #51500: a failed pin listing keeps the pins the dashboard already
@@ -390,6 +391,64 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		return bubbletea.Batch(m.refreshAgentsOverviewCmd(), usageCmd)
 	}
 	return usageCmd
+}
+
+// mergeAgentsOverviewRows keeps the command center's session membership for
+// this TUI, independently of the server's current loaded/recent window (Rust
+// #42104 agents_overview_threads: discovery merges into retained membership
+// without evicting rows; only archive/delete removes a thread). Fresh rows keep
+// the server order and refresh the retained metadata; previously discovered
+// rows that the latest listing no longer returns follow in discovery order as
+// unloaded sessions. Archived/deleted tombstones are never resurrected.
+func (m *Model) mergeAgentsOverviewRows(rows []agentsoverview.Row) []agentsoverview.Row {
+	if m == nil {
+		return rows
+	}
+	if m.agentsOverviewKnownRows == nil {
+		m.agentsOverviewKnownRows = map[string]agentsoverview.Row{}
+	}
+	seen := make(map[string]struct{}, len(rows)+len(m.agentsOverviewKnownRows))
+	merged := make([]agentsoverview.Row, 0, len(rows)+len(m.agentsOverviewKnownRows))
+	for _, row := range rows {
+		threadID := strings.TrimSpace(row.ThreadID)
+		if threadID == "" {
+			continue
+		}
+		if m.agentsOverviewRemoved[threadID] {
+			continue
+		}
+		if _, duplicate := seen[threadID]; duplicate {
+			continue
+		}
+		seen[threadID] = struct{}{}
+		if _, known := m.agentsOverviewKnownRows[threadID]; !known {
+			m.agentsOverviewKnownOrder = append(m.agentsOverviewKnownOrder, threadID)
+		}
+		m.agentsOverviewKnownRows[threadID] = row
+		merged = append(merged, row)
+	}
+	for _, threadID := range m.agentsOverviewKnownOrder {
+		if _, listed := seen[threadID]; listed {
+			continue
+		}
+		if m.agentsOverviewRemoved[threadID] {
+			continue
+		}
+		row, known := m.agentsOverviewKnownRows[threadID]
+		if !known {
+			continue
+		}
+		// A retained thread is no longer loaded; Rust closes it to NotLoaded
+		// before rendering the retained row.
+		row.StatusType = "notLoaded"
+		row.Group = agentsoverview.GroupForThread(row.StatusType, false, false, row.IsSubagent)
+		row.StatusActive = false
+		row.IsCurrent = false
+		row.HasVoice = false
+		seen[threadID] = struct{}{}
+		merged = append(merged, row)
+	}
+	return merged
 }
 
 func agentsOverviewThreadContains(threadIDs []string, target string) bool {
