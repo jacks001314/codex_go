@@ -397,6 +397,33 @@ func matchByteIndexes(text string, target byte) []int {
 	return indexes
 }
 
+// MathDisplayTailStart reports the earliest source offset a streaming stable
+// boundary must retreat to so it never splits a display math span. Rust #45501
+// filters its streaming cache boundary the same way: a span that strictly
+// crosses the boundary, or a standalone display that is still unterminated and
+// within the scan budget (Rust's `pending_start`), forces the whole span into
+// the mutable tail. Nothing is reported when math rendering is disabled or the
+// source cannot contain a display opener.
+func MathDisplayTailStart(source string, boundary int, width int) (int, bool) {
+	if boundary <= 0 {
+		return 0, false
+	}
+	scan := analyzeMathSpans(source, width)
+	start, held := 0, false
+	for _, span := range scan.displayRanges {
+		crosses := span[0] < boundary && boundary < span[1]
+		pending := span[0] < boundary && span[1] >= len(source) &&
+			len(source)-span[0] <= maxMathBytes
+		if !crosses && !pending {
+			continue
+		}
+		if !held || span[0] < start {
+			start, held = span[0], true
+		}
+	}
+	return start, held
+}
+
 // restoreMathPlaceholders restores the rendered Unicode in place of the
 // placeholders (Rust's `events` swap of the rendered text).
 func restoreMathPlaceholders(rendered string, placeholders map[string]string) string {

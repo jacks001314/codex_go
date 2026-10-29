@@ -326,6 +326,17 @@ func (c *streamCore) activeTailSourceStart() (int, bool) {
 	if markerStart, ok := bareListMarkerSourceStart(c.rawSource); ok && (!held || markerStart < start) {
 		start, held = markerStart, true
 	}
+	// Rust #45501 (streaming.rs): a cached prefix must never end inside a
+	// display equation, or the streamed copy would diverge from a whole-source
+	// render once the closer arrives. Without a line cache the equivalent is to
+	// keep the whole span in the mutable tail.
+	boundary := len(c.rawSource)
+	if held {
+		boundary = start
+	}
+	if mathStart, ok := markdown.MathDisplayTailStart(c.rawSource, boundary, c.width); ok {
+		start, held = mathStart, true
+	}
 	return start, held
 }
 

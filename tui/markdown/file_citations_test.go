@@ -25,6 +25,7 @@ func TestFileCitationDirectiveRendersAsLocalLinkPath(t *testing.T) {
 	}{
 		{"absolute", `/tmp/report.xlsx`, "", "/tmp/report.xlsx"},
 		{"markdown significant", `/tmp/a*b*.txt`, "", "/tmp/a*b*.txt"},
+		{"math significant", `/tmp/$x$/report.md`, "", "/tmp/$x$/report.md"},
 		{"relative", `reports/final.xlsx`, "/repo", "reports/final.xlsx"},
 		{"windows", `C:\Users\me\.codex\report.xlsx`, "", "C:/Users/me/.codex/report.xlsx"},
 		{"percent literal", `reports/final%20report.xlsx`, "/repo", "reports/final%20report.xlsx"},
@@ -126,6 +127,19 @@ func TestFileCitationParserSupportsLiteralAndBackslashQuoting(t *testing.T) {
 	unquoted, ok := parseFileCitationDirective(":codex-file-citation{path=/tmp/a*b*.txt purpose=output}", 0, &budget)
 	if !ok || unquoted.attributes["path"] != "/tmp/a*b*.txt" {
 		t.Fatalf("unquoted path parsed = %#v ok=%v", unquoted, ok)
+	}
+}
+
+// Rust #45501 (`file_citations_preserve_adjacent_entities_and_escaped_punctuation`):
+// inline math next to a citation leaves the citation path untouched, including
+// its own dollar-delimited segment.
+func TestFileCitationPathBetweenInlineMathLikeRust(t *testing.T) {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	source := "$\\alpha$" + ":codex-file-citation{path=/tmp/$x$/report.md}" + "$\\beta$"
+	if got := strings.TrimSpace(citationRenderedText(t, source, "")); got != "α/tmp/$x$/report.mdβ" {
+		t.Fatalf("math around citation rendered = %q", got)
 	}
 }
 

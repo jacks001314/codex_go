@@ -137,6 +137,69 @@ func TestMathRendersSnapshotContentLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's inline snapshots, including the narrow-width render where the
+// converted formula has to wrap like any other text.
+func TestMathInlineWrapsLikeRustSnapshots(t *testing.T) {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	wide := collapseMarkdownSpaces(strings.Join(
+		plainMarkdownLines(t, "Inline $\\alpha^2 + \\beta_{10}$ on $\\mathbb{R}^n$.", 80), "\n"))
+	if wide != "Inline α² + β₁₀ on ℝⁿ." {
+		t.Fatalf("wide inline math = %q", wide)
+	}
+
+	narrow := plainMarkdownLines(t, "Words $\\alpha^2 + \\beta_1$ more words and $\\sqrt{x}$.", 16)
+	for _, line := range narrow {
+		if width := len([]rune(line)); width > 16 {
+			t.Fatalf("narrow inline math line %q is %d columns wide", line, width)
+		}
+	}
+	if joined := collapseMarkdownSpaces(strings.Join(narrow, "\n")); joined != "Words α² + β₁ more words and √(x)." {
+		t.Fatalf("narrow inline math = %q", joined)
+	}
+}
+
+func collapseMarkdownSpaces(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// MathDisplayTailStart mirrors Rust #45501's streaming boundary filter: a
+// boundary inside a display span, or a still-open standalone display, forces the
+// whole span into the mutable tail.
+func TestMathDisplayTailStartLikeRust(t *testing.T) {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	source := "Intro.\n\n$$\nx^2\n$$\n\nAfter $\\alpha$.\n"
+	displayStart := strings.Index(source, "$$")
+	displayEnd := strings.Index(source, "$$\n\nAfter") + len("$$")
+	if start, ok := MathDisplayTailStart(source, displayStart+3, 80); !ok || start != displayStart {
+		t.Fatalf("boundary inside the display held from (%d, %v), want %d", start, ok, displayStart)
+	}
+	if start, ok := MathDisplayTailStart(source, displayEnd, 80); ok {
+		t.Fatalf("boundary at the display end held from %d, want no holdback", start)
+	}
+	if start, ok := MathDisplayTailStart(source, len(source), 80); ok {
+		t.Fatalf("closed display held from %d, want no holdback", start)
+	}
+
+	open := "Intro.\n\n$$\nx^2\n"
+	if start, ok := MathDisplayTailStart(open, len(open), 80); !ok || start != strings.Index(open, "$$") {
+		t.Fatalf("open display held from (%d, %v), want %d", start, ok, strings.Index(open, "$$"))
+	}
+
+	// Inline math alone never holds the tail back.
+	if start, ok := MathDisplayTailStart("Value $\\alpha^2$.\n", 12, 80); ok {
+		t.Fatalf("inline math held the tail from %d", start)
+	}
+	// An oversized open display is outside the scan budget, so it is not held.
+	oversized := "$$\n" + strings.Repeat("x", maxMathBytes+1)
+	if start, ok := MathDisplayTailStart(oversized, len(oversized), 80); ok {
+		t.Fatalf("oversized display held the tail from %d", start)
+	}
+}
+
 // Mirrors Rust's narrow-fallback snapshot: an aligned block that cannot keep its
 // geometry at the available width is not fragmented. The TeX source survives
 // verbatim, including its delimiters and row separators.
