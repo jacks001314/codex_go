@@ -2953,6 +2953,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #50093 keeps one replaceable `SharedThreadInstructionsProviders` wrapper per root and avoids replacing its backing provider when a relaunched root supplies that same wrapper (#50093, not applicable).
 - Go has no host `ThreadInstructionsProvider`: `ThreadStartParams` exposes only static `baseInstructions`, while `turnInstructionsProvider` and `turnStepInstructionsProvider` build per-turn closures, skip subagents, and are never stored in a root-scoped replaceable wrapper.
 - The missing provider surface was already audited as an architecture difference for #44701 (Round 481) and recorded for #50093 in `update/plan_2026_10_06.md:294`; no shared wrapper exists that could recurse into itself.
-Status after reconciliation: `2134 complete`, `445 not_applicable`,
-`359 audit_pending`, `207 regression_pending`, `4 partial`,
+### Existing audit closures (Round 976)
+
+- Rust #49956 caches the MCP hook argument placeholder regex in a `LazyLock` (#49956, complete). Go already has package-scoped `mcpArgumentPlaceholderPattern` in `appserver/hooks_runner.go:467`, reused by `resolveMcpTemplateString`; `TestExpandMcpArgumentTemplateMatchesRust` covers substitution and missing-field errors.
+- Rust #50035 follows `tools/list` pagination in legacy MCP mode (#50035, complete). Go passes `NextCursor` unconditionally from both `listMCPHTTPTools` and `listMCPStdioTools` into `collectMCPPaginatedWithLimitAndMeta`; `TestMCPReadOnlyToolsRequestMetadataLikeRust` exercises both protocol modes over two pages.
+- Rust #50052 preserves question context in recovered TUI answer drafts (#50052, complete). `bottompane.AsyncQuestions.TakePendingDrafts`/`recoveredQuestionDraft` already quotes sanitized 512-byte-bounded titles and keeps answers untruncated; `tui/tea/async_questions.go` separates recovered entries with blank lines while retaining composer elements. Tests cover sanitization, UTF-8 truncation, turn-end recovery, and command-prefix escaping.
+- Verified with `go test ./appserver -run TestExpandMcpArgumentTemplateMatchesRust -count=1`, `go test ./mcp -run TestMCPReadOnlyToolsRequestMetadataLikeRust -count=1`, `go test ./tui/bottom_pane -run TestAsyncQuestionsTakePendingDrafts -count=1`, and `go test ./tui/tea -run TestTurnEndRecoversAsyncQuestionDraftsLikeRust -count=1`.
+Status after reconciliation: `2137 complete`, `445 not_applicable`,
+`356 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

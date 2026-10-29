@@ -25060,9 +25060,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 976: Go already caches the MCP hook placeholder regex. appserver/hooks_runner.go:467 declares package-scoped mcpArgumentPlaceholderPattern = regexp.MustCompile(`\\$\\{([^{}]+)\\}`), and resolveMcpTemplateString reuses it for every argument string, matching Rust #49956 LazyLock behavior. Substitution semantics and missing-field errors are covered by TestExpandMcpArgumentTemplateMatchesRust. Verified with go test ./appserver -run TestExpandMcpArgumentTemplateMatchesRust -count=1"
    ]
   },
   {
@@ -25168,9 +25168,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 976: Go follows tools/list pagination in both protocol modes. listMCPHTTPTools and listMCPStdioTools unconditionally pass response.NextCursor into collectMCPPaginatedWithLimitAndMeta, which applies the page/item/cursor bounds and repeated-cursor rejection regardless of ProtocolMode. TestMCPReadOnlyToolsRequestMetadataLikeRust iterates MCPProtocolLegacy and MCPProtocol20260728, forces a second page, and asserts the second tools/list carries cursor=next; update/plan_2026_10_06.md:292 recorded the same conclusion. Verified with go test ./mcp -run TestMCPReadOnlyToolsRequestMetadataLikeRust -count=1"
    ]
   },
   {
@@ -25228,9 +25228,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 976: Go already preserves question context in recovered answer drafts. tui/bottom_pane/async_questions.go TakePendingDrafts calls recoveredQuestionDraft, which trims the answer, bounds the title to maxRecoveredQuestionTitleBytes=512 at a UTF-8 boundary, sanitizes it through historycell.SanitizeUserText, renders every line as a Markdown blockquote, adds an ellipsis on truncation, and separates title/answer with a blank line. tui/tea/async_questions.go joins recovered drafts with blank lines, preserving the main draft and structured text elements. Tests: TestAsyncQuestionsTakePendingDraftsMatchesRust, TestAsyncQuestionsTakePendingDraftsBoundsUTF8Title, TestTurnEndRecoversAsyncQuestionDraftsLikeRust, TestTurnEndEscapesCommandDraftBeforeRecoveryLikeRust. Verified with go test ./tui/bottom_pane -run TestAsyncQuestionsTakePendingDrafts -count=1 and go test ./tui/tea -run TestTurnEndRecoversAsyncQuestionDraftsLikeRust -count=1"
    ]
   },
   {
