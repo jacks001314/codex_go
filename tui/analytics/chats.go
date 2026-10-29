@@ -77,6 +77,8 @@ type AnalyticsChatThread struct {
 	Preview string
 	// UpdatedAt is the thread's last activity in Unix seconds.
 	UpdatedAt int64
+	// CreatedAt is the thread's creation time in Unix seconds, when known.
+	CreatedAt int64
 	Ephemeral bool
 	// ParentThreadID marks subagent threads, which are excluded from Top chats.
 	ParentThreadID *string
