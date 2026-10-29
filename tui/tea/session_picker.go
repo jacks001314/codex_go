@@ -510,6 +510,11 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	m.State.BumpMessagesRevision()
 	m.insertSessionHeader()
+	// Rust startup.rs / session_lifecycle.rs #45980: a summary-only read-only
+	// snapshot tells the user that intermediate items are unavailable.
+	if notice := strings.TrimSpace(response.HistoryNotice); notice != "" {
+		m.addInfoHistoryMessage(notice)
+	}
 	if previousThreadID != threadID {
 		m.prependDaybreakNewTurnNotice()
 	}

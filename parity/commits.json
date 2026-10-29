@@ -14463,9 +14463,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust d7104e26 (#45980) read-only history now recovers from thread/turns/list when the full snapshot fails for a paginated thread: cursor omitted, limit 100, sortDirection desc, itemsView summary, replayed in chronological order, with the up-to-100-prompts notice. remoteTUIReadThreadForViewing implements the fallback for both the remote resume and agent-switch paths; thread/read includeTurns=true remains the preferred load, legacy threads still surface the history error, and the command center returns Couldn't load this conversation. Please try again. while preserving the current conversation. SessionResumeResponse and AgentThreadSwitchResponse carry HistoryNotice into the tea transcript. Tests: go test ./app -run 'TestInteractiveRemoteReadOnlySummaryHistoryFallbackLikeRust|TestInteractiveRemoteReadOnlyHistoryFailureLikeRust' -count=1; go test ./tui/tea -run 'TestReadOnlySummaryHistoryNoticeLikeRust' -count=1; go test ./tui/... -count=1"
    ]
   },
   {

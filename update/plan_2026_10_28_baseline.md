@@ -2589,6 +2589,17 @@ Session-only model and reasoning selection (#45831, complete).
 - #40504 is superseded by #42667 and therefore `not_applicable`; Go has no plan-type Trusted Access URL routing.
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
-Status after reconciliation: `2099 complete`, `410 not_applicable`,
-`428 audit_pending`, `210 regression_pending`, `2 partial`,
+Status after reconciliation: `2100 complete`, `410 not_applicable`,
+`427 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
+
+### Read-only summary history fallback (Round 936)
+
+Read-only conversations now recover from turn summaries when history paging fails (#45980, complete).
+
+- `remoteTUIReadThreadForViewing` keeps the full `thread/read` snapshot as the preferred read-only load. When it fails and the thread reports paginated history, it requests `thread/turns/list` with no cursor, `limit: 100`, `sortDirection: desc`, and `itemsView: summary`, then reverses the page into chronological order.
+- Legacy threads still surface the original history error and never request turn summaries.
+- The recovered snapshot carries Rust's notice: `Showing up to 100 recent prompts and final replies. Intermediate messages and tool activity are unavailable.` `SessionResumeResponse` and `AgentThreadSwitchResponse` gained `HistoryNotice`, which the tea resume and agent-switch paths append to the transcript.
+- When both history loads fail, the command center returns `Couldn't load this conversation. Please try again.` and keeps the current conversation; the session picker still reports the underlying error.
+- Added `TestInteractiveRemoteReadOnlySummaryHistoryFallbackLikeRust` (limit/view/order/notice on both attach paths), `TestInteractiveRemoteReadOnlyHistoryFailureLikeRust` (legacy no-fallback and both-fail preservation), and `TestReadOnlySummaryHistoryNoticeLikeRust` (tea transcript notice, including the quiet complete-snapshot case).
+- Verified with `go build ./...`, `go test ./app -run 'Remote|SessionPicker|ReadOnly|Agent' -count=1`, `go test ./tui/... -count=1`, and `go vet ./app ./tui/tea`.

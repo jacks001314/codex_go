@@ -1813,7 +1813,9 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		// refuse Guardian review threads. A failed metadata read preserves the
 		// existing resume behavior.
 		resumeCWD := strings.TrimSpace(selection.ResumeCWD)
+		var metadataThread *appserver.Thread
 		if thread, readErr := remoteTUIReadThread(ctx, client, threadID, false); readErr == nil && thread != nil {
+			metadataThread = thread
 			parentThreadID := ""
 			if thread.ParentThreadID != nil {
 				parentThreadID = *thread.ParentThreadID
@@ -1843,12 +1845,13 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		if !remoteTUIResumeConflict(resumeErr) {
 			return codextea.SessionResumeResponse{}, resumeErr
 		}
-		thread, err := remoteTUIReadThread(ctx, client, threadID, true)
+		thread, notice, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
 		response := remoteTUIResumeResponseFromThread(thread)
 		response.ReadOnly = true
+		response.HistoryNotice = notice
 		return response, nil
 	}
 }
@@ -2331,7 +2334,9 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	// task the resume fails with the active-writer conflict, so fall back to a
 	// frozen read-only history snapshot instead of refusing to open it.
 	resumeCWD := ""
+	var metadataThread *appserver.Thread
 	if thread, readErr := remoteTUIReadThread(ctx, client, threadID, false); readErr == nil && thread != nil {
+		metadataThread = thread
 		if thread.Ephemeral {
 			return codextea.AgentThreadSwitchResponse{}, fmt.Errorf("Agent thread %s is not yet available for replay or live attach.", threadID)
 		}
@@ -2351,12 +2356,15 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	if !remoteTUIResumeConflict(resumeErr) {
 		return codextea.AgentThreadSwitchResponse{}, resumeErr
 	}
-	thread, err := remoteTUIReadThread(ctx, client, threadID, true)
+	thread, notice, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
 	if err != nil {
-		return codextea.AgentThreadSwitchResponse{}, err
+		// Rust agents_overview.rs #45980 reports a concise retry message and
+		// keeps the current conversation when both history loads fail.
+		return codextea.AgentThreadSwitchResponse{}, errors.New(remoteTUIConversationUnavailableMessage)
 	}
 	response := remoteTUIAgentSwitchResponseFromThread(thread)
 	response.ReadOnly = true
+	response.HistoryNotice = notice
 	return response, nil
 }
 
@@ -2436,6 +2444,55 @@ func remoteTUIReadThread(ctx context.Context, client *remoteAppServerTUIClient, 
 		return nil, fmt.Errorf("thread/read returned no thread for %s", strings.TrimSpace(threadID))
 	}
 	return response.Thread, nil
+}
+
+// remoteTUIReadOnlyHistoryTurnLimit bounds the summary recovery page.
+const remoteTUIReadOnlyHistoryTurnLimit = 100
+
+const (
+	remoteTUISummaryHistoryNotice = "Showing up to 100 recent prompts and final replies. Intermediate messages and tool activity are unavailable."
+
+	remoteTUIConversationUnavailableMessage = "Couldn't load this conversation. Please try again."
+)
+
+// remoteTUIReadThreadForViewing loads a read-only history snapshot of a
+// conversation owned by another app. It prefers the full embedded history and,
+// when that load fails for a paginated thread, recovers the latest 100 turn
+// summaries in chronological order (Rust #45980). The returned notice tells the
+// caller that intermediate items are unavailable; it is empty when the full
+// history loaded. metadata is the pre-resume thread read when one succeeded.
+func remoteTUIReadThreadForViewing(ctx context.Context, client *remoteAppServerTUIClient, threadID string, metadata *appserver.Thread) (*appserver.Thread, string, error) {
+	thread, historyErr := remoteTUIReadThread(ctx, client, threadID, true)
+	if historyErr == nil {
+		return thread, "", nil
+	}
+	if metadata == nil {
+		var err error
+		metadata, err = remoteTUIReadThread(ctx, client, threadID, false)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if metadata.HistoryMode == "" || metadata.HistoryMode == appserver.ThreadHistoryLegacy {
+		return nil, "", historyErr
+	}
+	limit := remoteTUIReadOnlyHistoryTurnLimit
+	var page appserver.TurnsPage
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadTurnsList, appserver.ThreadTurnsListParams{
+		ThreadID:      strings.TrimSpace(threadID),
+		Limit:         &limit,
+		SortDirection: appserver.SortDesc,
+		ItemsView:     appserver.TurnItemsSummary,
+	}, &page); err != nil {
+		return nil, "", err
+	}
+	// The summary page arrives newest first; replay it in chronological order.
+	turns := make([]appserver.Turn, 0, len(page.Data))
+	for index := len(page.Data) - 1; index >= 0; index-- {
+		turns = append(turns, page.Data[index])
+	}
+	metadata.Turns = turns
+	return metadata, remoteTUISummaryHistoryNotice, nil
 }
 
 // remoteTUIThreadModel / remoteTUIThreadProvider read the server-reported

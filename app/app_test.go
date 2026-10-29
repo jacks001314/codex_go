@@ -5849,6 +5849,256 @@ type remoteTUITestRequest struct {
 	Params json.RawMessage `json:"params"`
 }
 
+// remoteSummaryHistoryTurns returns a newest-first summary page whose turns
+// replay into chronological prompt/answer pairs.
+func remoteSummaryHistoryTurns() []any {
+	build := func(turnID string, prompt string, answer string) any {
+		return map[string]any{
+			"id":        turnID,
+			"status":    "completed",
+			"itemsView": "summary",
+			"items": []any{
+				map[string]any{"id": turnID + "-user", "type": "userMessage", "text": prompt},
+				map[string]any{"id": turnID + "-agent", "type": "agentMessage", "text": answer},
+			},
+		}
+	}
+	return []any{
+		build("turn-2", "prompt two", "answer two"),
+		build("turn-1", "prompt one", "answer one"),
+	}
+}
+
+// TestInteractiveRemoteReadOnlySummaryHistoryFallbackLikeRust covers Rust
+// #45980: a paginated read-only conversation whose history paging fails
+// reopens from the latest 100 turn summaries, replayed chronologically, with
+// the incompleteness notice surfaced on both attach paths.
+func TestInteractiveRemoteReadOnlySummaryHistoryFallbackLikeRust(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 16)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadRead):
+				var params appserver.ThreadReadParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-worker" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/read params = %#v", params))
+					return
+				}
+				if params.IncludeTurns {
+					remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{
+						"code":    -32000,
+						"message": "history paging unavailable",
+					}})
+					continue
+				}
+				thread := remoteSessionTestThread("thread-worker", "Scout", false, 0)
+				thread["historyMode"] = string(appserver.ThreadHistoryPaginated)
+				thread["cwd"] = "D:/saved-agent"
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
+			case string(appserver.MethodThreadResume):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{
+					"code":    -32000,
+					"message": "thread thread-worker already has an active writer",
+				}})
+			case string(appserver.MethodThreadTurnsList):
+				var params appserver.ThreadTurnsListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-worker" || params.Cursor != nil {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/turns/list params = %#v", params))
+					return
+				}
+				if params.Limit == nil || *params.Limit != 100 {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/turns/list limit = %#v", params.Limit))
+					return
+				}
+				if params.SortDirection != appserver.SortDesc || params.ItemsView != appserver.TurnItemsSummary {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/turns/list view = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+					"data":       remoteSummaryHistoryTurns(),
+					"nextCursor": nil,
+				}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	switchResponse, err := interactiveRemoteSwitchAgentThread(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, "thread-worker")
+	if err != nil {
+		t.Fatalf("switch agent error = %v", err)
+	}
+	if !switchResponse.ReadOnly {
+		t.Fatal("a task managed elsewhere must open read-only")
+	}
+	if switchResponse.HistoryNotice != remoteTUISummaryHistoryNotice {
+		t.Fatalf("switch history notice = %q", switchResponse.HistoryNotice)
+	}
+	if len(switchResponse.Messages) != 4 ||
+		switchResponse.Messages[0].Text != "prompt one" || switchResponse.Messages[1].Text != "answer one" ||
+		switchResponse.Messages[2].Text != "prompt two" || switchResponse.Messages[3].Text != "answer two" {
+		t.Fatalf("summary history messages are not chronological: %#v", switchResponse.Messages)
+	}
+
+	backendID := codextui.NewBackendID()
+	handler := interactiveRemoteResumeSessionHandler(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, backendID)
+	resumeResponse, err := handler(codextui.SessionSelection{
+		Kind:   codextui.SessionSelectionResume,
+		Target: codextui.SessionTarget{BackendID: backendID, ThreadID: "thread-worker"},
+	})
+	if err != nil {
+		t.Fatalf("resume session error = %v", err)
+	}
+	if !resumeResponse.ReadOnly || resumeResponse.HistoryNotice != remoteTUISummaryHistoryNotice {
+		t.Fatalf("resume fallback = readOnly=%v notice=%q", resumeResponse.ReadOnly, resumeResponse.HistoryNotice)
+	}
+	if len(resumeResponse.Messages) != 4 || resumeResponse.Messages[0].Text != "prompt one" || resumeResponse.Messages[3].Text != "answer two" {
+		t.Fatalf("resume summary history messages are not chronological: %#v", resumeResponse.Messages)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+// TestInteractiveRemoteReadOnlyHistoryFailureLikeRust covers Rust #45980: the
+// summary fallback is limited to paginated history, and the command center
+// reports a concise retry message when both loads fail.
+func TestInteractiveRemoteReadOnlyHistoryFailureLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		historyMode   appserver.ThreadHistoryMode
+		failSummary   bool
+		wantMessage   string
+		wantTurnsList bool
+	}{
+		{name: "legacy", historyMode: appserver.ThreadHistoryLegacy, wantMessage: "history paging unavailable"},
+		{name: "both fail", historyMode: appserver.ThreadHistoryPaginated, failSummary: true, wantMessage: remoteTUIConversationUnavailableMessage, wantTurnsList: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			requests := make(chan remoteTUITestRequest, 8)
+			serverErrs := make(chan error, 1)
+			sawTurnsList := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				defer conn.Close(websocket.StatusNormalClosure, "")
+				for {
+					req, err := remoteTUITestReadRequest(ctx, conn)
+					if err != nil {
+						if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+							return
+						}
+						remoteTUITestSendErr(serverErrs, err)
+						return
+					}
+					requests <- req
+					switch req.Method {
+					case string(appserver.MethodInitialize):
+						remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+					case string(appserver.MethodThreadRead):
+						var params appserver.ThreadReadParams
+						if err := json.Unmarshal(req.Params, &params); err != nil {
+							remoteTUITestSendErr(serverErrs, err)
+							return
+						}
+						if params.IncludeTurns {
+							remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{
+								"code":    -32000,
+								"message": "history paging unavailable",
+							}})
+							continue
+						}
+						thread := remoteSessionTestThread("thread-worker", "Scout", false, 0)
+						thread["historyMode"] = string(testCase.historyMode)
+						remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
+					case string(appserver.MethodThreadResume):
+						remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{
+							"code":    -32000,
+							"message": "thread thread-worker already has an active writer",
+						}})
+					case string(appserver.MethodThreadTurnsList):
+						sawTurnsList = true
+						remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{
+							"code":    -32000,
+							"message": "summary history unavailable",
+						}})
+						return
+					default:
+						remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+						return
+					}
+				}
+			}))
+			defer server.Close()
+
+			endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			var err error
+			if testCase.historyMode == appserver.ThreadHistoryLegacy {
+				// The session picker surfaces the history error; only the
+				// command-center path substitutes the concise retry message.
+				backendID := codextui.NewBackendID()
+				handler := interactiveRemoteResumeSessionHandler(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, backendID)
+				_, err = handler(codextui.SessionSelection{
+					Kind:   codextui.SessionSelectionResume,
+					Target: codextui.SessionTarget{BackendID: backendID, ThreadID: "thread-worker"},
+				})
+			} else {
+				_, err = interactiveRemoteSwitchAgentThread(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, "thread-worker")
+			}
+			if err == nil || err.Error() != testCase.wantMessage {
+				t.Fatalf("history error = %v, want %q", err, testCase.wantMessage)
+			}
+			if sawTurnsList != testCase.wantTurnsList {
+				t.Fatalf("turns/list requested = %v, want %v", sawTurnsList, testCase.wantTurnsList)
+			}
+			select {
+			case err := <-serverErrs:
+				t.Fatalf("server error: %v", err)
+			default:
+			}
+		})
+	}
+}
+
 func remoteAgentTestThread(id string, nickname string, role string, source string, status string, parentID *string, turns []any) map[string]any {
 	thread := remoteSessionTestThread(id, id, false, 0)
 	thread["status"] = map[string]any{"type": status}

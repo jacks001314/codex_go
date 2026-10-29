@@ -328,6 +328,11 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.State.Messages = messages
 		m.State.BumpMessagesRevision()
 		m.insertSessionHeader()
+		// Rust agents_overview.rs #45980: a summary-only read-only snapshot
+		// tells the user that intermediate items are unavailable.
+		if notice := strings.TrimSpace(message.Response.HistoryNotice); notice != "" {
+			m.addInfoHistoryMessage(notice)
+		}
 		status := strings.TrimSpace(message.Response.Status)
 		if status == "" {
 			status = "idle"
