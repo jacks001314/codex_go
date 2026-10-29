@@ -13960,7 +13960,13 @@ func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetA
 		resetCredits = &auth.RateLimitResetCreditsSummary{AvailableCount: response.RateLimitResetCredits.AvailableCount}
 	}
 	r.requireAccount().SetRateLimits(rateLimits, byLimitID, resetCredits)
-	ordinary, accountID, upsell := accountBoundRateLimitExtras(response, snapshot)
+	// Login can change while the backend read is in flight, so recheck the
+	// active identity before exposing account-bound CTA content (Rust #45762).
+	var activeAuth *auth.AuthDotJSON
+	if current, resolveErr := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout()); resolveErr == nil && current != nil {
+		activeAuth = &current.Auth
+	}
+	ordinary, accountID, upsell := accountBoundRateLimitExtras(response, activeAuth)
 	r.requireAccount().SetRateLimitExtras(ordinary, accountID, upsell)
 	return r.requireAccount().RateLimits(), nil
 }

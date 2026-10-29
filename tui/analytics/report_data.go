@@ -85,7 +85,7 @@ type analyticsTool struct {
 // reads for that report kind.
 func projectAnalyticsResponse(response chatgptapi.AnalyticsResponse) analyticsData {
 	switch response.Kind {
-	case chatgptapi.AnalyticsReportUsage:
+	case chatgptapi.AnalyticsReportUsage, chatgptapi.AnalyticsReportEnterpriseTokens, chatgptapi.AnalyticsReportWorkspaceCredits:
 		if response.Usage == nil {
 			return analyticsData{}
 		}

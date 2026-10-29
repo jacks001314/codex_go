@@ -17,11 +17,11 @@ func analyticsDayForTest(t *testing.T, value string) time.Time {
 	return date
 }
 
-// TestTaskStartKeepsFullDenominatorAndMissingAttributionLikeRust mirrors Rust
-// #45740: task-start grouping excludes non-user attribution from the buckets but
-// keeps it in the daily total, and a usage record without any breakdown is
-// unavailable rather than zero.
-func TestTaskStartKeepsFullDenominatorAndMissingAttributionLikeRust(t *testing.T) {
+// TestTurnStartIncludesAllFeaturesAndMissingAttributionLikeRust mirrors Rust
+// #45762: turn-start grouping includes every feature while keeping the full
+// daily denominator, and a usage record without any breakdown is unavailable
+// rather than zero.
+func TestTurnStartIncludesAllFeaturesAndMissingAttributionLikeRust(t *testing.T) {
 	date := analyticsDayForTest(t, "2026-01-09")
 	response := analyticsData{Data: []analyticsRecord{{
 		Date: "2026-01-09",
@@ -39,9 +39,10 @@ func TestTaskStartKeepsFullDenominatorAndMissingAttributionLikeRust(t *testing.T
 		Data: []AccountAnalyticsDay{{
 			Date:  date,
 			Total: 100,
-			Values: []AccountAnalyticsValue{{
-				Key: "start-composer", Label: "User messages", Value: 30,
-			}},
+			Values: []AccountAnalyticsValue{
+				{Key: "start-composer", Label: "User messages", Value: 30},
+				{Key: "unknown", Label: "Unknown", Value: 70},
+			},
 		}},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -208,10 +209,11 @@ func TestCountReportsPreserveExplicitZeroAndOmitUnreportedDaysLikeRust(t *testin
 	}
 }
 
-// TestConsumerPlanPrefersDailyProductsAndModelsLikeRust mirrors Rust #45740:
-// surface and model breakdowns win over attribution, work_ surfaces merge into
-// "work", and models under 1% of relative usage fold into "other".
-func TestConsumerPlanPrefersDailyProductsAndModelsLikeRust(t *testing.T) {
+// TestLegacyConsumerHistoryKeepsDailyProductsAndModelsLikeRust mirrors Rust
+// #45762: without attribution the legacy surface and model breakdowns are used,
+// work_ surfaces merge into "work", and models under 1% of relative usage fold
+// into "other".
+func TestLegacyConsumerHistoryKeepsDailyProductsAndModelsLikeRust(t *testing.T) {
 	date := analyticsDayForTest(t, "2026-09-01")
 	relative := "relative"
 	response := analyticsData{
@@ -227,7 +229,6 @@ func TestConsumerPlanPrefersDailyProductsAndModelsLikeRust(t *testing.T) {
 				{Model: "tiny", Credits: floatPointer(0.3)},
 				{Model: "OTHER", Credits: floatPointer(0.2)},
 			},
-			Attribution: []analyticsUsageAttribution{{Surface: stringPointer("wrong"), Model: stringPointer("wrong"), Value: 999}},
 		}},
 	}
 	surface, err := history(response, AccountAnalyticsReportUsage, AccountAnalyticsGroupingSurface, date, date)
@@ -261,6 +262,49 @@ func TestConsumerPlanPrefersDailyProductsAndModelsLikeRust(t *testing.T) {
 	}
 	if inCredits.Unit != AccountAnalyticsUnitCredits || len(inCredits.Data[0].Values) != 4 {
 		t.Fatalf("credits history = %#v", inCredits)
+	}
+}
+
+// TestCompleteAttributionWinsAndIncompleteIsNotMixedLikeRust mirrors Rust
+// #45762: complete attribution replaces legacy surface/model rows and keeps
+// relative usage even when the payload reports credits, while a response with
+// any unattributed row does not mix the two sources.
+func TestCompleteAttributionWinsAndIncompleteIsNotMixedLikeRust(t *testing.T) {
+	date := analyticsDayForTest(t, "2026-09-01")
+	credits := "credits"
+	response := analyticsData{
+		Units: &credits,
+		Data: []analyticsRecord{{
+			Date:                      "2026-09-01",
+			ProductSurfaceUsageValues: map[string]float64{"cli": 999},
+			Models:                    []analyticsModel{{Model: "legacy", Credits: floatPointer(999)}},
+			Attribution: []analyticsUsageAttribution{
+				{ThreadSource: stringPointer("user"), TurnTrigger: stringPointer("composer"), Surface: stringPointer("desktop_app"), Model: stringPointer("alpha"), Value: 30},
+				{ThreadSource: stringPointer("subagent"), TurnTrigger: stringPointer("goal"), Surface: stringPointer("cli"), Model: stringPointer("tiny"), Value: 0.1},
+			},
+		}},
+	}
+	for _, grouping := range []AccountAnalyticsGrouping{
+		AccountAnalyticsGroupingFeature,
+		AccountAnalyticsGroupingModel,
+		AccountAnalyticsGroupingSurface,
+		AccountAnalyticsGroupingTaskStart,
+	} {
+		normalized, err := history(response, AccountAnalyticsReportUsage, grouping, date, date)
+		if err != nil || normalized == nil {
+			t.Fatalf("grouping %v history = %#v, %v", grouping, normalized, err)
+		}
+		if normalized.Unit != AccountAnalyticsUnitRelativeUsage || normalized.Data[0].Total != 30.1 || len(normalized.Data[0].Values) != 2 {
+			t.Fatalf("grouping %v history = %#v", grouping, normalized)
+		}
+	}
+	incomplete := analyticsData{Data: []analyticsRecord{
+		{Date: "2026-09-01", Attribution: []analyticsUsageAttribution{}},
+		{Date: "2026-09-02"},
+	}}
+	got, err := history(incomplete, AccountAnalyticsReportUsage, AccountAnalyticsGroupingFeature, date, analyticsDayForTest(t, "2026-09-02"))
+	if err != nil || got != nil {
+		t.Fatalf("incomplete attribution history = %#v, %v; want nil, nil", got, err)
 	}
 }
 

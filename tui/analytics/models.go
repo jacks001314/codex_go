@@ -75,8 +75,10 @@ func CreditGroupings(plan auth.PlanType) []AccountAnalyticsGrouping {
 			AccountAnalyticsGroupingSpeed,
 			AccountAnalyticsGroupingReasoning,
 		}
-	default:
+	case AccountKindConsumer:
 		return []AccountAnalyticsGrouping{AccountAnalyticsGroupingSurface}
+	default:
+		return nil
 	}
 }
 

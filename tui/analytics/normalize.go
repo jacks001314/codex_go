@@ -10,6 +10,25 @@ import (
 	"codex_go/chatgptapi"
 )
 
+// hasCompleteAttribution reports whether every in-range usage row carries an
+// attribution breakdown. Out-of-range legacy rows do not change attribution
+// semantics for the requested period (Rust normalize.rs, #45762).
+func hasCompleteAttribution(data analyticsData, start time.Time, end time.Time) (bool, error) {
+	for _, record := range data.Data {
+		date, err := analyticsRecordDate(record.Date)
+		if err != nil {
+			return false, err
+		}
+		if date.Before(start) || date.After(end) {
+			continue
+		}
+		if record.Attribution == nil {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // historyForResponse projects one typed backend report and normalizes it.
 func historyForResponse(
 	response chatgptapi.AnalyticsResponse,
@@ -39,6 +58,10 @@ func history(
 			return nil, errors.New("Unsupported message count grouping.")
 		}
 	}
+	attributed, err := hasCompleteAttribution(data, start, end)
+	if err != nil {
+		return nil, err
+	}
 	days := map[time.Time]*analyticsDayAccumulator{}
 	for _, record := range data.Data {
 		date, err := analyticsRecordDate(record.Date)
@@ -53,7 +76,7 @@ func history(
 			accumulator = &analyticsDayAccumulator{values: map[string]float64{}}
 			days[date] = accumulator
 		}
-		if err := accumulateAnalyticsRecord(record, report, grouping, accumulator); err != nil {
+		if err := accumulateAnalyticsRecord(record, report, grouping, attributed, accumulator); err != nil {
 			if errors.Is(err, errAnalyticsUnavailable) {
 				return nil, nil
 			}
@@ -68,7 +91,7 @@ func history(
 			}
 		}
 	}
-	if report == AccountAnalyticsReportUsage && grouping == AccountAnalyticsGroupingModel && unitsOf(data) != "credits" {
+	if report == AccountAnalyticsReportUsage && !attributed && grouping == AccountAnalyticsGroupingModel && unitsOf(data) != "credits" {
 		foldSmallModelUsage(days)
 	}
 	if report == AccountAnalyticsReportCredits {
@@ -79,7 +102,7 @@ func history(
 		}
 	}
 	return &AccountAnalyticsHistory{
-		Unit:      analyticsHistoryUnit(report, data),
+		Unit:      analyticsHistoryUnit(report, data, attributed),
 		UpdatedAt: analyticsFreshness(data.DataFreshnessTS),
 		Data:      analyticsHistoryDays(days, data.Series),
 	}, nil
@@ -92,10 +115,10 @@ type analyticsDayAccumulator struct {
 
 // accumulateAnalyticsRecord applies one report record to its day and reports
 // Ok(None) as a sentinel error so the caller stops without surfacing a failure.
-func accumulateAnalyticsRecord(record analyticsRecord, report AccountAnalyticsReport, grouping AccountAnalyticsGrouping, accumulator *analyticsDayAccumulator) error {
+func accumulateAnalyticsRecord(record analyticsRecord, report AccountAnalyticsReport, grouping AccountAnalyticsGrouping, attributed bool, accumulator *analyticsDayAccumulator) error {
 	switch report {
 	case AccountAnalyticsReportUsage:
-		return accumulateUsageRecord(record, grouping, accumulator)
+		return accumulateUsageRecord(record, grouping, attributed, accumulator)
 	case AccountAnalyticsReportCredits:
 		return accumulateCreditsRecord(record, grouping, accumulator)
 	case AccountAnalyticsReportMessages:
@@ -107,25 +130,27 @@ func accumulateAnalyticsRecord(record analyticsRecord, report AccountAnalyticsRe
 	}
 }
 
-func accumulateUsageRecord(record analyticsRecord, grouping AccountAnalyticsGrouping, accumulator *analyticsDayAccumulator) error {
+func accumulateUsageRecord(record analyticsRecord, grouping AccountAnalyticsGrouping, attributed bool, accumulator *analyticsDayAccumulator) error {
 	var daily map[string]float64
 	dailyReported := false
-	switch grouping {
-	case AccountAnalyticsGroupingSurface:
-		if record.ProductSurfaceUsageValues != nil {
-			daily = record.ProductSurfaceUsageValues
-			dailyReported = true
-		}
-	case AccountAnalyticsGroupingModel:
-		if record.Models != nil {
-			daily = map[string]float64{}
-			for _, model := range record.Models {
-				if model.Credits == nil {
-					return errors.New("Plan usage amount was not reported.")
-				}
-				daily[model.Model] += *model.Credits
+	if !attributed {
+		switch grouping {
+		case AccountAnalyticsGroupingSurface:
+			if record.ProductSurfaceUsageValues != nil {
+				daily = record.ProductSurfaceUsageValues
+				dailyReported = true
 			}
-			dailyReported = true
+		case AccountAnalyticsGroupingModel:
+			if record.Models != nil {
+				daily = map[string]float64{}
+				for _, model := range record.Models {
+					if model.Credits == nil {
+						return errors.New("Plan usage amount was not reported.")
+					}
+					daily[model.Model] += *model.Credits
+				}
+				dailyReported = true
+			}
 		}
 	}
 	if dailyReported {
@@ -147,7 +172,7 @@ func accumulateUsageRecord(record analyticsRecord, grouping AccountAnalyticsGrou
 		}
 		return nil
 	}
-	if record.Attribution == nil {
+	if !attributed || record.Attribution == nil {
 		return errAnalyticsUnavailable
 	}
 	for _, entry := range record.Attribution {
@@ -155,9 +180,6 @@ func accumulateUsageRecord(record analyticsRecord, grouping AccountAnalyticsGrou
 			return errors.New("Analytics returned an invalid amount.")
 		}
 		accumulator.total += entry.Value
-		if grouping == AccountAnalyticsGroupingTaskStart && pointerValue(entry.ThreadSource) != "user" {
-			continue
-		}
 		var key string
 		switch grouping {
 		case AccountAnalyticsGroupingFeature:
@@ -313,10 +335,10 @@ func foldSmallModelUsage(days map[time.Time]*analyticsDayAccumulator) {
 	}
 }
 
-func analyticsHistoryUnit(report AccountAnalyticsReport, data analyticsData) AccountAnalyticsUnit {
+func analyticsHistoryUnit(report AccountAnalyticsReport, data analyticsData, attributed bool) AccountAnalyticsUnit {
 	switch report {
 	case AccountAnalyticsReportUsage:
-		if unitsOf(data) == "credits" {
+		if !attributed && unitsOf(data) == "credits" {
 			return AccountAnalyticsUnitCredits
 		}
 		return AccountAnalyticsUnitRelativeUsage
