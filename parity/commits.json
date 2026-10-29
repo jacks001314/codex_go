@@ -27919,9 +27919,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "update/plan_2026_10_28_baseline.md: Round 969 verifies typed retained-section content across line/JSON transcripts and source message IDs.",
+    "state/guardian_retained_context.go: SplitRetainedInstructionFragments partitions on RetainedInstructionPolicy(fragment.Kind) and the assistant markers are added only inside retainedAssistantContextSectionItems, so a bare input-text comparison can never decide the split.",
+    "state/guardian_retained_context.go: retainedSourceDelivered accepts only a complete captured source as delivery proof.",
+    "Tests: TestRetainedInstructionTypedSectionsAcrossTranscriptFormatsLikeRust.",
+    "Verified with go test ./state -run TestRetainedInstructionTypedSectionsAcrossTranscriptFormatsLikeRust -count=1 and go test ./state -count=1."
    ]
   },
   {

@@ -2901,6 +2901,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `appserver/guardian_reviewer.go:904` fails the review closed when preparation fails, and the review request carries the prepared read-only profile, provider id, session id and parent ephemeral intent.
 - Tests: `TestGuardianPrepareReviewerOptionsIsolatesParentConfigLikeRust`, `TestGuardianPrepareReviewerOptionsKeepsSameModelContextLikeRust`, `TestGuardianPrepareReviewerOptionsRetainsClientDeveloperMessagesLikeRust`, `TestGuardianPrepareReviewerOptionsNarrowsEnvironmentsLikeRust`, `TestGuardianPrepareReviewerOptionsRejectsUnresolvedEnvironmentsLikeRust`, `TestGuardianPrepareReviewerOptionsExternalSandboxFallbackLikeRust`, `TestGuardianReviewPlanPreparesReviewerSessionLikeRust`.
 - Verified with `go test ./appserver -run 'Guardian|InternalSession' -count=1`, `go test ./state ./sandbox ./model ./config ./features -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`. Full `go test ./appserver` still hits the pre-existing `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust` / `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust` timeouts and the Rust-checkout `https_mock` manifest drift, all reproduced at `c1f05435` without these changes.
-Status after reconciliation: `2131 complete`, `442 not_applicable`,
-`363 audit_pending`, `210 regression_pending`, `3 partial`,
+### Typed retained section content (Round 969)
+
+- Rust #51642 matches retained instruction splitting, assistant framing markers and empty assistant-context detection on `SectionContent::Other(ContentItem::InputText)` instead of bare `ContentItem::InputText`, and extends the snapshot-split test over line/JSON transcripts with and without a source message ID (#51642, complete).
+- Go's split is structurally typed already: `state/guardian_retained_context.go:371` partitions by `RetainedInstructionPolicy(fragment.Kind)`, `:387` adds the assistant markers only while building the framed section, and `:613` accepts only a complete captured source as delivery proof, so no text comparison can move a message between sections.
+- `state/guardian_retained_typed_sections_like_rust_test.go` mirrors the extended matrix: `line`/`json` x source id present/absent over four generations, asserting a stable instruction prefix, one delivery of the instruction, assistant originals framed behind the transcript, format-correct transcript records, banner-only deduplication for sourced records, no delivery proof without a message ID, and idempotent repeated preparation.
+- Verified with `go test ./state -run TestRetainedInstructionTypedSectionsAcrossTranscriptFormatsLikeRust -count=1` and `go test ./state -count=1`.
+Status after reconciliation: `2132 complete`, `442 not_applicable`,
+`362 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
