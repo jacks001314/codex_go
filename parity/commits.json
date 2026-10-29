@@ -14103,9 +14103,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 8/8 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust 4d2807023aae (#45807) records interrupted regular turns in the managed daemon recovery snapshot and skips completed, cancelled, review, and compaction tasks. Go already had the snapshot file format (daemonrecovery WriteSnapshot/ReadSnapshot with the codex-interrupted-v1 metadata entry), the producer (appserver/daemon_recovery_snapshot.go DaemonRecoverySnapshot plus DaemonRecoverySink), and the restore/continue consumers. The remaining gap was the task-kind filter: only review turns were excluded, so a thread/compact/start task (Originator compact, appserver/runtime_router.go handleThreadCompactStartRuntime) was captured as an interrupted turn and would be auto-continued after a restart. Added turnStartCompactionRuntime in appserver/turn_runtime.go and made daemonRecoveryInterruptedTurn skip it alongside review turns, mirroring Rust TaskKind::Regular. Added appserver/daemon_recovery_turns_like_rust_test.go TestDaemonRecoverySnapshotTurnStatesLikeRust covering running (recorded), completed (consumed), cancelled (cancelActiveRuntimeTurn), and compacting (skipped) turns. Verified: go test ./appserver -run DaemonRecovery and go build ./...."
    ]
   },
   {

@@ -2339,6 +2339,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Added `tui/agents_overview/hide_selection_like_rust_test.go` (`TestHideSelectedKeepsSelectionAdjacentLikeRust`, `TestHideSelectedFollowsSearchFilterLikeRust`, `TestHideSelectedWhileRenamingCancelsDraftLikeRust`, `TestHideSelectedHidesEveryVisibleTaskLikeRust`).
 - Verified with `go test ./tui/agents_overview`.
 
-Status after reconciliation: `2081 complete`, `408 not_applicable`,
-`432 audit_pending`, `224 regression_pending`, `4 partial`,
+### Skip compaction tasks in managed daemon recovery snapshots (Round 920)
+
+- Upstream (`4d2807023aae`, #45807) records regular, uncancelled turns in the managed daemon recovery snapshot and resumes them after a restart, while completed, cancelled, review, and compaction tasks never become resume candidates.
+- Go already had the on-disk format (`daemonrecovery` `WriteSnapshot`/`ReadSnapshot` with the `codex-interrupted-v1:` metadata entry), the producer (`appserver/daemon_recovery_snapshot.go` `DaemonRecoverySnapshot` plus the daemon-scoped `DaemonRecoverySink`), and the restore/continue consumers.
+- The remaining gap was the task-kind filter: only review turns were excluded, so a `thread/compact/start` task (originator `compact`, started in `handleThreadCompactStartRuntime`) was captured as an interrupted turn and would be continued automatically after a restart. Added `turnStartCompactionRuntime` in `appserver/turn_runtime.go` and made `daemonRecoveryInterruptedTurn` skip it next to review turns, mirroring Rust's `TaskKind::Regular` gate.
+- Added `appserver/daemon_recovery_turns_like_rust_test.go` (`TestDaemonRecoverySnapshotTurnStatesLikeRust`) covering running (recorded), completed (consumed), cancelled (`cancelActiveRuntimeTurn`), and compacting (skipped) turns.
+- Verified with `go test ./appserver -run DaemonRecovery` and `go build ./...`.
+
+Status after reconciliation: `2082 complete`, `408 not_applicable`,
+`432 audit_pending`, `223 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

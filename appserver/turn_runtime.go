@@ -658,6 +658,16 @@ func turnStartReviewRuntime(params *turn.TurnStartParams) bool {
 	return strings.EqualFold(strings.TrimSpace(params.Originator), "review")
 }
 
+// turnStartCompactionRuntime mirrors Rust's TaskKind::Compact: a
+// `thread/compact/start` task is not a regular turn, so daemon recovery never
+// resumes it after a restart (Rust #45807).
+func turnStartCompactionRuntime(params *turn.TurnStartParams) bool {
+	if params == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(params.Originator), "compact")
+}
+
 func turnStartPlanMode(params *turn.TurnStartParams) bool {
 	if params == nil || params.CollaborationMode == nil {
 		return false

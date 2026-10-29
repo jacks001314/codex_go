@@ -110,8 +110,9 @@ func (r *RuntimeRouter) daemonRecoveryInterruptedTurn(record *session.Record, th
 	if active == nil || strings.TrimSpace(active.TurnID) == "" || active.Params == nil {
 		return daemonrecovery.InterruptedTurn{}, false
 	}
-	// TaskKind::Regular: review and other non-regular tasks are never resumed.
-	if turnStartReviewRuntime(active.Params) {
+	// TaskKind::Regular: review, compaction, and other non-regular tasks are
+	// never resumed (Rust #45807).
+	if turnStartReviewRuntime(active.Params) || turnStartCompactionRuntime(active.Params) {
 		return daemonrecovery.InterruptedTurn{}, false
 	}
 	// RecordedTurnInput: the turn's accepted input must already be in the record,
