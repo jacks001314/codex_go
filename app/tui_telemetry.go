@@ -192,7 +192,7 @@ func interactiveDaemonSelectionReason(root *cli.RootOptions, endpoint *appserver
 	default:
 		return "incompatible_option"
 	}
-	if daemonAutoStartFeature(root) {
+	if daemonAutoStartRequested(root) {
 		return "auto_start"
 	}
 	if endpoint != nil {

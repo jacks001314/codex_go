@@ -1095,7 +1095,7 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	// daemon's reported configuration before the TUI opens. An optional
 	// attachment that cannot recover still falls back to embedded mode.
 	if implicitLocalDaemon || explicitLocalDaemon {
-		allowEmbeddedFallback := implicitLocalDaemon && !daemonAutoStartFeature(root)
+		allowEmbeddedFallback := implicitLocalDaemon && !daemonAutoStartRequested(root)
 		resolvedEndpoint, _, compatibilityErr := resolveDaemonCompatibility(ctx, root, remoteEndpoint, allowEmbeddedFallback, stdin, stdout)
 		if compatibilityErr != nil {
 			return interactiveFatalExit(stderr, compatibilityErr.Error())

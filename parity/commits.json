@@ -15772,9 +15772,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Worktree daemon eligibility: app/daemon_startup.go:79 daemonStartupExclusion no longer returns --worktree, so a worktree launch may reuse the shared server while --no-daemon still excludes it. The new daemonAutoStartRequested helper (app/daemon_startup.go:312) mirrors Rust startup_orchestration auto_start_daemon: a --worktree launch never starts the shared server and keeps embedded fallback, and app/tui_telemetry.go:195 plus app/interactive.go:1098 use the same gate for the selection reason and the optional attachment. Boolean features.worktrees overrides were already replayable through daemonOverridesAreReplayable (audited keys include worktrees and it is not a shared-server feature). Tests: app/daemon_startup_test.go TestDaemonStartupExclusionLikeRust (worktree eligible, no-daemon wins), TestLocalDaemonEndpointForLaunchLikeRust (worktree attaches to a reachable daemon), TestDaemonAutoStartSkipsWorktreeLikeRust, and app/tui_telemetry_like_rust_test.go TestInteractiveDaemonSelectionReasonLikeRust (worktree existing daemon / worktree embedded). Verified: go test ./app -run Daemon|Worktree|Telemetry|InteractiveDaemon -count=1 ok; go build ./... ok; go test ./app -count=1 only the known unrelated TestExecJSONEndToEnd failure; negative check re-adding the --worktree exclusion fails the new eligibility and selection tests."
    ]
   },
   {

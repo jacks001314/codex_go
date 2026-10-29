@@ -83,9 +83,6 @@ func daemonStartupExclusion(root *cli.RootOptions, agentsOverview bool) string {
 	if root.Shared.NoDaemon {
 		return "--no-daemon"
 	}
-	if root.Shared.Worktree {
-		return "--worktree"
-	}
 	if root.Shared.OSS || strings.TrimSpace(root.Shared.OSSProvider) != "" {
 		return "--oss"
 	}
@@ -309,6 +306,20 @@ var daemonAutoStartFeature = func(root *cli.RootOptions) bool {
 	return features.Enabled(cfg.FeatureSettings(), "daemon_auto_start")
 }
 
+// daemonAutoStartRequested mirrors Rust's `auto_start_daemon` decision in
+// startup_orchestration.rs (#46498): automatic startup applies when the
+// effective configuration enables it and the launch does not ask for a
+// client-owned managed worktree or opt out with --no-daemon. A worktree launch
+// stays eligible to attach to an existing shared server, with embedded
+// fallback. The agents overview and remote-workspace inputs are handled by the
+// callers that own them.
+func daemonAutoStartRequested(root *cli.RootOptions) bool {
+	if root != nil && (root.Shared.Worktree || root.Shared.NoDaemon) {
+		return false
+	}
+	return daemonAutoStartFeature(root)
+}
+
 // daemonAutoStartStart starts (or attaches to) the shared background server and
 // returns its control socket path.
 var daemonAutoStartStart = func(root *cli.RootOptions) (string, error) {
@@ -347,6 +358,9 @@ func daemonAutoStartFeatures(*cli.RootOptions) map[string]bool {
 //   - with `features.daemon_auto_start` enabled, the shared server is started
 //     and its connection is required: a failure surfaces the `--no-daemon`
 //     guidance instead of silently falling back to embedded mode;
+//   - Rust #46498: a `--worktree` launch never starts the shared server
+//     (worktree allocation is client-owned and thread requests forward the
+//     feature) but may still reuse a daemon that already answers;
 //   - otherwise a reachable shared server is reused, with embedded fallback.
 func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAppServerEndpoint, error) {
 	if daemonStartupExclusion(root, false) != "" {
@@ -358,7 +372,7 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	if daemonElevatedLaunchExcluded(root, false) {
 		return nil, nil
 	}
-	if !daemonAutoStartFeature(root) {
+	if !daemonAutoStartRequested(root) {
 		return localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath()), nil
 	}
 	// Rust #50555: a Windows-mounted WSL CODEX_HOME (DrvFS/9p) does not reliably

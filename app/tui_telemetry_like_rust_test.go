@@ -185,6 +185,7 @@ func TestInteractiveDaemonSelectionReasonLikeRust(t *testing.T) {
 		autoStart bool
 		exclusion string
 		noDaemon  bool
+		worktree  bool
 		want      string
 	}{
 		{name: "explicit remote", endpoint: endpoint, explicit: true, want: "explicit_remote"},
@@ -193,6 +194,9 @@ func TestInteractiveDaemonSelectionReasonLikeRust(t *testing.T) {
 		{name: "incompatible", exclusion: "feature settings", want: "incompatible_option"},
 		{name: "auto start", autoStart: true, want: "auto_start"},
 		{name: "existing daemon", endpoint: endpoint, want: "existing_daemon"},
+		// Rust #46498: --worktree never auto-starts but may reuse a daemon.
+		{name: "worktree existing daemon", endpoint: endpoint, autoStart: true, worktree: true, want: "existing_daemon"},
+		{name: "worktree embedded", autoStart: true, worktree: true, want: "auto_start_disabled"},
 		{name: "embedded", want: "auto_start_disabled"},
 	}
 	for _, tc := range cases {
@@ -201,6 +205,7 @@ func TestInteractiveDaemonSelectionReasonLikeRust(t *testing.T) {
 			if tc.noDaemon {
 				root.Shared.NoDaemon = true
 			}
+			root.Shared.Worktree = tc.worktree
 			daemonAutoStartFeature = func(*cli.RootOptions) bool { return tc.autoStart }
 			daemonAutoStartExclusionReason = tc.exclusion
 			if tc.elevated {

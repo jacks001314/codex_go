@@ -2144,6 +2144,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - `4f3867123f4a` tool output previews were already implemented: `tui/tool_output_preview.go` mirrors Rust `tool_output.rs` (three rows, 16 KiB input bound, partial logical line counts as hidden, hard-wrapped URLs, hidden marker with the `ctrl+t` hint), and `tui/history_cell/mcp.go:131`/`:163` applies one preview budget across all MCP blocks while transcript and raw output keep the full text, covered by `tui/tool_output_preview_test.go` and `tui/history_cell/mcp_preview_test.go`.
 - Verified with `go test ./tui/exec_cell -count=1`, `go test ./tui ./tui/exec_cell ./tui/history_cell -count=1`, `go build ./...`, and a negative check that disabling read grouping fails the new test.
 
-Status after reconciliation: `2059 complete`, `406 not_applicable`,
-`444 audit_pending`, `236 regression_pending`, `4 partial`,
+### Worktree sessions reuse an existing local daemon (Round 895)
+
+Closed #46498 (e49739355235) worktree daemon eligibility.
+
+- `app/daemon_startup.go:79` `daemonStartupExclusion` no longer returns `--worktree`; `--no-daemon` still wins. A worktree launch may now attach to an existing shared server.
+- New `daemonAutoStartRequested` (`app/daemon_startup.go:312`) mirrors Rust `startup_orchestration` `auto_start_daemon`: `--worktree` never starts the shared server and keeps embedded fallback. `app/tui_telemetry.go:195` and `app/interactive.go:1098` use the same gate.
+- Boolean `features.worktrees` overrides were already replayable via `daemonOverridesAreReplayable`; `worktrees` is an audited feature key and not a shared-server feature, so `features.worktrees=false` stays eligible.
+- Tests: `app/daemon_startup_test.go` `TestDaemonStartupExclusionLikeRust`, `TestLocalDaemonEndpointForLaunchLikeRust`, `TestDaemonAutoStartSkipsWorktreeLikeRust`; `app/tui_telemetry_like_rust_test.go` `TestInteractiveDaemonSelectionReasonLikeRust`.
+- Verified: `go test ./app -run 'Daemon|Worktree|Telemetry|InteractiveDaemon' -count=1` ok; `go build ./...` ok; `go test ./app -count=1` only the known unrelated `TestExecJSONEndToEnd` failure; negative check re-adding the `--worktree` exclusion fails the new tests.
+
+Status after reconciliation: `2060 complete`, `406 not_applicable`,
+`443 audit_pending`, `236 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
