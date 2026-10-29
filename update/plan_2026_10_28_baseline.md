@@ -1160,6 +1160,17 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - client_like_rust_test.go mirrors the upstream cases: identity change mid-request sends no traffic, account and user changes are rejected before the request, missing and API-key-only auth are refused, reloaded credentials are used for the same identity, a 401 recovers once, session initialization retries after sign-in, and plan to credit-group mapping matches Rust.
 - Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./... .
 
-Status after reconciliation: `2012 complete`, `395 not_applicable`,
-`482 audit_pending`, `258 regression_pending`, `2 partial`,
+### #45762 Load analytics reports with server plans and account identity checks (Round 835)
+
+## Round 835 - #45762 Load analytics reports with server plans and account identity checks
+
+- tui/analytics/client.go: NewAnalyticsSession asks accounts/check for the signed-in account and uses the server plan (Account() starts at auth.PlanUnknown, so token plan claims no longer drive report selection); a mutex guards identity and client access, and a failed plan lookup reports "Couldn't load account plan. Press R to retry Analytics." with 401 mapping to "Sign in again to load Analytics.".
+- Report selection now follows the verified plan: analyticsRoute picks the enterprise/business/consumer report and grouping (plugins 8/10, skills 6/10), analyticsCreditGroupingSupported gates credit breakdowns, and analyticsStartDate rejects overflow ranges; Live gains EndDate/Session/AccountLabel/CreditGroups/AttributedUsage/TokenModels/History/FilteredHistory backed by a per-session cache (analyticsCacheKeyFor keys Credits without a date range) that reuses payloads across grouping changes and evicts invalid responses so retries can succeed.
+- data.go adds accountAnalyticsGroupLabels/AnalyticsGroupLabel plus AnalyticsLoadState/StartAnalyticsLoad with Poll/Cancel/State/Ready/Message, a 30s timeout, a panic guard, and "Loading…" / "No history has been reported." / "Request interrupted. Press R to retry." / "Request timed out. Press R to retry."; render.go adds AnalyticsCategories (descending absolute total, then key); models.go makes CreditGroupings(Unknown) empty.
+- normalize.go prefers complete attribution within the requested range (turn-start breakdowns now include every feature) and only falls back to legacy surface/model daily data, small-model folding and credits-unit checks when attribution is incomplete; report_data.go maps workspace-credits reports onto the usage payload.
+- appserver/runtime_router.go re-resolves auth after the backend usage read before exposing account-bound ordinary usage and upsell content; appserver/rate_limits_identity_like_rust_test.go covers user switch, workspace switch and same-identity token refresh (and fails without the recheck).
+- Tests: client_like_rust_test.go covers server plan discovery and its failure/401/identity modes, 13 report routes and queries, cache reuse and identity-scoped eviction, model filtering, legacy fallback, invalid ranges, unknown-plan credit groupings, in-flight switches, 403/404 messages and load cancellation; normalize_like_rust_test.go covers attribution preference. Verified: go test ./tui/analytics -count=1, go test ./appserver -run "RateLimit" -count=1, go vet ./tui/analytics, go build ./... .
+
+Status after reconciliation: `2013 complete`, `395 not_applicable`,
+`481 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
