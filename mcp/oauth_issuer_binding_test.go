@@ -150,6 +150,22 @@ func TestMCPOAuthDiscoveryKeepsIssuerBindingExceptionsAndRejectsLookalikes(t *te
 				"token_endpoint":         "https://mcp.mercadopago.com/token",
 			},
 		},
+		{
+			name: "robinhood lookalike issuer path",
+			metadata: map[string]any{
+				"issuer":                 "https://agent.robinhood.com/mcp/attacker",
+				"authorization_endpoint": "https://robinhood.com/oauth",
+				"token_endpoint":         "https://api.robinhood.com/oauth2/token/",
+			},
+		},
+		{
+			name: "robinhood lookalike authorization host",
+			metadata: map[string]any{
+				"issuer":                 "https://agent.robinhood.com/mcp/trading",
+				"authorization_endpoint": "https://robinhood.com.attacker.example/oauth",
+				"token_endpoint":         "https://api.robinhood.com/oauth2/token/",
+			},
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := newMCPOAuthAuthorizationServerFixture(t, testCase.metadata)

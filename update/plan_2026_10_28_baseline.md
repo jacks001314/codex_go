@@ -2978,6 +2978,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go: `StreamController.NeedsScrollbackReflow` mirrors `needs_scrollback_reflow`, including a reference definition in the unterminated pending source; the Tea transcript replaces the streamed answer with the finalized markdown and re-renders it from source, matching the Required reflow branch.
 - Tests: `TestStreamControllerReleasesCompletedTableIntoScrollbackLikeRust`, `TestStreamControllerNeedsScrollbackReflowForLateReferenceDefinitionLikeRust`, `TestAnalyzeStreamingMarkdownLastTopLevelBlockLikeRust`, `TestHasReferenceLinkDefinitionLikeRust`.
 - Verified with `go test ./tui/streaming ./tui/markdown -count=1` and `go test ./tui/... -count=1`.
-Status after reconciliation: `2141 complete`, `446 not_applicable`,
-`351 audit_pending`, `207 regression_pending`, `4 partial`,
+### Dependency, extension-lifetime, and plugin-cache audits (Round 980)
+
+- Rust #50166 upgrades the Rust `age` crate and drops the RUSTSEC-2026-0173 advisory exception (#50166, not applicable). Go has no Cargo/Bazel lockfile or deny.toml and uses the Go module `filippo.io/age` v1.3.2 with no proc-macro-error2 chain.
+- Rust #41020 scopes extension capabilities to invocation lifetimes (#41020, not applicable). Go has no extension registry or `ToolEnvironment`/`ToolCall` lifetime surface; `tool.Executor.Execute(ctx, *Invocation)` receives call-scoped values and runs synchronously.
+- Rust #41231 instruments the loaded-plugin cache (#41231, not applicable). Go has no `PluginsManager` loaded-plugin cache or load semaphore; only the owned manifest cache from #49099 exists, and capabilities are derived synchronously from the catalog.
+- Rust #50189 replaces the Figma OAuth issuer-binding exception with Mercado Pago (#50189, complete). `mcp/oauth_discovery.go` already carries the Mercado Pago and Robinhood triples with exact issuer/origin matching; the provider-exception test now also covers the two Robinhood lookalikes from upstream.
+- Tests: `TestMCPOAuthDiscoveryKeepsIssuerBindingExceptionsAndRejectsLookalikes`, the `plugin` suite, the `safety` secret tests, and the `tool` suite.
+- Verified with `go test ./mcp -run TestMCPOAuthDiscoveryKeepsIssuerBindingExceptionsAndRejectsLookalikes -count=1`, `go test ./plugin -count=1`, `go test ./safety -run Secret -count=1`, and `go test ./tool -count=1`.
+Status after reconciliation: `2142 complete`, `449 not_applicable`,
+`347 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

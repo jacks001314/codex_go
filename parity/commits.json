@@ -3268,9 +3268,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/6; needs review: ExtensionToolAdapter, SkillReadRequest, ToolEnvironment, TurnInputContext, TurnInputEnvironment"
+    "Round 980: Rust #41020 adds a callback lifetime to extension ToolCall/ToolEnvironment, turn-input context and skill-read requests, and ties ToolExecutor::handle returned futures to &self so extension executors cannot retain host-owned environment capabilities. Go has no extension registry or extension ToolEnvironment/ToolCall surface: tools are plain tool.Executor implementations (tool/registry.go Executor.Execute(ctx context.Context, invocation *Invocation) (*Output, error)) that receive per-call values and run synchronously for the caller. There is no lifetime parameter to add and no long-lived extension capability holder matching the Rust API; the missing ext/* tree is the same architecture difference recorded for earlier extension audit entries. Verified with go test ./tool -count=1"
    ]
   },
   {
@@ -3868,9 +3868,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: LOAD_DURATION, WAIT_DURATION, plugins_for_config, record_event"
+    "Round 980: Rust #41231 instruments the core-plugins loaded-plugin cache (hit / hit_after_wait / load outcomes, semaphore-wait and load timings, clears, capacity evictions) and removes the unused force-reload path from PluginsManager::plugins_for_config. Go has no PluginsManager or asynchronous loaded-plugin cache: PluginStore.LoadPluginManifest parses through the owned manifestCache (plugin/manifest_cache.go, Rust #49099 capacity 128), and per-turn plugin capabilities are derived synchronously from the plugin catalog and configuration (plugin/executor_catalog.go MCPServerContributions, CapabilitySummaries). There is no load semaphore, force-reload parameter, or eviction counter to instrument. Verified with go test ./plugin -count=1"
    ]
   },
   {
@@ -25480,9 +25480,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 980: Rust #50166 is dependency plumbing only: age 0.12.1 in Cargo.toml/Cargo.lock/MODULE.bazel.lock and removal of the RUSTSEC-2026-0173 (proc-macro-error2) allowlist from codex-rs/.cargo/audit.toml and codex-rs/deny.toml. The Go tree does not consume the Rust crate graph and has no Cargo/Bazel lockfile or deny.toml. Local secrets use the Go module filippo.io/age v1.3.2 through safety/secrets_local.go, which has no proc-macro-error2 dependency and no Rust advisory exception. Verified with go test ./safety -run Secret -count=1 and go test ./auth -run Gateway -count=1"
    ]
   },
   {
@@ -25516,9 +25516,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 980: Go already ports the post-#50189 exception table exactly. mcp/oauth_discovery.go mcpOAuthIssuerBindingExceptions lists https://mcp.mercadopago.com/mcp -> https://auth.mercadopago.com / https://mcp.mercadopago.com plus the Robinhood triple, with no Figma entry, and mcpOAuthIssuerBindingExceptionMatches requires the exact parsed issuer string and exact authorization/token origins (validateMCPOAuthAuthorizationServerEndpoints). Added the two Robinhood negative cases from the Rust provider-exception test (lookalike issuer path https://agent.robinhood.com/mcp/attacker and lookalike authorization host https://robinhood.com.attacker.example/oauth) to TestMCPOAuthDiscoveryKeepsIssuerBindingExceptionsAndRejectsLookalikes, alongside the Mercado Pago lookalike, unrelated-token, HTTP issuer and HTTP authorization cases. Verified with go test ./mcp -run TestMCPOAuthDiscoveryKeepsIssuerBindingExceptionsAndRejectsLookalikes -count=1"
    ]
   },
   {
