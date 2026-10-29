@@ -1642,9 +1642,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 935: superseded by Rust #42667, which replaced plan-type Trusted Access URL routing with Daybreak eligibility notices. Go follows the successor model and has no plan-type URL switch."
    ]
   },
   {
@@ -4104,9 +4104,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 935: appserver/codex_home_metrics.go implements the startup size histogram, launched in the background from runtime_router.go and cancelable on shutdown. The scanner sums regular files without following symlinks; later Rust #43790 limits samples to sessions and archived_sessions and #42043 adds compression_enabled, both reflected here. TestCodexHomeMetricsScanLikeRust and related tests pass."
    ]
   },
   {
@@ -4464,9 +4464,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 935: model.ToolMessages carries the model-owned send_user_message_async description; runtime_router feeds the active step model catalog value into turn.RuntimeOptions, tool.SendUserMessageAsyncHandler preserves explicit empty text and falls back to built-in copy, and successor request_user_input_async metadata is covered. Targeted tool and turn catalog tests pass."
    ]
   },
   {
@@ -7287,9 +7287,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 935: Daybreak-aware cyber refusal copy is implemented across tui.DaybreakNotice, history_cell.NewCyberPolicyErrorEvent, tea cyberPolicyNotice, chatwidget turn runtime, and safety recourse. The current model catalog and account/session eligibility select Apply, Astra, Disabled, Enabled, or Limited; tests cover notice selection, rendered snapshots, session resume, and recourse. Targeted TUI tests pass."
    ]
   },
   {

@@ -2582,6 +2582,13 @@ Session-only model and reasoning selection (#45831, complete).
 - Ultra choices reproduce Rust's `ultra_reasoning_concurrency_warning`: with 8 or more configured V2 concurrent threads, the session-only path appends the warning including the `max_threads - 1` subagent count. The limit is wired from config into both embedded and remote TUI options.
 - Verified with `go build ./...`, `go test ./tui/...`, and the targeted app model-selection tests.
 
-Status after reconciliation: `2096 complete`, `409 not_applicable`,
-`428 audit_pending`, `214 regression_pending`, `2 partial`,
+### Ledger reconciliation (Round 935)
+
+- #41360 is implemented by the startup Codex home size histogram in `appserver/codex_home_metrics.go`; the background scan honors cancellation and the later #43790 session-directory scope plus #42043 compression tag.
+- #41461 is covered by the model-catalog `send_user_message_async` description path and its `request_user_input_async` successor; explicit empty values are preserved.
+- #40504 is superseded by #42667 and therefore `not_applicable`; Go has no plan-type Trusted Access URL routing.
+- #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
+
+Status after reconciliation: `2099 complete`, `410 not_applicable`,
+`428 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
