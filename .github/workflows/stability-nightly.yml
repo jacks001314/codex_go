@@ -1,0 +1,151 @@
+name: stability-nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # nightly: soak + scenarios on hosted runners
+    - cron: "17 3 * * 0" # weekly: 24h soak on a self-hosted runner
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Soak duration passed to the stability scripts
+        required: false
+        default: 2h
+      suite:
+        description: Suite name (smoke, soak, large, faults, ui, memory, disk, all)
+        required: false
+        default: all
+
+concurrency:
+  group: stability-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CODEX_STABILITY_COMMIT: ${{ github.sha }}
+
+jobs:
+  harness:
+    name: harness (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Harness and trend unit tests
+        run: go test ./stability/harness/... ./stability/cmd/stability-trend -count=1
+      - name: Harness race tests (linux only)
+        if: runner.os == 'Linux'
+        run: go test -race ./stability/harness/... -count=1
+
+  scenarios:
+    name: scenarios (${{ matrix.os }})
+    needs: harness
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      # Reports accumulate day over day so stability-trend can fit a slope.
+      # The key is unique per run; restore-keys picks up the newest series.
+      - name: Restore report history
+        uses: actions/cache@v4
+        with:
+          path: stability/reports
+          key: stability-reports-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            stability-reports-${{ runner.os }}-
+      - name: Run stability scenarios (linux)
+        if: runner.os == 'Linux'
+        env:
+          CODEX_STABILITY_DURATION: ${{ github.event.inputs.duration || '2h' }}
+        run: ./scripts/stability.sh ${{ github.event.inputs.suite || 'all' }} "$CODEX_STABILITY_DURATION" --json
+      - name: Run stability scenarios (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/stability.ps1 -Suite ${{ github.event.inputs.suite || 'all' }} -Duration ${{ github.event.inputs.duration || '2h' }} -Json
+      - name: Upload reports and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ matrix.os }}
+          path: |
+            stability/reports
+          if-no-files-found: warn
+          retention-days: 30
+
+  trend:
+    name: trend
+    needs: scenarios
+    if: always() && needs.scenarios.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Collect this run's reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: reports-*
+          path: stability/reports
+          merge-multiple: true
+      - name: Restore the report history used for slope fitting
+        uses: actions/cache/restore@v4
+        with:
+          path: stability/reports
+          key: stability-trend-history-${{ github.run_id }}
+          restore-keys: |
+            stability-trend-history-
+      # Fails on a growing metric series (1%/h over >= 3 reports) or on any
+      # failed report still inside the retained window. Never auto-retry.
+      - name: Analyze trends
+        run: |
+          set -o pipefail
+          go run ./stability/cmd/stability-trend -dir stability/reports -last 7 | tee trend.txt
+          cat trend.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Persist the report history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: stability/reports
+          key: stability-trend-history-${{ github.run_id }}
+
+  soak-weekly:
+    name: weekly 24h soak
+    if: github.event.schedule == '17 3 * * 0' || github.event.inputs.suite == 'weekly'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 1500
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 24h soak on a quiet reference host
+        env:
+          CODEX_STABILITY_DURATION: 24h
+        run: ./scripts/stability.sh soak 24h --json
+      - name: Keep the 24h report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-24h
+          path: stability/reports
+          retention-days: 90
