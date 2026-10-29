@@ -885,6 +885,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Rust's `chatwidget/interaction.rs` lease-retention change is not applicable: Go's clipboard writers own no X11 ownership handle, so there is no `clipboard_lease` to retain across a terminal-only copy.
 - Tests: `go test ./tui/... ./envutil -count=1` and `go vet ./tui ./envutil` pass.
 
-Status after reconciliation: `1989 complete`, `389 not_applicable`,
-`501 audit_pending`, `270 regression_pending`, `0 partial`,
+### Own thread persistence acquisition until resume commits (Round 803)
+
+- #45487 was mostly covered by structure rather than by an owned acquisition: `session.LiveThreadInitGuard` already existed, but `ThreadManager.RetainLiveThread` registered the thread (and its writer) as live the moment it opened persistence, so every later failure in `thread/resume` left the writer installed for a thread the client never received. Go has no await point between acquisition and registration, so Rust's exact cancellation window cannot occur; the equivalent contract is guard-owned acquisition until the request succeeds.
+- `appserver/thread_manager.go` adds `LiveThreadRetention` plus `AcquireLiveThreadRetention`: the retention owns the `LiveThreadInitGuard` while the caller initializes, `Commit` registers the thread as live (and fires the retained hook), and `Discard` releases the writer. `RetainLiveThread` keeps its previous atomic acquire-and-register body.
+- `appserver/router.go` now uses the retention for both resume shapes Rust routes through the guard: a cold `thread/resume` and a supplied-history resume (Rust's inherited-context creation). Named results let the deferred cleanup commit on success and discard on any error; the supplied-history path also removes the created record and rollout it leaked on failure.
+- New regressions in `appserver/thread_persistence_acquisition_like_rust_test.go`: `TestLiveThreadRetentionDiscardsWriterUntilCommitLikeRust` (a paginated acquisition holds the writer, an in-process re-acquire fails, discard releases it and leaves no live thread, and commit re-takes ownership), `TestLiveThreadRetentionIsIdempotentForLiveThreadsLikeRust`, `TestThreadResumeHistoryAcquiresPersistenceLikeRust` (a supplied-history resume retains persistence, which it previously never did), and `TestThreadResumeHistoryDiscardsPersistenceOnFailureLikeRust` (an unwritable sessions directory fails rollout creation; the writer is discarded and the record is removed instead of leaking).
+- `TestThreadResumeHistoryDiscardsPersistenceOnFailureLikeRust` fails against the previous code by leaving the record behind.
+- Tests: `go test ./appserver -count=1` shows only the three pre-existing analytics/fingerprint failures (`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`, `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`, `TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust`), which also fail with these changes reverted. `go test ./session -count=1` passes.
+
+Status after reconciliation: `1990 complete`, `389 not_applicable`,
+`501 audit_pending`, `269 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

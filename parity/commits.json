@@ -13011,9 +13011,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 803 (implementation): `ThreadManager.AcquireLiveThreadRetention`/`LiveThreadRetention` own thread persistence acquisition like Rust's `LiveThreadInitGuard` (Commit registers the thread and its writer, Discard releases it). Cold `thread/resume` and supplied-history resume (inherited-context creation) now commit only after the request succeeds and discard the writer, plus the created record and rollout, on failure. Regressions: TestLiveThreadRetentionDiscardsWriterUntilCommitLikeRust, TestLiveThreadRetentionIsIdempotentForLiveThreadsLikeRust, TestThreadResumeHistoryAcquiresPersistenceLikeRust, TestThreadResumeHistoryDiscardsPersistenceOnFailureLikeRust. Tests: go test ./appserver ./session -count=1 (only the three pre-existing analytics/fingerprint failures remain)."
    ]
   },
   {
