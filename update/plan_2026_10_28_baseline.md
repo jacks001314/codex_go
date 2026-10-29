@@ -1279,6 +1279,37 @@ Account profile data layer (#45769, part 1).
   request route.
 - Verified with `go test ./chatgptapi -count=1` and `go vet ./chatgptapi`.
 
+### Account Summary tab (#45769, part 2) (Round 844)
+
+Account Summary tab (#45769, part 2).
+
+- `tui/analytics/sections.go` appends `AnalyticsSectionSummary`: no report, the
+  Usage range group, Daily/Weekly/Cumulative labels, first in every resolved
+  plan, and the only section for an Unknown plan. Unresolved accounts still
+  show nothing.
+- `tui/analytics/summary.go` renders the identity (`display name`, `@handle`,
+  short plan name), a responsive five-field token grid with compact amounts,
+  streaks and longest chat, the activity chart with Daily/Weekly/Cumulative
+  controls, Activity insights (fast mode, reasoning effort, skill and chat
+  counts), the top five plugins/skills with run counts, and the statistics
+  metadata. The overview card keeps the identity and token fields only.
+- `LoadAnalyticsProfile` loads the profile independently of the reports and maps
+  failures through the shared request guidance. `AccountLabel` now returns the
+  email only, so the header drops the account id.
+- `chatwidget.TokenActivityCalendarLines` exposes the calendar without the
+  standalone view footer, and both the Summary and bar captions use the Rust
+  one-decimal compact amount.
+- The dashboard starts on Summary, scrolls it with the list actions, cycles the
+  activity view with `g`, ignores `r`, prints `tab/1-7` and `g view` hints, and
+  centers the loaded profile under the heading.
+- Tests cover the section order per account kind, the rendered fields and
+  layouts, missing and unbounded data, compact-amount promotion, the invocation
+  cap and an end-to-end Summary tab with Weekly switching, scrolling and an
+  independent report success when the profile fails.
+- Verified with `go test ./chatgptapi ./tui/analytics ./tui/chatwidget
+  ./tui/tea -count=1`, `go vet ./chatgptapi ./tui/analytics ./tui/tea
+  ./tui/chatwidget`, and `go build ./...`.
+
 Status after reconciliation: `2017 complete`, `395 not_applicable`,
 `476 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
