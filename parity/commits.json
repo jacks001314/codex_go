@@ -29874,9 +29874,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/7; needs review: ClipboardPasteTarget, clipboard_paste_target, flush_pending_paste_burst, prepare_composer_clipboard_paste, start_clipboard_text_paste"
+    "Round 758 (audit): #53224 implemented. tui/tea/clipboard_paste_shortcut.go: pasteClipboardShortcut (image first, then clipboard text, distinct 'Paste failed' notice for clipboard errors), applyKeyboardPasteText routes text to the active history-search query, an active composer selection (replaceComposerSelection), or the composer, and handleShiftInsertPaste maps Bubble Tea's undecoded Shift+Insert CSI (ESC[2;2~) to the same path on Windows. The KeyCtrlV case in tui/tea/model.go:4045 now calls this shared path, and explicit paste is not gated by the right-click paste mode, so inline mode with right-click paste off still pastes. Tests: TestCtrlVPastesClipboardTextLikeRust, TestCtrlVPasteReplacesComposerSelectionLikeRust, TestCtrlVPasteFeedsHistorySearchLikeRust, TestWindowsShiftInsertPastesLikeRust, TestCtrlVPasteFailureNoticeLikeRust in tui/tea/clipboard_paste_shortcut_like_rust_test.go; go test ./tui/tea -run 'CtrlV|ShiftInsert' -count=1 passes. Rust's stale pending-read cancellation has no Go carrier because the explicit read completes inline."
    ]
   },
   {
@@ -30042,9 +30042,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/10; needs review: BufferedServerRequest, PendingResolution, ResolvedThreadAppServerRequest, buffered_request, handle_server_request_event"
+    "Round 758 (audit): N/A by architecture - #53436 adds Rust TUI BufferedServerRequest/PendingResolution handles so buffered or replayed app-server requests keep their original reply connection and request id across thread attach and session reset. Go's remote TUI answers server requests inline on the originating connection and message id (app/remote_tui.go:3616 respondServerRequest -> remoteServerRequestResult with message.id, written on the same transport) and has no request buffer, replay queue, or pending-resolution bookkeeping to disambiguate (zero hits for BufferedServerRequest/PendingResolution/ResolvedThreadAppServerRequest). Server notifications are already thread-filtered (app/remote_tui.go:4601 handleNotification). No source change needed."
    ]
   },
   {
@@ -30427,9 +30427,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/20; needs review: SelectMode, after_cursor_grapheme, begin_select_mode, column_for_offset_on_row, cursor_position_at"
+    "Round 758 (audit): N/A by architecture - #53693 adds the transcript-view SelectMode state machine (cursor placement, grapheme/arrow/hjkl motion, preferred column, v/Space/Shift-arrow marking) and explicitly does not bind mode entry to a user-facing key. Go's transcript selection is the mouse-driven renderedSelection with Ctrl+C copy (tui/tea/model.go renderedSelection/copyRenderedSelection); there is no transcript select-mode state, cursor, or key binding to anchor, so no user-observable behavior changes. No source change needed."
    ]
   },
   {

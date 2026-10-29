@@ -559,13 +559,13 @@ re-tested: 56 packages pass, with only the pre-existing environmental failures
 noted below (`./app` `TestExecJSONEndToEnd`, `./exec` websocket handshake
 stubs, `./appserver` analytics timing under parallel load).
 
-The remaining `audit_pending` entries fall into two groups: 250 carry
+The remaining `audit_pending` entries fall into two groups: 247 carry
 symbol-coverage notes that still need per-symbol review, and the rest have no
 Go citation at all (Rust-only crates, CI, docs, or behaviour that may still be
 missing).
 
-Status after reconciliation: `1859 complete`, `379 not_applicable`,
-`624 audit_pending`, `287 regression_pending`, `0 partial`,
+Status after reconciliation: `1860 complete`, `381 not_applicable`,
+`621 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
 
 ## Files updated

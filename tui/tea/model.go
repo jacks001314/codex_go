@@ -3316,6 +3316,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if handled, cmd := m.handleCtrlInsertCopy(message); handled {
 		return m, cmd
 	}
+	if handled, cmd := m.handleShiftInsertPaste(message); handled {
+		return m, cmd
+	}
 	model, cmd := m.updateMessage(message)
 	next, ok := model.(*Model)
 	if !ok || next == nil {
@@ -4039,33 +4042,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// terminals. Read the native clipboard explicitly and insert it into
 			// the focused composer.
 			if m.modal == nil && m.overlay == nil {
-				if m.clipboardBusy {
-					m.notice = "Copy already in progress; try image paste after it finishes"
-					return m, nil
-				}
-				// Rust #51411: legacy terminals deliver key auto-repeat as new
-				// presses, so a repeated image-paste press inside the sliding
-				// window is ignored (and the window refreshed) to avoid a burst
-				// of duplicate pastes during a slow paste.
-				if m.noteImagePastePress(m.currentTime()) {
-					return m, nil
-				}
-				if path, err := pasteImageFromClipboard(); err == nil {
-					m.attachments = append(m.attachments, bottompane.ComposerAttachment{Kind: bottompane.AttachmentImage, Path: path})
-					m.notice = "Attached image " + path
-					return m, nil
-				}
-				text, err := sysclipboard.ReadAll()
-				if err != nil {
-					m.notice = "Paste failed: " + err.Error()
-					return m, nil
-				}
-				if text != "" {
-					m.insertComposerPaste(text)
-					m.extendComposerPasteWindow(m.currentTime())
-					m.refreshSlashPopup()
-				}
-				return m, nil
+				return m, m.pasteClipboardShortcut()
 			}
 		}
 		if m.modal != nil {
