@@ -15664,9 +15664,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Two halves. (1) Saved-record error classification: rollout/codex_error_info.go:67 normalizeCodexErrorInfoClassification already preserved known tags (including bio_policy) and mapped unknown tags to other; this round tightened the shapes Rust externally-tagged enum deserialization rejects - empty and multi-key objects, unit tags carrying a payload (including other), payload tags written as bare strings, and non-string/non-object JSON are now unreadable instead of being classified as other. Tests: rollout/codex_error_info_test.go TestRecordFromPathToleratesUnknownCodexErrorClassifications (new multi-key case) and TestCodexErrorInfoRejectsNonEnumShapesLikeRust. (2) Gateway OAuth provider settings were already implemented: model/provider_info.go:197 GatewayOAuthConfig with header/cookie delivery and reserved-header validation (:282), model/provider_config.go:405 parsing, model/gateway_auth.go:121 composing the secondary credential alongside primary auth. Verified: go test ./rollout -count=1 ok; go test ./model -run Gateway -count=1 ok; go build ./... ok; negative check reverting the multi-key rule fails the new shape test."
    ]
   },
   {
@@ -15700,9 +15700,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Test-only refactor: Rust replaced analytics/src/analytics_client_tests.rs with per-event suites under tests/suite/ plus shared fixtures. Go has no single monolithic analytics test file to split - the analytics surface is already covered by topic in telemetry/ (turn_event_test.go, accepted_lines_test.go, compaction_event_test.go, hook_run_event_test.go, guardian_*_test.go, api_request_test.go, http_events_test.go, ...) and appserver/turn_analytics_plugins_test.go, each aligned to the event it asserts. No production or behavioral delta to sync."
    ]
   },
   {

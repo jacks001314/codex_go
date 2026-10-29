@@ -2125,6 +2125,15 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - `a1efb59c4a17` active plugin inventory in turn analytics was already implemented: `activePluginIDsForTurnAnalytics` (`appserver/turn_analytics_plugins.go:65`) and `activePluginTelemetryIDs` (`:91`) select remote ids over validated package keys and return null on invalid, over-long (>128 bytes) or oversized (>512) inventories, while `turnAnalyticsPluginInventory` (`:27`) memoizes the first observation; `telemetry/turn_event.go:93` serializes `active_plugin_ids_at_turn_start`. Re-verified with `go test ./appserver -run 'TestTurnAnalyticsPluginInventory|TestRuntimeRouterTurnAnalyticsPluginInventory|TestActivePluginTelemetryIDs' -count=1`, `go test ./telemetry -run TurnEvent -count=1`, and a negative check that widening the bounds to 513/129 fails the bounds test.
 - `ff73d63e64e2` is a Rust-only crate move (backoff from `codex_core::util` to `codex_async_utils`, re-exported, delays and jitter unchanged) so cloud-config can drop its runtime dependency on core: not applicable, because Go has no crate boundary and the same 200 ms doubling with 0.9..1.1 jitter already lives in `responsesRetryDelay` (`model/responses_agent.go:4749`, annotated as mirroring `codex_async_utils::backoff`).
 
-Status after reconciliation: `2056 complete`, `405 not_applicable`,
-`445 audit_pending`, `239 regression_pending`, `4 partial`,
+### Tighten error classification decoding and close test-suite refactor (Round 893)
+
+**Upstream:** 3d5b66c655c1 (#46482), 2f522c5dc0a0 (#46488).
+
+- `3d5b66c655c1` saved-record error classifications: `normalizeCodexErrorInfoClassification` (`rollout/codex_error_info.go:67`) already preserved known tags, including `bio_policy`, and mapped unknown tags to `other` so terminal records stay readable. Rust deserializes `CodexErrorInfo` through an externally tagged enum, so this round tightened the shapes Go used to classify as `other`: empty and multi-key objects, unit tags carrying a payload (including `other`), payload tags written as a bare string, and non-string/non-object JSON are now unreadable. Tests: `rollout/codex_error_info_test.go` gained a record-level multi-key case and `TestCodexErrorInfoRejectsNonEnumShapesLikeRust`.
+- `3d5b66c655c1` gateway OAuth provider settings were already implemented: `GatewayOAuthConfig` (`model/provider_info.go:197`) with header and cookie delivery, reserved-header/prefix rejection and `Validate` (`:282`), parsing in `model/provider_config.go:405`, and secondary-credential composition in `model/gateway_auth.go:121`, covered by `model/gateway_oauth_test.go` and `model/gateway_auth_test.go`.
+- `2f522c5dc0a0` is a Rust test-layout refactor (monolithic `analytics_client_tests.rs` split into per-event suites): not applicable, because the Go analytics surface is already covered per topic in `telemetry/*_test.go` and `appserver/turn_analytics_plugins_test.go`.
+- Verified with `go test ./rollout -count=1`, `go test ./model -run Gateway -count=1`, `go build ./...`, and a negative check that reverting the multi-key rule fails the new shape test.
+
+Status after reconciliation: `2057 complete`, `406 not_applicable`,
+`444 audit_pending`, `238 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

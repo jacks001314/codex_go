@@ -79,12 +79,18 @@ func normalizeCodexErrorInfoClassification(raw any) (any, bool) {
 		}
 		return CodexErrorInfoOther, true
 	case map[string]any:
+		// Rust deserializes CodexErrorInfo as an externally tagged enum, which
+		// rejects empty and multi-key objects instead of classifying them.
 		if len(value) != 1 {
-			return CodexErrorInfoOther, true
+			return nil, false
 		}
 		for tag, payload := range value {
 			switch {
 			case codexErrorInfoUnitTags[tag]:
+				// A unit variant rejects any payload, including `other`.
+				if payload != nil {
+					return nil, false
+				}
 				return value, true
 			case codexErrorInfoStatusTags[tag]:
 				if !validCodexErrorInfoStatusPayload(payload) {
@@ -101,7 +107,8 @@ func normalizeCodexErrorInfoClassification(raw any) (any, bool) {
 			}
 		}
 	}
-	return raw, true
+	// Rust rejects any other JSON shape (number, bool, array).
+	return nil, false
 }
 
 func validCodexErrorInfoStatusPayload(payload any) bool {

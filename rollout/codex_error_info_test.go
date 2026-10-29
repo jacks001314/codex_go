@@ -43,6 +43,11 @@ func TestRecordFromPathToleratesUnknownCodexErrorClassifications(t *testing.T) {
 			errorInfo:  `{"active_turn_not_steerable":{"turn_kind":"unknown"}}`,
 			wantStatus: "inProgress",
 		},
+		{
+			name:       "multi-key object is unreadable",
+			errorInfo:  `{"future_error":null,"other":null}`,
+			wantStatus: "inProgress",
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -90,6 +95,28 @@ func TestRecordFromPathToleratesUnknownCodexErrorClassifications(t *testing.T) {
 				t.Fatalf("known classification was rewritten: %s", string(encoded))
 			}
 		})
+	}
+}
+
+// Rust deserializes CodexErrorInfo as an externally tagged enum, so only a bare
+// known tag, a single-key known tag with a valid payload, or an unknown single
+// tag is representable. Empty/multi-key objects, unit tags carrying a payload,
+// payload tags written as bare strings, and non-string/non-object JSON are
+// unreadable rather than being classified as other.
+func TestCodexErrorInfoRejectsNonEnumShapesLikeRust(t *testing.T) {
+	for _, raw := range []any{
+		map[string]any{},
+		map[string]any{"future_error": nil, "other": nil},
+		map[string]any{"other": map[string]any{"detail": "new payload"}},
+		map[string]any{"context_window_exceeded": 1.0},
+		"response_stream_disconnected",
+		42.0,
+		true,
+		[]any{"other"},
+	} {
+		if classified, ok := normalizeCodexErrorInfoClassification(raw); ok {
+			t.Fatalf("%#v classified as %#v, want unreadable", raw, classified)
+		}
 	}
 }
 
