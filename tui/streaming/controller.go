@@ -64,10 +64,18 @@ type streamCore struct {
 	now               func() time.Time
 	hasVisualization  bool
 	theme             string
-	mathPendingReady  bool
-	mathPendingSet    bool
-	mathPendingLen    int
-	mathPendingWidth  int
+	// hasReferenceLinkDefinition mirrors Rust's streaming render metadata: a
+	// reference definition can retroactively change an already emitted block.
+	hasReferenceLinkDefinition bool
+	sourceMetaReady            bool
+	sourceMetaLen              int
+	sourceMetaWidth            int
+	sourceMeta                 markdown.StreamingMarkdownMetadata
+	mathPendingReady           bool
+	mathPendingSet             bool
+	mathPendingStart           int
+	mathPendingLen             int
+	mathPendingWidth           int
 }
 
 func newStreamCore(width int) streamCore {
@@ -99,7 +107,9 @@ func (c *streamCore) pushDelta(delta string) bool {
 	if committed != "" {
 		c.rawSource += committed
 		c.hasVisualization = c.hasVisualization || strings.Contains(committed, tui.InlineVisualizationDirectivePrefix)
-		c.holdbackScanner.PushSourceChunk(committed)
+		metadata := c.refreshSourceMetadata()
+		c.hasReferenceLinkDefinition = metadata.HasReferenceLinkDefinition
+		c.holdbackScanner.Scan(c.rawSource, c.completedSourceLen())
 		c.renderedLines = c.renderSourceLines(c.rawSource)
 		enqueued = c.syncStableQueue()
 	}
@@ -209,12 +219,46 @@ func (c *streamCore) hasPendingDisplayMath() bool {
 	if c.mathPendingReady && c.mathPendingLen == len(c.rawSource) && c.mathPendingWidth == c.width {
 		return c.mathPendingSet
 	}
-	_, pending := markdown.MathPendingStart(c.rawSource, c.width)
+	start, pending := markdown.MathPendingStart(c.rawSource, c.width)
 	c.mathPendingReady = true
 	c.mathPendingSet = pending
+	c.mathPendingStart = start
 	c.mathPendingLen = len(c.rawSource)
 	c.mathPendingWidth = c.width
 	return pending
+}
+
+// refreshSourceMetadata parses the committed source for the streaming block
+// metadata Rust's renderer collects in its single parse pass
+// (`last_top_level_block_start` and `has_reference_link_definition`). The
+// result is cached per committed length and width so per-token pushes do not
+// repeat the parse.
+func (c *streamCore) refreshSourceMetadata() markdown.StreamingMarkdownMetadata {
+	if c.sourceMetaReady && c.sourceMetaLen == len(c.rawSource) && c.sourceMetaWidth == c.width {
+		return c.sourceMeta
+	}
+	c.sourceMeta = markdown.AnalyzeStreamingMarkdown(c.rawSource)
+	c.sourceMetaReady = true
+	c.sourceMetaLen = len(c.rawSource)
+	c.sourceMetaWidth = c.width
+	return c.sourceMeta
+}
+
+// completedSourceLen is the source prefix that contains only completed
+// top-level Markdown blocks (Rust `StreamingRender::completed_source_len`). A
+// table holdback releases once its block starts before this boundary.
+func (c *streamCore) completedSourceLen() int {
+	metadata := c.refreshSourceMetadata()
+	if !metadata.HasLastTopLevelBlock {
+		return 0
+	}
+	start := metadata.LastTopLevelBlockStart
+	// Rust filters the boundary out when an unfinished display equation begins
+	// before the final block, or when the boundary falls inside display math.
+	if c.hasPendingDisplayMath() && start > c.mathPendingStart {
+		return 0
+	}
+	return start
 }
 
 func (c *streamCore) commitCompleteSource() string {
@@ -232,7 +276,9 @@ func (c *streamCore) finalizeRemaining() []string {
 		remainder := c.pendingSource
 		c.pendingSource = ""
 		c.rawSource += remainder
-		c.holdbackScanner.PushSourceChunk(remainder)
+		metadata := c.refreshSourceMetadata()
+		c.hasReferenceLinkDefinition = metadata.HasReferenceLinkDefinition
+		c.holdbackScanner.Scan(c.rawSource, c.completedSourceLen())
 	}
 	rendered := c.renderSourceLines(c.rawSource)
 	if c.emittedStableLen >= len(rendered) {
@@ -299,6 +345,9 @@ func (c *streamCore) setWidth(width int) {
 		return
 	}
 	c.renderedLines = c.renderSourceLines(c.rawSource)
+	metadata := c.refreshSourceMetadata()
+	c.hasReferenceLinkDefinition = metadata.HasReferenceLinkDefinition
+	c.holdbackScanner.Scan(c.rawSource, c.completedSourceLen())
 	// Rust StreamCore::set_width re-renders before refresh_preview so the math
 	// preview decides from the fresh render and the new width.
 	c.refreshProsePreview()
@@ -532,6 +581,26 @@ func (c *StreamController) CurrentTailLines() []string {
 
 func (c *StreamController) HasLiveTail() bool {
 	return c != nil && c.core.hasTail()
+}
+
+// NeedsScrollbackReflow reports whether completion must repair already emitted
+// scrollback rows (Rust `StreamController::needs_scrollback_reflow`, #50207).
+// A reference-style link definition can change any earlier block, including one
+// whose table holdback was released early, so the final consolidation has to
+// reflow the transcript even when no live tail remains. The trailing source is
+// parsed too because a definition without a newline never reaches the
+// incremental render.
+func (c *StreamController) NeedsScrollbackReflow() bool {
+	if c == nil {
+		return false
+	}
+	if c.HasLiveTail() || c.core.hasReferenceLinkDefinition {
+		return true
+	}
+	if c.core.pendingSource == "" {
+		return false
+	}
+	return markdown.HasReferenceLinkDefinition(c.core.rawSource + c.core.pendingSource)
 }
 
 func (c *StreamController) TailStartsStream() bool {

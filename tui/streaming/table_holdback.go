@@ -65,7 +65,35 @@ func (s *TableHoldbackScanner) AllowsProsePreview() bool {
 	return s.State().Kind == TableHoldbackNone
 }
 
-func (s *TableHoldbackScanner) PushSourceChunk(sourceChunk string) {
+// Scan advances the scanner with the append-only committed source and the
+// renderer's completed top-level-block boundary (Rust
+// `TableHoldbackScanner::scan`, #50207). Holdback is released once the
+// confirmed table's containing top-level block is stable; the remaining tail is
+// rescanned so a later table in the same delta is still detected.
+func (s *TableHoldbackScanner) Scan(source string, completedSourceLen int) {
+	holdbackStart := -1
+	switch state := s.State(); state.Kind {
+	case TableHoldbackConfirmed, TableHoldbackPendingHeader:
+		holdbackStart = state.SourceStart
+	}
+	if completedSourceLen < 0 {
+		completedSourceLen = 0
+	}
+	if completedSourceLen > len(source) {
+		completedSourceLen = len(source)
+	}
+	if s.sourceOffset < completedSourceLen || (holdbackStart >= 0 && holdbackStart < completedSourceLen) {
+		s.Reset()
+		s.sourceOffset = completedSourceLen
+	}
+	if s.sourceOffset > len(source) {
+		s.Reset()
+		s.sourceOffset = len(source)
+	}
+	s.pushSourceChunk(source[s.sourceOffset:])
+}
+
+func (s *TableHoldbackScanner) pushSourceChunk(sourceChunk string) {
 	if sourceChunk == "" {
 		return
 	}
@@ -123,7 +151,7 @@ func (s *TableHoldbackScanner) pushLine(sourceLine string) {
 
 func TableHoldbackStateFor(source string) TableHoldbackState {
 	scanner := NewTableHoldbackScanner()
-	scanner.PushSourceChunk(source)
+	scanner.Scan(source, 0)
 	return scanner.State()
 }
 

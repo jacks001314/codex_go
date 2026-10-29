@@ -2970,6 +2970,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #41857 also matches the current conversation so answers survive when the original tool call exists only there (#41857, complete). Go does not filter answers by locating the original tool call: accepted answers are retained directly and restored after restart, which covers both current and retained history while preserving rollback semantics.
 - Tests: `TestRuntimeRouterRecordsVerifiedAnswersLikeRust`, `TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust`, `TestModelGuardianReviewerIncludesVerifiedAnswersLikeRust`, `TestGuardianReviewHistorySurvivesCompactionAndRollbackLikeRust`, and `TestRetainedEvidencePreservesOrderThroughRecoveryCheckpointAndRollback`.
 - Verified with `go test ./appserver -run 'TestRuntimeRouterRecordsVerifiedAnswersLikeRust|TestRuntimeRouterReplaysVerifiedAnswersAfterRestartLikeRust|TestModelGuardianReviewerIncludesVerifiedAnswersLikeRust|TestGuardianReviewHistorySurvivesCompactionAndRollbackLikeRust' -count=1` and `go test ./retainedctx -run TestRetainedEvidencePreservesOrderThroughRecoveryCheckpointAndRollback -count=1`.
-Status after reconciliation: `2140 complete`, `446 not_applicable`,
-`352 audit_pending`, `207 regression_pending`, `4 partial`,
+### Stable Markdown tables during streaming (Round 979)
+
+- Rust #50207 releases table holdback once the containing top-level Markdown block is stable, and requests a completion scrollback reflow when late reference-link definitions can change already-emitted blocks (#50207, complete).
+- Go: `tui/streaming/table_holdback.go` `Scan(source, completedSourceLen)` mirrors `TableHoldbackScanner::scan` by releasing holdback when the table start precedes the boundary, resetting fence/line state, and rescanning the remaining tail for later tables.
+- Go: `tui/streaming/controller.go` derives `completedSourceLen` from `markdown.AnalyzeStreamingMarkdown` (goldmark top-level block start, Rust `last_top_level_block_start`, filtered by pending display math) and rescans after push, finalize, and resize, so a completed table enters the stable queue while later tables stay mutable.
+- Go: `StreamController.NeedsScrollbackReflow` mirrors `needs_scrollback_reflow`, including a reference definition in the unterminated pending source; the Tea transcript replaces the streamed answer with the finalized markdown and re-renders it from source, matching the Required reflow branch.
+- Tests: `TestStreamControllerReleasesCompletedTableIntoScrollbackLikeRust`, `TestStreamControllerNeedsScrollbackReflowForLateReferenceDefinitionLikeRust`, `TestAnalyzeStreamingMarkdownLastTopLevelBlockLikeRust`, `TestHasReferenceLinkDefinitionLikeRust`.
+- Verified with `go test ./tui/streaming ./tui/markdown -count=1` and `go test ./tui/... -count=1`.
+Status after reconciliation: `2141 complete`, `446 not_applicable`,
+`351 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

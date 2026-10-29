@@ -58,7 +58,7 @@ func TestIncrementalHoldbackMatchesStatelessScan(t *testing.T) {
 	source := ""
 	for _, chunk := range chunks {
 		source += chunk
-		scanner.PushSourceChunk(chunk)
+		scanner.Scan(source, 0)
 		if got, want := scanner.State(), TableHoldbackStateFor(source); got != want {
 			t.Fatalf("after %q got %#v want %#v\nsource:\n%s", chunk, got, want, source)
 		}

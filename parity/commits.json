@@ -25552,9 +25552,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: needs_scrollback_reflow"
+    "Round 979: the Go streaming layer now releases a confirmed table once its containing top-level Markdown block is stable and keeps only later tables mutable. tui/streaming/table_holdback.go Scan(source, completedSourceLen) mirrors Rust TableHoldbackScanner::scan: it releases holdback when the confirmed/pending start precedes the boundary, resets the fence/line state, and rescans the remaining tail so a later table in the same delta is still detected. tui/streaming/controller.go derives completedSourceLen from markdown.AnalyzeStreamingMarkdown (goldmark top-level block boundary, Rust StreamingMarkdownRender::last_top_level_block_start, filtered by pending display math) and rescans on push, finalize and resize. StreamController.NeedsScrollbackReflow mirrors Rust StreamController::needs_scrollback_reflow: a live tail or any reference-link definition requires completion reflow, including a definition in the unterminated pending source without a trailing newline. The Tea transcript already replaces the streamed assistant message with the normalized final markdown and re-renders it from source (tui/tea/transcript.go mergeAssistantFinalToMessages -> richMessageDisplayLines), which is the Go form of the Required branch. Tests: tui/streaming/table_scrollback_like_rust_test.go TestStreamControllerReleasesCompletedTableIntoScrollbackLikeRust and TestStreamControllerNeedsScrollbackReflowForLateReferenceDefinitionLikeRust (definitions with and without a trailing newline), plus tui/markdown/streaming_blocks_like_rust_test.go. Verified with go test ./tui/streaming ./tui/markdown -count=1 and go test ./tui/... -count=1"
    ]
   },
   {
