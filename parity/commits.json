@@ -12243,9 +12243,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 789: #44928 stops a quiet sample from clearing its channel's meter history. tui/tea/model.go pushVoiceMeterSample no longer zeroes every earlier microphone/speaker intensity when the current frame is silent; the sample is appended like any other frame and earlier speech stays visible until it scrolls out of the VoiceMeterHistoryCapacity (12) window, matching Rust's removed release loop. The Rust #43695 note that quiet channels clear their meter history immediately is superseded. Added tui/tea/voice_test.go TestModelVoiceMeterHistoryKeepsQuietSamplesLikeRust: a loud microphone frame followed by a quiet microphone/speaker-only frame keeps the earlier peak and still renders activity, per-channel independence holds, and a full window of quiet samples settles the history and the rendered meter to silence. The existing mute case still renders no level because the strip forces the microphone meter to zero while muted. Rust's insta snapshot only changed in content, so the Rust snapshot manifest counts are unchanged. Validation: go test ./tui/tea -count=1 (37.7s); go test ./tui/chatwidget -run 'Voice|Meter' -count=1; go test ./tui/bottom_pane -run Voice -count=1."
    ]
   },
   {

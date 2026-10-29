@@ -783,6 +783,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Architecture gap: Go has no binding to MXC's native SDK, so `launch` fails closed with `native MXC is unavailable on this executor` after the whole request is validated, matching the existing executor-side gate instead of degrading to a weaker backend.
 - Tests: `sandbox/mxc/run_test.go`, `run_windows_test.go`, `run_other_test.go`, `request_windows_test.go` (Rust wrapper regression: exact argv, Windows quoting, separate policy/command cwd, explicit env forwarding), and `cmd/internal/codexmain/dispatch_mxc_test.go`; `go test ./sandbox/... ./cmd/... -count=1` and `go build ./cmd/... ./sandbox/... ./execserver/...` pass.
 
-Status after reconciliation: `1976 complete`, `385 not_applicable`,
-`508 audit_pending`, `280 regression_pending`, `0 partial`,
+### Keep voice meter history through quiet samples (Round 789)
+
+- `tui/tea/model.go`: `pushVoiceMeterSample` no longer zeroes every earlier microphone/speaker intensity when the current frame is quiet. The sample is appended like any other frame, so earlier speech stays visible until it scrolls out of the 12-frame `VoiceMeterHistoryCapacity` window (Rust #44928 removed the same release loop); this supersedes the #43695 note that quiet channels clear their meter history immediately.
+- The mute path still renders no level because the strip forces the microphone meter to zero while `MicrophoneMuted` is set, so mute feedback is unchanged.
+- New regression `tui/tea/voice_test.go` `TestModelVoiceMeterHistoryKeepsQuietSamplesLikeRust`: a loud microphone frame followed by a quiet microphone / speaker-only frame keeps the earlier peak and still renders activity, the two channels stay independent, and a full quiet window settles both the history and the rendered meter to silence.
+- Rust's insta snapshot for this case only changed in content, so the Rust TUI snapshot manifest file counts are unaffected; `go test ./tui/tea -count=1`, `go test ./tui/chatwidget -run 'Voice|Meter' -count=1` and `go test ./tui/bottom_pane -run Voice -count=1` pass.
+
+Status after reconciliation: `1977 complete`, `385 not_applicable`,
+`507 audit_pending`, `280 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
