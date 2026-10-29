@@ -15279,9 +15279,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go's V2 spawn_agent spec (agent/tools_v2.go multiAgentV2Spec) uses a condensed description that never carried Rust's 'Only call this tool for a concrete, bounded subtask...' sentence, so removing it has no Go counterpart; the guidance this commit keeps (inherited model guidance, usage hints, catalog overrides) is covered by agent/multi_agent_v2_spawn_guidance_like_rust_test.go"
    ]
   },
   {

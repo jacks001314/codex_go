@@ -2030,6 +2030,14 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - Missing piece: Rust's exclusion order lists `--worktree` immediately after `--no-daemon`; Go treated worktree launches as eligible for shared-server reuse. Added the reason and coverage for the exclusion, the `--no-daemon` precedence, and the daemon-reuse refusal.
 - Verified with `go test ./app -run 'Daemon|NoDaemon|Worktree|Interactive' -count=1`.
 
-Status after reconciliation: `2047 complete`, `401 not_applicable`,
-`452 audit_pending`, `246 regression_pending`, `3 partial`,
+### V2 spawn description relaxation has no Go counterpart (Round 883)
+
+**Upstream:** 16f49ccd7f72 "Relax delegation guidance in the v2 spawn_agent description (#46264)".
+
+- Rust removed the "Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally." sentence from the default V2 description.
+- Go's V2 `spawn_agent` spec (`agent/tools_v2.go`) uses a condensed description that never carried that sentence, so there is nothing to remove; the surrounding guidance the commit keeps is already covered by `agent/multi_agent_v2_spawn_guidance_like_rust_test.go` (inherited-model guidance, usage hints, catalog description overrides).
+- Recorded as not_applicable rather than porting the much longer Rust paragraph.
+
+Status after reconciliation: `2047 complete`, `402 not_applicable`,
+`451 audit_pending`, `246 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
