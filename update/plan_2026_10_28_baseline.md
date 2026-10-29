@@ -1046,6 +1046,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regressions in `install/bundle_like_rust_test.go`: the ported Rust layout/method test (fails with the branch disabled) and a structural test rejecting `Other.app` bundles and a `MacOS` directory without `Contents`.
 - Verified with `go test ./install -count=1`.
 
-Status after reconciliation: `2003 complete`, `392 not_applicable`,
-`491 audit_pending`, `261 regression_pending`, `2 partial`,
+### daemon seeding from provisioned macOS bundles (Round 822)
+
+- Follow-up to Round 820: #45558 also seeds from a provisioned macOS CLI bundle, where the running executable is `CodexCLI.app/Contents/MacOS/codex` rather than the packaged launcher. Round 821's bundle layout detection made that path reachable.
+- `appserverdaemon/prepare_install.go` now selects the staged executable for the identity comparison through `stagedIdentityExecutable`: on darwin a staged `CodexCLI.app` means identity comes from `CodexCLI.app/Contents/MacOS/codex`; every other layout keeps the manifest entrypoint.
+- `prepare_install_bundle_identity_test.go` pins the darwin choice plus the non-darwin and bundle-less fallbacks on any host. The darwin-only `prepare_install_darwin_bundle_test.go` ports Rust's `provisioned_macos_bundle_seeds_from_its_running_executable`: the launcher differs from the running bundle executable, the copied bundle bytes survive, and a prerelease records no auto-update marker.
+- Remaining difference is test harness only: upstream spawns the built CLI through start/restart/bootstrap in cargo integration tests; Go covers those lifecycle paths in `appserverdaemon/lifecycle_test.go` and the app-level daemon tests.
+- Verified with `go test ./appserverdaemon ./install -count=1`, `go build ./...`, and `GOOS=darwin GOARCH=arm64 go test -c ./appserverdaemon` for the darwin test.
+
+Status after reconciliation: `2004 complete`, `392 not_applicable`,
+`491 audit_pending`, `261 regression_pending`, `1 partial`,
 `6 blocked_precondition`.
