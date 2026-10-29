@@ -1,13 +1,14 @@
 package tui
 
 import (
-	"context"
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"codex_go/envutil"
@@ -39,11 +40,36 @@ func ParseBoolEnv(value *string) (bool, bool) {
 	}
 }
 
-func KeyboardEnhancementDisabledFor(disableEnv *string, isWSL bool, isVSCodeTerminal bool) bool {
+func KeyboardEnhancementDisabledFor(disableEnv *string, isWSL bool, detection VscodeDetection) bool {
 	if value, ok := ParseBoolEnv(disableEnv); ok {
 		return value
 	}
-	return isWSL && isVSCodeTerminal
+	// VS Code running a WSL shell can hide TERM_PROGRAM from the Linux process
+	// environment. If the Windows-side probe is inconclusive, avoid enabling the
+	// keyboard mode that can break dead-key composition in VS Code on WSL.
+	return isWSL && (detection == VscodeDetectionVsCode || detection == VscodeDetectionUnknown)
+}
+
+// KeyboardEnhancementDisabled mirrors Rust keyboard_enhancement_disabled: the
+// explicit environment flag wins, otherwise only a WSL host disables the
+// enhancement, and only for a VS Code or inconclusive reading.
+func KeyboardEnhancementDisabled() bool {
+	isWSL := codextui.IsProbablyWSL()
+	detection := VscodeDetectionOther
+	if isWSL {
+		detection = DetectVscodeTerminal()
+	}
+	return KeyboardEnhancementDisabledFor(disableKeyboardEnhancementEnvVar(), isWSL, detection)
+}
+
+// disableKeyboardEnhancementEnvVar reports the override as a nullable string so
+// an unset variable and an unparsable one both fall through to detection.
+func disableKeyboardEnhancementEnvVar() *string {
+	value, ok := os.LookupEnv(DisableKeyboardEnhancementEnvVar)
+	if !ok || value == "" {
+		return nil
+	}
+	return &value
 }
 
 func VscodeTerminalDetected(linuxTermProgram *string, windowsTermProgram *string) bool {
@@ -130,32 +156,130 @@ func DetectVscodeTerminal() VscodeDetection {
 }
 
 // ProbeWindowsTermProgram runs Rust's `cmd.exe /d /s /c "set TERM_PROGRAM"`
-// probe with a one-second deadline. Only a one-second timeout (or a spawn
-// failure) is inconclusive; exit status 1 and an empty variable both mean the
-// Windows session does not export TERM_PROGRAM.
+// probe under the one-second deadline. Only a timeout, a launch failure, or an
+// unexpected exit status is inconclusive; exit status 1 and an empty variable
+// both mean the Windows session does not export TERM_PROGRAM.
 func ProbeWindowsTermProgram() (string, bool, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), WindowsTermProgramProbeTimeout)
-	defer cancel()
-	command := exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", "set TERM_PROGRAM")
+	return readWindowsTermProgramWithTimeout(spawnWindowsTermProgram, WindowsTermProgramProbeTimeout)
+}
+
+// windowsTermProgramProcess is the probe child as the bounded reader sees it.
+// *exec.Cmd cannot be faked, so this mirrors Rust's std::process::Child seam and
+// keeps launch, timeout, and reap behaviour testable on every host.
+type windowsTermProgramProcess interface {
+	// Kill terminates the process. It may race with WaitOutput.
+	Kill() error
+	// WaitOutput waits for exit, reaps the child, and returns its stdout.
+	WaitOutput() ([]byte, error)
+}
+
+type execWindowsTermProgramProcess struct {
+	command *exec.Cmd
+	stdout  *bytes.Buffer
+}
+
+func (p execWindowsTermProgramProcess) Kill() error {
+	if p.command.Process == nil {
+		return errors.New("windows TERM_PROGRAM probe has not started")
+	}
+	return p.command.Process.Kill()
+}
+
+func (p execWindowsTermProgramProcess) WaitOutput() ([]byte, error) {
+	err := p.command.Wait()
+	return p.stdout.Bytes(), err
+}
+
+// spawnWindowsTermProgram launches the probe. Start happens here because a WSL
+// interop launch can block before the child exists at all.
+func spawnWindowsTermProgram() (windowsTermProgramProcess, error) {
+	command := exec.Command("cmd.exe", "/d", "/s", "/c", "set TERM_PROGRAM")
 	// Rust #48483: the probe is piped, so it must not allocate a console window
 	// when the TUI itself has no console.
 	envutil.SuppressConsoleWindow(command)
-	output, err := command.Output()
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", false, false
+	var stdout bytes.Buffer
+	command.Stdout = &stdout
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	return execWindowsTermProgramProcess{command: command, stdout: &stdout}, nil
+}
+
+// readWindowsTermProgramWithTimeout mirrors Rust
+// read_windows_vscode_detection_with_timeout. WSL interop can block inside the
+// launch itself, so launching, waiting, and cleanup all run off the startup
+// thread under a single deadline; a child that only appears after the deadline
+// is still killed and reaped rather than leaked.
+func readWindowsTermProgramWithTimeout(
+	spawn func() (windowsTermProgramProcess, error),
+	timeout time.Duration,
+) (string, bool, bool) {
+	if spawn == nil {
+		return "", false, false
+	}
+	type outcome struct {
+		termProgram string
+		present     bool
+		ok          bool
+	}
+	deadline := time.Now().Add(timeout)
+	done := make(chan outcome, 1)
+	go func() {
+		process, err := spawn()
+		if err != nil || process == nil {
+			done <- outcome{}
+			return
 		}
+		if !time.Now().Before(deadline) {
+			_ = process.Kill()
+			_, _ = process.WaitOutput()
+			done <- outcome{}
+			return
+		}
+		var expired atomic.Bool
+		timer := time.AfterFunc(time.Until(deadline), func() {
+			expired.Store(true)
+			_ = process.Kill()
+		})
+		output, waitErr := process.WaitOutput()
+		timer.Stop()
+		if expired.Load() {
+			done <- outcome{}
+			return
+		}
+		termProgram, present, ok := parseWindowsTermProgramOutput(output, waitErr)
+		done <- outcome{termProgram: termProgram, present: present, ok: ok}
+	}()
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case result := <-done:
+		return result.termProgram, result.present, result.ok
+	case <-timer.C:
+		return "", false, false
+	}
+}
+
+// parseWindowsTermProgramOutput mirrors Rust's outcome mapping. Only the first
+// TERM_PROGRAM line counts, and an empty value means the session does not
+// export one rather than an inconclusive probe.
+func parseWindowsTermProgramOutput(output []byte, waitErr error) (string, bool, bool) {
+	if waitErr != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == 1 {
+			// `cmd.exe /c set TERM_PROGRAM` exits with 1 when the variable is absent.
 			return "", false, true
 		}
 		return "", false, false
 	}
-	for _, line := range strings.Split(strings.ReplaceAll(string(output), "\r\n", "\n"), "\n") {
+	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSuffix(line, "\r")
-		value, ok := strings.CutPrefix(line, "TERM_PROGRAM=")
-		if !ok || strings.TrimSpace(value) == "" {
+		value, found := strings.CutPrefix(line, "TERM_PROGRAM=")
+		if !found {
 			continue
+		}
+		if strings.TrimSpace(value) == "" {
+			return "", false, true
 		}
 		return value, true, true
 	}

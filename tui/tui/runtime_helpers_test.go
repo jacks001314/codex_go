@@ -93,7 +93,9 @@ func TestKeyboardModeDetectionAndAnsiMatchRust(t *testing.T) {
 	if _, ok := ParseBoolEnv(&bad); ok {
 		t.Fatalf("unexpected bool parse")
 	}
-	if !KeyboardEnhancementDisabledFor(nil, true, true) || KeyboardEnhancementDisabledFor(&no, true, true) || !KeyboardEnhancementDisabledFor(&yes, false, false) {
+	if !KeyboardEnhancementDisabledFor(nil, true, VscodeDetectionVsCode) ||
+		KeyboardEnhancementDisabledFor(&no, true, VscodeDetectionVsCode) ||
+		!KeyboardEnhancementDisabledFor(&yes, false, VscodeDetectionOther) {
 		t.Fatalf("keyboard enhancement disable logic mismatch")
 	}
 	vscode := "vscode"
