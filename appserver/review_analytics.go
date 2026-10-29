@@ -188,7 +188,97 @@ func (r *RuntimeRouter) handleNotificationAnalytics(method NotificationMethod, p
 			return
 		}
 		r.emitHookRunAnalyticsEvent(context.Background(), notification)
+	case NotificationTurnStarted, NotificationTurnCompleted:
+		// Rust #46058: the reducer stamps each turn with the realtime voice
+		// session that started or steered it, and clears the thread's active
+		// turn once it completes.
+		threadID, turnID := turnNotificationAttributionIDs(params)
+		if method == NotificationTurnStarted {
+			r.trackVoiceTurnStarted(threadID, turnID)
+		} else {
+			r.trackVoiceTurnCompleted(threadID, turnID)
+		}
+	case NotificationThreadRealtimeStarted:
+		threadID, realtimeSessionID := threadRealtimeStartedAttribution(params)
+		r.trackVoiceSessionStarted(threadID, realtimeSessionID)
+	case NotificationThreadRealtimeClosed:
+		r.trackVoiceSessionClosed(threadScopedNotificationThreadID(params))
+	case NotificationThreadRealtimeItemAdded:
+		notification, ok := params.(*ThreadRealtimeItemAddedNotification)
+		if !ok || notification == nil {
+			return
+		}
+		// Rust #46058: only the handoff marker is analytics-relevant, and it is
+		// recorded with the thread id alone so no transcript reaches analytics.
+		if realtimeItemIsHandoffRequest(notification.Item) {
+			r.trackVoiceHandoffRequested(notification.ThreadID)
+		}
+	case NotificationThreadArchived, NotificationThreadClosed:
+		r.clearVoiceAttribution(threadScopedNotificationThreadID(params))
 	}
+}
+
+// turnNotificationAttributionIDs resolves the thread and turn ids carried by a
+// turn notification, accepting either a pointer or a value payload.
+func turnNotificationAttributionIDs(params any) (string, string) {
+	switch value := params.(type) {
+	case *TurnStartedNotification:
+		if value != nil {
+			return value.ThreadID, value.Turn.ID
+		}
+	case TurnStartedNotification:
+		return value.ThreadID, value.Turn.ID
+	case *TurnCompletedNotification:
+		if value != nil {
+			return value.ThreadID, value.Turn.ID
+		}
+	case TurnCompletedNotification:
+		return value.ThreadID, value.Turn.ID
+	}
+	return "", ""
+}
+
+func threadRealtimeStartedAttribution(params any) (string, string) {
+	switch value := params.(type) {
+	case *ThreadRealtimeStartedNotification:
+		if value != nil {
+			return value.ThreadID, stringPtrValue(value.RealtimeSessionID)
+		}
+	case ThreadRealtimeStartedNotification:
+		return value.ThreadID, stringPtrValue(value.RealtimeSessionID)
+	}
+	return "", ""
+}
+
+// threadScopedNotificationThreadID resolves the thread id of the thread-scoped
+// lifecycle notifications that clear or retarget voice attribution.
+func threadScopedNotificationThreadID(params any) string {
+	switch value := params.(type) {
+	case *ThreadIDNotification:
+		if value != nil {
+			return value.ThreadID
+		}
+	case ThreadIDNotification:
+		return value.ThreadID
+	case *ThreadRealtimeClosedNotification:
+		if value != nil {
+			return value.ThreadID
+		}
+	case ThreadRealtimeClosedNotification:
+		return value.ThreadID
+	}
+	return ""
+}
+
+// realtimeItemIsHandoffRequest reports whether a realtime item is the handoff
+// marker Rust keys the queued voice attribution on.
+func realtimeItemIsHandoffRequest(item any) bool {
+	values, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	itemType, _ := values["type"].(string)
+	return itemType == "handoff_request"
 }
 
 func (r *RuntimeRouter) emitGuardianReviewCompletedAnalytics(ctx context.Context, notification *ItemGuardianApprovalReviewCompletedNotification) {

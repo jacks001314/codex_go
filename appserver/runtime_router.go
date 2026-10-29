@@ -609,7 +609,24 @@ type RuntimeRouter struct {
 	voiceFailureThreads map[string]bool
 	// voiceSessionWindows retains the active and recent closed realtime sessions
 	// per thread so delayed compaction analytics can resolve their start time.
-	voiceSessionWindows   map[string][]voiceSessionWindow
+	voiceSessionWindows map[string][]voiceSessionWindow
+	// voiceTurnSessions attributes each active turn to the realtime voice session
+	// that started or steered it (Rust #46058). An entry is written at turn start
+	// and removed when the turn finishes, so attribution never leaks into later
+	// text turns.
+	voiceTurnSessions map[string]string
+	// voiceHandoffQueue holds voice-session ids captured when a realtime handoff
+	// was requested while no turn was active, so the turn the handoff starts is
+	// still attributed after the session closed.
+	voiceHandoffQueue map[string][]string
+	// voiceActiveSessions holds the realtime voice session currently open for a
+	// thread, and voiceActiveTurns the turn that thread is running. Both mirror
+	// the Rust reducer's thread-level attribution state (Rust #46058).
+	voiceActiveSessions map[string]string
+	voiceActiveTurns    map[string]string
+	// voiceTurnOrder bounds voiceTurnSessions the way Rust bounds its retained
+	// turn states, so a long session cannot grow the map without limit.
+	voiceTurnOrder        []string
 	internalMemoryThreads sync.Map
 	// internalHost owns the host-side state for private internal sessions:
 	// visibility markers, thread-ready contributors, and the per-session/thread
@@ -887,6 +904,10 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		realtimeOpsQueues:       map[string]chan func(context.Context){},
 		realtimeEventLocks:      map[string]*sync.Mutex{},
 		voiceSessionWindows:     map[string][]voiceSessionWindow{},
+		voiceTurnSessions:       map[string]string{},
+		voiceHandoffQueue:       map[string][]string{},
+		voiceActiveSessions:     map[string]string{},
+		voiceActiveTurns:        map[string]string{},
 		agentRegistry:           agent.NewRegistry(),
 		agentRegistries:         map[string]*agent.Registry{},
 		agentActivity:           map[string]chan string{},

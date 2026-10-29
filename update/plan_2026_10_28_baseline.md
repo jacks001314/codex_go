@@ -1955,6 +1955,30 @@ Rust #46054 (`f915e0de0794db24c0ff1419933f81028887069e`) renders completed merma
 
 Verification: `go test ./tui/... -count=1`; `go build ./...`.
 
-Status after reconciliation: `2042 complete`, `401 not_applicable`,
-`455 audit_pending`, `248 regression_pending`, `3 partial`,
+### Attribute analytics events to realtime voice sessions (Round 878)
+
+# Round 878 - attribute analytics events to realtime voice sessions
+
+Rust #46058 (`8ace915aced81ed841e34fa069b2e489c324731c`) adds `voice_session_id` to turn, app-use, skill-invocation and MCP tool-call analytics events, and tracks realtime handoff markers so a turn started after the voice session closed stays attributed while later text turns do not.
+
+## Gap closed
+
+**Event params.** `CodexTurnEventParams`, `CodexAppUsedEventParams`, `SkillInvocationEventParams` and `CodexMCPToolCallEventParams` now carry `voice_session_id` (null when absent), matching Rust's event shapes.
+
+**Reducer state.** `appserver/voice_session_analytics.go` adds the per-thread attribution Rust keeps in its reducer: the open voice session, the running turn, and a FIFO of queued handoffs. `turn/started` pops one queued handoff (including a queued empty value, which wins over the still-open session, as Rust's `pop_front().unwrap_or_else` does) or falls back to the open session; `thread/realtime/started` stamps the running turn; `thread/realtime/closed` forgets the open session but keeps the queue; `thread/archived` and `thread/closed` drop all three. `turn/completed` only clears the active-turn marker, because Go emits the turn event after `turn/completed`.
+
+**Handoff markers.** `thread/realtime/itemAdded` with `type == "handoff_request"` records the thread attribution only - the item's transcript never enters analytics state.
+
+**Retention.** The turn-to-voice map is bounded at 256 entries in insertion order, mirroring Rust's `MAX_PENDING_TURNS` eviction of retained turn states.
+
+**Emitters.** Turn, app-used, skill-invocation and MCP tool-call emitters read the stored attribution for their turn.
+
+## Verification
+
+`appserver/voice_session_turn_attribution_like_rust_test.go` covers attribution after the realtime session closes, active-turn steering that does not tag the next text turn, handoff markers that exclude transcripts, a handoff with no open session staying unattributed, archive cleanup, bounded retention, and serialization of all four events.
+
+Commands: `go test ./appserver -run 'Voice|Realtime|TurnEvent|Mcp|MCP|Skill' -count=1`; `go test ./telemetry -count=1`; `go build ./...`.
+
+Status after reconciliation: `2043 complete`, `401 not_applicable`,
+`454 audit_pending`, `248 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

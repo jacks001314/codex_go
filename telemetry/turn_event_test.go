@@ -69,6 +69,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"thread_id": "thread-2",
 			"session_id": "session-thread-2",
 			"turn_id": "turn-2",
+			"voice_session_id": null,
 			"root_turn_id": "root-turn-2",
 			"active_plugin_ids_at_turn_start": ["plugins~Plugin_example", "test@marketplace"],
 			"turn_trigger": null,

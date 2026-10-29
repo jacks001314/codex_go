@@ -111,6 +111,7 @@ func (r *RuntimeRouter) emitCodexAppUsedEvent(ctx context.Context, threadID stri
 			InvokeType:      stringPtrIfNotEmpty(invokeType),
 			ModelSlug:       stringPtrIfNotEmpty(strings.TrimSpace(modelSlug)),
 		},
+		VoiceSessionID:  stringPtrIfNotEmpty(r.voiceSessionIDForTurn(turnID)),
 		ElicitationType: cloneStringPtrAppserver(elicitationType),
 	}))
 }

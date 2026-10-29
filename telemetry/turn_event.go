@@ -81,6 +81,9 @@ type CodexTurnEventParams struct {
 	ThreadID                string  `json:"thread_id"`
 	SessionID               string  `json:"session_id"`
 	TurnID                  string  `json:"turn_id"`
+	// VoiceSessionID attributes this turn to a realtime voice session when the
+	// turn was started or steered by one (Rust #46058).
+	VoiceSessionID *string `json:"voice_session_id"`
 	// RootTurnID is the top-level turn that caused this activity, or null when
 	// the root is unknown or ambiguous (Rust #40486).
 	RootTurnID *string `json:"root_turn_id"`
@@ -158,6 +161,7 @@ type CodexTurnEventInput struct {
 	ThreadID                             string
 	SessionID                            string
 	TurnID                               string
+	VoiceSessionID                       *string
 	RootTurnID                           *string
 	ActivePluginIDsAtTurnStart           *[]string
 	TurnTrigger                          string
@@ -288,6 +292,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			ThreadID:                             input.ThreadID,
 			SessionID:                            input.SessionID,
 			TurnID:                               input.TurnID,
+			VoiceSessionID:                       input.VoiceSessionID,
 			RootTurnID:                           input.RootTurnID,
 			ActivePluginIDsAtTurnStart:           input.ActivePluginIDsAtTurnStart,
 			TurnTrigger:                          boundedTelemetryString(input.TurnTrigger),

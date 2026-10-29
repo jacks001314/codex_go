@@ -27,6 +27,7 @@ type SkillInvocationEventParams struct {
 	RemotePluginID  *string `json:"remote_plugin_id"`
 	ThreadID        *string `json:"thread_id"`
 	TurnID          *string `json:"turn_id"`
+	VoiceSessionID  *string `json:"voice_session_id"`
 	InvokeType      *string `json:"invoke_type"`
 	ModelSlug       *string `json:"model_slug"`
 }

@@ -178,6 +178,9 @@ type CodexMCPToolCallEventParams struct {
 	// ConnectorID is the trusted Codex Apps connector the call resolved to (Rust
 	// #32867).
 	ConnectorID *string `json:"connector_id"`
+	// VoiceSessionID is the realtime voice session that started or steered the
+	// calling turn (Rust #46058).
+	VoiceSessionID *string `json:"voice_session_id"`
 	// ElicitationType classifies the call when it ended in an authentication or
 	// account-linking block (`auth_or_link`) or in a denied, aborted or timed-out
 	// approval (`approval`); ordinary calls report null (Rust #45649/#45716).

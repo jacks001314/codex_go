@@ -14883,9 +14883,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Voice-session attribution for #46058: telemetry gains voice_session_id on turn, app-used, skill-invocation and MCP tool-call event params, and appserver mirrors Rust's reducer state per thread (voiceActiveSessions, voiceActiveTurns, voiceHandoffQueue) plus per-turn voiceTurnSessions bounded at 256. handleNotificationAnalytics now drives turn/started, turn/completed, thread/realtime/started, thread/realtime/closed, realtime itemAdded handoff_request markers (thread id only, no transcript) and thread/archived/closed cleanup. turn, app-used, skill and MCP emitters read the stored turn attribution. Tests: appserver/voice_session_turn_attribution_like_rust_test.go (after-close handoff attribution, active-turn steering without tagging the next text turn, marker excludes transcripts, empty handoff queue slot, archive cleanup, bounded retention, serialization); go test ./appserver -run 'Voice|Realtime|TurnEvent|Mcp|MCP|Skill' -count=1; go test ./telemetry -count=1; go build ./..."
    ]
   },
   {

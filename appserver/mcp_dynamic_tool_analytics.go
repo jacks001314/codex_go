@@ -84,6 +84,7 @@ func (r *RuntimeRouter) emitMCPToolCallAnalyticsEvent(ctx context.Context, conne
 		MCPErrorPresent:        threadItemMCPError(item) != nil,
 		PluginID:               threadItemStringPtrFromData(item.Data, "pluginId", "plugin_id"),
 		ConnectorID:            threadItemStringPtrFromData(item.Data, "connectorId", "connector_id"),
+		VoiceSessionID:         stringPtrIfNotEmpty(r.voiceSessionIDForTurn(turnID)),
 		// Rust #45649/#45716: the classification the call's producer queued before
 		// this item completed, if any.
 		ElicitationType: r.takeMCPToolCallElicitation(threadID, turnID, itemID),
