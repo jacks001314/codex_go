@@ -1032,6 +1032,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regressions in `appserver/attachment_store_session_like_rust_test.go`: a turn's runner carries the thread manager's store, a child-thread turn resolves the parent's store, and a real SSE turn uploads through the store with the outbound request carrying its file id instead of inline base64. All three fail with the assignment removed.
 - Verified with `go build ./...`, `go test ./attachmentstore ./eventmap ./model -count=1`, and `go test ./appserver -run 'ThreadManagerAttachmentStore' -count=1`; the full appserver run differs only by the two pre-existing unrelated analytics/fingerprint timeouts, which also fail with this change disabled.
 
+### seed daemon installs from local CLI packages (Round 820)
+
+- Rust #45558 seeds a missing managed daemon from the invoking CLI's complete local package. Go already had the staging path (`prepareDaemonPackage`, `validateDaemonPackage`, `requiredPackageArtifacts`, `copyPackageTree`/`packageTreeDigest`, `ensurePackageUnchanged`, `stablePackageVersion`, `followsStandaloneLatest`, `writeAutoUpdateMarker`), Windows selection with junction retargeting, and regressions for seeding, idempotent reuse, incomplete packages, platform/executable mismatch, stable-version gating, junction retargeting, and legacy migration.
+- New regressions in `appserverdaemon/prepare_install_selection_like_rust_test.go`: a legacy standalone selection is left untouched (no dedicated root, no selection move), a copied release preserves an explicit pin versus the standalone latest-channel marker, and a broken `current` selection is reported for repair instead of replaced (nothing staged). Each fails against a mutated production guard.
+- Remaining gap: Rust also seeds from a macOS CodexCLI.app bundle and compares identity against `CodexCLI.app/Contents/MacOS/codex`; Go has no bundle layout detection (`install.PackageLayoutFromExe`), tracked by Rust #42068 (audit_pending). The cargo-only CLI start/restart/bootstrap integration tests have no Go harness.
+- Verified with `go test ./appserverdaemon -count=1`.
+
 Status after reconciliation: `2002 complete`, `392 not_applicable`,
-`492 audit_pending`, `262 regression_pending`, `1 partial`,
+`492 audit_pending`, `261 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

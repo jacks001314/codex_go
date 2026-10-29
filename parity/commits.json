@@ -13491,9 +13491,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "partial",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #45558 lets `app-server daemon start`/`restart`/`bootstrap` seed a missing managed daemon from the invoking CLI's complete local package. Go already implemented the staging path in `appserverdaemon/prepare_install.go` (`prepareDaemonInstall`/`prepareDaemonPackage`, `prepareSourcePackage`, `daemonPackageManifest`, `validateDaemonPackage`, `requiredPackageArtifacts`, `copyPackageTree`/`packageTreeDigest`, `ensurePackageUnchanged`, `stablePackageVersion`, `followsStandaloneLatest`, `writeAutoUpdateMarker`), the Windows selection in `prepare_install_windows.go` (`selectDaemonRelease` with junction retargeting), and regressions for full-package seeding, idempotent reuse, incomplete packages, platform/executable mismatch, stable-version gating, Windows junction creation/retargeting, and legacy-to-dedicated migration. This round added the three missing Rust regressions in `appserverdaemon/prepare_install_selection_like_rust_test.go`: a legacy standalone selection is left untouched (no dedicated root is created and the selection does not move), a copied release preserves an explicit pin versus the standalone latest-channel marker (`auto-update-version` present only when the CLI was the standalone package the channel named), and a broken `current` selection whose release disappeared is reported for repair instead of being treated as a missing installation (nothing is staged and the selection is kept). Each test fails against a mutated production guard and passes with it. Remaining gap: Rust's macOS `provisioned_macos_bundle_seeds_from_its_running_executable` also stages from a CodexCLI.app bundle and compares identity against `CodexCLI.app/Contents/MacOS/codex`; Go's `install.PackageLayoutFromExe` has no bundle layout detection (tracked by Rust #42068, still audit_pending), so that path is unimplemented. The cargo-only CLI integration tests that spawn the packaged binary through start/restart/bootstrap have no equivalent Go harness. Verified with `go test ./appserverdaemon -count=1` (whole package passes)."
    ]
   },
   {
