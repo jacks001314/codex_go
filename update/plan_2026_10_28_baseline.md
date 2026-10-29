@@ -647,11 +647,16 @@ Eight more entries moved to `complete`: `#42132` (`gitutil/discovery.go`),
 cites the behaviour and the package tests that pin it in a clean archived
 snapshot.
 
-Status after reconciliation: `1926 complete`, `381 not_applicable`,
-`555 audit_pending`, `287 regression_pending`, `0 partial`,
+### Credential export, attachments, and read-only MCP sweep (Round 766)
+
+Eight more entries moved to `complete`: `#44028` (`model/credential_export.go`),
+`#44068` (`network/proxy_credential_broker.go`), `#44564`
+(`appserver/thread_attachments.go`), `#44691`
+(`config/ignored_settings.go`), `#45255` (`app/agents_dashboard.go`), `#45454`
+(`tui/tea/model.go`), `#45711` (`appserver/protocol.go`), and `#46042`
+(`mcp/read_only_tools.go`). Evidence cites the behaviour and the package tests
+that pin it.
+
+Status after reconciliation: `1934 complete`, `381 not_applicable`,
+`547 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
-```powershell
-$env:CODEX_RUST_ROOT = 'D:\qax\reagent\dev\git\codex\codex-rs'
-go test ./parity ./features -count=1
-go test ./... -count=1
-```

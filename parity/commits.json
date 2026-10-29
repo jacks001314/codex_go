@@ -10167,9 +10167,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/11; needs review: AwsCredentialExportConfig, CREDENTIAL_EXPORT_CONFIG_ERROR_PREFIX, CredentialExportRefresh, credentials_provider_error"
+    "Round 766 (audit): #44028 implemented at model/credential_export.go:18 - // Bedrock credential export (Rust #44028): a configured command emits SigV4 Behaviour: Bedrock credential export parses provider configuration, validates timeouts and rejected forms, runs the configured command, parses the emitted AWS access keys in all supported formats, defaults key lifetime, and refreshes before expiry. Regression contract: model/credential_export_test.go (TestProviderConfigParsesCredentialExportLikeRust|TestProviderConfigRejectsCredentialExportLikeRust|TestParseAWSCredentialOutputFormats|TestParseAWSCredentialOutputDefaultsLifetime); verify with `go test ./model -run 'TestProviderConfigParsesCredentialExportLikeRust|TestProviderConfigRejectsCredentialExportLikeRust|TestParseAWSCredentialOutputFormats|TestParseAWSCredentialOutputDefaultsLifetime' -count=1`."
    ]
   },
   {
@@ -10335,9 +10335,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/9; needs review: configure_credential_broker_environment, credential_broker_environment_for_text, credential_broker_source_matches_text, environment_for_text, registered_credential_source"
+    "Round 766 (audit): #44068 implemented at network/proxy_credential_broker.go:59 - // DestinationEnvKeys holds environment variables that contribute a Behaviour: destination hints contributed by environment keys survive child-environment filtering instead of being dropped as unrecognized provider env. Regression contract: network/proxy_credential_hints_test.go (TestCredentialBrokerDestinationHintsSurviveEnvFilteringLikeRust|TestCredentialBrokerDisablesOnAmbiguousWindowsProviderEnvLikeRust); verify with `go test ./network -run 'TestCredentialBrokerDestinationHintsSurviveEnvFilteringLikeRust|TestCredentialBrokerDisablesOnAmbiguousWindowsProviderEnvLikeRust' -count=1`."
    ]
   },
   {
@@ -11367,9 +11367,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 10/13; needs review: thread_attachment_add, thread_attachment_list, thread_attachment_remove"
+    "Round 766 (audit): #44564 implemented at appserver/thread_attachments.go:9 - // Thread attachments (Rust #43949/#44330/#44564): bounded, independently Behaviour: stored thread attachments support the full add/list/remove lifecycle through the state runtime with owner checks, pagination, validation, and per-thread limits. Regression contract: appserver/thread_attachments_test.go (TestRuntimeRouterThreadAttachmentLifecycle|TestRuntimeRouterThreadAttachmentOwnerList|TestRuntimeRouterThreadAttachmentListPagination|TestRouterThreadAttachmentLimitPerThread); verify with `go test ./appserver -run 'TestRuntimeRouterThreadAttachmentLifecycle|TestRuntimeRouterThreadAttachmentOwnerList|TestRuntimeRouterThreadAttachmentListPagination|TestRouterThreadAttachmentLimitPerThread' -count=1`."
    ]
   },
   {
@@ -11823,9 +11823,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: ignored_toml_value_fields, strip_cloud_auth_requirements"
+    "Round 766 (audit): #44691 implemented at config/ignored_settings.go:3 - // Rust parity: codex-rs/config/src/strict_config.rs ignored_config_warning Behaviour: unrecognized settings in the effective config and requirements layers surface as a bounded startup/project warning with hints, and an empty warning when nothing is unknown. Regression contract: config/ignored_settings_test.go (TestIgnoredConfigWarningCollectsUnknownSettings|TestIgnoredConfigWarningBoundsEntriesAndAddsHints|TestProjectIgnoredConfigKeysWarningsLikeRust|TestConfigServiceIgnoredSettingsWarning); verify with `go test ./config -run 'TestIgnoredConfigWarningCollectsUnknownSettings|TestIgnoredConfigWarningBoundsEntriesAndAddsHints|TestProjectIgnoredConfigKeysWarningsLikeRust|TestConfigServiceIgnoredSettingsWarning' -count=1`."
    ]
   },
   {
@@ -12723,9 +12723,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/4; needs review: layout_areas"
+    "Round 766 (audit): #45255 implemented at app/agents_dashboard.go:33 - // in CWD, which has no rollout yet (Rust #45255). Behaviour: the command center opens a new session directly, preserving image attachments when the dashboard dispatches a blank session. Regression contract: app/agents_dashboard_test.go (TestAgentsDashboardNewSessionOpensBlankSession|TestAgentsDashboardNewSessionPreservesImageAttachmentsLikeRust); verify with `go test ./app -run 'TestAgentsDashboardNewSessionOpensBlankSession|TestAgentsDashboardNewSessionPreservesImageAttachmentsLikeRust' -count=1`."
    ]
   },
   {
@@ -12927,9 +12927,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: append_control_char_if_active"
+    "Round 766 (audit): #45454 implemented at tui/tea/model.go:2611 - // mirroring Rust PasteBurst's plain-char timestamp (Rust #45454): a Tab that Behaviour: a Tab inside a paste burst keeps indentation rather than submitting, including in slash context, while an explicit paste-burst disable restores Enter submission. Regression contract: tui/tea/model_test.go (TestModelTabInsidePasteBurstKeepsIndentationLikeRust|TestModelTabInSlashContextInsidePasteBurstLikeRust|TestModelDisablePasteBurstSubmitsOnEnterLikeRust); verify with `go test ./tui/tea -run 'TestModelTabInsidePasteBurstKeepsIndentationLikeRust|TestModelTabInSlashContextInsidePasteBurstLikeRust|TestModelDisablePasteBurstSubmitsOnEnterLikeRust' -count=1`."
    ]
   },
   {
@@ -13695,9 +13695,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: AllowedTools, reviewer_allowed_tools, with_allowed_tools"
+    "Round 766 (audit): #45711 implemented at appserver/protocol.go:1621 - // empty list disables all tools; nil preserves ordinary setup (Rust #45711). Behaviour: thread start and resume accept startup tool allowlists and shape them like Rust. Regression contract: appserver/allowed_tools_like_rust_test.go (TestThreadAllowedToolsStartAndResumeShapeLikeRust); verify with `go test ./appserver -run 'TestThreadAllowedToolsStartAndResumeShapeLikeRust' -count=1`."
    ]
   },
   {
@@ -14811,9 +14811,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/3; needs review: with_read_only_tools"
+    "Round 766 (audit): #46042 implemented at mcp/read_only_tools.go:7 - // applyMCPReadOnlyToolsMeta mirrors Rust Behaviour: read-only MCP connections force the read-only-tools metadata marker on every discovery and invocation request, keeping unrestricted requests unmarked and isolating read-only connections and catalogs. Regression contract: mcp/read_only_tools_test.go (TestMCPReadOnlyToolsRequestMetadataLikeRust|TestMCPReadOnlyToolsIsolateConnectionsAndCatalogsLikeRust|TestMCPReadOnlyToolsKeepsUnrestrictedRequestsUnmarked); verify with `go test ./mcp -run 'TestMCPReadOnlyToolsRequestMetadataLikeRust|TestMCPReadOnlyToolsIsolateConnectionsAndCatalogsLikeRust|TestMCPReadOnlyToolsKeepsUnrestrictedRequestsUnmarked' -count=1`."
    ]
   },
   {
