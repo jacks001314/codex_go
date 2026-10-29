@@ -2379,6 +2379,25 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Verified with `go build ./...`, `go test ./appserver -run Environment|Clock|Compact`,
   and `go test ./session ./turn ./tool ./context ./compact`.
 
-Status after reconciliation: `2084 complete`, `408 not_applicable`,
-`432 audit_pending`, `221 regression_pending`, `4 partial`,
+### Guardian sender evidence stays reviewer-only (Round 923)
+
+- Upstream `e269f2164cbb` (#46179) gives Guardian reviewers the sender's recent
+  user messages for a delegated task. The Go tree already implemented the whole
+  surface: bounded snapshot in `retainedctx`, capture on accepted
+  `codex_app`/`codex_tui`/`cloud_threads` deliveries, reviewer-only rendering,
+  replay into retained context, and fork stripping.
+- Added `appserver/retained_sender_test.go`
+  `TestRuntimeRouterKeepsSenderSnapshotsOutOfTheWorkerPromptLikeRust`, the one
+  Rust assertion that had no Go counterpart: the snapshot stays with the delivery
+  and reaches the reviewer section, but never enters the worker's model-visible
+  text.
+- Upstream `77c1feb00ed6` (#46107) only boxes the app-server request-handler
+  future to shrink queued-future stack size. Go runs request handlers on
+  goroutines with growable stacks and keeps no such future queue, so the commit
+  has no counterpart and is recorded as `not_applicable`.
+- Verified with `go test ./appserver -run Sender|Retained|Guardian` and
+  `go test ./state ./retainedctx`.
+
+Status after reconciliation: `2085 complete`, `409 not_applicable`,
+`431 audit_pending`, `220 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

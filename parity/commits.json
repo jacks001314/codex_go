@@ -15087,9 +15087,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust 77c1feb00ed6 (#46107) only wraps the app-server handle_initialized_client_request future in Box::pin so queued request futures keep a small stack footprint (codex-rs/app-server/src/message_processor.rs, 9 lines). It changes no wire behaviour, protocol surface, or observable semantics. Go dispatches requests on goroutines with growable stacks and keeps no pre-allocated future queue, so there is no equivalent stack-size risk and nothing to port."
    ]
   },
   {
@@ -15195,9 +15195,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 7/7 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust e269f2164cbb (#46179) captures up to three recent sender user messages per accepted delegation delivery, renders a bounded reviewer-only snapshot, retains it across replay, compaction and rollback, and strips it from forked history. Go implements the same surface: retainedctx/sender_user_messages.go carries the bounded snapshot (3600-byte text bound and 128-byte id truncation matching history/src/sender_user_messages.rs), appserver/retained_context.go:719 captureSenderUserMessages accepts exactly the codex_app send_message_to_thread and create_thread, codex_tui send_message_to_thread and cloud_threads send_message deliveries and stamps the snapshot into the delivery harness metadata, appserver/retained_context.go:535 replays it into the retained context, state/guardian_sender_messages.go renders the SENDER USER MESSAGES START/END fragment with the shared 900-byte exchange budget and explicit unavailable notices, state.SenderUserMessagesSectionItems feeds both reviewers, and appserver/retained_context.go:1047 drops sender metadata from forked history. Existing coverage: appserver/retained_sender_test.go capture, budget, gating, persisted-read and label tests, state/guardian_sender_messages_test.go rendering tests, state/guardian_retained_context_test.go section test, retainedctx/heartbeat_test.go bound test and appserver/retained_inherited_test.go fork test. Added appserver/retained_sender_test.go TestRuntimeRouterKeepsSenderSnapshotsOutOfTheWorkerPromptLikeRust, which proves the snapshot stays out of the worker model-visible text while the reviewer section still carries it. Verified: go test ./appserver -run Sender|Retained|Guardian and go test ./state ./retainedctx."
    ]
   },
   {

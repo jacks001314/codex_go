@@ -521,3 +521,101 @@ func TestRuntimeRouterSenderCaptureLabelsOnlyUnloadedSendersLikeRust(t *testing.
 }
 
 func senderPointer(item session.Item) *session.Item { return &item }
+
+// Rust #46179 keeps the sender snapshot reviewer-only: it is retained with the
+// delivery so both Guardian reviewers can read it, while the receiving worker's
+// model-visible history still carries the delegation output alone.
+func TestRuntimeRouterKeepsSenderSnapshotsOutOfTheWorkerPromptLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	sender := session.ThreadID("thread-worker-sender")
+	receiver := session.ThreadID("thread-worker-receiver")
+	for _, id := range []session.ThreadID{sender, receiver} {
+		if err := store.Create(&session.Record{ID: id, SessionID: string(id)}); err != nil {
+			t.Fatalf("Create(%s) error = %v", id, err)
+		}
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	userRaw, err := json.Marshal(map[string]any{
+		"type":    "message",
+		"role":    "user",
+		"content": []any{map[string]any{"type": "input_text", "text": "Only use staging.\nNever production."}},
+		"internal_chat_message_metadata_passthrough": map[string]any{"content_item_kinds": []string{"user.text"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal sender message: %v", err)
+	}
+	senderItems := []session.Item{
+		{
+			ID:       "sender-user-1",
+			Type:     "message",
+			Role:     "user",
+			Text:     "Only use staging.\nNever production.",
+			Metadata: map[string]any{"turnId": "sender-turn-1"},
+			Raw:      userRaw,
+		},
+		{
+			ID:       "sender-assistant-1",
+			Type:     "message",
+			Role:     "assistant",
+			Text:     "I will use staging.",
+			Metadata: map[string]any{"turnId": "sender-turn-1"},
+		},
+	}
+	if _, err := router.runtimeAppendItems(sender, senderItems); err != nil {
+		t.Fatalf("runtimeAppendItems(sender) error = %v", err)
+	}
+
+	delivery := session.Item{
+		ID:        "worker-delivery",
+		Type:      "function_call_output",
+		Namespace: "codex_app",
+		Name:      "send_message_to_thread",
+		Text:      fmt.Sprintf("<codex_delegation>\n  <source_thread_id>%s</source_thread_id>\n  <input>Inspect.</input>\n</codex_delegation>", sender),
+	}
+	if _, err := router.runtimeAppendItems(receiver, []session.Item{delivery}); err != nil {
+		t.Fatalf("runtimeAppendItems(receiver) error = %v", err)
+	}
+	record, err := store.Read(receiver, true, true)
+	if err != nil || record == nil {
+		t.Fatalf("Read() = %#v/%v", record, err)
+	}
+	var snapshot *retainedctx.SenderUserMessages
+	var visible strings.Builder
+	for _, item := range compactItemsFromSessionItems(record.Items) {
+		visible.WriteString(item.Text)
+		visible.WriteString("\n")
+	}
+	for index := range record.Items {
+		item := &record.Items[index]
+		if item.ID != delivery.ID {
+			continue
+		}
+		if metadata := harnessMetadataFromSessionItem(item); metadata != nil {
+			snapshot = metadata.SenderUserMessages
+		}
+	}
+	if snapshot == nil {
+		t.Fatal("the delivery did not retain its sender snapshot")
+	}
+	if !strings.Contains(snapshot.Text, "Never production.") {
+		t.Fatalf("retained sender evidence =\n%s", snapshot.Text)
+	}
+	// Reviewer-only: the worker's model-visible text keeps the delegation output
+	// and never the host-rendered sender evidence.
+	if strings.Contains(visible.String(), "SENDER USER MESSAGES") || strings.Contains(visible.String(), "Never production.") {
+		t.Fatalf("sender evidence leaked into the worker prompt:\n%s", visible.String())
+	}
+	if !strings.Contains(visible.String(), "<codex_delegation>") {
+		t.Fatalf("worker prompt lost the delegation output:\n%s", visible.String())
+	}
+	router.retainedContextsMu.Lock()
+	context := router.retainedLiveContextLocked(string(receiver))
+	router.retainedContextsMu.Unlock()
+	if section := state.SenderUserMessagesSectionItems(context); len(section) != 1 || section[0] != snapshot.Text {
+		t.Fatalf("reviewer section = %#v, want the retained snapshot", section)
+	}
+}
