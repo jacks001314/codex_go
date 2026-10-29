@@ -1378,6 +1378,30 @@ Analytics chart readability and navigation (#45770, part 2).
 - Verified with `go test ./tui/analytics ./tui/tea ./tui/chatwidget
   ./chatgptapi -count=1`, `go vet ./tui/analytics ./tui/tea`, and `go build ./...`.
 
-Status after reconciliation: `2018 complete`, `395 not_applicable`,
-`475 audit_pending`, `258 regression_pending`, `3 partial`,
+### Analytics chart readability and navigation (Round 848)
+
+Analytics chart readability and navigation (#45770, complete).
+
+- Confirmed the remaining Rust pieces of `de40696e` are behavioural no-ops in
+  Go: `dashboard.rs`, `panels.rs`, `sections.rs` and `analytics.rs` only remove
+  the grouping picker (already dropped in Round 846), and `render.rs` keeps the
+  stable range row, footer timestamp and overflow-dependent hints from Round 847.
+- `TestAnalyticsExactFitHasNoScrollHintLikeRust` mirrors Rust's
+  `analytics_exact_fit_content_has_no_scroll_hint`: at the exact
+  `chrome + content` height the Chats viewport equals the content height and no
+  scroll hint is painted.
+- `TestAnalyticsPlotNarrowEqualTotalsLikeRust` reproduces Rust's
+  `narrow_equal_height_totals_remain_separate_numbers` snapshot byte-for-byte at
+  widths 21, 28 and 35, and the seven-day total test keeps covering the
+  `seven_day_totals` snapshot behaviour at width 100, height 8.
+- `TestAnalyticsUngroupedSectionsKeepConfiguredGLikeRust` keeps a configured
+  `g` jump-top binding working in Chats, Plugins, Skills and Credits, so the
+  grouping cycle cannot swallow the list action in ungrouped sections.
+- The taller-legend test now also checks that the footer timestamp wraps onto
+  its own line at widths 24, 40 and 64.
+- Verified with `go test ./tui/analytics ./tui/tea ./tui/chatwidget
+  ./chatgptapi -count=1`, `go vet ./tui/analytics ./tui/tea`, and `go build ./...`.
+
+Status after reconciliation: `2019 complete`, `395 not_applicable`,
+`475 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
