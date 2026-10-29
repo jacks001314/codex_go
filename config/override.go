@@ -148,10 +148,12 @@ func apply(root map[string]any, parts []string, value any, path []string) {
 	key := parts[0]
 	childPath := append(append([]string(nil), path...), key)
 	if len(parts) == 1 {
-		if isMultiAgentV2FeaturePath(childPath) {
-			// Mirrors Rust apply_toml_override (config/src/overrides.rs):
-			// multi_agent_v2 boolean/table overrides preserve nested config in
-			// either ordering instead of silently replacing the lower value.
+		if _, structured := structuredFeatureName(childPath); structured {
+			// Mirrors Rust apply_toml_override (config/src/overrides.rs): a legacy
+			// boolean toggle for a structured feature (`features.<feature>` or
+			// `profiles.<name>.features.<feature>`) converts to an `enabled` field,
+			// preserving nested configuration in either ordering instead of
+			// silently replacing the lower value.
 			switch existing := root[key].(type) {
 			case map[string]any:
 				if enabled, ok := value.(bool); ok {
@@ -176,7 +178,7 @@ func apply(root map[string]any, parts []string, value any, path []string) {
 	}
 	next, ok := root[key].(map[string]any)
 	if !ok {
-		if isMultiAgentV2FeaturePath(childPath) {
+		if _, structured := structuredFeatureName(childPath); structured {
 			// Mirrors Rust: a legacy boolean toggle on the traversal path is
 			// converted to an enabled table before descending.
 			if enabled, isBool := root[key].(bool); isBool {

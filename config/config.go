@@ -3762,13 +3762,6 @@ func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 	}
 }
 
-func isMultiAgentV2FeaturePath(path []string) bool {
-	if len(path) == 2 && path[0] == "features" && path[1] == "multi_agent_v2" {
-		return true
-	}
-	return len(path) == 4 && path[0] == "profiles" && path[2] == "features" && path[3] == "multi_agent_v2"
-}
-
 // structuredFeatureName mirrors Rust is_structured_feature_path
 // (config/src/merge.rs): the named feature paths whose legacy boolean toggle
 // converts to an `enabled` field when merged with a nested table.
@@ -3783,7 +3776,7 @@ func structuredFeatureName(path []string) (string, bool) {
 		return "", false
 	}
 	switch feature {
-	case "multi_agent_v2", "network_proxy", "sleep_tool":
+	case "code_mode", "multi_agent_v2", "network_proxy", "sleep_tool":
 		return feature, true
 	default:
 		return "", false

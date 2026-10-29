@@ -15363,9 +15363,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Behaviour was already ported; the audit found one real gap in nested-config merging. `features.code_mode.experimental_show_cell_overhead` is validated as a known code-mode field (config/config.go:1485), read by Config.CodeModeExperimentalShowCellOverhead (config/config.go:2260), and wired to the model-facing header through codeModeResponseHeader (tool/code_mode_exec.go:1993) from both `exec` (exec/exec.go:568) and app-server turns (appserver/runtime_router.go:16484). Formatting matches Rust: one decimal by default, three decimals plus `(code-mode X seconds; overhead Y seconds)` when enabled and host timing exists, default format when disabled or when host timing is missing, and negative rounding differences preserved (tool/code_mode_exec_test.go TestCodeModeResponseHeaderMatchesRustFormat). Host-duration plumbing is covered by tool/code_mode_host_timing_test.go and the toggle by config/config_test.go TestCodeModeExperimentalShowCellOverheadLikeRust. Fixed gap: structuredFeatureName (config/config.go:3768) omitted `code_mode`, so the Rust `is_structured_feature_path` addition was missing and a legacy `features.code_mode = true` combined with a nested code-mode table (or a base boolean merged with an override table) silently dropped the enable; `code_mode` is now in the structured list and config/override.go uses the shared structured-feature check for dotted overrides, matching Rust's apply_toml_override. Regression test: config/code_mode_overrides_like_rust_test.go covers both override orders, both merge directions, `features` and `profiles.work.features`, and the resolved feature settings. Verified with go test ./config -count=1 and go build ./..."
    ]
   },
   {

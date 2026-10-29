@@ -2068,6 +2068,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - #46293 only rewires discovery/loading/namespace callers onto the accessor with `unrestricted`, so access semantics do not change. Go already makes the same decision per call: `readExecutorSkillEntryResource` (`appserver/executor_skill_provider.go:310`) uses the captured sandbox through `readLocalEnvironmentSkillTextWithSandbox`/`readRemoteEnvironmentSkillTextWithSandbox` when a context exists and the unrestricted `os.ReadFile` otherwise.
 - Both recorded as not_applicable; no code change and no new test, because neither commit carries a behavioural delta.
 
-Status after reconciliation: `2049 complete`, `404 not_applicable`,
-`446 audit_pending`, `246 regression_pending`, `4 partial`,
+### Keep code-mode overhead merges structured (Round 887)
+
+**Upstream:** 0fd1cd8d99b6 "Add opt-in overhead timing to code-mode responses (#46288)".
+
+- Go already had the feature: `features.code_mode.experimental_show_cell_overhead` is validated as a known field (`config/config.go:1485`), read by `Config.CodeModeExperimentalShowCellOverhead` (`config/config.go:2260`), and threaded into `codeModeResponseHeader` (`tool/code_mode_exec.go:1993`) from both `exec` (`exec/exec.go:568`) and app-server turns (`appserver/runtime_router.go:16484`).
+- Header formats match Rust exactly: one decimal by default, three decimals with `(code-mode X seconds; overhead Y seconds)` when the option is on and host timing exists, the default form when it is off or host timing is absent, and negative rounding differences preserved. Host-duration plumbing is pinned by `tool/code_mode_host_timing_test.go`; the toggle by `TestCodeModeExperimentalShowCellOverheadLikeRust`; the header shapes by `TestCodeModeResponseHeaderMatchesRustFormat`.
+- Real gap found: `structuredFeatureName` (`config/config.go:3768`) did not list `code_mode`, so Rust's `is_structured_feature_path` addition was missing. A legacy `features.code_mode = true` merged with a nested code-mode table — including `-c features.code_mode=true` alongside `-c features.code_mode.experimental_show_cell_overhead=true` — dropped the enable.
+- Fixed by adding `code_mode` to the structured feature list and switching `config/override.go` from the multi-agent-only check to the shared structured-feature check, matching Rust's `apply_toml_override`. Added `config/code_mode_overrides_like_rust_test.go` covering both override orders, both merge directions, `features` and `profiles.work.features`, and the resolved feature settings.
+- Verified with `go test ./config -count=1` and `go build ./...`.
+
+Status after reconciliation: `2050 complete`, `404 not_applicable`,
+`446 audit_pending`, `245 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
