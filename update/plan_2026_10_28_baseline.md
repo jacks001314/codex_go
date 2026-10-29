@@ -1683,6 +1683,20 @@ Hidden HTTP/3 TCP tunnel command (#45900, regression closure).
   exercising token replacement, transport recovery, and draining; `./cli` tests
   cover the hidden subcommand surface.
 
-Status after reconciliation: `2028 complete`, `399 not_applicable`,
-`465 audit_pending`, `254 regression_pending`, `3 partial`,
+### Bound model catalog decode errors and classify request timeouts (#45928) (Round 862)
+
+Bound model catalog decode errors and classify request timeouts (#45928, not applicable).
+
+- Rust interpolated `serde_json` errors and the whole body into the catalog
+  decode failure. Go's `decodeModelsEndpointResponse` returns the
+  `encoding/json` error unchanged, which carries only an offset or the failing
+  field/struct/type — never the response body or payload values.
+- The error never reaches a user either: `RemoteModelsManager.fetchAndUpdateModels`
+  treats any endpoint error as a best-effort catalog miss and keeps the previous
+  snapshot, so no caller distinguishes a generic timeout from a request timeout.
+  The five-second deadline (`modelsEndpointRefreshTimeout`) is a
+  `context.WithTimeout` whose expiry aborts the request and is swallowed.
+
+Status after reconciliation: `2028 complete`, `400 not_applicable`,
+`464 audit_pending`, `254 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

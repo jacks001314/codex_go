@@ -14367,9 +14367,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go never embeds the response body or payload values in catalog decode errors: model.decodeModelsEndpointResponse returns the encoding/json error itself (SyntaxError.Offset or UnmarshalTypeError Field/Struct/Offset only), and ModelInfo contains no raw-value echo. The error is also never surfaced: RemoteModelsManager.fetchAndUpdateModels treats any endpoint error as a best-effort miss that keeps the previous catalog, so there is no CodexErr-style error to classify as RequestTimeout. The 5s deadline is a context.WithTimeout that aborts the request and is swallowed the same way; no Go caller observes a generic Timeout in place of a request timeout"
    ]
   },
   {
