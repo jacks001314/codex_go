@@ -2219,6 +2219,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Go has no `AgentControl` identifier to disambiguate. The equivalent local handle is `agent.ToolController` (`agent/tools.go`) implemented by `appserver.runtimeAgentController` (`appserver/agent_controller.go`), which is already distinct from `model.LocalAgentRunner` and the remote agent-controller paths.
 - No Go code change or regression coverage applies; recorded as `not_applicable`.
 
-Status after reconciliation: `2066 complete`, `407 not_applicable`,
-`441 audit_pending`, `231 regression_pending`, `4 partial`,
+### Share process-group termination with the macOS member fallback (Round 904)
+
+- New `processgroup` package mirrors Rust `codex_utils_pty::process_group`. `Terminate` and `Kill` signal the whole group on Unix; on macOS a denied (`EPERM`) group signal is retried against the group's members, enumerated through libproc `proc_listpgrppids` via `purego`, skipping members that exited or moved to another group and signalling the leader last.
+- Shared helpers replace the per-caller `syscall.Kill(-pid, ...)` calls: `mcp/stdio_process_unix.go` (SIGTERM, escalating to SIGKILL only when a live group accepted the term), `appserver/command_exec_process_unix.go`, `appserver/hook_process_tree_unix.go`, `gitutil/gitutil_unix.go`, and `tool/shell_snapshot_process_unix.go` (where ESRCH now simply means the group is gone).
+- `processgroup/processgroup_test.go` covers member retry, leader-last ordering, ESRCH and other-group skips, first-error precedence, invalid IDs, and non-permission errors.
+- Residual: without cgo, a `proc_listpgrppids` failure reports a generic error rather than the platform errno.
+- Verification: `go test ./processgroup ./mcp ./tool ./gitutil -count=1`, `go test ./appserver -run 'Command|Hook|Process|Exec|Kill' -count=1`, and `GOOS=darwin`/`GOOS=linux` builds of every touched package succeed.
+
+Status after reconciliation: `2067 complete`, `407 not_applicable`,
+`441 audit_pending`, `230 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

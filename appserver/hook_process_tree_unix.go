@@ -5,6 +5,8 @@ package appserver
 import (
 	osexec "os/exec"
 	"syscall"
+
+	"codex_go/processgroup"
 )
 
 // hookProcessTree runs a hook command in its own session and process group so
@@ -39,7 +41,7 @@ func (t *hookProcessTree) terminate() {
 	if t == nil || t.cmd == nil || t.cmd.Process == nil {
 		return
 	}
-	_ = syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+	_ = processgroup.Kill(t.cmd.Process.Pid)
 }
 
 // preserveDescendants is a no-op on Unix: successfully completed hooks may

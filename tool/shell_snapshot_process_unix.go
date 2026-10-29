@@ -7,6 +7,8 @@ import (
 	"os"
 	osexec "os/exec"
 	"syscall"
+
+	"codex_go/processgroup"
 )
 
 // ownSnapshotCaptureProcessGroup gives the capture its own process group and
@@ -40,8 +42,8 @@ func killSnapshotCaptureProcessGroup(process *osexec.Cmd) error {
 	if pid <= 0 {
 		return nil
 	}
-	err := syscall.Kill(-pid, syscall.SIGKILL)
-	if err == nil || errors.Is(err, syscall.ESRCH) {
+	err := processgroup.Kill(pid)
+	if err == nil {
 		return nil
 	}
 	// The capture did not lead a group: fall back to the leader, and report an

@@ -16012,9 +16012,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #46521 parity: new processgroup package mirrors codex_utils_pty::process_group. processgroup.Terminate and processgroup.Kill signal the whole group on Unix and, on macOS, retry a denied (EPERM) signal against the group's individual members enumerated through libproc proc_listpgrppids via purego, skipping members that exited or moved to another group and signalling the leader last. All Go process-group cleanup callers now share the helper: mcp stdio termination (SIGTERM then SIGKILL escalation only when the group accepted SIGTERM), appserver command-exec cleanup, appserver hook trees, gitutil process trees, and tool shell-snapshot capture (ESRCH now means already gone). Tests: processgroup tests cover member retry, leader-last ordering, ESRCH/other-group skips, first-error precedence, invalid IDs and non-permission errors; go test ./processgroup ./mcp ./tool ./gitutil and go test ./appserver -run Command|Hook|Process|Exec|Kill pass; GOOS=darwin and GOOS=linux builds of every touched package succeed. Residual: with no cgo, proc_listpgrppids failure reports a generic error instead of the platform errno."
    ]
   },
   {

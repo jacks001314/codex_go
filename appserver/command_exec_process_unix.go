@@ -5,6 +5,8 @@ package appserver
 import (
 	osexec "os/exec"
 	"syscall"
+
+	"codex_go/processgroup"
 )
 
 func prepareCommandExecProcess(cmd *osexec.Cmd) {
@@ -18,5 +20,5 @@ func terminateCommandExecProcess(active *managedCommandExec) {
 	if process == nil {
 		return
 	}
-	_ = syscall.Kill(-process.Pid, syscall.SIGKILL)
+	_ = processgroup.Kill(process.Pid)
 }

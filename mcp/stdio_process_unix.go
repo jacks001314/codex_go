@@ -7,6 +7,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"codex_go/processgroup"
 )
 
 // mcpStdioProcessTermGracePeriod mirrors Rust's `PROCESS_GROUP_TERM_GRACE_PERIOD`:
@@ -55,13 +57,15 @@ func (p *mcpStdioProcess) terminate(cmd *exec.Cmd) {
 		return
 	}
 	// Rust escalates only when SIGTERM reached an existing group; a group that
-	// is already gone (or cannot be signalled) needs no SIGKILL.
-	if err := syscall.Kill(-processGroupID, syscall.SIGTERM); err != nil {
+	// is already gone (or cannot be signalled) needs no SIGKILL. On macOS a
+	// denied group signal is retried per member (Rust #46521).
+	delivered, err := processgroup.Terminate(processGroupID)
+	if err != nil || !delivered {
 		return
 	}
 	go func() {
 		time.Sleep(mcpStdioProcessTermGracePeriod)
-		_ = syscall.Kill(-processGroupID, syscall.SIGKILL)
+		_ = processgroup.Kill(processGroupID)
 	}()
 }
 

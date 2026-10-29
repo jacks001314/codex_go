@@ -5,6 +5,8 @@ package gitutil
 import (
 	"os/exec"
 	"syscall"
+
+	"codex_go/processgroup"
 )
 
 type gitProcessTree struct {
@@ -31,6 +33,7 @@ func (t *gitProcessTree) kill() {
 	if t == nil || t.cmd == nil || t.cmd.Process == nil {
 		return
 	}
-	// Negative PID signals the whole process group (Rust kill_process_group).
-	_ = syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+	// Rust kill_process_group signals the whole group, with the macOS member
+	// fallback (#46521).
+	_ = processgroup.Kill(t.cmd.Process.Pid)
 }
