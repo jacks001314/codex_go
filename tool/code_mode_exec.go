@@ -1600,11 +1600,13 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 	}
 	if err := runtime.Set("clearTimeout", func(call sobek.FunctionCall) sobek.Value {
 		id := uint64(call.Argument(0).ToInteger())
-		if timer := timers[id]; timer != nil {
-			if timer.Stop() {
-				pending--
-			}
+		if timer, ok := timers[id]; ok {
+			// Rust removes the timeout from pending_timeouts even when the sleep
+			// already fired, so a queued fire whose callback has not run yet is
+			// dropped instead of invoking the callback later.
+			timer.Stop()
 			delete(timers, id)
+			pending--
 		}
 		return sobek.Undefined()
 	}); err != nil {
@@ -1717,14 +1719,19 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			runtime.Interrupt(ctx.Err())
 			return nil, ctx.Err()
 		case completed := <-completion:
-			pending--
 			if completed.callback != nil {
+				if _, live := timers[completed.timerID]; !live {
+					// clearTimeout won the race against the queued fire.
+					continue
+				}
 				delete(timers, completed.timerID)
+				pending--
 				if _, err := completed.callback(sobek.Undefined()); err != nil {
 					return codeModeScriptFailureOutput(invocation.CallID, err.Error(), contentItems, commands, nestedOutputs, exitCodes), nil
 				}
 				continue
 			}
+			pending--
 			if completed.err != nil {
 				if err := completed.reject(completed.err.Error()); err != nil {
 					return nil, err

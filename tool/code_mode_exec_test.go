@@ -595,6 +595,57 @@ func TestCodeModeExecTimers(t *testing.T) {
 	}
 }
 
+func TestCodeModeExecClearTimeoutDropsQueuedTimerFire(t *testing.T) {
+	executor := NewCodeModeExecExecutor(NewRegistry())
+	output, err := executor.Execute(context.Background(), &Invocation{CallID: "timer-cleared-after-fire", Payload: Payload{Kind: PayloadCustom, Input: `
+		for (let index = 0; index < 50; index += 1) {
+			clearTimeout(setTimeout(() => text("must-not-run"), 0));
+		}
+		await new Promise(resolve => setTimeout(resolve, 20));
+		text("done");
+	`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := codeModeBodyAfterHeader(t, output.Body, "Script completed"); body != "done" {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestCodeModeExecCellCompletionCancelsPendingTimers(t *testing.T) {
+	registry := NewRegistry()
+	exec, wait := NewCodeModeExecutors(registry)
+	if err := registry.Register(exec); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(wait); err != nil {
+		t.Fatal(err)
+	}
+	started, err := exec.Execute(context.Background(), &Invocation{CallID: "timer-finish", Payload: Payload{Kind: PayloadCustom, Input: `yield_control();
+		await new Promise(resolve => setTimeout(resolve, 10));
+		text("done");
+		setTimeout(() => text("late"), 60000);`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cellID, _ := started.Data["cell_id"].(string)
+	if cellID == "" {
+		t.Fatalf("started = %#v", started)
+	}
+	finished, err := wait.Execute(context.Background(), &Invocation{CallID: "timer-finish-wait", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `","yield_time_ms":2000}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := codeModeBodyAfterHeader(t, finished.Body, "Script completed"); body != "done" {
+		t.Fatalf("finished body = %q", finished.Body)
+	}
+	// The cell is consumed once it completes, so a late timer has nowhere to
+	// report; the important contract is that completion is not held open.
+	if _, err := wait.Execute(context.Background(), &Invocation{CallID: "timer-finish-late", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `"}`}}); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("wait after completion error = %v", err)
+	}
+}
+
 func TestCodeModeExecYieldWaitAndTerminate(t *testing.T) {
 	registry := NewRegistry()
 	exec, wait := NewCodeModeExecutors(registry)
