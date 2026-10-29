@@ -1812,6 +1812,22 @@ Route session-only permission shortcuts through the shared selection flow (#4601
   pending/confirm lifecycle for a shortcut and both rejection messages;
   `go test ./tui/tea -run Permission` passes.
 
-Status after reconciliation: `2035 complete`, `400 not_applicable`,
-`459 audit_pending`, `252 regression_pending`, `3 partial`,
+### Disable executor skills per environment (Round 870)
+
+Disable executor skills per environment (#46015, closure).
+
+- `RuntimeServices.DisabledExecutorSkillPaths` already carries the caller-owned
+  map, and `executorSkillProviderCatalogWithSnapshot` applies it: each catalog
+  entry's capability root is mapped to the environment it was selected from, so
+  a `SKILL.md` listed for that environment is dropped from the catalog while
+  other environments keep the skill and everything stays enabled by default.
+- Matching compares the executor path and the exposed locator as path URIs, so
+  forward-slash, `file:` locator, and macOS `/var` aliases resolve to the same
+  document; a dropped entry never reaches the prompt metadata.
+- `appserver/executor_skill_disabled_test.go` pins the default catalog, direct,
+  forward-slash, and `file:`-locator disablement, environment isolation, and the
+  Windows/POSIX path-identity rules; those tests pass.
+
+Status after reconciliation: `2036 complete`, `400 not_applicable`,
+`459 audit_pending`, `251 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

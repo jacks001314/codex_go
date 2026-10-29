@@ -14643,9 +14643,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go already exposes caller-owned per-environment executor skill disablement: RuntimeServices.DisabledExecutorSkillPaths (appserver/runtime_router.go) feeds executorSkillProviderCatalogWithSnapshot, which maps each catalog entry's capability root to its selected environment (executorSkillRootEnvironmentsForSnapshot) and drops entries whose SKILL.md matches that environment's configured paths (executorSkillDisabledForEnvironment), comparing the executor path and locator as path URIs so alias spellings still match while other environments are unaffected; entries stay enabled by default and a dropped entry never reaches the prompt catalog. appserver/executor_skill_disabled_test.go pins the default catalog, direct/forward-slash/file-locator disablement and environment isolation, and ./appserver DisabledExecutorSkillPaths tests pass"
    ]
   },
   {
