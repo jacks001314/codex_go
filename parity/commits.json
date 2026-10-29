@@ -15940,9 +15940,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: LocalAgentControl"
+    "Rename-only: Rust renames the session-local agent control handle to LocalAgentControl across codex-rs/core/src/agent/control.rs and its submodules. Go has no AgentControl identifier to disambiguate; the equivalent local handle is agent.ToolController (agent/tools.go:46-52) implemented by appserver.runtimeAgentController (appserver/agent_controller.go:23-101), already distinct from model.LocalAgentRunner and the remote agent-controller paths. No Go code change or regression coverage applies."
    ]
   },
   {

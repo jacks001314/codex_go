@@ -2213,6 +2213,12 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Residual: Go has no per-header sensitive marking equivalent to `HeaderValue::set_sensitive`.
 - Verification: `go test ./network ./realtime -count=1` and `go test ./model -count=1` pass.
 
-Status after reconciliation: `2066 complete`, `406 not_applicable`,
-`442 audit_pending`, `231 regression_pending`, `4 partial`,
+### Rename the local agent control handle (Round 903)
+
+- Rust #46513 renames the session-local agent control handle to `LocalAgentControl` across `codex-rs/core/src/agent/control.rs` and its submodules; no behavior changes.
+- Go has no `AgentControl` identifier to disambiguate. The equivalent local handle is `agent.ToolController` (`agent/tools.go`) implemented by `appserver.runtimeAgentController` (`appserver/agent_controller.go`), which is already distinct from `model.LocalAgentRunner` and the remote agent-controller paths.
+- No Go code change or regression coverage applies; recorded as `not_applicable`.
+
+Status after reconciliation: `2066 complete`, `407 not_applicable`,
+`441 audit_pending`, `231 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
