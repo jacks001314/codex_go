@@ -1,6 +1,37 @@
 package analytics
 
-import "time"
+import (
+	"time"
+
+	"codex_go/auth"
+)
+
+// AccountKind matches the App's consumer, business, and workspace scopes
+// (Rust AccountKind, #45742).
+type AccountKind int
+
+const (
+	AccountKindConsumer AccountKind = iota
+	AccountKindBusiness
+	AccountKindEnterprise
+	AccountKindUnknown
+)
+
+// AccountKindFor classifies a ChatGPT plan. Team-like plans are the business
+// family; every other workspace account is enterprise-like
+// (Rust AccountKind::from).
+func AccountKindFor(plan auth.PlanType) AccountKind {
+	switch {
+	case plan == "" || plan == auth.PlanUnknown:
+		return AccountKindUnknown
+	case plan.IsTeamLike():
+		return AccountKindBusiness
+	case plan.IsWorkspaceAccount():
+		return AccountKindEnterprise
+	default:
+		return AccountKindConsumer
+	}
+}
 
 // AccountAnalyticsReport identifies one account analytics report. The display
 // models stay independent of the app-server wire protocol (Rust #45740).
@@ -26,6 +57,28 @@ const (
 	AccountAnalyticsGroupingReasoning
 	AccountAnalyticsGroupingTokenType
 )
+
+// CreditGroupings lists the credit breakdowns supported by the account's
+// billing report (Rust AccountAnalyticsGrouping::credit_groupings, #45742).
+func CreditGroupings(plan auth.PlanType) []AccountAnalyticsGrouping {
+	switch AccountKindFor(plan) {
+	case AccountKindBusiness:
+		return []AccountAnalyticsGrouping{
+			AccountAnalyticsGroupingSurface,
+			AccountAnalyticsGroupingModel,
+			AccountAnalyticsGroupingSpeed,
+		}
+	case AccountKindEnterprise:
+		return []AccountAnalyticsGrouping{
+			AccountAnalyticsGroupingSurface,
+			AccountAnalyticsGroupingModel,
+			AccountAnalyticsGroupingSpeed,
+			AccountAnalyticsGroupingReasoning,
+		}
+	default:
+		return []AccountAnalyticsGrouping{AccountAnalyticsGroupingSurface}
+	}
+}
 
 // AccountAnalyticsUnit is the unit shown next to a normalized history.
 type AccountAnalyticsUnit int

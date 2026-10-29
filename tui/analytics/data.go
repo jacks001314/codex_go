@@ -6,7 +6,38 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"codex_go/auth"
 )
+
+// accountAnalyticsGroupings is the dashboard's grouping order (Rust
+// analytics/data.rs GROUPINGS, #45742).
+var accountAnalyticsGroupings = []AccountAnalyticsGrouping{
+	AccountAnalyticsGroupingSurface,
+	AccountAnalyticsGroupingFeature,
+	AccountAnalyticsGroupingModel,
+	AccountAnalyticsGroupingTaskStart,
+	AccountAnalyticsGroupingSpeed,
+	AccountAnalyticsGroupingReasoning,
+	AccountAnalyticsGroupingTokenType,
+}
+
+// CreditGroupIndices maps the plan's credit groupings onto positions in
+// accountAnalyticsGroupings, skipping any grouping the dashboard does not
+// render (Rust analytics/client.rs, #45742).
+func CreditGroupIndices(plan auth.PlanType) []int {
+	groupings := CreditGroupings(plan)
+	indices := make([]int, 0, len(groupings))
+	for _, grouping := range groupings {
+		for index, candidate := range accountAnalyticsGroupings {
+			if candidate == grouping {
+				indices = append(indices, index)
+				break
+			}
+		}
+	}
+	return indices
+}
 
 // analyticsAmount keeps tiny refunds visible while avoiding noise on ordinary
 // credit amounts (Rust analytics/data.rs amount).
