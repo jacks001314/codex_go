@@ -14067,9 +14067,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: EVENT_CLEANUP_DETAIL, contains_sid, owner_allows_cleanup"
+    "Rust #45799 completes Windows sandbox uninstall cleanup. The Go-carried behaviour is the legacy uninstall path (windows-sandbox-rs uninstall_windows -> clean_up_legacy_windows_sandbox, which now delegates to clean_up_packaged_windows_sandbox with no pinned home). Go's cleanUpLegacyWindowsSandbox now reports \"skipping sandbox directories: no pinned home\" for that no-home branch, reports every user-removal failure line (\"remove <name> profile and account: failed, ...\") instead of only returning them, and routes group removal through removeLegacySandboxGroupAfter: the CodexSandboxUsers group is removed only when every earlier step succeeded, otherwise it reports \"retaining sandbox group until cleanup finishes\" so a retry can still resolve the accounts (Rust uninstall_windows::finish gates the group on errors.is_empty() and on no retained logon). The user removal still deletes the profile before the account and keeps the account when profile deletion fails, matching principals::DisabledSandboxUsers::remove_users. The remaining upstream files are the Rust-only windows-sandbox-service crate (package_lifecycle/cleanup.rs, registered.rs owner_allows_cleanup, removal.ps1/removal.rs, EVENT_CLEANUP_DETAIL, retained_logons contains_sid and the SCM-stop retry loop); codex_go ships no windows-sandbox-service binary, so those symbols have no carrier, consistent with the earlier not_applicable dispositions for service-only commits. Tests: TestRemoveLegacySandboxGroupKeepsRetryableStateLikeRust and TestRemoveLegacySandboxGroupReportsOutcomeLikeRust. Verified with go test ./sandbox/windowssandbox -count=1, go vet ./sandbox/windowssandbox, and go build ./... ."
    ]
   },
   {

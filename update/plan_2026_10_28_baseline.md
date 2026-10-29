@@ -1436,6 +1436,30 @@ Python SDK `ImageUserInput` rename (#45796, not applicable).
 - The underlying protocol behaviour (file-ID image references in inputs and
   tool outputs) is already covered by #45794, which is complete.
 
-Status after reconciliation: `2020 complete`, `396 not_applicable`,
-`473 audit_pending`, `258 regression_pending`, `2 partial`,
+### Windows sandbox uninstall cleanup (Round 851)
+
+Windows sandbox uninstall cleanup (#45799).
+
+- The legacy uninstall path now reports the no-home branch with
+  `skipping sandbox directories: no pinned home`, matching Rust's
+  `clean_up_legacy_windows_sandbox` delegation to
+  `clean_up_packaged_windows_sandbox(None, ...)`.
+- `removeLegacySandboxUsers` reports each failure line
+  (`remove <name> profile and account: failed, ...`) instead of only returning
+  them, while still deleting the profile before the account and keeping the
+  account when profile deletion fails.
+- `removeLegacySandboxGroupAfter` removes `CodexSandboxUsers` only when every
+  earlier step succeeded; otherwise it reports
+  `retaining sandbox group until cleanup finishes`, matching Rust's
+  `errors.is_empty()` gate so a retry can still resolve the accounts.
+- The remaining upstream files are the Rust-only `windows-sandbox-service`
+  crate (package lifecycle, registered-runtime removal, `EVENT_CLEANUP_DETAIL`,
+  retained-logon SID deferral, SCM-stop retry); codex_go ships no such service,
+  so those symbols have no carrier.
+- Tests cover the retained group after a failure and the success/failure
+  wording. Verified with `go test ./sandbox/windowssandbox -count=1`,
+  `go vet ./sandbox/windowssandbox`, and `go build ./...`.
+
+Status after reconciliation: `2021 complete`, `396 not_applicable`,
+`472 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
