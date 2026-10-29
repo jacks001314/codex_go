@@ -2948,6 +2948,11 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go has no remote stdio launcher: `mcp/stdio_env.go` implements only the local placement, and `localStdioEnvVarNames` rejects `env_vars` entries with `source: remote` ("which requires remote MCP stdio"), so there is no remote allowlist to extend.
 - The same conclusion was recorded in `update/plan_2026_10_06.md:102` and `:293`.
 - Verified with `go test ./mcp -run TestCreateEnvForMCPServerRejectsRemoteSourceLikeRust -count=1`.
-Status after reconciliation: `2134 complete`, `444 not_applicable`,
-`360 audit_pending`, `207 regression_pending`, `4 partial`,
+### Shared thread instruction provider self-delegation (Round 975)
+
+- Rust #50093 keeps one replaceable `SharedThreadInstructionsProviders` wrapper per root and avoids replacing its backing provider when a relaunched root supplies that same wrapper (#50093, not applicable).
+- Go has no host `ThreadInstructionsProvider`: `ThreadStartParams` exposes only static `baseInstructions`, while `turnInstructionsProvider` and `turnStepInstructionsProvider` build per-turn closures, skip subagents, and are never stored in a root-scoped replaceable wrapper.
+- The missing provider surface was already audited as an architecture difference for #44701 (Round 481) and recorded for #50093 in `update/plan_2026_10_06.md:294`; no shared wrapper exists that could recurse into itself.
+Status after reconciliation: `2134 complete`, `445 not_applicable`,
+`359 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

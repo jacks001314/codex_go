@@ -25324,9 +25324,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #50093 guards SharedThreadInstructionsProviders (one replaceable host ThreadInstructionsProvider wrapper per root) against replacing its backing provider with that same wrapper. Go has no host ThreadInstructionsProvider or extension provider interface: appserver/protocol.go ThreadStartParams carries only static baseInstructions, and RuntimeRouter.turnInstructionsProvider / turnStepInstructionsProvider create per-turn closures that refresh AGENTS.md/plugin/skill text, return nil for subagents, and are never stored in a root-scoped replaceable wrapper. There is therefore no shared wrapper that can delegate to itself. The earlier architecture audit for the provider surface (#44701, Round 481 / update/plan_2026_09_12.md:2524) and update/plan_2026_10_06.md:294 recorded the same conclusion. No Go code change is possible without first porting the missing host provider API."
    ]
   },
   {
