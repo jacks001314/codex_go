@@ -15051,9 +15051,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "app/daemon_startup.go, cli parsing and the app/agents/queue rejections already mirrored #46088 (exclusion reasons, --remote/agents/queue conflicts, no-daemon guidance, resume/fork propagation); the missing Rust ordering entry --worktree was added to daemonStartupExclusion with tests in app/daemon_startup_test.go (worktree exclusion and --no-daemon precedence)"
    ]
   },
   {

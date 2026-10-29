@@ -83,6 +83,9 @@ func daemonStartupExclusion(root *cli.RootOptions, agentsOverview bool) string {
 	if root.Shared.NoDaemon {
 		return "--no-daemon"
 	}
+	if root.Shared.Worktree {
+		return "--worktree"
+	}
 	if root.Shared.OSS || strings.TrimSpace(root.Shared.OSSProvider) != "" {
 		return "--oss"
 	}

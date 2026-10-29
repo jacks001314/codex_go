@@ -112,6 +112,9 @@ func TestDaemonStartupExclusionLikeRust(t *testing.T) {
 	}{
 		{"plain launch", &cli.RootOptions{}, false, ""},
 		{"no-daemon", &cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}}, false, "--no-daemon"},
+		// Rust #46088 excludes worktree launches right after --no-daemon.
+		{"worktree", &cli.RootOptions{Shared: cli.SharedOptions{Worktree: true}}, false, "--worktree"},
+		{"no-daemon wins over worktree", &cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true, Worktree: true}}, false, "--no-daemon"},
 		{"oss", &cli.RootOptions{Shared: cli.SharedOptions{OSS: true}}, false, "--oss"},
 		{"local provider", &cli.RootOptions{Shared: cli.SharedOptions{OSSProvider: "ollama"}}, false, "--oss"},
 		{"profile", &cli.RootOptions{Shared: cli.SharedOptions{Profile: "work"}}, false, "--profile"},
@@ -171,6 +174,7 @@ func TestLocalDaemonEndpointForLaunchLikeRust(t *testing.T) {
 	}
 	for name, root := range map[string]*cli.RootOptions{
 		"--no-daemon":  {Shared: cli.SharedOptions{NoDaemon: true}},
+		"--worktree":   {Shared: cli.SharedOptions{Worktree: true}},
 		"--oss":        {Shared: cli.SharedOptions{OSS: true}},
 		"--profile":    {Shared: cli.SharedOptions{Profile: "work"}},
 		"strict":       {StrictConfig: true},

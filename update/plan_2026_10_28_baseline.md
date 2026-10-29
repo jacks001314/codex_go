@@ -2022,6 +2022,14 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
   - Effort-only overrides are validated against the captured model: an effort the captured model supports is accepted, and one only the turn's initial model supports is rejected with the captured model named in the error.
 - Verified with `go test ./appserver -run TestRuntimeAgentController -count=1`.
 
-Status after reconciliation: `2046 complete`, `401 not_applicable`,
-`452 audit_pending`, `247 regression_pending`, `3 partial`,
+### Worktree launches skip the shared daemon (Round 882)
+
+**Upstream:** 787823cf9577 "Add --no-daemon to bypass the shared background server (#46088)".
+
+- The Go launch path already mirrored the flag: `--no-daemon` parsing on the root and through `resume`/`fork`, the hidden `agents` spelling, `queue`, the `--remote`/`agents`/`queue` rejections, the agents-overview hint, `daemonStartupExclusion` (no-daemon, oss, workload identity, CODEX_EXEC_SERVER_URL, profile, strict config, bypass hook trust, unreplayable overrides) and the no-start/no-probe daemon target.
+- Missing piece: Rust's exclusion order lists `--worktree` immediately after `--no-daemon`; Go treated worktree launches as eligible for shared-server reuse. Added the reason and coverage for the exclusion, the `--no-daemon` precedence, and the daemon-reuse refusal.
+- Verified with `go test ./app -run 'Daemon|NoDaemon|Worktree|Interactive' -count=1`.
+
+Status after reconciliation: `2047 complete`, `401 not_applicable`,
+`452 audit_pending`, `246 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
