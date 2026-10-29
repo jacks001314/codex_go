@@ -697,6 +697,25 @@ func (r *guardianSessionRunner) RolloverForContext() {
 	r.mu.Unlock()
 }
 
+// ResetForParentHistoryReset invalidates the reusable reviewer after the parent
+// conversation history was replaced destructively without a compaction
+// checkpoint (Rust #45413). Rust folds a reset version into the review-session
+// reuse key, so the first review after a summary-free reset starts a new trunk
+// with no carried rationale and reports had_prior_review_context = false.
+func (r *guardianSessionRunner) ResetForParentHistoryReset() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.previous = ""
+	r.seeded = ""
+	r.previousFromPrewarm = false
+	r.priorReview = false
+	r.completedReviews = 0
+	r.lastUsage = 0
+}
+
 func (r *guardianSessionRunner) SeedForReview(request *model.AgentRequest) {
 	if r == nil || request == nil {
 		return
@@ -2585,6 +2604,28 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 		}
 	}
 	sessionRunner.ResetAfterParentCompaction(responseID)
+}
+
+// resetGuardianAfterParentHistoryReset clears the reusable Guardian reviewer
+// when the parent history is replaced destructively without a compaction
+// checkpoint (Rust #45413). Cold resumes and forks replay a thread's history
+// into a fresh runtime, which Rust models as HistoryReplacement::Reset and
+// bumps the reset version that participates in the review-session reuse key.
+// Without the reset Go would keep appending to the pre-reset reviewer chain and
+// report trunk_reused/had_prior_review_context = true after the history reset.
+func (r *RuntimeRouter) resetGuardianAfterParentHistoryReset() {
+	if r == nil || r.services.GuardianReviewer == nil {
+		return
+	}
+	runner, ok := r.services.GuardianReviewer.(*modelGuardianReviewer)
+	if !ok {
+		return
+	}
+	sessionRunner, ok := runner.agent.(*guardianSessionRunner)
+	if !ok {
+		return
+	}
+	sessionRunner.ResetForParentHistoryReset()
 }
 
 // guardianParentCompactionSeedAllowed reports whether the producer hash of an

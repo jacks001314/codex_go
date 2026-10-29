@@ -3,13 +3,113 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"codex_go/compact"
+	"codex_go/config"
 	"codex_go/model"
+	"codex_go/session"
 )
+
+// TestGuardianSessionRunnerSummaryFreeResetInvalidatesSession mirrors Rust
+// #45413: a destructive parent history replacement without a compaction
+// checkpoint starts a new Guardian trunk instead of reusing the pre-reset
+// reviewer, so the fourth review carries neither the previous thread nor the
+// prior rationale cursor.
+func TestGuardianSessionRunnerSummaryFreeResetInvalidatesSession(t *testing.T) {
+	agent := &guardianRecordingAgent{}
+	runner := &guardianSessionRunner{agent: agent}
+
+	// Attribution is captured before each review runs, like
+	// newGuardianReviewAttribution in Review.
+	first := &model.AgentRequest{Prompt: "first", TaskKind: model.AgentTaskReview}
+	if kind, prior := runner.reviewSessionAttribution(); kind != "trunk_new" || prior == nil || *prior {
+		t.Fatalf("first attribution = %q/%v, want trunk_new without prior context", kind, prior)
+	}
+	if _, err := runner.Run(context.Background(), first); err != nil {
+		t.Fatalf("first review error = %v", err)
+	}
+	runner.markPriorReview()
+
+	second := &model.AgentRequest{Prompt: "second", TaskKind: model.AgentTaskReview}
+	if kind, prior := runner.reviewSessionAttribution(); kind != "trunk_reused" || prior == nil || !*prior {
+		t.Fatalf("second attribution = %q/%v, want trunk_reused with prior context", kind, prior)
+	}
+	if _, err := runner.Run(context.Background(), second); err != nil {
+		t.Fatalf("second review error = %v", err)
+	}
+	runner.markPriorReview()
+
+	runner.ResetForParentHistoryReset()
+	if kind, prior := runner.reviewSessionAttribution(); kind != "trunk_new" || prior == nil || *prior {
+		t.Fatalf("post-reset attribution = %q/%v, want a fresh trunk", kind, prior)
+	}
+	third := &model.AgentRequest{Prompt: "third", TaskKind: model.AgentTaskReview}
+	if _, err := runner.Run(context.Background(), third); err != nil {
+		t.Fatalf("post-reset review error = %v", err)
+	}
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.requests) != 3 {
+		t.Fatalf("review requests = %d, want 3", len(agent.requests))
+	}
+	if got := agent.requests[1].PreviousResponseID; got != "resp-1" {
+		t.Fatalf("second request previous = %q, want the reused trunk", got)
+	}
+	if got := agent.requests[2].PreviousResponseID; got != "" {
+		t.Fatalf("post-reset request previous = %q, want no pre-reset continuation", got)
+	}
+	if completed := runner.completedReviewCount(); completed != 0 {
+		t.Fatalf("completed review count = %d, want a reset counter", completed)
+	}
+}
+
+// TestRuntimeRouterColdResumeResetsGuardianSessionLikeRust checks the Go
+// carrier for Rust's reset version: a cold resume replays the thread history
+// (HistoryReplacement::Reset), so the reusable reviewer must not continue the
+// pre-reset chain.
+func TestRuntimeRouterColdResumeResetsGuardianSessionLikeRust(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	threadID := session.ThreadID("thread-guardian-reset")
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	threadRouter := NewRouter(store)
+	record := &session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), SessionPrefix: session.PrefixForSessionID(string(threadID))},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := threadRouter.createThreadRollout(record, now); err != nil {
+		t.Fatalf("createThreadRollout() error = %v", err)
+	}
+	runner := &guardianSessionRunner{previous: "pre-reset-response", priorReview: true}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:     threadRouter,
+		Config:           config.NewConfigService(home),
+		GuardianReviewer: &modelGuardianReviewer{agent: runner},
+	})
+	resumed := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{
+		ThreadID:     string(threadID),
+		ExcludeTurns: true,
+	}))
+	if resumed.Error != nil {
+		t.Fatalf("resume error = %+v", resumed.Error)
+	}
+	if kind, prior := runner.reviewSessionAttribution(); kind != "trunk_new" || prior == nil || *prior {
+		t.Fatalf("attribution after cold resume = %q/%v, want a fresh trunk", kind, prior)
+	}
+	request := &model.AgentRequest{Prompt: "review"}
+	runner.SeedForReview(request)
+	if request.PreviousResponseID != "" {
+		t.Fatalf("PreviousResponseID = %q, want no pre-reset continuation", request.PreviousResponseID)
+	}
+}
 
 func TestGuardianSessionRunnerResetAfterParentCompaction(t *testing.T) {
 	agent := &guardianRecordingAgent{}

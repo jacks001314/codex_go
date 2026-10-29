@@ -3447,6 +3447,10 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			threadReadyAfterResume := false
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil && !r.threadIsLoaded(response.Thread.ID) {
 				threadReadyAfterResume = true
+				// A cold resume replays the thread history into a fresh runtime,
+				// which Rust treats as a destructive history replacement; the
+				// Guardian reviewer must start a new trunk (Rust #45413).
+				r.resetGuardianAfterParentHistoryReset()
 				cfg, configErr := r.effectiveMCPConfigForThreadResume(response, request)
 				if configErr != nil {
 					r.rollbackThreadResumeInitialization(response.Thread.ID, request)
@@ -5253,6 +5257,10 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				}
 			}
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			// A fork replays the source history into a fresh thread, so the
+			// reusable Guardian reviewer must not carry the source's rationale
+			// (Rust #45413).
+			r.resetGuardianAfterParentHistoryReset()
 			// Rust #44944: the fork inherits its own retained provider route.
 			r.captureThreadModelProviderRouteByID(response.Thread.ID)
 			r.emitThreadReadyLifecycle(response.Thread.ID)
