@@ -14163,9 +14163,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 13/13 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust 7c709f0ffd5c (#45817) adds the bounded codex-mermaid renderer with render and render_spans, source, diagram, canvas, and display-width limits, and errors without partial diagrams. Go already had the mermaid package with the same bounds (mermaid/mermaid.go maxSource maxNodes maxEdges maxLabel maxCells), ErrUnsupported/ErrLimit/ErrTooWide, both entry points, and family coverage tests, but no coverage for semantic span roles or for edge reconstruction across the layout directions. Added mermaid/edge_reconstruction_like_rust_test.go: TestReconstructEveryEdgeFromRenderedPathsLikeRust renders all 512 directed three-node graphs in TD, BT, LR, and RL, transposes horizontal layouts, verifies node order (A,B,C forward and C,B,A reverse), and reconstructs every edge from the emitted glyphs, including self-loops and crossing lanes; TestSemanticSpansDistinguishLabelsFromEndpointGlyphsLikeRust checks that a sequence message label and an endpoint glyph sharing a character keep text and edge roles and that box borders are node spans. Verified: go test ./mermaid."
    ]
   },
   {

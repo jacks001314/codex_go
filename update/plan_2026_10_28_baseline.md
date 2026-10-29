@@ -2347,6 +2347,15 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Added `appserver/daemon_recovery_turns_like_rust_test.go` (`TestDaemonRecoverySnapshotTurnStatesLikeRust`) covering running (recorded), completed (consumed), cancelled (`cancelActiveRuntimeTurn`), and compacting (skipped) turns.
 - Verified with `go test ./appserver -run DaemonRecovery` and `go build ./...`.
 
-Status after reconciliation: `2082 complete`, `408 not_applicable`,
-`432 audit_pending`, `223 regression_pending`, `4 partial`,
+### Cover Mermaid edge reconstruction and semantic spans (Round 921)
+
+- Upstream (`7c709f0ffd5c`, #45817) adds the bounded `codex-mermaid` renderer: `render` and `render_spans`, source/diagram/canvas/display-width limits, and errors without partial diagrams.
+- Go already carries the same bounds (`mermaid/mermaid.go`: `maxSource`, `maxNodes`, `maxEdges`, `maxLabel`, `maxCells`; `ErrUnsupported`/`ErrLimit`/`ErrTooWide`) and both entry points, with per-family coverage.
+- Missing were the semantic-span and exhaustive edge-reconstruction regressions. Added `mermaid/edge_reconstruction_like_rust_test.go`:
+  - `TestReconstructEveryEdgeFromRenderedPathsLikeRust` renders all 512 directed three-node graphs in `TD`, `BT`, `LR`, and `RL`, transposes horizontal layouts, checks node order (`A,B,C` forward, `C,B,A` reverse), and reconstructs every edge from the glyphs alone, including self-loops and crossing lanes.
+  - `TestSemanticSpansDistinguishLabelsFromEndpointGlyphsLikeRust` checks that a sequence message label and an endpoint glyph sharing a character keep `text` and `edge` roles and that box borders are `node` spans.
+- Verified with `go test ./mermaid`.
+
+Status after reconciliation: `2083 complete`, `408 not_applicable`,
+`432 audit_pending`, `222 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
