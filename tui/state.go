@@ -56,6 +56,9 @@ type Message struct {
 	// hides it while raw output and terminal scrollback keep the copy
 	// (Rust #48513).
 	StartupTip bool
+	// Recap marks a generated conversation recap. The owned transcript
+	// reserves a layout-only row below a trailing recap (Rust #47355).
+	Recap bool
 	// ItemID carries the thread item a transcript-only entry belongs to, so the
 	// live reasoning lifecycle can replace the restored snapshot in place
 	// (Rust ReasoningReplay restores the active item instead of committing it).

@@ -2752,6 +2752,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests cover typed HTTP/SSE/wrapped-WebSocket mapping and fallback boundaries, typed-code precedence, single-request HTTP/SSE behavior, real WebSocket termination, saved-rollout classification, analytics/protocol conversion, response-debug labels and Guardian retry.
 - Verified with `go build ./...`, `go test ./codexapi ./model ./rollout -count=1`, and focused appserver analytics/Guardian tests.
 
-Status after reconciliation: `2114 complete`, `440 not_applicable`,
-`382 audit_pending`, `210 regression_pending`, `3 partial`,
+### Recap tail spacing in the owned transcript (Round 952)
+
+- Rust #47355 reserves a blank row after a trailing conversation recap without adding it to selectable content, and omits it when a completed or live message follows (#47355, complete).
+- `tui/history_cell/recap.go:28` introduces the `RecapCell` marker, `tui/state.go:59` records it on transcript messages, and `tui/tea/model.go:9176` preserves it through `historyMessageFromCell`.
+- `tui/tea/model.go:10589` adds the layout-only tail row only for the owned transcript with a viewport taller than one row; inline/raw output, active streaming, running turns, and a following completed message keep the normal separator. `:10605` skips transcript-only reasoning and retained startup tips when identifying the visible tail.
+- `tui/tea/recap_tail_spacing_like_rust_test.go` covers the trailing recap, completed and live follow-ups, inline mode, and a single-row viewport; existing recap command tests continue to cover generated recaps.
+- Verified with `go build ./...`, `go test ./tui/tea ./tui ./tui/history_cell -count=1`.
+
+Status after reconciliation: `2115 complete`, `440 not_applicable`,
+`381 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

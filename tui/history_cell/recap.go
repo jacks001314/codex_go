@@ -20,6 +20,15 @@ type ThreadRecapHistoryCell struct {
 	NextAction *string
 }
 
+// RecapCell identifies generated recap history cells for layout decisions.
+// Rust checks the concrete ThreadRecapHistoryCell type in TranscriptView.
+type RecapCell interface {
+	IsRecap() bool
+}
+
+// IsRecap marks ThreadRecapHistoryCell as recap content.
+func (ThreadRecapHistoryCell) IsRecap() bool { return true }
+
 // NewThreadRecapHistoryCell builds a recap cell from the generated summary.
 func NewThreadRecapHistoryCell(recap string) ThreadRecapHistoryCell {
 	return ThreadRecapHistoryCell{Recap: recap}

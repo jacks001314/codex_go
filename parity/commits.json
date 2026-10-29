@@ -18919,9 +18919,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 952 (complete): tui/history_cell/recap.go marks ThreadRecapHistoryCell as RecapCell; tui/state.go carries that identity on Message.Recap, and tui/tea/model.go preserves it through historyMessageFromCell. reserveRecapTailSpacing adds one layout-only blank row below a trailing recap in the owned transcript when the viewport has more than one row, while omitting it for inline/raw output, active or running live content, and any completed follow-up message. lastVisibleTranscriptMessageIndex ignores transcript-only reasoning and the retained startup tip so a hidden trailing cell cannot suppress the gap. Tests: TestRecapTailSpacingLikeRust covers the tail, completed and live follow-ups, inline mode, and a single-row viewport; the existing recap command tests continue to cover generated recaps. Verified go build ./...; go test ./tui/tea ./tui ./tui/history_cell -count=1."
    ]
   },
   {

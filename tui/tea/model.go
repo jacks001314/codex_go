@@ -9172,6 +9172,9 @@ func historyMessageFromCell(cell historycell.HistoryCell, width int) codextui.Me
 	if activityCell, ok := cell.(historycell.ActivityIDCell); ok {
 		message.ActivityIDs = normalizeActivityIDs(activityCell.ActivityIDs())
 	}
+	if recapCell, ok := cell.(historycell.RecapCell); ok && recapCell.IsRecap() {
+		message.Recap = true
+	}
 	if _, ok := cell.(historycell.ActivityDisclosureCell); ok {
 		disclosure := historycell.ActivityDisclosureFor(cell, width)
 		message.ActivityHiddenLines = disclosure.HiddenLines
@@ -10552,6 +10555,7 @@ func (m *Model) refreshTranscript() {
 			m.turnTips.acknowledge(turnTipSurfaceCompletion)
 		}
 	}
+	content = m.reserveRecapTailSpacing(content)
 	m.recordTranscriptDisclosureHits(m.State, content, ranges)
 	if content == m.lastTranscriptContent {
 		if m.activityFollow && m.transcript.Height != m.lastTranscriptHeight {
@@ -10575,6 +10579,43 @@ func (m *Model) refreshTranscript() {
 		m.transcript.SetYOffset(restoreTranscriptScrollAnchor(content, anchor, maxOffset))
 	}
 	m.lastTranscriptHeight = m.transcript.Height
+}
+
+// reserveRecapTailSpacing keeps one blank layout row below a trailing recap.
+// The row belongs to the owned transcript viewport rather than message
+// content, so it is added after rendering and never enters selectable text.
+// Rust #47355 omits it for inline output, tiny viewports, or a following live
+// or completed message.
+func (m *Model) reserveRecapTailSpacing(content string) string {
+	if m == nil || m.State == nil || !m.ownedScreen || m.rawOutput || m.transcript.Height <= 1 || strings.TrimSpace(content) == "" {
+		return content
+	}
+	if m.Transcript.activeAssistantDeltaItemID != "" || strings.EqualFold(strings.TrimSpace(m.State.Status), "running") {
+		return content
+	}
+	index := m.lastVisibleTranscriptMessageIndex()
+	if index < 0 || !m.State.Messages[index].Recap {
+		return content
+	}
+	return content + "\n"
+}
+
+// lastVisibleTranscriptMessageIndex skips entries the owned live transcript
+// does not render: transcript-only reasoning and the retained startup tip.
+func (m *Model) lastVisibleTranscriptMessageIndex() int {
+	if m == nil || m.State == nil {
+		return -1
+	}
+	for index := len(m.State.Messages) - 1; index >= 0; index-- {
+		message := m.State.Messages[index]
+		if message.TranscriptOnly || (message.StartupTip && strings.TrimSpace(message.Text) != "") {
+			continue
+		}
+		if strings.TrimSpace(message.Text) != "" {
+			return index
+		}
+	}
+	return -1
 }
 
 func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
