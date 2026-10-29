@@ -14475,9 +14475,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go never reloads configuration for thread/settings/update, so the Rust bug (a permission reload that dropped the thread's session layers, making session-defined profiles unusable) cannot occur here: UpdateSettingsWithCommit stores the selected profile in the thread settings and record metadata, and the next turn resolves it against a config that merges threadRecordConfigOverrides(record) in prepareTurnStartParams, so both the named-profile table and the session default_permissions stay available. appserver/permission_profile_session_test.go already ports the upstream table (session-only, disk-and-session, top-level selection) and appserver/permission_profile_switch_session_test.go now pins that switching away from and back to the session-defined `audit` profile wins over the session default and still yields its read-only policy; both pass. Rust's exec-wrapper preservation is structural: Go does not carry arg0 dispatch paths in config (codex_linux_sandbox_exe only appears on the sandbox state wire), so the ConfigManager merge helper has no Go counterpart"
    ]
   },
   {

@@ -1755,6 +1755,28 @@ Tag rollout compression metrics by trigger (#46047, closure).
   `trigger` on the materialize failure sample, and `go test ./rollout/
   -run Compression` passes.
 
-Status after reconciliation: `2032 complete`, `400 not_applicable`,
-`460 audit_pending`, `254 regression_pending`, `3 partial`,
+### Keep session permission profiles across settings switches (Round 867)
+
+Keep session-defined permission profiles usable across settings switches (#45981, closure).
+
+- Rust had to reload permission configuration with the thread's enabled
+  `SessionFlags` layers because `thread/settings/update` otherwise could not see
+  profiles the thread defined at start time. Go never reloads configuration for
+  that method: `ThreadExtraService.UpdateSettingsWithCommit` records the selected
+  profile on the thread settings and record metadata, and `prepareTurnStartParams`
+  merges `threadRecordConfigOverrides(record)` into the next turn's config, so the
+  session `[permissions.*]` table and its `default_permissions` stay available.
+- `appserver/permission_profile_session_test.go` already ports the upstream table
+  (session-only profile, profile also on disk, top-level `permissions` selection)
+  and asserts the requested profile id comes back on `thread/settings/updated`;
+  `appserver/permission_profile_switch_session_test.go` now pins that switching
+  away to `:workspace` and back to the session-defined `audit` profile wins over
+  the session default on the next turn and still resolves to the read-only
+  policy. Both tests pass.
+- Rust's exec-wrapper half is structural: Go does not place arg0 dispatch paths
+  in configuration (`codex_linux_sandbox_exe` only appears on the sandbox state
+  wire), so there is no per-thread config reload that could drop them.
+
+Status after reconciliation: `2033 complete`, `400 not_applicable`,
+`460 audit_pending`, `253 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
