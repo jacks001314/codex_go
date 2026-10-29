@@ -1054,6 +1054,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Remaining difference is test harness only: upstream spawns the built CLI through start/restart/bootstrap in cargo integration tests; Go covers those lifecycle paths in `appserverdaemon/lifecycle_test.go` and the app-level daemon tests.
 - Verified with `go test ./appserverdaemon ./install -count=1`, `go build ./...`, and `GOOS=darwin GOARCH=arm64 go test -c ./appserverdaemon` for the darwin test.
 
-Status after reconciliation: `2004 complete`, `392 not_applicable`,
-`491 audit_pending`, `261 regression_pending`, `1 partial`,
+### TUI standalone display math rendering (Round 823)
+
+- Rust #45612 renders standalone display math in the TUI: `MathMarkdown` records `pending_start`/`display_ranges`, the streaming tail switches to `PreviewMode::Math` and shows the wrapped source verbatim until the closer arrives (reflowing on resize), and rejected or oversized displays stay literal. Go already had the display renderer and scanner; this round closes the streaming preview and source-preservation gaps.
+- `tui/markdown/math_spans.go` exposes `MathPendingStart` (Rust `pending_start`). `tui/streaming/controller.go` adds `previewMode` mirroring `PreviewMode::{Prose,Math}`: a pending-display check cached per `(len(rawSource), width)`, `$$`/`\[` opener detection while prose preview is allowed, `safeLen` advance for math, and `wrapMathPreviewLines`, which wraps the raw source at UAX #14 line-break opportunities (uniseg) to reproduce Rust's `textwrap::wrap` output instead of re-rendering Markdown. The narrow snapshot `$$` / ` \frac{|` / `a+b+c+d+e+f|}{g+h}` matches Rust exactly. `setWidth` now re-renders before refreshing the preview like Rust.
+- `tui/markdown/render.go` masks math before `revealHeadingMarkers`, so a rejected or pending display containing `#` or list lines restores its source verbatim instead of leaking an inserted heading marker (`$$\n# x` previously rendered `# # x`).
+- New regressions: `tui/streaming/math_preview_like_rust_test.go` (raw source, exact narrow reflow snapshot, verbatim TeX underscores/indentation/Markdown punctuation, shell `$$` staying prose, closed display dropping the preview and matching the whole-source render) and `tui/markdown/math_display_like_rust_test.go` (narrow list/quote displays equal the code-span source render, a 600-row oversized display stays literal for both `$$` and `\[`, and pending continuations, rejected closers, PID boundaries and escaped prices match Rust).
+- Verified with `go test ./tui/markdown ./tui/streaming ./tui/chatwidget ./tui ./tui/history_cell ./tui/exec_cell ./tui/tea -count=1` and `go vet ./tui/streaming ./tui/markdown`.
+- Remaining difference is pre-existing and renderer-wide rather than math-specific: glamour output starts with a blank line and pads lines to the render width while Rust's ratatui lines do not; the existing streaming helpers compare against `renderSourceLines`, which carries the same shape.
+
+Status after reconciliation: `2005 complete`, `392 not_applicable`,
+`490 audit_pending`, `261 regression_pending`, `1 partial`,
 `6 blocked_precondition`.
