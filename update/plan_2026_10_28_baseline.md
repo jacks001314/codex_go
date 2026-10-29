@@ -797,6 +797,12 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - `hide_world_writable_warning` still exists on both sides (Rust `config/src/types.rs`, Go `config/config.go`), and the server-side audit/warning path (`sandbox/windowssandbox`, `sandbox/windows.go` `WindowsSandboxWarning`, app-server `windows/worldWritableWarning`) is retained by Rust after this commit, so it stays in Go as well.
 - Nothing to remove or add; no new regression is meaningful because the deleted behavior has no Go surface.
 
-Status after reconciliation: `1977 complete`, `386 not_applicable`,
-`506 audit_pending`, `280 regression_pending`, `0 partial`,
+### Confirm connector auth failure detection without an install URL (Round 791)
+
+- #44938 was already synced in `39c808d4`: `mcp/auth_elicitation.go` exports `IsConnectorAuthFailureFromToolResult`, backed by the shared `connectorAuthFailureMetadata` validation that `ConnectorAuthFailureFromToolResult` also uses - error result, explicit auth-failure flag, and a nonempty connector id that does not conflict with the metadata. Detection therefore no longer needs an install URL while the elicitation parser still does.
+- The trusted classification reaches the real path: `mcp/tool_executor.go` checks `IsConnectorAuthFailureFromToolResult` on the raw Codex Apps result before `maybeRequestCodexAppsAuthElicitation` can rewrite it (Rust #45716 ordering).
+- Regression coverage mirrors Rust's three cases - detection without an install URL, rejection of missing/mismatched connector ids, non-error results and a false auth flag, and detection for `missing_link`, `oauth_upgrade_required` and `reauthentication_required` - plus the executor-boundary test; `go test ./mcp -run ConnectorAuth -count=1` and `go test ./mcp -count=1` pass.
+
+Status after reconciliation: `1978 complete`, `386 not_applicable`,
+`506 audit_pending`, `279 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

@@ -12327,9 +12327,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 791: #44938 was already synced (39c808d4). mcp/auth_elicitation.go exports IsConnectorAuthFailureFromToolResult, which delegates to the shared connectorAuthFailureMetadata validation that ConnectorAuthFailureFromToolResult also uses: the result must be an error, carry an explicit auth-failure flag, and name a nonempty connector id that does not conflict with the metadata - so detection no longer needs an install URL while parsing still does. The trusted classification is consumed on the real path: mcp/tool_executor.go rejects Codex Apps results through IsConnectorAuthFailureFromToolResult before maybeRequestCodexAppsAuthElicitation can rewrite them (Rust #45716 ordering). Regression coverage mirrors Rust's three tests: TestIsConnectorAuthFailureFromToolResultWithoutInstallURL (detected without install URL while ConnectorAuthFailureFromToolResult still returns nil), TestIsConnectorAuthFailureRequiresTrustedConnectorIdentityAndAuthFlag (nil result, missing and mismatched connector ids, auth flag false, non-error result), TestIsConnectorAuthFailureDetectsEachSupportedReason (missing_link, oauth_upgrade_required, reauthentication_required), plus TestMCPToolExecutorReportsConnectorAuthFailuresLikeRust for the executor boundary. Validation: go test ./mcp -run ConnectorAuth -count=1; go test ./mcp -count=1 (20.1s)."
    ]
   },
   {
