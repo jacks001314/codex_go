@@ -13347,9 +13347,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "The Linux helper already enforced the grant (`sandbox/linuxsandbox` parses `allowUnixSockets`/`dangerouslyAllowAllUnixSockets` from `--managed-network` and its proxy-routed seccomp filter allows `AF_UNIX` only for the allow-all grant), but nothing on the Go side ever produced or transported that policy: `network.ProxyManagedNetworkSandboxContext` and `execserver.ManagedNetworkSandboxContext` lacked the fields, `PrepareProxyManagedNetwork` only carried ports/binding, and `execserver.prepareExecProcess`/`BuildCommandRunPlan` never forwarded a managed-network context. This round closes the full path: both wire types gained `allowUnixSockets`/`dangerouslyAllowAllUnixSockets` (always serialized, missing fields deserialize restrictive); `PrepareProxyManagedNetwork` now takes the effective `ProxySettings` and fills the allow list (allow entries only, sorted, `[]` when empty) plus the allow-all flag on non-Windows executors; the exec server copies them from the prepared context and marshals the context into the Linux `--managed-network` argv (including the alternate policy-CWD re-wrap); `tool/unified_exec.go` and `tool/shell.go` carry the fields through their clone/mapping helpers. Tests: `network/proxy_unix_socket_context_like_rust_test.go` (allow-only list, allow-all mirroring, restrictive defaults/wire shape), `execserver/managed_network_unix_sockets_like_rust_test.go` (wire round trip, legacy restrictive defaults, enforcement gate), `execserver/managed_network_unix_sockets_linux_like_rust_test.go` (prepareExecProcess puts the exact JSON on the helper argv), plus the existing `sandbox`/`linuxsandbox` parse and malformed-JSON coverage. Verified with `go test ./network ./execserver ./sandbox ./tool -count=1`, `GOOS=linux go vet ./execserver ./sandbox ./sandbox/linuxsandbox ./tool ./network`, and a `GOOS=linux go test -c` of the exec-server test package (this also required a stale `[]byte`/string use in `execserver/tty_unix_test.go` to be corrected so the Linux test package compiles)."
    ]
   },
   {

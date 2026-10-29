@@ -976,6 +976,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Package lifecycle directory guard: service-only; Go has no package lifecycle.
 - Verified with `go test ./sandbox/windowssandbox/... -count=1`.
 
-Status after reconciliation: `1997 complete`, `392 not_applicable`,
-`495 audit_pending`, `265 regression_pending`, `0 partial`,
+### Honor explicit Unix socket grants in the Linux managed sandbox (#45534) (Round 814)
+
+- The Linux helper already honoured the grant: `sandbox/linuxsandbox` parses `allowUnixSockets`/`dangerouslyAllowAllUnixSockets` out of `--managed-network`, and its proxy-routed seccomp rule admits `AF_UNIX` only when the allow-all grant is set. Nothing produced or forwarded that policy, though, so `dangerously_allow_all_unix_sockets` never reached the helper.
+- `network.ProxyManagedNetworkSandboxContext` and `execserver.ManagedNetworkSandboxContext` now carry `allowUnixSockets` and `dangerouslyAllowAllUnixSockets` (always serialized like Rust, missing fields deserialize to the restrictive values). `PrepareProxyManagedNetwork` takes the effective `ProxySettings` and fills the allow list (allow entries only, sorted, `[]` when empty) and the allow-all flag; a Windows executor keeps both empty.
+- `execserver.prepareExecProcess` now marshals the prepared context into `BuildCommandRunPlan`, and the helper argv receives it as `--managed-network`, including the alternate policy-CWD re-wrap branch. `tool/unified_exec.go` and `tool/shell.go` carry the fields through their mapping and clone helpers.
+- Path-only grants stay denied: the sandbox helper only relaxes `AF_UNIX` for the explicit allow-all flag, and the transport never invents one.
+- Tests: `network/proxy_unix_socket_context_like_rust_test.go`, `execserver/managed_network_unix_sockets_like_rust_test.go`, `execserver/managed_network_unix_sockets_linux_like_rust_test.go`, plus the existing helper parse/malformed-JSON coverage.
+- Verified with `go test ./network ./execserver ./sandbox ./tool -count=1`, `GOOS=linux go vet ./execserver ./sandbox ./sandbox/linuxsandbox ./tool ./network`, and `GOOS=linux go test -c ./execserver`. The Linux test package did not compile before this round (`execserver/tty_unix_test.go` passed a `[]byte` chunk to `base64.DecodeString`); that stale test call was corrected so the Linux coverage could be built.
+
+Status after reconciliation: `1998 complete`, `392 not_applicable`,
+`494 audit_pending`, `265 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
