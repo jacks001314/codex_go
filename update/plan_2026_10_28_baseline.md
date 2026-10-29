@@ -2174,6 +2174,15 @@ Closed #46501 (f5b941c9107a) regression coverage for the usage diagnostics on th
 - Recorded nuance: the feedback-crate half (scraping `tags_json` from tracing and raising `MAX_FEEDBACK_TAGS` 64 → 512) has no Go counterpart because Go feedback uploads take caller-supplied tags, as noted in `update/plan_2026_09_19.md:2009`.
 - Verified: `go test ./appserver -run UsageTags -count=1` ok; `go test ./turn -run 'UsageTags|SamplingSpan' -count=1` ok.
 
-Status after reconciliation: `2062 complete`, `406 not_applicable`,
-`442 audit_pending`, `235 regression_pending`, `4 partial`,
+### Restrict the Windows native palette fallback to ConsoleWindowClass (Round 899)
+
+Closed #46504 (907b751eabc0) by adding the last missing piece: the Windows native palette fallback is now restricted to the native console window class.
+
+- Already present and audited: six bundled `tmTheme` assets (`ada`, `babbage`, `curie`, `cushman`, `dali`, `davinci`) with picker registration, per-theme chroma styles and `codex.accent`; theme-aware accent at truecolor/256 colours; terminal-default diff backgrounds with matching gutter clears.
+- New: `tui/terminal_default_colors_windows.go:53` `consoleWindowClassIsNative` reads the console window class (`GetConsoleWindow` + `GetClassNameW`), and `platformTerminalDefaultColors` (`:66`) refuses the console color table unless the class is exactly `ConsoleWindowClass`, so a ConPTY `PseudoConsoleWindow` palette is never used when OSC probing fails.
+- Tests: `tui/terminal_default_colors_windows_test.go:88`, `:108`, `:131`.
+- Verified: `go test ./tui -count=1` ok; negative check removing the class gate fails `TestNativePaletteFallbackHonorsConsoleClassLikeRust`.
+
+Status after reconciliation: `2063 complete`, `406 not_applicable`,
+`442 audit_pending`, `234 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

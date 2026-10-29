@@ -81,3 +81,53 @@ func TestWindowsReplayOmitsOnlyResponseRecords(t *testing.T) {
 		}
 	}
 }
+
+// TestConsoleWindowClassRuleLikeRust mirrors Rust #46504: the native console
+// palette is only a valid fallback when the console window is the native
+// ConsoleWindowClass, never for ConPTY's PseudoConsoleWindow.
+func TestConsoleWindowClassRuleLikeRust(t *testing.T) {
+	original := consoleWindowClassName
+	t.Cleanup(func() { consoleWindowClassName = original })
+	for className, want := range map[string]bool{
+		"ConsoleWindowClass":  true,
+		"PseudoConsoleWindow": false,
+		"":                    false,
+		"consolewindowclass":  false,
+	} {
+		name := className
+		consoleWindowClassName = func() string { return name }
+		if got := consoleWindowClassIsNative(); got != want {
+			t.Fatalf("consoleWindowClassIsNative(%q) = %v, want %v", className, got, want)
+		}
+	}
+}
+
+// TestNativePaletteFallbackHonorsConsoleClassLikeRust pins that the platform
+// palette source skips the console color table for a non-native console window
+// and still reads it for ConsoleWindowClass.
+func TestNativePaletteFallbackHonorsConsoleClassLikeRust(t *testing.T) {
+	original := consoleWindowClassName
+	originalQuery := queryConsoleDefaultColors
+	t.Cleanup(func() {
+		consoleWindowClassName = original
+		queryConsoleDefaultColors = originalQuery
+	})
+	queryConsoleDefaultColors = func() (DefaultColors, bool) {
+		return DefaultColors{FG: RGBColor{R: 1, G: 2, B: 3}, BG: RGBColor{R: 4, G: 5, B: 6}}, true
+	}
+
+	consoleWindowClassName = func() string { return "PseudoConsoleWindow" }
+	if _, ok := platformTerminalDefaultColors(); ok {
+		t.Fatal("a ConPTY console window must not supply the native palette")
+	}
+	consoleWindowClassName = func() string { return "ConsoleWindowClass" }
+	if colors, ok := platformTerminalDefaultColors(); !ok || colors.BG != (RGBColor{R: 4, G: 5, B: 6}) {
+		t.Fatalf("native console window palette = %#v, %v; want the queried colors", colors, ok)
+	}
+}
+
+// TestConsoleWindowClassNameQueryable checks the Win32 seam reads a class name
+// (or reports no console) without panicking.
+func TestConsoleWindowClassNameQueryable(t *testing.T) {
+	t.Logf("console window class = %q", queryConsoleWindowClassName())
+}

@@ -4,6 +4,7 @@ package tui
 
 import (
 	"encoding/binary"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -23,10 +24,52 @@ const (
 
 var getConsoleScreenBufferInfoEx = syscall.NewLazyDLL("kernel32.dll").NewProc("GetConsoleScreenBufferInfoEx")
 
+var (
+	getConsoleWindow = syscall.NewLazyDLL("kernel32.dll").NewProc("GetConsoleWindow")
+	getClassNameW    = syscall.NewLazyDLL("user32.dll").NewProc("GetClassNameW")
+)
+
+// consoleWindowClassName reads the Win32 class of the process's console window,
+// or "" when there is none. Tests replace the seam to exercise the class rule.
+var consoleWindowClassName = queryConsoleWindowClassName
+
+func queryConsoleWindowClassName() string {
+	window, _, _ := getConsoleWindow.Call()
+	if window == 0 {
+		return ""
+	}
+	var class [64]uint16
+	length, _, _ := getClassNameW.Call(window, uintptr(unsafe.Pointer(&class[0])), uintptr(len(class)))
+	if length == 0 || int(length) > len(class) {
+		return ""
+	}
+	return strings.TrimSpace(syscall.UTF16ToString(class[:length]))
+}
+
+// consoleWindowClassIsNative mirrors Rust #46504: only the native
+// ConsoleWindowClass owns the visible console colors. ConPTY's
+// PseudoConsoleWindow can look visible, but its color table does not describe
+// the renderer, so the native palette fallback must not use it.
+func consoleWindowClassIsNative() bool {
+	return consoleWindowClassName() == "ConsoleWindowClass"
+}
+
+// queryConsoleDefaultColors reads the native console color table. Tests replace
+// the seam so the class gate can be exercised without a real console.
+var queryConsoleDefaultColors = readConsoleDefaultColors
+
 // platformTerminalDefaultColors reads the Windows console's configured default
 // foreground/background colors. It reports false when stdout is not a console
-// or the query fails.
+// or the query fails, and also when the console window is not the native
+// ConsoleWindowClass (Rust #46504).
 func platformTerminalDefaultColors() (DefaultColors, bool) {
+	if !consoleWindowClassIsNative() {
+		return DefaultColors{}, false
+	}
+	return queryConsoleDefaultColors()
+}
+
+func readConsoleDefaultColors() (DefaultColors, bool) {
 	var info [consoleScreenBufferInfoExSize]byte
 	binary.LittleEndian.PutUint32(info[0:], consoleScreenBufferInfoExSize)
 	ret, _, _ := getConsoleScreenBufferInfoEx.Call(

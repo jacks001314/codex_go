@@ -15832,9 +15832,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Bundled theme work was already in the Go tree and this round closed the remaining Windows palette gap. Audit: tui/themes/assets holds ada, babbage, curie, cushman, dali and davinci as embedded tmTheme assets, and tui/bundled_themes.go plus tui/bundled_themes_test.go keep them in BuiltinThemeIDs with their own chroma styles and codex.accent values (ada = #5FAFFF) while custom files with the same names win. tui/theme_accent.go renders the accent at truecolor and 256 colours and stays empty below that (tui/theme_accent_test.go). tui/diff_scope_background.go resolves the terminal-default marker and clears the matching gutter fill (tui/diff_scope_background_test.go, dali and davinci suppressed fills). New: tui/terminal_default_colors_windows.go:53 consoleWindowClassIsNative reads the console window class through GetConsoleWindow plus GetClassNameW, and platformTerminalDefaultColors (:66) now returns no colors unless the class is exactly ConsoleWindowClass, so ConPTY PseudoConsoleWindow palettes are never mistaken for the renderer colors when OSC 10/11 probing fails (Rust terminal_probe/windows.rs). queryConsoleDefaultColors (:59) is the test seam. Tests: tui/terminal_default_colors_windows_test.go:88 TestConsoleWindowClassRuleLikeRust, :108 TestNativePaletteFallbackHonorsConsoleClassLikeRust (:119 ConPTY rejected, :123 native class reads the table), :131 TestConsoleWindowClassNameQueryable. Verified: go test ./tui -count=1 ok; negative check removing the class gate fails TestNativePaletteFallbackHonorsConsoleClassLikeRust."
    ]
   },
   {
