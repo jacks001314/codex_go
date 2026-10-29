@@ -12819,9 +12819,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go parity implemented: Rust folds ContextManager::reset_version into GuardianReviewSessionReuseKey so a destructive history replacement without a compaction checkpoint starts a new reviewer trunk. Go's reusable guardianSessionRunner kept its previous response chain across a cold thread resume and a thread fork, both of which replay the thread history into a fresh runtime (Rust HistoryReplacement::Reset). New guardianSessionRunner.ResetForParentHistoryReset clears previous/seeded, the prewarm flag, the prior-review cursor, the completed-review count and last usage; RuntimeRouter.resetGuardianAfterParentHistoryReset is wired into a cold thread resume (which also covers resume-with-supplied-history) and into fork. Regressions: TestGuardianSessionRunnerSummaryFreeResetInvalidatesSession (trunk_new -> trunk_reused -> reset -> trunk_new with no previous response id and completedReviewCount 0) and TestRuntimeRouterColdResumeResetsGuardianSessionLikeRust (cold resume over a real store; verified to fail without the hook by reporting trunk_reused). go test ./appserver -run Guardian and -run 'ThreadResume|ThreadFork|Resume' pass."
    ]
   },
   {

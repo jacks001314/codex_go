@@ -851,6 +851,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regressions: `TestCodeModeExecClearTimeoutDropsQueuedTimerFire` (50 zero-delay `setTimeout`/`clearTimeout` rounds inside one synchronous block; fails against the old code with stray `must-not-run` output) and `TestCodeModeExecCellCompletionCancelsPendingTimers` (a 60s timer neither holds completion open nor emits output).
 - Tests: `go test ./tool -count=1` passes, and the timer tests pass under `-race`.
 
-Status after reconciliation: `1986 complete`, `388 not_applicable`,
-`503 audit_pending`, `272 regression_pending`, `0 partial`,
+### Reset Guardian reviewer after parent history replays (Round 799)
+
+- #45413 was a real Go gap. Rust adds `ContextManager::reset_version` (bumped by destructive history replacement, preserved by ordinary input and compaction) and folds it into `GuardianReviewSessionReuseKey`, so a summary-free parent context reset starts a new reviewer trunk with no prior rationale.
+- Go's reusable `guardianSessionRunner` kept its `previous` response chain and `priorReview` cursor across cold thread resumes and forks, both of which replay a thread's history into a fresh runtime (Rust's `HistoryReplacement::Reset`). The next review therefore reported `trunk_reused`/`had_prior_review_context=true` and carried pre-reset rationale.
+- `guardianSessionRunner.ResetForParentHistoryReset` now clears `previous`/`seeded`, the prewarm flag, the prior-review cursor, the completed-review count and the last usage. `RuntimeRouter.resetGuardianAfterParentHistoryReset` is wired into a cold `thread/resume` (including resume-with-supplied-history) and into `thread/fork`; attaching to an already-loaded thread keeps the live reviewer, matching Rust's live-attach path.
+- New regressions: `TestGuardianSessionRunnerSummaryFreeResetInvalidatesSession` (`trunk_new` -> `trunk_reused` -> reset -> `trunk_new`, with no previous response id and a zeroed completed-review count) and `TestRuntimeRouterColdResumeResetsGuardianSessionLikeRust` (cold resume over a real store; fails without the hook by reporting `trunk_reused`).
+- Tests: `go test ./appserver -run Guardian` and `go test ./appserver -run 'ThreadResume|ThreadFork|Resume'` pass.
+
+Status after reconciliation: `1987 complete`, `388 not_applicable`,
+`502 audit_pending`, `272 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
