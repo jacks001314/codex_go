@@ -1627,6 +1627,20 @@ Preserve executor path conventions in permission summaries (#45852).
   interactive path prints no `AppExitInfo` lines at all, so there is nothing to
   suppress.
 
-Status after reconciliation: `2025 complete`, `398 not_applicable`,
-`466 audit_pending`, `257 regression_pending`, `3 partial`,
+### Avoid redundant model catalog lookups in reused Guardian reviewers (#45933) (Round 859)
+
+Avoid redundant model catalog lookups in reused Guardian reviewers (#45933, not applicable).
+
+- Rust rebuilt the previous model's turn context (and therefore refreshed the
+  model catalog) even when a Guardian reviewer reused the same model.
+- Go makes the decision in `previousModelCompactionForTurn` and returns before
+  building any turn context when the recorded model matches the selected one.
+- Model metadata reads on that path are in-memory only: `ModelService.Info`
+  delegates to `ModelsManager.GetModelInfo`, which reads `GetRemoteModels`;
+  cache refresh happens exclusively through `RawModelCatalog`/`ListModels`,
+  which the compaction decision never calls. An expired cache therefore issues
+  no extra catalog request.
+
+Status after reconciliation: `2025 complete`, `399 not_applicable`,
+`465 audit_pending`, `257 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

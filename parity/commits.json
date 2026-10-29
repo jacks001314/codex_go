@@ -14379,9 +14379,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go has no redundant catalog request on this path: RuntimeRouter.previousModelCompactionForTurn returns before any compaction when the recorded model equals the selected model, and model resolution (modelInfoForRuntime -> ModelService.Info -> ModelsManager.GetModelInfo -> GetRemoteModels) only reads the in-memory/cached catalog; network refresh happens solely through RawModelCatalog/ListModels, which the compaction decision never calls. Guardian sessions are already identified by guardianTurnStart, and no previous-model turn context is built when the decision does not run, so the Rust early return has no Go counterpart to fix"
    ]
   },
   {
