@@ -1777,6 +1777,22 @@ Keep session-defined permission profiles usable across settings switches (#45981
   in configuration (`codex_linux_sandbox_exe` only appears on the sandbox state
   wire), so there is no per-thread config reload that could drop them.
 
-Status after reconciliation: `2033 complete`, `400 not_applicable`,
-`460 audit_pending`, `253 regression_pending`, `3 partial`,
+### Show attach feedback when opening tasks from the overview (Round 868)
+
+Give immediate feedback while an agents-overview task attach is in flight (#45983, closure).
+
+- Rust had to draw a bold `Loading task…` frame by hand because its attach
+  awaits server requests inline, where prompts and chat-widget replacement can
+  clear the terminal. Go's attach is a bubbletea command: the dashboard closes,
+  `applyAgentModalOption` raises a `Switching to <label>...` notice that the next
+  render shows while the resume runs on the command goroutine, and
+  `applyAgentSwitchResult` rebuilds the widget and replaces the notice with the
+  attached task's label.
+- `tui/tea/agents_overview_switch_notice_like_rust_test.go` pins that lifecycle:
+  the notice exists before the attach command resolves, appears in the rendered
+  view, and is gone after the widget rebuild. `go test ./tui/tea/
+  -run 'AgentsDashboard|AgentsOverview'` passes.
+
+Status after reconciliation: `2034 complete`, `400 not_applicable`,
+`460 audit_pending`, `252 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

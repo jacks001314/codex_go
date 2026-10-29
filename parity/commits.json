@@ -14499,9 +14499,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go's attach path never blocks the event loop, so Rust's hazard cannot occur: openAgentsOverviewThread closes the dashboard and returns a bubbletea command, applyAgentModalOption sets an immediate `Switching to <label>...` notice that the next render shows while the resume runs on the command goroutine, applyAgentSwitchResult rebuilds the chat widget and replaces the notice with the attached task's label, and prompts are modal overlays rather than inline draws that clear the terminal. New tui/tea/agents_overview_switch_notice_like_rust_test.go pins that lifecycle (notice raised before the attach command resolves, present in the rendered view, gone after the widget rebuild); ./tui/tea AgentsOverview tests pass"
    ]
   },
   {
