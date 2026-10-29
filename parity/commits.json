@@ -14391,9 +14391,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "memories/workspace.go MemoryStorageBytes sums regular-file sizes from Lstat metadata, skips .git entries and symbolic links, and saturates; memories/metrics.go RecordMemoryStorageSize reports codex.memory.storage_bytes on Rust's log-spaced boundaries tagged with memory_version; memories/pipeline.go records it after the timer stops on both the succeeded_no_workspace_changes path and the post-baseline-reset success path; covered by memories/metrics_test.go (TestRecordMemoryStorageSizeFollowsRust, boundaries, missing root) and memories/workspace_test.go TestMemoryStorageBytesCountsRegularFilesOnly plus the pipeline storage-size assertions"
    ]
   },
   {
@@ -14415,9 +14415,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "memories/usage.go UsageFromCommand/UsageFromPath return (kind, memory version), normalize Windows separators before classifying, and detect the memories_v2 root before collapsing it to memories/; telemetry/memory_usage.go emits codex.memories.usage with the memory_version tag alongside kind/tool/success; covered by memories/usage_test.go and telemetry/memory_usage_test.go (both roots, mixed-root reads, PowerShell paths)"
    ]
   },
   {

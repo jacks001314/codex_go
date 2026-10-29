@@ -1641,6 +1641,29 @@ Avoid redundant model catalog lookups in reused Guardian reviewers (#45933, not 
   which the compaction decision never calls. An expired cache therefore issues
   no extra catalog request.
 
-Status after reconciliation: `2025 complete`, `399 not_applicable`,
-`465 audit_pending`, `257 regression_pending`, `3 partial`,
+### Memory storage size and memory-version telemetry (#45956, #45960) (Round 860)
+
+Memory storage size and memory-version telemetry (#45956, #45960, regression closure).
+
+- `memories/workspace.go` adds `MemoryStorageBytes`, which walks the root with
+  `Lstat`, sums regular-file sizes, skips `.git` entries and symbolic links, and
+  saturates instead of wrapping; `memories/metrics.go` reports it as
+  `codex.memory.storage_bytes` on Rust's log-spaced boundaries with the
+  `memory_version` tag.
+- `memories/pipeline.go` records the sample after stopping the phase-two timer
+  on both the `succeeded_no_workspace_changes` path and the post-baseline-reset
+  success path, so successful runs that changed nothing are covered too.
+- `memories/usage.go` classifies reads into `(kind, memory version)` pairs,
+  normalizing Windows separators first and mapping `memories_v2/` to v2 before
+  collapsing the prefix onto `memories/`; `telemetry/memory_usage.go` emits
+  `codex.memories.usage` with the `memory_version` tag beside kind, tool, and
+  success.
+- Existing coverage (`memories/metrics_test.go`,
+  `memories/workspace_test.go`, `memories/usage_test.go`,
+  `telemetry/memory_usage_test.go`) exercises nested files, UTF-8 sizes, git
+  exclusion, symbolic links, both roots, mixed-root reads, and PowerShell
+  spellings; `go test ./memories/... ./telemetry/` passes.
+
+Status after reconciliation: `2027 complete`, `399 not_applicable`,
+`465 audit_pending`, `255 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
