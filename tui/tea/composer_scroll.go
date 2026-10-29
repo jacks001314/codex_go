@@ -254,48 +254,83 @@ func composerWrappedRows(runes []rune, width int) [][]rune {
 		width = 1
 	}
 	var (
-		lines  = [][]rune{{}}
-		word   = []rune{}
-		row    int
-		spaces int
+		lines = [][]rune{{}}
+		word  = []rune{}
+		row   int
+		// rowWidth and wordBound track display widths incrementally. Rebuilding
+		// and re-measuring the whole row and word for every word made one
+		// keystroke O(draft) in uniseg calls and dominated the composer frame.
+		rowWidth  int
+		wordBound int
+		spaces    int
 	)
 	for _, r := range runes {
 		if unicode.IsSpace(r) {
 			spaces++
 		} else {
 			word = append(word, r)
+			// No single rune is wider than two cells, so this stays an upper
+			// bound until the word is measured exactly.
+			wordBound += 2
 		}
 		if spaces > 0 {
-			if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces > width {
+			wordWidth := composerWordWidth(word, &wordBound)
+			if rowWidth+wordWidth+spaces > width {
 				row++
 				lines = append(lines, []rune{})
+				rowWidth = 0
 			}
 			lines[row] = append(lines[row], word...)
 			lines[row] = append(lines[row], composerRepeatSpaces(spaces)...)
+			rowWidth += wordWidth + spaces
 			spaces = 0
 			word = nil
+			wordBound = 0
 			continue
 		}
 		if len(word) == 0 {
 			continue
 		}
 		lastWidth := runewidth.RuneWidth(word[len(word)-1])
-		if uniseg.StringWidth(string(word))+lastWidth > width {
+		if wordBound+lastWidth <= width {
+			// The bound proves the check below cannot fire.
+			continue
+		}
+		wordWidth := composerWordWidth(word, &wordBound)
+		if wordWidth+lastWidth > width {
 			if len(lines[row]) > 0 {
 				row++
 				lines = append(lines, []rune{})
+				rowWidth = 0
 			}
 			lines[row] = append(lines[row], word...)
+			rowWidth += wordWidth
 			word = nil
+			wordBound = 0
 		}
 	}
-	if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces >= width {
+	wordWidth := composerWordWidth(word, &wordBound)
+	if rowWidth+wordWidth+spaces >= width {
 		lines = append(lines, []rune{})
 		row++
+		rowWidth = 0
 	}
 	lines[row] = append(lines[row], word...)
 	lines[row] = append(lines[row], composerRepeatSpaces(spaces+1)...)
 	return lines
+}
+
+// composerWordWidth measures a word exactly and refreshes the tracked upper
+// bound. Callers only reach it when the word might not fit, so a word that
+// stays inside the line is never segmented.
+func composerWordWidth(word []rune, bound *int) int {
+	if len(word) == 0 {
+		*bound = 0
+		return 0
+	}
+	measured := uniseg.StringWidth(string(word))
+	*bound = measured
+	return measured
 }
 
 func composerRepeatSpaces(n int) []rune {
