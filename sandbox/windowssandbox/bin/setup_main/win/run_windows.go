@@ -77,11 +77,12 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 
 	err = runSetupPayload(payload, log, sbzDir)
 	if err != nil {
-		setupLogLine(log, fmt.Sprintf("setup error: %v", err))
-		_ = windowssandbox.LogNoteInDir(sbzDir, fmt.Sprintf("setup error: %v", err))
+		detail := "setup error: " + windowssandbox.SetupErrorChain(err)
+		setupLogLine(log, detail)
+		_ = windowssandbox.LogNoteInDir(sbzDir, detail)
 		failure := extractSetupFailure(err)
 		if failure == nil {
-			failure = windowssandbox.NewSetupFailure(windowssandbox.SetupErrorHelperUnknownError, err.Error())
+			failure = windowssandbox.NewSetupFailure(windowssandbox.SetupErrorHelperUnknownError, windowssandbox.SetupErrorChain(err))
 		}
 		report := &windowssandbox.SetupErrorReport{Code: failure.Code, Message: failure.Message}
 		if writeErr := windowssandbox.WriteSetupErrorReport(payload.CodexHome, report); writeErr != nil {
@@ -171,7 +172,7 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 	}
 	if writesSetupMarker {
 		if err := commitSetupMarker(payload.CodexHome, payload.OfflineUsername, payload.OnlineUsername, payload.ProxyPorts, payload.AllowLocalBinding); err != nil {
-			return setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "commit setup marker failed: %v", err)
+			return setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "commit setup marker failed: %s", windowssandbox.SetupErrorChain(err))
 		}
 	}
 	return nil
@@ -239,15 +240,15 @@ func runProvisionOnly(payload *setupPayload, log io.Writer, sbxDir string) error
 		return err
 	}
 	if err := verifySandboxAccountPasswordsRepaired(payload.sandboxUsernames()); err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "%v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "%s", windowssandbox.SetupErrorChain(err))
 	}
 	offlineSID, err := resolveSIDString(payload.OfflineUsername)
 	if err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve SID for offline user %s failed: %v", payload.OfflineUsername, err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve SID for offline user %s failed: %s", payload.OfflineUsername, windowssandbox.SetupErrorChain(err))
 	}
 	sandboxGroupSIDBytes, err := ResolveSandboxUsersGroupSID()
 	if err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve sandbox users group SID failed: %v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve sandbox users group SID failed: %s", windowssandbox.SetupErrorChain(err))
 	}
 	if err := configureOfflineSandboxNetwork(payload, offlineSID, log); err != nil {
 		return err
@@ -268,7 +269,7 @@ func runSetupFull(payload *setupPayload, log io.Writer, sbxDir string) error {
 		// credentials, so an account that needs full setup must fail the
 		// refresh instead of leaving unusable credentials behind (Rust #46043).
 		if err := rejectUnrepairableSandboxAccountsDuringRefresh(payload.sandboxUsernames()); err != nil {
-			return setupFailuref(windowssandbox.SetupErrorHelperUserCreateOrUpdateFailed, "%v", err)
+			return setupFailuref(windowssandbox.SetupErrorHelperUserCreateOrUpdateFailed, "%s", windowssandbox.SetupErrorChain(err))
 		}
 	}
 	if !payload.RefreshOnly {
@@ -276,16 +277,16 @@ func runSetupFull(payload *setupPayload, log io.Writer, sbxDir string) error {
 			return err
 		}
 		if err := verifySandboxAccountPasswordsRepaired(payload.sandboxUsernames()); err != nil {
-			return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "%v", err)
+			return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "%s", windowssandbox.SetupErrorChain(err))
 		}
 	}
 	offlineSID, err := resolveSIDString(payload.OfflineUsername)
 	if err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve SID for offline user %s failed: %v", payload.OfflineUsername, err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve SID for offline user %s failed: %s", payload.OfflineUsername, windowssandbox.SetupErrorChain(err))
 	}
 	sandboxGroupSIDBytes, err := ResolveSandboxUsersGroupSID()
 	if err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve sandbox users group SID failed: %v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve sandbox users group SID failed: %s", windowssandbox.SetupErrorChain(err))
 	}
 	sandboxGroupSID := windowssandbox.StringFromSIDBytes(sandboxGroupSIDBytes)
 	refreshErrors := []string{}
@@ -451,7 +452,7 @@ func provisionAndHideSandboxUsers(payload *setupPayload, log io.Writer, sbxDir s
 		if extractSetupFailure(err) != nil {
 			return err
 		}
-		return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "provision sandbox users failed: %v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "provision sandbox users failed: %s", windowssandbox.SetupErrorChain(err))
 	}
 	if err := windowssandbox.HideNewlyCreatedUsers([]string{payload.OfflineUsername, payload.OnlineUsername}, sbxDir); err != nil {
 		setupLogLine(log, fmt.Sprintf("hide newly created users failed: %v", err))
@@ -464,13 +465,13 @@ func configureOfflineSandboxNetwork(payload *setupPayload, offlineSID string, lo
 		if extractSetupFailure(err) != nil {
 			return err
 		}
-		return setupFailuref(windowssandbox.SetupErrorHelperFirewallRuleCreateOrAddFailed, "ensure offline proxy allowlist failed: %v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperFirewallRuleCreateOrAddFailed, "ensure offline proxy allowlist failed: %s", windowssandbox.SetupErrorChain(err))
 	}
 	if err := EnsureOfflineNetworkBlocks(offlineSID, log); err != nil {
 		if extractSetupFailure(err) != nil {
 			return err
 		}
-		return setupFailuref(windowssandbox.SetupErrorHelperFirewallRuleCreateOrAddFailed, "ensure offline network blocks failed: %v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperFirewallRuleCreateOrAddFailed, "ensure offline network blocks failed: %s", windowssandbox.SetupErrorChain(err))
 	}
 	windowssandbox.InstallWFPFilters(payload.CodexHome, payload.OfflineUsername, func(message string) {
 		setupLogLine(log, message)
@@ -599,10 +600,10 @@ func encodeSetupPayload(payload *setupPayload) (string, error) {
 
 func prepareSetupMarker(codexHome string, realUser string) error {
 	if err := os.MkdirAll(windowssandbox.SandboxDir(codexHome), 0o700); err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSandboxDirCreateFailed, "failed to create sandbox dir %s: %v", windowssandbox.SandboxDir(codexHome), err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSandboxDirCreateFailed, "failed to create sandbox dir %s: %s", windowssandbox.SandboxDir(codexHome), windowssandbox.SetupErrorChain(err))
 	}
 	if err := os.Remove(windowssandbox.SetupMarkerPath(codexHome)); err != nil && !os.IsNotExist(err) {
-		return setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "prepare setup marker failed: %v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "prepare setup marker failed: %s", windowssandbox.SetupErrorChain(err))
 	}
 	return nil
 }
@@ -655,7 +656,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
 	)
 	if err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox dir %s failed: %v", sandboxDir, err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox dir %s failed: %s", sandboxDir, windowssandbox.SetupErrorChain(err))
 	}
 	secretsDir := windowssandbox.SandboxSecretsDir(payload.CodexHome)
 	err = lockSandboxDir(
@@ -667,7 +668,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
 	)
 	if err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox secrets dir %s failed: %v", secretsDir, err)
+		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox secrets dir %s failed: %s", secretsDir, windowssandbox.SetupErrorChain(err))
 	}
 	legacyUsers := filepath.Join(sandboxDir, "sandbox_users.json")
 	if err := os.Remove(legacyUsers); err != nil && !os.IsNotExist(err) {
@@ -802,27 +803,10 @@ func recordSetupACLFailure(refreshErrors *[]string, operation setupACLRefreshOpe
 }
 
 // formatSetupErrorChain renders every distinct wrapped cause so native Windows
-// diagnostics survive the setup error report.
+// diagnostics survive the setup error report. The renderer lives in the shared
+// package so the orchestrator and the helper cannot drift (#46237).
 func formatSetupErrorChain(err error) string {
-	if err == nil {
-		return ""
-	}
-	var parts []string
-	for err != nil {
-		message := strings.TrimSpace(err.Error())
-		if message != "" && (len(parts) == 0 || parts[len(parts)-1] != message) {
-			parts = append(parts, message)
-		}
-		next := errors.Unwrap(err)
-		if next == nil {
-			break
-		}
-		if message != "" && strings.Contains(message, next.Error()) {
-			break
-		}
-		err = next
-	}
-	return strings.Join(parts, ": ")
+	return windowssandbox.SetupErrorChain(err)
 }
 
 func setupFailuref(code windowssandbox.SetupErrorCode, format string, args ...interface{}) *windowssandbox.SetupFailure {

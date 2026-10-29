@@ -2522,6 +2522,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
   observation; Rust's `Launch` guard records `app_server_mode=unconfirmed` in
   that case.
 
-Status after reconciliation: `2089 complete`, `409 not_applicable`,
-`429 audit_pending`, `219 regression_pending`, `3 partial`,
+### Windows sandbox provisioning error chains (Round 928)
+
+- Rust #46237 renders Windows sandbox provisioning responses and failure logs with the alternate anyhow chain (`{error:#}`) and prunes the legacy installation registry key.
+- Go has no Windows sandbox service IPC (`response_error_message`, `MAX_RESPONSE_MESSAGE_BYTES`) and no legacy installation record, so those halves stay not applicable.
+- The cause-loss gap was real: `sandbox/windowssandbox/setup_error.go:125` adds `SetupErrorChain`, which mirrors `{error:#}` and surfaces causes that `Error()` hides.
+- `sandbox/windowssandbox/bin/setup_main/win/run_windows.go:80` logs and reports provisioning failures through it, and the provisioning `setupFailuref` sites now render `%s` chains (user provisioning, SID resolution, firewall, marker, locks).
+- New `sandbox/windowssandbox/setup_error_chain_like_rust_test.go` covers nested chains, the hidden `SandboxAccountCredentialMismatch` cause, dedupe and nil.
+
+Status after reconciliation: `2090 complete`, `409 not_applicable`,
+`428 audit_pending`, `219 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

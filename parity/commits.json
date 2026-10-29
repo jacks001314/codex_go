@@ -15219,9 +15219,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/windowssandbox/setup_error.go:125 SetupErrorChain renders the full cause chain like Rust {error:#}; setup_main/win/run_windows.go:80,243,455,780 log and report provisioning failures and ACL causes through it; the Windows sandbox service IPC response and legacy installation registry key have no Go carrier, so control-char replacement, response byte limit and SHDeleteEmptyKeyW cleanup stay not applicable"
    ]
   },
   {
