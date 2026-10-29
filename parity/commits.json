@@ -12447,9 +12447,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 793: #44970 dashboard task tokens and usage estimates were already implemented. tui/tea/agents_overview_usage.go mirrors Rust agents_overview_usage.rs: the 60s agentsOverviewUsageRefreshInterval cadence fetches only the selected task, refreshAgentsOverviewUsageCmd gates on a ChatGPT account, the disabled capability, the Business/ENT26/Enterprise-CBP plan set, an in-flight request, and a fresh cached fetchedAt (scheduling the remaining time instead of refetching); applyAgentsOverviewUsageLoaded keeps a prior nonzero credits/USD value and its breakdown groups when a settlement reports zero, latches usageDisabled on AgentsOverviewUsageDisabled while clearing every cached estimate, records fetchedAt on failures so the cadence retries, and ignores results whose pending thread/request id no longer matches; clearAgentsOverviewUsage drops the cache, the disabled flag and the pending request on account changes, reconnects and missed events. agentsOverviewUsageLines prefers the live token totals and otherwise sums the complete breakdown side, rendering 'Tokens: 13K in - 4K out' and 'Est. usage: 3.4 credits - ~$0.14' (ENT26 uses native dollars). tui/agents_overview renders those lines after the model row and prefers usage over the original prompt when height is tight (SetUsageLines/usageLinesFor with prune on refresh). Existing tests cover fetch/rendering, zero-preservation, the disabled capability, plan gates, plan-change cache clearing, incomplete breakdowns and ENT26 dollars; this round adds TestAgentsOverviewUsageDiscardsStaleResultsAndRetriesAfterFailure so the reconnect/account-change stale-result discard and the retry-after-failure cadence are pinned. Validation: go test ./tui/tea -run 'AgentsOverviewUsage' -count=1; go test ./tui/tea -run Agents -count=1; go test ./app -run Agents -count=1; go test ./tui/agents_overview -count=1."
    ]
   },
   {

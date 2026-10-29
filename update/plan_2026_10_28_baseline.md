@@ -810,6 +810,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regression `tui/agents_overview/model_grouping_recency_like_rust_test.go` mirrors Rust's `overview_model_grouping_shows_details_and_preserves_selection`: host order deliberately disagrees with recency, model grouping yields `Unknown(t-4)`, `model-a(t-3 newest, t-1)`, `model-b(t-2)`, `sameGroup` follows the model rather than host position, the selection survives the regroup, and `MoveSelection` walks the grouped order across group boundaries.
 - `go test ./tui/agents_overview -count=1`, `go test ./tui/tea -run 'Agents|Agent' -count=1`, `go test ./app -run 'Agents|Agent' -count=1` and `go build ./tui/... ./app/...` pass.
 
-Status after reconciliation: `1979 complete`, `386 not_applicable`,
-`506 audit_pending`, `278 regression_pending`, `0 partial`,
+### Show task tokens and usage estimates in the command center (Round 793)
+
+- #44970 was already implemented. `tui/tea/agents_overview_usage.go` mirrors Rust `agents_overview_usage.rs`: a 60s cadence fetches only the selected task, gated on a ChatGPT account, the disabled capability, the Business/ENT26/Enterprise-CBP plan set, an in-flight request, and a fresh cached `fetchedAt` (scheduling the remaining time instead of refetching).
+- `applyAgentsOverviewUsageLoaded` keeps a prior nonzero credits/USD value and its breakdown groups when a settlement reports zero, latches `usageDisabled` on the disabled outcome while clearing every cached estimate, stamps `fetchedAt` on failures so the cadence retries, and ignores results whose pending thread/request id no longer matches. `clearAgentsOverviewUsage` drops the cache, disabled flag and pending request on account changes, reconnects and missed events.
+- `agentsOverviewUsageLines` prefers live token totals and otherwise sums the complete breakdown side, rendering `Tokens: 13K in · 4K out` and `Est. usage: 3.4 credits · ~$0.14` (ENT26 uses native dollars). `tui/agents_overview` renders those lines after the model row and prefers usage over the original prompt when height is tight.
+- Existing tests cover fetch/render, zero-preservation, the disabled capability, plan gates, plan-change cache clearing, incomplete breakdowns and ENT26 dollars; this round adds `TestAgentsOverviewUsageDiscardsStaleResultsAndRetriesAfterFailure` to pin the reconnect/account-change stale-result discard and the retry-after-failure cadence.
+- `go test ./tui/tea -run 'AgentsOverviewUsage' -count=1`, `go test ./tui/tea -run Agents -count=1`, `go test ./app -run Agents -count=1` and `go test ./tui/agents_overview -count=1` pass.
+
+Status after reconciliation: `1980 complete`, `386 not_applicable`,
+`506 audit_pending`, `277 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
