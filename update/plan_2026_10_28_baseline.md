@@ -1171,6 +1171,17 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - appserver/runtime_router.go re-resolves auth after the backend usage read before exposing account-bound ordinary usage and upsell content; appserver/rate_limits_identity_like_rust_test.go covers user switch, workspace switch and same-identity token refresh (and fails without the recheck).
 - Tests: client_like_rust_test.go covers server plan discovery and its failure/401/identity modes, 13 report routes and queries, cache reuse and identity-scoped eviction, model filtering, legacy fallback, invalid ranges, unknown-plan credit groupings, in-flight switches, 403/404 messages and load cancellation; normalize_like_rust_test.go covers attribution preference. Verified: go test ./tui/analytics -count=1, go test ./appserver -run "RateLimit" -count=1, go vet ./tui/analytics, go build ./... .
 
-Status after reconciliation: `2013 complete`, `395 not_applicable`,
-`481 audit_pending`, `258 regression_pending`, `2 partial`,
+### #45763 Add stacked chart primitives for account analytics (Round 836)
+
+## Round 836 - #45763 Add stacked chart primitives for account analytics
+
+- tui/analytics/plot.go adds the stacked-bar pipeline: AnalyticsBand (nonnegative Amount, rowY, top-anchored reversed partial glyphs for refunds), AnalyticsSeriesColorName for the four palette series, AnalyticsCell/AnalyticsChart with AnalyticsChartText, AnalyticsPeak (max of summed absolute parts and the authoritative daily total), AnalyticsAxisMax (Rust's 1/1.5/2/2.5/3/4/5/7.5/10 ladder, never fractional for counts or tokens), analyticsPlotLayout (axis hidden unless the width is at least 30 and the tick label fits a third of it, cursor slot kept visible, center()), and AnalyticsPlot, which paints bars, the baseline and ticks, missing-day em dashes, reported zeros, the authoritative daily total callout with a connecting guide, and calendar ticks in Rust's order.
+- render.go adds AnalyticsParts: the three plotted categories plus an un-renormalized Other slot that collects every remaining key, matching Rust's parts() for duplicate-date remainders.
+- Calendar and label fitting follow Rust exactly: endpoints plus weekly ticks get priority, month/day labels fall back to the day-only form and are then dropped instead of truncated, and up to seven short-range bars show their totals with the cursor choosing space first.
+- Tests in plot_like_rust_test.go mirror the upstream unit assertions: twelve axis_max cases, parts remainder and refund peak, two signed bands with reversed negative cells, missing/zero markers with one visible cursor at widths 36/8/1, oversized axes hidden for widths 8/30/35 and shown at 44, the authoritative 20.00 callout rather than 12.00, narrow 1/2/5/6-column dates, midpoint series color with reversed partial cells, tiny segments keeping their series color, and seven simultaneous daily totals.
+- Difference: Go has no ratatui Buffer, so cells carry style facts (Series/Dim/Accent/Bold/Underline/Reversed) and the view resolves terminal colors; an out-of-range cursor is clamped instead of panicking.
+- Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./... .
+
+Status after reconciliation: `2014 complete`, `395 not_applicable`,
+`480 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
