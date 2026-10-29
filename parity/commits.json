@@ -16264,9 +16264,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/unix_socket.go:229-275 advertises x-codex-websocket-max-unfragmented-message-bytes on both the managed /daemon/shutdown upgrade and every other control socket upgrade, applies the same DefaultWebSocketMaxMessageSize as the connection read limit (Rust uses one WebSocketConfig for both), and leaves a rejected 403 shutdown upgrade without the header (Rust check_callback ordering). Tests appserver/unix_socket_control_socket_like_rust_test.go: TestControlSocketAdvertisesUnfragmentedMessageLimitLikeRust, TestManagedShutdownSocketAdvertisesUnfragmentedMessageLimitLikeRust, TestRejectedShutdownSocketOmitsUnfragmentedMessageLimitLikeRust. Verified: go build ./appserver, GOOS=darwin go test -c ./appserver, go test ./appserver -run UnixSocket|ControlSocket|Socket|Websocket (unix-tagged tests exercised on this host through a temporary untagged copy, all pass)."
    ]
   },
   {

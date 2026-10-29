@@ -2255,6 +2255,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `app/doctor_probe_helper_like_rust_test.go`: `doctor --probe-filesystem-path` exits silently with the probe status (2 on POSIX, 5 on Windows) even with an unparsable `config.toml`, proving the helper never loads configuration.
 - Verification: `go test ./doctor -count=1` and `go test ./app -run Doctor -count=1` pass.
 
-Status after reconciliation: `2070 complete`, `408 not_applicable`,
-`438 audit_pending`, `229 regression_pending`, `4 partial`,
+### Advertise control socket message limits (Round 909)
+
+- Upstream (`98a8d4ea9cab`, #46548) advertises `x-codex-websocket-max-unfragmented-message-bytes` on accepted control socket upgrades so clients can reject oversized single-frame requests before the socket closes, using the same `WebSocketConfig` for the connection.
+- `appserver/unix_socket.go` now sets that header via `advertiseControlSocketMessageLimit` on the managed `/daemon/shutdown` upgrade and on every other path, and bounds the connection with the same value through `applyControlSocketReadLimit` (`DefaultWebSocketMaxMessageSize`, 128 MiB).
+- A refused shutdown upgrade keeps the bare `403 unmanaged server` response with no advertised limit, matching Rust inserting the header only after the access check.
+- Regression: `appserver/unix_socket_control_socket_like_rust_test.go` adds `TestControlSocketAdvertisesUnfragmentedMessageLimitLikeRust`, `TestManagedShutdownSocketAdvertisesUnfragmentedMessageLimitLikeRust`, and `TestRejectedShutdownSocketOmitsUnfragmentedMessageLimitLikeRust`.
+- Verified with `go build ./appserver`, `GOOS=darwin go test -c ./appserver`, and `go test ./appserver -run 'UnixSocket|ControlSocket|Socket|Websocket' -count=1`.
+
+Status after reconciliation: `2071 complete`, `408 not_applicable`,
+`437 audit_pending`, `229 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -229,10 +229,12 @@ func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unmanaged server", http.StatusForbidden)
 			return
 		}
+		advertiseControlSocketMessageLimit(w)
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 		if err != nil {
 			return
 		}
+		applyControlSocketReadLimit(conn)
 		runDaemonShutdownHandshake(r.Context(), conn, h.shutdown)
 		return
 	}
@@ -241,9 +243,7 @@ func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Rust routes every other path to the WebSocket upgrade handler.
-	if max := DefaultWebSocketMaxMessageSize; max > 0 {
-		w.Header().Set(maxUnfragmentedMessageBytesHeader, strconv.FormatInt(max, 10))
-	}
+	advertiseControlSocketMessageLimit(w)
 	compression := WebsocketCompressionPlain
 	if h.compressionEnabled && r.Header.Get(WebsocketCompressionHeader) == WebsocketZstdStreamProtocol {
 		compression = WebsocketCompressionZstd
@@ -253,10 +253,26 @@ func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	if DefaultWebSocketMaxMessageSize > 0 {
+	applyControlSocketReadLimit(conn)
+	_ = serveWebSocketConnectionWithCompression(r.Context(), conn, h.routerFactory(), compression)
+}
+
+// advertiseControlSocketMessageLimit mirrors Rust #46548: every accepted
+// control socket upgrade advertises the effective single-frame cap so clients
+// can reject oversized requests before the socket closes. Rust omits it from a
+// rejected upgrade, which is why the managed shutdown check runs first.
+func advertiseControlSocketMessageLimit(w http.ResponseWriter) {
+	if max := DefaultWebSocketMaxMessageSize; max > 0 {
+		w.Header().Set(maxUnfragmentedMessageBytesHeader, strconv.FormatInt(max, 10))
+	}
+}
+
+// applyControlSocketReadLimit bounds the connection with the same value the
+// handshake advertises (Rust uses one WebSocketConfig for both).
+func applyControlSocketReadLimit(conn *websocket.Conn) {
+	if conn != nil && DefaultWebSocketMaxMessageSize > 0 {
 		conn.SetReadLimit(DefaultWebSocketMaxMessageSize)
 	}
-	_ = serveWebSocketConnectionWithCompression(r.Context(), conn, h.routerFactory(), compression)
 }
 
 // runDaemonShutdownHandshake reads the owner's PID, echoes it, and asks the
