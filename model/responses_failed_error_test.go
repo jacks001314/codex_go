@@ -60,12 +60,16 @@ func TestResponseFailedErrorPolicyFallbackMessagesLikeRust(t *testing.T) {
 		t.Fatalf("blank cyber_policy fallback = %#v", blankCyber)
 	}
 	invalid := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt"}}}`))
-	if !errors.As(invalid, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidRequest || apiErr.Message != "Invalid request." {
+	if !errors.As(invalid, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidPrompt || apiErr.Message != InvalidPromptFallbackMessage {
 		t.Fatalf("invalid_prompt fallback = %#v", invalid)
 	}
 	blankInvalid := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":""}}}`))
-	if !errors.As(blankInvalid, &apiErr) || apiErr.Message != "" {
+	if !errors.As(blankInvalid, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidPrompt || apiErr.Message != "" {
 		t.Fatalf("blank invalid_prompt message = %#v", blankInvalid)
+	}
+	spacedInvalid := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"  "}}}`))
+	if !errors.As(spacedInvalid, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidPrompt || apiErr.Message != "  " {
+		t.Fatalf("spaced invalid_prompt message = %#v", spacedInvalid)
 	}
 }
 

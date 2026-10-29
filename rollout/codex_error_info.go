@@ -34,6 +34,8 @@ var codexErrorInfoUnitTags = map[string]bool{
 	"unauthorized":                  true,
 	"bad_request":                   true,
 	"badRequest":                    true,
+	"invalid_prompt":                true,
+	"invalidPrompt":                 true,
 	"sandbox_error":                 true,
 	"sandboxError":                  true,
 	"thread_rollback_failed":        true,

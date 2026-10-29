@@ -98,6 +98,18 @@ func TestRecordFromPathToleratesUnknownCodexErrorClassifications(t *testing.T) {
 	}
 }
 
+// Rust #47353 added CodexErrorInfo::InvalidPrompt to the core protocol. Saved
+// records carrying either the core snake_case tag or the app-server camelCase
+// spelling must stay classified instead of being rewritten to other.
+func TestCodexErrorInfoPreservesInvalidPromptLikeRust(t *testing.T) {
+	for _, raw := range []string{"invalid_prompt", "invalidPrompt"} {
+		classified, ok := normalizeCodexErrorInfoClassification(raw)
+		if !ok || classified != raw {
+			t.Fatalf("normalizeCodexErrorInfoClassification(%q) = %#v, %t; want preserved", raw, classified, ok)
+		}
+	}
+}
+
 // Rust deserializes CodexErrorInfo as an externally tagged enum, so only a bare
 // known tag, a single-key known tag with a valid payload, or an unknown single
 // tag is representable. Empty/multi-key objects, unit tags carrying a payload,

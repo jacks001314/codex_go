@@ -18907,9 +18907,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 951 (complete): codexapi/error.go adds ErrorInvalidPrompt (invalidPrompt) with the Rust CodexErrorDetails::InvalidPrompt display. model/responses_agent.go classifies HTTP 400 and wrapped-WebSocket invalid_prompt (typed codes take precedence over the context-window message heuristic), using InvalidPromptFallbackMessage when the message is missing or blank; model/responses_stream.go classifies SSE response.failed as ErrorInvalidPrompt, preserves a present empty or blank message, and falls back only when absent, while isRetryableResponsesStreamError treats it as terminal. appserver/turn_runtime.go maps it to app-server v2 other while analytics keeps codexErrorKind invalid_prompt; Guardian retry remains terminal. rollout/codex_error_info.go recognizes both invalid_prompt and invalidPrompt saved classifications. Tests: TestResponseFailedErrorClassifiesPolicyCodesLikeRust, TestResponseFailedErrorPolicyFallbackMessagesLikeRust, TestInvalidPromptErrorsAreTypedAcrossHTTPAndWrappedWebsocketLikeRust, TestResponsesAgentRunnerHTTPInvalidPromptIsTerminalLikeRust, TestResponsesAgentRunnerWebSocketInvalidPromptIsTerminalLikeRust, TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust, TestGuardianReviewSessionRetryClassificationLikeRust, TestTelemetryInvalidPromptMessageLikeRust, and TestCodexErrorInfoPreservesInvalidPromptLikeRust. Verified go build ./...; go test ./codexapi ./model ./rollout -count=1; focused appserver analytics/guardian tests."
    ]
   },
   {

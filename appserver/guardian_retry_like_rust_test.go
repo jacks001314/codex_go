@@ -289,6 +289,7 @@ func TestGuardianReviewSessionRetryClassificationLikeRust(t *testing.T) {
 		{"api 401", &codexapi.APIError{Kind: codexapi.ErrorAPI, Status: 401}, false},
 		{"context window", &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded}, false},
 		{"cyber policy", &codexapi.APIError{Kind: codexapi.ErrorCyberPolicy}, false},
+		{"invalid prompt", &codexapi.APIError{Kind: codexapi.ErrorInvalidPrompt, Status: 500}, false},
 		{"usage limit", &codexapi.APIError{Kind: codexapi.ErrorRateLimit}, false},
 		{"plain error", errors.New("boom"), false},
 	} {

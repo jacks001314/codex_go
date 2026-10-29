@@ -4794,6 +4794,10 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return fields("other", "bio_policy")
 	case codexapi.ErrorMisalignmentPolicyViolation:
 		return fields("misalignmentPolicyViolation", "misalignment_policy_violation")
+	case codexapi.ErrorInvalidPrompt:
+		// Rust #47353 maps InvalidPrompt to the app-server v2 `other` variant
+		// while analytics keeps the distinct invalid_prompt error kind.
+		return fields("other", "invalid_prompt")
 	case codexapi.ErrorInvalidRequest:
 		return fields("badRequest", "invalid_request")
 	case codexapi.ErrorRetryable:

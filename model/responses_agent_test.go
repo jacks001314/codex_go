@@ -4098,6 +4098,120 @@ func TestResponsesAgentRunnerDoesNotRetryFatalResponseFailedLikeRust(t *testing.
 	}
 }
 
+// Rust #47353 recognizes invalid_prompt on HTTP 400 responses and on the
+// wrapped WebSocket body (type/status alongside error), preserving the
+// provider message and falling back only when it is missing or blank.
+func TestInvalidPromptErrorsAreTypedAcrossHTTPAndWrappedWebsocketLikeRust(t *testing.T) {
+	strPtr := func(value string) *string { return &value }
+	cases := []struct {
+		name        string
+		message     *string
+		wantMessage string
+	}{
+		{name: "message", message: strPtr("The prompt is invalid."), wantMessage: "The prompt is invalid."},
+		{name: "typed code wins over context heuristic", message: strPtr("prompt is too long"), wantMessage: "prompt is too long"},
+		{name: "missing", wantMessage: InvalidPromptFallbackMessage},
+		{name: "empty", message: strPtr(""), wantMessage: InvalidPromptFallbackMessage},
+		{name: "blank", message: strPtr("  "), wantMessage: InvalidPromptFallbackMessage},
+	}
+	for _, wrapped := range []bool{false, true} {
+		for _, tc := range cases {
+			name := tc.name
+			if wrapped {
+				name += " wrapped websocket"
+			}
+			t.Run(name, func(t *testing.T) {
+				body := map[string]any{"error": map[string]any{"code": "invalid_prompt"}}
+				if tc.message != nil {
+					body["error"].(map[string]any)["message"] = *tc.message
+				}
+				if wrapped {
+					body["type"] = "error"
+					body["status"] = http.StatusBadRequest
+				}
+				raw, err := json.Marshal(body)
+				if err != nil {
+					t.Fatalf("Marshal: %v", err)
+				}
+				httpErr := responsesHTTPError("openai", http.StatusBadRequest, http.Header{}, raw)
+				var apiErr *codexapi.APIError
+				if !errors.As(httpErr, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidPrompt {
+					t.Fatalf("http error = %#v, want invalid prompt", httpErr)
+				}
+				if apiErr.Status != http.StatusBadRequest || apiErr.Message != tc.wantMessage {
+					t.Fatalf("http error = status:%d message:%q, want status:%d message:%q", apiErr.Status, apiErr.Message, http.StatusBadRequest, tc.wantMessage)
+				}
+				if isRetryableResponsesStreamError(httpErr) {
+					t.Fatal("invalid_prompt must be terminal")
+				}
+			})
+		}
+	}
+}
+
+// Rust #47353 asserts an HTTP invalid_prompt failure reaches the caller after
+// exactly one request, with the typed classification preserved.
+func TestResponsesAgentRunnerHTTPInvalidPromptIsTerminalLikeRust(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"invalid_prompt","message":"The prompt is invalid."}}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL + "/v1", RequestMaxRetries: 2},
+	})
+	_, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidPrompt {
+		t.Fatalf("Run() error = %#v, want invalid prompt", err)
+	}
+	if apiErr.Status != http.StatusBadRequest || apiErr.Message != "The prompt is invalid." {
+		t.Fatalf("invalid prompt = status:%d message:%q", apiErr.Status, apiErr.Message)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestResponsesAgentRunnerWebSocketInvalidPromptIsTerminalLikeRust(t *testing.T) {
+	var dials atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		dials.Add(1)
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		if _, _, err := conn.Read(request.Context()); err != nil {
+			t.Errorf("Read() error = %v", err)
+			return
+		}
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"resp-invalid"}}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"error","status":400,"error":{"code":"invalid_prompt","message":"The prompt is invalid."}}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true, WebsocketConnectTimeout: time.Second,
+	})
+	_, err := runner.RunWebSocket(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidPrompt {
+		t.Fatalf("RunWebSocket() error = %#v, want invalid prompt", err)
+	}
+	if apiErr.Status != http.StatusBadRequest || apiErr.Message != "The prompt is invalid." {
+		t.Fatalf("invalid prompt = status:%d message:%q", apiErr.Status, apiErr.Message)
+	}
+	if dials.Load() != 1 {
+		t.Fatalf("dials = %d, want 1", dials.Load())
+	}
+}
+
 func TestMisalignmentPolicyViolationErrorsAreTypedAndNonRetryableLikeRust(t *testing.T) {
 	err := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"This request violated the misalignment policy."}}}`))
 	var apiErr *codexapi.APIError

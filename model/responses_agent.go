@@ -1638,11 +1638,20 @@ func websocketErrorEventAdviceHeaders(event map[string]any) http.Header {
 	return websocketEventHTTPHeaders(event)
 }
 
-// websocketErrorEventAPIError maps rate-limit and capacity `error` events to
-// the shared API error, preserving Retry-After advice (Rust #51440). A
-// headerless capacity failure keeps its terminal classification (Rust #57452),
-// while a headerless rate limit stays on the generic-error path.
+// websocketErrorEventAPIError maps invalid-prompt, rate-limit and capacity
+// `error` events to the shared API error, preserving Retry-After advice
+// (Rust #47353/#51440). A headerless capacity failure keeps its terminal
+// classification (Rust #57452), while a headerless rate limit stays on the
+// generic-error path.
 func websocketErrorEventAPIError(event map[string]any) *codexapi.APIError {
+	status, _ := uint64FromAny(event["status"])
+	if status == http.StatusBadRequest && strings.EqualFold(strings.TrimSpace(websocketEventErrorCode(event)), "invalid_prompt") {
+		return &codexapi.APIError{
+			Kind:    codexapi.ErrorInvalidPrompt,
+			Status:  int(status),
+			Message: fallbackPolicyMessage(websocketEventErrorMessage(event), InvalidPromptFallbackMessage),
+		}
+	}
 	var kind codexapi.APIErrorKind
 	switch strings.ToLower(strings.TrimSpace(websocketEventErrorCode(event))) {
 	case "rate_limit_exceeded", "rate_limited", "rate_limit":
@@ -1658,7 +1667,7 @@ func websocketErrorEventAPIError(event map[string]any) *codexapi.APIError {
 	if !advised && kind == codexapi.ErrorRateLimitExceeded {
 		return nil
 	}
-	status, _ := uint64FromAny(event["status"])
+	status, _ = uint64FromAny(event["status"])
 	if status == 0 {
 		if value, ok := event["error"].(map[string]any); ok {
 			status, _ = uint64FromAny(value["status"])
@@ -1676,6 +1685,13 @@ func websocketErrorEventAPIError(event map[string]any) *codexapi.APIError {
 		return apiErr.WithRetryDelay(delay)
 	}
 	return apiErr
+}
+
+func websocketEventErrorMessage(event map[string]any) string {
+	if value, ok := event["error"].(map[string]any); ok {
+		return strings.TrimSpace(responseToolString(value["message"]))
+	}
+	return ""
 }
 
 // websocketTerminalProviderError maps a statusless or 400/403/404
@@ -4128,18 +4144,6 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
 		message = strings.TrimSpace(payload.Error.Message)
 	}
-	// OpenAI-compatible servers (vLLM, DeepSeek, and similar) commonly report an
-	// oversized prompt as a plain 400 without an error code. Classify it as a
-	// context-window failure so the turn records the compaction state and the
-	// next turn can summarize the history instead of surfacing a generic status.
-	if (statusCode == http.StatusBadRequest || statusCode == http.StatusRequestEntityTooLarge) &&
-		((payload.Error != nil && responseErrorCode(payload.Error) == "context_length_exceeded") ||
-			isContextWindowExceededMessage(message)) {
-		if strings.TrimSpace(message) == "" {
-			message = http.StatusText(statusCode)
-		}
-		return &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded, Status: statusCode, Message: message}
-	}
 	// Rust #56445: a `model_not_found` provider error on 400/403/404 is
 	// terminal and preserves the provider message.
 	if apiErr := terminalProviderError(payload.Error, statusCode); apiErr != nil {
@@ -4172,7 +4176,25 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 				Status:  statusCode,
 				Message: fallbackPolicyMessage(policyMessage, BioPolicyFallbackMessage),
 			}
+		case "invalid_prompt":
+			return &codexapi.APIError{
+				Kind:    codexapi.ErrorInvalidPrompt,
+				Status:  statusCode,
+				Message: fallbackPolicyMessage(policyMessage, InvalidPromptFallbackMessage),
+			}
 		}
+	}
+	// OpenAI-compatible servers (vLLM, DeepSeek, and similar) commonly report an
+	// oversized prompt as a plain 400 without an error code. Typed provider codes
+	// above win, as they do in Rust; the heuristic only classifies untyped bodies
+	// as context-window failures so the turn can compact before retrying.
+	if (statusCode == http.StatusBadRequest || statusCode == http.StatusRequestEntityTooLarge) &&
+		((payload.Error != nil && responseErrorCode(payload.Error) == "context_length_exceeded") ||
+			isContextWindowExceededMessage(message)) {
+		if strings.TrimSpace(message) == "" {
+			message = http.StatusText(statusCode)
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded, Status: statusCode, Message: message}
 	}
 	// Rust #45602: a 503 body distinguishes model capacity from a retryable
 	// rate limit instead of treating both as one blanket overload.
@@ -4267,8 +4289,9 @@ const bedrockExpiredSignatureMessage = "Amazon Bedrock rejected the request beca
 
 // Policy-refusal messages mirror Rust's codex-api constants (#46306).
 const (
-	CyberPolicyFallbackMessage = "This request has been flagged for possible cybersecurity risk."
-	BioPolicyFallbackMessage   = "This content was flagged for possible biological risk."
+	CyberPolicyFallbackMessage   = "This request has been flagged for possible cybersecurity risk."
+	BioPolicyFallbackMessage     = "This content was flagged for possible biological risk."
+	InvalidPromptFallbackMessage = "Invalid request."
 )
 
 func fallbackPolicyMessage(message string, fallback string) string {

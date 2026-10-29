@@ -18,6 +18,7 @@ const (
 	ErrorRetryable                   APIErrorKind = "retryable"
 	ErrorRateLimit                   APIErrorKind = "rateLimit"
 	ErrorInvalidRequest              APIErrorKind = "invalidRequest"
+	ErrorInvalidPrompt               APIErrorKind = "invalidPrompt"
 	ErrorCyberPolicy                 APIErrorKind = "cyberPolicy"
 	ErrorBioPolicy                   APIErrorKind = "bioPolicy"
 	ErrorMisalignmentPolicyViolation APIErrorKind = "misalignmentPolicyViolation"
@@ -124,6 +125,9 @@ func (e *APIError) Error() string {
 		return e.Message
 	case ErrorInvalidRequest:
 		// Rust's CodexErrorDetails::InvalidRequest(String) displays the message.
+		return e.Message
+	case ErrorInvalidPrompt:
+		// Rust's CodexErrorDetails::InvalidPrompt displays the provider message.
 		return e.Message
 	case ErrorCyberPolicy:
 		return e.Message

@@ -75,6 +75,11 @@ func TestAPIErrorDisplayMatchesRustLikeRust(t *testing.T) {
 			want: "bad prompt",
 		},
 		{
+			name: "invalid prompt",
+			err:  &APIError{Kind: ErrorInvalidPrompt, Message: "bad prompt detail"},
+			want: "bad prompt detail",
+		},
+		{
 			name: "cyber policy",
 			err:  &APIError{Kind: ErrorCyberPolicy, Message: "blocked for cyber risk"},
 			want: "blocked for cyber risk",

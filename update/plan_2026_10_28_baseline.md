@@ -2741,10 +2741,17 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `#44062` fixes Rust's Bazel voice build and release packaging; Go's `release.yml` uses `third_party/voice/prepare_opus.py` instead of Bazel.
 - No code change was required. Verified with `go test ./parity -run 'TestAlignment' -count=1`.
 
-Status after reconciliation: `2113 complete`, `440 not_applicable`,
-`383 audit_pending`, `210 regression_pending`, `3 partial`,
+### Distinct invalid_prompt classification (Round 951)
+
+- Rust #47353 adds a distinct `InvalidPrompt` API/core error and keeps it across HTTP 400, wrapped WebSocket failures and SSE `response.failed`; the classification is terminal and app-server v2 maps it to `other` (#47353, complete).
+- `codexapi/error.go:21` adds `ErrorInvalidPrompt` (`invalidPrompt`), whose display is the provider message, matching `CodexErrorDetails::InvalidPrompt`; response-debug telemetry reuses the `invalid request` label.
+- `model/responses_agent.go:4194` recognizes the HTTP 400 code and `:1647` recognizes the wrapped WebSocket event, both preserving the server message and using `Invalid request.` only when it is missing or blank; typed provider codes take precedence over the context-window message heuristic.
+- `model/responses_stream.go:2799` recognizes SSE `response.failed`; a missing message gets `Invalid request.`, while a present empty or blank message is preserved verbatim. `:571` classifies the error as non-retryable.
+- `appserver/turn_runtime.go:4797` serializes the turn error as app-server v2 `other`, keeps analytics `codexErrorKind` as `invalid_prompt`, and Guardian retry fails closed.
+- `rollout/codex_error_info.go` recognizes the saved `invalid_prompt` and `invalidPrompt` classifications instead of rewriting them to `other`.
+- Tests cover typed HTTP/SSE/wrapped-WebSocket mapping and fallback boundaries, typed-code precedence, single-request HTTP/SSE behavior, real WebSocket termination, saved-rollout classification, analytics/protocol conversion, response-debug labels and Guardian retry.
+- Verified with `go build ./...`, `go test ./codexapi ./model ./rollout -count=1`, and focused appserver analytics/Guardian tests.
+
+Status after reconciliation: `2114 complete`, `440 not_applicable`,
+`382 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
-
-
-
-

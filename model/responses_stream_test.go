@@ -44,9 +44,9 @@ func TestParseResponsesStreamRecoversDeclaredCustomToolFromFunctionCallEnvelope(
 	}
 }
 
-// TestResponseFailedErrorClassifiesPolicyCodesLikeRust mirrors Rust #46306:
-// a streaming `bio_policy` failure keeps its own non-retryable classification
-// while `invalid_prompt` stays a generic invalid request.
+// TestResponseFailedErrorClassifiesPolicyCodesLikeRust mirrors Rust
+// #46306/#47353: streaming `bio_policy` and `invalid_prompt` failures keep
+// their own non-retryable classifications.
 func TestResponseFailedErrorClassifiesPolicyCodesLikeRust(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -77,10 +77,10 @@ func TestResponseFailedErrorClassifiesPolicyCodesLikeRust(t *testing.T) {
 			wantMessage: BioPolicyFallbackMessage,
 		},
 		{
-			name:        "invalid prompt stays an invalid request",
+			name:        "invalid prompt keeps its own classification",
 			code:        "invalid_prompt",
 			message:     "bad prompt",
-			wantKind:    codexapi.ErrorInvalidRequest,
+			wantKind:    codexapi.ErrorInvalidPrompt,
 			wantMessage: "bad prompt",
 		},
 	}
@@ -835,6 +835,62 @@ func TestResponseFailedPolicyCapacityClassificationLikeRust(t *testing.T) {
 			}
 			if advised && (delay < 2990*time.Millisecond || delay > 3*time.Second) {
 				t.Fatalf("retry advice = %s, want 3s", delay)
+			}
+		})
+	}
+}
+
+func TestWebsocketErrorEventInvalidPromptRequiresHTTP400LikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		status     any
+		message    string
+		wantKind   codexapi.APIErrorKind
+		wantStatus int
+		wantText   string
+	}{
+		{
+			name:       "bad request with message",
+			status:     http.StatusBadRequest,
+			message:    "The prompt is invalid.",
+			wantKind:   codexapi.ErrorInvalidPrompt,
+			wantStatus: http.StatusBadRequest,
+			wantText:   "The prompt is invalid.",
+		},
+		{
+			name:       "bad request without message",
+			status:     http.StatusBadRequest,
+			wantKind:   codexapi.ErrorInvalidPrompt,
+			wantStatus: http.StatusBadRequest,
+			wantText:   InvalidPromptFallbackMessage,
+		},
+		{name: "missing status"},
+		{name: "internal error", status: http.StatusInternalServerError},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			errorBody := map[string]any{"code": "invalid_prompt"}
+			if testCase.message != "" {
+				errorBody["message"] = testCase.message
+			}
+			event := map[string]any{"type": "error", "error": errorBody}
+			if testCase.status != nil {
+				event["status"] = testCase.status
+			}
+			apiErr := websocketErrorEventAPIError(event)
+			if testCase.wantKind == "" {
+				if apiErr != nil {
+					t.Fatalf("event classified as %#v, want the generic path", apiErr)
+				}
+				return
+			}
+			if apiErr == nil || apiErr.Kind != testCase.wantKind {
+				t.Fatalf("error = %#v, want kind %q", apiErr, testCase.wantKind)
+			}
+			if apiErr.Status != testCase.wantStatus || apiErr.Error() != testCase.wantText {
+				t.Fatalf("error = status:%d display:%q, want status:%d display:%q", apiErr.Status, apiErr.Error(), testCase.wantStatus, testCase.wantText)
+			}
+			if isRetryableResponsesStreamError(apiErr) {
+				t.Fatal("invalid_prompt must be terminal")
 			}
 		})
 	}

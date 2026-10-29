@@ -21239,6 +21239,14 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			wantKind:  "bio_policy",
 		},
 		{
+			// Rust #47353 maps InvalidPrompt to `other` in app-server v2 while
+			// analytics keeps the distinct invalid_prompt classification.
+			name:      "invalid prompt",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorInvalidPrompt, Status: http.StatusBadRequest, Message: "bad prompt"},
+			wantError: `"other"`,
+			wantKind:  "invalid_prompt",
+		},
+		{
 			// Rust #47967: the Flex-capacity failure carries the 429 the
 			// request arrived with and keeps its dedicated classification.
 			name:      "flex unavailable",

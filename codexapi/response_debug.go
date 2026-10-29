@@ -84,6 +84,7 @@ const (
 	ResponseAPIRetryable        ResponseAPIErrorKind = "retryable"
 	ResponseAPIRateLimit        ResponseAPIErrorKind = "rateLimit"
 	ResponseAPIInvalidRequest   ResponseAPIErrorKind = "invalidRequest"
+	ResponseAPIInvalidPrompt    ResponseAPIErrorKind = "invalidPrompt"
 	ResponseAPICyberPolicy      ResponseAPIErrorKind = "cyberPolicy"
 	ResponseAPIServerOverloaded ResponseAPIErrorKind = "serverOverloaded"
 	ResponseAPIFlexUnavailable  ResponseAPIErrorKind = "flexUnavailable"
@@ -128,7 +129,7 @@ func TelemetryResponseAPIErrorMessage(err *ResponseAPIError) string {
 		return "retryable error"
 	case ResponseAPIRateLimit:
 		return "rate limit"
-	case ResponseAPIInvalidRequest:
+	case ResponseAPIInvalidRequest, ResponseAPIInvalidPrompt:
 		return "invalid request"
 	case ResponseAPICyberPolicy:
 		return "cyber policy"

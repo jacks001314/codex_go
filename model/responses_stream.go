@@ -568,6 +568,7 @@ func isRetryableResponsesStreamError(err error) bool {
 			return true
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
 			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest,
+			codexapi.ErrorInvalidPrompt,
 			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy,
 			codexapi.ErrorFlexUnavailable, codexapi.ErrorModelNotFound:
 			return false
@@ -2797,9 +2798,11 @@ func responseFailedError(data []byte) error {
 		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message, Misalignment: parseMisalignmentDetails(errBody.Misalignment)}
 	case "invalid_prompt":
 		if errBody.Message == nil {
-			message = "Invalid request."
+			return &codexapi.APIError{Kind: codexapi.ErrorInvalidPrompt, Message: InvalidPromptFallbackMessage}
 		}
-		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
+		// Rust's SSE classifier only substitutes a message when the field is
+		// missing; an explicitly empty or blank message is preserved verbatim.
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidPrompt, Message: *errBody.Message}
 	case "policy_capacity_unavailable":
 		policyCapacity := &codexapi.APIError{Kind: codexapi.ErrorPolicyCapacityUnavailable, Message: message}
 		if hasRetryAfter {
