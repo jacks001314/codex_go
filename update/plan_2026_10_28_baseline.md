@@ -1793,6 +1793,25 @@ Give immediate feedback while an agents-overview task attach is in flight (#4598
   view, and is gone after the widget rebuild. `go test ./tui/tea/
   -run 'AgentsDashboard|AgentsOverview'` passes.
 
-Status after reconciliation: `2034 complete`, `400 not_applicable`,
-`460 audit_pending`, `252 regression_pending`, `3 partial`,
+### Route permission shortcuts through the shared selection flow (Round 869)
+
+Route session-only permission shortcuts through the shared selection flow (#46013, closure).
+
+- `applyPermissionShortcutKey` already cycles the cached permission catalog and
+  hands the selection to `applyPermissionSelectionWithPersistence(item, false)`,
+  which for a connected thread calls `selectServerPermissionProfile`: the
+  request goes out through `onUpdateThreadPermissions`, `pendingServerProfile`
+  is set, and the notice reports `Permission selection requested: <label>`
+  while `State.Sandbox`/`State.ApprovalPolicy` keep the confirmed values.
+  `applyThreadSettingsUpdated` then applies the server's `ThreadSettingsUpdated`
+  snapshot and clears the pending profile; shortcuts never write config.
+- Rejections reuse the shared messages: `Permission selection requires a newer
+  app server.` for an unsupported server and `Failed to select permissions:
+  <error>` otherwise.
+- `tui/tea/permission_shortcut_server_flow_like_rust_test.go` pins the
+  pending/confirm lifecycle for a shortcut and both rejection messages;
+  `go test ./tui/tea -run Permission` passes.
+
+Status after reconciliation: `2035 complete`, `400 not_applicable`,
+`459 audit_pending`, `252 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

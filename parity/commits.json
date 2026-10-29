@@ -14631,9 +14631,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go's session-only permission shortcut already routes through the shared selection flow when a server is connected: applyPermissionShortcutKey cycles the cached catalog and calls applyPermissionSelectionWithPersistence(item, false), which selectServerPermissionProfile turns into an onUpdateThreadPermissions request, sets pendingServerProfile, reports `Permission selection requested: <label>`, and leaves State.Sandbox/ApprovalPolicy untouched until applyThreadSettingsUpdated applies the server's ThreadSettingsUpdated snapshot and clears the pending profile; rejections reuse `Permission selection requires a newer app server.` and `Failed to select permissions: <err>`, and the shortcut never writes config. New tui/tea/permission_shortcut_server_flow_like_rust_test.go pins that pending/confirm lifecycle plus both rejection messages; existing permission shortcut tests and ./tui/tea -run Permission pass"
    ]
   },
   {
