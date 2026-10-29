@@ -62,6 +62,49 @@ func (c ThreadRecapHistoryCell) DisplayLines(width int) []string {
 	})
 }
 
+// SGR sequences for the rendered recap (Rust #46332): every recap line is
+// dimmed while keeping the italic recap style, and the "Recap:"/"Next:" labels
+// stay bold without the previous cyan colour. 22 turns bold off, 2/3 restore
+// the faint and italic the whole line carries.
+const (
+	recapLineSGR   = "\x1b[2;3m"
+	recapLabelSGR  = "\x1b[1m"
+	recapNormalSGR = "\x1b[22;2;3m"
+	recapResetSGR  = "\x1b[0m"
+)
+
+// StyledDisplayLines renders the recap with Rust's dimmed line style. The plain
+// DisplayLines/RawLines contract is unchanged.
+func (c ThreadRecapHistoryCell) StyledDisplayLines(width int) []string {
+	lines := c.DisplayLines(width)
+	styled := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			styled = append(styled, line)
+			continue
+		}
+		styled = append(styled, recapLineSGR+recapEmphasizeLabels(line)+recapResetSGR)
+	}
+	return styled
+}
+
+// recapEmphasizeLabels bolds the first recap label on the line, restoring the
+// line's faint/italic style after it.
+func recapEmphasizeLabels(line string) string {
+	for _, label := range []string{"Recap:", "Next:"} {
+		index := strings.Index(line, label)
+		if index < 0 {
+			continue
+		}
+		end := index + len(label)
+		if end < len(line) && line[end] == ' ' {
+			end++
+		}
+		return line[:index] + recapLabelSGR + line[index:end] + recapNormalSGR + line[end:]
+	}
+	return line
+}
+
 // wrapRecapBody wraps each source line with the shared adaptive wrapper, then
 // re-wraps any line that still exceeds the width with word breaking, matching
 // Rust's oversized-token fallback (url-preserving options with break_words).

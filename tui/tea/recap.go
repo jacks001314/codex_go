@@ -133,8 +133,18 @@ func (m *Model) applyRecapGeneratedMsg(msg RecapGeneratedMsg) bubbletea.Cmd {
 		return m.failRecap(msg.Trigger, msg.TurnRevision)
 	}
 	m.recap.MarkRecapped(msg.CompletedTurns)
-	m.applyHistoryCell(historycell.NewThreadRecapHistoryCell(summary).WithNextAction(nextAction))
+	m.applyHistoryCell(styledRecapCell{historycell.NewThreadRecapHistoryCell(summary).WithNextAction(nextAction)})
 	return nil
+}
+
+// styledRecapCell paints the transcript text with Rust #46332's dimmed recap
+// style while leaving the cell's plain projection untouched.
+type styledRecapCell struct {
+	historycell.ThreadRecapHistoryCell
+}
+
+func (c styledRecapCell) DisplayLines(width int) []string {
+	return c.StyledDisplayLines(width)
 }
 
 // failRecap reports a manual failure or schedules one automatic retry per turn

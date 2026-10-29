@@ -15616,9 +15616,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go recaps rendered unstyled (no dim, italic or cyan); added ThreadRecapHistoryCell.StyledDisplayLines painting faint+italic for every recap line with a bold Recap:/Next: label and no colour, wired through a styledRecapCell in tui/tea/recap.go so the transcript text carries the style while DisplayLines/RawLines stay plain; tui/history_cell/recap_styled_like_rust_test.go asserts dim+reset per line, bold labels, absence of cyan, and unchanged wrapping/plain text"
    ]
   },
   {

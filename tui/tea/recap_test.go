@@ -10,6 +10,7 @@ import (
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
+	"codex_go/utils"
 )
 
 func recapTestModel(t *testing.T, generate RecapGenerateFunc) *Model {
@@ -58,7 +59,10 @@ func TestModelRecapCommandShowsLoadingThenRecap(t *testing.T) {
 	if strings.Contains(text, "Generating conversation recap") {
 		t.Fatalf("loading row was not cleared:\n%s", text)
 	}
-	if !strings.Contains(text, "\u21b3 Recap:") || !strings.Contains(text, "Fixed the parser.") {
+	// Rust #46332 paints the recap dimmed with a bold label, so the transcript
+	// text carries SGR around the label.
+	plain := utils.StripANSI(text)
+	if !strings.Contains(plain, "\u21b3 Recap:") || !strings.Contains(plain, "Fixed the parser.") {
 		t.Fatalf("recap cell missing:\n%s", text)
 	}
 	if model.recapInFlight {

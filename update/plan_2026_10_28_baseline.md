@@ -2048,6 +2048,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 
 **Also audited:** 841b5490b251 #46112 (filesystem sandbox policy context when the cwd disappears) is now recorded as `partial`: Go's exec-server filesystem helper still launches with `cmd.Dir` set to the policy cwd, so a helper launch after the selected directory is removed still fails, and the artifact carries no `policyContext`/legacy-directory fallback fields.
 
-Status after reconciliation: `2048 complete`, `402 not_applicable`,
-`449 audit_pending`, `246 regression_pending`, `4 partial`,
+### Dim conversation recaps in the transcript (Round 885)
+
+**Upstream:** 3cd255a4ee8e "Dim conversation recaps in the TUI (#46332)".
+
+- Rust now dims every rendered recap line (keeping italics) and removes the cyan from the `Next:` label, which stays bold.
+- Go rendered recap cells with no styling at all — no dim, italic, or label emphasis. Added `ThreadRecapHistoryCell.StyledDisplayLines` (`tui/history_cell/recap.go`) which paints faint+italic over every line, bolds the `Recap:`/`Next:` label, never emits a colour, and keeps `DisplayLines`/`RawLines` plain for copy and wrapping.
+- `tui/tea/recap.go` applies the styled projection for the transcript via a small `styledRecapCell` wrapper, so `/recap` and automatic recaps both render dimmed; `tui/tea/recap_test.go` now strips ANSI before matching the label.
+- Added `tui/history_cell/recap_styled_like_rust_test.go` covering the dim/reset on every line, the bold labels, the absence of cyan, and that styling never changes the wrapped text.
+- Verified with `go test ./tui/history_cell ./tui/tea ./tui/markdown -count=1`.
+
+Status after reconciliation: `2049 complete`, `402 not_applicable`,
+`448 audit_pending`, `246 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
