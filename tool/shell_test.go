@@ -461,13 +461,12 @@ func TestBuildShellRequestCarriesWindowsSandboxRuntimeOptions(t *testing.T) {
 		PermissionProfileID:          sandbox.BuiltInPermissionProfileWorkspace,
 		PermissionProfile:            &profile,
 		WindowsSandboxLevel:          sandbox.WindowsSandboxElevated,
-		WindowsSandboxPrivateDesktop: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildShellRequest() error = %v", err)
 	}
-	if req.WindowsSandboxLevel != sandbox.WindowsSandboxElevated || !req.WindowsSandboxPrivateDesktop {
-		t.Fatalf("Windows sandbox options = %q/%t", req.WindowsSandboxLevel, req.WindowsSandboxPrivateDesktop)
+	if req.WindowsSandboxLevel != sandbox.WindowsSandboxElevated {
+		t.Fatalf("Windows sandbox level = %q", req.WindowsSandboxLevel)
 	}
 }
 

@@ -13,7 +13,6 @@ type SpawnRequest struct {
 	Command           []string
 	CWD               string
 	Env               map[string]string
-	UsePrivateDesktop bool
 	LogsBaseDir       string
 	Columns           int16
 	Rows              int16

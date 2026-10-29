@@ -37,11 +37,11 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	}
 	if selection == WindowsSandboxSelectionMXC {
 		// Rust #45524: MXC launches accept TTY and managed networking, and the
-		// only request shapes it still rejects are custom argv0 and private
-		// desktop launches. That rejection happens before the availability
-		// check, so it wins over the fail-closed diagnostic.
-		if params.Arg0 != nil || sandboxContext.WindowsSandboxPrivateDesktop {
-			return nil, true, requestError(-32602, "MXC custom argv0 and private-desktop launches are not supported")
+		// only request shape it still rejects is a custom argv0. That rejection
+		// happens before the availability check, so it wins over the fail-closed
+		// diagnostic.
+		if params.Arg0 != nil {
+			return nil, true, requestError(-32602, "MXC custom argv0 is not supported")
 		}
 		// Go has no native MXC runner, so every remaining MXC request fails
 		// closed exactly like Rust on an executor without a usable MXC
@@ -109,7 +109,6 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 			Env:                              childEnv(params),
 			TTY:                              params.TTY,
 			StdinOpen:                        params.TTY || params.PipeStdin,
-			UsePrivateDesktop:                sandboxContext.WindowsSandboxPrivateDesktop,
 			ProxyEnforced:                    params.EnforceManagedNetwork,
 			ProxySettingsMode:                windowsSandboxProxySettingsMode(sandboxContext.WindowsSandboxProxySettingsMode),
 			ReadRootsIncludePlatformDefaults: true,

@@ -966,7 +966,6 @@ func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandbox
 		CWD:                             req.CWD,
 		UserHomeDir:                     req.UnifiedExecUserHomeDir,
 		WindowsSandboxLevel:             req.WindowsSandboxLevel,
-		WindowsSandboxPrivateDesktop:    req.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,
 		SandboxOverride:                 sandboxOverrideForFirstAttempt(req),
 		AllowedSymlinkedCodexHome:       req.AllowedSymlinkedCodexHome,
@@ -1008,7 +1007,6 @@ type FileSystemSandboxContextOptions struct {
 	TemporaryDirectories            []string
 	UserHomeDir                     string
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
-	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
 	UseLegacyLandlock               bool
 	// SandboxOverride is the controller's selection carried for observation
@@ -1089,7 +1087,6 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		TemporaryDirectories:            temporaryDirectories,
 		UserHomeDir:                     userHomeDir,
 		WindowsSandboxLevel:             string(windowsSandboxLevel),
-		WindowsSandboxPrivateDesktop:    options.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: options.WindowsSandboxProxySettingsMode,
 		UseLegacyLandlock:               options.UseLegacyLandlock,
 		SandboxOverride:                 options.SandboxOverride,

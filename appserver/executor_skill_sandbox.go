@@ -49,8 +49,6 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 		}
 	}
 	windowsLevel := windowsSandboxLevelForConfig(cfg)
-	// Rust #46554: legacy Windows sandboxes always use a private desktop.
-	privateDesktop := windowsSandboxPrivateDesktopForTurn()
 	useLegacyLandlock := cfg != nil && features.Enabled(cfg.FeatureSettings(), "use_legacy_landlock")
 
 	contexts := map[string]*execserverclient.FileSystemSandboxContext{}
@@ -91,7 +89,6 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 			WorkspaceRoots:               workspaceRoots,
 			TemporaryDirectories:         temporaryDirectories,
 			WindowsSandboxLevel:          windowsLevel,
-			WindowsSandboxPrivateDesktop: privateDesktop,
 			UseLegacyLandlock:            useLegacyLandlock,
 			AllowedSymlinkedCodexHome:    r.allowedSymlinkedCodexHome,
 		})

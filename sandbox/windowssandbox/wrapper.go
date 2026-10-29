@@ -48,7 +48,6 @@ type WindowsSandboxCommandArgsRequest struct {
 	Env                              map[string]string
 	PermissionProfile                *coresandbox.PermissionProfile
 	WindowsSandboxLevel              WindowsSandboxLevel
-	WindowsSandboxPrivateDesktop     bool
 	ProxyEnforced                    bool
 	ProxySettingsMode                ProxySettingsMode
 	ReadRootsOverride                []string
@@ -112,9 +111,9 @@ func CreateWindowsSandboxCommandArgsForPermissionProfile(req WindowsSandboxComma
 	for _, root := range workspaceRoots {
 		args = append(args, workspaceRootFlag, root)
 	}
-	if req.WindowsSandboxPrivateDesktop {
-		args = append(args, privateDesktopFlag)
-	}
+	// Rust #46554 removed the private-desktop opt-out: every sandboxed launch
+	// runs on a private desktop, so the child always receives the flag.
+	args = append(args, privateDesktopFlag)
 	if req.ProxyEnforced {
 		args = append(args, proxyEnforcedFlag)
 	}
@@ -224,7 +223,9 @@ func ParseWindowsSandboxWrapperArgs(args []string) (*WindowsSandboxWrapperReques
 			}
 			req.WindowsSandboxLevel, i = level, next
 		case privateDesktopFlag:
-			req.WindowsSandboxPrivateDesktop = true
+			// Accepted for compatibility with an already-built wrapper command
+			// line; the private desktop is no longer optional (Rust #46554).
+			continue
 		case proxyEnforcedFlag:
 			req.ProxyEnforced = true
 		case preserveProxySettingsFlag:
@@ -376,7 +377,6 @@ func wrapperCaptureRequest(req *WindowsSandboxWrapperRequest) *CaptureRequest {
 		Command:                          cloneStrings(req.Command),
 		CWD:                              req.CommandCWD,
 		Env:                              cloneEnv(req.Env),
-		UsePrivateDesktop:                req.WindowsSandboxPrivateDesktop,
 		ProxyEnforced:                    req.ProxyEnforced,
 		ProxySettingsMode:                req.ProxySettingsMode,
 		ReadRootsOverride:                cloneStrings(req.ReadRootsOverride),

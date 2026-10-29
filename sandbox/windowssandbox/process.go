@@ -29,7 +29,6 @@ type ProcessSpawnRequest struct {
 	Env               map[string]string
 	LogsBaseDir       string
 	Stdio             *ProcessStdio
-	UsePrivateDesktop bool
 }
 
 type CreatedProcess struct {
@@ -48,7 +47,6 @@ type PipeSpawnRequest struct {
 	Env               map[string]string
 	StdinMode         StdinMode
 	StderrMode        StderrMode
-	UsePrivateDesktop bool
 	LogsBaseDir       string
 }
 

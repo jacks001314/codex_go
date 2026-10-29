@@ -460,7 +460,6 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		Env:                              env,
 		PermissionProfile:                profile,
 		WindowsSandboxLevel:              level,
-		WindowsSandboxPrivateDesktop:     ctx.WindowsSandboxPrivateDesktop,
 		ProxySettingsMode:                windowsSandboxProxySettingsModeForFS(ctx.WindowsSandboxProxySettingsMode),
 		ReadRootsIncludePlatformDefaults: true,
 		CodexHome:                        fsHelperCodexHome(),

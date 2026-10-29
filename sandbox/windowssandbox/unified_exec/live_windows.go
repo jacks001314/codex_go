@@ -83,7 +83,6 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 			Command:           capture.Command,
 			CWD:               capture.CWD,
 			Env:               spawnContext.Env,
-			UsePrivateDesktop: capture.UsePrivateDesktop,
 			LogsBaseDir:       spawnContext.LogsBaseDir,
 		})
 		if err != nil {
@@ -115,7 +114,6 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 			Env:               spawnContext.Env,
 			StdinMode:         stdinMode,
 			StderrMode:        windowssandbox.StderrModeSeparate,
-			UsePrivateDesktop: capture.UsePrivateDesktop,
 			LogsBaseDir:       spawnContext.LogsBaseDir,
 		})
 		if err != nil {

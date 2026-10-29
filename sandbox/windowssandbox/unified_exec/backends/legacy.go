@@ -56,7 +56,6 @@ func runLegacyBackendPTY(req *windowssandbox.CaptureRequest) (*windowssandbox.Ca
 		Command:           req.Command,
 		CWD:               req.CWD,
 		Env:               context.Env,
-		UsePrivateDesktop: req.UsePrivateDesktop,
 		LogsBaseDir:       context.LogsBaseDir,
 	})
 	if err != nil {

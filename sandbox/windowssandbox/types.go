@@ -52,7 +52,6 @@ type CaptureRequest struct {
 	Env                              map[string]string
 	TimeoutMS                        *int64
 	Cancellation                     CancellationToken
-	UsePrivateDesktop                bool
 	TTY                              bool
 	StdinOpen                        bool
 	ProxyEnforced                    bool

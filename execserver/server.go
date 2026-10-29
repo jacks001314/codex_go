@@ -638,7 +638,6 @@ type FileSystemSandboxContext struct {
 	TemporaryDirectories            []string                        `json:"temporaryDirectories,omitempty"`
 	UserHomeDir                     string                          `json:"userHomeDir,omitempty"`
 	WindowsSandboxLevel             string                          `json:"windowsSandboxLevel"`
-	WindowsSandboxPrivateDesktop    bool                            `json:"windowsSandboxPrivateDesktop,omitempty"`
 	WindowsSandboxProxySettingsMode WindowsSandboxProxySettingsMode `json:"windowsSandboxProxySettingsMode,omitempty"`
 	UseLegacyLandlock               bool                            `json:"useLegacyLandlock,omitempty"`
 	// allowedSymlinkedCodexHome is trusted executor startup state, never a

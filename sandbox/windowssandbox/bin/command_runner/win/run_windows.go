@@ -234,7 +234,6 @@ func spawnIPCProcess(request *elevated.SpawnRequest) (*ipcSpawnedProcess, error)
 			Command:           request.Command,
 			CWD:               effectiveCWD,
 			Env:               request.Env,
-			UsePrivateDesktop: request.UsePrivateDesktop,
 			LogsBaseDir:       request.CodexHome,
 		})
 		if err != nil {
@@ -271,7 +270,6 @@ func spawnIPCProcess(request *elevated.SpawnRequest) (*ipcSpawnedProcess, error)
 		Env:               request.Env,
 		StdinMode:         stdinMode,
 		StderrMode:        windowssandbox.StderrModeSeparate,
-		UsePrivateDesktop: request.UsePrivateDesktop,
 		LogsBaseDir:       request.CodexHome,
 	})
 	if err != nil {

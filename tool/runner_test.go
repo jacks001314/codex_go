@@ -314,8 +314,8 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 		if capture.Env["CODEX_PERMISSION_PROFILE"] != ":workspace" || capture.Env["CODEX_RUNNER_ENV"] != "runner" {
 			t.Fatalf("Env = %#v", capture.Env)
 		}
-		if !capture.UsePrivateDesktop || !capture.DisallowSetupElevation {
-			t.Fatalf("capture privateDesktop/disallowElevation = %t/%t", capture.UsePrivateDesktop, capture.DisallowSetupElevation)
+		if !capture.DisallowSetupElevation {
+			t.Fatalf("capture disallowElevation = %t", capture.DisallowSetupElevation)
 		}
 		return &windowssandbox.CaptureResult{ExitCode: 0, Stdout: []byte("sandboxed")}, nil
 	}
@@ -333,7 +333,6 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 		PermissionProfileID:          ":workspace",
 		PermissionProfile:            &profile,
 		WindowsSandboxLevel:          sandbox.WindowsSandboxUnelevated,
-		WindowsSandboxPrivateDesktop: true,
 		ApprovalPolicy:               sandbox.ApprovalNever,
 	})
 	if err != nil {

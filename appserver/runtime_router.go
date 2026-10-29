@@ -5999,13 +5999,6 @@ func (r *RuntimeRouter) threadStartDefaultCWD() string {
 	return processCWD()
 }
 
-// windowsSandboxPrivateDesktopForTurn mirrors Rust #46554: legacy Windows
-// sandboxes always launch on a private desktop, and the removed
-// `windows.sandbox_private_desktop` setting cannot opt out.
-func windowsSandboxPrivateDesktopForTurn() bool {
-	return true
-}
-
 func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams) (*config.Config, error) {
 	cfg := &config.Config{Values: map[string]any{}}
 	if r == nil || r.services.Config == nil {
@@ -16652,8 +16645,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			allowTTY := features.Enabled(cfg.FeatureSettings(), "unified_exec_tty")
 			options.Shell.AllowTTY = &allowTTY
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelForConfig(cfg)
-			// Rust #46554: legacy Windows sandboxes always use a private desktop.
-			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopForTurn()
 		}
 		if cfg != nil {
 			// Rust #50962 gates the stable environment tool surface behind the

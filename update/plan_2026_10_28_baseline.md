@@ -2271,6 +2271,15 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Regression: `agent/list_agents_live_agent_like_rust_test.go` adds `TestListedAgentsFromLiveFallsBackToThreadIDLikeRust` and `TestListAgentsHandlerFormatsLiveRecordsLikeRust`; the exec/appserver controller tests now convert through the shared helper.
 - Verified with `go build ./...`, `go test ./agent -count=1`, `go test ./exec -run 'ListAgents|MultiAgent|AgentController'`, and `go test ./appserver -run 'ListAgents|AgentController|PrefixBoundary'`.
 
-Status after reconciliation: `2072 complete`, `408 not_applicable`,
-`436 audit_pending`, `229 regression_pending`, `4 partial`,
+### Always use private desktops for legacy Windows sandboxes (Round 911)
+
+- Upstream (`a633ebc1245f`, #46554) removes the private-desktop opt-out from elevated and unelevated Windows sandbox launches, deletes `windows.sandbox_private_desktop` plus its managed requirement and API fields, and warns about the obsolete setting.
+- The Go sandbox layer no longer carries the opt-out: `CaptureRequest`, `PipeSpawnRequest`, `ProcessSpawnRequest`, `conpty.SpawnRequest`, `elevated.SpawnRequest` and their IPC wire form dropped `UsePrivateDesktop`, and the process/ConPTY launchers always prepare a private desktop. The wrapper always passes `--windows-sandbox-private-desktop`.
+- `execserver` dropped its `windowsSandboxPrivateDesktop` sandbox-context field; its MXC gate now only rejects a custom `argv0` with `MXC custom argv0 is not supported`, matching the upstream message. `tool` `ShellOptions`/`ShellRequest` and the exec-server `FileSystemSandboxContext` no longer expose an opt-out, and `appserver`'s `windowsSandboxPrivateDesktopForTurn` helper is gone.
+- Regression: `sandbox/windowssandbox/wrapper_private_desktop_like_rust_test.go` adds `TestWindowsSandboxWrapperAlwaysPassesPrivateDesktopLikeRust`; `execserver` MXC, `tool` shell/runner tests updated; the obsolete-setting warning stays covered by `config/windows_requirements_test.go`.
+- Residual: Rust also requires a caller-owned private desktop name so the desktop outlives the short-lived wrapper (`--windows-sandbox-private-desktop-name`); Go still has the wrapper child create its own desktop and accepts the marker flag as a no-op.
+- Verified with `go build ./...`, `go vet ./app ./exec ./agent ./execserver ./tool ./sandbox/windowssandbox`, `go test ./sandbox/...`, `go test ./tool`, `go test ./execserver`, and `go test ./appserver -run 'Sandbox|Windows|ExecutorSkill'`.
+
+Status after reconciliation: `2073 complete`, `408 not_applicable`,
+`436 audit_pending`, `228 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

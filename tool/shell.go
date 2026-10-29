@@ -138,7 +138,6 @@ type ShellRequest struct {
 	AllowedSymlinkedCodexHome       string
 	ProcessSandboxType              *sandbox.SandboxType
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
-	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
 	ApprovalPolicy                  sandbox.AskForApproval
 	ApprovalRequired                bool
@@ -329,7 +328,6 @@ type ShellValidationOptions struct {
 	PathConvention                  utils.PathConvention
 	AllowedSymlinkedCodexHome       string
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
-	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
 	EnforceManagedNetwork           bool
 	ManagedNetwork                  *network.ProxyManagedNetworkSandboxContext
@@ -716,7 +714,6 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		PathConvention:                  opts.PathConvention,
 		AllowedSymlinkedCodexHome:       opts.AllowedSymlinkedCodexHome,
 		WindowsSandboxLevel:             opts.WindowsSandboxLevel,
-		WindowsSandboxPrivateDesktop:    opts.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: opts.WindowsSandboxProxySettingsMode,
 		ApprovalPolicy:                  opts.ApprovalPolicy,
 		EnforceManagedNetwork:           opts.EnforceManagedNetwork,

@@ -50,7 +50,9 @@ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, err
 	if err != nil {
 		return nil, err
 	}
-	desktop, err := PrepareLaunchDesktop(req.UsePrivateDesktop)
+	// Rust #46554: every sandboxed launch uses a private desktop; there is no
+	// longer an opt-out to pass through.
+	desktop, err := PrepareLaunchDesktop(true)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +161,6 @@ func SpawnProcessWithPipesWithToken(req PipeSpawnRequest) (*PipeSpawnHandles, er
 		CWD:               req.CWD,
 		Env:               req.Env,
 		LogsBaseDir:       req.LogsBaseDir,
-		UsePrivateDesktop: req.UsePrivateDesktop,
 		Stdio: &ProcessStdio{
 			Stdin:  uintptr(inR),
 			Stdout: uintptr(outW),

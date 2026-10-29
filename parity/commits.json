@@ -16312,9 +16312,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "sandbox/windowssandbox: removed the UsePrivateDesktop opt-out from CaptureRequest, PipeSpawnRequest, ProcessSpawnRequest, conpty.SpawnRequest, elevated.SpawnRequest and their IPC wire fields; process_windows.go:53 and conpty/conpty_windows.go:102 always prepare a private desktop and wrapper.go always passes --windows-sandbox-private-desktop; execserver dropped its windowsSandboxPrivateDesktop sandbox-context field and the MXC gate now only rejects a custom argv0 (MXC custom argv0 is not supported); tool ShellOptions/ShellRequest and the exec-server FileSystemSandboxContext no longer carry an opt-out; appserver helper windowsSandboxPrivateDesktopForTurn deleted. Tests: sandbox/windowssandbox/wrapper_private_desktop_like_rust_test.go TestWindowsSandboxWrapperAlwaysPassesPrivateDesktopLikeRust, execserver TestExecServerRejectsMXCLevelLikeRust updated, tool/shell_test.go and tool/runner_test.go updated, appserver/windows_private_desktop_test.go removed because config/windows_requirements_test.go TestWindowsSandboxPrivateDesktopSettingIsObsoleteLikeRust keeps the obsolete-setting warning coverage. Verified: go build ./..., go vet ./app ./exec ./agent ./execserver ./tool ./sandbox/windowssandbox, go test ./sandbox/..., go test ./tool, go test ./execserver, go test ./appserver -run Sandbox|Windows|ExecutorSkill. Residual: Rust also requires a caller-owned private desktop name (--windows-sandbox-private-desktop-name with LaunchDesktop::open_private) so the desktop outlives the short-lived wrapper; Go still lets the wrapper child create its own private desktop and keeps the marker flag as an accepted no-op."
    ]
   },
   {

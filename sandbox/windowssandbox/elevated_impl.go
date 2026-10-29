@@ -66,7 +66,6 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 		TimeoutMS:         timeout,
 		TTY:               capture.TTY,
 		StdinOpen:         capture.StdinOpen,
-		UsePrivateDesktop: capture.UsePrivateDesktop,
 	}
 	creds := toElevatedRunnerCreds(context.SandboxCreds)
 	return elevated.RetryRunnerSpawnOnce(
@@ -156,7 +155,6 @@ func RunWindowsSandboxCaptureForPermissionProfileElevated(req *ElevatedSandboxPr
 		TimeoutMS:         timeout,
 		TTY:               capture.TTY,
 		StdinOpen:         capture.StdinOpen,
-		UsePrivateDesktop: capture.UsePrivateDesktop,
 	}
 	creds := toElevatedRunnerCreds(context.SandboxCreds)
 	_ = LogNote(capture.CodexHome, fmt.Sprintf(

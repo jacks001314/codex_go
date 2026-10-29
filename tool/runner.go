@@ -135,7 +135,6 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 		CWD:                    commandCWD,
 		Env:                    env,
 		TimeoutMS:              timeout,
-		UsePrivateDesktop:      req.WindowsSandboxPrivateDesktop,
 		TTY:                    req.TTY,
 		ProxyEnforced:          req.EnforceManagedNetwork,
 		ProxySettingsMode:      windowsSandboxProxySettingsMode(req.WindowsSandboxProxySettingsMode),

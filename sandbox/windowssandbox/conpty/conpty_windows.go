@@ -99,7 +99,8 @@ func SpawnProcessAsUserWithToken(req SpawnRequest) (*windowssandbox.CreatedProce
 	if err != nil {
 		return nil, nil, err
 	}
-	desktop, err := windowssandbox.PrepareLaunchDesktop(req.UsePrivateDesktop)
+	// Rust #46554: every sandboxed ConPTY launch uses a private desktop.
+	desktop, err := windowssandbox.PrepareLaunchDesktop(true)
 	if err != nil {
 		return nil, nil, err
 	}

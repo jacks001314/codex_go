@@ -8,18 +8,17 @@ import (
 	"testing"
 )
 
-// Mirrors Rust's prepare_exec_request MXC gate (#45524): an MXC launch accepts
-// TTY and managed networking, still rejects custom argv0 and private-desktop
-// launches, and requires native MXC on the executor. Go has no native MXC
-// runner, so the availability check rejects every remaining request exactly
-// like Rust on such a host.
+// Mirrors Rust's prepare_exec_request MXC gate (#45524, updated by #46554): an
+// MXC launch accepts TTY and managed networking, still rejects a custom argv0,
+// and requires native MXC on the executor. Go has no native MXC runner, so the
+// availability check rejects every remaining request exactly like Rust on such
+// a host.
 func TestExecServerRejectsMXCLevelLikeRust(t *testing.T) {
 	mxcLevel := windowsSandboxLevelMxc
-	sandbox := func(level string, privateDesktop bool) json.RawMessage {
+	sandbox := func(level string) json.RawMessage {
 		payload, err := json.Marshal(FileSystemSandboxContext{
-			Permissions:                  json.RawMessage(`{"type":"managed","file_system":{"type":"restricted","entries":[]},"network":"restricted"}`),
-			WindowsSandboxLevel:          level,
-			WindowsSandboxPrivateDesktop: privateDesktop,
+			Permissions:         json.RawMessage(`{"type":"managed","file_system":{"type":"restricted","entries":[]},"network":"restricted"}`),
+			WindowsSandboxLevel: level,
 		})
 		if err != nil {
 			t.Fatalf("Marshal(sandbox context) error = %v", err)
@@ -32,7 +31,7 @@ func TestExecServerRejectsMXCLevelLikeRust(t *testing.T) {
 			Argv:      []string{"echo", "hi"},
 			CWD:       t.TempDir(),
 			Env:       map[string]string{},
-			Sandbox:   sandbox(mxcLevel, false),
+			Sandbox:   sandbox(mxcLevel),
 		}
 	}
 
@@ -49,14 +48,8 @@ func TestExecServerRejectsMXCLevelLikeRust(t *testing.T) {
 	arg0 := "custom-arg0"
 	arg0Params := base()
 	arg0Params.Arg0 = &arg0
-	if _, _, err := startExecServerSandboxProcess(arg0Params); err == nil || !strings.Contains(err.Error(), "MXC custom argv0 and private-desktop launches are not supported") {
+	if _, _, err := startExecServerSandboxProcess(arg0Params); err == nil || !strings.Contains(err.Error(), "MXC custom argv0 is not supported") {
 		t.Fatalf("arg0 launch err = %v", err)
-	}
-
-	privateDesktop := base()
-	privateDesktop.Sandbox = sandbox(mxcLevel, true)
-	if _, _, err := startExecServerSandboxProcess(privateDesktop); err == nil || !strings.Contains(err.Error(), "MXC custom argv0 and private-desktop launches are not supported") {
-		t.Fatalf("private desktop launch err = %v", err)
 	}
 
 	managed := base()

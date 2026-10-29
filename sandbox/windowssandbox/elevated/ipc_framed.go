@@ -50,7 +50,6 @@ type SpawnRequest struct {
 	TimeoutMS         *uint64                        `json:"timeout_ms"`
 	TTY               bool                           `json:"tty"`
 	StdinOpen         bool                           `json:"stdin_open"`
-	UsePrivateDesktop bool                           `json:"use_private_desktop"`
 }
 
 type SpawnReady struct {
@@ -369,7 +368,6 @@ func (r SpawnRequest) MarshalJSON() ([]byte, error) {
 		TimeoutMS         *uint64                `json:"timeout_ms"`
 		TTY               bool                   `json:"tty"`
 		StdinOpen         bool                   `json:"stdin_open"`
-		UsePrivateDesktop bool                   `json:"use_private_desktop"`
 	}
 	return json.Marshal(wireSpawnRequest{
 		Command:           append([]string(nil), r.Command...),
@@ -383,7 +381,6 @@ func (r SpawnRequest) MarshalJSON() ([]byte, error) {
 		TimeoutMS:         r.TimeoutMS,
 		TTY:               r.TTY,
 		StdinOpen:         r.StdinOpen,
-		UsePrivateDesktop: r.UsePrivateDesktop,
 	})
 }
 
@@ -400,7 +397,6 @@ func (r *SpawnRequest) UnmarshalJSON(data []byte) error {
 		TimeoutMS         *uint64                `json:"timeout_ms"`
 		TTY               bool                   `json:"tty"`
 		StdinOpen         bool                   `json:"stdin_open"`
-		UsePrivateDesktop bool                   `json:"use_private_desktop"`
 	}
 	var wire wireSpawnRequest
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -417,7 +413,6 @@ func (r *SpawnRequest) UnmarshalJSON(data []byte) error {
 	r.TimeoutMS = wire.TimeoutMS
 	r.TTY = wire.TTY
 	r.StdinOpen = wire.StdinOpen
-	r.UsePrivateDesktop = wire.UsePrivateDesktop
 	return nil
 }
 

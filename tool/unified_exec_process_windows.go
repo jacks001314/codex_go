@@ -50,7 +50,6 @@ func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedEx
 			Env:                    env,
 			TTY:                    req.TTY,
 			StdinOpen:              req.TTY,
-			UsePrivateDesktop:      req.WindowsSandboxPrivateDesktop,
 			ProxyEnforced:          req.EnforceManagedNetwork,
 			ProxySettingsMode:      windowsSandboxProxySettingsMode(req.WindowsSandboxProxySettingsMode),
 			DisallowSetupElevation: req.ApprovalPolicy == sandbox.ApprovalNever,

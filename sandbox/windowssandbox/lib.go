@@ -72,7 +72,6 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 		Env:               context.Env,
 		StdinMode:         StdinModeClosed,
 		StderrMode:        StderrModeSeparate,
-		UsePrivateDesktop: req.UsePrivateDesktop,
 		LogsBaseDir:       context.LogsBaseDir,
 	})
 	if err != nil {
