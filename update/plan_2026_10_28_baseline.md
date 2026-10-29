@@ -1828,6 +1828,24 @@ Disable executor skills per environment (#46015, closure).
   forward-slash, and `file:`-locator disablement, environment isolation, and the
   Windows/POSIX path-identity rules; those tests pass.
 
-Status after reconciliation: `2036 complete`, `400 not_applicable`,
-`459 audit_pending`, `251 regression_pending`, `3 partial`,
+### Allow hosted Apps protocol-mode overrides (Round 871)
+
+Allow a hosted Apps protocol-mode override while keeping user verification (#46019, closure).
+
+- Go has no extension-contribution enum: `RuntimeConfigFromValuesWithAuth`
+  builds the host-owned `codex_apps` registration itself and plugin overlays are
+  the only extension contributions, so Rust's new `HostedApps.protocol_mode`
+  field has no direct counterpart.
+- The behavior it enables is already implemented: `ServerConfig.ProtocolModeOverride`
+  is checked first in `effectiveMCPProtocolMode`, while
+  `isHostOwnedCodexAppsRegistration` ignores the override, so native user
+  verification stays limited to the controller-owned Apps server.
+- `mcp/protocol_2026_hosted_apps_override_like_rust_test.go` pins the legacy
+  hosted Apps default, a `V20260728` override selecting modern protocol with
+  user verification still allowed, and the same override on an ordinary
+  extension registration selecting modern protocol without verification;
+  `go test ./mcp -run 'ProtocolMode|UserVerification'` passes.
+
+Status after reconciliation: `2037 complete`, `400 not_applicable`,
+`458 audit_pending`, `251 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

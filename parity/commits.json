@@ -14655,9 +14655,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go models MCP registrations rather than Rust's contribution enum: RuntimeConfigFromValuesWithAuth builds the host-owned codex_apps registration itself (compatibility source plus legacyCodexAppsRegistrationID) and plugin overlays are the only extension contributions, so Rust's new HostedApps.protocol_mode field has no direct Go counterpart. The behavior it enables is already present: ServerConfig.ProtocolModeOverride wins first in effectiveMCPProtocolMode, and isHostOwnedCodexAppsRegistration ignores the override while still granting host-owned Apps authority, so native user verification stays limited to the controller-owned server. New mcp/protocol_2026_hosted_apps_override_like_rust_test.go pins the legacy hosted Apps default, a V20260728 override selecting modern protocol while service.serverAllowsUserVerification stays true, and the same override on an ordinary extension registration selecting modern protocol without gaining verification; ./mcp ProtocolMode/UserVerification tests pass"
    ]
   },
   {
