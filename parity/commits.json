@@ -5148,9 +5148,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/5; needs review: append_metric_tags, has_configured_writable_roots_with_cwd, record_metadata, record_policy_metadata"
+    "Rust #41933 makes diagnostic sandbox policy labels configuration-derived (has_configured_writable_roots_with_cwd never inspects the filesystem) while runtime authorization keeps filesystem-aware resolution, and reuses the captured labels for response metadata and tool metrics. Go's label path is already pure: safety.PermissionProfilePolicyTag and sandbox.SandboxPolicyTag derive the tag from configured WritableRoots via writableRootsWithCWD/GetWritableRootsWithCWD without stat/open, appserver.permissionProfilePolicyTagFromProfile is the same helper that feeds the turn's sandbox_mode client metadata, and tool/shell.go records the identical SandboxPolicyTag as the launch PolicyTag. New regression appserver/sandbox_policy_tag_configured_roots_like_rust_test.go asserts a configured writable root that does not exist on disk still labels workspace-write through all three entry points and that read-only/danger-full-access labels are unchanged. Tests: go test ./appserver -run SandboxPolicyTags -count=1."
    ]
   },
   {
@@ -5292,9 +5292,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #41974 emits the codex.tui.start counter once per TUI launch with app_server_mode = in_process|local_daemon|remote at startup so reconnects do not count. Go matches: app/tui_telemetry.go startInteractiveTUITelemetry emits codex.tui.start with the app_server_mode tag (alongside daemon_selection_reason, terminal_name, multiplexer) once when the interactive TUI starts; app/interactive.go records in_process for the embedded path, and app/remote_tui.go selects remote versus local_daemon from the resolved endpoint before launching. Tests: TestInteractiveTUIStartTelemetryLikeRust asserts a single start sample with the expected tags/context, and TestInteractiveDaemonSelectionReasonLikeRust covers the mode selection; go test ./app -run 'TUIStart|InteractiveTUITelemetry' -count=1."
    ]
   },
   {
@@ -5316,9 +5316,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #41980 keeps the complete upstream response.usage object in ResponseUsageMetadata.metadata while retaining amount, and exposes it on rawResponse/completed. Go already models it (model.ResponseUsageMetadata{Amount *string, Metadata json.RawMessage}), fills metadata in usageMetadataFromStreamEventData from the raw response.usage object (null ignored; usage-only responses still produce metadata with a nil amount), and appserver.RawResponseCompletedNotification serializes both fields. New regressions: model/responses_usage_metadata_like_rust_test.go covers amount+raw usage, usage-only, and usage:null; appserver/notifications_test.go TestRawResponseCompletedNotificationPreservesRawUsageMetadataLikeRust round-trips the raw usage JSON through the notification. Tests: go test ./model -run UsageMetadata -count=1; go test ./appserver -run RawResponseCompleted -count=1."
    ]
   },
   {
@@ -5364,9 +5364,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/5; needs review: reference_count, rollouts_for_thread"
+    "Rust #42039 compresses cold rollouts across shared and forked histories without a separate compression mode, retires local_thread_store_shared_compression while still accepting it in strict config, and reads compressed rollouts when codex exec resume resolves the resume cwd. Go's worker has a single mode and walks both archived_sessions and sessions roots (rollout/compression.go RunRolloutCompression -> compressRolloutsInRoot) with no lineage filtering, so fork/shared chains are compressed; the features registry lists local_thread_store_shared_compression as StageRemoved (no behavior change) and config/config_test.go keeps it in the accepted strict-config key list; rollout opening is representation-agnostic (OpenRolloutLineReader/Load resolve .jsonl and .jsonl.zst, CollectRolloutPaths lists both), and the exec resume import path reads through rollout.RecordFromPathResolved/ListThreads. Tests: go test ./rollout -run 'Compression|Compressed|Load' -count=1. (go test ./exec -run Resume has a pre-existing failure at 1ffdc32b, reproduced in a clean worktree, unrelated to this change.)"
    ]
   },
   {
@@ -5808,9 +5808,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #42142 adds a 50% warning for Plus/Team accounts on an approximately five-hour window while keeping 75/90/95 for other plans and window lengths, deduplicating across rolling updates. Go now matches: tui/chatwidget/rate_limits.go uses thresholds [50,75,90,95], and takeWindowWarning records the 50% threshold only when earlyRateLimitWarningEligible(planType, window) reports plus/team with isApproximateWindow(minutes, 5h); other combinations still advance past the threshold so it never replays later. Plan type reaches the snapshot through tui/tea's rolling merge, which retains the previous value when the update omits it. Tests: TestRateLimitWarningStateEarlyWarningLikeRust covers plus/team five-hour hits, pro/weekly/unknown-window misses, deduplication, and the skipped-threshold case, while the existing threshold test still passes; go test ./tui/chatwidget -run RateLimit -count=1."
    ]
   },
   {
@@ -5820,9 +5820,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/6; needs review: GuardianV2EventKind, track_guardian_v2_event"
+    "Rust #42144 adds codex_guardian_v2_classification (outcome, risk level, duration, model, thread attribution), codex_guardian_v2_fast_decision when Guardian V2 approves without a full review, and guardian_v2_enabled turn analytics gated by requirements. Go matches: telemetry/guardian_v2_event.go defines both event types with Rust's flattened params/attribution shape; appserver/review_analytics.go emits the classification event from ItemGuardianApprovalReviewCompleted only on the analytics-enabled, GuardianV2-enabled, thread-scoped path (risk level, duration, lineage attribution) and emits the fast decision when the fast path approves; telemetry/turn_event.go carries guardian_v2_enabled, and appserver/turn_runtime.go now computes it through guardianV2AnalyticsEnabled (feature on and managed requirements do not force auto-review for the model). Tests: go test ./telemetry -run GuardianV2 -count=1 and go test ./appserver -run GuardianV2Analytics -count=1 (feature off/nil config, requirement-forced auto-review, unlisted model)."
    ]
   },
   {

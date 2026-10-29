@@ -8267,7 +8267,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		IsFirstTurn:             threadSnapshot.IsFirstTurn,
 		ApprovalPolicy:          string(approvalPolicy),
 		ApprovalsReviewer:       approvalsReviewer,
-		GuardianV2Enabled:       features.Enabled(cfg.FeatureSettings(), "guardianv2"),
+		GuardianV2Enabled:       guardianV2AnalyticsEnabled(cfg, modelProviderConfig.Model),
 		MultiAgentVersion:       r.turnAnalyticsMultiAgentVersion(threadID, cfg),
 		SandboxPolicy:           analyticsSandboxPolicy(permissionProfile, cwd),
 		SandboxNetworkAccess:    analyticsSandboxNetworkAccess(permissionProfile),
@@ -8667,6 +8667,17 @@ func analyticsSandboxPolicy(resolution *config.SandboxPermissionProfileResolutio
 
 func analyticsSandboxNetworkAccess(resolution *config.SandboxPermissionProfileResolution) bool {
 	return resolution != nil && resolution.Profile != nil && resolution.Profile.AllowsNetwork()
+}
+
+// guardianV2AnalyticsEnabled mirrors Rust #42144's turn analytics flag: the
+// feature must be enabled and managed requirements must not force auto-review
+// for this model. Rust also bypasses the requirement gate for computer-use-only
+// review scopes; Go does not model a review scope yet.
+func guardianV2AnalyticsEnabled(cfg *config.Config, model string) bool {
+	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "guardianv2") {
+		return false
+	}
+	return !autoReviewRequiredForModel(cfg, model)
 }
 
 // autoReviewRequiredForModel mirrors Rust's auto_review_required_for_model

@@ -17,7 +17,9 @@ const (
 	secondaryLimitFallbackLabel    = "secondary usage"
 )
 
-var rateLimitWarningThresholds = []float64{75, 90, 95}
+// rateLimitWarningThresholds mirrors Rust RATE_LIMIT_WARNING_THRESHOLDS
+// (#42142): the 50% warning is reserved for Plus/Team five-hour windows.
+var rateLimitWarningThresholds = []float64{50, 75, 90, 95}
 
 const (
 	UsageMenuActionRateLimitSwitchModel  UsageMenuAction = "rate_limit_switch_model"
@@ -92,12 +94,14 @@ func (s *RateLimitWarningState) TakeWarnings(snapshot RateLimitSnapshot) []strin
 		&s.secondaryIndex,
 		secondaryPercent,
 		secondaryWindow,
+		snapshot.PlanType,
 		true,
 	)...)
 	warnings = append(warnings, s.takeWindowWarning(
 		&s.primaryIndex,
 		primaryPercent,
 		primaryWindow,
+		snapshot.PlanType,
 		false,
 	)...)
 	return warnings
@@ -225,14 +229,19 @@ func workspaceOwnerNudgeCopy(creditType AddCreditsNudgeCreditType) (string, stri
 	}
 }
 
-func (s *RateLimitWarningState) takeWindowWarning(index *int, usedPercent *float64, windowMinutes *int64, secondary bool) []string {
+func (s *RateLimitWarningState) takeWindowWarning(index *int, usedPercent *float64, windowMinutes *int64, planType string, secondary bool) []string {
 	if usedPercent == nil || index == nil {
 		return nil
 	}
 	var highest *float64
 	for *index < len(rateLimitWarningThresholds) && *usedPercent >= rateLimitWarningThresholds[*index] {
 		threshold := rateLimitWarningThresholds[*index]
-		highest = &threshold
+		// Rust #42142: only Plus and Team plans get the early 50% warning, and
+		// only for the approximately five-hour window. Other combinations still
+		// advance past the threshold so it never fires later.
+		if threshold != 50 || earlyRateLimitWarningEligible(planType, windowMinutes) {
+			highest = &threshold
+		}
 		*index = *index + 1
 	}
 	if highest == nil {
@@ -280,6 +289,20 @@ func LimitsDuration(minutes int64) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// earlyRateLimitWarningEligible mirrors Rust's `plan_type is Plus|Team` plus
+// `is_approximate_window(minutes, 5 * 60)` gate for the 50% threshold.
+func earlyRateLimitWarningEligible(planType string, windowMinutes *int64) bool {
+	if windowMinutes == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(planType)) {
+	case "plus", "team":
+	default:
+		return false
+	}
+	return isApproximateWindow(*windowMinutes, 5*60)
 }
 
 func isApproximateWindow(minutes int64, expected int64) bool {

@@ -69,6 +69,58 @@ func TestRateLimitWarningStateThresholdsAndLabels(t *testing.T) {
 	}
 }
 
+// TestRateLimitWarningStateEarlyWarningLikeRust mirrors Rust #42142: the 50%
+// threshold warns only Plus/Team accounts on an approximately five-hour window,
+// and deduplicates across rolling updates.
+func TestRateLimitWarningStateEarlyWarningLikeRust(t *testing.T) {
+	fiveHours := int64(5 * 60)
+	weekly := int64(7 * 24 * 60)
+	window := func(percent float64, minutes *int64) *RateLimitWindow {
+		return &RateLimitWindow{UsedPercent: percent, WindowDurationMins: minutes}
+	}
+
+	var plus RateLimitWarningState
+	warnings := plus.TakeWarnings(RateLimitSnapshot{LimitID: "codex", PlanType: "plus", Primary: window(52, &fiveHours)})
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "less than 50% of your 5h limit left") {
+		t.Fatalf("plus 5h warnings = %#v", warnings)
+	}
+	if warnings = plus.TakeWarnings(RateLimitSnapshot{LimitID: "codex", PlanType: "plus", Primary: window(60, &fiveHours)}); len(warnings) != 0 {
+		t.Fatalf("plus warning repeated = %#v", warnings)
+	}
+	if warnings = plus.TakeWarnings(RateLimitSnapshot{LimitID: "codex", PlanType: "plus", Primary: window(76, &fiveHours)}); len(warnings) != 1 || !strings.Contains(warnings[0], "less than 25%") {
+		t.Fatalf("plus 75 warning = %#v", warnings)
+	}
+
+	var team RateLimitWarningState
+	warnings = team.TakeWarnings(RateLimitSnapshot{LimitID: "codex", PlanType: "team", Secondary: window(50, &fiveHours)})
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "less than 50% of your 5h limit left") {
+		t.Fatalf("team 5h warnings = %#v", warnings)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		plan   string
+		window *int64
+	}{
+		{name: "pro 5h", plan: "pro", window: &fiveHours},
+		{name: "plus weekly", plan: "plus", window: &weekly},
+		{name: "plus unknown window", plan: "plus"},
+		{name: "unknown plan 5h", window: &fiveHours},
+	} {
+		var state RateLimitWarningState
+		if warnings := state.TakeWarnings(RateLimitSnapshot{LimitID: "codex", PlanType: testCase.plan, Primary: window(55, testCase.window)}); len(warnings) != 0 {
+			t.Fatalf("%s: warnings = %#v, want none", testCase.name, warnings)
+		}
+	}
+
+	// A skipped 50% threshold is not replayed later even if the plan changes.
+	var crossed RateLimitWarningState
+	crossed.TakeWarnings(RateLimitSnapshot{LimitID: "codex", PlanType: "pro", Primary: window(55, &fiveHours)})
+	if warnings := crossed.TakeWarnings(RateLimitSnapshot{LimitID: "codex", PlanType: "plus", Primary: window(60, &fiveHours)}); len(warnings) != 0 {
+		t.Fatalf("skipped threshold replayed = %#v", warnings)
+	}
+}
+
 func TestRateLimitWarningStateSkipsCapCreditsAndNonCodex(t *testing.T) {
 	var state RateLimitWarningState
 	monthly := int64(30 * 24 * 60)

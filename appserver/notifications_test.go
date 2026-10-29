@@ -99,6 +99,41 @@ func TestRawResponseCompletedNotificationIncludesUsageMetadata(t *testing.T) {
 	}
 }
 
+// TestRawResponseCompletedNotificationPreservesRawUsageMetadataLikeRust mirrors
+// Rust #41980: the raw upstream `usage` object travels in usageMetadata.metadata.
+func TestRawResponseCompletedNotificationPreservesRawUsageMetadataLikeRust(t *testing.T) {
+	amount := "0.5"
+	data, err := json.Marshal(&RawResponseCompletedNotification{
+		ThreadID: "thread-1", TurnID: "turn-1", ResponseID: "resp-1",
+		UsageMetadata: &model.ResponseUsageMetadata{
+			Amount:   &amount,
+			Metadata: json.RawMessage(`{"input_tokens":7,"output_tokens":2,"total_tokens":9}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("MarshalJSON() error = %v", err)
+	}
+	var decoded struct {
+		UsageMetadata struct {
+			Amount   *string         `json:"amount"`
+			Metadata json.RawMessage `json:"metadata"`
+		} `json:"usageMetadata"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v (%s)", err, data)
+	}
+	if decoded.UsageMetadata.Amount == nil || *decoded.UsageMetadata.Amount != amount {
+		t.Fatalf("amount = %v", decoded.UsageMetadata.Amount)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(decoded.UsageMetadata.Metadata, &raw); err != nil {
+		t.Fatalf("metadata is not raw JSON: %v (%s)", err, decoded.UsageMetadata.Metadata)
+	}
+	if raw["total_tokens"] != float64(9) {
+		t.Fatalf("metadata = %#v", raw)
+	}
+}
+
 func TestWithoutNotificationMediaOmitItemMediaLikeRust(t *testing.T) {
 	payload := ThreadItemPayload{
 		"type": "message",

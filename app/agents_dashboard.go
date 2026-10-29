@@ -363,8 +363,9 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 }
 
 // recentSessionLimit seeds the agent command center with this many recent
-// sessions, in addition to loaded sessions (Rust RECENT_SESSION_LIMIT, #46579).
-const recentSessionLimit = 10
+// sessions, in addition to loaded sessions (Rust RECENT_SESSION_LIMIT, #46579;
+// raised to 20 by #42104).
+const recentSessionLimit = 20
 
 // agentsOverviewSeedPinnedThreads merges the shared pinned section's tasks into
 // the command center's rows (Rust #51500, agents_overview_threads.rs: every
