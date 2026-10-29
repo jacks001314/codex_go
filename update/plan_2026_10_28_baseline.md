@@ -1460,6 +1460,32 @@ Windows sandbox uninstall cleanup (#45799).
   wording. Verified with `go test ./sandbox/windowssandbox -count=1`,
   `go vet ./sandbox/windowssandbox`, and `go build ./...`.
 
-Status after reconciliation: `2021 complete`, `396 not_applicable`,
-`472 audit_pending`, `258 regression_pending`, `2 partial`,
+### Bounded WSL terminal detection (Round 852)
+
+Bounded WSL terminal detection (#45811).
+
+- `readWindowsTermProgramWithTimeout` mirrors Rust's
+  `read_windows_vscode_detection_with_timeout`: the `cmd.exe /d /s /c "set
+  TERM_PROGRAM"` launch, the wait for output, and cleanup all run off the
+  startup goroutine under one deadline, so a WSL interop launch that blocks
+  before the child exists can no longer stall startup.
+- A probe that answers after the deadline is killed and reaped instead of
+  leaked, and a timeout is cached by the existing `sync.Once` seam so the worker
+  is not retried on the startup path.
+- `probeWindowsTermProgramWithTimeout` maps outcomes like Rust: exit 0 with
+  `TERM_PROGRAM=vscode` is `vscode`, any other answered value and exit status 1
+  are `other`, and launch failure, timeout, or any other exit status are
+  `unknown`.
+- `KeyboardEnhancementDisabledFor` now takes the three-state
+  `VscodeDetection`, and `KeyboardEnhancementDisabled` mirrors Rust's
+  `keyboard_enhancement_disabled`: only WSL plus a VS Code or inconclusive
+  reading disables enhancement, and the environment override still wins.
+- Tests mirror `windows_term_program_tests.rs` through a portable process seam:
+  exit 0/vscode, exit 0/other, exit 1, exit 2, launch failure, empty value,
+  timeout with kill+reap, and a launch that completes only after the deadline.
+- Verified with `go test ./tui/tui -count=2`, `go vet ./tui/tui`, and
+  `go build ./...`.
+
+Status after reconciliation: `2022 complete`, `396 not_applicable`,
+`471 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

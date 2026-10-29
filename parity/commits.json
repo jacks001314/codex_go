@@ -14127,9 +14127,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "tui/tui/keyboard_modes.go bounds launch+wait+reap of the Windows TERM_PROGRAM probe under one deadline and gates WSL keyboard enhancement on VS Code/Unknown; portable probe tests mirror windows_term_program_tests.rs"
    ]
   },
   {
