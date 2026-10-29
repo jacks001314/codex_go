@@ -13959,9 +13959,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #45770 improves analytics chart readability and navigation. Part 1 (Round 846) makes g cycle the available groupings instead of opening a picker. AnalyticsView no longer keeps group_picker state: g advances to group_options()[(current position + 1) % len] and reloads the report, the picker key loop, its reset points (refresh, close, section change, summary open) and its bounds validation disappear, and the Summary control row shows only the active Daily/Weekly/Cumulative label instead of all three. The Go dashboard drops groupPicker from tui/tea/analytics_dashboard.go; handleKey consumes g for every section with more than one grouping (Usage/Credits/Activity and the Summary views), advances with wraparound and calls loadReport, while the picker movement/accept/cancel handling and the picker footer hint are removed. The panel and overview renderers lose their picker rows, the picker selection override and the GroupOptions/GroupPicker options, and tui/analytics/summary.go renders just the selected activity view label beside Token activity. Tests cover the direct cycle and wraparound for Usage grouping, the single active Summary label in wide and narrow layouts, the removed in-card picker, and the panel's full selection range. Verified with go test ./tui/analytics ./tui/chatwidget ./tui/chatgptapi ./tui/tea -count=1, go vet ./tui/analytics ./tui/tea, and go build ./... . Remaining for #45770: daily totals on charts of up to seven days, viewport-dependent breakdown rows and legend height, the footer update timestamp, and overflow-dependent scroll hints."
    ]
   },
   {

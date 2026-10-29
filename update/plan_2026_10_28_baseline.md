@@ -1335,6 +1335,29 @@ Account Summary tab (#45769, part 3).
   ./tui/tea -count=1`, `go vet ./chatgptapi ./tui/analytics ./tui/tea
   ./tui/chatwidget`, and `go build ./...`.
 
+### Analytics chart readability and navigation (Round 846)
+
+Analytics chart readability and navigation (#45770, part 1).
+
+- Rust #45770 makes `g` cycle the available groupings instead of opening a
+  picker. `tui/tea/analytics_dashboard.go` drops `groupPicker`: `g` advances to
+  the next grouping (wrapping) for Usage/Credits/Activity and the Summary views,
+  then reloads the report.
+- `tui/analytics/panels.go` and `tui/analytics/dashboard.go` lose the picker
+  rows, the picker selection override and the `GroupOptions`/`GroupPicker`
+  options; the footer no longer prints picker hints and the Summary centering no
+  longer waits on a closed picker.
+- `tui/analytics/summary.go` shows only the active `Daily`/`Weekly`/`Cumulative`
+  label beside `Token activity` instead of the three-way bracketed row.
+- Tests cover grouping advance and wraparound, the single active Summary label
+  in wide and narrow layouts, the removed in-card picker, and the panel's full
+  selection range.
+- Verified with `go test ./tui/analytics ./tui/chatwidget ./chatgptapi
+  ./tui/tea -count=1`, `go vet ./tui/analytics ./tui/tea`, and `go build ./...`.
+- Remaining for #45770: seven-day daily totals, viewport-dependent breakdown
+  rows and legend height, the footer update timestamp, and overflow-dependent
+  scroll hints.
+
 Status after reconciliation: `2018 complete`, `395 not_applicable`,
-`476 audit_pending`, `258 regression_pending`, `2 partial`,
+`475 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
