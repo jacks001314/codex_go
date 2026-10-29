@@ -859,6 +859,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regressions: `TestGuardianSessionRunnerSummaryFreeResetInvalidatesSession` (`trunk_new` -> `trunk_reused` -> reset -> `trunk_new`, with no previous response id and a zeroed completed-review count) and `TestRuntimeRouterColdResumeResetsGuardianSessionLikeRust` (cold resume over a real store; fails without the hook by reporting `trunk_reused`).
 - Tests: `go test ./appserver -run Guardian` and `go test ./appserver -run 'ThreadResume|ThreadFork|Resume'` pass.
 
-Status after reconciliation: `1987 complete`, `388 not_applicable`,
-`502 audit_pending`, `272 regression_pending`, `0 partial`,
+### Dismiss MCP status snapshot cloning as Rust-internal (Round 800)
+
+- #45428 is a Rust-internal allocation change: the owned `McpServerStatusSnapshot` is destructured into the response so server metadata, tools, resources, templates and auth statuses move with `HashMap::remove` instead of `get().cloned()`. Output, pagination and the missing-entry defaults are identical.
+- Go has no owned snapshot object. `MCPService.ListStatusCheckedWithObserver` builds a request-owned copy from the mutex-guarded `s.servers`/`s.configs` maps under `s.mu` (`cloneMCPServerStatus`/`cloneServerConfig`), and `populateStatusInventories` hands each startup worker its own clone before fanning out. Consuming the live service state in place is neither possible (the service keeps serving concurrent reads) nor safe, and dropping the copies would publish aliases of shared mutable state.
+- The contract half of the change is already satisfied: a server missing from the inventory maps still reports empty `tools`/`resources`/`resourceTemplates` and the `Unsupported` auth status, and `paginateMCPStatuses` keeps the server-name filter and cursor behavior. Existing coverage: `TestListStatusAndToolCall`, `TestMCPStatusPaginationInvalidRequestErrors`, `TestMCPServerStatusDetailZeroValueMatchesToolsAndAuthOnly`, `TestMCPServerStatusWireIncludesStateAndError`.
+- Tests: `go test ./mcp -run 'TestListStatusAndToolCall|TestMCPStatusPagination|TestMCPServerStatusDetailZeroValue|TestMCPServerStatusWireIncludesStateAndError' -count=1` passes.
+
+Status after reconciliation: `1987 complete`, `389 not_applicable`,
+`501 audit_pending`, `272 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

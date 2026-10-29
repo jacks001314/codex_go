@@ -12867,9 +12867,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Not applicable: #45428 is a Rust-internal allocation change (destructure the owned McpServerStatusSnapshot into the response with HashMap::remove instead of get().cloned()) with no observable contract change. Go has no owned snapshot object: MCPService.ListStatusCheckedWithObserver copies the statuses out of the mutex-guarded live s.servers/s.configs maps under s.mu using cloneMCPServerStatus/cloneServerConfig, and populateStatusInventories hands each worker goroutine its own clone, so consuming the service state in place is neither possible nor safe. Pagination and the missing-entry defaults (empty tools/resources/resource_templates, Unsupported auth status) keep their existing behavior, already covered by TestListStatusAndToolCall, TestMCPStatusPaginationInvalidRequestErrors, TestMCPServerStatusDetailZeroValueMatchesToolsAndAuthOnly and TestMCPServerStatusWireIncludesStateAndError, which pass."
    ]
   },
   {
