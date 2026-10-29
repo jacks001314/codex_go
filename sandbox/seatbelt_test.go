@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,108 @@ func TestBuildSeatbeltPolicyWorkspaceWriteAndNetwork(t *testing.T) {
 	}
 	if seatbeltParametersContain(parameters, "relative.sock") {
 		t.Fatalf("relative socket accepted: %#v", parameters)
+	}
+}
+
+// Mirrors Rust #45548: the prepared managed-network context controls the
+// Unix-socket policy, and explicit extra grants are still preserved. Relative
+// entries are ignored rather than resolved against the host CWD.
+func TestBuildSeatbeltPolicyUsesPreparedManagedNetworkUnixSocketsLikeRust(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temporary directory: %v", err)
+	}
+	explicitSocket := filepath.Join(root, "explicit.sock")
+	preparedSocket := filepath.Join(root, "prepared.sock")
+	profile := WorkspaceWritePermissionProfile()
+	managed := &seatbeltManagedNetworkContext{
+		AllowUnixSockets: []string{preparedSocket, "relative.sock"},
+	}
+	policy, parameters, err := buildSeatbeltPolicyWithManagedNetwork(root, &profile, []string{explicitSocket}, managed, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicyWithManagedNetwork: %v", err)
+	}
+	if !strings.Contains(policy, "(allow system-socket (socket-domain AF_UNIX))") {
+		t.Fatalf("policy missing Unix-socket domain grant:\n%s", policy)
+	}
+	if strings.Contains(policy, "(allow network-bind (local unix-socket))") ||
+		strings.Contains(policy, "(allow network-outbound (remote unix-socket))\n") {
+		t.Fatalf("restricted policy unexpectedly grants every Unix socket:\n%s", policy)
+	}
+	for index, wantPath := range []string{explicitSocket, preparedSocket} {
+		wantName := fmt.Sprintf("UNIX_SOCKET_PATH_%d", index)
+		wantParameter := seatbeltParameter{Name: wantName, Value: wantPath}
+		if !strings.Contains(policy, fmt.Sprintf(`(allow network-bind (local unix-socket (subpath (param "%s"))))`, wantName)) ||
+			!strings.Contains(policy, fmt.Sprintf(`(allow network-outbound (remote unix-socket (subpath (param "%s"))))`, wantName)) {
+			t.Fatalf("policy missing socket rules for %s:\n%s", wantName, policy)
+		}
+		found := false
+		for _, parameter := range parameters {
+			if parameter == wantParameter {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("parameters = %#v, want %#v", parameters, wantParameter)
+		}
+	}
+	if seatbeltParametersContain(parameters, "relative.sock") {
+		t.Fatalf("relative socket accepted: %#v", parameters)
+	}
+}
+
+// Mirrors Rust #45548's empty-context case: an empty prepared allowlist keeps
+// AF_UNIX denied instead of inheriting a broader live-proxy grant.
+func TestBuildSeatbeltPolicyPreparedEmptyUnixSocketsStayDeniedLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	policy, parameters, err := buildSeatbeltPolicyWithManagedNetwork(t.TempDir(), &profile, nil, &seatbeltManagedNetworkContext{}, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicyWithManagedNetwork: %v", err)
+	}
+	if strings.Contains(policy, "(allow system-socket (socket-domain AF_UNIX))") ||
+		strings.Contains(policy, "(allow network-bind (local unix-socket") ||
+		strings.Contains(policy, "(allow network-outbound (remote unix-socket") {
+		t.Fatalf("empty prepared policy granted Unix sockets:\n%s", policy)
+	}
+	if seatbeltHasParameterPrefix(parameters, "UNIX_SOCKET_PATH_") {
+		t.Fatalf("empty prepared policy emitted socket parameters: %#v", parameters)
+	}
+}
+
+// Mirrors Rust #45548's explicit allow-all behavior: every Unix socket is
+// available, but unrestricted IP networking is still denied by the profile.
+func TestBuildSeatbeltPolicyPreparedAllowAllUnixSocketsLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	managed := &seatbeltManagedNetworkContext{
+		AllowUnixSockets:               []string{"/tmp/ignored.sock"},
+		DangerouslyAllowAllUnixSockets: true,
+	}
+	policy, parameters, err := buildSeatbeltPolicyWithManagedNetwork(t.TempDir(), &profile, nil, managed, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicyWithManagedNetwork: %v", err)
+	}
+	for _, want := range []string{
+		"(allow system-socket (socket-domain AF_UNIX))",
+		"(allow network-bind (local unix-socket))",
+		"(allow network-outbound (remote unix-socket))",
+		"(deny network*)",
+	} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("policy missing %q:\n%s", want, policy)
+		}
+	}
+	if strings.Contains(policy, "(allow network-outbound)\n") {
+		t.Fatalf("allow-all Unix sockets widened IP networking:\n%s", policy)
+	}
+	if seatbeltHasParameterPrefix(parameters, "UNIX_SOCKET_PATH_") {
+		t.Fatalf("allow-all policy emitted path parameters: %#v", parameters)
+	}
+}
+
+func TestParseSeatbeltManagedNetworkContextRejectsInvalidJSON(t *testing.T) {
+	if _, err := parseSeatbeltManagedNetworkContext("{"); err == nil {
+		t.Fatal("invalid managed network context was accepted")
 	}
 }
 

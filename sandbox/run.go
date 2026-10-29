@@ -273,7 +273,11 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		plan.Command = wrapped
 		plan.SandboxType = SandboxTypeLinuxSeccomp
 	} else if runtime.GOOS == "darwin" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
-		wrapped, err := createSeatbeltCommandArgs(plan.Command, plan.CWD, plan.PermissionProfile, req.AllowUnixSockets, req.AllowedSymlinkedCodexHome)
+		managedNetwork, err := parseSeatbeltManagedNetworkContext(plan.ManagedNetworkJSON)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
+		}
+		wrapped, err := createSeatbeltCommandArgsWithManagedNetwork(plan.Command, plan.CWD, plan.PermissionProfile, req.AllowUnixSockets, managedNetwork, req.AllowedSymlinkedCodexHome)
 		if err != nil {
 			return nil, err
 		}

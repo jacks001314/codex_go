@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	pathpkg "path"
@@ -17,11 +18,35 @@ type seatbeltParameter struct {
 	Value string
 }
 
+// seatbeltManagedNetworkContext is the subset of the prepared managed-network
+// context that shapes the Seatbelt policy. Rust #45548 reads this policy from
+// the context for this command instead of falling back to a live proxy.
+type seatbeltManagedNetworkContext struct {
+	AllowUnixSockets               []string `json:"allowUnixSockets"`
+	DangerouslyAllowAllUnixSockets bool     `json:"dangerouslyAllowAllUnixSockets"`
+}
+
+func parseSeatbeltManagedNetworkContext(raw string) (*seatbeltManagedNetworkContext, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var context seatbeltManagedNetworkContext
+	if err := json.Unmarshal([]byte(raw), &context); err != nil {
+		return nil, fmt.Errorf("managed network context is invalid: %w", err)
+	}
+	return &context, nil
+}
+
 func createSeatbeltCommandArgs(command []string, cwd string, profile *PermissionProfile, allowUnixSockets []string, allowedSymlinkedCodexHome string) ([]string, error) {
+	return createSeatbeltCommandArgsWithManagedNetwork(command, cwd, profile, allowUnixSockets, nil, allowedSymlinkedCodexHome)
+}
+
+func createSeatbeltCommandArgsWithManagedNetwork(command []string, cwd string, profile *PermissionProfile, allowUnixSockets []string, managedNetwork *seatbeltManagedNetworkContext, allowedSymlinkedCodexHome string) ([]string, error) {
 	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
 		return nil, fmt.Errorf("%w: command is required", ErrInvalidSandboxRunRequest)
 	}
-	policy, parameters, err := buildSeatbeltPolicy(cwd, profile, allowUnixSockets, allowedSymlinkedCodexHome)
+	policy, parameters, err := buildSeatbeltPolicyWithManagedNetwork(cwd, profile, allowUnixSockets, managedNetwork, allowedSymlinkedCodexHome)
 	if err != nil {
 		return nil, err
 	}
@@ -34,6 +59,10 @@ func createSeatbeltCommandArgs(command []string, cwd string, profile *Permission
 }
 
 func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSockets []string, allowedSymlinkedCodexHome string) (string, []seatbeltParameter, error) {
+	return buildSeatbeltPolicyWithManagedNetwork(cwd, profile, allowUnixSockets, nil, allowedSymlinkedCodexHome)
+}
+
+func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfile, allowUnixSockets []string, managedNetwork *seatbeltManagedNetworkContext, allowedSymlinkedCodexHome string) (string, []seatbeltParameter, error) {
 	if profile == nil || profile.Disabled {
 		return "(version 1)\n(allow default)\n", nil, nil
 	}
@@ -116,15 +145,9 @@ func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSocket
 	if !profile.AllowsNetwork() {
 		lines = append(lines, "(deny network*)", "(deny system-socket)")
 	}
-	for _, socket := range cleanAbsoluteSeatbeltPaths(allowUnixSockets) {
-		name := fmt.Sprintf("UNIX_SOCKET_%d", len(parameters))
-		parameters = append(parameters, seatbeltParameter{Name: name, Value: socket})
-		lines = append(lines,
-			"(allow system-socket (socket-domain AF_UNIX))",
-			fmt.Sprintf(`(allow network-bind (local unix-socket (subpath (param "%s"))))`, name),
-			fmt.Sprintf(`(allow network-outbound (remote unix-socket (subpath (param "%s"))))`, name),
-		)
-	}
+	socketLines, socketParameters := seatbeltUnixSocketRules(allowUnixSockets, managedNetwork)
+	lines = append(lines, socketLines...)
+	parameters = append(parameters, socketParameters...)
 	// Rust #45984: network grants and Unix-socket allowlists must never reopen
 	// the privileged app-server control socket to filesystem-restricted
 	// commands. Keep this after the allowlist so the deny wins.
@@ -156,6 +179,39 @@ func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSocket
 		lines = append(lines, fmt.Sprintf(`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "%s"))))`, name))
 	}
 	return strings.Join(lines, "\n") + "\n", parameters, nil
+}
+
+// seatbeltUnixSocketRules mirrors Rust #45548's prepared-context precedence:
+// a prepared allow-all grant becomes broad AF_UNIX allowances, while a
+// prepared allowlist is normalized and combined with explicit extra grants.
+// With no prepared context the explicit extra grants are the whole policy.
+func seatbeltUnixSocketRules(extraAllowUnixSockets []string, managedNetwork *seatbeltManagedNetworkContext) ([]string, []seatbeltParameter) {
+	if managedNetwork != nil && managedNetwork.DangerouslyAllowAllUnixSockets {
+		return []string{
+			"(allow system-socket (socket-domain AF_UNIX))",
+			"(allow network-bind (local unix-socket))",
+			"(allow network-outbound (remote unix-socket))",
+		}, nil
+	}
+	allowUnixSockets := append([]string(nil), extraAllowUnixSockets...)
+	if managedNetwork != nil {
+		allowUnixSockets = append(allowUnixSockets, managedNetwork.AllowUnixSockets...)
+	}
+	sockets := normalizeSeatbeltSocketPaths(allowUnixSockets)
+	if len(sockets) == 0 {
+		return nil, nil
+	}
+	lines := []string{"(allow system-socket (socket-domain AF_UNIX))"}
+	parameters := make([]seatbeltParameter, 0, len(sockets))
+	for index, socket := range sockets {
+		name := fmt.Sprintf("UNIX_SOCKET_PATH_%d", index)
+		parameters = append(parameters, seatbeltParameter{Name: name, Value: socket})
+		lines = append(lines,
+			fmt.Sprintf(`(allow network-bind (local unix-socket (subpath (param "%s"))))`, name),
+			fmt.Sprintf(`(allow network-outbound (remote unix-socket (subpath (param "%s"))))`, name),
+		)
+	}
+	return lines, parameters
 }
 
 // seatbeltProtectedPaths returns the protected paths (a writable root's
@@ -510,6 +566,26 @@ func cleanAbsoluteSeatbeltPaths(paths []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// normalizeSeatbeltSocketPaths resolves existing socket paths on macOS, where
+// /tmp and similar roots are aliases, then applies the same absolute-path and
+// deduplication rules as other Seatbelt parameters.
+func normalizeSeatbeltSocketPaths(paths []string) []string {
+	normalized := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if !isSeatbeltAbsolutePath(path) {
+			continue
+		}
+		path = cleanSeatbeltPath(path)
+		if runtime.GOOS == "darwin" {
+			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+				path = cleanSeatbeltPath(resolved)
+			}
+		}
+		normalized = append(normalized, path)
+	}
+	return cleanAbsoluteSeatbeltPaths(normalized)
 }
 
 func isSeatbeltAbsolutePath(path string) bool {
