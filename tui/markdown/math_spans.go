@@ -424,6 +424,18 @@ func MathDisplayTailStart(source string, boundary int, width int) (int, bool) {
 	return start, held
 }
 
+// MathPendingStart reports the line start of an unterminated standalone
+// display that is still within the scan budget (Rust's `pending_start`). The
+// streaming preview uses it to decide that the tail must stay source-formatted
+// until the closing delimiter arrives.
+func MathPendingStart(source string, width int) (int, bool) {
+	scan := analyzeMathSpans(source, width)
+	if scan.pendingStart == nil {
+		return 0, false
+	}
+	return *scan.pendingStart, true
+}
+
 // restoreMathPlaceholders restores the rendered Unicode in place of the
 // placeholders (Rust's `events` swap of the rendered text).
 func restoreMathPlaceholders(rendered string, placeholders map[string]string) string {

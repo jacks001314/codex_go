@@ -6,6 +6,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/rivo/uniseg"
+
 	"codex_go/eventmap"
 	"codex_go/tui"
 	historycell "codex_go/tui/history_cell"
@@ -60,6 +62,10 @@ type streamCore struct {
 	now               func() time.Time
 	hasVisualization  bool
 	theme             string
+	mathPendingReady  bool
+	mathPendingSet    bool
+	mathPendingLen    int
+	mathPendingWidth  int
 }
 
 func newStreamCore(width int) streamCore {
@@ -98,46 +104,63 @@ func (c *streamCore) pushDelta(delta string) bool {
 	return enqueued || c.refreshProsePreview()
 }
 
+// previewMode selects how the disposable tail preview renders (Rust
+// streaming/prose_preview.rs `PreviewMode`). A math preview shows the
+// unterminated display source itself, wrapped to width, without interpreting
+// TeX punctuation as Markdown.
+type previewMode int
+
+const (
+	previewModeProse previewMode = iota
+	previewModeMath
+)
+
 // refreshProsePreview re-renders the disposable preview of the unterminated
 // trailing source and reports whether it changed. Rust StreamCore::refresh_preview.
 func (c *streamCore) refreshProsePreview() bool {
-	if !c.holdbackScanner.AllowsProsePreview() {
+	pending := c.pendingSource
+	prosePreview := c.holdbackScanner.AllowsProsePreview()
+	mode := previewModeProse
+	if c.hasPendingDisplayMath() ||
+		(prosePreview && (strings.HasPrefix(pending, "$$") || strings.HasPrefix(pending, `\[`))) {
+		mode = previewModeMath
+	} else if !prosePreview {
 		if len(c.preview.lines) == 0 {
 			return false
 		}
 		c.preview.reset()
 		return true
 	}
-	source := c.pendingSource
-	if source == "" {
+	if pending == "" {
 		if len(c.preview.lines) == 0 {
 			return false
 		}
 		c.preview.reset()
 		return true
 	}
-	if c.preview.scanned > len(source) {
+	if c.preview.scanned > len(pending) {
 		c.preview.reset()
 	}
-	if c.preview.scanned < len(source) {
-		if strings.Contains(source[c.preview.scanned:], "|") {
+	if c.preview.scanned < len(pending) {
+		if strings.Contains(pending[c.preview.scanned:], "|") {
 			c.preview.hasPipe = true
 		}
-		c.preview.scanned = len(source)
+		c.preview.scanned = len(pending)
 	}
 	// Indented and quoted lines may belong to nested code blocks, so their
 	// newline holdback is preserved; a pipe (table) or fence start also keeps
 	// the previous safe preview instead of guessing at the missing structure.
-	if !(c.preview.hasPipe ||
-		strings.HasPrefix(source, " ") ||
-		strings.HasPrefix(source, "\t") ||
-		strings.HasPrefix(source, ">") ||
-		strings.HasPrefix(source, "```") ||
-		strings.HasPrefix(source, "~~~") ||
-		source == "`" || source == "``" || source == "~" || source == "~~") {
-		c.preview.safeLen = len(source)
+	// A math preview advances regardless because it shows the source verbatim.
+	if mode == previewModeMath || !(c.preview.hasPipe ||
+		strings.HasPrefix(pending, " ") ||
+		strings.HasPrefix(pending, "\t") ||
+		strings.HasPrefix(pending, ">") ||
+		strings.HasPrefix(pending, "```") ||
+		strings.HasPrefix(pending, "~~~") ||
+		pending == "`" || pending == "``" || pending == "~" || pending == "~~") {
+		c.preview.safeLen = len(pending)
 	}
-	safe := source
+	safe := pending
 	if c.preview.safeLen < len(safe) {
 		safe = safe[:c.preview.safeLen]
 	}
@@ -150,7 +173,11 @@ func (c *streamCore) refreshProsePreview() bool {
 	}
 	var lines []string
 	if start < len(safe) {
-		lines = c.renderPreviewSourceLines(safe[start:])
+		if mode == previewModeMath {
+			lines = wrapMathPreviewLines(safe[start:], c.width)
+		} else {
+			lines = c.renderPreviewSourceLines(safe[start:])
+		}
 	}
 	if start > 0 {
 		lines = append([]string{"…"}, lines...)
@@ -160,6 +187,22 @@ func (c *streamCore) refreshProsePreview() bool {
 	}
 	c.preview.lines = lines
 	return true
+}
+
+// hasPendingDisplayMath reports whether the committed source still ends inside
+// an unterminated standalone display equation (Rust
+// `StreamingRender::pending_math_start`). The scan is cached per committed
+// length and width so per-token pushes do not re-parse the whole source.
+func (c *streamCore) hasPendingDisplayMath() bool {
+	if c.mathPendingReady && c.mathPendingLen == len(c.rawSource) && c.mathPendingWidth == c.width {
+		return c.mathPendingSet
+	}
+	_, pending := markdown.MathPendingStart(c.rawSource, c.width)
+	c.mathPendingReady = true
+	c.mathPendingSet = pending
+	c.mathPendingLen = len(c.rawSource)
+	c.mathPendingWidth = c.width
+	return pending
 }
 
 func (c *streamCore) commitCompleteSource() string {
@@ -239,11 +282,14 @@ func (c *streamCore) setWidth(width int) {
 	previousWidth := c.width
 	previousTailStart, hadTailStart := c.activeTailSourceStart()
 	c.width = width
-	c.refreshProsePreview()
 	if c.rawSource == "" {
+		c.refreshProsePreview()
 		return
 	}
 	c.renderedLines = c.renderSourceLines(c.rawSource)
+	// Rust StreamCore::set_width re-renders before refresh_preview so the math
+	// preview decides from the fresh render and the new width.
+	c.refreshProsePreview()
 	// Rust StreamCore::recompute_render: the emitted count is a rendered-line
 	// count, so when a tail is held back the emitted prefix is carried across the
 	// reflow in source terms. Without this, a resize that changes the height of
@@ -526,6 +572,111 @@ func (c *PlanStreamController) CurrentTailDisplayLines() []string {
 
 func (c *PlanStreamController) HasLiveTail() bool {
 	return c != nil && c.core.hasTail()
+}
+
+// wrapMathPreviewLines renders the unfinished display-math tail the way Rust's
+// `PreviewMode::Math` does: the original source wrapped to width without
+// interpreting TeX or Markdown punctuation (streaming/prose_preview.rs uses
+// `textwrap::wrap`). Wrapping follows Unicode line-break opportunities so a
+// formula breaks where Rust breaks it, keeps the first line's leading
+// whitespace, and only splits inside a segment that cannot fit on its own.
+func wrapMathPreviewLines(source string, width int) []string {
+	if width <= 0 {
+		return []string{source}
+	}
+	lines := []string{}
+	for _, line := range strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n") {
+		lines = append(lines, wrapMathPreviewLine(line, width)...)
+	}
+	return lines
+}
+
+func wrapMathPreviewLine(line string, width int) []string {
+	segments := lineBreakSegments(line)
+	out := []string{}
+	var current strings.Builder
+	currentWidth := 0
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		out = append(out, strings.TrimRight(current.String(), " \t"))
+		current.Reset()
+		currentWidth = 0
+	}
+	for _, segment := range segments {
+		blank := strings.TrimSpace(segment) == ""
+		if blank && currentWidth == 0 && len(out) > 0 {
+			// textwrap drops whitespace at the start of a continuation line.
+			continue
+		}
+		segmentWidth := tui.DisplayWidth(segment)
+		if currentWidth > 0 && currentWidth+segmentWidth > width {
+			flush()
+			if blank {
+				continue
+			}
+		}
+		if !blank && segmentWidth > width {
+			for _, piece := range splitPreviewSegment(segment, width) {
+				flush()
+				current.WriteString(piece)
+				currentWidth = tui.DisplayWidth(piece)
+				flush()
+			}
+			continue
+		}
+		current.WriteString(segment)
+		currentWidth += segmentWidth
+	}
+	flush()
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
+}
+
+// lineBreakSegments splits text at every Unicode line-break opportunity
+// (UAX #14), the separator Rust's textwrap uses for math previews.
+func lineBreakSegments(text string) []string {
+	segments := []string{}
+	remaining, state := text, -1
+	for remaining != "" {
+		segment, rest, _, next := uniseg.FirstLineSegmentInString(remaining, state)
+		if segment == "" && rest == remaining {
+			break
+		}
+		segments = append(segments, segment)
+		remaining, state = rest, next
+	}
+	return segments
+}
+
+// splitPreviewSegment splits an overlong run into display-width pieces, the
+// equivalent of textwrap's `break_words`.
+func splitPreviewSegment(segment string, width int) []string {
+	if width <= 0 {
+		return []string{segment}
+	}
+	out := []string{}
+	var current strings.Builder
+	used := 0
+	graphemes := uniseg.NewGraphemes(segment)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		graphemeWidth := tui.DisplayWidth(grapheme)
+		if used > 0 && used+graphemeWidth > width {
+			out = append(out, current.String())
+			current.Reset()
+			used = 0
+		}
+		current.WriteString(grapheme)
+		used += graphemeWidth
+	}
+	if current.Len() > 0 {
+		out = append(out, current.String())
+	}
+	return out
 }
 
 func renderSourceLines(source string, width int, theme string) []string {

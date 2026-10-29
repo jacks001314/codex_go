@@ -228,7 +228,6 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	if text == "" {
 		return "", nil
 	}
-	text = revealHeadingMarkers(text)
 	if width <= 0 {
 		width = defaultWidth
 	}
@@ -244,6 +243,10 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	localLinks = append(citationLinks, localLinks...)
 	urlPlaceholders, text := protectLongBareURLs(text, width)
 	mathPlaceholders, text := protectMathSpans(text, width)
+	// Mask math before revealing heading markers: a rejected or pending display
+	// restores its source verbatim, and a heading marker injected inside that
+	// span would leak an extra "# " the source never contained.
+	text = revealHeadingMarkers(text)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	renderLists := CurrentRendering().Lists
