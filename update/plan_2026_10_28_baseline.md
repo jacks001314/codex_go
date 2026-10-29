@@ -686,6 +686,10 @@ Closed two audits. `#41328` was already implemented at the app-server layer: uni
 
 Closed five audits by matching existing Go implementations: `#40679` Bedrock onboarding (`tui/onboarding/auth.go`, `bedrock.go`, `bedrock_setup_wizard` feature), `#41742` actionable usage banners with automatic model fallback (`app/backend_banners.go`, `app/backend_banner_wiring.go`, `tui/tea/backend_banner*.go`), `#45820` daemon-restart continuation (`appserver/daemon_recovery_continue.go`), and `#46281` workspace routing applied to model requests (`model/workspace_routing.go`, `appserver/agent_runtime.go`). `#41899` gained a new regression: `appserver/mcp_event_stream_test.go` now unloads the subscribed task mid-stream and asserts a later event is still forwarded, locking the dedicated-connection design.
 
-Status after reconciliation: `1954 complete`, `381 not_applicable`,
-`527 audit_pending`, `287 regression_pending`, `0 partial`,
+### History output budgets, voice settings, and removed rollback API (Round 772)
+
+Closed three audits. `#41260` is already reflected in `historynotes`: the tool returns the backend result unchanged (the backend enforces the output budget before encryption) while still sending the truncation-policy header, and the test keeps a large encrypted payload intact. `#44622` is implemented end to end: the TUI exposes `/voice settings`, loads supported voices plus the saved preference, persists a new choice through local and remote savers, and the slash description matches upstream. `#44915` is not applicable because codex_go never exposed the deprecated `thread/rollback` method; only `thread/revert` exists.
+
+Status after reconciliation: `1956 complete`, `382 not_applicable`,
+`524 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

@@ -3936,9 +3936,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "The history/notes tool returns the backend's result unchanged because the backend enforces the tool-output budget before encryption. historynotes/tools.go historyNotesToolOutput documents that contract and only converts images to input_image content while keeping attachments out of the logged body and post-tool-use hook response; historynotes/backend.go still sends the x-openai-tool-output-truncation-policy header so the backend can size the payload, and no client-side byte cap can reject an oversized encrypted result. historynotes/historynotes_test.go covers the budget header and preserves a large backend payload verbatim. Test: go test ./historynotes -count=1."
    ]
   },
   {
@@ -11559,9 +11559,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/7; needs review: effective_realtime_voice, on_realtime_voice_saved, persist_realtime_voice, read_effective_config_if_supported, realtime_voices"
+    "/voice settings selects and persists the voice used by future conversations. tui/tea/model.go exposes OnVoiceSettings and OnVoiceSaveVoice, requests the supported voices plus the saved preference, opens the voice-settings hierarchy, and saves the chosen voice; tui/chatwidget/voice_audio_settings.go and voice_picker.go render the hierarchy; app/interactive.go and app/remote_tui.go wire local and remote savers (interactiveLocalVoiceSaver/interactiveRemoteVoiceSaver) so the choice persists through config/batchWrite, and the slash description now reads 'use /voice settings to choose a voice' (tui/bottom_pane/slash_contract_test.go). Tests: go test ./app -run 'Voice' -count=1; go test ./tui/tea -run 'Voice' -count=1."
    ]
   },
   {
@@ -12183,9 +12183,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "The deprecated thread/rollback app-server method was never exposed by codex_go, so there is nothing to remove. appserver/protocol.go registers thread/revert (MethodThreadRevert) and no thread/rollback method; app/prompt_edit.go and appserver/router.go implement and dispatch only thread/revert. The rollback* helpers in appserver (rollbackThreadForkInitialization, rollbackThreadResumeInitialization, rollbackThreadStartInitialization, rollbackReviewHistory) are internal transaction cleanup, not the removed API. Test: go test ./appserver -run 'ThreadRevert|InternalSession' -count=1."
    ]
   },
   {
