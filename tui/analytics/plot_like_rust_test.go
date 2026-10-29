@@ -327,3 +327,53 @@ func TestAnalyticsPlotSevenDayTotalsLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// TestAnalyticsPlotNarrowEqualTotalsLikeRust mirrors Rust's
+// narrow_equal_height_totals_remain_separate_numbers: equal-height totals stay
+// separate numbers instead of merging into one run, matching the Rust snapshot.
+func TestAnalyticsPlotNarrowEqualTotalsLikeRust(t *testing.T) {
+	start := plotTestDate(t, "2026-01-01")
+	rows := make([]*AccountAnalyticsDay, 0, 7)
+	for offset := 0; offset < 7; offset++ {
+		rows = append(rows, &AccountAnalyticsDay{
+			Date:   start.AddDate(0, 0, offset),
+			Total:  111,
+			Values: []AccountAnalyticsValue{plotTestValue("a", 111)},
+		})
+	}
+	screens := make([]string, 0, 3)
+	for _, width := range []int{21, 28, 35} {
+		chart := AnalyticsPlot(plotTestDays(rows...), rows[0].Values, 3, width, 4, AccountAnalyticsUnitCount)
+		screens = append(screens, AnalyticsChartText(chart))
+	}
+	want := strings.Join([]string{
+		`   111      111   111
+111 ┊    111 ┊ 111 ┊
+▇▇ ▇▇ ▇▇ ▇▇ ▇▇ ▇▇ ▇▇
+██ ██ ██ ██ ██ ██ ██
+██ ██ ██ ██ ██ ██ ██
+─────────────────────
+          ▲
+ 1  2  3  4  5  6  7`,
+		`111 111 111 111 111 111 111
+ ▇▇  ▇▇  ▇▇  ▇▇  ▇▇  ▇▇  ▇▇
+ ██  ██  ██  ██  ██  ██  ██
+ ██  ██  ██  ██  ██  ██  ██
+────────────────────────────
+             ▲
+ 1   2   3   4   5   6   7`,
+		` 150 111 111 111  111 111 111  111
+      ▇▇  ▇▇  ▇▇  ▇▇▇  ▇▇  ▇▇  ▇▇▇
+  75  ██  ██  ██  ███  ██  ██  ███
+      ██  ██  ██  ███  ██  ██  ███
+   0 ──────────────────────────────
+                   ▲
+      1   2   3    4   5   6    7`,
+	}, "\n\n\n")
+	// Each chart screen ends with a blank row, so its text already ends in a
+	// newline; the extra separator keeps one blank line between screens like
+	// the Rust snapshot.
+	if got := strings.TrimRight(strings.Join(screens, "\n\n"), "\n"); got != want {
+		t.Fatalf("narrow equal totals:\ngot:\n%s\n\nwant:\n%s", got, want)
+	}
+}

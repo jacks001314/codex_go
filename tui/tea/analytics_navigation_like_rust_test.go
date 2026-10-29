@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
+	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
 )
 
@@ -131,6 +134,14 @@ func TestAnalyticsTallerReportShowsMoreLegendRowsLikeRust(t *testing.T) {
 	if got := strings.Count(short, "Updated"); got != 1 {
 		t.Fatalf("update timestamp appears %d times, want once in the footer:\n%s", got, short)
 	}
+	// Rust #45770 wraps the footer timestamp onto its own line when narrow.
+	for _, width := range []int{24, 40, 64} {
+		model.width, model.height = width, 60
+		lines := strings.Split(strings.TrimRight(stripAnalyticsTestANSI(model.View()), "\n"), "\n")
+		if last := lines[len(lines)-1]; !strings.Contains(last, "UTC") {
+			t.Fatalf("width=%d footer last line = %q, want the update timestamp", width, last)
+		}
+	}
 }
 
 // TestAnalyticsScrollHintsFollowOverflowLikeRust covers Rust #45770: scroll
@@ -154,5 +165,69 @@ func TestAnalyticsScrollHintsFollowOverflowLikeRust(t *testing.T) {
 	cramped := stripAnalyticsTestANSI(model.View())
 	if !strings.Contains(cramped, "scroll") {
 		t.Fatalf("overflowing report dropped the scroll hint:\n%s", cramped)
+	}
+}
+
+// TestAnalyticsExactFitHasNoScrollHintLikeRust covers Rust #45770: content that
+// exactly fills the viewport drops the scroll hint and leaves the viewport at
+// the content height (Rust analytics_exact_fit_content_has_no_scroll_hint).
+func TestAnalyticsExactFitHasNoScrollHintLikeRust(t *testing.T) {
+	backend := startAnalyticsTestBackend(t, "account-a", "enterprise", `{"data": []}`)
+	model := newAnalyticsTestModel(t, "enterprise", backend)
+	openAnalyticsFromUsageMenu(t, model)
+	waitForAnalyticsLoads(t, model)
+
+	dashboard := model.analyticsDashboard
+	dashboard.selectSection(analytics.AnalyticsSectionChats)
+
+	model.width, model.height = 120, 60
+	if strings.Contains(stripAnalyticsTestANSI(model.View()), "scroll") {
+		t.Fatal("roomy chats panel kept the scroll hint")
+	}
+	chromeHeight := 60 - dashboard.viewportHeight
+	contentHeight := len(dashboard.panel(analytics.AnalyticsSectionChats, 116, 4).Lines)
+
+	model.height = chromeHeight + contentHeight
+	exact := stripAnalyticsTestANSI(model.View())
+	if strings.Contains(exact, "scroll") {
+		t.Fatalf("exact fit kept the scroll hint:\n%s", exact)
+	}
+	if dashboard.viewportHeight != contentHeight {
+		t.Fatalf("viewport height = %d, want the %d content rows", dashboard.viewportHeight, contentHeight)
+	}
+}
+
+// TestAnalyticsUngroupedSectionsKeepConfiguredGLikeRust covers Rust #45770:
+// when a section has no alternate grouping, a configured g jump-top binding
+// still reaches the list action instead of being swallowed by grouping.
+func TestAnalyticsUngroupedSectionsKeepConfiguredGLikeRust(t *testing.T) {
+	backend := startAnalyticsTestBackend(t, "account-a", "enterprise", `{"data": []}`)
+	model := newAnalyticsTestModel(t, "enterprise", backend)
+	keymapConfig := codextui.NewKeymapConfig()
+	if err := keymapConfig.Set("list", "jump_top", []string{"g"}); err != nil {
+		t.Fatalf("configure jump_top: %v", err)
+	}
+	model.keymapConfig = keymapConfig
+	openAnalyticsFromUsageMenu(t, model)
+	waitForAnalyticsLoads(t, model)
+
+	dashboard := model.analyticsDashboard
+	// The Rust fixture has no live session, so credits expose one grouping.
+	dashboard.live = nil
+	for _, section := range []analytics.AnalyticsSection{
+		analytics.AnalyticsSectionChats,
+		analytics.AnalyticsSectionPlugins,
+		analytics.AnalyticsSectionSkills,
+		analytics.AnalyticsSectionCredits,
+	} {
+		dashboard.selectSection(section)
+		if options := dashboard.groupOptions(); len(options) > 1 {
+			t.Fatalf("%v unexpectedly groups by %v", section, options)
+		}
+		dashboard.sections[section].Cursor = 3
+		model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'g'}})
+		if cursor := dashboard.sections[section].Cursor; cursor != 0 {
+			t.Fatalf("%v cursor after g = %d, want the configured jump top", section, cursor)
+		}
 	}
 }
