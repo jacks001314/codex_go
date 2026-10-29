@@ -15183,9 +15183,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 7/7 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "audited #46126: Go already had codex.daemon.start (app/daemon_telemetry.go:128), codex.daemon.update for foreground CLI updates (app/daemon_telemetry.go:83), the CODEX_DAEMON_TELEMETRY_HANDOFF marker with env removal for long-lived daemon children (appserverdaemon/pid_process_windows.go:95, appserverdaemon/pid_process_unix.go:64), bounded settings tags (app/pid telemetry) and codex.tui.start with daemon_selection_reason/daemon_auto_start (app/tui_telemetry.go:70); the missing piece was the TUI update handoff observation, now added at app/daemon_telemetry.go:170 recordTUIDaemonUpdateHandoff emitting one codex.daemon.update with initiation_source=tui_handoff, update_target this_cli/public_stable and outcome=handoff_requested from the launch provider before relaunching, wired through app/daemon_update_action.go:37 runDaemonUpdateActionWithTelemetry called from the pending-update tail of app/interactive.go and app/remote_tui.go; tests app/tui_daemon_handoff_telemetry_like_rust_test.go:36,75,81 cover both targets, bounded settings tags without launch-only tags, silence without a provider, telemetry-before-relaunch ordering and no observation for non-daemon actions; verified go build ./... and go test ./app -run Telemetry|DaemonUpdate|DaemonStart|DaemonAutoStart|Worktree; residual: Go records codex.tui.start when the TUI starts with the already-resolved mode, so a fatal pre-TUI startup error emits no launch observation, whereas Rust's Launch guard records app_server_mode=unconfirmed"
    ]
   },
   {

@@ -1472,7 +1472,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	if err != nil {
 		return err
 	}
-	return runPendingDaemonUpdate(ctx, model, stdout, stderr)
+	return runPendingDaemonUpdate(ctx, tuiTelemetry, model, stdout, stderr)
 }
 
 // interactiveAutoThreadTitle derives a provisional thread title from the first

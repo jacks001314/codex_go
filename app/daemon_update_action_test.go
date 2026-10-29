@@ -81,7 +81,7 @@ func TestRunDaemonUpdateActionIgnoresOtherActionsLikeRust(t *testing.T) {
 	if *executable != "" {
 		t.Fatalf("relaunched %q for a non-daemon action", *executable)
 	}
-	if err := runPendingDaemonUpdate(context.Background(), nil, io.Discard, io.Discard); err != nil {
+	if err := runPendingDaemonUpdate(context.Background(), interactiveTUITelemetry{}, nil, io.Discard, io.Discard); err != nil {
 		t.Fatalf("runPendingDaemonUpdate(nil) error = %v", err)
 	}
 }

@@ -805,7 +805,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		}
 		return runInteractiveRemoteTUI(ctx, root, endpoint, stdin, stdout, stderr)
 	}
-	return runPendingDaemonUpdate(ctx, model, stdout, stderr)
+	return runPendingDaemonUpdate(ctx, tuiTelemetry, model, stdout, stderr)
 }
 
 func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool, *bool, string) {

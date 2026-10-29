@@ -56,6 +56,12 @@ type interactiveTUITelemetry struct {
 	exporter         config.OtelExporterKind
 	analyticsEnabled *bool
 	shutdown         func()
+	// sink is the launch provider's metrics client, reused for the daemon
+	// update handoff observation before it is shut down (Rust #46126).
+	sink tuiMetricSink
+	// settingsTags are the bounded daemon settings captured at launch, without
+	// terminal tags, so later observations do not read settings again.
+	settingsTags map[string]string
 }
 
 func (t interactiveTUITelemetry) close() {
@@ -80,7 +86,9 @@ func startInteractiveTUITelemetry(root *cli.RootOptions, selectionReason string,
 		return telemetry
 	}
 	telemetry.shutdown = shutdown
-	tags := appserverdaemon.DaemonSettingsTagMap(auth.DefaultCodexHome())
+	telemetry.sink = sink
+	telemetry.settingsTags = appserverdaemon.DaemonSettingsTagMap(auth.DefaultCodexHome())
+	tags := cloneTUITelemetryTags(telemetry.settingsTags)
 	width, height := codextui.TerminalSizeRead()
 	for key, value := range codextui.TerminalSizeTags(width, height) {
 		tags[key] = value

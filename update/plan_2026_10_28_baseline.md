@@ -2490,6 +2490,38 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
   `policyContext` wire field; Windows relative deny globs stay anchored through
   the payload's explicit `command_cwd` rather than Rust's pre-binding pass.
 
-Status after reconciliation: `2088 complete`, `409 not_applicable`,
-`429 audit_pending`, `220 regression_pending`, `3 partial`,
+### TUI daemon update handoffs report their observation (Round 927)
+
+- Upstream `b0659c53865d` (#46126) adds daemon startup and update
+  observations, records `codex.tui.start` once after the first connection
+  attempt, reports TUI update handoffs as `handoff_requested`, and keeps daemon
+  settings tags to enabled state and explicit presence.
+- Go already carried most of the surface: `codex.daemon.start` for TUI
+  auto-start, `codex.daemon.update` for `daemon update` with the CLI initiation
+  source, the `CODEX_DAEMON_TELEMETRY_HANDOFF` marker (removed again when a
+  long-lived daemon child is spawned), bounded daemon settings tags, and
+  `codex.tui.start` with `daemon_selection_reason` and `daemon_auto_start`.
+- The missing piece was the TUI update handoff observation.
+  `recordTUIDaemonUpdateHandoff` now records one `codex.daemon.update` counter
+  from the launch provider, with the launch-time settings tags plus
+  `initiation_source=tui_handoff`, `update_target=this_cli|public_stable` and
+  `outcome=handoff_requested`. It is emitted before the CLI relaunch, so a
+  failed relaunch still reports a requested handoff, and the relaunched child
+  stays silent through the existing marker.
+- `interactiveTUITelemetry` now keeps the launch sink and its settings tags, so
+  the handoff observation reuses the same consent-aware provider that recorded
+  `codex.tui.start` instead of building a second one.
+- Added `app/tui_daemon_handoff_telemetry_like_rust_test.go` covering both
+  targets, the bounded settings tags, the absence of launch-only tags, silence
+  when no provider exists, telemetry-before-relaunch ordering, and no
+  observation for non-daemon update actions.
+- Verified with `go build ./...` and
+  `go test ./app -run "Telemetry|DaemonUpdate|DaemonStart|DaemonAutoStart|Worktree"`.
+- Residual: Go records `codex.tui.start` when the TUI actually starts with the
+  already-resolved mode, so a fatal pre-TUI startup error emits no launch
+  observation; Rust's `Launch` guard records `app_server_mode=unconfirmed` in
+  that case.
+
+Status after reconciliation: `2089 complete`, `409 not_applicable`,
+`429 audit_pending`, `219 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

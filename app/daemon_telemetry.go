@@ -12,6 +12,7 @@ import (
 	"codex_go/config"
 	"codex_go/doctor"
 	"codex_go/otelinit"
+	codextui "codex_go/tui"
 )
 
 // Foreground daemon observations use the CLI's existing consent and identity
@@ -160,4 +161,28 @@ func daemonStartOutcome(output *appserverdaemon.LifecycleOutput, startErr error)
 	default:
 		return "unconfirmed"
 	}
+}
+
+// recordTUIDaemonUpdateHandoff mirrors Rust #46126's post-TUI observation: the
+// foreground TUI owns the requested update's consent, so it reports the handoff
+// before relaunching the CLI. The child suppresses its own report through the
+// handoff marker, which keeps the installation unconfirmed.
+func recordTUIDaemonUpdateHandoff(telemetry interactiveTUITelemetry, source codextui.DaemonUpdateSource) {
+	if telemetry.sink == nil {
+		return
+	}
+	tags := cloneTUITelemetryTags(telemetry.settingsTags)
+	tags["initiation_source"] = "tui_handoff"
+	tags["update_target"] = daemonUpdateTargetForSource(source)
+	tags["outcome"] = "handoff_requested"
+	telemetry.sink.Counter(daemonUpdateMetric, 1, tags)
+}
+
+// daemonUpdateTargetForSource maps a daemon update source onto the bounded
+// update_target tag Rust reports for TUI handoffs.
+func daemonUpdateTargetForSource(source codextui.DaemonUpdateSource) string {
+	if source == codextui.DaemonUpdateSourceThisCli {
+		return daemonUpdateTargetThisCLI
+	}
+	return daemonUpdateTargetPublicStable
 }

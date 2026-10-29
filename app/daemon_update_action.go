@@ -23,11 +23,22 @@ import (
 // UpdateAction::Daemon, and tui/src/update_action.rs).
 
 // runPendingDaemonUpdate runs the update a TUI asked for, if any.
-func runPendingDaemonUpdate(ctx context.Context, model *codextea.Model, stdout io.Writer, stderr io.Writer) error {
+func runPendingDaemonUpdate(ctx context.Context, telemetry interactiveTUITelemetry, model *codextea.Model, stdout io.Writer, stderr io.Writer) error {
 	if model == nil {
 		return nil
 	}
-	return runDaemonUpdateAction(ctx, model.PendingUpdateAction(), stdout, stderr)
+	return runDaemonUpdateActionWithTelemetry(ctx, telemetry, model.PendingUpdateAction(), stdout, stderr)
+}
+
+// runDaemonUpdateActionWithTelemetry records the TUI's daemon update handoff
+// observation, then relaunches the CLI. The foreground TUI owns the request's
+// consent, so the child stays silent and the installation remains unconfirmed
+// (Rust #46126).
+func runDaemonUpdateActionWithTelemetry(ctx context.Context, telemetry interactiveTUITelemetry, action codextui.UpdateAction, stdout io.Writer, stderr io.Writer) error {
+	if source, ok := action.DaemonUpdateSourceOf(); ok {
+		recordTUIDaemonUpdateHandoff(telemetry, source)
+	}
+	return runDaemonUpdateAction(ctx, action, stdout, stderr)
 }
 
 // daemonUpdateExecutable resolves the CLI that relaunches for a daemon update;
