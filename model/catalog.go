@@ -1381,6 +1381,15 @@ func fallbackBundledModelsResponse() ModelsResponse {
 	// (catalog.go:712/714). Stamp the catalog's values on so the same field
 	// cannot read false here and true on the models.json path.
 	applyBundledCatalogBooleans(&response)
+	// Rust #47397 moves the bundled GPT-6, GPT-5.6, GPT-5.5 and auto-review
+	// catalog entries from `unified_exec` to `shell_command`; the offline
+	// fallback mirrors the bundled catalog so both paths report the same
+	// shell type.
+	for index := range response.Models {
+		if bundledShellCommandSlugs[response.Models[index].Slug] {
+			response.Models[index].ShellType = "shell_command"
+		}
+	}
 	// Every bundled Codex model advertises the freeform apply_patch tool, as in
 	// Rust models-manager/models.json. The fallback catalog is also used when
 	// that JSON is not installed, so it must preserve the model-owned tool
@@ -1391,6 +1400,19 @@ func fallbackBundledModelsResponse() ModelsResponse {
 		}
 	}
 	return response
+}
+
+// bundledShellCommandSlugs are the bundled catalog entries Rust #47397 moved to
+// the `shell_command` shell type.
+var bundledShellCommandSlugs = map[string]bool{
+	"gpt-6-astra":       true,
+	"gpt-6-sol":         true,
+	"gpt-6-luna":        true,
+	"gpt-5.6-sol":       true,
+	"gpt-5.6-terra":     true,
+	"gpt-5.6-luna":      true,
+	"gpt-5.5":           true,
+	"codex-auto-review": true,
 }
 
 // applyBundledCatalogBooleans fills the two serde-default-true booleans

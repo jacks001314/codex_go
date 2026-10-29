@@ -2796,6 +2796,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestResponsesStreamReasoningSummaryUsesLastNonEmptyPartLikeRust`, `TestResponsesStreamReasoningSummaryPartsAccumulateIndependentlyLikeRust`, `TestResponsesStreamReasoningSummaryIsConsumedOnce`, `TestV3BackendReasoningStatusAppendsQuietCommentary` (also asserts no `response.create`), `TestV3BackendReasoningStatusDisabledSendsNothingLikeRust`, `TestStartParamsBackendReasoningStatusDefaultsFalseAndRoundTrips`.
 - Verified with `go build ./...`, `go test ./appserver -run 'ReasoningSummary|ReasoningStatus' -count=1` and `go test ./realtime -count=1`.
 
-Status after reconciliation: `2118 complete`, `441 not_applicable`,
-`377 audit_pending`, `210 regression_pending`, `3 partial`,
+### Bundled model catalog refresh (Round 957)
+
+- Rust #47397 refreshes `models-manager/models.json` and its prompt snapshots: the GPT-6, GPT-5.6, GPT-5.5 and auto-review entries move to `shell_command`, `gpt-6-astra` accepts reasoning-effort updates without experimental context, plan availability gains `ent26`/`promax`, and Astra/auto-review guidance text changes (#47397, complete).
+- `model/catalog.go:1407` adds `bundledShellCommandSlugs` and `:1389` stamps `shell_command` onto the offline fallback entries for `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol/terra/luna`, `gpt-5.5` and `codex-auto-review`; the fallback already carried astra's `supports_reasoning_effort_updates=true` and `supports_experimental_context=false`.
+- `model/catalog_test.go:251` (`TestFallbackBundledCatalogUsesShellCommandLikeRust`) pins the shell type for all eight slugs plus the astra and serde-default flags.
+- Not carried: `available_in_plans` (Go's `ModelInfo` has no plan-type field; access comes from the runtime catalog payload) and the catalog-embedded `model_messages`/collaboration-mode text with its Rust scenario snapshots. At the `7ac60816` baseline the canonical `collaboration-mode-templates/templates/default.md` is unchanged, and `TestRustCollaborationModeTemplatesMatchGo` keeps Go pinned to it.
+- Verified with `go build ./...`, `go test ./model -count=1` and `go test ./parity -run 'CollaborationMode|TestAlignment' -count=1`.
+
+Status after reconciliation: `2119 complete`, `441 not_applicable`,
+`376 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

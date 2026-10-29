@@ -243,6 +243,42 @@ func TestFallbackBundledCatalogCarriesGPT6FamilyLikeRust(t *testing.T) {
 	}
 }
 
+// TestFallbackBundledCatalogUsesShellCommandLikeRust pins Rust #47397 for the
+// offline fallback catalog: the bundled GPT-6, GPT-5.6, GPT-5.5 and
+// auto-review entries use `shell_command`, gpt-6-astra accepts reasoning-effort
+// updates without experimental context, and the other moved entries keep the
+// serde defaults for both flags.
+func TestFallbackBundledCatalogUsesShellCommandLikeRust(t *testing.T) {
+	manager := NewStaticModelsManager(fallbackBundledModelsResponse())
+	for _, slug := range []string{
+		"gpt-6-astra",
+		"gpt-6-sol",
+		"gpt-6-luna",
+		"gpt-5.6-sol",
+		"gpt-5.6-terra",
+		"gpt-5.6-luna",
+		"gpt-5.5",
+		"codex-auto-review",
+	} {
+		info := manager.GetModelInfo(slug, nil)
+		if info.ShellType != "shell_command" {
+			t.Fatalf("%s ShellType = %q, want shell_command", slug, info.ShellType)
+		}
+	}
+	astra := manager.GetModelInfo("gpt-6-astra", nil)
+	if !astra.SupportsReasoningEffortUpdates || astra.SupportsExperimentalContext {
+		t.Fatalf("gpt-6-astra flags = effortUpdates:%v experimentalContext:%v, want true/false",
+			astra.SupportsReasoningEffortUpdates, astra.SupportsExperimentalContext)
+	}
+	for _, slug := range []string{"gpt-5.6-sol", "gpt-5.5", "codex-auto-review"} {
+		info := manager.GetModelInfo(slug, nil)
+		if info.SupportsReasoningEffortUpdates || info.SupportsExperimentalContext {
+			t.Fatalf("%s flags = effortUpdates:%v experimentalContext:%v, want false/false",
+				slug, info.SupportsReasoningEffortUpdates, info.SupportsExperimentalContext)
+		}
+	}
+}
+
 func TestFallbackBundledCatalogDropsGPT54LikeRust(t *testing.T) {
 	// Rust #47932 (694d8d45bd): gpt-5.4 is removed from the bundled catalog.
 	// The GPT-5.4 Mini entry stays because its migration target (GPT-6 Luna)

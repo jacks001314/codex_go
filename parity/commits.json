@@ -19099,9 +19099,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 957 (complete): Rust #47397 refreshes the bundled models-manager/models.json catalog and its prompt snapshots. The parts Go carries are the catalog shell type and model flags: model/catalog.go now mirrors the bundled entries for gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol/terra/luna, gpt-5.5 and codex-auto-review with shell_command (Rust moved them off unified_exec), while the fallback already carried gpt-6-astra's supports_reasoning_effort_updates=true with supports_experimental_context=false and the false/false serde defaults of the other moved entries. TestFallbackBundledCatalogUsesShellCommandLikeRust pins the shell type for all eight slugs plus those flags. Not carried: available_in_plans (Go's ModelInfo has no plan-type field and access is decided by the runtime catalog payload) and the catalog-embedded model_messages/collaboration-mode text plus the seven Rust scenario snapshots; at the 7ac60816 baseline the canonical collaboration-mode-templates/templates/default.md is unchanged and Go pins it through TestRustCollaborationModeTemplatesMatchGo. Verified with go build ./...; go test ./model -count=1; go test ./parity -run 'CollaborationMode|TestAlignment' -count=1."
    ]
   },
   {
