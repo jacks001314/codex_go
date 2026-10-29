@@ -21,10 +21,13 @@ const (
 	// existing sections, so a retained selection keeps its identity
 	// (Rust Section::Chats, #45765).
 	AnalyticsSectionChats
+	// AnalyticsSectionSummary appends the account Summary tab without
+	// renumbering the existing sections (Rust Section::Summary, #45769).
+	AnalyticsSectionSummary
 )
 
 // AnalyticsSectionCount is the number of dashboard sections.
-const AnalyticsSectionCount = 6
+const AnalyticsSectionCount = 7
 
 // Report maps a section onto the report it renders. Every section has one.
 func (s AnalyticsSection) Report() AccountAnalyticsReport {
@@ -42,11 +45,11 @@ func (s AnalyticsSection) Report() AccountAnalyticsReport {
 	}
 }
 
-// HasReport reports whether the section loads an account analytics report. Top
-// chats loads local roots and per-thread estimates instead
-// (Rust Section::report returning None for Chats).
+// HasReport reports whether the section loads an account analytics report.
+// Summary loads the account profile, and Top chats loads local roots and
+// per-thread estimates instead (Rust Section::report returning None).
 func (s AnalyticsSection) HasReport() bool {
-	return s != AnalyticsSectionChats
+	return s != AnalyticsSectionChats && s != AnalyticsSectionSummary
 }
 
 // AnalyticsSectionState is one section's report and its selection. Each section
@@ -92,6 +95,8 @@ func (s AnalyticsSection) RangeGroup(business bool) AnalyticsRangeGroup {
 		return AnalyticsRangeGroupUsage
 	case AnalyticsSectionChats:
 		return AnalyticsRangeGroupUsage
+	case AnalyticsSectionSummary:
+		return AnalyticsRangeGroupUsage
 	case AnalyticsSectionActivity:
 		return AnalyticsRangeGroupActivity
 	default:
@@ -103,6 +108,9 @@ func (s AnalyticsSection) RangeGroup(business bool) AnalyticsRangeGroup {
 // non-attributed usage label the first grouping "Product"
 // (Rust AnalyticsView::group_label).
 func (s AnalyticsSection) GroupLabel(group int, consumerAttribution bool) string {
+	if s == AnalyticsSectionSummary {
+		return AnalyticsSummaryViewLabel(group)
+	}
 	if group == 0 && (s == AnalyticsSectionCredits || (s == AnalyticsSectionUsage && !consumerAttribution)) {
 		return "Product"
 	}
@@ -123,6 +131,7 @@ func AnalyticsVisibleSections(plan auth.PlanType, resolved bool) []AnalyticsSect
 	switch AccountKindFor(plan) {
 	case AccountKindConsumer:
 		return []AnalyticsSection{
+			AnalyticsSectionSummary,
 			AnalyticsSectionUsage,
 			AnalyticsSectionActivity,
 			AnalyticsSectionPlugins,
@@ -132,6 +141,7 @@ func AnalyticsVisibleSections(plan auth.PlanType, resolved bool) []AnalyticsSect
 	case AccountKindBusiness, AccountKindEnterprise:
 		if AnalyticsThreadUsageSupported(plan) {
 			return []AnalyticsSection{
+				AnalyticsSectionSummary,
 				AnalyticsSectionCredits,
 				AnalyticsSectionUsage,
 				AnalyticsSectionPlugins,
@@ -140,13 +150,16 @@ func AnalyticsVisibleSections(plan auth.PlanType, resolved bool) []AnalyticsSect
 			}
 		}
 		return []AnalyticsSection{
+			AnalyticsSectionSummary,
 			AnalyticsSectionCredits,
 			AnalyticsSectionUsage,
 			AnalyticsSectionPlugins,
 			AnalyticsSectionSkills,
 		}
 	default:
-		return nil
+		// An unresolved plan is still an account: the profile summary needs no
+		// plan-specific report.
+		return []AnalyticsSection{AnalyticsSectionSummary}
 	}
 }
 

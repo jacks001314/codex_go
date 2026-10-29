@@ -432,8 +432,9 @@ func (l *Live) Session(ctx context.Context) (*AnalyticsLiveSession, error) {
 	return l.session, nil
 }
 
-// AccountLabel renders "email · id", or just the id when no email is stored.
-// It returns nil until the session is initialized.
+// AccountLabel renders the account email used by the Analytics header. It
+// returns nil until the session is initialized or when no email is stored
+// (Rust Live::account_label, #45769).
 func (l *Live) AccountLabel() *string {
 	if l == nil {
 		return nil
@@ -443,11 +444,11 @@ func (l *Live) AccountLabel() *string {
 	if l.session == nil {
 		return nil
 	}
-	account := l.session.Backend.Account()
-	label := account.ID
-	if account.Email != nil && strings.TrimSpace(*account.Email) != "" {
-		label = *account.Email + " · " + account.ID
+	email := l.session.Backend.Account().Email
+	if email == nil || strings.TrimSpace(*email) == "" {
+		return nil
 	}
+	label := *email
 	return &label
 }
 

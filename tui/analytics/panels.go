@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"codex_go/auth"
+	"codex_go/chatgptapi"
 )
 
 // AnalyticsPanelOptions describes the maximized section panel.
@@ -20,10 +21,16 @@ type AnalyticsPanelOptions struct {
 	ChatReady   bool
 	// Tasks supplies the consumer Top chats rows; the section renders current
 	// allowance and balance debits instead of lifetime estimates (Rust #45768).
-	Tasks                *AnalyticsTaskChats
-	TaskMessage          string
-	TaskReady            bool
-	ChatMetric           int
+	Tasks       *AnalyticsTaskChats
+	TaskMessage string
+	TaskReady   bool
+	ChatMetric  int
+	// Profile supplies the account Summary (Rust #45769); Plan labels its
+	// subscription row.
+	Profile              *chatgptapi.AccountProfile
+	ProfileMessage       string
+	ProfileReady         bool
+	Plan                 *auth.PlanType
 	ShowZeroCreditGroups bool
 	ViewportHeight       int
 	Width                int
@@ -83,7 +90,21 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 	bands := 0
 	selectionStart := 0
 	selectionEnd := len(lines)
-	if opts.Section == AnalyticsSectionChats {
+	if opts.Section == AnalyticsSectionSummary {
+		// Summary keeps the heading selectable and scrolls its profile body
+		// (Rust panels.rs Summary branch, #45769).
+		selectionStart, selectionEnd = 0, 1
+		lines = append(lines, AnalyticsSummaryLines(AnalyticsSummaryOptions{
+			Profile: opts.Profile,
+			Message: opts.ProfileMessage,
+			Ready:   opts.ProfileReady,
+			Plan:    opts.Plan,
+			Zoomed:  true,
+			View:    opts.State.Group,
+			EndDate: opts.EndDate,
+			Width:   width,
+		})...)
+	} else if opts.Section == AnalyticsSectionChats {
 		var panel AnalyticsChatPanel
 		if opts.Business {
 			panel = AnalyticsChatPanelLines(AnalyticsChatPanelOptions{

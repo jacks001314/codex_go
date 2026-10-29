@@ -31,12 +31,12 @@ func TestAnalyticsToolNameMatchesRust(t *testing.T) {
 // order.
 func TestAnalyticsVisibleSectionsMatchRust(t *testing.T) {
 	consumer := AnalyticsVisibleSections(auth.PlanPlus, true)
-	want := []AnalyticsSection{AnalyticsSectionUsage, AnalyticsSectionActivity, AnalyticsSectionPlugins, AnalyticsSectionSkills, AnalyticsSectionChats}
+	want := []AnalyticsSection{AnalyticsSectionSummary, AnalyticsSectionUsage, AnalyticsSectionActivity, AnalyticsSectionPlugins, AnalyticsSectionSkills, AnalyticsSectionChats}
 	if !analyticsSameSections(consumer, want) {
 		t.Fatalf("consumer sections = %v, want %v", consumer, want)
 	}
 	business := AnalyticsVisibleSections(auth.PlanBusiness, true)
-	want = []AnalyticsSection{AnalyticsSectionCredits, AnalyticsSectionUsage, AnalyticsSectionPlugins, AnalyticsSectionSkills, AnalyticsSectionChats}
+	want = []AnalyticsSection{AnalyticsSectionSummary, AnalyticsSectionCredits, AnalyticsSectionUsage, AnalyticsSectionPlugins, AnalyticsSectionSkills, AnalyticsSectionChats}
 	if !analyticsSameSections(business, want) {
 		t.Fatalf("business sections = %v, want %v", business, want)
 	}
@@ -46,7 +46,7 @@ func TestAnalyticsVisibleSectionsMatchRust(t *testing.T) {
 	}
 	// Plans without thread-usage support keep the four-card layout even when
 	// they are workspace accounts.
-	want = []AnalyticsSection{AnalyticsSectionCredits, AnalyticsSectionUsage, AnalyticsSectionPlugins, AnalyticsSectionSkills}
+	want = []AnalyticsSection{AnalyticsSectionSummary, AnalyticsSectionCredits, AnalyticsSectionUsage, AnalyticsSectionPlugins, AnalyticsSectionSkills}
 	if enterprise := AnalyticsVisibleSections(auth.PlanEnterprise, true); !analyticsSameSections(enterprise, want) {
 		t.Fatalf("enterprise sections = %v, want %v", enterprise, want)
 	}
@@ -56,8 +56,8 @@ func TestAnalyticsVisibleSectionsMatchRust(t *testing.T) {
 	if team := AnalyticsVisibleSections(auth.PlanTeam, true); !analyticsSameSections(team, want) {
 		t.Fatalf("team sections = %v, want %v", team, want)
 	}
-	if got := AnalyticsVisibleSections(auth.PlanUnknown, true); len(got) != 0 {
-		t.Fatalf("unknown sections = %v, want none", got)
+	if got := AnalyticsVisibleSections(auth.PlanUnknown, true); !analyticsSameSections(got, []AnalyticsSection{AnalyticsSectionSummary}) {
+		t.Fatalf("unknown sections = %v, want only Summary", got)
 	}
 	if got := AnalyticsVisibleSections(auth.PlanPlus, false); len(got) != 0 {
 		t.Fatalf("unresolved sections = %v, want none", got)
@@ -222,18 +222,16 @@ func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
 	if start != 0 || end != 16 {
 		t.Fatalf("focused range = (%d,%d), want (0,16)", start, end)
 	}
-	if !strings.HasPrefix(lines[0], "╭─") || !strings.Contains(lines[0], "1 Usage history") {
+	if !strings.HasPrefix(lines[0], "╭─") || !strings.Contains(lines[0], "1 Summary") {
 		t.Fatalf("first card top = %q", lines[0])
 	}
-	if !strings.Contains(lines[0], "▸") {
+	if !strings.Contains(lines[0], "2 Usage history") || !strings.Contains(lines[0], "▸") {
 		t.Fatalf("focused card title = %q, want a focus marker", lines[0])
 	}
 	for index, line := range lines {
 		if strings.HasPrefix(line, "╭") || strings.HasPrefix(line, "│") || strings.HasPrefix(line, "╰") {
-			// An odd number of cards leaves the last row's single card at the
-			// column width, like Rust's unpadded leftover chunk.
-			if got := analyticsDisplayWidth(line); got != 120 && got != 58 {
-				t.Fatalf("line %d width = %d, want 120 or 58 (%q)", index, got, line)
+			if got := analyticsDisplayWidth(line); got != 120 {
+				t.Fatalf("line %d width = %d, want 120 (%q)", index, got, line)
 			}
 		}
 	}
@@ -241,8 +239,8 @@ func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
 	narrow.Width = 80
 	narrow.Height = 40
 	lines, _, _ = AnalyticsDashboardLines(narrow)
-	if len(lines) != 5*16+4 {
-		t.Fatalf("single-column rows = %d, want %d", len(lines), 5*16+4)
+	if len(lines) != 6*16+5 {
+		t.Fatalf("single-column rows = %d, want %d", len(lines), 6*16+5)
 	}
 }
 

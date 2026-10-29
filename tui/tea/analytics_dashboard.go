@@ -11,6 +11,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/auth"
+	"codex_go/chatgptapi"
 	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
 	"codex_go/tui/styles"
@@ -45,6 +46,7 @@ type analyticsDashboard struct {
 	tasks                analytics.AnalyticsLoad[analytics.AnalyticsTaskChats]
 	taskLister           analytics.AnalyticsTaskDescendantLister
 	chatMetric           int
+	profile              analytics.AnalyticsLoad[chatgptapi.AccountProfile]
 	showZeroCreditGroups bool
 	account              analytics.AnalyticsLoad[auth.PlanType]
 	reportsStarted       bool
@@ -65,7 +67,8 @@ func newAnalyticsDashboard() *analyticsDashboard {
 		account:         analytics.UnavailableAnalyticsLoad[auth.PlanType](),
 		chats:           analytics.UnavailableAnalyticsLoad[analytics.AnalyticsChats](),
 		tasks:           analytics.UnavailableAnalyticsLoad[analytics.AnalyticsTaskChats](),
-		section:         analytics.AnalyticsSectionUsage,
+		profile:         analytics.UnavailableAnalyticsLoad[chatgptapi.AccountProfile](),
+		section:         analytics.AnalyticsSectionSummary,
 		zoomed:          true,
 		followSelection: true,
 		viewportHeight:  1,
@@ -148,6 +151,7 @@ func (d *analyticsDashboard) refresh() {
 	d.sections[analytics.AnalyticsSectionChats].Detail = nil
 	d.chats.Invalidate()
 	d.tasks.Invalidate()
+	d.profile.Invalidate()
 	d.account.Invalidate()
 	if d.live != nil {
 		live := d.live
@@ -175,6 +179,7 @@ func (d *analyticsDashboard) cancelLoads() {
 	}
 	d.chats.Invalidate()
 	d.tasks.Invalidate()
+	d.profile.Invalidate()
 	d.account.Invalidate()
 	d.live = nil
 	d.liveFactory = nil
@@ -201,6 +206,9 @@ func (d *analyticsDashboard) finish() {
 	}
 	if d.tasks.State() == analytics.AnalyticsLoadStateLoading {
 		d.tasks.Invalidate()
+	}
+	if d.profile.State() == analytics.AnalyticsLoadStateLoading {
+		d.profile.Invalidate()
 	}
 	d.account.Invalidate()
 	d.live = nil
@@ -235,6 +243,22 @@ func (d *analyticsDashboard) loadReport(section analytics.AnalyticsSection) {
 	}
 	d.sections[section].History.Cancel()
 	d.sections[section].History = *analytics.StartAnalyticsLoad(context.Background(), load, nil)
+}
+
+// loadSummary starts the profile load independently of the report loads
+// (Rust AnalyticsView::load_summary, #45769).
+func (d *analyticsDashboard) loadSummary() {
+	if d == nil {
+		return
+	}
+	if d.live == nil || d.liveFactory == nil {
+		d.profile.Invalidate()
+		return
+	}
+	live := d.live
+	d.profile = *analytics.StartAnalyticsLoad(context.Background(), func(ctx context.Context) (*chatgptapi.AccountProfile, error) {
+		return analytics.LoadAnalyticsProfile(ctx, live)
+	}, nil)
 }
 
 func (d *analyticsDashboard) business() bool {
@@ -291,6 +315,7 @@ func (d *analyticsDashboard) pollReports() {
 	}
 	d.chats.Poll()
 	d.tasks.Poll()
+	d.profile.Poll()
 	d.account.Poll()
 	d.startReports()
 	if !d.business() && !d.consumerAttribution() {
@@ -348,6 +373,7 @@ func (d *analyticsDashboard) startReports() {
 			d.sections[analytics.AnalyticsSectionCredits].Group = creditGroups[0]
 		}
 	}
+	d.loadSummary()
 	for _, section := range visible {
 		d.loadReport(section)
 	}
@@ -430,6 +456,25 @@ func (d *analyticsDashboard) modelName(key string) string {
 	return key
 }
 
+// summaryProfile returns the decoded profile, its load message, readiness and
+// the resolved plan for the Summary panel and card.
+func (d *analyticsDashboard) summaryProfile() (*chatgptapi.AccountProfile, string, bool, *auth.PlanType) {
+	if d == nil {
+		return nil, "", false, nil
+	}
+	profile, ready := d.profile.Ready()
+	var loaded *chatgptapi.AccountProfile
+	if ready {
+		loaded = &profile
+	}
+	message, _ := d.profile.Message()
+	var planPtr *auth.PlanType
+	if plan, ok := d.account.Ready(); ok {
+		planPtr = &plan
+	}
+	return loaded, message, ready, planPtr
+}
+
 // cycleTokenModel advances the business usage model filter, wrapping to no
 // filter after the last model (Rust AnalyticsView's `m` handling).
 func (d *analyticsDashboard) cycleTokenModel() {
@@ -496,6 +541,9 @@ func (d *analyticsDashboard) anyLoading() bool {
 		return true
 	}
 	if d.tasks.State() == analytics.AnalyticsLoadStateLoading {
+		return true
+	}
+	if d.profile.State() == analytics.AnalyticsLoadStateLoading {
 		return true
 	}
 	return false
@@ -574,6 +622,37 @@ func (d *analyticsDashboard) selectSection(section analytics.AnalyticsSection) {
 	d.groupPicker = nil
 }
 
+// summaryAction scrolls the Summary body. A missing action leaves the view
+// unchanged (Rust AnalyticsView::summary_action, #45769).
+func (d *analyticsDashboard) summaryAction(action string) {
+	if d == nil {
+		return
+	}
+	switch action {
+	case "move_up":
+		d.scrollOffset--
+	case "move_down":
+		d.scrollOffset++
+	case "page_up":
+		d.scrollOffset -= d.viewportHeight
+	case "page_down":
+		d.scrollOffset += d.viewportHeight
+	case "jump_top":
+		d.scrollOffset = 0
+	case "jump_bottom":
+		d.scrollOffset = int(^uint(0) >> 1)
+	case "cancel":
+		d.finish()
+		return
+	default:
+		return
+	}
+	if d.scrollOffset < 0 {
+		d.scrollOffset = 0
+	}
+	d.followSelection = false
+}
+
 // handleKey applies one key press. It mirrors Rust AnalyticsView::handle_key.
 func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 	if d == nil || !d.active {
@@ -633,7 +712,9 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 				return true
 			}
 		case 'r':
-			if d.section != analytics.AnalyticsSectionChats && len(d.visibleSections()) > 0 {
+			if d.section != analytics.AnalyticsSectionChats &&
+				d.section != analytics.AnalyticsSectionSummary &&
+				len(d.visibleSections()) > 0 {
 				d.changeRange()
 				return true
 			}
@@ -687,7 +768,7 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 		}
 		return true
 	}
-	if runeKey, ok := analyticsPlainRune(msg); ok && runeKey >= '1' && runeKey <= '6' {
+	if runeKey, ok := analyticsPlainRune(msg); ok && runeKey >= '1' && runeKey <= '7' {
 		if index := int(runeKey - '1'); index < len(visible) {
 			d.selectSection(visible[index])
 		}
@@ -706,6 +787,10 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 		return true
 	case bubbletea.KeyShiftTab:
 		d.selectSection(visible[(current+len(visible)-1)%len(visible)])
+		return true
+	}
+	if d.section == analytics.AnalyticsSectionSummary {
+		d.summaryAction(action)
 		return true
 	}
 	if (d.section == analytics.AnalyticsSectionPlugins ||
@@ -798,7 +883,9 @@ func (d *analyticsDashboard) render(m *Model, width, height int) string {
 	visible := d.visibleSections()
 	// Top chats always covers 30 days, so it never shows the 7/30d range row
 	// (Rust render.rs show_range).
-	showRange := len(visible) > 0 && d.section != analytics.AnalyticsSectionChats
+	showRange := len(visible) > 0 &&
+		d.section != analytics.AnalyticsSectionChats &&
+		d.section != analytics.AnalyticsSectionSummary
 	theme := m.styles()
 
 	controls := d.controls(m, showRange)
@@ -890,13 +977,28 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 				panel = d.panel(d.section, width, adjusted)
 			}
 		}
+		_, profileReady := d.profile.Ready()
+		centerSummary := d.section == analytics.AnalyticsSectionSummary &&
+			profileReady &&
+			d.groupPicker == nil
+		if centerSummary {
+			// Keep the heading and rule fixed and center the profile below
+			// them (Rust render.rs center_summary, #45769).
+			padding := (height - len(panel.Lines)) / 2
+			if padding > 0 {
+				insert := make([]string, padding)
+				panel.Lines = append(panel.Lines[:2], append(insert, panel.Lines[2:]...)...)
+			}
+		}
 		start, end := 0, len(panel.Lines)
 		if len(panel.Lines) > height {
 			start, end = panel.SelectionStart, panel.SelectionEnd
 		}
 		lines := make([]string, 0, len(panel.Lines)+1)
 		lines = append(lines, panel.Lines...)
-		lines = append(lines, "")
+		if !centerSummary {
+			lines = append(lines, "")
+		}
 		return lines, start, end
 	}
 	groups := [analytics.AnalyticsSectionCount]int{}
@@ -915,6 +1017,7 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 		loadedTasks = &tasks
 	}
 	taskMessage, _ := d.tasks.Message()
+	profile, profileMessage, profileReady, planPtr := d.summaryProfile()
 	lines, start, end := analytics.AnalyticsDashboardLines(analytics.AnalyticsDashboardOptions{
 		Width:               width,
 		Height:              height,
@@ -934,6 +1037,10 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 		TaskMessage:         taskMessage,
 		TaskReady:           tasksReady,
 		ChatMetric:          d.chatMetric,
+		Profile:             profile,
+		ProfileMessage:      profileMessage,
+		ProfileReady:        profileReady,
+		Plan:                planPtr,
 		History:             d.historyLines,
 	})
 	return lines, start, end
@@ -957,6 +1064,7 @@ func (d *analyticsDashboard) panel(section analytics.AnalyticsSection, width, ch
 		loadedTasks = &tasks
 	}
 	taskMessage, _ := d.tasks.Message()
+	profile, profileMessage, profileReady, planPtr := d.summaryProfile()
 	return analytics.AnalyticsPanelLines(analytics.AnalyticsPanelOptions{
 		Section:              section,
 		State:                d.sections[section],
@@ -968,6 +1076,10 @@ func (d *analyticsDashboard) panel(section analytics.AnalyticsSection, width, ch
 		TaskMessage:          taskMessage,
 		TaskReady:            tasksReady,
 		ChatMetric:           d.chatMetric,
+		Profile:              profile,
+		ProfileMessage:       profileMessage,
+		ProfileReady:         profileReady,
+		Plan:                 planPtr,
 		ShowZeroCreditGroups: d.showZeroCreditGroups,
 		ViewportHeight:       d.viewportHeight,
 		Width:                width,
@@ -1010,7 +1122,11 @@ func (d *analyticsDashboard) controls(m *Model, showRange bool) string {
 		return "R refresh · " + cancelHint + " back · q close"
 	}
 	if d.groupPicker != nil {
-		return analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " group · " +
+		target := "group"
+		if d.section == analytics.AnalyticsSectionSummary {
+			target = "view"
+		}
+		return analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " " + target + " · " +
 			analyticsHintLabel(m, "accept") + " select · " + cancelHint + " cancel"
 	}
 	navigation := analyticsHintLabel(m, "accept") + "/z maximize"
@@ -1018,6 +1134,8 @@ func (d *analyticsDashboard) controls(m *Model, showRange bool) string {
 		if d.section == analytics.AnalyticsSectionChats {
 			navigation = analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " row · " +
 				analyticsHintLabel(m, "accept") + " details"
+		} else if d.section == analytics.AnalyticsSectionSummary {
+			navigation = analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " scroll"
 		} else {
 			navigation = analyticsHintLabel(m, "move_left") + "/" + analyticsHintLabel(m, "move_right") + " day · " +
 				analyticsHintLabel(m, "accept") + " details"
@@ -1038,7 +1156,11 @@ func (d *analyticsDashboard) controls(m *Model, showRange bool) string {
 	}
 	groupHint := ""
 	if len(d.groupOptions()) >= 2 {
-		groupHint = "g group · "
+		if d.section == analytics.AnalyticsSectionSummary {
+			groupHint = "g view · "
+		} else {
+			groupHint = "g group · "
+		}
 	}
 	return "tab/1–" + strconv.Itoa(len(d.visibleSections())) + " section · " + zoomHint + navigation + "\n" +
 		rangeHint + groupHint + "R refresh · " +

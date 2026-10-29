@@ -275,8 +275,8 @@ func TestAnalyticsRequestsUseReloadedCredentialsLikeRust(t *testing.T) {
 		t.Fatalf("save reloaded auth: %v", err)
 	}
 	label := live.AccountLabel()
-	if label == nil || *label != "analytics@example.test · account-a" {
-		t.Fatalf("AccountLabel() = %v, want %q", label, "analytics@example.test · account-a")
+	if label == nil || *label != "analytics@example.test" {
+		t.Fatalf("AccountLabel() = %v, want %q", label, "analytics@example.test")
 	}
 	if _, err := RequestAnalytics(ctx, session.Backend, func(ctx context.Context, client *chatgptapi.CloudClient) (int, error) {
 		if _, err := client.GetAccountAnalytics(ctx, chatgptapi.AnalyticsReport{Kind: chatgptapi.AnalyticsReportUsage}, analyticsTestStartDate().Format("2006-01-02"), analyticsTestEndDate.Format("2006-01-02")); err != nil {

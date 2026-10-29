@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -274,6 +275,17 @@ func graphWidth(width int) int {
 }
 
 func TokenActivityChartLines(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int) []string {
+	return append(tokenActivityChartBody(view, buckets, today, width), tokenActivityViewFooter(view))
+}
+
+// TokenActivityCalendarLines is the calendar/chart body without the view
+// switching footer, for hosts that render their own controls
+// (Rust analytics/activity_chart.rs chart_lines, #45769).
+func TokenActivityCalendarLines(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int) []string {
+	return tokenActivityChartBody(view, buckets, today, width)
+}
+
+func tokenActivityChartBody(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int) []string {
 	values := TokenActivityDailyValues(buckets, today)
 	shownColumns := shownTokenActivityColumns(width)
 	if shownColumns == 0 {
@@ -304,7 +316,6 @@ func TokenActivityChartLines(view TokenActivityView, buckets []TokenActivityDail
 	} else {
 		lines = append(lines, tokenActivityBarCaption(view, values))
 	}
-	lines = append(lines, tokenActivityViewFooter(view))
 	return lines
 }
 
@@ -509,7 +520,25 @@ func tokenActivityBarCaption(view TokenActivityView, values []int64) string {
 	if peak <= 0 {
 		return "   No token activity in the last 12 months"
 	}
-	return "   " + lead + FormatTokensCompact(peak)
+	return "   " + lead + formatTokenActivityAmount(float64(peak))
+}
+
+// formatTokenActivityAmount mirrors Rust data::compact_amount: one decimal with
+// trailing zeros removed, promoting before rounding would print 1000K.
+func formatTokenActivityAmount(value float64) string {
+	if math.Abs(value) < 1000 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return strconv.FormatInt(int64(math.Round(value)), 10)
+	}
+	units := []string{"K", "M", "B", "T"}
+	scaled := value / 1000
+	unit := 0
+	for math.Abs(scaled) >= 999.95 && unit+1 < len(units) {
+		scaled /= 1000
+		unit++
+	}
+	rounded := strconv.FormatFloat(math.Round(scaled*10)/10, 'f', 1, 64)
+	rounded = strings.TrimRight(strings.TrimRight(rounded, "0"), ".")
+	return rounded + units[unit]
 }
 
 func tokenActivityViewFooter(active TokenActivityView) string {

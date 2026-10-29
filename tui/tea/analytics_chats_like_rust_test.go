@@ -124,7 +124,7 @@ func TestAnalyticsChatsTabRendersTableLikeRust(t *testing.T) {
 	waitForAnalyticsLoads(t, model)
 
 	dashboard := model.analyticsDashboard
-	model.Update(runes("5"))
+	model.Update(runes("6"))
 	if dashboard.section != analytics.AnalyticsSectionChats {
 		t.Fatalf("section after 5 = %v, want chats", dashboard.section)
 	}
@@ -144,7 +144,7 @@ func TestAnalyticsChatsTabRendersTableLikeRust(t *testing.T) {
 		"Chat usage unavailable",
 		"1 chat estimate unavailable",
 		"Local chats · excludes archived chats and subagent usage",
-		"tab/1–5",
+		"tab/1–6",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chats view missing %q:\n%s", want, view)
@@ -177,7 +177,7 @@ func TestAnalyticsChatsZeroCreditToggleNeedsDetailLikeRust(t *testing.T) {
 	openAnalyticsFromUsageMenu(t, model)
 	waitForAnalyticsLoads(t, model)
 	dashboard := model.analyticsDashboard
-	model.Update(runes("5"))
+	model.Update(runes("6"))
 	waitForAnalyticsLoads(t, model)
 
 	model.Update(runes("a"))
@@ -238,7 +238,7 @@ func TestAnalyticsChatsIgnoresRangeKeyLikeRust(t *testing.T) {
 	openAnalyticsFromUsageMenu(t, model)
 	waitForAnalyticsLoads(t, model)
 	dashboard := model.analyticsDashboard
-	model.Update(runes("5"))
+	model.Update(runes("6"))
 	waitForAnalyticsLoads(t, model)
 
 	before := dashboard.ranges
@@ -269,7 +269,7 @@ func TestAnalyticsChatsOverviewCardLikeRust(t *testing.T) {
 	openAnalyticsFromUsageMenu(t, model)
 	waitForAnalyticsLoads(t, model)
 	dashboard := model.analyticsDashboard
-	model.Update(runes("5"))
+	model.Update(runes("6"))
 	waitForAnalyticsLoads(t, model)
 	model.Update(runes("z"))
 	if dashboard.zoomed {
@@ -306,7 +306,7 @@ func TestAnalyticsConsumerChatsTableAndSortCyclingLikeRust(t *testing.T) {
 	openAnalyticsFromUsageMenu(t, model)
 	waitForAnalyticsLoads(t, model)
 	dashboard := model.analyticsDashboard
-	model.Update(runes("5"))
+	model.Update(runes("6"))
 	if dashboard.section != analytics.AnalyticsSectionChats {
 		t.Fatalf("section after 5 = %v, want chats", dashboard.section)
 	}

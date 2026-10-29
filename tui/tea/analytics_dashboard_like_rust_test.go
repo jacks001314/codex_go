@@ -163,6 +163,7 @@ func TestUsageMenuOpensAnalyticsLikeRust(t *testing.T) {
 	waitForAnalyticsLoads(t, model)
 
 	want := []analytics.AnalyticsSection{
+		analytics.AnalyticsSectionSummary,
 		analytics.AnalyticsSectionUsage,
 		analytics.AnalyticsSectionActivity,
 		analytics.AnalyticsSectionPlugins,
@@ -173,7 +174,7 @@ func TestUsageMenuOpensAnalyticsLikeRust(t *testing.T) {
 		t.Fatalf("consumer sections = %v, want %v", got, want)
 	}
 	view := model.View()
-	for _, want := range []string{"Analytics", "Live account", "tab/1–5", "Total usage history"} {
+	for _, want := range []string{"Analytics", "Live account", "tab/1–6", "Total usage history", "Summary"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard view missing %q:\n%s", want, view)
 		}
@@ -188,6 +189,7 @@ func TestAnalyticsBusinessSectionsLikeRust(t *testing.T) {
 	waitForAnalyticsLoads(t, model)
 
 	want := []analytics.AnalyticsSection{
+		analytics.AnalyticsSectionSummary,
 		analytics.AnalyticsSectionCredits,
 		analytics.AnalyticsSectionUsage,
 		analytics.AnalyticsSectionPlugins,
@@ -197,10 +199,9 @@ func TestAnalyticsBusinessSectionsLikeRust(t *testing.T) {
 	if got := analyticsSectionList(model.analyticsDashboard.visibleSections()); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("business sections = %v, want %v", got, want)
 	}
-	// Rust keeps the default Usage section when it is part of the account's
-	// section list, even though Credits is listed first.
-	if model.analyticsDashboard.section != analytics.AnalyticsSectionUsage {
-		t.Fatalf("initial business section = %v, want usage", model.analyticsDashboard.section)
+	// Summary is the initial tab for every account that resolves a plan.
+	if model.analyticsDashboard.section != analytics.AnalyticsSectionSummary {
+		t.Fatalf("initial business section = %v, want summary", model.analyticsDashboard.section)
 	}
 }
 
@@ -211,6 +212,7 @@ func TestAnalyticsRangeChangeKeepsSelectionLikeRust(t *testing.T) {
 	waitForAnalyticsLoads(t, model)
 
 	dashboard := model.analyticsDashboard
+	dashboard.selectSection(analytics.AnalyticsSectionUsage)
 	if got := dashboard.rowCount(); got != 7 {
 		t.Fatalf("row count = %d, want 7", got)
 	}
@@ -241,6 +243,7 @@ func TestAnalyticsGroupPickerAppliesGroupingLikeRust(t *testing.T) {
 	waitForAnalyticsLoads(t, model)
 
 	dashboard := model.analyticsDashboard
+	dashboard.selectSection(analytics.AnalyticsSectionUsage)
 	options := dashboard.groupOptions()
 	position := 0
 	for index, group := range options {
@@ -397,13 +400,13 @@ func TestAnalyticsSectionsSwitchAndDetailsLikeRust(t *testing.T) {
 	waitForAnalyticsLoads(t, model)
 
 	dashboard := model.analyticsDashboard
-	model.Update(runes("2"))
+	model.Update(runes("3"))
 	if dashboard.section != analytics.AnalyticsSectionActivity {
-		t.Fatalf("section after 2 = %v, want activity", dashboard.section)
+		t.Fatalf("section after 3 = %v, want activity", dashboard.section)
 	}
-	model.Update(runes("1"))
+	model.Update(runes("2"))
 	if dashboard.section != analytics.AnalyticsSectionUsage {
-		t.Fatalf("section after 1 = %v, want usage", dashboard.section)
+		t.Fatalf("section after 2 = %v, want usage", dashboard.section)
 	}
 	model.Update(key(bubbletea.KeyLeft))
 	if got := dashboard.sections[analytics.AnalyticsSectionUsage].Cursor; got != 5 {
@@ -453,7 +456,7 @@ func TestAnalyticsSectionLoadFailuresAreIndependentLikeRust(t *testing.T) {
 	if state := dashboard.sections[analytics.AnalyticsSectionPlugins].History.State(); state != analytics.AnalyticsLoadStateError {
 		t.Fatalf("plugins state = %v, want error", state)
 	}
-	model.Update(runes("3"))
+	model.Update(runes("4"))
 	if view := model.View(); !strings.Contains(view, "Report request failed") {
 		t.Fatalf("plugin panel missing the failure message:\n%s", view)
 	}

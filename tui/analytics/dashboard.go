@@ -3,6 +3,9 @@ package analytics
 import (
 	"strconv"
 	"strings"
+
+	"codex_go/auth"
+	"codex_go/chatgptapi"
 )
 
 // AnalyticsGroupOptions lists the groupings offered for a section. Usage
@@ -24,6 +27,8 @@ func AnalyticsGroupOptions(section AnalyticsSection, business, consumerAttributi
 		return creditGroups
 	case section == AnalyticsSectionActivity:
 		return []int{2, 0}
+	case section == AnalyticsSectionSummary:
+		return []int{0, 1, 2}
 	default:
 		return nil
 	}
@@ -58,6 +63,8 @@ func AnalyticsSectionTitle(section AnalyticsSection, business, consumerAttributi
 		return "Messages"
 	case AnalyticsSectionChats:
 		return "Top chats"
+	case AnalyticsSectionSummary:
+		return "Summary"
 	default:
 		return "Skills used"
 	}
@@ -87,7 +94,12 @@ type AnalyticsDashboardOptions struct {
 	TaskMessage string
 	TaskReady   bool
 	ChatMetric  int
-	History     func(section AnalyticsSection, width, height int) []string
+	// Profile supplies the account Summary card (Rust #45769).
+	Profile        *chatgptapi.AccountProfile
+	ProfileMessage string
+	ProfileReady   bool
+	Plan           *auth.PlanType
+	History        func(section AnalyticsSection, width, height int) []string
 }
 
 // AnalyticsDashboardLines renders the bordered overview cards and returns the
@@ -165,7 +177,7 @@ func analyticsDashboardCard(
 ) []string {
 	focused := section == opts.Section
 	content := []string{""}
-	if section != AnalyticsSectionChats {
+	if section != AnalyticsSectionChats && section != AnalyticsSectionSummary {
 		rangeDays := 7
 		if opts.Ranges[section.RangeGroup(opts.Business)] != 0 {
 			rangeDays = 30
@@ -183,7 +195,17 @@ func analyticsDashboardCard(
 	if section == AnalyticsSectionUsage || section == AnalyticsSectionCredits || section == AnalyticsSectionActivity {
 		content = append(content, "By "+strings.ToLower(section.GroupLabel(opts.Groups[section], opts.ConsumerAttribution)))
 	}
-	if section == AnalyticsSectionChats {
+	if section == AnalyticsSectionSummary {
+		content = AnalyticsSummaryLines(AnalyticsSummaryOptions{
+			Profile: opts.Profile,
+			Message: opts.ProfileMessage,
+			Ready:   opts.ProfileReady,
+			Plan:    opts.Plan,
+			Zoomed:  false,
+			View:    opts.Groups[section],
+			Width:   innerWidth,
+		})
+	} else if section == AnalyticsSectionChats {
 		if opts.Business {
 			content = AnalyticsChatOverviewLines(opts.Chats, opts.ChatMessage, opts.ChatReady, innerWidth)
 		} else {
