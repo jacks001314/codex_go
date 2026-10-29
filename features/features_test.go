@@ -48,6 +48,35 @@ func TestGuardianRecordedItemsFeatureRegisteredLikeRust(t *testing.T) {
 	}
 }
 
+// TestAnalyticsPlanHistoryExperimentalLikeRust pins Rust #45772: plan history
+// appears in the experimental menu with its preview copy and stays off by
+// default.
+func TestAnalyticsPlanHistoryExperimentalLikeRust(t *testing.T) {
+	const key = "analytics_plan_history"
+	var spec Spec
+	for _, candidate := range Registry {
+		if candidate.Key == key {
+			spec = candidate
+			break
+		}
+	}
+	if spec.Key == "" {
+		t.Fatalf("%s should be registered", key)
+	}
+	if spec.Stage != StageExperimental {
+		t.Fatalf("%s stage = %q, want %q", key, spec.Stage, StageExperimental)
+	}
+	if spec.ExperimentalName != "Analytics plan history" {
+		t.Fatalf("%s menu name = %q", key, spec.ExperimentalName)
+	}
+	if want := "Preview five-hour and weekly allowance history for consumer accounts in /analytics."; spec.ExperimentalMenuDescription != want {
+		t.Fatalf("%s menu description = %q, want %q", key, spec.ExperimentalMenuDescription, want)
+	}
+	if spec.DefaultEnabled || Defaults()[key] {
+		t.Fatalf("%s must stay disabled by default", key)
+	}
+}
+
 func TestPluginRecommendationsEnabledLikeRust(t *testing.T) {
 	for _, test := range []struct {
 		name   string

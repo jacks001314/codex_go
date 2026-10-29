@@ -4,8 +4,41 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/features"
 	"codex_go/tui"
 )
+
+// TestExperimentalFeaturesAnalyticsPlanHistoryLikeRust pins Rust #45772's
+// experimental-menu snapshot: plan history appears unchecked with its preview
+// copy.
+func TestExperimentalFeaturesAnalyticsPlanHistoryLikeRust(t *testing.T) {
+	const key = "analytics_plan_history"
+	registry := features.Registry
+	var spec features.Spec
+	for _, candidate := range registry {
+		if candidate.Key == key {
+			spec = candidate
+			break
+		}
+	}
+	if spec.Stage != features.StageExperimental || spec.ExperimentalName == "" || spec.ExperimentalMenuDescription == "" {
+		t.Fatalf("experimental registry spec = %#v", spec)
+	}
+	view := NewExperimentalFeaturesView([]ExperimentalFeatureItem{{
+		Feature:     key,
+		Name:        spec.ExperimentalName,
+		Description: spec.ExperimentalMenuDescription,
+		Enabled:     spec.DefaultEnabled,
+	}})
+	rows := view.Rows(240)
+	joined := strings.Join(rows, "\n")
+	if !strings.Contains(joined, "[ ] "+spec.ExperimentalName) {
+		t.Fatalf("experimental menu missing the unchecked entry:\n%s", joined)
+	}
+	if !strings.Contains(joined, spec.ExperimentalMenuDescription) {
+		t.Fatalf("experimental menu missing the preview copy:\n%s", joined)
+	}
+}
 
 func TestExperimentalFeaturesViewToggleSaveRowsMatchRust(t *testing.T) {
 	view := NewExperimentalFeaturesView([]ExperimentalFeatureItem{

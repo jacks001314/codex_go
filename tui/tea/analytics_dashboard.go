@@ -631,6 +631,27 @@ func (m *Model) analyticsListAction(msg bubbletea.KeyMsg) string {
 	return ""
 }
 
+// analyticsListActionForKey resolves the shared list keymap action for a key,
+// falling back to the vim horizontal aliases only when the key itself is
+// unbound: explicit bindings win and remapped or unbound arrows stay
+// authoritative (Rust AnalyticsView::handle_key, #45772).
+func (m *Model) analyticsListActionForKey(msg bubbletea.KeyMsg) string {
+	if action := m.analyticsListAction(msg); action != "" {
+		return action
+	}
+	runeKey, ok := analyticsPlainRune(msg)
+	if !ok {
+		return ""
+	}
+	switch runeKey {
+	case 'h':
+		return m.analyticsListAction(bubbletea.KeyMsg{Type: bubbletea.KeyLeft})
+	case 'l':
+		return m.analyticsListAction(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
+	}
+	return ""
+}
+
 func (d *analyticsDashboard) selectSection(section analytics.AnalyticsSection) {
 	if d.zoomed && section != d.section {
 		d.scrollOffset = 0
@@ -686,7 +707,7 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 	if runeKey, ok := analyticsPlainRune(msg); ok && runeKey == ' ' {
 		action = "accept"
 	} else {
-		action = m.analyticsListAction(msg)
+		action = m.analyticsListActionForKey(msg)
 	}
 	d.followSelection = true
 	if runeKey, ok := analyticsPlainRune(msg); ok {
@@ -1252,7 +1273,7 @@ func analyticsStyledControls(theme styles.Styles, line string) string {
 		return line
 	}
 	dim := theme.Chat.DimText
-	bold := theme.Dialog.Highlight + theme.ExecCell.Bold
+	keyStyle := analyticsFooterKeyStyle() + theme.ExecCell.Bold
 	parts := strings.Split(line, " · ")
 	var builder strings.Builder
 	for index, part := range parts {
@@ -1264,7 +1285,7 @@ func analyticsStyledControls(theme styles.Styles, line string) string {
 			keys = part[:at]
 			description = part[at:]
 		}
-		builder.WriteString(bold)
+		builder.WriteString(keyStyle)
 		builder.WriteString(keys)
 		builder.WriteString(reset)
 		builder.WriteString(dim)
@@ -1272,6 +1293,16 @@ func analyticsStyledControls(theme styles.Styles, line string) string {
 		builder.WriteString(reset)
 	}
 	return dim + builder.String() + reset
+}
+
+// analyticsFooterKeyStyle keeps footer shortcut keys readable on light
+// terminals while leaving dark terminals on their default foreground
+// (Rust style::footer_hint_key_style, #45772).
+func analyticsFooterKeyStyle() string {
+	if background, known := codextui.DefaultBackgroundRGB(); known && codextui.IsLight(background) {
+		return "\x1b[30m"
+	}
+	return ""
 }
 
 func analyticsTitleLine(theme styles.Styles, live *analytics.Live) string {
