@@ -14307,9 +14307,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go already carries the whole `/daemon` surface: tui/slash_command.go + tui/bottom_pane/slash_commands.go register the command, tui/tea/daemon_menu.go opens the menu, gates confirm on a local CLI and non-remote target, records PendingUpdateAction and quits, tui/chatwidget/daemon_menu.go builds the menu/confirm/restart views (remote, missing-CLI and missing-package disabled states), tui/update_action.go pins `app-server daemon update [--from-cli --yes]`, and app/daemon_update_action.go relaunches the launching CLI with the telemetry handoff marker and propagates failures; version notices route to `/daemon` via tui/tea/server_version_notice.go and tui/history_cell/warnings.go; regression coverage in tui/chatwidget/daemon_menu_test.go, tui/tea/daemon_menu_test.go, app/daemon_update_action_test.go (executable, args, env, failure copy) all pass"
    ]
   },
   {

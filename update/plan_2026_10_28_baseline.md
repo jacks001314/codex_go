@@ -1602,6 +1602,31 @@ Preserve executor path conventions in permission summaries (#45852).
 - Tests mirror the upstream cases (POSIX, Windows drive, UNC, case-distinct
   roots, opaque subpath writes, network and full-access labels).
 
-Status after reconciliation: `2024 complete`, `398 not_applicable`,
-`466 audit_pending`, `258 regression_pending`, `3 partial`,
+### /daemon menu for local background server updates (#45854) (Round 858)
+
+`/daemon` menu for local background server updates (#45854, regression closure).
+
+- Go already implements the full surface, so this round records regression
+  evidence instead of new code. `tui/tea/daemon_menu.go` opens the menu,
+  refuses confirmation without a launching CLI or for a remote target, records
+  `PendingUpdateAction`, and quits; `app/daemon_update_action.go` then relaunches
+  the CLI in the foreground with the source's arguments and propagates
+  failures.
+- The view builders in `tui/chatwidget/daemon_menu.go` keep maintenance
+  available when disconnected or embedded while disabling both sources for
+  remote connections or a missing CLI, and disabling "Use this CLI build"
+  without a local package.
+- `tui/update_action.go` pins `app-server daemon update` and
+  `app-server daemon update --from-cli --yes`; local daemon version notices
+  point at `/daemon` (`tui/tea/server_version_notice.go`,
+  `tui/history_cell/warnings.go`).
+- Existing coverage in `tui/chatwidget/daemon_menu_test.go`,
+  `tui/tea/daemon_menu_test.go`, and `app/daemon_update_action_test.go`
+  (selected executable, arguments, handoff env, failure copy) passes.
+- Rust also suppresses the generic exit summary for a daemon update; the Go
+  interactive path prints no `AppExitInfo` lines at all, so there is nothing to
+  suppress.
+
+Status after reconciliation: `2025 complete`, `398 not_applicable`,
+`466 audit_pending`, `257 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
