@@ -157,6 +157,20 @@ func TestProjectTrustLookupForTargetPrefersCwdOverRepositoryRootLikeRust(t *test
 	if level, ok := cfg.ProjectTrustLevelForLookup(lookup); !ok || level != "untrusted" {
 		t.Fatalf("root fallback = %q, %v, want untrusted", level, ok)
 	}
+
+	// Rust #47924: a cwd entry without a trust level still takes precedence over
+	// a trusted repository root, so the lookup reports no decision instead of
+	// inheriting the root's trust.
+	cfg = &Config{Values: map[string]any{"projects": trustProjects(map[string]any{
+		cwd:  nil,
+		root: "trusted",
+	})}}
+	if level, ok := cfg.ProjectTrustLevelForLookup(lookup); ok || level != "" {
+		t.Fatalf("cwd entry without a level = %q, %v, want no decision", level, ok)
+	}
+	if project, ok := cfg.ActiveProjectForLookup(lookup); !ok || len(project) != 0 {
+		t.Fatalf("active project = %#v, %v, want the untrusted-levels cwd entry", project, ok)
+	}
 }
 
 func normalizeTrustKeyForTest(path string) string {

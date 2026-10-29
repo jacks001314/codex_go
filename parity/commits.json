@@ -15580,9 +15580,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 782: the #46328 behavior is present end to end in Go. The loader classifies a folder as projectless only when discovery finds no project-root marker, no Git checkout and no project-local config directory, and Go additionally never writes an implicit `projects.<cwd>.trust_level` from thread/start, so there is no implicit trust path to skip. The connected trust driver also stops before prompting or persisting for a projectless folder. New end-to-end contract config/projectless_trust_persistence_like_rust_test.go: reading the effective config of a projectless folder adds no project layer, writes no trust_level, still refuses project configuration added afterwards (`.gcode/config.toml` model stays out of the effective config), and loads it once a trusted decision is saved. Existing loader coverage: config/projectless_test.go (classification, markers, saved trust, managed markers, ignored discovery) and app TestEnsureRemoteProjectTrustSkipsPromptForProjectlessFolderLikeRust (no prompt, no config/batchWrite). Verify with: go test ./config -run 'Projectless' -count=1; go test ./app -run Projectless -count=1."
    ]
   },
   {
@@ -20901,9 +20901,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 783: Go's lookup already takes explicit paths - ProjectTrustPath{Original, Canonical} plus ProjectTrustLookupFromPaths(windowsConvention, cwd, *repoRoot) and ProjectTrustLookupForTarget(cwd, repoRoot) - and performs no filesystem access or root resolution while building keys, so repository-root canonicalization stays deferred until the cwd keys miss (Rust #47924). Added the missing #47924 precedence case to config/project_trust_test.go: a cwd entry without a trust_level still wins over a trusted repository root and reports no decision, while removing the cwd entry falls back to the root. Windows case handling and canonical-before-original ordering are already covered by TestWindowsProjectTrustLookupPrefersExactThenSortedAliasesLikeRust and TestPosixProjectTrustLookupPreservesOrderAndCaseLikeRust. Verify with: go test ./config -run 'ProjectTrustLookup' -count=1."
    ]
   },
   {

@@ -736,6 +736,17 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Go renders no onboarding consent screen: those paths attach to the server-owned task and the connected server already applies the restricted state, so there is no consent step to run, cancel, or re-dispatch - the same reason #54048 is not applicable.
 - The decision machinery is covered: `checkDirectoryTrust` (destination + saved folder, restricted no-persist, existing-task flag) and `tui/onboarding.TrustDirectoryPrompt`'s connected/restricted/existing-task/keep-current-directory states.
 
-Status after reconciliation: `1969 complete`, `385 not_applicable`,
-`510 audit_pending`, `285 regression_pending`, `0 partial`,
+### Keep projectless folders from preapproving project config (Round 782)
+
+- Go's loader classifies a folder as projectless only without a project-root marker, Git checkout, or project-local config directory, and `thread/start` never writes an implicit `projects.<cwd>.trust_level`, so there is no implicit trust path to skip.
+- New contract `config/projectless_trust_persistence_like_rust_test.go`: a projectless read adds no project layer and writes no trust, project configuration added afterwards stays unloaded, and a saved trusted decision still loads it.
+- The connected trust driver still skips both the prompt and `config/batchWrite` for projectless folders.
+
+### Pin explicit project trust lookup paths (Round 783)
+
+- `ProjectTrustLookupFromPaths` already takes explicit `ProjectTrustPath` inputs plus an optional repository root and builds keys without filesystem access, so root canonicalization stays deferred (Rust #47924).
+- Added the missing precedence case: a cwd entry without a `trust_level` still wins over a trusted repository root and reports no decision; removing it falls back to the root.
+
+Status after reconciliation: `1971 complete`, `385 not_applicable`,
+`510 audit_pending`, `283 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
