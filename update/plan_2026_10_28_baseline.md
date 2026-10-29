@@ -657,6 +657,16 @@ Eight more entries moved to `complete`: `#44028` (`model/credential_export.go`),
 (`mcp/read_only_tools.go`). Evidence cites the behaviour and the package tests
 that pin it.
 
-Status after reconciliation: `1934 complete`, `381 not_applicable`,
-`547 audit_pending`, `287 regression_pending`, `0 partial`,
+### Managed provider, telemetry, and Windows sandbox sweep (Round 767)
+
+Eight more entries moved to `complete`: `#44650` (`config/config.go`),
+`#44661` (`appserver/session_telemetry.go`), `#43949`
+(`appserver/thread_attachments.go`), `#45276` (`app/agents_overview_tui.go`),
+`#46839` (`tui/agents_overview/overview.go`), `#44872`
+(`sandbox/windows_mxc_availability.go`), `#45224`
+(`sandbox/windowssandbox/desktop_windows.go`), and `#46116`
+(`tui/chatwidget/tool_lifecycle.go`).
+
+Status after reconciliation: `1942 complete`, `381 not_applicable`,
+`539 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

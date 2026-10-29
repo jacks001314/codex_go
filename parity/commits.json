@@ -10011,9 +10011,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/10; needs review: AddThreadAttachmentOutcome, RemoveThreadAttachmentOutcome, ThreadAttachmentPage"
+    "Round 767 (audit): #43949 implemented at appserver/thread_attachments.go:9 - // Thread attachments (Rust #43949/#44330/#44564): bounded, independently Behaviour: thread attachment mutations are bounded, independently persisted, owner-scoped, and copied when a thread is forked. Regression contract: appserver/thread_attachments_fork_test.go (TestThreadForkCopiesAttachmentsLikeRust); verify with `go test ./appserver -run 'TestThreadForkCopiesAttachmentsLikeRust' -count=1`."
    ]
   },
   {
@@ -11655,9 +11655,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/5; needs review: origins_with_path_filter, required_model_provider, to_config, validate_bedrock_override"
+    "Round 767 (audit): #44650 implemented at config/config.go:640 - // applyManagedModelProviderOverride mirrors Rust #44650: a required Behaviour: a required managed model provider overrides user configuration, and attempts to write a disallowed provider are rejected. Regression contract: config/managed_model_provider_test.go (TestManagedModelProviderRequirementsOverrideUserConfigLikeRust|TestManagedModelProviderWriteRejectedLikeRust); verify with `go test ./config -run 'TestManagedModelProviderRequirementsOverrideUserConfigLikeRust|TestManagedModelProviderWriteRejectedLikeRust' -count=1`."
    ]
   },
   {
@@ -11739,9 +11739,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/7; needs review: DispatchInterruption, NestedToolDispatchTrace, result_ready"
+    "Round 767 (audit): #44661 implemented at appserver/session_telemetry.go:59 - // Rust parity: the app-server's SessionTelemetry wiring - the per-session Behaviour: tool-call receipt and result readiness reach the telemetry pipelines, with MCP tool-call spans and outcome telemetry emitted per session. Regression contract: appserver/session_telemetry_test.go (TestToolResultRecordsReachThePipelines|TestMCPToolCallSpanLikeRust|TestMCPToolCallOutcomeTelemetryLikeRust); verify with `go test ./appserver -run 'TestToolResultRecordsReachThePipelines|TestMCPToolCallSpanLikeRust|TestMCPToolCallOutcomeTelemetryLikeRust' -count=1`."
    ]
   },
   {
@@ -12099,9 +12099,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: CODEX_WINDOWS_MXC_ARG1, CreateMxcCommandArgsParams"
+    "Round 767 (audit): #44872 implemented at sandbox/windows_mxc_availability.go:1 - package sandbox Behaviour: Windows MXC availability is recorded once per process, matching Rust, so managed network policy support does not re-probe repeatedly. Regression contract: sandbox/windows_mxc_availability_test.go (TestWindowsMXCAvailabilityRecordedOnceLikeRust); verify with `go test ./sandbox -run 'TestWindowsMXCAvailabilityRecordedOnceLikeRust' -count=1`."
    ]
   },
   {
@@ -12699,9 +12699,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/8; needs review: ProvisioningRequest, ServiceRequest, ServiceUnavailable, pin_directory, register_authenticated_user"
+    "Round 767 (audit): #45224 implemented at sandbox/windowssandbox/desktop_windows.go:34 - func PrepareLaunchDesktop(usePrivateDesktop bool) (*LaunchDesktop, error) { Behaviour: Windows desktop launch preparation defaults to the shared desktop, rejects an empty desktop name, and creates and closes a private desktop before sandbox setup. Regression contract: sandbox/windowssandbox/desktop_windows_test.go (TestPrepareLaunchDesktopDefault|TestCreateLaunchDesktopRejectsEmptyName|TestPrepareLaunchDesktopPrivateCreatesAndCloses); verify with `go test ./sandbox/windowssandbox -run 'TestPrepareLaunchDesktopDefault|TestCreateLaunchDesktopRejectsEmptyName|TestPrepareLaunchDesktopPrivateCreatesAndCloses' -count=1`."
    ]
   },
   {
@@ -12759,9 +12759,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/4; needs review: start_agents_overview_session"
+    "Round 767 (audit): #45276 implemented at app/agents_overview_tui.go:55 - // (Rust #45276 new_agents_overview_worktree). A failed start removes the new Behaviour: the agents overview creates worktree-backed sessions and wires the remote overview source, gated by platform support. Regression contract: tui/agents_overview/worktree_test.go (TestLinkedWorktreeRowsGroupTogetherWhenEnabled|TestApplyRefreshPreservesWorktreesGrouping); verify with `go test ./tui/agents_overview -run 'TestLinkedWorktreeRowsGroupTogetherWhenEnabled|TestApplyRefreshPreservesWorktreesGrouping' -count=1`."
    ]
   },
   {
@@ -15123,9 +15123,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: ViewImageHistoryCell"
+    "Round 767 (audit): #46116 implemented at tui/chatwidget/tool_lifecycle.go:105 - func (s *ToolLifecycleState) Start(item ToolLifecycleItem) { Behaviour: web-search and image activity summaries stay compact and descriptive, with active and fallback forms matching Rust. Regression contract: tui/chatwidget/tool_lifecycle_test.go (TestToolLifecycleWebSearchActiveAndFallbackMatchRust); verify with `go test ./tui/chatwidget -run 'TestToolLifecycleWebSearchActiveAndFallbackMatchRust' -count=1`."
    ]
   },
   {
@@ -17035,9 +17035,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/5; needs review: center_filter_hint, command_center_key, hint_line, reconcile_command_center_selection"
+    "Round 767 (audit): #46839 implemented at tui/agents_overview/overview.go:939 - func (v *View) StatusFilterIndex() int { Behaviour: status filter tabs cycle with counted labels, combine with search and hide, keep the rename target visible, and page navigation stops at the ends. Regression contract: tui/agents_overview/status_filter_like_rust_test.go (TestStatusFilterCyclesAndRendersCountedTabsLikeRust|TestStatusFilterCombinesWithSearchAndHideLikeRust|TestStatusFilterKeepsRenameTargetVisibleLikeRust|TestPageNavigationUsesViewportAndStopsAtEndsLikeRust); verify with `go test ./tui/agents_overview -run 'TestStatusFilterCyclesAndRendersCountedTabsLikeRust|TestStatusFilterCombinesWithSearchAndHideLikeRust|TestStatusFilterKeepsRenameTargetVisibleLikeRust|TestPageNavigationUsesViewportAndStopsAtEndsLikeRust' -count=1`."
    ]
   },
   {
