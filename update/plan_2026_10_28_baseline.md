@@ -1358,6 +1358,26 @@ Analytics chart readability and navigation (#45770, part 1).
   rows and legend height, the footer update timestamp, and overflow-dependent
   scroll hints.
 
+### Analytics chart readability and navigation (Round 847)
+
+Analytics chart readability and navigation (#45770, part 2).
+
+- The range row keeps a fixed two-line height, so section tabs stay on the same
+  row for reports, Summary and Top chats alike.
+- `tui/analytics/history_lines.go` sizes the maximized breakdown rows from the
+  viewport (`max(viewport_height/4, 4)`), keeps four rows in the overview card,
+  and prints the update timestamp only in the overview card (`chart.rs`).
+- The maximized update timestamp moves to the right-aligned footer, wrapping to
+  its own line when narrow. Scroll hints disappear when the body fits the
+  viewport, and the trailing blank row is reserved only for overflowing panels.
+- Seven-day daily totals were already in place and now match the Rust
+  `seven_day_totals` snapshot text exactly at width 100, height 8.
+- Tests cover the stable tab row at widths 64 and 120, taller legends with the
+  footer timestamp, overflow-dependent scroll hints, the row budget and the
+  timestamp gating.
+- Verified with `go test ./tui/analytics ./tui/tea ./tui/chatwidget
+  ./chatgptapi -count=1`, `go vet ./tui/analytics ./tui/tea`, and `go build ./...`.
+
 Status after reconciliation: `2018 complete`, `395 not_applicable`,
 `475 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
