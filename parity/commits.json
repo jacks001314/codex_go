@@ -25248,9 +25248,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 2/5; needs review: DecisionsError, DecisionsSampler, DecisionsTask"
+    "Round 758 (audit): N/A by architecture - #50066 adds a bounded Decisions transport (DecisionsSampler/DecisionsTask/DecisionsError) inside codex-rs/ext/guardian-v2/src/async_scorer. Go has no guardian-v2 async scorer: the only hits for decisions_comparison/DECISIONS_API_KEY are the feature key in features/features.go:405 and env scrubbing in envutil/envutil.go:40; Guardian review is a synchronous model call in appserver/guardian_reviewer.go. Precedent: #53389/#53633/#40431 marked N/A for the same missing carrier. No source change needed."
    ]
   },
   {
@@ -25320,9 +25320,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/5; needs review: decisions_failure_reason, decisions_sampler, finish_and_record_outcome, record_decisions_comparison_outcome"
+    "Round 758 (audit): N/A by architecture - #50099 adds the opt-in Decisions comparison inside ext/guardian-v2/src/async_scorer (decisions.rs/classification.rs). Go has no async scorer or comparison path: decisions_sampler/finish_and_record_outcome/record_decisions_comparison_outcome have zero Go hits, and appserver/guardian_reviewer.go performs one synchronous review. Precedent: #53389/#53633. No source change needed."
    ]
   },
   {
@@ -25584,9 +25584,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: record_decisions_comparison"
+    "Round 758 (audit): N/A by architecture - #50273 records agree/disagree/unavailable comparison counters and paired latency histograms for the Rust guardian-v2 async scorer (metrics.rs record_decisions_comparison). Go has no decisions sampler or comparison metrics; rg for codex.guardian_v2.decisions_comparison and record_decisions_comparison over *.go finds nothing, and telemetry/guardian_v2_event.go only mirrors the analytics event schema. Precedent: #54057/#144779cd N/A. No source change needed."
    ]
   },
   {
@@ -26546,9 +26546,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 758 (audit): N/A by architecture - #51065 scopes responses_duration to sampler.sample() in the snapshot classification path of ext/guardian-v2/src/async_scorer/classification.rs. Go has no classification/sampling loop (no async scorer, no sampler.sample, no responses_duration metric); its reviewer builds one prompt per attempt in appserver/guardian_reviewer.go. Precedent: #43da1368/#523519d9 N/A. No source change needed."
    ]
   },
   {
@@ -26618,9 +26618,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 758 (audit): N/A by architecture - #51133 falls back to OPENAI_API_KEY for the guardian-v2 Decisions sampler in ext/guardian-v2/src/async_scorer/startup.rs. Go has no Decisions sampler startup or dedicated decisions credential selection; CODEX_GUARDIAN_DECISIONS_API_KEY appears only in the envutil scrubbing list (envutil/envutil.go:40), never as a credential source. Precedent: #53389/#53633. No source change needed."
    ]
   },
   {
@@ -26642,9 +26642,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 758 (audit): N/A by architecture - #51139 makes parent-checkpoint recovery require a fresh reviewer session and ignore cached fork snapshots, adding ReviewerRequest::requires_fresh_session in ext/guardian-reviewer/src/pool.rs. Go has no reviewer pool, GuardianReviewForkSnapshot, or snapshot-reuse path: appserver/guardian_reviewer.go keeps one guardianSessionRunner and recovers by seeding the parent compaction response id (ResetAfterParentCompaction, guardian_reviewer.go:637) with DropStaleParentCompaction fail-closed (guardian_reviewer.go:654). The requires-fresh-session flag has no carrier. Precedent: #45521/#46509/#46512 N/A. No source change needed."
    ]
   },
   {
@@ -26654,9 +26654,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 758 (audit): N/A by architecture - #51140 splits the shared CheckpointRecovery flag into per-attempt recovery_requested flags stored in Rust thread_extension_data (core/src/guardian/review_session_setup.rs, input_budget.rs). Go has no thread extension data, PreparedReview, or CheckpointRecovery struct; guardianSessionRunner keeps its history checkpoint in memory and rolls back stale attempts (guardian_reviewer.go:420-443, 861-1192), so there is no shared recovery flag to isolate. Precedent: #46512/#46509 N/A. No source change needed."
    ]
   },
   {
@@ -27170,9 +27170,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: connect_with_connector"
+    "Round 758 (audit): N/A by architecture - #51378 keeps the guardian-v2 sampler WebSocket pool warm with concurrent replenishment and extracts ResponsesWebsocketClient::connect_with_connector so a caller-owned TLS connector is reused. Go has no guardian websocket pool (zero hits for websocketPool/replenish/connection_pool) and no connector abstraction; model/responses_agent.go:219 caches one socket per request key instead of a warm pool. The connect_with_connector refactor exists only to serve that pool. Precedent: #45521 N/A. No source change needed."
    ]
   },
   {
@@ -28791,9 +28791,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 758 (audit): #52223 is implemented in Go. appserverdaemon/updater_network.go:18-59 builds the updater HTTP client from the activated application network policy (config.NetworkPolicyFromRequirements) and returns the config load error instead of falling back to a default client; ConfigureUpdaterNetworkPolicy and ConfigureMigrationNetworkPolicy bind the same policy to the daemon update loop and migration. appserverdaemon/updater_network_test.go covers allowed, denied, and unlisted destinations plus fatal configuration errors. Validation: go test ./appserverdaemon -run Updater -count=1 passes."
    ]
   },
   {
@@ -29826,9 +29826,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 758 (audit): N/A by architecture - #53155 keeps Rust RemoteAppServerClient's event receiver alive until the worker finishes shutdown so an in-flight notification cannot abort the worker before it sends Message::Close(None) (app-server-client/src/remote.rs). Go has no client-side event receiver/worker split: app/remote_tui.go handles notifications inline in the read loop (handleNotification at remote_tui.go:4601) and the transport closes the socket with websocket.StatusNormalClosure (remote_tui.go:339), so there is no receiver to drop before the close frame. No source change needed."
    ]
   },
   {
@@ -30030,9 +30030,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/8; needs review: EFFECTS_VIEW_ID, apply_config_preference, set_animations_enabled, set_motion_preferences, should_hide_column"
+    "Round 758 (audit): #53429 implemented. tui/tea/config_panel.go now searches every configuration group (configPanelFilteredRows), tags search results with their group (configPanelRowDescription), moves the selected description below the list when the value column leaves under 45 columns while reserving the tallest slot for a stable height (configPanelInlineDescriptionMinWidth, configPanelDescriptionSlot), keeps values visible in narrow terminals, tailors the footer accept hint per row (configPanelAcceptLabel: toggle/open/test), and clears an active search on Esc before closing. The Effects picker, live toggle application, and stale-save handling already existed. Tests: TestConfigPanelSearchSpansGroupsLikeRust and TestConfigPanelNarrowKeepsValueAndDescribesBelowLikeRust; go test ./tui/tea -run 'ConfigPanel|ConfigCommand|Effects' -count=1 passes."
    ]
   },
   {

@@ -32,6 +32,10 @@ var configPanelSectionTitles = []string{
 	"Text selection",
 }
 
+// configPanelInlineDescriptionMinWidth mirrors Rust #53429's
+// SelectionDescriptionLayout::SelectedBelowWhenNarrow min_description_width.
+const configPanelInlineDescriptionMinWidth = 45
+
 type configPanelAction int
 
 const (
@@ -248,13 +252,15 @@ func (m *Model) configPanelFilteredRows() []configPanelRow {
 	query := strings.ToLower(strings.TrimSpace(panel.query))
 	rows := make([]configPanelRow, 0, len(configPanelRows))
 	for _, row := range configPanelRows {
-		if row.section != panel.section {
-			continue
-		}
 		if query == "" {
+			if row.section != panel.section {
+				continue
+			}
 			rows = append(rows, row)
 			continue
 		}
+		// Rust #53429: search spans every group, and each result keeps its
+		// group tag so a match outside the active tab is still identifiable.
 		haystack := strings.ToLower(row.label + " " + row.description + " " + row.keywords + " " + configPanelSectionTitles[row.section])
 		if strings.Contains(haystack, query) {
 			rows = append(rows, row)
@@ -385,6 +391,12 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 			panel.effects = false
 			panel.selected = 0
 			panel.scrollTop = 0
+			return nil
+		}
+		// Rust #53429: Esc clears an active search before it closes the panel.
+		if strings.TrimSpace(panel.query) != "" {
+			panel.query = ""
+			m.resetConfigPanelSelection()
 			return nil
 		}
 		m.modal = nil
@@ -795,7 +807,16 @@ func (m *Model) renderConfigPanel() string {
 	optionBudget := max(maxRows-6, 1)
 	title := m.modal.title
 	var header []string
-	footer := "type to search \u00b7 \u2190/\u2192 tabs \u00b7 enter open \u00b7 esc close"
+	searching := strings.TrimSpace(panel.query) != ""
+	acceptLabel := "open"
+	if panel.selected >= 0 && panel.selected < len(rows) {
+		acceptLabel = configPanelAcceptLabel(rows[panel.selected])
+	}
+	closeLabel := "close"
+	if searching {
+		closeLabel = "clear search"
+	}
+	footer := "type to search \u00b7 \u2190/\u2192 tabs \u00b7 enter " + acceptLabel + " \u00b7 esc " + closeLabel
 	if panel.effects {
 		title = "Effects"
 		header = []string{title, "Configure visual effects", ""}
@@ -837,8 +858,10 @@ func (m *Model) renderConfigPanel() string {
 			line += strings.Repeat(" ", padding)
 		}
 		line += m.configPanelValue(row)
-		if row.description != "" && width > labelWidth+16 {
-			line += "  \u2014 " + row.description
+		description := configPanelRowDescription(row, searching)
+		descriptionWidth := width - (2 + labelWidth + 2 + codextui.DisplayWidth(m.configPanelValue(row))) - 2
+		if description != "" && descriptionWidth >= configPanelInlineDescriptionMinWidth {
+			line += "  \u2014 " + description
 		}
 		line = codextui.TruncateWithEllipsis(line, width)
 		if index == panel.selected {
@@ -849,9 +872,91 @@ func (m *Model) renderConfigPanel() string {
 	if len(rows) == 0 {
 		lines = append(lines, "No matching settings")
 	}
+	lines = append(lines, m.configPanelDescriptionSlot(rows, labelWidth, width, searching)...)
 	if below {
 		lines = append(lines, "\u2193")
 	}
 	lines = append(lines, "", inactiveStyle(footer))
 	return strings.Join(lines, "\n")
+}
+
+// configPanelRowDescription returns the description shown for a row. Search
+// results carry their group tag so a match outside the active tab stays
+// identifiable (Rust #53429 searches every group).
+func configPanelRowDescription(row configPanelRow, searching bool) string {
+	if !searching || row.description == "" {
+		return row.description
+	}
+	section := int(row.section)
+	if section < 0 || section >= len(configPanelSectionTitles) {
+		return row.description
+	}
+	return configPanelSectionTitles[section] + " \u00b7 " + row.description
+}
+
+// configPanelAcceptLabel mirrors Rust #53429's per-row footer hint: toggles
+// say toggle, notification tests say test, and editors say open.
+func configPanelAcceptLabel(row configPanelRow) string {
+	switch row.action {
+	case configActionTips, configActionStatusLineColors, configActionNotifications,
+		configActionStartInVimMode, configActionPasteDetection, configActionAutomaticRecaps,
+		configActionCopyOnSelectClear:
+		return "toggle"
+	case configActionNotificationTest:
+		return "test"
+	default:
+		return "open"
+	}
+}
+
+// configPanelDescriptionSlot mirrors Rust #53429's SelectedBelowWhenNarrow
+// layout: when the value column leaves fewer than 45 columns for the
+// description, the selected row's description moves below the list. The slot
+// reserves the tallest wrapped description so the panel height stays stable
+// while moving the selection.
+func (m *Model) configPanelDescriptionSlot(rows []configPanelRow, labelWidth, width int, searching bool) []string {
+	if m == nil || m.modal == nil || m.modal.configPanel == nil {
+		return []string{""}
+	}
+	narrow := false
+	for _, row := range rows {
+		if configPanelRowDescription(row, searching) == "" {
+			continue
+		}
+		valueWidth := codextui.DisplayWidth(m.configPanelValue(row))
+		if width-(2+labelWidth+2+valueWidth)-2 < configPanelInlineDescriptionMinWidth {
+			narrow = true
+			break
+		}
+	}
+	if !narrow {
+		return []string{""}
+	}
+	const maxDescriptionSlotLines = 3
+	wrapped := make([][]string, len(rows))
+	reserved := 1
+	for index, row := range rows {
+		text := configPanelRowDescription(row, searching)
+		if text == "" {
+			continue
+		}
+		wrapped[index] = codextui.WrapLine(text, codextui.WrapOptions{
+			Width:            max(width, 1),
+			InitialIndent:    "  ",
+			SubsequentIndent: "  ",
+			BreakWords:       true,
+		})
+		reserved = max(reserved, min(len(wrapped[index]), maxDescriptionSlotLines))
+	}
+	slot := make([]string, 0, reserved)
+	if selected := m.modal.configPanel.selected; selected >= 0 && selected < len(wrapped) {
+		slot = append(slot, wrapped[selected]...)
+	}
+	if len(slot) > reserved {
+		slot = slot[:reserved]
+	}
+	for len(slot) < reserved {
+		slot = append(slot, "")
+	}
+	return slot
 }

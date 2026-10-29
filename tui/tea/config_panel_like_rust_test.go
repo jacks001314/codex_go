@@ -76,9 +76,78 @@ func TestConfigCommandOpensSearchablePanelLikeRust(t *testing.T) {
 	if !strings.Contains(view, "Keyboard") || strings.Contains(view, "Right-click paste") {
 		t.Fatalf("config search did not filter input rows:\n%s", view)
 	}
+	// Rust #53429: Esc clears an active search first and closes on the next
+	// press.
+	model.Update(key(bubbletea.KeyEsc))
+	if model.modal == nil || model.modal.configPanel == nil || model.modal.configPanel.query != "" {
+		t.Fatalf("Esc did not clear the config search: %#v", model.modal)
+	}
 	model.Update(key(bubbletea.KeyEsc))
 	if model.modal != nil {
 		t.Fatal("Esc did not close the config panel")
+	}
+}
+
+// Rust #53429: search spans every configuration group and each result keeps
+// its group tag.
+func TestConfigPanelSearchSpansGroupsLikeRust(t *testing.T) {
+	model := configPanelModel(t, nil)
+	model.openConfigPanel()
+	model.Update(configPanelRunes("paste"))
+	view := utils.StripANSI(model.View())
+	// Paste detection lives in Input and Right-click paste in Text selection,
+	// yet both match while Appearance is the active tab.
+	for _, want := range []string{
+		"Paste detection",
+		"Right-click paste",
+		"Input \u00b7 ",
+		"Text selection \u00b7 ",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("global search missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"Automatic recaps", "Status line colors"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("global search kept non-matching %q:\n%s", unwanted, view)
+		}
+	}
+	model.Update(key(bubbletea.KeyRight))
+	if model.modal == nil || model.modal.configPanel == nil || model.modal.configPanel.query != "paste" {
+		t.Fatalf("tab switch dropped the search query: %#v", model.modal)
+	}
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Right-click paste") {
+		t.Fatalf("search results did not survive a tab switch:\n%s", view)
+	}
+}
+
+// Rust #53429: narrow terminals keep setting values visible and show the
+// selected description below the list with a stable panel height.
+func TestConfigPanelNarrowKeepsValueAndDescribesBelowLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 30})
+	model.openConfigPanel()
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Theme") || !strings.Contains(view, "Configure") {
+		t.Fatalf("narrow panel hid the selected value:\n%s", view)
+	}
+	if !strings.Contains(view, "Choose the syntax highlighting theme") {
+		t.Fatalf("narrow panel did not describe the selection below the list:\n%s", view)
+	}
+	height := strings.Count(view, "\n")
+	model.Update(key(bubbletea.KeyDown))
+	down := utils.StripANSI(model.View())
+	if got := strings.Count(down, "\n"); got != height {
+		t.Fatalf("panel height changed with selection: %d -> %d", height, got)
+	}
+	if !strings.Contains(down, "Animate the welcome screen") || !strings.Contains(down, "transitions") {
+		t.Fatalf("description did not follow the selection:\n%s", down)
+	}
+	if !strings.Contains(down, "enter open") {
+		t.Fatalf("footer lost the editor accept hint:\n%s", down)
+	}
+	model.Update(configPanelRunes("tips"))
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "enter toggle") {
+		t.Fatalf("footer did not switch to the toggle hint:\n%s", view)
 	}
 }
 
