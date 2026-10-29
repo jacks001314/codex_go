@@ -2324,6 +2324,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Added `tui/terminal_probe_timeout_like_rust_test.go` (`TestTerminalProbeTimeoutMatchesRustDefault`, `TestTerminalColorProbeUsesDefaultBudgetWhenUnset`) and updated `TestTerminalColorProbeQueryMatchesRust` to expect 250 ms.
 - Verified with `go build ./tui/...` and `go test ./tui -run TerminalProbe` plus `go test ./tui -run TerminalColor`.
 
-Status after reconciliation: `2079 complete`, `408 not_applicable`,
-`434 audit_pending`, `224 regression_pending`, `4 partial`,
+### Select read-only permissions for temporary structured threads (Round 918)
+
+- Upstream (`15312c326c9b`, #46844) found that managed permission profiles take precedence over the legacy sandbox override, so a managed `:workspace` default could start a temporary structured (recap) thread writable. It now sets `default_permissions` to the built-in `:read-only` profile when no custom profile is supplied, and rejects a start whose effective sandbox is not read-only.
+- `app/recap.go` now resolves the custom profile once, inserts `default_permissions: ":read-only"` into the temporary thread config when no custom profile is used, keeps `permissions` for custom profiles only, and validates the `ThreadStartResponse` before running the structured turn: the sandbox policy must be read-only (an omitted sandbox defaults to read-only), or the active permission profile must match the requested custom profile.
+- Added `app/recap_permissions_like_rust_test.go` against a fake app server that serves a managed `:workspace` default: `TestTemporaryStructuredThreadRequestsReadOnlyPermissionsLikeRust`, `TestTemporaryStructuredThreadRejectsWritableSandboxLikeRust`, `TestTemporaryStructuredThreadPreservesCustomProfileLikeRust`, `TestTemporaryStructuredThreadRejectsLostCustomProfileLikeRust`.
+- Verified with `go test ./app -run TemporaryStructured` and `go test ./app -run Recap`.
+
+Status after reconciliation: `2080 complete`, `408 not_applicable`,
+`433 audit_pending`, `224 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

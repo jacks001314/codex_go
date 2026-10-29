@@ -11,6 +11,7 @@ import (
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/config"
+	"codex_go/sandbox"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 )
@@ -20,6 +21,9 @@ const (
 	temporaryStructuredMaxBytes     = 8 * 1024
 	temporaryStructuredTextKind     = "text"
 	temporaryStructuredAgentMessage = "agentmessage"
+	// temporaryStructuredReadOnlyPermissionProfile mirrors Rust's
+	// BUILT_IN_PERMISSION_PROFILE_READ_ONLY.
+	temporaryStructuredReadOnlyPermissionProfile = ":read-only"
 )
 
 // interactiveRemoteRecapGenerateHandler runs the temporary structured recap turn
@@ -57,7 +61,17 @@ func startRemoteTemporaryStructuredThread(ctx context.Context, client *remoteApp
 	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, readParams, &effective); err != nil {
 		return "", fmt.Errorf("could not read the effective configuration: %w", err)
 	}
+	customProfile := ""
+	if profile := strings.TrimSpace(options.PermissionProfile); profile != "" && !strings.HasPrefix(profile, ":") {
+		customProfile = profile
+	}
 	overrides := temporaryStructuredConfigOverrides()
+	if customProfile == "" {
+		// Rust #46844: managed permission profiles take precedence over the
+		// legacy sandbox override, so a managed `:workspace` default would
+		// otherwise start the temporary thread with write access.
+		overrides["default_permissions"] = temporaryStructuredReadOnlyPermissionProfile
+	}
 	if names := mcpServerNamesFromEffectiveConfig(effective.Config); len(names) > 0 {
 		servers := make(map[string]any, len(names))
 		for _, name := range names {
@@ -79,14 +93,21 @@ func startRemoteTemporaryStructuredThread(ctx context.Context, client *remoteApp
 		threadSource := appserver.ThreadSource(source)
 		params.ThreadSource = &threadSource
 	}
-	if profile := strings.TrimSpace(options.PermissionProfile); profile != "" && !strings.HasPrefix(profile, ":") {
-		params.Permissions = &profile
+	if customProfile != "" {
+		params.Permissions = &customProfile
 	} else {
 		params.Sandbox = "read-only"
 	}
 	var started appserver.ThreadStartResponse
 	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadStart, params, &started); err != nil {
 		return "", err
+	}
+	if customProfile != "" {
+		if started.ActivePermissionProfile == nil || started.ActivePermissionProfile.ID != customProfile {
+			return "", fmt.Errorf("temporary structured thread did not preserve permission profile %s", customProfile)
+		}
+	} else if !temporaryStructuredSandboxIsReadOnly(started.Sandbox) {
+		return "", errors.New("temporary structured thread did not start with read-only permissions")
 	}
 	if started.Thread == nil || strings.TrimSpace(started.Thread.ID) == "" {
 		return "", errors.New("temporary structured thread start returned no thread")
@@ -228,6 +249,24 @@ func temporaryStructuredConfigOverrides() map[string]any {
 		overrides[key] = false
 	}
 	return overrides
+}
+
+// temporaryStructuredSandboxIsReadOnly reports whether the started thread's
+// effective sandbox is read-only. An omitted sandbox defaults to read-only in
+// the app-server response, so a missing value is accepted (Rust #46844).
+func temporaryStructuredSandboxIsReadOnly(value any) bool {
+	if value == nil {
+		return true
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	var policy sandbox.SandboxPolicy
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return false
+	}
+	return policy.Kind == sandbox.SandboxReadOnly
 }
 
 var temporaryStructuredDisabledFeatures = []string{

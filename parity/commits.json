@@ -17059,9 +17059,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust 15312c326c9b (#46844) sets default_permissions to the built-in :read-only profile when a temporary structured thread starts without a custom permission profile, because managed profiles take precedence over the legacy sandbox override, and rejects a start whose effective sandbox is not read-only. app/recap.go now computes the custom profile once, inserts default_permissions :read-only into the temporary thread config when none is custom, keeps permissions for custom profiles only, and validates the ThreadStartResponse: SandboxPolicy.Kind must be read-only (an omitted sandbox defaults to read-only) or ActivePermissionProfile.ID must equal the custom profile, otherwise the turn is not started. Added app/recap_permissions_like_rust_test.go with TestTemporaryStructuredThreadRequestsReadOnlyPermissionsLikeRust, TestTemporaryStructuredThreadRejectsWritableSandboxLikeRust, TestTemporaryStructuredThreadPreservesCustomProfileLikeRust, and TestTemporaryStructuredThreadRejectsLostCustomProfileLikeRust against a fake app-server that serves a managed :workspace default. Verified: go test ./app -run TemporaryStructured and go test ./app -run Recap."
    ]
   },
   {
