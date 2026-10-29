@@ -1204,6 +1204,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Tests cover the menu entry and account-specific sections, range switching, the group picker, business model cycling, independent section failures, cancellation on close, small terminals, zoom, section switching and details, terminal styling, draft preservation, and retained navigation across reopen.
 - Verified: go test ./tui/analytics ./tui/chatwidget ./tui/tea -count=1, go vet on the same packages, go build ./... .
 
+### Top chats data loading (#45765, part 1) (Round 839)
+
+- `chatgptapi` gains `GetThreadsUsage`: 1–100 distinct ids, nullable-credit wire rows, "Invalid thread usage response.", duplicate/unrequested-row rejection, and omission of unavailable estimates instead of zero; `GetThreadUsage` now delegates to it.
+- `tui/analytics/chats.go` adds plan gating, 30-day recent-root discovery with cutoff/cursor/dedupe rules, and the bounded estimate loader: 200-thread chunks, two concurrent ≤100 halves, a 25s budget, 503 bisection, at most 15 requests per half, and descending-credit ranking with unavailable rows last.
+- Titles come from name, then preview, then "Untitled chat", and stay hidden behind "Chat usage unavailable" until an estimate is returned.
+- `StartAnalyticsLoadWithTimeout` gives the combined load a 90s budget; `AnalyticsSectionChats` is appended without renumbering existing sections and only appears for Business/EnterpriseCbpUsageBased/EnterpriseCbpAutomation plans.
+- `tui/tea` now stores the account plan (not just the kind), matching Rust's `Load<PlanType>`.
+- Verified: go test ./chatgptapi ./tui/analytics -count=1, go test ./tui/tea -run Analytics -count=1, go vet on the same packages, go build ./... .
+
 Status after reconciliation: `2015 complete`, `395 not_applicable`,
-`479 audit_pending`, `258 regression_pending`, `2 partial`,
+`478 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
