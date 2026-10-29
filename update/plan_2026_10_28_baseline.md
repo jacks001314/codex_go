@@ -2088,6 +2088,15 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - Added `appserver/guardian_reasoning_effort_like_rust_test.go`: both source forms, no trusted update recorded or injected, selected `low`/`high` efforts honored with no pin retained, the parent's pin and update still applied, and inherited updates dropped from the request copy without touching saved history.
 - Verified with `go test ./appserver -run 'TestSyncGuardianKeepsSelectedReasoningEffortLikeRust|TestReasoningEffort|Guardian' -count=1` (the new test fails when the exemption is disabled) and `go build ./...`.
 
-Status after reconciliation: `2051 complete`, `404 not_applicable`,
-`446 audit_pending`, `244 regression_pending`, `4 partial`,
+### Catalog descriptions cover every multi-agent V2 tool (Round 889)
+
+**Upstream:** 3e581ebca854 "Support catalog descriptions for all multi-agent V2 tools (#46297)".
+
+- Go already resolved catalog overrides for all six V2 tools: `MultiAgentToolOverridesFromCatalog` (`turn/tools.go:262`) walks `agent.MultiAgentV2ToolNames` (`agent/tools.go:346`), and `applyMultiAgentToolOverride` (`agent/tools_v2.go:296`) replaces text for every tool except `spawn_agent`, whose `Spec` substitutes the catalog description first and then appends inherited-model guidance and the usage hint (`agent/tools_v2.go:204`).
+- Rules match Rust: missing or null keeps bundled text, an empty string suppresses the static text without unregistering the tool, parameter schemas stay bundled, and resolution does not depend on the configured namespace.
+- The existing tests covered `send_message`, `list_agents` and `spawn_agent` only. Added `agent/multi_agent_v2_catalog_descriptions_like_rust_test.go`, which compares a baseline registry with an overridden one registered under a custom namespace and checks all six tools: catalog text for `send_message`/`followup_task`/`wait_agent`/`interrupt_agent`, empty-string suppression for `list_agents`, bundled text plus unchanged input schemas for tools without an entry, and `spawn_agent`'s override-before-guidance ordering with the usage hint last.
+- Verified with `go test ./agent -count=1`.
+
+Status after reconciliation: `2052 complete`, `404 not_applicable`,
+`446 audit_pending`, `243 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -15423,9 +15423,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Already implemented through the #46505 catalog-override plumbing: turn.MultiAgentToolOverridesFromCatalog (turn/tools.go:262) resolves description and parameter overrides for every entry in agent.MultiAgentV2ToolNames (agent/tools.go:346: spawn_agent, send_message, followup_task, wait_agent, interrupt_agent, list_agents), and multiAgentV2ToolExecutor.Spec applies them through applyMultiAgentToolOverride (agent/tools_v2.go:296) for every tool except spawn_agent, whose Spec substitutes the catalog description first and then appends inherited-model guidance and the usage hint (agent/tools_v2.go:204). Missing or null overrides keep the bundled text, an empty string suppresses it without unregistering the tool, parameter schemas stay bundled, and resolution is independent of the configured namespace. Added agent/multi_agent_v2_catalog_descriptions_like_rust_test.go, which registers a baseline and an overridden registry under a custom namespace and checks all six tools: catalog text for send_message/followup_task/wait_agent/interrupt_agent, empty-string suppression for list_agents, bundled text and unchanged input schemas for tools without an entry, plus spawn_agent's override-before-guidance ordering with the usage hint last. Verified with go test ./agent -count=1."
    ]
   },
   {
