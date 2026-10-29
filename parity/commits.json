@@ -5736,9 +5736,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: GitRootDiscovery, git_root_discovery, spawn_git_enrichment_task"
+    "Round 765 (audit): #42132 implemented at gitutil/discovery.go:28 - // filesystem probes (Rust #42132). Results are discarded after completion so a Behaviour: git root discovery is bounded by caller cancellation, coalesces concurrent lookups, and returns the repository root without spawning unbounded enrichment work. Regression contract: gitutil/discovery_test.go (TestDiscoverGitRootReturnsRepositoryRoot|TestDiscoverGitRootHonorsCallerCancellation|TestDiscoverGitRootCoalescesConcurrentLookups); verify with `go test ./gitutil -run 'TestDiscoverGitRootReturnsRepositoryRoot|TestDiscoverGitRootHonorsCallerCancellation|TestDiscoverGitRootCoalescesConcurrentLookups' -count=1`."
    ]
   },
   {
@@ -6807,9 +6807,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/7; needs review: OAuthRuntime, PROACTIVE_REFRESH_TIMEOUT, REFRESH_REQUEST_TIMEOUT, acquire_transaction_guard, refresh_if_needed"
+    "Round 765 (audit): #42413 implemented at mcp/http_client.go:49 - func (c *httpClient) adoptRefreshedOAuthCredential(previous *OAuthTokenSet, serverName string, codexHome string) (*OAuthTokenSet, error) { Behaviour: concurrent MCP OAuth refreshes adopt a concurrent login only while it is valid and same-issuer, keep the previous error while the token is still valid, and require authentication when refresh fails. Regression contract: mcp/oauth_refresh_adoption_test.go (TestHTTPMCPOAuthRefreshAdoptsConcurrentLogin|TestHTTPMCPOAuthRefreshKeepsErrorWhileTokenValid|TestHTTPMCPOAuthRefreshRejectsReplacementWithNewIssuer|TestMCPHTTPToolCallRequiresAuthenticationWhenRefreshFails); verify with `go test ./mcp -run 'TestHTTPMCPOAuthRefreshAdoptsConcurrentLogin|TestHTTPMCPOAuthRefreshKeepsErrorWhileTokenValid|TestHTTPMCPOAuthRefreshRejectsReplacementWithNewIssuer|TestMCPHTTPToolCallRequiresAuthenticationWhenRefreshFails' -count=1`."
    ]
   },
   {
@@ -7923,9 +7923,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/15; needs review: PendingInputPreviewContent, QuestionState, capture_thread_input_state, copy_history_for_key, event_survives_session_refresh"
+    "Round 765 (audit): #42903 implemented at tui/tea/async_questions.go:277 - func (m *Model) advanceAsyncQuestionsOrRestoreQueued() bool { Behaviour: answering the last async question restores composer state, and advancing with a queued message collapses the question view so the queued message can be edited, while loaded history keeps matching markdown. Regression contract: tui/tea/async_questions_test.go (TestAsyncQuestionsForwardNavigationRestoresQueuedMessage|TestAsyncQuestionMarkdownMatchesLoadedHistoryLikeRust); verify with `go test ./tui/tea -run 'TestAsyncQuestionsForwardNavigationRestoresQueuedMessage|TestAsyncQuestionMarkdownMatchesLoadedHistoryLikeRust' -count=1`."
    ]
   },
   {
@@ -15904,9 +15904,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: ThreadHistoryTurnMetadata"
+    "Round 765 (audit): #46510 implemented at appserver/runtime_router.go:8128 - // Rust #46510: only a resume that includes turns or requests an initial page Behaviour: a metadata-only resume while a turn is running exposes the active turn items as a view instead of cloning them, and stale-path resumes are rejected. Regression contract: appserver/runtime_router_test.go (TestRuntimeRouterRunningResumeTurnItemsViewLikeRust|TestRuntimeRouterThreadResumeRejectsStalePathWhileRunning); verify with `go test ./appserver -run 'TestRuntimeRouterRunningResumeTurnItemsViewLikeRust|TestRuntimeRouterThreadResumeRejectsStalePathWhileRunning' -count=1`."
    ]
   },
   {
@@ -16517,9 +16517,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/23; needs review: CachedSelectedRoot, CloudPluginGeneration, CloudPluginMetadata, McpResourceClientAuthKey, PluginContributor"
+    "Round 765 (audit): #46572 implemented at appserver/cloud_catalog_refresh.go:217 - // refreshCloudPluginCatalogForStep refreshes the cloud plugin catalog before a Behaviour: turn-start cloud plugin discovery refreshes the catalog once per auth/provider scope, backs off failures to a cap, retries cancellation immediately, reuses turn discovery, and serializes concurrent steps. Regression contract: appserver/cloud_catalog_refresh_test.go (TestRefreshCloudPluginCatalogForStepBacksOffFailuresLikeRust|TestRefreshCloudPluginCatalogForStepReusesTurnDiscoveryLikeRust|TestRefreshCloudPluginCatalogForStepSerializesConcurrentStepsLikeRust|TestCloudCatalogBackoffEscalatesToCapLikeRust); verify with `go test ./appserver -run 'TestRefreshCloudPluginCatalogForStepBacksOffFailuresLikeRust|TestRefreshCloudPluginCatalogForStepReusesTurnDiscoveryLikeRust|TestRefreshCloudPluginCatalogForStepSerializesConcurrentStepsLikeRust|TestCloudCatalogBackoffEscalatesToCapLikeRust' -count=1`."
    ]
   },
   {
@@ -16673,9 +16673,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 11/27; needs review: PickerLayoutSizes, PickerSurface, SelectionAppearance, TabAppearance, accent_color. Footer slice landed: cancellable SelectionViews now rewrite the standard placeholder to `enter select · esc back` (Rust apply_standard_popup_hint), custom hints survive, status/title setup use lowercase `space toggle · enter save · esc cancel`, experimental uses `esc save/close`, and Ctrl+R search uses compact styled spans (dim prompt, cyan query, bold keys, red no-match). Result viewport landed for generic selection modals: terminal-height budget, ↑/↓ overflow markers, PgUp/PgDn by visible rows, Home/End edges, and responsive wrapped-row shrinking. Theme picker now has the same stable window plus preview-yields-first behavior in narrow layouts. Ctrl+T pager now reserves two compact hint rows with resolved close/find bindings. Filled tabs/overflow markers already shipped; remaining: full contrast palette and an audit of other custom browser renderers."
+    "Round 765 (audit): #46680 implemented at tui/bottom_pane/selection_picker_layout.go:22 - // PickerAreas mirrors Rust's selection_picker_layout::picker_areas. The ten Behaviour: the shared picker layout allocates header, tabs, search, indicators, rows, and side content the way Rust does, yielding optional chrome before required rows and never over-allocating. Regression contract: tui/bottom_pane/selection_picker_layout_test.go (TestPickerAreasMatchesRustAllocation|TestPickerAreasNeverOverallocate); verify with `go test ./tui/bottom_pane -run 'TestPickerAreasMatchesRustAllocation|TestPickerAreasNeverOverallocate' -count=1`."
    ]
   },
   {
@@ -16781,9 +16781,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/14; needs review: adjacent_activity_items, append_completed, completed_group, fold_trailing_activity_details, is_hidden_activity_detail"
+    "Round 765 (audit): #46711 implemented at tui/activity_group.go:10 - // without changing the compact display. Behaviour: activity groups interleave reasoning blocks in order and skip empty reasoning blocks, matching the live transcript. Regression contract: tui/activity_group_test.go (TestActivityGroupInterleavesReasoningLikeRust|TestActivityGroupSkipsEmptyReasoningBlocksLikeRust); verify with `go test ./tui -run 'TestActivityGroupInterleavesReasoningLikeRust|TestActivityGroupSkipsEmptyReasoningBlocksLikeRust' -count=1`."
    ]
   },
   {
@@ -26402,9 +26402,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: RemoteControlSubcommand"
+    "Round 765 (audit): #50803 implemented at app/remote_control.go:41 - func runRemoteControl(ctx context.Context, opts cli.RemoteControlOptions, root *cli.RootOptions, stdout io.Writer) error { Behaviour: remote-control launches use the managed daemon on eligible platforms, reject `--no-daemon` with an explicit subcommand, and bind the control socket on Windows. Regression contract: app/remote_control_test.go (TestRemoteControlStartPlatformBoundary|TestRemoteControlForegroundBindsControlSocketOnWindows); verify with `go test ./app -run 'TestRemoteControlStartPlatformBoundary|TestRemoteControlForegroundBindsControlSocketOnWindows' -count=1`."
    ]
   },
   {

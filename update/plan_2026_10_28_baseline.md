@@ -636,11 +636,20 @@ managed daemon: `#42196` (`worktree/manager.go`), `#43120`
 (`app/gov_cloud_guidance.go`). The Windows daemon tests run natively on this
 host and pass.
 
-Status after reconciliation: `1918 complete`, `381 not_applicable`,
-`563 audit_pending`, `287 regression_pending`, `0 partial`,
-`6 blocked_precondition`.
-## Verification
+### Git discovery, OAuth refresh, and catalog refresh sweep (Round 765)
 
+Eight more entries moved to `complete`: `#42132` (`gitutil/discovery.go`),
+`#42413` (`mcp/http_client.go`), `#42903` (`tui/tea/async_questions.go`),
+`#46510` (`appserver/runtime_router.go`), `#46572`
+(`appserver/cloud_catalog_refresh.go`), `#46680`
+(`tui/bottom_pane/selection_picker_layout.go`), `#46711`
+(`tui/activity_group.go`), and `#50803` (`app/remote_control.go`). Evidence
+cites the behaviour and the package tests that pin it in a clean archived
+snapshot.
+
+Status after reconciliation: `1926 complete`, `381 not_applicable`,
+`555 audit_pending`, `287 regression_pending`, `0 partial`,
+`6 blocked_precondition`.
 ```powershell
 $env:CODEX_RUST_ROOT = 'D:\qax\reagent\dev\git\codex\codex-rs'
 go test ./parity ./features -count=1
