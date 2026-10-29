@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"codex_go/sandbox"
-	mxcsandbox "codex_go/sandbox/mxc"
 	"codex_go/sandbox/windowssandbox"
 	windowsunified "codex_go/sandbox/windowssandbox/unified_exec"
 )
@@ -30,27 +29,24 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	}
 	// Rust deserializes windows_sandbox_level as a kebab-case enum, so an
 	// unrecognized level is an invalid-params error rather than a silent
-	// fallback. MXC rejects custom argv0 and otherwise requires a usable native
-	// process security environment.
+	// fallback. MXC rejects custom argv0 and private-desktop launches and
+	// otherwise requires a usable native process security environment.
 	selection, err := selectWindowsSandboxForExecutor(sandboxContext.WindowsSandboxLevel, params.CWD)
 	if err != nil {
 		return nil, true, requestError(-32602, "invalid sandbox context: "+err.Error())
 	}
 	if selection == WindowsSandboxSelectionMXC {
-		if params.Arg0 != nil {
-			return nil, true, requestError(-32602, "MXC custom argv0 is not supported")
+		// Rust #45524: MXC launches accept TTY and managed networking, and the
+		// only request shapes it still rejects are custom argv0 and private
+		// desktop launches. That rejection happens before the availability
+		// check, so it wins over the fail-closed diagnostic.
+		if params.Arg0 != nil || sandboxContext.WindowsSandboxPrivateDesktop {
+			return nil, true, requestError(-32602, "MXC custom argv0 and private-desktop launches are not supported")
 		}
-		if params.ManagedNetwork != nil {
-			managed := &mxcsandbox.ManagedNetworkContext{
-				LoopbackPorts:     append([]uint16(nil), params.ManagedNetwork.LoopbackPorts...),
-				AllowLocalBinding: params.ManagedNetwork.AllowLocalBinding,
-			}
-			if err := mxcsandbox.ValidateManagedNetwork(managed); err != nil {
-				return nil, true, requestError(-32602, err.Error())
-			}
-		}
-		// Go has no native MXC runner, so an MXC request is rejected exactly like
-		// Rust on an executor without a usable MXC environment.
+		// Go has no native MXC runner, so every remaining MXC request fails
+		// closed exactly like Rust on an executor without a usable MXC
+		// environment. Rust validates managed networking only after this
+		// check, so no managed-network error can surface here.
 		return nil, true, requestError(-32602, "native MXC is unavailable on this executor")
 	}
 	if !hasJSONValue(sandboxContext.Permissions) {

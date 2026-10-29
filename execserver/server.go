@@ -562,6 +562,10 @@ type EnvironmentCapabilities struct {
 	// Rust #50177: whether `fs/open` supports replacement mode and
 	// `fs/writeBlock` is supported.
 	FileWriteStreaming bool `json:"fileWriteStreaming"`
+	// Rust 60e35765 (#45524): whether requests may explicitly select the MXC
+	// Windows sandbox backend. Go never has a native MXC runner, so this stays
+	// false; the field is always serialized to match the Rust wire shape.
+	WindowsMxc bool `json:"windowsMxc"`
 }
 
 type EnvironmentStatus struct {
@@ -3951,6 +3955,10 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			// Rust #50177: the executor supports replacement opens and
 			// positional `fs/writeBlock`.
 			FileWriteStreaming: true,
+			// Rust #45524 reports native MXC availability on Windows. Go has no
+			// native MXC runner (`sandbox/mxc` always fails closed), so the
+			// capability stays honest and reports false on every platform.
+			WindowsMxc: false,
 		},
 	}
 }
