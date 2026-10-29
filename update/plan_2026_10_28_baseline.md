@@ -2194,6 +2194,15 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Tests: `agent/tools_v2_overrides_test.go` `TestMultiAgentV2OverrideStoreRefreshesForModelChangeLikeRust`; `turn/agent_loop_test.go` `TestRuntimeRefreshesMultiAgentCatalogOverridesForStepModelLikeRust`.
 - Verified: `go test ./agent ./turn -count=1` ok; `go test ./appserver -run 'TurnStepSettings|StepCapabilities|MultiAgent' -count=1` ok; `go build ./...` ok; negative check removing the step refresh fails the new turn test.
 
-Status after reconciliation: `2064 complete`, `406 not_applicable`,
-`442 audit_pending`, `233 regression_pending`, `4 partial`,
+### Worktree launches auto-start the shared daemon (Round 901)
+
+- `app/daemon_startup.go`: `daemonAutoStartRequested` no longer excludes `--worktree` (only `--no-daemon` opts out), matching Rust #46529's "resolve worktree configuration before daemon selection" ordering; the endpoint and selection-reason comments now describe the worktree auto-start path.
+- `app/daemon_startup_test.go`: `TestDaemonAutoStartAllowsWorktreeLikeRust` replaces the old skip test. A worktree launch requests startup, calls the managed-server start with the worktree root, returns the started control socket, and reports selection reason `auto_start`; `--no-daemon --worktree` stays embedded and never starts a server. Existing exclusion/endpoint cases were re-labelled to #46529.
+- `app/tui_telemetry_like_rust_test.go`: worktree selection cases now expect `auto_start` when auto-start is enabled and `existing_daemon` when only a running server is reused.
+- `app/thread_config_overrides_like_rust_test.go`: `suppress_unstable_features_warning` travels with the thread configuration overrides beside audited feature toggles (Rust `config_request_overrides_from_config`), and a launch without the switch forwards nothing for it.
+- Already aligned through later upstream state: the audited boolean feature allowlist plus `suppress_unstable_features_warning` in `daemonConfigExclusion`, shared-service compatibility checks in `app/daemon_compatibility.go`, and the agents overview resolving the shared server without the feature check.
+- Verification: `go test ./app -run 'Daemon|Worktree|Telemetry|SelectionReason|SuppressUnstable' -count=1` and `go test ./appserverdaemon -count=1` pass; full `go test ./app` only reports the pre-existing `TestExecJSONEndToEnd` websocket failure.
+
+Status after reconciliation: `2065 complete`, `406 not_applicable`,
+`442 audit_pending`, `232 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

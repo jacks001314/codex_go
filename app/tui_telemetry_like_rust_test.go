@@ -194,9 +194,10 @@ func TestInteractiveDaemonSelectionReasonLikeRust(t *testing.T) {
 		{name: "incompatible", exclusion: "feature settings", want: "incompatible_option"},
 		{name: "auto start", autoStart: true, want: "auto_start"},
 		{name: "existing daemon", endpoint: endpoint, want: "existing_daemon"},
-		// Rust #46498: --worktree never auto-starts but may reuse a daemon.
-		{name: "worktree existing daemon", endpoint: endpoint, autoStart: true, worktree: true, want: "existing_daemon"},
-		{name: "worktree embedded", autoStart: true, worktree: true, want: "auto_start_disabled"},
+		// Rust #46529: a worktree launch auto-starts the shared server like any
+		// other launch, and still reuses a running daemon when auto-start is off.
+		{name: "worktree auto start", endpoint: endpoint, autoStart: true, worktree: true, want: "auto_start"},
+		{name: "worktree existing daemon", endpoint: endpoint, worktree: true, want: "existing_daemon"},
 		{name: "embedded", want: "auto_start_disabled"},
 	}
 	for _, tc := range cases {

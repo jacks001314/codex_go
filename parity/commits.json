@@ -16084,9 +16084,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #46529 parity: daemonAutoStartRequested only opts out for --no-daemon, so --worktree launches take the automatic-start path; interactiveDaemonEndpoint starts the shared server for a worktree launch and interactiveDaemonSelectionReason reports auto_start (app/daemon_startup.go:307-370, app/tui_telemetry.go:176-202). daemonConfigExclusion already admits audited boolean feature toggles plus suppress_unstable_features_warning (app/daemon_startup.go:178-220), shared-service compatibility checks live in app/daemon_compatibility.go with the later compatibility_warning rules, remoteConfigValues forwards suppress_unstable_features_warning in thread config overrides (app/remote_tui.go:5509), and the agents overview resolves the shared server without the feature check (app/agents.go:27-84). Tests: TestDaemonAutoStartAllowsWorktreeLikeRust, TestDaemonStartupExclusionLikeRust, TestInteractiveDaemonSelectionReasonLikeRust, TestRemoteThreadConfigForwardsSuppressUnstableFeaturesWarningLikeRust; go test ./app ./appserverdaemon."
    ]
   },
   {

@@ -112,8 +112,9 @@ func TestDaemonStartupExclusionLikeRust(t *testing.T) {
 	}{
 		{"plain launch", &cli.RootOptions{}, false, ""},
 		{"no-daemon", &cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}}, false, "--no-daemon"},
-		// Rust #46498: worktree allocation is client-owned, so --worktree stays
-		// eligible for an existing daemon; --no-daemon still wins over it.
+		// Rust #46529: the worktree configuration is resolved before daemon
+		// selection, so --worktree stays eligible for the shared server;
+		// --no-daemon still wins over it.
 		{"worktree", &cli.RootOptions{Shared: cli.SharedOptions{Worktree: true}}, false, ""},
 		{"no-daemon wins over worktree", &cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true, Worktree: true}}, false, "--no-daemon"},
 		{"oss", &cli.RootOptions{Shared: cli.SharedOptions{OSS: true}}, false, "--oss"},
@@ -184,7 +185,7 @@ func TestLocalDaemonEndpointForLaunchLikeRust(t *testing.T) {
 			t.Fatalf("%s reused a daemon: %#v", name, got)
 		}
 	}
-	// Rust #46498: a worktree launch may attach to an existing daemon.
+	// Rust #46529: a worktree launch may attach to an existing daemon.
 	worktree := &cli.RootOptions{Shared: cli.SharedOptions{Worktree: true}}
 	if got := localDaemonEndpointForLaunchWithProbe(worktree, false, socketPath, reachable); got == nil ||
 		got.Kind != appserverdaemon.RemoteEndpointUnixSocket {
@@ -303,11 +304,11 @@ func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
 	}
 }
 
-// TestDaemonAutoStartSkipsWorktreeLikeRust mirrors Rust #46498: a --worktree
-// launch never starts the shared background server even when
-// daemon_auto_start is enabled, because worktree allocation is client-owned,
-// and it may still attach to an already-running daemon.
-func TestDaemonAutoStartSkipsWorktreeLikeRust(t *testing.T) {
+// TestDaemonAutoStartAllowsWorktreeLikeRust mirrors Rust #46529: the worktree
+// configuration is resolved before daemon selection, so a --worktree launch
+// takes the same automatic-start path as any other launch. --no-daemon still
+// disables automatic startup for every launch.
+func TestDaemonAutoStartAllowsWorktreeLikeRust(t *testing.T) {
 	originalFeature := daemonAutoStartFeature
 	originalStart := daemonAutoStartStart
 	originalReason := daemonAutoStartExclusionReason
@@ -324,26 +325,43 @@ func TestDaemonAutoStartSkipsWorktreeLikeRust(t *testing.T) {
 		t.Fatal("a plain launch must request automatic startup")
 	}
 	worktree := &cli.RootOptions{Shared: cli.SharedOptions{Worktree: true}}
-	if daemonAutoStartRequested(worktree) {
-		t.Fatal("a --worktree launch must not request automatic startup")
+	if !daemonAutoStartRequested(worktree) {
+		t.Fatal("a --worktree launch must request automatic startup")
 	}
 	// --no-daemon still disables automatic startup for any launch.
-	if daemonAutoStartRequested(&cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}}) {
+	if daemonAutoStartRequested(&cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true, Worktree: true}}) {
 		t.Fatal("a --no-daemon launch must not request automatic startup")
 	}
 
-	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
-		t.Fatal("a --worktree launch must not start the shared background server")
-		return "", nil
+	starts := 0
+	daemonAutoStartStart = func(root *cli.RootOptions) (string, error) {
+		starts++
+		if root == nil || !root.Shared.Worktree {
+			t.Fatalf("auto-start root = %#v, want the --worktree launch", root)
+		}
+		return t.TempDir() + "/codex.sock", nil
 	}
-	if endpoint, err := interactiveDaemonEndpoint(worktree); err != nil || endpoint != nil {
-		t.Fatalf("--worktree endpoint = %#v, err = %v; want embedded fallback", endpoint, err)
+	endpoint, err := interactiveDaemonEndpoint(worktree)
+	if err != nil || endpoint == nil {
+		t.Fatalf("--worktree endpoint = %#v, err = %v; want the started shared server", endpoint, err)
 	}
-	if got := interactiveDaemonSelectionReason(worktree, nil, false); got != "auto_start_disabled" {
-		t.Fatalf("--worktree selection reason = %q, want auto_start_disabled", got)
+	if starts != 1 {
+		t.Fatalf("--worktree automatic start calls = %d, want 1", starts)
+	}
+	if got := interactiveDaemonSelectionReason(worktree, endpoint, false); got != "auto_start" {
+		t.Fatalf("--worktree selection reason = %q, want auto_start", got)
 	}
 	if got := daemonAutoStartExclusionWarning(worktree); got != "" {
 		t.Fatalf("--worktree warning = %q, want none", got)
+	}
+
+	// --no-daemon keeps a worktree launch embedded and never starts the server.
+	daemonAutoStartExclusionReason = ""
+	if endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true, Worktree: true}}); err != nil || endpoint != nil {
+		t.Fatalf("--no-daemon --worktree endpoint = %#v, err = %v; want embedded", endpoint, err)
+	}
+	if starts != 1 {
+		t.Fatalf("--no-daemon --worktree automatic start calls = %d, want 1", starts)
 	}
 }
 

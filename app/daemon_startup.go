@@ -307,14 +307,14 @@ var daemonAutoStartFeature = func(root *cli.RootOptions) bool {
 }
 
 // daemonAutoStartRequested mirrors Rust's `auto_start_daemon` decision in
-// startup_orchestration.rs (#46498): automatic startup applies when the
-// effective configuration enables it and the launch does not ask for a
-// client-owned managed worktree or opt out with --no-daemon. A worktree launch
-// stays eligible to attach to an existing shared server, with embedded
-// fallback. The agents overview and remote-workspace inputs are handled by the
-// callers that own them.
+// startup_orchestration.rs: automatic startup applies when the effective
+// configuration enables it and the launch does not opt out with --no-daemon.
+// Rust #46529 resolved the worktree configuration before daemon selection and
+// allowed worktree sessions to auto-start the shared server, so --worktree is
+// no longer an exclusion here. The agents overview and remote-workspace inputs
+// are handled by the callers that own them.
 func daemonAutoStartRequested(root *cli.RootOptions) bool {
-	if root != nil && (root.Shared.Worktree || root.Shared.NoDaemon) {
+	if root != nil && root.Shared.NoDaemon {
 		return false
 	}
 	return daemonAutoStartFeature(root)
@@ -358,9 +358,8 @@ func daemonAutoStartFeatures(*cli.RootOptions) map[string]bool {
 //   - with `features.daemon_auto_start` enabled, the shared server is started
 //     and its connection is required: a failure surfaces the `--no-daemon`
 //     guidance instead of silently falling back to embedded mode;
-//   - Rust #46498: a `--worktree` launch never starts the shared server
-//     (worktree allocation is client-owned and thread requests forward the
-//     feature) but may still reuse a daemon that already answers;
+//   - Rust #46529: a `--worktree` launch resolves its worktree configuration
+//     first and then takes the same automatic-start path as any other launch;
 //   - otherwise a reachable shared server is reused, with embedded fallback.
 func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAppServerEndpoint, error) {
 	if daemonStartupExclusion(root, false) != "" {
