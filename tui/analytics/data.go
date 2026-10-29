@@ -87,6 +87,13 @@ type AnalyticsLoad[T any] struct {
 // StartAnalyticsLoad runs load on its own goroutine with a 30 second timeout and
 // schedules a frame once the result is available (Rust Load::start).
 func StartAnalyticsLoad[T any](ctx context.Context, load func(context.Context) (*T, error), scheduleFrame func()) *AnalyticsLoad[T] {
+	return StartAnalyticsLoadWithTimeout(ctx, load, scheduleFrame, analyticsLoadTimeout)
+}
+
+// StartAnalyticsLoadWithTimeout is StartAnalyticsLoad with a caller-selected
+// budget, used by loads that combine several bounded phases
+// (Rust Load::start_with_timeout, #45765).
+func StartAnalyticsLoadWithTimeout[T any](ctx context.Context, load func(context.Context) (*T, error), scheduleFrame func(), timeout time.Duration) *AnalyticsLoad[T] {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -97,7 +104,7 @@ func StartAnalyticsLoad[T any](ctx context.Context, load func(context.Context) (
 		pending: &PendingAnalyticsLoad[T]{result: results, cancel: cancel},
 	}
 	go func() {
-		result := runAnalyticsLoad(taskCtx, load)
+		result := runAnalyticsLoad(taskCtx, load, timeout)
 		cancel()
 		results <- result
 		if scheduleFrame != nil {
@@ -107,8 +114,8 @@ func StartAnalyticsLoad[T any](ctx context.Context, load func(context.Context) (
 	return handle
 }
 
-func runAnalyticsLoad[T any](ctx context.Context, load func(context.Context) (*T, error)) (result analyticsLoadResult[T]) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, analyticsLoadTimeout)
+func runAnalyticsLoad[T any](ctx context.Context, load func(context.Context) (*T, error), timeout time.Duration) (result analyticsLoadResult[T]) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	defer func() {
 		if recover() != nil {

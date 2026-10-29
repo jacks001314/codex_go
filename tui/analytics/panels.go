@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"codex_go/auth"
 )
 
 // AnalyticsPanelOptions describes the maximized section panel.
@@ -98,7 +100,9 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 
 // AnalyticsStatusLine is the panel/account status text used when the account is
 // still loading or unavailable (Rust AnalyticsView::render account branch).
-func AnalyticsStatusLine(account AnalyticsLoad[AccountKind]) string {
+// The load carries the account plan so the layout can gate plan-specific
+// sections such as Top chats.
+func AnalyticsStatusLine(account AnalyticsLoad[auth.PlanType]) string {
 	if message, ok := account.Message(); ok {
 		return message
 	}

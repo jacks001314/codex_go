@@ -56,6 +56,8 @@ func AnalyticsSectionTitle(section AnalyticsSection, business, consumerAttributi
 		return "Credits usage history"
 	case AnalyticsSectionActivity:
 		return "Messages"
+	case AnalyticsSectionChats:
+		return "Top chats"
 	default:
 		return "Skills used"
 	}

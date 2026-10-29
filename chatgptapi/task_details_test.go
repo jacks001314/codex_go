@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -232,8 +233,112 @@ func TestCloudClientGetThreadUsageMatchesRust(t *testing.T) {
 		t.Fatalf("group native usage = %+v", usage.Groups[0].NativeUsageUSDMicros)
 	}
 
-	if _, err := client.GetThreadUsage(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), "did not contain requested thread") {
+	if _, err := client.GetThreadUsage(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), "unexpected threads") {
 		t.Fatalf("missing thread error = %v", err)
+	}
+	omitted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSONChatGPTAPI(t, w, map[string]any{"threads": []map[string]any{}})
+	}))
+	defer omitted.Close()
+	omittedClient := NewCloudClient(&CloudClientOptions{BaseURL: omitted.URL})
+	if _, err := omittedClient.GetThreadUsage(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), "omitted requested thread") {
+		t.Fatalf("omitted thread error = %v", err)
+	}
+}
+
+func TestCloudClientGetThreadsUsageMatchesRust(t *testing.T) {
+	var body string
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/api/codex/usage/thread_usage/query" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		writeJSONChatGPTAPI(t, w, map[string]any{
+			"threads": []map[string]any{
+				{"thread_id": "first", "estimated_usage_credits_micros": 1250000, "estimated_usage_usd_micros": nil, "groups": nil},
+				{"thread_id": "second", "estimated_usage_credits_micros": nil},
+			},
+		})
+	}))
+	defer server.Close()
+	client := NewCloudClient(&CloudClientOptions{BaseURL: server.URL})
+
+	usage, err := client.GetThreadsUsage(context.Background(), []string{"first", "second"})
+	if err != nil {
+		t.Fatalf("GetThreadsUsage error = %v", err)
+	}
+	if requests != 1 || body != `{"thread_ids":["first","second"]}` {
+		t.Fatalf("request = %d %s", requests, body)
+	}
+	// A null credit total means unavailable, so it is omitted rather than zero.
+	if len(usage) != 1 || usage[0].ThreadID != "first" || usage[0].EstimatedUsageCreditsMicros != 1250000 ||
+		usage[0].EstimatedUsageUSDMicros != nil || usage[0].Groups == nil || len(usage[0].Groups) != 0 {
+		t.Fatalf("usage = %+v", usage)
+	}
+}
+
+func TestCloudClientGetThreadsUsageRejectsInvalidRequestsBeforeHTTP(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client := NewCloudClient(&CloudClientOptions{BaseURL: server.URL})
+
+	tooMany := make([]string, 0, 101)
+	for index := 0; index < 101; index++ {
+		tooMany = append(tooMany, "thread-"+strconv.Itoa(index))
+	}
+	for name, ids := range map[string][]string{
+		"empty":      nil,
+		"duplicates": {"duplicate", "duplicate"},
+		"too many":   tooMany,
+	} {
+		if _, err := client.GetThreadsUsage(context.Background(), ids); err == nil ||
+			!strings.Contains(err.Error(), "1–100 distinct thread IDs") {
+			t.Fatalf("%s error = %v", name, err)
+		}
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want none", requests)
+	}
+}
+
+func TestCloudClientGetThreadsUsageRejectsUnexpectedRows(t *testing.T) {
+	for name, returned := range map[string][]map[string]any{
+		"duplicate":   {{"thread_id": "first", "estimated_usage_credits_micros": 1}, {"thread_id": "first", "estimated_usage_credits_micros": 1}},
+		"unrequested": {{"thread_id": "first", "estimated_usage_credits_micros": 1}, {"thread_id": "unexpected", "estimated_usage_credits_micros": nil}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeJSONChatGPTAPI(t, w, map[string]any{"threads": returned})
+			}))
+			defer server.Close()
+			client := NewCloudClient(&CloudClientOptions{BaseURL: server.URL})
+			if _, err := client.GetThreadsUsage(context.Background(), []string{"first", "second"}); err == nil ||
+				!strings.Contains(err.Error(), "unexpected threads") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCloudClientGetThreadsUsageInvalidResponseMatchesRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"threads": "not-a-list"}`))
+	}))
+	defer server.Close()
+	client := NewCloudClient(&CloudClientOptions{BaseURL: server.URL})
+	if _, err := client.GetThreadsUsage(context.Background(), []string{"first"}); err == nil ||
+		err.Error() != "Invalid thread usage response." {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/auth"
 )
 
 // TestAnalyticsToolNameMatchesRust covers Rust's tool_panel::tool_name (#45764).
@@ -28,24 +30,36 @@ func TestAnalyticsToolNameMatchesRust(t *testing.T) {
 // TestAnalyticsVisibleSectionsMatchRust covers Rust's account-specific card
 // order.
 func TestAnalyticsVisibleSectionsMatchRust(t *testing.T) {
-	consumer := AnalyticsVisibleSections(AccountKindConsumer, true)
+	consumer := AnalyticsVisibleSections(auth.PlanPlus, true)
 	want := []AnalyticsSection{AnalyticsSectionUsage, AnalyticsSectionActivity, AnalyticsSectionPlugins, AnalyticsSectionSkills}
 	if !analyticsSameSections(consumer, want) {
 		t.Fatalf("consumer sections = %v, want %v", consumer, want)
 	}
-	business := AnalyticsVisibleSections(AccountKindBusiness, true)
-	want = []AnalyticsSection{AnalyticsSectionCredits, AnalyticsSectionUsage, AnalyticsSectionPlugins, AnalyticsSectionSkills}
+	business := AnalyticsVisibleSections(auth.PlanBusiness, true)
+	want = []AnalyticsSection{AnalyticsSectionCredits, AnalyticsSectionUsage, AnalyticsSectionPlugins, AnalyticsSectionSkills, AnalyticsSectionChats}
 	if !analyticsSameSections(business, want) {
 		t.Fatalf("business sections = %v, want %v", business, want)
 	}
-	enterprise := AnalyticsVisibleSections(AccountKindEnterprise, true)
-	if !analyticsSameSections(enterprise, want) {
+	// EnterpriseCbpUsageBased is business-like and exposes thread estimates.
+	if enterprise := AnalyticsVisibleSections(auth.PlanEnterpriseCBPUsageBased, true); !analyticsSameSections(enterprise, want) {
 		t.Fatalf("enterprise sections = %v, want %v", enterprise, want)
 	}
-	if got := AnalyticsVisibleSections(AccountKindUnknown, true); len(got) != 0 {
+	// Plans without thread-usage support keep the four-card layout even when
+	// they are workspace accounts.
+	want = []AnalyticsSection{AnalyticsSectionCredits, AnalyticsSectionUsage, AnalyticsSectionPlugins, AnalyticsSectionSkills}
+	if enterprise := AnalyticsVisibleSections(auth.PlanEnterprise, true); !analyticsSameSections(enterprise, want) {
+		t.Fatalf("enterprise sections = %v, want %v", enterprise, want)
+	}
+	if ent26 := AnalyticsVisibleSections(auth.PlanEnt26, true); !analyticsSameSections(ent26, want) {
+		t.Fatalf("ent26 sections = %v, want %v", ent26, want)
+	}
+	if team := AnalyticsVisibleSections(auth.PlanTeam, true); !analyticsSameSections(team, want) {
+		t.Fatalf("team sections = %v, want %v", team, want)
+	}
+	if got := AnalyticsVisibleSections(auth.PlanUnknown, true); len(got) != 0 {
 		t.Fatalf("unknown sections = %v, want none", got)
 	}
-	if got := AnalyticsVisibleSections(AccountKindConsumer, false); len(got) != 0 {
+	if got := AnalyticsVisibleSections(auth.PlanPlus, false); len(got) != 0 {
 		t.Fatalf("unresolved sections = %v, want none", got)
 	}
 }
@@ -192,7 +206,7 @@ func TestAnalyticsSectionDatesMatchRust(t *testing.T) {
 // TestAnalyticsDashboardLayoutMatchesRust covers the two-column overview, the
 // viewport-driven card height, and the focused-card selection range.
 func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
-	visible := AnalyticsVisibleSections(AccountKindConsumer, true)
+	visible := AnalyticsVisibleSections(auth.PlanPlus, true)
 	opts := AnalyticsDashboardOptions{
 		Width:    120,
 		Height:   40,

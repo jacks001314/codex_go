@@ -1,6 +1,10 @@
 package analytics
 
-import "time"
+import (
+	"time"
+
+	"codex_go/auth"
+)
 
 // AnalyticsSection identifies one dashboard card. The values are stable so a
 // selection survives the account-driven layout order changes
@@ -13,10 +17,14 @@ const (
 	AnalyticsSectionCredits
 	AnalyticsSectionActivity
 	AnalyticsSectionSkills
+	// AnalyticsSectionChats appends the Top chats card without renumbering the
+	// existing sections, so a retained selection keeps its identity
+	// (Rust Section::Chats, #45765).
+	AnalyticsSectionChats
 )
 
 // AnalyticsSectionCount is the number of dashboard sections.
-const AnalyticsSectionCount = 5
+const AnalyticsSectionCount = 6
 
 // Report maps a section onto the report it renders. Every section has one.
 func (s AnalyticsSection) Report() AccountAnalyticsReport {
@@ -32,6 +40,13 @@ func (s AnalyticsSection) Report() AccountAnalyticsReport {
 	default:
 		return AccountAnalyticsReportUsage
 	}
+}
+
+// HasReport reports whether the section loads an account analytics report. Top
+// chats loads local roots and per-thread estimates instead
+// (Rust Section::report returning None for Chats).
+func (s AnalyticsSection) HasReport() bool {
+	return s != AnalyticsSectionChats
 }
 
 // AnalyticsSectionState is one section's report and its selection. Each section
@@ -75,6 +90,8 @@ func (s AnalyticsSection) RangeGroup(business bool) AnalyticsRangeGroup {
 		return AnalyticsRangeGroupUsage
 	case AnalyticsSectionCredits:
 		return AnalyticsRangeGroupUsage
+	case AnalyticsSectionChats:
+		return AnalyticsRangeGroupUsage
 	case AnalyticsSectionActivity:
 		return AnalyticsRangeGroupActivity
 	default:
@@ -97,11 +114,12 @@ func (s AnalyticsSection) GroupLabel(group int, consumerAttribution bool) string
 
 // AnalyticsVisibleSections is the account-specific card order. Unknown and
 // unresolved accounts show nothing (Rust AnalyticsView::visible_sections).
-func AnalyticsVisibleSections(kind AccountKind, resolved bool) []AnalyticsSection {
+// Top chats appears only for plans whose backend exposes thread estimates.
+func AnalyticsVisibleSections(plan auth.PlanType, resolved bool) []AnalyticsSection {
 	if !resolved {
 		return nil
 	}
-	switch kind {
+	switch AccountKindFor(plan) {
 	case AccountKindConsumer:
 		return []AnalyticsSection{
 			AnalyticsSectionUsage,
@@ -110,6 +128,15 @@ func AnalyticsVisibleSections(kind AccountKind, resolved bool) []AnalyticsSectio
 			AnalyticsSectionSkills,
 		}
 	case AccountKindBusiness, AccountKindEnterprise:
+		if AnalyticsThreadUsageSupported(plan) {
+			return []AnalyticsSection{
+				AnalyticsSectionCredits,
+				AnalyticsSectionUsage,
+				AnalyticsSectionPlugins,
+				AnalyticsSectionSkills,
+				AnalyticsSectionChats,
+			}
+		}
 		return []AnalyticsSection{
 			AnalyticsSectionCredits,
 			AnalyticsSectionUsage,

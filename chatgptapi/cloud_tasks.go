@@ -491,8 +491,80 @@ type threadUsageQueryRequest struct {
 	ThreadIDs []string `json:"thread_ids"`
 }
 
+// threadUsageEstimate is the wire row for one thread. A null credit total means
+// the estimate is unavailable, which is not the same as zero credits
+// (Rust #45765).
+type threadUsageEstimate struct {
+	ThreadID                    string                       `json:"thread_id"`
+	EstimatedUsageCreditsMicros *int64                       `json:"estimated_usage_credits_micros"`
+	EstimatedUsageUSDMicros     *int64                       `json:"estimated_usage_usd_micros,omitempty"`
+	NativeUsageUSDMicros        *int64                       `json:"native_usage_usd_micros,omitempty"`
+	Groups                      *[]ThreadUsageBreakdownGroup `json:"groups,omitempty"`
+}
+
 type threadUsageQueryResponse struct {
-	Threads []ThreadUsage `json:"threads"`
+	Threads []threadUsageEstimate `json:"threads"`
+}
+
+// batchedThreadUsageIDs is the backend's per-request bound
+// (Rust thread_usage.rs get_threads_usage).
+const batchedThreadUsageIDs = 100
+
+// GetThreadsUsage reads authoritative usage estimates for one to 100 distinct
+// threads. Rows the backend returns without a credit total are unavailable, so
+// they are omitted instead of reported as zero (Rust #45765).
+func (c *CloudClient) GetThreadsUsage(ctx context.Context, threadIDs []string) ([]ThreadUsage, error) {
+	if c == nil {
+		return nil, errors.New("cloud client is nil")
+	}
+	requested := make(map[string]struct{}, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if _, duplicate := requested[threadID]; duplicate {
+			return nil, errors.New("expected 1–100 distinct thread IDs")
+		}
+		requested[threadID] = struct{}{}
+	}
+	if len(threadIDs) == 0 || len(threadIDs) > batchedThreadUsageIDs {
+		return nil, errors.New("expected 1–100 distinct thread IDs")
+	}
+	var response threadUsageQueryResponse
+	if err := c.doJSON(ctx, http.MethodPost, c.apiPath("usage", "thread_usage", "query"), nil, threadUsageQueryRequest{
+		ThreadIDs: threadIDs,
+	}, &response); err != nil {
+		var decodeErr *cloudResponseDecodeError
+		if errors.As(err, &decodeErr) {
+			return nil, errors.New("Invalid thread usage response.")
+		}
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(response.Threads))
+	for _, row := range response.Threads {
+		if _, ok := requested[row.ThreadID]; !ok {
+			return nil, errors.New("thread usage returned unexpected threads")
+		}
+		if _, duplicate := seen[row.ThreadID]; duplicate {
+			return nil, errors.New("thread usage returned unexpected threads")
+		}
+		seen[row.ThreadID] = struct{}{}
+	}
+	usage := make([]ThreadUsage, 0, len(response.Threads))
+	for _, row := range response.Threads {
+		if row.EstimatedUsageCreditsMicros == nil {
+			continue
+		}
+		groups := []ThreadUsageBreakdownGroup{}
+		if row.Groups != nil {
+			groups = *row.Groups
+		}
+		usage = append(usage, ThreadUsage{
+			ThreadID:                    row.ThreadID,
+			EstimatedUsageCreditsMicros: *row.EstimatedUsageCreditsMicros,
+			EstimatedUsageUSDMicros:     row.EstimatedUsageUSDMicros,
+			NativeUsageUSDMicros:        row.NativeUsageUSDMicros,
+			Groups:                      groups,
+		})
+	}
+	return usage, nil
 }
 
 // GetThreadUsage reads authoritative estimated usage for one thread from the
@@ -505,18 +577,16 @@ func (c *CloudClient) GetThreadUsage(ctx context.Context, threadID string) (*Thr
 	if threadID == "" {
 		return nil, errors.New("thread id is required")
 	}
-	var response threadUsageQueryResponse
-	if err := c.doJSON(ctx, http.MethodPost, c.apiPath("usage", "thread_usage", "query"), nil, threadUsageQueryRequest{
-		ThreadIDs: []string{threadID},
-	}, &response); err != nil {
+	usage, err := c.GetThreadsUsage(ctx, []string{threadID})
+	if err != nil {
 		return nil, err
 	}
-	for index := range response.Threads {
-		if response.Threads[index].ThreadID == threadID {
-			return &response.Threads[index], nil
+	for index := range usage {
+		if usage[index].ThreadID == threadID {
+			return &usage[index], nil
 		}
 	}
-	return nil, fmt.Errorf("thread usage response did not contain requested thread %s", threadID)
+	return nil, errors.New("thread usage response omitted requested thread")
 }
 
 func (c *CloudClient) ListWorkspaceMessages(ctx context.Context) (*WorkspaceMessagesResponse, error) {

@@ -191,6 +191,7 @@ func TestAnalyticsBusinessSectionsLikeRust(t *testing.T) {
 		analytics.AnalyticsSectionUsage,
 		analytics.AnalyticsSectionPlugins,
 		analytics.AnalyticsSectionSkills,
+		analytics.AnalyticsSectionChats,
 	}
 	if got := analyticsSectionList(model.analyticsDashboard.visibleSections()); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("business sections = %v, want %v", got, want)

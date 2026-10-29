@@ -10,6 +10,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/auth"
 	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
 	"codex_go/tui/styles"
@@ -39,7 +40,7 @@ type analyticsDashboard struct {
 	modelNames  map[string]string
 
 	sections       [analytics.AnalyticsSectionCount]analytics.AnalyticsSectionState
-	account        analytics.AnalyticsLoad[analytics.AccountKind]
+	account        analytics.AnalyticsLoad[auth.PlanType]
 	reportsStarted bool
 
 	section         analytics.AnalyticsSection
@@ -55,7 +56,7 @@ type analyticsDashboard struct {
 
 func newAnalyticsDashboard() *analyticsDashboard {
 	dashboard := &analyticsDashboard{
-		account:         analytics.UnavailableAnalyticsLoad[analytics.AccountKind](),
+		account:         analytics.UnavailableAnalyticsLoad[auth.PlanType](),
 		section:         analytics.AnalyticsSectionUsage,
 		zoomed:          true,
 		followSelection: true,
@@ -136,13 +137,13 @@ func (d *analyticsDashboard) refresh() {
 	d.account.Invalidate()
 	if d.live != nil {
 		live := d.live
-		load := func(ctx context.Context) (*analytics.AccountKind, error) {
+		load := func(ctx context.Context) (*auth.PlanType, error) {
 			session, err := live.Session(ctx)
 			if err != nil {
 				return nil, err
 			}
-			kind := session.Kind
-			return &kind, nil
+			plan := session.Backend.Account().PlanType
+			return &plan, nil
 		}
 		d.account = *analytics.StartAnalyticsLoad(context.Background(), load, nil)
 	}
@@ -185,6 +186,9 @@ func (d *analyticsDashboard) loadReport(section analytics.AnalyticsSection) {
 	if d == nil {
 		return
 	}
+	if !section.HasReport() {
+		return
+	}
 	if d.live == nil || d.liveFactory == nil {
 		d.sections[section].History.Invalidate()
 		return
@@ -213,10 +217,11 @@ func (d *analyticsDashboard) business() bool {
 	if d == nil {
 		return false
 	}
-	kind, ok := d.account.Ready()
+	plan, ok := d.account.Ready()
 	if !ok {
 		return false
 	}
+	kind := analytics.AccountKindFor(plan)
 	return kind == analytics.AccountKindBusiness || kind == analytics.AccountKindEnterprise
 }
 
@@ -236,8 +241,8 @@ func (d *analyticsDashboard) visibleSections() []analytics.AnalyticsSection {
 	if d == nil {
 		return nil
 	}
-	kind, ok := d.account.Ready()
-	return analytics.AnalyticsVisibleSections(kind, ok)
+	plan, ok := d.account.Ready()
+	return analytics.AnalyticsVisibleSections(plan, ok)
 }
 
 func (d *analyticsDashboard) groupOptions() []int {
@@ -278,10 +283,11 @@ func (d *analyticsDashboard) startReports() {
 	if d == nil || d.reportsStarted {
 		return
 	}
-	kind, ok := d.account.Ready()
+	plan, ok := d.account.Ready()
 	if !ok {
 		return
 	}
+	kind := analytics.AccountKindFor(plan)
 	d.reportsStarted = true
 	visible := d.visibleSections()
 	if len(visible) == 0 {
