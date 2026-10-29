@@ -12507,9 +12507,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go parity confirmed: tui/app/recap.go keeps RecapDelay=30m/RecapRetryDelay=30s and the deadline state machine; tui/history_cell/recap.go renders the italic hanging '  ↳ Recap:' layout with right padding, explicit line breaks, Unicode, and URL-preserving narrow wrap; app/recap.go no longer overrides token_budget.use_history_notes_extension. New TestRecapDelayMatchesRustThirtyMinutes plus the existing narrow-terminal/Unicode/URL tests pass (go test ./tui/app ./tui/history_cell ./tui/tea -count=1)."
    ]
   },
   {
@@ -12519,9 +12519,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 8/8 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go parity confirmed: tui/app/recap.go has the shared RecapPrompt/RecapPromptPrefix with the 8192-token (32 KiB) ceiling, up to eight answered exchanges plus a pending correction, whole-exchange drop before endpoint excerpts, strict summary/nullable next_action parsing at 700/200 chars, the output schema, and tui/history_cell/recap.go renders the separately wrapped 'Next:' line. Tests cover UTF-8 prompt bounds, exchange selection, excerpt boundaries, strict parsing, and next-action rendering; go test ./tui/app ./tui/history_cell ./tui/tea -count=1 passes."
    ]
   },
   {
@@ -12591,9 +12591,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go parity confirmed: tui/streaming keeps a disposable prosePreview bounded to the newest 8 KiB at a rune boundary with a leading ellipsis, excludes it from the stable queue, reflows on resize, retains the last safe preview when a pipe reveals a table, and holds back fences/tables; currentTailLines appends it to the live view and pushDelta reports preview changes. TestStreamControllerPreviewsUnterminatedProse, ProsePreviewBoundedAtRuneBoundary, ProsePreviewRetainsSafeTextOnPipe, and ProsePreviewReflowsOnResize pass (go test ./tui/streaming -count=1)."
    ]
   },
   {

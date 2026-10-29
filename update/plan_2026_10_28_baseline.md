@@ -818,6 +818,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Existing tests cover fetch/render, zero-preservation, the disabled capability, plan gates, plan-change cache clearing, incomplete breakdowns and ENT26 dollars; this round adds `TestAgentsOverviewUsageDiscardsStaleResultsAndRetriesAfterFailure` to pin the reconnect/account-change stale-result discard and the retry-after-failure cadence.
 - `go test ./tui/tea -run 'AgentsOverviewUsage' -count=1`, `go test ./tui/tea -run Agents -count=1`, `go test ./app -run Agents -count=1` and `go test ./tui/agents_overview -count=1` pass.
 
-Status after reconciliation: `1980 complete`, `386 not_applicable`,
-`506 audit_pending`, `277 regression_pending`, `0 partial`,
+### Delay and compact recaps while previewing streaming prose (Round 794)
+
+- #45089 was already implemented. `tui/app/recap.go` keeps `RecapDelay = 30m` and `RecapRetryDelay = 30s` in the focus-loss/turn-count deadline state machine, `tui/history_cell/recap.go` renders the compact italic hanging `  ↳ Recap:` layout with a two-column right pad, preserved source line breaks, Unicode-safe wrapping and a `BreakWords` fallback that keeps URLs intact until they overflow, and `app/recap.go` no longer overrides `token_budget.use_history_notes_extension` on temporary structured requests.
+- This round adds `TestRecapDelayMatchesRustThirtyMinutes` and fixes the two mis-encoded `↳` label comments; the existing narrow-terminal, Unicode, URL-wrap and fallback-header tests already pin the layout.
+- #45090 was already implemented. `RecapPrompt`/`RecapPromptPrefix` share the 8,192-token (32 KiB) byte ceiling, `RecapHistory` selects up to eight answered exchanges plus a pending correction, drops older whole exchanges before excerpting both ends, and `ParseRecap` requires a `summary` plus nullable `next_action` bounded to 700/200 characters with the matching output schema; `ThreadRecapHistoryCell.WithNextAction` renders the separately wrapped `Next:` line.
+- #45135 was already implemented. `tui/streaming` keeps a disposable `prosePreview` bounded to the newest 8 KiB at a rune boundary with a leading ellipsis, never enqueues it into the stable queue, reflows it on resize, drops it on a committed newline, retains the last safe preview when a pipe reveals table structure, and holds back fences; `pushDelta` reports preview changes and `currentTailLines` appends the preview to the live tail. Existing controller tests cover visibility before completion, finalization without duplication, bounds, table holdback and resize reflow.
+- Tests: `go test ./tui/app ./tui/history_cell ./tui/tea ./tui/streaming -count=1` passes.
+
+Status after reconciliation: `1983 complete`, `386 not_applicable`,
+`506 audit_pending`, `274 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
