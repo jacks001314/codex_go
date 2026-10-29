@@ -1194,6 +1194,16 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Still open for a complete port: the `/usage` "Explore analytics" entry, the full-screen view with its key bindings, wiring to analytics.Live and the model-name map, draft preservation, and the chatwidget usage-menu changes.
 - Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./... .
 
-Status after reconciliation: `2014 complete`, `395 not_applicable`,
-`479 audit_pending`, `258 regression_pending`, `3 partial`,
+### #45764 Account analytics dashboard (full-screen view) (Round 838)
+
+- chatwidget/usage.go adds `UsageMenuActionOpenAnalytics` and inserts the "Explore analytics" row between "Show usage" and the reset entry for ChatGPT accounts, matching Rust's `usage_menu_params` insertion.
+- tui/tea/analytics_dashboard.go hosts the retained full-screen view: five independent section loads over an `analytics.Live` built for the current end date, account load through `Session`, `History`/`FilteredHistory` with `AnalyticsGroupingAt`, and refresh/close paths that rebuild or cancel loads without losing navigation state.
+- Key handling mirrors `AnalyticsView::handle_key`: q/ctrl+c close, tab and 1-5 switch sections, z toggles overview/maximize, r flips the shared 7/30-day range and shifts cursor/detail, g opens the group picker, m cycles the business usage model filter, R refreshes, space/enter toggles day details, page up/down scroll, and esc backs out of details first.
+- Rendering composes the bold title with the live account label, the `[7d]`/`[30d]` range row, numbered tabs, the maximized panel (chart height re-measured from the chart bands) or the overview grid, clamped scrolling, and a dimmed two-line footer whose keys are highlighted and whose details hint disappears when no day has values while keeping the footer height.
+- model.go retains the view, routes key presses and pastes to it, renders it before the transcript, and polls pending loads on a 60ms tick; the `/usage` modal action opens it and the composer draft is never touched.
+- Tests cover the menu entry and account-specific sections, range switching, the group picker, business model cycling, independent section failures, cancellation on close, small terminals, zoom, section switching and details, terminal styling, draft preservation, and retained navigation across reopen.
+- Verified: go test ./tui/analytics ./tui/chatwidget ./tui/tea -count=1, go vet on the same packages, go build ./... .
+
+Status after reconciliation: `2015 complete`, `395 not_applicable`,
+`479 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
