@@ -14295,9 +14295,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/summary.go SummarizePermissionProfile summarizes runtime filesystem entries with PathUri cwd/roots (workspace/subpath/outside/tmpdir/slash_tmp classification, POSIX-only slash_tmp, extra roots via NativePathString); exec/exec.go execHumanSandboxSummary and tui/status StatusPermissionSummary + WorkspaceRootSuffix route through it; sandbox/summary_test.go and tui/status/permission_summary_test.go cover POSIX, Windows drive, UNC, case-distinct roots, opaque subpath writes, and network/full-access labels"
    ]
   },
   {

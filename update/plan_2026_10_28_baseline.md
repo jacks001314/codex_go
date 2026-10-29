@@ -1582,6 +1582,26 @@ App-server shutdown signal across loop iterations (#45849, not applicable).
 - The companion upstream change is a Rust-only app-server WebSocket drain test
   fixture with gated SSE responses, which has no Go counterpart.
 
-Status after reconciliation: `2023 complete`, `398 not_applicable`,
-`467 audit_pending`, `258 regression_pending`, `3 partial`,
+### Preserve executor path conventions in permission summaries (#45852) (Round 857)
+
+Preserve executor path conventions in permission summaries (#45852).
+
+- `sandbox/summary.go` adds `SummarizePermissionProfile(profile, cwd *utils.PathURI, workspaceRoots []*utils.PathURI)`, derived from the profile's runtime
+  filesystem entries instead of a legacy `SandboxPolicy` projection: a write on
+  the working directory (URI or native form) or an unscoped `project_roots`
+  entry marks the workspace writable, subpath writes, writes outside the
+  working directory, and `root` stay `custom permissions`, and `slash_tmp`
+  counts only for POSIX working directories.
+- Extra workspace roots render through `PathURI.NativePathString()`, so POSIX,
+  Windows drive, and UNC roots keep their own convention (encoded spaces
+  decode, case-distinct roots stay distinct).
+- `exec/exec.go` converts the working directory and workspace roots to
+  `PathUri` before summarizing, keeping the legacy tag only when the path
+  cannot be represented; `tui/status` gains `StatusPermissionSummary` and
+  `WorkspaceRootSuffix` mirroring the Rust status card helpers.
+- Tests mirror the upstream cases (POSIX, Windows drive, UNC, case-distinct
+  roots, opaque subpath writes, network and full-access labels).
+
+Status after reconciliation: `2024 complete`, `398 not_applicable`,
+`466 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
