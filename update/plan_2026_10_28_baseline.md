@@ -2038,6 +2038,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - Go's V2 `spawn_agent` spec (`agent/tools_v2.go`) uses a condensed description that never carried that sentence, so there is nothing to remove; the surrounding guidance the commit keeps is already covered by `agent/multi_agent_v2_spawn_guidance_like_rust_test.go` (inherited-model guidance, usage hints, catalog description overrides).
 - Recorded as not_applicable rather than porting the much longer Rust paragraph.
 
-Status after reconciliation: `2047 complete`, `402 not_applicable`,
-`451 audit_pending`, `246 regression_pending`, `3 partial`,
+### Cover the expanded Unicode math symbol set (Round 884)
+
+**Upstream:** 608825d51179 "Expand Unicode math rendering with accents, symbols, and delimiters (#46266)".
+
+- Audit: the Go renderer already implemented every part of this change — the extended symbol table (physics, relations, sets, logic, arrows, integrals, `\hbar` and Greek variants), `\hat`/`\bar`/`\tilde`/`\vec`/`\dot`/`\ddot` on single visible graphemes with following scripts, named delimiters both bare and through `\left`/`\right` (including `\left<`/`\right>`), and the grapheme-count base rule — but only the `\hat H` case was tested.
+- Added `tui/markdown/math_symbols_delimiters_like_rust_test.go` mirroring Rust's snapshots: every symbol and delimiter family, the Schrödinger display layout, and the invisible / multi-grapheme accent rejection cases.
+- Verified with `go test ./tui/markdown -count=1`.
+
+**Also audited:** 841b5490b251 #46112 (filesystem sandbox policy context when the cwd disappears) is now recorded as `partial`: Go's exec-server filesystem helper still launches with `cmd.Dir` set to the policy cwd, so a helper launch after the selected directory is removed still fails, and the artifact carries no `policyContext`/legacy-directory fallback fields.
+
+Status after reconciliation: `2048 complete`, `402 not_applicable`,
+`449 audit_pending`, `246 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

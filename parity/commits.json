@@ -15111,9 +15111,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 3/22; needs review: WireCapabilityRootDiscoverRequest, WireCapabilityRootsDiscoverParams, WireExecParams, WireFileSystemSandboxContext, WireFsCanonicalizeParams"
+    "Rust #46112 launches filesystem helpers from the filesystem root while carrying the policy cwd separately; Go's exec-server fs helper still runs with cmd.Dir set to the policy cwd (execserver/fs_helper.go runSandboxedFSOperation) and derives the Windows sandbox CommandCWD from it, so an fs RPC after the selected cwd is removed still fails at process start; no policyContext/legacy-fallback wire fields exist on the Go exec-server surface, and the cross-cutting helper-launch change is not yet implemented"
    ]
   },
   {
@@ -15291,9 +15291,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go's math renderer already carried the expanded symbol table (physics/relations/sets/logic/arrows/integrals incl. hbar), the hat/bar/tilde/vec/dot/ddot accents with single-grapheme and following-script handling, named delimiters through left/right and left-angle/right-angle forms, and the grapheme-based has-base rule; added tui/markdown/math_symbols_delimiters_like_rust_test.go covering every symbol and delimiter from Rust's snapshots, the Schrodinger display layout, and the invisible/multi-grapheme accent rejections"
    ]
   },
   {
