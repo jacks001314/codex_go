@@ -533,7 +533,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		SessionHeaderVersion:        doctor.Version(),
 		InitialHistoryCells:         interactiveUpdateHistoryCells(root),
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
-		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint, backendID),
+		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint, root, backendID),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint, root, backendID),
 		OnContinueSafetyRecourse:    interactiveRemoteContinueSafetyRecourse(ctx, endpoint, root, state, backendID),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
@@ -1680,7 +1680,7 @@ func remoteTUIHistoryModelProvider(ctx context.Context, client *remoteAppServerT
 	return "openai"
 }
 
-func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, backendID codextui.BackendID) codextea.SessionActionFunc {
+func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, backendID codextui.BackendID) codextea.SessionActionFunc {
 	return func(selection codextui.SessionSelection) (*codextui.SessionSummary, error) {
 		// Rust #54681: reject a selection listed by another backend before any
 		// request reaches this one.
@@ -1690,6 +1690,13 @@ func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appser
 		threadID := strings.TrimSpace(selection.Target.ThreadID)
 		if threadID == "" {
 			return nil, errors.New("remote session action requires a thread id")
+		}
+		// Rust #43330: a remote fork inherits the parent task's saved
+		// permissions, so explicit launch overrides are refused before the
+		// request reaches the app server.
+		if selection.Kind == codextui.SessionSelectionFork &&
+			interactiveRemoteEndpointIsExplicitRemote(root) && hasExplicitRemotePermissionOverride(root) {
+			return nil, errors.New(remoteForkPermissionOverrideMessage)
 		}
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
@@ -1851,6 +1858,11 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 func remoteTUIResumeParams(root *cli.RootOptions, threadID string, resumeCWD string) (appserver.ThreadResumeParams, error) {
 	params := appserver.ThreadResumeParams{ThreadID: strings.TrimSpace(threadID)}
 	if interactiveRemoteEndpointIsExplicitRemote(root) {
+		// Rust #43330: a remote task resumes with the permissions saved on its
+		// server, so an explicit launch override is refused rather than sent.
+		if hasExplicitRemotePermissionOverride(root) {
+			return params, errors.New(remoteResumePermissionOverrideMessage)
+		}
 		if cwd := strings.TrimSpace(root.Shared.CWD); cwd != "" {
 			params.CWD = &cwd
 		} else if strings.TrimSpace(resumeCWD) != "" {

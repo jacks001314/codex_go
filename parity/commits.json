@@ -4020,9 +4020,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: TerminalSandboxSource, for_launch"
+    "Terminal input is reviewed against the permissions the terminal was launched with. tool/unified_exec.go records the launch SandboxPermissions, additional and runtime-internal grants, permission profile, environment, and managed-network flag on the process and forwards them with every non-empty write (empty polls and non-TTY interrupts stay exempt). appserver/runtime_router.go implements Rust's review_requirement: escalated launches, profiles that differ from the current policy, and additional grants beyond runtime-internal ones require review; denied-read or unfittable current restrictions fail closed with the start-a-new-terminal message; the approval action and reason carry the effective sandbox mode and user-visible grants without host-owned grant paths, and still run hooks, Guardian, then user approval. Tests: go test ./appserver -run WriteStdin -count=1 (TestWriteStdinApprovalReviewsEscalatedInputLikeRust, TestWriteStdinApprovalSkipsMatchingTerminalsLikeRust, TestWriteStdinReviewTreatsRuntimeGrantsAsLaunchFactsLikeRust, TestWriteStdinApprovalFailsClosedOnPolicyDriftLikeRust, TestWriteStdinActiveGrantReachesReviewLikeRust, TestWriteStdinSessionGrantReachesLaterReviewLikeRust, TestWriteStdinStaleOrMismatchedGrantIsRejectedLikeRust); go test ./tool -run WriteStdin -count=1."
    ]
   },
   {
@@ -8559,9 +8559,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: ForkPermissionMode, has_explicit_resume_permission_override, reject_remote_resume_permission_override"
+    "Remote resume and fork keep the task's saved server permissions. remoteTUIResumeParams and the remote fork handlers send no approval policy, sandbox, or permission config when inheriting, and the resume response's settings replace the live state (tui/tea/thread_settings.go applyThreadSettingsValues refreshes approval policy, approvals reviewer, active permission profile, model, effort, and workspace roots) so the previous task's overrides do not persist. app/remote_permission_overrides.go mirrors Rust's has_explicit_resume_permission_override across launch flags (--sandbox, --ask-for-approval, --add-dir, bypass), generic -c permission keys, and session-flags/profile-scoped-user config layers; explicit overrides are refused with Rust's messages before the resume or fork request. Tests: go test ./app -run 'RemoteResume|RemoteFork|RemotePermission|RemoteTUI|InteractiveRemote' -count=1."
    ]
   },
   {
@@ -12339,9 +12339,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: WindowsSandboxHost, required_elevated_windows_sandbox, windows_sandbox_host, windows_sandbox_setup_is_local"
+    "Windows sandbox readiness follows the execution host that actually runs the session. app/windows_sandbox_tui.go keeps the local app-server authoritative: a ready daemon suppresses the TUI setup prompt, and TUI-local setup files are never used to judge a daemon connection; remote sessions read platform/sandbox state from the app-server instead of the client OS. Tests: go test ./app -run 'WindowsSandbox' -count=1 (TestRemoteWindowsSandboxReadinessUsesServerPlatformLikeRust, TestInteractiveRemoteWindowsSandboxPromptUsesAppServerStateLikeRust, TestInteractiveWindowsSandboxStartupPromptUsesEffectiveConfig)."
    ]
   },
   {
@@ -13923,9 +13923,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/15; needs review: PlanLimitBreakdown, PlanLimitDimension, PlanLimitHistory, PlanLimitPeriod, PlanLimitValue"
+    "Gated /usage plan history. chatgptapi/plan_history.go fetches /usage/plan_limit_history?days=7 and treats 404 as no data; tui/analytics/plan_history.go validates data_as_of, RFC3339 timestamps, the 1000-period cap, 300/10080-minute windows, duplicate IDs, start<end, NaN/Inf and breakdown counts, and renders wide/narrow reports while preserving unknown dimensions instead of zeroing them; tui/tea/usage_plan_history.go wires the analytics_plan_history gate, request IDs that drop stale results, and the unavailable line for reader errors; chatwidget slash dispatch accepts /usage plan. Tests: go test ./chatgptapi ./tui/analytics -count=1; go test ./tui/tea -run 'TestUsagePlan|TestModelUsageCommand' -count=1; go test ./tui/chatwidget -run TestPreparedSlashArgsUsageMcpKeymapRawMatchRust -count=1."
    ]
   },
   {

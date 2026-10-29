@@ -674,6 +674,14 @@ Three more entries moved to `complete`: `#42891` and `#44328`
 tests cover notification, markdown, cross-client dismissal, and prompt-driven
 clearing; the cloud-skills snapshot test pins the startup failure path.
 
-Status after reconciliation: `1945 complete`, `381 not_applicable`,
-`536 audit_pending`, `287 regression_pending`, `0 partial`,
+### Plan usage history and Windows sandbox host parity (Round 769)
+
+Closed two audits. `#44939` (Windows sandbox setup) keeps the local app-server authoritative for sandbox readiness and reads remote platform state from the app-server rather than the client OS; the three `WindowsSandbox` app tests lock the prompt behavior. `#45766` adds the gated `/usage plan` history path across `chatgptapi`, `tui/analytics`, `tui/tea`, and slash dispatch, covering 404-as-empty, snapshot validation (as-of, RFC3339, period cap, windows, duplicate IDs, non-finite values), stale-result rejection, and the disabled-gate/unavailable notices. Verified in a clean index snapshot with `go build ./...`, `go test ./chatgptapi ./tui/analytics`, `go test ./tui/tea -run 'TestUsagePlan|TestModelUsageCommand'`, `go test ./tui/chatwidget -run TestPreparedSlashArgsUsageMcpKeymapRawMatchRust`, and `go test ./app -run WindowsSandbox`.
+
+### Retained stdin permissions and remote saved-permission parity (Round 770)
+
+Closed two audits. `#41328` was already implemented at the app-server layer: unified-exec processes retain launch sandbox permissions, additional/runtime-internal grants, and the managed-network flag, and the write_stdin review compares them with the current turn policy, failing closed on denied-read or unfittable drift while the approval action reports effective mode and user-visible grants without internal paths. `#43330` now matches Rust end to end: remote resume/fork requests omit permission fields when inheriting, the resume response refreshes the live approval/sandbox/profile state, and a new `app/remote_permission_overrides.go` mirrors Rust's explicit-override detection (launch flags, `-c` permission keys, session-flag and profile layers) so remote resume and fork refuse overrides with Rust's messages. Verified with `go test ./appserver -run WriteStdin`, `go test ./tool -run WriteStdin`, and `go test ./app -run 'RemoteResume|RemoteFork|RemotePermission|RemoteTUI|InteractiveRemote'`; `#44746` remains open because the Go TUI still has no in-session trust modal for a destination chosen after startup.
+
+Status after reconciliation: `1949 complete`, `381 not_applicable`,
+`532 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

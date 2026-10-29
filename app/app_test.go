@@ -4969,7 +4969,7 @@ func TestInteractiveRemoteSessionActionHandlerCallsAppServer(t *testing.T) {
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	backendID := codextui.NewBackendID()
-	handler := interactiveRemoteSessionActionHandler(ctx, endpoint, backendID)
+	handler := interactiveRemoteSessionActionHandler(ctx, endpoint, &cli.RootOptions{}, backendID)
 	source := codextui.SessionTarget{BackendID: backendID, ThreadID: "thread-source"}
 	forked, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionFork, Target: source})
 	if err != nil || forked == nil || forked.ThreadID != "thread-forked" {

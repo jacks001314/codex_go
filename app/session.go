@@ -284,7 +284,7 @@ func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.W
 		return err
 	}
 	if endpoint != nil {
-		return runRemoteSessionFork(context.Background(), endpoint, opts, stdout)
+		return runRemoteSessionFork(context.Background(), endpoint, root, opts, stdout)
 	}
 	store := newSessionStore()
 	if needsSessionPicker(opts) {
@@ -575,7 +575,12 @@ func runRemoteSessionDelete(ctx context.Context, endpoint *appserverdaemon.Remot
 	return nil
 }
 
-func runRemoteSessionFork(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, stdout io.Writer) error {
+func runRemoteSessionFork(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, opts *cli.SessionOptions, stdout io.Writer) error {
+	// Rust #43330: an explicit remote fork inherits the parent task's saved
+	// permissions, so a launch override is refused before any request.
+	if interactiveRemoteEndpointIsExplicitRemote(root) && hasExplicitRemotePermissionOverride(root) {
+		return errors.New(remoteForkPermissionOverrideMessage)
+	}
 	client, err := openRemoteSessionClient(ctx, endpoint)
 	if err != nil {
 		return err
