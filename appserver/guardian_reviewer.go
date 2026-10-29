@@ -899,6 +899,21 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	reviewCtx, cancel := guardianReviewContext(ctx, timeout)
 	defer cancel()
 	plan := r.planForTurn(threadID, turnID)
+	// Rust #40742 fails the decision closed when the reviewer session cannot be
+	// prepared (for example an environment whose permissions are still pending).
+	if plan.PreparedError != "" {
+		rationale := guardianReviewFailureRationale(plan.PreparedError)
+		message := guardianReviewFailureMessage(plan.PreparedError)
+		completed, _ := store.FailClosed(event.ID, rationale)
+		emit(threadID, completed)
+		r.recordNonDenial(threadID, turnID)
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
+		attribution.FailureReason = "session_error"
+		emitReviewMetrics()
+		r.emitWarning(threadID, rationale)
+		return state.DecisionDenied, message, nil
+	}
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.EnsureReviewPolicy(plan.NodeReplPolicy)
 		if r.rolloverForTokenBudget != nil && r.rolloverForTokenBudget(threadID, turnID) {
@@ -1171,6 +1186,7 @@ reviewAttempt:
 		Instructions:    "",
 		InputItems:      inputItems,
 		Model:           plan.Selection.Model,
+		ProviderID:      plan.ProviderID,
 		Endpoint:        r.reviewEndpointValue(threadID, turnID),
 		ReasoningEffort: plan.Selection.ReasoningEffort,
 		// Rust #52689 forwards the parent turn's Cyber program to the reviewer
@@ -1179,15 +1195,22 @@ reviewAttempt:
 		CyberAccessProgram: plan.CyberAccessProgram,
 		TaskKind:           model.AgentTaskReview,
 		ThreadID:           threadID,
+		SessionID:          plan.SessionID,
 		TurnID:             turnID,
 		Originator:         "guardian",
+		// Rust #40742 preserves the parent's persistence setting for the
+		// reviewer session; Go carries it as the request's ephemeral intent.
+		Ephemeral: plan.Ephemeral,
 		// Rust scopes a Guardian review session's Responses cache to the
 		// reviewed parent thread (guardian_prompt_cache_key override).
 		PromptCacheKey: guardianPromptCacheKeyOverride(guardianReviewerName, threadID),
 		OutputSchema:   guardianAssessmentOutputSchema(),
 		ClientMetadata: r.reviewClientMetadata(threadID, turnID, targetItemID),
 	}
-	if r.permissionProfile != nil {
+	if plan.Prepared != nil && plan.Prepared.PermissionProfile != nil {
+		reviewRequest.PermissionProfile = plan.Prepared.PermissionProfile
+	}
+	if reviewRequest.PermissionProfile == nil && r.permissionProfile != nil {
 		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)
 	}
 	feedbackCapture.history = guardianFeedbackHistoryInput(prompt, inputItems)

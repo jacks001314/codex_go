@@ -2639,9 +2639,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: prepare_reviewer_options"
+    "update/plan_2026_10_28_baseline.md: Round 968 prepares isolated reviewer config, read-only environments, feature isolation and fail-closed unresolved permissions.",
+    "appserver/guardian_reviewer_config.go: guardianPrepareReviewerOptions, guardianReviewerIsolatedConfig and guardianPrepareReviewerEnvironments mirror Rust prepare_reviewer_options.",
+    "appserver/guardian_reviewer.go: review requests carry the prepared read-only profile, provider/session identity and ephemeral intent; preparation failures deny the action.",
+    "Tests: TestGuardianPrepareReviewerOptionsIsolatesParentConfigLikeRust, TestGuardianPrepareReviewerOptionsNarrowsEnvironmentsLikeRust, TestGuardianPrepareReviewerOptionsRejectsUnresolvedEnvironmentsLikeRust, TestGuardianReviewPlanPreparesReviewerSessionLikeRust.",
+    "Verified with go test ./appserver -run 'Guardian|InternalSession' -count=1, go test ./state ./sandbox ./model ./config ./features -count=1, go build ./..., go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

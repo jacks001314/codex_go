@@ -2893,6 +2893,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestPrivateDesktopNameValidationLikeRust`, `TestOpeningMissingPrivateDesktopDoesNotCreateLikeRust`, `TestSharedPrivateDesktopSurvivesLaunchHandlesAndConcurrentRequestsLikeRust`, `TestLegacyDesktopReusesOnlyEquivalentPermissionsLikeRust`, `TestElevatedDesktopPolicySeparatesEffectivePermissionsLikeRust`.
 - Verified with `go test ./sandbox/... -count=1`, `go build ./...`, and `GOOS=linux go build ./sandbox/...`.
 
-Status after reconciliation: `2130 complete`, `442 not_applicable`,
-`364 audit_pending`, `210 regression_pending`, `3 partial`,
+### Isolated Guardian reviewer sessions (Round 968)
+
+- Rust #40742 adds `GuardianExtension::prepare_reviewer_options`: it clones the parent config into an isolated reviewer config, resolves ready environments to read-only permissions while preserving deny-read entries, fails closed on pending/failed environments, disables 20 features, and returns `StartThreadOptions` with internal Guardian / guardian_review sources (#40742, complete).
+- `appserver/guardian_reviewer_config.go:67` adds `guardianPrepareReviewerOptions`, with `guardianReviewerIsolatedConfig` (`:93`), `guardianPrepareReviewerEnvironments` (`:157`), `guardianReviewerReadOnlyProfile` (`:198`) and `guardianReviewerDisabledFeatures` (`:211`): the parent value tree is deep-cloned, developer instructions/notify/MCP/memory/budget/personality surfaces are cleared, approval becomes `never`, the 20 features are disabled without dropping nested feature tables, and a different reviewer model drops inherited context-window limits.
+- `appserver/agent_runtime.go:619` resolves the reviewed turn's parent profile and prepares the options inside `guardianReviewPlanForTurn`; pending/failed attachments set `PreparedError`. `guardianReviewInstructions` is split around `guardianReviewBaseInstructions` so the prepared config records Rust's template+contract prompt.
+- `appserver/guardian_reviewer.go:904` fails the review closed when preparation fails, and the review request carries the prepared read-only profile, provider id, session id and parent ephemeral intent.
+- Tests: `TestGuardianPrepareReviewerOptionsIsolatesParentConfigLikeRust`, `TestGuardianPrepareReviewerOptionsKeepsSameModelContextLikeRust`, `TestGuardianPrepareReviewerOptionsRetainsClientDeveloperMessagesLikeRust`, `TestGuardianPrepareReviewerOptionsNarrowsEnvironmentsLikeRust`, `TestGuardianPrepareReviewerOptionsRejectsUnresolvedEnvironmentsLikeRust`, `TestGuardianPrepareReviewerOptionsExternalSandboxFallbackLikeRust`, `TestGuardianReviewPlanPreparesReviewerSessionLikeRust`.
+- Verified with `go test ./appserver -run 'Guardian|InternalSession' -count=1`, `go test ./state ./sandbox ./model ./config ./features -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`. Full `go test ./appserver` still hits the pre-existing `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust` / `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust` timeouts and the Rust-checkout `https_mock` manifest drift, all reproduced at `c1f05435` without these changes.
+Status after reconciliation: `2131 complete`, `442 not_applicable`,
+`363 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

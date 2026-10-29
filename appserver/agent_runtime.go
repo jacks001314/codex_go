@@ -555,6 +555,15 @@ type guardianReviewPlan struct {
 	Selection    model.ApprovalReviewModel
 	AutoReview   *model.AutoReviewMessages
 	Instructions string
+	// Prepared is the isolated reviewer configuration and read-only environment
+	// set from Rust's GuardianExtension::prepare_reviewer_options (#40742). The
+	// inline Go reviewer applies its resolved permissions and session identity at
+	// the request boundary; PreparedError fails the review closed.
+	Prepared      *guardianReviewerPreparedOptions
+	PreparedError string
+	ProviderID    string
+	SessionID     string
+	Ephemeral     bool
 	// NodeReplPolicy is the resolved extra policy for `node_repl`/`cua_repl`
 	// reviews (Rust ResolvedAutoReviewMessages::node_repl_policy). The reviewer
 	// injects it as its own developer fragment only when the reviewed action
@@ -607,13 +616,39 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 		cloned := *catalogInfo.ModelMessages.AutoReview
 		autoReview = &cloned
 	}
-	return guardianReviewPlan{
+	plan := guardianReviewPlan{
 		Selection:          selection,
 		AutoReview:         autoReview,
 		Instructions:       guardianReviewInstructions(cfg, autoReview),
 		NodeReplPolicy:     guardianNodeReplPolicy(autoReview),
 		CyberAccessProgram: model.GuardianCyberAccessProgram(active.RunConfig.CyberAccessProgram),
 	}
+	var parentEnvironments []map[string]any
+	if active.Params != nil {
+		parentEnvironments = active.Params.Environments
+	}
+	prepared, prepareErr := guardianPrepareReviewerOptions(guardianReviewerPrepareInput{
+		ParentConfig:                    cfg,
+		ParentEnvironments:              parentEnvironments,
+		ParentModel:                     parentModel,
+		ReviewerModel:                   selection.Model,
+		ReviewerEffort:                  selection.ReasoningEffort,
+		BaseInstructions:                guardianReviewBaseInstructions(cfg, autoReview),
+		ParentPermissionProfile:         r.guardianParentPermissionProfileForTurn(active, cfg),
+		PreserveClientDeveloperMessages: parentInfo != nil && parentInfo.NodeReplAutoReviewRequired,
+		Ephemeral:                       active.RunConfig.Ephemeral,
+		ProviderID:                      active.RunConfig.ProviderID,
+		SessionID:                       active.RunConfig.SessionID,
+	})
+	plan.ProviderID = strings.TrimSpace(active.RunConfig.ProviderID)
+	plan.SessionID = strings.TrimSpace(active.RunConfig.SessionID)
+	plan.Ephemeral = active.RunConfig.Ephemeral
+	if prepareErr != nil {
+		plan.PreparedError = prepareErr.Error()
+	} else {
+		plan.Prepared = prepared
+	}
+	return plan
 }
 
 // guardianNodeReplPolicy mirrors Rust
@@ -626,12 +661,13 @@ func guardianNodeReplPolicy(autoReview *model.AutoReviewMessages) string {
 	return state.GuardianNodeReplPolicy()
 }
 
-// guardianReviewInstructions mirrors the reviewer base instructions Rust builds
-// in build_guardian_review_session_config: the resolved policy substituted into
-// the resolved policy template and terminated by the output contract. The
-// catalog wins over the bundled templates and the managed/config policy wins
-// over both.
-func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages) string {
+// guardianReviewBaseInstructions mirrors the reviewer base instructions Rust
+// builds in build_guardian_review_session_config: the resolved policy
+// substituted into the resolved policy template and terminated by the output
+// contract. The catalog wins over the bundled templates and the managed/config
+// policy wins over both. This is the value the prepared reviewer config stores
+// as `base_instructions` (#40742).
+func guardianReviewBaseInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages) string {
 	policy, policyTemplate := state.GuardianPolicy(), state.GuardianPolicyTemplate()
 	if autoReview != nil {
 		if autoReview.Policy != nil {
@@ -655,7 +691,13 @@ func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReview
 			extraPolicy = value
 		}
 	}
-	instructions := state.RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, state.GuardianOutputContractPrompt())
+	return state.RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, state.GuardianOutputContractPrompt())
+}
+
+// guardianReviewInstructions adds the reviewer-only prompt sections (conversation
+// history retrieval and the JSON transcript grammar) to the base instructions.
+func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages) string {
+	instructions := guardianReviewBaseInstructions(cfg, autoReview)
 	if cfg != nil &&
 		features.Enabled(cfg.FeatureSettings(), "guardian_conversation_history_tools") &&
 		features.Enabled(cfg.FeatureSettings(), "apps") {
@@ -765,17 +807,30 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 	return info != nil && info.NodeReplAutoReviewRequired
 }
 
+// guardianParentPermissionProfileForTurn resolves the reviewed turn's own
+// permission profile, the value Rust's prepare_reviewer_options intersects with
+// read-only (#40742). It prefers the selected environment's resolved profile and
+// falls back to the turn's sandbox resolution.
+func (r *RuntimeRouter) guardianParentPermissionProfileForTurn(active *activeRuntimeTurn, cfg *config.Config) *sandbox.PermissionProfile {
+	if r == nil || active == nil || active.Params == nil {
+		return nil
+	}
+	if _, _, profile, _ := r.guardianTurnEnvironmentForTurn(active.Params, ""); profile != nil {
+		return profile
+	}
+	resolution, err := turnSandboxPermissionProfile(cfg, active.Params.CWD, active.Params)
+	if err != nil || resolution == nil {
+		return nil
+	}
+	return resolution.Profile
+}
+
 func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID string) *sandbox.PermissionProfile {
 	profile, _, _ := r.guardianTurnPermissionProfileForTurn(threadID, turnID, "")
 	if profile == nil {
 		return nil
 	}
-	readOnly := profile.IntersectWithReadOnly()
-	if readOnly == nil {
-		value := sandbox.ReadOnlyPermissionProfile()
-		readOnly = &value
-	}
-	return readOnly
+	return guardianReviewerReadOnlyProfile(profile)
 }
 
 // guardianTurnPermissionProfileForTurn resolves the reviewed turn's active
