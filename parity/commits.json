@@ -13503,9 +13503,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: can_resume_registration"
+    "Rust #45559 resumes a service-owned Windows sandbox registration refresh after the provisioning service restarts: provisioning_client/refresh_retry.rs retries only response-pipe disconnects (up to two restarts within the original deadline, requiring a new service PID authenticated against the running service), RuntimeRegistration::can_resume_registration lets a refresh resume without ready_package while runtime execution still requires it, and provisioning/registered.rs wires the new gate. Go's Windows sandbox has no provisioning service, service-owned InstallationRecord, RuntimeRegistration record, named-pipe provisioning client, SCM service-PID check, or background registration refresh: registered mode is validated locally from the app-contained runner plus OS package identity (see #45550's partial evidence and identity.go registeredSetupIsReady). With no client to retry and no service record to resume, there is no Go surface for this change. The local behavior Go does own - rejecting helper-owned provisioning for registered Core - is already covered by sandbox/windowssandbox/bin/setup_main/win/setup_runtime_like_rust_windows_test.go. Verified with go test ./sandbox/windowssandbox ./sandbox/windowssandbox/bin/setup_main/win -count=1."
    ]
   },
   {

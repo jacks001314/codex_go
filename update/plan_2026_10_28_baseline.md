@@ -1063,6 +1063,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Verified with `go test ./tui/markdown ./tui/streaming ./tui/chatwidget ./tui ./tui/history_cell ./tui/exec_cell ./tui/tea -count=1` and `go vet ./tui/streaming ./tui/markdown`.
 - Remaining difference is pre-existing and renderer-wide rather than math-specific: glamour output starts with a blank line and pads lines to the render width while Rust's ratatui lines do not; the existing streaming helpers compare against `renderSourceLines`, which carries the same shape.
 
-Status after reconciliation: `2005 complete`, `392 not_applicable`,
-`490 audit_pending`, `261 regression_pending`, `1 partial`,
+### Windows sandbox registration refresh resumability (Round 824)
+
+- Rust #45559 resumes a service-owned Windows sandbox registration refresh after the provisioning service restarts: `provisioning_client/refresh_retry.rs` retries only response-pipe disconnects (up to two restarts within the original deadline, requiring a new service PID authenticated against the running service), `RuntimeRegistration::can_resume_registration` lets a refresh resume without `ready_package` while runtime execution still requires readiness, and `provisioning/registered.rs` wires the new gate.
+- Go has no provisioning service, service-owned `InstallationRecord`, `RuntimeRegistration` record, named-pipe provisioning client, SCM service-PID check, or background registration refresh: registered mode is validated locally from the app-contained runner plus OS package identity (see #45550's `partial` evidence and `identity.go` `registeredSetupIsReady`). With no client to retry and no service record to resume, there is no Go surface for this change.
+- The local behavior Go does own — rejecting helper-owned provisioning for registered Core — is already covered by `sandbox/windowssandbox/bin/setup_main/win/setup_runtime_like_rust_windows_test.go`.
+- Verified with `go test ./sandbox/windowssandbox ./sandbox/windowssandbox/bin/setup_main/win -count=1`.
+
+Status after reconciliation: `2005 complete`, `393 not_applicable`,
+`489 audit_pending`, `261 regression_pending`, `1 partial`,
 `6 blocked_precondition`.
