@@ -79,7 +79,15 @@ func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, snap
 		return nil, nil
 	}
 	if accountID == "" {
-		return nil, model.ErrWorkspaceRoutingMissingAccountID
+		// Rust #45529 gates discovery on `get_account_id()`: a token-backed
+		// ChatGPT login without a selected workspace yields `None` and the read
+		// reports `workspaceRouting: null` instead of failing. Only
+		// personal-access-token auth always carries an id, so an empty one is
+		// the shape Rust rejects with this error.
+		if snapshot != nil && snapshot.Mode() == "personal-access-token" {
+			return nil, model.ErrWorkspaceRoutingMissingAccountID
+		}
+		return nil, nil
 	}
 	state := auth.AuthChangeState{}
 	if r.authChangeTracker != nil {
@@ -312,7 +320,8 @@ func workspaceConfigLoadReasonFallback(err error) string {
 
 // chatGPTWorkspaceAccountID mirrors Rust is_chatgpt_auth plus get_account_id:
 // ChatGPT, ChatGPT auth tokens, and personal access tokens all represent an
-// authenticated human ChatGPT account.
+// authenticated human ChatGPT account. The bool reports the auth mode, not the
+// presence of an id; callers decide what an empty id means for that mode.
 func chatGPTWorkspaceAccountID(snapshot *auth.AuthDotJSON) (string, bool) {
 	if snapshot == nil {
 		return "", false
