@@ -14247,9 +14247,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: SelectionSecondaryAction, session_model_selection_action"
+    "SelectionSecondaryAction ported into tui/bottom_pane (non-searchable enabled rows only, footer hint override, tests mirror secondary_action_respects_search_disabled_rows_and_dismissal); picker s-shortcut wiring, AppEvent.SelectSessionModel, session-only confirmation and plan-mode default restore still pending because tui/tea/model.go carries uncommitted in-flight work"
    ]
   },
   {

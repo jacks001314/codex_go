@@ -1541,6 +1541,29 @@ App-server Windows sandbox state for onboarding (#45830, not applicable).
   `WindowsSandboxLevelFromConfig` is fed app-server config values and matches the
   surviving `WindowsSandboxConfig::level()` mapping.
 
+### Session-only model selection (Round 855)
+
+Session-only model and reasoning selection (#45831, partial).
+
+- `tui/bottom_pane` now carries Rust's `SelectionSecondaryAction`: a row can
+  declare a single-character shortcut, an action, and a footer hint.
+- `AcceptSecondarySelected` runs only that action and still refuses disabled
+  rows; `HandleKey` triggers it only for non-searchable views, because a
+  searchable list consumes plain characters as query input, matching Rust's
+  `allow_plain_char_navigation` guard.
+- `ActiveFooterHint` and the row renderer prefer the selected row's secondary
+  hint over the view footer, mirroring Rust `active_footer_hint`.
+- Tests mirror `secondary_action_respects_search_disabled_rows_and_dismissal`
+  (secondary, primary, disabled row, searchable view) and pin the footer-hint
+  override and fallback.
+- Still pending: wiring the `s` shortcut onto the model and reasoning pickers,
+  `AppEvent.SelectSessionModel`, the "for this session only" confirmation, and
+  Plan-mode default preservation. Those live in `tui/tea/model.go`, which has
+  uncommitted in-flight work from another session, so the port is deferred to
+  avoid mixing changes.
+- Verified with `go test ./tui/bottom_pane -count=1` and
+  `go vet ./tui/bottom_pane`.
+
 Status after reconciliation: `2023 complete`, `397 not_applicable`,
-`469 audit_pending`, `258 regression_pending`, `2 partial`,
+`468 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
