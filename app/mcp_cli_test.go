@@ -183,6 +183,62 @@ func TestMCPAddListGetRemove(t *testing.T) {
 	}
 }
 
+// TestMCPAddRemovePackageStyleServerNameLikeRust mirrors Rust #41700: package
+// coordinates are valid MCP server names, round-trip through config.toml, and
+// remain addressable by get/list/remove.
+func TestMCPAddRemovePackageStyleServerNameLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	const name = "npm:@modelcontextprotocol/server-sequential.thinking"
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"mcp", "add", name, "--", "mcp-echo"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp add returned error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile config error = %v", err)
+	}
+	if !strings.Contains(string(data), `[mcp_servers."`+name+`"]`) {
+		t.Fatalf("config = %q, want quoted package-style server table", string(data))
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"mcp", "list", "--json"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp list returned error: %v", err)
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list JSON %q: %v", stdout.String(), err)
+	}
+	if len(listed) != 1 || listed[0]["name"] != name {
+		t.Fatalf("list = %#v, want the package-style name", listed)
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"mcp", "get", name, "--json"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp get returned error: %v", err)
+	}
+	var fetched map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &fetched); err != nil {
+		t.Fatalf("decode get JSON %q: %v", stdout.String(), err)
+	}
+	if fetched["name"] != name {
+		t.Fatalf("get name = %#v, want %q", fetched["name"], name)
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"mcp", "remove", name}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp remove returned error: %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile config after remove error = %v", err)
+	}
+	if strings.Contains(string(data), name) {
+		t.Fatalf("config after remove = %q", string(data))
+	}
+}
 func TestMCPCloudManagedListGetDoNotWriteManagedServersToUserConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

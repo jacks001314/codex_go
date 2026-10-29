@@ -2423,9 +2423,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: connect_once, refresh_connection"
+    "Round 946 (audit): Rust #40710 adds LazyRemoteExecServerClient::refresh_connection plus a refresh lock, retired-session cancellation, executor-key pinning and in-flight work draining. Go has no lazy persistent remote exec-server client or Environment::refresh_connection: appserver.EnvironmentManager stores transport registrations only and opens a fresh client for each Info/Status/tool path (appserver/environment.go fetchRemoteEnvironmentInfo/fetchRemoteEnvironmentStatus), closing it at the end of that call. A planned executor replacement is therefore picked up by the next lookup and there is no stale long-lived session to retire, resume, or fail in flight, so the refresh machinery has no Go counterpart. Per-call transport and provisioning behavior is covered by appserver/environment_test.go and environment_provisioning_test.go. No code change required."
    ]
   },
   {
@@ -2627,9 +2627,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 6/16; needs review: EmaIdpIdentity, EmaIdpIdentityRequest, OidcClaims, acquire_for_server, ema_reauthentication_required"
+    "Round 946: the identity-resolution surface from #40739 is present and regression-covered by the later #55685 port. mcp/ema_identity.go provides MCPEMAIDPIdentity, MapMCPEMAIDPIdentityCredentials, MCPEMAAccountIDPIdentityRequest and ResolveMCPEMAAccountIDPIdentity; mcp/ema_claims.go provides mcpEMAOIDCClaims/mcpEMAOIDCIdentity with exact issuer, subject, audience and authorized-party binding while treating expiry separately; mcp/ema_auth_policy.go provides resolveMCPEMAClientAuth (public-client 'none' must be explicit), ValidateMCPEMAAuthResource and advertisedMCPEMACapability; EMAAuthFailureReauthenticationRequired drives the sign-in classification. The oauth half is covered by per-Codex-home ema-idp: store keys, the credential lock and authoritative reread (mcp/oauth.go, mcp/oauth_credential_lock.go, mcp/http_client.go, mcp/ema_runtime.go). Tests: TestResolveMCPEMAAccountIDPIdentityLikeRust, TestMCPEMAOIDCIdentityRequiresNonEmptyExpectationsLikeRust, TestMCPEMAAccountOIDCIdentityIgnoresExpiryLikeRust, TestMCPEMAResourceOriginQueryAndPathAreBound, TestEMATokenSourceErrorClassificationLikeRust, TestComputeMCPOAuthStoreKeyLikeRust. Verified with go test ./mcp -run 'EMA|OAuthStoreKey' -count=1."
    ]
   },
   {
@@ -4656,9 +4656,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 946: app/mcp.go validateMCPServerName now accepts the package-style characters ':', '@', '/' and '.', so names such as npm:@modelcontextprotocol/server-sequential.thinking round-trip through mcp add/list/get/remove and are written as a quoted TOML table; OAuth login already uses ServerConfig.OAuthCredentialName. mcp/oauth.go now keeps repeated local: prefixes isolated when matching legacy file credentials for both load and delete, so local:foo cannot satisfy or be deleted as local:local:foo. mcp/tool_runtime.go already sanitizes package names into callable namespaces (npm:@scope/package.name -> mcp__npm__scope_package_name). Regression tests: TestMCPAddRemovePackageStyleServerNameLikeRust and TestMCPOAuthFileCredentialsKeepRepeatedLocalPrefixesIsolatedLikeRust. The upstream startup-timeout config hint was not added because Go's current startup-status path has no corresponding mcp_init_error_display. Verified with go test ./app -run 'TestMCPAddRemovePackageStyleServerNameLikeRust|TestMCPAddListGetRemove' -count=1 and go test ./mcp -run 'TestMCPOAuthFileCredentialsKeepRepeatedLocalPrefixesIsolatedLikeRust|TestComputeMCPOAuthStoreKeyLikeRust' -count=1."
    ]
   },
   {
@@ -5700,9 +5700,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/3; needs review: should_render_local_link_label"
+    "Round 946: superseded by the later #50695 port, which is the target-baseline local-link label policy. tui/markdown/local_links.go parses file://, ~/ and relative/absolute local targets plus colon and #L location suffixes; the renderer preserves descriptive labels as 'label (target)', falls back to the formatted target for empty labels, and keeps the destination hyperlink. tui/markdown/local_link_labels_like_rust_test.go covers path labels, line suffixes, directories, relative destinations, table cells and malformed file URLs. Verified with go test ./tui/markdown -run 'LocalFileLink' -count=1."
    ]
   },
   {

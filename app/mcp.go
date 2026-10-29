@@ -581,14 +581,16 @@ func runMCPLogout(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions,
 }
 
 func validateMCPServerName(name string) error {
+	const allowed = "letters, numbers, '-', '_', ':', '@', '/', '.'"
 	if name == "" {
-		return fmt.Errorf("invalid server name '%s' (use letters, numbers, '-', '_')", name)
+		return fmt.Errorf("invalid server name '%s' (use %s)", name, allowed)
 	}
 	for _, r := range name {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			r == '-' || r == '_' || r == ':' || r == '@' || r == '/' || r == '.' {
 			continue
 		}
-		return fmt.Errorf("invalid server name '%s' (use letters, numbers, '-', '_')", name)
+		return fmt.Errorf("invalid server name '%s' (use %s)", name, allowed)
 	}
 	return nil
 }

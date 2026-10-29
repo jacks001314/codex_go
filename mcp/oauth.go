@@ -226,7 +226,11 @@ func (s *OAuthStore) loadFromFile(serverName string, serverURL string) (*OAuthTo
 		if strings.HasPrefix(serverName, "executor:") {
 			matches = storedKey == key && entry.ExecutorOwned && entry.ServerName == serverName && entry.ServerURL == serverURL
 		} else if !entry.ExecutorOwned {
-			matches = entry.ServerURL == serverURL && (entry.ServerName == localServerName || (storedKey == key && entry.ServerName == serverName))
+			// Escaped names may also match another server's stored, escaped name.
+			// Only accept a legacy unescaped entry under this identity's own key.
+			matches = entry.ServerURL == serverURL &&
+				(!strings.HasPrefix(serverName, "local:") || storedKey == key) &&
+				(entry.ServerName == localServerName || (storedKey == key && entry.ServerName == serverName))
 		}
 		if matches {
 			return oauthTokenSetFromFallbackEntry(entry), nil
@@ -487,7 +491,10 @@ func (s *OAuthStore) deleteWithLockHeld(serverName string, serverURL string) (bo
 			}
 			matches = entryKey == key && entry.ExecutorOwned && entry.ServerName == serverName && entry.ServerURL == serverURL
 		} else if !entry.ExecutorOwned {
-			matches = entry.ServerURL == serverURL && (entry.ServerName == localServerName || (entryKey == key && entry.ServerName == serverName))
+			// Never delete a legacy entry that belongs to another local: name.
+			matches = entry.ServerURL == serverURL &&
+				(!strings.HasPrefix(serverName, "local:") || entryKey == key) &&
+				(entry.ServerName == localServerName || (entryKey == key && entry.ServerName == serverName))
 		}
 		if matches {
 			delete(file, entryKey)

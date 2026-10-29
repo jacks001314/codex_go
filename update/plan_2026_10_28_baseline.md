@@ -2691,6 +2691,16 @@ Three remaining L4c entries are Rust runtime-scheduling details with no Go count
 - `#49708` moves session-index file I/O to blocking workers and keeps an owned Tokio mutex guard through cancellation. Go runs the same synchronous I/O under one process mutex plus a cross-process flock, so ordering cannot be released mid-write; covered by `session_index_lock_test.go` and `session_index_test.go`.
 - No code change was required. Verified with `go test ./rollout -run 'Projection|SessionIndex' -count=1`.
 
-Status after reconciliation: `2107 complete`, `413 not_applicable`,
-`416 audit_pending`, `210 regression_pending`, `3 partial`,
+### MCP package names and identity audits (Round 946)
+
+Four early MCP/remote-executor ledger entries were re-audited; one real MCP package-name gap was fixed.
+
+- `#41700` (complete): `app/mcp.go` now accepts `:`, `@`, `/` and `.` in `codex mcp add/remove` names, so `npm:@modelcontextprotocol/server-sequential.thinking` round-trips through `config.toml` and `list/get/remove`. `mcp/oauth.go` also keeps repeated `local:` prefixes isolated when matching legacy file credentials on load and delete, so `local:foo` cannot satisfy or be deleted as `local:local:foo`. Existing callable-name sanitization already maps the package name to `mcp__npm__scope_package_name`. Tests: `TestMCPAddRemovePackageStyleServerNameLikeRust`, `TestMCPOAuthFileCredentialsKeepRepeatedLocalPrefixesIsolatedLikeRust`.
+- `#40739` (complete): the enterprise IdP identity-resolution surface is present through the later `#55685` port — account ID-token binding, public-client authentication advertisement, resource-origin/path validation, reauthentication classification, per-home `ema-idp:` store keys and the credential-lock reread.
+- `#42123` (complete): superseded by the later `#50695` local-link label policy in `tui/markdown/local_links.go`; descriptive labels render as `label (target)` and path-like/empty labels keep the canonical destination behavior.
+- `#40710` (not applicable): Go has no lazy persistent remote exec-server client or `Environment::refresh_connection`. `EnvironmentManager` opens a fresh client per info/status/tool path and closes it, so an executor replacement is observed by the next lookup and there is no stale session to retire or resume.
+- Verified with `go test ./app -run 'TestMCPAddRemovePackageStyleServerNameLikeRust|TestMCPAddListGetRemove' -count=1`, `go test ./mcp -run 'TestMCPOAuthFileCredentialsKeepRepeatedLocalPrefixesIsolatedLikeRust|TestComputeMCPOAuthStoreKeyLikeRust' -count=1`, and `go test ./tui/markdown -run 'LocalFileLink' -count=1`.
+
+Status after reconciliation: `2110 complete`, `414 not_applicable`,
+`412 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

@@ -62,6 +62,48 @@ func TestComputeMCPOAuthStoreKeyLikeRust(t *testing.T) {
 	}
 }
 
+// TestMCPOAuthFileCredentialsKeepRepeatedLocalPrefixesIsolatedLikeRust mirrors
+// Rust #41700: a legacy entry for "local:foo" must not satisfy the distinct
+// identity "local:local:foo", and deleting the latter must leave the former.
+func TestMCPOAuthFileCredentialsKeepRepeatedLocalPrefixesIsolatedLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile)
+	const serverURL = "https://mcp.example.test/mcp"
+	first := &OAuthTokenSet{
+		ServerName:  "local:foo",
+		ServerURL:   serverURL,
+		ClientID:    "client-1",
+		AccessToken: "first-token",
+	}
+	if err := store.Save(first); err != nil {
+		t.Fatalf("Save(first) error = %v", err)
+	}
+	if got, err := store.Load("local:local:foo", serverURL); err != nil || got != nil {
+		t.Fatalf("Load(distinct local prefix) = %#v, %v; want no legacy match", got, err)
+	}
+	second := &OAuthTokenSet{
+		ServerName:  "local:local:foo",
+		ServerURL:   serverURL,
+		ClientID:    "client-1",
+		AccessToken: "second-token",
+	}
+	if err := store.Save(second); err != nil {
+		t.Fatalf("Save(second) error = %v", err)
+	}
+	for _, expected := range []*OAuthTokenSet{first, second} {
+		got, err := store.Load(expected.ServerName, serverURL)
+		if err != nil || got == nil || got.AccessToken != expected.AccessToken {
+			t.Fatalf("Load(%q) = %#v, %v; want %q", expected.ServerName, got, err, expected.AccessToken)
+		}
+	}
+	removed, err := store.Delete("local:local:foo", serverURL)
+	if err != nil || !removed {
+		t.Fatalf("Delete(second) = %v, %v", removed, err)
+	}
+	if got, err := store.Load("local:foo", serverURL); err != nil || got == nil || got.AccessToken != "first-token" {
+		t.Fatalf("Load(first) after deleting second = %#v, %v", got, err)
+	}
+}
 func newFakeKeyring() *fakeKeyring {
 	return &fakeKeyring{values: map[string]string{}}
 }
