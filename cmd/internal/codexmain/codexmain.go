@@ -16,6 +16,7 @@ import (
 	"codex_go/execserver"
 	"codex_go/processhardening"
 	"codex_go/sandbox"
+	"codex_go/sandbox/mxc"
 	"codex_go/sandbox/windowssandbox"
 	commandrunner "codex_go/sandbox/windowssandbox/bin/command_runner"
 	setupmain "codex_go/sandbox/windowssandbox/bin/setup_main"
@@ -48,32 +49,8 @@ func Main(args []string, argv0 string, stdin io.Reader, stdout, stderr io.Writer
 	if len(args) > 0 {
 		argv1 = args[0]
 	}
-	switch cli.DispatchKind(argv0, argv1) {
-	case "apply_patch":
-		cwd, _ := os.Getwd()
-		return applypatch.RunCLI(args, stdin, stdout, stderr, cwd)
-	case "apply_patch_core":
-		cwd, _ := os.Getwd()
-		return applypatch.RunCLI(args[1:], stdin, stdout, stderr, cwd)
-	case "linux_sandbox":
-		return sandbox.RunLinuxSandboxHelper(args, stdout, stderr)
-	case "execve_wrapper":
-		return sandbox.RunExecveWrapperHelper(args, stdout, stderr)
-	case "windows_sandbox":
-		return windowssandbox.RunWindowsSandboxWrapperMain(args)
-	case "windows_sandbox_setup":
-		if argv1 == cli.DispatchWindowsSandboxSetupFlag {
-			args = args[1:]
-		}
-		return setupmain.Run(args, stdout, stderr)
-	case "windows_command_runner":
-		if argv1 == cli.DispatchWindowsCommandRunnerFlag {
-			args = args[1:]
-		}
-		return commandrunner.Run(args, stdin, stdout, stderr)
-	}
-	if argv1 == execserver.FSHelperArg1 {
-		return execserver.RunFSHelper(stdin, stdout, stderr)
+	if code, handled := dispatchInternalHelper(argv0, argv1, args, stdin, stdout, stderr); handled {
+		return code
 	}
 
 	exe, _ := os.Executable()
@@ -98,6 +75,45 @@ func Main(args []string, argv0 string, stdin io.Reader, stdout, stderr io.Writer
 		return app.ExitCode(err)
 	}
 	return 0
+}
+
+// dispatchInternalHelper runs the helper modes Rust's arg0 dispatch selects
+// before ordinary CLI parsing. It reports whether the process was handled.
+func dispatchInternalHelper(argv0, argv1 string, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, bool) {
+	switch cli.DispatchKind(argv0, argv1) {
+	case "apply_patch":
+		cwd, _ := os.Getwd()
+		return applypatch.RunCLI(args, stdin, stdout, stderr, cwd), true
+	case "apply_patch_core":
+		cwd, _ := os.Getwd()
+		return applypatch.RunCLI(args[1:], stdin, stdout, stderr, cwd), true
+	case "linux_sandbox":
+		return sandbox.RunLinuxSandboxHelper(args, stdout, stderr), true
+	case "execve_wrapper":
+		return sandbox.RunExecveWrapperHelper(args, stdout, stderr), true
+	case "windows_sandbox":
+		return windowssandbox.RunWindowsSandboxWrapperMain(args), true
+	case "windows_sandbox_setup":
+		if argv1 == cli.DispatchWindowsSandboxSetupFlag {
+			args = args[1:]
+		}
+		return setupmain.Run(args, stdout, stderr), true
+	case "windows_command_runner":
+		if argv1 == cli.DispatchWindowsCommandRunnerFlag {
+			args = args[1:]
+		}
+		return commandrunner.Run(args, stdin, stdout, stderr), true
+	}
+	// Rust #44903 dispatches the native Windows MXC helper before ordinary CLI
+	// parsing and before the file-system helper; it consumes no further
+	// arguments and reports the child exit code.
+	if argv1 == mxc.LauncherArg1 {
+		return mxc.RunMain(stdin, stdout, stderr), true
+	}
+	if argv1 == execserver.FSHelperArg1 {
+		return execserver.RunFSHelper(stdin, stdout, stderr), true
+	}
+	return 0, false
 }
 
 // runStandaloneMeta handles the `--help` and `--version` flags clap provides to

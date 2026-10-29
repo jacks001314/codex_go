@@ -134,7 +134,9 @@ func CreateCommandArgs(
 func DecodeCommandArgs(env map[string]string) (*Request, error) {
 	payload, err := windowssandbox.DecodeAndScrubSandboxLaunchPayload(env)
 	if err != nil {
-		return nil, err
+		// Transport and serde errors can quote arbitrary payload values; the
+		// helper reports a single stable diagnostic instead (Rust #44903).
+		return nil, errors.New("invalid MXC launcher request")
 	}
 	var request Request
 	if err := json.Unmarshal([]byte(payload), &request); err != nil {
