@@ -77,7 +77,12 @@ type AnalyticsDashboardOptions struct {
 	Business            bool
 	ConsumerAttribution bool
 	TokenModel          *string
-	History             func(section AnalyticsSection, width, height int) []string
+	// Chats supplies the Top chats overview rows; the card never uses the
+	// history renderer (Rust #45765).
+	Chats       *AnalyticsChats
+	ChatMessage string
+	ChatReady   bool
+	History     func(section AnalyticsSection, width, height int) []string
 }
 
 // AnalyticsDashboardLines renders the bordered overview cards and returns the
@@ -155,23 +160,27 @@ func analyticsDashboardCard(
 ) []string {
 	focused := section == opts.Section
 	content := []string{""}
-	rangeDays := 7
-	if opts.Ranges[section.RangeGroup(opts.Business)] != 0 {
-		rangeDays = 30
-	}
-	header := strconv.Itoa(rangeDays) + "d"
-	if section == AnalyticsSectionUsage && opts.Business {
-		model := "All models"
-		if opts.TokenModel != nil && *opts.TokenModel != "" {
-			model = *opts.TokenModel
+	if section != AnalyticsSectionChats {
+		rangeDays := 7
+		if opts.Ranges[section.RangeGroup(opts.Business)] != 0 {
+			rangeDays = 30
 		}
-		header += " · " + model
+		header := strconv.Itoa(rangeDays) + "d"
+		if section == AnalyticsSectionUsage && opts.Business {
+			model := "All models"
+			if opts.TokenModel != nil && *opts.TokenModel != "" {
+				model = *opts.TokenModel
+			}
+			header += " · " + model
+		}
+		content[0] = header
 	}
-	content[0] = header
 	if section == AnalyticsSectionUsage || section == AnalyticsSectionCredits || section == AnalyticsSectionActivity {
 		content = append(content, "By "+strings.ToLower(section.GroupLabel(opts.Groups[section], opts.ConsumerAttribution)))
 	}
-	if focused && opts.GroupPicker != nil {
+	if section == AnalyticsSectionChats {
+		content = AnalyticsChatOverviewLines(opts.Chats, opts.ChatMessage, opts.ChatReady, innerWidth)
+	} else if focused && opts.GroupPicker != nil {
 		for index, group := range opts.GroupOptions {
 			marker := " "
 			if index == *opts.GroupPicker {

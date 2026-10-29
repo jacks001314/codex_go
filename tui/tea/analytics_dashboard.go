@@ -39,9 +39,12 @@ type analyticsDashboard struct {
 	liveFactory func(endDate time.Time) *analytics.Live
 	modelNames  map[string]string
 
-	sections       [analytics.AnalyticsSectionCount]analytics.AnalyticsSectionState
-	account        analytics.AnalyticsLoad[auth.PlanType]
-	reportsStarted bool
+	sections             [analytics.AnalyticsSectionCount]analytics.AnalyticsSectionState
+	chats                analytics.AnalyticsLoad[analytics.AnalyticsChats]
+	chatLister           analytics.AnalyticsChatLister
+	showZeroCreditGroups bool
+	account              analytics.AnalyticsLoad[auth.PlanType]
+	reportsStarted       bool
 
 	section         analytics.AnalyticsSection
 	zoomed          bool
@@ -57,6 +60,7 @@ type analyticsDashboard struct {
 func newAnalyticsDashboard() *analyticsDashboard {
 	dashboard := &analyticsDashboard{
 		account:         analytics.UnavailableAnalyticsLoad[auth.PlanType](),
+		chats:           analytics.UnavailableAnalyticsLoad[analytics.AnalyticsChats](),
 		section:         analytics.AnalyticsSectionUsage,
 		zoomed:          true,
 		followSelection: true,
@@ -68,6 +72,7 @@ func newAnalyticsDashboard() *analyticsDashboard {
 	}
 	dashboard.sections[analytics.AnalyticsSectionUsage].Group = 1
 	dashboard.sections[analytics.AnalyticsSectionActivity].Group = 2
+	dashboard.sections[analytics.AnalyticsSectionChats].Cursor = 0
 	return dashboard
 }
 
@@ -100,13 +105,13 @@ func (m *Model) openAnalyticsDashboard() bubbletea.Cmd {
 			return analytics.NewLive(analytics.AnalyticsSessionConfig{CodexHome: codexHome}, endDate)
 		}
 	}
-	m.analyticsDashboard.open(factory, modelNames)
+	m.analyticsDashboard.open(factory, modelNames, m.analyticsChats)
 	return m.analyticsDashboard.nextPollCmd()
 }
 
 // open attaches a live session factory and restarts every report. Navigation
 // state from a previous open is retained (Rust AnalyticsView::open).
-func (d *analyticsDashboard) open(factory func(endDate time.Time) *analytics.Live, modelNames map[string]string) {
+func (d *analyticsDashboard) open(factory func(endDate time.Time) *analytics.Live, modelNames map[string]string, chatLister analytics.AnalyticsChatLister) {
 	if d == nil {
 		return
 	}
@@ -114,6 +119,7 @@ func (d *analyticsDashboard) open(factory func(endDate time.Time) *analytics.Liv
 	d.generation++
 	d.liveFactory = factory
 	d.modelNames = modelNames
+	d.chatLister = chatLister
 	d.refresh()
 }
 
@@ -134,6 +140,8 @@ func (d *analyticsDashboard) refresh() {
 	}
 	d.reportsStarted = false
 	d.tokenModel = nil
+	d.sections[analytics.AnalyticsSectionChats].Detail = nil
+	d.chats.Invalidate()
 	d.account.Invalidate()
 	if d.live != nil {
 		live := d.live
@@ -159,9 +167,11 @@ func (d *analyticsDashboard) cancelLoads() {
 	for index := range d.sections {
 		d.sections[index].History.Invalidate()
 	}
+	d.chats.Invalidate()
 	d.account.Invalidate()
 	d.live = nil
 	d.liveFactory = nil
+	d.chatLister = nil
 }
 
 // finish closes the dashboard while keeping its navigation state. Pending
@@ -177,6 +187,9 @@ func (d *analyticsDashboard) finish() {
 		if d.sections[index].History.State() == analytics.AnalyticsLoadStateLoading {
 			d.sections[index].History.Invalidate()
 		}
+	}
+	if d.chats.State() == analytics.AnalyticsLoadStateLoading {
+		d.chats.Invalidate()
 	}
 	d.account.Invalidate()
 	d.live = nil
@@ -265,6 +278,7 @@ func (d *analyticsDashboard) pollReports() {
 	for index := range d.sections {
 		d.sections[index].History.Poll()
 	}
+	d.chats.Poll()
 	d.account.Poll()
 	d.startReports()
 	if !d.business() && !d.consumerAttribution() {
@@ -275,6 +289,10 @@ func (d *analyticsDashboard) pollReports() {
 	}
 	if d.groupPicker != nil && *d.groupPicker >= len(d.groupOptions()) {
 		d.groupPicker = nil
+	}
+	if chats, ok := d.chats.Ready(); ok {
+		cursor := &d.sections[analytics.AnalyticsSectionChats].Cursor
+		*cursor = analyticsMin(*cursor, analyticsMax(len(chats.Rows)-1, 0))
 	}
 }
 
@@ -317,6 +335,17 @@ func (d *analyticsDashboard) startReports() {
 	for _, section := range visible {
 		d.loadReport(section)
 	}
+	if analyticsSectionVisible(visible, analytics.AnalyticsSectionChats) {
+		if d.live != nil && d.chatLister != nil {
+			live := d.live
+			lister := d.chatLister
+			d.chats = *analytics.StartAnalyticsLoadWithTimeout(context.Background(), func(ctx context.Context) (*analytics.AnalyticsChats, error) {
+				return analytics.LoadAnalyticsChats(ctx, live, lister)
+			}, nil, 90*time.Second)
+		} else {
+			d.chats = analytics.UnavailableAnalyticsLoad[analytics.AnalyticsChats]()
+		}
+	}
 }
 
 // changeRange flips the shared 7/30 day range and keeps each section's
@@ -342,6 +371,12 @@ func (d *analyticsDashboard) changeRange() {
 func (d *analyticsDashboard) rowCount() int {
 	if d == nil {
 		return 7
+	}
+	if d.section == analytics.AnalyticsSectionChats {
+		if chats, ok := d.chats.Ready(); ok {
+			return len(chats.Rows)
+		}
+		return 0
 	}
 	return analytics.AnalyticsSectionDays(d.ranges[d.section.RangeGroup(d.business())])
 }
@@ -423,6 +458,9 @@ func (d *analyticsDashboard) anyLoading() bool {
 		if d.sections[index].History.State() == analytics.AnalyticsLoadStateLoading {
 			return true
 		}
+	}
+	if d.chats.State() == analytics.AnalyticsLoadStateLoading {
+		return true
 	}
 	return false
 }
@@ -559,8 +597,13 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 				return true
 			}
 		case 'r':
-			if len(d.visibleSections()) > 0 {
+			if d.section != analytics.AnalyticsSectionChats && len(d.visibleSections()) > 0 {
 				d.changeRange()
+				return true
+			}
+		case 'a':
+			if d.section == analytics.AnalyticsSectionChats && d.sections[d.section].Detail != nil {
+				d.showZeroCreditGroups = !d.showZeroCreditGroups
 				return true
 			}
 		case 'g':
@@ -616,13 +659,37 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 		action == "accept" && !d.dayHasDetails(d.section, d.sections[d.section].Cursor) {
 		return true
 	}
+	chart := d.section != analytics.AnalyticsSectionChats
+	if !chart && (action == "accept" || action == "move_right") {
+		chats, ok := d.chats.Ready()
+		cursor := d.sections[d.section].Cursor
+		if !ok || cursor < 0 || cursor >= len(chats.Rows) || chats.Rows[cursor].Usage == nil {
+			return true
+		}
+	}
 	count := analyticsMax(d.rowCount(), 1)
 	state := &d.sections[d.section]
+	previousCursor := state.Cursor
 	switch action {
-	case "move_up", "move_left":
+	case "move_up":
 		state.Cursor = analyticsMax(state.Cursor-1, 0)
-	case "move_down", "move_right":
+	case "move_down":
 		state.Cursor = analyticsMin(state.Cursor+1, count-1)
+	case "move_left":
+		if chart {
+			state.Cursor = analyticsMax(state.Cursor-1, 0)
+		} else {
+			state.Detail = nil
+		}
+	case "move_right":
+		if chart {
+			state.Cursor = analyticsMin(state.Cursor+1, count-1)
+		} else if state.Detail != nil && *state.Detail == state.Cursor {
+			state.Detail = nil
+		} else {
+			cursor := state.Cursor
+			state.Detail = &cursor
+		}
 	case "jump_top":
 		state.Cursor = 0
 	case "jump_bottom":
@@ -651,6 +718,9 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 		cursor := state.Cursor
 		state.Detail = &cursor
 	}
+	if !chart && state.Cursor != previousCursor {
+		state.Detail = nil
+	}
 	return true
 }
 
@@ -663,7 +733,9 @@ func (d *analyticsDashboard) render(m *Model, width, height int) string {
 		innerWidth = 1
 	}
 	visible := d.visibleSections()
-	showRange := len(visible) > 0
+	// Top chats always covers 30 days, so it never shows the 7/30d range row
+	// (Rust render.rs show_range).
+	showRange := len(visible) > 0 && d.section != analytics.AnalyticsSectionChats
 	theme := m.styles()
 
 	controls := d.controls(m, showRange)
@@ -768,6 +840,12 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 	for index := range d.sections {
 		groups[index] = d.sections[index].Group
 	}
+	chats, chatsReady := d.chats.Ready()
+	var loadedChats *analytics.AnalyticsChats
+	if chatsReady {
+		loadedChats = &chats
+	}
+	chatMessage, _ := d.chats.Message()
 	lines, start, end := analytics.AnalyticsDashboardLines(analytics.AnalyticsDashboardOptions{
 		Width:               width,
 		Height:              height,
@@ -780,6 +858,9 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 		Business:            d.business(),
 		ConsumerAttribution: d.consumerAttribution(),
 		TokenModel:          d.tokenModel,
+		Chats:               loadedChats,
+		ChatMessage:         chatMessage,
+		ChatReady:           chatsReady,
 		History:             d.historyLines,
 	})
 	return lines, start, end
@@ -791,21 +872,32 @@ func (d *analyticsDashboard) panel(section analytics.AnalyticsSection, width, ch
 	if ok {
 		loaded = &history
 	}
+	chats, chatsReady := d.chats.Ready()
+	var loadedChats *analytics.AnalyticsChats
+	if chatsReady {
+		loadedChats = &chats
+	}
+	chatMessage, _ := d.chats.Message()
 	return analytics.AnalyticsPanelLines(analytics.AnalyticsPanelOptions{
-		Section:             section,
-		State:               d.sections[section],
-		History:             loaded,
-		Width:               width,
-		ChartHeight:         chartHeight,
-		RangeIndex:          d.ranges[section.RangeGroup(d.business())],
-		EndDate:             d.endDate,
-		Focused:             section == d.section,
-		Business:            d.business(),
-		ConsumerAttribution: d.consumerAttribution(),
-		TokenModel:          d.tokenModel,
-		GroupOptions:        d.groupOptions(),
-		GroupPicker:         d.groupPicker,
-		ModelName:           d.modelName,
+		Section:              section,
+		State:                d.sections[section],
+		History:              loaded,
+		Chats:                loadedChats,
+		ChatMessage:          chatMessage,
+		ChatReady:            chatsReady,
+		ShowZeroCreditGroups: d.showZeroCreditGroups,
+		ViewportHeight:       d.viewportHeight,
+		Width:                width,
+		ChartHeight:          chartHeight,
+		RangeIndex:           d.ranges[section.RangeGroup(d.business())],
+		EndDate:              d.endDate,
+		Focused:              section == d.section,
+		Business:             d.business(),
+		ConsumerAttribution:  d.consumerAttribution(),
+		TokenModel:           d.tokenModel,
+		GroupOptions:         d.groupOptions(),
+		GroupPicker:          d.groupPicker,
+		ModelName:            d.modelName,
 	})
 }
 
@@ -840,8 +932,13 @@ func (d *analyticsDashboard) controls(m *Model, showRange bool) string {
 	}
 	navigation := analyticsHintLabel(m, "accept") + "/z maximize"
 	if d.zoomed {
-		navigation = analyticsHintLabel(m, "move_left") + "/" + analyticsHintLabel(m, "move_right") + " day · " +
-			analyticsHintLabel(m, "accept") + " details"
+		if d.section == analytics.AnalyticsSectionChats {
+			navigation = analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " row · " +
+				analyticsHintLabel(m, "accept") + " details"
+		} else {
+			navigation = analyticsHintLabel(m, "move_left") + "/" + analyticsHintLabel(m, "move_right") + " day · " +
+				analyticsHintLabel(m, "accept") + " details"
+		}
 	}
 	zoomHint := ""
 	if d.zoomed {

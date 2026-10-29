@@ -10,20 +10,27 @@ import (
 
 // AnalyticsPanelOptions describes the maximized section panel.
 type AnalyticsPanelOptions struct {
-	Section             AnalyticsSection
-	State               AnalyticsSectionState
-	History             *AccountAnalyticsHistory
-	Width               int
-	ChartHeight         int
-	RangeIndex          int
-	EndDate             time.Time
-	Focused             bool
-	Business            bool
-	ConsumerAttribution bool
-	TokenModel          *string
-	GroupOptions        []int
-	GroupPicker         *int
-	ModelName           func(string) string
+	Section AnalyticsSection
+	State   AnalyticsSectionState
+	History *AccountAnalyticsHistory
+	// Chats supplies the Top chats rows; the section never loads a history
+	// report (Rust #45765).
+	Chats                *AnalyticsChats
+	ChatMessage          string
+	ChatReady            bool
+	ShowZeroCreditGroups bool
+	ViewportHeight       int
+	Width                int
+	ChartHeight          int
+	RangeIndex           int
+	EndDate              time.Time
+	Focused              bool
+	Business             bool
+	ConsumerAttribution  bool
+	TokenModel           *string
+	GroupOptions         []int
+	GroupPicker          *int
+	ModelName            func(string) string
 }
 
 // AnalyticsPanel is wrapped panel content plus the measured selection range and
@@ -67,24 +74,50 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 			lines = append(lines, marker+" "+opts.Section.GroupLabel(group, opts.ConsumerAttribution))
 		}
 	}
-	historyLines, bands := AnalyticsHistoryLines(opts.Section, opts.State, opts.History, AnalyticsHistoryOptions{
-		Width:               width,
-		ChartHeight:         opts.ChartHeight,
-		RangeIndex:          opts.RangeIndex,
-		EndDate:             opts.EndDate,
-		Zoomed:              true,
-		Business:            opts.Business,
-		ConsumerAttribution: opts.ConsumerAttribution,
-		ModelName:           opts.ModelName,
-	})
-	lines = append(lines, historyLines...)
+	bands := 0
+	selectionStart := 0
 	selectionEnd := len(lines)
+	if opts.Section == AnalyticsSectionChats {
+		panel := AnalyticsChatPanelLines(AnalyticsChatPanelOptions{
+			Chats:                opts.Chats,
+			Message:              opts.ChatMessage,
+			Ready:                opts.ChatReady,
+			Cursor:               opts.State.Cursor,
+			Detail:               opts.State.Detail,
+			ShowZeroCreditGroups: opts.ShowZeroCreditGroups,
+			Width:                width,
+			Zoomed:               true,
+			ViewportHeight:       opts.ViewportHeight,
+			ModelName:            opts.ModelName,
+		})
+		selectionStart = len(lines) + panel.SelectionStart
+		selectionEnd = len(lines) + panel.SelectionEnd
+		lines = append(lines, panel.Lines...)
+	} else {
+		historyLines, chartBands := AnalyticsHistoryLines(opts.Section, opts.State, opts.History, AnalyticsHistoryOptions{
+			Width:               width,
+			ChartHeight:         opts.ChartHeight,
+			RangeIndex:          opts.RangeIndex,
+			EndDate:             opts.EndDate,
+			Zoomed:              true,
+			Business:            opts.Business,
+			ConsumerAttribution: opts.ConsumerAttribution,
+			ModelName:           opts.ModelName,
+		})
+		bands = chartBands
+		lines = append(lines, historyLines...)
+		selectionEnd = len(lines)
+	}
 	if opts.Focused && opts.GroupPicker != nil {
 		selectionEnd = 2 + len(opts.GroupOptions)
+		selectionStart = 0
 	}
 	wrapped := make([]string, 0, len(lines))
 	wrappedStart, wrappedEnd := 0, 0
 	for index, line := range lines {
+		if index == selectionStart {
+			wrappedStart = len(wrapped)
+		}
 		wrapped = append(wrapped, analyticsWrap(line, width)...)
 		if index+1 == selectionEnd {
 			wrappedEnd = len(wrapped)

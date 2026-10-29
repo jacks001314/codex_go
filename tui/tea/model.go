@@ -1300,6 +1300,10 @@ type Options struct {
 	// picker's ctrl+t overlay (Rust PickerLoadRequest::Transcript). Nil leaves
 	// the overlay showing a failure notice.
 	OnReadSessionTranscript SessionTranscriptFunc
+	// OnAnalyticsChats lists recent local roots for the analytics Top chats
+	// section (Rust #45765). Nil leaves the section unavailable, as it does for
+	// runtimes without a thread source.
+	OnAnalyticsChats analytics.AnalyticsChatLister
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1761,6 +1765,9 @@ type Model struct {
 	// analyticsLive builds the account analytics client. It is nil in normal
 	// use, which signs in through the local ChatGPT store.
 	analyticsLive func(endDate time.Time) *analytics.Live
+	// analyticsChats lists recent local roots for the Top chats section. Nil
+	// leaves the section unavailable (Rust #45765).
+	analyticsChats analytics.AnalyticsChatLister
 	// agentsOverviewRemoved tombstones archived/deleted tasks so a delayed
 	// dynamic-tool registration cannot restore their rows (Rust #46946).
 	agentsOverviewRemoved  map[string]bool
@@ -2874,6 +2881,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewPinnedThreads:   pinnedThreads,
 		onAgentsOverviewTogglePin:       togglePin,
 		onStartAgentsDaemon:             options.OnStartAgentsDaemon,
+		analyticsChats:                  options.OnAnalyticsChats,
 		agentsOverviewDrafts:            map[string]string{},
 		onExternalEditor:                options.OnExternalEditor,
 		externalEditorDirectory:         options.OnExternalEditorDirectory,
