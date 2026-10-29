@@ -15796,9 +15796,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Seatbelt mutating fcntl deny: sandbox/seatbelt.go:181 now appends (deny system-fcntl (fcntl-command 80 110)) whenever the policy lacks full disk write access (F_MAKECOMPRESSED = 80, F_TRANSFEREXTENTS = 110), placed last so no earlier file-write* or file-ioctl allowance reopens it, mirroring Rust create_seatbelt_command_args_with_profile. An unrestricted or full-access policy keeps both operations allowed. Test: sandbox/seatbelt_test.go:160 TestBuildSeatbeltPolicyDeniesMutatingFcntlsLikeRust pins read-only and workspace-write policies (deny once and as the final rule) and the full-access policy (no deny). Residual, recorded not claimed: Rust also exercises real Seatbelt children and asserts EPERM plus unchanged contents/metadata on macOS; Go cannot run that here, so the check covers generated policy text only. Verified: go test ./sandbox -count=1 ok; negative check removing the deny fails the new test."
    ]
   },
   {

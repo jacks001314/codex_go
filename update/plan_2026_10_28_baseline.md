@@ -2154,6 +2154,16 @@ Closed #46498 (e49739355235) worktree daemon eligibility.
 - Tests: `app/daemon_startup_test.go` `TestDaemonStartupExclusionLikeRust`, `TestLocalDaemonEndpointForLaunchLikeRust`, `TestDaemonAutoStartSkipsWorktreeLikeRust`; `app/tui_telemetry_like_rust_test.go` `TestInteractiveDaemonSelectionReasonLikeRust`.
 - Verified: `go test ./app -run 'Daemon|Worktree|Telemetry|InteractiveDaemon' -count=1` ok; `go build ./...` ok; `go test ./app -count=1` only the known unrelated `TestExecJSONEndToEnd` failure; negative check re-adding the `--worktree` exclusion fails the new tests.
 
-Status after reconciliation: `2060 complete`, `406 not_applicable`,
-`443 audit_pending`, `236 regression_pending`, `4 partial`,
+### Deny mutating fcntls in restricted Seatbelt policies (Round 896)
+
+Closed #46500 (04e4d2b40ffd): restricted Seatbelt policies deny mutating fcntls.
+
+- `sandbox/seatbelt.go:181` appends `(deny system-fcntl (fcntl-command 80 110))` whenever the policy lacks full disk write access (`F_MAKECOMPRESSED` = 80, `F_TRANSFEREXTENTS` = 110).
+- The denial is the final rule, so no earlier `file-write*` or `file-ioctl` allowance reopens the mutation path; a full-access policy keeps both operations allowed, matching Rust.
+- Test: `sandbox/seatbelt_test.go:160` `TestBuildSeatbeltPolicyDeniesMutatingFcntlsLikeRust`.
+- Residual: Rust also runs real Seatbelt children on macOS and asserts `EPERM` plus unchanged contents/metadata; only the generated policy text is verified here.
+- Verified: `go test ./sandbox -count=1` ok; negative check removing the deny fails the new test.
+
+Status after reconciliation: `2061 complete`, `406 not_applicable`,
+`442 audit_pending`, `236 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

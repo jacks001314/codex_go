@@ -157,6 +157,38 @@ func TestBuildSeatbeltPolicyDeniesXPCLookupsLikeRust(t *testing.T) {
 	}
 }
 
+// TestBuildSeatbeltPolicyDeniesMutatingFcntlsLikeRust covers #46500:
+// F_MAKECOMPRESSED (80) and F_TRANSFEREXTENTS (110) mutate files through
+// read-only descriptors, so every policy without full disk write access denies
+// them explicitly and the denial stays last so no broader allowance reopens it.
+func TestBuildSeatbeltPolicyDeniesMutatingFcntlsLikeRust(t *testing.T) {
+	const denyFcntls = `(deny system-fcntl (fcntl-command 80 110))`
+	for name, profile := range map[string]PermissionProfile{
+		"read only":       ReadOnlyPermissionProfile(),
+		"workspace write": WorkspaceWritePermissionProfile(),
+	} {
+		policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
+		if err != nil {
+			t.Fatalf("%s: buildSeatbeltPolicy: %v", name, err)
+		}
+		if got := strings.Count(policy, denyFcntls); got != 1 {
+			t.Fatalf("%s: mutating fcntl deny appears %d times, want 1:\n%s", name, got, policy)
+		}
+		lines := strings.Split(strings.TrimSpace(policy), "\n")
+		if last := lines[len(lines)-1]; last != denyFcntls {
+			t.Fatalf("%s: last policy line = %q, want %q", name, last, denyFcntls)
+		}
+	}
+	fullAccess := FullAccessPermissionProfile()
+	policy, _, err := buildSeatbeltPolicy("/workspace", &fullAccess, nil, "")
+	if err != nil {
+		t.Fatalf("full access: buildSeatbeltPolicy: %v", err)
+	}
+	if strings.Contains(policy, denyFcntls) {
+		t.Fatalf("full access policy denies mutating fcntls:\n%s", policy)
+	}
+}
+
 // Mirrors Rust #39599: a writable root directory is an authority boundary and
 // cannot be unlinked or renamed by the sandboxed process.
 func TestBuildSeatbeltPolicyProtectsWritableRootAnchorLikeRust(t *testing.T) {

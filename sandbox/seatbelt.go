@@ -178,6 +178,12 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 		parameters = append(parameters, seatbeltParameter{Name: name, Value: ancestor})
 		lines = append(lines, fmt.Sprintf(`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "%s"))))`, name))
 	}
+	// Rust #46500: these fcntls mutate files through read-only descriptors,
+	// bypassing file-write* and file-ioctl. Even a deny-default policy needs
+	// this explicit denial. F_MAKECOMPRESSED = 80, F_TRANSFEREXTENTS = 110.
+	if !policy.HasFullDiskWriteAccess() {
+		lines = append(lines, `(deny system-fcntl (fcntl-command 80 110))`)
+	}
 	return strings.Join(lines, "\n") + "\n", parameters, nil
 }
 
