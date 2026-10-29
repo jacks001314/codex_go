@@ -39,3 +39,22 @@ func AnalyticsCategories(history *AccountAnalyticsHistory) []AccountAnalyticsVal
 	})
 	return values
 }
+
+// AnalyticsParts partitions one day's values into the three plotted categories
+// plus an Other remainder. The remainder is not renormalized: the last slot
+// collects every value whose key is not one of the first three categories
+// (Rust analytics/render.rs parts, #45763).
+func AnalyticsParts(values []AccountAnalyticsValue, categories []AccountAnalyticsValue) [4]float64 {
+	var parts [4]float64
+	for _, value := range values {
+		index := 3
+		for position := 0; position < len(categories) && position < 3; position++ {
+			if categories[position].Key == value.Key {
+				index = position
+				break
+			}
+		}
+		parts[index] += value.Value
+	}
+	return parts
+}
