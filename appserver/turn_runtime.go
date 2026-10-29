@@ -409,9 +409,39 @@ func applyPersistentClockDefaults(cfg *config.Config, params *turn.TurnStartPara
 		if currentTimeReminderExplicitlyConfigured(cfg) {
 			return false
 		}
+		// Rust apply_persistent_defaults enables the feature only when managed
+		// policy allows it (features.enable(...).is_ok()).
+		if cfg.Requirements != nil {
+			if enabled, ok := cfg.Requirements.FeatureRequirements["current_time_reminder"]; ok && !enabled {
+				return false
+			}
+		}
 		return true
 	}
 	return false
+}
+
+// resolvedClockReminderConfig mirrors Rust apply_persistent_defaults: an
+// explicit [features].current_time_reminder value always wins, while a
+// persistent-effort turn otherwise gets the default reminder config with the
+// interruptible clock.sleep tool enabled. A nil result leaves reminders off.
+func resolvedClockReminderConfig(cfg *config.Config, params *turn.TurnStartParams) *config.CurrentTimeReminderConfig {
+	if cfg == nil {
+		return nil
+	}
+	if reminder := cfg.CurrentTimeReminder(); reminder != nil {
+		return reminder
+	}
+	if !applyPersistentClockDefaults(cfg, params) {
+		return nil
+	}
+	return &config.CurrentTimeReminderConfig{
+		Enabled:                 true,
+		ReminderIntervalSeconds: 1,
+		ClockSource:             config.CurrentTimeSourceSystem,
+		DeliveryMode:            config.CurrentTimeReminderAnyInference,
+		SleepTool:               true,
+	}
 }
 
 // currentTimeReminderExplicitlyConfigured reports whether the turn config
@@ -8135,7 +8165,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	// mention is reported.
 	r.rememberExplicitAppMentions(ctx, threadID, turnID, connectionID, params, cfg, modelProviderConfig.Model)
 	currentTimeState := r.newCurrentTimeReminderTurnState(threadID)
-	currentTimeInputItems, currentTimeSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, time.UnixMilli(startedAtMS).UTC(), currentTimeState)
+	currentTimeInputItems, currentTimeSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, params, time.UnixMilli(startedAtMS).UTC(), currentTimeState)
 	if err != nil {
 		return nil, err
 	}
@@ -8171,7 +8201,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		defer extraSessionItemsMu.Unlock()
 		return append([]session.Item(nil), extraSessionItems...)
 	}
-	postToolInputItems = r.currentTimePostToolInputItems(threadID, turnID, cfg, currentTimeState, postToolInputItems, appendExtraSessionItems)
+	postToolInputItems = r.currentTimePostToolInputItems(threadID, turnID, cfg, params, currentTimeState, postToolInputItems, appendExtraSessionItems)
 	postToolInputItems = r.networkApprovalPostToolInputItems(threadID, turnID, postToolInputItems, appendExtraSessionItems)
 	inputItems = append(inputItems, skillInputItems...)
 	// Rust #54053: the request's client-metadata update (replacement then patch)
@@ -9984,11 +10014,11 @@ func (s *currentTimeReminderTurnState) noteDelivered(now time.Time) {
 	s.lastTimeUTC = now.UTC()
 }
 
-func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threadID string, turnID string, cfg *config.Config, createdAt time.Time, state *currentTimeReminderTurnState) ([]any, []session.Item, error) {
+func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threadID string, turnID string, cfg *config.Config, params *turn.TurnStartParams, createdAt time.Time, state *currentTimeReminderTurnState) ([]any, []session.Item, error) {
 	if cfg == nil {
 		return nil, nil, nil
 	}
-	reminder := cfg.CurrentTimeReminder()
+	reminder := resolvedClockReminderConfig(cfg, params)
 	if reminder == nil || !reminder.Enabled {
 		return nil, nil, nil
 	}
@@ -10095,11 +10125,11 @@ func currentTimeUnavailableNotice(turnID string, createdAt time.Time) ([]any, []
 	return []any{modelInputTextMessage(rendered.Role, rendered.Content)}, []session.Item{sessionItem}
 }
 
-func (r *RuntimeRouter) currentTimePostToolInputItems(threadID string, turnID string, cfg *config.Config, state *currentTimeReminderTurnState, base turn.ToolPostExecutionInputItems, appendSessionItems func([]session.Item)) turn.ToolPostExecutionInputItems {
+func (r *RuntimeRouter) currentTimePostToolInputItems(threadID string, turnID string, cfg *config.Config, params *turn.TurnStartParams, state *currentTimeReminderTurnState, base turn.ToolPostExecutionInputItems, appendSessionItems func([]session.Item)) turn.ToolPostExecutionInputItems {
 	if cfg == nil {
 		return base
 	}
-	reminder := cfg.CurrentTimeReminder()
+	reminder := resolvedClockReminderConfig(cfg, params)
 	if reminder == nil || !reminder.Enabled {
 		return base
 	}
@@ -10112,7 +10142,7 @@ func (r *RuntimeRouter) currentTimePostToolInputItems(threadID string, turnID st
 		if output != nil && !output.CompletedAt.IsZero() {
 			createdAt = output.CompletedAt.UTC()
 		}
-		currentInputItems, currentSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, createdAt, state)
+		currentInputItems, currentSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, params, createdAt, state)
 		if err != nil {
 			return items
 		}

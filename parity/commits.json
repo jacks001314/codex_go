@@ -2927,9 +2927,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/turn_runtime.go:428 resolvedClockReminderConfig materializes the Rust apply_persistent_defaults reminder for persistent-effort turns and :401 now honors a managed current_time_reminder requirement; the turn and post-tool reminder paths at :10021 and :10132 use it, so persistent turns deliver the current-time reminder and enable clock.sleep plus the clock tools; appserver/current_time_reminder_persistent_like_rust_test.go covers persistent, ordinary, explicit, disabled, managed-disabled, configured-effort and review turns plus delivery"
    ]
   },
   {

@@ -2545,6 +2545,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `mcp/ema_claims.go:230` now rejects non-empty `authorization_details` in the signed ID-JAG claims and in the IdP response, and `mcp/ema_claims.go:297` does the same for the resource token response; an absent or empty list still validates.
 - New `mcp/ema_authorization_details_like_rust_test.go` covers absent, empty and non-empty lists for all three carriers.
 
-Status after reconciliation: `2092 complete`, `409 not_applicable`,
-`428 audit_pending`, `217 regression_pending`, `3 partial`,
+### Persistent-turn clock reminders (Round 931)
+
+- Rust #40942 defaults the current-time reminder and the interruptible `clock.sleep` tool on for persistent-reasoning turns, while explicit settings and managed policy win.
+- Go already synthesized the clock tools (`decideClockToolEnablement`), but never materialized the reminder config, so persistent turns got `clock.curr_time` without any `<current_time_reminder>` delivery.
+- `appserver/turn_runtime.go:428` adds `resolvedClockReminderConfig`: an explicit `[features].current_time_reminder` wins, otherwise a persistent-effort turn gets the Rust default (interval 1, system clock, any-inference, `sleep_tool` on).
+- `appserver/turn_runtime.go:401` now also refuses the default when a managed requirement disables the feature, matching Rust `features.enable(...).is_ok()`.
+- Both reminder paths (`turn_runtime.go:10021` and `:10132`) use the resolved config; `appserver/current_time_reminder_persistent_like_rust_test.go` covers persistent, ordinary, explicit, explicitly disabled, managed-disabled, configured-effort and review turns plus delivery.
+
+Status after reconciliation: `2093 complete`, `409 not_applicable`,
+`428 audit_pending`, `216 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
