@@ -17,7 +17,10 @@ type AnalyticsHistoryOptions struct {
 	RangeIndex  int
 	EndDate     time.Time
 	Zoomed      bool
-	Business    bool
+	// ViewportHeight bounds the breakdown rows of a maximized report
+	// (Rust #45770 row_budget).
+	ViewportHeight int
+	Business       bool
 	// ConsumerAttribution reports whether consumer usage is fully attributed,
 	// which changes the label of the first grouping.
 	ConsumerAttribution bool
@@ -166,7 +169,8 @@ func AnalyticsHistoryLines(
 			lines = append(lines, "")
 		}
 	}
-	if history.UpdatedAt != nil && *history.UpdatedAt > 0 {
+	// Rust #45770 moves the timestamp into the viewport footer when maximized.
+	if !opts.Zoomed && history.UpdatedAt != nil && *history.UpdatedAt > 0 {
 		updated := time.Unix(*history.UpdatedAt, 0).UTC()
 		lines = append(lines, "Updated "+updated.Format("Jan 2 15:04")+" UTC")
 	}
@@ -285,13 +289,20 @@ func analyticsBreakdownRows(
 	sort.SliceStable(rows, func(left, right int) bool {
 		return math.Abs(rows[left].value) > math.Abs(rows[right].value)
 	})
-	if !expanded && len(rows) > 4 {
-		remaining := rows[3:]
+	rowBudget := 4
+	if opts.Zoomed {
+		// Taller maximized reports show more breakdown rows (Rust #45770).
+		if budget := opts.ViewportHeight / 4; budget > rowBudget {
+			rowBudget = budget
+		}
+	}
+	if !expanded && len(rows) > rowBudget {
+		remaining := rows[rowBudget-1:]
 		sum := 0.0
 		for _, entry := range remaining {
 			sum += entry.value
 		}
-		rows = append(rows[:3], row{label: strconv.Itoa(len(remaining)) + " more", value: sum, more: true})
+		rows = append(rows[:rowBudget-1], row{label: strconv.Itoa(len(remaining)) + " more", value: sum, more: true})
 	}
 	limit := len(rows)
 	if !opts.Zoomed && limit > 2 {

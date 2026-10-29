@@ -134,6 +134,7 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 		historyLines, chartBands := AnalyticsHistoryLines(opts.Section, opts.State, opts.History, AnalyticsHistoryOptions{
 			Width:               width,
 			ChartHeight:         opts.ChartHeight,
+			ViewportHeight:      opts.ViewportHeight,
 			RangeIndex:          opts.RangeIndex,
 			EndDate:             opts.EndDate,
 			Zoomed:              true,

@@ -884,27 +884,26 @@ func (d *analyticsDashboard) render(m *Model, width, height int) string {
 	theme := m.styles()
 
 	controls := d.controls(m, showRange)
-	footer := d.footerLines(theme, controls, innerWidth)
+	footer := analytics.AnalyticsWrapLines(strings.Split(controls, "\n"), innerWidth)
 	if (d.section == analytics.AnalyticsSectionPlugins ||
 		d.section == analytics.AnalyticsSectionActivity ||
 		d.section == analytics.AnalyticsSectionSkills) &&
 		!d.dayHasDetails(d.section, d.sections[d.section].Cursor) {
 		height := len(footer)
 		controls = strings.Replace(controls, " · "+analyticsHintLabel(m, "accept")+" details", "", 1)
-		footer = d.footerLines(theme, controls, innerWidth)
-		for len(footer) < height {
-			footer = append(footer, "")
-		}
-		if len(footer) > height {
-			footer = footer[:height]
-		}
+		footer = analyticsResizeFooter(analytics.AnalyticsWrapLines(strings.Split(controls, "\n"), innerWidth), height)
 	}
+	// Rust #45770 moves a maximized report's update timestamp into the footer.
+	updated := d.updatedFooterLabel()
+	footer = analyticsAppendUpdated(footer, updated, innerWidth)
 
 	lines := []string{analyticsTitleLine(theme, d.live)}
 	if showRange {
 		lines = append(lines, analyticsRangeLine(theme, d.section.RangeGroup(d.business()), d.ranges, d.endDate), "")
 	} else {
-		lines = append(lines, "")
+		// Rust #45770 keeps the range row at a stable height so the tabs do not
+		// shift between sections.
+		lines = append(lines, "", "")
 	}
 	if tabs := analyticsTabLines(theme, d, innerWidth); len(tabs) > 0 {
 		lines = append(lines, tabs...)
@@ -937,7 +936,25 @@ func (d *analyticsDashboard) render(m *Model, width, height int) string {
 			lines = append(lines, "")
 		}
 	}
-	lines = append(lines, footer...)
+	if len(body) <= d.viewportHeight {
+		// Rust #45770 hides scroll hints when the content already fits.
+		height := len(footer)
+		controls = strings.Replace(controls, " · "+analyticsHintLabel(m, "page_up")+"/"+analyticsHintLabel(m, "page_down")+" scroll", "", 1)
+		controls = strings.Replace(controls, " · "+analyticsHintLabel(m, "move_up")+"/"+analyticsHintLabel(m, "move_down")+" scroll", "", 1)
+		footer = analytics.AnalyticsWrapLines(strings.Split(controls, "\n"), innerWidth)
+		footer = analyticsAppendUpdated(footer, updated, innerWidth)
+		if updated != "" {
+			padding := height - len(footer)
+			for index := 0; index < padding; index++ {
+				footer = append([]string{""}, footer...)
+			}
+		} else {
+			footer = analyticsResizeFooter(footer, height)
+		}
+	}
+	for _, line := range d.styledFooterLines(theme, footer, updated) {
+		lines = append(lines, line)
+	}
 
 	rendered := make([]string, len(lines))
 	for index, line := range lines {
@@ -989,7 +1006,9 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 		}
 		lines := make([]string, 0, len(panel.Lines)+1)
 		lines = append(lines, panel.Lines...)
-		if !centerSummary {
+		// Rust #45770 only reserves the trailing blank row when the panel
+		// overflows the viewport.
+		if !centerSummary && len(panel.Lines) > height {
 			lines = append(lines, "")
 		}
 		return lines, start, end
@@ -1094,6 +1113,7 @@ func (d *analyticsDashboard) historyLines(section analytics.AnalyticsSection, wi
 	lines, _ := analytics.AnalyticsHistoryLines(section, d.sections[section], loaded, analytics.AnalyticsHistoryOptions{
 		Width:               width,
 		ChartHeight:         height,
+		ViewportHeight:      d.viewportHeight,
 		RangeIndex:          d.ranges[section.RangeGroup(d.business())],
 		EndDate:             d.endDate,
 		Zoomed:              d.zoomed,
@@ -1149,14 +1169,80 @@ func (d *analyticsDashboard) controls(m *Model, showRange bool) string {
 		cancelHint + " back · q close"
 }
 
-// footerLines wraps the control hints and highlights their keys.
-func (d *analyticsDashboard) footerLines(theme styles.Styles, controls string, width int) []string {
-	wrapped := analytics.AnalyticsWrapLines(strings.Split(controls, "\n"), width)
-	lines := make([]string, 0, len(wrapped))
-	for _, line := range wrapped {
-		lines = append(lines, analyticsStyledControls(theme, line))
+// updatedFooterLabel is the maximized report's update timestamp that the
+// footer carries instead of the chart body (Rust render.rs updated).
+func (d *analyticsDashboard) updatedFooterLabel() string {
+	if d == nil || !d.zoomed || !d.section.HasReport() {
+		return ""
+	}
+	history, ok := d.sections[d.section].History.Ready()
+	if !ok || history.UpdatedAt == nil || *history.UpdatedAt <= 0 {
+		return ""
+	}
+	updated := time.Unix(*history.UpdatedAt, 0).UTC()
+	return "Updated " + updated.Format("Jan 2 15:04") + " UTC"
+}
+
+// analyticsAppendUpdated right-aligns the timestamp on the last footer line
+// when it fits and otherwise adds a wrapped line (Rust render.rs add_updated).
+func analyticsAppendUpdated(footer []string, updated string, width int) []string {
+	if updated == "" {
+		return footer
+	}
+	if len(footer) > 0 &&
+		analytics.AnalyticsDisplayWidth(footer[len(footer)-1])+analytics.AnalyticsDisplayWidth(updated)+3 <= width {
+		footer[len(footer)-1] = analyticsColumnsText(footer[len(footer)-1], updated, width)
+		return footer
+	}
+	return append(footer, analytics.AnalyticsWrapLines([]string{analyticsColumnsText("", updated, width)}, width)...)
+}
+
+// analyticsColumnsText right-aligns the second column within width (Rust
+// analytics/render.rs columns).
+func analyticsColumnsText(left, right string, width int) string {
+	padding := width - analytics.AnalyticsDisplayWidth(left) - analytics.AnalyticsDisplayWidth(right)
+	if padding < 1 {
+		padding = 1
+	}
+	return left + strings.Repeat(" ", padding) + right
+}
+
+// analyticsResizeFooter pads or trims footer lines to a stable height.
+func analyticsResizeFooter(lines []string, height int) []string {
+	if len(lines) > height {
+		return lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
 	}
 	return lines
+}
+
+// styledFooterLines highlights footer keys and dims the update timestamp.
+func (d *analyticsDashboard) styledFooterLines(theme styles.Styles, lines []string, updated string) []string {
+	styled := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line == "" {
+			styled = append(styled, "")
+			continue
+		}
+		styled = append(styled, analyticsStyledControlsWithUpdated(theme, line, updated))
+	}
+	return styled
+}
+
+// analyticsStyledControlsWithUpdated keeps the update timestamp in the
+// secondary style instead of treating it as a key token.
+func analyticsStyledControlsWithUpdated(theme styles.Styles, line, updated string) string {
+	if updated == "" || !strings.HasSuffix(line, updated) {
+		return analyticsStyledControls(theme, line)
+	}
+	reset := theme.ExecCell.Reset
+	if reset == "" {
+		return line
+	}
+	prefix := strings.TrimSuffix(line, updated)
+	return analyticsStyledControls(theme, prefix) + theme.Chat.DimText + updated + reset
 }
 
 // analyticsStyledControls dims the footer and highlights each key token.
