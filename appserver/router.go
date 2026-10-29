@@ -265,6 +265,13 @@ func (r *Router) retainLiveThread(record *session.Record) error {
 	return r.threadManager().RetainLiveThread(r.store, record)
 }
 
+// acquireLiveThreadRetention opens thread persistence without marking the
+// thread live yet, so a failed initialization can discard the writer
+// (Rust #45487 LiveThreadInitGuard).
+func (r *Router) acquireLiveThreadRetention(record *session.Record) (*LiveThreadRetention, error) {
+	return r.threadManager().AcquireLiveThreadRetention(r.store, record)
+}
+
 func (r *Router) acquireLifecycleWriters(threadIDs []session.ThreadID) ([]*session.WriterLock, error) {
 	return r.threadManager().AcquireLifecycleWriters(r.store, threadIDs)
 }
@@ -1511,7 +1518,7 @@ func processCWD() string {
 	return strings.TrimSpace(cwd)
 }
 
-func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, error) {
+func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeResponse, err error) {
 	var params ThreadResumeParams
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
@@ -1528,7 +1535,6 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	}
 	var sourceID session.ThreadID
 	var record *session.Record
-	var err error
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
 		record, err = r.readThreadRecordFromRolloutPath(*params.Path, true, includeTurns)
 		if err != nil {
@@ -1602,8 +1608,21 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 			restoredSettings.changed = true
 		}
 	}
-	if err := r.retainLiveThread(record); err != nil {
-		return nil, err
+	// Rust #45487: the writer acquired for a cold resume stays owned by this
+	// request until the resume succeeds, so a later failure discards it instead
+	// of leaving persistence acquired for a thread the client never received.
+	retention, retainErr := r.acquireLiveThreadRetention(record)
+	if retainErr != nil {
+		return nil, retainErr
+	}
+	if retention != nil {
+		defer func() {
+			if err != nil {
+				_ = retention.Discard()
+				return
+			}
+			retention.Commit()
+		}()
 	}
 	if restoredSettings.changed {
 		if err := r.saveThreadRecord(record); err != nil {
@@ -1650,7 +1669,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	if approvalPolicy == nil && record != nil && strings.TrimSpace(record.Metadata.ApprovalPolicy) != "" {
 		approvalPolicy = record.Metadata.ApprovalPolicy
 	}
-	response := &ThreadResumeResponse{
+	response = &ThreadResumeResponse{
 		Thread:                  thread,
 		CWD:                     cwd,
 		Model:                   firstNonEmpty(stringPtrValue(params.Model), record.Metadata.Model),
@@ -1786,7 +1805,7 @@ func (r *Router) loadPaginatedThreadFullTurnsWithOptions(threadID string, option
 	}
 }
 
-func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResumeParams, includeTurns bool) (*ThreadResumeResponse, error) {
+func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResumeParams, includeTurns bool) (response *ThreadResumeResponse, err error) {
 	if r == nil || r.store == nil {
 		return nil, fmt.Errorf("%w: router is not configured", ErrInvalidRequest)
 	}
@@ -1833,11 +1852,30 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 		return nil, err
 	}
 	r.setHistoryInitialization(record.ID, session.HistoryInitializationSuppliedHistory)
+	// Rust #45487: a supplied-history resume creates a thread with inherited
+	// context, so it acquires persistence like thread creation and releases the
+	// writer if initialization fails.
+	retention, retainErr := r.acquireLiveThreadRetention(record)
+	if retainErr != nil {
+		_ = r.store.Delete(record.ID)
+		return nil, retainErr
+	}
+	if retention != nil {
+		defer func() {
+			if err != nil {
+				_ = retention.Discard()
+				r.deleteThreadRollouts(record.ID)
+				_ = r.store.Delete(record.ID)
+				return
+			}
+			retention.Commit()
+		}()
+	}
 	if err := r.createThreadRollout(record, now); err != nil {
 		return nil, err
 	}
 	path := r.threadRolloutPath(record)
-	response := &ThreadResumeResponse{
+	response = &ThreadResumeResponse{
 		Thread:                  BuildThread(record, path, true),
 		Model:                   modelID,
 		ModelProvider:           stringPtrValue(params.ModelProvider),

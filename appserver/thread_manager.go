@@ -167,6 +167,70 @@ func (m *ThreadManager) RetainLiveThread(store *session.Store, record *session.R
 	return nil
 }
 
+// LiveThreadRetention owns a persistence acquisition until initialization
+// decides whether the thread really became live (Rust #45487
+// LiveThreadInitGuard).
+//
+// Rust keeps the guard for the whole session initialization and only commits
+// once it succeeds, so a failure after the writer was installed discards the
+// writer instead of leaving it owned by a thread the client never received.
+type LiveThreadRetention struct {
+	manager *ThreadManager
+	record  *session.Record
+	guard   *session.LiveThreadInitGuard
+	done    bool
+}
+
+// AcquireLiveThreadRetention opens persistence for a thread that is about to
+// become live. It returns nil when the thread is already retained.
+func (m *ThreadManager) AcquireLiveThreadRetention(store *session.Store, record *session.Record) (*LiveThreadRetention, error) {
+	if m == nil || record == nil {
+		return nil, nil
+	}
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	if _, ok := m.liveThreads[record.ID]; ok {
+		return nil, nil
+	}
+	guard, err := session.OpenLiveThread(store, record, threadUsesPaginatedHistory(record))
+	if err != nil {
+		return nil, writerOwnershipError(err)
+	}
+	return &LiveThreadRetention{manager: m, record: record, guard: guard}, nil
+}
+
+// Commit registers the acquired thread as live and hands its writer to the
+// manager.
+func (retention *LiveThreadRetention) Commit() {
+	if retention == nil || retention.done {
+		return
+	}
+	retention.done = true
+	manager := retention.manager
+	threadID := retention.record.ID
+	manager.liveThreadsMu.Lock()
+	if _, ok := manager.liveThreads[threadID]; ok {
+		manager.liveThreadsMu.Unlock()
+		_ = retention.guard.Discard()
+		return
+	}
+	manager.liveThreads[threadID] = &managedLiveThread{persistence: retention.guard.Commit()}
+	hook := manager.retainedHook
+	manager.liveThreadsMu.Unlock()
+	if hook != nil {
+		hook(string(threadID))
+	}
+}
+
+// Discard releases the acquisition without retaining the thread.
+func (retention *LiveThreadRetention) Discard() error {
+	if retention == nil || retention.done {
+		return nil
+	}
+	retention.done = true
+	return retention.guard.Discard()
+}
+
 // SetThreadRetainedHook installs the callback that arms idle eviction after a
 // thread becomes live (Rust #52081: persisted children created after a client
 // disconnect still receive lifecycle listeners).
