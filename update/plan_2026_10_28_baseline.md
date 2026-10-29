@@ -1664,6 +1664,25 @@ Memory storage size and memory-version telemetry (#45956, #45960, regression clo
   exclusion, symbolic links, both roots, mixed-root reads, and PowerShell
   spellings; `go test ./memories/... ./telemetry/` passes.
 
-Status after reconciliation: `2027 complete`, `399 not_applicable`,
-`465 audit_pending`, `255 regression_pending`, `3 partial`,
+### Hidden HTTP/3 TCP tunnel command (#45900) (Round 861)
+
+Hidden HTTP/3 TCP tunnel command (#45900, regression closure).
+
+- `cli/cli.go` registers the hidden `codex tcp-tunnel` command and
+  `cli/tcp_tunnel.go` parses its HTTP/3 CONNECT arguments.
+- `tcptunnel/args.go` requires the proxy origin to match an approved HTTPS
+  origin from the policy file and admits loopback targets; `tcptunnel/control.go`
+  reads the bearer token and bounded, non-forwarding `x-` headers from stdin,
+  acknowledges renewal with `AUTH_UPDATED`, reports `LISTENING`, and stops on
+  control-pipe closure.
+- `tcptunnel/tunnel.go` keeps a single listener across proxy reconnects without
+  replaying TCP streams, and `tcptunnel/diagnostics.go` emits bounded JSON
+  diagnostics with secret-free error codes.
+- `go test ./tcptunnel/` covers parsing, admission, credential renewal,
+  control-pipe closure, invalid input, header bounds, and a local HTTP/3 proxy
+  exercising token replacement, transport recovery, and draining; `./cli` tests
+  cover the hidden subcommand surface.
+
+Status after reconciliation: `2028 complete`, `399 not_applicable`,
+`465 audit_pending`, `254 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

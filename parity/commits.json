@@ -14343,9 +14343,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 7/7 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go carries the hidden `codex tcp-tunnel` command end to end: cli/cli.go maps CommandTcpTunnel and cli/tcp_tunnel.go parses the HTTP/3 CONNECT args, tcptunnel/args.go enforces the approved-HTTPS proxy origin and loopback target admission, tcptunnel/control.go reads bearer tokens plus bounded non-forwarding `x-` headers with AUTH_UPDATED/LISTENING notifications and shutdown on control-pipe close, tcptunnel/tunnel.go keeps the listener across proxy reconnects without replaying streams, and tcptunnel/diagnostics.go emits bounded JSON diagnostics; tests in tcptunnel/{args,control,diagnostics,tunnel}_test.go plus cli/cli_test.go cover parsing, admission, credential renewal, pipe closure, secret-free invalid input, and a local HTTP/3 proxy with reconnects, all passing"
    ]
   },
   {
