@@ -1846,6 +1846,25 @@ Allow a hosted Apps protocol-mode override while keeping user verification (#460
   extension registration selecting modern protocol without verification;
   `go test ./mcp -run 'ProtocolMode|UserVerification'` passes.
 
-Status after reconciliation: `2037 complete`, `400 not_applicable`,
-`458 audit_pending`, `251 regression_pending`, `3 partial`,
+### Expose the experimental rollout compression trigger (Round 872)
+
+Add the experimental rollout compression trigger endpoint (#46020, closure).
+
+- `rollout/compress` already exists in Go: `MethodRolloutCompress` is declared,
+  `schema.go` marks it experimental with a `RolloutCompressResponse`, the runtime
+  rejects calls from clients without `experimentalApi`, and
+  `Router.handleRolloutCompress` schedules the background worker with the `rpc`
+  trigger and immediately returns `{}`. It never reads
+  `features.local_thread_store_compression`, so the pass runs with the startup
+  flag disabled, and the worker's cold-file checks, run marker, and cooldown
+  still apply.
+- `appserver/rollout_compress_readback_like_rust_test.go` adds the upstream
+  lossless-readback assertion: the `.jsonl.zst` payload decodes to exactly the
+  original bytes and the plain path still resolves through `rollout.Load`. It
+  also pins the local-store guard, rejecting a router whose store has no local
+  codex home instead of scheduling a pass with nowhere to run.
+- `go test ./appserver -run RolloutCompress` passes.
+
+Status after reconciliation: `2038 complete`, `400 not_applicable`,
+`458 audit_pending`, `250 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

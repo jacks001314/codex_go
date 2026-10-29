@@ -14667,9 +14667,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go already ships the experimental rollout/compress endpoint: appserver/protocol.go defines MethodRolloutCompress, schema.go marks it experimental with a RolloutCompressResponse result, runtime_router rejects it without experimentalApi capability (`rollout/compress requires experimentalApi capability`), and Router.handleRolloutCompress schedules SpawnRolloutCompressionWorker with the rpc trigger and immediately returns RolloutCompressResponse{} without consulting features.local_thread_store_compression. appserver/rollout_compress_test.go covers scheduling with the startup flag off and capability enforcement; new appserver/rollout_compress_readback_like_rust_test.go adds the upstream lossless-readback assertion (decoded .jsonl.zst equals the original bytes and the plain path still resolves through rollout.Load) plus the non-local-store guard (a store with no local codex home is rejected with `rollout/compress requires a local codex home`); all rollout/compress appserver tests pass"
    ]
   },
   {
