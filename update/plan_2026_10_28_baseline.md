@@ -2589,8 +2589,8 @@ Session-only model and reasoning selection (#45831, complete).
 - #40504 is superseded by #42667 and therefore `not_applicable`; Go has no plan-type Trusted Access URL routing.
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
-Status after reconciliation: `2102 complete`, `410 not_applicable`,
-`425 audit_pending`, `210 regression_pending`, `2 partial`,
+Status after reconciliation: `2103 complete`, `410 not_applicable`,
+`424 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
 
 ### Read-only summary history fallback (Round 936)
@@ -2623,3 +2623,12 @@ Invalid `tui.keymap` bindings keep their specific validation reason (#49910, com
 - Added `TestKeymapConfigPreservesKeybindingValidationErrorsLikeRust` for unknown keys in single and list form, an invalid chord stroke, and an overly long chord, pinning both the reason and `tui.keymap.editor.insert_newline`.
 - Go's `codex mcp list` uses a standalone MCP store and does not construct the TUI keymap, so invalid bindings surface when the TUI loads its keymap instead of on every CLI command; the error-preservation behavior is otherwise aligned.
 - Verified with `go test ./tui -count=1` and `go vet ./tui`.
+
+### Multiline ANSI warning payloads (Round 939)
+
+Multiline ANSI input no longer risks payload-heavy warning logs (#49416, complete).
+
+- Rust replaced the rendered line contents in `ansi_escape_line`'s multiline warning with `input_bytes` and `line_count`.
+- Go has no `ansi_escape_line` warning path: hook rendering parses multiline ANSI through `historycell.ParseANSISpans` and `StyledLinesFromSpans`, which emit no log entries, so the leaking vector does not exist.
+- Existing `TestHookSystemMessageRendersANSIStyles` covers multiline styled warnings without raw escape leakage, and `TestHookSystemMessagePreservesBlankAndCombiningLines` covers trailing newlines and blank lines.
+- Verified with the targeted `tui/history_cell` tests; no code change was required.

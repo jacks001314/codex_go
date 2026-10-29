@@ -23818,9 +23818,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust ab84d71f (#49416) removed multiline payloads from the ansi_escape_line warning by logging only input_bytes and line_count. Go has no ansi_escape_line logging path: hook rendering uses historycell.ParseANSISpans and StyledLinesFromSpans, which accept multiline and trailing-newline input without emitting any warning, so the payload-leak vector cannot occur. TestHookSystemMessageRendersANSIStyles already covers a multiline styled warning and asserts no raw escape leaks, and TestHookSystemMessagePreservesBlankAndCombiningLines covers trailing newlines and blank lines. No Go code change was needed. Tests: go test ./tui/history_cell -run 'TestHookSystemMessageRendersANSIStyles|TestHookSystemMessagePreservesBlankAndCombiningLines' -count=1"
    ]
   },
   {
