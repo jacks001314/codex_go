@@ -88,7 +88,11 @@ type modelGuardianReviewer struct {
 	notify            func(threadID string, event *state.Event)
 	logAssessment     func(threadID string, event *state.Event)
 	interrupt         func(threadID, turnID, reason string)
-	transcript        func(threadID string) []string
+	// activeTurnID resolves the turn Guardian denial accounting applies to
+	// (Rust #44866): a review dispatched by a cell from an earlier turn counts
+	// against the turn that is active now. Nil keeps the review's own turn.
+	activeTurnID func(threadID string) string
+	transcript   func(threadID string) []string
 	// transcriptSelection carries the profile-retained host-attributed entries,
 	// including native encrypted agent messages that cannot be rendered as text
 	// (#49038), plus the retention omission and truncation observations.
@@ -281,11 +285,29 @@ func (r *modelGuardianReviewer) markScored(threadID string) {
 // recordNonDenial mirrors Rust's record_guardian_non_denial: only a completed
 // assessment with outcome deny counts as a policy denial, so an approved review
 // and every review failure reset the denial window instead.
-func (r *modelGuardianReviewer) recordNonDenial(turnID string) {
+func (r *modelGuardianReviewer) recordNonDenial(threadID, turnID string) {
 	if r == nil || r.breaker == nil {
 		return
 	}
-	r.breaker.RecordNonDenial(turnID)
+	target, ok := r.accountingTurnID(threadID, turnID)
+	if !ok {
+		return
+	}
+	r.breaker.RecordNonDenial(target)
+}
+
+// accountingTurnID picks the turn a Guardian decision applies to. Rust #44866
+// records against the session's active turn so a review from an earlier cell
+// still accounts for (and can interrupt) the turn that is running now; with no
+// active turn there is nothing to account.
+func (r *modelGuardianReviewer) accountingTurnID(threadID, turnID string) (string, bool) {
+	if r != nil && r.activeTurnID != nil {
+		if active := strings.TrimSpace(r.activeTurnID(strings.TrimSpace(threadID))); active != "" {
+			return active, true
+		}
+		return "", false
+	}
+	return strings.TrimSpace(turnID), true
 }
 
 // guardianReviewFailureInstructions mirrors Rust's REVIEW_FAILURE_INSTRUCTIONS.
@@ -875,7 +897,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 		// Rust records a non-denial for a failed review: only a completed
 		// assessment with outcome deny counts as a policy denial.
-		r.recordNonDenial(turnID)
+		r.recordNonDenial(threadID, turnID)
 		attribution.Decision = state.DecisionTimedOut
 		attribution.TerminalStatus = "timed_out"
 		attribution.FailureReason = "timeout"
@@ -897,7 +919,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		if finishErr == nil {
 			emit(threadID, completed)
 		}
-		r.recordNonDenial(turnID)
+		r.recordNonDenial(threadID, turnID)
 		attribution.Decision = state.DecisionAborted
 		attribution.TerminalStatus = "aborted"
 		attribution.FailureReason = "cancelled"
@@ -1033,7 +1055,7 @@ reviewAttempt:
 			message := guardianReviewFailureMessage(err.Error())
 			completed, _ := store.FailClosed(event.ID, rationale)
 			emit(threadID, completed)
-			r.recordNonDenial(turnID)
+			r.recordNonDenial(threadID, turnID)
 			attribution.Decision = state.DecisionDenied
 			attribution.TerminalStatus = "failed_closed"
 			attribution.FailureReason = "session_error"
@@ -1197,7 +1219,7 @@ reviewAttempt:
 		rationale := guardianReviewFailureRationale(message)
 		failedClosed, _ := store.FailClosed(event.ID, rationale)
 		emit(threadID, failedClosed)
-		r.recordNonDenial(turnID)
+		r.recordNonDenial(threadID, turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "stale_authorization"
@@ -1283,7 +1305,7 @@ reviewAttempt:
 		message := guardianReviewFailureMessage(err.Error())
 		failedClosed, _ := store.FailClosed(event.ID, rationale)
 		emit(threadID, failedClosed)
-		r.recordNonDenial(turnID)
+		r.recordNonDenial(threadID, turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "session_error"
@@ -1311,7 +1333,7 @@ reviewAttempt:
 		message := guardianReviewFailureMessage(err.Error())
 		failedClosed, _ := store.FailClosed(event.ID, rationale)
 		emit(threadID, failedClosed)
-		r.recordNonDenial(turnID)
+		r.recordNonDenial(threadID, turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "parse_error"
@@ -1502,14 +1524,18 @@ func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision
 		return
 	}
 	if decision == state.DecisionApproved {
-		r.recordNonDenial(turnID)
+		r.recordNonDenial(threadID, turnID)
 		return
 	}
 	policy := state.CircuitBreakerPolicyStandard
 	if r.specialty != nil && strings.TrimSpace(r.specialty(threadID, turnID)) == model.ModelSpecialtyCyber {
 		policy = state.CircuitBreakerPolicyCyber
 	}
-	action := r.breaker.RecordDenialWithPolicy(turnID, policy)
+	target, ok := r.accountingTurnID(threadID, turnID)
+	if !ok {
+		return
+	}
+	action := r.breaker.RecordDenialWithPolicy(target, policy)
 	if !action.InterruptTurn {
 		return
 	}
@@ -1521,7 +1547,7 @@ func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision
 		r.metrics.Counter(telemetry.GuardianDenialLimitReachedMetric, 1, nil)
 	}
 	if r.interrupt != nil {
-		r.interrupt(threadID, turnID, reason)
+		r.interrupt(threadID, target, reason)
 	}
 }
 
@@ -2209,6 +2235,20 @@ func guardianRequestPermissionProfile(values map[string]any) *RequestPermissionP
 		return nil
 	}
 	return &profile
+}
+
+// guardianActiveTurnID returns the thread's active turn for Guardian denial
+// accounting (Rust #44866). An empty result means the review belongs to a turn
+// that is no longer running, so nothing is counted against a newer turn.
+func (r *RuntimeRouter) guardianActiveTurnID(threadID string) string {
+	if r == nil {
+		return ""
+	}
+	active := r.threads.ActiveTurn(strings.TrimSpace(threadID))
+	if active == nil {
+		return ""
+	}
+	return strings.TrimSpace(active.TurnID)
 }
 
 func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID, reason string) {

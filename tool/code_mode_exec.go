@@ -124,7 +124,13 @@ type codeModeExecExecutor struct {
 	// cell. Callback call IDs are not guaranteed to encode their parent, so the
 	// cell ID is the authoritative routing key (Rust #44865).
 	remoteCellInvocations map[string]*Invocation
-	defaultYieldMS        int
+	// remoteClosedCells remembers cells the host closed, so a queued nested
+	// call whose originating execution was released is cancelled instead of
+	// being dispatched against the resuming turn (Rust #44866). The FIFO slice
+	// bounds the memory a long session retains.
+	remoteClosedCells map[string]struct{}
+	remoteClosedOrder []string
+	defaultYieldMS    int
 	// showCellOverhead mirrors Rust's features.code_mode.experimental_show_cell_overhead
 	// (#46288): report the code-mode host duration and harness overhead in the
 	// cell response header.
@@ -352,6 +358,7 @@ func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *
 		store: map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},
 		remoteCellOrigins: map[string]codeModeCallOrigin{}, remoteCellReleases: map[string]func(){},
 		remoteCellInvocations: map[string]*Invocation{},
+		remoteClosedCells:     map[string]struct{}{},
 		provider:              provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
 	}
 	if provider != nil {
@@ -948,6 +955,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		e.remoteCellReleases[response.CellID] = done
 		e.remoteCellInvocations[response.CellID] = invocation
 		e.remoteCellsMu.Unlock()
+		e.clearRemoteCellClosed(response.CellID)
 		// Rust's CellStarted fact: the exec call that created the cell is its
 		// parent.
 		e.observeCall(CodeModeCallObservation{
@@ -1144,6 +1152,62 @@ func (e *codeModeExecExecutor) registryForRemoteCell(cellID string) *Registry {
 	return registry
 }
 
+// codeModeNestedToolCallCancelled is Rust's delegate error for a queued nested
+// call whose step context was released before it could be dispatched.
+const codeModeNestedToolCallCancelled = "code mode nested tool call cancelled"
+
+// codeModeClosedCellRetention bounds the closed-cell markers a session keeps.
+const codeModeClosedCellRetention = 256
+
+// markRemoteCellClosedLocked records a closed cell so late nested calls cancel.
+// The caller holds remoteCellsMu.
+func (e *codeModeExecExecutor) markRemoteCellClosedLocked(cellID string) {
+	if e == nil || cellID == "" {
+		return
+	}
+	if e.remoteClosedCells == nil {
+		e.remoteClosedCells = map[string]struct{}{}
+	}
+	if _, exists := e.remoteClosedCells[cellID]; exists {
+		return
+	}
+	e.remoteClosedCells[cellID] = struct{}{}
+	e.remoteClosedOrder = append(e.remoteClosedOrder, cellID)
+	for len(e.remoteClosedOrder) > codeModeClosedCellRetention {
+		delete(e.remoteClosedCells, e.remoteClosedOrder[0])
+		e.remoteClosedOrder = e.remoteClosedOrder[1:]
+	}
+}
+
+// remoteCellClosed reports whether a cell's originating execution was released.
+func (e *codeModeExecExecutor) remoteCellClosed(cellID string) bool {
+	if e == nil || cellID == "" {
+		return false
+	}
+	e.remoteCellsMu.RLock()
+	_, closed := e.remoteClosedCells[cellID]
+	e.remoteCellsMu.RUnlock()
+	return closed
+}
+
+// clearRemoteCellClosed forgets a closed marker when the cell id starts again.
+func (e *codeModeExecExecutor) clearRemoteCellClosed(cellID string) {
+	if e == nil || cellID == "" {
+		return
+	}
+	e.remoteCellsMu.Lock()
+	if _, closed := e.remoteClosedCells[cellID]; closed {
+		delete(e.remoteClosedCells, cellID)
+		for index, value := range e.remoteClosedOrder {
+			if value == cellID {
+				e.remoteClosedOrder = append(e.remoteClosedOrder[:index], e.remoteClosedOrder[index+1:]...)
+				break
+			}
+		}
+	}
+	e.remoteCellsMu.Unlock()
+}
+
 func (e *codeModeExecExecutor) forgetRemoteCell(cellID string) {
 	if e == nil || strings.TrimSpace(cellID) == "" {
 		return
@@ -1154,6 +1218,7 @@ func (e *codeModeExecExecutor) forgetRemoteCell(cellID string) {
 	delete(e.remoteCellInvocations, cellID)
 	release := e.remoteCellReleases[cellID]
 	delete(e.remoteCellReleases, cellID)
+	e.markRemoteCellClosedLocked(cellID)
 	e.remoteCellsMu.Unlock()
 	if release != nil {
 		release()
@@ -1241,6 +1306,16 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 	if d == nil || d.exec == nil {
 		return nil, fmt.Errorf("code mode tool registry is unavailable")
 	}
+	// Rust #44866: a cell can outlive its turn, but a queued nested call whose
+	// originating step context was released must be cancelled rather than
+	// dispatched against the resuming turn's tools and approvals.
+	if d.exec.remoteCellClosed(strings.TrimSpace(call.CellID)) {
+		return nil, fmt.Errorf("%s", codeModeNestedToolCallCancelled)
+	}
+	parent := d.invocationForCell(call.CellID, call.RuntimeToolCallID)
+	if parent == nil {
+		return nil, fmt.Errorf("%s", codeModeNestedToolCallCancelled)
+	}
 	registry := d.exec.registryForRemoteCell(call.CellID)
 	if registry == nil {
 		return nil, fmt.Errorf("code mode tool registry is unavailable")
@@ -1259,7 +1334,6 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 	} else {
 		payload.Arguments = string(call.Input)
 	}
-	parent := d.invocationForCell(call.CellID, call.RuntimeToolCallID)
 	invocationContext := map[string]any(nil)
 	if parent != nil {
 		invocationContext = cloneInvocationContext(parent.Context)
