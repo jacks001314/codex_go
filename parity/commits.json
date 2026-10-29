@@ -14871,9 +14871,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Streamed mermaid parity for #46054: markdown.MermaidFenceTailStart reports the final top-level block's opening line when it contains a mermaid fence (standalone, unclosed, list item and blockquote cases), and streamCore.activeTailSourceStart now includes it as a mutable-tail candidate so a closing fence, resize and theme change re-render the diagram before it enters scrollback; the next top-level block releases it. Static diagram rendering, theme node/edge colors and source fallbacks were already ported. Tests: tui/markdown/mermaid_streaming_like_rust_test.go, tui/streaming/mermaid_tail_like_rust_test.go; go test ./tui/... -count=1; go build ./..."
    ]
   },
   {

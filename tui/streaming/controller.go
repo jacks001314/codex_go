@@ -372,6 +372,12 @@ func (c *streamCore) activeTailSourceStart() (int, bool) {
 	if markerStart, ok := bareListMarkerSourceStart(c.rawSource); ok && (!held || markerStart < start) {
 		start, held = markerStart, true
 	}
+	// Rust #46054: a mermaid fence in the final top-level block stays mutable so
+	// the closing fence, a resize and a theme change can swap source and diagram
+	// before the block enters scrollback.
+	if mermaidStart, ok := markdown.MermaidFenceTailStart(c.rawSource); ok && (!held || mermaidStart < start) {
+		start, held = mermaidStart, true
+	}
 	// Rust #45501 (streaming.rs): a cached prefix must never end inside a
 	// display equation, or the streamed copy would diverge from a whole-source
 	// render once the closer arrives. Without a line cache the equivalent is to

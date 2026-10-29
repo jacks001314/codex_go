@@ -5,6 +5,9 @@ import (
 
 	"codex_go/mermaid"
 	codextui "codex_go/tui"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	gmtext "github.com/yuin/goldmark/text"
 )
 
 // Rust parity: codex-rs/tui/src/markdown_render/mermaid.rs. Bounded,
@@ -217,4 +220,110 @@ func skipFencePrefixes(line string) string {
 		trimmed = strings.TrimLeft(trimmed, " \t")
 	}
 	return trimmed
+}
+
+// MermaidFenceTailStart mirrors Rust's StreamingMarkdownRender::mermaid_start
+// (markdown_render/streaming.rs, #46054): a mermaid fence keeps its whole
+// top-level block mutable while that block is the last one, so a closing fence,
+// a terminal resize and a render-mode change can replace the source with a
+// diagram (and back) without the block having entered scrollback.
+func MermaidFenceTailStart(source string) (int, bool) {
+	if !strings.Contains(source, "mermaid") {
+		return 0, false
+	}
+	data := []byte(source)
+	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	last := document.LastChild()
+	if last == nil {
+		return 0, false
+	}
+	containsMermaid := false
+	_ = ast.Walk(last, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		fence, ok := node.(*ast.FencedCodeBlock)
+		if ok && codeLanguageToken(string(fence.Language(data))) == "mermaid" {
+			containsMermaid = true
+		}
+		return ast.WalkContinue, nil
+	})
+	if !containsMermaid {
+		return 0, false
+	}
+	return mermaidBlockLineStart(last, data)
+}
+
+// mermaidBlockLineStart returns the beginning of the line that opens the block,
+// so a list or blockquote item keeps its prefix in the mutable tail. A fenced
+// code block's first leaf line is its content, so the fence opener is one line
+// earlier.
+func mermaidBlockLineStart(block ast.Node, data []byte) (int, bool) {
+	first := -1
+	_ = ast.Walk(block, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		lines := blockLeafLines(node)
+		if lines == nil || lines.Len() == 0 {
+			return ast.WalkContinue, nil
+		}
+		offset := lines.At(0).Start
+		if _, fenced := node.(*ast.FencedCodeBlock); fenced {
+			offset = previousLineStart(data, offset)
+		}
+		if first < 0 || offset < first {
+			first = offset
+		}
+		return ast.WalkContinue, nil
+	})
+	if first < 0 {
+		// An empty fence has no content segments; fall back to the last mermaid
+		// fence opener in the source, which is this final block's opening line.
+		opener, ok := lastMermaidFenceOpenerLineStart(data)
+		return opener, ok
+	}
+	return lineStartAt(data, first), true
+}
+
+func lineStartAt(data []byte, offset int) int {
+	if offset < 0 || offset > len(data) {
+		return 0
+	}
+	return strings.LastIndexByte(string(data[:offset]), '\n') + 1
+}
+
+func previousLineStart(data []byte, offset int) int {
+	start := lineStartAt(data, offset)
+	if start <= 0 {
+		return 0
+	}
+	return lineStartAt(data, start-1)
+}
+
+func lastMermaidFenceOpenerLineStart(data []byte) (int, bool) {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	found := -1
+	offset := 0
+	for _, line := range lines {
+		if _, length := fenceOpeningRun(line); length > 0 {
+			trimmed := skipFencePrefixes(line)
+			if codeLanguageToken(strings.TrimSpace(trimmed[length:])) == "mermaid" {
+				found = offset
+			}
+		}
+		offset += len(line) + 1
+	}
+	return found, found >= 0
+}
+
+// blockLeafLines returns a block leaf's line segments. Inline nodes also expose
+// Lines(), but calling it there panics, so only block leaves are accepted.
+func blockLeafLines(node ast.Node) *gmtext.Segments {
+	switch node.(type) {
+	case *ast.Paragraph, *ast.TextBlock, *ast.Heading, *ast.FencedCodeBlock, *ast.CodeBlock, *ast.HTMLBlock:
+		return node.Lines()
+	default:
+		return nil
+	}
 }

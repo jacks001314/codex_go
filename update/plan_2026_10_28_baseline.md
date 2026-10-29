@@ -1937,6 +1937,24 @@ Two regression contracts pin the remaining semantics:
 
 Verification: `go test ./turn ./appserver -run 'Compaction|ExecutedToolCall|CodeMode' -count=1`.
 
-Status after reconciliation: `2041 complete`, `401 not_applicable`,
-`455 audit_pending`, `249 regression_pending`, `3 partial`,
+### Keep streamed Mermaid diagrams mutable (Round 877)
+
+# Round 877 - streamed Mermaid diagrams in the TUI
+
+Rust #46054 (`f915e0de0794db24c0ff1419933f81028887069e`) renders completed mermaid fences as diagrams and keeps a streamed diagram mutable while its top-level block is last, so a closing fence, resize or render-mode change can update it before it enters scrollback.
+
+## What Go already had
+
+`tui/markdown/mermaid.go` already rendered completed mermaid fences through the Go `mermaid` package with theme node/edge colors, kept source for unclosed, invalid, unsupported and oversized diagrams, and preserved the original source through `collectSourceCodeBlocks`. Table, bare-list-marker and display-math holdbacks already fed `activeTailSourceStart`.
+
+## Gap closed
+
+- New `markdown.MermaidFenceTailStart` mirrors Rust's `StreamingMarkdownRender::mermaid_start`: the final top-level block's opening line is reported when that block contains a mermaid fence, including fences inside list items and blockquotes, and including unclosed fences.
+- `streamCore.activeTailSourceStart` now treats that offset as one more mutable-tail candidate (earliest wins, and the display-math boundary is computed from the combined start), so the diagram stays out of scrollback until another top-level block starts.
+- Tests cover the offset probe (standalone, unclosed, list, blockquote, info string, released by a later block, non-mermaid, prose) and the streaming lifecycle: mutable through the closing fence and two resizes, released by the next block, original source retained, and the diagram re-rendered at both widths instead of leaking fence markers.
+
+Verification: `go test ./tui/... -count=1`; `go build ./...`.
+
+Status after reconciliation: `2042 complete`, `401 not_applicable`,
+`455 audit_pending`, `248 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
