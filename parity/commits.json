@@ -14835,9 +14835,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Compaction prompts now have pinned Go parity for #46044: AttachToCompactionPrompt keeps captured Direct records with their completeness marker, and shortened compaction retries neither attach stray metadata nor discard observations, so a later normal sampling request still emits the pending inventory and, after commit, the retained inventory with tool_calls_complete. The per-scope metadata budget from the original commit was superseded by #49401, so Go matching HEAD intentionally performs no compaction-time bounding. Appserver remote v2 compaction already routed through AttachToCompactionPrompt. New tests: turn/executed_tool_calls_compaction_retry_like_rust_test.go; go test ./turn ./appserver -run Compaction|ExecutedToolCall|CodeMode -count=1."
    ]
   },
   {

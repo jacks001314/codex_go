@@ -1916,6 +1916,27 @@ The service-side `registered.rs` portion is not applicable: Go has no Windows sa
 
 Verification: `go test ./sandbox/windowssandbox/... -count=1`; `go build ./...`; linux/darwin cross-build of the sandbox tree.
 
-Status after reconciliation: `2040 complete`, `401 not_applicable`,
-`455 audit_pending`, `250 regression_pending`, `3 partial`,
+### Attach Code Mode metadata to compaction prompts (Round 876)
+
+# Round 876 - Code Mode metadata in compaction prompts
+
+Rust #46044 (`20f4d12f76fc0dbe77bb4052e8acc1615bef5f5d`) attaches recorded Code Mode tool metadata to local and remote compaction prompts, keeps captured Direct records, and keeps observations omitted from shortened compaction retries available for the next normal sampling request.
+
+## What Go already had
+
+`ExecutedToolCallRecorder.AttachToCompactionPrompt` already mirrored this, and `appserver/compact_remote.go` already routed the remote v2 compaction prompt through it. `attachPendingToPrompt(items, false)` keeps the pending/retained state and does not prune Direct observations for a compaction request, and `restoreDirectCallObservations` re-attaches recorded Direct calls.
+
+The per-scope metadata budget from the original commit was superseded upstream by Rust #49401 (no aggregate prompt cap), so Go matches current HEAD by not bounding at compaction time.
+
+## Gap closed
+
+Two regression contracts pin the remaining semantics:
+
+- A compaction prompt with capture enabled keeps a captured Direct record and its completeness marker instead of stripping or rebuilding it.
+- A shortened compaction attempt that cannot see the exec output neither grows metadata nor drops observations: the next normal sampling request still attaches the pending inventory, and after commit plus a second shortened retry the retained inventory and completeness marker are re-emitted.
+
+Verification: `go test ./turn ./appserver -run 'Compaction|ExecutedToolCall|CodeMode' -count=1`.
+
+Status after reconciliation: `2041 complete`, `401 not_applicable`,
+`455 audit_pending`, `249 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
