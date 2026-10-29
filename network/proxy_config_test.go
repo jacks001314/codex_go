@@ -468,7 +468,7 @@ func TestDomainPatternAllows(t *testing.T) {
 
 func TestProxyEnvOverrides(t *testing.T) {
 	env := map[string]string{"PRESERVED": "value"}
-	prepared := PrepareProxyManagedNetwork(env, MustProxyTCPAddr("127.0.0.1", 3128), MustProxyTCPAddr("127.0.0.1", 8081), true, false)
+	prepared := PrepareProxyManagedNetwork(env, MustProxyTCPAddr("127.0.0.1", 3128), MustProxyTCPAddr("127.0.0.1", 8081), true, ProxySettings{})
 	if prepared.Env["PRESERVED"] != "value" {
 		t.Fatalf("base env not preserved")
 	}

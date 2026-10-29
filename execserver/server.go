@@ -618,6 +618,12 @@ type ShellSnapshotRequest struct {
 type ManagedNetworkSandboxContext struct {
 	LoopbackPorts     []uint16 `json:"loopbackPorts"`
 	AllowLocalBinding bool     `json:"allowLocalBinding"`
+	// AllowUnixSockets and DangerouslyAllowAllUnixSockets carry the effective
+	// Unix socket policy from the proxy preparation (Rust #45534). The Linux
+	// sandbox helper allows standalone `AF_UNIX` sockets only for the explicit
+	// allow-all grant. Missing fields deserialize to the restrictive values.
+	AllowUnixSockets               []string `json:"allowUnixSockets"`
+	DangerouslyAllowAllUnixSockets bool     `json:"dangerouslyAllowAllUnixSockets"`
 }
 
 type FileSystemSandboxContext struct {
@@ -2399,8 +2405,10 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 	}
 	sandboxContext := prepared.SandboxContextSnapshot()
 	preparedParams.ManagedNetwork = &ManagedNetworkSandboxContext{
-		LoopbackPorts:     append([]uint16(nil), sandboxContext.LoopbackPorts...),
-		AllowLocalBinding: sandboxContext.AllowLocalBinding,
+		LoopbackPorts:                  append([]uint16(nil), sandboxContext.LoopbackPorts...),
+		AllowLocalBinding:              sandboxContext.AllowLocalBinding,
+		AllowUnixSockets:               append([]string(nil), sandboxContext.AllowUnixSockets...),
+		DangerouslyAllowAllUnixSockets: sandboxContext.DangerouslyAllowAllUnixSockets,
 	}
 	preparedParams.EnforceManagedNetwork = true
 	return &preparedParams, prepared, policyCancel, nil
@@ -2504,6 +2512,10 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 	if err != nil {
 		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
 	}
+	managedNetworkJSON, err := managedNetworkSandboxContextJSON(params)
+	if err != nil {
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("invalid managed network context: %v", err))
+	}
 	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
 		ResolvedPermissionProfile:     profile,
 		ResolvedPermissionProfileID:   "exec-server",
@@ -2511,6 +2523,7 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 		CWD:                           cwd,
 		UseLegacyLandlock:             sandboxContext.UseLegacyLandlock,
 		AllowNetworkForProxy:          params.EnforceManagedNetwork,
+		ManagedNetworkJSON:            managedNetworkJSON,
 		AllowedSymlinkedCodexHome:     allowedSymlinkedCodexHome,
 		Command:                       command,
 	})
@@ -2527,13 +2540,15 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 	plan.CWD = cwd
 	_ = sandboxCWD
 	if runtime.GOOS == "linux" && sandboxCWD != cwd {
-		wrapped, wrapErr := sandbox.CreateLinuxSandboxCommandArgsForPermissionProfileJSON(
+		wrapped, wrapErr := sandbox.CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork(
+			"",
 			command,
 			cwd,
 			profileJSON,
 			sandboxCWD,
 			sandboxContext.UseLegacyLandlock,
 			params.EnforceManagedNetwork,
+			managedNetworkJSON,
 		)
 		if wrapErr != nil {
 			return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", wrapErr))
@@ -2541,6 +2556,21 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 		plan.Command = wrapped
 	}
 	return plan.Command, plan.CWD, plan.SandboxType, nil
+}
+
+// managedNetworkSandboxContextJSON serializes the prepared managed-network
+// context for the Linux sandbox helper. Rust #45534 hands the context to the
+// helper on proxy-routed launches, and the helper treats its presence as the
+// proxy-mode switch and reads `dangerouslyAllowAllUnixSockets` from it.
+func managedNetworkSandboxContextJSON(params *ExecParams) (string, error) {
+	if params == nil || !params.EnforceManagedNetwork || params.ManagedNetwork == nil {
+		return "", nil
+	}
+	encoded, err := json.Marshal(params.ManagedNetwork)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func nativeExecServerPath(raw string, label string) (string, error) {

@@ -129,7 +129,7 @@ func startProxyManagedNetworkWithClient(ctx context.Context, config ProxyConfig,
 	if server.socksListener != nil {
 		socksAddr = *server.socksListener.Addr().(*net.TCPAddr)
 	}
-	prepared := PrepareProxyManagedNetwork(baseEnv, httpAddr, socksAddr, server.socksListener != nil, config.Network.AllowLocalBinding)
+	prepared := PrepareProxyManagedNetwork(baseEnv, httpAddr, socksAddr, server.socksListener != nil, config.Network)
 	server.mitm.ApplyChildEnv(prepared.Env)
 	server.runtimePolicy().broker.SetDestinationHints(baseEnv)
 	server.runtimePolicy().broker.VirtualizeChildEnv(prepared.Env)

@@ -952,8 +952,10 @@ func unifiedExecManagedNetworkContext(value *network.ProxyManagedNetworkSandboxC
 		return nil
 	}
 	return &execserver.ManagedNetworkSandboxContext{
-		LoopbackPorts:     append([]uint16(nil), value.LoopbackPorts...),
-		AllowLocalBinding: value.AllowLocalBinding,
+		LoopbackPorts:                  append([]uint16(nil), value.LoopbackPorts...),
+		AllowLocalBinding:              value.AllowLocalBinding,
+		AllowUnixSockets:               append([]string(nil), value.AllowUnixSockets...),
+		DangerouslyAllowAllUnixSockets: value.DangerouslyAllowAllUnixSockets,
 	}
 }
 

@@ -32,7 +32,8 @@ func TestExecServerTTYUsesRealTerminalAndPTYStreamLikeRust(t *testing.T) {
 		if chunk.Stream != "pty" {
 			t.Fatalf("TTY chunk stream = %q", chunk.Stream)
 		}
-		data, decodeErr := base64.StdEncoding.DecodeString(chunk.Chunk)
+		// outputChunk.Chunk holds the raw bytes; the wire form is base64.
+		data, decodeErr := base64.StdEncoding.DecodeString(string(chunk.Chunk))
 		if decodeErr != nil {
 			t.Fatalf("DecodeString() error = %v", decodeErr)
 		}

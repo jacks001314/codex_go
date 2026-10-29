@@ -115,6 +115,13 @@ func ApplyProxyEnvOverrides(env map[string]string, httpAddr net.TCPAddr, socksAd
 type ProxyManagedNetworkSandboxContext struct {
 	LoopbackPorts     []uint16 `json:"loopbackPorts"`
 	AllowLocalBinding bool     `json:"allowLocalBinding"`
+	// AllowUnixSockets and DangerouslyAllowAllUnixSockets carry the effective
+	// Unix socket policy with the launch (Rust #45534). The Linux sandbox
+	// helper only allows standalone `AF_UNIX` sockets when the policy grants
+	// them; path-only grants stay denied there. Both stay empty on Windows,
+	// matching Rust's `cfg!(target_os = "windows")` preparation.
+	AllowUnixSockets               []string `json:"allowUnixSockets"`
+	DangerouslyAllowAllUnixSockets bool     `json:"dangerouslyAllowAllUnixSockets"`
 }
 
 type PreparedProxyManagedNetwork struct {
@@ -165,7 +172,7 @@ func (p *PreparedProxyManagedNetwork) ReloadConfig(config ProxyConfig) error {
 	if err := p.server.ReloadConfig(config); err != nil {
 		return err
 	}
-	prepared := PrepareProxyManagedNetwork(p.baseEnv, p.httpAddr, p.socksAddr, p.socksEnabled, config.Network.AllowLocalBinding)
+	prepared := PrepareProxyManagedNetwork(p.baseEnv, p.httpAddr, p.socksAddr, p.socksEnabled, config.Network)
 	p.server.mitm.ApplyChildEnv(prepared.Env)
 	p.server.runtimePolicy().broker.VirtualizeChildEnv(prepared.Env)
 	p.mu.Lock()
@@ -308,22 +315,31 @@ func (p *PreparedProxyManagedNetwork) environmentSnapshot() []*PreparedProxyMana
 	return out
 }
 
-func PrepareProxyManagedNetwork(baseEnv map[string]string, httpAddr net.TCPAddr, socksAddr net.TCPAddr, socksEnabled bool, allowLocalBinding bool) PreparedProxyManagedNetwork {
+func PrepareProxyManagedNetwork(baseEnv map[string]string, httpAddr net.TCPAddr, socksAddr net.TCPAddr, socksEnabled bool, settings ProxySettings) PreparedProxyManagedNetwork {
 	env := make(map[string]string, len(baseEnv)+16)
 	for key, value := range baseEnv {
 		env[key] = value
 	}
-	ApplyProxyEnvOverrides(env, httpAddr, socksAddr, socksEnabled, allowLocalBinding)
+	ApplyProxyEnvOverrides(env, httpAddr, socksAddr, socksEnabled, settings.AllowLocalBinding)
 	ports := []uint16{uint16(httpAddr.Port)}
 	if socksEnabled && socksAddr.Port != httpAddr.Port {
 		ports = append(ports, uint16(socksAddr.Port))
 	}
+	sandboxContext := ProxyManagedNetworkSandboxContext{
+		LoopbackPorts:     ports,
+		AllowLocalBinding: settings.AllowLocalBinding,
+	}
+	// Rust #45534 prepares the Unix socket policy only on Unix executors; a
+	// Windows sandbox never receives it.
+	if runtime.GOOS != "windows" {
+		// Keep the wire shape identical to Rust's `Vec::new()`: an empty grant
+		// serializes as `[]`, never as `null`.
+		sandboxContext.AllowUnixSockets = append([]string{}, settings.AllowUnixSockets()...)
+		sandboxContext.DangerouslyAllowAllUnixSockets = boolPointerValue(settings.DangerouslyAllowAllUnixSockets)
+	}
 	return PreparedProxyManagedNetwork{
-		Env: env,
-		SandboxContext: ProxyManagedNetworkSandboxContext{
-			LoopbackPorts:     ports,
-			AllowLocalBinding: allowLocalBinding,
-		},
+		Env:            env,
+		SandboxContext: sandboxContext,
 	}
 }
 

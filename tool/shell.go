@@ -760,8 +760,10 @@ func cloneManagedNetworkSandboxContext(value *network.ProxyManagedNetworkSandbox
 		return nil
 	}
 	return &network.ProxyManagedNetworkSandboxContext{
-		LoopbackPorts:     append([]uint16(nil), value.LoopbackPorts...),
-		AllowLocalBinding: value.AllowLocalBinding,
+		LoopbackPorts:                  append([]uint16(nil), value.LoopbackPorts...),
+		AllowLocalBinding:              value.AllowLocalBinding,
+		AllowUnixSockets:               append([]string(nil), value.AllowUnixSockets...),
+		DangerouslyAllowAllUnixSockets: value.DangerouslyAllowAllUnixSockets,
 	}
 }
 
