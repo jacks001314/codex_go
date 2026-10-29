@@ -43,6 +43,8 @@ const (
 	// stagingDirPrefix names the temporary directory a package is staged in
 	// before it is renamed into releases.
 	stagingDirPrefix = ".staging."
+	// macOSBundleDirname is the app bundle a provisioned macOS CLI runs from.
+	macOSBundleDirname = "CodexCLI.app"
 )
 
 // daemonPackageManifest is the part of codex-package.json the daemon validates.
@@ -566,7 +568,7 @@ func ensurePackageUnchanged(source, stage string, manifestBytes []byte, runningI
 	if err != nil {
 		return err
 	}
-	stagedIdentity, err := install.ExecutableIdentityFromFile(filepath.Join(stage, filepath.FromSlash(manifest.Entrypoint)))
+	stagedIdentity, err := install.ExecutableIdentityFromFile(stagedIdentityExecutable(runtime.GOOS, stage, manifest.Entrypoint))
 	if err != nil {
 		return fmt.Errorf("failed to read staged executable identity: %w", err)
 	}
@@ -576,6 +578,20 @@ func ensurePackageUnchanged(source, stage string, manifestBytes []byte, runningI
 		return errors.New("the CLI package changed while preparing the daemon or differs from the running executable")
 	}
 	return nil
+}
+
+// stagedIdentityExecutable is the staged executable whose contents must match
+// the running CLI. A provisioned macOS bundle runs from
+// CodexCLI.app/Contents/MacOS/codex rather than the packaged launcher, so its
+// identity is read from there (Rust #45558); every other layout uses the
+// manifest entrypoint.
+func stagedIdentityExecutable(goos, stage, entrypoint string) string {
+	if goos == "darwin" {
+		if info, err := os.Stat(filepath.Join(stage, macOSBundleDirname)); err == nil && info.IsDir() {
+			return filepath.Join(stage, macOSBundleDirname, "Contents", "MacOS", "codex")
+		}
+	}
+	return filepath.Join(stage, filepath.FromSlash(entrypoint))
 }
 
 // followsStandaloneLatest mirrors Rust's follows_latest: the selected release
