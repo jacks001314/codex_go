@@ -135,8 +135,9 @@ func ServerVersionNoticeKey(kind RemoteConnectionKind, endpoint string, serverHo
 }
 
 // PendingServerVersionNotice returns the notice and its dedup key when the
-// connected server is an older official stable release and the same notice has
-// not already been shown (Rust #43622).
+// connected server's version differs from the client's (older release or a
+// different version line, Rust #43622/#46673) and the same notice has not
+// already been shown.
 func PendingServerVersionNotice(kind RemoteConnectionKind, endpoint string, serverHome string, client string, server string, offerUpdate bool, lastShown string) (*ServerVersionNotice, string, bool) {
 	message, ok := ServerVersionNoticeMessage(client, &server)
 	if !ok {

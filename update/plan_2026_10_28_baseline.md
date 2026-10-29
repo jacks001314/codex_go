@@ -2301,6 +2301,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - The policy is now factored into `PackageIdentityDecision` so the registered-core rejection is testable, and `app_package_decision_like_rust_test.go` adds `TestPackageIdentityDecisionLikeRust` covering identity present (with and without registered core), an unpackaged caller, and the rejection branch.
 - Verified with `go build ./...`, `GOOS=darwin go build ./sandbox/windowssandbox`, and `go test ./sandbox/windowssandbox/... -count=1`.
 
-Status after reconciliation: `2076 complete`, `408 not_applicable`,
-`434 audit_pending`, `227 regression_pending`, `4 partial`,
+### Extend server version notices to prerelease and local clients (Round 915)
+
+- Upstream (`a5290028a293`, #46673) extends server version notices to prerelease and local clients: stable clients compare against older releases including prereleases, prerelease clients order within their release line and report other lines as different, local clients (`0.0.0` or build metadata) report mismatches, malformed versions stay silent.
+- Go already implements this in `tui/update_versions.go` (`ServerVersionNoticeKindFor`), `tui/status/remote_connection.go` ("older than"/"different from" plus dedup key), and `tui/tea/server_version_notice.go` (`<` / not-equal overview indicator with `/daemon` guidance, honouring `tui.show_server_version_notice`).
+- Regression coverage exists: `tui/update_versions_test.go` (`TestStableClientsOnlyWarnForOlderReleasesLikeRust`, `TestPrereleaseClientsCompareWithinTheSameReleaseLineLikeRust`, `TestPrereleaseAndLocalClientsWarnForMismatchesLikeRust`, `TestUnknownOrMalformedVersionsDoNotProduceNoticesLikeRust`) and `tui/status/remote_connection_notice_test.go` (`TestServerVersionNoticeUsesClientReleasePolicyLikeRust`, `TestPendingServerVersionNoticeDedupAndServiceIdentity`).
+- Updated the stale `PendingServerVersionNotice` doc comment to describe version differences rather than older stable releases.
+- Verified with `go test ./tui -run Version` and `go test ./tui/status -run ServerVersion`.
+
+Status after reconciliation: `2077 complete`, `408 not_applicable`,
+`434 audit_pending`, `226 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -16661,9 +16661,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Already implemented in Go and verified: tui/update_versions.go ServerVersionNoticeKindFor parses semantic versions, orders stable clients against released servers including prereleases, orders prerelease clients only within their release line, reports other lines plus local builds (0.0.0 or build metadata) as different, and returns no notice for malformed input; tui/status/remote_connection.go renders older than / different from with the dedup key, and tui/tea/server_version_notice.go renders the < or not-equal overview indicator with /daemon guidance while honouring tui.show_server_version_notice. Regression coverage: tui/update_versions_test.go TestStableClientsOnlyWarnForOlderReleasesLikeRust, TestPrereleaseClientsCompareWithinTheSameReleaseLineLikeRust, TestPrereleaseAndLocalClientsWarnForMismatchesLikeRust, TestUnknownOrMalformedVersionsDoNotProduceNoticesLikeRust; tui/status/remote_connection_notice_test.go TestServerVersionNoticeUsesClientReleasePolicyLikeRust and TestPendingServerVersionNoticeDedupAndServiceIdentity. Updated the stale PendingServerVersionNotice doc comment to describe version differences instead of older stable releases. Verified: go test ./tui -run Version and go test ./tui/status -run ServerVersion."
    ]
   },
   {
