@@ -903,6 +903,14 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 		return nil, err
 	}
 	agent.StoreOptions = r.authStoreOptions()
+	// Rust #45556: the thread manager owns the configured attachment store and
+	// hands it to every session it spawns, so a turn's prepared images upload
+	// through the host backend instead of the inline default. Delegated
+	// subagent sessions are turns on this same router, so each inherits the
+	// same store from the thread manager.
+	if r.threads != nil {
+		agent.ImageStore = r.threads.AttachmentStore()
+	}
 	agent.AgentIdentity = agentIdentityOptionsForAppTurn(cfg)
 	agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
 	agent.OutputTokenReplayEnabled = features.Enabled(cfg.FeatureSettings(), "output_token_replay")
