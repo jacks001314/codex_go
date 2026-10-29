@@ -1,7 +1,10 @@
 package app
 
+import "codex_go/appserver"
+
 type ThreadSessionState struct {
 	ThreadID                string
+	WindowsSandboxHost      WindowsSandboxHost
 	ForkedFromID            *string
 	ForkParentTitle         *string
 	ThreadName              *string
@@ -68,6 +71,9 @@ type ThreadReadSnapshot struct {
 	CWD           string
 	Path          *string
 	ReadModel     *string
+	// Environments are the executors the thread reported (Rust #45813). A
+	// missing or empty list classifies the host as unknown.
+	Environments []appserver.ThreadEnvironment
 }
 
 func SyncActiveThreadServiceTierToCachedSession(cache *ThreadSessionCache, serviceTier *string) {
@@ -134,6 +140,7 @@ func SessionStateForThreadRead(primary *ThreadSessionState, defaults ThreadSessi
 	}
 
 	session.ThreadID = thread.ThreadID
+	session.WindowsSandboxHost = HostFromEnvironments(thread.Environments)
 	session.ThreadName = cloneStringPointer(thread.ThreadName)
 	session.ModelProviderID = thread.ModelProvider
 	session.setCWDRetargetingImplicitRuntimeWorkspaceRoot(thread.CWD)
