@@ -774,6 +774,15 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if release := r.blocking.enter(threadID); release != nil {
 		defer release()
 	}
+	// Rust #45693 (guardian-reviewer/src/routing.rs ReviewRequest::decide):
+	// cancellation is checked before the routing contributors run, and a
+	// cancelled operation reports Abort rather than a fast approval. Go's
+	// reviewer has no contributor registry or cached approvals, so the
+	// equivalent guard is this single check ahead of the full-access and
+	// user-approval-mode fast paths.
+	if ctx != nil && ctx.Err() != nil {
+		return state.DecisionAborted, "", nil
+	}
 	// Rust #57433: a native tool call keeps review accounting and metrics but has
 	// no action-specific client assessment event, so its started/completed
 	// notifications are suppressed while the review still runs.
