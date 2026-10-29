@@ -550,7 +550,7 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	}
 	if showUsageLink {
 		rows = append(rows,
-			statusCardRow{text: indent + AnnotateCompleteWebURLsInLine("Visit https://chatgpt.com/codex/settings/usage for up-to-date"), continuation: indent},
+			statusCardRow{text: indent + AnnotateCompleteWebURLsInLine("Visit https://chatgpt.com/settings/usage for up-to-date"), continuation: indent},
 			statusCardRow{text: indent + "information on rate limits and credits", continuation: indent},
 			statusCardRow{},
 		)

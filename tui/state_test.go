@@ -379,7 +379,7 @@ func TestValidApprovalPolicy(t *testing.T) {
 // usage link renders as a terminal hyperlink whose complete destination is
 // preserved.
 func TestStatusCardLinksChatGPTUsageURLLikeRust(t *testing.T) {
-	const url = "https://chatgpt.com/codex/settings/usage"
+	const url = "https://chatgpt.com/settings/usage"
 	card := NewState(nil).RenderStatusCardWidth(100)
 	if !strings.Contains(card, "\x1b]8;;"+url+"\x07") {
 		t.Fatalf("status card missing hyperlink to %q:\n%s", url, card)

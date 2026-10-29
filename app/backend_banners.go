@@ -28,7 +28,7 @@ const (
 	backendBannerMaxSlugBytes       = 256
 	backendBannerMaxFallbackSlugs   = 16
 
-	backendBannerUsageURL          = "https://chatgpt.com/codex/settings/usage"
+	backendBannerUsageURL          = "https://chatgpt.com/settings/usage"
 	backendBannerWorkspaceUsageURL = "https://chatgpt.com/admin/usage-limits/workspace"
 )
 

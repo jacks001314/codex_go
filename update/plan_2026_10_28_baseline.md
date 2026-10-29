@@ -2589,8 +2589,8 @@ Session-only model and reasoning selection (#45831, complete).
 - #40504 is superseded by #42667 and therefore `not_applicable`; Go has no plan-type Trusted Access URL routing.
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
-Status after reconciliation: `2103 complete`, `410 not_applicable`,
-`424 audit_pending`, `210 regression_pending`, `2 partial`,
+Status after reconciliation: `2104 complete`, `410 not_applicable`,
+`423 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
 
 ### Read-only summary history fallback (Round 936)
@@ -2632,3 +2632,13 @@ Multiline ANSI input no longer risks payload-heavy warning logs (#49416, complet
 - Go has no `ansi_escape_line` warning path: hook rendering parses multiline ANSI through `historycell.ParseANSISpans` and `StyledLinesFromSpans`, which emit no log entries, so the leaking vector does not exist.
 - Existing `TestHookSystemMessageRendersANSIStyles` covers multiline styled warnings without raw escape leakage, and `TestHookSystemMessagePreservesBlankAndCombiningLines` covers trailing newlines and blank lines.
 - Verified with the targeted `tui/history_cell` tests; no code change was required.
+
+### Usage and credit links (Round 940)
+
+Usage and credit links now target `https://chatgpt.com/settings/usage` (#49874, complete).
+
+- `model/usage_limit.go` uses the new URL in the Plus and Pro usage-limit messages, and the model tests assert it.
+- `app/backend_banners.go` sets `backendBannerUsageURL` to the new URL; the credits purchase action still appends `?credits_modal=true`.
+- `tui/state.go` renders the new URL in the status card usage row, with the status and auth tests updated.
+- No Go code still references the old `chatgpt.com/codex/settings/usage` path.
+- Verified with `go test ./model -count=1`, `go test ./app -run 'Banner|Backend' -count=1`, and `go test ./tui -run 'Status|Usage|Auth' -count=1`.

@@ -70,7 +70,7 @@ func TestUsageLimitReachedMessageLikeRust(t *testing.T) {
 		{
 			name:     "generic reached type keeps the plan copy",
 			evidence: usageLimitEvidence{RateLimitReachedType: "rate_limit_reached", PlanType: "plus"},
-			want:     "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+			want:     "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again later.",
 		},
 		{
 			name:     "promo message",
@@ -85,7 +85,7 @@ func TestUsageLimitReachedMessageLikeRust(t *testing.T) {
 		{
 			name:     "plus",
 			evidence: usageLimitEvidence{PlanType: "plus"},
-			want:     "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+			want:     "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again later.",
 		},
 		{
 			name:     "team",
@@ -110,12 +110,12 @@ func TestUsageLimitReachedMessageLikeRust(t *testing.T) {
 		{
 			name:     "pro",
 			evidence: usageLimitEvidence{PlanType: "pro", ResetsAt: &sameDay},
-			want:     "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:05 PM.",
+			want:     "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.",
 		},
 		{
 			name:     "promax",
 			evidence: usageLimitEvidence{PlanType: "promax"},
-			want:     "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+			want:     "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again later.",
 		},
 		{
 			name:     "enterprise",

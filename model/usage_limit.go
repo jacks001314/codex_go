@@ -167,7 +167,7 @@ func usageLimitReachedMessage(evidence usageLimitEvidence) string {
 
 	switch usageLimitPlanCopy(evidence.PlanType) {
 	case usageLimitPlanCopyUpgradeToPro:
-		return "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits" +
+		return "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits" +
 			retrySuffixAfterOr(evidence.ResetsAt)
 	case usageLimitPlanCopyAdmin:
 		return "You’ve hit your usage limit. To get more access now, send a request to your admin" +
@@ -176,7 +176,7 @@ func usageLimitReachedMessage(evidence usageLimitEvidence) string {
 		return "You’ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus)," +
 			retrySuffixAfterOr(evidence.ResetsAt)
 	case usageLimitPlanCopyPurchaseCredits:
-		return "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits" +
+		return "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits" +
 			retrySuffixAfterOr(evidence.ResetsAt)
 	default:
 		return "You’ve hit your usage limit." + retrySuffix(evidence.ResetsAt)

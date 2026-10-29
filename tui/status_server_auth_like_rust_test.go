@@ -6,7 +6,7 @@ import (
 )
 
 func TestStatusCardUsesServerRequiresOpenAIAuthLikeRust(t *testing.T) {
-	const usageURL = "https://chatgpt.com/codex/settings/usage"
+	const usageURL = "https://chatgpt.com/settings/usage"
 	tests := []struct {
 		name      string
 		provider  string

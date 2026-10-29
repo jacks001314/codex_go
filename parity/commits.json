@@ -24900,9 +24900,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust bdfbab9f (#49874) moved usage and credit links from https://chatgpt.com/codex/settings/usage to https://chatgpt.com/settings/usage in usage-limit errors, the status card and backend banner actions, keeping ?credits_modal=true for purchases. Go now uses the new URL in model/usage_limit.go for the Plus and Pro usage-limit messages, app/backend_banners.go backendBannerUsageURL (credits purchase still appends ?credits_modal=true), and tui/state.go's status card usage row; the corresponding model, banner and status tests were updated. No Go code still references the old path. Tests: go test ./model -count=1; go test ./app -run 'Banner|Backend' -count=1; go test ./tui -run 'Status|Usage|Auth' -count=1"
    ]
   },
   {
