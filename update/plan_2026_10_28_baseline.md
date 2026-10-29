@@ -730,6 +730,12 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - `tui/tea`: the dashboard wires the cwd-aware renderer to `markdown.RenderWithThemeCwd`.
 - Tests: `tui/agents_overview/details_markdown_cwd_like_rust_test.go`, `tui/tea` `TestWireAgentsOverviewSetsCWDMarkdownRenderer`; `go test ./tui/agents_overview ./tui/tea -run 'Details|AgentsOverview'` passes.
 
-Status after reconciliation: `1969 complete`, `384 not_applicable`,
-`510 audit_pending`, `286 regression_pending`, `0 partial`,
+### Audit TUI folder-consent dispatch integration (Round 781)
+
+- Rust #44755 wires the folder-consent screen into command-center dispatch, resume, and loaded-task opening, plus its cancellation UX (back to the command center, cleared launch prompt/images, restored composer draft, startup-hooks review after trust is saved).
+- Go renders no onboarding consent screen: those paths attach to the server-owned task and the connected server already applies the restricted state, so there is no consent step to run, cancel, or re-dispatch - the same reason #54048 is not applicable.
+- The decision machinery is covered: `checkDirectoryTrust` (destination + saved folder, restricted no-persist, existing-task flag) and `tui/onboarding.TrustDirectoryPrompt`'s connected/restricted/existing-task/keep-current-directory states.
+
+Status after reconciliation: `1969 complete`, `385 not_applicable`,
+`510 audit_pending`, `285 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

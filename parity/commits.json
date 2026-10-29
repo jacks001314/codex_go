@@ -11979,9 +11979,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 781 (audit): Rust #44755 wires the folder-consent screen into Agent Command Center dispatch, session resume and loaded-task opening, and defines its cancellation UX (return connected users to Agent Command Center, clear launch prompt/images, restore the composer draft, review startup hooks after trust is saved). Go's TUI renders no onboarding consent screen: dispatch, resume and task opening attach to the server-owned task, and the connected server already applies the restricted state (project config, hooks and exec policies stay disabled), so there is no consent step to run, cancel, or restore a draft for - the same architectural reason #54048 was recorded not_applicable. The decision machinery this PR builds on is present and regression-covered in Go: checkDirectoryTrust covers the resolved destination plus a local daemon resume's saved folder with restricted no-persist and existing-task reporting (app/remote_trust_destination_like_rust_test.go), and tui/onboarding.TrustDirectoryPrompt carries the connected 'Back to Agent Command Center' cancel label, the restricted/existing-task wording and the projectless 'Keep current directory' cancel (tui/onboarding/onboarding_test.go)."
    ]
   },
   {
