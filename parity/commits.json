@@ -30639,9 +30639,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #53751 applies --enable/--disable and boolean features.* overrides to `app-server daemon restart`, accepts nested enabled values, normalizes aliases, replaces conflicting saved aliases while preserving unrelated settings, persists them for later restarts, and rejects invalid toggles before stopping the daemon. Go implements the same split: app/daemon_restart_features.go parses the root overrides (--enable/--disable plus features.<name> and features.<name>.enabled), maps them through features.CanonicalKey with Rust's imagegenext precedence, and returns the unknown/non-boolean errors before any daemon work; app/app.go:1766 calls it first and then dispatches to LifecycleRunner.RestartApplyingFeatures. appserverdaemon/lifecycle.go:215 loads saved settings, removes every saved spelling of each requested canonical feature and stores the canonical key, then restarts the managed backend for both running and stopped daemons (RestartWithFeatures keeps the compatibility/onboarding path that reuses an unchanged backend). Tests: TestDaemonRestartFeatureOverridesLikeRust (enable/disable, nested enabled, alias replacement, unknown feature and non-boolean rejection), TestLifecycleRunnerRestartApplyingFeaturesLikeRust (saved alias replaced, unrelated override preserved, repeated restart), TestLifecycleRunnerRestartWithFeaturesLikeRust, TestDaemonSettingsFeatureOverridesAndUpdaterLikeRust. Verified with go test ./app -run 'TestDaemonRestartFeatureOverridesLikeRust|TestAppServerDaemon' -count=1 and go test ./appserverdaemon -run 'TestLifecycleRunnerRestartApplyingFeaturesLikeRust|TestLifecycleRunnerRestartWithFeaturesLikeRust|TestDaemonSettings' -count=1."
    ]
   },
   {

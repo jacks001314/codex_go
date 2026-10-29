@@ -2590,7 +2590,7 @@ Session-only model and reasoning selection (#45831, complete).
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
 Status after reconciliation: `2104 complete`, `410 not_applicable`,
-`423 audit_pending`, `209 regression_pending`, `2 partial`,
+`423 audit_pending`, `208 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
 
 ### Read-only summary history fallback (Round 936)
@@ -2923,6 +2923,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Round 970 (this session) added the closed-connection guard so a start that outlives its connection cannot re-attach a dead subscriber.
 - Tests: `TestIdleChildCreatedWithoutClientDisconnectsLikeRust`, `TestIdleLifecycleWaitsForPendingCleanupLikeRust`, `TestIdleLifecycleKeepsEphemeralAndRootThreadsLikeRust`, `TestIdleEphemeralThreadWithZeroOverrideUnloadsLikeRust`, `TestIdleEphemeralSubagentStaysLoadedEvenWithZeroOverrideLikeRust`, `TestIdleUnloadPreservesQueuedMailLikeRust`, `TestThreadUnloadDelayDefaultsToOneMinuteLikeRust`.
 - Verified with `go test ./appserver -run 'TestIdle|TestThreadUnloadDelay' -count=1`.
-Status after reconciliation: `2133 complete`, `442 not_applicable`,
+### Daemon restart feature overrides (Round 972)
+
+- Rust #53751 applies `--enable`/`--disable` and boolean `features.*` overrides to `codex app-server daemon restart`, accepts nested `enabled` values, normalizes aliases, replaces conflicting saved aliases while preserving unrelated settings, persists them, and rejects invalid toggles before stopping the daemon (#53751, complete).
+- `app/daemon_restart_features.go` extracts and validates the overrides (canonical keys, `imagegenext` precedence, unknown/non-boolean errors) before any daemon work; `app/app.go:1766` dispatches to `LifecycleRunner.RestartApplyingFeatures`.
+- `appserverdaemon/lifecycle.go:215` replaces every saved spelling of a requested canonical feature, stores the canonical key, and restarts the managed backend for running and stopped daemons; `RestartWithFeatures` keeps the compatibility path that reuses an unchanged backend.
+- Tests: `TestDaemonRestartFeatureOverridesLikeRust`, `TestLifecycleRunnerRestartApplyingFeaturesLikeRust`, `TestLifecycleRunnerRestartWithFeaturesLikeRust`, `TestDaemonSettingsFeatureOverridesAndUpdaterLikeRust`.
+- Verified with `go test ./app -run 'TestDaemonRestartFeatureOverridesLikeRust|TestAppServerDaemon' -count=1` and `go test ./appserverdaemon -run 'TestLifecycleRunnerRestartApplyingFeaturesLikeRust|TestLifecycleRunnerRestartWithFeaturesLikeRust|TestDaemonSettings' -count=1`.
+Status after reconciliation: `2134 complete`, `442 not_applicable`,
 `361 audit_pending`, `210 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
