@@ -97,6 +97,27 @@ func StoreChatGPTResponseCookies(rawURL string, header http.Header) {
 	SharedChatGPTCookieJar().SetCookies(target, response.Cookies())
 }
 
+// WebsocketHandshakeCookies returns the handshake headers for a ChatGPT HTTPS
+// or secure-WebSocket target with the shared infrastructure cookies attached
+// (Rust websocket-client connect_with_route, #46506). An explicit caller Cookie
+// header wins, and the caller's map is never mutated; the original map comes
+// back unchanged when there is nothing to add.
+func WebsocketHandshakeCookies(rawURL string, header http.Header) http.Header {
+	if header.Get("Cookie") != "" {
+		return header
+	}
+	cookie := ChatGPTCookieHeader(rawURL)
+	if cookie == "" {
+		return header
+	}
+	cloned := header.Clone()
+	if cloned == nil {
+		cloned = make(http.Header)
+	}
+	cloned.Set("Cookie", cookie)
+	return cloned
+}
+
 // chatGPTCookieURL maps a ChatGPT HTTPS or secure-WebSocket request target to
 // the HTTPS URL the shared cookie scope uses (Rust #46506: a secure WebSocket
 // handshake has the same cookie scope as HTTPS). Insecure `ws` targets and

@@ -982,14 +982,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	dialStartedAt := time.Now()
 	// Rust #46506: a secure WebSocket handshake reuses the HTTP factory's
 	// ChatGPT cookie store, while an explicit Cookie header still wins.
-	headers := httpRequest.Header
-	if headers.Get("Cookie") == "" {
-		if cookie := network.ChatGPTCookieHeader(endpoint); cookie != "" {
-			cloned := headers.Clone()
-			cloned.Set("Cookie", cookie)
-			headers = cloned
-		}
-	}
+	headers := network.WebsocketHandshakeCookies(endpoint, httpRequest.Header)
 	conn, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: headers})
 	if response != nil {
 		// A rejected upgrade can refresh infrastructure cookies exactly like an
@@ -1221,11 +1214,17 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		defer cancel()
 		var response *http.Response
 		dialStartedAt := time.Now()
-		dialOptions := &websocket.DialOptions{HTTPHeader: httpRequest.Header}
+		// Rust websocket-client connect_with_route (#46506): the handshake
+		// reuses the shared ChatGPT cookies unless the request set its own, and
+		// both successful and rejected upgrades may refresh them.
+		dialOptions := &websocket.DialOptions{HTTPHeader: network.WebsocketHandshakeCookies(endpoint, httpRequest.Header)}
 		if client := r.websocketHTTPClient(); client != nil {
 			dialOptions.HTTPClient = client
 		}
 		conn, response, err = websocket.Dial(connectCtx, endpoint, dialOptions)
+		if response != nil {
+			network.StoreChatGPTResponseCookies(endpoint, response.Header)
+		}
 		// Rust reports every handshake attempt with connection_reused false,
 		// because a dial always establishes a new connection.
 		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase)

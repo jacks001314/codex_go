@@ -15856,9 +15856,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #46506 parity: network.WebsocketHandshakeCookies attaches the process-global ChatGPT infrastructure cookies to a secure handshake unless the caller already set an explicit Cookie header, and every Codex WebSocket dial site now uses it (model/responses_agent.go prewarm and runWebSocket, realtime/wire.go dialRealtimeTransport). Successful and rejected upgrades both feed network.StoreChatGPTResponseCookies, so a routing-cookie refresh from a rejected upgrade reaches the next connector. Regression: TestWebsocketHandshakeCookiesMatchRust (explicit header precedence, no caller-map mutation, nil headers, insecure ws and non-ChatGPT hosts), TestResponsesWebsocketSharesChatGPTCookiesLikeRust and TestRealtimeHandshakeSharesChatGPTCookiesLikeRust (local TLS handshakes routed to a *.chatgpt.com host prove __oailb reuse and refresh after a 403 upgrade). Residual: Go has no equivalent per-header sensitive marking."
    ]
   },
   {

@@ -2203,6 +2203,16 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Already aligned through later upstream state: the audited boolean feature allowlist plus `suppress_unstable_features_warning` in `daemonConfigExclusion`, shared-service compatibility checks in `app/daemon_compatibility.go`, and the agents overview resolving the shared server without the feature check.
 - Verification: `go test ./app -run 'Daemon|Worktree|Telemetry|SelectionReason|SuppressUnstable' -count=1` and `go test ./appserverdaemon -count=1` pass; full `go test ./app` only reports the pre-existing `TestExecJSONEndToEnd` websocket failure.
 
-Status after reconciliation: `2065 complete`, `406 not_applicable`,
-`442 audit_pending`, `232 regression_pending`, `4 partial`,
+### Share ChatGPT cookies across WebSocket transports (Round 902)
+
+- `network/chatgpt_cookies.go`: `WebsocketHandshakeCookies` decorates a handshake header set with the process-global ChatGPT infrastructure cookies (Rust `websocket-client` `connect_with_route`, #46506). An explicit caller `Cookie` header wins, the caller's map is never mutated, and out-of-scope targets (`ws`, non-ChatGPT hosts) keep their headers untouched.
+- `model/responses_agent.go`: the prewarm handshake and `runWebSocket` both route through that helper, and `runWebSocket` now feeds handshake responses - including rejected upgrades - into `StoreChatGPTResponseCookies`.
+- `realtime/wire.go`: `dialRealtimeTransport` attaches the shared cookies before dialing and stores allowlisted response cookies from successful or rejected upgrades.
+- `network/chatgpt_cookies_test.go`: `TestWebsocketHandshakeCookiesMatchRust` pins precedence, immutable inputs, nil headers, and the `ws`/non-ChatGPT scope exclusions.
+- `model/responses_websocket_cookie_like_rust_test.go` and `realtime/realtime_cookie_like_rust_test.go`: local TLS servers routed behind a `*.chatgpt.com` hostname prove that `__oailb` rides the handshake, that a 403 upgrade refreshes it, and that the next connector sends the refreshed value.
+- Residual: Go has no per-header sensitive marking equivalent to `HeaderValue::set_sensitive`.
+- Verification: `go test ./network ./realtime -count=1` and `go test ./model -count=1` pass.
+
+Status after reconciliation: `2066 complete`, `406 not_applicable`,
+`442 audit_pending`, `231 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

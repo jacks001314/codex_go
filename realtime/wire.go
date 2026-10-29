@@ -11,6 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/coder/websocket"
+
+	"codex_go/network"
 )
 
 const realtimeContextAppendMaxBytes = 500
@@ -50,7 +52,16 @@ func dialRealtimeTransport(ctx context.Context, threadID string, backend *Transp
 			headers.Set("openai-alpha", "quicksilver=v2")
 		}
 	}
+	// Rust #46506: a secure handshake reuses the shared ChatGPT infrastructure
+	// cookies, while an explicit Cookie header still wins.
+	headers = network.WebsocketHandshakeCookies(endpoint, headers)
 	conn, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: backend.HTTPClient, HTTPHeader: headers})
+	// Rust websocket-client connect_with_route (#46506): a secure handshake
+	// reuses the shared ChatGPT cookies, and both successful and rejected
+	// upgrades may refresh them.
+	if response != nil {
+		network.StoreChatGPTResponseCookies(endpoint, response.Header)
+	}
 	if err != nil {
 		wrapped := fmt.Errorf("connect realtime websocket: %w", err)
 		if response != nil {

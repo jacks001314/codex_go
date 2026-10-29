@@ -109,6 +109,49 @@ func TestSharedChatGPTCookieHeaderReachesTheSharedStore(t *testing.T) {
 	}
 }
 
+// TestWebsocketHandshakeCookiesMatchRust covers the decoration Rust
+// websocket-client connect_with_route applies (#46506): an explicit Cookie
+// header wins, the shared jar fills in when the caller has none, the caller's
+// map is never mutated, and out-of-scope targets keep their headers untouched.
+func TestWebsocketHandshakeCookiesMatchRust(t *testing.T) {
+	target, _ := url.Parse("https://handshake-decorate.chatgpt.com/api")
+	SharedChatGPTCookieJar().SetCookies(target, []*http.Cookie{{Name: "__oailb", Value: "decorated", Path: "/", Secure: true}})
+	t.Cleanup(func() {
+		SharedChatGPTCookieJar().SetCookies(target, []*http.Cookie{{Name: "__oailb", Value: "", Path: "/", MaxAge: -1}})
+	})
+
+	original := http.Header{"Accept": []string{"*/*"}}
+	decorated := WebsocketHandshakeCookies("wss://handshake-decorate.chatgpt.com/api", original)
+	if got := decorated.Get("Cookie"); got != "__oailb=decorated" {
+		t.Fatalf("handshake cookie = %q, want the shared jar value", got)
+	}
+	if decorated.Get("Accept") != "*/*" {
+		t.Fatalf("handshake headers = %#v, want the original Accept header", decorated)
+	}
+	if original.Get("Cookie") != "" {
+		t.Fatalf("input header was mutated: %#v", original)
+	}
+	if got := WebsocketHandshakeCookies("wss://handshake-decorate.chatgpt.com/api", nil).Get("Cookie"); got != "__oailb=decorated" {
+		t.Fatalf("nil header cookie = %q, want the shared jar value", got)
+	}
+
+	explicit := http.Header{"Cookie": []string{"session=caller"}}
+	if got := WebsocketHandshakeCookies("wss://handshake-decorate.chatgpt.com/api", explicit); got.Get("Cookie") != "session=caller" {
+		t.Fatalf("explicit cookie = %q, want the caller value", got.Get("Cookie"))
+	} else if len(got.Values("Cookie")) != 1 {
+		t.Fatalf("explicit cookie values = %#v, want only the caller value", got.Values("Cookie"))
+	}
+
+	for _, rawURL := range []string{
+		"ws://handshake-decorate.chatgpt.com/api",
+		"wss://handshake-decorate.example.com/api",
+	} {
+		if got := WebsocketHandshakeCookies(rawURL, original); got.Get("Cookie") != "" {
+			t.Fatalf("cookie for %q = %q, want none", rawURL, got.Get("Cookie"))
+		}
+	}
+}
+
 // chatGPTCookieHeaderFromJar mirrors ChatGPTCookieHeader against a specific jar
 // so the scope matrix stays isolated from the process-global store.
 func chatGPTCookieHeaderFromJar(jar *ChatGPTCloudflareCookieJar, rawURL string) string {
