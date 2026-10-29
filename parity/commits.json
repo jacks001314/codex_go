@@ -4284,9 +4284,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: into_response, serialize_mcp_server, serialize_mcp_server_inline, truncate_function_output_payload"
+    "Round 759 (audit): #41421 implemented at ./mcp/api.go:1212 - // for a server's tool, or nil when unset (Rust #41421). The effective limit is Regression contract: output_token_limit_test.go:TestToolConfigOutputTokenLimitParseLikeRust; output_token_limit_test.go:TestToolConfigRestrictOutputTokenLimitLikeRust (test body cites Rust #41421); verify with `go test ./mcp -run 'TestToolConfigOutputTokenLimitParseLikeRust|TestToolConfigRestrictOutputTokenLimitLikeRust' -count=1`."
    ]
   },
   {
@@ -7887,9 +7887,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 8/11; needs review: TIP_SEPARATOR, inline_flash, option_tip"
+    "Round 759 (audit): #42894 implemented at ./tui/bottom_pane/async_questions.go:33 - // (Rust #42894). Regression contract: async_questions_test.go:TestAsyncQuestionsResolveAnswersLikeRust; async_questions_test.go:TestOversizedQuestionIDsKeepQuestionsAnswerableLikeRust; async_questions_test.go:TestAsyncQuestionsBoundSuggestedOptions (test body cites Rust #42894); verify with `go test ./tui/bottom_pane -run 'TestAsyncQuestionsResolveAnswersLikeRust|TestOversizedQuestionIDsKeepQuestionsAnswerableLikeRust|TestAsyncQuestionsBoundSuggestedOptions' -count=1`."
    ]
   },
   {
@@ -7899,9 +7899,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/8; needs review: focus_other, history_search_query_cursor_pos, other_input_area, other_prefix_width, render_inline_options"
+    "Round 759 (audit): #42897 implemented at ./tui/bottom_pane/async_questions.go:37 - // with suggestions (Rust #42897). Regression contract: async_questions_test.go:TestOversizedQuestionIDsKeepQuestionsAnswerableLikeRust; async_questions_test.go:TestAsyncQuestionsBoundSuggestedOptions; async_questions_test.go:TestAsyncQuestionsChoiceSelectionAndAnswer (test body cites Rust #42897); verify with `go test ./tui/bottom_pane -run 'TestOversizedQuestionIDsKeepQuestionsAnswerableLikeRust|TestAsyncQuestionsBoundSuggestedOptions|TestAsyncQuestionsChoiceSelectionAndAnswer' -count=1`."
    ]
   },
   {
@@ -8571,9 +8571,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: confirmed_server_profile, reject_pending_permission_change, retain_input_after_failed_permission_selection"
+    "Round 759 (audit): #43340 implemented at ./app/remote_tui.go:521 - // Rust #43340: the connected server owns named permission profiles. Regression contract: remote_tui_permissions_test.go:TestInteractiveRemoteUpdateThreadPermissionsSendsSelectionLikeRust; remote_tui_permissions_test.go:TestRemoteTUIPermissionDiscoveryRequiresDefaultPermissions; remote_tui_resume_test.go:TestRemoteTUIResumeConflictDetection (test body cites Rust #43340); verify with `go test ./app -run 'TestInteractiveRemoteUpdateThreadPermissionsSendsSelectionLikeRust|TestRemoteTUIPermissionDiscoveryRequiresDefaultPermissions|TestRemoteTUIResumeConflictDetection' -count=1`."
    ]
   },
   {
@@ -9699,9 +9699,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/8; needs review: CancelOnShutdown, ConnectionLifecycle, ProxyListeners"
+    "Round 759 (audit): #43884 implemented at ./network/proxy_conn_tracking.go:8 - // Active-connection tracking for the managed network proxy (Rust #43884): Regression contract: proxy_server_test.go:TestProxyManagedNetworkStartsForwardsAndClosesLikeRust (test body cites Rust #43884); verify with `go test ./network -run 'TestProxyManagedNetworkStartsForwardsAndClosesLikeRust' -count=1`."
    ]
   },
   {
@@ -9867,9 +9867,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/8; needs review: before_event"
+    "Round 759 (audit): #43921 implemented at ./app/remote_tui.go:95 - // (Rust #43921). Regression contract: remote_tui_terminal_interaction_test.go:TestRemoteTUIRoutesTerminalInteraction; remote_tui_terminal_interaction_test.go:TestRemoteProtocolItemCarriesProcessID; remote_tui_terminal_interaction_test.go:TestRemoteProtocolItemCarriesReasoningSummary (test body cites Rust #43921); verify with `go test ./app -run 'TestRemoteTUIRoutesTerminalInteraction|TestRemoteProtocolItemCarriesProcessID|TestRemoteProtocolItemCarriesReasoningSummary' -count=1`."
    ]
   },
   {
@@ -10311,9 +10311,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/26; needs review: CredentialBrokerEnvironment, DiscoveredCredential, GeneratedAlias, KnownCredentialMatch, contains_embedded_value"
+    "Round 759 (audit): #44066 implemented at ./network/proxy_credential_broker.go:63 - // discovery (#44066). Built-in providers leave this nil. Regression contract: proxy_credential_alias_test.go:TestCredentialBrokerRejectsDummyEmbeddingOtherProviderLikeRust (test body cites Rust #44066); verify with `go test ./network -run 'TestCredentialBrokerRejectsDummyEmbeddingOtherProviderLikeRust' -count=1`."
    ]
   },
   {
@@ -10371,9 +10371,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: BrokeredProtocols, TunnelProtocol, peek_protocol"
+    "Round 759 (audit): #44077 implemented at ./network/proxy_server.go:789 - // (network-proxy/src/credential_broker.rs + brokered_tunnel.rs, #44089/#44077). Regression contract: proxy_plaintext_tunnel_test.go:TestCredentialDestinationHostRequiresHTTPInterception; proxy_plaintext_tunnel_test.go:TestPlaintextTunnelRequestAllowedLikeRust (test body cites Rust #44077); verify with `go test ./network -run 'TestCredentialDestinationHostRequiresHTTPInterception|TestPlaintextTunnelRequestAllowedLikeRust' -count=1`."
    ]
   },
   {
@@ -10923,9 +10923,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: remote_control_auth_dot_json, remote_control_retry_at, remote_control_retry_delay, retry_deferred"
+    "Round 759 (audit): #44311 implemented at ./remotecontrol/server_api.go:23 - // Rust #44311: spread clients across the 30 seconds after a server deadline. Regression contract: server_api_test.go:TestRefreshRemoteControlServerIgnoresTransientProactiveRefresh; server_api_test.go:TestRefreshRemoteControlServerRejectsMismatchedEnrollment; server_api_test.go:TestParseRetryAfterSupportsDeltaSecondsAndHTTPDates (test body cites Rust #44311); verify with `go test ./remotecontrol -run 'TestRefreshRemoteControlServerIgnoresTransientProactiveRefresh|TestRefreshRemoteControlServerRejectsMismatchedEnrollment|TestParseRetryAfterSupportsDeltaSecondsAndHTTPDates' -count=1`."
    ]
   },
   {
@@ -15135,9 +15135,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: EXTERNAL_AGENT_CONFIG_MIGRATION_DAEMON_UNAVAILABLE_MESSAGE"
+    "Round 759 (audit): #46117 implemented at ./app/daemon_startup.go:290 - // automatic background-server startup (Rust Feature::DaemonAutoStart, #46117; Regression contract: daemon_startup_test.go:TestNoDaemonRejectionsLikeRust; daemon_startup_test.go:TestInteractiveDaemonAutoStartLikeRust (test body cites Rust #46117); verify with `go test ./app -run 'TestNoDaemonRejectionsLikeRust|TestInteractiveDaemonAutoStartLikeRust' -count=1`."
    ]
   },
   {
@@ -15676,9 +15676,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 6/7; needs review: question_editor"
+    "Round 759 (audit): #46486 implemented at ./context/fragments.go:659 - // stable question identity (#46486), while an oversized identity falls back to Regression contract: fragments_test.go:TestAnsweredQuestionFramingIsBoundedAndKeepsUnicodeBoundaries; fragments_test.go:TestAnsweredQuestionFlattensLineBreaks (test body cites Rust #46486); verify with `go test ./context -run 'TestAnsweredQuestionFramingIsBoundedAndKeepsUnicodeBoundaries|TestAnsweredQuestionFlattensLineBreaks' -count=1`."
    ]
   },
   {
@@ -16961,9 +16961,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/15; needs review: handle_warning_event, has_active_modal, keymap_contexts, record_composer_activity_at, set_keymap"
+    "Round 759 (audit): #46751 implemented at ./tui/tea/model.go:5923 - if m == nil || len(result.Warnings) == 0 { Regression contract: model_test.go:TestModelStartupWarningsWaitForSplashLikeRust; model_test.go:TestModelStartupWarningsSignInSubsetAndHintLikeRust (test body cites Rust #46751); verify with `go test ./tui/tea -run 'TestModelStartupWarningsWaitForSplashLikeRust|TestModelStartupWarningsSignInSubsetAndHintLikeRust' -count=1`."
    ]
   },
   {
@@ -17011,9 +17011,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: CenterRow, center_rows, format_relative_time, render_center_rows"
+    "Round 759 (audit): #46837 implemented at ./tui/agents_overview/overview.go:237 - // ordinary input prompts (Rust #46837 AgentsOverviewView::status). Regression contract: status_filter_like_rust_test.go:TestStatusFilterCyclesAndRendersCountedTabsLikeRust; status_filter_like_rust_test.go:TestStatusFilterKeepsRenameTargetVisibleLikeRust; status_filter_like_rust_test.go:TestPageNavigationUsesViewportAndStopsAtEndsLikeRust (test body cites Rust #46837); verify with `go test ./tui/agents_overview -run 'TestStatusFilterCyclesAndRendersCountedTabsLikeRust|TestStatusFilterKeepsRenameTargetVisibleLikeRust|TestPageNavigationUsesViewportAndStopsAtEndsLikeRust' -count=1`."
    ]
   },
   {
@@ -22413,9 +22413,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/6; needs review: current_mcp_runtime_context, list_available_server_infos, list_tools_with_errors"
+    "Round 759 (audit): #48783 implemented at ./mcp/api.go:172 - // thread's existing MCP connection is reused (Rust #48783). Regression contract: api_test.go:TestMCPServerOauthLoginResponseLoginIDLikeRust; api_test.go:TestMCPListServerStatusParamsServerNameLikeRust; server_name_filter_test.go:TestListStatusServerNameLimitsDiscoveryLikeRust (test body cites Rust #48783); verify with `go test ./mcp -run 'TestMCPServerOauthLoginResponseLoginIDLikeRust|TestMCPListServerStatusParamsServerNameLikeRust|TestListStatusServerNameLimitsDiscoveryLikeRust' -count=1`."
    ]
   },
   {
@@ -23205,9 +23205,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/12; needs review: CURRENT_CONFIG, DirectoryTrustOptions, FreshStartupDefaults, ResumePermissions, check_background_terminals"
+    "Round 759 (audit): #49160 implemented at ./app/interactive.go:1487 - // Rust #49160 applies the implicit projectless defaults while preparing fresh Regression contract: projectless_trust_test.go:TestProjectlessFolderTrustEligibleLikeRust; projectless_trust_test.go:TestProjectlessImplicitDefaultsLikeRust; projectless_trust_test.go:TestEnsureRemoteProjectTrustSkipsPromptForProjectlessFolderLikeRust (test body cites Rust #49160); verify with `go test ./app -run 'TestProjectlessFolderTrustEligibleLikeRust|TestProjectlessImplicitDefaultsLikeRust|TestEnsureRemoteProjectTrustSkipsPromptForProjectlessFolderLikeRust' -count=1`."
    ]
   },
   {
@@ -26125,9 +26125,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: config_error_from_ignored_toml_fields, config_error_from_ignored_toml_value_fields, config_error_from_ignored_toml_value_fields_for_source_name"
+    "Round 759 (audit): #50525 implemented at ./config/config.go:1070 - // Rust #50525 (upstream b65ab465ce) rejects unknown `[tui]` keys by Regression contract: config_test.go:TestLoadEffectiveAppliesOverridePrecedence; config_test.go:TestLoadEffectiveStrictConfigRejectsUnknownTopLevelField; config_test.go:TestLoadEffectiveStrictConfigAllowsTUI (test body cites Rust #50525); verify with `go test ./config -run 'TestLoadEffectiveAppliesOverridePrecedence|TestLoadEffectiveStrictConfigRejectsUnknownTopLevelField|TestLoadEffectiveStrictConfigAllowsTUI' -count=1`."
    ]
   },
   {
@@ -27578,9 +27578,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/5; needs review: detail_line, detail_wrapped_lines, render_buffer"
+    "Round 759 (audit): #51473 implemented at ./tui/bottom_pane/hooks_browser_view.go:756 - // Rust #51473: hook details wrap with URL preservation and turn web URLs Regression contract: hooks_browser_view_test.go:TestHookHandlerRowAlignsDimmedIndexLikeRust; hooks_browser_view_test.go:TestHooksBrowserHandlerTitlesFromStatusMessageLikeRust (test body cites Rust #51473); verify with `go test ./tui/bottom_pane -run 'TestHookHandlerRowAlignsDimmedIndexLikeRust|TestHooksBrowserHandlerTitlesFromStatusMessageLikeRust' -count=1`."
    ]
   },
   {
@@ -28383,9 +28383,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: fork_options_from_parent"
+    "Round 759 (audit): #51884 implemented at ./appserver/protocol.go:2186 - // loaded parent's effective context and request settings (Rust #51884). Regression contract: thread_prediction_fork_like_rust_test.go:TestThreadPredictionForkInheritsParentContextLikeRust; thread_prediction_fork_like_rust_test.go:TestThreadPredictionForkRejectsInvalidParametersLikeRust; thread_prediction_fork_like_rust_test.go:TestThreadPredictionForkRequiresLoadedParentLikeRust (test body cites Rust #51884); verify with `go test ./appserver -run 'TestThreadPredictionForkInheritsParentContextLikeRust|TestThreadPredictionForkRejectsInvalidParametersLikeRust|TestThreadPredictionForkRequiresLoadedParentLikeRust' -count=1`."
    ]
   },
   {

@@ -564,8 +564,21 @@ symbol-coverage notes that still need per-symbol review, and the rest have no
 Go citation at all (Rust-only crates, CI, docs, or behaviour that may still be
 missing).
 
-Status after reconciliation: `1860 complete`, `381 not_applicable`,
-`621 audit_pending`, `287 regression_pending`, `0 partial`,
+### Citation-verified audit closure (Round 759)
+
+Re-audited the 90 `audit_pending` entries whose Rust PR number is cited by
+Go code. Each was checked for a cited implementation site plus a regression
+test whose body names the same PR; 18 cleared both bars and moved to
+`complete` (`#41421 #42894 #42897 #43340 #43884 #43921 #44066 #44077 #44311
+#46117 #46486 #46751 #46837 #48783 #49160 #50525 #51473 #51884`). The
+remaining citations are comment-only or sit next to unrelated functions
+(`#43120`), so they stay `audit_pending` until the real implementation and
+its coverage are located. Targeted package tests pass in a clean archived
+snapshot: `./mcp ./tui/bottom_pane ./network ./remotecontrol ./context
+./tui/agents_overview ./config ./app ./tui/tea ./appserver`.
+
+Status after reconciliation: `1878 complete`, `381 not_applicable`,
+`603 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
 
 ## Files updated
