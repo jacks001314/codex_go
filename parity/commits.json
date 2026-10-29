@@ -3828,9 +3828,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "audit_pending",
    "evidence": [
-    "Round 947: Go paginated fork lineage resolution (state.PreparePaginatedFork -> materializePaginatedLineageForReference) now applies Rust PlainForReference managed-root validation to every referenced rollout: canonicalize the rollout and the codex_home sessions/archived_sessions roots, then reject references outside them with the InvalidRequest message rollout path ... must be in Codex home directory. state.canonicalizePath follows Windows junctions like Rust std::fs::canonicalize (filepath.EvalSymlinks does not), and the router passes session.Store.Root() as the Codex home, so a resumed rollout under a symlinked sessions root is accepted while a nested link escaping that root is rejected. Tests: TestPreparePaginatedForkAcceptsRolloutUnderSymlinkedSessionsRoot, TestPreparePaginatedForkRejectsReferenceEscapingSymlinkedSessionsRoot, TestThreadForkAcceptsRolloutUnderSymlinkedSessionsRootLikeRust (os.Symlink with a Windows junction fallback for unprivileged runs; all three executed and passed on this host). Verified with go test ./state -count=1, go test ./appserver -run Fork|History|Resume -count=1, go test ./parity -run TestAlignment -count=1, and go build ./..."
+    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
    ]
   },
   {
@@ -5772,9 +5772,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 947: Go paginated fork lineage resolution (state.PreparePaginatedFork -> materializePaginatedLineageForReference) now applies Rust PlainForReference managed-root validation to every referenced rollout: canonicalize the rollout and the codex_home sessions/archived_sessions roots, then reject references outside them with the InvalidRequest message rollout path ... must be in Codex home directory. state.canonicalizePath follows Windows junctions like Rust std::fs::canonicalize (filepath.EvalSymlinks does not), and the router passes session.Store.Root() as the Codex home, so a resumed rollout under a symlinked sessions root is accepted while a nested link escaping that root is rejected. Tests: TestPreparePaginatedForkAcceptsRolloutUnderSymlinkedSessionsRoot, TestPreparePaginatedForkRejectsReferenceEscapingSymlinkedSessionsRoot, TestThreadForkAcceptsRolloutUnderSymlinkedSessionsRootLikeRust (os.Symlink with a Windows junction fallback for unprivileged runs; all three executed and passed on this host). Verified with go test ./state -count=1, go test ./appserver -run Fork|History|Resume -count=1, go test ./parity -run TestAlignment -count=1, and go build ./..."
    ]
   },
   {
