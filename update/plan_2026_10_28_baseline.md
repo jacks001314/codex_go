@@ -706,6 +706,10 @@ Closed the app-link approval trio. `#42056` passes the resolved Codex Apps link 
 
 Closed `#42149` end to end. Explicit upgrades now select Git marketplaces from the effective merged configuration (system/managed/project plus CLI layers) and stage the download before activation; the initiating loader is reused for a final definition check, so a changed source/ref/sparse set, a removed marketplace, or an unreadable config rolls back to the previous snapshot instead of activating it. App-server startup runs the same synchronization as a background task with automatic Git isolation and refreshes derived plugin state only when roots changed; if the initial user config is invalid it keeps Rust's defaults-loader fallback (`ConfigService.ReadDefaults` ignores user and project layers while retaining packaged defaults and managed configuration). The CLI upgrade preserves `-c` overrides through both selection and the activation reload. New coverage: `plugin/marketplace_upgrade_like_rust_test.go`, `appserver/marketplace_upgrade_config_test.go`, and the CLI override case in `app/plugin_cli_test.go`.
 
-Status after reconciliation: `1967 complete`, `382 not_applicable`,
-`513 audit_pending`, `287 regression_pending`, `0 partial`,
+### sync: classify TUI closing-thread reconnect retry as architecture-gap N/A (#42207) (Round 777)
+
+Audited `#42207` and recorded it as not applicable. The upstream change only narrows the retry predicate inside Rust's automatic app-server reconnect loop. Go's TUI has no in-place out-of-process reconnect transition — `#41916` and `#41918` were already closed on that architectural difference: remote turns open a fresh per-turn connection, explicit resume failures return to the session picker, and there is no `finish_reconnect`/unavailable-thread state where this retry could apply. Verification confirmed that a `-32600` `thread ... is closing;` response is classified as a server RPC error, not a transport failure, and never enters the voice-only disconnect path; `app/remote_tui_reconnect_like_rust_test.go` now freezes that classification. Next: `#44746` startup folder trust.
+
+Status after reconciliation: `1967 complete`, `383 not_applicable`,
+`512 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

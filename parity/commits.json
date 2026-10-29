@@ -6036,9 +6036,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 777 (audit): Rust #42207 only relaxes the retry predicate inside TUI's automatic app-server reconnect loop. Go's TUI has no in-place out-of-process reconnect transition: #41916 and #41918 were already recorded not_applicable because remote turns open a fresh per-turn connection, explicit resume failures return to the session picker, and there is no finish_reconnect/unavailable-thread state where this retry could apply. Verified a -32600 'thread ... is closing;' response is classified as a server RPC error rather than a transport failure and does not enter the voice-only AppServerDisconnect path. Regression contract: app/remote_tui_reconnect_like_rust_test.go TestRemoteClosingThreadErrorDoesNotTriggerReconnectLikeRust; go test ./app -run TestRemoteClosingThreadErrorDoesNotTriggerReconnectLikeRust."
    ]
   },
   {
