@@ -123,12 +123,10 @@ func createTokenWithCapsAndExtraSIDsFrom(baseToken windows.Token, caps []string,
 		}
 	}()
 
-	daclSIDs := make([]*windows.SID, 0, len(capEntries)+2)
-	daclSIDs = append(daclSIDs, sidPointerFromBytes(logonSID), sidPointerFromBytes(everyoneSID))
-	for _, entry := range capEntries {
-		daclSIDs = append(daclSIDs, entry.Sid)
-	}
-	if err := setTokenDefaultDACL(newToken, daclSIDs); err != nil {
+	// Filesystem and route capabilities may be shared between launches. They
+	// must not grant access to another launch's processes, threads, or IPC
+	// (Rust #47361).
+	if err := setTokenDefaultDACL(newToken, sidPointerFromBytes(logonSID)); err != nil {
 		return 0, fmt.Errorf("SetTokenInformation(TokenDefaultDacl): %w", err)
 	}
 	if err := enableSinglePrivilege(newToken, "SeChangeNotifyPrivilege"); err != nil {
@@ -335,24 +333,32 @@ type tokenDefaultDACLInfo struct {
 	DefaultDACL *windows.ACL
 }
 
-func setTokenDefaultDACL(token windows.Token, sids []*windows.SID) error {
-	if len(sids) == 0 {
-		return nil
+// setTokenDefaultDACL keeps child-process and IPC access within the runner's
+// logon session. Elevated runners have distinct logon SIDs even when they use
+// the same account, so a shared account's implicit owner rights must not let
+// another logon rewrite the DACL (Rust #47361).
+func setTokenDefaultDACL(token windows.Token, logonSID *windows.SID) error {
+	if logonSID == nil || !logonSID.IsValid() {
+		return ErrInvalidRequest
 	}
-	entries := make([]windows.EXPLICIT_ACCESS, 0, len(sids))
-	for _, sid := range sids {
-		if sid == nil || !sid.IsValid() {
-			return ErrInvalidRequest
-		}
-		entries = append(entries, windows.EXPLICIT_ACCESS{
+	ownerRights, err := windows.CreateWellKnownSid(windows.WinCreatorOwnerRightsSid)
+	if err != nil {
+		return err
+	}
+	// The shared account also owns these objects. An OWNER RIGHTS ACE
+	// suppresses its implicit WRITE_DAC grant; the creating logon retains full
+	// access explicitly.
+	entries := []windows.EXPLICIT_ACCESS{
+		{
 			AccessPermissions: windows.GENERIC_ALL,
 			AccessMode:        windows.GRANT_ACCESS,
-			Trustee: windows.TRUSTEE{
-				TrusteeForm:  windows.TRUSTEE_IS_SID,
-				TrusteeType:  windows.TRUSTEE_IS_UNKNOWN,
-				TrusteeValue: windows.TrusteeValueFromSID(sid),
-			},
-		})
+			Trustee:           tokenDefaultDACLTrustee(logonSID),
+		},
+		{
+			AccessPermissions: windows.READ_CONTROL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Trustee:           tokenDefaultDACLTrustee(ownerRights),
+		},
 	}
 	acl, err := windows.ACLFromEntries(entries, nil)
 	if err != nil {
@@ -365,8 +371,16 @@ func setTokenDefaultDACL(token windows.Token, sids []*windows.SID) error {
 		(*byte)(unsafe.Pointer(&info)),
 		uint32(unsafe.Sizeof(info)),
 	)
-	runtimeKeepAliveACL(acl, entries, sids)
+	runtimeKeepAliveACL(acl, entries, []*windows.SID{logonSID, ownerRights})
 	return err
+}
+
+func tokenDefaultDACLTrustee(sid *windows.SID) windows.TRUSTEE {
+	return windows.TRUSTEE{
+		TrusteeForm:  windows.TRUSTEE_IS_SID,
+		TrusteeType:  windows.TRUSTEE_IS_UNKNOWN,
+		TrusteeValue: windows.TrusteeValueFromSID(sid),
+	}
 }
 
 func enableSinglePrivilege(token windows.Token, name string) error {

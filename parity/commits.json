@@ -18955,9 +18955,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 954 (complete): sandbox/windowssandbox/token_windows.go now builds the restricted token's default DACL from exactly two entries for every readonly and workspace-write runner token (Rust #47361): the token's logon SID with GENERIC_ALL, and OWNER RIGHTS (S-1-3-4 via windows.WinCreatorOwnerRightsSid) with READ_CONTROL. Everyone and the capability SIDs remain in the WRITE_RESTRICTED restricting set but are no longer granted object access in the default DACL, and the OWNER RIGHTS entry suppresses the shared account owner's implicit WRITE_DAC so another logon cannot rewrite the DACL. The existing deferred cleanup still closes the new token handle when the default DACL or SeChangeNotifyPrivilege setup fails. Test: TestDefaultObjectsRestrictAccessToLogonSessionLikeRust creates a workspace-write token with capability S-1-5-21-10-20-30-40, reads TokenDefaultDacl, and asserts exactly logon SID=GENERIC_ALL and S-1-3-4=READ_CONTROL with no Everyone or capability ACE, skipping when the host rejects WRITE_RESTRICTED tokens. Verified on Windows with go build ./... and go test ./sandbox/... -count=1. Residual: the Go test validates the DACL contents instead of replaying Rust's AccessCheck simulation of a second logon, because x/sys/windows has no AccessCheck binding."
    ]
   },
   {

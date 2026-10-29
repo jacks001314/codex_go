@@ -2771,6 +2771,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Verified with `go build ./...`, `go test ./doctor ./app -count=1`, `go test ./parity -run 'TestAlignment|TestRustErrorCodeSurfaceAgainstGo' -count=1`.
 - Residual: Go's doctor rows still use plain `OK`/`!!`/`XX` markers and unstyled group titles and labels; that structural difference predates this commit, so only copyable-item coloring is aligned here.
 
-Status after reconciliation: `2116 complete`, `440 not_applicable`,
-`380 audit_pending`, `210 regression_pending`, `3 partial`,
+### Logon-session-scoped Windows sandbox default DACL (Round 954)
+
+- Rust #47361 restricts the sandbox runner token's default DACL to the runner's logon SID and adds an `OWNER RIGHTS` entry with `READ_CONTROL`, so shared capabilities and account ownership cannot reach another logon's processes, threads or IPC objects (#47361, complete).
+- `sandbox/windowssandbox/token_windows.go:340` builds the DACL from exactly two ACEs: the token logon SID with `GENERIC_ALL`, and OWNER RIGHTS (`S-1-3-4` via `windows.WinCreatorOwnerRightsSid`) with `READ_CONTROL`; Everyone and capability SIDs stay in the WRITE_RESTRICTED restricting set but no longer appear in the default DACL, and the owner entry suppresses the shared account's implicit `WRITE_DAC`.
+- `sandbox/windowssandbox/token_windows.go:129` applies the DACL to every readonly and workspace-write runner token; the existing deferred cleanup still closes the new handle when the DACL or `SeChangeNotifyPrivilege` setup fails.
+- `sandbox/windowssandbox/token_default_dacl_like_rust_test.go:24` creates a workspace-write token with capability `S-1-5-21-10-20-30-40`, reads `TokenDefaultDacl`, and asserts exactly logon SID = `GENERIC_ALL` and `S-1-3-4` = `READ_CONTROL` with no Everyone or capability ACE, skipping when the host rejects WRITE_RESTRICTED tokens.
+- Verified on Windows with `go build ./...` and `go test ./sandbox/... -count=1`.
+- Residual: the test validates DACL contents instead of replaying Rust's `AccessCheck` simulation for a second logon, because `x/sys/windows` exposes no `AccessCheck` binding.
+
+Status after reconciliation: `2117 complete`, `440 not_applicable`,
+`379 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
