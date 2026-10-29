@@ -894,6 +894,16 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - `TestThreadResumeHistoryDiscardsPersistenceOnFailureLikeRust` fails against the previous code by leaving the record behind.
 - Tests: `go test ./appserver -count=1` shows only the three pre-existing analytics/fingerprint failures (`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`, `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`, `TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust`), which also fail with these changes reverted. `go test ./session -count=1` passes.
 
-Status after reconciliation: `1990 complete`, `389 not_applicable`,
-`501 audit_pending`, `269 regression_pending`, `0 partial`,
+### Report the running login policy in config requirements (Round 804)
+
+- #45495 was partly present: `config.ProjectRequirementsWithAllowedLoginMethods` already projected `allowedLoginMethods` (including `requirements: null` for the unrestricted default), and `RuntimeRouter.configRequirementsRead` already composed managed allowlists, the forced login method, and the ChatGPT workspace intersection.
+- Three behaviours were missing. `configRequirements/read` reported the *cached* requirements instead of re-reading the managed file, so a requirements file written after startup never reached the response and an invalid one never failed the call; an invalid `allowed_login_methods` entry was silently dropped instead of failing the load; and an explicit empty `allowed_chatgpt_workspaces` list collapsed to `nil` and therefore read as unrestricted.
+- `config/requirements_file.go` now returns `invalid allowed_login_methods value "saml": expected api or chatgpt` for unknown methods (Rust deserializes the enum) and keeps an explicitly empty workspace allowlist non-nil.
+- `config.ConfigService` freezes the requirements its login policy was built from (`LoginPolicyRequirements`, refreshed by `SetRequirements`/`SetRequirementsIfDifferentFromLoaded`, not by `ReloadRequirementsFromHome`), so `configRequirements/read` can follow Rust's split: re-read the file for the response body, report the process-lifetime auth policy for the allowed methods. The handler propagates reload errors the way Rust's `map_error` does.
+- Regressions added to `appserver/config_requirements_login_test.go`: the full Rust matrix (`TestRuntimeRouterConfigRequirementsReadMatchesRustLoginMatrix`: empty/absent forced workspaces stay null, unrelated requirements expose both methods, `["chatgpt","api","api"]` normalizes to `[api, chatgpt]`, forced ChatGPT without requirements, forced-narrowed managed allowlists, empty managed workspaces, disjoint/overlapping workspaces, api-only ignore of the workspace mismatch), `TestRuntimeRouterConfigRequirementsReadRejectsInvalidLoginMethodLikeRust`, and `TestRuntimeRouterConfigRequirementsReadUsesRunningLoginPolicyLikeRust` (a requirements file removed or rewritten after startup leaves `allowedLoginMethods` at `["api"]`).
+- Before this change the empty-workspace and invalid-method cases failed; the running-policy case already passed because the service cached requirements.
+- Tests: `go test ./config -count=1` passes; `go test ./appserver -count=1` shows only the three pre-existing analytics/fingerprint failures; `go test ./app -run 'Requirement|Login|Managed|RemoteTUI|Daemon|Workspace' -count=1` passes.
+
+Status after reconciliation: `1991 complete`, `389 not_applicable`,
+`501 audit_pending`, `268 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

@@ -13071,9 +13071,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 804 (implementation): `configRequirements/read` re-reads managed requirements for the response body (surfacing post-startup files and invalid allowlists) while reporting allowed login methods from the frozen running policy (`ConfigService.LoginPolicyRequirements`). Unknown `allowed_login_methods` values now fail the load, and an explicit empty `allowed_chatgpt_workspaces` list keeps restricting ChatGPT. Regressions: TestRuntimeRouterConfigRequirementsReadMatchesRustLoginMatrix, TestRuntimeRouterConfigRequirementsReadRejectsInvalidLoginMethodLikeRust, TestRuntimeRouterConfigRequirementsReadUsesRunningLoginPolicyLikeRust. Tests: go test ./config ./appserver -count=1 (only pre-existing analytics/fingerprint failures remain), go test ./app -run 'Requirement|Login|Managed|RemoteTUI|Daemon|Workspace' -count=1."
    ]
   },
   {
