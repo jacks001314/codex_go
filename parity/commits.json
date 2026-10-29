@@ -12075,9 +12075,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 786 (implementation): a Code Mode notification now keeps the budget of the model that started its cell. The dispatcher freezes with_serialization_allowance(truncation_policy).token_budget() when the exec call starts a cell, bounds the notification item to that token limit with Rust's truncate_text(Tokens(limit)) shape, and still hands the full text to the raw OnCodeModeNotify callback; the budget rides on ToolResponseItem.HistoryTruncationTokenLimit as a sidecar that never enters the model request. A cell that outlives its exec call routes later notifications into the running turn's pending input through Runtime's SteerMailbox (Rust inject_if_running), where they previously fell into a per-call buffer that had already been drained. Tests: TestCodeModeNotifyKeepsOriginatingBudgetAfterModelSwitchLikeRust, TestCodeModeNotifyAfterExecReturnInjectsIntoActiveTurnLikeRust, TestRuntimeCodeModeResponseItemInjectorQueuesPendingInputLikeRust, TestCodeModeNotificationBudgetStaysOutOfModelRequestLikeRust; go test ./turn ./tool, go build ./turn ./exec ./appserver ./app. Architecture note: Go applies the saved budget while building the notification item instead of during a record-time truncation pass, and its session/rollout builders do not mint a separate entry for a notify response item, so there is no rollout metadata field to compare."
    ]
   },
   {

@@ -457,6 +457,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			OnToolCompleted:             request.OnToolCompleted,
 			EmitCodeModeNestedLifecycle: request.EmitCodeModeNestedLifecycle,
 			OnCodeModeNotify:            request.OnCodeModeNotify,
+			InjectResponseItems:         r.codeModeResponseItemInjector(request.ThreadID, request.TurnID),
 			ThreadID:                    request.ThreadID,
 			TurnID:                      request.TurnID,
 			ExecutedToolCalls:           executedToolCalls,
@@ -474,6 +475,30 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		Now:                    r.now,
 		DeferMailboxPreemption: r.deferMailboxPreemption,
 	}).Run(ctx, &loopRequest)
+}
+
+// codeModeResponseItemInjector queues a response item as pending input for the
+// running turn (Rust `Session::inject_if_running`). A Code Mode cell outlives
+// the exec call that started it, so a notification emitted later must reach the
+// active turn's next sampling request instead of a per-call buffer that was
+// already drained. A finishing or closed turn rejects the item, mirroring the
+// inject_if_running gate.
+func (r *Runtime) codeModeResponseItemInjector(threadID string, turnID string) func(items []any) bool {
+	if r == nil || r.steerMailbox == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return nil
+	}
+	return func(items []any) bool {
+		if len(items) == 0 {
+			return false
+		}
+		stored, err := r.steerMailbox.EnqueueIfAcceptingDelivery(&SteerEnqueueParams{ThreadID: threadID, TurnID: turnID, InputItems: items})
+		return err == nil && stored
+	}
 }
 
 func filterAllowedHostedTools(tools []any, allowed *[]string) []any {

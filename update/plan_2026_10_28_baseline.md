@@ -761,6 +761,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Architecture gap: Go passes MCP approval metadata inline with the approval request, so no turn-scoped registry/weak-map lifetime is needed, and it emits no legacy `McpToolCallBegin/End` events - nested lifecycle callbacks stay on the originating turn's dispatcher.
 - Tests: `tool/code_mode_nested_cancel_like_rust_test.go`, `appserver/guardian_active_turn_denials_like_rust_test.go`; `go test ./tool ./turn`, `go test ./appserver -run Guardian`, and `go build ./appserver ./tool ./turn ./exec ./app` pass.
 
-Status after reconciliation: `1973 complete`, `385 not_applicable`,
-`509 audit_pending`, `282 regression_pending`, `0 partial`,
+### Code-mode notifications keep their originating budgets (Round 786)
+
+- `turn/tool_dispatcher.go`: a Code Mode cell freezes the originating model's `with_serialization_allowance` token budget when its exec call starts, bounds each notification item to it with Rust's `truncate_text(Tokens(limit))` shape, and keeps the full text on the raw `OnCodeModeNotify` callback. The budget rides on `ToolResponseItem.HistoryTruncationTokenLimit`, which `MarshalJSON` keeps out of the model request.
+- `turn/runtime.go`: a yielded cell outlives the exec call that started it, so a later notification is queued as pending input for the running turn (`inject_if_running`) through the steer mailbox; previously it landed in a per-call buffer that had already been drained and was lost. A finishing or closed turn rejects the injection.
+- Architecture note: Go applies the saved budget while building the notification item rather than during Rust's record-time truncation pass, and its session/rollout builders do not mint a separate rollout entry for a notify response item.
+- Tests: `turn/code_mode_notify_budget_like_rust_test.go` covers the originating budget across a model switch, raw full text, late delivery after exec returned, the mailbox gate, and the model-request sidecar; `go test ./turn ./tool` and `go build ./turn ./exec ./appserver ./app` pass.
+
+Status after reconciliation: `1974 complete`, `385 not_applicable`,
+`509 audit_pending`, `281 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

@@ -29,6 +29,11 @@ type ToolDispatcherOptions struct {
 	TurnID                      string
 	ExecutedToolCalls           *ExecutedToolCallRecorder
 	ToolMode                    string
+	// InjectResponseItems queues a response item as pending input for the
+	// running turn (Rust `Session::inject_if_running`). A yielded Code Mode cell
+	// outlives the exec call that started it, so a later notification is
+	// delivered here instead of the per-call buffer that was already drained.
+	InjectResponseItems func(items []any) bool
 	// InstantInterrupt enables Rust #48135's opt-in code-mode yielding: each
 	// sampling request watches the turn's queued user input and hands the
 	// code-mode calls a shared preemption signal, so a message queued during a
@@ -136,6 +141,7 @@ type ToolDispatcher struct {
 	onToolCompleted             ToolCompletedCallback
 	emitCodeModeNestedLifecycle bool
 	onCodeModeNotify            CodeModeNotifyCallback
+	injectResponseItems         func(items []any) bool
 	threadID                    string
 	turnID                      string
 	executedToolCalls           *ExecutedToolCallRecorder
@@ -201,6 +207,12 @@ type ToolResponseItem struct {
 	Execution string                     `json:"execution,omitempty"`
 	Output    *FunctionCallOutputPayload `json:"output,omitempty"`
 	Tools     []any                      `json:"tools,omitempty"`
+
+	// HistoryTruncationTokenLimit is the originating history budget in tokens,
+	// already carrying the serialization allowance (Rust
+	// `CodexHarnessMetadata::history_truncation_token_limit`). It never reaches
+	// the model request: MarshalJSON rebuilds only the response-item fields.
+	HistoryTruncationTokenLimit *uint64 `json:"-"`
 
 	executedToolCalls []model.ExecutedToolCall
 	cellID            string
@@ -401,6 +413,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		onToolCompleted:             options.OnToolCompleted,
 		emitCodeModeNestedLifecycle: options.EmitCodeModeNestedLifecycle,
 		onCodeModeNotify:            options.OnCodeModeNotify,
+		injectResponseItems:         options.InjectResponseItems,
 		threadID:                    strings.TrimSpace(options.ThreadID),
 		turnID:                      strings.TrimSpace(options.TurnID),
 		executedToolCalls:           options.ExecutedToolCalls,
@@ -927,20 +940,43 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	}
 	var notifyMu sync.Mutex
 	notifyItems := []any{}
+	notifyActive := false
 	if invocation.ToolName.Namespace == "" && invocation.ToolName.Name == tool.CodeModeExecToolName {
 		if invocation.Context == nil {
 			invocation.Context = map[string]any{}
 		}
 		invocation.Context[tool.CodeModeOutputCallIDContextKey] = invocation.CallID
+		// Rust #44867: the cell keeps the truncation policy of the model that
+		// started it. Freeze the allowance-bearing budget when the call starts a
+		// cell, so a later model switch cannot re-bound the notification with the
+		// receiving model's budget (Rust `CodeModeCellDelegate::notify`).
+		notifyTokenLimit := codeModeNotificationTokenLimit(invocation.Truncation)
+		notifyMu.Lock()
+		notifyActive = true
+		notifyMu.Unlock()
 		invocation.Context["code_mode_notify"] = tool.CodeModeNotifyFunc(func(callID string, text string) {
 			if strings.TrimSpace(text) == "" {
 				return
 			}
-			item := &ToolResponseItem{Type: "custom_tool_call_output", CallID: callID, Name: tool.CodeModeExecToolName, Output: NewFunctionCallOutputPayload(text, boolPtr(true))}
+			item := &ToolResponseItem{
+				Type:                        "custom_tool_call_output",
+				CallID:                      callID,
+				Name:                        tool.CodeModeExecToolName,
+				Output:                      NewFunctionCallOutputPayload(codeModeNotificationText(text, notifyTokenLimit), boolPtr(true)),
+				HistoryTruncationTokenLimit: notifyTokenLimit,
+			}
 			notifyMu.Lock()
-			notifyItems = append(notifyItems, item)
+			active := notifyActive
+			if active {
+				notifyItems = append(notifyItems, item)
+			}
 			notifyMu.Unlock()
+			if !active && d.injectResponseItems != nil {
+				d.injectResponseItems([]any{item})
+			}
 			if d.onCodeModeNotify != nil {
+				// Rust keeps the full notification text on the raw response item;
+				// only the recorded history item carries the truncation.
 				d.onCodeModeNotify(toolCtx, callID, text)
 			}
 		})
@@ -1182,8 +1218,11 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	d.emitToolResultReady(dispatchCtx, invocation, traceSource, d.turnID)
 	inputItems := d.postExecutionInputItems(toolCtx, invocation, output)
 	notifyMu.Lock()
-	inputItems = append(notifyItems, inputItems...)
+	notifyActive = false
+	pendingNotifyItems := notifyItems
+	notifyItems = nil
 	notifyMu.Unlock()
+	inputItems = append(pendingNotifyItems, inputItems...)
 	result := &ToolExecutionResult{
 		Invocation:      invocation,
 		Output:          output,
@@ -1256,6 +1295,30 @@ func (d *ToolDispatcher) nowUTC() time.Time {
 	d.clockMu.Lock()
 	defer d.clockMu.Unlock()
 	return d.now().UTC()
+}
+
+// codeModeNotificationTokenLimit mirrors Rust #44867's delegate budget: the
+// originating truncation policy with the 20% serialization allowance applied.
+// A host that supplied no policy leaves the notification unbounded, matching
+// the rest of Go's optional-policy handling; Rust always has one.
+func codeModeNotificationTokenLimit(policy *utils.TruncationPolicy) *uint64 {
+	if policy == nil {
+		return nil
+	}
+	allowance := policy.WithSerializationAllowance()
+	limit := uint64((&allowance).TokenBudget())
+	return &limit
+}
+
+// codeModeNotificationText bounds a notification by the originating budget.
+// Rust attaches the same budget as `history_truncation_token_limit` and
+// truncates the recorded item later; Go applies it while building the item so
+// the next request already carries the originating model's bound.
+func codeModeNotificationText(text string, tokenLimit *uint64) string {
+	if tokenLimit == nil {
+		return text
+	}
+	return utils.TruncateText(text, utils.TokensPolicy(int(*tokenLimit)))
 }
 
 func (d *ToolDispatcher) postExecutionInputItems(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any {
