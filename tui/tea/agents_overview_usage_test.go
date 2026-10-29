@@ -209,3 +209,53 @@ func TestAgentsOverviewUsageEnt26UsesNativeDollars(t *testing.T) {
 		t.Fatalf("missing native usage lines = %#v, want none", lines)
 	}
 }
+
+// Rust #44970: account changes, reconnects and missed server events clear the
+// cache, so a result that arrives afterwards is discarded, and a failed fetch
+// still records the attempt and schedules the next one-minute check.
+func TestAgentsOverviewUsageDiscardsStaleResultsAndRetriesAfterFailure(t *testing.T) {
+	model := newUsageDashboardModel(t, "business")
+	model.onAgentsOverviewUsage = func(string) (AgentsOverviewUsageResult, error) {
+		return AgentsOverviewUsageResult{}, nil
+	}
+
+	model.agentsOverviewUsagePendingThread = "root-1"
+	model.agentsOverviewUsagePendingRequest = 3
+	model.clearAgentsOverviewUsage() // account change / reconnect
+	command := model.applyAgentsOverviewUsageLoaded(agentsOverviewUsageLoadedMsg{
+		threadID:  "root-1",
+		requestID: 3,
+		result: AgentsOverviewUsageResult{
+			Outcome: AgentsOverviewUsageAvailable,
+			Usage:   AgentsOverviewThreadUsage{ThreadID: "root-1", EstimatedCreditsMicros: 9_000_000},
+		},
+	})
+	if command != nil {
+		t.Fatal("a stale result must not schedule work")
+	}
+	if entry := model.agentsOverviewUsage["root-1"]; entry != nil && entry.estimate != nil {
+		t.Fatalf("stale estimate stored after a reconnect: %#v", entry.estimate)
+	}
+
+	// A failed fetch keeps the cadence alive instead of stopping the feature.
+	model.agentsOverviewUsagePendingThread = "root-1"
+	model.agentsOverviewUsagePendingRequest = 4
+	command = model.applyAgentsOverviewUsageLoaded(agentsOverviewUsageLoadedMsg{
+		threadID:  "root-1",
+		requestID: 4,
+		err:       errors.New("usage read failed"),
+	})
+	if command == nil {
+		t.Fatal("a failed fetch must schedule the next one-minute check")
+	}
+	if model.agentsOverviewUsagePendingThread != "" {
+		t.Fatal("the pending request must be released after a failure")
+	}
+	entry := model.agentsOverviewUsage["root-1"]
+	if entry == nil || entry.fetchedAt.IsZero() {
+		t.Fatal("a failed fetch must record its attempt time")
+	}
+	if next := model.refreshAgentsOverviewUsageCmd(); next == nil {
+		t.Fatal("the cadence must keep a scheduled check after a failure")
+	}
+}
