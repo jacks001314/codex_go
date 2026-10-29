@@ -34,6 +34,7 @@ const (
 	AccountAnalyticsUnitRelativeUsage AccountAnalyticsUnit = iota
 	AccountAnalyticsUnitCredits
 	AccountAnalyticsUnitCount
+	AccountAnalyticsUnitTokens
 )
 
 // AccountAnalyticsHistory is one normalized daily series.
