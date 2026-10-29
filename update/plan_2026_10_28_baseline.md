@@ -2164,6 +2164,16 @@ Closed #46500 (04e4d2b40ffd): restricted Seatbelt policies deny mutating fcntls.
 - Residual: Rust also runs real Seatbelt children on macOS and asserts `EPERM` plus unchanged contents/metadata; only the generated policy text is verified here.
 - Verified: `go test ./sandbox -count=1` ok; negative check removing the deny fails the new test.
 
-Status after reconciliation: `2061 complete`, `406 not_applicable`,
-`442 audit_pending`, `236 regression_pending`, `4 partial`,
+### Usage diagnostics on the sampling span (Round 897)
+
+Closed #46501 (f5b941c9107a) regression coverage for the usage diagnostics on the sampling span.
+
+- `appserver/usage_tags.go:29` `UsageTagsForTurn` carries the full 28-key scalar allowlist plus one `feature.<key>` tag per registry feature (excluding the `Collab`/`SpawnCsv` equivalents), with absent values rendered as `unset`.
+- `appserver/turn_runtime.go:8326` feeds `cfg.FeatureSettings()` per turn; `turn/telemetry_span.go:53` records the sorted document as `tags_json` on the `run_sampling_request` span.
+- `appserver/usage_tags_test.go` now merges a second turn into the first tag map, proving `unset` overwrites the previous override.
+- Recorded nuance: the feedback-crate half (scraping `tags_json` from tracing and raising `MAX_FEEDBACK_TAGS` 64 → 512) has no Go counterpart because Go feedback uploads take caller-supplied tags, as noted in `update/plan_2026_09_19.md:2009`.
+- Verified: `go test ./appserver -run UsageTags -count=1` ok; `go test ./turn -run 'UsageTags|SamplingSpan' -count=1` ok.
+
+Status after reconciliation: `2062 complete`, `406 not_applicable`,
+`442 audit_pending`, `235 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

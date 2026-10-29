@@ -30,16 +30,24 @@ func TestUsageTagsConfiguredAndEffectiveContextAreDistinctLikeRust(t *testing.T)
 		}
 	}
 
+	// Rust merges the next turn's tags into the collector's existing map, so the
+	// explicit "unset" values must overwrite the earlier override.
+	updated := map[string]string{}
+	for key, value := range tags {
+		updated[key] = value
+	}
 	cfg.Values = map[string]any{}
-	tags = UsageTagsForTurn(cfg, nil, &modelInfo, "")
+	for key, value := range UsageTagsForTurn(cfg, nil, &modelInfo, "") {
+		updated[key] = value
+	}
 	for name, want := range map[string]string{
 		"model_context_window":           "unset",
 		"model_context_window_override":  "false",
 		"model_context_window_effective": "258400",
 		"service_tier":                   "unset",
 	} {
-		if tags[name] != want {
-			t.Fatalf("%s = %q, want %q", name, tags[name], want)
+		if updated[name] != want {
+			t.Fatalf("%s = %q, want %q", name, updated[name], want)
 		}
 	}
 }

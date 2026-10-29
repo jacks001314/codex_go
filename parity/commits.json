@@ -15808,9 +15808,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Usage diagnostics on the sampling span: appserver/usage_tags.go:29 UsageTagsForTurn mirrors Rust feedback_config::usage_tags with the full 28-key scalar allowlist (context window configured/override/effective, compaction and tool-output limits, verbosity, reasoning summary, service tier, review and subagent models, multi_agent_v2, memories, token_budget and rollout_budget), renders absent values as unset, and adds one boolean feature.<key> tag for every registry feature except the Collab and SpawnCsv equivalents (multi_agent, enable_fanout). appserver/turn_runtime.go:8326 passes cfg.FeatureSettings() into the per-turn tags and turn/telemetry_span.go:53 records the sorted document as tags_json on the run_sampling_request span, replacing the earlier combined enabled-feature list. Tests: appserver/usage_tags_test.go TestUsageTagsConfiguredAndEffectiveContextAreDistinctLikeRust now merges a second turn into the first tag map to prove unset overwrites the prior override (872000/true/380000/priority then unset/false/258400/unset), TestUsageTagsReportEveryFeatureExceptCollabAndSpawnCsvLikeRust, TestUsageTagsDocumentJSONLikeRust, and turn/telemetry_span_test.go TestAgentLoopSamplingSpanCarriesUsageTagsLikeRust. Recorded nuance: the feedback-crate half of the Rust commit (scraping tags_json out of tracing events and raising MAX_FEEDBACK_TAGS from 64 to 512) has no Go counterpart because Go feedback uploads take caller-supplied tags rather than reading the tracing pipeline, as recorded in update/plan_2026_09_19.md:2009. Verified: go test ./appserver -run UsageTags -count=1 ok; go test ./turn -run UsageTags|SamplingSpan -count=1 ok."
    ]
   },
   {
