@@ -403,7 +403,8 @@ func (m *Model) openStatusLineSetup() {
 	m.ensureStatusControls()
 	m.syncStatusControlsRuntime()
 	selections := chatwidget.NewStatusSurfaceSelections(m.statusControls.ConfiguredStatusLineItems(), m.statusControls.ConfiguredTerminalTitleItems())
-	view := chatwidget.NewStatusLineSetupView(selections.StatusLineItems, m.statusControls.StatusLineUseThemeColors, m.statusControls.StatusSurfacePreviewData())
+	previewData := m.statusControls.StatusSurfacePreviewData()
+	view := chatwidget.NewStatusLineSetupView(selections.StatusLineItems, m.statusControls.StatusLineUseThemeColors, previewData)
 	setup := &statusLineSetupModal{
 		items:          chatwidget.AllStatusLineItems(),
 		selected:       map[string]bool{},
@@ -424,7 +425,7 @@ func (m *Model) openStatusLineSetup() {
 		id:              "status-line-setup",
 		kind:            ModalKindStatusLine,
 		title:           view.Title,
-		body:            statusLineSetupBody(view.PreviewText),
+		body:            statusLineSetupBody(m.statusLinePreviewStyled(previewData, selections.StatusLineItems, view.UseThemeColors)),
 		options:         options,
 		statusLineSetup: setup,
 	})
@@ -475,11 +476,7 @@ func (m *Model) toggleStatusSetupSelection() bubbletea.Cmd {
 	if m.modal.statusLineSetup != nil {
 		setup := m.modal.statusLineSetup
 		setup.selected[option.ID] = !setup.selected[option.ID]
-		line, ok := m.statusControls.StatusSurfacePreviewData().StatusLineForItems(selectedStatusLineItems(setup), setup.useThemeColors)
-		preview := ""
-		if ok {
-			preview = line.PlainText()
-		}
+		preview := m.statusLinePreviewStyled(m.statusControls.StatusSurfacePreviewData(), selectedStatusLineItems(setup), setup.useThemeColors)
 		m.modal.body = statusLineSetupBody(preview)
 		return nil
 	}

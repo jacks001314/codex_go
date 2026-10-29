@@ -60,6 +60,7 @@ func TestStatusLineRenderStyledPrefersThemeAndThreadColors(t *testing.T) {
 func TestStatusLineRenderStyledDimsWhenThemeColorsDisabled(t *testing.T) {
 	line, ok := StatusLineFromSegments([]StatusLineSegment{
 		{Item: StatusLineModelName, Text: "gpt-5"},
+		{Item: StatusLineThreadTitle, Text: "Task"},
 	}, false)
 	if !ok {
 		t.Fatal("status line was not rendered")
@@ -67,7 +68,8 @@ func TestStatusLineRenderStyledDimsWhenThemeColorsDisabled(t *testing.T) {
 	styled := line.RenderStyled("\x1b[38;2;1;2;3m", func(StatusLineAccent) string {
 		return "\x1b[38;2;9;9;9m"
 	}, false)
-	if styled != "\x1b[2mgpt-5\x1b[0m" {
+	// Thread identity colors are suppressed with the rest of the palette.
+	if styled != "\x1b[2mgpt-5\x1b[0m\x1b[2m \u00b7 \x1b[0m\x1b[2mTask\x1b[0m" {
 		t.Fatalf("styled = %q, want dim plain text", styled)
 	}
 }

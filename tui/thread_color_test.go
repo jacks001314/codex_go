@@ -81,3 +81,32 @@ func TestThreadColorSGR(t *testing.T) {
 		}
 	}
 }
+
+// TestThreadColorPaletteFollowsThemeChanges covers Rust #44857's palette
+// refresh: switching the active theme must select that theme's accents. The Go
+// cache is keyed by the resolved syntax style, so a theme change never reuses
+// the previous theme's palette, and an explicit reset reloads deterministically.
+func TestThreadColorPaletteFollowsThemeChanges(t *testing.T) {
+	ResetThreadColorPaletteCache()
+	mocha := ThreadColorPalette("catppuccin-mocha")
+	dark := ThreadColorPalette("dracula")
+	if len(mocha) == 0 || len(dark) == 0 {
+		t.Fatalf("expected accents for both themes: %d/%d", len(mocha), len(dark))
+	}
+	if strings.Join(mocha, ",") == strings.Join(dark, ",") {
+		t.Fatalf("theme change reused the previous palette: %v", mocha)
+	}
+	if again := ThreadColorPalette("catppuccin-mocha"); strings.Join(again, ",") != strings.Join(mocha, ",") {
+		t.Fatalf("switching back changed the palette: %v vs %v", mocha, again)
+	}
+	ResetThreadColorPaletteCache()
+	threadColorPaletteMu.Lock()
+	cached := len(threadColorPaletteCache)
+	threadColorPaletteMu.Unlock()
+	if cached != 0 {
+		t.Fatalf("reset left %d cached palettes", cached)
+	}
+	if reloaded := ThreadColorPalette("dracula"); strings.Join(reloaded, ",") != strings.Join(dark, ",") {
+		t.Fatalf("reloaded palette = %v, want %v", reloaded, dark)
+	}
+}
