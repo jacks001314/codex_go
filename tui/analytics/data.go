@@ -176,6 +176,28 @@ func (l *AnalyticsLoad[T]) Ready() (T, bool) {
 	return l.value, true
 }
 
+// UnavailableAnalyticsLoad returns an untouched load (Rust Load::Unavailable).
+func UnavailableAnalyticsLoad[T any]() AnalyticsLoad[T] {
+	return AnalyticsLoad[T]{state: AnalyticsLoadStateUnavailable}
+}
+
+// Invalidate aborts any pending request and returns the load to Unavailable,
+// which is what closing or refreshing the dashboard does (Rust
+// AnalyticsView::cancel_loads).
+func (l *AnalyticsLoad[T]) Invalidate() {
+	if l == nil {
+		return
+	}
+	if l.pending != nil {
+		l.pending.cancel()
+		l.pending = nil
+	}
+	var zero T
+	l.state = AnalyticsLoadStateUnavailable
+	l.value = zero
+	l.message = ""
+}
+
 // Message returns the placeholder or error text, if any (Rust Load::message).
 func (l *AnalyticsLoad[T]) Message() (string, bool) {
 	switch {
