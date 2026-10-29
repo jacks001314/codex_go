@@ -2309,6 +2309,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Updated the stale `PendingServerVersionNotice` doc comment to describe version differences rather than older stable releases.
 - Verified with `go test ./tui -run Version` and `go test ./tui/status -run ServerVersion`.
 
-Status after reconciliation: `2077 complete`, `408 not_applicable`,
-`434 audit_pending`, `226 regression_pending`, `4 partial`,
+### Cover the shared local child-process spawn contract (Round 916)
+
+- Upstream (`d086e2752dad`, #46659) only relocates the local child-process implementation into `codex-utils-pty`: it exposes `Child` plus `spawn_child`, which sets `kill_on_drop(true)` and pipes stdin, stdout, and stderr, and the MCP stdio transport switches to it.
+- Go has no separate pty crate, so `mcp` owns the equivalent contract: `startProcess` wires `StdinPipe`, `StdoutPipe`, and a `stdioOutputBuffer` for stderr before starting the child through `startMCPStdioProcess` (`mcp/stdio_process_unix.go` process group with SIGTERM then SIGKILL escalation, `mcp/stdio_process_windows.go` suspended spawn plus kill-on-job-close Job Object, `mcp/stdio_process_other.go` direct-child fallback). `closeLocked` terminates the child, reaps it, and releases containment handles.
+- Added `mcp/stdio_child_spawn_like_rust_test.go` (`TestStdioChildSpawnPipesStreamsAndKillsOnCloseLikeRust`): it drives a real re-executed stdio helper, proves the piped stdout response and captured stderr marker, and proves that closing the transport kills the recorded child pid.
+- Verified with `go test ./mcp -run TestStdioChildSpawnPipesStreamsAndKillsOnCloseLikeRust` and the full `go test ./mcp`.
+
+Status after reconciliation: `2078 complete`, `408 not_applicable`,
+`434 audit_pending`, `225 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

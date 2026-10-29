@@ -16625,9 +16625,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust d086e2752dad only relocates the local child-process API into codex-utils-pty and exposes spawn_child with kill-on-drop plus piped stdin/stdout/stderr; Go has no separate pty crate, so mcp owns the equivalent contract: mcp/stdio_client.go startProcess wires StdinPipe, StdoutPipe, and a stdioOutputBuffer for stderr and starts the child through startMCPStdioProcess (mcp/stdio_process_unix.go process group with SIGTERM then SIGKILL escalation, mcp/stdio_process_windows.go suspended spawn plus kill-on-job-close Job Object, mcp/stdio_process_other.go direct-child fallback), and closeLocked terminates the child, waits, and releases containment handles. Added mcp/stdio_child_spawn_like_rust_test.go TestStdioChildSpawnPipesStreamsAndKillsOnCloseLikeRust, which drives a real re-executed stdio helper, proves the piped stdout and stderr paths, and proves closing the transport kills the recorded child pid. Verified: go test ./mcp -run TestStdioChildSpawnPipesStreamsAndKillsOnCloseLikeRust and go test ./mcp."
    ]
   },
   {
