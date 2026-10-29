@@ -1182,6 +1182,18 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Difference: Go has no ratatui Buffer, so cells carry style facts (Series/Dim/Accent/Bold/Underline/Reversed) and the view resolves terminal colors; an out-of-range cursor is clamped instead of panicking.
 - Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./... .
 
+### #45764 Account analytics dashboard (view-model layer) (Round 837)
+
+## Round 837 - #45764 Account analytics dashboard (view-model layer)
+
+- tui/analytics/sections.go adds the stable section identities (usage/plugins/credits/activity/skills), their report mapping, per-section state (default cursor 6, detail, group), the three range groups (business usage shares the activity range; plugins and skills share tools), the account-specific card order, the "Product" grouping label for credits and unattributed usage, and the 7/30-day cursor shift.
+- dashboard.go adds AnalyticsGroupOptions per section and account, AnalyticsConsumerAttribution, AnalyticsSectionTitle, and AnalyticsDashboardLines: bordered overview cards that switch to two columns at width >= 104, clamp card height to 16..24 rows from the viewport, push the "… z to maximize" hint when content overflows, and replace history with the group picker while it is open.
+- panels.go adds the maximized panel (heading, "By …" grouping, business model line, picker selection range, wrapped content, chart band count); history_lines.go ports the section body: total line with "reported" for messages, approximate-usage and turn-start notes, chart or no-activity message, selected-day summary with Not reported / No activity (0) / relative units / raw expanded totals, Share percentages, 56-column breakdown table with the top three plus "N more" remainder, expanded rows, an empty-breakdown message that preserves row height, and the Updated footer.
+- tool_panel.go adds readable plugin/skill labels (namespace dedupe plus PR/CLI/API/IDE/MCP/SDK/UI/TUI/OpenAI), and text_layout.go adds column joins, ellipsis truncation, and width-aware wrapping; data.go adds UnavailableAnalyticsLoad/Invalidate so closing or refreshing returns every report to Unavailable.
+- Tests cover account layouts, range groups and labels, group options, attribution gating and titles, the range switch, section dates, card geometry at 120/80 columns, overflow hint, picker, panel heading/selection/bands, totals and shares, remainder and expansion, relative units, empty breakdowns, tool names, and load invalidation.
+- Still open for a complete port: the `/usage` "Explore analytics" entry, the full-screen view with its key bindings, wiring to analytics.Live and the model-name map, draft preservation, and the chatwidget usage-menu changes.
+- Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./... .
+
 Status after reconciliation: `2014 complete`, `395 not_applicable`,
-`480 audit_pending`, `258 regression_pending`, `2 partial`,
+`479 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
