@@ -7,8 +7,17 @@ import (
 )
 
 // terminalColorProbeTimeout mirrors Rust's DEFAULT_TIMEOUT for the OSC 10/11
-// probe.
-const terminalColorProbeTimeout = 100 * time.Millisecond
+// probe (#46855 raised the shared budget to 250 ms).
+const terminalColorProbeTimeout = 250 * time.Millisecond
+
+// defaultTerminalColorProbeTimeout resolves an unset budget to the shared Rust
+// DEFAULT_TIMEOUT so every platform probe uses the same window (#46855).
+func defaultTerminalColorProbeTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return terminalColorProbeTimeout
+	}
+	return timeout
+}
 
 // terminalColorProbeQuery is Rust's combined OSC 10 (foreground) and OSC 11
 // (background) query, each terminated with ST.

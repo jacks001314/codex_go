@@ -34,9 +34,7 @@ func terminalStartupProbeQuery(queryIdentity bool) string {
 // unterminated report bytes; the probe restores the previous mode before it
 // returns.
 func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, []byte, bool) {
-	if timeout <= 0 {
-		timeout = terminalColorProbeTimeout
-	}
+	timeout = defaultTerminalColorProbeTimeout(timeout)
 	queryIdentity := StartupProbeQueryTerminalIdentity()
 	SetTerminalAppOverSSHFromStartupProbe(nil)
 	if !queryIdentity {

@@ -17095,9 +17095,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust 7c1e485c871d (#46855) raised terminal_probe DEFAULT_TIMEOUT from 100ms to 250ms and uses that shared budget for every terminal probe and startup probe group. Go now pins tui/terminal_probe.go DefaultTerminalProbeTimeout and tui/terminal_default_colors.go terminalColorProbeTimeout to 250ms, resolves an unset budget through defaultTerminalColorProbeTimeout (used by the unix and windows platform probes), and the TUI startup probe in tui/tea/model.go passes the shared constant instead of a hardcoded 100ms. Tests: tui/terminal_probe_timeout_like_rust_test.go TestTerminalProbeTimeoutMatchesRustDefault and TestTerminalColorProbeUsesDefaultBudgetWhenUnset; TestTerminalColorProbeQueryMatchesRust now expects 250ms. Verified: go build ./tui/... and go test ./tui -run TerminalProbe and go test ./tui -run TerminalColor."
    ]
   },
   {

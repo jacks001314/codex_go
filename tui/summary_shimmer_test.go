@@ -182,8 +182,8 @@ func TestTerminalColorProbeQueryMatchesRust(t *testing.T) {
 	if terminalColorProbeQuery != want {
 		t.Fatalf("probe query = %q, want %q", terminalColorProbeQuery, want)
 	}
-	if terminalColorProbeTimeout != 100*time.Millisecond {
-		t.Fatalf("probe timeout = %s, want 100ms (Rust DEFAULT_TIMEOUT)", terminalColorProbeTimeout)
+	if terminalColorProbeTimeout != 250*time.Millisecond {
+		t.Fatalf("probe timeout = %s, want 250ms (Rust DEFAULT_TIMEOUT, #46855)", terminalColorProbeTimeout)
 	}
 }
 

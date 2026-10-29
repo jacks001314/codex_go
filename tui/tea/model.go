@@ -152,7 +152,7 @@ func probeTerminalColorsForTUI(input io.Reader, output io.Writer) io.Reader {
 	if !terminalStartupProbeConsumed.CompareAndSwap(false, true) {
 		return input
 	}
-	_, leftover, _ := codextui.ProbeTerminalStartup(100 * time.Millisecond)
+	_, leftover, _ := codextui.ProbeTerminalStartup(codextui.DefaultTerminalProbeTimeout)
 	return newReplayInputReader(leftover, input)
 }
 

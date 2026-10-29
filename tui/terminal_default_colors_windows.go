@@ -92,9 +92,7 @@ func readConsoleDefaultColors() (DefaultColors, bool) {
 // that is not part of a reply (Rust terminal_probe/windows.rs). When it reports
 // false, the console color table above remains the platform source.
 func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, []byte, bool) {
-	if timeout <= 0 {
-		timeout = terminalColorProbeTimeout
-	}
+	timeout = defaultTerminalColorProbeTimeout(timeout)
 	// Windows never queries DA2, so the startup identity is known to be
 	// something other than Apple Terminal over SSH (Rust #47417).
 	SetTerminalAppOverSSHFromStartupProbe(boolPtrTerminalProbe(false))

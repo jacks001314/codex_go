@@ -2316,6 +2316,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Added `mcp/stdio_child_spawn_like_rust_test.go` (`TestStdioChildSpawnPipesStreamsAndKillsOnCloseLikeRust`): it drives a real re-executed stdio helper, proves the piped stdout response and captured stderr marker, and proves that closing the transport kills the recorded child pid.
 - Verified with `go test ./mcp -run TestStdioChildSpawnPipesStreamsAndKillsOnCloseLikeRust` and the full `go test ./mcp`.
 
-Status after reconciliation: `2078 complete`, `408 not_applicable`,
-`434 audit_pending`, `225 regression_pending`, `4 partial`,
+### Raise the default terminal probe budget to 250 ms (Round 917)
+
+- Upstream (`7c1e485c871d`, #46855) raised `terminal_probe::DEFAULT_TIMEOUT` from 100 ms to 250 ms; the same budget covers every terminal probe and startup probe group.
+- Go now pins `DefaultTerminalProbeTimeout` (`tui/terminal_probe.go`) and `terminalColorProbeTimeout` (`tui/terminal_default_colors.go`) to 250 ms, and resolves an unset budget through `defaultTerminalColorProbeTimeout`, which both platform color probes use.
+- The TUI startup probe in `tui/tea/model.go` now passes `codextui.DefaultTerminalProbeTimeout` instead of a hardcoded 100 ms, so the raised window reaches the real query path.
+- Added `tui/terminal_probe_timeout_like_rust_test.go` (`TestTerminalProbeTimeoutMatchesRustDefault`, `TestTerminalColorProbeUsesDefaultBudgetWhenUnset`) and updated `TestTerminalColorProbeQueryMatchesRust` to expect 250 ms.
+- Verified with `go build ./tui/...` and `go test ./tui -run TerminalProbe` plus `go test ./tui -run TerminalColor`.
+
+Status after reconciliation: `2079 complete`, `408 not_applicable`,
+`434 audit_pending`, `224 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

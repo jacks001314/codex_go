@@ -10,7 +10,10 @@ import (
 )
 
 // Rust parity: codex-rs/tui/src/terminal_probe.rs.
-const DefaultTerminalProbeTimeout = 100 * time.Millisecond
+
+// DefaultTerminalProbeTimeout mirrors Rust's `DEFAULT_TIMEOUT` (#46855): the
+// wall-clock budget for each terminal probe or startup probe group.
+const DefaultTerminalProbeTimeout = 250 * time.Millisecond
 
 type TerminalProbeResult struct {
 	Terminal TerminalName
