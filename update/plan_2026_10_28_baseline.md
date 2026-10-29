@@ -1515,6 +1515,32 @@ Windows sandbox policy and per-thread executor hosts (#45813).
 - Verified with `go test ./tui/ ./tui/app/ ./config/ ./tui/chatwidget
   -count=1`, `go vet ./tui/ ./tui/app/`, and `go build ./...`.
 
-Status after reconciliation: `2023 complete`, `396 not_applicable`,
-`470 audit_pending`, `258 regression_pending`, `2 partial`,
+### App-server Windows sandbox state (Round 854)
+
+App-server Windows sandbox state for onboarding (#45830, not applicable).
+
+- The commit is removal-only: it deletes `windows_sandbox_level` from
+  `AppCommand::OverrideTurnContext`, stops sending sandbox-only overrides, and
+  deletes `windows_sandbox::level_from_config`.
+- Go has no turn-context override carrying a Windows sandbox level: built-in
+  preset changes go through `thread/settings/update` and the
+  `WindowsSandboxLevelRefresh` result flag in `tui/chatwidget/settings.go` has no
+  sender, so there is nothing to remove and no stale override can be ignored by
+  the server.
+- Go's connected TUI already treats the app server as authoritative:
+  `interactiveRemoteWindowsSandboxStartupPrompt` reads effective config and
+  requirements from the server and `refreshWindowsSandboxStateCmd` re-reads them
+  after setup, matching the intent of deriving onboarding state from the app
+  server. The local-config variant in `interactive.go` only serves embedded
+  (non-app-server) sessions, which Rust does not have.
+- The onboarding trust screen is only a render model in Go
+  (`tui/onboarding.TrustDirectoryPrompt`): `ShowWindowsCreateSandboxHint` is set
+  solely by tests and no live flow derives it from local configuration, so the
+  source switch has no carrier.
+- `level_from_config`'s deletion does not remove behaviour: Go's
+  `WindowsSandboxLevelFromConfig` is fed app-server config values and matches the
+  surviving `WindowsSandboxConfig::level()` mapping.
+
+Status after reconciliation: `2023 complete`, `397 not_applicable`,
+`469 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

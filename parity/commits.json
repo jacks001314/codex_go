@@ -14235,9 +14235,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Removal-only commit: Go has no OverrideTurnContext/windows_sandbox_level carrier and no live onboarding trust screen deriving the hint from local config; connected sessions already read app-server config (interactiveRemoteWindowsSandboxState) and refresh after setup"
    ]
   },
   {
