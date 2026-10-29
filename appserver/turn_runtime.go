@@ -3378,10 +3378,28 @@ func (r *RuntimeRouter) modelInvocationContextForTurn(threadID string, turnID st
 	if active == nil || active.RunConfig == nil {
 		return modelInvocationContext{}
 	}
-	return modelInvocationContext{
-		ModelSlug:       strings.TrimSpace(active.RunConfig.Model),
-		ReasoningEffort: strings.TrimSpace(active.RunConfig.ReasoningEffort),
+	return r.modelInvocationContextForRunConfig(active.RunConfig)
+}
+
+// modelInvocationContextForRunConfig resolves the analytics model labels for a
+// step's run config. Rust's StepContext::model_context reports
+// effective_reasoning_effort(), which falls back to the model's default
+// reasoning level when the step did not select one (Rust #45445).
+func (r *RuntimeRouter) modelInvocationContextForRunConfig(runConfig *appTurnRunConfig) modelInvocationContext {
+	if runConfig == nil {
+		return modelInvocationContext{}
 	}
+	context := modelInvocationContext{
+		ModelSlug:       strings.TrimSpace(runConfig.Model),
+		ReasoningEffort: strings.TrimSpace(runConfig.ReasoningEffort),
+	}
+	if context.ReasoningEffort != "" || context.ModelSlug == "" || r == nil {
+		return context
+	}
+	if info := r.modelInfoForRuntimeWithConfig(context.ModelSlug, runConfig.Config); info != nil {
+		context.ReasoningEffort = strings.TrimSpace(info.DefaultReasoningLevel)
+	}
+	return context
 }
 
 func unifiedExecSessionItem(turnID string, item ThreadItem, event tool.UnifiedExecEvent) session.Item {

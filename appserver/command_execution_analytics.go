@@ -60,11 +60,11 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 	// completion-time run config stand in (the carry the unified-exec path hands
 	// the emitter is already the start-time config).
 	modelContext, _ := r.takeToolItemModelContext(threadID, turnID, threadItemExternalID(item))
-	if modelContext.ModelSlug == "" && modelContext.ReasoningEffort == "" && runConfig != nil {
-		modelContext = modelInvocationContext{
-			ModelSlug:       strings.TrimSpace(runConfig.Model),
-			ReasoningEffort: strings.TrimSpace(runConfig.ReasoningEffort),
-		}
+	if modelContext.isZero() {
+		// No start was observed: the completion-time resolved settings stand in,
+		// still reporting the model's default reasoning level when the step did
+		// not select one.
+		modelContext = r.modelInvocationContextForRunConfig(runConfig)
 	}
 	base := telemetry.CodexToolItemEventBase{
 		ThreadID:                       threadID,

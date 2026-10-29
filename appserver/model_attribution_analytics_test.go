@@ -4,9 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/plugin"
 	"codex_go/session"
 	"codex_go/telemetry"
@@ -153,5 +156,60 @@ func TestPluginMeasurementEventCarriesTheInvokingModelLikeRust(t *testing.T) {
 		}
 	default:
 		t.Fatal("no second plugin measurement event was recorded")
+	}
+}
+
+// TestCommandExecutionAnalyticsReportsModelDefaultReasoningLikeRust covers the
+// rest of Rust #45445's model context: StepContext::model_context reports
+// effective_reasoning_effort(), which falls back to the model's default
+// reasoning level when the step selected none.
+func TestCommandExecutionAnalyticsReportsModelDefaultReasoningLikeRust(t *testing.T) {
+	router, sink := newModelAttributionRouter(t)
+	var info model.ModelInfo
+	for _, candidate := range model.BundledModelsResponse().Models {
+		if strings.TrimSpace(candidate.DefaultReasoningLevel) != "" {
+			info = candidate
+			break
+		}
+	}
+	if info.Slug == "" {
+		t.Skip("bundled catalog declares no default reasoning level")
+	}
+	threadID := "thread-default-effort"
+	turnID := "turn-default-effort"
+	if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{ThreadID: threadID, Model: info.Slug}); err != nil {
+		t.Fatalf("register active turn error = %v", err)
+	}
+	router.updateActiveRuntimeTurnAnalytics(threadID, turnID, "", &appTurnRunConfig{Model: info.Slug})
+	if context := router.modelInvocationContextForTurn(threadID, turnID); context.ReasoningEffort != info.DefaultReasoningLevel {
+		t.Fatalf("start context reasoning effort = %q, want the model default %q", context.ReasoningEffort, info.DefaultReasoningLevel)
+	}
+
+	item := &ThreadItem{
+		ID:        "cmd-default-effort",
+		Type:      "commandExecution",
+		CallID:    "cmd-default-effort",
+		CreatedAt: 125000,
+		Data: map[string]any{
+			"status":                 string(CommandExecutionCompleted),
+			"startedAtMs":            int64(123000),
+			"completedAtMs":          int64(125000),
+			"command":                "echo hi",
+			"commandActions":         []any{},
+			"commandSource":          "agent",
+			"exitCode":               int64(0),
+			"commandExecutionSource": "agent",
+		},
+	}
+	// No start notification was recorded, so the completion-time settings stand
+	// in and still carry the model default.
+	router.emitCommandExecutionAnalyticsEvent(context.Background(), "conn-model-attribution", threadID, turnID, item, &appTurnRunConfig{Model: info.Slug})
+	event := waitForCommandExecutionAnalyticsEvent(t, sink, turnID)
+	params := event.EventParams
+	if params.ModelSlug == nil || *params.ModelSlug != info.Slug {
+		t.Fatalf("model_slug = %#v, want %q", params.ModelSlug, info.Slug)
+	}
+	if params.ReasoningEffort == nil || *params.ReasoningEffort != info.DefaultReasoningLevel {
+		t.Fatalf("reasoning_effort = %#v, want the model default %q", params.ReasoningEffort, info.DefaultReasoningLevel)
 	}
 }
