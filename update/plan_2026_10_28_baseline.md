@@ -2856,6 +2856,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestRuntimeRouterRetainsDeliveredAssistantMessageLikeRust`, `TestRuntimeRouterSkipsInheritedDeliveredAssistantMessageForWorkerLikeRust`.
 - Verified with `go test ./appserver -run 'TestRuntimeRouterRetainsDeliveredAssistantMessageLikeRust|TestRuntimeRouterSkipsInheritedDeliveredAssistantMessageForWorkerLikeRust' -count=1`.
 
-Status after reconciliation: `2125 complete`, `441 not_applicable`,
-`370 audit_pending`, `210 regression_pending`, `3 partial`,
+### Unfinished link destinations in rich streaming previews (Round 964)
+
+- Rust #47589 keeps a Markdown link's label visible and withholds the opening parenthesis plus destination until the link closes, scanning incrementally with nested parentheses, escapes, angle-bracket destinations, titles and inline code accounted for; the holdback applies only to rich prose previews (#47589, complete).
+- `tui/streaming/link_holdback.go` adds `linkPreview`, the incremental scanner mirroring Rust's `LinkPreview`, and `refreshProsePreview` now tracks `richSafeLen` alongside the structural `safeLen`.
+- Prose previews cut at the pending destination offset while math previews keep the structural bound, and newline commitment plus finalization still render the original source, so resizing or completing a long URL cannot collapse rows that were already shown.
+- Tests: `TestStreamingPreviewHidesUnfinishedLinkDestinationsLikeRust` (seven destinations pushed character by character, plus a long Unicode destination past the 8 KiB preview bound), `TestStreamingUnfinishedLinkFlushesOnNewlineLikeRust` (resize, newline flush, committed line), `TestStreamingPreviewWithoutLinkHoldbackLikeRust` (escaped labels, inline code, complete links).
+- Verified with `go build ./...` and `go test ./tui/streaming -count=1`.
+
+Status after reconciliation: `2126 complete`, `441 not_applicable`,
+`369 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

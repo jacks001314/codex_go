@@ -25,10 +25,12 @@ const maxProsePreviewBytes = 8192
 // scrollback; newline commitment and finalization render the original source
 // independently.
 type prosePreview struct {
-	lines   []string
-	scanned int
-	safeLen int
-	hasPipe bool
+	lines       []string
+	scanned     int
+	safeLen     int
+	richSafeLen int
+	hasPipe     bool
+	link        linkPreview
 }
 
 func (p *prosePreview) reset() {
@@ -145,6 +147,7 @@ func (c *streamCore) refreshProsePreview() bool {
 		if strings.Contains(pending[c.preview.scanned:], "|") {
 			c.preview.hasPipe = true
 		}
+		c.preview.link.scan(pending, c.preview.scanned)
 		c.preview.scanned = len(pending)
 	}
 	// Indented and quoted lines may belong to nested code blocks, so their
@@ -159,10 +162,19 @@ func (c *streamCore) refreshProsePreview() bool {
 		strings.HasPrefix(pending, "~~~") ||
 		pending == "`" || pending == "``" || pending == "~" || pending == "~~") {
 		c.preview.safeLen = len(pending)
+		c.preview.richSafeLen = len(pending)
+	}
+	// Keep Raw/Math's structural bound independent of Rich-only link holdback.
+	if start, ok := c.preview.link.pendingStart(); ok && start < c.preview.richSafeLen {
+		c.preview.richSafeLen = start
 	}
 	safe := pending
-	if c.preview.safeLen < len(safe) {
-		safe = safe[:c.preview.safeLen]
+	safeLen := c.preview.safeLen
+	if mode == previewModeProse {
+		safeLen = c.preview.richSafeLen
+	}
+	if safeLen < len(safe) {
+		safe = safe[:safeLen]
 	}
 	start := 0
 	if len(safe) > maxProsePreviewBytes {

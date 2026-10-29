@@ -19486,9 +19486,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "tui/streaming/link_holdback.go adds the incremental `linkPreview` scanner mirroring Rust `LinkPreview`: it tracks label brackets, escapes, inline-code ticks, nested destination parentheses, angle-bracket destinations and quoted titles, and reports the byte offset where an unfinished destination starts.",
+    "The prose preview keeps that offset as `richSafeLen` (tui/streaming/controller.go refreshProsePreview) so the label stays visible and the opening parenthesis plus destination are withheld until the link closes; math previews continue to use the structural `safeLen`, and newline commitment/finalization still render the original source.",
+    "Tests: TestStreamingPreviewHidesUnfinishedLinkDestinationsLikeRust (seven destinations pushed character by character, long Unicode destination past the 8 KiB bound), TestStreamingUnfinishedLinkFlushesOnNewlineLikeRust (resize, newline flush, committed line), TestStreamingPreviewWithoutLinkHoldbackLikeRust (escaped labels, inline code, complete links)."
    ]
   },
   {
