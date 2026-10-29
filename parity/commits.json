@@ -15471,9 +15471,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #46305 replaced turn-snapshot lookups with ThreadState::active_turn_id for interrupt validation, elicitation turn-id fallback, and teardown/shutdown logging. Go's ThreadManager.ActiveTurn (appserver/thread_manager.go:722) clones the turn through cloneActiveRuntimeTurn -> cloneTurnStartParams, so id-only callers paid the same cost. Added ActiveTurnID (appserver/thread_manager.go:734) and used it for the manual-compaction abort (appserver/runtime_router.go:9182), Guardian denial accounting (guardianActiveTurnID, appserver/guardian_reviewer.go:2287), the review-turn probe (appserver/turn_runtime.go:3858), and as the pre-clone id check in interruptRuntimeTurn, which still materializes the snapshot only when the id matches so reservation and finishing behavior are unchanged. Go has no elicitation turn-id fallback (tool-call elicitations always carry the turn) and no had_active_turn teardown log, so those two Rust call sites have no Go counterpart. Regression test appserver/active_turn_id_lookup_like_rust_test.go covers nil and idle managers, whitespace-tolerant lookup, agreement with the snapshot, continued snapshot isolation from the stored turn, and guardian lookup before and after ConsumeTurn. Verified with go test ./appserver -run 'Interrupt|Compaction|Guardian|ActiveTurn|Wake' -count=1, go test ./turn -count=1, and go build ./..."
    ]
   },
   {

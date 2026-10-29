@@ -2288,11 +2288,7 @@ func (r *RuntimeRouter) guardianActiveTurnID(threadID string) string {
 	if r == nil {
 		return ""
 	}
-	active := r.threads.ActiveTurn(strings.TrimSpace(threadID))
-	if active == nil {
-		return ""
-	}
-	return strings.TrimSpace(active.TurnID)
+	return strings.TrimSpace(r.threads.ActiveTurnID(strings.TrimSpace(threadID)))
 }
 
 func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID, reason string) {

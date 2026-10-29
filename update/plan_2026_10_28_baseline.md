@@ -2097,6 +2097,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - The existing tests covered `send_message`, `list_agents` and `spawn_agent` only. Added `agent/multi_agent_v2_catalog_descriptions_like_rust_test.go`, which compares a baseline registry with an overridden one registered under a custom namespace and checks all six tools: catalog text for `send_message`/`followup_task`/`wait_agent`/`interrupt_agent`, empty-string suppression for `list_agents`, bundled text plus unchanged input schemas for tools without an entry, and `spawn_agent`'s override-before-guidance ordering with the usage hint last.
 - Verified with `go test ./agent -count=1`.
 
-Status after reconciliation: `2052 complete`, `404 not_applicable`,
-`446 audit_pending`, `243 regression_pending`, `4 partial`,
+### Active-turn id lookups skip the snapshot clone (Round 890)
+
+**Upstream:** 55db7e8c8870 "Avoid cloning turn items for app-server active turn lookups (#46305)".
+
+- Rust exposed `ThreadState::active_turn_id` so interrupt validation, elicitation turn-id fallback, and teardown logging stop building turn snapshots. Go's `ThreadManager.ActiveTurn` (`appserver/thread_manager.go:722`) clones the turn via `cloneActiveRuntimeTurn` -> `cloneTurnStartParams`, so id-only callers paid the same cost.
+- Added `ThreadManager.ActiveTurnID` (`appserver/thread_manager.go:734`) and used it for the manual-compaction abort (`appserver/runtime_router.go:9182`), Guardian denial accounting (`appserver/guardian_reviewer.go:2287`), the review-turn probe (`appserver/turn_runtime.go:3858`), and as the pre-clone id check inside `interruptRuntimeTurn`. The snapshot is still materialized only when the id matches, so wake-reservation and turn-finishing behavior is unchanged.
+- Two Rust call sites have no Go counterpart: Go has no elicitation turn-id fallback (tool-call elicitations always carry the turn) and no `had_active_turn` teardown log.
+- Added `appserver/active_turn_id_lookup_like_rust_test.go`: nil and idle managers, whitespace-tolerant lookup, agreement with the snapshot, continued snapshot isolation from the stored turn, and Guardian lookup before and after `ConsumeTurn`.
+- Verified with `go test ./appserver -run 'Interrupt|Compaction|Guardian|ActiveTurn|Wake' -count=1`, `go test ./turn -count=1`, and `go build ./...`.
+
+Status after reconciliation: `2053 complete`, `404 not_applicable`,
+`446 audit_pending`, `242 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

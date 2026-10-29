@@ -9183,17 +9183,19 @@ func (r *RuntimeRouter) abortRuntimeTurnForManualCompaction(threadID string) {
 	if r == nil || !r.hasRuntimeThreadStore() {
 		return
 	}
-	active := r.threads.ActiveTurn(threadID)
-	if active == nil || strings.TrimSpace(active.TurnID) == "" {
+	// Rust #46305: teardown-style lookups read the active turn id without
+	// materializing the turn's params.
+	turnID := strings.TrimSpace(r.threads.ActiveTurnID(threadID))
+	if turnID == "" {
 		return
 	}
 	// Rust's abort is infallible; a compaction must still run when the turn has
 	// already reached a terminal state.
-	if _, err := r.interruptRuntimeTurn(threadID, active.TurnID, nil, turnAbortReasonReplaced); err != nil {
+	if _, err := r.interruptRuntimeTurn(threadID, turnID, nil, turnAbortReasonReplaced); err != nil {
 		slog.Warn(
 			"failed to replace the running turn for manual compaction",
 			"thread_id", threadID,
-			"turn_id", active.TurnID,
+			"turn_id", turnID,
 			"error", err,
 		)
 	}
@@ -9206,13 +9208,16 @@ func (r *RuntimeRouter) abortRuntimeTurnForManualCompaction(threadID string) {
 // `replaced`.
 func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, requestedAtMS *uint64, reason string) (*turn.TurnInterruptResponse, error) {
 	if r.hasRuntimeThreadStore() {
-		if active := r.threads.ActiveTurn(threadID); active != nil && active.TurnID == turnID {
+		// Rust #46305: validate the id before cloning the turn. Only a matching
+		// id needs the full record's reservation and finishing state.
+		if turnID != "" && r.threads.ActiveTurnID(threadID) == turnID {
+			active := r.threads.ActiveTurn(threadID)
 			// A wake reserves work before it registers a task. Stopping the
 			// reservation must preserve its mail without emitting a terminal event
 			// for work that never started; only an interrupt stops later automatic
 			// turns (Rust marks interrupted for Interrupted/BudgetLimited, while
 			// Replaced still drops the reservation).
-			if automaticWakeReservation(active) {
+			if active != nil && automaticWakeReservation(active) {
 				stopped := reason == turnAbortReasonInterrupted
 				if stopped {
 					if _, err := r.requireTurns().Interrupt(&turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID}); err != nil {
@@ -9227,7 +9232,7 @@ func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, req
 			// capacity eviction cannot close the rollout writer, and its only
 			// terminal event is TurnComplete. Replacement still aborts it so manual
 			// compaction can take the thread.
-			if reason == turnAbortReasonInterrupted {
+			if active != nil && reason == turnAbortReasonInterrupted {
 				if mailbox := r.requireSteerMailbox(); mailbox != nil && mailbox.IsTurnFinishing(threadID, turnID) {
 					return &turn.TurnInterruptResponse{}, nil
 				}

@@ -728,6 +728,22 @@ func (m *ThreadManager) ActiveTurn(threadID string) *activeRuntimeTurn {
 	return cloneActiveRuntimeTurn(m.active[strings.TrimSpace(threadID)])
 }
 
+// ActiveTurnID mirrors Rust #46305 (`ThreadState::active_turn_id`): callers
+// that only need the active turn's identity must not pay for a turn snapshot,
+// which clones the turn's start parameters and inputs.
+func (m *ThreadManager) ActiveTurnID(threadID string) string {
+	if m == nil {
+		return ""
+	}
+	m.turnsMu.Lock()
+	defer m.turnsMu.Unlock()
+	active := m.active[strings.TrimSpace(threadID)]
+	if active == nil {
+		return ""
+	}
+	return active.TurnID
+}
+
 func (m *ThreadManager) ActiveTurns() []*activeRuntimeTurn {
 	if m == nil {
 		return nil

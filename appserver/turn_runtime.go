@@ -3859,6 +3859,11 @@ func (r *RuntimeRouter) activeRuntimeTurnIsReview(threadID string, turnID string
 	if r == nil {
 		return false
 	}
+	// Rust #46305: probe the id first so a mismatched interrupt never clones the
+	// active turn's params.
+	if activeTurnID := r.threads.ActiveTurnID(threadID); activeTurnID == "" || activeTurnID != turnID {
+		return false
+	}
 	active := r.threads.ActiveTurn(threadID)
 	if active == nil || active.TurnID != turnID || active.Params == nil {
 		return false
