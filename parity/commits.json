@@ -19187,9 +19187,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Mouse gestures now carry click counts (400 ms window, cycling 1/2/3) so a double-click marks the word under the pointer and a triple-click marks the whole logical row (tui/chatwidget/transcript_overlay.go mouseClickCount, tui/chatwidget/transcript_select.go selectUnitForClicks/unitRangeAt).",
+    "Shift-press with a non-empty selection keeps the gesture's origin anchor and original unit, extends in either direction, and leaves the gesture open so continued dragging and repeated Shift-click both work; an ordinary click still starts a fresh selection and repeated clicks past a row end are ignored.",
+    "Tests: TestTranscriptShiftClickExtendsWordSelectionLikeRust and TestTranscriptShiftClickPreservesUnitsAndDragLikeRust cover extension in both directions, unit preservation (character and row), continued dragging, and plain-click reset."
    ]
   },
   {

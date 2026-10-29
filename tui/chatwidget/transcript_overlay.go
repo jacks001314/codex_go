@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -64,6 +65,12 @@ type TranscriptOverlay struct {
 	selectMode selectModeState
 	// dragActive keeps a mouse drag extending the current selection.
 	dragActive bool
+	// lastClick/lastClickAt track the multi-click gesture so double-click marks a
+	// word and triple-click marks a row (Rust text_selection::click_count).
+	lastClickAt    time.Time
+	lastClickCol   int
+	lastClickRow   int
+	lastClickCount int
 }
 
 func NewTranscriptOverlay(width int, height int, content string) *TranscriptOverlay {
@@ -502,6 +509,21 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 			return false
 		}
 		point := o.mouseSelectPoint(msg)
+		// Rust #47414: Shift-click extends the existing range from its original
+		// anchor and unit instead of starting a new gesture.
+		if msg.Shift && o.hasSelectionRange() {
+			o.lastClickAt = time.Time{}
+			o.extendMouseSelection(point)
+			o.dragActive = true
+			o.viewport.SetContent(o.viewContent())
+			return true
+		}
+		clicks := o.mouseClickCount(msg)
+		if clicks >= 2 && point.Col >= o.lineWidth(point.Row) {
+			// Rust ignores repeated clicks past the end of a row so empty space
+			// never selects a word or line.
+			return false
+		}
 		if !o.selectMode.active {
 			o.selectMode = selectModeState{
 				active:          true,
@@ -510,10 +532,15 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 				savedFollow:     o.viewport.AtBottom(),
 			}
 		}
-		o.selectMode.marked = false
-		o.selectMode.unit = SelectUnitCharacter
-		o.selectMode.anchor = point
-		o.selectMode.activeEnd = point
+		unit := selectUnitForClicks(clicks)
+		start, end := o.unitRangeAt(unit, point)
+		o.selectMode.marked = start != end
+		o.selectMode.unit = unit
+		o.selectMode.anchor = start
+		o.selectMode.activeEnd = end
+		o.selectMode.originStart = start
+		o.selectMode.originEnd = end
+		o.selectMode.preferredColumn = -1
 		o.dragActive = true
 		o.viewport.SetContent(o.viewContent())
 		return true
@@ -522,10 +549,7 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 			return false
 		}
 		point := o.mouseSelectPoint(msg)
-		if point != o.selectMode.anchor {
-			o.selectMode.marked = true
-		}
-		o.selectMode.activeEnd = point
+		o.extendMouseSelection(point)
 		o.viewport.SetContent(o.viewContent())
 		return true
 	case bubbletea.MouseActionRelease:
@@ -536,6 +560,41 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 		return true
 	}
 	return false
+}
+
+// mouseClickCount counts consecutive presses at the same cell within the
+// gesture window, cycling 1, 2, 3 like Rust `text_selection::click_count`.
+func (o *TranscriptOverlay) mouseClickCount(msg bubbletea.MouseMsg) int {
+	now := time.Now()
+	clicks := 1
+	if !o.lastClickAt.IsZero() && now.Sub(o.lastClickAt) < 400*time.Millisecond &&
+		o.lastClickCol == msg.X && o.lastClickRow == msg.Y {
+		clicks = o.lastClickCount%3 + 1
+	}
+	o.lastClickAt = now
+	o.lastClickCol = msg.X
+	o.lastClickRow = msg.Y
+	o.lastClickCount = clicks
+	return clicks
+}
+
+// extendMouseSelection moves the active end to point while keeping the gesture's
+// original unit range as the fixed side of the selection, so repeated Shift
+// clicks and continued dragging can extend it in either direction (#47414).
+func (o *TranscriptOverlay) extendMouseSelection(point selectPoint) {
+	if !o.selectMode.active {
+		return
+	}
+	start, end := o.unitRangeAt(o.selectMode.unit, point)
+	origin := o.selectMode.originStart
+	if start.before(origin) {
+		o.selectMode.anchor = o.selectMode.originEnd
+		o.selectMode.activeEnd = start
+	} else {
+		o.selectMode.anchor = o.selectMode.originStart
+		o.selectMode.activeEnd = end
+	}
+	o.selectMode.marked = o.selectMode.anchor != o.selectMode.activeEnd
 }
 
 func (o *TranscriptOverlay) mouseSelectPoint(msg bubbletea.MouseMsg) selectPoint {

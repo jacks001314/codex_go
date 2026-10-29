@@ -2822,6 +2822,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestLocalGatewayCacheIsScopedToBackendLikeRust`, `TestLocalSecretCacheReusesPlaintextLikeRust`, `TestLocalSecretCacheDetectsExternalChangesLikeRust`, `TestLocalSecretCacheStillChecksKeyringLikeRust`.
 - Verified with `go test ./safety -run 'TestLocalSecretCache|TestLocalGatewayCache' -count=1`.
 
-Status after reconciliation: `2121 complete`, `441 not_applicable`,
-`374 audit_pending`, `210 regression_pending`, `3 partial`,
+### Shift-click transcript selection extension (Round 960)
+
+- Rust #47414 lets a Shift-click extend an existing transcript selection from its original anchor and unit, keeps the gesture open for continued dragging and repeated extension in either direction, and still starts a fresh selection on an ordinary click (#47414, complete).
+- `tui/chatwidget/transcript_overlay.go` now counts presses within 400 ms at the same cell (cycling 1/2/3 like Rust `text_selection::click_count`), so a double-click marks the word under the pointer and a triple-click marks the row; repeated clicks past a row end are ignored, matching Rust's `position_at(column) == position_at(u16::MAX)` guard.
+- `handleSelectMouse` extends instead of re-anchoring when Shift is held over a non-empty range, and `extendMouseSelection` recomputes the unit range at the pointer so backwards extension pins the original unit's end while forward extension pins its start.
+- `tui/chatwidget/transcript_select.go` adds `SelectUnitWord`, `selectUnitForClicks`, `unitRangeAt`, `wordSpanAtColumn` and `selectMode.originStart/originEnd`; word spans split on the same alphanumeric boundaries as the keyboard word motions, and line units cover the whole logical row.
+- Tests: `TestTranscriptShiftClickExtendsWordSelectionLikeRust` (both directions, repeated extension, ordinary-click reset) and `TestTranscriptShiftClickPreservesUnitsAndDragLikeRust` (character and row units with continued dragging).
+- Verified with `go build ./tui/...`, `go test ./tui/chatwidget -count=1` and `go test ./tui -count=1`.
+
+Status after reconciliation: `2122 complete`, `441 not_applicable`,
+`373 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

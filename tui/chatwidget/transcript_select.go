@@ -23,6 +23,8 @@ const (
 	SelectUnitCharacter SelectUnit = iota
 	// SelectUnitLine marks whole logical rows (`V`).
 	SelectUnitLine
+	// SelectUnitWord marks the word under a double-click (Rust #47414).
+	SelectUnitWord
 )
 
 // SelectAction reports what the key handler asks the owner to do next.
@@ -106,11 +108,16 @@ type selectOrigin struct {
 }
 
 type selectModeState struct {
-	active          bool
-	marked          bool
-	unit            SelectUnit
-	anchor          selectPoint
-	activeEnd       selectPoint
+	active    bool
+	marked    bool
+	unit      SelectUnit
+	anchor    selectPoint
+	activeEnd selectPoint
+	// originStart/originEnd remember the text unit a mouse gesture started on so
+	// Shift-click can extend it in either direction without losing the anchor
+	// (Rust transcript_view::Selection::origin, #47414).
+	originStart     selectPoint
+	originEnd       selectPoint
 	preferredColumn int
 	savedOffset     int
 	savedFollow     bool
@@ -276,6 +283,73 @@ func (o *TranscriptOverlay) lineWidth(row int) int {
 		return 0
 	}
 	return runewidth.StringWidth(o.plainLines[row])
+}
+
+// hasSelectionRange reports whether a non-empty range is marked, matching Rust
+// `TranscriptView::has_selection_range` (#47414).
+func (o *TranscriptOverlay) hasSelectionRange() bool {
+	if o == nil || !o.selectMode.active || !o.selectMode.marked {
+		return false
+	}
+	start, end := o.selectionRange()
+	return start != end
+}
+
+// selectUnitForClicks maps a click count onto a selection unit (Rust
+// `SelectionUnit::from_clicks`).
+func selectUnitForClicks(clicks int) SelectUnit {
+	switch clicks {
+	case 2:
+		return SelectUnitWord
+	case 3:
+		return SelectUnitLine
+	default:
+		return SelectUnitCharacter
+	}
+}
+
+// unitRangeAt returns the text unit covered at point. Character selections are
+// a single position, word selections cover one word, and line selections cover
+// the whole logical row (Rust `SelectionUnit::range`).
+func (o *TranscriptOverlay) unitRangeAt(unit SelectUnit, point selectPoint) (selectPoint, selectPoint) {
+	switch unit {
+	case SelectUnitLine:
+		return selectPoint{Row: point.Row, Col: 0}, selectPoint{Row: point.Row, Col: o.lineWidth(point.Row)}
+	case SelectUnitWord:
+		start, end := o.wordSpanAtColumn(point.Row, point.Col)
+		return selectPoint{Row: point.Row, Col: start}, selectPoint{Row: point.Row, Col: end}
+	default:
+		return point, point
+	}
+}
+
+// wordSpanAtColumn returns the display-column span of the word under column.
+// Word runs and the non-word runs between them are separate units, mirroring
+// `split_word_bound_indices` closely enough for pointer selection.
+func (o *TranscriptOverlay) wordSpanAtColumn(row int, column int) (int, int) {
+	if row < 0 || row >= len(o.plainLines) {
+		return column, column
+	}
+	line := o.plainLines[row]
+	runes := []rune(line)
+	width := runewidth.StringWidth(line)
+	if column >= width || len(runes) == 0 {
+		return width, width
+	}
+	index := runeIndexAtColumn(line, column)
+	if index >= len(runes) {
+		return width, width
+	}
+	word := isWordRune(runes[index])
+	start := index
+	for start > 0 && isWordRune(runes[start-1]) == word {
+		start--
+	}
+	end := index + 1
+	for end < len(runes) && isWordRune(runes[end]) == word {
+		end++
+	}
+	return runewidth.StringWidth(string(runes[:start])), runewidth.StringWidth(string(runes[:end]))
 }
 
 // SelectedText returns the plain text covered by the current mark.

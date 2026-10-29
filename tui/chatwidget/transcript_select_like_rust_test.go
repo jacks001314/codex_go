@@ -199,3 +199,80 @@ func TestTranscriptSelectionRendersLikeRust(t *testing.T) {
 		t.Fatalf("caret is not underlined: %q", view)
 	}
 }
+
+func sendTranscriptMouse(overlay *TranscriptOverlay, action bubbletea.MouseAction, col int, row int, shift bool) bool {
+	return overlay.handleSelectMouse(bubbletea.MouseMsg{
+		Action: action,
+		Button: bubbletea.MouseButtonLeft,
+		Shift:  shift,
+		X:      col,
+		Y:      row,
+	})
+}
+
+func clickTranscriptMouse(overlay *TranscriptOverlay, col int, row int, times int) {
+	for range times {
+		sendTranscriptMouse(overlay, bubbletea.MouseActionPress, col, row, false)
+		sendTranscriptMouse(overlay, bubbletea.MouseActionRelease, col, row, false)
+	}
+}
+
+// Rust #47414: Shift-click extends a double-clicked word from its original
+// anchor in both directions, and an ordinary click still starts fresh.
+func TestTranscriptShiftClickExtendsWordSelectionLikeRust(t *testing.T) {
+	overlay := NewTranscriptOverlay(40, 8, "alpha beta gamma")
+	// The second press lands inside "beta" within the click window.
+	clickTranscriptMouse(overlay, 9, 1, 2)
+	if got := overlay.SelectedText(); got != "beta" {
+		t.Fatalf("double-click selection = %q, want %q", got, "beta")
+	}
+	for _, step := range []struct {
+		col  int
+		want string
+	}{
+		{13, "beta gamma"},
+		{2, "alpha beta"},
+		{13, "beta gamma"},
+	} {
+		if !sendTranscriptMouse(overlay, bubbletea.MouseActionPress, step.col, 1, true) {
+			t.Fatalf("shift press at %d was not handled", step.col)
+		}
+		if got := overlay.SelectedText(); got != step.want {
+			t.Fatalf("shift press at %d = %q, want %q", step.col, got, step.want)
+		}
+		sendTranscriptMouse(overlay, bubbletea.MouseActionRelease, step.col, 1, true)
+	}
+	clickTranscriptMouse(overlay, 13, 1, 1)
+	if got := overlay.SelectedText(); got != "" {
+		t.Fatalf("ordinary click kept selection %q", got)
+	}
+}
+
+// Rust #47414: Shift-click keeps the gesture's unit and supports continued
+// dragging, including selections that started as a whole row.
+func TestTranscriptShiftClickPreservesUnitsAndDragLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		clicks int
+		want   string
+	}{
+		{1, "beta gam"},
+		{3, "alpha beta gamma"},
+	} {
+		overlay := NewTranscriptOverlay(40, 8, "alpha beta gamma")
+		// Repeated presses on one cell raise the click count while the gesture
+		// stays open, matching Rust's begin_selection(clicks) setup.
+		for range tc.clicks {
+			sendTranscriptMouse(overlay, bubbletea.MouseActionPress, 6, 1, false)
+		}
+		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionMotion, Button: bubbletea.MouseButtonLeft, X: 10, Y: 1})
+		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft, X: 10, Y: 1})
+		if !sendTranscriptMouse(overlay, bubbletea.MouseActionPress, 12, 1, true) {
+			t.Fatalf("clicks=%d shift press was not handled", tc.clicks)
+		}
+		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionMotion, Button: bubbletea.MouseButtonLeft, Shift: true, X: 14, Y: 1})
+		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft, Shift: true, X: 14, Y: 1})
+		if got := overlay.SelectedText(); got != tc.want {
+			t.Fatalf("clicks=%d selection = %q, want %q", tc.clicks, got, tc.want)
+		}
+	}
+}
