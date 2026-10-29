@@ -19309,9 +19309,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust runs the AGENTS.md/thread-instruction refresh concurrently with capability discovery, MCP setup and tool construction, and keeps returning refresh warnings even when tool preparation fails or the step is cancelled. Go has no equivalent overlap to gain: turn/agent_loop.go assembles the step tool list from the in-memory registry (ToolsForStep, turn/runtime.go buildTools) with no await point or failure path, while the instruction refresh is a side-effecting provider that emits its warnings as it runs.",
+    "The loop calls InstructionsProvider before ToolsForStep on every step, so refresh warnings are already delivered before tools are assembled and cannot be swallowed; the provider returns the refreshed text used for that request, and a skill-catalog failure warns and falls back to the turn base instructions (appserver/global_instructions.go turnStepInstructionsProvider), preserving Rust's instruction-error precedence.",
+    "Rust publishes the selected-plugin snapshot only after both branches succeed; Go composes plugin/skill context into the instruction text inside the provider, so nothing is published on a failed refresh.",
+    "Test: TestAgentLoopRefreshesInstructionsBeforeStepToolsLikeRust pins the provider-before-tools ordering and that refreshed instructions and rebuilt tools both reach the second sampling request."
    ]
   },
   {

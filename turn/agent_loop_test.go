@@ -196,6 +196,55 @@ func TestAgentLoopRebuildsToolsForLaterModelStepsLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #47458 keeps instruction refresh and tool preparation independent and
+// delivers refresh warnings before tools are assembled, so a failed tool
+// preparation cannot swallow them. Go's step tool rebuild is an in-memory list
+// assembly that cannot fail, and the loop calls the instructions provider first
+// on every step; this pins that ordering.
+func TestAgentLoopRefreshesInstructionsBeforeStepToolsLikeRust(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+		MaxTurns:   3,
+	})
+	var order []string
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:       "run echo",
+		Model:        "first-model",
+		Tools:        []any{"initial-tools"},
+		Instructions: "base",
+		InstructionsProvider: func() string {
+			order = append(order, "instructions")
+			return "refreshed"
+		},
+		ToolsForStep: func(modelID string) []any {
+			order = append(order, "tools")
+			return []any{"rebuilt"}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ","); got != "instructions,instructions,tools" {
+		t.Fatalf("preparation order = %q", got)
+	}
+	if len(agent.requests) < 2 {
+		t.Fatalf("agent requests = %d", len(agent.requests))
+	}
+	if agent.requests[1].Instructions != "refreshed" {
+		t.Fatalf("second-step instructions = %q", agent.requests[1].Instructions)
+	}
+	if len(agent.requests[1].Tools) != 1 || agent.requests[1].Tools[0] != "rebuilt" {
+		t.Fatalf("second-step tools = %#v", agent.requests[1].Tools)
+	}
+}
+
 // TestRuntimeRefreshesMultiAgentCatalogOverridesForStepModelLikeRust mirrors
 // Rust #46505 step settings: the Multi-Agent V2 catalog overrides are resolved
 // again for every later sampling step's model, so a mid-turn model change

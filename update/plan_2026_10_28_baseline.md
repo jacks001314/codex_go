@@ -2831,6 +2831,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestTranscriptShiftClickExtendsWordSelectionLikeRust` (both directions, repeated extension, ordinary-click reset) and `TestTranscriptShiftClickPreservesUnitsAndDragLikeRust` (character and row units with continued dragging).
 - Verified with `go build ./tui/...`, `go test ./tui/chatwidget -count=1` and `go test ./tui -count=1`.
 
-Status after reconciliation: `2122 complete`, `441 not_applicable`,
-`373 audit_pending`, `210 regression_pending`, `3 partial`,
+### Instruction refresh versus tool preparation ordering (Round 961)
+
+- Rust #47458 overlaps the AGENTS.md/thread-instruction refresh with capability discovery, MCP setup and tool construction, and keeps delivering refresh warnings when tool preparation fails or the step is cancelled (#47458, complete).
+- Go has no overlap to gain: the per-step tool list is assembled in memory from the registry (`turn/agent_loop.go:542`, `turn/runtime.go` `buildTools`) with no await point or failure path, while the instruction refresh is a side-effecting provider that emits its warnings as it runs.
+- The loop calls `InstructionsProvider` before `ToolsForStep` on every step, so refresh warnings are delivered before tools are assembled and cannot be swallowed; a skill-catalog failure warns and falls back to the turn's base instructions (`appserver/global_instructions.go`), preserving Rust's instruction-error precedence.
+- Rust publishes the selected-plugin snapshot only when both branches succeed; Go composes plugin and skill context into the instruction text inside the provider, so a failed refresh publishes nothing.
+- Test: `TestAgentLoopRefreshesInstructionsBeforeStepToolsLikeRust` pins the provider-before-tools ordering and that the refreshed instructions and rebuilt tools both reach the second sampling request.
+- Verified with `go test ./turn -run 'TestAgentLoopRefreshesInstructionsBeforeStepToolsLikeRust|TestAgentLoopRebuildsToolsForLaterModelStepsLikeRust' -count=1`.
+
+Status after reconciliation: `2123 complete`, `441 not_applicable`,
+`372 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
