@@ -14,7 +14,7 @@ func TestStandaloneToolOutputRetentionAnnotationLikeRust(t *testing.T) {
 	retained := standaloneToolOutputInputItem(&turn.TurnToolOutput{
 		Name:      "inspect",
 		Namespace: "example",
-		Output:    "Inspect the failing tests.",
+		Output:    turn.ToolOutputText("Inspect the failing tests."),
 		Retain:    true,
 	})
 	want := map[string]any{
@@ -28,7 +28,7 @@ func TestStandaloneToolOutputRetentionAnnotationLikeRust(t *testing.T) {
 		t.Fatalf("retained item = %#v, want %#v", retained, want)
 	}
 
-	ordinary := standaloneToolOutputInputItem(&turn.TurnToolOutput{Name: "inspect", Output: "done"})
+	ordinary := standaloneToolOutputInputItem(&turn.TurnToolOutput{Name: "inspect", Output: turn.ToolOutputText("done")})
 	object, _ := ordinary.(map[string]any)
 	if _, marked := object["harness_metadata"]; marked {
 		t.Fatalf("ordinary output carries retention metadata: %#v", ordinary)

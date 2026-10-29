@@ -12847,7 +12847,7 @@ func standaloneToolOutputInputItem(output *turn.TurnToolOutput) any {
 	item := map[string]any{
 		"type":   "function_call_output",
 		"name":   output.Name,
-		"output": output.Output,
+		"output": output.Output.WireValue(),
 	}
 	if strings.TrimSpace(output.Namespace) != "" {
 		item["namespace"] = output.Namespace

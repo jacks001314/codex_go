@@ -327,8 +327,8 @@ func TestExecuteDynamicToolSendMessageStartsToolTurn(t *testing.T) {
 	if start.ToolOutput == nil || start.ToolOutput.Name != "send_message_to_thread" || start.ToolOutput.Namespace != DynamicToolNamespace {
 		t.Fatalf("tool output = %#v", start.ToolOutput)
 	}
-	if !strings.Contains(start.ToolOutput.Output, "<codex_delegation>") || !strings.Contains(start.ToolOutput.Output, "<source_thread_id>thread-caller</source_thread_id>") {
-		t.Fatalf("delegated prompt = %q", start.ToolOutput.Output)
+	if !strings.Contains(start.ToolOutput.Output.Text, "<codex_delegation>") || !strings.Contains(start.ToolOutput.Output.Text, "<source_thread_id>thread-caller</source_thread_id>") {
+		t.Fatalf("delegated prompt = %q", start.ToolOutput.Output.Text)
 	}
 	if strings.TrimSpace(start.Model) != "gpt-test" {
 		t.Fatalf("model = %q", start.Model)

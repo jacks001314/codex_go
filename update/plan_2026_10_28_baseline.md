@@ -2553,6 +2553,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `appserver/turn_runtime.go:401` now also refuses the default when a managed requirement disables the feature, matching Rust `features.enable(...).is_ok()`.
 - Both reminder paths (`turn_runtime.go:10021` and `:10132`) use the resolved config; `appserver/current_time_reminder_persistent_like_rust_test.go` covers persistent, ordinary, explicit, explicitly disabled, managed-disabled, configured-effort and review turns plus delivery.
 
-Status after reconciliation: `2093 complete`, `409 not_applicable`,
-`428 audit_pending`, `216 regression_pending`, `3 partial`,
+### Structured turn tool outputs (Round 932)
+
+- Rust #41002 adds an optional `toolOutput` to `turn/start` whose `output` is a `FunctionCallOutputBody`: plain text or structured content items.
+- Go already accepted `toolOutput` and validated name, input exclusivity and the text limit, but the body was a plain string, so structured outputs with inline images failed to decode.
+- `turn/api.go:124` adds `TurnToolOutputBody` with string-or-items wire encoding; `turn/api.go:475` now validates the structured form (text-char budget over `input_text` items, remote image URLs rejected, `file_id` references allowed) and `turn/api.go:162` counts only text items.
+- `appserver/turn_runtime.go:12850` forwards the structured body unchanged to the `function_call_output` item, so inline images reach the model request.
+- `turn/tool_output_body_like_rust_test.go` and `appserver/turn_tool_output_structured_like_rust_test.go` cover both wire forms, round trip, remote image rejection, file references and oversized structured output.
+
+Status after reconciliation: `2094 complete`, `409 not_applicable`,
+`428 audit_pending`, `215 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

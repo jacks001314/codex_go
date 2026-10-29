@@ -501,7 +501,7 @@ func (e *dynamicToolExecutor) startTurn(threadID string, tool string, prompt str
 		ToolOutput: &turn.TurnToolOutput{
 			Name:      tool,
 			Namespace: DynamicToolNamespace,
-			Output:    prompt,
+			Output:    turn.ToolOutputText(prompt),
 		},
 		SandboxPolicy:      sandboxPolicy,
 		CyberAccessProgram: wireCyberAccessProgram(cyberAccessProgram),

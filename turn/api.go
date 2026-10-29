@@ -109,13 +109,75 @@ type TurnUserInput struct {
 // TurnToolOutput carries a standalone named function-call output used to start
 // or steer a turn without a user prompt (Rust TurnToolOutput, #41002).
 type TurnToolOutput struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace,omitempty"`
-	Output    string `json:"output"`
+	Name      string             `json:"name"`
+	Namespace string             `json:"namespace,omitempty"`
+	Output    TurnToolOutputBody `json:"output"`
 	// Retain marks a client-submitted tool output that must be retained as
 	// client-authored history (Rust #52671 `retain` annotation). The marker is
 	// stored as harness metadata and never reaches a model request.
 	Retain bool `json:"retain,omitempty"`
+}
+
+// TurnToolOutputBody is the on-wire FunctionCallOutputBody of a standalone tool
+// output: either plain text or a structured list of content items (text and
+// inline images), mirroring Rust FunctionCallOutputBody (#41002).
+type TurnToolOutputBody struct {
+	Text  string
+	Items []FunctionCallOutputContentItem
+}
+
+// ToolOutputText returns a plain-text tool output body.
+func ToolOutputText(text string) TurnToolOutputBody {
+	return TurnToolOutputBody{Text: text}
+}
+
+// ToolOutputContentItems returns a structured tool output body.
+func ToolOutputContentItems(items ...FunctionCallOutputContentItem) TurnToolOutputBody {
+	return TurnToolOutputBody{Items: items}
+}
+
+func (b *TurnToolOutputBody) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*b = TurnToolOutputBody{Text: text}
+		return nil
+	}
+	var items []FunctionCallOutputContentItem
+	if err := json.Unmarshal(data, &items); err != nil {
+		return fmt.Errorf("%w: toolOutput.output must be a string or a list of content items", ErrInvalidTurnRequest)
+	}
+	*b = TurnToolOutputBody{Items: items}
+	return nil
+}
+
+func (b TurnToolOutputBody) MarshalJSON() ([]byte, error) {
+	if b.Items != nil {
+		return json.Marshal(b.Items)
+	}
+	return json.Marshal(b.Text)
+}
+
+// TextCharCount mirrors Rust's text-char accounting: text entries count, image
+// entries do not.
+func (b TurnToolOutputBody) TextCharCount() int {
+	if b.Items == nil {
+		return utf8.RuneCountInString(b.Text)
+	}
+	total := 0
+	for _, item := range b.Items {
+		if item.Type == "" || item.Type == "input_text" {
+			total += utf8.RuneCountInString(item.Text)
+		}
+	}
+	return total
+}
+
+// WireValue returns the function_call_output body as the model consumes it.
+func (b TurnToolOutputBody) WireValue() any {
+	if b.Items != nil {
+		return b.Items
+	}
+	return b.Text
 }
 
 type ByteRange struct {
@@ -417,10 +479,21 @@ func (p *TurnStartParams) Validate() error {
 		if userInputTextChars(p.Prompt, p.Input) > 0 {
 			return fmt.Errorf("%w: toolOutput cannot be combined with nonempty input", ErrInvalidTurnRequest)
 		}
-		if actualChars := utf8.RuneCountInString(p.ToolOutput.Output); actualChars > MaxUserInputTextChars {
+		if p.ToolOutput.Output.Items != nil && p.ToolOutput.Output.Text != "" {
+			return fmt.Errorf("%w: toolOutput.output must be either text or content items", ErrInvalidTurnRequest)
+		}
+		if actualChars := p.ToolOutput.Output.TextCharCount(); actualChars > MaxUserInputTextChars {
 			return &InputTooLargeError{
 				MaxChars:    MaxUserInputTextChars,
 				ActualChars: actualChars,
+			}
+		}
+		for _, item := range p.ToolOutput.Output.Items {
+			if item.Type != "input_image" {
+				continue
+			}
+			if strings.TrimSpace(item.FileID) == "" && isRemoteImageURL(item.ImageURL) {
+				return fmt.Errorf("%w: %s", ErrInvalidTurnRequest, remoteImageURLError)
 			}
 		}
 	}

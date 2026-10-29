@@ -651,22 +651,22 @@ func TestTurnUserInputMarshalRustUnionShapes(t *testing.T) {
 
 func TestTurnStartParamsToolOutputValidationLikeRust(t *testing.T) {
 	// Empty toolOutput.name is rejected.
-	bad := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "", Output: "x"}}
+	bad := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "", Output: ToolOutputText("x")}}
 	if err := bad.Validate(); !errors.Is(err, ErrInvalidTurnRequest) {
 		t.Fatalf("empty toolOutput.name error = %v, want ErrInvalidTurnRequest", err)
 	}
 	// toolOutput combined with nonempty input is rejected.
-	combined := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "notifications", Output: "x"}, Input: []TurnUserInput{{Text: "hello"}}}
+	combined := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "notifications", Output: ToolOutputText("x")}, Input: []TurnUserInput{{Text: "hello"}}}
 	if err := combined.Validate(); !errors.Is(err, ErrInvalidTurnRequest) {
 		t.Fatalf("toolOutput + input error = %v, want ErrInvalidTurnRequest", err)
 	}
 	// A valid toolOutput passes.
-	valid := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "notifications", Namespace: "slack", Output: "Alice mentioned you."}}
+	valid := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "notifications", Namespace: "slack", Output: ToolOutputText("Alice mentioned you.")}}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid toolOutput error = %v", err)
 	}
 	// Oversized tool output is rejected with InputTooLargeError.
-	tooLarge := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "notifications", Output: strings.Repeat("x", MaxUserInputTextChars+1)}}
+	tooLarge := &TurnStartParams{ThreadID: "thread-1", ToolOutput: &TurnToolOutput{Name: "notifications", Output: ToolOutputText(strings.Repeat("x", MaxUserInputTextChars+1))}}
 	tooLargeErr := tooLarge.Validate()
 	if tooLargeErr == nil {
 		t.Fatal("oversized toolOutput error = nil, want InputTooLargeError")

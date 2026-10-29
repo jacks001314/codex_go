@@ -3204,9 +3204,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "turn/api.go:124 TurnToolOutputBody decodes toolOutput.output as plain text or content items; turn/api.go:475 validates name, input exclusivity, text-size limit and remote image URLs; turn/api.go:162 counts only text items; appserver/turn_runtime.go:12850 forwards the structured body unchanged to the function_call_output item; turn/tool_output_body_like_rust_test.go and appserver/turn_tool_output_structured_like_rust_test.go cover both wire forms, round trip, remote image rejection, file references and oversized structured output"
    ]
   },
   {
