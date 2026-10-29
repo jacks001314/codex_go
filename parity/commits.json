@@ -15015,9 +15015,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/agent_controller.go already builds the child from capturedSpawnSettings (model, effective effort, summary) and validates effort-only overrides against the captured model; added appserver/agent_controller_step_settings_like_rust_test.go covering V1 captured-settings inheritance after a mid-turn update and effort-only validation against the captured model rather than the thread record's stale model"
    ]
   },
   {

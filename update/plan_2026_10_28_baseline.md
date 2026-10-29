@@ -2012,6 +2012,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - `tui/markdown/render.go` projects the resolved colour onto glamour's Code style, which also covers the local file-path labels the renderer emits as code spans, and uses ANSI palette index 6 for Rust's cyan fallback (glamour ignores the colour name).
 - Verified with `go test ./tui/... -count=1` (all pass) and `go build ./...`.
 
-Status after reconciliation: `2045 complete`, `401 not_applicable`,
-`452 audit_pending`, `248 regression_pending`, `3 partial`,
+### Subagent spawn uses captured step settings (Round 881)
+
+**Upstream:** 800d183e2d0a "Use captured step settings when spawning subagents (#46075)".
+
+- The Go parent controller already mirrored this behaviour (`capturedSpawnSettings` feeds the child's model, effective reasoning effort and reasoning summary, and `resolveSpawnModelOverrides` validates effort-only overrides against the captured model), but only the V2 backend and explicit overrides were covered.
+- Added `appserver/agent_controller_step_settings_like_rust_test.go`:
+  - V1 spawn after a mid-turn settings update inherits the captured model, effort and summary instead of the thread record's older values.
+  - Effort-only overrides are validated against the captured model: an effort the captured model supports is accepted, and one only the turn's initial model supports is rejected with the captured model named in the error.
+- Verified with `go test ./appserver -run TestRuntimeAgentController -count=1`.
+
+Status after reconciliation: `2046 complete`, `401 not_applicable`,
+`452 audit_pending`, `247 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
