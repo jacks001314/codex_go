@@ -2682,6 +2682,15 @@ The speculative shell-snapshot capture is now retained and cancellable (#42137, 
 - Added `TestSnapshotBuilderPrewarmRunsOnceLikeRust`, `TestSnapshotBuilderCloseCancelsPrewarmLikeRust`, and `TestShellSnapshotPrewarmRunsOncePerSessionLikeRust`.
 - Verified with `go test ./tool ./appserver -run 'Snapshot|ShellSnapshot' -count=1`, the full `./tool` package, and `go test -race ./tool -run 'TestSnapshotBuilder' -count=1`.
 
-Status after reconciliation: `2107 complete`, `410 not_applicable`,
-`419 audit_pending`, `210 regression_pending`, `3 partial`,
+### Rollout I/O scheduling audits (Round 945)
+
+Three remaining L4c entries are Rust runtime-scheduling details with no Go counterpart (#49444, #49693, #49708; not applicable).
+
+- `#49444` replaces a byte-wise reverse newline search with `memchr::memrchr`; it changes no parsing or output. Go has no `reverse_jsonl_scanner`: session-index lookups read the index with `os.ReadFile`, and projection trailing newlines use `bytes.LastIndexByte`.
+- `#49693` collapses rollout open/metadata/seek/read/projection into one `spawn_blocking` call. Go's `rollout.ReadProjectionStepsCancellable` already performs those steps synchronously in one function on the calling goroutine, with cancellation covered by `projection_cancellation_test.go` and `projection_54639_test.go`.
+- `#49708` moves session-index file I/O to blocking workers and keeps an owned Tokio mutex guard through cancellation. Go runs the same synchronous I/O under one process mutex plus a cross-process flock, so ordering cannot be released mid-write; covered by `session_index_lock_test.go` and `session_index_test.go`.
+- No code change was required. Verified with `go test ./rollout -run 'Projection|SessionIndex' -count=1`.
+
+Status after reconciliation: `2107 complete`, `413 not_applicable`,
+`416 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

@@ -23903,9 +23903,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 945: Rust-only optimization. #49444 swaps the byte-by-byte rposition in rollout/src/reverse_jsonl_scanner.rs for memchr::memrchr with no parsing or output change. Go has no reverse_jsonl_scanner: session-index lookups read session_index.jsonl with os.ReadFile (rollout/session_index.go FindThreadNamesByIDs) and projection trailing newlines use vectorized bytes.LastIndexByte (rollout/projection.go), so there is no Go call site or behavior to port."
    ]
   },
   {
@@ -24204,9 +24204,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 945: Rust runtime-scheduling change. #49693 removes an intermediate tokio::fs::File so rollout open, metadata, seek, read and projection all run inside one spawn_blocking call; parsing and projection output are unchanged. Go is synchronous and already does those steps in one function: rollout.ReadProjectionStepsCancellable -> openProjectionSuffix/readProjectionStepsStream (rollout/projection.go) opens, seeks, reads and projects on the calling goroutine, with cancellation covered by projection_cancellation_test.go and projection_54639_test.go. No Go async-runtime thread can be blocked, so there is nothing to move."
    ]
   },
   {
@@ -24288,9 +24288,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 945: Rust runtime-scheduling change. #49708 moves session_index.rs append/remove file I/O into spawn_blocking and keeps an owned Tokio mutex guard so cancelled awaiting tasks cannot reorder writes. Go performs the same synchronous file I/O under one process mutex plus a cross-process flock (rollout/session_index.go withSessionIndexLock) and the caller goroutine runs the update to completion; cancellation cannot release ordering mid-write. Lock retention, cross-process serialization and append/removal behavior are covered by rollout/session_index_lock_test.go and rollout/session_index_test.go. No Tokio runtime threads exist to unblock."
    ]
   },
   {
