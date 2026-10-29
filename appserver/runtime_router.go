@@ -349,12 +349,16 @@ type RuntimeRouter struct {
 	threadSubscriptions   map[string]map[string]struct{}
 	clientInfoMu          sync.RWMutex
 	clientInfo            map[string]ClientInfo
-	notificationOptOut    map[string]map[NotificationMethod]struct{}
-	experimentalAPI       map[string]bool
-	diagnosticsGauges     *serverDiagnosticsGaugeRegistry
-	requestAttestation    map[string]bool
-	mcpOpenAIForm         map[string]bool
-	mcpStandardFormInput  map[string]bool
+	// closedConnections records transports that already reported closure, so a
+	// request that outlived its connection cannot re-subscribe it after slow
+	// startup (Rust #50380).
+	closedConnections    map[string]bool
+	notificationOptOut   map[string]map[NotificationMethod]struct{}
+	experimentalAPI      map[string]bool
+	diagnosticsGauges    *serverDiagnosticsGaugeRegistry
+	requestAttestation   map[string]bool
+	mcpOpenAIForm        map[string]bool
+	mcpStandardFormInput map[string]bool
 	// mcpToolApprovalsMu guards mcpToolApprovals, the per-thread store of
 	// session-remembered custom MCP tool approvals (Rust
 	// session.tool_approvals).
@@ -2551,6 +2555,10 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	if r == nil {
 		return
 	}
+	// Rust #50380: a request that outlives its connection must not attach a
+	// listener for it later; record the closure so the completion path can
+	// leave the thread unsubscribed and idle-unloadable.
+	r.markConnectionClosed(connectionID)
 	r.pendingGoalMu.Lock()
 	delete(r.pendingGoalByConn, connectionID)
 	r.pendingGoalMu.Unlock()
@@ -2786,6 +2794,9 @@ func (r *RuntimeRouter) rememberConnectionClientInfo(connectionID string, info C
 	if _, exists := r.clientInfo[connectionID]; exists {
 		return false
 	}
+	// A successful initialize reopens the connection: a transport id reused
+	// after cleanup is live again.
+	delete(r.closedConnections, connectionID)
 	r.clientInfo[connectionID] = info
 	return true
 }
@@ -2870,6 +2881,33 @@ func (r *RuntimeRouter) rememberConnectionRequestAttestation(connectionID string
 		r.requestAttestation = map[string]bool{}
 	}
 	r.requestAttestation[connectionID] = enabled
+}
+
+// markConnectionClosed records a transport closure so a request that finishes
+// after connection cleanup does not subscribe the dead connection (Rust #50380).
+func (r *RuntimeRouter) markConnectionClosed(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.closedConnections == nil {
+		r.closedConnections = map[string]bool{}
+	}
+	r.closedConnections[connectionID] = true
+}
+
+// connectionClosed reports whether the transport already reported this
+// connection closed.
+func (r *RuntimeRouter) connectionClosed(connectionID string) bool {
+	if r == nil {
+		return false
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	return r.closedConnections[connectionID]
 }
 
 func (r *RuntimeRouter) clearConnectionClientInfo(connectionID string) {
@@ -6658,7 +6696,15 @@ func (r *RuntimeRouter) markResponseThreadLoaded(result any, connectionID string
 		return
 	}
 	r.requireThreadStatus().UpsertThread(thread.ID, false)
-	r.subscribeThreadConnection(thread.ID, connectionID)
+	if r.connectionClosed(connectionID) {
+		// Rust #50380: required MCP startup can outlast the requesting
+		// connection. Do not re-subscribe the closed transport; the retained
+		// thread keeps its idle-unload lifecycle so it is reclaimed instead of
+		// staying loaded without a live subscriber.
+		r.scheduleThreadIdleUnload(thread.ID)
+	} else {
+		r.subscribeThreadConnection(thread.ID, connectionID)
+	}
 	thread.Status = r.requireThreadStatus().LoadedStatusForThread(thread.ID)
 	r.prewarmMCPThread(thread.ID)
 }

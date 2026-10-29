@@ -25708,9 +25708,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #50380 keeps the thread listener alive when the requesting connection closed during required MCP startup, so idle unloading still reclaims the thread while the request result stays ConnectionClosed. Go's listener equivalent is the retained-thread idle lifecycle. Round 970 records closed transports in RuntimeRouter.closedConnections (guarded by clientInfoMu, cleared by a successful initialize) from ConnectionClosed, and markResponseThreadLoaded no longer re-subscribes a connection that closed while required MCP startup was still running: it arms scheduleThreadIdleUnload instead, so a thread cannot stay loaded with a dead subscriber. unloadIdleChildThread now broadcasts thread/closed after the eviction, matching Rust's ThreadClosed on idle unload. Tests: TestThreadStartFinishingAfterConnectionCloseStillUnloadsLikeRust (disconnect before publish, then no subscriber, idle unload, empty thread/loaded/list and thread/closed), TestThreadStartWithLiveConnectionSubscribesThenUnloadsLikeRust, TestInitializeReopensClosedConnectionLikeRust. Verified with go test ./appserver -run 'Idle|ThreadLifecycle|ThreadLoad|ThreadStart|ConnectionClosed|WorkspaceSwitch|AccountSession|ThreadClosed' -count=1; full go test ./appserver still fails only on the pre-existing Rust-checkout protocol/manifest drift and RuntimeRouter analytics timeouts, reproduced without this change. Residual: idleThreadEvictable deliberately admits only persistent non-subagent children, so Go keeps root and ephemeral-root threads resident and the Rust ephemeral thread/start unload-by-idle scenario has no Go counterpart; the fix covers every thread Go can evict."
    ]
   },
   {

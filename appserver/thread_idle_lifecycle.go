@@ -380,6 +380,9 @@ func (r *RuntimeRouter) unloadIdleChildThread(threadID string, generation uint64
 
 	r.markThreadUnloaded(threadID)
 	r.threads.ReleaseLiveThreads([]session.ThreadID{session.ThreadID(threadID)})
+	// Rust #52081/#50380: a completed idle eviction broadcasts thread/closed,
+	// so clients drop the runtime they no longer have a subscriber for.
+	r.notify(NotificationThreadClosed, ThreadClosedNotification{ThreadID: threadID})
 
 	r.idleLifecycle.mu.Lock()
 	delete(r.idleLifecycle.pending, threadID)
