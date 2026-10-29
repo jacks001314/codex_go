@@ -15111,9 +15111,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Rust #46112 launches filesystem helpers from the filesystem root while carrying the policy cwd separately; Go's exec-server fs helper still runs with cmd.Dir set to the policy cwd (execserver/fs_helper.go runSandboxedFSOperation) and derives the Windows sandbox CommandCWD from it, so an fs RPC after the selected cwd is removed still fails at process start; no policyContext/legacy-fallback wire fields exist on the Go exec-server surface, and the cross-cutting helper-launch change is not yet implemented"
+    "ported the core of #46112: execserver/fs_helper.go:483 fsHelperLaunchRoot returns the filesystem root containing the policy cwd, runSandboxedFSOperation launches the piped helper there (execserver/fs_helper.go:219) while the sandbox plan keeps the policy cwd at fs_helper.go:426 and the Windows payload keeps CommandCWD=policy cwd, and sandbox/run.go:33,308 add CommandRunRequest/CommandRunPlan CommandCWD resolved by planCommandCWD so the linux wrapper (sandbox/run.go:270) passes --command-cwd separately from --sandbox-policy-cwd and relative permission rules stay anchored; regression tests sandbox/run_plan_command_cwd_like_rust_test.go:7,22 and execserver/fs_helper_launch_root_like_rust_test.go:16,51 where a read after deleting the policy cwd succeeds and fails with The directory name is invalid when cmd.Dir uses the removed cwd; verified go build ./... GOOS=linux go build ./sandbox/... ./execserver/... go test ./sandbox and go test ./execserver -run FS|FileSystem|Sandbox|FSOperation; residual: Go carries the policy cwd inline on each fs RPC with ingress fallback (prepareFSSandboxForOperation) instead of adding Rust's separate policyContext wire field, and Windows relative deny globs stay anchored via the payload command_cwd instead of Rust's pre-binding pass"
    ]
   },
   {

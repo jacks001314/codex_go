@@ -26,14 +26,19 @@ type CommandRunRequest struct {
 	ResolvedPermissionProfileJSON string
 	ConfigProfile                 string
 	CWD                           string
-	IncludeManagedConfig          bool
-	SandboxStateJSON              string
-	SandboxReadableRoots          []string
-	SandboxDisableNetwork         bool
-	AllowUnixSockets              []string
-	LogDenials                    bool
-	UseLegacyLandlock             bool
-	AllowNetworkForProxy          bool
+	// CommandCWD is where the sandboxed command itself starts. Empty keeps the
+	// policy cwd, which is what every caller except the exec-server filesystem
+	// helper wants; that helper launches from the filesystem root so a removed
+	// policy directory cannot block it (Rust #46112).
+	CommandCWD            string
+	IncludeManagedConfig  bool
+	SandboxStateJSON      string
+	SandboxReadableRoots  []string
+	SandboxDisableNetwork bool
+	AllowUnixSockets      []string
+	LogDenials            bool
+	UseLegacyLandlock     bool
+	AllowNetworkForProxy  bool
 	// AllowedSymlinkedCodexHome is the host-resolved macOS Seatbelt opt-out
 	// (Rust #42716). Empty keeps symlinked writable roots rejected.
 	AllowedSymlinkedCodexHome string
@@ -46,6 +51,7 @@ type CommandRunRequest struct {
 type CommandRunPlan struct {
 	Command                 []string
 	CWD                     string
+	CommandCWD              string
 	SandboxType             SandboxType
 	PermissionProfileID     string
 	PermissionProfile       *PermissionProfile
@@ -158,6 +164,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 	plan := &CommandRunPlan{
 		Command:              cloneSandboxStrings(req.Command),
 		CWD:                  strings.TrimSpace(req.CWD),
+		CommandCWD:           strings.TrimSpace(req.CommandCWD),
 		SandboxType:          SandboxTypeNone,
 		UseLegacyLandlock:    req.UseLegacyLandlock,
 		AllowNetworkForProxy: req.AllowNetworkForProxy,
@@ -260,7 +267,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		wrapped, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork(
 			plan.CodexLinuxSandboxExe,
 			plan.Command,
-			plan.CWD,
+			planCommandCWD(plan),
 			profileJSON,
 			plan.CWD,
 			plan.UseLegacyLandlock,
@@ -296,6 +303,18 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		}
 	}
 	return plan, nil
+}
+
+// planCommandCWD resolves where the sandboxed command starts, defaulting to the
+// policy cwd when the caller did not ask for a different launch directory.
+func planCommandCWD(plan *CommandRunPlan) string {
+	if plan == nil {
+		return ""
+	}
+	if cwd := strings.TrimSpace(plan.CommandCWD); cwd != "" {
+		return cwd
+	}
+	return plan.CWD
 }
 
 func platformSupportsPermissionProfileSandbox() bool {

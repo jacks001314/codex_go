@@ -2459,6 +2459,37 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
   exclusion guard), so installing `sites@openai-bundled` beside a cached remote
   install returns an error instead of a silent no-op install.
 
-Status after reconciliation: `2087 complete`, `409 not_applicable`,
-`429 audit_pending`, `220 regression_pending`, `4 partial`,
+### Filesystem helpers launch from the root when the cwd disappears (Round 926)
+
+- Upstream `841b5490b251` (#46112) found that deleting the selected working
+  directory stopped filesystem helpers from launching even though the requests
+  use absolute paths. The helper is now started from the filesystem root while
+  the policy cwd keeps anchoring permission rules.
+- `execserver/fs_helper.go` gained `fsHelperLaunchRoot`, which returns the root
+  of the policy cwd's volume (`/` on POSIX, `C:\` or the UNC share root on
+  Windows). `runSandboxedFSOperation` launches the piped helper there instead of
+  in the policy directory, and the sandbox plan still receives the policy cwd,
+  so relative permission entries and the Windows payload's `command_cwd` are
+  resolved exactly as before.
+- `sandbox/run.go` now carries an optional `CommandCWD` on
+  `CommandRunRequest`/`CommandRunPlan`, resolved by `planCommandCWD`. The Linux
+  wrapper passes it as `--command-cwd` while `--sandbox-policy-cwd` stays the
+  policy directory, so bwrap no longer chdirs into a removed path and relative
+  rules stay anchored to the policy cwd.
+- Regression coverage: `sandbox/run_plan_command_cwd_like_rust_test.go` pins the
+  default and explicit command-cwd resolution, and
+  `execserver/fs_helper_launch_root_like_rust_test.go` checks the launch-root
+  mapping plus an end-to-end read after the policy directory is deleted. The
+  read fails with `The directory name is invalid` when `cmd.Dir` is the removed
+  path, which is the bug this round fixes.
+- Verified with `go build ./...`, `GOOS=linux go build ./sandbox/...
+  ./execserver/...`, `go test ./sandbox` and
+  `go test ./execserver -run "FS|FileSystem|Sandbox|FSOperation"`.
+- Residual: Go keeps the legacy inline `cwd` on every filesystem RPC, resolving
+  an omitted directory at executor ingress, instead of adding Rust's separate
+  `policyContext` wire field; Windows relative deny globs stay anchored through
+  the payload's explicit `command_cwd` rather than Rust's pre-binding pass.
+
+Status after reconciliation: `2088 complete`, `409 not_applicable`,
+`429 audit_pending`, `220 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

@@ -216,7 +216,7 @@ func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, pa
 		return true, err
 	}
 	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Dir = cwd
+	cmd.Dir = fsHelperLaunchRoot(cwd)
 	cmd.Env = envPairs(env)
 	// Rust #48483: the helper is piped, so it must not allocate a console window
 	// when the exec server itself has no console.
@@ -424,6 +424,10 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		ResolvedPermissionProfileID:   "exec-server-fs-helper",
 		ResolvedPermissionProfileJSON: profileJSON,
 		CWD:                           cwd,
+		// Rust #46112: requests carry absolute paths, so launch the helper from
+		// the filesystem root. The policy cwd still anchors relative permission
+		// rules and the Windows sandbox payload.
+		CommandCWD: fsHelperLaunchRoot(cwd),
 		// Rust #38561: filesystem helpers only need access to their own
 		// executables; granting the containing directory would make unrelated
 		// sibling files readable.
@@ -471,6 +475,21 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	// runtime selection, not a shell-supplied override (Rust #45550).
 	windowssandbox.ApplyWrapperRuntimeEnv(env)
 	return append([]string{executable}, args...), env, nil
+}
+
+// fsHelperLaunchRoot returns the filesystem root that contains the policy cwd.
+// The helper receives absolute paths, so starting there keeps filesystem RPCs
+// working after the selected working directory has been removed (Rust #46112).
+func fsHelperLaunchRoot(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return ""
+	}
+	volume := filepath.VolumeName(cwd)
+	if volume == "" {
+		return string(filepath.Separator)
+	}
+	return volume + string(filepath.Separator)
 }
 
 // fsHelperReadableRoots returns the absolute readable roots for a filesystem
