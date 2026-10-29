@@ -26,10 +26,13 @@ func (m *Model) applyUsageCommand(args string) bubbletea.Cmd {
 		return nil
 	}
 	args = strings.TrimSpace(args)
+	if planHistoryArgs(args) {
+		return m.openPlanHistory()
+	}
 	if args != "" {
 		view, ok := chatwidget.ParseTokenActivityView(args)
 		if !ok {
-			m.notice = "Usage: /usage [daily|weekly|cumulative]"
+			m.notice = "Usage: /usage [daily|weekly|cumulative|plan]"
 			return nil
 		}
 		return m.openTokenActivity(view)

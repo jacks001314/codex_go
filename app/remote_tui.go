@@ -628,6 +628,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnReadRateLimits:    interactiveRemoteRateLimitsReader(ctx, endpoint),
 		OnReadThreadUsage:   interactiveRemoteThreadUsageReader(ctx, endpoint),
+		OnReadPlanHistory:   interactivePlanHistoryReader(root),
+		PlanHistoryEnabled:  features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
 		OnReadBackendBanner: interactiveRemoteBackendBannerReader(ctx, endpoint),
 		OnBackendBannerAction: interactiveBackendBannerActionHandler(
 			interactiveRemoteAddCreditsNudgeSender(ctx, endpoint),

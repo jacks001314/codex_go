@@ -33,6 +33,7 @@ import (
 	"codex_go/shell"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/analytics"
 	"codex_go/tui/anim"
 	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
@@ -1335,8 +1336,13 @@ type Options struct {
 	// OnClipboardWriteRich, when set, receives the rendered HTML fragment plus
 	// the plain Markdown for whole-response copies so rich-text destinations
 	// keep formatting (Rust #42847). Code/blockquote copies stay plain.
-	OnClipboardWriteRich          func(html string, text string) error
-	OnReadTokenActivity           TokenActivityReaderFunc
+	OnClipboardWriteRich func(html string, text string) error
+	OnReadTokenActivity  TokenActivityReaderFunc
+	// OnReadPlanHistory reads seven days of consumer allowance history for
+	// /usage plan (Rust #45766). PlanHistoryEnabled mirrors the
+	// analytics_plan_history feature gate.
+	OnReadPlanHistory             func() (*analytics.Report, error)
+	PlanHistoryEnabled            bool
 	OnReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	OnConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	OnReadRateLimits              RateLimitsReaderFunc
@@ -2336,6 +2342,9 @@ type Model struct {
 	// loading row, or -1 when none is shown.
 	recapLoadingIndex             int
 	onReadTokenActivity           TokenActivityReaderFunc
+	onReadPlanHistory             func() (*analytics.Report, error)
+	planHistoryEnabled            bool
+	pendingPlanHistoryRequestID   uint64
 	onReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	onReadRateLimits              RateLimitsReaderFunc
@@ -2899,6 +2908,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		showRawReasoning:                options.ShowRawReasoning,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
+		onReadPlanHistory:               options.OnReadPlanHistory,
+		planHistoryEnabled:              options.PlanHistoryEnabled,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
 		onReadRateLimits:                options.OnReadRateLimits,
@@ -3637,6 +3648,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applyThreadUsageSettlement(msg)
 	case TokenActivityResultMsg:
 		m.applyTokenActivityResult(msg)
+		return m, nil
+	case PlanHistoryResultMsg:
+		m.applyPlanHistoryResult(msg)
 		return m, nil
 	case RateLimitResetCreditsResultMsg:
 		m.applyRateLimitResetCreditsResult(msg)

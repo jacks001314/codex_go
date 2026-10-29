@@ -172,12 +172,21 @@ func TestPreparedSlashArgsUsageMcpKeymapRawMatchRust(t *testing.T) {
 		t.Fatalf("usage = %#v", usage)
 	}
 
+	plan := DispatchPreparedSlashArgs(PreparedSlashArgsContext{
+		Command:             codextui.CommandUsage,
+		Args:                "plan",
+		HasCodexBackendAuth: true,
+	})
+	if plan.Action != PreparedSlashArgsShowPlanHistory {
+		t.Fatalf("plan usage = %#v", plan)
+	}
+
 	badUsage := DispatchPreparedSlashArgs(PreparedSlashArgsContext{
 		Command:             codextui.CommandUsage,
 		Args:                "year",
 		HasCodexBackendAuth: true,
 	})
-	if badUsage.Action != PreparedSlashArgsError || badUsage.ErrorMessage != "Usage: /usage [daily|weekly|cumulative]" {
+	if badUsage.Action != PreparedSlashArgsError || badUsage.ErrorMessage != "Usage: /usage [daily|weekly|cumulative|plan]" {
 		t.Fatalf("bad usage = %#v", badUsage)
 	}
 

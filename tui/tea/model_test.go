@@ -7374,7 +7374,7 @@ func TestModelUsageCommandDirectViewAndInvalidView(t *testing.T) {
 
 	typeText(t, model, "/usage year")
 	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Usage: /usage [daily|weekly|cumulative]") {
+	if !strings.Contains(model.View(), "Usage: /usage [daily|weekly|cumulative|plan]") {
 		t.Fatalf("invalid usage view missing notice:\n%s", model.View())
 	}
 

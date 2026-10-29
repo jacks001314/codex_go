@@ -1371,6 +1371,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnStartMCPLogin:            interactiveLocalMCPLoginStarter(mcpService),
 		OnReadRateLimits:           interactiveLocalRateLimitsReader(),
 		OnReadThreadUsage:          interactiveLocalThreadUsageReader(),
+		OnReadPlanHistory:          interactivePlanHistoryReader(root),
+		PlanHistoryEnabled:         features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
 		OnReadBackendBanner:        interactiveLocalBackendBannerReader(),
 		OnReadSecuritySetup:        interactiveLocalSecuritySetupReader(root),
 		OnBackendBannerAction:      interactiveBackendBannerActionHandler(interactiveLocalAddCreditsNudgeSender()),

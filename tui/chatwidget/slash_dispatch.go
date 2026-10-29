@@ -65,6 +65,7 @@ type PreparedSlashArgsActionKind string
 const (
 	PreparedSlashArgsDispatchBare           PreparedSlashArgsActionKind = "dispatch_bare"
 	PreparedSlashArgsShowTokenActivity      PreparedSlashArgsActionKind = "show_token_activity"
+	PreparedSlashArgsShowPlanHistory        PreparedSlashArgsActionKind = "show_plan_history"
 	PreparedSlashArgsShowMcpVerbose         PreparedSlashArgsActionKind = "show_mcp_verbose"
 	PreparedSlashArgsOpenKeymapDebug        PreparedSlashArgsActionKind = "open_keymap_debug"
 	PreparedSlashArgsSetRawOutput           PreparedSlashArgsActionKind = "set_raw_output"
@@ -217,8 +218,13 @@ func DispatchPreparedSlashArgs(context PreparedSlashArgsContext) PreparedSlashAr
 			decision.TokenActivityView = view
 			return decision
 		}
+		if strings.EqualFold(trimmed, "plan") {
+			// Rust #45766: gated plan allowance history shares the /usage entry.
+			decision.Action = PreparedSlashArgsShowPlanHistory
+			return decision
+		}
 		decision.Action = PreparedSlashArgsError
-		decision.ErrorMessage = "Usage: /usage [daily|weekly|cumulative]"
+		decision.ErrorMessage = "Usage: /usage [daily|weekly|cumulative|plan]"
 		return decision
 	case codextui.CommandMcp:
 		if strings.EqualFold(trimmed, "verbose") {
