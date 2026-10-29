@@ -12423,9 +12423,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 792: #44957 model grouping was already present in tui/agents_overview (Grouping cycle project -> directory -> status -> model via ToggleGrouping, GroupingModel/ModelName with \"Unknown\" for missing or empty models, group: model footer label, Model: detail line, SetRowModel patch on thread settings changes, and new-task dispatch that only inherits the selected cwd for project grouping in app/agents_dashboard.go). The remaining gap was ordering: Rust sorts keyed groupings by (key, Reverse(updated_at)) so the newest task leads each group, while Go's stableSortByGroupKey only sorted by key and relied on the host list order. Replaced it with sortByGroupKeyThenRecency, applied to project, directory and model grouping alike, with equal timestamps keeping host order. New regression tui/agents_overview/model_grouping_recency_like_rust_test.go mirrors Rust's overview_model_grouping_shows_details_and_preserves_selection: host order deliberately disagrees with recency, model grouping yields [Unknown(t-4), model-a(t-3 newest, t-1), model-b(t-2)], sameGroup follows the model rather than host position, the selection survives the regroup, MoveSelection walks the grouped order across group boundaries (t-1 -> t-3 -> t-1 -> t-2 -> t-4), and project grouping also orders newest-first within a project. Validation: go test ./tui/agents_overview -count=1; go test ./tui/tea -run 'Agents|Agent' -count=1; go test ./app -run 'Agents|Agent' -count=1; go build ./tui/... ./app/..."
    ]
   },
   {

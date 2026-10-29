@@ -803,6 +803,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - The trusted classification reaches the real path: `mcp/tool_executor.go` checks `IsConnectorAuthFailureFromToolResult` on the raw Codex Apps result before `maybeRequestCodexAppsAuthElicitation` can rewrite it (Rust #45716 ordering).
 - Regression coverage mirrors Rust's three cases - detection without an install URL, rejection of missing/mismatched connector ids, non-error results and a false auth flag, and detection for `missing_link`, `oauth_upgrade_required` and `reauthentication_required` - plus the executor-boundary test; `go test ./mcp -run ConnectorAuth -count=1` and `go test ./mcp -count=1` pass.
 
-Status after reconciliation: `1978 complete`, `386 not_applicable`,
-`506 audit_pending`, `279 regression_pending`, `0 partial`,
+### Order grouped agent tasks newest first (Round 792)
+
+- Model grouping was already present in `tui/agents_overview`: the `Ctrl+S` cycle (project -> directory -> status -> model), `GroupingModel`/`ModelName` with `Unknown` for a missing or empty model, the `group: model` footer label, the `Model:` detail line, `SetRowModel` on thread-settings changes, and new-task dispatch that inherits the selected cwd only for project grouping.
+- The remaining gap was ordering: Rust sorts keyed groupings by `(key, Reverse(updated_at))`, so the newest task leads each group, while Go sorted only by key and relied on the host list order. `stableSortByGroupKey` became `sortByGroupKeyThenRecency` and now applies to project, directory and model grouping, with equal timestamps keeping host order.
+- New regression `tui/agents_overview/model_grouping_recency_like_rust_test.go` mirrors Rust's `overview_model_grouping_shows_details_and_preserves_selection`: host order deliberately disagrees with recency, model grouping yields `Unknown(t-4)`, `model-a(t-3 newest, t-1)`, `model-b(t-2)`, `sameGroup` follows the model rather than host position, the selection survives the regroup, and `MoveSelection` walks the grouped order across group boundaries.
+- `go test ./tui/agents_overview -count=1`, `go test ./tui/tea -run 'Agents|Agent' -count=1`, `go test ./app -run 'Agents|Agent' -count=1` and `go build ./tui/... ./app/...` pass.
+
+Status after reconciliation: `1979 complete`, `386 not_applicable`,
+`506 audit_pending`, `278 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
