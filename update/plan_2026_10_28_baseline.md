@@ -2864,6 +2864,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestStreamingPreviewHidesUnfinishedLinkDestinationsLikeRust` (seven destinations pushed character by character, plus a long Unicode destination past the 8 KiB preview bound), `TestStreamingUnfinishedLinkFlushesOnNewlineLikeRust` (resize, newline flush, committed line), `TestStreamingPreviewWithoutLinkHoldbackLikeRust` (escaped labels, inline code, complete links).
 - Verified with `go build ./...` and `go test ./tui/streaming -count=1`.
 
-Status after reconciliation: `2126 complete`, `441 not_applicable`,
-`369 audit_pending`, `210 regression_pending`, `3 partial`,
+### Native POSIX spawning for hooks and shell snapshots (Round 965)
+
+- Rust #47610 routes Unix command hooks through the PTY launcher with `ProcessMode::NewSession` instead of a `pre_exec` detach callback, keeps the session environment snapshot, hook overrides and restricted-variable filtering, and covers process-group cleanup plus preserved background descendants (#47610, complete).
+- Go already detaches hooks the same way: `appserver/hook_process_tree_unix.go` starts every hook command with `SysProcAttr{Setsid: true}` and kills the negative PID on cancellation or timeout, while `hooks_runner.go:295-301` layers the session snapshot, hook overrides and `envutil.ScrubCommandEnv`. Native spawning is the Go default because `os/exec` has no `pre_exec` hook.
+- Rust #47611 moves Unix shell snapshots onto the same launcher, passes the complete scrubbed child environment, and rejects a NUL-containing script before execution (#47611, complete). Go's capture already owns its process group (`tool/shell_snapshot_process_unix.go`), passes `snapshotCaptureEnv` through `envSlice`, and `os/exec` fails `Start` with `EINVAL` for NUL arguments, so the shell never runs.
+- Rust #47613 only expands Linux spawn-helper lifecycle tests for a helper process Go does not have (not applicable); the guarantees it protects are covered by `TestSnapshotCaptureOwnsItsProcessGroupLikeRust` and `TestHookProcessTreeTimeoutTerminatesTree`.
+- Tests: `TestSnapshotCaptureRejectsNULScriptBeforeExecutionLikeRust` (new), `TestHookCommandDetachesFromControllingTerminalLikeRust`, `TestHookProcessTreeTimeoutTerminatesTree`, `TestHookRunnerRunsCommandAndNotifies`.
+- Verified with `go test ./tool -count=1`, `go test ./appserver -run Hook -count=1`, and a Linux test-binary build (`GOOS=linux go test -c ./appserver`) so the Unix files compile.
+
+Status after reconciliation: `2128 complete`, `442 not_applicable`,
+`366 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

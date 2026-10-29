@@ -19597,9 +19597,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust routes Unix command hooks through the PTY launcher with ProcessMode::NewSession so the detach no longer needs a pre_exec callback. Go already starts every hook command with syscall.SysProcAttr{Setsid: true} (appserver/hook_process_tree_unix.go startHookProcessTree), creating the same detached session; Go os/exec has no pre_exec hook, so native spawning is the Go default.",
+    "The session environment snapshot, hook overrides and restricted-variable filtering are preserved: appserver/hooks_runner.go:295 assigns hookCommandEnv(snapshot, metadata.Env) and :301 applies envutil.ScrubCommandEnv, filtering non-inheritable names from both sources like Rust.",
+    "Cancellation and timeout tear down the whole process group (hookProcessTree.terminate -> processgroup.Kill on the negative pid) while a completed hook leaves background descendants running (preserveDescendants), matching the Rust process-group cleanup and preserved helpers.",
+    "Tests: TestHookCommandDetachesFromControllingTerminalLikeRust (unix), TestHookProcessTreeTimeoutTerminatesTree, TestHookRunnerRunsCommandAndNotifies. Verified with go test ./appserver -run Hook -count=1 plus a Linux test-binary build (GOOS=linux go test -c ./appserver) so the unix files compile."
    ]
   },
   {
@@ -19609,9 +19612,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Unix shell snapshots already run in their own process group instead of a pre_exec detach: tool/shell_snapshot_process_unix.go ownSnapshotCaptureProcessGroup sets Setpgid and routes Cancel to killSnapshotCaptureProcessGroup, the later #49782 form of the #47611 NewSession launcher.",
+    "The capture passes the complete, scrubbed child environment: snapshotCaptureEnv builds the parent environment minus launch-context variables and applies envutil.ScrubMap, and each runner assigns process.Env = envSlice(env) (tool/shell_snapshot_builder.go:478-566).",
+    "Original command arguments are preserved, so a script containing a NUL byte is rejected before execution: Go os/exec fails Start with EINVAL and the shell never runs. Test TestSnapshotCaptureRejectsNULScriptBeforeExecutionLikeRust asserts the error and that the script output file was not created.",
+    "Verified with go test ./tool -run TestSnapshotCaptureRejectsNULScriptBeforeExecutionLikeRust -count=1."
    ]
   },
   {
@@ -19633,9 +19639,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #47613 is Linux test coverage for the PTY spawn helper: a separate helper process performs environment transfer, fd inheritance, a report handshake and exec. Go has no spawn helper, since os/exec forks and execs inside the runtime, so parent-death signaling, handshake pause points and reaper fixtures have no counterpart.",
+    "The guarantees those tests protect still hold through process-group ownership: a cancelled or failed capture kills its group (tool/shell_snapshot_process_unix.go) and a cancelled or timed-out hook tears down its session (appserver/hook_process_tree_unix.go), covered by TestSnapshotCaptureOwnsItsProcessGroupLikeRust and TestHookProcessTreeTimeoutTerminatesTree."
    ]
   },
   {
