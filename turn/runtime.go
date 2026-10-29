@@ -477,6 +477,16 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	}).Run(ctx, &loopRequest)
 }
 
+// ToolNamespacesInfo returns the finalized tool inventory of the router that
+// issued the current step (Rust `StepContext::tool_router`). Remote compaction
+// reports it separately so its metadata matches the issuing request (#45248).
+func (r *Runtime) ToolNamespacesInfo() tool.ToolNamespacesInfo {
+	if r == nil || r.router == nil {
+		return nil
+	}
+	return r.router.ToolNamespacesInfo()
+}
+
 // codeModeResponseItemInjector queues a response item as pending input for the
 // running turn (Rust `Session::inject_if_running`). A Code Mode cell outlives
 // the exec call that started it, so a notification emitted later must reach the

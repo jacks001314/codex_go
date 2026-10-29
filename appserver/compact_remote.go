@@ -12,6 +12,7 @@ import (
 	"codex_go/install"
 	"codex_go/model"
 	"codex_go/session"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -137,7 +138,7 @@ func (r *RuntimeRouter) compactResponsesClientMetadataForWindow(record *session.
 			Phase:          string(request.Phase),
 		}
 	}
-	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
+	clientMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		InstallationID:             installationID,
 		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
 		ThreadID:                   threadID,
@@ -168,6 +169,37 @@ func (r *RuntimeRouter) compactResponsesClientMetadataForWindow(record *session.
 		StartedAtMS:                startedAtMS,
 		UseResponsesLite:           r.modelUsesResponsesLite(compactModel),
 	})
+	// Rust #45248 attaches the finalized tool inventory of the issuing step's
+	// router to the compaction request's turn-metadata document.
+	if active != nil && active.Runtime != nil {
+		clientMetadata = attachToolInventoryToCompactionMetadata(clientMetadata, active.Runtime.ToolNamespacesInfo())
+	}
+	return clientMetadata
+}
+
+// attachToolInventoryToCompactionMetadata writes the issuing step's finalized
+// tool inventory into the Responses turn-metadata document (Rust
+// `responses_metadata.tool_namespaces_info`). A document without a turn
+// metadata payload or an empty inventory is left untouched.
+func attachToolInventoryToCompactionMetadata(clientMetadata map[string]string, inventory tool.ToolNamespacesInfo) map[string]string {
+	if len(clientMetadata) == 0 || len(inventory) == 0 {
+		return clientMetadata
+	}
+	raw := strings.TrimSpace(clientMetadata[codexapi.ClientCodexTurnMetadataHeader])
+	if raw == "" {
+		return clientMetadata
+	}
+	var document map[string]any
+	if err := json.Unmarshal([]byte(raw), &document); err != nil || document == nil {
+		return clientMetadata
+	}
+	document[codexapi.ToolNamespacesInfoKey] = inventory
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return clientMetadata
+	}
+	clientMetadata[codexapi.ClientCodexTurnMetadataHeader] = string(encoded)
+	return clientMetadata
 }
 
 // remoteCompactServiceTierForRecord resolves the service tier for a remote

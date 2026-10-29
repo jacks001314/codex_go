@@ -9,6 +9,7 @@ import (
 	"codex_go/compact"
 	"codex_go/config"
 	"codex_go/session"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -29,6 +30,47 @@ func decodeCompactionTurnMetadata(t *testing.T, raw string) map[string]any {
 // the compaction turn's metadata document with the compaction request kind and
 // the operation's dispatch metadata, plus the current window and fork fields -
 // and, unlike a sampling step, it does not apply the captured step settings.
+// Rust #45248 attaches the issuing step's finalized tool inventory to remote
+// compaction metadata without disturbing the compaction document.
+func TestAttachToolInventoryToCompactionMetadataLikeRust(t *testing.T) {
+	document := map[string]any{
+		codexapi.RequestKindKey: string(codexapi.ClientRequestCompaction),
+		codexapi.ThreadIDKey:    "thread-1",
+	}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	clientMetadata := map[string]string{codexapi.ClientCodexTurnMetadataHeader: string(raw)}
+	inventory := tool.ToolNamespacesInfo{
+		"clock": {
+			Name: "clock",
+			Functions: map[string]tool.ToolFunctionInfo{
+				"curr_time": {Name: "curr_time", Source: tool.ToolFunctionSource{Kind: tool.ToolFunctionSourceHarness}},
+			},
+		},
+	}
+	got := attachToolInventoryToCompactionMetadata(clientMetadata, inventory)
+	document = decodeCompactionTurnMetadata(t, got[codexapi.ClientCodexTurnMetadataHeader])
+	if document[codexapi.RequestKindKey] != string(codexapi.ClientRequestCompaction) ||
+		document[codexapi.ThreadIDKey] != "thread-1" {
+		t.Fatalf("compaction document = %#v", document)
+	}
+	namespaces, ok := document[codexapi.ToolNamespacesInfoKey].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_namespaces_info = %#v", document[codexapi.ToolNamespacesInfoKey])
+	}
+	if _, ok := namespaces["clock"]; !ok {
+		t.Fatalf("tool_namespaces_info = %#v, want clock", namespaces)
+	}
+
+	// An empty inventory leaves the document untouched.
+	unchanged := map[string]string{codexapi.ClientCodexTurnMetadataHeader: string(raw)}
+	if got := attachToolInventoryToCompactionMetadata(unchanged, nil); got[codexapi.ClientCodexTurnMetadataHeader] != string(raw) {
+		t.Fatalf("empty inventory changed the document: %q", got[codexapi.ClientCodexTurnMetadataHeader])
+	}
+}
+
 func TestCompactResponsesClientMetadataCarriesTheTurnDocument(t *testing.T) {
 	router := &RuntimeRouter{}
 	record := &session.Record{ID: "thread-1", SessionID: "session-1"}
