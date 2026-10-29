@@ -10963,9 +10963,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 983: Go already implements this commit end to end. appserver/goal_empty_responses.go tracks a per-thread streak only for automatically admitted goal continuation turns (markGoalContinuation), counts a terminal agent message with no text (goalMessagePhaseIsTerminalAnswer, Rust #51249) or an interrupted turn with no activity as an empty final answer, and resets the streak on user input, non-empty reasoning/answer text, questions, tool or other items, non-automatic turns, and goal replacement. appserver/thread_goal_state.go blocks the goal after three consecutive empties by updating the state goal to blocked, emitting the ThreadGoalUpdated status change, recording the transition, and clearing the streak. Tests: TestGoalEmptyAutomaticContinuationsBlockAfterThree, TestGoalInterruptedAutomaticContinuationsCountTowardNoActivityLikeRust, TestGoalEmptyStreakResetsOnActivityAndNonAutomaticTurns, TestGoalEmptyStreakResetsOnGoalChange, TestGoalEmptyPartialAnswersDoNotCountAsEmptyFinalLikeRust (all in appserver/goal_empty_responses_test.go). Verified with go test ./appserver -run 'GoalEmpty|GoalInterrupted' -count=1."
    ]
   },
   {

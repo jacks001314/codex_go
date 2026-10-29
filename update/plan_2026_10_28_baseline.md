@@ -3004,6 +3004,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `model/prewarm_preconnect_like_rust_test.go` (routing hint and `service_tier`, guardian omission, 401 refresh retry, finalized `additional_tools` declarations). Verified with `go test ./model -count=1` and `go test ./appserver -run Prewarm -count=1`.
 - Residual: Rust's startup prewarm captures its own turn-scoped tools during the handshake; Go's startup hook runs at thread/start before MCP discovery and has no such snapshot, so the base warmup carries only caller-supplied tools.
 
-Status after reconciliation: `2143 complete`, `449 not_applicable`,
-`347 audit_pending`, `205 regression_pending`, `5 partial`,
+### Goal empty-continuation breaker (Round 983)
+
+- Rust #44320 blocks a goal after three consecutive empty automatic continuation turns (#44320, complete).
+- `appserver/goal_empty_responses.go` counts only automatically admitted goal turns, treats a textless terminal agent message or an interrupted turn with no activity as empty, and resets the streak on user input, reasoning/answer text, questions, tool activity, non-automatic turns, and goal changes; `appserver/thread_goal_state.go` blocks the goal, emits `ThreadGoalUpdated`, records the transition, and clears the streak.
+- Tests: `TestGoalEmptyAutomaticContinuationsBlockAfterThree`, `TestGoalInterruptedAutomaticContinuationsCountTowardNoActivityLikeRust`, `TestGoalEmptyStreakResetsOnActivityAndNonAutomaticTurns`, `TestGoalEmptyStreakResetsOnGoalChange`, `TestGoalEmptyPartialAnswersDoNotCountAsEmptyFinalLikeRust`. Verified with `go test ./appserver -run 'GoalEmpty|GoalInterrupted' -count=1`.
+
+Status after reconciliation: `2144 complete`, `449 not_applicable`,
+`347 audit_pending`, `204 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
