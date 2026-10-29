@@ -7435,14 +7435,14 @@ func TestModelUsageWeeklyOpensSummaryWeeklyView(t *testing.T) {
 	if dashboard.section != analytics.AnalyticsSectionSummary {
 		t.Fatalf("section = %v, want summary", dashboard.section)
 	}
-	if !dashboard.zoomed || dashboard.scrollOffset != 0 || dashboard.groupPicker != nil {
-		t.Fatalf("summary state = zoomed:%v scroll:%d picker:%v", dashboard.zoomed, dashboard.scrollOffset, dashboard.groupPicker)
+	if !dashboard.zoomed || dashboard.scrollOffset != 0 {
+		t.Fatalf("summary state = zoomed:%v scroll:%d", dashboard.zoomed, dashboard.scrollOffset)
 	}
 	if got := dashboard.sections[analytics.AnalyticsSectionSummary].Group; got != 1 {
 		t.Fatalf("summary view = %d, want 1 (weekly)", got)
 	}
 	waitForAnalyticsLoads(t, model)
-	if view := stripAnalyticsTestANSI(model.View()); !strings.Contains(view, "Daily  [Weekly]  Cumulative") {
+	if view := stripAnalyticsTestANSI(model.View()); !strings.Contains(view, "Token activity") || !strings.Contains(view, "Weekly") {
 		t.Fatalf("summary did not select Weekly:\n%s", view)
 	}
 }

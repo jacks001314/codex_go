@@ -236,7 +236,7 @@ func TestAnalyticsRangeChangeKeepsSelectionLikeRust(t *testing.T) {
 	}
 }
 
-func TestAnalyticsGroupPickerAppliesGroupingLikeRust(t *testing.T) {
+func TestAnalyticsGroupCyclesLikeRust(t *testing.T) {
 	backend := startAnalyticsTestBackend(t, "account-a", "plus", `{"data": []}`)
 	model := newAnalyticsTestModel(t, "plus", backend)
 	openAnalyticsFromUsageMenu(t, model)
@@ -252,19 +252,19 @@ func TestAnalyticsGroupPickerAppliesGroupingLikeRust(t *testing.T) {
 			break
 		}
 	}
+	// Rust #45770: g advances one grouping and wraps without a picker.
 	model.Update(runes("g"))
-	if dashboard.groupPicker == nil {
-		t.Fatalf("group picker did not open; options=%v", options)
-	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
-	if dashboard.groupPicker != nil {
-		t.Fatal("group picker stayed open after selection")
-	}
 	if want := options[(position+1)%len(options)]; dashboard.sections[analytics.AnalyticsSectionUsage].Group != want {
 		t.Fatalf("usage group = %d, want %d", dashboard.sections[analytics.AnalyticsSectionUsage].Group, want)
 	}
 	waitForAnalyticsLoads(t, model)
+	for range options[1:] {
+		model.Update(runes("g"))
+		waitForAnalyticsLoads(t, model)
+	}
+	if got := dashboard.sections[analytics.AnalyticsSectionUsage].Group; got != options[position] {
+		t.Fatalf("wrapped usage group = %d, want %d", got, options[position])
+	}
 }
 
 func TestAnalyticsBusinessModelFilterLikeRust(t *testing.T) {

@@ -81,7 +81,7 @@ func TestAnalyticsSummaryTabLoadsProfileAndScrollsLikeRust(t *testing.T) {
 		"Lifetime tokens",
 		"142.3B",
 		"Token activity",
-		"[Daily]  Weekly  Cumulative",
+		"Daily",
 		"tab/1–6",
 		"scroll",
 	} {
@@ -103,16 +103,11 @@ func TestAnalyticsSummaryTabLoadsProfileAndScrollsLikeRust(t *testing.T) {
 		t.Fatalf("r changed the summary range: %v -> %v", before, dashboard.ranges)
 	}
 	model.Update(runes("g"))
-	if dashboard.groupPicker == nil {
-		t.Fatal("g did not open the summary view picker")
-	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
 	if got := dashboard.sections[analytics.AnalyticsSectionSummary].Group; got != 1 {
 		t.Fatalf("summary view = %d, want 1", got)
 	}
 	waitForAnalyticsLoads(t, model)
-	if view := stripAnalyticsTestANSI(model.View()); !strings.Contains(view, "Daily  [Weekly]  Cumulative") {
+	if view := stripAnalyticsTestANSI(model.View()); !strings.Contains(view, "Token activity") || !strings.Contains(view, "Weekly") {
 		t.Fatalf("summary did not switch to Weekly:\n%s", view)
 	}
 

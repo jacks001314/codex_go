@@ -151,15 +151,8 @@ func AnalyticsSummaryLines(opts AnalyticsSummaryOptions) []string {
 		lines = append(lines, values, labels, "")
 	}
 	selected := AnalyticsSummaryViewIndex(opts.View)
-	controls := make([]string, 0, len(AnalyticsSummaryViews))
-	for index, view := range AnalyticsSummaryViews {
-		if index == selected {
-			controls = append(controls, "["+view.Label()+"]")
-		} else {
-			controls = append(controls, view.Label())
-		}
-	}
-	controlLine := strings.Join(controls, "  ")
+	// Rust #45770 shows only the active activity view beside the heading.
+	controlLine := AnalyticsSummaryViews[selected].Label()
 	if innerWidth >= 58 {
 		lines = append(lines, analyticsColumns("Token activity", controlLine, innerWidth))
 	} else {

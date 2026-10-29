@@ -89,7 +89,8 @@ func TestAnalyticsSummaryRendersProfileLikeRust(t *testing.T) {
 		"Longest streak",
 		"160 days",
 		"Token activity",
-		"[Daily]  Weekly  Cumulative",
+		"Token activity",
+		"Daily",
 		"Last 12 months",
 		"Activity insights",
 		"Fast Mode",
@@ -134,10 +135,10 @@ func TestAnalyticsSummaryNarrowLayoutStacksFieldsLikeRust(t *testing.T) {
 			t.Fatalf("narrow line %q wider than 30", line)
 		}
 	}
-	if summaryContains(narrow, "Token activity  [") {
+	if summaryContains(narrow, "Token activity  Daily") {
 		t.Fatalf("narrow header should stack the controls:\n%s", strings.Join(narrow, "\n"))
 	}
-	if !summaryContains(narrow, "[Daily]  Weekly  Cumulative") {
+	if !summaryContains(narrow, "Daily") {
 		t.Fatalf("narrow controls missing:\n%s", strings.Join(narrow, "\n"))
 	}
 	overview := AnalyticsSummaryLines(AnalyticsSummaryOptions{

@@ -245,7 +245,7 @@ func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
 }
 
 // TestAnalyticsDashboardTruncatesOverflowLikeRust covers the "… z to maximize"
-// hint and the group picker replacing card history.
+// hint (Rust #45770 removed the in-card group picker).
 func TestAnalyticsDashboardTruncatesOverflowLikeRust(t *testing.T) {
 	visible := []AnalyticsSection{AnalyticsSectionUsage}
 	long := make([]string, 30)
@@ -265,19 +265,11 @@ func TestAnalyticsDashboardTruncatesOverflowLikeRust(t *testing.T) {
 	if !strings.Contains(text, "… z to maximize") {
 		t.Fatalf("overflow hint missing:\n%s", text)
 	}
-	picker := 1
-	options.GroupPicker = &picker
-	options.GroupOptions = []int{1, 2, 0, 3}
-	lines, _, _ = AnalyticsDashboardLines(options)
-	text = strings.Join(lines, "\n")
-	if !strings.Contains(text, "› Model") || !strings.Contains(text, "  Feature") || strings.Contains(text, "line") {
-		t.Fatalf("group picker content:\n%s", text)
-	}
 }
 
-// TestAnalyticsPanelContainsChartAndPickerLikeRust covers the maximized panel:
-// heading, grouping, business model line, and picker selection range.
-func TestAnalyticsPanelContainsChartAndPickerLikeRust(t *testing.T) {
+// TestAnalyticsPanelContainsChartLikeRust covers the maximized panel heading,
+// grouping, business model line, and its full selection range.
+func TestAnalyticsPanelContainsChartLikeRust(t *testing.T) {
 	history := &AccountAnalyticsHistory{
 		Unit: AccountAnalyticsUnitCredits,
 		Data: []AccountAnalyticsDay{
@@ -291,7 +283,6 @@ func TestAnalyticsPanelContainsChartAndPickerLikeRust(t *testing.T) {
 	state := DefaultAnalyticsSectionState()
 	state.Cursor = 6
 	state.History = readyAnalyticsLoad(*history)
-	picker := 0
 	panel := AnalyticsPanelLines(AnalyticsPanelOptions{
 		Section:             AnalyticsSectionUsage,
 		State:               state,
@@ -304,8 +295,6 @@ func TestAnalyticsPanelContainsChartAndPickerLikeRust(t *testing.T) {
 		Business:            true,
 		ConsumerAttribution: false,
 		TokenModel:          strPtrForTest("gpt-5"),
-		GroupOptions:        []int{6, 2},
-		GroupPicker:         &picker,
 	})
 	text := strings.Join(panel.Lines, "\n")
 	if !strings.Contains(text, "Token usage history") || !strings.Contains(text, "By product") {
@@ -314,11 +303,8 @@ func TestAnalyticsPanelContainsChartAndPickerLikeRust(t *testing.T) {
 	if !strings.Contains(text, "gpt-5 · m change model") {
 		t.Fatalf("business model line missing:\n%s", text)
 	}
-	if !strings.Contains(text, "› Token type") || !strings.Contains(text, "  Model") {
-		t.Fatalf("picker options missing:\n%s", text)
-	}
-	if panel.SelectionStart != 0 || panel.SelectionEnd != 2+2 {
-		t.Fatalf("picker selection = (%d,%d), want (0,4)", panel.SelectionStart, panel.SelectionEnd)
+	if panel.SelectionStart != 0 || panel.SelectionEnd != len(panel.Lines) {
+		t.Fatalf("panel selection = (%d,%d), want (0,%d)", panel.SelectionStart, panel.SelectionEnd, len(panel.Lines))
 	}
 	if panel.ChartBands != 1 {
 		t.Fatalf("chart bands = %d, want 1", panel.ChartBands)

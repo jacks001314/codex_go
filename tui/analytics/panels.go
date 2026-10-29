@@ -41,8 +41,6 @@ type AnalyticsPanelOptions struct {
 	Business             bool
 	ConsumerAttribution  bool
 	TokenModel           *string
-	GroupOptions         []int
-	GroupPicker          *int
 	ModelName            func(string) string
 }
 
@@ -55,8 +53,8 @@ type AnalyticsPanel struct {
 	ChartBands     int
 }
 
-// AnalyticsPanelLines builds the maximized section: heading, grouping, optional
-// group picker, and the history chart with its breakdown table.
+// AnalyticsPanelLines builds the maximized section: heading, grouping, and
+// the history chart with its breakdown table.
 func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 	width := opts.Width
 	if width < 1 {
@@ -77,15 +75,6 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 			model = *opts.TokenModel
 		}
 		lines = append(lines, model+" · m change model")
-	}
-	if opts.Focused && opts.GroupPicker != nil {
-		for index, group := range opts.GroupOptions {
-			marker := " "
-			if index == *opts.GroupPicker {
-				marker = "›"
-			}
-			lines = append(lines, marker+" "+opts.Section.GroupLabel(group, opts.ConsumerAttribution))
-		}
 	}
 	bands := 0
 	selectionStart := 0
@@ -155,10 +144,6 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 		bands = chartBands
 		lines = append(lines, historyLines...)
 		selectionEnd = len(lines)
-	}
-	if opts.Focused && opts.GroupPicker != nil {
-		selectionEnd = 2 + len(opts.GroupOptions)
-		selectionStart = 0
 	}
 	wrapped := make([]string, 0, len(lines))
 	wrappedStart, wrappedEnd := 0, 0

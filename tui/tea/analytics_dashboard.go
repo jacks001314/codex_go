@@ -60,7 +60,6 @@ type analyticsDashboard struct {
 	ranges          [3]int
 	endDate         time.Time
 	tokenModel      *string
-	groupPicker     *int
 }
 
 func newAnalyticsDashboard() *analyticsDashboard {
@@ -128,7 +127,6 @@ func (m *Model) openAnalyticsSummary(view *chatwidget.TokenActivityView) bubblet
 	dashboard.section = analytics.AnalyticsSectionSummary
 	dashboard.zoomed = true
 	dashboard.scrollOffset = 0
-	dashboard.groupPicker = nil
 	if view != nil {
 		for index, candidate := range analytics.AnalyticsSummaryViews {
 			if candidate == *view {
@@ -162,7 +160,6 @@ func (d *analyticsDashboard) refresh() {
 		return
 	}
 	d.endDate = analyticsDay(time.Now())
-	d.groupPicker = nil
 	d.live = nil
 	if d.liveFactory != nil {
 		d.live = d.liveFactory(d.endDate)
@@ -218,7 +215,6 @@ func (d *analyticsDashboard) finish() {
 	if d == nil {
 		return
 	}
-	d.groupPicker = nil
 	d.active = false
 	for index := range d.sections {
 		if d.sections[index].History.State() == analytics.AnalyticsLoadStateLoading {
@@ -347,9 +343,6 @@ func (d *analyticsDashboard) pollReports() {
 		if group != 0 && group != 2 {
 			d.sections[analytics.AnalyticsSectionUsage].Group = 0
 		}
-	}
-	if d.groupPicker != nil && *d.groupPicker >= len(d.groupOptions()) {
-		d.groupPicker = nil
 	}
 	if chats, ok := d.chats.Ready(); ok {
 		cursor := &d.sections[analytics.AnalyticsSectionChats].Cursor
@@ -643,7 +636,6 @@ func (d *analyticsDashboard) selectSection(section analytics.AnalyticsSection) {
 		d.scrollOffset = 0
 	}
 	d.section = section
-	d.groupPicker = nil
 }
 
 // summaryAction scrolls the Summary body. A missing action leaves the view
@@ -696,30 +688,6 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 	} else {
 		action = m.analyticsListAction(msg)
 	}
-	if d.groupPicker != nil {
-		options := d.groupOptions()
-		choice := *d.groupPicker
-		if choice < 0 || choice >= len(options) {
-			d.groupPicker = nil
-			return true
-		}
-		switch action {
-		case "move_up", "move_left":
-			next := (choice + len(options) - 1) % len(options)
-			d.groupPicker = &next
-		case "move_down", "move_right":
-			next := (choice + 1) % len(options)
-			d.groupPicker = &next
-		case "accept":
-			d.sections[d.section].Group = options[choice]
-			d.groupPicker = nil
-			d.loadReport(d.section)
-		case "cancel":
-			d.groupPicker = nil
-		}
-		d.followSelection = true
-		return true
-	}
 	d.followSelection = true
 	if runeKey, ok := analyticsPlainRune(msg); ok {
 		switch runeKey {
@@ -767,15 +735,18 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 				return true
 			}
 		case 'g':
+			// Rust #45770 cycles the grouping directly instead of opening a
+			// picker.
 			if options := d.groupOptions(); len(options) > 1 {
-				choice := 0
+				next := 0
 				for index, group := range options {
 					if group == d.sections[d.section].Group {
-						choice = index
+						next = (index + 1) % len(options)
 						break
 					}
 				}
-				d.groupPicker = &choice
+				d.sections[d.section].Group = options[next]
+				d.loadReport(d.section)
 				return true
 			}
 		}
@@ -914,7 +885,7 @@ func (d *analyticsDashboard) render(m *Model, width, height int) string {
 
 	controls := d.controls(m, showRange)
 	footer := d.footerLines(theme, controls, innerWidth)
-	if d.groupPicker == nil && (d.section == analytics.AnalyticsSectionPlugins ||
+	if (d.section == analytics.AnalyticsSectionPlugins ||
 		d.section == analytics.AnalyticsSectionActivity ||
 		d.section == analytics.AnalyticsSectionSkills) &&
 		!d.dayHasDetails(d.section, d.sections[d.section].Cursor) {
@@ -1002,9 +973,7 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 			}
 		}
 		_, profileReady := d.profile.Ready()
-		centerSummary := d.section == analytics.AnalyticsSectionSummary &&
-			profileReady &&
-			d.groupPicker == nil
+		centerSummary := d.section == analytics.AnalyticsSectionSummary && profileReady
 		if centerSummary {
 			// Keep the heading and rule fixed and center the profile below
 			// them (Rust render.rs center_summary, #45769).
@@ -1049,8 +1018,6 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 		Section:             d.section,
 		Ranges:              d.ranges,
 		Groups:              groups,
-		GroupOptions:        d.groupOptions(),
-		GroupPicker:         d.groupPicker,
 		Business:            d.business(),
 		ConsumerAttribution: d.consumerAttribution(),
 		TokenModel:          d.tokenModel,
@@ -1114,8 +1081,6 @@ func (d *analyticsDashboard) panel(section analytics.AnalyticsSection, width, ch
 		Business:             d.business(),
 		ConsumerAttribution:  d.consumerAttribution(),
 		TokenModel:           d.tokenModel,
-		GroupOptions:         d.groupOptions(),
-		GroupPicker:          d.groupPicker,
 		ModelName:            d.modelName,
 	})
 }
@@ -1144,14 +1109,6 @@ func (d *analyticsDashboard) controls(m *Model, showRange bool) string {
 	cancelHint := analyticsHintLabel(m, "cancel")
 	if len(d.visibleSections()) == 0 {
 		return "R refresh · " + cancelHint + " back · q close"
-	}
-	if d.groupPicker != nil {
-		target := "group"
-		if d.section == analytics.AnalyticsSectionSummary {
-			target = "view"
-		}
-		return analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " " + target + " · " +
-			analyticsHintLabel(m, "accept") + " select · " + cancelHint + " cancel"
 	}
 	navigation := analyticsHintLabel(m, "accept") + "/z maximize"
 	if d.zoomed {

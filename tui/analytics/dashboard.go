@@ -79,8 +79,6 @@ type AnalyticsDashboardOptions struct {
 	Section             AnalyticsSection
 	Ranges              [3]int
 	Groups              [AnalyticsSectionCount]int
-	GroupOptions        []int
-	GroupPicker         *int
 	Business            bool
 	ConsumerAttribution bool
 	TokenModel          *string
@@ -216,14 +214,6 @@ func analyticsDashboardCard(
 				Metric:  opts.ChatMetric,
 				Width:   innerWidth,
 			}).Lines
-		}
-	} else if focused && opts.GroupPicker != nil {
-		for index, group := range opts.GroupOptions {
-			marker := " "
-			if index == *opts.GroupPicker {
-				marker = "›"
-			}
-			content = append(content, marker+" "+section.GroupLabel(group, opts.ConsumerAttribution))
 		}
 	} else if opts.History != nil {
 		historyHeight := innerHeight - 13
