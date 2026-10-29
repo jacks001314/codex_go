@@ -16132,9 +16132,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #46533 stops a new TUI thread from requesting detailed reasoning summaries by default and stops enabling summaries when only features.concurrent_reasoning_summaries is set. Go follows the later #50811 rule that Rust HEAD keeps: the TUI forwards model_reasoning_summary only when it is a winning launch choice and never derives it from a default or from the concurrent-summary feature (app/interactive.go:2754-2775, app/remote_tui.go:5509-5540), so a fresh thread leaves the value to the server while explicit settings still travel. Regression: TestNewTUIThreadReasoningDefaultsLikeRust covers the empty default, concurrent-only feature forwarding without a summary, the remote thread config, and an explicit auto value; TestInteractiveLaunchReasoningOverridesLikeRust and TestRemoteConfigValuesForwardProfileReasoningChoicesLikeRust cover launch-choice precedence. go test ./app -run Reasoning|LaunchSetting|NewTUIThread passes."
    ]
   },
   {

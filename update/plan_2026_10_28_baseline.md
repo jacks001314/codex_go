@@ -2233,6 +2233,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Go has no Seatbelt platform-defaults asset: `sandbox/seatbelt.go` builds every policy as `(version 1)` plus `(allow default)` and then adds explicit deny rules, so it never enumerates macOS system services and never granted `com.apple.runningboard`.
 - Nothing to remove or retest; recorded as `not_applicable`, consistent with the earlier record for the same profile file (`75388bf3`).
 
-Status after reconciliation: `2067 complete`, `408 not_applicable`,
-`440 audit_pending`, `230 regression_pending`, `4 partial`,
+### Default new TUI threads to no reasoning summaries (Round 906)
+
+- Rust #46533 defaults a new TUI thread's `model_reasoning_summary` to `none` and stops enabling summaries when only `features.concurrent_reasoning_summaries` is set.
+- Go's TUI already follows the later #50811 rule that Rust HEAD keeps: `model_reasoning_summary` is forwarded only as a winning launch choice and is never derived from a default or from the concurrent-summary feature (`app/interactive.go`, `app/remote_tui.go`), so a fresh thread leaves the value to the server while explicit settings still travel.
+- `app/embedded_reasoning_test.go`: `TestNewTUIThreadReasoningDefaultsLikeRust` pins the empty default, concurrent-only feature forwarding without a summary override (embedded and remote thread config), and an explicit `auto` value.
+- Verification: `go test ./app -run 'Reasoning|LaunchSetting|NewTUIThread' -count=1` passes.
+
+Status after reconciliation: `2068 complete`, `408 not_applicable`,
+`439 audit_pending`, `230 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

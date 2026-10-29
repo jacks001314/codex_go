@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"codex_go/cli"
@@ -49,6 +50,47 @@ func TestInteractiveLaunchReasoningOverridesLikeRust(t *testing.T) {
 	root = &cli.RootOptions{ConfigOverrides: []string{"model_reasoning_summary=none"}}
 	if got := interactiveLaunchReasoningOverrides(root); !slices.Contains(got, "model_reasoning_summary=none") {
 		t.Fatalf("disabled cli overrides = %#v, want none preserved", got)
+	}
+}
+
+// TestNewTUIThreadReasoningDefaultsLikeRust mirrors Rust #46533: a new TUI
+// thread never derives a reasoning-summary override from a default, and
+// enabling features.concurrent_reasoning_summaries on its own never requests
+// summaries. Explicit summary choices still travel, and #50811 keeps the client
+// from overriding settings that are not launch choices.
+func TestNewTUIThreadReasoningDefaultsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	if got := interactiveLaunchReasoningOverrides(&cli.RootOptions{}); len(got) != 0 {
+		t.Fatalf("default overrides = %#v, want none", got)
+	}
+
+	concurrent := &cli.RootOptions{ConfigOverrides: []string{"features.concurrent_reasoning_summaries=true"}}
+	got := interactiveLaunchReasoningOverrides(concurrent)
+	if !slices.Contains(got, "features.concurrent_reasoning_summaries=true") {
+		t.Fatalf("concurrent overrides = %#v, want the feature choice", got)
+	}
+	for _, override := range got {
+		if strings.HasPrefix(override, "model_reasoning_summary=") {
+			t.Fatalf("concurrent summaries produced a summary override: %#v", got)
+		}
+	}
+	values, err := remoteConfigValues(concurrent, cli.SharedOptions{})
+	if err != nil {
+		t.Fatalf("remoteConfigValues: %v", err)
+	}
+	if _, present := values["model_reasoning_summary"]; present {
+		t.Fatalf("concurrent summaries forwarded a summary: %#v", values)
+	}
+	remoteFeatures, _ := values["features"].(map[string]any)
+	if enabled, _ := remoteFeatures["concurrent_reasoning_summaries"].(bool); !enabled {
+		t.Fatalf("concurrent feature not forwarded: %#v", values)
+	}
+
+	explicit := &cli.RootOptions{ConfigOverrides: []string{"model_reasoning_summary=auto"}}
+	if got := interactiveLaunchReasoningOverrides(explicit); !slices.Contains(got, "model_reasoning_summary=auto") {
+		t.Fatalf("explicit overrides = %#v, want auto preserved", got)
 	}
 }
 
