@@ -214,19 +214,35 @@ func (m *Model) wireAgentsOverviewThemeColors(view *agentsoverview.View) {
 	// lines. The core cannot measure ANSI, so the renderer returns lines already
 	// wrapped to the requested width.
 	view.RenderMarkdown = func(text string, width int) []string {
-		if width <= 0 || strings.TrimSpace(text) == "" {
-			return nil
-		}
-		rendered, err := markdown.RenderWithThemeCwd(text, width, m.tuiTheme, m.overviewCWD())
-		if err != nil {
-			return nil
-		}
-		lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
-		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-			lines = lines[:len(lines)-1]
-		}
-		return lines
+		return renderAgentsOverviewMarkdown(text, width, m.tuiTheme, m.overviewCWD())
 	}
+	// Rust #44752 renders the prompt and last message against the task's own
+	// working directory so relative links resolve like they do in the thread.
+	view.RenderMarkdownCWD = func(text string, width int, cwd string) []string {
+		base := strings.TrimSpace(cwd)
+		if base == "" {
+			base = m.overviewCWD()
+		}
+		return renderAgentsOverviewMarkdown(text, width, m.tuiTheme, base)
+	}
+}
+
+// renderAgentsOverviewMarkdown renders one task-details preview at width,
+// resolving local file links against base. A renderer failure declines the
+// preview so the core falls back to plain text.
+func renderAgentsOverviewMarkdown(text string, width int, theme string, base string) []string {
+	if width <= 0 || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	rendered, err := markdown.RenderWithThemeCwd(text, width, theme, base)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // overviewCWD returns the working directory used to resolve local file links in

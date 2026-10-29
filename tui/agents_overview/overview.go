@@ -470,6 +470,11 @@ type View struct {
 	// owns the terminal markup, so callers inject it; nil keeps the plain text
 	// preview.
 	RenderMarkdown func(text string, width int) []string
+	// RenderMarkdownCWD renders the prompt and last-message previews against the
+	// task's own working directory (Rust #44752 passes `Some(row.thread.cwd)`
+	// when rendering both). It takes precedence over RenderMarkdown and falls
+	// back to it when it returns no lines.
+	RenderMarkdownCWD func(text string, width int, cwd string) []string
 	// usageLines holds the pre-rendered token/usage-estimate lines for a task,
 	// shown in the details pane (Rust #44970 agents_overview.usage).
 	usageLines map[string][]string

@@ -11943,9 +11943,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 779 (audit): Rust #44747 only touches Rust third-party dependency plumbing - quinn-proto 0.11.14 -> 0.11.15 in Cargo.lock and MODULE.bazel.lock plus a hyperium/h3 Git-source allowlist entry in codex-rs/deny.toml - and changes no product behavior. Go's HTTP/3 CONNECT tunnel is built on github.com/quic-go/quic-go v0.59.1 (tcptunnel/tunnel.go); the module has no quinn-proto or hyperium/h3 dependency, no Cargo/Bazel lockfile, and no cargo-deny source allowlist, so there is nothing to bump or allowlist."
    ]
   },
   {
@@ -11967,9 +11967,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 780: tui/agents_overview renders both task-details previews with the task's own working directory. View.RenderMarkdownCWD(text, width, cwd) takes precedence over the model-level RenderMarkdown, renderDetails passes row.CWD for the prompt and for the last message (Rust renders both with Some(row.thread.cwd)), and the TUI wires it to markdown.RenderWithThemeCwd so relative local file links resolve like they do in the thread. The prompt stays limited to two rendered lines with an ellipsis while the last message keeps every rendered line. Preview bounds (newlines/tabs kept, other control characters stripped, 512-rune cap), markdown-fence unwrapping for agent messages, and prompt/last-message markdown rendering already existed. Regression contracts: tui/agents_overview/details_markdown_cwd_like_rust_test.go (task cwd and pane width for both previews, model-renderer fallback, two-line prompt budget, unlimited last message) and tui/tea TestWireAgentsOverviewSetsCWDMarkdownRenderer. Verify with: go test ./tui/agents_overview -count=1; go test ./tui/tea -run 'AgentsOverview' -count=1."
    ]
   },
   {

@@ -721,14 +721,7 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	if message := strings.TrimSpace(row.LastMessage); message != "" {
 		lines = append(lines, nil)
 		lines = append(lines, []span{{text: "Last message", style: spanDim}})
-		rendered := v.RenderMarkdown != nil
-		var messageLines []string
-		if rendered {
-			messageLines = v.RenderMarkdown(message, width)
-			if len(messageLines) == 0 {
-				rendered = false
-			}
-		}
+		messageLines, rendered := v.renderDetailsMarkdown(message, width, row.CWD)
 		if len(messageLines) == 0 {
 			messageLines = wrapPreviewLines(message, width)
 		}
@@ -750,13 +743,10 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	}
 	// The renderer supplies styled lines; plain rendering strips the styling so
 	// both modes show the parsed markdown text (Rust #44752).
-	markdown := v.RenderMarkdown != nil && preview != "No prompt available."
+	markdown := false
 	var prompt []string
-	if markdown {
-		prompt = v.RenderMarkdown(preview, width)
-		if len(prompt) == 0 {
-			markdown = false
-		}
+	if preview != "No prompt available." {
+		prompt, markdown = v.renderDetailsMarkdown(preview, width, row.CWD)
 	}
 	if len(prompt) == 0 {
 		prompt = wrapPreviewLines(preview, width)
@@ -781,6 +771,26 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		out = append(out, renderLine("", spans, width, styled))
 	}
 	return out
+}
+
+// renderDetailsMarkdown renders one task-details preview at the panel width,
+// resolving relative links against the task's working directory (Rust #44752
+// renders both the prompt and the last message with `Some(row.thread.cwd)`).
+func (v *View) renderDetailsMarkdown(text string, width int, cwd string) ([]string, bool) {
+	if v == nil {
+		return nil, false
+	}
+	if v.RenderMarkdownCWD != nil {
+		if cwdLines := v.RenderMarkdownCWD(text, width, cwd); len(cwdLines) > 0 {
+			return cwdLines, true
+		}
+	}
+	if v.RenderMarkdown != nil {
+		if lines := v.RenderMarkdown(text, width); len(lines) > 0 {
+			return lines, true
+		}
+	}
+	return nil, false
 }
 
 // CursorColumn returns the terminal column for the input cursor, mirroring

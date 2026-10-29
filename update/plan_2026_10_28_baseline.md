@@ -718,6 +718,18 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - `app/remote_tui.go`: consent runs before server settings are read, so a persisted decision is part of the starting configuration; agents overview worktrees use the local host lookup.
 - Tests: `config/project_trust_lookup_keys_test.go`, `app/remote_trust_destination_like_rust_test.go`; `go test ./config`, `go test ./app -run 'ReadRemoteProjectTrust|EnsureRemoteProjectTrust|CheckDirectoryTrust'`, and `go test ./parity` pass.
 
-Status after reconciliation: `1968 complete`, `383 not_applicable`,
-`511 audit_pending`, `287 regression_pending`, `0 partial`,
+### Audit Rust dependency-only bump (Round 779)
+
+- Rust #44747 only bumps Rust dependency plumbing (`quinn-proto` 0.11.14 -> 0.11.15 in `Cargo.lock`/`MODULE.bazel.lock`) and allowlists the pinned `hyperium/h3` Git source in `codex-rs/deny.toml`; it changes no product behavior.
+- Go's HTTP/3 CONNECT tunnel uses `github.com/quic-go/quic-go` v0.59.1 (`tcptunnel/tunnel.go`), so there is no quinn-proto/h3 dependency, Cargo/Bazel lockfile, or cargo-deny allowlist to update.
+
+### Render task details Markdown with the task cwd (Round 780)
+
+- `tui/agents_overview`: `View.RenderMarkdownCWD` now takes precedence for task-details previews, so the prompt and last message render at the pane width with the task's own working directory (Rust passes `Some(row.thread.cwd)` for both) and relative local file links resolve like in the thread.
+- The prompt stays limited to two rendered lines with an ellipsis; the last message keeps every rendered line; a declining cwd-aware renderer falls back to the model-level renderer.
+- `tui/tea`: the dashboard wires the cwd-aware renderer to `markdown.RenderWithThemeCwd`.
+- Tests: `tui/agents_overview/details_markdown_cwd_like_rust_test.go`, `tui/tea` `TestWireAgentsOverviewSetsCWDMarkdownRenderer`; `go test ./tui/agents_overview ./tui/tea -run 'Details|AgentsOverview'` passes.
+
+Status after reconciliation: `1969 complete`, `384 not_applicable`,
+`510 audit_pending`, `286 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
