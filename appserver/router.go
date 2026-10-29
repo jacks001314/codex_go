@@ -1518,6 +1518,26 @@ func processCWD() string {
 	return strings.TrimSpace(cwd)
 }
 
+// refreshedResumeRecord reads the stored snapshot again while the resume holds
+// writer ownership. A previous writer can commit after readThreadRecord and
+// before AcquireLiveThreadRetention; restoring the pre-acquisition snapshot would
+// drop that history (Rust #49599). A missing store record keeps the rollout-path
+// fallback that produced the initial snapshot.
+func (r *Router) refreshedResumeRecord(retention *LiveThreadRetention, snapshot *session.Record, includeHistory bool) (*session.Record, error) {
+	if retention == nil || snapshot == nil {
+		return snapshot, nil
+	}
+	record, err := retention.ReadRecord(true, includeHistory)
+	if errors.Is(err, session.ErrThreadNotFound) {
+		return snapshot, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.applyIndexedThreadName(record)
+	return record, nil
+}
+
 func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeResponse, err error) {
 	var params ThreadResumeParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -1535,7 +1555,8 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 	}
 	var sourceID session.ThreadID
 	var record *session.Record
-	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
+	explicitRolloutPath := params.Path != nil && strings.TrimSpace(*params.Path) != ""
+	if explicitRolloutPath {
 		record, err = r.readThreadRecordFromRolloutPath(*params.Path, true, includeTurns)
 		if err != nil {
 			return nil, err
@@ -1574,6 +1595,29 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 		}
 		paginatedResume = found && strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated))
 	}
+	sourceWasLive := r.threadManager().LiveThread(record.ID) != nil
+	// Rust #45487: the writer acquired for a cold resume stays owned by this
+	// request until the resume succeeds, so a later failure discards it instead
+	// of leaving persistence acquired for a thread the client never received.
+	retention, retainErr := r.acquireLiveThreadRetention(record)
+	if retainErr != nil {
+		return nil, retainErr
+	}
+	if retention != nil {
+		defer func() {
+			if err != nil {
+				_ = retention.Discard()
+				return
+			}
+			retention.Commit()
+		}()
+	}
+	if !sourceWasLive && !explicitRolloutPath && retention != nil {
+		record, err = r.refreshedResumeRecord(retention, record, includeTurns)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if includeTurns && !paginatedResume {
 		r.attachRolloutTurnSnapshots(record)
 	}
@@ -1584,7 +1628,6 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 			return nil, err
 		}
 	}
-	sourceWasLive := r.threadManager().LiveThread(record.ID) != nil
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	applyThreadAllowedToolsExtra(record.Metadata.Extra, params.AllowedTools)
 	var restoredSettings restoredThreadSettings
@@ -1607,22 +1650,6 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 		if modelChanged {
 			restoredSettings.changed = true
 		}
-	}
-	// Rust #45487: the writer acquired for a cold resume stays owned by this
-	// request until the resume succeeds, so a later failure discards it instead
-	// of leaving persistence acquired for a thread the client never received.
-	retention, retainErr := r.acquireLiveThreadRetention(record)
-	if retainErr != nil {
-		return nil, retainErr
-	}
-	if retention != nil {
-		defer func() {
-			if err != nil {
-				_ = retention.Discard()
-				return
-			}
-			retention.Commit()
-		}()
 	}
 	if restoredSettings.changed {
 		if err := r.saveThreadRecord(record); err != nil {

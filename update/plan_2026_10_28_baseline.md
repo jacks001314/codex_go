@@ -2653,6 +2653,15 @@ Interrupt callbacks now finish before interrupted terminal events (#49475, compl
 - Added `TestInterruptCallbackCompletesBeforeTurnAbortedLikeRust`, which holds the Interrupt hook open and verifies that explicit interrupt, conditional Guardian interrupt, and shutdown emit no `turn/completed` until the hook completes. It also asserts the hook runs exactly once for each path.
 - Verified with `go build ./...` and the targeted appserver lifecycle and Guardian tests. The full `go test ./appserver -count=1` run completed without abort-lifecycle failures but still hit two unrelated 2-second timeout tests (`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust` and `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`), both of which reproduce in isolation. `go vet ./appserver` still reports the pre-existing context-cancel warning in `appserver/thread_sample.go:220`, also unrelated.
 
-Status after reconciliation: `2105 complete`, `410 not_applicable`,
-`422 audit_pending`, `210 regression_pending`, `2 partial`,
+### Authoritative resume history (Round 942)
+
+A cold resume now restores history committed by the previous writer (#49599, complete).
+
+- `handleThreadResume` reads the snapshot before it can acquire the single-writer lock, so a prior process could append history in that window and have it dropped when the resume restored the stale snapshot.
+- `LiveThreadRetention.ReadRecord` now reads through the writer acquired by the resume, and `refreshedResumeRecord` re-reads the stored record after acquisition before settings, turn snapshots, and the response are built. A missing store record keeps the rollout-path fallback, and explicit `path` resumes keep their prior semantics.
+- Added `TestResumeRefreshesStaleHistoryUnderWriterLikeRust` (late append survives, pre-acquisition snapshot is not mutated) and `TestResumeRefreshKeepsRolloutFallbackLikeRust` (missing store record keeps the rollout snapshot).
+- Verified with `go test ./appserver -run 'TestResume|TestThreadResume' -count=1`. The full `go test ./appserver -count=1` run still hits three unrelated 2-second timeout tests that fail identically on the unmodified tree: `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`, `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`, and `TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust`. `go vet ./appserver` still reports the pre-existing context-cancel warning in `appserver/thread_sample.go:220`.
+
+Status after reconciliation: `2106 complete`, `410 not_applicable`,
+`421 audit_pending`, `210 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

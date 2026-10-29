@@ -24071,9 +24071,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 942: a cold thread/resume now re-reads the stored record through the LiveThreadRetention writer it just acquired, so history committed by a previous writer between the initial snapshot and writer acquisition is restored; explicit rollout paths and the rollout-only fallback keep their prior semantics. appserver/resume_authoritative_history_like_rust_test.go pins the stale-snapshot refresh and the missing-store fallback."
    ]
   },
   {

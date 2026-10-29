@@ -181,6 +181,17 @@ type LiveThreadRetention struct {
 	done    bool
 }
 
+// ReadRecord reads through the writer acquired by this resume. Writes committed
+// by a previous writer before ownership transferred are visible here, so callers
+// can restore from authoritative history instead of their pre-acquisition
+// snapshot (Rust #49599).
+func (retention *LiveThreadRetention) ReadRecord(includeArchived bool, includeHistory bool) (*session.Record, error) {
+	if retention == nil || retention.done || retention.guard == nil || retention.guard.LiveThread() == nil {
+		return nil, fmt.Errorf("%w: resume persistence is not held", session.ErrConflict)
+	}
+	return retention.guard.LiveThread().Read(includeArchived, includeHistory)
+}
+
 // AcquireLiveThreadRetention opens persistence for a thread that is about to
 // become live. It returns nil when the thread is already retained.
 func (m *ThreadManager) AcquireLiveThreadRetention(store *session.Store, record *session.Record) (*LiveThreadRetention, error) {
