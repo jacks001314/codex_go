@@ -1222,6 +1222,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Tests: table/stacked layouts, zero-credit toggle, unavailable breakdown, cursor window selection, overview five-row limit, business five-tab Top chats layout, row-hint footer, detail gating on unavailable rows, and `r` leaving the range untouched.
 - Verified: go test ./tui/analytics ./tui/tea -count=1, go vet ./tui/analytics ./tui/tea ./chatgptapi, go build ./..., plus a build/test of the staged snapshot in a throwaway worktree.
 
+### Consumer task usage data layer (#45768, part 1) (Round 841)
+
+- `chatgptapi/task_usage.go` adds the consumer `query_v2` contract: disjoint task/thread bounds, ownership and status validation, and `TaskUsageCredits`, which preserves exact decimal strings and orders them by sign, exponent, and significant digits.
+- `tui/analytics/tasks.go` adds `LoadAnalyticsTasks`: consumer-only loading, newest-first root selection with the 100-chat truncation, archived descendant discovery with chain proofs, disjoint batching, 404/503 freshness degradation, and the oldest `data_as_of` only when every batch supplied one.
+- `AnalyticsTaskChat.DisplayTitle` keeps unavailable-account titles hidden, and `AnalyticsChatThread` now carries `CreatedAt` so discovery can forward root creation times.
+- Tests cover decimal precision and ordering, request and response validation without stray HTTP traffic, archived paginated descendants, hidden unavailable titles, truncation with a 503 outage, overlap rejection, and every descendant chain failure.
+- Part 2 will render the consumer table, `s` sort cycling, and the dashboard card.
+- Verified: go test ./chatgptapi ./tui/analytics -count=1, go test ./tui/tea -run Analytics -count=1, go vet ./chatgptapi ./tui/analytics, go build ./... .
+
 Status after reconciliation: `2016 complete`, `395 not_applicable`,
-`478 audit_pending`, `258 regression_pending`, `2 partial`,
+`477 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
