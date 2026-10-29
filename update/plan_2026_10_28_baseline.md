@@ -564,8 +564,8 @@ symbol-coverage notes that still need per-symbol review, and the rest have no
 Go citation at all (Rust-only crates, CI, docs, or behaviour that may still be
 missing).
 
-Status after reconciliation: `1853 complete`, `365 not_applicable`,
-`644 audit_pending`, `287 regression_pending`, `0 partial`,
+Status after reconciliation: `1854 complete`, `370 not_applicable`,
+`638 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
 
 ## Files updated

@@ -25873,9 +25873,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: the commit only strengthens the Rust test tool_call_timing_guard_ignores_code_mode_source inside codex-rs/core/src/tools/parallel.rs mod tests (tracing subscriber capture, no production code). Go keeps its own tool-call timing tests and has no tracing-subscriber harness to extend."
    ]
   },
   {
@@ -26089,9 +26089,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: ServiceStopReason, record_stopped"
+    "N/A by architecture: the commit adds service_diagnostics.rs and stop-path logging inside codex-rs/windows-sandbox-service, the Rust Windows helper service (symbols ServiceStopReason/record_stopped). Go has no Windows sandbox service binary (no windows/svc usage; windowssandbox runs setup_main plus command_runner helpers), so no service stop path exists to instrument."
    ]
   },
   {
@@ -26101,9 +26101,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Equivalent implementation present: app/gov_cloud_guidance.go maybeRunGovCloudGuidance resolves GovCloud through the interactive Bedrock callbacks (interactiveBedrockCallbacks -> checkGovCloud), shows the blocking onboarding guidance, and persists notice.hide_gov_cloud_guidance only after acknowledgment; a cancelled prompt returns without writing. Tests: TestBedrockAPIKeyFlowAndGovCloudGuidance, TestGovCloudGuidanceAcknowledgeAndCancel, TestHideGovCloudGuidanceNoticeLikeRust (go test ./tui/onboarding -run GovCloud; go test ./config -run HideGovCloud)"
    ]
   },
   {
@@ -26426,9 +26426,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: snapshot-only maintenance inside codex-rs/tui (deletes .snap fixtures, replaces full-output snapshots with direct assertions, consolidates test loops); no production behaviour changes. Go has no insta snapshots and keeps its own TUI test suite."
    ]
   },
   {
@@ -26810,9 +26810,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: the commit only bumps .bazelversion to 9.2.0 and refreshes MODULE.bazel.lock. Go builds with the go toolchain and carries no Bazel workspace."
    ]
   },
   {
@@ -29910,9 +29910,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: the commit deletes redundant Rust test cases (184 deletions, no production code) across apply-patch, codex-mcp, and TUI local-link tests. Go keeps its own regression suites and has no equivalent test files to remove."
    ]
   },
   {
