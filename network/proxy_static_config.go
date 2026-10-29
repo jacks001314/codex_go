@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"codex_go/utils"
 )
 
 // StaticNetworkProxyConfig is a resolved standalone policy, including the
@@ -140,7 +142,18 @@ func (c *StaticNetworkProxyConfig) Validate() error {
 	if !c.Network.Enabled {
 		return errors.New("standalone network proxy requires network.enabled = true")
 	}
-	return ValidateProxyPolicyAgainstConstraints(ProxyConfig{Network: c.Network}, c.Constraints)
+	config := ProxyConfig{Network: c.Network}
+	// Rust #46578: the standalone proxy builds its config state with
+	// Platform::native(), so the socket allowlist is validated for the host
+	// platform before any listener or credential material is loaded.
+	if err := ValidateProxyUnixSocketAllowlistPathsForPlatform(config, utils.NativePlatform()); err != nil {
+		return err
+	}
+	// Rust build_config_state also requires MITM for the credential broker.
+	if config.Network.CredentialBroker && !config.Network.MITM {
+		return errors.New("network.credential_broker requires network.mitm = true")
+	}
+	return ValidateProxyPolicyAgainstConstraints(config, c.Constraints)
 }
 
 func (c standaloneProxyConstraints) toProxyConstraints() ProxyConstraints {

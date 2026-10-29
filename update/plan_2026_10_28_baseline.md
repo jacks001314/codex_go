@@ -2287,6 +2287,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Regression: `appserver/active_turn_environment_selections_like_rust_test.go` adds `TestThreadEnvironmentSelectionsUseTurnStartSnapshotLikeRust`, which registers a turn with `env-initial`, mutates the caller's params to `env-next`, asserts the turn keeps `env-initial`, and asserts the persisted `env-saved` selection applies after the turn ends. It complements the existing MCP snapshot test.
 - Verified with `go test ./appserver -run TestThreadEnvironmentSelectionsUseTurnStartSnapshotLikeRust` and `go test ./appserver -run 'EnvironmentSelections|EnvironmentPolicy|EnvironmentCapability'`.
 
-Status after reconciliation: `2074 complete`, `408 not_applicable`,
-`435 audit_pending`, `228 regression_pending`, `4 partial`,
+### Fix standalone network proxy policy initialization (Round 913)
+
+- Upstream (`29a57861e31a`, #46578) passes `Platform::native()` to `build_config_state` in the standalone network proxy so its policy is validated for the host executor OS before listeners start.
+- `network.StaticNetworkProxyConfig.Validate` now runs `ValidateProxyUnixSocketAllowlistPathsForPlatform` with `utils.NativePlatform()` and requires `network.mitm` when `credential_broker` is enabled, matching the other `build_config_state` preconditions before `codex-network-proxy` loads credentials or opens sockets.
+- Regression: `network/proxy_static_config_platform_like_rust_test.go` adds `TestStaticProxyConfigValidatesNativePlatformPolicyLikeRust` covering a rejected relative socket path, an accepted absolute path, and the credential-broker MITM requirement.
+- Verified with `go build ./network/... ./cmd/...`, `go test ./network -count=1`, and `go vet ./network ./cmd/codex-network-proxy`.
+
+Status after reconciliation: `2075 complete`, `408 not_applicable`,
+`434 audit_pending`, `228 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

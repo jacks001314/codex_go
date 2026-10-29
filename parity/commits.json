@@ -16577,9 +16577,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "network/proxy_static_config.go Validate now mirrors Rust #46578 build_config_state(config, constraints, Platform::native()): it validates network.allow_unix_sockets paths with ValidateProxyUnixSocketAllowlistPathsForPlatform(config, utils.NativePlatform()) and requires network.mitm for credential_broker before the standalone proxy (cmd/codex-network-proxy) loads credentials or creates listeners. Regression network/proxy_static_config_platform_like_rust_test.go TestStaticProxyConfigValidatesNativePlatformPolicyLikeRust covers a relative socket path rejection, an absolute path acceptance and the credential broker MITM requirement. Verified: go build ./network/... ./cmd/..., go test ./network -count=1, go vet ./network ./cmd/codex-network-proxy."
    ]
   },
   {
