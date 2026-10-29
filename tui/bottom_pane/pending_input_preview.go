@@ -20,7 +20,10 @@ type PendingInputPreview struct {
 
 func NewPendingInputPreview() *PendingInputPreview {
 	return &PendingInputPreview{
-		EditBinding:      "Alt+Up",
+		// Rust #47618 prefers Shift+Left over the terminal-dependent Alt+Up.
+		// Callers that own a configured keymap replace this with its primary
+		// shortcut, or clear it when the action is unbound.
+		EditBinding:      "shift+←",
 		InterruptBinding: "Esc",
 	}
 }

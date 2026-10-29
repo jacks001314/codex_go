@@ -352,8 +352,8 @@ func TestHandleKeymapCommandSupportsGlobalComposerFallback(t *testing.T) {
 func TestAsyncQuestionKeymapActionsResolveDefaults(t *testing.T) {
 	config := NewKeymapConfig()
 	for action, want := range map[string]string{
-		"edit_queued_message": "alt-up,shift-left",
-		"prompt_stack_back":   "alt-down,shift-right",
+		"edit_queued_message": "shift-left,alt-up",
+		"prompt_stack_back":   "shift-right,alt-down",
 		"skip_question":       "ctrl-]",
 	} {
 		bindings, source, custom := ResolvedKeymapBindings(config, "chat", action)
@@ -368,7 +368,7 @@ func TestAsyncQuestionKeymapActionsResolveDefaults(t *testing.T) {
 			editDescription = action.Description
 		}
 	}
-	if !strings.Contains(editDescription, "Move up through questions") {
+	if !strings.Contains(editDescription, "Move forward through questions") {
 		t.Fatalf("edit_queued_message description = %q", editDescription)
 	}
 }

@@ -19664,9 +19664,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Shift+Left/Shift+Right are now the primary edit_queued_message/prompt_stack_back defaults with Alt+Up/Alt+Down retained as alternatives; queued-input and async-question hints resolve the first configured shortcut, render custom two-stroke chords, and disappear when the action is unbound. Tests: go test ./tui/bottom_pane ./tui ./tui/tea -count=1"
    ]
   },
   {

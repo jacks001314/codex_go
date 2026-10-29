@@ -614,7 +614,7 @@ func (m *Model) renderAsyncQuestions() []string {
 		lines := []string{line}
 		// Rust #42903 keeps the edit binding on its own line so the countdown
 		// never crowds it out.
-		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "alt+↑"); binding != "" {
+		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "shift+←"); binding != "" {
 			lines = append(lines, m.dimAsyncQuestionText("    "+binding+" to answer"))
 		}
 		return lines
@@ -726,7 +726,7 @@ func (m *Model) asyncQuestionHintLine() string {
 	if binding := m.resolveAsyncQuestionBinding("chat", "skip_question", "ctrl+]"); binding != "" {
 		tips = append(tips, m.dimAsyncQuestionText(binding+" skip"))
 	}
-	if binding := m.resolveAsyncQuestionBinding("chat", "prompt_stack_back", "alt+↓"); binding != "" {
+	if binding := m.resolveAsyncQuestionBinding("chat", "prompt_stack_back", "shift+→"); binding != "" {
 		label := "prev question"
 		if m.asyncQuestions.CurrentIndex() == 0 {
 			label = "main prompt"
@@ -734,7 +734,7 @@ func (m *Model) asyncQuestionHintLine() string {
 		tips = append(tips, m.dimAsyncQuestionText(binding+" "+label))
 	}
 	if m.asyncQuestions.CurrentIndex()+1 < m.asyncQuestions.UnansweredCount() {
-		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "alt+↑"); binding != "" {
+		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "shift+←"); binding != "" {
 			tips = append(tips, m.dimAsyncQuestionText(binding+" next question"))
 		}
 	}
@@ -817,6 +817,18 @@ func questionCountLabel(count int) string {
 }
 
 func displayKeyBinding(binding string) string {
+	strokes := strings.Fields(binding)
+	if len(strokes) == 0 {
+		return binding
+	}
+	labels := make([]string, 0, len(strokes))
+	for _, stroke := range strokes {
+		labels = append(labels, displaySingleKeyBinding(stroke))
+	}
+	return strings.Join(labels, " ")
+}
+
+func displaySingleKeyBinding(binding string) string {
 	parts := strings.Split(strings.TrimSpace(binding), "-")
 	if len(parts) == 0 {
 		return binding

@@ -237,11 +237,80 @@ func TestAsyncQuestionsArriveCollapsedWithSummary(t *testing.T) {
 		t.Fatalf("questions = %d expanded=%v", model.asyncQuestions.UnansweredCount(), model.asyncQuestions.Expanded())
 	}
 	view := model.View()
-	if !strings.Contains(view, "2 questions") || !strings.Contains(view, "alt+↑ to answer") {
+	if !strings.Contains(view, "2 questions") || !strings.Contains(view, "shift+← to answer") {
 		t.Fatalf("collapsed summary missing:\n%s", view)
 	}
 	if strings.Contains(view, "1 of 2") {
 		t.Fatalf("collapsed view must not render the editor:\n%s", view)
+	}
+}
+
+// TestAsyncQuestionHintsFollowResolvedShortcutLikeRust mirrors Rust #47618:
+// question footers use the first configured shortcut for each action, render
+// custom chords, and omit an unbound action.
+func TestAsyncQuestionHintsFollowResolvedShortcutLikeRust(t *testing.T) {
+	config := codextui.NewKeymapConfig()
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, KeymapConfig: config})
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "Which database?"},
+		map[string]any{"title": "Deadline?"},
+	})
+	if view := model.View(); !strings.Contains(view, "shift+← to answer") {
+		t.Fatalf("default question hint missing:\n%s", view)
+	}
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyShiftLeft})
+	model = updated.(*Model)
+	if view := model.View(); !strings.Contains(view, "shift+→ main prompt") || !strings.Contains(view, "shift+← next question") {
+		t.Fatalf("default question footer missing:\n%s", view)
+	}
+
+	config = codextui.NewKeymapConfig()
+	if err := config.Set("chat", "edit_queued_message", []string{"alt-up", "shift-left"}); err != nil {
+		t.Fatalf("set edit_queued_message: %v", err)
+	}
+	if err := config.Set("chat", "prompt_stack_back", []string{"alt-down", "shift-right"}); err != nil {
+		t.Fatalf("set prompt_stack_back: %v", err)
+	}
+	model = NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, KeymapConfig: config})
+	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
+	if view := model.View(); !strings.Contains(view, "alt+↑ to answer") {
+		t.Fatalf("configured question hint missing:\n%s", view)
+	}
+
+	config = codextui.NewKeymapConfig()
+	if err := config.Set("chat", "edit_queued_message", []string{"ctrl-x up", "shift-left"}); err != nil {
+		t.Fatalf("set chord edit_queued_message: %v", err)
+	}
+	if err := config.Set("chat", "prompt_stack_back", []string{"ctrl-x down", "shift-right"}); err != nil {
+		t.Fatalf("set chord prompt_stack_back: %v", err)
+	}
+	model = NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, KeymapConfig: config})
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "Which database?"},
+		map[string]any{"title": "Deadline?"},
+	})
+	if view := model.View(); !strings.Contains(view, "ctrl+x ↑ to answer") {
+		t.Fatalf("chord question hint missing:\n%s", view)
+	}
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyShiftLeft})
+	model = updated.(*Model)
+	if view := model.View(); !strings.Contains(view, "ctrl+x ↓ main prompt") || !strings.Contains(view, "ctrl+x ↑ next question") {
+		t.Fatalf("chord question footer missing:\n%s", view)
+	}
+
+	config = codextui.NewKeymapConfig()
+	if err := config.Set("chat", "edit_queued_message", []string{}); err != nil {
+		t.Fatalf("unbind edit_queued_message: %v", err)
+	}
+	model = NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, KeymapConfig: config})
+	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
+	if view := model.View(); strings.Contains(view, "to answer") {
+		t.Fatalf("unbound question hint must be hidden:\n%s", view)
+	}
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+	if model.asyncQuestions.Expanded() {
+		t.Fatal("unbound edit action must not expand questions through a fallback")
 	}
 }
 

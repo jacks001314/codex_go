@@ -2873,6 +2873,16 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestSnapshotCaptureRejectsNULScriptBeforeExecutionLikeRust` (new), `TestHookCommandDetachesFromControllingTerminalLikeRust`, `TestHookProcessTreeTimeoutTerminatesTree`, `TestHookRunnerRunsCommandAndNotifies`.
 - Verified with `go test ./tool -count=1`, `go test ./appserver -run Hook -count=1`, and a Linux test-binary build (`GOOS=linux go test -c ./appserver`) so the Unix files compile.
 
-Status after reconciliation: `2128 complete`, `442 not_applicable`,
-`366 audit_pending`, `210 regression_pending`, `3 partial`,
+### Shift-arrow queued-message and question hints (Round 966)
+
+- Rust #47618 makes `Shift+Left` / `Shift+Right` the primary shortcuts for advancing through async questions and editing the last queued message, retaining `Alt+Up` / `Alt+Down` as alternatives, and removes terminal-specific hint selection (#47618, complete).
+- `tui/keymap.go:45` now orders the defaults `shift-left,alt-up` / `shift-right,alt-down` and uses Rust's "Move forward through questions" description.
+- `tui/tea/model.go:11482` derives the queued-message edit hint from the resolved keymap's first binding and clears it when the action is unbound; `tui/bottom_pane/pending_input_preview.go:26` defaults to `shift+←` for direct preview construction.
+- `tui/tea/async_questions.go:617` and `:737` use the resolved `edit_queued_message` binding for the collapsed "to answer" hint and the expanded "next question" footer, while `prompt_stack_back` resolves `shift+→`.
+- `tui/tea/async_questions.go:819` displays two-stroke chords as separate shortcut labels (`ctrl-x up` -> `ctrl+x ↑`) so configured chord hints match the keymap.
+- Tests: `TestQueuedMessageEditHintUsesPrimaryShortcutLikeRust`, `TestQueuedMessageEditAcceptsBothDefaultShortcutsLikeRust`, `TestAsyncQuestionHintsFollowResolvedShortcutLikeRust`, `TestPendingInputPreviewRendersQueues` (default, configured order, custom chord, unbound).
+- Verified with `go test ./tui/bottom_pane ./tui ./tui/tea -count=1`.
+
+Status after reconciliation: `2129 complete`, `442 not_applicable`,
+`365 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

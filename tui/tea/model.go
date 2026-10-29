@@ -11362,7 +11362,7 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 // composer for editing, mirroring Rust 2bc43d516e (#38907 "Edit queued
 // messages with Vim history-up"):
 //
-//   - the chat edit_queued_message binding (default alt-up / shift-left)
+//   - the chat edit_queued_message binding (default shift-left / alt-up)
 //     restores whenever queued follow-ups exist and no modal or popup is
 //     active;
 //   - in Vim normal mode, an empty composer's history-up binding (vim_normal
@@ -11477,6 +11477,9 @@ func (m *Model) renderBottomPane() string {
 	if len(m.pendingSteers) > 0 || len(m.rejectedSteers) > 0 || len(m.queued) > 0 || hasAsyncQuestions {
 		preview := bottompane.NewPendingInputPreview()
 		preview.HasQuestions = hasAsyncQuestions
+		// Rust #47618: the queued-message hint comes from the configured keymap's
+		// primary shortcut and disappears when the action is unbound.
+		preview.SetEditBinding(m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "shift+←"))
 		preview.PendingSteers = make([]string, 0, len(m.pendingSteers))
 		for _, pending := range m.pendingSteers {
 			preview.PendingSteers = append(preview.PendingSteers, queuedSubmissionSummary(pending.Request))

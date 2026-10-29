@@ -133,15 +133,20 @@ func TestPendingInputPreviewRendersQueues(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], "Queued follow-up inputs") ||
 		!strings.Contains(lines[1], "Hello, world!") ||
-		!strings.Contains(lines[2], "Alt+Up edit last queued message") {
+		!strings.Contains(lines[2], "shift+← edit last queued message") {
 		t.Fatalf("queued render lines = %#v", lines)
 	}
 
 	preview = NewPendingInputPreview()
-	preview.SetEditBinding("Shift+Left")
+	preview.SetEditBinding("ctrl+x ↑")
 	preview.QueuedMessages = []string{"Hello, world!"}
-	if lines := preview.RenderLines(40); !strings.Contains(lines[2], "Shift+Left") {
+	if lines := preview.RenderLines(40); !strings.Contains(lines[2], "ctrl+x ↑") {
 		t.Fatalf("remapped edit binding lines = %#v", lines)
+	}
+
+	preview.SetEditBinding("")
+	if lines := preview.RenderLines(40); strings.Contains(strings.Join(lines, "\n"), "edit last queued message") {
+		t.Fatalf("unbound edit action must hide the hint: %#v", lines)
 	}
 }
 
