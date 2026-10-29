@@ -149,6 +149,10 @@ type ToolDispatcher struct {
 	instantInterrupt            bool
 	truncation                  *utils.TruncationPolicy
 	truncationForModel          func(model string) *utils.TruncationPolicy
+	// stepAttribution is the settings captured for the current sampling step
+	// (Rust #45248). The agent loop writes it before that step's tool batch
+	// starts and the batch only reads it, so parallel calls share one value.
+	stepAttribution             *tool.StepAttribution
 	onToolOutputExternalContext func(ctx context.Context, invocation *tool.Invocation, output *tool.Output)
 	tracer                      SpanTracer
 	clockMu                     sync.Mutex
@@ -514,6 +518,26 @@ func codeModeCellID(invocation *tool.Invocation, output *tool.Output) string {
 	return ""
 }
 
+// SetStepSettings captures the settings that issued the current sampling step.
+// Tool hooks report these instead of the turn's initial attribution when a
+// turn/settings/update changes the model or approval policy mid-turn
+// (Rust #45248).
+func (d *ToolDispatcher) SetStepSettings(modelID string, reasoningEffort string, permissionMode string) {
+	if d == nil {
+		return
+	}
+	attribution := &tool.StepAttribution{
+		Model:           strings.TrimSpace(modelID),
+		ReasoningEffort: strings.TrimSpace(reasoningEffort),
+		PermissionMode:  strings.TrimSpace(permissionMode),
+	}
+	if attribution.Model == "" && attribution.ReasoningEffort == "" && attribution.PermissionMode == "" {
+		d.stepAttribution = nil
+		return
+	}
+	d.stepAttribution = attribution
+}
+
 // SetStepModel applies the producing model's output-truncation policy to the
 // tools of the current sampling step (Rust #44243). The agent loop drains each
 // step's tools before asking for the next step's settings, so the policy is
@@ -665,6 +689,7 @@ func (d *ToolDispatcher) addInvocationContext(invocation *tool.Invocation) {
 		invocation.Context["turnId"] = d.turnID
 	}
 	invocation.Truncation = d.truncation
+	invocation.StepAttribution = d.stepAttribution
 }
 
 func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations []*tool.Invocation) ([]ToolExecutionResult, error) {

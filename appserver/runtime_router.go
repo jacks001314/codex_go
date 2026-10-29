@@ -19683,6 +19683,17 @@ func (r *RuntimeRouter) permissionRequestHookVerdict(ctx context.Context, thread
 	if adapter == nil {
 		return nil, false
 	}
+	// Rust #45248 reports the captured review settings to PermissionRequest
+	// hooks; the running turn's step settings carry the model and approval
+	// policy that issued the review.
+	if settings := r.turnStepSettingsProvider(strings.TrimSpace(threadID), strings.TrimSpace(turnID))(); settings != nil {
+		if model := strings.TrimSpace(settings.Model); model != "" {
+			adapter.Model = model
+		}
+		if mode := strings.TrimSpace(settings.HookPermissionMode); mode != "" {
+			adapter.PermissionMode = mode
+		}
+	}
 	decision, err := adapter.RunPermissionRequest(ctx, runIDSuffix, toolName, matcherAliases, toolInput, toolCWD, targetEnvironment)
 	if err != nil {
 		return nil, false

@@ -38,14 +38,15 @@ func (a *ToolHookAdapter) RunPreToolUse(ctx context.Context, invocation *tool.In
 	if invocation != nil {
 		toolUseID = invocation.CallID
 	}
+	model, permissionMode := a.attributionFor(invocation)
 	result, err := a.Runner.RunPreToolUse(ctx, &HookPreToolUseRequest{
 		ThreadID:       a.ThreadID,
 		TurnID:         a.TurnID,
 		Subagent:       a.Subagent,
 		CWD:            a.CWD,
 		TranscriptPath: a.TranscriptPath,
-		Model:          a.Model,
-		PermissionMode: firstHookString(a.PermissionMode, "default"),
+		Model:          model,
+		PermissionMode: permissionMode,
 		ToolName:       payload.ToolName.Name,
 		MatcherAliases: append([]string(nil), payload.ToolName.MatcherAliases...),
 		ToolUseID:      toolUseID,
@@ -117,14 +118,15 @@ func (a *ToolHookAdapter) RunPostToolUse(ctx context.Context, invocation *tool.I
 	if strings.TrimSpace(toolUseID) == "" && invocation != nil {
 		toolUseID = invocation.CallID
 	}
+	model, permissionMode := a.attributionFor(invocation)
 	result, err := a.Runner.RunPostToolUse(ctx, &HookPostToolUseRequest{
 		ThreadID:       a.ThreadID,
 		TurnID:         a.TurnID,
 		Subagent:       a.Subagent,
 		CWD:            a.CWD,
 		TranscriptPath: a.TranscriptPath,
-		Model:          a.Model,
-		PermissionMode: firstHookString(a.PermissionMode, "default"),
+		Model:          model,
+		PermissionMode: permissionMode,
 		ToolName:       payload.ToolName.Name,
 		MatcherAliases: append([]string(nil), payload.ToolName.MatcherAliases...),
 		ToolUseID:      toolUseID,
@@ -146,6 +148,20 @@ func (a *ToolHookAdapter) RunPostToolUse(ctx context.Context, invocation *tool.I
 		FatalReason:        result.StopReason,
 		AdditionalContexts: append([]string(nil), result.AdditionalContexts...),
 	}, nil
+}
+
+// attributionFor prefers the settings captured on the invocation by the tool
+// dispatcher (Rust #45248 runs pre/post hooks with step_context.settings) and
+// falls back to the adapter's turn-level attribution for calls dispatched
+// without a captured step.
+func (a *ToolHookAdapter) attributionFor(invocation *tool.Invocation) (string, string) {
+	model := a.Model
+	permissionMode := firstHookString(a.PermissionMode, "default")
+	if invocation != nil && invocation.StepAttribution != nil {
+		model = firstHookString(invocation.StepAttribution.Model, model)
+		permissionMode = firstHookString(invocation.StepAttribution.PermissionMode, permissionMode)
+	}
+	return model, permissionMode
 }
 
 func firstHookString(values ...string) string {

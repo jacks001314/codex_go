@@ -154,6 +154,18 @@ type Invocation struct {
 	// response-content budget through ResponseByteBudget; Code Mode calls
 	// ignore it because they receive typed results.
 	Truncation *utils.TruncationPolicy
+	// StepAttribution carries the settings captured for the sampling step that
+	// issued this call (Rust #45248 `StepContext::settings`), so pre/post tool
+	// hooks report the step's model and permission mode rather than the turn's
+	// initial ones. It is set per invocation and never serialized.
+	StepAttribution *StepAttribution
+}
+
+// StepAttribution is the captured execution metadata of one sampling step.
+type StepAttribution struct {
+	Model           string
+	ReasoningEffort string
+	PermissionMode  string
 }
 
 type CodeModeNotifyFunc func(callID string, text string)

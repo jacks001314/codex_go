@@ -119,6 +119,9 @@ type AgentStepSettings struct {
 	ReasoningSummary string
 	ServiceTier      string
 	ClientMetadata   map[string]string
+	// HookPermissionMode is the step's effective approval policy in the hook
+	// vocabulary (Rust #45248 hook_permission_mode(step_context.settings)).
+	HookPermissionMode string
 }
 
 type AgentLoopRequest struct {
@@ -390,6 +393,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		stepReasoningEffort := request.ReasoningEffort
 		stepReasoningSummary := request.ReasoningSummary
 		stepServiceTier := request.ServiceTier
+		stepHookPermissionMode := ""
 		if iteration > 0 && request.StepSettings != nil {
 			if settings := request.StepSettings(); settings != nil {
 				if modelID := strings.TrimSpace(settings.Model); modelID != "" {
@@ -398,6 +402,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				stepReasoningEffort = settings.ReasoningEffort
 				stepReasoningSummary = settings.ReasoningSummary
 				stepServiceTier = settings.ServiceTier
+				if mode := strings.TrimSpace(settings.HookPermissionMode); mode != "" {
+					stepHookPermissionMode = mode
+				}
 				if len(settings.ClientMetadata) > 0 {
 					clientMetadata = transformClientMetadata(settings.ClientMetadata, request.ClientMetadataTransform)
 				}
@@ -416,6 +423,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 		l.dispatcher.SetStepModel(stepModel)
+		l.dispatcher.SetStepSettings(stepModel, stepReasoningEffort, stepHookPermissionMode)
 		if request.StepInputItems != nil {
 			items, err := request.StepInputItems(ctx, iteration, stepModel, stepReasoningEffort)
 			if err != nil {

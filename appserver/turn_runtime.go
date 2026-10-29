@@ -9100,6 +9100,11 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 		if settings.Model == "" && active.Params != nil {
 			settings.Model = strings.TrimSpace(active.Params.Model)
 		}
+		// Rust #45248: hooks report the issuing step's approval policy in the
+		// hook permission-mode vocabulary.
+		if cfg, err := r.effectiveConfigForTurn(active.Params); err == nil {
+			settings.HookPermissionMode = hookPermissionMode(turnApprovalPolicyForTurn(cfg, active.Params))
+		}
 		if cfg, err := r.effectiveConfigForTurn(active.Params); err == nil && cfg != nil {
 			if (active.Params != nil && active.Params.Summary != nil) ||
 				stringConfigValue(cfg, "model_reasoning_summary") != "" {

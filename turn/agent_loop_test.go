@@ -1100,6 +1100,58 @@ func TestAgentLoopUsesStepModelForToolTruncationLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #45248: pre/post tool hooks use the captured settings of the step that
+// issued the call, so a mid-turn model or approval-policy update changes the
+// attribution seen by the next step's tools.
+func TestAgentLoopUsesCapturedStepSettingsForToolHooksLikeRust(t *testing.T) {
+	agent := &toolPerStepLoopAgent{}
+	registry := tool.NewRegistry()
+	type seenAttribution struct{ model, effort, permission string }
+	var seen []seenAttribution
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		attribution := invocation.StepAttribution
+		if attribution == nil {
+			return nil, errors.New("missing step attribution")
+		}
+		seen = append(seen, seenAttribution{attribution.Model, attribution.ReasoningEffort, attribution.PermissionMode})
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+		MaxTurns:   4,
+	})
+	_, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:          "run echo twice",
+		Model:           "gpt-initial",
+		ReasoningEffort: "low",
+		StepSettings: func() *AgentStepSettings {
+			return &AgentStepSettings{
+				Model:              "gpt-updated",
+				ReasoningEffort:    "high",
+				HookPermissionMode: "bypassPermissions",
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := []seenAttribution{
+		{model: "gpt-initial", effort: "low"},
+		{model: "gpt-updated", effort: "high", permission: "bypassPermissions"},
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("attributions = %#v, want %#v", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Fatalf("attribution %d = %#v, want %#v", i, seen[i], want[i])
+		}
+	}
+}
+
 // Rust builds request-scoped world state from the StepContext captured for each
 // sampling request. The Go loop must therefore resolve step input after the
 // step settings refresh and retain the resulting context for later requests.

@@ -133,6 +133,55 @@ func TestTurnHookAdapterPrefersTheTurnModelOverTheConfiguredModel(t *testing.T) 
 	}
 }
 
+// Rust #45248: the pre/post hook payload reports the captured settings of the
+// step that issued the call, not the adapter's turn-start attribution.
+func TestToolHookAdapterReportsInvocationStepAttributionLikeRust(t *testing.T) {
+	captured := filepath.Join(t.TempDir(), "pre-tool-use.json")
+	command := captureHookStdinCommand(captured)
+	hook := hookRunnerMetadata("pre", HookEventPreToolUse, "echo", 0)
+	hook.Command = &command
+	adapter := NewToolHookAdapter(NewHookRunner(), []HookMetadata{hook}, "thread-1", "turn-1", t.TempDir())
+	adapter.Model = "gpt-turn"
+	adapter.PermissionMode = "default"
+
+	if _, err := adapter.RunPreToolUse(context.Background(), &tool.Invocation{
+		CallID:   "call-1",
+		ToolName: tool.PlainName("echo"),
+		StepAttribution: &tool.StepAttribution{
+			Model:           "gpt-step",
+			ReasoningEffort: "high",
+			PermissionMode:  "bypassPermissions",
+		},
+	}, &tool.PreToolUsePayload{
+		ToolName:  &tool.HookToolName{Name: "echo"},
+		ToolInput: map[string]any{"command": "echo hi"},
+	}); err != nil {
+		t.Fatalf("RunPreToolUse() error = %v", err)
+	}
+	payload, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("the hook did not receive its stdin payload: %v", err)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(payload, &input); err != nil {
+		t.Fatalf("hook input json error = %v payload=%s", err, payload)
+	}
+	if input["model"] != "gpt-step" || input["permission_mode"] != "bypassPermissions" {
+		t.Fatalf("hook input attribution = %#v", input)
+	}
+
+	// A partially captured step keeps the adapter fallback for the missing
+	// field, and a call without a captured step uses the turn attribution.
+	model, mode := adapter.attributionFor(&tool.Invocation{StepAttribution: &tool.StepAttribution{Model: "gpt-step"}})
+	if model != "gpt-step" || mode != "default" {
+		t.Fatalf("partial attributionFor() = %q/%q", model, mode)
+	}
+	model, mode = adapter.attributionFor(&tool.Invocation{})
+	if model != "gpt-turn" || mode != "default" {
+		t.Fatalf("fallback attributionFor() = %q/%q", model, mode)
+	}
+}
+
 func captureHookStdinCommand(path string) string {
 	if runtime.GOOS == "windows" {
 		return powershellEncodedCommand(`[Console]::In.ReadToEnd() | Set-Content -Path ` + powerShellSingleQuote(path))
