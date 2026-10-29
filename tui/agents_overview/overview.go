@@ -1561,6 +1561,21 @@ func (v *View) HideSelected() Action {
 	if v.State.HiddenThreads == nil {
 		v.State.HiddenThreads = map[string]struct{}{}
 	}
+	if v.State.Renaming {
+		// Rust #45978: while renaming, leave the selection where it is so the
+		// draft cannot transfer to a neighboring task, and cancel the rename
+		// when its target is the hidden row.
+		target := strings.TrimSpace(v.State.RenameTarget)
+		v.State.HiddenThreads[threadID] = struct{}{}
+		if target == "" || target == threadID {
+			v.State.Renaming = false
+			v.State.RenameTarget = ""
+			v.State.Input = ""
+			v.State.InputCursor = 0
+		}
+		v.fitSelection()
+		return ActionHideThread
+	}
 	removed := map[string]struct{}{threadID: {}}
 	// Rust #50505: pick the adjacent surviving task in displayed order (next,
 	// else previous) before the row can leave the list, so a later rebuild keeps

@@ -14451,9 +14451,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust 576110286845 (#45978) keeps the agents overview selection adjacent when the selected task is hidden and keeps rename cancellation from transferring a draft to a neighboring task. Go already picked the next displayed surviving task, else the previous one at the end of the list, through SelectionAfterRemoval (Rust #50505), but HideSelected moved the selection while a rename was in flight and left State.Renaming and State.Input set on a hidden target. tui/agents_overview/overview.go HideSelected now returns early while renaming: it hides the row, cancels Renaming, RenameTarget, Input, and InputCursor when the rename target is the hidden row, and refits without choosing a successor. Added tui/agents_overview/hide_selection_like_rust_test.go with TestHideSelectedKeepsSelectionAdjacentLikeRust (a middle row picks the next displayed row and the last row picks the previous one), TestHideSelectedFollowsSearchFilterLikeRust, TestHideSelectedWhileRenamingCancelsDraftLikeRust, and TestHideSelectedHidesEveryVisibleTaskLikeRust. Verified: go test ./tui/agents_overview."
    ]
   },
   {

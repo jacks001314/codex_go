@@ -2331,6 +2331,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Added `app/recap_permissions_like_rust_test.go` against a fake app server that serves a managed `:workspace` default: `TestTemporaryStructuredThreadRequestsReadOnlyPermissionsLikeRust`, `TestTemporaryStructuredThreadRejectsWritableSandboxLikeRust`, `TestTemporaryStructuredThreadPreservesCustomProfileLikeRust`, `TestTemporaryStructuredThreadRejectsLostCustomProfileLikeRust`.
 - Verified with `go test ./app -run TemporaryStructured` and `go test ./app -run Recap`.
 
-Status after reconciliation: `2080 complete`, `408 not_applicable`,
-`433 audit_pending`, `224 regression_pending`, `4 partial`,
+### Keep agents overview selection adjacent when hiding tasks (Round 919)
+
+- Upstream (`576110286845`, #45978) keeps the agents overview selection adjacent when the selected task is hidden (next visible task, else the previous one at the end of the list) and keeps the rename-cancellation behavior so an unsubmitted draft cannot transfer to a neighboring task.
+- Go already chose the adjacent surviving task through `SelectionAfterRemoval` (`tui/agents_overview/overview.go`, Rust #50505), and the search filter is honored. The remaining gap was the rename path: `HideSelected` moved the selection while renaming and left `State.Renaming` and `State.Input` set on a now-hidden target.
+- `HideSelected` now returns early while renaming: it hides the row, cancels `Renaming`/`RenameTarget`/`Input`/`InputCursor` when the rename target is the hidden row, and refits without selecting a successor.
+- Added `tui/agents_overview/hide_selection_like_rust_test.go` (`TestHideSelectedKeepsSelectionAdjacentLikeRust`, `TestHideSelectedFollowsSearchFilterLikeRust`, `TestHideSelectedWhileRenamingCancelsDraftLikeRust`, `TestHideSelectedHidesEveryVisibleTaskLikeRust`).
+- Verified with `go test ./tui/agents_overview`.
+
+Status after reconciliation: `2081 complete`, `408 not_applicable`,
+`432 audit_pending`, `224 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
