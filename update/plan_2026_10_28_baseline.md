@@ -933,6 +933,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Rust's `config.schema.json` has no Go counterpart, so the schema entry has nothing to mirror.
 - Coverage: `config/guardian_policy_config_test.go` (deserialization, trimming, managed-vs-config precedence), `appserver/guardian_reviewer_test.go` (catalog-vs-config precedence, rendered policy text), `state/guardian_instructions_test.go` (placeholder rendering). Verified with `go test ./config -run Guardian`, `go test ./appserver -run Guardian`, `go test ./state -run Guardian`.
 
-Status after reconciliation: `1994 complete`, `390 not_applicable`,
-`499 audit_pending`, `266 regression_pending`, `0 partial`,
+### Restore collaboration mode when resuming threads (#45519) (Round 809)
+
+- The app-server half was already ported: `thread/resume` reports the restored `collaborationMode` (live snapshot, else the rollout snapshot, else the last legacy `TurnContext`), overlaid with the effective model and reasoning effort, and writes the overlaid snapshot back for the next resume.
+- `app/remote_tui.go`: `remoteTUISettingsFromResume` now carries the response's `collaborationMode` into `appserver.Settings.CollaborationMode`, so a reconnecting client receives the server's mode instead of falling back to Default.
+- `tui/tea`: `applyThreadSettingsValues` adopts the reported mode kind before the reasoning-effort assignment, so Plan mode is restored, the effort lands in the plan slot, and the first prompt after the resume is submitted with the restored mode. A response without a mode leaves the local selection alone, matching older servers.
+- Tests: `TestResumeRestoresCollaborationModeLikeRust`, `TestResumeWithoutReportedModeKeepsLocalSelectionLikeRust`, `TestRemoteTUIResumeCarriesCollaborationModeLikeRust`.
+- Known Go-specific gap: the in-process (embedded) resume path has no thread-settings snapshot to read because local turns do not yet persist one; the app-server-backed path is complete.
+- Verified with `go test ./tui/tea ./tui ./tui/chatwidget` and `go test ./app -run 'RemoteTUI|ThreadSettings|Collaboration|Resume'`.
+
+Status after reconciliation: `1995 complete`, `390 not_applicable`,
+`499 audit_pending`, `265 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

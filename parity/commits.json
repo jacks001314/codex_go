@@ -13251,9 +13251,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "App-server half was already present (ThreadResumeResponse.CollaborationMode, applyThreadResumeCollaborationMode restoring the live/rollout/last-legacy-TurnContext mode overlaid with the effective model and effort, plus the settings snapshot write-back). This round closed the TUI half: remoteTUISettingsFromResume now carries resumed.CollaborationMode into appserver.Settings.CollaborationMode, and tea.applyThreadSettingsValues adopts the reported mode kind before the effort assignment so State.PlanMode is restored and the first prompt after resume is submitted in Plan mode; an omitted mode leaves the local selection untouched. Tests: TestResumeRestoresCollaborationModeLikeRust, TestResumeWithoutReportedModeKeepsLocalSelectionLikeRust, TestRemoteTUIResumeCarriesCollaborationModeLikeRust. go test ./tui/tea ./app ./tui ./tui/chatwidget pass (app limited to RemoteTUI|ThreadSettings|Collaboration|Resume). Go-specific gap recorded: the in-process (embedded) resume path builds no thread settings because local turns do not yet write thread-settings snapshots."
    ]
   },
   {
