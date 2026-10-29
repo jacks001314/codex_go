@@ -13779,9 +13779,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/18; needs review: AccountAnalyticsDay, AccountAnalyticsGrouping, AccountAnalyticsHistory, AccountAnalyticsReport, AccountAnalyticsUnit"
+    "Rust #45740 adds a TUI analytics data layer: display models (report/grouping/unit/history/day/value), a projection from the typed backend analytics responses (usage, credits, enterprise credits, messages, plugins, skills), and a normalizer producing daily histories with grouping labels, units and freshness. It is not yet wired to /usage. Go now mirrors that layer in tui/analytics: models.go defines AccountAnalyticsReport/Grouping/Unit/History/Day/Value; report_data.go projects chatgptapi.AnalyticsResponse into an endpoint-neutral analyticsData keeping Rust's Option semantics (nil slice means not reported, empty slice means reported empty, usage product-surface maps always present as Rust's non-Option backend fields); normalize.go builds days keyed by the first 10 characters of each record date, keeps missing usage attribution as Ok(None), preserves signed credit adjustments, merges work_* surfaces into work and everything else into codex for surface grouping, folds models below 1% of relative usage (and any case-insensitive other) into other, keeps the authoritative message total as the day denominator with the unassigned remainder added to other, merges duplicate dates, maps client IDs and model names (codex-auto-review) as Rust does, fills only credit reports across the requested range, reads series labels before the built-in label table, and converts data_freshness_ts to Unix seconds. Regression coverage in tui/analytics/normalize_like_rust_test.go mirrors the upstream cases: task-start full denominator plus unavailable attribution, signed credits netting to zero, desktop client merge plus unmapped remainder, enterprise series labels/signed values/freshness, date-time truncation and legacy model credits fallback, explicit zero versus omitted days for count reports, daily product/model breakdown outranking attribution with the 1% fold, duplicate message dates, unsupported message groupings, and the typed usage projection path. Verified with go test ./tui/analytics -count=1, go vet ./tui/analytics and go build ./tui/... ."
    ]
   },
   {

@@ -1132,6 +1132,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Go already carries SandboxTypeWindowsMxc versus SandboxTypeWindowsRestrictedToken in the sandbox plan and keeps the legacy setup mode separate; the routing half has no counterpart: no ManagedProxyRouting/dedicated-listener symbols exist, there is no debug-sandbox CLI, and the MXC launcher fails closed so no MXC proxy route is ever created - not_applicable.
 - Verified: go test ./sandbox -run 'SandboxState|Windows|Mxc' -count=1, go test ./config -run 'Windows' -count=1, go test ./appserver -run 'WindowsSandbox|SandboxState|WindowsMxc' -count=1.
 
-Status after reconciliation: `2009 complete`, `395 not_applicable`,
-`485 audit_pending`, `258 regression_pending`, `2 partial`,
+### TUI account analytics normalization layer added (Round 832)
+
+## Round 832 - #45740 Add account analytics data normalization to the TUI
+
+- New tui/analytics data layer: models.go (report/grouping/unit/history/day/value), report_data.go (typed chatgptapi projection preserving Option semantics) and normalize.go (daily histories with labels, units, freshness).
+- Behaviours mirrored: missing attribution stays unavailable, signed credits survive, work_* surfaces merge into work, models under 1% of relative usage fold into Other, message totals stay authoritative with the unassigned remainder as Other, duplicate dates merge, only credit reports fill missing days, series labels win, freshness becomes Unix seconds.
+- normalize_like_rust_test.go mirrors the upstream cases including task-start denominators, duplicate message dates, unsupported groupings and the typed projection path; not wired to /usage yet, matching upstream.
+- Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./tui/... .
+
+Status after reconciliation: `2010 complete`, `395 not_applicable`,
+`484 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
