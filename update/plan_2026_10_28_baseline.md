@@ -1564,6 +1564,24 @@ Session-only model and reasoning selection (#45831, partial).
 - Verified with `go test ./tui/bottom_pane -count=1` and
   `go vet ./tui/bottom_pane`.
 
-Status after reconciliation: `2023 complete`, `397 not_applicable`,
-`468 audit_pending`, `258 regression_pending`, `3 partial`,
+### App-server shutdown signal (Round 856)
+
+App-server shutdown signal across loop iterations (#45849, not applicable).
+
+- Rust recreated a `shutdown_signal()` future on every `tokio::select!`
+  iteration, so an unrelated event cancelled and rebuilt the pending signal
+  listener; the fix pins one boxed future and resets it only after completion.
+- Go has no analogous construct. `appserver/stdio.go` calls
+  `installStdioShutdownSignals` once per connection, and
+  `appserver/stdio_shutdown_unix.go` keeps a single `signal.Notify` channel plus
+  a goroutine for the connection lifetime, so no listener is cancelled and
+  re-registered between loop iterations.
+- Go also has no SIGHUP graceful-restart select loop (`graceful_signal_restart`
+  in Rust); the only Unix signal path is the SIGTERM teardown watchdog from
+  #44523.
+- The companion upstream change is a Rust-only app-server WebSocket drain test
+  fixture with gated SSE responses, which has no Go counterpart.
+
+Status after reconciliation: `2023 complete`, `398 not_applicable`,
+`467 audit_pending`, `258 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

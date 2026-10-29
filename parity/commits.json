@@ -14283,9 +14283,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go has no shutdown_signal() future or SIGHUP graceful-restart select loop: installStdioShutdownSignals registers SIGTERM once per connection with a persistent channel and goroutine, so no listener is cancelled or recreated between iterations"
    ]
   },
   {
