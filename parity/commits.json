@@ -13971,9 +13971,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #45772 exposes the analytics plan-history preview and improves analytics navigation. The feature registry keeps analytics_plan_history in the experimental menu with the name \"Analytics plan history\" and the description \"Preview five-hour and weekly allowance history for consumer accounts in /analytics.\", default-disabled; Go already carried that metadata from #45766, and TestAnalyticsPlanHistoryExperimentalLikeRust plus TestExperimentalFeaturesAnalyticsPlanHistoryLikeRust now pin the registry stage/copy and the unchecked menu row. handleKey gains h/l horizontal aliases: the raw key is resolved through the list keymap first, and only an unbound key without modifiers retries the translation against the Left/Right binding (analyticsListActionForKey), so explicit bindings win and remapped or unbound arrows stay authoritative. Tests mirror Rust navigation_tests.rs: aliases match the arrows for Usage/Activity/Plugins/Skills/Credits in dashboard and maximized views, chat rows open and close details, a configured g/h/l jump_top wins, unbound arrows make h/l no-ops, move_up=right and move_down=left keep the remapped arrows authoritative, and modified h/H/l keys never reach the alias. Footer shortcut keys now use a terminal-aware style (analyticsFooterKeyStyle): black on light default backgrounds and the terminal foreground otherwise, matching Rust style::footer_hint_key_style, with a test covering both palettes. Verified with go test ./features ./tui/bottom_pane ./tui/analytics ./tui/tea ./tui/chatwidget ./chatgptapi -count=1, go vet ./features ./tui/bottom_pane ./tui/tea ./tui/analytics, and go build ./... ."
    ]
   },
   {

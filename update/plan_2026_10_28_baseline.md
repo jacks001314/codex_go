@@ -1402,6 +1402,29 @@ Analytics chart readability and navigation (#45770, complete).
 - Verified with `go test ./tui/analytics ./tui/tea ./tui/chatwidget
   ./chatgptapi -count=1`, `go vet ./tui/analytics ./tui/tea`, and `go build ./...`.
 
-Status after reconciliation: `2019 complete`, `395 not_applicable`,
-`475 audit_pending`, `258 regression_pending`, `2 partial`,
+### Analytics plan history menu and Vim navigation (Round 849)
+
+Analytics plan history menu and Vim navigation (#45772).
+
+- The `analytics_plan_history` registry entry already carried the experimental
+  name, preview copy and default-off state from #45766;
+  `TestAnalyticsPlanHistoryExperimentalLikeRust` and
+  `TestExperimentalFeaturesAnalyticsPlanHistoryLikeRust` now pin the metadata
+  and the unchecked experimental-menu row.
+- `analyticsListActionForKey` adds `h`/`l` as horizontal aliases only when the
+  raw key is unbound: explicit bindings win, and remapped or removed arrows
+  stay authoritative, matching Rust's `action_for(...).or_else(...)`.
+- Footer shortcut keys use `analyticsFooterKeyStyle`: black on light terminal
+  backgrounds, the terminal foreground otherwise (Rust
+  `style::footer_hint_key_style`).
+- Tests mirror Rust `navigation_tests.rs`: chart aliases in dashboard and
+  maximized views for every grouped and ungrouped section, chat detail
+  open/close, configured `g`/`h`/`l` `jump_top`, unbound arrows, remapped
+  arrows, and modified keys.
+- Verified with `go test ./features ./tui/bottom_pane ./tui/analytics ./tui/tea
+  ./tui/chatwidget ./chatgptapi -count=1`, `go vet ./features
+  ./tui/bottom_pane ./tui/tea ./tui/analytics`, and `go build ./...`.
+
+Status after reconciliation: `2020 complete`, `395 not_applicable`,
+`474 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
