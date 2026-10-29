@@ -3675,7 +3675,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 	case MethodConfigBatchWrite:
 		return r.handleConfigBatchWrite(request)
 	case MethodConfigRequirementsRead:
-		return r.configRequirementsRead(), nil
+		return r.configRequirementsRead()
 	case MethodServerDiagnostics:
 		return r.handleServerDiagnostics(request)
 	case MethodExternalAgentConfigDetect:
@@ -9798,21 +9798,29 @@ func resumeEffectiveModelAndEffort(cfg *config.Config, fallbackModel string) (st
 // host with no managed requirements still returns a requirements object when
 // that policy restricts login methods, while the unrestricted default keeps
 // `requirements: null`.
-func (r *RuntimeRouter) configRequirementsRead() *config.ConfigRequirementsReadResponse {
-	read := r.requireConfig().Requirements()
+//
+// Rust re-reads the managed requirements for the response body on every call
+// but takes the allowed methods from the running auth manager, so a requirement
+// file written after startup (or an invalid one) is visible on the wire while
+// the reported policy stays with the process.
+func (r *RuntimeRouter) configRequirementsRead() (*config.ConfigRequirementsReadResponse, error) {
+	service := r.requireConfig()
+	var values map[string]any
+	if cfgRead, err := service.Read(&config.ConfigReadParams{}); err == nil && cfgRead != nil {
+		values = cfgRead.Config
+	}
+	policyConfig := &config.Config{Values: values, Requirements: service.LoginPolicyRequirements()}
+	allowed := policyConfig.AllowedLoginMethods()
+	if err := service.ReloadRequirementsFromHome(); err != nil {
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
+	}
+	read := service.Requirements()
 	if read == nil {
 		read = &config.ConfigRequirementsReadResponse{}
 	}
-	var values map[string]any
-	if r != nil && r.services.Config != nil {
-		if cfgRead, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && cfgRead != nil {
-			values = cfgRead.Config
-		}
-	}
-	cfg := &config.Config{Values: values, Requirements: read.Requirements}
 	return &config.ConfigRequirementsReadResponse{
-		Requirements: config.ProjectRequirementsWithAllowedLoginMethods(read.Requirements, cfg.AllowedLoginMethods()),
-	}
+		Requirements: config.ProjectRequirementsWithAllowedLoginMethods(read.Requirements, allowed),
+	}, nil
 }
 
 // collaborationModeFromAnyMap converts a saved collaboration-mode document into

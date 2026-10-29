@@ -451,13 +451,18 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		out.AllowedLoginMethods = make([]ForcedLoginMethod, 0, len(values))
 		for _, value := range values {
 			method := ForcedLoginMethod(strings.ToLower(strings.TrimSpace(value)))
-			if method == ForcedLoginMethodAPI || method == ForcedLoginMethodChatGPT {
-				out.AllowedLoginMethods = append(out.AllowedLoginMethods, method)
+			if method != ForcedLoginMethodAPI && method != ForcedLoginMethodChatGPT {
+				// Rust deserializes the enum, so an unknown method fails the whole
+				// requirements load instead of silently narrowing the policy (#45495).
+				return nil, fmt.Errorf("invalid allowed_login_methods value %q: expected api or chatgpt", value)
 			}
+			out.AllowedLoginMethods = append(out.AllowedLoginMethods, method)
 		}
 	}
 	if values, ok := stringListAnyKey(values, "allowed_chatgpt_workspaces", "allowedChatGPTWorkspaces"); ok {
-		out.AllowedChatGPTWorkspaces = append([]string(nil), values...)
+		// An explicit empty list restricts ChatGPT logins to no workspace, which
+		// differs from an absent key (#45495), so keep it non-nil.
+		out.AllowedChatGPTWorkspaces = append([]string{}, values...)
 	}
 	// Rust 0f21cb3413 (#39043): exact managed authentication backend settings.
 	// These are local-only requirements and are dropped from cloud layers in

@@ -1879,13 +1879,18 @@ type ConfigService struct {
 	// and login traffic under the local policy while the effective one - which
 	// may depend on a cloud fetch - is still unknown.
 	localRequirements *ConfigRequirements
-	warnings          []ConfigWarningNotification
-	managedLayers     []Layer
-	featureDefaults   map[string]bool
-	importHistory     []ExternalAgentConfigImportHistory
-	nextImportID      int
-	externalAgentHome string
-	now               func() time.Time
+	// loginPolicyRequirements is the requirements snapshot the running login
+	// policy was built from. Rust's AuthManager keeps that policy for the life of
+	// the process, so configRequirements/read reports it even after requirement
+	// files change on disk (#45495).
+	loginPolicyRequirements *ConfigRequirements
+	warnings                []ConfigWarningNotification
+	managedLayers           []Layer
+	featureDefaults         map[string]bool
+	importHistory           []ExternalAgentConfigImportHistory
+	nextImportID            int
+	externalAgentHome       string
+	now                     func() time.Time
 	// memoryImportMu guards the host-supplied external-memory pipeline settings
 	// (Rust #56414/#56462); they are read while the import mutex is held.
 	memoryImportMu sync.RWMutex
@@ -1896,6 +1901,7 @@ func NewConfigService(codexHome string) *ConfigService {
 	service := &ConfigService{codexHome: codexHome, externalAgentHome: defaultExternalAgentHome(), now: time.Now}
 	service.loadRequirementsFromHome()
 	service.loadManagedConfigLayerFromEnv()
+	service.captureLoginPolicyRequirements()
 	return service
 }
 
@@ -1948,6 +1954,7 @@ func (s *ConfigService) SetRequirements(requirements *ConfigRequirements) {
 	defer s.mu.Unlock()
 	s.requirements = cloneRequirements(requirements)
 	s.requirementsOverride = true
+	s.loginPolicyRequirements = cloneRequirements(s.requirements)
 }
 
 // SetRequirementsIfDifferentFromLoaded preserves file-backed requirements
@@ -1961,6 +1968,30 @@ func (s *ConfigService) SetRequirementsIfDifferentFromLoaded(requirements *Confi
 	}
 	s.requirements = cloneRequirements(requirements)
 	s.requirementsOverride = true
+	s.loginPolicyRequirements = cloneRequirements(s.requirements)
+}
+
+// captureLoginPolicyRequirements freezes the requirements the running login
+// policy is derived from.
+func (s *ConfigService) captureLoginPolicyRequirements() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loginPolicyRequirements = cloneRequirements(s.requirements)
+}
+
+// LoginPolicyRequirements returns the requirements snapshot the running login
+// policy was built from, or the current requirements when the service has no
+// snapshot yet (Rust AuthManager::allowed_login_methods, #45495).
+func (s *ConfigService) LoginPolicyRequirements() *ConfigRequirements {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loginPolicyRequirements != nil {
+		return cloneRequirements(s.loginPolicyRequirements)
+	}
+	return cloneRequirements(s.requirements)
 }
 
 func (s *ConfigService) ReloadRequirementsFromHome() error {
