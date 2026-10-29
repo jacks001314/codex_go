@@ -68,26 +68,20 @@ func TestDaemonConfigExclusionFeatureFlagsLikeRust(t *testing.T) {
 	}
 }
 
-// TestDaemonStartupServerFeaturesLikeRust mirrors Rust
-// daemon_startup::server_features plus the auto-start's retention rule: only the
-// shared-server features a launch explicitly enables travel to the daemon, since
-// disabling a shared service requires confirmation.
-func TestDaemonStartupServerFeaturesLikeRust(t *testing.T) {
-	root := &cli.RootOptions{ConfigOverrides: []string{
-		"features.code_mode_host=true",
-		"features.auth_elicitation=false",
-		"features.unrelated=true",
-	}}
-	got := daemonStartupServerFeatures(root)
-	if !FeatureOverridesEqualForTest(got, map[string]bool{"code_mode_host": true}) {
-		t.Fatalf("daemonStartupServerFeatures() = %#v, want only code_mode_host", got)
-	}
-	if got := daemonStartupServerFeatures(&cli.RootOptions{}); got != nil {
-		t.Fatalf("daemonStartupServerFeatures(plain) = %#v, want nil", got)
-	}
-	enabled := &cli.RootOptions{EnableFeatures: []string{"mcp_oauth_refresh_coordination"}}
-	if got := daemonStartupServerFeatures(enabled); !FeatureOverridesEqualForTest(got, map[string]bool{"mcp_oauth_refresh_coordination": true}) {
-		t.Fatalf("daemonStartupServerFeatures(--enable) = %#v", got)
+// TestDaemonAutoStartPreservesSavedFeatureSettingsLikeRust covers Rust #55442:
+// automatic startup calls `start_with_features(&Default::default())`, so the
+// daemon keeps its saved settings and the launch's explicit toggles are only
+// applied by a confirmed recovery restart.
+func TestDaemonAutoStartPreservesSavedFeatureSettingsLikeRust(t *testing.T) {
+	for _, root := range []*cli.RootOptions{
+		nil,
+		{},
+		{ConfigOverrides: []string{"features.code_mode_host=true", "features.auth_elicitation=false"}},
+		{EnableFeatures: []string{"mcp_oauth_refresh_coordination"}},
+	} {
+		if got := daemonAutoStartFeatures(root); got != nil {
+			t.Fatalf("daemonAutoStartFeatures(%#v) = %#v, want nil", root, got)
+		}
 	}
 }
 

@@ -782,7 +782,7 @@ func (r *RuntimeRouter) senderContextEvidence(sourceThreadID string) (*retainedc
 // `internalMemorySessionSource` (memory_startup.go): Rust's
 // `InternalSessionSource::{MemoryConsolidation, Guardian}` are the two session
 // sources `SessionSource::is_internal` reports, and Go persists them in the
-// same display form.
+// same `internal_<name>` Display form.
 const internalGuardianSessionSource = "internal_guardian"
 
 // senderSessionSourceIsInternal mirrors Rust's `SessionSource::is_internal`

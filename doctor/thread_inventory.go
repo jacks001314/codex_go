@@ -570,8 +570,13 @@ func rolloutParitySourceCategory(source string) string {
 	if _, ok := parsed["custom"]; ok {
 		return "custom"
 	}
-	if internal, ok := parsed["internal"]; ok && fmt.Sprint(internal) == "memory_consolidation" {
-		return "internal:memory_consolidation"
+	if internal, ok := parsed["internal"]; ok {
+		switch fmt.Sprint(internal) {
+		case "memory_consolidation":
+			return "internal:memory_consolidation"
+		case "guardian":
+			return "internal:guardian"
+		}
 	}
 	subagent, ok := parsed["subagent"]
 	if !ok {

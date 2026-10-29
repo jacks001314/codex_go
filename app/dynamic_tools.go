@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/appserver"
+	"codex_go/features"
 )
 
 // Rust parity: codex-rs/tui/src/dynamic_tools.rs. The TUI serves the
@@ -33,6 +34,10 @@ type DynamicToolOptions struct {
 	// Now/Sleep allow tests to control the wait loop.
 	Now   func() time.Time
 	Sleep func(time.Duration)
+	// FeatureSettings is the TUI's resolved feature state (Rust passes
+	// `Features` into dynamic_tools::execute). Nil falls back to the launch
+	// configuration; an unresolvable state skips the Daybreak override.
+	FeatureSettings map[string]bool
 }
 
 // ExecuteDynamicTool runs one codex_tui dynamic tool call (Rust
@@ -453,6 +458,13 @@ func (e *dynamicToolExecutor) createThreadTool(params appserver.DynamicToolCallP
 	if arguments.Model != nil {
 		startParams.Model = strings.TrimSpace(*arguments.Model)
 	}
+	if startParams.DaybreakEnabled == nil {
+		// Rust #53701: a background task inherits the source thread's effective
+		// Daybreak preference, including project-local configuration.
+		if featureSettings, ok := e.tuiFeatureSettings(); ok && features.Enabled(featureSettings, "cli_daybreak") {
+			startParams.DaybreakEnabled = e.effectiveDaybreakDefault(sourceThread.CWD)
+		}
+	}
 	var started appserver.ThreadStartResponse
 	if err := e.request(appserver.MethodThreadStart, startParams, &started); err != nil {
 		return nil, err
@@ -464,6 +476,11 @@ func (e *dynamicToolExecutor) createThreadTool(params appserver.DynamicToolCallP
 	if err := e.registerBackgroundThread(started.Thread, true); err != nil {
 		return nil, err
 	}
+	daybreakEnabled := started.Thread.DaybreakEnabled != nil && *started.Thread.DaybreakEnabled
+	cyberAccessProgram, err := e.backgroundTurnProgram(threadID, started.Model, started.ModelProvider, daybreakEnabled)
+	if err != nil {
+		return nil, err
+	}
 	if arguments.Title != nil {
 		var nameResponse appserver.ThreadSetNameResponse
 		// A naming failure must not fail the task creation (Rust warns only).
@@ -472,7 +489,7 @@ func (e *dynamicToolExecutor) createThreadTool(params appserver.DynamicToolCallP
 			Name:     strings.TrimSpace(*arguments.Title),
 		}, &nameResponse)
 	}
-	if err := e.startTurn(threadID, "create_thread", prompt, nil, sandboxPolicy); err != nil {
+	if err := e.startTurn(threadID, "create_thread", prompt, nil, sandboxPolicy, cyberAccessProgram); err != nil {
 		return nil, err
 	}
 	return map[string]any{"threadId": threadID}, nil
@@ -497,18 +514,26 @@ func (e *dynamicToolExecutor) sendMessageTool(params appserver.DynamicToolCallPa
 	if err != nil {
 		return nil, err
 	}
-	if _, err := e.resumeThread(arguments.ThreadID, thread.HistoryMode == appserver.ThreadHistoryPaginated, e.mcpConfigOverrides()); err != nil {
+	resumed, err := e.resumeThread(arguments.ThreadID, thread.HistoryMode == appserver.ThreadHistoryPaginated, e.mcpConfigOverrides())
+	if err != nil {
 		return nil, err
 	}
 	if err := e.registerBackgroundThread(thread, false); err != nil {
 		return nil, err
 	}
 	var model *string
+	programModel := strings.TrimSpace(resumed.Model)
 	if arguments.Model != nil {
 		value := strings.TrimSpace(*arguments.Model)
 		model = &value
+		programModel = value
 	}
-	if err := e.startTurn(arguments.ThreadID, "send_message_to_thread", prompt, model, nil); err != nil {
+	daybreakEnabled := thread.DaybreakEnabled != nil && *thread.DaybreakEnabled
+	cyberAccessProgram, err := e.backgroundTurnProgram(arguments.ThreadID, programModel, resumed.ModelProvider, daybreakEnabled)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.startTurn(arguments.ThreadID, "send_message_to_thread", prompt, model, nil, cyberAccessProgram); err != nil {
 		return nil, err
 	}
 	return map[string]any{"threadId": arguments.ThreadID}, nil

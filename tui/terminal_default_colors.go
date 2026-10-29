@@ -2,6 +2,7 @@ package tui
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,7 +27,56 @@ var (
 	terminalDefaultColorsMu        sync.Mutex
 	terminalDefaultColorsAttempted bool
 	terminalDefaultColorsValue     *DefaultColors
+	// terminalAppOverSSH is -1 until the startup probe settles the identity,
+	// 0 for every other terminal, and 1 for Apple Terminal over SSH.
+	terminalAppOverSSH atomic.Int32
 )
+
+func init() {
+	terminalAppOverSSH.Store(-1)
+}
+
+// TerminalAppOverSSH reports whether the startup probe identified Apple
+// Terminal over SSH. Unknown (the probe did not run or timed out) is false,
+// matching Rust's `terminal_app_over_ssh.unwrap_or(false)`.
+func TerminalAppOverSSH() bool {
+	return terminalAppOverSSH.Load() == 1
+}
+
+// TerminalAppOverSSHKnown reports the identity and whether the startup probe
+// settled it.
+func TerminalAppOverSSHKnown() (bool, bool) {
+	switch terminalAppOverSSH.Load() {
+	case 0:
+		return false, true
+	case 1:
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+// SetTerminalAppOverSSHFromStartupProbe records the startup probe's terminal
+// identity decision. A nil value marks it unknown.
+func SetTerminalAppOverSSHFromStartupProbe(value *bool) {
+	if value == nil {
+		terminalAppOverSSH.Store(-1)
+		return
+	}
+	if *value {
+		terminalAppOverSSH.Store(1)
+		return
+	}
+	terminalAppOverSSH.Store(0)
+}
+
+// SetTerminalAppOverSSHForTest installs an identity for a test and returns a
+// restore function.
+func SetTerminalAppOverSSHForTest(value *bool) func() {
+	previous := terminalAppOverSSH.Load()
+	SetTerminalAppOverSSHFromStartupProbe(value)
+	return func() { terminalAppOverSSH.Store(previous) }
+}
 
 // DefaultTerminalColors reports the terminal's default foreground/background
 // colors, querying the platform source once when the cache is unset (Rust

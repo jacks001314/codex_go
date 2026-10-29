@@ -1778,12 +1778,14 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskRegular,
 		ThreadID:                     threadID,
+		SessionID:                    runConfig.SessionID,
 		TurnID:                       turnID,
 		Ephemeral:                    r.threadIsEphemeral(threadID),
 		PreSamplingValidation:        r.requiredSkillsPreSamplingValidation(params, threadID, turnID),
 		Originator:                   runConfig.Originator,
 		Store:                        runConfig.Store,
 		PreviousResponseID:           runConfig.PreviousResponseID,
+		PreviousResponseFromPrewarm:  runConfig.PreviousResponseFromPrewarm,
 		ParallelToolCalls:            runConfig.ParallelToolCalls,
 		ReasoningEffort:              runConfig.ReasoningEffort,
 		ReasoningSummary:             runConfig.ReasoningSummary,
@@ -2348,12 +2350,14 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskReview,
 		ThreadID:                     threadID,
+		SessionID:                    runConfig.SessionID,
 		TurnID:                       turnID,
 		Ephemeral:                    r.threadIsEphemeral(threadID),
 		PreSamplingValidation:        r.requiredSkillsPreSamplingValidation(params, threadID, turnID),
 		Originator:                   runConfig.Originator,
 		Store:                        runConfig.Store,
 		PreviousResponseID:           runConfig.PreviousResponseID,
+		PreviousResponseFromPrewarm:  runConfig.PreviousResponseFromPrewarm,
 		ParallelToolCalls:            runConfig.ParallelToolCalls,
 		ReasoningEffort:              runConfig.ReasoningEffort,
 		ReasoningSummary:             runConfig.ReasoningSummary,
@@ -3284,6 +3288,7 @@ func (r *RuntimeRouter) rememberUnifiedExecAnalytics(threadID string, turnID str
 	if r == nil || runConfig == nil {
 		return
 	}
+	r.registerAnalyticsTurn(threadID, turnID)
 	r.unifiedExecAnalyticsMu.Lock()
 	defer r.unifiedExecAnalyticsMu.Unlock()
 	if r.unifiedExecAnalytics == nil {
@@ -3334,6 +3339,7 @@ func (r *RuntimeRouter) rememberToolItemModelContext(threadID string, turnID str
 	if itemID == "" {
 		return
 	}
+	r.registerAnalyticsTurn(threadID, turnID)
 	r.toolItemModelContextsMu.Lock()
 	defer r.toolItemModelContextsMu.Unlock()
 	if r.toolItemModelContexts == nil {
@@ -6981,6 +6987,7 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		effort:             compactionEffort,
 		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
 		clientMetadata:     r.compactResponsesClientMetadata(record, request, compactModel),
+		sessionID:          firstNonEmpty(strings.TrimSpace(record.SessionID), strings.TrimSpace(string(record.ID))),
 		// Rust #46044: compaction prompts carry the recorded Code Mode tool
 		// inventory from the thread's recorder.
 		executedToolCalls:               r.executedToolCallRecorder(string(record.ID)),
@@ -7823,9 +7830,12 @@ type appTurnRunConfig struct {
 	ExtraSessionItems             func() []session.Item
 	PostToolInputItems            turn.ToolPostExecutionInputItems
 	PreviousResponseID            string
-	ParallelToolCalls             bool
-	ReasoningEffort               string
-	ReasoningSummary              string
+	// PreviousResponseFromPrewarm marks PreviousResponseID as the response a
+	// startup or idle-history prewarm prepared (Rust #48812).
+	PreviousResponseFromPrewarm bool
+	ParallelToolCalls           bool
+	ReasoningEffort             string
+	ReasoningSummary            string
 	// ReasoningEffortOverrideEnabled is the combined client-level gate (Rust
 	// `ModelClient::reasoning_effort_override_enabled`): when false, saved
 	// configuration_update items are dropped from the request copy (#46530).
@@ -7912,6 +7922,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		}
 	}
 	historyItems, previousResponseID := r.historyInputItemsForTurn(threadID)
+	previousResponseFromPrewarm := false
 	// Rust #46291: disabling the override feature must also recover threads
 	// whose persisted history still carries configuration_update items. Only
 	// the request copy is filtered; the stored history is untouched.
@@ -7934,6 +7945,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		settingsKey := prewarmSettingsKey(modelInfo.Slug, instructions, serviceTier)
 		if id, consumed := r.takeStartupPrewarmResponseID(threadID, historyItems, settingsKey); id != "" {
 			previousResponseID = id
+			previousResponseFromPrewarm = true
 			if consumed > 0 && consumed <= len(historyItems) {
 				// The prepared response already contains this prefix; send only
 				// the extension so previous_response_id does not duplicate it.
@@ -8272,6 +8284,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ExtraSessionItems:              extraSessionItemsSnapshot,
 		PostToolInputItems:             postToolInputItems,
 		PreviousResponseID:             previousResponseID,
+		PreviousResponseFromPrewarm:    previousResponseFromPrewarm,
 		ParallelToolCalls:              r.modelSupportsParallelToolCalls(modelProviderConfig.Model, params.Originator),
 		ReasoningEffort:                requestReasoningEffort,
 		ReasoningSummary:               turnReasoningSummary(cfg, params),
@@ -9228,7 +9241,21 @@ func stepTurnClientMetadata(metadata map[string]string, modelID string, reasonin
 // parent's cache, while the fork keeps its own session/thread identity.
 func (r *RuntimeRouter) responsesPromptCacheKey(threadID string, lineage responsesMetadataLineage, ephemeral bool) string {
 	threadID = strings.TrimSpace(threadID)
-	if r == nil || threadID == "" || !ephemeral {
+	if r == nil || threadID == "" {
+		return threadID
+	}
+	// Rust #39994: an internal session scopes its cache key to the source and
+	// parent thread instead of its own thread id.
+	if r.internalSessionThreadRegistered(threadID) {
+		if record := r.runtimeRecordForThread(threadID); record != nil {
+			if parentThreadID := strings.TrimSpace(string(record.ParentThreadID)); parentThreadID != "" {
+				if source, ok := session.InternalSessionSourceWire(record.Metadata.Source); ok {
+					return source + ":" + parentThreadID
+				}
+			}
+		}
+	}
+	if !ephemeral {
 		return threadID
 	}
 	parentThreadID := strings.TrimSpace(lineage.ForkedFromThreadID)
@@ -10291,7 +10318,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	orchestratorComplete := false
 	if cfg == nil || cfg.OrchestratorSkillsEnabled() {
 		var orchestratorWarnings []string
-		orchestratorMetadata, orchestratorWarnings = r.orchestratorSkillMetadataForRuntime(threadID)
+		orchestratorMetadata, orchestratorWarnings = r.orchestratorSkillMetadataForRuntime(threadID, turnID)
 		orchestratorComplete = len(orchestratorMetadata) > 0 && len(orchestratorWarnings) == 0
 		skillMetadata = append(skillMetadata, orchestratorMetadata...)
 		r.notifySkillWarnings(threadID, orchestratorWarnings)
@@ -10686,7 +10713,19 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 	// executor skill catalog. It must be projected directly instead of
 	// reopening host paths or falling back to legacy per-root discovery.
 	if snapshot != nil && snapshot.executorCapabilityDiscoveryV2Enabled() {
-		return skillEntriesFromDiscoveryV2(snapshot.executorCapabilityDiscoveryV2(), snapshot.disabledPluginIDsSnapshot()), nil, nil
+		discoveryV2 := snapshot.executorCapabilityDiscoveryV2()
+		entries := skillEntriesFromDiscoveryV2(discoveryV2, snapshot.disabledPluginIDsSnapshot())
+		// Rust #56530: a failed or missing executor inventory makes the
+		// projected skill catalog partial.
+		partial := false
+		for _, discovered := range discoveryV2 {
+			if strings.TrimSpace(discovered.Err) != "" || discovered.Response == nil {
+				partial = true
+				break
+			}
+		}
+		r.recordExecutorSkillCatalog(threadID, entries, nil, partial)
+		return entries, nil, nil
 	}
 	selectedRoots := threadSelectedCapabilityRoots(record)
 	if snapshot != nil {
@@ -10694,6 +10733,7 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 	}
 	entries := make([]SkillsListEntry, 0)
 	warnings := make([]string, 0)
+	partial := false
 	rootPluginIDs := r.executorSkillRootPluginIDsForSnapshot(threadID, snapshot)
 	for _, selected := range selectedRoots {
 		if selected.Location.Type != CapabilityRootLocationEnvironment {
@@ -10702,10 +10742,12 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 		environmentID := firstNonEmpty(strings.TrimSpace(selected.Location.EnvironmentID), "local")
 		sandboxContext, sandboxErr := executorSkillSandboxContextForEnvironment(sandboxContexts, environmentID)
 		if sandboxErr != nil {
+			partial = true
 			warnings = append(warnings, fmt.Sprintf("executor skills unavailable for environment `%s`: filesystem sandbox context is missing", environmentID))
 			continue
 		}
 		if sandboxErr := validateExecutorSkillSandboxAvailability(sandboxContext, selected.Location.Path); sandboxErr != nil {
+			partial = true
 			warnings = append(warnings, "executor skills unavailable: "+sandboxErr.Error())
 			continue
 		}
@@ -10715,6 +10757,7 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 			cached.once.Do(func() {
 				cached.entries, cached.warnings, cached.err = discoverRemoteEnvironmentSkillsWithSandbox(ctx, environmentRecord, selected.Location.Path, sandboxContext)
 				if cached.err != nil {
+					cached.partial = true
 					cached.warnings = append(cached.warnings, "executor skills unavailable: "+cached.err.Error())
 					cached.err = nil
 				}
@@ -10724,6 +10767,7 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 			attributeExecutorSkillPluginIDs(cloned, selected.ID, rootPluginIDs)
 			entries = append(entries, cloned...)
 			warnings = append(warnings, cached.warnings...)
+			partial = partial || cached.partial
 			continue
 		}
 		if r.selectedCapabilityEnvironmentRequired(&selected.Location) {
@@ -10742,6 +10786,7 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 				cached.entries, discoveredErrors, cached.err = discover(SkillsRoot{Path: path, Scope: "environment"})
 			}
 			if cached.err != nil {
+				cached.partial = true
 				cached.warnings = append(cached.warnings, "executor skills unavailable: "+cached.err.Error())
 				cached.err = nil
 			}
@@ -10754,7 +10799,9 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 		attributeExecutorSkillPluginIDs(cloned, selected.ID, rootPluginIDs)
 		entries = append(entries, cloned...)
 		warnings = append(warnings, cached.warnings...)
+		partial = partial || cached.partial
 	}
+	r.recordExecutorSkillCatalog(threadID, entries, warnings, partial)
 	return entries, warnings, nil
 }
 
@@ -11128,20 +11175,55 @@ func promptSkillLocatorKind(entry SkillsListEntry) string {
 	}
 }
 
-func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]promptctx.InstructionsSkillMetadata, []string) {
+// orchestratorSkillMetadataForRuntime returns the cloud (orchestrator) skill
+// catalog for a thread. Discoveries that failed back off across steps and
+// turns, a cancelled discovery retries immediately, and the resulting warning
+// is reported at most once per turn (Rust #55957/#55968).
+func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string, turnID string) ([]promptctx.InstructionsSkillMetadata, []string) {
 	if r == nil {
 		return nil, nil
 	}
-	service := r.mcpServiceForThread(threadID, nil)
-	if service == nil {
+	provider := r.services.CloudSkills
+	var service *mcp.MCPService
+	if provider == nil {
+		service = r.mcpServiceForThread(threadID, nil)
+		if service == nil {
+			return nil, nil
+		}
+	}
+	scope := r.cloudSkillCatalogScope(service)
+	state := r.cloudCatalogs.forThread(threadID)
+	if state.skillBackoffPending(scope) {
 		return nil, nil
 	}
 	cacheKey, cache := r.orchestratorSkillCacheForRuntime(threadID, service)
 	cache.once.Do(func() {
-		cache.catalog, cache.err = turn.LoadOrchestratorSkillCatalog(service, strings.TrimSpace(threadID))
+		if provider != nil {
+			var catalog skillprovider.Catalog
+			catalog, cache.err = provider.List(context.Background(), skillprovider.ListQuery{TurnID: turnID})
+			if cache.err == nil {
+				cache.catalog = turn.OrchestratorSkillCatalogFromProviderCatalog(catalog)
+			}
+		} else {
+			cache.catalog, cache.err = turn.LoadOrchestratorSkillCatalog(service, strings.TrimSpace(threadID))
+		}
+		if cache.err != nil {
+			if !cloudCatalogDiscoveryCanceled(cache.err) {
+				state.recordSkillFailure(scope)
+			}
+			return
+		}
+		state.clearSkillBackoff()
+		// Rust #56530 measures the published cloud skill catalog.
+		r.recordCatalogEntries(skillCatalogEntriesMetric, catalogStageCloud, len(cache.catalog.Skills), false, len(cache.catalog.Warnings))
 	})
 	metadata := make([]promptctx.InstructionsSkillMetadata, 0, len(cache.catalog.Skills))
 	for _, skill := range cache.catalog.Skills {
+		// A snapshot can keep a skill readable while hiding it from the model
+		// catalog (Rust #55631 prompt_visible = false).
+		if !skill.PromptVisible {
+			continue
+		}
 		metadata = append(metadata, promptctx.InstructionsSkillMetadata{
 			Name:           skill.Name,
 			Scope:          "orchestrator",
@@ -11157,20 +11239,21 @@ func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]
 			RemotePluginID: skill.PluginID,
 		})
 	}
-	warnings := append([]string(nil), cache.catalog.Warnings...)
-	if cache.err != nil {
+	// Partial-catalog warnings repeat with the cached discovery, so they are
+	// reported once per cache generation. The discovery failure warning follows
+	// Rust #55957 and is reported once per turn.
+	warnings := []string(nil)
+	if len(cache.catalog.Warnings) > 0 {
+		r.orchestratorSkillMu.Lock()
+		if !r.orchestratorWarned[cacheKey] {
+			r.orchestratorWarned[cacheKey] = true
+			warnings = append(warnings, cache.catalog.Warnings...)
+		}
+		r.orchestratorSkillMu.Unlock()
+	}
+	if cache.err != nil && state.shouldWarnSkillFailure(turnID) {
 		warnings = append(warnings, "orchestrator skills unavailable: "+cache.err.Error())
 	}
-	if len(warnings) == 0 {
-		return metadata, nil
-	}
-	r.orchestratorSkillMu.Lock()
-	if r.orchestratorWarned[cacheKey] {
-		warnings = nil
-	} else {
-		r.orchestratorWarned[cacheKey] = true
-	}
-	r.orchestratorSkillMu.Unlock()
 	return metadata, warnings
 }
 
@@ -11200,9 +11283,12 @@ func (r *RuntimeRouter) readOrchestratorSkillResourceForRuntime(threadID string,
 	if r == nil {
 		return "", errors.New("session MCP resource client is not configured")
 	}
-	service := r.mcpServiceForThread(threadID, nil)
-	if service == nil {
-		return "", errors.New("session MCP resource client is not configured")
+	var service *mcp.MCPService
+	if r.services.CloudSkills == nil {
+		service = r.mcpServiceForThread(threadID, nil)
+		if service == nil {
+			return "", errors.New("session MCP resource client is not configured")
+		}
 	}
 	_, cache := r.orchestratorSkillCacheForRuntime(threadID, service)
 	key := skill.PackageID + "\x00" + skill.ResourceID
@@ -11212,7 +11298,19 @@ func (r *RuntimeRouter) readOrchestratorSkillResourceForRuntime(threadID string,
 		return contents, nil
 	}
 	cache.resourceMu.Unlock()
-	contents, err := turn.ReadOrchestratorSkillResource(service, threadID, skill.PackageID, skill.ResourceID)
+	var contents string
+	var err error
+	if provider := r.services.CloudSkills; provider != nil {
+		var result skillprovider.ReadResult
+		result, err = provider.Read(context.Background(), skillprovider.ReadRequest{
+			Authority: skillprovider.Authority{Kind: skillprovider.SourceCloud, ID: skillprovider.FrozenCloudServerName},
+			PackageID: skill.PackageID,
+			Resource:  skill.ResourceID,
+		})
+		contents = result.Contents
+	} else {
+		contents, err = turn.ReadOrchestratorSkillResource(service, threadID, skill.PackageID, skill.ResourceID)
+	}
 	if err != nil {
 		return "", err
 	}

@@ -108,6 +108,13 @@ func authIsAPIKeyForProgram(snapshot *auth.AuthDotJSON) bool {
 	return snapshot != nil && snapshot.Mode() == "api-key"
 }
 
+// AuthIsAPIKey mirrors Rust `CodexAuth::is_api_key_auth` for callers that
+// resolve cyber-program eligibility outside this package (exec Daybreak
+// selection, Rust #49856/#53717).
+func AuthIsAPIKey(snapshot *auth.AuthDotJSON) bool {
+	return authIsAPIKeyForProgram(snapshot)
+}
+
 // authHasChatGPTAccountForProgram reports whether the auth snapshot is an
 // authenticated human ChatGPT account (Rust `AuthMode::has_chatgpt_account`).
 func authHasChatGPTAccountForProgram(snapshot *auth.AuthDotJSON) bool {
@@ -120,6 +127,12 @@ func authHasChatGPTAccountForProgram(snapshot *auth.AuthDotJSON) bool {
 	default:
 		return false
 	}
+}
+
+// AuthHasChatGPTAccount mirrors Rust `AuthMode::has_chatgpt_account` for
+// callers outside this package.
+func AuthHasChatGPTAccount(snapshot *auth.AuthDotJSON) bool {
+	return authHasChatGPTAccountForProgram(snapshot)
 }
 
 // GuardianCyberAccessProgram mirrors Rust

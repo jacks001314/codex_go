@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"codex_go/network"
 )
 
 // TestCustomCAClientKeepsPlatformRootsIsolatedLikeRust mirrors Rust #54056
@@ -33,8 +35,8 @@ func TestCustomCAClientKeepsPlatformRootsIsolatedLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newExecServerHTTPClient() error = %v", err)
 	}
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok || transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+	transport := network.BaseTransport(client.Transport)
+	if transport == nil || transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
 		t.Fatalf("client transport = %#v, want TLS roots carrying the custom CA", client.Transport)
 	}
 	if _, err := certificate.Verify(x509.VerifyOptions{Roots: transport.TLSClientConfig.RootCAs}); err != nil {

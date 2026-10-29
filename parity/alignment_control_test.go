@@ -12,8 +12,8 @@ import (
 
 const (
 	candidateRustFrom = "bd19459358f534ed1cae464ec13d56600aeb45f2"
-	candidateRustTo   = "8c076942cb70fba8e5c4732c23f1faabc4aed484"
-	candidateGoStart  = "5c25a72b1cbd16b060b594f2ccb7c3243479eb87"
+	candidateRustTo   = "7ac6081623928adead75caa2882e307444edad82"
+	candidateGoStart  = "5073f4dfdbe20bdabde8e8d9ec6742b384aee029"
 )
 
 type alignmentBaseline struct {
@@ -124,8 +124,8 @@ func TestAlignmentCommitLedgerIsComplete(t *testing.T) {
 	if ledger.SchemaVersion != 1 || ledger.RustFromExclusive != candidateRustFrom || ledger.RustToInclusive != candidateRustTo {
 		t.Fatalf("invalid commit ledger header: %#v", ledger)
 	}
-	if len(ledger.Commits) != 2700 {
-		t.Fatalf("candidate commit count = %d, want 2700", len(ledger.Commits))
+	if len(ledger.Commits) != 3155 {
+		t.Fatalf("candidate commit count = %d, want 3155", len(ledger.Commits))
 	}
 	shaPattern := regexp.MustCompile(`^[0-9a-f]{40}$`)
 	allowedStatus := map[string]bool{

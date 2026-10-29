@@ -8,6 +8,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/metrics"
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
@@ -28,7 +29,7 @@ func newVoiceTestModel(t *testing.T) (*Model, *[]string, *int) {
 		*answers = append(*answers, answer)
 		return nil
 	}
-	model.onVoiceCloseHelper = func() { *closes++ }
+	model.onVoiceCloseHelper = func(bool) error { *closes++; return nil }
 	return model, answers, closes
 }
 
@@ -129,6 +130,69 @@ func TestModelVoiceSessionOtherFailureStops(t *testing.T) {
 	}
 	if !model.VoiceConversation.FailureRecorded {
 		t.Fatal("the failure was not recorded")
+	}
+}
+
+type voiceTeaMetricRecord struct {
+	name string
+	tags map[string]string
+}
+
+type voiceTeaMetricsRecorder struct {
+	counters []voiceTeaMetricRecord
+}
+
+func (r *voiceTeaMetricsRecorder) RecordDuration(string, time.Duration, map[string]string) {}
+
+func (r *voiceTeaMetricsRecorder) Counter(name string, _ int, tags map[string]string) {
+	r.counters = append(r.counters, voiceTeaMetricRecord{name: name, tags: tags})
+}
+
+func (r *voiceTeaMetricsRecorder) Histogram(string, int, map[string]string) {}
+
+func firstVoiceTeaFailure(recorder *voiceTeaMetricsRecorder) *voiceTeaMetricRecord {
+	for index := range recorder.counters {
+		if recorder.counters[index].name == chatwidget.VoiceTelemetrySessionFailure {
+			return &recorder.counters[index]
+		}
+	}
+	return nil
+}
+
+// Rust #52756: a typed WebRTC failure reaches the TUI with its bounded cause,
+// and the runtime-chosen message is preserved instead of the generic text.
+func TestModelVoiceSessionPreservesTypedFailureCauseLikeRust(t *testing.T) {
+	recorder := &voiceTeaMetricsRecorder{}
+	previous := metrics.InstallGlobal(recorder)
+	t.Cleanup(func() { metrics.InstallGlobal(previous) })
+
+	model, _, _ := newVoiceTestModel(t)
+	model.Update(VoiceNotificationMsg{Notification: chatwidget.VoiceNotification{Kind: chatwidget.VoiceNotificationStarted}})
+	message := "Voice conversation failed: voice audio session stopped unexpectedly"
+	model.Update(VoiceAnswerResultMsg{
+		AttemptID: 7,
+		Err:       voicehost.ConnectionAudioSession,
+		Cause:     "audio_session",
+		Message:   message,
+	})
+	if model.notice != message {
+		t.Fatalf("notice = %q, want the stored WebRTC error", model.notice)
+	}
+	if !model.VoiceConversation.FailureRecorded {
+		t.Fatal("the failure was not recorded")
+	}
+	found := false
+	for _, record := range recorder.counters {
+		if record.name != "codex.voice.session.failure" {
+			continue
+		}
+		found = true
+		if record.tags["cause"] != "audio_session" || record.tags["phase"] == "" {
+			t.Fatalf("failure tags = %#v", record.tags)
+		}
+	}
+	if !found {
+		t.Fatal("voice session failure metric was not recorded")
 	}
 }
 
@@ -456,6 +520,10 @@ func TestModelVoiceRendersNonDelegatedAnswerNormally(t *testing.T) {
 }
 
 func TestModelVoiceSpeechFailureRestoresAnswer(t *testing.T) {
+	recorder := &voiceTeaMetricsRecorder{}
+	previous := metrics.InstallGlobal(recorder)
+	t.Cleanup(func() { metrics.InstallGlobal(previous) })
+
 	model, _, _ := newVoiceTestModel(t)
 	model.realtimeHelperAttached = true
 	model.VoiceConversation.MarkVoiceBackendStarted()
@@ -482,8 +550,17 @@ func TestModelVoiceSpeechFailureRestoresAnswer(t *testing.T) {
 	if len(model.VoiceConversation.PendingSpeech) != 0 {
 		t.Fatalf("pending speech = %#v", model.VoiceConversation.PendingSpeech)
 	}
-	if !strings.Contains(model.notice, "speech unavailable") {
+	// Rust ChatWidget::on_realtime_error(SpeechDelivery) reports its own text and
+	// ends the conversation instead of leaving the strip live (#52756).
+	if model.notice != "Failed to deliver the voice response." {
 		t.Fatalf("notice = %q", model.notice)
+	}
+	if !model.VoiceConversation.FailureRecorded || model.VoiceConversation.Phase != chatwidget.VoicePhaseStopping {
+		t.Fatalf("voice state after a delivery failure = %#v", model.VoiceConversation)
+	}
+	failure := firstVoiceTeaFailure(recorder)
+	if failure == nil || failure.tags["cause"] != chatwidget.VoiceFailureCauseSpeechDelivery {
+		t.Fatalf("failure metric = %#v", failure)
 	}
 }
 
@@ -585,5 +662,112 @@ func TestModelVoiceToggleKeyFollowsKeymapLikeRust(t *testing.T) {
 	// is whatever the shadowing action reported.
 	if !shadowModel.VoiceConversation.Inactive() || shadowModel.notice == fromCommand.notice {
 		t.Fatalf("shadowed default still ran on F8: notice=%q phase=%q", shadowModel.notice, shadowModel.VoiceConversation.Phase)
+	}
+}
+
+// Rust #52756: an app-server transport failure retires local media for the
+// visible session and for a session parked on another thread, recording the
+// cause exactly once.
+func TestModelAppServerDisconnectRetiresVoiceLikeRust(t *testing.T) {
+	tests := []struct {
+		name          string
+		visibleThread string
+	}{
+		{name: "visible", visibleThread: "thread-voice"},
+		{name: "parked", visibleThread: "thread-other"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := &voiceTeaMetricsRecorder{}
+			previous := metrics.InstallGlobal(recorder)
+			t.Cleanup(func() { metrics.InstallGlobal(previous) })
+
+			model, _, _ := newVoiceTestModel(t)
+			model.State.SetThreadID(test.visibleThread)
+			model.VoiceConversation.MarkVoiceBackendStarted()
+			model.VoiceConversation.MarkVoiceWebRTCConnected()
+			model.VoiceConversation.ActiveSince = time.Now().Add(-time.Second)
+			notified := 0
+			model.onVoiceCloseHelper = func(notifyServer bool) error {
+				if notifyServer {
+					t.Error("the disconnected app-server was asked to stop the session")
+				}
+				notified++
+				return nil
+			}
+
+			model.Update(AppServerDisconnectMsg{})
+			if notified != 1 {
+				t.Fatalf("helper retirements = %d, want 1", notified)
+			}
+			if !model.VoiceConversation.Inactive() {
+				t.Fatalf("voice state after disconnect = %#v", model.VoiceConversation)
+			}
+			failure := firstVoiceTeaFailure(recorder)
+			if failure == nil || failure.tags["cause"] != chatwidget.VoiceFailureCauseAppServerDisconnect {
+				t.Fatalf("failure metric = %#v", failure)
+			}
+
+			// A second disconnect has nothing left to retire or record.
+			model.Update(AppServerDisconnectMsg{})
+			if notified != 1 {
+				t.Fatal("a repeated disconnect retired the helper again")
+			}
+			failures := 0
+			for _, record := range recorder.counters {
+				if record.name == chatwidget.VoiceTelemetrySessionFailure {
+					failures++
+				}
+			}
+			if failures != 1 {
+				t.Fatalf("failure metrics after a repeated disconnect = %d", failures)
+			}
+		})
+	}
+}
+
+func TestModelAppServerDisconnectLeavesIdleVoiceAlone(t *testing.T) {
+	recorder := &voiceTeaMetricsRecorder{}
+	previous := metrics.InstallGlobal(recorder)
+	t.Cleanup(func() { metrics.InstallGlobal(previous) })
+
+	model, _, closes := newVoiceTestModel(t)
+	model.VoiceConversation.ResetVoiceConversation()
+	model.Update(AppServerDisconnectMsg{})
+	if *closes != 0 {
+		t.Fatalf("an idle disconnect retired the helper %d times", *closes)
+	}
+	if firstVoiceTeaFailure(recorder) != nil {
+		t.Fatalf("an idle disconnect recorded a failure %#v", recorder.counters)
+	}
+}
+
+// Rust #52756: a failed realtime stop request is an app-server request failure;
+// the session resets and the error is reported without a duplicate cause.
+func TestModelVoiceStopFailureRecordsAppServerRequest(t *testing.T) {
+	recorder := &voiceTeaMetricsRecorder{}
+	previous := metrics.InstallGlobal(recorder)
+	t.Cleanup(func() { metrics.InstallGlobal(previous) })
+
+	model, _, _ := newVoiceTestModel(t)
+	model.VoiceConversation.MarkVoiceBackendStarted()
+	model.VoiceConversation.MarkVoiceWebRTCConnected()
+	model.onVoiceCloseHelper = func(notifyServer bool) error {
+		if !notifyServer {
+			t.Error("the stop request was not sent to the app-server")
+		}
+		return errors.New("stop failed")
+	}
+
+	model.stopVoiceConversation()
+	if !model.VoiceConversation.Inactive() {
+		t.Fatalf("voice state after a failed stop = %#v", model.VoiceConversation)
+	}
+	if model.notice != "Voice conversation failed: stop failed" {
+		t.Fatalf("notice = %q", model.notice)
+	}
+	failure := firstVoiceTeaFailure(recorder)
+	if failure == nil || failure.tags["cause"] != chatwidget.VoiceFailureCauseAppServerRequest || failure.tags["phase"] != "stopping" {
+		t.Fatalf("failure metric = %#v", failure)
 	}
 }

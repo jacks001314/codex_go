@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"sort"
 	"strings"
 	"syscall"
@@ -16,6 +15,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	codexnetwork "codex_go/network"
 	"codex_go/plugin"
 )
 
@@ -129,7 +129,7 @@ func (ctx *pluginCLIContext) remoteOptionsForScope(scope string) (*plugin.Remote
 		AccountID:   auth.AccountIDFromAuthForRestrictions(snapshot),
 		Scope:       scope,
 		CodexHome:   ctx.codexHome,
-		HTTPClient:  http.DefaultClient,
+		HTTPClient:  codexnetwork.NewHTTPClient(true, 0),
 	}, nil
 }
 
@@ -223,7 +223,7 @@ func runPluginAdd(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.Writ
 			return fmt.Errorf("remote plugin %q did not provide a bundle download URL", remote.Name)
 		}
 		version := stringValueOrEmptyLocal(detail.Release.Version)
-		root, err := appserver.InstallRemotePluginBundle(context.Background(), http.DefaultClient, &appserver.RemotePluginBundleInstallParams{
+		root, err := appserver.InstallRemotePluginBundle(context.Background(), codexnetwork.NewHTTPClient(true, 0), &appserver.RemotePluginBundleInstallParams{
 			CodexHome:         ctx.codexHome,
 			MarketplaceName:   selection.MarketplaceName,
 			PluginName:        remote.Name,

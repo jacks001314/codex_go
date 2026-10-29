@@ -1241,6 +1241,9 @@ func TestGuardianSessionRunnerReusesPrewarmResponseForFirstReview(t *testing.T) 
 	if len(requests) != 2 || requests[0].PreviousResponseID != "warm-1" || requests[1].PreviousResponseID != "review-1" {
 		t.Fatalf("requests=%#v", requests)
 	}
+	if !requests[0].PreviousResponseFromPrewarm || requests[1].PreviousResponseFromPrewarm {
+		t.Fatalf("after_prewarm flags=%v/%v", requests[0].PreviousResponseFromPrewarm, requests[1].PreviousResponseFromPrewarm)
+	}
 	if websocketRuns != 2 {
 		t.Fatalf("websocketRuns=%d", websocketRuns)
 	}

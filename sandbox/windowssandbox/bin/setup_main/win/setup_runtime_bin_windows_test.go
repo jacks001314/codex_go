@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"codex_go/sandbox/windowssandbox"
+	"golang.org/x/sys/windows"
 )
 
 func TestEnsureCodexAppRuntimePathsReadableGrantsEveryone(t *testing.T) {
@@ -120,5 +121,125 @@ func TestEnsureRuntimeTreeRepairsExistingChildren(t *testing.T) {
 		if !allows {
 			t.Fatalf("PathMaskAllows(%s) = false after runtime tree repair", path)
 		}
+	}
+}
+
+// Mirrors Rust's #51822 regression: repairing the runtime tree must not open an
+// active node.exe with access that conflicts with a reader holding it with
+// FILE_SHARE_READ only, and it must keep existing deny ACEs instead of adding
+// allows ahead of them.
+func TestEnsureRuntimeTreeRepairsHeldRuntimeFileAndPreservesDenies(t *testing.T) {
+	root := t.TempDir()
+	node := filepath.Join(root, "bin", "node.exe")
+	module := filepath.Join(root, "sky", "dist", "project", "index.js")
+	for _, path := range []string{node, module} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte("runtime content"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	const sid = "S-1-5-21-10-20-30-40"
+	readExecute := uint32(RuntimeReadExecuteMask)
+	// Root-only grant: without inheritance the children stay unreadable until
+	// the tree repair visits them.
+	if err := windowssandbox.EnsureAllowMaskACEsWithInheritance(windowssandbox.ACLRequest{
+		Path: root,
+		SID:  sid,
+		Mask: readExecute,
+	}, 0); err != nil {
+		t.Fatalf("EnsureAllowMaskACEsWithInheritance(%s) error = %v", root, err)
+	}
+	assertMaskAllows(t, root, sid, readExecute, true, true)
+	for _, path := range []string{node, module} {
+		assertMaskAllows(t, path, sid, readExecute, true, false)
+	}
+
+	deniedDirectory := filepath.Join(root, "denied")
+	if err := os.Mkdir(deniedDirectory, 0o700); err != nil {
+		t.Fatalf("Mkdir(%s) error = %v", deniedDirectory, err)
+	}
+	if err := windowssandbox.AddDenyReadACE(windowssandbox.ACLRequest{Path: deniedDirectory, SID: sid}); err != nil {
+		t.Fatalf("AddDenyReadACE(%s) error = %v", deniedDirectory, err)
+	}
+	deniedChild := filepath.Join(deniedDirectory, "private.js")
+	if err := os.WriteFile(deniedChild, []byte("private runtime content"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", deniedChild, err)
+	}
+	writeDenied := filepath.Join(root, "read-only.js")
+	if err := os.WriteFile(writeDenied, []byte("read-only runtime content"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", writeDenied, err)
+	}
+	if err := windowssandbox.AddDenyWriteACE(windowssandbox.ACLRequest{Path: writeDenied, SID: sid}); err != nil {
+		t.Fatalf("AddDenyWriteACE(%s) error = %v", writeDenied, err)
+	}
+
+	// Keep data-write and delete opens blocked throughout repair and revalidation.
+	reader := openReadOnlyShared(t, node)
+	defer windows.CloseHandle(reader)
+
+	writeOrACL := uint32(windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.DELETE | windows.WRITE_DAC)
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := ensureRuntimeTreeReadable(root, sid); err != nil {
+			t.Fatalf("ensureRuntimeTreeReadable(attempt %d) error = %v", attempt, err)
+		}
+		for _, path := range []string{deniedDirectory, deniedChild} {
+			denied, err := windowssandbox.PathMaskDenied(windowssandbox.ACLRequest{Path: path, SID: sid, Mask: readExecute})
+			if err != nil {
+				t.Fatalf("PathMaskDenied(%s) error = %v", path, err)
+			}
+			if !denied {
+				t.Fatalf("read denial on %s did not survive repair", path)
+			}
+			assertMaskAllows(t, path, sid, readExecute, false, false)
+		}
+		denied, err := windowssandbox.PathMaskDenied(windowssandbox.ACLRequest{
+			Path: writeDenied,
+			SID:  sid,
+			Mask: uint32(windows.FILE_GENERIC_WRITE | windows.DELETE),
+		})
+		if err != nil {
+			t.Fatalf("PathMaskDenied(%s) error = %v", writeDenied, err)
+		}
+		if !denied {
+			t.Fatalf("write denial on %s did not survive repair", writeDenied)
+		}
+		for _, path := range []string{node, module, filepath.Dir(module)} {
+			assertMaskAllows(t, path, sid, readExecute, true, true)
+			assertMaskAllows(t, path, sid, writeOrACL, false, false)
+		}
+	}
+}
+
+func openReadOnlyShared(t *testing.T, path string) windows.Handle {
+	t.Helper()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatalf("UTF16PtrFromString(%s) error = %v", path, err)
+	}
+	handle, err := windows.CreateFile(
+		name,
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("CreateFile(%s) error = %v", path, err)
+	}
+	return handle
+}
+
+func assertMaskAllows(t *testing.T, path string, sid string, mask uint32, requireAllBits bool, want bool) {
+	t.Helper()
+	allows, err := windowssandbox.PathMaskAllows(windowssandbox.ACLRequest{Path: path, SID: sid, Mask: mask}, requireAllBits)
+	if err != nil {
+		t.Fatalf("PathMaskAllows(%s) error = %v", path, err)
+	}
+	if allows != want {
+		t.Fatalf("PathMaskAllows(%s) = %v, want %v", path, allows, want)
 	}
 }

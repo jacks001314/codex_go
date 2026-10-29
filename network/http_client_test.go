@@ -25,12 +25,22 @@ func TestNewHTTPClientCanDisableSystemProxy(t *testing.T) {
 
 func TestNewHTTPClientCanRespectSystemProxy(t *testing.T) {
 	client := NewHTTPClient(true, 0)
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("Transport = %T", client.Transport)
-	}
+	transport := underlyingHTTPTransport(t, client.Transport)
 	if transport.Proxy == nil {
 		t.Fatal("Proxy is nil, want ProxyFromEnvironment")
+	}
+}
+
+func underlyingHTTPTransport(t *testing.T, roundTripper http.RoundTripper) *http.Transport {
+	t.Helper()
+	switch transport := roundTripper.(type) {
+	case *http.Transport:
+		return transport
+	case *proxyAuthTransport:
+		return transport.base
+	default:
+		t.Fatalf("Transport = %T", roundTripper)
+		return nil
 	}
 }
 

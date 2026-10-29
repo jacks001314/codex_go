@@ -197,3 +197,38 @@ func TestFeatureStageMappingMatchesRust(t *testing.T) {
 		}
 	}
 }
+
+// TestFeatureEntryRoundTripsRustWireName covers the client half of the catalog
+// wire shape: the server writes `name` (Rust ExperimentalFeature), so decoding
+// must restore the key instead of dropping every entry.
+func TestFeatureEntryRoundTripsRustWireName(t *testing.T) {
+	original := FeatureListResponse{Data: []FeatureEntry{{
+		Key:            "api_key_model_discovery",
+		Stage:          FeatureStageBeta,
+		Enabled:        true,
+		DefaultEnabled: false,
+	}}}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+	var decoded FeatureListResponse
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal error = %v", err)
+	}
+	if len(decoded.Data) != 1 || decoded.Data[0].Key != "api_key_model_discovery" {
+		t.Fatalf("decoded data = %#v, want the key restored from `name`", decoded.Data)
+	}
+	if decoded.Data[0].Stage != FeatureStageBeta || !decoded.Data[0].Enabled {
+		t.Fatalf("decoded entry = %#v", decoded.Data[0])
+	}
+
+	// A catalog encoded with the struct tag still decodes.
+	var legacy FeatureEntry
+	if err := json.Unmarshal([]byte(`{"key":"apps","stage":"beta","enabled":false}`), &legacy); err != nil {
+		t.Fatalf("legacy Unmarshal error = %v", err)
+	}
+	if legacy.Key != "apps" || legacy.Enabled {
+		t.Fatalf("legacy entry = %#v", legacy)
+	}
+}

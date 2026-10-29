@@ -459,6 +459,92 @@ func TestResponsesAgentRunnerPrewarmUsesWebSocketGenerateFalse(t *testing.T) {
 	if continuation == nil || continuation.tags["mode"] != "full" || continuation.tags["reason"] != "prewarm" || continuation.tags["phase"] != "warmup" {
 		t.Fatalf("continuation metric = %#v", continuation)
 	}
+	if continuation.tags["after_prewarm"] != "false" {
+		t.Fatalf("prewarm after_prewarm = %q, want false", continuation.tags["after_prewarm"])
+	}
+	var websocketCheck *recordedMetricSample
+	for index := range sink.counters {
+		if sink.counters[index].name == startupPrewarmWebsocketCheckMetric {
+			websocketCheck = &sink.counters[index]
+		}
+	}
+	if websocketCheck == nil || websocketCheck.tags["outcome"] != "needs_prewarm" || websocketCheck.tags["input"] != "base" {
+		t.Fatalf("websocket check metric = %#v", websocketCheck)
+	}
+}
+
+// Mirrors Rust #48812: only the generation that consumes the prepared warmup
+// response is tagged after_prewarm, both for the warmup itself and for later
+// requests in the same turn.
+func TestResponsesAgentRunnerWebSocketContinuationMarksAfterPrewarmLikeRust(t *testing.T) {
+	var created atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		for {
+			if _, _, err := conn.Read(request.Context()); err != nil {
+				return
+			}
+			id := fmt.Sprintf("resp-%d", created.Add(1))
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"`+id+`"}}`))
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.output_item.done","item":{"id":"msg-`+id+`","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`))
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"`+id+`"}}`))
+		}
+	}))
+	defer server.Close()
+	sink := &recordingMetricsSink{}
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:                &APIProvider{BaseURL: server.URL},
+		Auth:                    &AuthHeaders{Headers: http.Header{"Authorization": []string{"Bearer secret"}}},
+		SupportsWebsockets:      true,
+		WebsocketConnectTimeout: time.Second,
+	})
+	runner.Metrics = sink
+	if _, err := runner.Prewarm(context.Background(), &AgentRequest{Model: "gpt-test"}); err != nil {
+		t.Fatalf("Prewarm() error = %v", err)
+	}
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+		Model:                       "gpt-test",
+		Prompt:                      "hello",
+		ThreadID:                    "thread-after-prewarm",
+		TurnID:                      "turn-after-prewarm",
+		PreviousResponseID:          "resp-1",
+		PreviousResponseFromPrewarm: true,
+	}); err != nil {
+		t.Fatalf("RunWebSocket() error = %v", err)
+	}
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+		Model:              "gpt-test",
+		Prompt:             "again",
+		ThreadID:           "thread-after-prewarm",
+		TurnID:             "turn-after-prewarm",
+		PreviousResponseID: "resp-2",
+	}); err != nil {
+		t.Fatalf("RunWebSocket() second error = %v", err)
+	}
+	var phases []string
+	var afterPrewarm []string
+	for index := range sink.counters {
+		if sink.counters[index].name != websocketContinuationCountMetric {
+			continue
+		}
+		phases = append(phases, sink.counters[index].tags["phase"])
+		afterPrewarm = append(afterPrewarm, sink.counters[index].tags["after_prewarm"])
+	}
+	wantPhases := []string{"warmup", "generation", "generation"}
+	wantAfter := []string{"false", "true", "false"}
+	if len(phases) != len(wantPhases) {
+		t.Fatalf("continuation phases = %#v, want %#v", phases, wantPhases)
+	}
+	for index := range wantPhases {
+		if phases[index] != wantPhases[index] || afterPrewarm[index] != wantAfter[index] {
+			t.Fatalf("continuation[%d] = (%q, %q), want (%q, %q)", index, phases[index], afterPrewarm[index], wantPhases[index], wantAfter[index])
+		}
+	}
 }
 
 // Mirrors Rust #46051: every generation response.create records the

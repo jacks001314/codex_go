@@ -357,7 +357,6 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
-	cyberAccessProgram := execCyberAccessProgramForTurn(req.Exec.CyberAccessProgram, providerID)
 	permissionProfile, err := resolveExecSandboxPermissionProfile(cfg, req)
 	if err != nil {
 		return nil, err
@@ -371,6 +370,17 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	agent, err := r.agentForRun(cfg, resolvedAuth, providerID, authStoreOptions)
 	if err != nil {
 		return nil, err
+	}
+	cyberAccessProgram := execCyberAccessProgramForTurn(req.Exec.CyberAccessProgram, providerID)
+	if strings.TrimSpace(req.Exec.CyberAccessProgram) == "" &&
+		features.Enabled(cfg.FeatureSettings(), "cli_daybreak") {
+		// Rust exec run_exec_session (#49856/#53717): with no explicit
+		// selection, the CLI Daybreak feature resolves the turn's program from
+		// the model catalog.
+		cyberAccessProgram, err = execDaybreakProgramForTurn(cfg, resolvedAuth, agent, providerID, modelID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !req.Exec.JSON && stderr != nil {
 		writeHumanConfigSummary(stderr, req, cfg, identityPrompt, threadID, modelID, providerID, approvalPolicy, permissionProfile, reasoningEffort)
@@ -562,6 +572,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		CyberAccessProgram:                cyberAccessProgram,
 		TaskKind:                          taskKind,
 		ThreadID:                          threadID,
+		SessionID:                         execSessionID(req, threadID),
 		TurnID:                            turnID,
 		Originator:                        originator,
 		PreviousResponseID:                resumePreviousResponseID(resumeContext),
@@ -726,6 +737,90 @@ func execCyberAccessProgramForTurn(program string, providerID string) string {
 	}
 }
 
+// execDaybreakProgramForTurn mirrors Rust `exec::daybreak::program_for_turn`
+// (#49856/#53717): with the CLI Daybreak feature on and no explicit program,
+// the turn selects the catalog-advertised Daybreak program when the preference
+// is on and the advertised standard program when it is off. A Git-style account
+// lookup failure, an empty program list, or a model absent from the catalog
+// keeps the server's automatic treatment. An account that cannot use Daybreak
+// still fails when the preference is explicitly on.
+func execDaybreakProgramForTurn(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, agent model.AgentRunner, providerID string, modelID string) (string, error) {
+	daybreakEnabled := cfg != nil && cfg.DaybreakEnabled()
+	if providerID != model.OpenAIProviderID {
+		if daybreakEnabled {
+			return "", errors.New("Daybreak requires the OpenAI model provider")
+		}
+		return "", nil
+	}
+	var snapshot *auth.AuthDotJSON
+	if resolvedAuth != nil {
+		snapshot = &resolvedAuth.Auth
+	}
+	chatGPT := model.AuthHasChatGPTAccount(snapshot)
+	apiKey := model.AuthIsAPIKey(snapshot)
+	if daybreakEnabled && !chatGPT && !apiKey {
+		return "", errors.New("Daybreak requires a signed-in ChatGPT account or an OpenAI API key")
+	}
+	programs := execModelCyberPrograms(agent, modelID)
+	if len(programs) == 0 {
+		// Missing or empty discovery metadata preserves the server's automatic
+		// treatment.
+		return "", nil
+	}
+	if daybreakEnabled {
+		if program := execDaybreakProgram(programs); program != "" {
+			return program, nil
+		}
+		return "", fmt.Errorf("Daybreak is unavailable for model %s; turn it off or choose a compatible model", modelID)
+	}
+	eligible := chatGPT || (apiKey && features.Enabled(cfg.FeatureSettings(), "api_key_cyber_access_programs"))
+	if !eligible || !execHasStandardProgram(programs) {
+		return "", nil
+	}
+	return string(model.CyberAccessProgramStandard), nil
+}
+
+// execModelCyberPrograms returns the catalog-advertised cyber programs for one
+// model, using the same manager the run's agent uses so an online catalog is
+// consulted when available.
+func execModelCyberPrograms(agent model.AgentRunner, modelID string) []string {
+	manager := execModelsManagerForAgent(agent)
+	if manager == nil {
+		return nil
+	}
+	info := manager.GetModelInfo(strings.TrimSpace(modelID), nil)
+	if info.AvailableAccessPrograms == nil || len(info.AvailableAccessPrograms.Cyber) == 0 {
+		return nil
+	}
+	programs := make([]string, 0, len(info.AvailableAccessPrograms.Cyber))
+	for _, program := range info.AvailableAccessPrograms.Cyber {
+		programs = append(programs, string(program))
+	}
+	return programs
+}
+
+// execDaybreakProgram prefers Daybreak Blue over Daybreak Red, matching Rust
+// `ModelAccessPrograms::daybreak`.
+func execDaybreakProgram(programs []string) string {
+	for _, want := range []model.CyberAccessProgram{model.CyberAccessProgramDaybreakBlue, model.CyberAccessProgramDaybreakRed} {
+		for _, program := range programs {
+			if model.CyberAccessProgram(strings.TrimSpace(program)) == want {
+				return string(want)
+			}
+		}
+	}
+	return ""
+}
+
+func execHasStandardProgram(programs []string) bool {
+	for _, program := range programs {
+		if model.CyberAccessProgram(strings.TrimSpace(program)) == model.CyberAccessProgramStandard {
+			return true
+		}
+	}
+	return false
+}
+
 // validateExecWorktreeRequest enforces the CLI restrictions for the
 // experimental managed-worktree flag before any worktree is allocated
 // (Rust #42652).
@@ -796,6 +891,7 @@ type agentRunConfig struct {
 	CyberAccessProgram                string
 	TaskKind                          model.AgentTaskKind
 	ThreadID                          string
+	SessionID                         string
 	TurnID                            string
 	Originator                        string
 	PreviousResponseID                string
@@ -1389,6 +1485,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		TaskKind:                run.TaskKind,
 		ThreadID:                run.ThreadID,
 		TurnID:                  run.TurnID,
+		SessionID:               run.SessionID,
 		// Rust #51517: an ephemeral exec run intentionally skips durable
 		// persistence, so attachment uploads made while preparing its requests
 		// carry that intent (Rust's `turn_context.config.ephemeral`).

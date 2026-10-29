@@ -102,6 +102,12 @@ func reportFailure(stage ConnectionError, err error) error {
 	if err == nil {
 		return nil
 	}
+	return classifyFailure(stage, err)
+}
+
+// classifyFailure extracts the typed cause of a session failure, falling back
+// to the stage that produced it.
+func classifyFailure(stage ConnectionError, err error) ConnectionError {
 	var connectionErr ConnectionError
 	if errors.As(err, &connectionErr) {
 		return connectionErr
@@ -387,7 +393,7 @@ func sessionStartup(ctx context.Context, owner *sessionOwner, executable, buildC
 // later inspection.
 func completeStartup(owner *sessionOwner, offer chan<- sessionOffer, stage ConnectionError, err error) {
 	failure := reportFailure(stage, err)
-	owner.state.setError(failure.Error())
+	owner.state.setError(classifyFailure(stage, err), failure.Error())
 	offer <- sessionOffer{err: failure}
 }
 
@@ -410,7 +416,9 @@ type sessionState struct {
 	microphone atomic.Uint32
 	speaker    atomic.Uint32
 	errorMu    sync.Mutex
+	lastCause  ConnectionError
 	lastError  string
+	hasError   bool
 }
 
 func (s *sessionState) recordPeak(target *atomic.Uint32, value uint16) {
@@ -425,18 +433,37 @@ func (s *sessionState) recordPeak(target *atomic.Uint32, value uint16) {
 	}
 }
 
-func (s *sessionState) setError(message string) {
+func (s *sessionState) setError(cause ConnectionError, message string) {
 	s.errorMu.Lock()
+	s.lastCause = cause
 	s.lastError = message
+	s.hasError = true
 	s.errorMu.Unlock()
 }
 
-func (s *sessionState) takeError() string {
+// setErrorIfAbsent records a generic failure without replacing a more specific
+// error the actor already stored (Rust realtime-webrtc session.rs: the failed
+// control send must not overwrite the WebRTC cause).
+func (s *sessionState) setErrorIfAbsent(cause ConnectionError, message string) {
+	s.errorMu.Lock()
+	if !s.hasError {
+		s.lastCause = cause
+		s.lastError = message
+		s.hasError = true
+	}
+	s.errorMu.Unlock()
+}
+
+func (s *sessionState) takeError() (ConnectionError, string, bool) {
 	s.errorMu.Lock()
 	defer s.errorMu.Unlock()
-	message := s.lastError
+	if !s.hasError {
+		return ConnectionFailed, "", false
+	}
+	cause, message := s.lastCause, s.lastError
 	s.lastError = ""
-	return message
+	s.hasError = false
+	return cause, message, true
 }
 
 // sessionOwner owns the helper process and the ordered command channel.
@@ -522,10 +549,11 @@ func (h *SessionHandle) ApplyAnswerSDP(answer string) error {
 	}
 }
 
-// TakeError returns and clears the last bounded session failure.
-func (h *SessionHandle) TakeError() string {
+// TakeError returns and clears the last bounded session failure with its typed
+// cause (Rust RealtimeWebrtcSessionHandle::take_error).
+func (h *SessionHandle) TakeError() (ConnectionError, string, bool) {
 	if h == nil || h.owner == nil {
-		return ""
+		return ConnectionFailed, "", false
 	}
 	return h.owner.state.takeError()
 }
@@ -552,7 +580,7 @@ func (o *sessionOwner) send(command sessionCommand) error {
 	case o.commands <- command:
 		return nil
 	default:
-		o.state.setError("Voice control channel unavailable.")
+		o.state.setErrorIfAbsent(ConnectionFailed, "Voice control channel unavailable.")
 		o.cancel()
 		return errors.New("voice control channel unavailable")
 	}
@@ -684,7 +712,7 @@ func (o *sessionOwner) dispatchControls(ctx context.Context, host sessionHost) e
 // finish closes the helper and records the bounded failure.
 func (o *sessionOwner) finish(failure error) {
 	if failure != nil {
-		o.state.setError(failure.Error())
+		o.state.setError(classifyFailure(ConnectionFailed, failure), failure.Error())
 	}
 }
 

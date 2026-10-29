@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
@@ -413,10 +412,10 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.modal != nil {
 		return m.updateModal(msg)
 	}
-	// Rust #44433: an in-flight archive/delete keeps rendering but blocks
-	// navigation and task switching until it finishes.
+	// Rust #53908: an in-flight archive/delete keeps the dashboard browsable
+	// while blocking task switching, new tasks, and leaving the dashboard.
 	if m.agentsOverviewLifecycleProgress != "" {
-		return nil
+		return m.updateAgentsOverviewRemovalKey(msg)
 	}
 	// Rust #45276: creating a worktree pauses every action but cancel/quit.
 	if m.agentsOverview.State.CreatingWorktree && msg.String() != "esc" && msg.String() != "ctrl+c" {
@@ -570,6 +569,78 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	// Rust #44970: the selected task's usage estimate follows the selection.
 	if m.agentsOverview != nil && m.agentsOverview.Selected != selectedBefore {
 		return m.refreshAgentsOverviewUsageCmd()
+	}
+	return nil
+}
+
+// updateAgentsOverviewRemovalKey routes input while an archive/delete request
+// holds the server lifecycle lock. Rust's AgentsOverviewView still handles
+// search, help, status-filter tabs, and list movement before the removal guard,
+// so browsing stays responsive; every other action is swallowed.
+func (m *Model) updateAgentsOverviewRemovalKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil {
+		return nil
+	}
+	if m.agentsOverview.State.Help {
+		if msg.String() == "?" || msg.String() == "esc" {
+			m.agentsOverview.State.Help = false
+		}
+		return nil
+	}
+	switch msg.String() {
+	case "up", "k":
+		m.agentsOverview.MoveSelection(false)
+		return nil
+	case "down", "j":
+		m.agentsOverview.MoveSelection(true)
+		return nil
+	case "pgup":
+		m.agentsOverview.PageUp()
+		return nil
+	case "pgdown":
+		m.agentsOverview.PageDown()
+		return nil
+	case "home":
+		m.agentsOverview.JumpTop()
+		return nil
+	case "end":
+		m.agentsOverview.JumpBottom()
+		return nil
+	case "?":
+		m.agentsOverview.ToggleHelp()
+		return nil
+	}
+	switch msg.Type {
+	case bubbletea.KeyTab:
+		if m.agentsOverviewFilterKeyAvailable("tab") {
+			m.agentsOverview.CycleStatusFilter(true)
+		}
+		return nil
+	case bubbletea.KeyShiftTab:
+		if m.agentsOverviewFilterKeyAvailable("shift-tab") {
+			m.agentsOverview.CycleStatusFilter(false)
+		}
+		return nil
+	}
+	keySpec := keySpecFromKeyMsg(msg)
+	if msg.String() == "esc" && (m.agentsOverview.State.Searching || m.agentsOverview.State.Renaming) {
+		m.agentsOverview.Cancel()
+		return nil
+	}
+	if m.keyMatches("agents", "search", keySpec) {
+		m.agentsOverview.ToggleSearch()
+		return nil
+	}
+	if m.agentsOverview.State.Searching {
+		if msg.String() == "backspace" {
+			m.agentsOverview.Backspace()
+			return nil
+		}
+		if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+			for _, r := range msg.Runes {
+				m.agentsOverview.TypeChar(r)
+			}
+		}
 	}
 	return nil
 }
@@ -1035,10 +1106,19 @@ func (m *Model) runAgentsOverviewLifecycleCmd(request *agentsOverviewLifecycleRe
 		return nil
 	}
 	m.agentsOverviewBusy = true
+	// Rust #53908: hide the affected task immediately and keep the dashboard
+	// browsable while the server completes the request.
+	progress += "  You can still browse."
 	m.agentsOverviewLifecycleProgress = progress
 	m.agentsOverviewLifecycle = request
 	action := request.action
 	threadID := request.threadID
+	if m.agentsOverview != nil {
+		removed := map[string]struct{}{strings.TrimSpace(threadID): {}}
+		m.agentsOverview.PrepareRemoval(removed)
+		m.agentsOverview.HideThread(threadID)
+	}
+	m.refreshTranscript()
 	return func() bubbletea.Msg {
 		var err error
 		if action == agentsOverviewActionDelete {
@@ -1062,7 +1142,11 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 		if msg.action == agentsOverviewActionDelete {
 			label = "delete"
 		}
+		if m.agentsOverview != nil {
+			m.agentsOverview.UnhideThread(msg.threadID)
+		}
 		m.agentsOverviewNotice = "Failed to " + label + " task: " + strings.TrimSpace(msg.err.Error())
+		m.refreshTranscript()
 		return nil
 	}
 	m.agentsOverviewNotice = ""
@@ -1269,14 +1353,13 @@ func (m *Model) renderAgentsOverview() string {
 	if m.agentsOverview.Notice == "" {
 		m.agentsOverview.Notice = strings.TrimSpace(m.agentsOverviewServerVersionNotice)
 	}
+	if progress := strings.TrimSpace(m.agentsOverviewLifecycleProgress); progress != "" && strings.TrimSpace(m.agentsOverviewNotice) == "" {
+		m.agentsOverview.Notice = progress
+	}
 	m.agentsOverview.KeyChordHints = m.agentsOverviewKeyChordHints()
 	m.agentsOverview.FilterHint = m.agentsOverviewFilterHint()
 	m.agentsOverview.Loading = (m.agentsOverviewInflight || m.agentsOverviewPending) && len(m.agentsOverview.Rows) == 0
-	lines := m.agentsOverview.RenderStyled(m.width, m.height)
-	if m.agentsOverviewLifecycleProgress != "" {
-		lines = centerAgentsOverviewDialog(lines, m.agentsOverviewLifecycleProgress, m.width, m.height)
-	}
-	return strings.Join(lines, "\n")
+	return strings.Join(m.agentsOverview.RenderStyled(m.width, m.height), "\n")
 }
 
 // agentsOverviewFilterKeyAvailable reports whether key is free to drive the
@@ -1322,66 +1405,6 @@ func (m *Model) agentsOverviewKeyChordHints() []agentsoverview.KeyChordHint {
 		return nil
 	}
 	return []agentsoverview.KeyChordHint{{Keys: keys, Action: "chord\u2026"}}
-}
-
-// centerAgentsOverviewDialog renders lifecycle progress as a centered dialog
-// over the retained Command Center backdrop (Rust #53804).
-func centerAgentsOverviewDialog(backdrop []string, progress string, width, height int) []string {
-	progress = strings.TrimSpace(progress)
-	if progress == "" {
-		return backdrop
-	}
-	if width < 24 {
-		return append(backdrop, progress)
-	}
-	dialogWidth := min(width-4, max(42, len([]rune(progress))+8))
-	contentWidth := max(dialogWidth-4, 1)
-	progress = truncateDisplayWidth(progress, contentWidth)
-	hint := truncateDisplayWidth("Please wait. Task switching is unavailable.", contentWidth)
-	dialog := []string{
-		"\u256d" + strings.Repeat("\u2500", dialogWidth-2) + "\u256e",
-		"\u2502 " + padDisplayWidth(progress, contentWidth) + " \u2502",
-		"\u2502 " + padDisplayWidth(hint, contentWidth) + " \u2502",
-		"\u2570" + strings.Repeat("\u2500", dialogWidth-2) + "\u256f",
-	}
-	for len(backdrop) < height {
-		backdrop = append(backdrop, "")
-	}
-	startRow := max(0, (height-len(dialog))/2)
-	if startRow+len(dialog) > len(backdrop) {
-		startRow = max(0, len(backdrop)-len(dialog))
-	}
-	left := max(0, (width-dialogWidth)/2)
-	for i, line := range dialog {
-		backdrop[startRow+i] = strings.Repeat(" ", left) + line
-	}
-	return backdrop
-}
-
-func padDisplayWidth(value string, width int) string {
-	value = truncateDisplayWidth(value, width)
-	padding := width - runewidth.StringWidth(value)
-	if padding <= 0 {
-		return value
-	}
-	return value + strings.Repeat(" ", padding)
-}
-
-func truncateDisplayWidth(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	var out strings.Builder
-	used := 0
-	for _, r := range value {
-		cell := runewidth.RuneWidth(r)
-		if used+cell > width {
-			break
-		}
-		out.WriteRune(r)
-		used += cell
-	}
-	return out.String()
 }
 
 // applyThreadScopedSettingsUpdated patches a listed task's model from a

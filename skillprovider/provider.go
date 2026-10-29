@@ -12,6 +12,10 @@ const (
 	SourceHost         SourceKind = "host"
 	SourceExecutor     SourceKind = "executor"
 	SourceOrchestrator SourceKind = "orchestrator"
+	// SourceCloud is the native cloud authority a frozen snapshot supplies
+	// (Rust SkillSourceKind::Cloud, #55631). The skills tool still exposes it as
+	// the "orchestrator" authority on the wire.
+	SourceCloud SourceKind = "cloud"
 )
 
 func CustomSourceKind(kind string) SourceKind {
@@ -31,9 +35,13 @@ type CatalogEntry struct {
 	ShortDescription string
 	MainResource     string
 	DisplayPath      string
-	Enabled          bool
-	PromptVisible    bool
-	Dependencies     []ToolDependency
+	// AliasRoot is the package root a provider declares for rendered aliases
+	// (Rust SkillCatalogEntry::with_alias_root, #55631). Empty falls back to
+	// deriving the root from PackageID.
+	AliasRoot     string
+	Enabled       bool
+	PromptVisible bool
+	Dependencies  []ToolDependency
 	// PluginID attributes an executor skill to the plugin whose capability
 	// root selected it (Rust #39309), carried into skill_invocation analytics.
 	PluginID string
@@ -110,6 +118,22 @@ type Provider interface {
 	List(context.Context, ListQuery) (Catalog, error)
 	Read(context.Context, ReadRequest) (ReadResult, error)
 	Search(context.Context, SearchRequest) (SearchResult, error)
+}
+
+// MCPResourceUser is implemented by providers that can report whether they
+// need the MCP resource client. Providers that do not implement it keep Rust's
+// default of requiring MCP resources.
+type MCPResourceUser interface {
+	UsesMCPResources() bool
+}
+
+// UsesMCPResources reports whether provider reads through MCP resources. A nil
+// provider keeps the historical MCP-backed behavior.
+func UsesMCPResources(provider Provider) bool {
+	if user, ok := provider.(MCPResourceUser); ok {
+		return user.UsesMCPResources()
+	}
+	return true
 }
 
 type ProviderFuncs struct {

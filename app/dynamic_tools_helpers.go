@@ -493,7 +493,9 @@ func (e *dynamicToolExecutor) resumeThread(threadID string, excludeTurns bool, c
 }
 
 // startTurn submits a tool-output turn that delegates a prompt (Rust start_turn).
-func (e *dynamicToolExecutor) startTurn(threadID string, tool string, prompt string, model *string, sandboxPolicy any) error {
+// cyberAccessProgram is the resolved target-thread program, empty when the
+// server should apply its automatic treatment.
+func (e *dynamicToolExecutor) startTurn(threadID string, tool string, prompt string, model *string, sandboxPolicy any, cyberAccessProgram string) error {
 	params := turn.TurnStartParams{
 		ThreadID: strings.TrimSpace(threadID),
 		ToolOutput: &turn.TurnToolOutput{
@@ -501,7 +503,8 @@ func (e *dynamicToolExecutor) startTurn(threadID string, tool string, prompt str
 			Namespace: DynamicToolNamespace,
 			Output:    prompt,
 		},
-		SandboxPolicy: sandboxPolicy,
+		SandboxPolicy:      sandboxPolicy,
+		CyberAccessProgram: wireCyberAccessProgram(cyberAccessProgram),
 	}
 	if model != nil {
 		params.Model = strings.TrimSpace(*model)

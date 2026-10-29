@@ -239,6 +239,7 @@ func (c *appServerMemoryConsolidator) ConsolidateMemory(ctx context.Context, req
 	c.router.applyThreadStartConfigSnapshot(response, startRequest)
 	c.router.applyThreadStartInstructionSources(response, startRequest)
 	c.router.requireThreadStatus().UpsertThread(threadID, false)
+	c.router.emitThreadReadyLifecycle(threadID)
 
 	effort := firstNonEmpty(strings.TrimSpace(request.ReasoningEffort), "medium")
 	turnParams := &turn.TurnStartParams{

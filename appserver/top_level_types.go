@@ -197,6 +197,9 @@ func (a *LocalShellAction) MarshalJSON() ([]byte, error) {
 
 type InternalSessionSource string
 
-const InternalSessionSourceMemoryConsolidation InternalSessionSource = "memory_consolidation"
+const (
+	InternalSessionSourceMemoryConsolidation InternalSessionSource = "memory_consolidation"
+	InternalSessionSourceGuardian            InternalSessionSource = "guardian"
+)
 
 type SubAgentSource any

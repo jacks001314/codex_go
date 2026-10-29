@@ -62,15 +62,16 @@ func EnsureAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) erro
 
 // GrantAllowMaskACEsWithInheritance adds missing read/execute grants without
 // replacing existing ACEs. Any deny ACE for the same mask is preserved instead
-// of introducing an allow that could outrank an inherited deny.
-func GrantAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) error {
-	_, err := grantAllowMaskACE(req, inheritance)
-	return err
+// of introducing an allow that could outrank an inherited deny. It reports
+// whether the DACL changed (Rust `ensure_allow_mask_aces_with_inheritance`
+// returns the same flag so callers only revalidate after an update).
+func GrantAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) (bool, error) {
+	return grantAllowMaskACE(req, inheritance)
 }
 
 // GrantReadExecuteACEs adds read/execute permissions without replacing existing
-// ACEs or overriding any deny ACE.
-func GrantReadExecuteACEs(req ACLRequest, inheritance uint32) error {
+// ACEs or overriding any deny ACE. It reports whether the DACL changed.
+func GrantReadExecuteACEs(req ACLRequest, inheritance uint32) (bool, error) {
 	req.Mask = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_EXECUTE
 	return GrantAllowMaskACEsWithInheritance(req, inheritance)
 }
@@ -90,6 +91,23 @@ func PathMaskAllows(req ACLRequest, requireAllBits bool) (bool, error) {
 		return daclAllowsMaskForSID(dacl, sid, req.Mask), nil
 	}
 	return daclAllowsAnyMaskForSID(dacl, sid, req.Mask), nil
+}
+
+// PathMaskDenied reports whether an explicit deny ACE for the request's SID
+// covers any bit of the request mask (Rust `dacl_has_deny_mask`). Callers use
+// it to prove a denial survived a repair that only adds allow ACEs.
+func PathMaskDenied(req ACLRequest) (bool, error) {
+	path, sidBytes, sid, err := validateACLRequest(req)
+	if err != nil {
+		return false, err
+	}
+	sd, dacl, err := fileDACL(path)
+	if err != nil {
+		return false, err
+	}
+	defer runtime.KeepAlive(sidBytes)
+	defer runtime.KeepAlive(sd)
+	return daclHasDeniedMaskForSID(dacl, sid, req.Mask), nil
 }
 
 func addACLACE(req ACLRequest, kind aclACEKind) (bool, error) {
@@ -187,6 +205,11 @@ func grantAllowMaskACE(req ACLRequest, inheritance uint32) (bool, error) {
 	if daclHasAnyDenyMask(dacl, req.Mask|windows.GENERIC_READ|windows.GENERIC_WRITE|windows.GENERIC_EXECUTE) {
 		return false, nil
 	}
+	// A root-only grant must never turn a null DACL (which already allows
+	// everyone) into a restrictive one (Rust `inheritance == 0 && p_dacl.is_null()`).
+	if dacl == nil && inheritance == 0 {
+		return false, nil
+	}
 	entry := explicitGrantAccessForSID(sid, req.Mask, inheritance)
 	newACL, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{entry}, dacl)
 	if err != nil {
@@ -264,6 +287,10 @@ func setDACL(path string, dacl *windows.ACL) error {
 // openACLHandle opens a path for ACL reads and updates. Requesting the security
 // rights directly on the handle (with backup semantics so directories open too)
 // is what lets the handle-based security APIs repair long runtime paths.
+//
+// Deliberately never MAXIMUM_ALLOWED (Rust #51822): that access mask conflicts
+// with a runtime file another process holds open with FILE_SHARE_READ, so
+// repairing an active node.exe failed with a sharing violation.
 func openACLHandle(path string, access uint32, operation string) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(extendedACLPath(path))
 	if err != nil {

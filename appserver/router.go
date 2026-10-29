@@ -481,6 +481,7 @@ func (r *Router) newThreadRolloutRecorder(record *session.Record, now time.Time)
 		SessionPrefix:              record.Metadata.SessionPrefix,
 		ThreadID:                   string(record.ID),
 		ForkedFromID:               string(record.ForkedFromID),
+		AttachedThread:             record.AttachedThreadParentID != "",
 		Source:                     record.Metadata.Source,
 		ThreadSource:               record.Metadata.ThreadSource,
 		Originator:                 record.Metadata.Originator,
@@ -618,6 +619,7 @@ func rolloutSessionMetaFromRecord(record *session.Record) *rollout.SessionMeta {
 		SessionID:                  record.SessionID,
 		SessionPrefix:              record.Metadata.SessionPrefix,
 		ForkedFromID:               string(record.ForkedFromID),
+		AttachedThread:             record.AttachedThreadParentID != "",
 		Timestamp:                  createdAt.Format(time.RFC3339),
 		CWD:                        record.Metadata.CWD,
 		Model:                      record.Metadata.Model,
@@ -2357,14 +2359,35 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 			return nil, threadReadError(params.ThreadID, err)
 		}
 	}
+	var paginatedTurns []Turn
+	paginatedRead := false
 	if params.IncludeTurns {
 		if r.threadRolloutMissing(record) && !threadUsesPaginatedHistory(record) {
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; includeTurns is unavailable before first user message", record.ID))
 		}
-		r.attachRolloutTurnSnapshots(record)
+		if r.state != nil {
+			mode, found, modeErr := r.threadHistoryModeWithRepair(session.ThreadID(params.ThreadID))
+			if modeErr != nil {
+				return nil, modeErr
+			}
+			paginatedRead = found && strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated))
+		}
+		if paginatedRead {
+			// Rust #57256: paginated reads come from the thread history store,
+			// whose visible lineage stops at an attached fork's parent bookmark.
+			paginatedTurns, err = r.loadPaginatedThreadFullTurns(params.ThreadID)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			r.attachRolloutTurnSnapshots(record)
+		}
 	}
 	path := r.threadRolloutPath(record)
 	response := &ThreadReadResponse{Thread: BuildThread(record, path, params.IncludeTurns)}
+	if paginatedRead && response.Thread != nil {
+		response.Thread.Turns = paginatedTurns
+	}
 	attachThreadReadState(r.state, response)
 	return response, nil
 }
@@ -2419,6 +2442,14 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if sourceRecord != nil && sourceRecord.Archived {
 		return nil, threadResumeArchivedError(sourceRecord.ID)
 	}
+	if params.AttachToSource {
+		if r.state == nil {
+			return nil, methodNotFound("attached threads is not supported yet")
+		}
+		if !threadUsesPaginatedHistory(sourceRecord) {
+			return nil, jsonRPCInvalidRequest("attachToSource requires a paginated parent")
+		}
+	}
 	if unmaterializedThread(sourceRecord) && !threadUsesPaginatedHistory(sourceRecord) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", sourceRecord.ID))
 	}
@@ -2443,6 +2474,11 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	record, err := r.store.ForkRecord(sourceRecord, forkOptions)
 	if err != nil {
 		return nil, threadForkRecordError(err)
+	}
+	if params.AttachToSource {
+		// Attached forks are saved forks of their resolved source; unlike a
+		// spawned agent, the relationship never enters the spawn graph.
+		record.AttachedThreadParentID = record.ForkedFromID
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	initialization := session.HistoryInitializationColdFork
@@ -2492,6 +2528,17 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		if err := r.createThreadRollout(record, record.CreatedAt); err != nil {
 			r.rollbackThreadForkInitialization(record)
 			return nil, err
+		}
+	}
+	if params.AttachToSource {
+		// Rust indexes an attached fork as soon as its canonical rollout is
+		// durable so database-only discovery works before the first turn.
+		path := r.threadRolloutPath(record)
+		if strings.TrimSpace(path) != "" {
+			if err := r.state.ReconcileRollout(context.Background(), path, false); err != nil {
+				r.rollbackThreadForkInitialization(record)
+				return nil, fmt.Errorf("failed to index attached thread: %w", err)
+			}
 		}
 	}
 	if !params.Ephemeral && explicitThreadName(record) {
@@ -2978,6 +3025,9 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 	if err != nil {
 		return nil, threadDeleteError(params.ThreadID, err)
 	}
+	if err := r.ensureNoAttachedThreads(threadIDs); err != nil {
+		return nil, err
+	}
 	lifecycleLocks, err := r.acquireLifecycleWriters(threadIDs)
 	if err != nil {
 		return nil, err
@@ -3019,6 +3069,28 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 	}
 	r.releaseLiveThreads(threadIDs)
 	return &ThreadDeleteResponse{}, nil
+}
+
+// ensureNoAttachedThreads mirrors Rust's LocalThreadStore
+// `ensure_no_attached_threads` (#56351): a source remains undeletable while any
+// saved fork is attached to it. The check reads the shared state database, so a
+// second store instance sees the same attachment edge.
+func (r *Router) ensureNoAttachedThreads(threadIDs []session.ThreadID) error {
+	if r == nil || r.state == nil || len(threadIDs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		ids = append(ids, string(threadID))
+	}
+	child, err := r.state.FirstAttachedThreadID(context.Background(), ids)
+	if err != nil {
+		return err
+	}
+	if child == "" {
+		return nil
+	}
+	return jsonRPCInvalidRequest(fmt.Sprintf("cannot delete thread while attached thread %s exists; delete the attached thread first", child))
 }
 
 func threadDeleteError(threadID string, err error) error {
@@ -3684,6 +3756,9 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 	if err != nil {
 		return nil, err
 	}
+	if params.AttachedToThreadID != nil && r.state == nil {
+		return nil, methodNotFound("attached threads is not supported yet")
+	}
 	var page *session.Page
 	if r.state != nil {
 		if !params.UseStateDBOnly {
@@ -3776,15 +3851,16 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 			continue
 		}
 		record := session.Record{
-			ID:             session.ThreadID(row.ID),
-			SessionID:      row.ID,
-			ParentThreadID: session.ThreadID(nullString(row.ParentThreadID)),
-			Title:          nullString(row.Name),
-			Preview:        nullString(row.Preview),
-			Archived:       row.Archived,
-			CreatedAt:      time.UnixMilli(row.CreatedAtMS).UTC(),
-			UpdatedAt:      time.UnixMilli(row.UpdatedAtMS).UTC(),
-			RecencyAt:      time.UnixMilli(row.RecencyAtMS).UTC(),
+			ID:                     session.ThreadID(row.ID),
+			SessionID:              row.ID,
+			ParentThreadID:         session.ThreadID(nullString(row.ParentThreadID)),
+			AttachedThreadParentID: session.ThreadID(nullString(row.AttachedThreadParentID)),
+			Title:                  nullString(row.Name),
+			Preview:                nullString(row.Preview),
+			Archived:               row.Archived,
+			CreatedAt:              time.UnixMilli(row.CreatedAtMS).UTC(),
+			UpdatedAt:              time.UnixMilli(row.UpdatedAtMS).UTC(),
+			RecencyAt:              time.UnixMilli(row.RecencyAtMS).UTC(),
 			Metadata: session.Metadata{
 				CWD:            nullString(row.CWD),
 				Model:          nullString(row.Model),

@@ -545,6 +545,14 @@ func ClientSubagentMetadataFromSource(sessionSource string) (string, string) {
 	if raw == "" {
 		return "", ""
 	}
+	// Rust #39994: every internal session source contributes its Display name
+	// as the subagent header (memory_consolidation, guardian), with no kind.
+	if name, ok := internalSessionSourceName(raw); ok {
+		if name == "memory_consolidation" {
+			return "memory_consolidation", ""
+		}
+		return name, ""
+	}
 	label, isSubagent := clientSubagentSourceLabel(raw)
 	normalizedLabel := clientNormalizeSubagentSource(label)
 	if isSubagent {
@@ -578,6 +586,28 @@ func ClientSubagentMetadataFromSource(sessionSource string) (string, string) {
 	default:
 		return "", ""
 	}
+}
+
+// internalSessionSourceName extracts the Display name from a canonical Go
+// internal session source ("internal_guardian", "internal:guardian", ...).
+func internalSessionSourceName(source string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(source))
+	for _, prefix := range []string{"internal:", "internal_", "internal-"} {
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		name := strings.TrimSpace(source[len(prefix):])
+		name = strings.NewReplacer("-", "_", ":", "_", "/", "_").Replace(strings.ToLower(name))
+		switch name {
+		case "memory_consolidation", "memoryconsolidation":
+			return "memory_consolidation", true
+		case "guardian":
+			return "guardian", true
+		default:
+			return "", false
+		}
+	}
+	return "", false
 }
 
 func clientSubagentSourceLabel(source string) (string, bool) {

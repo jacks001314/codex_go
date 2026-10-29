@@ -51,6 +51,39 @@ func (e *FeatureEntry) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// UnmarshalJSON reads the Rust wire name (`name`) and, for older Go encoders
+// that wrote the struct tag, `key`. Without this the catalog a server returns
+// decoded with an empty key and the TUI dropped every entry.
+func (e *FeatureEntry) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Name           string          `json:"name"`
+		Key            string          `json:"key"`
+		Stage          FeatureAPIStage `json:"stage"`
+		Enabled        bool            `json:"enabled"`
+		DefaultEnabled bool            `json:"defaultEnabled"`
+		DisplayName    *string         `json:"displayName"`
+		Description    *string         `json:"description"`
+		Announcement   *string         `json:"announcement"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	name := wire.Name
+	if name == "" {
+		name = wire.Key
+	}
+	*e = FeatureEntry{
+		Key:            name,
+		DisplayName:    cloneStringPtr(wire.DisplayName),
+		Description:    cloneStringPtr(wire.Description),
+		Announcement:   cloneStringPtr(wire.Announcement),
+		Stage:          wire.Stage,
+		Enabled:        wire.Enabled,
+		DefaultEnabled: wire.DefaultEnabled,
+	}
+	return nil
+}
+
 type FeatureListParams struct {
 	Cursor   *string `json:"cursor,omitempty"`
 	Limit    *int    `json:"limit,omitempty"`

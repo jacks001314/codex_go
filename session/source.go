@@ -122,3 +122,23 @@ func SubAgentSourceWire(source string) (any, bool) {
 		return nil, false
 	}
 }
+
+// InternalSessionSourceWire returns the Serialize form of a canonical internal
+// session source's payload (the value carried under the "internal" key). Rust
+// serializes SessionSource::Internal(InternalSessionSource::Guardian) as
+// {"internal":"guardian"}; Go stores the same source in Display form as
+// "internal_guardian".
+func InternalSessionSourceWire(source string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(source))
+	normalized = strings.NewReplacer("-", "_", ":", "_", "/", "_").Replace(normalized)
+	const prefix = "internal_"
+	if !strings.HasPrefix(normalized, prefix) {
+		return "", false
+	}
+	switch name := strings.TrimPrefix(normalized, prefix); name {
+	case "memory_consolidation", "guardian":
+		return name, true
+	default:
+		return "", false
+	}
+}

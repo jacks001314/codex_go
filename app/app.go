@@ -39,6 +39,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/sandbox/integrity"
 	"codex_go/sandbox/windowssandbox"
+	"codex_go/skillprovider"
 	"codex_go/state"
 	"codex_go/tcptunnel"
 )
@@ -1609,6 +1610,15 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions, loadedConfig *con
 		options.DisableCodeModeInProcessFallback = true
 	} else if loadedConfig != nil {
 		options.DisableCodeModeInProcessFallback = loadedConfig.DisableCodeModeInProcessFallback()
+	}
+	// Rust #55631: a host-owned frozen snapshot replaces cloud skill discovery.
+	// Loading happens before serving so a missing or invalid file fails startup.
+	if snapshot := strings.TrimSpace(opts.CloudSkillsSnapshot); snapshot != "" {
+		provider, err := skillprovider.LoadFrozenCloudProvider(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		options.CloudSkillProvider = provider
 	}
 	return options, nil
 }

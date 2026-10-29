@@ -2,12 +2,16 @@ package tea
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
+	bottompane "codex_go/tui/bottom_pane"
+	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/utils"
 )
 
 func automaticTitleModel(t *testing.T, renameErr error, suggestion string) (*Model, *[]string, *int) {
@@ -111,5 +115,51 @@ func TestProvisionalThreadTitleBoundsLikeRust(t *testing.T) {
 	got := tuiapp.ProvisionalThreadTitle(strings.Repeat("界", 40))
 	if len([]rune(got)) != 36 {
 		t.Fatalf("provisional runes = %d", len([]rune(got)))
+	}
+}
+
+// TestAutomaticThreadTitlePendingShowsNoProgressSpinnerLikeRust covers Rust
+// #55324: automatic naming stays in the background, and the footer, status
+// line, and terminal title carry no title-generation spinner while pending.
+func TestAutomaticThreadTitlePendingShowsNoProgressSpinnerLikeRust(t *testing.T) {
+	model, renames, generations := automaticTitleModel(t, nil, `{"title":"Fix login timeout"}`)
+	model.State.CWD = filepath.Join(t.TempDir(), "project")
+	model.State.Model = "gpt-5.2"
+	cmd := model.applyItemCompleted(&protocol.ThreadItem{
+		ID:   "user-1",
+		Type: "user_message",
+		Text: "Fix the login timeout",
+	})
+	if cmd == nil || !model.automaticThreadTitlePending {
+		t.Fatalf("automatic title did not start: cmd=%v pending=%v", cmd != nil, model.automaticThreadTitlePending)
+	}
+	model.refreshStatusControls()
+
+	view := utils.StripANSI(model.View())
+	statusLine, ok := model.statusControls.StatusLineValueForItem(bottompane.StatusLineThreadTitle)
+	if !ok || statusLine != "Fix the login timeout" {
+		t.Fatalf("thread title status line = %q, %v", statusLine, ok)
+	}
+	for _, frame := range chatwidget.TerminalTitleSpinnerFrames {
+		if strings.Contains(view, frame) {
+			t.Fatalf("footer rendered title-generation spinner %q:\n%s", frame, view)
+		}
+		if strings.Contains(statusLine, frame) {
+			t.Fatalf("status line rendered title-generation spinner: %q", statusLine)
+		}
+		if strings.Contains(model.statusControls.LastTerminalTitle, frame) {
+			t.Fatalf("terminal title rendered title-generation spinner: %q", model.statusControls.LastTerminalTitle)
+		}
+	}
+
+	runTeaCmd(t, model, cmd)
+	if *generations != 1 {
+		t.Fatalf("generations = %d, want one", *generations)
+	}
+	if model.State.ThreadName != "Fix login timeout" {
+		t.Fatalf("generated title = %q", model.State.ThreadName)
+	}
+	if len(*renames) != 2 || (*renames)[1] != "thread-auto:Fix login timeout" {
+		t.Fatalf("renames = %#v", *renames)
 	}
 }

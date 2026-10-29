@@ -10,6 +10,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/model"
+	"codex_go/network"
 	"codex_go/tool"
 	"codex_go/turn"
 )
@@ -32,8 +33,8 @@ func TestStandaloneWebSearchHonorsSystemProxySettingLikeRust(t *testing.T) {
 			if !ok || client == nil {
 				t.Fatalf("httpClientForConfig() type = %T", router.httpClientForConfig(cfg))
 			}
-			transport, ok := client.Transport.(*http.Transport)
-			if !ok || transport == nil {
+			transport := network.BaseTransport(client.Transport)
+			if transport == nil {
 				t.Fatalf("transport type = %T", client.Transport)
 			}
 			if got := transport.Proxy != nil; got != testCase.wantProxy {

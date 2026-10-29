@@ -9,6 +9,7 @@ require github.com/grafana/sobek v0.0.0-20260722203707-64fef69693b6
 require (
 	filippo.io/age v1.3.2
 	github.com/alecthomas/chroma/v2 v2.20.0
+	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.26

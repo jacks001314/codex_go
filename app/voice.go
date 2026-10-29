@@ -95,10 +95,20 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 	return func() bubbletea.Msg {
 		threadID = strings.TrimSpace(threadID)
 		if threadID == "" {
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: errors.New("start a conversation before using voice mode")}
+			return codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       errors.New("start a conversation before using voice mode"),
+				Cause:     "connection_unknown",
+				Message:   "Failed to start voice mode: start a conversation before using voice mode",
+			}
 		}
 		if r == nil {
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: errors.New("voice runtime is unavailable")}
+			return codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       errors.New("voice runtime is unavailable"),
+				Cause:     "connection_unknown",
+				Message:   "Failed to start voice mode: voice runtime is unavailable",
+			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), voiceStartTimeout)
 		defer cancel()
@@ -106,7 +116,12 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 		if settings.AudioErr != "" {
 			// The helper is not started at all: the Rust TUI refuses to open a
 			// conversation whose stored audio preference cannot be read.
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: errors.New(settings.AudioErr)}
+			return codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       errors.New(settings.AudioErr),
+				Cause:     "audio_devices",
+				Message:   "Failed to start voice mode: " + settings.AudioErr,
+			}
 		}
 		started, err := startVoiceSession(ctx, voicehost.SessionOptions{
 			PackageDir:     r.options.packageDir,
@@ -114,18 +129,28 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 			AudioSelection: settings.Audio,
 		})
 		if err != nil {
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: err}
+			return voiceStartFailureMessage(attemptID, err)
 		}
 		params, err := r.startParams(ctx, threadID, started.OfferSDP, settings)
 		if err != nil {
 			started.Handle.Close()
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: err}
+			return codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       err,
+				Cause:     "app_server_request",
+				Message:   "Failed to start voice mode: " + err.Error(),
+			}
 		}
 		if err := r.options.startSession(ctx, params); err != nil {
 			// The app-server never accepted the offer, so the helper is
 			// retired before the caller sees the failure.
 			started.Handle.Close()
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: err}
+			return codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       err,
+				Cause:     "app_server_request",
+				Message:   "Failed to start voice mode: " + err.Error(),
+			}
 		}
 		r.setSession(started, threadID)
 		return codextea.VoiceHelperAttachedMsg{AttemptID: attemptID}
@@ -203,32 +228,93 @@ func (r *voiceRuntime) applyAnswerCmd(threadID string, attemptID uint64, answer 
 	return func() bubbletea.Msg {
 		session := r.currentSession()
 		if session == nil {
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: errors.New("voice helper is not running")}
+			return codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       errors.New("voice helper is not running"),
+				Cause:     "connection_unknown",
+				Message:   "Failed to connect voice mode: voice helper is not running",
+			}
 		}
 		if err := session.Handle.ApplyAnswerSDP(answer); err != nil {
-			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: err}
+			// The failed control send is less specific than the WebRTC error the
+			// actor stored; Rust keeps the stored error (realtime.rs #52756).
+			if cause, message, ok := session.Handle.TakeError(); ok {
+				return codextea.VoiceAnswerResultMsg{
+					AttemptID: attemptID,
+					Err:       err,
+					Cause:     voiceFailureCause(cause),
+					Message:   "Voice conversation failed: " + message,
+				}
+			}
+			cause := voiceFailureCause(err)
+			return codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       err,
+				Cause:     cause,
+				Message:   "Failed to connect voice mode: " + err.Error(),
+			}
 		}
 		return codextea.VoiceAnswerResultMsg{AttemptID: attemptID}
 	}
 }
 
-// close retires the helper and asks the app-server to end the session.
-func (r *voiceRuntime) close() {
+// voiceStartFailureMessage classifies a helper startup failure, preserving the
+// typed WebRTC cause for the session failure metric.
+func voiceStartFailureMessage(attemptID uint64, err error) codextea.VoiceAnswerResultMsg {
+	return codextea.VoiceAnswerResultMsg{
+		AttemptID: attemptID,
+		Err:       err,
+		Cause:     voiceFailureCause(err),
+		Message:   "Failed to start voice mode: " + err.Error(),
+	}
+}
+
+// voiceFailureCause maps a typed voice connection failure to the bounded cause
+// strings Rust uses for codex.voice.session.failure (failure_metrics.rs).
+func voiceFailureCause(err error) string {
+	var connectionErr voicehost.ConnectionError
+	if errors.As(err, &connectionErr) {
+		switch connectionErr {
+		case voicehost.ConnectionNegotiationTimedOut:
+			return "negotiation_timed_out"
+		case voicehost.ConnectionHelperStartup:
+			return "helper_startup"
+		case voicehost.ConnectionRuntimeInitialization:
+			return "runtime_initialization"
+		case voicehost.ConnectionTransport:
+			return "transport"
+		case voicehost.ConnectionAudioDevices:
+			return "audio_devices"
+		case voicehost.ConnectionAudioControls:
+			return "audio_controls"
+		case voicehost.ConnectionAudioSession:
+			return "audio_session"
+		case voicehost.ConnectionShutdown:
+			return "shutdown"
+		}
+	}
+	return "connection_unknown"
+}
+
+// close retires the helper and, when notifyServer is set, asks the app-server
+// to end the session. The stop request runs on its own connection, so its error
+// is returned to the TUI for classification (Rust #52756). A dead shared
+// connection passes false: the RPC cannot succeed and the local media must
+// still be retired.
+func (r *voiceRuntime) close(notifyServer bool) error {
 	if r == nil {
-		return
+		return nil
 	}
 	session, threadID := r.takeSession()
 	if session != nil {
 		session.Handle.Close()
 	}
-	if threadID == "" || r.options.stopSession == nil {
-		return
+	if !notifyServer || threadID == "" || r.options.stopSession == nil {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), voiceStopTimeout)
 	defer cancel()
-	// The local session is already gone; a failed stop RPC must not surface as
-	// a user-visible error.
-	_ = r.options.stopSession(ctx, threadID)
+	return r.options.stopSession(ctx, threadID)
 }
 
 // setMicrophoneMuted queues an ordered privacy transition.

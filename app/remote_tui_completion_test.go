@@ -44,7 +44,9 @@ func TestRemoteTUIThreadMessagesRestoreCompletionMetadataLikeRust(t *testing.T) 
 	messages := remoteTUIThreadMessagesFromThread(thread, reasoningProjectionChatWidget, false)
 	footers := 0
 	for _, message := range messages {
-		if message.Role == codextui.RoleHistory && strings.Contains(message.Text, "done ") {
+		// Rust's completion footer is "Worked for <duration> • <time>"; the
+		// stored duration must survive the replay.
+		if message.Role == codextui.RoleHistory && strings.HasPrefix(message.Text, "Worked for ") {
 			footers++
 			if !strings.Contains(message.Text, "Worked for 2m 5s") {
 				t.Fatalf("restored footer missing duration: %q", message.Text)
@@ -63,7 +65,7 @@ func TestRemoteTUIThreadMessagesRestoreCompletionMetadataLikeRust(t *testing.T) 
 		Items:  []appserver.ThreadItem{{ID: "m3", Type: "agentMessage", Text: "done"}},
 	}}}, reasoningProjectionChatWidget, false)
 	for _, message := range bare {
-		if strings.Contains(message.Text, "done ") {
+		if strings.HasPrefix(message.Text, "Worked for ") {
 			t.Fatalf("bare completed turn restored a footer: %#v", bare)
 		}
 	}

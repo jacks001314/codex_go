@@ -3328,38 +3328,38 @@ func websocketReachabilityCheckFromProvider(providerID string, provider *model.P
 	timeout := provider.EffectiveWebsocketConnectTimeout()
 	probeCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	conn, response, err := websocket.Dial(probeCtx, endpoint, &websocket.DialOptions{HTTPHeader: headers})
-	if err != nil {
+	probe, probeErr := codexapi.ProbeResponsesWebsocket(probeCtx, endpoint, &codexapi.ResponsesWebsocketProbeOptions{
+		DialOptions:           &websocket.DialOptions{HTTPHeader: headers},
+		ImmediateCloseTimeout: websocketImmediateCloseGrace,
+	})
+	if probeErr != nil {
+		// A read failure after the upgrade keeps the upgrade status (Rust
+		// #57597 retains the probe evidence even when the following read fails).
+		if probeErr.Status == http.StatusSwitchingProtocols {
+			details = append(details, fmt.Sprintf("handshake result: HTTP %d", probeErr.Status))
+		}
 		summary := "Responses WebSocket failed; HTTPS fallback may still work"
-		detail := websocketHandshakeErrorDetail(response, err)
-		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		detail := websocketProbeErrorDetail(probeErr)
+		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) || errors.Is(probeErr.Err, context.DeadlineExceeded) {
 			summary = "Responses WebSocket timed out; HTTPS fallback may still work"
 			detail = "handshake timed out"
 		}
 		return websocketProbeWarning(summary, details, detail)
 	}
-	status := http.StatusSwitchingProtocols
-	responseHeaders := http.Header{}
-	if response != nil {
-		status = response.StatusCode
-		responseHeaders = response.Header
-	}
 	details = append(details,
-		fmt.Sprintf("handshake result: HTTP %d", status),
-		fmt.Sprintf("reasoning header: %t", websocketHeaderPresent(responseHeaders, "x-reasoning-included")),
-		fmt.Sprintf("server model present: %t", websocketHeaderPresent(responseHeaders, "openai-model", "x-openai-model")),
+		fmt.Sprintf("handshake result: HTTP %d", probe.Status),
+		fmt.Sprintf("reasoning header: %t", probe.ReasoningIncluded),
+		fmt.Sprintf("server model present: %t", probe.ServerModelPresent),
 	)
-	immediateClose, readErr := websocketImmediateCloseForDoctor(conn, websocketImmediateCloseGrace)
-	_ = conn.Close(websocket.StatusNormalClosure, "doctor probe completed")
-	if readErr != nil {
-		// Rust #57597: the upgrade evidence collected above is kept, but the
-		// raw stream error may echo wire values, so only its category is shown.
-		return websocketProbeWarning("Responses WebSocket failed; HTTPS fallback may still work", details, "handshake stream error: [redacted]")
+	for _, name := range codexapi.ResponsesWebsocketTrackingHeaders {
+		if len(probe.Headers.Values(name)) > 0 {
+			details = append(details, name+": present (redacted)")
+		}
 	}
-	if immediateClose != nil {
+	if probe.ImmediateClose != nil {
 		details = append(details,
-			"immediate close code: "+immediateClose.Code,
-			"immediate close reason: "+closeReasonDetail(immediateClose.Reason),
+			"immediate close code: "+probe.ImmediateClose.Code,
+			"immediate close reason: "+closeReasonDetail(probe.ImmediateClose.Reason),
 		)
 		return NewCheck("network.websocket_reachability", "websocket", CheckStatusWarning, "Responses WebSocket closed immediately after handshake").
 			DetailsList(details).
@@ -3473,6 +3473,35 @@ func websocketHandshakeErrorDetail(response *http.Response, err error) string {
 		return "handshake transport error: " + websocketTransportErrorCategory(err) + ": [redacted]"
 	}
 	return "handshake transport error"
+}
+
+// websocketProbeErrorDetail renders a structured probe error without wire
+// values. A rejected upgrade keeps its status; a read failure after a
+// successful upgrade is a stream error (Rust #57597).
+func websocketProbeErrorDetail(probeErr *codexapi.ResponsesWebsocketProbeError) string {
+	if probeErr == nil {
+		return "handshake transport error"
+	}
+	if probeErr.Status == http.StatusSwitchingProtocols {
+		return "handshake stream error: [redacted]"
+	}
+	if probeErr.Status != 0 {
+		statusText := strings.TrimSpace(http.StatusText(probeErr.Status))
+		if statusText == "" {
+			statusText = strconv.Itoa(probeErr.Status)
+		}
+		return fmt.Sprintf("handshake API error: %d %s [redacted]", probeErr.Status, statusText)
+	}
+	category := ""
+	if probeErr.Stage == codexapi.ResponsesWebsocketProbeFailureStageTLS {
+		category = "TLS handshake failed"
+	} else if probeErr.Err != nil {
+		category = websocketTransportErrorCategory(probeErr.Err)
+	}
+	if category == "" {
+		category = "network error"
+	}
+	return "handshake transport error: " + category + ": [redacted]"
 }
 
 // websocketTransportErrorCategory keeps the failure category while hiding the

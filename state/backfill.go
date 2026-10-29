@@ -333,6 +333,7 @@ type rolloutThreadMetadata struct {
 	createdAt, updatedAt, recencyAt              time.Time
 	tokensUsed                                   int64
 	archived                                     bool
+	attachedThreadParentID                       string
 }
 
 func extractRolloutThreadMetadata(path string, archived bool, defaultProvider string) (rolloutThreadMetadata, error) {
@@ -399,6 +400,9 @@ func applySessionMetaToBackfill(metadata *rolloutThreadMetadata, meta *rollout.S
 	}
 	assignNonEmpty(&metadata.source, meta.Source)
 	assignNonEmpty(&metadata.threadSource, meta.ThreadSource)
+	if meta.AttachedThread {
+		metadata.attachedThreadParentID = strings.TrimSpace(meta.ForkedFromID)
+	}
 	metadata.agentNickname = meta.AgentNickname
 	metadata.agentRole = meta.AgentRole
 	metadata.agentPath = meta.AgentPath
@@ -585,9 +589,10 @@ INSERT INTO threads (
     sandbox_policy, approval_mode, tokens_used, first_user_message,
     archived, archived_at, thread_section_id, section_position, section_entered_at_ms,
     git_sha, git_branch, git_origin_url, memory_mode,
-    creator_user_id, creator_account_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)
+    creator_user_id, creator_account_id, attached_thread_parent_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
+    attached_thread_parent_id = COALESCE(excluded.attached_thread_parent_id, threads.attached_thread_parent_id),
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
@@ -629,7 +634,8 @@ ON CONFLICT(id) DO UPDATE SET
 		metadata.sandboxPolicy, metadata.approvalMode, metadata.tokensUsed, metadata.firstUserMessage,
 		metadata.archived, archivedAt,
 		nullableString(metadata.gitSHA), nullableString(metadata.gitBranch), nullableString(metadata.gitOriginURL), metadata.memoryMode,
-		nullableString(metadata.creatorUserID), nullableString(metadata.creatorAccountID))
+		nullableString(metadata.creatorUserID), nullableString(metadata.creatorAccountID),
+		nullableString(metadata.attachedThreadParentID))
 	if err != nil {
 		return fmt.Errorf("upsert rollout thread %s: %w", metadata.id, err)
 	}
@@ -792,6 +798,7 @@ type storedRolloutThreadRow struct {
 	createdAt, updatedAt, recencyAt                 sql.NullInt64
 	createdAtMs, updatedAtMs, recencyAtMs           sql.NullInt64
 	tokensUsed, archived, archivedAt                sql.NullInt64
+	attachedThreadParentID                          sql.NullString
 }
 
 func (r *StateRuntime) readRolloutThreadRow(ctx context.Context, threadID string) (storedRolloutThreadRow, bool, error) {
@@ -804,7 +811,7 @@ SELECT rollout_path, source, history_mode, thread_source,
        first_user_message, git_sha, git_branch, git_origin_url,
        creator_user_id, creator_account_id,
        created_at, created_at_ms, updated_at, updated_at_ms, recency_at, recency_at_ms,
-       tokens_used, archived, archived_at
+       tokens_used, archived, archived_at, attached_thread_parent_id
 FROM threads WHERE id = ?`, threadID).Scan(
 		&row.rolloutPath, &row.source, &row.historyMode, &row.threadSource,
 		&row.agentNickname, &row.agentRole, &row.agentPath,
@@ -813,7 +820,7 @@ FROM threads WHERE id = ?`, threadID).Scan(
 		&row.firstUserMessage, &row.gitSHA, &row.gitBranch, &row.gitOriginURL,
 		&row.creatorUserID, &row.creatorAccountID,
 		&row.createdAt, &row.createdAtMs, &row.updatedAt, &row.updatedAtMs, &row.recencyAt, &row.recencyAtMs,
-		&row.tokensUsed, &row.archived, &row.archivedAt,
+		&row.tokensUsed, &row.archived, &row.archivedAt, &row.attachedThreadParentID,
 	)
 	if err == sql.ErrNoRows {
 		return storedRolloutThreadRow{}, false, nil
@@ -880,6 +887,11 @@ func intendedRolloutThreadRow(metadata rolloutThreadMetadata, existing storedRol
 	if !existing.creatorAccountID.Valid {
 		row.creatorAccountID = nullThreadText(metadata.creatorAccountID)
 	}
+	// attached_thread_parent_id = COALESCE(excluded.attached_thread_parent_id,
+	// threads.attached_thread_parent_id)
+	if metadata.attachedThreadParentID != "" {
+		row.attachedThreadParentID = nullThreadText(metadata.attachedThreadParentID)
+	}
 	// The follow-up repair names a paginated thread only while its name is blank.
 	if metadata.historyMode == "paginated" && !rolloutThreadNamePresent(existing.name) {
 		name := strings.TrimSpace(metadata.title)
@@ -922,7 +934,8 @@ func rolloutThreadRowMatchesExceptTimestamps(stored, intended storedRolloutThrea
 		stored.createdAtMs == intended.createdAtMs &&
 		stored.tokensUsed == intended.tokensUsed &&
 		stored.archived == intended.archived &&
-		stored.archivedAt == intended.archivedAt
+		stored.archivedAt == intended.archivedAt &&
+		stored.attachedThreadParentID == intended.attachedThreadParentID
 }
 
 // touchThreadUpdatedAt moves only the stored thread timestamps. Rust keeps the

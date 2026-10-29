@@ -1578,6 +1578,31 @@ func (v *View) UnhideThread(threadID string) {
 	v.fitSelection()
 }
 
+// HideThread hides threadID without requiring it to be selected and keeps the
+// adjacent surviving task selected (Rust #53908 hides an archive/delete target
+// immediately while the request is still pending).
+func (v *View) HideThread(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if v == nil || threadID == "" {
+		return false
+	}
+	if v.State.HiddenThreads == nil {
+		v.State.HiddenThreads = map[string]struct{}{}
+	}
+	successor := strings.TrimSpace(v.selectionAfterRemoval)
+	if successor == "" {
+		successor = v.SelectionAfterRemoval(map[string]struct{}{threadID: {}})
+	}
+	v.State.HiddenThreads[threadID] = struct{}{}
+	if successor == "" {
+		v.Selected = 0
+	} else {
+		v.selectedIndexForThreadID(successor)
+	}
+	v.fitSelection()
+	return true
+}
+
 // HiddenThreads returns a copy of the locally hidden thread ids so callers can
 // preserve them across dashboard close/reopen (Rust #44424).
 func (v *View) HiddenThreads() map[string]struct{} {

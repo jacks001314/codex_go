@@ -36,15 +36,15 @@ func (r *RuntimeRouter) recordStartupPrewarmDuration(status string, inputMode st
 		duration = 0
 	}
 	r.services.TurnMetrics.RecordDuration(telemetry.StartupPrewarmDurationMetric, duration, map[string]string{
-		"status":     status,
-		"input_mode": inputMode,
+		"status": status,
+		"input":  inputMode,
 	})
 }
 
 // recordStartupPrewarmAgeAtFirstTurn mirrors the resolve path's
-// STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC sample (status "consumed" or the
-// unavailable status).
-func (r *RuntimeRouter) recordStartupPrewarmAgeAtFirstTurn(status string, inputMode string, duration time.Duration) {
+// STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC sample, which Rust tags with the
+// status alone.
+func (r *RuntimeRouter) recordStartupPrewarmAgeAtFirstTurn(status string, duration time.Duration) {
 	if r == nil || r.services.TurnMetrics == nil {
 		return
 	}
@@ -52,7 +52,6 @@ func (r *RuntimeRouter) recordStartupPrewarmAgeAtFirstTurn(status string, inputM
 		duration = 0
 	}
 	r.services.TurnMetrics.RecordDuration(telemetry.StartupPrewarmAgeAtFirstTurnMetric, duration, map[string]string{
-		"status":     status,
-		"input_mode": inputMode,
+		"status": status,
 	})
 }

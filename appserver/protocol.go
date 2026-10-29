@@ -602,6 +602,9 @@ func (s SessionSource) MarshalJSON() ([]byte, error) {
 	if subAgent, ok := session.SubAgentSourceWire(string(s)); ok {
 		return json.Marshal(map[string]any{"subAgent": subAgent})
 	}
+	if internal, ok := session.InternalSessionSourceWire(string(s)); ok {
+		return json.Marshal(map[string]any{"internal": internal})
+	}
 	return json.Marshal(string(s))
 }
 
@@ -610,6 +613,7 @@ type ThreadSource string
 const (
 	ThreadSourceUser                ThreadSource = "user"
 	ThreadSourceSubagent            ThreadSource = "subagent"
+	ThreadSourceGuardianReview      ThreadSource = "guardian_review"
 	ThreadSourceMemoryConsolidation ThreadSource = "memory_consolidation"
 )
 
@@ -2171,8 +2175,13 @@ type ThreadForkParams struct {
 	RuntimeWorkspaceRoots []string         `json:"runtimeWorkspaceRoots,omitempty"`
 	ThreadSource          *ThreadSource    `json:"threadSource,omitempty"`
 	Ephemeral             bool             `json:"ephemeral,omitempty"`
-	ExcludeTurns          bool             `json:"excludeTurns,omitempty"`
-	DeferGoalContinuation bool             `json:"deferGoalContinuation,omitempty"`
+	// AttachToSource persists the fork as an attached thread of its source,
+	// hidden from ordinary lists (Rust #56351). It requires local storage and a
+	// paginated source, and cannot be combined with ephemeral or
+	// deferGoalContinuation.
+	AttachToSource        bool `json:"attachToSource,omitempty"`
+	ExcludeTurns          bool `json:"excludeTurns,omitempty"`
+	DeferGoalContinuation bool `json:"deferGoalContinuation,omitempty"`
 	// ExperimentalPredictionMode forks an ephemeral thread that inherits the
 	// loaded parent's effective context and request settings (Rust #51884).
 	// Configuration overrides and history cutoffs are rejected in this mode.
@@ -2226,6 +2235,9 @@ func (p *ThreadForkParams) Validate() error {
 		if p.Path != nil || strings.TrimSpace(p.LastTurnID) != "" || strings.TrimSpace(p.BeforeTurnID) != "" {
 			return jsonRPCInvalidRequest("`experimentalPredictionMode` requires a thread id without a path or turn cutoff")
 		}
+	}
+	if p.AttachToSource && (p.Ephemeral || p.DeferGoalContinuation) {
+		return jsonRPCInvalidRequest("attachToSource cannot be combined with ephemeral or deferGoalContinuation")
 	}
 	if err := validateThreadRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
@@ -2647,6 +2659,10 @@ type ThreadListParams struct {
 	SearchTerm        *string              `json:"searchTerm,omitempty"`
 	ParentThreadID    *string              `json:"parentThreadId,omitempty"`
 	AncestorThreadID  *string              `json:"ancestorThreadId,omitempty"`
+	// AttachedToThreadID returns only persistent threads attached to this
+	// thread, including empty threads. It is mutually exclusive with
+	// parentThreadId and ancestorThreadId (Rust #56351).
+	AttachedToThreadID *string `json:"attachedToThreadId,omitempty"`
 }
 
 func (p ThreadListParams) MarshalJSON() ([]byte, error) {
@@ -2795,6 +2811,9 @@ func validateThreadSectionAppearance(appearance *ThreadSectionAppearance) error 
 func (p *ThreadListParams) Validate() error {
 	if p == nil {
 		return nil
+	}
+	if p.AttachedToThreadID != nil && (p.ParentThreadID != nil || p.AncestorThreadID != nil) {
+		return jsonRPCInvalidRequest("attachedToThreadId cannot be combined with parentThreadId or ancestorThreadId")
 	}
 	if p.ParentThreadID != nil && p.AncestorThreadID != nil {
 		return jsonRPCInvalidRequest("parentThreadId and ancestorThreadId are mutually exclusive")
@@ -3778,6 +3797,8 @@ func ThreadSourceFromString(value string) ThreadSource {
 		return ThreadSourceUser
 	case string(ThreadSourceSubagent):
 		return ThreadSourceSubagent
+	case string(ThreadSourceGuardianReview):
+		return ThreadSourceGuardianReview
 	case string(ThreadSourceMemoryConsolidation):
 		return ThreadSourceMemoryConsolidation
 	default:
@@ -3933,6 +3954,13 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 			return session.ListOptions{}, err
 		}
 		options.Relation = &session.RelationFilter{DescendantsOf: threadID}
+	}
+	if params.AttachedToThreadID != nil {
+		threadID, err := parseThreadListRelationThreadID(*params.AttachedToThreadID, "attached thread parent")
+		if err != nil {
+			return session.ListOptions{}, err
+		}
+		options.Relation = &session.RelationFilter{AttachedThreadsOf: threadID}
 	}
 	if options.Relation != nil && params.SourceKinds == nil {
 		options.Sources = nil

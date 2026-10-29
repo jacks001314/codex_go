@@ -66,13 +66,13 @@ type responsesProxyTokenClient struct {
 
 func newResponsesProxyTokenClient() *responsesProxyTokenClient {
 	client := codexnetwork.NewHTTPClient(true, 0)
-	if transport, ok := client.Transport.(*http.Transport); ok && transport != nil {
+	if transport := codexnetwork.BaseTransport(client.Transport); transport != nil {
 		transport = transport.Clone()
 		transport.DialContext = (&net.Dialer{
 			Timeout:   responsesProxyTokenConnectTimeout,
 			KeepAlive: 30 * time.Second,
 		}).DialContext
-		client.Transport = transport
+		client.Transport = codexnetwork.ReplaceBaseTransport(client.Transport, transport)
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse

@@ -415,6 +415,8 @@ func TestClientSubagentHeaderValue(t *testing.T) {
 		"subagent_guardian":               "guardian",
 		"internal:memory_consolidation":   "memory_consolidation",
 		"internal_memory_consolidation":   "memory_consolidation",
+		"internal:guardian":               "guardian",
+		"internal_guardian":               "guardian",
 		"cli":                             "",
 	}
 	for input, want := range cases {
@@ -431,6 +433,7 @@ func TestClientSubagentMetadataKind(t *testing.T) {
 		"subagent_thread_spawn_parent_d2": "thread_spawn",
 		"subagent_guardian":               "guardian",
 		"internal_memory_consolidation":   "",
+		"internal_guardian":               "",
 		"cli":                             "",
 	}
 	for input, want := range cases {

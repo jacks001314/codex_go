@@ -140,14 +140,17 @@ type SessionTelemetrySink interface {
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.
 const (
-	apiCallCountMetric                          = "codex.api_request"
-	apiCallDurationMetric                       = "codex.api_request.duration_ms"
-	sseEventCountMetric                         = "codex.sse_event"
-	sseEventDurationMetric                      = "codex.sse_event.duration_ms"
-	websocketEventCountMetric                   = "codex.websocket.event"
-	websocketEventDurationMetric                = "codex.websocket.event.duration_ms"
-	websocketRequestCountMetric                 = "codex.websocket.request"
-	websocketContinuationCountMetric            = "codex.websocket.continuation"
+	apiCallCountMetric               = "codex.api_request"
+	apiCallDurationMetric            = "codex.api_request.duration_ms"
+	sseEventCountMetric              = "codex.sse_event"
+	sseEventDurationMetric           = "codex.sse_event.duration_ms"
+	websocketEventCountMetric        = "codex.websocket.event"
+	websocketEventDurationMetric     = "codex.websocket.event.duration_ms"
+	websocketRequestCountMetric      = "codex.websocket.request"
+	websocketContinuationCountMetric = "codex.websocket.continuation"
+	// startupPrewarmWebsocketCheckMetric mirrors Rust #48812's
+	// `codex.startup_prewarm.websocket_check`.
+	startupPrewarmWebsocketCheckMetric          = "codex.startup_prewarm.websocket_check"
 	websocketRequestDurationMetric              = "codex.websocket.request.duration_ms"
 	responsesAPIOverheadDurationMetric          = "codex.responses_api_overhead.duration_ms"
 	responsesAPIInferenceTimeDurationMetric     = "codex.responses_api_inference_time.duration_ms"
@@ -401,14 +404,17 @@ func (r *ResponsesAgentRunner) recordWebsocketRequest(err error, duration time.D
 
 // recordWebsocketContinuation mirrors Rust #46051's
 // `codex.websocket.continuation` counter for every response.create attempt.
-func (r *ResponsesAgentRunner) recordWebsocketContinuation(mode, reason, phase string) {
+// Rust #48812 adds after_prewarm, true only for the generation attempt that
+// consumes a prepared warmup response.
+func (r *ResponsesAgentRunner) recordWebsocketContinuation(mode, reason, phase string, afterPrewarm bool) {
 	if r == nil || r.Metrics == nil {
 		return
 	}
 	r.Metrics.Counter(websocketContinuationCountMetric, 1, map[string]string{
-		"mode":   mode,
-		"reason": reason,
-		"phase":  phase,
+		"mode":          mode,
+		"reason":        reason,
+		"phase":         phase,
+		"after_prewarm": strconv.FormatBool(afterPrewarm),
 	})
 }
 

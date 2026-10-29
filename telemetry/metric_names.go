@@ -71,6 +71,9 @@ const (
 	StartupPrewarmDurationMetric = "codex.startup_prewarm.duration_ms"
 	// StartupPrewarmAgeAtFirstTurnMetric measures the age of the startup prewarm
 	// attempt when the first real turn resolves it, tagged by outcome.
+	// StartupPrewarmWebsocketCheckMetric counts the warmup's cached-WebSocket
+	// check, tagged by outcome and input mode (Rust #48812).
+	StartupPrewarmWebsocketCheckMetric = "codex.startup_prewarm.websocket_check"
 	// ShellSnapshotDurationMetric measures one shell-snapshot capture attempt
 	// (Rust core/src/shell_snapshot.rs), tagged by version and success.
 	ShellSnapshotDurationMetric = "codex.shell_snapshot.duration_ms"

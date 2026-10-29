@@ -14,6 +14,40 @@ import (
 	"codex_go/utils"
 )
 
+// Rust #48812 tags only the sampling request that consumes the prepared warmup
+// response; later tool-follow-up requests in the same turn are not tagged.
+func TestAgentLoopTagsOnlyFirstRequestAfterPrewarmLikeRust(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+		MaxTurns:   3,
+	})
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:                      "run echo",
+		Model:                       "gpt-test",
+		PreviousResponseID:          "prewarm-response",
+		PreviousResponseFromPrewarm: true,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(agent.requests))
+	}
+	if !agent.requests[0].PreviousResponseFromPrewarm {
+		t.Fatalf("first request did not carry after_prewarm")
+	}
+	if agent.requests[1].PreviousResponseFromPrewarm {
+		t.Fatalf("tool follow-up request carried after_prewarm")
+	}
+}
+
 func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	agent := &fakeLoopAgent{}
 	executedToolCalls := NewExecutedToolCallRecorder()

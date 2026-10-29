@@ -76,6 +76,7 @@ func (r *RuntimeRouter) recordToolItemReviewSummary(threadID string, turnID stri
 	if key == "" {
 		return
 	}
+	r.registerAnalyticsTurn(threadID, turnID)
 	if summary.FinalApprovalOutcome == "" {
 		summary.FinalApprovalOutcome = telemetry.FinalApprovalOutcomeUnknown
 	}
@@ -95,6 +96,26 @@ func (r *RuntimeRouter) clearToolItemReviewSummaries(threadID string, turnID str
 	if prefix == "" {
 		return
 	}
+	r.approvalSessionsMu.Lock()
+	defer r.approvalSessionsMu.Unlock()
+	for key := range r.toolItemReviews {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.toolItemReviews, key)
+		}
+	}
+}
+
+// clearThreadToolItemReviewSummaries drops every review summary a closing thread
+// retains, including reviews whose turn never completed (Rust #55847).
+func (r *RuntimeRouter) clearThreadToolItemReviewSummaries(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	prefix := threadID + "\x00"
 	r.approvalSessionsMu.Lock()
 	defer r.approvalSessionsMu.Unlock()
 	for key := range r.toolItemReviews {

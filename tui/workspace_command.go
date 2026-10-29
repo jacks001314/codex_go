@@ -40,8 +40,12 @@ type WorkspaceCommand struct {
 	DisableOutputCap bool
 }
 
-func NewWorkspaceCommand(argv ...string) WorkspaceCommand {
+// NewWorkspaceCommand builds a workspace command bound to an explicit host
+// working directory (Rust #54050 makes `cwd` a constructor argument so a
+// command can never inherit the TUI process directory).
+func NewWorkspaceCommand(cwd string, argv ...string) WorkspaceCommand {
 	command := WorkspaceCommand{
+		CWD:     strings.TrimSpace(cwd),
 		Argv:    cleanWorkspaceArgv(argv),
 		Env:     map[string]*string{},
 		Timeout: DefaultWorkspaceCommandTimeout,
@@ -50,11 +54,6 @@ func NewWorkspaceCommand(argv ...string) WorkspaceCommand {
 		command.Name = command.Argv[0]
 	}
 	return command
-}
-
-func (c WorkspaceCommand) WithCWD(cwd string) WorkspaceCommand {
-	c.CWD = strings.TrimSpace(cwd)
-	return c
 }
 
 func (c WorkspaceCommand) WithEnv(key string, value string) WorkspaceCommand {
@@ -122,6 +121,9 @@ func (e WorkspaceCommandError) Error() string {
 }
 
 func (c WorkspaceCommand) Validate() error {
+	if strings.TrimSpace(c.CWD) == "" {
+		return fmt.Errorf("workspace command cwd is empty")
+	}
 	if len(c.Argv) == 0 {
 		return fmt.Errorf("workspace command argv is empty")
 	}

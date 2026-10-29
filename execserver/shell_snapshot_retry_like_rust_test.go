@@ -54,28 +54,28 @@ func TestShellSnapshotRetriesWithBackoffAndCachesFinalFailureLikeRust(t *testing
 	t.Cleanup(manager.close)
 	params := snapshotRetryParams(t, "retry-recovers")
 
-	if _, err := manager.snapshotPath(context.Background(), params, shell.ShellBash, params.Env, nil); err == nil {
+	if _, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil); err == nil {
 		t.Fatal("first capture unexpectedly succeeded")
 	}
-	if _, err := manager.snapshotPath(context.Background(), params, shell.ShellBash, params.Env, nil); err == nil {
+	if _, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil); err == nil {
 		t.Fatal("failure during backoff unexpectedly retried")
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("captures during backoff = %d, want one", calls.Load())
 	}
 	now = now.Add(shellSnapshotRetryBackoff)
-	if _, err := manager.snapshotPath(context.Background(), params, shell.ShellBash, params.Env, nil); err == nil {
+	if _, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil); err == nil {
 		t.Fatal("second attempt unexpectedly succeeded")
 	}
 	now = now.Add(shellSnapshotRetryBackoff)
-	path, err := manager.snapshotPath(context.Background(), params, shell.ShellBash, params.Env, nil)
-	if err != nil || path == "" {
-		t.Fatalf("third attempt = %q, %v", path, err)
+	entry, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil)
+	if err != nil || entry == nil || entry.state == "" {
+		t.Fatalf("third attempt = %#v, %v", entry, err)
 	}
 	if calls.Load() != 3 {
 		t.Fatalf("captures = %d, want three", calls.Load())
 	}
-	if _, err := manager.snapshotPath(context.Background(), params, shell.ShellBash, params.Env, nil); err != nil {
+	if _, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil); err != nil {
 		t.Fatalf("cached success error = %v", err)
 	}
 	if calls.Load() != 3 {
@@ -89,7 +89,7 @@ func TestShellSnapshotRetriesWithBackoffAndCachesFinalFailureLikeRust(t *testing
 	t.Cleanup(exhausted.close)
 	exhaustedParams := snapshotRetryParams(t, "retry-exhausted")
 	for attempt := 0; attempt < maxShellSnapshotAttempts; attempt++ {
-		if _, err := exhausted.snapshotPath(context.Background(), exhaustedParams, shell.ShellBash, exhaustedParams.Env, nil); err == nil {
+		if _, err := exhausted.snapshotEntry(context.Background(), exhaustedParams, shell.ShellBash, exhaustedParams.Env, nil); err == nil {
 			t.Fatalf("attempt %d unexpectedly succeeded", attempt)
 		}
 		now = now.Add(shellSnapshotRetryBackoff)
@@ -97,7 +97,7 @@ func TestShellSnapshotRetriesWithBackoffAndCachesFinalFailureLikeRust(t *testing
 	if exhaustedCalls.Load() != maxShellSnapshotAttempts {
 		t.Fatalf("exhausted captures = %d", exhaustedCalls.Load())
 	}
-	if _, err := exhausted.snapshotPath(context.Background(), exhaustedParams, shell.ShellBash, exhaustedParams.Env, nil); err == nil {
+	if _, err := exhausted.snapshotEntry(context.Background(), exhaustedParams, shell.ShellBash, exhaustedParams.Env, nil); err == nil {
 		t.Fatal("exhausted failure was not cached")
 	}
 	if exhaustedCalls.Load() != maxShellSnapshotAttempts {
@@ -131,7 +131,7 @@ func TestShellSnapshotConcurrentRequestsShareAttemptLikeRust(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := manager.snapshotPath(context.Background(), params, shell.ShellBash, params.Env, nil)
+			_, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil)
 			errs <- err
 		}()
 	}

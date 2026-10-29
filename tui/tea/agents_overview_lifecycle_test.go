@@ -18,11 +18,16 @@ func TestAgentsOverviewLifecycleProgressKeepsBackdropLikeRust(t *testing.T) {
 		ThreadID: "t-1",
 		Name:     "Selected task",
 	}}, "t-1", false)
-	model.agentsOverviewLifecycleProgress = "Archiving task\u2026"
+	model.agentsOverviewLifecycleProgress = "Archiving task\u2026  You can still browse."
 	rendered := utils.StripANSI(model.renderAgentsOverview())
-	for _, want := range []string{"Selected task", "Archiving task", "\u256d", "Please wait"} {
+	for _, want := range []string{"Selected task", "Archiving task", "You can still browse"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("lifecycle progress missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, unwanted := range []string{"Please wait", "\u256d"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("lifecycle progress still renders the blocking dialog %q:\n%s", unwanted, rendered)
 		}
 	}
 }
@@ -30,6 +35,114 @@ func TestAgentsOverviewLifecycleProgressKeepsBackdropLikeRust(t *testing.T) {
 type agentsLifecycleCalls struct {
 	archived []string
 	deleted  []string
+}
+
+// TestModelAgentsLifecyclePendingKeepsDashboardBrowsableLikeRust covers Rust
+// #53908: the removed task disappears immediately behind an inline progress
+// notice, while navigation, search, help, and status tabs keep working and
+// task switching, new tasks, and leaving the dashboard stay suppressed.
+func TestModelAgentsLifecyclePendingKeepsDashboardBrowsableLikeRust(t *testing.T) {
+	calls := &agentsLifecycleCalls{}
+	newSessions := 0
+	model := NewModel(nil, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnAgentsOverviewArchive: func(threadID string) error {
+			calls.archived = append(calls.archived, threadID)
+			return nil
+		},
+		OnAgentsOverviewNewSession: func(string) (AgentThreadSwitchResponse, error) {
+			newSessions++
+			return AgentThreadSwitchResponse{}, nil
+		},
+	})
+	openAgentsDashboard(t, model)
+
+	model.Update(agentsKeyEvent('a'))
+	model.Update(key(bubbletea.KeyDown))
+	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("confirmed archive returned no lifecycle command")
+	}
+	if !strings.Contains(model.agentsOverviewLifecycleProgress, "You can still browse") {
+		t.Fatalf("lifecycle progress = %q", model.agentsOverviewLifecycleProgress)
+	}
+	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 2 {
+		t.Fatalf("removed task was not hidden immediately: visible=%v", visible)
+	}
+	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
+		t.Fatalf("selection after immediate removal = %q, want root-2", got)
+	}
+
+	model.Update(key(bubbletea.KeyDown))
+	if got := model.agentsOverview.SelectedThreadID(); got != "root-3" {
+		t.Fatalf("down during removal selected %q, want root-3", got)
+	}
+	model.Update(key(bubbletea.KeyUp))
+	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
+		t.Fatalf("up during removal selected %q, want root-2", got)
+	}
+
+	model.Update(agentsF3Event())
+	typeText(t, model, "gamma")
+	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 1 {
+		t.Fatalf("search during removal visible = %v, want gamma only", visible)
+	}
+	model.Update(key(bubbletea.KeyEsc))
+	if model.agentsOverview.State.Searching || model.agentsOverview.State.Search != "" {
+		t.Fatalf("escape did not close search during removal: %#v", model.agentsOverview.State)
+	}
+
+	model.Update(agentsKeyEvent('?'))
+	if !model.agentsOverview.State.Help {
+		t.Fatal("help did not open during removal")
+	}
+	model.Update(key(bubbletea.KeyEsc))
+	if model.agentsOverview.State.Help {
+		t.Fatal("escape did not close help during removal")
+	}
+
+	model.Update(key(bubbletea.KeyEnter))
+	if model.agentsOverview == nil {
+		t.Fatal("enter switched tasks while the removal was pending")
+	}
+	model.Update(agentsKeyEvent('n'))
+	if newSessions != 0 {
+		t.Fatalf("new task ran while the removal was pending: %d", newSessions)
+	}
+	if model.agentsOverview == nil {
+		t.Fatal("n left the dashboard while the removal was pending")
+	}
+	model.Update(key(bubbletea.KeyEsc))
+	if model.agentsOverview == nil {
+		t.Fatal("escape left the dashboard while the removal was pending")
+	}
+	if _, quit := model.Update(key(bubbletea.KeyCtrlC)); quit != nil {
+		t.Fatal("ctrl+c quit the dashboard while the removal was pending")
+	}
+
+	model.Update(bubbletea.WindowSizeMsg{Width: 100, Height: 30})
+	if rendered := utils.StripANSI(model.renderAgentsOverview()); !strings.Contains(rendered, "You can still browse") {
+		t.Fatalf("resize dropped the inline progress notice:\n%s", rendered)
+	}
+
+	updated, refresh := model.Update(command())
+	model = updated.(*Model)
+	if refresh == nil {
+		t.Fatal("completed archive did not refresh the dashboard")
+	}
+	if model.agentsOverviewLifecycleProgress != "" || model.agentsOverviewBusy {
+		t.Fatalf("lifecycle state not cleared: progress=%q busy=%v", model.agentsOverviewLifecycleProgress, model.agentsOverviewBusy)
+	}
+	updated, _ = model.Update(refresh())
+	model = updated.(*Model)
+	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 2 {
+		t.Fatalf("archived task returned after refresh: visible=%v", visible)
+	}
 }
 
 func newAgentsLifecycleModel(t *testing.T, calls *agentsLifecycleCalls, archiveErr, deleteErr error) *Model {

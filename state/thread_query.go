@@ -26,6 +26,7 @@ type ThreadListRow struct {
 	SectionAppearance                                 sql.NullString
 	SectionPosition, SectionEnteredAtMS               sql.NullInt64
 	ParentThreadID                                    sql.NullString
+	AttachedThreadParentID                            sql.NullString
 }
 
 func (r *StateRuntime) SetThreadPreviewIfEmpty(ctx context.Context, threadID, preview string) (bool, error) {
@@ -71,7 +72,7 @@ func (r *StateRuntime) ListThreadRowsByName(ctx context.Context, name string, ar
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return r.queryThreadRows(ctx, "WHERE threads.archived = ? AND (threads.name = ? OR threads.title = ?)", "ORDER BY COALESCE(NULLIF(threads.recency_at_ms, 0), threads.updated_at_ms, threads.updated_at * 1000) DESC", archived, strings.TrimSpace(name), strings.TrimSpace(name))
+	return r.queryThreadRows(ctx, "WHERE threads.archived = ? AND threads.attached_thread_parent_id IS NULL AND (threads.name = ? OR threads.title = ?)", "ORDER BY COALESCE(NULLIF(threads.recency_at_ms, 0), threads.updated_at_ms, threads.updated_at * 1000) DESC", archived, strings.TrimSpace(name), strings.TrimSpace(name))
 }
 
 func (r *StateRuntime) queryThreadRows(ctx context.Context, where string, order string, args ...any) ([]ThreadListRow, error) {
@@ -113,7 +114,8 @@ SELECT
     thread_sections.appearance,
     threads.section_position,
     threads.section_entered_at_ms,
-    thread_spawn_edges.parent_thread_id
+    thread_spawn_edges.parent_thread_id,
+    threads.attached_thread_parent_id
 FROM threads
 LEFT JOIN thread_sections ON thread_sections.id = threads.thread_section_id
 LEFT JOIN thread_spawn_edges ON thread_spawn_edges.child_thread_id = threads.id
@@ -134,6 +136,7 @@ LEFT JOIN thread_spawn_edges ON thread_spawn_edges.child_thread_id = threads.id
 			&item.TokensUsed, &item.FirstUserMessage, &item.MemoryMode, &item.Archived, &item.ArchivedAt,
 			&item.GitSHA, &item.GitBranch, &item.GitOriginURL, &item.SectionID, &item.SectionName, &item.SectionAppearance,
 			&item.SectionPosition, &item.SectionEnteredAtMS, &item.ParentThreadID,
+			&item.AttachedThreadParentID,
 		); err != nil {
 			return nil, fmt.Errorf("scan thread row: %w", err)
 		}
@@ -143,4 +146,38 @@ LEFT JOIN thread_spawn_edges ON thread_spawn_edges.child_thread_id = threads.id
 		return nil, fmt.Errorf("list thread rows: %w", err)
 	}
 	return out, nil
+}
+
+// FirstAttachedThreadID returns one saved attached fork of any of the given
+// parents. Deletion uses it to reject removing a source while its attached
+// threads still exist (Rust #56351).
+func (r *StateRuntime) FirstAttachedThreadID(ctx context.Context, parentThreadIDs []string) (string, error) {
+	if r == nil || r.stateDB == nil {
+		return "", errors.New("state runtime is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	parents := make([]any, 0, len(parentThreadIDs))
+	for _, parent := range parentThreadIDs {
+		parent = strings.TrimSpace(parent)
+		if parent == "" {
+			continue
+		}
+		parents = append(parents, parent)
+	}
+	if len(parents) == 0 {
+		return "", nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(parents)), ",")
+	query := "SELECT id FROM threads WHERE attached_thread_parent_id IN (" + placeholders + ") ORDER BY id LIMIT 1"
+	var child string
+	err := r.stateDB.QueryRowContext(ctx, query, parents...).Scan(&child)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find attached thread: %w", err)
+	}
+	return child, nil
 }

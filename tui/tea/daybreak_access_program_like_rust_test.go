@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"strings"
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -43,12 +44,28 @@ func TestCyberAccessProgramForTurnLikeRust(t *testing.T) {
 		t.Fatalf("daybreak on program = %q err=%v", got, err)
 	}
 	unsupported := cyberProgramTestModel(t, true, []string{"standard"})
-	if _, err := unsupported.cyberAccessProgramForTurn(); err == nil {
+	if _, err := unsupported.cyberAccessProgramForTurn(); err == nil ||
+		!strings.Contains(err.Error(), "could not be confirmed by the connected server") {
 		t.Fatal("daybreak on unsupported model did not error")
 	}
 	red := cyberProgramTestModel(t, true, []string{"standard", "daybreak_red"})
 	if got, err := red.cyberAccessProgramForTurn(); err != nil || got != "daybreak_red" {
 		t.Fatalf("daybreak_red program = %q err=%v", got, err)
+	}
+}
+
+// Rust #53717: missing or empty discovery metadata preserves the server's
+// automatic treatment instead of failing the turn, for both a listed model
+// without programs and an explicit model ID absent from the catalog.
+func TestCyberAccessProgramMissingMetadataPreservesServerTreatmentLikeRust(t *testing.T) {
+	empty := cyberProgramTestModel(t, true, []string{})
+	if got, err := empty.cyberAccessProgramForTurn(); err != nil || got != "" {
+		t.Fatalf("empty metadata program = %q err=%v", got, err)
+	}
+	unlisted := cyberProgramTestModel(t, true, nil)
+	unlisted.State.Model = "unlisted-model"
+	if got, err := unlisted.cyberAccessProgramForTurn(); err != nil || got != "" {
+		t.Fatalf("unlisted model program = %q err=%v", got, err)
 	}
 }
 

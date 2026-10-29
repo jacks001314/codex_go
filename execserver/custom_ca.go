@@ -35,12 +35,8 @@ func newExecServerHTTPClient(configured ...*http.Client) (*http.Client, error) {
 	if !rootCAs.AppendCertsFromPEM(pemData) {
 		return nil, fmt.Errorf("Failed to load CA certificates from %s selected by %s: no usable CERTIFICATE blocks found. %s", path, sourceEnv, customCAHint)
 	}
-	baseTransport := client.Transport
-	if baseTransport == nil {
-		baseTransport = http.DefaultTransport
-	}
-	transport, ok := baseTransport.(*http.Transport)
-	if !ok {
+	transport := network.BaseTransport(client.Transport)
+	if transport == nil {
 		return nil, fmt.Errorf("Failed to build HTTP client while using CA bundle from %s (%s): default HTTP transport is not configurable", sourceEnv, path)
 	}
 	transport = transport.Clone()
@@ -50,7 +46,7 @@ func newExecServerHTTPClient(configured ...*http.Client) (*http.Client, error) {
 		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
 		transport.TLSClientConfig.RootCAs = rootCAs
 	}
-	client.Transport = transport
+	client.Transport = network.ReplaceBaseTransport(client.Transport, transport)
 	return client, nil
 }
 

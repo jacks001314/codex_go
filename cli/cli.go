@@ -442,6 +442,10 @@ type AppServerOptions struct {
 	StartupClientInfo       json.RawMessage
 	AnalyticsDefaultEnabled bool
 	CodeModeHostURL         string
+	// CloudSkillsSnapshot is the host-owned frozen cloud skill snapshot
+	// (Rust #55631). It is loaded during app-server startup, so a missing or
+	// malformed file fails the process.
+	CloudSkillsSnapshot string
 	WebSocketAuthOptions
 }
 
@@ -2719,6 +2723,15 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 				return err
 			}
 			appServer.CodeModeHostURL = value
+		case arg == "--cloud-skills-snapshot":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			appServer.CloudSkillsSnapshot = value
+			i = next
+		case strings.HasPrefix(arg, "--cloud-skills-snapshot="):
+			appServer.CloudSkillsSnapshot = strings.TrimPrefix(arg, "--cloud-skills-snapshot=")
 		case strings.HasPrefix(arg, "--ws-"):
 			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &appServer.WebSocketAuthOptions)
 			if err != nil {

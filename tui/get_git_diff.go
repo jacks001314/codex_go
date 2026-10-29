@@ -73,9 +73,7 @@ func (LocalWorkspaceCommandRunner) RunWorkspaceCommand(ctx context.Context, comm
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, command.Argv[0], command.Argv[1:]...)
-	if strings.TrimSpace(command.CWD) != "" {
-		cmd.Dir = strings.TrimSpace(command.CWD)
-	}
+	cmd.Dir = strings.TrimSpace(command.CWD)
 	cmd.Env = workspaceCommandEnv(os.Environ(), command.Env)
 	// Rust #48483: workspace commands are piped, so they must not allocate a
 	// console window when the TUI itself has no console.
@@ -119,8 +117,7 @@ func GitNullDevice() string {
 func BuildGitDiffCommand(cwd string, fsmonitor GitFsmonitorOverride, configOverrides []GitConfigOverride, args ...string) WorkspaceCommand {
 	argv := []string{"git", "-c", fsmonitor.GitConfigArg(), "-c", DisableHooksConfig()}
 	argv = append(argv, args...)
-	command := NewWorkspaceCommand(argv...).
-		WithCWD(cwd).
+	command := NewWorkspaceCommand(cwd, argv...).
 		WithTimeout(GitDiffCommandTimeout).
 		WithDisabledOutputCap()
 	if len(configOverrides) > 0 {
@@ -136,7 +133,7 @@ func BuildGitDiffCommand(cwd string, fsmonitor GitFsmonitorOverride, configOverr
 
 func BuildGitProbeCommand(cwd string, args ...string) WorkspaceCommand {
 	argv := append([]string{"git"}, args...)
-	return NewWorkspaceCommand(argv...).WithCWD(cwd)
+	return NewWorkspaceCommand(cwd, argv...)
 }
 
 func ReadGitDiff(cwd string) (string, bool, error) {

@@ -35,6 +35,7 @@ func (r *RuntimeRouter) rememberMCPToolCallElicitation(threadID string, turnID s
 		return
 	}
 	key := pendingMCPElicitation{threadID: threadID, turnID: turnID, itemID: itemID}
+	r.registerAnalyticsTurn(threadID, turnID)
 	r.mcpElicitationsMu.Lock()
 	defer r.mcpElicitationsMu.Unlock()
 	for index := range r.pendingMCPElicitations {

@@ -348,6 +348,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,
 			ThreadID:                     request.ThreadID,
+			SessionID:                    request.SessionID,
 			TurnID:                       request.TurnID,
 			Ephemeral:                    request.Ephemeral,
 			Originator:                   request.Originator,

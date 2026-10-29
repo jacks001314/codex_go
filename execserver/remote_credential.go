@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"codex_go/network"
 )
 
 // Rust #54346 (`0003732489`) adds a scoped authentication mode to the remote
@@ -193,21 +195,14 @@ func withoutSystemProxy(client *http.Client) (*http.Client, error) {
 		client = remoteHTTPClient()
 	}
 	cloned := *client
-	switch transport := client.Transport.(type) {
-	case nil:
-		direct := http.DefaultTransport.(*http.Transport).Clone()
-		direct.Proxy = nil
-		cloned.Transport = direct
-	case *http.Transport:
-		direct := transport.Clone()
-		direct.Proxy = nil
-		cloned.Transport = direct
-	default:
+	direct, ok := network.WithoutSystemProxy(client.Transport)
+	if !ok {
 		// A host-injected RoundTripper (for example the application network
 		// policy client) has no proxy knob to clear, so this fails loudly rather
 		// than silently sending a credential through a proxy.
 		return nil, errScopedRegistryNeedsProxyBypass
 	}
+	cloned.Transport = direct
 	return &cloned, nil
 }
 

@@ -433,6 +433,21 @@ func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) b
 	return nil
 }
 
+// invalidatePermissionDiscoveryCache drops the cached server permission catalog
+// so the next picker or shortcut re-reads it (Rust #50140 clears the cache on
+// session, account, working-directory, and connection changes).
+func (m *Model) invalidatePermissionDiscoveryCache() {
+	if m == nil {
+		return
+	}
+	m.permissionProfiles = nil
+	m.permissionProfilesDiscovered = false
+	m.permissionProfilesExplicit = false
+	m.permissionProfilesErr = ""
+	m.permissionProfilesLoading = false
+	m.pendingPermissionProfileArgs = ""
+}
+
 // openPermissionDiscoveryRetryView shows Rust's failed-discovery view: the raw
 // error as the subtitle and a single Retry item.
 func (m *Model) openPermissionDiscoveryRetryView(message string) {
@@ -614,6 +629,18 @@ func (m *Model) applyPermissionShortcutKey(keySpec string) (bubbletea.Cmd, bool)
 		forward = true
 	default:
 		return nil, false
+	}
+	if m.onListPermissionProfiles != nil && !m.permissionProfilesDiscovered {
+		// Rust #50140: shortcuts consult the cached server catalog instead of
+		// local configuration. Without one they open the loading picker and
+		// reuse an outstanding discovery fetch rather than cycling presets the
+		// server may forbid.
+		m.showPermissionsLoadingView()
+		if m.permissionProfilesLoading {
+			return nil, true
+		}
+		m.permissionProfilesLoading = true
+		return m.fetchPermissionProfilesCmd(), true
 	}
 	view := chatwidget.NewPermissionsPopupView(m.permissionMenuConfig(false))
 	available := make([]chatwidget.PermissionMenuItem, 0, len(view.Items))

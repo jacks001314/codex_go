@@ -450,18 +450,26 @@ func TestModelSafetyRecourseReadyRestoresRejectedRewriteLikeRust(t *testing.T) {
 	var submitted []SubmitRequest
 	model := newSafetyRecourseModel(Options{
 		HasChatGPTAccount: true,
+		FeatureSettings:   map[string]bool{"cli_daybreak": true},
+		ModelPickerOptions: []codextui.ModelPickerOption{{
+			ID:                     "gpt-5",
+			AvailableCyberPrograms: []string{"standard"},
+		}},
 		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
 			submitted = append(submitted, request)
 			return nil
 		},
 	})
+	model.State.Model = "gpt-5"
 	model.setStatus("idle")
 	model.applySafetyRecourseRewriteReady(SafetyRecourseRewriteReadyMsg{
 		SourceThreadID: "thread-safety",
 		Prompt:         "Explain the general background.",
 		Response: SessionResumeResponse{
-			// The fork has Daybreak on but its model offers no cyber program, so
-			// the turn is rejected before reaching the backend.
+			// The fork has Daybreak on and its model advertises cyber programs
+			// without Daybreak, so the turn is rejected before reaching the
+			// backend (Rust #53717 keeps rejecting a nonempty list that does not
+			// offer Daybreak, while missing metadata no longer fails).
 			Summary: &codextui.SessionSummary{ThreadID: "thread-fork", DaybreakEnabled: true},
 			Status:  "idle",
 		},

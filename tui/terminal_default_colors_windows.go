@@ -52,6 +52,9 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, [
 	if timeout <= 0 {
 		timeout = terminalColorProbeTimeout
 	}
+	// Windows never queries DA2, so the startup identity is known to be
+	// something other than Apple Terminal over SSH (Rust #47417).
+	SetTerminalAppOverSSHFromStartupProbe(boolPtrTerminalProbe(false))
 	output, ok := windowsStdHandle(stdOutputHandle)
 	if !ok {
 		return DefaultColors{}, nil, false

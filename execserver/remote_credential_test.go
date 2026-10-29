@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"codex_go/network"
 )
 
 // registryCredentialRegistrationBody is a well-formed environment registry
@@ -323,8 +325,8 @@ func TestScopedLoopbackRegistryBypassesAConfiguredProxyLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remoteRegistryHTTPClientForAuth() error = %v", err)
 	}
-	transport, ok := authClient.Transport.(*http.Transport)
-	if !ok || transport.Proxy != nil {
+	transport := network.BaseTransport(authClient.Transport)
+	if transport == nil || transport.Proxy != nil {
 		t.Fatalf("scoped loopback HTTP client transport = %#v, want a proxy-free *http.Transport", authClient.Transport)
 	}
 	if _, err := registerRemoteEnvironment(ctx, scoped, RemotePublicKey{}); err != nil {

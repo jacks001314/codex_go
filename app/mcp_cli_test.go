@@ -16,6 +16,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/mcp"
+	codexnetwork "codex_go/network"
 )
 
 // Mirrors Rust #44629: `mcp login --no-browser` completes from a pasted
@@ -123,8 +124,8 @@ func TestMCPCLIStoreUsesConfiguredProxyPolicy(t *testing.T) {
 	if _, err := store.Load(nil); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	transport, ok := store.httpClient.Transport.(*http.Transport)
-	if !ok || transport.Proxy == nil {
+	transport := codexnetwork.BaseTransport(store.httpClient.Transport)
+	if transport == nil || transport.Proxy == nil {
 		t.Fatalf("configured MCP HTTP transport = %#v, want system proxy routing", store.httpClient.Transport)
 	}
 
@@ -132,8 +133,8 @@ func TestMCPCLIStoreUsesConfiguredProxyPolicy(t *testing.T) {
 	if _, err := store.Load(nil); err != nil {
 		t.Fatalf("Load() after policy change error = %v", err)
 	}
-	transport, ok = store.httpClient.Transport.(*http.Transport)
-	if !ok || transport.Proxy != nil {
+	transport = codexnetwork.BaseTransport(store.httpClient.Transport)
+	if transport == nil || transport.Proxy != nil {
 		t.Fatalf("configured MCP HTTP transport = %#v, want proxy disabled", store.httpClient.Transport)
 	}
 }

@@ -85,6 +85,9 @@ func TestRuntimeRouterSessionStartupPrewarmFeedsFirstTurnLikeRust(t *testing.T) 
 	if request.PreviousResponseID != "prewarm-resp-1" {
 		t.Fatalf("first turn PreviousResponseID = %q, want prewarm-resp-1", request.PreviousResponseID)
 	}
+	if !request.PreviousResponseFromPrewarm {
+		t.Fatalf("first turn did not report PreviousResponseFromPrewarm")
+	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 

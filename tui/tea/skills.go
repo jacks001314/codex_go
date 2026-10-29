@@ -9,6 +9,21 @@ import (
 	chatwidget "codex_go/tui/chatwidget"
 )
 
+// skillsResultMatchesCurrentCWD reports whether a skills response still
+// belongs to the active session directory (Rust #54050 drops queued ListSkills
+// commands whose directories exclude the configured working directory).
+func (m *Model) skillsResultMatchesCurrentCWD(cwd string) bool {
+	if m == nil {
+		return false
+	}
+	resultCWD := strings.TrimSpace(cwd)
+	if resultCWD == "" {
+		return true
+	}
+	current := strings.TrimSpace(m.sessionCWD)
+	return current == "" || resultCWD == current
+}
+
 func (m *Model) applySkillsManageCommand() bubbletea.Cmd {
 	if m == nil {
 		return nil

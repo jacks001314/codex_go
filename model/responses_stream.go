@@ -1194,6 +1194,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			return false, err
 		}
 		a.applyToolInputDeltas(item)
+		a.releaseToolInputDeltas(item)
 		if item != nil {
 			a.recordAgentItem(item)
 		}
@@ -1290,6 +1291,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		}
 		for i := range items {
 			a.applyToolInputDeltas(&items[i])
+			a.releaseToolInputDeltas(&items[i])
 			a.recordAgentItem(&items[i])
 		}
 		usage, hasUsage := usageFromStreamEventData(sse.Data)
@@ -1789,6 +1791,21 @@ func (a *responsesStreamAccumulator) applyToolInputDeltas(item *AgentItem) {
 				soleAccumulatedToolInputDelta(a.functionCallArgDeltas),
 			)
 		}
+	}
+}
+
+// releaseToolInputDeltas drops the accumulated argument buffers once the item
+// they belong to is complete. The completed item already carries the applied
+// payload; keeping the delta copies would hold every tool argument alive until
+// the response finishes (Rust #57563 releases completed-item payloads as soon
+// as they are delivered).
+func (a *responsesStreamAccumulator) releaseToolInputDeltas(item *AgentItem) {
+	if a == nil || item == nil {
+		return
+	}
+	for _, key := range uniqueNonEmptyResponseValues(item.ID, item.CallID) {
+		delete(a.functionCallArgDeltas, key)
+		delete(a.customToolInputDeltas, key)
 	}
 }
 

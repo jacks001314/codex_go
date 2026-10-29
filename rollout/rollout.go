@@ -60,15 +60,30 @@ type Config struct {
 // history base when it belongs to the parent thread or this is the thread's
 // original rollout (Rust rollout::forked_from_ordinal_exclusive, #40987).
 func ForkedFromOrdinal(meta *SessionMeta) *uint64 {
+	return ForkedFromOrdinalAtPath(meta, "")
+}
+
+// ForkedFromOrdinalAtPath also accepts the rollout path so a thread's original
+// rollout can fall back to its own history base even when the base names an
+// earlier rollout of that same thread (Rust #40987).
+func ForkedFromOrdinalAtPath(meta *SessionMeta, path string) *uint64 {
 	if meta == nil || strings.TrimSpace(meta.ForkedFromID) == "" {
 		return nil
 	}
 	if meta.ForkedFromOrdinalExclusive != nil {
 		return meta.ForkedFromOrdinalExclusive
 	}
-	if base := meta.HistoryBase; base != nil && base.ThreadID == meta.ForkedFromID {
-		out := base.EndOrdinalExclusive
-		return &out
+	if base := meta.HistoryBase; base != nil {
+		ownRollout := false
+		if strings.TrimSpace(path) != "" {
+			if id, err := ThreadIDFromPath(path); err == nil && id == meta.ID {
+				ownRollout = true
+			}
+		}
+		if base.ThreadID == meta.ForkedFromID || ownRollout {
+			out := base.EndOrdinalExclusive
+			return &out
+		}
 	}
 	return nil
 }
@@ -102,6 +117,10 @@ type SessionMeta struct {
 	SessionID     string `json:"session_id"`
 	SessionPrefix string `json:"session_prefix,omitempty"`
 	ForkedFromID  string `json:"forked_from_id,omitempty"`
+	// AttachedThread marks a persisted fork attached to ForkedFromID (Rust
+	// #56351). Attached threads are hidden from ordinary listings and cannot
+	// outlive their source thread.
+	AttachedThread bool `json:"attached_thread,omitempty"`
 	// ForkedFromOrdinalExclusive persists the fork cutoff ordinal separately
 	// from the physical history base so fork lineage stays accurate after
 	// reverts and cold resumes (Rust #40987).
@@ -324,6 +343,7 @@ type CreateParams struct {
 	SessionPrefix               string
 	ThreadID                    string
 	ForkedFromID                string
+	AttachedThread              bool
 	Source                      string
 	ThreadSource                string
 	Originator                  string
@@ -396,6 +416,7 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 		SessionID:                   sessionID,
 		SessionPrefix:               params.SessionPrefix,
 		ForkedFromID:                params.ForkedFromID,
+		AttachedThread:              params.AttachedThread,
 		Timestamp:                   now.UTC().Format(time.RFC3339),
 		CWD:                         params.CWD,
 		Model:                       params.Model,
@@ -2588,6 +2609,9 @@ type ThreadItem struct {
 	UpdatedAt        time.Time
 	RecencyAt        time.Time
 	Archived         bool
+	// AttachedThread marks a saved fork that is attached to its source. The
+	// default rollout listing hides these rows (Rust #56351).
+	AttachedThread bool
 }
 
 type Page struct {
@@ -2607,6 +2631,9 @@ type ListOptions struct {
 	ModelProviders []string
 	CWDFilters     []string
 	Search         string
+	// IncludeAttachedThreads keeps saved attached forks in the result. Ordinary
+	// resume and history listings leave this false (Rust #56351).
+	IncludeAttachedThreads bool
 }
 
 func ListThreads(codexHome string, options ListOptions) (*Page, error) {
@@ -2675,6 +2702,7 @@ func BuildThreadItem(path string, archived bool) (ThreadItem, bool) {
 			item.Source = line.Meta.Source
 			item.HistoryMode = line.Meta.HistoryMode
 			item.ParentThreadID = line.Meta.ParentThreadID
+			item.AttachedThread = line.Meta.AttachedThread
 			item.AgentNickname = line.Meta.AgentNickname
 			item.AgentRole = line.Meta.AgentRole
 			item.Model = line.Meta.Model
@@ -3152,6 +3180,9 @@ func moveRollout(path string, targetDir string) (string, error) {
 }
 
 func matchesOptions(item *ThreadItem, options *ListOptions) bool {
+	if item.AttachedThread && (options == nil || !options.IncludeAttachedThreads) {
+		return false
+	}
 	if len(options.AllowedSources) > 0 && !contains(options.AllowedSources, item.Source) {
 		return false
 	}

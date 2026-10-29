@@ -32,6 +32,7 @@ import (
 	"codex_go/doctor"
 	"codex_go/features"
 	"codex_go/mcp"
+	codexnetwork "codex_go/network"
 	"codex_go/plugin"
 	"codex_go/prompt"
 	"codex_go/protocol"
@@ -267,9 +268,50 @@ type remoteAppServerMessage struct {
 	} `json:"error,omitempty"`
 }
 
+// remoteTransportError marks a connection-level app-server failure, the Go
+// analogue of Rust `TypedRequestError::Transport`. Only these failures put the
+// TUI offline, so only they retire local voice media (Rust
+// App::recover_transport_error -> App::begin_reconnect).
+type remoteTransportError struct {
+	err error
+}
+
+func (e *remoteTransportError) Error() string {
+	if e == nil || e.err == nil {
+		return "remote app-server transport failed"
+	}
+	return e.err.Error()
+}
+
+func (e *remoteTransportError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+// asRemoteTransportError tags a connection-level failure, leaving an already
+// tagged error untouched.
+func asRemoteTransportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isRemoteTransportError(err) {
+		return err
+	}
+	return &remoteTransportError{err: err}
+}
+
+// isRemoteTransportError reports whether err came from the app-server transport
+// rather than from a JSON-RPC response.
+func isRemoteTransportError(err error) bool {
+	var transportErr *remoteTransportError
+	return errors.As(err, &transportErr)
+}
+
 func (t *remoteWebSocketTransport) read(ctx context.Context) ([]byte, error) {
 	if t == nil || t.conn == nil {
-		return nil, errors.New("remote app-server websocket is not connected")
+		return nil, asRemoteTransportError(errors.New("remote app-server websocket is not connected"))
 	}
 	messageType, data, err := t.conn.Read(ctx)
 	if err != nil {
@@ -277,9 +319,9 @@ func (t *remoteWebSocketTransport) read(ctx context.Context) ([]byte, error) {
 			return nil, ctx.Err()
 		}
 		if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway {
-			return nil, io.EOF
+			return nil, asRemoteTransportError(io.EOF)
 		}
-		return nil, err
+		return nil, asRemoteTransportError(err)
 	}
 	if messageType != websocket.MessageText {
 		return nil, errors.New("remote app-server websocket returned a non-text message")
@@ -289,9 +331,9 @@ func (t *remoteWebSocketTransport) read(ctx context.Context) ([]byte, error) {
 
 func (t *remoteWebSocketTransport) write(ctx context.Context, data []byte) error {
 	if t == nil || t.conn == nil {
-		return errors.New("remote app-server websocket is not connected")
+		return asRemoteTransportError(errors.New("remote app-server websocket is not connected"))
 	}
-	return t.conn.Write(ctx, websocket.MessageText, data)
+	return asRemoteTransportError(t.conn.Write(ctx, websocket.MessageText, data))
 }
 
 func (t *remoteWebSocketTransport) close() {
@@ -309,7 +351,7 @@ func newRemoteJSONLineTransport(conn net.Conn) *remoteJSONLineTransport {
 
 func (t *remoteJSONLineTransport) read(ctx context.Context) ([]byte, error) {
 	if t == nil || t.conn == nil || t.reader == nil {
-		return nil, errors.New("remote app-server unix socket is not connected")
+		return nil, asRemoteTransportError(errors.New("remote app-server unix socket is not connected"))
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = t.conn.SetReadDeadline(deadline)
@@ -324,14 +366,14 @@ func (t *remoteJSONLineTransport) read(ctx context.Context) ([]byte, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, err
+		return nil, asRemoteTransportError(err)
 	}
 	return data, nil
 }
 
 func (t *remoteJSONLineTransport) write(ctx context.Context, data []byte) error {
 	if t == nil || t.conn == nil {
-		return errors.New("remote app-server unix socket is not connected")
+		return asRemoteTransportError(errors.New("remote app-server unix socket is not connected"))
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = t.conn.SetWriteDeadline(deadline)
@@ -344,7 +386,7 @@ func (t *remoteJSONLineTransport) write(ctx context.Context, data []byte) error 
 		data = append(append([]byte(nil), data...), '\n')
 	}
 	_, err := t.conn.Write(data)
-	return err
+	return asRemoteTransportError(err)
 }
 
 func (t *remoteJSONLineTransport) close() {
@@ -437,9 +479,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// directly instead of the tea model).
 	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
 	sessionPickerItems, sessionPickerNotice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
+	// Rust #47417: the startup probe runs before the first frame, so `auto`
+	// keeps native scrollback for Apple Terminal over SSH.
+	stdin = codextea.PrepareTerminal(stdin, stdout)
+	terminalAppOverSSH := codextui.TerminalAppOverSSH()
 	options := codextea.Options{
 		Profile:                      interactiveStringFromSharedProfile(root),
-		NoAltScreen:                  interactiveNoAltScreen(root, settings),
+		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
 		AlternateScreenMode:          settings.AlternateScreenMode,
 		WindowsTerminalMappedInput:   codextea.WindowsTerminalMappedInputEnabled(),
 		TerminalSizeContext:          tuiTelemetry.context,
@@ -3233,14 +3279,14 @@ func (c *remoteAppServerTUIClient) connect(ctx context.Context) error {
 		if dial == nil {
 			dial = websocket.Dial
 		}
-		options := &websocket.DialOptions{}
+		options := &websocket.DialOptions{HTTPClient: codexnetwork.NewSystemProxyHTTPClient(0)}
 		if c.endpoint.AuthToken != nil && strings.TrimSpace(*c.endpoint.AuthToken) != "" {
 			options.HTTPHeader = http.Header{}
 			options.HTTPHeader.Set("Authorization", "Bearer "+strings.TrimSpace(*c.endpoint.AuthToken))
 		}
 		conn, response, err := dial(ctx, c.endpoint.WebSocketURL, options)
 		if err != nil {
-			return formatRemoteWebSocketDialError(c.endpoint.WebSocketURL, response, err)
+			return asRemoteTransportError(formatRemoteWebSocketDialError(c.endpoint.WebSocketURL, response, err))
 		}
 		c.transport = &remoteWebSocketTransport{conn: conn}
 		return nil
@@ -3258,7 +3304,7 @@ func (c *remoteAppServerTUIClient) connect(ctx context.Context) error {
 		// the shared local daemon).
 		conn, err := dial(ctx, socketPath, true)
 		if err != nil {
-			return fmt.Errorf("connect remote app-server unix socket %s: %w", socketPath, err)
+			return asRemoteTransportError(fmt.Errorf("connect remote app-server unix socket %s: %w", socketPath, err))
 		}
 		c.transport = &remoteWebSocketTransport{conn: conn}
 		return nil
@@ -5852,6 +5898,11 @@ func sendRemoteTurnError(messages chan<- bubbletea.Msg, err error) {
 	text := strings.TrimSpace(err.Error())
 	if text == "" {
 		text = "remote app-server error"
+	}
+	if isRemoteTransportError(err) {
+		// Rust turns a transport failure into App::begin_reconnect, which
+		// retires local voice media before the TUI continues offline (#52756).
+		messages <- codextea.AppServerDisconnectMsg{}
 	}
 	messages <- codextea.ThreadEventMsg{Event: protocol.ErrorEvent(text)}
 	messages <- codextea.TurnCompletedMsg{Err: errors.New(text)}

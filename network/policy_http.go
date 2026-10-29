@@ -58,6 +58,34 @@ type PolicyHTTPDoer struct {
 	Next   HTTPDoer
 }
 
+// HTTPClient exposes the policy as a concrete client for transports that need
+// http.Client, notably the Responses and app-server WebSocket handshakes.
+// Returning false means the wrapped doer has no concrete client and cannot be
+// adapted without changing its request semantics.
+func (d *PolicyHTTPDoer) HTTPClient() (*http.Client, bool) {
+	if d == nil || d.Next == nil {
+		return nil, false
+	}
+	switch next := d.Next.(type) {
+	case *http.Client:
+		if !d.Policy.IsScoped() {
+			return next, true
+		}
+		return PolicyHTTPClient(d.Policy, next), true
+	case *PolicyHTTPDoer:
+		client, ok := next.HTTPClient()
+		if !ok {
+			return nil, false
+		}
+		if !d.Policy.IsScoped() {
+			return client, true
+		}
+		return PolicyHTTPClient(d.Policy, client), true
+	default:
+		return nil, false
+	}
+}
+
 func (d *PolicyHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 	if d == nil || d.Next == nil {
 		return nil, errors.New("network policy transport is unavailable")

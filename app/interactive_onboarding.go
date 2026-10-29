@@ -14,10 +14,16 @@ import (
 	"codex_go/features"
 	modelpkg "codex_go/model"
 	codexnetwork "codex_go/network"
+	codextui "codex_go/tui"
 	"codex_go/tui/onboarding"
+	codextea "codex_go/tui/tea"
 )
 
 func runInteractiveEntry(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	// Rust #47417: settle the terminal identity before onboarding or the first
+	// TUI frame so `tui.alternate_screen = "auto"` can keep native scrollback
+	// for Apple Terminal over SSH throughout startup.
+	stdin = codextea.PrepareTerminal(stdin, stdout)
 	if shouldRunInteractiveAuthOnboarding(root, stdin, stdout) {
 		cancelled, err := maybeRunGovCloudGuidance(ctx, root, stdin, stdout)
 		if err != nil {
@@ -96,7 +102,7 @@ func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFl
 	if resolved != nil && resolved.Auth.Mode() != "unknown" {
 		return nil, false, nil
 	}
-	noAltScreen := interactiveNoAltScreenFromValues(root, loaded.Values)
+	noAltScreen := interactiveNoAltScreenFromValues(root, loaded.Values, codextui.TerminalAppOverSSH())
 	options := &onboarding.AuthFlowOptions{
 		CodexHome:        codexHome,
 		StoreOptions:     storeOptions,

@@ -14,8 +14,16 @@ import (
 // terminalStartupProbeQuery adds the primary device attributes (DA1) request
 // ahead of the OSC 10/11 colors. Rust's startup probe asks for DA1 too: its
 // reply finishes keyboard detection and records that the terminal can be asked
-// to drain outstanding reports at exit (#57391).
-const terminalStartupProbeQuery = "\x1b[c" + terminalColorProbeQuery
+// to drain outstanding reports at exit (#57391). For an SSH session outside a
+// multiplexer the secondary query (DA2) is appended so the reply pair can
+// identify Apple Terminal (#47417).
+func terminalStartupProbeQuery(queryIdentity bool) string {
+	query := "\x1b[c" + terminalColorProbeQuery
+	if queryIdentity {
+		query += "\x1b[>c"
+	}
+	return query
+}
 
 // Rust parity: codex-rs/tui/src/terminal_probe.rs (Unix) startup probe. The
 // queries are sent together under one bounded deadline and read from a
@@ -28,6 +36,11 @@ const terminalStartupProbeQuery = "\x1b[c" + terminalColorProbeQuery
 func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, []byte, bool) {
 	if timeout <= 0 {
 		timeout = terminalColorProbeTimeout
+	}
+	queryIdentity := StartupProbeQueryTerminalIdentity()
+	SetTerminalAppOverSSHFromStartupProbe(nil)
+	if !queryIdentity {
+		SetTerminalAppOverSSHFromStartupProbe(boolPtrTerminalProbe(false))
 	}
 	setTerminalDA1Supported(false)
 	info, err := os.Stdin.Stat()
@@ -51,7 +64,7 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, [
 		return DefaultColors{}, nil, false
 	}
 	defer syscall.SetNonblock(fd, false)
-	if _, err := os.Stdout.WriteString(terminalStartupProbeQuery); err != nil {
+	if _, err := os.Stdout.WriteString(terminalStartupProbeQuery(queryIdentity)); err != nil {
 		return DefaultColors{}, nil, false
 	}
 	deadline := time.Now().Add(timeout)
@@ -73,13 +86,26 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, [
 						setTerminalDA1Supported(true)
 					}
 				}
-				return colors, StartupReplayInput(buffer), true
+				if overSSH, known := ParseTerminalAppOverSSH(buffer); known {
+					SetTerminalAppOverSSHFromStartupProbe(&overSSH)
+				}
+				if !queryIdentity {
+					return colors, StartupReplayInput(buffer), true
+				}
+				if _, known := TerminalAppOverSSHKnown(); known {
+					return colors, StartupReplayInput(buffer), true
+				}
 			}
 		}
 		if err != nil && !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
 			return DefaultColors{}, StartupReplayInput(buffer), false
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if colors, ok := ParseDefaultColors(buffer); ok {
+		// Rust returns the probe with an unsettled identity; callers treat an
+		// unknown terminal as not being Apple Terminal over SSH.
+		return colors, StartupReplayInput(buffer), true
 	}
 	return DefaultColors{}, StartupReplayInput(buffer), false
 }

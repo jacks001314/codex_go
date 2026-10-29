@@ -272,6 +272,17 @@ type responsesWebsocketSessionCache struct {
 type responsesWebsocketSession struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
+	// messages is owned by the session's single reader goroutine. The request
+	// loop consumes it instead of calling conn.Read directly so that mailbox
+	// preemption can be observed while a frame is outstanding without closing
+	// the connection (Rust #55969).
+	messages   chan responsesWebsocketReadResult
+	readerDone chan struct{}
+}
+
+type responsesWebsocketReadResult struct {
+	data []byte
+	err  error
 }
 
 type AgentIdentityOptions struct {
@@ -854,11 +865,65 @@ func responsesWebsocketSessionKey(request *AgentRequest) string {
 }
 
 func closeResponsesWebsocketSession(session *responsesWebsocketSession, reason string) {
-	if session == nil || session.conn == nil {
+	if session == nil {
+		return
+	}
+	stopResponsesWebsocketReader(session)
+	if session.conn == nil {
 		return
 	}
 	_ = session.conn.Close(websocket.StatusNormalClosure, reason)
 	session.conn = nil
+}
+
+// startResponsesWebsocketReader starts the session's single reader goroutine.
+// gorilla/websocket permits one concurrent reader and one concurrent writer,
+// so the request loop keeps writing (response.create, response.interrupt) while
+// the reader delivers frames. Reading through a channel is what lets the loop
+// select on mailbox preemption while a frame is outstanding (Rust #55969).
+func startResponsesWebsocketReader(session *responsesWebsocketSession) chan responsesWebsocketReadResult {
+	if session == nil {
+		return nil
+	}
+	if session.messages != nil {
+		return session.messages
+	}
+	conn := session.conn
+	if conn == nil {
+		return nil
+	}
+	messages := make(chan responsesWebsocketReadResult, 64)
+	done := make(chan struct{})
+	session.messages = messages
+	session.readerDone = done
+	go func() {
+		defer close(messages)
+		for {
+			_, data, err := conn.Read(context.Background())
+			select {
+			case messages <- responsesWebsocketReadResult{data: data, err: err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return messages
+}
+
+// stopResponsesWebsocketReader stops the reader goroutine without closing the
+// connection. The caller must hold session.mu.
+func stopResponsesWebsocketReader(session *responsesWebsocketSession) {
+	if session == nil {
+		return
+	}
+	if session.readerDone != nil {
+		close(session.readerDone)
+		session.readerDone = nil
+	}
+	session.messages = nil
 }
 
 func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
@@ -874,7 +939,18 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	session := r.websocketSession(request)
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if session.conn != nil {
+	websocketReady := session.conn != nil
+	if r.Metrics != nil {
+		outcome := "needs_prewarm"
+		if websocketReady {
+			outcome = "ready"
+		}
+		r.Metrics.Counter(startupPrewarmWebsocketCheckMetric, 1, map[string]string{
+			"outcome": outcome,
+			"input":   prewarmInputMode(request),
+		})
+	}
+	if websocketReady {
 		return nil, nil
 	}
 	modelID := strings.TrimSpace(request.Model)
@@ -969,7 +1045,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		payload["access_programs"] = apiRequest.AccessPrograms
 	}
 	requestStartedAt := time.Now()
-	r.recordWebsocketContinuation("full", "prewarm", "warmup")
+	r.recordWebsocketContinuation("full", "prewarm", "warmup", false)
 	writeErr := conn.Write(connectCtx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	// The prewarm dials a fresh connection (it returns early when one exists).
@@ -1005,6 +1081,15 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 			return nil, fmt.Errorf("responses websocket prewarm failed: %s", strings.TrimSpace(responseToolString(event["error"])))
 		}
 	}
+}
+
+// prewarmInputMode labels a warmup by the input it prepares, mirroring Rust
+// #48812's PrewarmInput::Base / PrewarmInput::History.
+func prewarmInputMode(request *AgentRequest) string {
+	if request != nil && strings.EqualFold(strings.TrimSpace(request.PrewarmInputMode), "history") {
+		return "history"
+	}
+	return "base"
 }
 
 // toolResultMetadataDestinationAllowed reports whether raw tool-result metadata
@@ -1083,12 +1168,19 @@ func clearToolResultMetadataInPromptItem(value any) any {
 }
 
 func (r *ResponsesAgentRunner) RunWebSocket(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+	ctx, err := r.prepareResponsesRun(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if !r.responsesWebSocketEnabled() {
+		return r.runHTTP(ctx, request)
+	}
 	return r.runWebSocket(ctx, request, "", "", false, &authRecoveryState{})
 }
 
 func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentRequest, recoveryMode, recoveryPhase string, transportRetried bool, recovery *authRecoveryState) (*AgentResponse, error) {
-	if r == nil || !r.SupportsWebsockets || r.websocketsDisabled() {
-		return r.Run(ctx, request)
+	if !r.responsesWebSocketEnabled() {
+		return r.runHTTP(ctx, request)
 	}
 	if request == nil {
 		return nil, ErrInvalidAgentRequest
@@ -1104,52 +1196,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			session.mu.Unlock()
 		}
 	}()
-	modelID := strings.TrimSpace(request.Model)
-	if modelID == "" {
-		modelID = "gpt-5.5"
-	}
-	modelInfo := r.modelInfoForRequest(modelID)
-	inputItems := responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())
-	instructions := responsesInstructions(request)
-	tools := normalizeResponseToolParameters(cloneAnySlice(request.Tools))
-	if modelInfo.UseResponsesLite {
-		// Rust #51480: a responses-lite window that already recorded its tool
-		// declarations replays the recorded items and omits the rebuilt
-		// `instructions` / `tools` fields, exactly like the HTTP runner, so the
-		// websocket transport never re-declares (or moves) the window's catalog.
-		if WindowHasToolDeclarations(inputItems) {
-			inputItems = responsesLiteDeclaredInputItems(inputItems)
-			instructions = ""
-			tools = nil
-		}
-	} else {
-		// Rust #44249: downgrade `original` image detail for models that do not
-		// support it before sending the request over the websocket transport.
-		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
-		// Rust #51156: standard Responses requests carry base instructions as a
-		// stable developer input message instead of the top-level field.
-		inputItems, instructions = prependResponsesBaseInstructions(inputItems, instructions, request.ThreadID)
-	}
-	if !strings.EqualFold(strings.TrimSpace(r.providerName()), OpenAIProviderName) {
-		inputItems = clearInternalChatMessageMetadata(inputItems)
-	}
-	accessPrograms, err := AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot, r.ApiKeyCyberAccessPrograms)
+	apiRequest, err := r.buildResponsesAgentRequest(request, true)
 	if err != nil {
 		return nil, err
 	}
-	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: instructions, Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: tools, ToolChoice: "auto",
-		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
-		ServiceTier: r.serviceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
-		AccessPrograms: accessPrograms,
-		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
-	}
-	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
-	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
-	if apiRequest.Reasoning != nil || r.outputTokenReplayForProvider() {
-		apiRequest.Include = r.responsesInclude()
-	}
-	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request, r.Metrics)
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
 	if err != nil {
 		return nil, err
@@ -1171,14 +1221,18 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		defer cancel()
 		var response *http.Response
 		dialStartedAt := time.Now()
-		conn, response, err = websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
+		dialOptions := &websocket.DialOptions{HTTPHeader: httpRequest.Header}
+		if client := r.websocketHTTPClient(); client != nil {
+			dialOptions.HTTPClient = client
+		}
+		conn, response, err = websocket.Dial(connectCtx, endpoint, dialOptions)
 		// Rust reports every handshake attempt with connection_reused false,
 		// because a dial always establishes a new connection.
 		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase)
 		if err != nil {
 			if response != nil && response.StatusCode == http.StatusUpgradeRequired {
 				r.disableWebsockets()
-				return r.Run(ctx, request)
+				return r.runHTTP(ctx, request)
 			}
 			// Rust's websocket loop recovers from each recoverable auth error and
 			// `continue`s: the plan cursor bounds the retries, so a no-change
@@ -1212,7 +1266,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)
 	requestStartedAt := time.Now()
 	continuationMode, continuationReason := websocketContinuationTags(request.PreviousResponseID, connectionReused)
-	r.recordWebsocketContinuation(continuationMode, continuationReason, "generation")
+	// Rust #48812 tags the generation that consumes a prepared warmup response
+	// and clears the flag on that same attempt.
+	afterPrewarm := request.PreviousResponseFromPrewarm
+	r.recordWebsocketContinuation(continuationMode, continuationReason, "generation", afterPrewarm)
 	writeErr := conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
@@ -1224,17 +1281,60 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			return r.runWebSocket(ctx, request, recoveryMode, recoveryPhase, true, recovery)
 		}
 		r.disableWebsockets()
-		return r.Run(ctx, request)
+		return r.runHTTP(ctx, request)
 	}
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
+	activeHandler := handler
 	accumulator := newResponsesStreamAccumulator(request)
 	var outputText strings.Builder
 	receivedEvent := false
+	// Rust #55969: a mailbox preemption interrupts a Responses Lite stream
+	// instead of abandoning it, then drains until the terminal event so the
+	// completed items and the response ID survive for the follow-up request.
+	preempt := request.Preempt
+	preemptPending := false
+	draining := false
+	messages := startResponsesWebsocketReader(session)
 	for {
 		messageStartedAt := time.Now()
-		_, data, err := conn.Read(ctx)
+		var read responsesWebsocketReadResult
+		var readOK bool
+		select {
+		case <-ctx.Done():
+			closeResponsesWebsocketSession(session, "response read canceled")
+			return nil, ctx.Err()
+		case <-preempt:
+			preempt = nil
+			if !apiRequest.UseResponsesLite {
+				closeResponsesWebsocketSession(session, "preempted")
+				return preemptedAgentResponse(request), nil
+			}
+			if strings.TrimSpace(accumulator.responseID) == "" {
+				// Rust sends response.interrupt only after response.created
+				// supplied the id it names.
+				preemptPending = true
+				continue
+			}
+			if err := writeResponsesWebsocketInterrupt(ctx, conn, accumulator.responseID); err != nil {
+				closeResponsesWebsocketSession(session, "response interrupt failed")
+				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
+			}
+			draining = true
+			activeHandler = newResponsesDrainStreamHandler(handler)
+			continue
+		case read, readOK = <-messages:
+			if !readOK {
+				read.err = errors.New("responses websocket connection closed")
+			}
+		}
+		data, err := read.data, read.err
 		if err != nil {
 			closeResponsesWebsocketSession(session, "response read failed")
+			if draining {
+				// Mail already requires a follow-up even when the producer
+				// exited before receiving the interrupt.
+				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
+			}
 			if !receivedEvent && !transportRetried {
 				session.mu.Unlock()
 				locked = false
@@ -1242,7 +1342,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			}
 			if !receivedEvent {
 				r.disableWebsockets()
-				return r.Run(ctx, request)
+				return r.runHTTP(ctx, request)
 			}
 			return nil, fmt.Errorf("responses websocket closed before response.completed: %w", err)
 		}
@@ -1268,6 +1368,13 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				outputText.WriteString(responseToolString(event["text"]))
 			}
 		case "error":
+			if draining {
+				// Rust keeps draining a preempted response instead of turning a
+				// server error frame into the turn's terminal error while mail
+				// still needs a follow-up request.
+				closeResponsesWebsocketSession(session, "response failed while draining")
+				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
+			}
 			closeResponsesWebsocketSession(session, "response failed")
 			if apiErr := websocketTerminalProviderError(event); apiErr != nil {
 				return nil, apiErr
@@ -1305,18 +1412,120 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				r.rememberTurnStateFromHeaders(request, jsonHeadersToHTTPHeaders(headers))
 			}
 		}
-		completed, err := accumulator.apply(&responsesSSEEvent{Event: rawType, Data: data}, handler)
+		completed, err := accumulator.apply(&responsesSSEEvent{Event: rawType, Data: data}, activeHandler)
 		if err != nil {
+			if draining {
+				closeResponsesWebsocketSession(session, "response failed while draining")
+				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
+			}
 			return nil, err
+		}
+		if preemptPending && !draining && strings.TrimSpace(accumulator.responseID) != "" {
+			preemptPending = false
+			if err := writeResponsesWebsocketInterrupt(ctx, conn, accumulator.responseID); err != nil {
+				closeResponsesWebsocketSession(session, "response interrupt failed")
+				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
+			}
+			draining = true
+			activeHandler = newResponsesDrainStreamHandler(handler)
 		}
 		if !completed {
 			continue
 		}
-		if len(accumulator.items) == 0 && strings.TrimSpace(outputText.String()) != "" {
+		if !draining && len(accumulator.items) == 0 && strings.TrimSpace(outputText.String()) != "" {
 			accumulator.recordAgentItem(&AgentItem{Type: "agent_message", Text: outputText.String()})
+		}
+		if draining {
+			return drainedAgentResponse(accumulator, request, r.ProviderID), nil
 		}
 		return accumulator.agentResponse(request, r.ProviderID)
 	}
+}
+
+// writeResponsesWebsocketInterrupt asks the server to stop generating the
+// current response while preserving what it already completed (Rust #55969's
+// `ResponseInterrupt::Drain`).
+func writeResponsesWebsocketInterrupt(ctx context.Context, conn *websocket.Conn, responseID string) error {
+	if conn == nil || strings.TrimSpace(responseID) == "" {
+		return errors.New("responses websocket interrupt requires a response id")
+	}
+	payload := map[string]any{
+		"type":        "response.interrupt",
+		"response_id": strings.TrimSpace(responseID),
+		"mode":        "discard_partial_items",
+	}
+	return conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
+}
+
+// drainedAgentResponse builds the preempted result of a drained WebSocket
+// stream: the completed items and response ID are retained so the follow-up
+// request can continue from the server's history.
+func drainedAgentResponse(accumulator *responsesStreamAccumulator, request *AgentRequest, providerID string) *AgentResponse {
+	response := preemptedAgentResponse(request)
+	response.Drained = true
+	if accumulator == nil {
+		return response
+	}
+	response.ResponseID = accumulator.responseID
+	if built, err := accumulator.agentResponse(request, providerID); err == nil && built != nil {
+		built.Preempted = true
+		built.Drained = true
+		return built
+	}
+	return response
+}
+
+// newResponsesDrainStreamHandler defers item exposure while a preempted
+// response drains. Partial items may be discarded by the server, so their
+// added/delta events stay hidden; a completed item is exposed only once
+// `response.output_item.done` confirms it (Rust #55969).
+func newResponsesDrainStreamHandler(handler ResponsesStreamHandler) ResponsesStreamHandler {
+	if handler == nil {
+		return nil
+	}
+	pending := map[string]*ResponsesStreamEvent{}
+	return func(event *ResponsesStreamEvent) {
+		if event == nil {
+			return
+		}
+		switch event.Kind {
+		case ResponsesStreamEventOutputAdded:
+			pending[drainStreamEventKey(event)] = event
+		case ResponsesStreamEventOutputDone:
+			key := drainStreamEventKey(event)
+			added := pending[key]
+			delete(pending, key)
+			if added == nil {
+				added = &ResponsesStreamEvent{
+					Kind:       ResponsesStreamEventOutputAdded,
+					ResponseID: event.ResponseID,
+					Item:       event.Item,
+					RawItem:    event.RawItem,
+					ItemID:     event.ItemID,
+					CallID:     event.CallID,
+					RawType:    string(ResponsesStreamEventOutputAdded),
+				}
+			}
+			handler(added)
+			handler(event)
+		case ResponsesStreamEventOutputText,
+			ResponsesStreamEventToolInputDelta,
+			ResponsesStreamEventPlanDelta,
+			ResponsesStreamEventReasoningSummaryTextDelta,
+			ResponsesStreamEventReasoningTextDelta,
+			ResponsesStreamEventReasoningSummaryPartAdded:
+			return
+		default:
+			handler(event)
+		}
+	}
+}
+
+func drainStreamEventKey(event *ResponsesStreamEvent) string {
+	if event == nil {
+		return ""
+	}
+	return firstNonEmptyResponseValue(event.ItemID, event.CallID, agentItemID(event.Item), agentItemCallID(event.Item))
 }
 
 // Websocket client-metadata keys that carry the request's W3C trace context
@@ -1538,6 +1747,52 @@ func websocketURLFromHTTP(value *url.URL) (string, error) {
 	return copy.String(), nil
 }
 
+// websocketHTTPClient adapts the runner's HTTP seam to the concrete client the
+// WebSocket handshake needs. Policy-wrapped doers expose the same policy on a
+// concrete client, so the dial keeps application network checks, custom
+// transports, proxies, and custom CA roots instead of silently using
+// http.DefaultClient.
+func (r *ResponsesAgentRunner) websocketHTTPClient() *http.Client {
+	if r == nil || r.HTTPClient == nil {
+		return nil
+	}
+	if client, ok := r.HTTPClient.(*http.Client); ok {
+		return responsesWebsocketClient(client)
+	}
+	type httpClientProvider interface {
+		HTTPClient() (*http.Client, bool)
+	}
+	if provider, ok := r.HTTPClient.(httpClientProvider); ok {
+		if client, ok := provider.HTTPClient(); ok {
+			return responsesWebsocketClient(client)
+		}
+	}
+	return responsesWebsocketClient(&http.Client{Transport: responsesHTTPDoerRoundTripper{doer: r.HTTPClient}})
+}
+
+func responsesWebsocketClient(client *http.Client) *http.Client {
+	if client == nil || client.Timeout == 0 {
+		return client
+	}
+	clone := *client
+	// A WebSocket response is a long-lived exchange. The handshake has its own
+	// WebsocketConnectTimeout; the HTTP client's whole-request timeout must not
+	// terminate an otherwise healthy stream.
+	clone.Timeout = 0
+	return &clone
+}
+
+type responsesHTTPDoerRoundTripper struct {
+	doer HTTPDoer
+}
+
+func (t responsesHTTPDoerRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if t.doer == nil {
+		return http.DefaultTransport.RoundTrip(request)
+	}
+	return t.doer.Do(request)
+}
+
 func responseIDFromWebsocketEvent(event map[string]any) string {
 	if response, ok := event["response"].(map[string]any); ok {
 		return strings.TrimSpace(responseToolString(response["id"]))
@@ -1685,23 +1940,57 @@ func (r *ResponsesAgentRunner) WithStreamHandler(handler ResponsesStreamHandler)
 	return &clone
 }
 
-func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+func (r *ResponsesAgentRunner) responsesWebSocketEnabled() bool {
+	return r != nil && r.SupportsWebsockets && !r.websocketsDisabled()
+}
+
+// prepareResponsesRun applies the validation and auth resolution shared by the
+// HTTP and WebSocket transports. The transport decision itself stays in Run so
+// a failed WebSocket handshake can fall back to runHTTP without re-running
+// provider-owned auth recovery.
+func (r *ResponsesAgentRunner) prepareResponsesRun(ctx context.Context, request *AgentRequest) (context.Context, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return ctx, err
+	}
+	if r == nil {
+		return ctx, errors.New("responses agent runner is nil")
 	}
 	if request == nil {
-		return nil, ErrInvalidAgentRequest
+		return ctx, ErrInvalidAgentRequest
 	}
 	prompt := strings.TrimSpace(request.Prompt)
 	if prompt == "" && len(request.InputItems) == 0 {
-		return nil, errors.New("prompt or input items are required")
+		return ctx, errors.New("prompt or input items are required")
 	}
 	if err := r.resolveAgentIdentityAuth(ctx); err != nil {
+		return ctx, err
+	}
+	return ctx, nil
+}
+
+func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+	ctx, err := r.prepareResponsesRun(ctx, request)
+	if err != nil {
 		return nil, err
 	}
+	// Rust ModelClientSession::stream prefers the Responses WebSocket transport
+	// whenever the provider advertises support and session fallback has not
+	// disabled it. The same choice applies to every Responses turn, not only the
+	// Guardian prewarm path.
+	if r.responsesWebSocketEnabled() {
+		return r.runWebSocket(ctx, request, "", "", false, &authRecoveryState{})
+	}
+	return r.runHTTP(ctx, request)
+}
+
+// buildResponsesAgentRequest is the single request builder shared by the HTTP
+// and WebSocket transports. Keeping this in one place prevents the WebSocket
+// path from drifting on hosted tools, Responses Lite, image-detail
+// normalization, timing metrics, beta headers, and access programs.
+func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest, stream bool) (*responsesAgentRequest, error) {
 	modelID := strings.TrimSpace(request.Model)
 	if modelID == "" {
 		modelID = "gpt-5.5"
@@ -1755,7 +2044,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		Input:                inputItems,
 		Tools:                tools,
 		ToolChoice:           "auto",
-		Stream:               r.Stream,
+		Stream:               stream,
 		Store:                request.Store,
 		ParallelToolCalls:    parallelToolCalls,
 		ServiceTier:          r.serviceTierForRequest(&modelInfo, request.ServiceTier),
@@ -1773,6 +2062,20 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		apiRequest.Include = r.responsesInclude()
 	}
 	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request, r.Metrics)
+	return apiRequest, nil
+}
+
+func (r *ResponsesAgentRunner) runHTTP(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if request == nil {
+		return nil, ErrInvalidAgentRequest
+	}
+	apiRequest, err := r.buildResponsesAgentRequest(request, r.Stream)
+	if err != nil {
+		return nil, err
+	}
 	if apiRequest.Stream {
 		return r.runStreaming(ctx, request, apiRequest)
 	}

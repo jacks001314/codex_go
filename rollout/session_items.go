@@ -443,15 +443,16 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 		recencyAt = items[len(items)-1].CreatedAt
 	}
 	record := &session.Record{
-		ID:             session.ThreadID(meta.ID),
-		SessionID:      firstNonEmptyString(meta.SessionID, meta.ID),
-		ForkedFromID:   session.ThreadID(meta.ForkedFromID),
-		ParentThreadID: session.ThreadID(meta.ParentThreadID),
-		Preview:        previewFromSessionItems(items),
-		Archived:       archived,
-		CreatedAt:      createdAt,
-		UpdatedAt:      updatedAt,
-		RecencyAt:      recencyAt,
+		ID:                     session.ThreadID(meta.ID),
+		SessionID:              firstNonEmptyString(meta.SessionID, meta.ID),
+		ForkedFromID:           session.ThreadID(meta.ForkedFromID),
+		AttachedThreadParentID: attachedThreadParentID(meta),
+		ParentThreadID:         session.ThreadID(meta.ParentThreadID),
+		Preview:                previewFromSessionItems(items),
+		Archived:               archived,
+		CreatedAt:              createdAt,
+		UpdatedAt:              updatedAt,
+		RecencyAt:              recencyAt,
 		Metadata: session.Metadata{
 			CWD:                        meta.CWD,
 			Model:                      meta.Model,
@@ -508,6 +509,16 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 	applyRolloutTurnAttributionMetadata(record, lines)
 	applyRolloutTokenUsageMetadata(record, lines)
 	return record, nil
+}
+
+// attachedThreadParentID mirrors Rust's
+// `forked_from_id.filter(|_| attached_thread)`: the durable attachment edge is
+// derived from the fork source and only exists for attached threads.
+func attachedThreadParentID(meta *SessionMeta) session.ThreadID {
+	if meta == nil || !meta.AttachedThread {
+		return ""
+	}
+	return session.ThreadID(meta.ForkedFromID)
 }
 
 // applyRolloutTurnAttributionMetadata records the provenance of the newest

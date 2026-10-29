@@ -3937,9 +3937,10 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			CapabilityDiscoverySandbox:       true,
 			CapabilityDiscoveryV2:            true,
 			FSWatchMissing:                   runtime.GOOS == "linux",
-			// Local exec-servers do not own the unified-exec launch path, so they
-			// must not advertise executor-managed shell snapshots (Rust #39958).
-			ShellSnapshotV2: false,
+			// Rust #40376: the local exec server advertises executor-managed
+			// shell snapshots on Unix and keeps reporting them unsupported
+			// elsewhere (EnvironmentInfo::local uses cfg!(unix)).
+			ShellSnapshotV2: runtime.GOOS != "windows",
 			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
 			// Go now implements the request (execserver/environment_config_read.go,
 			// mirroring exec-server/src/server/registry.rs -> environment_config_read),

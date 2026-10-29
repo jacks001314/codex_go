@@ -127,10 +127,13 @@ type RuntimeServices struct {
 	TurnMetrics           telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
-	VoiceMetrics            telemetry.CounterDurationSink
-	AnalyticsRPCTransport   telemetry.AppServerRPCTransport
-	BrowserOpen             func(string) error
-	CustomSkills            *skillprovider.Registry
+	VoiceMetrics          telemetry.CounterDurationSink
+	AnalyticsRPCTransport telemetry.AppServerRPCTransport
+	BrowserOpen           func(string) error
+	CustomSkills          *skillprovider.Registry
+	// CloudSkills replaces MCP resource discovery for cloud (orchestrator)
+	// skills when the host started with a frozen snapshot (Rust #55631).
+	CloudSkills             skillprovider.Provider
 	UnifiedExec             *tool.UnifiedExecManager
 	CodeModeProvider        tool.CodeModeRemoteProvider
 	DisableCodeModeFallback bool
@@ -268,6 +271,9 @@ type RuntimeRouterOptions struct {
 	// were backed up and rebuilt before the router existed, so it is collected
 	// during startup and emitted once with the initialize response (#49701).
 	StateDBRecoveryNotice *config.ConfigWarningNotification
+	// CloudSkillProvider is the native cloud skill source loaded from
+	// --cloud-skills-snapshot (Rust #55631). Nil keeps MCP-backed discovery.
+	CloudSkillProvider skillprovider.Provider
 }
 
 type RuntimeRouter struct {
@@ -478,19 +484,28 @@ type RuntimeRouter struct {
 	restoredWindows map[string]bool
 	// clockFailures records the last reported nonfatal clock failure per thread
 	// (Rust's session-level `last_clock_failure`, #46006).
-	clockFailuresMu        sync.Mutex
-	clockFailures          map[string]clockFailureKey
-	codeModeRuntimesMu     sync.Mutex
-	codeModeRuntimes       map[string]*tool.CodeModeRuntime
-	pendingGoalMu          sync.Mutex
-	pendingGoalByConn      map[string][]*Notification
-	deferredGoalMode       atomic.Bool
-	toolItemReviews        map[string]toolItemReviewSummary
-	skillMCPPromptMu       sync.Mutex
-	skillMCPPrompted       map[string]struct{}
-	orchestratorSkillMu    sync.Mutex
-	orchestratorSkills     map[string]*runtimeOrchestratorSkillCatalog
-	orchestratorWarned     map[string]bool
+	clockFailuresMu     sync.Mutex
+	clockFailures       map[string]clockFailureKey
+	codeModeRuntimesMu  sync.Mutex
+	codeModeRuntimes    map[string]*tool.CodeModeRuntime
+	pendingGoalMu       sync.Mutex
+	pendingGoalByConn   map[string][]*Notification
+	deferredGoalMode    atomic.Bool
+	toolItemReviews     map[string]toolItemReviewSummary
+	skillMCPPromptMu    sync.Mutex
+	skillMCPPrompted    map[string]struct{}
+	orchestratorSkillMu sync.Mutex
+	orchestratorSkills  map[string]*runtimeOrchestratorSkillCatalog
+	orchestratorWarned  map[string]bool
+	// cloudCatalogs tracks per-thread cloud plugin and skill catalog refresh
+	// cooldowns plus the successful discovery a turn can reuse across model
+	// steps (Rust #55957/#55968). Its zero value is ready to use.
+	cloudCatalogs cloudCatalogRefreshStore
+	// catalogMetricsSeen remembers the last published skill and plugin catalog
+	// signature per thread so reused discovery is not measured twice
+	// (Rust #56530).
+	catalogMetricsMu       sync.Mutex
+	catalogMetricsSeen     map[string]string
 	skillWarningsMu        sync.Mutex
 	skillWarnings          map[string]map[string]struct{}
 	selectedSkillMu        sync.Mutex
@@ -526,6 +541,12 @@ type RuntimeRouter struct {
 	// later sampled response is known, so they can name the subsequent response
 	// (Rust #36729's `pending_tool_events`).
 	pendingToolEvents map[string][]pendingToolEvent
+	// retainedAnalyticsTurns orders the (thread, turn) pairs whose analytics
+	// evidence the router still retains, mirroring the MAX_PENDING_TURNS
+	// ordering of Rust's analytics reducer (#55847).
+	retainedAnalyticsTurnsMu sync.Mutex
+	retainedAnalyticsTurns   []string
+	analyticsTurnKnown       map[string]struct{}
 	// pendingMCPElicitations queues MCP call classifications (auth_or_link,
 	// approval) before the items they belong to complete (Rust #45649).
 	mcpElicitationsMu      sync.Mutex
@@ -590,11 +611,15 @@ type RuntimeRouter struct {
 	// per thread so delayed compaction analytics can resolve their start time.
 	voiceSessionWindows   map[string][]voiceSessionWindow
 	internalMemoryThreads sync.Map
-	sessionEndMu          sync.Mutex
-	sessionEnded          map[string]struct{}
-	agentRegistry         *agent.Registry
-	agentRegistryMu       sync.Mutex
-	agentRegistries       map[string]*agent.Registry
+	// internalHost owns the host-side state for private internal sessions:
+	// visibility markers, thread-ready contributors, and the per-session/thread
+	// extension stores supplied to them (Rust #39994).
+	internalHost    internalSessionHost
+	sessionEndMu    sync.Mutex
+	sessionEnded    map[string]struct{}
+	agentRegistry   *agent.Registry
+	agentRegistryMu sync.Mutex
+	agentRegistries map[string]*agent.Registry
 	// networkPolicy publishes the application network policy the app-server's
 	// own transports enforce (Rust ConfigManager's NetworkPolicyController).
 	networkPolicy   *network.NetworkPolicyController
@@ -681,7 +706,10 @@ type runtimeSelectedSkillCatalog struct {
 	once     sync.Once
 	entries  []SkillsListEntry
 	warnings []string
-	err      error
+	// partial marks a catalog whose discovery failed, which Rust #56530
+	// reports instead of a plain warning status.
+	partial bool
+	err     error
 }
 
 const runtimeSeedRolloutExtraKey = "runtime_seed_rollout"
@@ -840,6 +868,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		codeModeChildCalls:      map[string]map[string]string{},
 		codeModeCells:           map[string]map[string]codeModeCellState{},
 		pendingToolEvents:       map[string][]pendingToolEvent{},
+		analyticsTurnKnown:      map[string]struct{}{},
 		connectorSelections:     map[string]*state.SessionState{},
 		appUsedEmittedKeys:      map[string]bool{},
 		managedNetworks:         map[string]*network.PreparedProxyManagedNetwork{},
@@ -1708,6 +1737,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	}
 	if options != nil {
 		services.DisableCodeModeFallback = options.DisableCodeModeInProcessFallback
+		services.CloudSkills = options.CloudSkillProvider
 	}
 	switch {
 	case options != nil && strings.TrimSpace(options.CodeModeHostURL) != "":
@@ -3260,6 +3290,11 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 	if err := r.rejectExperimentalAPIDisabled(request); err != nil {
 		return nil, err
 	}
+	if !request.Internal {
+		if threadID := threadLifecycleRequestThreadID(request); threadID != "" && r.internalSessionThreadHidden(threadID) {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", threadID))
+		}
+	}
 	if threadLifecycleSensitiveMethod(request.Method) {
 		if threadID := threadLifecycleRequestThreadID(request); threadID != "" {
 			if err := r.awaitPendingThreadUnload(threadID); err != nil {
@@ -3403,7 +3438,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			// restored collaboration mode takes its model and reasoning effort from
 			// it (Rust #45519).
 			var resumeConfig *config.Config
+			threadReadyAfterResume := false
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil && !r.threadIsLoaded(response.Thread.ID) {
+				threadReadyAfterResume = true
 				cfg, configErr := r.effectiveMCPConfigForThreadResume(response, request)
 				if configErr != nil {
 					r.rollbackThreadResumeInitialization(response.Thread.ID, request)
@@ -3447,6 +3484,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 					}
 				}
 				r.captureThreadModelProviderRouteByID(response.Thread.ID)
+				if threadReadyAfterResume {
+					r.emitThreadReadyLifecycle(response.Thread.ID)
+				}
 				r.emitThreadResumeAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 				r.emitThreadStartedMetric(context.Background(), response.Thread)
 			}
@@ -4553,7 +4593,7 @@ func (r *RuntimeRouter) handleThreadLoadedListRuntime(request *Request) (*Thread
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	ids := r.requireThreadStatus().LoadedThreadIDs()
+	ids := r.visibleLoadedThreadIDs(r.requireThreadStatus().LoadedThreadIDs())
 	if len(ids) == 0 {
 		return &ThreadLoadedListResponse{Data: []string{}}, nil
 	}
@@ -4592,10 +4632,30 @@ func (r *RuntimeRouter) handleThreadLoadedListRuntime(request *Request) (*Thread
 	return &ThreadLoadedListResponse{Data: page, NextCursor: next}, nil
 }
 
+// visibleLoadedThreadIDs removes host-owned internal sessions from the public
+// loaded-thread list. Loaded internal threads are always registered for their
+// lifetime, so this stays a registry lookup instead of a per-thread record read.
+func (r *RuntimeRouter) visibleLoadedThreadIDs(ids []string) []string {
+	if r == nil || len(ids) == 0 {
+		return ids
+	}
+	visible := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if r.internalSessionThreadRegistered(id) {
+			continue
+		}
+		visible = append(visible, id)
+	}
+	return visible
+}
+
 func (r *RuntimeRouter) handleThreadReadRuntime(request *Request) (*ThreadReadResponse, error) {
 	var params ThreadReadParams
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
+	}
+	if !request.Internal && r.isInternalSessionThread(params.ThreadID) {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", strings.TrimSpace(params.ThreadID)))
 	}
 	if record, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
 		if params.IncludeTurns {
@@ -5132,6 +5192,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				return nil, err
 			}
 			r.applyThreadStartOriginator(response, request)
+			r.emitThreadReadyLifecycle(response.Thread.ID)
 			r.markRuntimeSeedRollout(response, request)
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
 			if request.Method == MethodThreadStart {
@@ -5174,7 +5235,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
 			r.startThreadSessionSpan(response.Thread.ID, threadSpawnSpan)
 			var forkParams ThreadForkParams
+			suppressThreadStarted := false
 			if request.DecodeParams(&forkParams) == nil {
+				suppressThreadStarted = forkParams.AttachToSource
 				if !forkParams.ExcludeTurns && response.Thread.HistoryMode == ThreadHistoryPaginated {
 					r.notifyPaginatedHistoryDeprecation(request,
 						"Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.")
@@ -5186,10 +5249,11 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
 			// Rust #44944: the fork inherits its own retained provider route.
 			r.captureThreadModelProviderRouteByID(response.Thread.ID)
+			r.emitThreadReadyLifecycle(response.Thread.ID)
 			r.emitThreadForkAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			r.emitThreadStartedMetric(context.Background(), response.Thread)
 			r.notifyRestoredTokenUsage(response)
-			if shouldEmitThreadStartedNotification(response.Thread) {
+			if !suppressThreadStarted && shouldEmitThreadStartedNotification(response.Thread) {
 				r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
 			}
 		}
@@ -6614,15 +6678,23 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.flushThreadPendingToolEvents(threadID)
 	r.forgetThreadToolEvidence(threadID)
 	r.forgetThreadMCPToolCallElicitations(threadID)
+	// Rust's ThreadClosed handling also drops the thread's retained turn and
+	// review state, including reviews whose turn never completed (#55847).
+	r.discardThreadAnalyticsTurns(threadID)
 	// Rust drops the thread's message-board handle with its runtime.
 	r.closeMessageBoardHandle(threadID)
 	// Rust drops the thread's retained context with its in-memory runtime; the
 	// durable checkpoint keeps the evidence a resumed thread needs.
 	r.forgetThreadRetainedContext(threadID)
 	r.forgetGuardianReviewHistory(threadID)
+	r.internalHost.forgetThread(threadID)
 	r.forgetGuardianBlocking(threadID)
 	r.forgetPermissionGrants(threadID)
 	r.forgetThreadSessionState(threadID)
+	// Cloud catalog cooldowns and per-turn discovery reuse live in thread
+	// state (Rust #55957/#55968), so they go away with the runtime.
+	r.cloudCatalogs.dropThread(threadID)
+	r.forgetCatalogMetrics(threadID)
 	r.closeThreadShellSnapshots(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
@@ -6746,6 +6818,14 @@ func (r *RuntimeRouter) notifyRestoredTokenUsage(result any) {
 	record, err := r.threadRecord(session.ThreadID(thread.ID), true, true)
 	if err != nil || record == nil {
 		return
+	}
+	// Rust #57256: a paginated fork resume carries the parent's token usage in
+	// its inherited history, so replaying it would report parent activity as the
+	// child's own.
+	if _, resume := result.(*ThreadResumeResponse); resume && thread.ForkedFromID != nil && strings.TrimSpace(*thread.ForkedFromID) != "" && r.services.ThreadRouter != nil {
+		if mode, found, modeErr := r.services.ThreadRouter.threadHistoryModeWithRepair(session.ThreadID(thread.ID)); modeErr == nil && found && strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated)) {
+			return
+		}
 	}
 	usage := restoredTokenUsageFromRecord(record)
 	if usage == nil {
@@ -6905,6 +6985,9 @@ func (r *RuntimeRouter) runtimeMultiAgentVersionForThread(threadID string, cfg *
 func (r *RuntimeRouter) runtimeMultiAgentVersionForTurn(threadID string, cfg *config.Config, agentsConfig *config.AgentsConfig) agent.MultiAgentVersion {
 	if r != nil {
 		if record, recordErr := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false); recordErr == nil && record != nil {
+			if strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), internalSessionMultiAgentVersionDisabled) {
+				return ""
+			}
 			if version := knownRuntimeMultiAgentVersion(strings.TrimSpace(record.Metadata.MultiAgentVersion)); version != "" {
 				return version
 			}
@@ -7121,6 +7204,14 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	if sourceRecord != nil && sourceRecord.Archived {
 		return nil, true, threadResumeArchivedError(sourceRecord.ID)
 	}
+	if params.AttachToSource {
+		if r.services.StateRuntime == nil {
+			return nil, true, methodNotFound("attached threads is not supported yet")
+		}
+		if !threadUsesPaginatedHistory(sourceRecord) {
+			return nil, true, jsonRPCInvalidRequest("attachToSource requires a paginated parent")
+		}
+	}
 	if err := validatePaginatedForkParams(sourceRecord, &params); err != nil {
 		return nil, true, err
 	}
@@ -7140,6 +7231,9 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, forkOptions)
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
+	}
+	if params.AttachToSource {
+		record.AttachedThreadParentID = record.ForkedFromID
 	}
 	r.forkGuardianReviewHistory(sourceRecord, string(record.ID), params.BeforeTurnID, params.LastTurnID, params.LastN)
 	if !params.Ephemeral {
@@ -7174,6 +7268,15 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 		}
 	} else {
 		r.saveEphemeralThreadRecord(record)
+	}
+	if params.AttachToSource && r.services.StateRuntime != nil {
+		path := r.services.ThreadRouter.threadRolloutPath(record)
+		if strings.TrimSpace(path) != "" {
+			if err := r.services.StateRuntime.ReconcileRollout(context.Background(), path, false); err != nil {
+				r.rollbackRuntimeForkInitialization(record)
+				return nil, true, fmt.Errorf("failed to index attached thread: %w", err)
+			}
+		}
 	}
 	responseRecord := record
 	if params.ExcludeTurns {
@@ -12223,6 +12326,8 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 			// one) replaces legacy plugin contribution discovery. Merge cloud
 			// metadata by canonical identity and preserve executor-local plugins.
 			v2Supplied = true
+			// Rust #56530 measures the catalog the MCP runtime publishes.
+			r.recordExecutorPluginCatalog(threadID, executorCatalog)
 			policy := plugin.PluginsConfigTomlFromValues(values)
 			merged := plugin.MergePluginCatalogs(executorCatalog, r.services.Plugins.CloudPluginCatalog())
 			contributions = merged.MCPServerContributions(policy.Plugins)
@@ -16169,7 +16274,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		}
 	}
 	catalogEnablesApplyPatch := turnModelInfo == nil || strings.TrimSpace(turnModelInfo.ApplyPatchToolType) != ""
-	if allowedTools == nil && catalogEnablesApplyPatch && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if allowedTools == nil && catalogEnablesApplyPatch && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && r.services.CloudSkills == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
@@ -16431,6 +16536,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	orchestratorSkillsEnabled := cfg == nil || cfg.OrchestratorSkillsEnabled()
 	options.OrchestratorSkillsEnabled = &orchestratorSkillsEnabled
 	options.SkillProviders = executorSkillProviders
+	options.CloudSkillProvider = r.services.CloudSkills
 	options.DiscoveryV2Skills = stepCapabilities != nil && stepCapabilities.executorCapabilityDiscoveryV2Enabled()
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
@@ -16733,33 +16839,18 @@ func (r *RuntimeRouter) refreshCloudPluginCatalogForTurn(ctx context.Context, cf
 	}
 	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "plugins") || r.services.PluginCatalogProvider == nil {
 		r.services.Plugins.SetCloudPluginCatalog(nil, "")
+		r.cloudCatalogs.forThread(threadID).resetPlugin()
 		return
 	}
-	codexHome := ""
-	if r.services.Config != nil {
-		codexHome = strings.TrimSpace(r.services.Config.CodexHome())
-	}
-	identityBefore := remoteInstalledPluginsAuthIdentityFromSnapshot(r.accountAuthSnapshot(codexHome))
-	cacheKey := fmt.Sprintf("%T\x00%s", r.services.PluginCatalogProvider, remoteInstalledPluginsAuthIdentityKey(identityBefore))
+	cacheKey := r.cloudPluginCatalogScope()
 	// A catalog discovered under another account (or without Apps access) must
 	// not leak into this turn while the refresh is in flight.
 	if current := r.services.Plugins.CloudPluginCatalogKey(); current != "" && current != cacheKey {
 		r.services.Plugins.SetCloudPluginCatalog(nil, "")
 	}
-	catalog, err := plugin.ListPluginCatalog(ctx, r.services.PluginCatalogProvider, plugin.PluginListQuery{
-		ThreadID: strings.TrimSpace(threadID),
-		TurnID:   strings.TrimSpace(turnID),
-	})
-	if err != nil {
-		// Keep the previous catalog within the same auth/Apps scope.
-		return
-	}
-	// Rust #46572 rechecks the authenticated identity before publishing: a
-	// result fetched with credentials that changed mid-flight is discarded.
-	if identityAfter := remoteInstalledPluginsAuthIdentityFromSnapshot(r.accountAuthSnapshot(codexHome)); identityAfter != identityBefore {
-		return
-	}
-	r.services.Plugins.SetCloudPluginCatalog(catalog, cacheKey)
+	// Failures back off across steps and turns, and a successful discovery is
+	// reused for the rest of the turn (Rust #55957/#55968).
+	r.refreshCloudPluginCatalogForStep(ctx, cfg, threadID, turnID)
 }
 
 // runtimeThreadSourceIsInternal mirrors Rust SessionSource::is_internal(): the

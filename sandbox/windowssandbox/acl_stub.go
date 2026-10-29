@@ -18,14 +18,18 @@ func EnsureAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) erro
 	return unsupported("acl.ensure_allow_mask_aces_with_inheritance")
 }
 
-func GrantAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) error {
-	return unsupported("acl.grant_allow_mask_aces_with_inheritance")
+func GrantAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) (bool, error) {
+	return false, unsupported("acl.grant_allow_mask_aces_with_inheritance")
 }
 
-func GrantReadExecuteACEs(req ACLRequest, inheritance uint32) error {
-	return unsupported("acl.grant_read_execute_aces")
+func GrantReadExecuteACEs(req ACLRequest, inheritance uint32) (bool, error) {
+	return false, unsupported("acl.grant_read_execute_aces")
 }
 
 func PathMaskAllows(req ACLRequest, requireAllBits bool) (bool, error) {
 	return false, unsupported("acl.path_mask_allows")
+}
+
+func PathMaskDenied(req ACLRequest) (bool, error) {
+	return false, unsupported("acl.path_mask_denied")
 }

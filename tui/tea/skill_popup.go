@@ -350,6 +350,11 @@ func (m *Model) applySkillsInventoryResult(message SkillsInventoryResultMsg) {
 		return
 	}
 	m.skillsInventoryLoading = false
+	// Rust #54050: a queued skills refresh for a directory that is no longer
+	// current must not replace the active inventory.
+	if !m.skillsResultMatchesCurrentCWD(message.CWD) {
+		return
+	}
 	if message.Err != nil {
 		m.skillsInventoryCWD = strings.TrimSpace(message.CWD)
 		m.skillsInventoryErr = strings.TrimSpace(message.Err.Error())

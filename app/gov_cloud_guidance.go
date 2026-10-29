@@ -11,6 +11,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	modelpkg "codex_go/model"
+	codextui "codex_go/tui"
 	"codex_go/tui/onboarding"
 )
 
@@ -43,7 +44,7 @@ func maybeRunGovCloudGuidance(ctx context.Context, root *cli.RootOptions, stdin 
 	if !govCloud {
 		return false, nil
 	}
-	result, err := onboarding.RunGovCloudGuidance(ctx, stdin, stdout, interactiveNoAltScreenFromValues(root, loaded.Values))
+	result, err := onboarding.RunGovCloudGuidance(ctx, stdin, stdout, interactiveNoAltScreenFromValues(root, loaded.Values, codextui.TerminalAppOverSSH()))
 	if err != nil {
 		return false, err
 	}

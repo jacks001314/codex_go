@@ -488,3 +488,100 @@ func TestCheckVoiceCommandAvailability(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 }
+
+// Rust #52756: a shared app-server disconnect is a session failure only while
+// the session is starting, active, or waiting for retry cleanup.
+func TestVoiceDisconnectFailureClassificationLikeRust(t *testing.T) {
+	tests := []struct {
+		name  string
+		state VoiceConversationState
+		want  bool
+	}{
+		{name: "inactive", state: VoiceConversationState{}, want: false},
+		{
+			name:  "starting",
+			state: VoiceConversationState{Phase: VoicePhaseStarting},
+			want:  true,
+		},
+		{
+			name:  "active",
+			state: VoiceConversationState{Phase: VoicePhaseActive},
+			want:  true,
+		},
+		{
+			name:  "stopping without retry",
+			state: VoiceConversationState{Phase: VoicePhaseStopping, StartupRetry: VoiceRetryUsed},
+			want:  false,
+		},
+		{
+			name:  "retry cleanup pending",
+			state: VoiceConversationState{Phase: VoicePhaseStopping, StartupRetry: VoiceRetryWaitingForStop},
+			want:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := &voiceMetricsRecorder{}
+			previous := metrics.InstallGlobal(recorder)
+			defer metrics.InstallGlobal(previous)
+
+			state := test.state
+			got := state.RecordVoiceDisconnectFailure()
+			if got != test.want {
+				t.Fatalf("recorded = %v, want %v", got, test.want)
+			}
+			failure := firstVoiceMetric(recorder.counters, voiceSessionFailureMetric)
+			if !test.want {
+				if failure != nil {
+					t.Fatalf("unexpected failure metric %#v", failure)
+				}
+				return
+			}
+			if failure == nil || failure.tags["cause"] != VoiceFailureCauseAppServerDisconnect {
+				t.Fatalf("failure = %#v", failure)
+			}
+			if state.RecordVoiceDisconnectFailure() {
+				t.Fatal("a second disconnect was recorded for the same session")
+			}
+			if got := countVoiceMetric(recorder.counters, voiceSessionFailureMetric); got != 1 {
+				t.Fatalf("failures = %d, want 1", got)
+			}
+		})
+	}
+}
+
+// Rust ChatWidget::on_realtime_error records the cause, stops the session, and
+// leaves an inactive session untouched.
+func TestVoiceBeginFailureMatchesRustOnRealtimeError(t *testing.T) {
+	recorder := &voiceMetricsRecorder{}
+	previous := metrics.InstallGlobal(recorder)
+	t.Cleanup(func() { metrics.InstallGlobal(previous) })
+
+	var inactive VoiceConversationState
+	if inactive.BeginVoiceFailure(VoiceFailureCauseSpeechDelivery) {
+		t.Fatal("an inactive session reported a failure")
+	}
+
+	var active VoiceConversationState
+	active.BeginVoiceConversation("thread-1", 1)
+	active.MarkVoiceBackendStarted()
+	active.MarkVoiceWebRTCConnected()
+	if !active.BeginVoiceFailure(VoiceFailureCauseSpeechDelivery) {
+		t.Fatal("a running session did not report the failure")
+	}
+	if active.Phase != VoicePhaseStopping || !active.FailureRecorded {
+		t.Fatalf("state = %#v", active)
+	}
+	failure := firstVoiceMetric(recorder.counters, voiceSessionFailureMetric)
+	if failure == nil || failure.tags["cause"] != VoiceFailureCauseSpeechDelivery || failure.tags["phase"] != "active" {
+		t.Fatalf("failure = %#v", failure)
+	}
+	// A second failure still reports the running session but never adds a
+	// second cause: the first one is the session's outcome.
+	if !active.BeginVoiceFailure(VoiceFailureCauseAppServerRequest) {
+		t.Fatal("a stopping session stopped reporting failures")
+	}
+	if got := countVoiceMetric(recorder.counters, voiceSessionFailureMetric); got != 1 {
+		t.Fatalf("failures = %d, want 1", got)
+	}
+}

@@ -31,6 +31,9 @@ func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) {
 		// account changes; quota and warning thresholds belong to the old
 		// account and must not carry into the new one.
 		m.clearUsageNoticeState()
+		// Rust #50140 also drops the cached server permission catalog, which is
+		// scoped to the account the connected server authenticated.
+		m.invalidatePermissionDiscoveryCache()
 	}
 	m.accountEmailRequestID = strings.TrimSpace(message.EmailRequestID)
 	m.refreshTranscript()

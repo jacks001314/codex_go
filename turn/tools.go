@@ -92,6 +92,10 @@ type ToolRegistryOptions struct {
 	MCPSourceObserver         func(source mcp.McpCallSource)
 	OrchestratorSkillsEnabled *bool
 	SkillProviders            *skillprovider.Registry
+	// CloudSkillProvider replaces MCP resource discovery for the cloud
+	// (orchestrator) catalog when the host supplies a frozen snapshot
+	// (Rust #55631). Nil keeps the MCP-backed path.
+	CloudSkillProvider skillprovider.Provider
 	// DiscoveryV2Skills exposes skills.installations. It is set only when the
 	// step's executor capability inventory came from discovery V2 (Rust #55330).
 	DiscoveryV2Skills  bool

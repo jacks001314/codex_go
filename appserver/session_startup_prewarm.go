@@ -170,11 +170,12 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 		var responseID string
 		status := "failed"
 		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
-			Model:        modelID,
-			Instructions: instructions,
-			InputItems:   historyItems,
-			ThreadID:     threadID,
-			Originator:   "session_startup",
+			Model:            modelID,
+			Instructions:     instructions,
+			InputItems:       historyItems,
+			ThreadID:         threadID,
+			Originator:       "session_startup",
+			PrewarmInputMode: "history",
 		})
 		if err == nil {
 			status = "ready"
@@ -246,7 +247,6 @@ func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string, historyIte
 		consumed = len(state.historyKeys)
 	}
 	responseID := strings.TrimSpace(state.responseID)
-	inputMode := state.inputMode
 	age := time.Since(state.startedAt)
 	if age < 0 {
 		age = 0
@@ -255,12 +255,12 @@ func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string, historyIte
 		// The prewarm finished without a usable response id; Rust reports the
 		// prewarm setup failure as unavailable with status "failed".
 		r.startupPrewarmMu.Unlock()
-		r.recordStartupPrewarmAgeAtFirstTurn("failed", inputMode, age)
+		r.recordStartupPrewarmAgeAtFirstTurn("failed", age)
 		return "", 0
 	}
 	state.consumed = true
 	r.startupPrewarmMu.Unlock()
-	r.recordStartupPrewarmAgeAtFirstTurn("consumed", inputMode, age)
+	r.recordStartupPrewarmAgeAtFirstTurn("consumed", age)
 	return responseID, consumed
 }
 

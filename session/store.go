@@ -318,27 +318,31 @@ type QueuedSubmission struct {
 }
 
 type Record struct {
-	ID               ThreadID         `json:"id"`
-	SessionID        string           `json:"session_id,omitempty"`
-	ForkedFromID     ThreadID         `json:"forked_from_id,omitempty"`
-	ParentThreadID   ThreadID         `json:"parent_thread_id,omitempty"`
-	Title            string           `json:"title,omitempty"`
-	Preview          string           `json:"preview,omitempty"`
-	Archived         bool             `json:"archived"`
-	Section          *ThreadSection   `json:"section,omitempty"`
-	SectionPosition  *int64           `json:"section_position,omitempty"`
-	SectionEnteredAt *time.Time       `json:"section_entered_at,omitempty"`
-	IsPinned         bool             `json:"is_pinned,omitempty"` // Legacy on-disk migration field.
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
-	RecencyAt        time.Time        `json:"recency_at"`
-	Metadata         Metadata         `json:"metadata"`
-	HistoryBase      *HistoryPosition `json:"history_base,omitempty"`
-	Items            []Item           `json:"items,omitempty"`
-	FromRollout      bool             `json:"-"`
-	ItemCount        int              `json:"-"`
-	InheritedItems   int              `json:"-"`
-	InheritedTurns   int              `json:"-"`
+	ID           ThreadID `json:"id"`
+	SessionID    string   `json:"session_id,omitempty"`
+	ForkedFromID ThreadID `json:"forked_from_id,omitempty"`
+	// AttachedThreadParentID marks a persisted fork attached to the named
+	// source thread (Rust #56351). It is independent of the spawned-agent
+	// ParentThreadID graph.
+	AttachedThreadParentID ThreadID         `json:"attached_thread_parent_id,omitempty"`
+	ParentThreadID         ThreadID         `json:"parent_thread_id,omitempty"`
+	Title                  string           `json:"title,omitempty"`
+	Preview                string           `json:"preview,omitempty"`
+	Archived               bool             `json:"archived"`
+	Section                *ThreadSection   `json:"section,omitempty"`
+	SectionPosition        *int64           `json:"section_position,omitempty"`
+	SectionEnteredAt       *time.Time       `json:"section_entered_at,omitempty"`
+	IsPinned               bool             `json:"is_pinned,omitempty"` // Legacy on-disk migration field.
+	CreatedAt              time.Time        `json:"created_at"`
+	UpdatedAt              time.Time        `json:"updated_at"`
+	RecencyAt              time.Time        `json:"recency_at"`
+	Metadata               Metadata         `json:"metadata"`
+	HistoryBase            *HistoryPosition `json:"history_base,omitempty"`
+	Items                  []Item           `json:"items,omitempty"`
+	FromRollout            bool             `json:"-"`
+	ItemCount              int              `json:"-"`
+	InheritedItems         int              `json:"-"`
+	InheritedTurns         int              `json:"-"`
 }
 
 // HistoryPosition freezes the materialized prefix inherited by a paginated
@@ -423,6 +427,8 @@ type ListOptions struct {
 type RelationFilter struct {
 	DirectChildrenOf ThreadID
 	DescendantsOf    ThreadID
+	// AttachedThreadsOf returns only saved forks attached to this thread.
+	AttachedThreadsOf ThreadID
 }
 
 type Page struct {
@@ -699,6 +705,16 @@ func (s *Store) Revert(threadID ThreadID, beforeTurnID string) (*Record, error) 
 	}
 	if strings.TrimSpace(beforeTurnID) == "" {
 		return nil, fmt.Errorf("%w: beforeTurnId is required", ErrInvalidThreadID)
+	}
+	// Rust #57256: an attached fork's visible history starts at its parent
+	// bookmark, so a turn inherited from the parent cannot be a revert
+	// boundary even though it is materialized for model context.
+	if record.InheritedTurns > 0 {
+		for i := 0; i < record.InheritedTurns && i < len(record.Metadata.RolloutTurns); i++ {
+			if record.Metadata.RolloutTurns[i].ID == strings.TrimSpace(beforeTurnID) {
+				return nil, fmt.Errorf("%w: beforeTurnId '%s' was not found in the source thread", ErrInvalidThreadID, strings.TrimSpace(beforeTurnID))
+			}
+		}
 	}
 	items, err := itemsBeforeTurn(record.Items, beforeTurnID)
 	if err != nil {
@@ -1935,6 +1951,12 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 	if options.Relation != nil && !recordMatchesRelation(record, options.Relation, all) {
 		return false
 	}
+	// Attached forks are hidden from ordinary listings and from every other
+	// relationship listing (Rust #56351).
+	if record.AttachedThreadParentID != "" &&
+		(options.Relation == nil || options.Relation.AttachedThreadsOf == "") {
+		return false
+	}
 	if len(options.ExcludedThreadIDs) > 0 && containsThreadID(options.ExcludedThreadIDs, record.ID) {
 		return false
 	}
@@ -2065,6 +2087,9 @@ func recordMatchesSearch(record *Record, search string) bool {
 }
 
 func recordMatchesRelation(record *Record, relation *RelationFilter, all []Record) bool {
+	if relation.AttachedThreadsOf != "" {
+		return record.AttachedThreadParentID == relation.AttachedThreadsOf
+	}
 	if relation.DirectChildrenOf != "" {
 		return record.ParentThreadID == relation.DirectChildrenOf
 	}

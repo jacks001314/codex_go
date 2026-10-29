@@ -10,9 +10,13 @@ func NewHTTPClient(respectSystemProxy bool, timeout time.Duration) *http.Client 
 	if !respectSystemProxy {
 		transport.Proxy = nil
 	}
+	var roundTripper http.RoundTripper = transport
+	if respectSystemProxy && proxyAuthSupported() {
+		roundTripper = newProxyAuthTransport(transport)
+	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: transport,
+		Transport: roundTripper,
 	}
 }
 

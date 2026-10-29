@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"codex_go/network"
+	"codex_go/shell"
 	"codex_go/utils"
 )
 
@@ -38,8 +41,8 @@ func TestShellSnapshotRequestRoundTripAndCapability(t *testing.T) {
 	if decoded.ShellSnapshot == nil || decoded.ShellSnapshot.ScopeID != "attachment-1" {
 		t.Fatalf("decoded shell snapshot = %#v", decoded.ShellSnapshot)
 	}
-	if got := localEnvironmentInfo().Capabilities.ShellSnapshotV2; got {
-		t.Fatal("local exec-server must not advertise shellSnapshotV2")
+	if got, want := localEnvironmentInfo().Capabilities.ShellSnapshotV2, runtime.GOOS != "windows"; got != want {
+		t.Fatalf("local shellSnapshotV2 capability = %v, want %v (Rust #40376)", got, want)
 	}
 }
 
@@ -77,8 +80,15 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := rewritten.Argv[2]
-	if !strings.HasPrefix(script, ". '") || !strings.Contains(script, "|| exit 1\n") || !strings.HasSuffix(script, "echo ok") {
+	if rewritten.Argv[1] != "-fc" {
+		t.Fatalf("zsh snapshot launch flag = %q, want -fc", rewritten.Argv[1])
+	}
+	if !strings.HasPrefix(script, "setopt RCS\nif ! eval \"unset __CODEX_SHELL_SNAPSHOT_STATE_0") || !strings.HasSuffix(script, "echo ok") {
 		t.Fatalf("rewritten script = %q", script)
+	}
+	state, ok := rewritten.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"]
+	if !ok || !strings.Contains(state, "sk-dummy-value") || strings.Contains(state, "sk-real-secret") {
+		t.Fatalf("in-memory snapshot state = %q", state)
 	}
 	if !strings.Contains(script, "\\builtin export HTTP_PROXY='http://127.0.0.1:8080'") ||
 		!strings.Contains(script, "\\builtin export "+network.CredentialBrokerActiveEnvKey+"='1'") ||
@@ -92,22 +102,15 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 	if calls.Load() != 1 || again.Argv[2] != script {
 		t.Fatalf("snapshot cache calls=%d script=%q", calls.Load(), again.Argv[2])
 	}
-	path := strings.TrimSpace(strings.Split(script, "|| exit 1")[0])
-	path = strings.TrimSpace(strings.TrimPrefix(path, ". '"))
-	path = strings.TrimSpace(strings.TrimSuffix(path, "'"))
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("snapshot file = %q: %v", path, err)
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(contents), "sk-real-secret") || !strings.Contains(string(contents), "sk-dummy-value") {
-		t.Fatalf("snapshot credentials were not masked: %s", contents)
+	if again.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"] != state {
+		t.Fatalf("cached snapshot state = %q, want %q", again.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"], state)
 	}
 	manager.close()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("snapshot file survived close: %v", err)
+	manager.mu.Lock()
+	cached := len(manager.cache)
+	manager.mu.Unlock()
+	if cached != 0 {
+		t.Fatalf("snapshot cache survived close: %d entries", cached)
 	}
 }
 
@@ -139,5 +142,95 @@ func TestShellSnapshotCaptureFailureRestoresCredentialsLikeRust(t *testing.T) {
 	}
 	if !strings.Contains(rewritten.Argv[2], "Credential masking is unavailable") || !strings.HasSuffix(rewritten.Argv[2], "echo ok") {
 		t.Fatalf("fallback script = %q", rewritten.Argv[2])
+	}
+}
+
+// TestShellSnapshotCacheIsBoundedLikeRust covers Rust's MAX_CACHED_SNAPSHOTS:
+// the executor keeps at most 16 captures and removes the file a file-backed
+// capture materialized when it evicts that entry (#39957).
+func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
+	previous := shellSnapshotPlatformSupported
+	shellSnapshotPlatformSupported = true
+	t.Cleanup(func() { shellSnapshotPlatformSupported = previous })
+	manager := newShellSnapshotManager()
+	t.Cleanup(manager.close)
+	// The state exceeds the 512 KiB environment replay budget, so every capture
+	// materializes a replay file.
+	output := []byte("# Snapshot file\n" + strings.Repeat("export BIG=\"value\"\n", 48*1024) + "\x00\x00\x00")
+	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
+		return output, nil
+	}
+	cwd, err := utils.FromHostNativePath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldestPath string
+	for index := 0; index < maxCachedShellSnapshots+1; index++ {
+		params := &ExecParams{
+			ProcessID: "bounded-snapshot",
+			Argv:      []string{"/bin/bash", "-lc", "echo ok"},
+			CWD:       cwd.String(),
+			ShellSnapshot: &ShellSnapshotRequest{
+				ScopeID: fmt.Sprintf("scope-%d", index),
+				Shell:   ShellInfo{Name: "bash", Path: "/bin/bash"},
+			},
+			Env: map[string]string{"PATH": "/bin"},
+		}
+		entry, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil)
+		if err != nil {
+			t.Fatalf("capture %d: %v", index, err)
+		}
+		if entry == nil || !entry.fileSource || entry.path == "" {
+			t.Fatalf("capture %d did not materialize a replay file: %#v", index, entry)
+		}
+		if index == 0 {
+			oldestPath = entry.path
+		}
+	}
+	manager.mu.Lock()
+	cached := len(manager.cache)
+	manager.mu.Unlock()
+	if cached != maxCachedShellSnapshots {
+		t.Fatalf("cached snapshots = %d, want %d", cached, maxCachedShellSnapshots)
+	}
+	if _, err := os.Stat(oldestPath); !os.IsNotExist(err) {
+		t.Fatalf("evicted snapshot file survived: %v", err)
+	}
+}
+
+// TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust covers Rust's bash
+// startup suppression: the restored snapshot launches with -pc and clears the
+// privileged mode so automatic startup files do not re-run (#39957).
+func TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust(t *testing.T) {
+	previous := shellSnapshotPlatformSupported
+	shellSnapshotPlatformSupported = true
+	t.Cleanup(func() { shellSnapshotPlatformSupported = previous })
+	manager := newShellSnapshotManager()
+	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
+		return []byte("# Snapshot file\nexport TOKEN=\"value\"\n\x00\x00\x00"), nil
+	}
+	cwd, err := utils.FromHostNativePath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := &ExecParams{
+		ProcessID: "bash-snapshot",
+		Argv:      []string{"/bin/bash", "-lc", "echo ok"},
+		CWD:       cwd.String(),
+		ShellSnapshot: &ShellSnapshotRequest{
+			ScopeID: "bash-scope",
+			Shell:   ShellInfo{Name: "bash", Path: "/bin/bash"},
+		},
+		Env: map[string]string{"PATH": "/bin"},
+	}
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rewritten.Argv[1] != "-pc" {
+		t.Fatalf("bash snapshot launch flag = %q, want -pc", rewritten.Argv[1])
+	}
+	if !strings.HasPrefix(rewritten.Argv[2], "set +o privileged\nif ! eval \"unset __CODEX_SHELL_SNAPSHOT_STATE_0") {
+		t.Fatalf("bash snapshot script = %q", rewritten.Argv[2])
 	}
 }

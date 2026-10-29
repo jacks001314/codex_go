@@ -70,6 +70,8 @@ func (m *Model) resetThreadScopedState() {
 	m.clearCompactionActivity()
 	m.toolRequestRuntime = chatwidget.ToolRequestRuntimeState{}
 	m.resetReviewModeState()
+	// Rust #50140 clears the cached server permission catalog with the session.
+	m.invalidatePermissionDiscoveryCache()
 	m.pendingSteers = nil
 	m.rejectedSteers = nil
 	m.mainFind = mainTranscriptFind{}

@@ -2169,6 +2169,12 @@ func TestRolloutDBParitySourceCategoryAndCountSummary(t *testing.T) {
 	if got := rolloutParitySourceCategory(`{"subagent":{"thread_spawn":{"parent_thread_id":"00000000-0000-0000-0000-000000000001","depth":2}}}`); got != "subagent:thread_spawn" {
 		t.Fatalf("source category = %q", got)
 	}
+	if got := rolloutParitySourceCategory(`{"internal":"guardian"}`); got != "internal:guardian" {
+		t.Fatalf("internal guardian source category = %q", got)
+	}
+	if got := rolloutParitySourceCategory(`{"internal":"memory_consolidation"}`); got != "internal:memory_consolidation" {
+		t.Fatalf("internal memory source category = %q", got)
+	}
 	summary := rolloutParityCountSummary([]string{"a", "b", "c", "d", "e", "f", "g", "h", "i"})
 	if summary != "a=1, b=1, c=1, d=1, e=1, f=1, g=1, h=1, other=1 across 1 categories" {
 		t.Fatalf("summary = %q", summary)

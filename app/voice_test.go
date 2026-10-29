@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
 	"codex_go/realtime"
 	codextea "codex_go/tui/tea"
 	"codex_go/voicehost"
@@ -164,7 +166,9 @@ func TestVoiceRuntimeCloseRetiresHelperAndStopsSession(t *testing.T) {
 			t.Fatalf("start reported %#v", msg)
 		}
 	}
-	runtime.close()
+	if err := runtime.close(true); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 	if stoppedThreadID != "thread-close" {
 		t.Fatalf("stopped thread = %q", stoppedThreadID)
 	}
@@ -173,7 +177,9 @@ func TestVoiceRuntimeCloseRetiresHelperAndStopsSession(t *testing.T) {
 	}
 	// A second close must be a no-op rather than stopping an unrelated session.
 	stoppedThreadID = ""
-	runtime.close()
+	if err := runtime.close(true); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
 	if stoppedThreadID != "" {
 		t.Fatalf("a second close stopped %q", stoppedThreadID)
 	}
@@ -534,5 +540,92 @@ func TestRealtimeSettingsFromConfigValuesReportsUnusableAudioLikeRust(t *testing
 				t.Fatalf("an unusable audio section still produced a selection: %#v", got.Audio)
 			}
 		})
+	}
+}
+
+// Rust #52756: once the shared connection is gone, local media is retired
+// without another app-server request.
+func TestVoiceRuntimeCloseSkipsStopRequestWhenDisconnected(t *testing.T) {
+	withFakeVoiceSession(t, &voicehost.StartedSession{
+		OfferSDP: "v=0 offer",
+		Handle:   &voicehost.SessionHandle{},
+	}, nil)
+	stopped := false
+	runtime := newVoiceRuntime(voiceRuntimeOptions{
+		startSession: func(context.Context, realtime.StartParams) error { return nil },
+		stopSession: func(context.Context, string) error {
+			stopped = true
+			return nil
+		},
+	})
+	if msg := runtime.startCmd("thread-close", 6)(); msg == nil {
+		t.Fatal("the helper was not started")
+	}
+	if err := runtime.close(false); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if stopped {
+		t.Fatal("a disconnected close asked the app-server to stop the session")
+	}
+	if runtime.running() {
+		t.Fatal("a disconnected close retained the helper")
+	}
+}
+
+// Rust #52756: a failed realtime stop request reaches the TUI so it can record
+// app_server_request and report the error.
+func TestVoiceRuntimeCloseSurfacesStopRequestFailure(t *testing.T) {
+	withFakeVoiceSession(t, &voicehost.StartedSession{
+		OfferSDP: "v=0 offer",
+		Handle:   &voicehost.SessionHandle{},
+	}, nil)
+	stopErr := errors.New("stop failed")
+	runtime := newVoiceRuntime(voiceRuntimeOptions{
+		startSession: func(context.Context, realtime.StartParams) error { return nil },
+		stopSession:  func(context.Context, string) error { return stopErr },
+	})
+	if msg := runtime.startCmd("thread-close", 6)(); msg == nil {
+		t.Fatal("the helper was not started")
+	}
+	if err := runtime.close(true); !errors.Is(err, stopErr) {
+		t.Fatalf("close error = %v, want the stop failure", err)
+	}
+	if runtime.running() {
+		t.Fatal("a failed stop retained the helper")
+	}
+}
+
+// Rust #52756: only a transport failure puts the TUI offline, so only it emits
+// the disconnect that retires voice media.
+func TestSendRemoteTurnErrorReportsTransportDisconnectLikeRust(t *testing.T) {
+	messages := make(chan bubbletea.Msg, 4)
+	sendRemoteTurnError(messages, asRemoteTransportError(errors.New("stream closed")))
+	close(messages)
+	var received []bubbletea.Msg
+	for message := range messages {
+		received = append(received, message)
+	}
+	if len(received) != 3 {
+		t.Fatalf("messages = %#v", received)
+	}
+	if _, ok := received[0].(codextea.AppServerDisconnectMsg); !ok {
+		t.Fatalf("first message = %#v, want the disconnect", received[0])
+	}
+	if _, ok := received[1].(codextea.ThreadEventMsg); !ok {
+		t.Fatalf("second message = %#v", received[1])
+	}
+	if completed, ok := received[2].(codextea.TurnCompletedMsg); !ok || completed.Err == nil {
+		t.Fatalf("third message = %#v", received[2])
+	}
+}
+
+func TestSendRemoteTurnErrorKeepsServerErrorsOnline(t *testing.T) {
+	messages := make(chan bubbletea.Msg, 4)
+	sendRemoteTurnError(messages, &remoteRPCError{Code: -32603, Message: "boom"})
+	close(messages)
+	for message := range messages {
+		if _, ok := message.(codextea.AppServerDisconnectMsg); ok {
+			t.Fatal("a JSON-RPC error was reported as a transport disconnect")
+		}
 	}
 }

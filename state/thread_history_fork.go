@@ -41,6 +41,16 @@ func (r *StateRuntime) PreparePaginatedFork(ctx context.Context, threadID, bound
 	if boundaryKind == "" {
 		boundaryKind = ThreadHistoryForkLatest
 	}
+	// Fork boundaries resolve against client-visible history so an attached
+	// child cannot fork through turns inherited from its parent (Rust #57256).
+	visibleLineage := lineage
+	if boundaryKind != ThreadHistoryForkLatest {
+		pageLineage, _, pageErr := r.prepareThreadHistoryPageRead(ctx, threadID, "prepare_fork")
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		visibleLineage = pageLineage
+	}
 	turnID = strings.TrimSpace(turnID)
 
 	var position *rollout.HistoryPosition
@@ -63,7 +73,7 @@ func (r *StateRuntime) PreparePaginatedFork(ctx context.Context, threadID, bound
 		if turnID == "" {
 			return nil, invalidThreadHistory("throughTurn fork boundary requires a turn id")
 		}
-		row, err := findThreadHistoryForkTurn(ctx, db, lineage, turnID, true)
+		row, err := findThreadHistoryForkTurn(ctx, db, visibleLineage, turnID, true)
 		if err != nil {
 			return nil, err
 		}
@@ -86,7 +96,7 @@ func (r *StateRuntime) PreparePaginatedFork(ctx context.Context, threadID, bound
 		if turnID == "" {
 			return nil, invalidThreadHistory("beforeTurn fork boundary requires a turn id")
 		}
-		row, err := findThreadHistoryForkTurn(ctx, db, lineage, turnID, false)
+		row, err := findThreadHistoryForkTurn(ctx, db, visibleLineage, turnID, false)
 		if err != nil {
 			return nil, err
 		}
@@ -108,7 +118,7 @@ func (r *StateRuntime) PreparePaginatedFork(ctx context.Context, threadID, bound
 	default:
 		return nil, invalidThreadHistory(fmt.Sprintf("unknown fork boundary %q", boundaryKind))
 	}
-	return normalizeThreadHistoryForkPosition(lineage, position)
+	return normalizeThreadHistoryForkPosition(visibleLineage, position)
 }
 
 func (r *StateRuntime) materializePaginatedLineageForReference(ctx context.Context, requestedThreadID string) error {

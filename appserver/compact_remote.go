@@ -211,6 +211,9 @@ type agentCompactRunner struct {
 	// (Rust `Session::compaction_responses_metadata`): the turn-metadata
 	// document reports the compaction request kind and the turn's identity.
 	clientMetadata map[string]string
+	// sessionID is the thread's Responses session identity, which differs from
+	// the thread id for host-owned internal sessions (Rust #39994).
+	sessionID string
 	// executedToolCalls is the thread's executed-tool-call recorder; Rust
 	// #46044 attaches the recorded Code Mode inventory to compaction prompts.
 	executedToolCalls *turn.ExecutedToolCallRecorder
@@ -252,6 +255,7 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		ProviderID:      strings.TrimSpace(r.providerID),
 		TaskKind:        model.AgentTaskRegular,
 		ThreadID:        request.ThreadID,
+		SessionID:       r.sessionID,
 		TurnID:          request.TurnID,
 		Store:           false,
 		ClientMetadata:  clientMetadata,

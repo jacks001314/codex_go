@@ -65,6 +65,7 @@ func (r *RuntimeRouter) rememberSampledToolCalls(threadID string, turnID string,
 	if strings.TrimSpace(key) == "\x00" {
 		return
 	}
+	r.registerAnalyticsTurn(threadID, turnID)
 	r.sampledToolCallsMu.Lock()
 	if r.sampledToolCalls == nil {
 		r.sampledToolCalls = map[string]map[string]string{}
@@ -126,6 +127,7 @@ func (r *RuntimeRouter) emitToolEvent(threadID string, turnID string, base *tele
 		return
 	}
 	key := sampledToolCallsKey(threadID, turnID)
+	r.registerAnalyticsTurn(threadID, turnID)
 	r.sampledToolCallsMu.Lock()
 	if r.pendingToolEvents == nil {
 		r.pendingToolEvents = map[string][]pendingToolEvent{}
@@ -283,6 +285,7 @@ func (r *RuntimeRouter) rememberCodeModeChildCall(threadID string, turnID string
 		return
 	}
 	key := sampledToolCallsKey(threadID, turnID)
+	r.registerAnalyticsTurn(threadID, turnID)
 	r.sampledToolCallsMu.Lock()
 	defer r.sampledToolCallsMu.Unlock()
 	// Rust records a child call only while its cell is known.

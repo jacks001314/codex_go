@@ -195,7 +195,7 @@ WHERE thread_id = ? AND rollout_ordinal >= ?`
 }
 
 func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params ThreadHistoryListItemsParams) (*ThreadHistoryItemsPage, error) {
-	lineage, db, err := r.prepareThreadHistoryRead(ctx, params.ThreadID, "list_items")
+	lineage, db, err := r.prepareThreadHistoryPageRead(ctx, params.ThreadID, "list_items")
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +286,7 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 }
 
 func (r *StateRuntime) ListThreadHistoryTurns(ctx context.Context, params ThreadHistoryListTurnsParams) (*ThreadHistoryTurnsPage, error) {
-	lineage, db, err := r.prepareThreadHistoryRead(ctx, params.ThreadID, "list_turns")
+	lineage, db, err := r.prepareThreadHistoryPageRead(ctx, params.ThreadID, "list_turns")
 	if err != nil {
 		return nil, err
 	}
@@ -391,6 +391,18 @@ WHERE thread_id = ? AND rollout_ordinal >= ?`
 }
 
 func (r *StateRuntime) prepareThreadHistoryRead(ctx context.Context, threadID, operation string) ([]threadHistoryLineageSegment, *sql.DB, error) {
+	return r.prepareThreadHistoryReadForMode(ctx, threadID, operation, false)
+}
+
+// prepareThreadHistoryPageRead resolves lineage for client-visible history
+// (items, turns, search, fork boundaries). Attached forks stop at the parent
+// bookmark so inherited turns never appear as the child's activity (Rust
+// #57256 `resolve_rollout_lineage_for_history_page`).
+func (r *StateRuntime) prepareThreadHistoryPageRead(ctx context.Context, threadID, operation string) ([]threadHistoryLineageSegment, *sql.DB, error) {
+	return r.prepareThreadHistoryReadForMode(ctx, threadID, operation, true)
+}
+
+func (r *StateRuntime) prepareThreadHistoryReadForMode(ctx context.Context, threadID, operation string, historyPage bool) ([]threadHistoryLineageSegment, *sql.DB, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -402,7 +414,7 @@ func (r *StateRuntime) prepareThreadHistoryRead(ctx context.Context, threadID, o
 	if !found || !strings.EqualFold(strings.TrimSpace(mode), "paginated") {
 		return nil, nil, &ThreadHistoryError{Kind: ThreadHistoryUnsupported, Operation: operation}
 	}
-	lineage, err := r.resolveThreadHistoryLineage(ctx, threadID)
+	lineage, err := r.resolveThreadHistoryLineage(ctx, threadID, historyPage)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -422,7 +434,7 @@ func (r *StateRuntime) prepareThreadHistoryRead(ctx context.Context, threadID, o
 	return lineage, db, nil
 }
 
-func (r *StateRuntime) resolveThreadHistoryLineage(ctx context.Context, requestedThreadID string) ([]threadHistoryLineageSegment, error) {
+func (r *StateRuntime) resolveThreadHistoryLineage(ctx context.Context, requestedThreadID string, historyPage bool) ([]threadHistoryLineageSegment, error) {
 	segments := make([]threadHistoryLineageSegment, 0, 1)
 	seen := map[string]bool{}
 	threadID := requestedThreadID
@@ -470,8 +482,21 @@ func (r *StateRuntime) resolveThreadHistoryLineage(ctx context.Context, requeste
 			}
 			start = meta.HistoryBase.EndOrdinalExclusive + 1
 		}
+		// Reverts can point to earlier records of the same child. Stop at the
+		// original parent bookmark so views never traverse inherited history.
+		atParent := false
+		if historyPage && meta.AttachedThread && meta.HistoryBase != nil {
+			if forkOrdinal := rollout.ForkedFromOrdinalAtPath(meta, existing); forkOrdinal != nil && meta.HistoryBase.EndOrdinalExclusive <= *forkOrdinal {
+				atParent = true
+				adjusted, adjustErr := rollout.AttachedHistoryStart(existing, start)
+				if adjustErr != nil {
+					return nil, fmt.Errorf("resolve attached history start for %s: %w", threadID, adjustErr)
+				}
+				start = adjusted
+			}
+		}
 		segments = append(segments, threadHistoryLineageSegment{ThreadID: threadID, Path: existing, Start: start, End: cloneRolloutHistoryPosition(end), Meta: meta})
-		if meta.HistoryBase == nil {
+		if meta.HistoryBase == nil || atParent {
 			break
 		}
 		threadID = meta.HistoryBase.ThreadID

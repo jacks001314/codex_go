@@ -257,7 +257,12 @@ func (m *Model) finishManageSkillsModal(state *manageSkillsModalState) bubbletea
 	}
 	m.skillsInventoryLoading = true
 	reader := m.onReadSkills
-	cwd := state.cwd
+	// Rust #54050: closing the popup refreshes the configured working
+	// directory, not the directory captured when it opened.
+	cwd := strings.TrimSpace(m.sessionCWD)
+	if cwd == "" {
+		cwd = strings.TrimSpace(state.cwd)
+	}
 	return func() bubbletea.Msg {
 		response, err := reader(cwd, true)
 		return SkillsInventoryResultMsg{CWD: cwd, Response: response, Err: err}

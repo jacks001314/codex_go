@@ -1065,14 +1065,17 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	// Rust #54421: an explicit attachment to the default daemon socket requires the
 	// server to be present during a restart window, and the advertised alias is
 	// replaced by the verified endpoint so it cannot redirect local configuration.
+	explicitLocalDaemon := false
 	if socketPath, requested := explicitDefaultDaemonSocketPath(remoteEndpoint); requested {
 		if _, statErr := os.Stat(socketPath); statErr != nil {
 			return interactiveFatalExit(stderr, ExplicitLocalDaemonSocketUnavailableError)
 		}
 		if verified, ok := appserver.VerifiedLocalDaemonSocket(socketPath); ok {
+			explicitLocalDaemon = true
 			remoteEndpoint = appserverdaemon.NewUnixSocketEndpoint(verified)
 		}
 	}
+	implicitLocalDaemon := false
 	if remoteEndpoint == nil {
 		// Rust app_server_target_for_launch + startup_orchestration: an eligible
 		// interactive launch reuses a running shared daemon (or, with
@@ -1083,9 +1086,21 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 			return interactiveFatalExit(stderr, endpointErr.Error())
 		}
 		remoteEndpoint = endpoint
+		implicitLocalDaemon = endpoint != nil
 	}
 	if message := interactiveRemoteWorkloadIdentityError(remoteEndpoint, auth.IsWorkloadIdentitySelected()); message != "" {
 		return interactiveFatalExit(stderr, message)
+	}
+	// Rust #55442: compare this launch's explicit feature toggles with the shared
+	// daemon's reported configuration before the TUI opens. An optional
+	// attachment that cannot recover still falls back to embedded mode.
+	if implicitLocalDaemon || explicitLocalDaemon {
+		allowEmbeddedFallback := implicitLocalDaemon && !daemonAutoStartFeature(root)
+		resolvedEndpoint, _, compatibilityErr := resolveDaemonCompatibility(ctx, root, remoteEndpoint, allowEmbeddedFallback, stdin, stdout)
+		if compatibilityErr != nil {
+			return interactiveFatalExit(stderr, compatibilityErr.Error())
+		}
+		remoteEndpoint = resolvedEndpoint
 	}
 	if remoteEndpoint != nil {
 		if strings.TrimSpace(root.Prompt) != "" {
@@ -1210,11 +1225,16 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		startSession:     voiceStart,
 		stopSession:      voiceStop,
 	})
+	// Rust #47417: probe the terminal before the first frame so `auto` can keep
+	// native scrollback for Apple Terminal over SSH. The probe runs once per
+	// process; the TUI's own startup path reuses its leftover input.
+	stdin = codextea.PrepareTerminal(stdin, stdout)
+	terminalAppOverSSH := codextui.TerminalAppOverSSH()
 	options := codextea.Options{
 		// Rust #57516: the status line's profile item reports the profile
 		// selected with --profile.
 		Profile:                      interactiveStringFromSharedProfile(root),
-		NoAltScreen:                  interactiveNoAltScreen(root, settings),
+		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
 		AlternateScreenMode:          settings.AlternateScreenMode,
 		WindowsTerminalMappedInput:   codextea.WindowsTerminalMappedInputEnabled(),
 		LocalSession:                 true,
@@ -2101,7 +2121,7 @@ type interactiveLocalSettings struct {
 func interactiveLocalSettingsFromLive(root *cli.RootOptions, settings codextea.SettingsWriteResult) interactiveLocalSettings {
 	return interactiveLocalSettings{
 		Tui:         settings,
-		NoAltScreen: interactiveNoAltScreen(root, settings),
+		NoAltScreen: interactiveNoAltScreen(root, settings, codextui.TerminalAppOverSSH()),
 	}
 }
 
@@ -2454,7 +2474,7 @@ func interactiveAlternateScreenMode(values map[string]any) string {
 // interactiveNoAltScreen resolves this launch's terminal ownership. Rust owns
 // the screen only when fullscreen transcripts and the alternate screen are both
 // enabled (TranscriptMode::resolve); `--no-alt-screen` always wins.
-func interactiveNoAltScreen(root *cli.RootOptions, settings codextea.SettingsWriteResult) bool {
+func interactiveNoAltScreen(root *cli.RootOptions, settings codextea.SettingsWriteResult, terminalAppOverSSH bool) bool {
 	if root != nil && root.Shared.NoAltScreen {
 		return true
 	}
@@ -2462,14 +2482,23 @@ func interactiveNoAltScreen(root *cli.RootOptions, settings codextea.SettingsWri
 	if !fullscreen {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(settings.AlternateScreenMode), "never")
+	switch strings.ToLower(strings.TrimSpace(settings.AlternateScreenMode)) {
+	case "always":
+		return false
+	case "never":
+		return true
+	default:
+		// auto (the default) uses native scrollback for Apple Terminal over
+		// SSH (Rust determine_alt_screen_mode, #47417).
+		return terminalAppOverSSH
+	}
 }
 
-func interactiveNoAltScreenFromValues(root *cli.RootOptions, values map[string]any) bool {
+func interactiveNoAltScreenFromValues(root *cli.RootOptions, values map[string]any, terminalAppOverSSH bool) bool {
 	return interactiveNoAltScreen(root, codextea.SettingsWriteResult{
 		FullscreenTranscript: interactiveFullscreenTranscript(values),
 		AlternateScreenMode:  interactiveAlternateScreenMode(values),
-	})
+	}, terminalAppOverSSH)
 }
 
 // interactiveStatusLineUseColors resolves the configured

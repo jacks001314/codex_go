@@ -221,6 +221,9 @@ func (r *RuntimeRouter) turnStepInstructionsProvider(threadID string, turnID str
 		if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Params != nil {
 			stepParams.Model = strings.TrimSpace(active.Params.Model)
 		}
+		// Rust #55957: re-discover cloud catalogs before the next model step so
+		// plugin acceptance and skill instructions follow a mid-turn auth change.
+		r.refreshCloudPluginCatalogForStep(context.Background(), runConfig.Config, threadID, turnID)
 		instructions = r.instructionsWithPluginContext(threadID, runConfig.Config, stepParams, instructions)
 		refreshed, _, _, err := r.instructionsWithSkillsContextForTurn(context.Background(), threadID, turnID, runConfig.Config, stepParams, instructions)
 		if err != nil {

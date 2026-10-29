@@ -120,7 +120,21 @@ type SubmitRequest struct {
 // returns the input the TUI should read: keystrokes that arrived during the
 // probe window come back as leftover bytes and are replayed ahead of the
 // terminal, mirroring Rust's terminal_probe::startup + startup_replay_input.
+var terminalStartupProbeConsumed atomic.Bool
+
+// PrepareTerminal runs the bounded startup probe before the first frame and
+// returns the input the TUI should read, with keystrokes typed during the probe
+// window replayed ahead of the terminal. Launchers call it once before they
+// resolve terminal ownership (Rust #47417 decides the alternate screen from the
+// probe's Apple Terminal identity); Run calls it again and reuses the result.
+func PrepareTerminal(input io.Reader, output io.Writer) io.Reader {
+	return probeTerminalColorsForTUI(input, output)
+}
+
 func probeTerminalColorsForTUI(input io.Reader, output io.Writer) io.Reader {
+	if terminalStartupProbeConsumed.Load() {
+		return input
+	}
 	inputFile, inputOK := input.(*os.File)
 	outputFile, outputOK := output.(*os.File)
 	if !inputOK || !outputOK || inputFile == nil || outputFile == nil {
@@ -132,6 +146,9 @@ func probeTerminalColorsForTUI(input io.Reader, output io.Writer) io.Reader {
 	}
 	outputInfo, err := outputFile.Stat()
 	if err != nil || outputInfo.Mode()&os.ModeCharDevice == 0 {
+		return input
+	}
+	if !terminalStartupProbeConsumed.CompareAndSwap(false, true) {
 		return input
 	}
 	_, leftover, _ := codextui.ProbeTerminalStartup(100 * time.Millisecond)
@@ -597,6 +614,12 @@ type TurnInterruptedMsg struct {
 	Err      error
 }
 
+// AppServerDisconnectMsg reports that the TUI's app-server connection failed at
+// the transport level. Rust recovers through App::begin_reconnect, whose
+// ChatWidget::pause_for_disconnect retires local voice media before the TUI
+// goes offline (#52756).
+type AppServerDisconnectMsg struct{}
+
 // ClipboardWriteResultMsg delivers an asynchronous clipboard write result.
 type ClipboardWriteResultMsg struct {
 	RequestID uint64
@@ -746,6 +769,13 @@ type VoiceNotificationMsg struct {
 type VoiceAnswerResultMsg struct {
 	AttemptID uint64
 	Err       error
+	// Cause is the bounded voice failure cause (Rust RealtimeFailureCause),
+	// carried from the typed WebRTC error when one is available.
+	Cause string
+	// Message is the user-facing failure text chosen by the runtime layer. It
+	// preserves a stored WebRTC error instead of the less specific control
+	// send failure.
+	Message string
 }
 
 // VoiceSettingsMsg carries the supported voices and the saved preference.
@@ -1279,7 +1309,10 @@ type Options struct {
 	// OnVoiceApplyAnswer hands a remote answer to the local helper.
 	OnVoiceApplyAnswer func(threadID string, attemptID uint64, answer string) bubbletea.Cmd
 	// OnVoiceCloseHelper closes and reaps the local helper.
-	OnVoiceCloseHelper func()
+	// notifyServer asks the app-server to end the voice session; a caller that
+	// already lost the shared connection passes false. The returned error is the
+	// stop request's outcome, which the TUI classifies as app_server_request.
+	OnVoiceCloseHelper func(notifyServer bool) error
 	// OnVoiceSetMicrophoneMuted applies the microphone state to the helper.
 	OnVoiceSetMicrophoneMuted func(muted bool) error
 	// OnVoicePeaks samples and clears the helper's audio levels.
@@ -1577,7 +1610,7 @@ type Model struct {
 	// onVoiceApplyAnswer hands a remote answer to the local helper.
 	onVoiceApplyAnswer func(threadID string, attemptID uint64, answer string) bubbletea.Cmd
 	// onVoiceCloseHelper closes and reaps the local helper.
-	onVoiceCloseHelper func()
+	onVoiceCloseHelper func(notifyServer bool) error
 	// onVoiceSetMicrophoneMuted applies the microphone state to the helper.
 	onVoiceSetMicrophoneMuted func(muted bool) error
 	// onVoicePeaks samples and clears the helper's audio levels.
@@ -3448,6 +3481,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			recapStatus = appserver.TurnStatusFailed
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
+	case AppServerDisconnectMsg:
+		m.handleAppServerDisconnect()
+		return m, m.refreshStatusControlsCmd()
 	case TurnInterruptedMsg:
 		if m.applyInactiveThreadTurnInterrupted(msg) {
 			return m, m.refreshStatusControlsCmd()
@@ -3525,6 +3561,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if m.VoiceConversation.Running() && msg.AttemptID == m.VoiceConversation.AttemptID {
 			m.realtimeHelperAttached = true
 			m.voiceStripStartedAt = m.currentTime()
+		} else if !m.VoiceConversation.Running() {
+			// The attempt was reset while the helper was starting, so nothing
+			// else will close it (Rust aborts the startup, #52756).
+			_ = m.retireVoiceHelper(false)
 		}
 		return m, m.refreshStatusControlsCmd()
 	case VoiceDevicesMsg:
@@ -9549,16 +9589,12 @@ func (m *Model) applyVoiceCommand(args string) bubbletea.Cmd {
 			m.recordVoiceCommandResult("Voice conversations are not running.")
 			return nil
 		}
-		m.VoiceConversation.BeginVoiceStop()
-		m.recordVoiceCommandResult("Stopping voice conversation.")
-		m.closeVoiceHelper()
+		m.stopVoiceConversation()
 		return nil
 	}
 
 	if !m.VoiceConversation.Inactive() {
-		m.VoiceConversation.BeginVoiceStop()
-		m.recordVoiceCommandResult("Stopping voice conversation.")
-		m.closeVoiceHelper()
+		m.stopVoiceConversation()
 		return nil
 	}
 	availability := chatwidget.CheckVoiceCommandAvailability(chatwidget.VoiceCommandContext{
@@ -9701,7 +9737,7 @@ func (m *Model) handleVoiceNotification(notification chatwidget.VoiceNotificatio
 		cmd = m.publishVoiceAnswer(effect.PublishSDP)
 	}
 	if effect.CloseHelper {
-		m.closeVoiceHelper()
+		m.recordVoiceStopFailure(m.closeVoiceHelper())
 	}
 	// Rendering is deduplicated, so a completed caption appears exactly once
 	// whether it arrived live or while the session was stopping.
@@ -9749,19 +9785,33 @@ func (m *Model) toggleVoiceMicrophoneFromKey() {
 
 // handleVoiceAnswerResult records the outcome of applying a remote answer.
 func (m *Model) handleVoiceAnswerResult(msg VoiceAnswerResultMsg) bubbletea.Cmd {
-	if m == nil || !m.VoiceConversation.Running() || msg.AttemptID != m.VoiceConversation.AttemptID {
+	if m == nil {
+		return nil
+	}
+	if !m.VoiceConversation.Running() || msg.AttemptID != m.VoiceConversation.AttemptID {
+		// A reset while the helper was starting still leaves the helper owning
+		// the microphone; Rust aborts that startup and closes it (#52756).
+		if !m.VoiceConversation.Running() {
+			_ = m.retireVoiceHelper(false)
+		}
 		return nil
 	}
 	if msg.Err != nil {
-		if msg.Err == voicehost.ConnectionNegotiationTimedOut {
+		if msg.Err == voicehost.ConnectionNegotiationTimedOut || msg.Cause == "negotiation_timed_out" {
 			outcome := m.VoiceConversation.FailVoiceStartup(true, false)
 			m.recordVoiceCommandResult(outcome.Message)
 		} else {
-			m.VoiceConversation.RecordVoiceFailure()
+			m.VoiceConversation.RecordVoiceFailureCause(msg.Cause)
 			m.VoiceConversation.BeginVoiceStop()
-			m.recordVoiceCommandResult("Voice connection failed: " + msg.Err.Error())
+			message := msg.Message
+			if message == "" {
+				message = "Voice connection failed: " + msg.Err.Error()
+			}
+			m.recordVoiceCommandResult(message)
 		}
-		m.closeVoiceHelper()
+		// The failure above is more specific than a control-channel error, so a
+		// failed stop request must not replace it (Rust #52756).
+		_ = m.retireVoiceHelper(true)
 		return nil
 	}
 	m.VoiceConversation.MarkVoiceWebRTCConnected()
@@ -9818,17 +9868,63 @@ func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) 
 	}
 }
 
-// closeVoiceHelper retires the local helper and clears the streamed caption.
-func (m *Model) closeVoiceHelper() {
+// stopVoiceConversation ends a running conversation on the user's request and
+// classifies a failed stop request (Rust #52756).
+func (m *Model) stopVoiceConversation() {
+	m.VoiceConversation.BeginVoiceStop()
+	m.recordVoiceCommandResult("Stopping voice conversation.")
+	m.recordVoiceStopFailure(m.retireVoiceHelper(true))
+}
+
+// closeVoiceHelper retires the local helper and clears the streamed caption,
+// reporting a failed app-server stop request.
+func (m *Model) closeVoiceHelper() error {
+	return m.retireVoiceHelper(true)
+}
+
+// retireVoiceHelper tears down the local helper and clears the streamed caption.
+// notifyServer asks the app-server to end the session; the disconnect path
+// passes false because the shared connection is already gone and the RPC cannot
+// succeed (Rust retires local media without another request).
+func (m *Model) retireVoiceHelper(notifyServer bool) error {
 	m.VoiceConversation.FinishVoiceLiveTranscripts()
 	m.refreshVoiceTranscript()
 	m.realtimeHelperAttached = false
 	// Answers that never reached the conversation must still be readable, so
 	// they are rendered normally instead of being dropped.
 	m.restoreUndeliveredVoiceSpeech()
-	if m.onVoiceCloseHelper != nil {
-		m.onVoiceCloseHelper()
+	if m.onVoiceCloseHelper == nil {
+		return nil
 	}
+	return m.onVoiceCloseHelper(notifyServer)
+}
+
+// recordVoiceStopFailure mirrors Rust's RealtimeConversationStop failure path:
+// the stop request is an app-server request, so a failure records
+// app_server_request, resets the session, and reports the error. The failure is
+// recorded at most once and never overwrites an earlier, more specific cause.
+func (m *Model) recordVoiceStopFailure(err error) {
+	if err == nil || !m.VoiceConversation.Running() {
+		return
+	}
+	m.VoiceConversation.RecordVoiceFailureCause(chatwidget.VoiceFailureCauseAppServerRequest)
+	m.VoiceConversation.ResetVoiceConversation()
+	m.recordVoiceCommandResult("Voice conversation failed: " + err.Error())
+	m.refreshVoiceTranscript()
+}
+
+// handleAppServerDisconnect mirrors Rust App::begin_reconnect ->
+// ChatWidget::pause_for_disconnect: the app-server transport can fail while the
+// separate WebRTC helper still sends microphone audio, so the local media is
+// retired before the TUI continues offline. The voice session keeps its own
+// thread across navigation, so a parked (background) session is covered too.
+func (m *Model) handleAppServerDisconnect() {
+	if m == nil || !m.VoiceConversation.RecordVoiceDisconnectFailure() {
+		return
+	}
+	_ = m.retireVoiceHelper(false)
+	m.VoiceConversation.ResetVoiceConversation()
+	m.refreshVoiceTranscript()
 }
 
 // deliverVoiceSpeech sends a delegated answer into the realtime conversation.
@@ -9857,7 +9953,12 @@ func (m *Model) handleVoiceSpeechResult(msg VoiceSpeechResultMsg) {
 	if ok {
 		m.mergeAssistantFinal(text)
 	}
-	m.recordVoiceCommandResult("The spoken answer could not be delivered: " + msg.Err.Error())
+	// Rust ChatWidget::on_realtime_error(SpeechDelivery): the delivery failure
+	// ends the conversation so the strip cannot stay live without a backend.
+	if m.VoiceConversation.BeginVoiceFailure(chatwidget.VoiceFailureCauseSpeechDelivery) {
+		_ = m.closeVoiceHelper()
+		m.recordVoiceCommandResult("Failed to deliver the voice response.")
+	}
 	m.refreshTranscript()
 }
 

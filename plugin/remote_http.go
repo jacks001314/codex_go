@@ -3,6 +3,8 @@ package plugin
 import (
 	"net/http"
 	"sync"
+
+	"codex_go/network"
 )
 
 // CODEXProductSKU is Rust remote::CODEX_PRODUCT_SKU (#49100): the product SKU
@@ -17,8 +19,9 @@ const CODEXProductSKU = "codex"
 // the lifetime of its owner, so repeated service configurations reuse
 // connections; independently constructed owners keep separate pools.
 //
-// Go has no route-aware client selector, so the pooled client wraps a clone of
-// http.DefaultTransport rather than Rust's RouteAwareClientPool.
+// Go has no route-aware client selector, so the pooled client uses the shared
+// system-proxy client (including Windows CONNECT authentication) rather than
+// Rust's RouteAwareClientPool.
 type RemotePluginHTTPPool struct {
 	mu     sync.Mutex
 	client *http.Client
@@ -39,7 +42,7 @@ func (p *RemotePluginHTTPPool) Client() *http.Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.client == nil {
-		p.client = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+		p.client = network.NewHTTPClient(true, 0)
 	}
 	return p.client
 }

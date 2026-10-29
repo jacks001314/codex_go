@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"codex_go/shell"
 )
 
 // Rust parity: codex-rs/tui/src/terminal_probe.rs.
@@ -34,7 +37,28 @@ type StartupProbe struct {
 	CursorPosition               *TerminalPosition
 	DefaultColors                *DefaultColors
 	KeyboardEnhancementSupported *bool
+	// TerminalAppOverSSH is Some when the startup probe settled whether the
+	// terminal is Apple Terminal over SSH (Rust #47417). It stays nil while a
+	// requested DA1/DA2 identity probe has not yet seen both replies.
+	TerminalAppOverSSH *bool
 }
+
+// StartupProbeQueryTerminalIdentity mirrors Rust's `query_identity`: the DA2
+// identity probe runs only for a Unix SSH session outside a multiplexer.
+func StartupProbeQueryTerminalIdentity() bool {
+	if info := startupProbeTerminalInfo(); info != nil && info.Multiplexer != nil {
+		return false
+	}
+	_, sshTTY := startupProbeLookupEnv("SSH_TTY")
+	_, sshConnection := startupProbeLookupEnv("SSH_CONNECTION")
+	return sshTTY || sshConnection
+}
+
+// Seams for the environment-driven identity decision (Rust terminal_info()).
+var (
+	startupProbeTerminalInfo = shell.CurrentTerminalInfo
+	startupProbeLookupEnv    = os.LookupEnv
+)
 
 type StartupKeyboardEnhancementProbe int
 
@@ -222,6 +246,11 @@ func UpdateStartupProbe(probe *StartupProbe, sawSupportedKeyboard *bool, buffer 
 			probe.DefaultColors = &colors
 		}
 	}
+	if probe.TerminalAppOverSSH == nil {
+		if overSSH, ok := ParseTerminalAppOverSSH(buffer); ok {
+			probe.TerminalAppOverSSH = boolPtrTerminalProbe(overSSH)
+		}
+	}
 	if keyboardProbe == StartupKeyboardEnhancementProbeSkip || probe.KeyboardEnhancementSupported != nil {
 		return
 	}
@@ -240,6 +269,7 @@ func UpdateStartupProbe(probe *StartupProbe, sawSupportedKeyboard *bool, buffer 
 func StartupProbeComplete(probe StartupProbe, keyboardProbe StartupKeyboardEnhancementProbe) bool {
 	return probe.CursorPosition != nil &&
 		probe.DefaultColors != nil &&
+		probe.TerminalAppOverSSH != nil &&
 		(keyboardProbe == StartupKeyboardEnhancementProbeSkip || probe.KeyboardEnhancementSupported != nil)
 }
 

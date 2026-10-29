@@ -89,11 +89,18 @@ func ensureRuntimeTreeReadable(root string, sandboxGroupSID string) error {
 			inheritance = RuntimeInheritance
 		}
 		req := windowssandbox.ACLRequest{Path: path, SID: sandboxGroupSID, Mask: RuntimeReadExecuteMask}
-		if err := windowssandbox.GrantReadExecuteACEs(req, inheritance); err != nil {
+		changed, err := windowssandbox.GrantReadExecuteACEs(req, inheritance)
+		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
+		}
+		// Only revalidate after an update. An unchanged path may be blocked by a
+		// deny ACE on purpose, and complaining about it would fail the whole
+		// repair (Rust `ensure_runtime_tree_readable`).
+		if !changed {
+			return nil
 		}
 		allowed, err := windowssandbox.PathMaskAllows(req, true)
 		if err != nil {

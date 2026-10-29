@@ -315,8 +315,8 @@ func TestRealtimeSessionPollsLevelsAndReportsHelperLoss(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("helper loss did not stop the session")
 	}
-	if message := started.Handle.TakeError(); message != ConnectionAudioSession.Error() {
-		t.Fatalf("recorded error = %q", message)
+	if cause, message, ok := started.Handle.TakeError(); !ok || cause != ConnectionAudioSession || message != ConnectionAudioSession.Error() {
+		t.Fatalf("recorded error = %v %q %v", cause, message, ok)
 	}
 }
 
@@ -331,8 +331,28 @@ func TestSessionHandleSaturationStopsTheSession(t *testing.T) {
 	if err := handle.SetMicrophoneMuted(true); err == nil {
 		t.Fatal("a saturated control channel must fail closed")
 	}
-	if message := handle.TakeError(); message != "Voice control channel unavailable." {
-		t.Fatalf("recorded error = %q", message)
+	if cause, message, ok := handle.TakeError(); !ok || cause != ConnectionFailed || message != "Voice control channel unavailable." {
+		t.Fatalf("recorded error = %v %q %v", cause, message, ok)
+	}
+}
+
+// Rust #52756: a failed control send preserves a more specific stored WebRTC
+// error instead of overwriting it with the control-channel failure.
+func TestSessionHandleSaturationPreservesStoredCause(t *testing.T) {
+	owner := &sessionOwner{
+		commands: make(chan sessionCommand, 1),
+		cancel:   func() {},
+		done:     make(chan struct{}),
+	}
+	owner.state.setError(ConnectionAudioSession, "voice audio session stopped unexpectedly")
+	handle := &SessionHandle{owner: owner}
+	owner.commands <- sessionCommand{kind: sessionCommandControls}
+	if err := handle.SetMicrophoneMuted(true); err == nil {
+		t.Fatal("a saturated control channel must fail closed")
+	}
+	cause, message, ok := handle.TakeError()
+	if !ok || cause != ConnectionAudioSession || message != "voice audio session stopped unexpectedly" {
+		t.Fatalf("stored error = %v %q %v", cause, message, ok)
 	}
 }
 

@@ -99,7 +99,7 @@ func TestStartupProbeParsesBatchedTerminalResponses(t *testing.T) {
 	UpdateStartupProbe(
 		&probe,
 		&sawSupportedKeyboard,
-		[]byte("\x1b[20;10R\x1b]11;rgb:1111/1111/1111\x07\x1b[?64;1;2c\x1b]10;rgb:eeee/eeee/eeee\x1b\\\x1b[?7u"),
+		[]byte("\x1b[20;10R\x1b]11;rgb:1111/1111/1111\x07\x1b[?64;1;2c\x1b]10;rgb:eeee/eeee/eeee\x1b\\\x1b[?7u\x1b[>1;95;0c"),
 		StartupKeyboardEnhancementProbeQuery,
 	)
 

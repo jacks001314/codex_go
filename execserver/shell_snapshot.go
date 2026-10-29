@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"codex_go/network"
 	"codex_go/shell"
@@ -20,6 +21,12 @@ import (
 
 const (
 	maxShellSnapshotScopeBytes = 256
+	// maxCachedShellSnapshots bounds the executor's snapshot cache, mirroring
+	// Rust's MAX_CACHED_SNAPSHOTS (#39957).
+	maxCachedShellSnapshots = 16
+	// maxShellSnapshotEnvValueBytes bounds one environment chunk used to replay
+	// an in-memory snapshot, mirroring Rust's MAX_SNAPSHOT_ENV_VALUE_BYTES.
+	maxShellSnapshotEnvValueBytes = 60 * 1024
 	// Rust #51350: file replay admits 4 MiB of shell state and 8 MiB of raw
 	// capture output while the captured environment stays capped at 512 KiB.
 	maxFileShellSnapshotBytes        = 4 * 1024 * 1024
@@ -34,7 +41,8 @@ var shellSnapshotPlatformSupported = runtime.GOOS != "windows"
 
 type shellSnapshotManager struct {
 	mu       sync.Mutex
-	cache    map[string]string
+	cache    map[string]*shellSnapshotEntry
+	order    []string
 	failures map[string]shellSnapshotFailure
 	inflight map[string]*shellSnapshotFlight
 	capture  func(context.Context, []string, string, map[string]string) ([]byte, error)
@@ -43,12 +51,21 @@ type shellSnapshotManager struct {
 
 func newShellSnapshotManager() *shellSnapshotManager {
 	return &shellSnapshotManager{
-		cache:    map[string]string{},
+		cache:    map[string]*shellSnapshotEntry{},
 		failures: map[string]shellSnapshotFailure{},
 		inflight: map[string]*shellSnapshotFlight{},
 		capture:  runShellSnapshotCapture,
 		now:      time.Now,
 	}
+}
+
+// shellSnapshotEntry is one cached capture. Rust keeps the captured state in
+// executor memory and only materializes a replay file for states that exceed
+// the environment replay budget (#39957).
+type shellSnapshotEntry struct {
+	state      string
+	path       string
+	fileSource bool
 }
 
 type shellSnapshotFailure struct {
@@ -81,7 +98,7 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 	if scriptIndex < 0 {
 		return nil, requestError(-32602, "shell snapshot requires a shell -c or -lc invocation")
 	}
-	path, err := m.snapshotPath(ctx, params, shellType, captureEnv, credentialPairs)
+	entry, err := m.snapshotEntry(ctx, params, shellType, captureEnv, credentialPairs)
 	if err != nil {
 		rewritten := *params
 		rewritten.Argv = append([]string(nil), params.Argv...)
@@ -93,10 +110,73 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 	}
 	rewritten := *params
 	rewritten.Argv = append([]string(nil), params.Argv...)
-	rewritten.Argv[scriptIndex] = ". " + shellSingleQuote(path) + " || exit 1\n" +
+	rewritten.Env = cloneShellSnapshotEnv(params.Env)
+	if rewritten.Env == nil {
+		rewritten.Env = map[string]string{}
+	}
+	protected := len(credentialPairs) > 0
+	restore := shellSnapshotReplayScript(&rewritten, entry, protected)
+	flag, startup := shellSnapshotStartupScript(shellType)
+	rewritten.Argv[scriptIndex-1] = flag
+	restoreGate := "if ! " + restore + " >/dev/null; then printf 'failed to restore shell snapshot\\n' >&2; fi"
+	if protected {
+		restoreGate = "if ! " + restore + " >/dev/null 2>&1; then printf 'failed to restore shell snapshot\\n' >&2; exit 1; fi"
+	}
+	rewritten.Argv[scriptIndex] = startup + restoreGate + "\n" +
 		shellSnapshotLaunchEnvExports(params.Env) +
 		params.Argv[scriptIndex]
 	return &rewritten, nil
+}
+
+// shellSnapshotStartupScript returns the launch flag and the startup line that
+// keeps automatic startup files from re-running after the snapshot restores the
+// user's state, mirroring Rust's bash -pc / zsh -fc switch (#39957).
+func shellSnapshotStartupScript(shellType shell.ShellType) (string, string) {
+	switch shellType {
+	case shell.ShellBash:
+		return "-pc", "set +o privileged\n"
+	case shell.ShellZsh:
+		return "-fc", "setopt RCS\n"
+	default:
+		return "-c", ""
+	}
+}
+
+// shellSnapshotReplayScript builds the restore command for one snapshot. Small
+// states stay entirely in executor memory and are replayed through chunked
+// __CODEX_SHELL_SNAPSHOT_STATE_* environment variables, while large states use
+// the materialized replay file (Rust #39957).
+func shellSnapshotReplayScript(params *ExecParams, entry *shellSnapshotEntry, protected bool) string {
+	if entry == nil || entry.state == "" {
+		return ":"
+	}
+	if entry.fileSource {
+		return ". " + shellSingleQuote(entry.path)
+	}
+	names := make([]string, 0, 8)
+	state := entry.state
+	for start := 0; start < len(state); {
+		end := start + maxShellSnapshotEnvValueBytes
+		if end > len(state) {
+			end = len(state)
+		}
+		for end > start && end < len(state) && !utf8.RuneStart(state[end]) {
+			end--
+		}
+		name := fmt.Sprintf("__CODEX_SHELL_SNAPSHOT_STATE_%d", len(names))
+		params.Env[name] = state[start:end]
+		names = append(names, name)
+		start = end
+	}
+	var expansion strings.Builder
+	for _, name := range names {
+		if protected {
+			expansion.WriteString("${" + name + ":?missing shell snapshot chunk}")
+			continue
+		}
+		expansion.WriteString("${" + name + "}")
+	}
+	return "eval \"unset " + strings.Join(names, " ") + "\n" + expansion.String() + "\""
 }
 
 func shellSnapshotLaunchEnvExports(env map[string]string) string {
@@ -150,25 +230,30 @@ func shellSnapshotLaunchEnvExports(env map[string]string) string {
 	return exports.String()
 }
 
-func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (string, error) {
+func (m *shellSnapshotManager) snapshotEntry(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (*shellSnapshotEntry, error) {
 	key, err := shellSnapshotKey(params, shellType)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	attempts := 1
 	for {
 		m.mu.Lock()
-		if path := m.cache[key]; path != "" {
-			if _, statErr := os.Stat(path); statErr == nil {
+		if entry := m.cache[key]; entry != nil {
+			if !entry.fileSource {
 				m.mu.Unlock()
-				return path, nil
+				return entry, nil
+			}
+			if _, statErr := os.Stat(entry.path); statErr == nil {
+				m.mu.Unlock()
+				return entry, nil
 			}
 			delete(m.cache, key)
+			m.forgetOrderLocked(key)
 		}
 		if failure, ok := m.failures[key]; ok {
 			if failure.attempts >= maxShellSnapshotAttempts || m.now().Before(failure.retryAt) {
 				m.mu.Unlock()
-				return "", failure.err
+				return nil, failure.err
 			}
 			attempts = failure.attempts + 1
 			delete(m.failures, key)
@@ -180,14 +265,14 @@ func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecPar
 			case <-done:
 				continue
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return nil, ctx.Err()
 			}
 		}
 		flight := &shellSnapshotFlight{done: make(chan struct{})}
 		m.inflight[key] = flight
 		m.mu.Unlock()
 
-		path, captureErr := m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, key)
+		entry, captureErr := m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, key)
 		m.mu.Lock()
 		delete(m.inflight, key)
 		close(flight.done)
@@ -198,15 +283,48 @@ func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecPar
 				err:      captureErr,
 			}
 		} else {
-			m.cache[key] = path
+			m.storeEntryLocked(key, entry)
 			delete(m.failures, key)
 		}
 		m.mu.Unlock()
-		return path, captureErr
+		return entry, captureErr
 	}
 }
 
-func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, key string) (string, error) {
+// storeEntryLocked caches one capture and evicts the oldest entry past the
+// bounded cache size, removing the file a file-backed entry materialized.
+func (m *shellSnapshotManager) storeEntryLocked(key string, entry *shellSnapshotEntry) {
+	if entry == nil {
+		return
+	}
+	m.cache[key] = entry
+	m.forgetOrderLocked(key)
+	m.order = append(m.order, key)
+	for len(m.order) > maxCachedShellSnapshots {
+		oldest := m.order[0]
+		m.order = m.order[1:]
+		evicted := m.cache[oldest]
+		if evicted == nil {
+			continue
+		}
+		delete(m.cache, oldest)
+		if evicted.fileSource && evicted.path != "" {
+			_ = os.Remove(evicted.path)
+		}
+	}
+}
+
+func (m *shellSnapshotManager) forgetOrderLocked(key string) {
+	for index, tracked := range m.order {
+		if tracked != key {
+			continue
+		}
+		m.order = append(m.order[:index], m.order[index+1:]...)
+		return
+	}
+}
+
+func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, key string) (*shellSnapshotEntry, error) {
 
 	ctx, captureSpan := startExecServerSpan(
 		ctx,
@@ -220,7 +338,7 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 		Startup: shell.SnapshotStartupInteractive, Declarations: true,
 	})
 	if !ok {
-		return "", errors.New("unsupported snapshot shell")
+		return nil, errors.New("unsupported snapshot shell")
 	}
 	cwd := shellSnapshotNativeCWD(params.CWD)
 	env := shellSnapshotEnvironment(captureEnv)
@@ -228,45 +346,50 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	defer cancel()
 	output, err := m.capture(captureCtx, []string{params.ShellSnapshot.Shell.Path, "-lc", captureScript}, cwd, env)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(output) > maxFileShellSnapshotCaptureBytes {
-		return "", fmt.Errorf("shell snapshot capture exceeds %d bytes", maxFileShellSnapshotCaptureBytes)
+		return nil, fmt.Errorf("shell snapshot capture exceeds %d bytes", maxFileShellSnapshotCaptureBytes)
 	}
 	captured := shell.ParseCapturedSnapshot(shellType, output)
 	if captured == nil {
-		return "", errors.New("invalid captured shell state")
+		return nil, errors.New("invalid captured shell state")
 	}
 	rendered := network.MaskSnapshotText(captured.RenderScript(nil), credentialPairs)
 	if err := validateShellSnapshotSizes(captured, rendered); err != nil {
-		return "", err
+		return nil, err
+	}
+	// Rust #39957 keeps a snapshot that fits the environment replay budget
+	// entirely in executor memory; only larger states materialize a replay file.
+	if len(rendered) <= maxShellSnapshotEnvironmentBytes {
+		return &shellSnapshotEntry{state: rendered}, nil
 	}
 	dir := filepath.Join(os.TempDir(), "codex-exec-server-shell-snapshots")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return nil, err
 	}
 	path := filepath.Join(dir, safeSnapshotFile(key)+"."+string(shellType))
 	temp, err := os.CreateTemp(dir, ".snapshot-*")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 	if err := temp.Chmod(0o600); err != nil {
 		_ = temp.Close()
-		return "", err
+		return nil, err
 	}
 	if _, err := temp.WriteString(rendered); err != nil {
 		_ = temp.Close()
-		return "", err
+		return nil, err
 	}
 	if err := temp.Close(); err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := os.Rename(tempPath, path); err != nil {
-		return "", err
+		return nil, err
 	}
-	return path, nil
+	return &shellSnapshotEntry{state: rendered, path: path, fileSource: true}, nil
 }
 
 // validateShellSnapshotSizes mirrors Rust #51350's replay limits: the captured
@@ -294,10 +417,13 @@ func (m *shellSnapshotManager) close() {
 	}
 	m.mu.Lock()
 	paths := make([]string, 0, len(m.cache))
-	for _, path := range m.cache {
-		paths = append(paths, path)
+	for _, entry := range m.cache {
+		if entry != nil && entry.fileSource && entry.path != "" {
+			paths = append(paths, entry.path)
+		}
 	}
-	m.cache = map[string]string{}
+	m.cache = map[string]*shellSnapshotEntry{}
+	m.order = nil
 	m.failures = map[string]shellSnapshotFailure{}
 	m.inflight = map[string]*shellSnapshotFlight{}
 	m.mu.Unlock()

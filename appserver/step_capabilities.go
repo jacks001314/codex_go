@@ -81,6 +81,9 @@ func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, rout
 		discoveryV2 = router.executorCapabilityDiscoveryV2ForStep(ctx, threadID, params, cfg, sandboxContexts, s.discoveryV2Cache)
 		if discoveryV2 != nil && router.services.Plugins != nil && cfg != nil {
 			executorCatalog := plugin.CatalogFromExecutorSnapshots(*discoveryV2)
+			// Rust #56530 measures the executor plugin catalog when the
+			// discovery it was projected from changes.
+			router.recordExecutorPluginCatalog(threadID, executorCatalog)
 			merged := plugin.MergePluginCatalogs(executorCatalog, router.services.Plugins.CloudPluginCatalog())
 			policy := plugin.PluginsConfigTomlFromValues(cfg.Values)
 			capabilities = plugin.MergeCapabilitySummaries(capabilities, merged.CapabilitySummaries(policy.Plugins))

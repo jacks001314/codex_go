@@ -130,7 +130,11 @@ type AgentLoopRequest struct {
 	ProviderID              string
 	TaskKind                model.AgentTaskKind
 	ThreadID                string
-	TurnID                  string
+	// SessionID is the Responses session identity, which differs from ThreadID
+	// for host-owned internal sessions that reuse their parent session
+	// (Rust #39994). Empty keeps the thread-id fallback.
+	SessionID string
+	TurnID    string
 	// Ephemeral mirrors Rust's `turn_context.config.ephemeral`: the thread
 	// intentionally skips durable persistence, so attachment uploads made while
 	// preparing this turn's requests carry that intent (Rust #51517).
@@ -151,9 +155,13 @@ type AgentLoopRequest struct {
 	HostedTools        []any
 	Store              bool
 	PreviousResponseID string
-	ParallelToolCalls  bool
-	ReasoningEffort    string
-	ReasoningSummary   string
+	// PreviousResponseFromPrewarm marks PreviousResponseID as the response a
+	// prewarm prepared, so only the first sampling request is tagged
+	// after_prewarm (Rust #48812).
+	PreviousResponseFromPrewarm bool
+	ParallelToolCalls           bool
+	ReasoningEffort             string
+	ReasoningSummary            string
 	// DropReasoningEffortUpdates removes saved configuration_update items from
 	// the request copy when the effective model/provider does not support them
 	// (Rust #46530).
@@ -541,11 +549,13 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,
 			ThreadID:                     request.ThreadID,
+			SessionID:                    request.SessionID,
 			TurnID:                       request.TurnID,
 			Ephemeral:                    request.Ephemeral,
 			Originator:                   request.Originator,
 			Store:                        request.Store,
 			PreviousResponseID:           previousResponseID,
+			PreviousResponseFromPrewarm:  iteration == 0 && request.PreviousResponseFromPrewarm,
 			ParallelToolCalls:            request.ParallelToolCalls,
 			ReasoningEffort:              stepReasoningEffort,
 			ReasoningSummary:             stepReasoningSummary,
@@ -622,11 +632,56 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			return nil, err
 		}
 		if response.Preempted {
-			// A signaled step produced no assistant output: the turn continues
-			// with the queued input (drained at the top of the next iteration),
-			// and the replacement request sends full history.
+			if l.steerMailbox.HasPendingMailboxItems(request.ThreadID, request.TurnID) {
+				emitMailboxPreemptionEvent(stepCtx, request, request.ThreadID, request.TurnID)
+			}
 			endSamplingRequestSpan()
-			previousResponseID = ""
+			if !response.Drained {
+				// A signaled step produced no assistant output: the turn
+				// continues with the queued input (drained at the top of the
+				// next iteration), and the replacement request sends full
+				// history.
+				previousResponseID = ""
+				continue
+			}
+			// Rust #55969: an interrupted Responses Lite WebSocket stream is
+			// drained rather than abandoned. Completed items stay in the
+			// transcript, buffered tool calls are cancelled before dispatch
+			// (their output is recorded as aborted), and the response ID is
+			// kept so the follow-up request can continue incrementally.
+			result.Responses = append(result.Responses, response)
+			result.Usage = addAgentUsage(result.Usage, response.Usage)
+			if request.OnTokenUsage != nil {
+				request.OnTokenUsage(result.Usage)
+			}
+			if responseID := strings.TrimSpace(response.ResponseID); responseID != "" {
+				previousResponseID = responseID
+			}
+			if prompt != "" && !promptAppended {
+				if userMessage := model.UserMessageInputItem(prompt); userMessage != nil {
+					result.InputItems = append(result.InputItems, userMessage)
+					promptAppended = true
+				}
+			}
+			prompt = ""
+			if !postPromptAppended && len(postPromptItems) > 0 {
+				for _, item := range postPromptItems {
+					if item != nil {
+						result.InputItems = append(result.InputItems, item)
+					}
+				}
+				postPromptAppended = true
+			}
+			for i := range response.Items {
+				item := response.Items[i]
+				if request.OnCompletedResponseItem != nil {
+					request.OnCompletedResponseItem(item)
+				}
+				result.InputItems = append(result.InputItems, &item)
+				if isToolAgentItem(&item) {
+					result.InputItems = append(result.InputItems, abortedToolCallOutputItem(&item))
+				}
+			}
 			continue
 		}
 		if l.executedToolCalls != nil {
@@ -1110,6 +1165,22 @@ func isToolAgentItem(item *model.AgentItem) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// abortedToolCallOutputItem answers a tool call that was completed by the
+// server during a mailbox drain but cancelled before dispatch (Rust #55969's
+// `ToolCallRuntime::aborted_response`). The call is already in server history,
+// so resume needs a paired output even though the tool never ran.
+func abortedToolCallOutputItem(item *model.AgentItem) map[string]any {
+	callID := ""
+	if item != nil {
+		callID = firstNonEmpty(item.CallID, item.ID)
+	}
+	return map[string]any{
+		"type":    "function_call_output",
+		"call_id": callID,
+		"output":  "aborted before dispatch",
 	}
 }
 

@@ -45,9 +45,16 @@ type AgentRequest struct {
 	Originator         string
 	Store              bool
 	PreviousResponseID string
-	ParallelToolCalls  bool
-	ReasoningEffort    string
-	ReasoningSummary   string
+	// PreviousResponseFromPrewarm reports that PreviousResponseID was prepared
+	// by a session startup or idle-history prewarm. Rust #48812 tags the
+	// websocket continuation of that request with after_prewarm.
+	PreviousResponseFromPrewarm bool
+	// PrewarmInputMode labels a Prewarm call as "base" (startup) or "history"
+	// (idle-thread warmup). It only affects prewarm telemetry (Rust #48812).
+	PrewarmInputMode  string
+	ParallelToolCalls bool
+	ReasoningEffort   string
+	ReasoningSummary  string
 	// DropReasoningEffortUpdates mirrors Rust ModelClient's request-time filter
 	// (#46530): when reasoning-effort updates are unsupported for the effective
 	// model or provider, saved configuration_update items are removed from the
@@ -407,6 +414,12 @@ type AgentResponse struct {
 	// turn continues with the queued input instead of treating the step as a
 	// failure.
 	Preempted bool
+	// Drained reports that a preempted Responses Lite WebSocket stream was
+	// interrupted gracefully and drained to its terminal event (Rust #55969).
+	// Items and ResponseID are the completed parts the server retained, so the
+	// turn records them and continues from ResponseID instead of resending full
+	// history.
+	Drained bool
 }
 
 func AgentResponseMetadata(response *AgentResponse) map[string]any {

@@ -391,6 +391,10 @@ type guardianSessionRunner struct {
 	agent    model.AgentRunner
 	previous string
 	seeded   string
+	// previousFromPrewarm marks r.previous as the response the reviewer
+	// prewarm prepared, so the first review is tagged after_prewarm
+	// (Rust #48812).
+	previousFromPrewarm bool
 	// policyInitialized/policy mirror Rust #41919: a changed effective Node
 	// REPL policy invalidates a cached reviewer session.
 	policyInitialized bool
@@ -544,6 +548,7 @@ func (r *guardianSessionRunner) Prewarm(ctx context.Context) error {
 	})
 	if err == nil && response != nil && strings.TrimSpace(response.ResponseID) != "" {
 		r.previous = strings.TrimSpace(response.ResponseID)
+		r.previousFromPrewarm = true
 	}
 	return err
 }
@@ -556,6 +561,7 @@ func (r *guardianSessionRunner) Run(ctx context.Context, request *model.AgentReq
 	defer r.mu.Unlock()
 	clone := *request
 	clone.ClientMetadata = cloneStringMap(request.ClientMetadata)
+	clone.PreviousResponseFromPrewarm = false
 	if strings.TrimSpace(request.PreviousResponseID) != "" && strings.TrimSpace(r.seeded) != "" {
 		clone.PreviousResponseID = strings.TrimSpace(r.seeded)
 		r.previous = strings.TrimSpace(r.seeded)
@@ -567,7 +573,9 @@ func (r *guardianSessionRunner) Run(ctx context.Context, request *model.AgentReq
 		r.previous = strings.TrimSpace(request.PreviousResponseID)
 	} else {
 		clone.PreviousResponseID = r.previous
+		clone.PreviousResponseFromPrewarm = r.previousFromPrewarm
 	}
+	r.previousFromPrewarm = false
 	clone.Store = false
 	var response *model.AgentResponse
 	var err error
@@ -576,6 +584,7 @@ func (r *guardianSessionRunner) Run(ctx context.Context, request *model.AgentReq
 			response, err = ws.RunWebSocket(ctx, &clone)
 			if err != nil {
 				clone.PreviousResponseID = ""
+				clone.PreviousResponseFromPrewarm = false
 				r.previous = ""
 				response, err = r.agent.Run(ctx, &clone)
 			}

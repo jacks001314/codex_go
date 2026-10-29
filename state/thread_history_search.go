@@ -86,7 +86,7 @@ func (r *StateRuntime) SearchThreadHistoryOccurrences(ctx context.Context, param
 	if params.PageSize <= 0 {
 		return nil, invalidThreadHistory("thread/searchOccurrences requires page_size greater than zero")
 	}
-	lineage, db, err := r.prepareThreadHistoryRead(ctx, params.ThreadID, "thread/searchOccurrences")
+	lineage, db, err := r.prepareThreadHistoryPageRead(ctx, params.ThreadID, "thread/searchOccurrences")
 	if err != nil {
 		return nil, err
 	}

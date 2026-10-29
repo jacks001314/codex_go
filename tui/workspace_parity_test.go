@@ -50,8 +50,7 @@ func TestWorkspaceCommandBuilderMatchesRustDefaults(t *testing.T) {
 	// (`get_git_diff.rs::assert_command_metadata` dropped the
 	// `output_bytes_cap == 64 * 1024` assertion); only the uncapped opt-out
 	// remains part of the command shape.
-	command := NewWorkspaceCommand(" git ", "status").
-		WithCWD(`D:\repo`).
+	command := NewWorkspaceCommand(`D:\repo`, " git ", "status").
 		WithEnv(" GIT_OPTIONAL_LOCKS ", " 0 ").
 		WithoutEnv("PAGER").
 		WithTimeout(2500 * time.Millisecond).
@@ -85,16 +84,19 @@ func TestWorkspaceCommandOutputAndRunnerBoundary(t *testing.T) {
 	runner := &recordingWorkspaceCommandRunner{
 		output: WorkspaceCommandOutput{ExitCode: 0, Stdout: "ok"},
 	}
-	got, err := runner.RunWorkspaceCommand(context.Background(), NewWorkspaceCommand("git", "rev-parse"))
+	got, err := runner.RunWorkspaceCommand(context.Background(), NewWorkspaceCommand(`D:\repo`, "git", "rev-parse"))
 	if err != nil || !got.Success() || runner.command.Argv[0] != "git" {
 		t.Fatalf("runner got=%#v err=%v recorded=%#v", got, err, runner.command)
 	}
 	runner.err = NewWorkspaceCommandError("transport failed")
-	if _, err := runner.RunWorkspaceCommand(context.Background(), NewWorkspaceCommand("git")); err == nil || !strings.Contains(err.Error(), "transport failed") {
+	if _, err := runner.RunWorkspaceCommand(context.Background(), NewWorkspaceCommand(`D:\repo`, "git")); err == nil || !strings.Contains(err.Error(), "transport failed") {
 		t.Fatalf("runner error = %v", err)
 	}
 	if err := (WorkspaceCommand{}).Validate(); err == nil {
 		t.Fatal("empty argv should fail validation")
+	}
+	if err := NewWorkspaceCommand("", "git").Validate(); err == nil {
+		t.Fatal("builders must require an explicit working directory")
 	}
 	if !errors.Is(NewWorkspaceCommandError("x"), NewWorkspaceCommandError("x")) {
 		t.Log("WorkspaceCommandError is value comparable but not sentinel-based")
@@ -163,7 +165,7 @@ func TestWindowsSandboxLevelFromConfigMatchesRust(t *testing.T) {
 // `WorkspaceCommand` no longer owns an output cap: bounded commands use the
 // execution boundary's default and only `/diff`-style callers opt out.
 func TestWorkspaceCommandUsesHostDefaultOutputCapLikeRust(t *testing.T) {
-	probe := NewWorkspaceCommand("git", "config", "--get", "core.fsmonitor")
+	probe := NewWorkspaceCommand("/workspace", "git", "config", "--get", "core.fsmonitor")
 	if probe.DisableOutputCap {
 		t.Fatalf("metadata probe must stay bounded: %#v", probe)
 	}
@@ -185,7 +187,7 @@ func TestWorkspaceCommandUsesHostDefaultOutputCapLikeRust(t *testing.T) {
 	}
 
 	// `/diff` keeps the uncapped opt-out (Rust `disable_output_cap` preserved).
-	diff := NewWorkspaceCommand("git", "diff").WithDisabledOutputCap()
+	diff := NewWorkspaceCommand("/workspace", "git", "diff").WithDisabledOutputCap()
 	uncapped := strings.Repeat("z", DefaultWorkspaceCommandOutputBytesCap+128)
 	if got := commandOutputString([]byte(uncapped), diff); got != uncapped {
 		t.Fatalf("uncapped command truncated: len=%d", len(got))

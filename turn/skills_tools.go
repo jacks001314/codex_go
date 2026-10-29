@@ -106,15 +106,16 @@ type skillsInstallationsResponse struct {
 }
 
 type skillsToolExecutor struct {
-	spec       tool.Spec
-	mcpService *mcp.MCPService
-	threadID   string
-	name       string
-	catalog    *orchestratorSkillCatalogCache
-	providers  *skillprovider.Registry
-	executor   *executorSkillCatalogCache
-	readMu     sync.Mutex
-	read       *executorReadSnapshot
+	spec          tool.Spec
+	mcpService    *mcp.MCPService
+	cloudProvider skillprovider.Provider
+	threadID      string
+	name          string
+	catalog       *orchestratorSkillCatalogCache
+	providers     *skillprovider.Registry
+	executor      *executorSkillCatalogCache
+	readMu        sync.Mutex
+	read          *executorReadSnapshot
 }
 
 type executorReadSnapshot struct {
@@ -129,6 +130,12 @@ type OrchestratorSkillMetadata struct {
 	Description  string
 	MainResource string
 	PluginID     string
+	// AliasRoot is the provider-declared root for rendered aliases; empty
+	// derives it from the package URI.
+	AliasRoot string
+	// PromptVisible is false for cloud skills a snapshot hides from the model
+	// catalog while keeping them readable (Rust #55631).
+	PromptVisible bool
 }
 
 type OrchestratorSkillCatalog struct {
@@ -150,7 +157,8 @@ func registerSkillsTools(registry *tool.Registry, options *ToolRegistryOptions) 
 	if registry == nil || options == nil {
 		return nil
 	}
-	orchestratorAvailable := options.MCPService != nil && (options.OrchestratorSkillsEnabled == nil || *options.OrchestratorSkillsEnabled)
+	orchestratorAvailable := options.CloudSkillProvider != nil ||
+		(options.MCPService != nil && (options.OrchestratorSkillsEnabled == nil || *options.OrchestratorSkillsEnabled))
 	if !orchestratorAvailable && options.SkillProviders == nil {
 		return nil
 	}
@@ -181,12 +189,13 @@ func newSkillsToolExecutor(options *ToolRegistryOptions, name string, descriptio
 			Parallel:             true,
 			NamespaceDescription: fmt.Sprintf("Tools in the %s namespace.", skillsToolNamespace),
 		},
-		mcpService: options.MCPService,
-		threadID:   strings.TrimSpace(options.ThreadID),
-		name:       name,
-		catalog:    catalog,
-		providers:  options.SkillProviders,
-		executor:   executor,
+		mcpService:    options.MCPService,
+		cloudProvider: options.CloudSkillProvider,
+		threadID:      strings.TrimSpace(options.ThreadID),
+		name:          name,
+		catalog:       catalog,
+		providers:     options.SkillProviders,
+		executor:      executor,
 	}
 }
 
@@ -536,6 +545,16 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 		}
 		authority = resolved
 	}
+	if authority.Kind == "" {
+		// Rust's read handler has no authority argument: it derives the source
+		// from the matched catalog entry (`matching_packages`). Go accepts the
+		// legacy selector but must behave the same when it is omitted.
+		resolved, ok := e.skillReadAuthorityForPackage(ctx, args.Package)
+		if !ok {
+			return nil, tool.RespondToModel("skill package is not available")
+		}
+		authority = resolved
+	}
 	if err := validateSkillsToolReadAuthority(authority); err != nil {
 		return nil, err
 	}
@@ -555,7 +574,9 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	if err := validateSkillToolHandle("resource", resource, maxSkillToolHandleBytes); err != nil {
 		return nil, err
 	}
-	if !skillResourceBelongsToPackage(authority, args.Package, resource) {
+	// The requested package may be a rendered alias; validate the resource
+	// against the canonical package the catalog selected (Rust #55631).
+	if !skillResourceBelongsToPackage(authority, entry.Package, resource) {
 		return nil, tool.RespondToModel("skill package is not available from the requested authority")
 	}
 	var result skillprovider.ReadResult
@@ -574,8 +595,16 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 		// of rereading the whole resource for every page.
 		switch {
 		case authority.Kind == "orchestrator":
+			if e.cloudProvider != nil {
+				result, err = e.cloudProvider.Read(ctx, skillprovider.ReadRequest{
+					Authority: skillprovider.Authority{Kind: skillprovider.SourceCloud, ID: skillprovider.FrozenCloudServerName},
+					PackageID: entry.Package,
+					Resource:  resource,
+				})
+				break
+			}
 			var contents string
-			contents, err = ReadOrchestratorSkillResource(e.mcpService, e.threadID, args.Package, resource)
+			contents, err = ReadOrchestratorSkillResource(e.mcpService, e.threadID, entry.Package, resource)
 			result = skillprovider.ReadResult{Resource: resource, Contents: contents}
 		case e.providers != nil:
 			result, err = e.providers.Read(ctx, skillprovider.ReadRequest{
@@ -653,6 +682,36 @@ func (e *skillsToolExecutor) skillReadAuthorityForSource(ctx context.Context, pa
 	}
 }
 
+// skillReadAuthorityForPackage resolves the authority Rust derives from the
+// matched catalog entry when skills.read omits an authority selector. Cloud
+// entries win over executor entries, and a generated `cN/`/`eN/` alias keeps
+// the search scoped to its own source.
+func (e *skillsToolExecutor) skillReadAuthorityForPackage(ctx context.Context, packageArg string) (skillsToolAuthority, bool) {
+	aliasSource := skillAliasSource(packageArg)
+	if aliasSource != "executor" {
+		cloud := e.orchestratorSkillCatalog()
+		entries := orchestratorCatalogAsSkillProviderEntries(cloud)
+		for _, skill := range cloud.Skills {
+			if skill.Package == packageArg || skillPackageMatchesAlias(entries, skill.Package, packageArg) {
+				return skillsToolAuthority{Kind: "orchestrator"}, true
+			}
+		}
+	}
+	if aliasSource == "cloud" || aliasSource == "host" {
+		return skillsToolAuthority{}, false
+	}
+	executor := e.executorSkillCatalog(ctx)
+	for _, entry := range executor.Entries {
+		if !entry.Enabled || entry.Authority.Kind != skillprovider.SourceExecutor || entry.Authority.ID == "" {
+			continue
+		}
+		if entry.PackageID == packageArg || skillPackageMatchesAlias(executor.Entries, entry.PackageID, packageArg) {
+			return skillsToolAuthority{Kind: "executor", ID: entry.Authority.ID}, true
+		}
+	}
+	return skillsToolAuthority{}, false
+}
+
 func (e *skillsToolExecutor) orchestratorSkillCatalog() OrchestratorSkillCatalog {
 	if e == nil {
 		return OrchestratorSkillCatalog{Skills: []OrchestratorSkillMetadata{}, Warnings: []string{}}
@@ -661,6 +720,18 @@ func (e *skillsToolExecutor) orchestratorSkillCatalog() OrchestratorSkillCatalog
 		e.catalog = &orchestratorSkillCatalogCache{}
 	}
 	e.catalog.once.Do(func() {
+		if e.cloudProvider != nil {
+			catalog, err := e.cloudProvider.List(context.Background(), skillprovider.ListQuery{})
+			if err != nil {
+				e.catalog.catalog = OrchestratorSkillCatalog{
+					Skills:   []OrchestratorSkillMetadata{},
+					Warnings: []string{"orchestrator skills unavailable: " + err.Error()},
+				}
+				return
+			}
+			e.catalog.catalog = OrchestratorSkillCatalogFromProviderCatalog(catalog)
+			return
+		}
 		catalog, err := LoadOrchestratorSkillCatalog(e.mcpService, e.threadID)
 		if err != nil {
 			catalog.Warnings = append(catalog.Warnings, "orchestrator skills unavailable: "+err.Error())
@@ -668,6 +739,31 @@ func (e *skillsToolExecutor) orchestratorSkillCatalog() OrchestratorSkillCatalog
 		e.catalog.catalog = catalog
 	})
 	return cloneOrchestratorSkillCatalog(e.catalog.catalog)
+}
+
+// OrchestratorSkillCatalogFromProviderCatalog adapts a native cloud provider
+// catalog to the orchestrator shape the skills tool and prompt renderer use.
+// Disabled entries are omitted; hidden entries stay listed for skills.read.
+func OrchestratorSkillCatalogFromProviderCatalog(catalog skillprovider.Catalog) OrchestratorSkillCatalog {
+	out := OrchestratorSkillCatalog{
+		Skills:   make([]OrchestratorSkillMetadata, 0, len(catalog.Entries)),
+		Warnings: append([]string(nil), catalog.Warnings...),
+	}
+	for _, entry := range catalog.Entries {
+		if !entry.Enabled {
+			continue
+		}
+		out.Skills = append(out.Skills, OrchestratorSkillMetadata{
+			Package:       entry.PackageID,
+			Name:          entry.Name,
+			Description:   entry.Description,
+			MainResource:  entry.MainResource,
+			PluginID:      entry.PluginID,
+			AliasRoot:     entry.AliasRoot,
+			PromptVisible: entry.PromptVisible,
+		})
+	}
+	return out
 }
 
 func LoadOrchestratorSkillCatalog(service *mcp.MCPService, threadID string) (OrchestratorSkillCatalog, error) {
@@ -808,7 +904,8 @@ func (e *skillsToolExecutor) availableSkillPackage(ctx context.Context, authorit
 		return listedSkill{}, false
 	}
 	for _, entry := range listed {
-		if skillPackageMatchesAlias(orchestratorCatalogAsSkillProviderEntries(e.orchestratorSkillCatalog()), entry.Package, pkg) {
+		entries := orchestratorCatalogAsSkillProviderEntries(e.orchestratorSkillCatalog())
+		if skillPackageMatchesAlias(entries, entry.Package, pkg) {
 			return entry, true
 		}
 	}
@@ -892,7 +989,10 @@ func skillAliasRoots(entries []skillprovider.CatalogEntry) []string {
 		if entry.PackageID == "" {
 			continue
 		}
-		root := extensionSkillAliasRoot(entry.PackageID)
+		root := strings.TrimSpace(entry.AliasRoot)
+		if root == "" {
+			root = extensionSkillAliasRoot(entry.PackageID)
+		}
 		if root == "" || seen[root] {
 			continue
 		}
@@ -943,6 +1043,7 @@ func orchestratorCatalogAsSkillProviderEntries(catalog OrchestratorSkillCatalog)
 		entries = append(entries, skillprovider.CatalogEntry{
 			PackageID:     skill.Package,
 			Authority:     skillprovider.Authority{Kind: skillprovider.SourceOrchestrator},
+			AliasRoot:     skill.AliasRoot,
 			Enabled:       true,
 			PromptVisible: true,
 			MainResource:  skill.MainResource,
@@ -993,11 +1094,12 @@ func orchestratorSkillMetadataFromResource(resource mcp.MCPResource) (Orchestrat
 		return OrchestratorSkillMetadata{}, false
 	}
 	return OrchestratorSkillMetadata{
-		Package:      entry.Package,
-		Name:         entry.Name,
-		Description:  entry.Description,
-		MainResource: entry.MainResource,
-		PluginID:     entry.PluginID,
+		Package:       entry.Package,
+		Name:          entry.Name,
+		Description:   entry.Description,
+		MainResource:  entry.MainResource,
+		PluginID:      entry.PluginID,
+		PromptVisible: true,
 	}, true
 }
 

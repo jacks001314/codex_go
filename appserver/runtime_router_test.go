@@ -7224,6 +7224,18 @@ func writeRuntimeRouterMCPError(t *testing.T, w http.ResponseWriter, id int64, c
 	}
 }
 
+// rejectRuntimeRouterWebsocketUpgrade answers a Responses WebSocket upgrade
+// attempt with 426 Upgrade Required so the runner switches to the HTTP
+// transport, mirroring Rust's WebsocketStreamOutcome::FallbackToHttp for a
+// server that does not speak the Responses WebSocket protocol.
+func rejectRuntimeRouterWebsocketUpgrade(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	w.WriteHeader(http.StatusUpgradeRequired)
+	return true
+}
+
 func TestRuntimeRouterMCPConfigReloadAppliesConfig(t *testing.T) {
 	home := t.TempDir()
 	body := `[features]
@@ -16254,8 +16266,8 @@ func TestRuntimeRouterOrchestratorSkillCatalogAndExplicitReadLikeRust(t *testing
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
-	firstCatalog, firstWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
-	secondCatalog, secondWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	firstCatalog, firstWarnings := router.orchestratorSkillMetadataForRuntime(threadID, "turn-catalog")
+	secondCatalog, secondWarnings := router.orchestratorSkillMetadataForRuntime(threadID, "turn-catalog")
 	if len(firstCatalog) != 1 || len(secondCatalog) != 1 || len(firstWarnings) != 0 || len(secondWarnings) != 0 {
 		t.Fatalf("cached orchestrator catalogs = %#v/%#v warnings=%#v/%#v", firstCatalog, secondCatalog, firstWarnings, secondWarnings)
 	}
@@ -16265,7 +16277,7 @@ func TestRuntimeRouterOrchestratorSkillCatalogAndExplicitReadLikeRust(t *testing
 	}
 	methodsMu.Unlock()
 	mcpService.Refresh()
-	refreshedCatalog, refreshedWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	refreshedCatalog, refreshedWarnings := router.orchestratorSkillMetadataForRuntime(threadID, "turn-catalog")
 	if len(refreshedCatalog) != 1 || len(refreshedWarnings) != 0 {
 		t.Fatalf("refreshed orchestrator catalog = %#v warnings=%#v", refreshedCatalog, refreshedWarnings)
 	}
@@ -16417,11 +16429,11 @@ func TestRuntimeRouterOrchestratorSkillCatalogCachesFailureLikeRust(t *testing.T
 			mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
 		}}),
 	})
-	first, firstWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure")
+	first, firstWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure", "turn-orchestrator-failure")
 	requestMu.Lock()
 	firstRequestCount := requestCount
 	requestMu.Unlock()
-	second, secondWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure")
+	second, secondWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure", "turn-orchestrator-failure")
 	requestMu.Lock()
 	secondRequestCount := requestCount
 	requestMu.Unlock()
@@ -24586,6 +24598,9 @@ func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 	var recordedAuth string
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rejectRuntimeRouterWebsocketUpgrade(w, r) {
+			return
+		}
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -24815,6 +24830,9 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImageGener
 	}
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rejectRuntimeRouterWebsocketUpgrade(w, r) {
+			return
+		}
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -24883,6 +24901,9 @@ func TestRuntimeRouterImageGenerationRecordsRustOutputHint(t *testing.T) {
 		t.Fatalf("Save auth error = %v", err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rejectRuntimeRouterWebsocketUpgrade(w, r) {
+			return
+		}
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusNoContent)
 			return

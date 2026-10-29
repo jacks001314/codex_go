@@ -69,6 +69,24 @@ const (
 	VoiceTelemetrySessionFailure   = "codex.voice.session.failure"
 )
 
+// Bounded failure causes the TUI records itself. They reuse Rust's
+// RealtimeFailureCause wire values so both implementations agree.
+const (
+	// VoiceFailureCauseAppServerDisconnect marks a session retired because the
+	// shared app-server transport failed.
+	VoiceFailureCauseAppServerDisconnect = "app_server_disconnect"
+	// VoiceFailureCauseAppServerRequest marks a failed realtime start or stop
+	// request.
+	VoiceFailureCauseAppServerRequest = "app_server_request"
+	// VoiceFailureCauseLocalRequest marks a request the TUI could not hand to
+	// its own runtime. Go issues realtime requests inline, so only a runtime
+	// without a wired start hook can produce it.
+	VoiceFailureCauseLocalRequest = "local_request"
+	// VoiceFailureCauseSpeechDelivery marks a spoken answer that the app-server
+	// could not deliver.
+	VoiceFailureCauseSpeechDelivery = "speech_delivery"
+)
+
 // VoiceTranscriptRecord is one retained caption.
 type VoiceTranscriptRecord struct {
 	Role     VoiceTranscriptRole
@@ -389,6 +407,35 @@ func (s *VoiceConversationState) RecordVoiceFailureCause(cause string) bool {
 		"cause": cause,
 		"phase": voiceMetricPhase(s.phase()),
 	})
+	return true
+}
+
+// RecordVoiceDisconnectFailure records an app-server disconnect for a session
+// that is starting, active, or waiting for retry cleanup, mirroring Rust
+// ChatWidget::record_realtime_disconnect_failure. A stopping session without a
+// queued retry is already ending under its own outcome.
+func (s *VoiceConversationState) RecordVoiceDisconnectFailure() bool {
+	if s == nil {
+		return false
+	}
+	if s.phase() != VoicePhaseStarting && s.phase() != VoicePhaseActive && s.retry() != VoiceRetryWaitingForStop {
+		return false
+	}
+	return s.RecordVoiceFailureCause(VoiceFailureCauseAppServerDisconnect)
+}
+
+// BeginVoiceFailure records a classified failure and moves a running session
+// into stopping, mirroring Rust ChatWidget::on_realtime_error. It reports
+// whether the session was running: an inactive session has nothing to stop and
+// must not surface a message.
+func (s *VoiceConversationState) BeginVoiceFailure(cause string) bool {
+	if s == nil || s.Inactive() {
+		return false
+	}
+	if s.phase() != VoicePhaseStopping || s.retry() == VoiceRetryWaitingForStop {
+		s.RecordVoiceFailureCause(cause)
+	}
+	s.BeginVoiceStop()
 	return true
 }
 

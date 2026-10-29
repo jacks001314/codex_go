@@ -261,6 +261,35 @@ func TestResponsesStreamAccumulatorPrefersAccumulatedFunctionArguments(t *testin
 	}
 }
 
+// Mirrors Rust #57563: once an output item is complete, the accumulator keeps
+// only the item it will return and releases the separately accumulated tool
+// argument payload instead of holding both until the response ends.
+func TestResponsesStreamAccumulatorReleasesCompletedToolInputDeltas(t *testing.T) {
+	acc := newResponsesStreamAccumulator(&AgentRequest{})
+	deltas := []string{
+		`{"type":"response.function_call_arguments.delta","item_id":"call-item","call_id":"call-1","delta":"{\"cmd\":"}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"call-item","call_id":"call-1","delta":"\"echo ok\"}"}`,
+	}
+	for _, data := range deltas {
+		if _, err := acc.apply(&responsesSSEEvent{Event: "response.function_call_arguments.delta", Data: []byte(data)}, nil); err != nil {
+			t.Fatalf("apply delta error = %v", err)
+		}
+	}
+	if len(acc.functionCallArgDeltas) == 0 {
+		t.Fatal("the accumulator did not retain the in-flight argument deltas")
+	}
+	done := `{"type":"response.output_item.done","item":{"id":"call-item","type":"function_call","name":"echo","call_id":"call-1","arguments":""}}`
+	if _, err := acc.apply(&responsesSSEEvent{Event: "response.output_item.done", Data: []byte(done)}, nil); err != nil {
+		t.Fatalf("apply done error = %v", err)
+	}
+	if len(acc.functionCallArgDeltas) != 0 {
+		t.Fatalf("completed item kept %d argument buffers: %#v", len(acc.functionCallArgDeltas), acc.functionCallArgDeltas)
+	}
+	if len(acc.items) != 1 || acc.items[0].Arguments != `{"cmd":"echo ok"}` {
+		t.Fatalf("completed items = %#v, want the applied arguments", acc.items)
+	}
+}
+
 func TestResponsesStreamAccumulatorBridgesApplyPatchCustomDeltaToFunctionCall(t *testing.T) {
 	patch := "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch"
 	acc := &responsesStreamAccumulator{customToolInputDeltas: map[string]string{"call-1": patch}}

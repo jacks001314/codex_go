@@ -176,10 +176,18 @@ func privateTempHome(t *testing.T) string {
 func TestExplicitAttachmentNeverFallsBackToEmbeddedLikeRust(t *testing.T) {
 	originalFeature := daemonAutoStartFeature
 	originalStart := daemonAutoStartStart
+	originalRead := daemonCompatibilityRead
 	t.Cleanup(func() {
 		daemonAutoStartFeature = originalFeature
 		daemonAutoStartStart = originalStart
+		daemonCompatibilityRead = originalRead
 	})
+	// The compatibility gate (Rust #55442) connects before the TUI opens. This
+	// test is about socket locality, so the readback seam stands in for a
+	// healthy daemon and keeps the launch on the remote path.
+	daemonCompatibilityRead = func(context.Context, *appserverdaemon.RemoteAppServerEndpoint, string, bool) (*daemonCompatibilityReadback, error) {
+		return &daemonCompatibilityReadback{}, nil
+	}
 
 	home := privateTempHome(t)
 	t.Setenv("CODEX_HOME", home)

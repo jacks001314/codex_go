@@ -13,10 +13,11 @@ func boolPtrApp(value bool) *bool { return &value }
 // decide terminal ownership; --no-alt-screen always wins.
 func TestInteractiveNoAltScreenResolutionLikeRust(t *testing.T) {
 	tests := []struct {
-		name     string
-		root     *cli.RootOptions
-		settings codextea.SettingsWriteResult
-		want     bool
+		name               string
+		root               *cli.RootOptions
+		settings           codextea.SettingsWriteResult
+		terminalAppOverSSH bool
+		want               bool
 	}{
 		{
 			name:     "defaults fullscreen",
@@ -50,9 +51,33 @@ func TestInteractiveNoAltScreenResolutionLikeRust(t *testing.T) {
 			settings: codextea.SettingsWriteResult{FullscreenTranscript: boolPtrApp(true)},
 			want:     true,
 		},
+		{
+			name:               "auto keeps native scrollback for Apple Terminal over SSH",
+			settings:           codextea.SettingsWriteResult{FullscreenTranscript: boolPtrApp(true), AlternateScreenMode: "auto"},
+			terminalAppOverSSH: true,
+			want:               true,
+		},
+		{
+			name:               "auto owns the screen for other terminals",
+			settings:           codextea.SettingsWriteResult{FullscreenTranscript: boolPtrApp(true), AlternateScreenMode: "auto"},
+			terminalAppOverSSH: false,
+			want:               false,
+		},
+		{
+			name:               "always overrides the terminal identity",
+			settings:           codextea.SettingsWriteResult{FullscreenTranscript: boolPtrApp(true), AlternateScreenMode: "always"},
+			terminalAppOverSSH: true,
+			want:               false,
+		},
+		{
+			name:               "never overrides the terminal identity",
+			settings:           codextea.SettingsWriteResult{FullscreenTranscript: boolPtrApp(true), AlternateScreenMode: "never"},
+			terminalAppOverSSH: false,
+			want:               true,
+		},
 	}
 	for _, testCase := range tests {
-		if got := interactiveNoAltScreen(testCase.root, testCase.settings); got != testCase.want {
+		if got := interactiveNoAltScreen(testCase.root, testCase.settings, testCase.terminalAppOverSSH); got != testCase.want {
 			t.Fatalf("%s: noAltScreen = %v, want %v", testCase.name, got, testCase.want)
 		}
 	}
@@ -75,7 +100,7 @@ func TestInteractiveTUIModeConfigParsingLikeRust(t *testing.T) {
 	if got := interactiveAlternateScreenMode(nil); got != "auto" {
 		t.Fatalf("default alternate screen mode = %q", got)
 	}
-	if !interactiveNoAltScreenFromValues(nil, values) {
+	if !interactiveNoAltScreenFromValues(nil, values, false) {
 		t.Fatal("configured scrollback mode did not disable the alternate screen")
 	}
 }

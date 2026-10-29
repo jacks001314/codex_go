@@ -15,10 +15,14 @@ func (m *Model) cyberAccessProgramForTurn() (string, error) {
 		return "", nil
 	}
 	modelID := strings.TrimSpace(m.State.Model)
-	programs := []string(nil)
-	if option, ok := m.currentModelCatalogOption(modelID); ok {
-		programs = option.AvailableCyberPrograms
+	option, ok := m.currentModelCatalogOption(modelID)
+	if !ok || len(option.AvailableCyberPrograms) == 0 {
+		// Missing or empty discovery metadata preserves the server's automatic
+		// treatment (Rust #53717). An unlisted explicit model ID is handled the
+		// same way.
+		return "", nil
 	}
+	programs := option.AvailableCyberPrograms
 	contains := func(want string) bool {
 		for _, program := range programs {
 			if strings.EqualFold(strings.TrimSpace(program), want) {
@@ -31,7 +35,7 @@ func (m *Model) cyberAccessProgramForTurn() (string, error) {
 		if program := daybreakProgram(programs); program != "" {
 			return program, nil
 		}
-		return "", fmt.Errorf("Daybreak is unavailable for model %s", modelID)
+		return "", fmt.Errorf("Daybreak support for model %s could not be confirmed by the connected server. Use /daybreak to turn it off, or choose a compatible model and server.", modelID)
 	}
 	if contains("standard") {
 		return "standard", nil
