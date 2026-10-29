@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -424,4 +425,89 @@ func hostBashPath() string {
 		}
 	}
 	return ""
+}
+
+// TestSnapshotBuilderPrewarmRunsOnceLikeRust pins Rust #42137's retained
+// prewarm handle: later turns reuse the speculative capture without running it
+// again, and a command after the prewarm still reuses the snapshot.
+func TestSnapshotBuilderPrewarmRunsOnceLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	runner := &snapshotBuilderRunner{capture: snapshotBashCaptureStream()}
+	builder := NewSnapshotBuilder(SnapshotBuilderOptions{
+		CodexHome: codexHome,
+		SessionID: "session-1",
+		Runner:    runner.run,
+	})
+	if builder == nil {
+		t.Fatal("NewSnapshotBuilder() = nil")
+	}
+	t.Cleanup(builder.Close)
+	request := SnapshotCaptureRequest{ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true}
+	snapshot, reason, attempted := builder.PrewarmSnapshot(context.Background(), request)
+	if !attempted || snapshot == nil || reason != "" || runner.captureCalls() != 1 {
+		t.Fatalf("first prewarm = (%v, %q, %v), captures = %d", snapshot, reason, attempted, runner.captureCalls())
+	}
+	if _, _, attempted = builder.PrewarmSnapshot(context.Background(), request); attempted {
+		t.Fatal("a second prewarm started another capture")
+	}
+	if runner.captureCalls() != 1 {
+		t.Fatalf("captures after the second prewarm = %d, want 1", runner.captureCalls())
+	}
+	reused, _ := builder.Snapshot(context.Background(), request)
+	if reused == nil || reused.Path() != snapshot.Path() || runner.captureCalls() != 1 {
+		t.Fatalf("command reuse = %v after %d captures", reused, runner.captureCalls())
+	}
+}
+
+// blockingPrewarmRunner keeps the speculative capture in flight until the
+// builder's context is cancelled, standing in for a slow login shell.
+type blockingPrewarmRunner struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingPrewarmRunner) run(ctx context.Context, _ []string, _ string, _ map[string]string, _ *sandbox.PermissionProfile, _ string) ([]byte, error) {
+	r.once.Do(func() { close(r.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestSnapshotBuilderCloseCancelsPrewarmLikeRust pins Rust #42137's shutdown
+// cancellation: unloading a thread aborts an outstanding prewarm promptly
+// instead of waiting for the capture timeout.
+func TestSnapshotBuilderCloseCancelsPrewarmLikeRust(t *testing.T) {
+	runner := &blockingPrewarmRunner{started: make(chan struct{})}
+	builder := NewSnapshotBuilder(SnapshotBuilderOptions{
+		CodexHome: t.TempDir(),
+		SessionID: "session-1",
+		Runner:    runner.run,
+	})
+	if builder == nil {
+		t.Fatal("NewSnapshotBuilder() = nil")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		builder.PrewarmSnapshot(context.Background(), SnapshotCaptureRequest{
+			ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true,
+		})
+	}()
+	select {
+	case <-runner.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("prewarm capture did not start")
+	}
+	begin := time.Now()
+	builder.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not cancel the in-flight prewarm")
+	}
+	if elapsed := time.Since(begin); elapsed > 2*time.Second {
+		t.Fatalf("Close blocked for %s on the capture timeout", elapsed)
+	}
+	if !builder.Closed() {
+		t.Fatal("builder is not closed")
+	}
 }

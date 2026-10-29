@@ -194,14 +194,19 @@ func (r *RuntimeRouter) prewarmShellSnapshot(builder *tool.SnapshotBuilder, thre
 		ctx, cancel := context.WithTimeout(context.Background(), shellSnapshotPrewarmTimeout)
 		defer cancel()
 		started := time.Now()
-		_, reason := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
+		_, reason, attempted := builder.PrewarmSnapshot(ctx, tool.SnapshotCaptureRequest{
 			ShellType:         shellType,
 			ShellPath:         shellPath,
 			CWD:               cwd,
 			AllowLoginShell:   true,
 			EnvironmentPolicy: policyTable,
 		})
-		r.recordShellSnapshot(time.Since(started), reason)
+		// Rust keeps one prewarm handle per session; later turns reuse the
+		// result without another capture or telemetry sample (#42137). A
+		// capture cancelled by thread unload is not a failure either.
+		if attempted && !builder.Closed() {
+			r.recordShellSnapshot(time.Since(started), reason)
+		}
 	}()
 }
 

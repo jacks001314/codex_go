@@ -5784,9 +5784,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 2/5; needs review: CapturePurpose, apply_unified_exec_env, prewarm_shell_snapshots"
+    "Round 944: Go's active local snapshot path is the v1 session snapshot (Feature::ShellSnapshot). tool/shell_snapshot_builder.go now exposes PrewarmSnapshot, which runs the speculative capture once per session key; later turns reuse the retained result without another capture or telemetry sample, failed speculative captures remain retryable by real commands, and Close marks the builder closed and cancels an in-flight capture before removing files (appserver/shell_snapshot.go skips telemetry for a shutdown-cancelled attempt). The exec-server v2 prewarm from this commit is not ported for local execution: Go has no in-process v2 snapshot cache, and v2 ShellSnapshot requests are only sent to remote exec-servers, which capture lazily on process/start. Rust's per-turn-environment v2 prewarm also captures under each environment's permission/sandbox and skips allow_login_shell=false or network_policy environments; the local v1 path intentionally keeps its unsandboxed session capture. Tests: TestSnapshotBuilderPrewarmRunsOnceLikeRust, TestSnapshotBuilderCloseCancelsPrewarmLikeRust, TestShellSnapshotPrewarmRunsOncePerSessionLikeRust. Verified with go test ./tool ./appserver -run 'Snapshot|ShellSnapshot' -count=1 (tool full package also passes). Residual: local v2 executor prewarm with sandbox and permission context."
    ]
   },
   {

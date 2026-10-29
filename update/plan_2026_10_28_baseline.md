@@ -2672,6 +2672,16 @@ The agent command center now keeps discovered sessions for the TUI's lifetime (#
 - Added `TestAgentsOverviewRetainsDiscoveredSessionsLikeRust` (retention after the recent window shrinks, metadata refresh, tombstone removal).
 - Verified with `go test ./tui/tea ./tui/agents_overview -count=1`.
 
+### Retained shell-snapshot prewarm (Round 944)
+
+The speculative shell-snapshot capture is now retained and cancellable (#42137, partial).
+
+- Go's active local path uses the v1 session snapshot. `tool.SnapshotBuilder.PrewarmSnapshot` now starts the speculative capture once per session key; later turns reuse it without another capture or telemetry sample, and a failed prewarm stays retryable by real commands.
+- `SnapshotBuilder.Close` marks the builder closed and cancels an in-flight capture before removing files, so unloading a thread no longer waits for the capture timeout. `appserver/shell_snapshot.go` skips capture telemetry for a shutdown-cancelled attempt.
+- Rust's v2 prewarm is not ported for local execution: Go has no in-process v2 snapshot cache, and v2 requests go only to remote exec-servers, which capture lazily. Rust also captures each turn environment under its permission/sandbox and skips disallowed login shells or network policies; Go's v1 session capture stays unsandboxed.
+- Added `TestSnapshotBuilderPrewarmRunsOnceLikeRust`, `TestSnapshotBuilderCloseCancelsPrewarmLikeRust`, and `TestShellSnapshotPrewarmRunsOncePerSessionLikeRust`.
+- Verified with `go test ./tool ./appserver -run 'Snapshot|ShellSnapshot' -count=1`, the full `./tool` package, and `go test -race ./tool -run 'TestSnapshotBuilder' -count=1`.
+
 Status after reconciliation: `2107 complete`, `410 not_applicable`,
-`420 audit_pending`, `210 regression_pending`, `2 partial`,
+`419 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

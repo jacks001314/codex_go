@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"codex_go/envutil"
@@ -138,10 +139,14 @@ func snapshotExplicitOverrides(req *ShellRequest) map[string]string {
 // captures it, and other launches wait for that capture instead of starting a
 // second one.
 type SnapshotBuilder struct {
-	mu        sync.Mutex
-	options   SnapshotBuilderOptions
-	snapshots map[string]*ShellSnapshotFile
-	cleaned   bool
+	mu         sync.Mutex
+	options    SnapshotBuilderOptions
+	snapshots  map[string]*ShellSnapshotFile
+	prewarmed  map[string]struct{}
+	captureCtx context.Context
+	cancel     context.CancelFunc
+	closed     atomic.Bool
+	cleaned    bool
 }
 
 // ShellSnapshotFile is a captured snapshot on disk. Closing it removes the file,
@@ -181,7 +186,14 @@ func NewSnapshotBuilder(options SnapshotBuilderOptions) *SnapshotBuilder {
 	if options.Timeout <= 0 {
 		options.Timeout = DefaultSnapshotTimeout
 	}
-	return &SnapshotBuilder{options: options, snapshots: map[string]*ShellSnapshotFile{}}
+	captureCtx, cancel := context.WithCancel(context.Background())
+	return &SnapshotBuilder{
+		options:    options,
+		snapshots:  map[string]*ShellSnapshotFile{},
+		prewarmed:  map[string]struct{}{},
+		captureCtx: captureCtx,
+		cancel:     cancel,
+	}
 }
 
 // Snapshot returns the session's snapshot for the request, capturing it on first
@@ -196,6 +208,9 @@ func (b *SnapshotBuilder) Snapshot(ctx context.Context, request SnapshotCaptureR
 	key := snapshotCaptureKey(request)
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed.Load() {
+		return nil, ""
+	}
 	b.cleanupStaleSnapshotsLocked()
 	if existing := b.snapshots[key]; existing != nil {
 		if _, err := os.Stat(existing.path); err == nil {
@@ -209,6 +224,51 @@ func (b *SnapshotBuilder) Snapshot(ctx context.Context, request SnapshotCaptureR
 	}
 	b.snapshots[key] = created
 	return created, ""
+}
+
+// PrewarmSnapshot starts the session's speculative capture once. Rust keeps the
+// prewarm handle in session state and only stores a replaced one on a new turn,
+// so later turns do not repeat the capture or its telemetry (#42137). The
+// attempt flag reports whether this call actually ran a capture; a cached
+// snapshot or an already-started prewarm returns false.
+func (b *SnapshotBuilder) PrewarmSnapshot(ctx context.Context, request SnapshotCaptureRequest) (*ShellSnapshotFile, SnapshotFailureReason, bool) {
+	if b == nil {
+		return nil, "", false
+	}
+	key := snapshotCaptureKey(request)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed.Load() {
+		return nil, "", false
+	}
+	if _, started := b.prewarmed[key]; started {
+		return nil, "", false
+	}
+	b.prewarmed[key] = struct{}{}
+	b.cleanupStaleSnapshotsLocked()
+	if existing := b.snapshots[key]; existing != nil {
+		if _, err := os.Stat(existing.path); err == nil {
+			return existing, "", false
+		}
+		delete(b.snapshots, key)
+	}
+	created, reason := b.captureLocked(ctx, request)
+	if created == nil {
+		return nil, reason, true
+	}
+	b.snapshots[key] = created
+	return created, "", true
+}
+
+// Closed reports whether Close has begun. A prewarm that lost its capture to
+// shutdown is not a capture failure, so callers skip its telemetry.
+func (b *SnapshotBuilder) Closed() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closed.Load()
 }
 
 // PrewarmedSnapshot reports whether a snapshot captured under this request's
@@ -238,6 +298,12 @@ func (b *SnapshotBuilder) PrewarmedSnapshot(request SnapshotCaptureRequest) bool
 func (b *SnapshotBuilder) Close() {
 	if b == nil {
 		return
+	}
+	// Cancel an in-flight prewarm before waiting for the capture lock, so
+	// unloading a thread does not block on the capture timeout (#42137).
+	b.closed.Store(true)
+	if b.cancel != nil {
+		b.cancel()
 	}
 	b.mu.Lock()
 	snapshots := b.snapshots
@@ -275,6 +341,10 @@ func (b *SnapshotBuilder) captureLocked(ctx context.Context, request SnapshotCap
 	}
 	runCtx, cancel := context.WithTimeout(ctx, b.options.Timeout)
 	defer cancel()
+	if b.captureCtx != nil {
+		stop := context.AfterFunc(b.captureCtx, cancel)
+		defer stop()
+	}
 	env := snapshotCaptureEnv()
 	captured, err := b.options.Runner(runCtx, snapshotExecArgs(request, script), request.CWD, env, request.PermissionProfile, request.PermissionProfileID)
 	if err != nil {

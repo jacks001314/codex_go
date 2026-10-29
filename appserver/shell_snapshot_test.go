@@ -316,6 +316,45 @@ func TestShellSnapshotPrewarmsAndReusesLikeRust(t *testing.T) {
 	}
 }
 
+// Rust stores the prewarm handle in session state and only starts a missing
+// one (#42137), so building the turn's provider again reuses the captured
+// result instead of running (and sampling) a second capture.
+func TestShellSnapshotPrewarmRunsOncePerSessionLikeRust(t *testing.T) {
+	runner := &recordingSnapshotRunner{}
+	previous := shellSnapshotCaptureRunner
+	shellSnapshotCaptureRunner = runner.run
+	t.Cleanup(func() { shellSnapshotCaptureRunner = previous })
+	router, threadID, cwd := newShellSnapshotRouter(t, "sandbox_mode = \"workspace-write\"\n")
+	t.Cleanup(func() { _ = router.Close() })
+	router.services.Environment = NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, cwd)
+	cfg := router.effectiveWriteStdinConfig(threadID)
+	if provider := router.shellSnapshotProviderForTurn(threadID, cfg); provider == nil {
+		t.Fatal("no snapshot provider")
+	}
+	if !waitForSnapshotCaptures(runner, 1, 2*time.Second) {
+		t.Fatalf("the session did not prewarm its snapshot (captures = %d)", runner.count())
+	}
+	second := router.shellSnapshotProviderForTurn(threadID, cfg)
+	if second == nil {
+		t.Fatal("second provider call returned nil")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if captures := runner.count(); captures != 1 {
+		t.Fatalf("captures after a second provider build = %d, want the retained prewarm", captures)
+	}
+	if path := second(context.Background(), tool.SnapshotProviderRequest{
+		ShellType:       tool.ShellBash,
+		ShellPath:       "/bin/bash",
+		CWD:             cwd,
+		AllowLoginShell: true,
+	}).Path; path == "" {
+		t.Fatal("the second provider found no prewarmed snapshot")
+	}
+	if captures := runner.count(); captures != 1 {
+		t.Fatalf("captures after reusing the second provider = %d, want 1", captures)
+	}
+}
+
 // A session with the credential broker configured keeps its snapshots lazy
 // (Rust's `should_rebuild_inherited`): protected captures need the command's
 // sandbox and credential preparation.
