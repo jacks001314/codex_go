@@ -754,6 +754,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Regression: preview/footer styled equality and identity-color fallback (`tui/tea/status_surface_preview_color_like_rust_test.go`), palette follow/reset (`tui/thread_color_test.go`), identity suppression on a disabled line (`tui/bottom_pane/status_line_style_test.go`), plus the existing picker and agents-overview color tests.
 - Startup pickers already open from the theme-aware tea model, so Rust's pre-render theme load has no Go counterpart; `go test ./tui ./tui/bottom_pane ./tui/agents_overview ./tui/chatwidget ./tui/tea` passes.
 
-Status after reconciliation: `1972 complete`, `385 not_applicable`,
-`510 audit_pending`, `282 regression_pending`, `0 partial`,
+### Cancel nested code-mode calls with a released context (Round 785)
+
+- `tool/code_mode_exec.go`: the remote delegate refuses a nested call whose originating execution was released, answering Rust's `code mode nested tool call cancelled` instead of dispatching it against the resuming turn; closed cells are remembered (bounded FIFO) and a restarted cell id clears the marker.
+- `appserver/guardian_reviewer.go`: denial and non-denial accounting resolve the thread's active turn, so a review dispatched by a cell from an earlier turn counts against - and can interrupt - the turn running now; an empty active turn records nothing.
+- Architecture gap: Go passes MCP approval metadata inline with the approval request, so no turn-scoped registry/weak-map lifetime is needed, and it emits no legacy `McpToolCallBegin/End` events - nested lifecycle callbacks stay on the originating turn's dispatcher.
+- Tests: `tool/code_mode_nested_cancel_like_rust_test.go`, `appserver/guardian_active_turn_denials_like_rust_test.go`; `go test ./tool ./turn`, `go test ./appserver -run Guardian`, and `go build ./appserver ./tool ./turn ./exec ./app` pass.
+
+Status after reconciliation: `1973 complete`, `385 not_applicable`,
+`509 audit_pending`, `282 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

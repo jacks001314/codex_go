@@ -12063,9 +12063,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: CodeModeCellDelegate, as_legacy_begin_event, as_legacy_end_event, record_guardian_denial_for_test"
+    "Nested code-mode calls now fail with Rust's `code mode nested tool call cancelled` once the originating execution was released: the remote delegate resolves the cell's retained invocation before dispatch and remembers closed cells so a late call is not run against the resuming turn (tool/code_mode_exec.go, tool/code_mode_nested_cancel_like_rust_test.go). Guardian denial accounting and interruption resolve the session's active turn instead of the review's originating turn, including reviews from an earlier yielded cell (appserver/guardian_reviewer.go, appserver/guardian_active_turn_denials_like_rust_test.go). MCP approval metadata is passed inline with the approval request, so Go needs no turn-scoped registry or weak-map lifetime; Go emits no legacy McpToolCallBegin/End events, and nested lifecycle callbacks run on the originating turn's dispatcher, so late MCP completions need no extra turn_id field."
    ]
   },
   {
