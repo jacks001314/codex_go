@@ -833,6 +833,12 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - New regressions: `TestAgentLoopUsesCapturedStepSettingsForToolHooksLikeRust` (two steps, model/effort/approval change mid-turn), `TestToolHookAdapterReportsInvocationStepAttributionLikeRust` (hook stdin plus partial/absent fallbacks), and `TestAttachToolInventoryToCompactionMetadataLikeRust`.
 - Tests: `go build ./turn ./tool ./appserver ./app`, `go test ./turn ./tool -count=1`, and `go test ./appserver -run 'Hook|Compact|StepSettings|StepCapabilities' -count=1` pass.
 
-Status after reconciliation: `1984 complete`, `386 not_applicable`,
-`506 audit_pending`, `273 regression_pending`, `0 partial`,
+### Dispose unported packaged sandbox cleanup and inline scrollback (Round 796)
+
+- #45178 is N/A by architecture. The commit only splits Rust's packaged Windows sandbox cleanup into `prepare_packaged_windows_sandbox_cleanup` plus a `PreparedWindowsSandboxCleanup` guard whose `finish` removes resources, and extracts the service's `package_lifecycle/cleanup.rs`. Go has no `windows-sandbox-service`/package-lifecycle path and no packaged-install cleanup carrier: `sandbox/windowssandbox/uninstall.go` exposes only `CleanUpLegacyWindowsSandbox`, and `uninstall_windows.go` records that the setup mutex, installation record, and account disable/wait primitives are unported.
+- #45271 is N/A by architecture. Rust changes `ScrollbackStrategy::Standard` viewport growth to emit newlines inside a `DECSTBM` history region so QTermWidget/xterm.js keep scrollback. Go's TUI has no inline-history viewport or scroll-region writer (no `ScrollbackStrategy`/`grow_viewport`/`DECSTBM` carrier); transcript insertion and resize reflow live in `tui/app/resize_reflow.go`, and the bubbletea renderer owns the screen.
+- Verification: `rg 'ScrollbackStrategy|grow_viewport|PreparedWindowsSandboxCleanup|prepare_packaged|package_lifecycle' --glob '*.go'` finds no carrier, and the existing `sandbox/windowssandbox` legacy cleanup and `tui/app` resize-reflow tests remain unchanged and green.
+
+Status after reconciliation: `1984 complete`, `388 not_applicable`,
+`504 audit_pending`, `273 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

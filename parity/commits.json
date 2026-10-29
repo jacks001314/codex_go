@@ -12651,9 +12651,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: PreparedWindowsSandboxCleanup, prepare_packaged_windows_sandbox_cleanup"
+    "N/A by architecture: the commit splits Rust's packaged Windows sandbox cleanup (prepare_packaged_windows_sandbox_cleanup, PreparedWindowsSandboxCleanup, and the service package_lifecycle/cleanup.rs module) into prepare/finish phases. Go ships no windows-sandbox-service or packaged-install cleanup path: sandbox/windowssandbox/uninstall.go exposes only CleanUpLegacyWindowsSandbox, uninstall_windows.go documents that the setup mutex, installation record, and account disable/wait primitives have no Go carrier, and rg for package_lifecycle/PreparedWindowsSandboxCleanup/prepare_packaged finds nothing."
    ]
   },
   {
@@ -12747,9 +12747,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: the commit rewrites Rust's inline-history ScrollbackStrategy::Standard viewport growth to emit newlines inside a DECSTBM history region instead of CSI S. Go's TUI has no inline-history viewport or scroll-region writer (rg for ScrollbackStrategy/grow_viewport/DECSTBM finds no carrier); transcript insertion and resize reflow live in tui/app/resize_reflow.go and the bubbletea renderer owns the screen, so there is no Go scrollback strategy to change."
    ]
   },
   {
