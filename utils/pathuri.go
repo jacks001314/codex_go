@@ -385,6 +385,14 @@ func (u *PathURI) JoinDescendant(nativePath string) (*PathURI, error) {
 		if strings.HasPrefix(nativePath, `\`) || isDriveRelative(nativePath) {
 			return nil, &ParseError{Reason: "path must resolve to a relative descendant when joining a path URI", Path: nativePath}
 		}
+		// Rust #41001 also rejects any segment carrying a drive or alternate
+		// data stream separator, so a fully qualified path cannot be mistaken
+		// for a descendant of the base.
+		for _, segment := range PathSegments(ConventionWindows, nativePath) {
+			if strings.Contains(segment, ":") {
+				return nil, &ParseError{Reason: "path must resolve to a relative descendant when joining a path URI", Path: nativePath}
+			}
+		}
 	}
 	if !descendant.StartsWith(u) {
 		return nil, &ParseError{Reason: "path must resolve to a relative descendant when joining a path URI", Path: nativePath}

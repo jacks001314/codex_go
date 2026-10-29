@@ -3192,9 +3192,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "sandbox/policy_transforms.go:458 pathsMayOverlapForConvention already compares PathUri.Overlaps and fails closed; utils/pathuri.go:372 JoinDescendant now also rejects drive-qualified and colon-bearing segments like Rust; new utils/pathuri_policy_uri_native_like_rust_test.go mirrors the 41001 matrix for convention joins, encoded segments, overlaps, opaque fail-closed and lexical depth; residual: sandbox/integrity/policy.go:300 protected metadata names still join with host filepath and PathWithin"
    ]
   },
   {

@@ -2530,6 +2530,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `sandbox/windowssandbox/bin/setup_main/win/run_windows.go:80` logs and reports provisioning failures through it, and the provisioning `setupFailuref` sites now render `%s` chains (user provisioning, SID resolution, firewall, marker, locks).
 - New `sandbox/windowssandbox/setup_error_chain_like_rust_test.go` covers nested chains, the hidden `SandboxAccountCredentialMismatch` cause, dedupe and nil.
 
-Status after reconciliation: `2090 complete`, `409 not_applicable`,
-`428 audit_pending`, `219 regression_pending`, `3 partial`,
+### URI-native filesystem policy matching (Round 929)
+
+- Rust #41001 makes filesystem policy matching URI-native; Go already compares policy paths through `PathUri.Overlaps` with fail-closed ambiguity (`sandbox/policy_transforms.go:458`).
+- The new parity matrix mirrors the upstream cases: convention-aware descendant joins, encoded `StartsWith` segments, Windows case variants, opaque fail-closed overlaps and validated lexical depths.
+- The matrix exposed a real gap: `utils/pathuri.go:372` accepted a fully qualified `C:\workspace\docs` as a descendant join, while Rust rejects drive-qualified and colon-bearing segments.
+- `JoinDescendant` now rejects any Windows segment carrying `:` in addition to `\`-rooted and drive-relative inputs.
+- Residual: protected metadata names still use host `filepath.Join` plus `PathWithin` (`sandbox/integrity/policy.go:300`), so a foreign executor convention is not applied there.
+
+Status after reconciliation: `2091 complete`, `409 not_applicable`,
+`428 audit_pending`, `218 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
