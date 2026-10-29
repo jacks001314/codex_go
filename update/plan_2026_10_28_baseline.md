@@ -2078,6 +2078,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - Fixed by adding `code_mode` to the structured feature list and switching `config/override.go` from the multi-agent-only check to the shared structured-feature check, matching Rust's `apply_toml_override`. Added `config/code_mode_overrides_like_rust_test.go` covering both override orders, both merge directions, `features` and `profiles.work.features`, and the resolved feature settings.
 - Verified with `go test ./config -count=1` and `go build ./...`.
 
-Status after reconciliation: `2050 complete`, `404 not_applicable`,
-`446 audit_pending`, `245 regression_pending`, `4 partial`,
+### Synchronous Guardian reviews keep their selected effort (Round 888)
+
+**Upstream:** 93321c88d8e4 "Preserve selected reasoning effort for synchronous Guardian reviews (#46292)".
+
+- Go's reviewer path already used its selected effort (`model.AgentRequest.ReasoningEffort = plan.Selection.ReasoningEffort`, `appserver/guardian_reviewer.go:1175`), and reviewer prompts are rendered transcripts, so inherited `configuration_update` items never reach a reviewer request.
+- The real gap was the single client-level gate: `reasoningEffortOverrideExempt` (`appserver/reasoning_effort_override.go:138`) exempted only memory consolidation and ephemeral `thread_title`, so a turn on a guardian-sourced thread still filtered, pinned, and injected effort updates when managed requirements enabled `reasoning_effort_override`.
+- Rust #46292 disables the override in `ModelClient` for `guardian::is_basic_session_source`, covering both `SubAgent(Other("guardian"))` and `Internal(Guardian)`. Added `guardianReviewerSessionSource` (`appserver/reasoning_effort_override.go:126`) and an exemption keyed on the recorded session source, so request filtering, effort pinning, and update injection share one decision while the parent thread keeps its pin.
+- Added `appserver/guardian_reasoning_effort_like_rust_test.go`: both source forms, no trusted update recorded or injected, selected `low`/`high` efforts honored with no pin retained, the parent's pin and update still applied, and inherited updates dropped from the request copy without touching saved history.
+- Verified with `go test ./appserver -run 'TestSyncGuardianKeepsSelectedReasoningEffortLikeRust|TestReasoningEffort|Guardian' -count=1` (the new test fails when the exemption is disabled) and `go build ./...`.
+
+Status after reconciliation: `2051 complete`, `404 not_applicable`,
+`446 audit_pending`, `244 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

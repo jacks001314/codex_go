@@ -15387,9 +15387,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go's reviewer already sends the selected effort (`model.AgentRequest.ReasoningEffort = plan.Selection.ReasoningEffort`, appserver/guardian_reviewer.go:1175) and builds its prompt from a rendered transcript, so inherited configuration_update items never reach a reviewer request. The gap was the single client-level gate: reasoningEffortOverrideExempt (appserver/reasoning_effort_override.go:138) exempted only memory consolidation and ephemeral thread_title, so a turn on a guardian-sourced thread still filtered, pinned, and injected effort updates when managed requirements enabled the feature. Rust #46292 disables the override in ModelClient for guardian::is_basic_session_source, covering both SubAgent(Other(\"guardian\")) and Internal(Guardian). Added guardianReviewerSessionSource (appserver/reasoning_effort_override.go:126) and an exemption keyed on the recorded session source, so request filtering (rejectConfigurationUpdateInputItems), effort pinning (reasoningEffortForRequest), and update injection (reasoningEffortOverrideInputItems) follow one decision; the parent thread keeps its behavior. Regression test appserver/guardian_reasoning_effort_like_rust_test.go covers both sources, no trusted update recorded or injected, selected low/high efforts honored with no pin retained, the parent's pin and updates still applied, and inherited updates dropped from the request copy without changing saved history. Verified with go test ./appserver -run 'TestSyncGuardianKeepsSelectedReasoningEffortLikeRust|TestReasoningEffort|Guardian' -count=1 (the new test fails when the exemption is disabled) and go build ./..."
    ]
   },
   {

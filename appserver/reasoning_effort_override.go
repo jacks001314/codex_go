@@ -7,6 +7,7 @@ import (
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/reasoningoverride"
+	"codex_go/session"
 	"codex_go/turn"
 )
 
@@ -119,11 +120,21 @@ func reasoningEffortProviderIsOpenAI(cfg *config.Config, providerID string) bool
 	return err == nil && providerInfo != nil && providerInfo.IsOpenAI()
 }
 
-// reasoningEffortOverrideExempt mirrors Rust #46531: fixed-effort workers
-// (memory consolidation and ephemeral `thread_title` generation) use their
-// selected request-level effort even when managed settings enable the override
-// feature. Persisted `thread_title` threads and other ephemeral threads keep
-// the normal override behavior.
+// guardianReviewerSessionSource mirrors Rust `guardian::is_basic_session_source`
+// (#46292): the current internal guardian source and the legacy subagent
+// "guardian" source both identify a synchronous Guardian reviewer.
+func guardianReviewerSessionSource(source string) bool {
+	if session.IsGuardianReviewSource(source) {
+		return true
+	}
+	return normalizedInternalSessionSource(InternalSessionSource(source)) == "guardian"
+}
+
+// reasoningEffortOverrideExempt mirrors Rust #46531 and #46292: fixed-effort
+// workers (memory consolidation and ephemeral `thread_title` generation) and
+// synchronous Guardian reviewers use their selected request-level effort even
+// when managed settings enable the override feature. Persisted `thread_title`
+// threads and other ephemeral threads keep the normal override behavior.
 func (r *RuntimeRouter) reasoningEffortOverrideExempt(threadID string) bool {
 	if r == nil {
 		return false
@@ -131,6 +142,12 @@ func (r *RuntimeRouter) reasoningEffortOverrideExempt(threadID string) bool {
 	record := r.runtimeRecordForThread(threadID)
 	if record == nil {
 		return false
+	}
+	// Rust #46292 disables the override when the ModelClient is created for a
+	// Guardian review session, so the same decision governs request filtering,
+	// effort pinning, and update injection for every turn of that session.
+	if guardianReviewerSessionSource(record.Metadata.Source) {
+		return true
 	}
 	threadSource := strings.ToLower(strings.TrimSpace(record.Metadata.ThreadSource))
 	source := strings.ToLower(strings.TrimSpace(record.Metadata.Source))
