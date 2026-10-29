@@ -3010,6 +3010,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `appserver/goal_empty_responses.go` counts only automatically admitted goal turns, treats a textless terminal agent message or an interrupted turn with no activity as empty, and resets the streak on user input, reasoning/answer text, questions, tool activity, non-automatic turns, and goal changes; `appserver/thread_goal_state.go` blocks the goal, emits `ThreadGoalUpdated`, records the transition, and clears the streak.
 - Tests: `TestGoalEmptyAutomaticContinuationsBlockAfterThree`, `TestGoalInterruptedAutomaticContinuationsCountTowardNoActivityLikeRust`, `TestGoalEmptyStreakResetsOnActivityAndNonAutomaticTurns`, `TestGoalEmptyStreakResetsOnGoalChange`, `TestGoalEmptyPartialAnswersDoNotCountAsEmptyFinalLikeRust`. Verified with `go test ./appserver -run 'GoalEmpty|GoalInterrupted' -count=1`.
 
-Status after reconciliation: `2144 complete`, `449 not_applicable`,
-`347 audit_pending`, `204 regression_pending`, `5 partial`,
+### Managed proxy listener handoff audit (Round 984)
+
+- Rust #40999 hardens linux-sandbox managed proxying by moving loopback listeners to host bridges over anonymous socketpairs with descriptor validation and private, short-lived bootstrap channels (#40999, not applicable).
+- Go's proxy routing has no listener handoff: the host bridge listens on a filesystem UDS and the bwrap inner helper runs a loopback bridge that dials it, with `Pdeathsig` bounding both helper lifetimes. No socketpair/SCM_RIGHTS or inherited control descriptor exists on this path.
+- Residual recorded for future work: the Go transport keeps the readable socket directory and the extra loopback hop, and stale `codex-linux-sandbox-proxy-*` directories are never removed.
+
+Status after reconciliation: `2144 complete`, `450 not_applicable`,
+`346 audit_pending`, `204 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

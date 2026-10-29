@@ -3184,9 +3184,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: move_fd_above_stdio, receive_listener, send_listener"
+    "Round 984 (audit): Rust #40999 replaces the filesystem Unix-socket proxy bridges in linux-sandbox with anonymous socketpairs plus an SCM_RIGHTS listener handoff, validates the transferred descriptors, keeps each launch's bootstrap channel private and closes it before running untrusted commands, and ties bridge lifetime to the sandbox. Go's managed proxy routing (sandbox/linuxsandbox/linux.go prepareHostProxyRouteSpec / activateProxyRoutesInNetns) has no listener handoff surface: the outer helper spawns --proxy-host-bridge, which listens on a filesystem UDS under CODEX_HOME/tmp (or TMPDIR); the bwrap inner helper spawns --proxy-local-bridge, which listens on 127.0.0.1 and dials that UDS; both helpers carry Pdeathsig so they end with the sandbox. There is no socketpair, SCM_RIGHTS sendmsg/recvmsg, inherited control descriptor or bootstrap channel on the proxy path (the family of fd-passing helpers in sandbox/linuxsandbox/execve_wrapper_unix.go serves the exec-server wrapper, not proxy routing), so the descriptor-validation hardening has nothing to port; matching Rust would mean replacing the transport and passing a preserved fd through bwrap. Residual difference recorded for future work: the Go transport still needs a readable socket directory, never removes stale codex-linux-sandbox-proxy-* directories (no RemoveAll in sandbox/linuxsandbox), and keeps the extra loopback hop this commit removes. No code change; audit based on the Go sources above."
    ]
   },
   {
