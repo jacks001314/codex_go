@@ -14955,9 +14955,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "tui/bat_theme_scopes.go records two-face 0.5.1's resolved Markdown raw-inline foregrounds (markup.inline.raw.string.markdown, markup.raw.inline.markdown) for all 32 bundled bat themes; tui/theme_scope_foreground.go consults them before the Chroma approximation and stops at an unstyled scope like Rust; tui/markdown/render.go patches glamour's Code style with the resolved raw colour and uses ANSI palette 6 for Rust's cyan fallback; tui/markdown/inline_code_theme_colors_like_rust_test.go covers catppuccin-mocha #a6e3a1, catppuccin-latte #40a02b, ansi green, nord #8fbcbb fallback and the cyan default"
    ]
   },
   {

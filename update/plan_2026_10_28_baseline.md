@@ -2001,6 +2001,17 @@ Porting the new assertion exposed a real difference. Rust's `guardian-context/sr
 
 The transcript test was confirmed to fail with the filter removed. Commands: `go test ./appserver -run 'Guardian|AutoReview' -count=1`; `go build ./...`.
 
-Status after reconciliation: `2044 complete`, `401 not_applicable`,
-`453 audit_pending`, `248 regression_pending`, `3 partial`,
+### Inline code and file paths follow the syntax theme (Round 880)
+
+**Upstream:** 172f8a290111 "Use syntax theme colors for inline code and file paths (#46069)".
+
+- Rust resolves `MarkdownStyles::code` from the active syntect theme (two-face/bat bundle) via `foreground_style_for_scopes_with_theme(["markup.inline.raw.string.markdown", "markup.raw.inline.markdown"])`, falling back to `Style::new().cyan()`.
+- Go previously had no bat `.tmTheme` data, so Chroma's `GenericOutput` (or nothing) resolved; inline code and local file paths rendered cyan-less or with the wrong tone.
+- Added `tui/bat_theme_scopes.go`: the per-theme resolved foregrounds generated from two-face 0.5.1 by running syntect's `Highlighter::style_mod_for_stack`, covering all 32 bundled themes (catppuccin styles the inline-code scope, nord/ansi/gruvbox style the raw-inline scope, dracula/github and friends style neither).
+- `tui/theme_scope_foreground.go` consults that table before the Chroma approximation and treats an unstyled scope as authoritative (next scope, then the caller's fallback), mirroring Rust's scope-list resolution.
+- `tui/markdown/render.go` projects the resolved colour onto glamour's Code style, which also covers the local file-path labels the renderer emits as code spans, and uses ANSI palette index 6 for Rust's cyan fallback (glamour ignores the colour name).
+- Verified with `go test ./tui/... -count=1` (all pass) and `go build ./...`.
+
+Status after reconciliation: `2045 complete`, `401 not_applicable`,
+`452 audit_pending`, `248 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

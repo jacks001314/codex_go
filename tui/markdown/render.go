@@ -564,6 +564,12 @@ func applyThemeMarkupColors(style ansi.StyleConfig, themeID string, level codext
 	if color := foreground("markup.quote.markdown"); color != nil {
 		style.BlockQuote.Color = color
 	}
+	// Rust #46069: inline code and local file paths (rendered as code spans)
+	// borrow the theme's Markdown raw-text foreground, keeping cyan when the
+	// theme styles neither scope.
+	if value := codextui.ThemeScopeForegroundValue(themeID, "markup.inline.raw.string.markdown", "markup.raw.inline.markdown"); value != "" {
+		style.Code.StylePrimitive.Color = styleString(value)
+	}
 	return style
 }
 
@@ -883,7 +889,10 @@ func codexMarkdownStyle() ansi.StyleConfig {
 	style.H6 = ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Italic: styleBool(true)}}
 	style.Strong = ansi.StylePrimitive{Bold: styleBool(true)}
 	style.Emph = ansi.StylePrimitive{Italic: styleBool(true)}
-	style.Code = ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: styleString("cyan")}}
+	// Rust MarkdownStyles::code falls back to `Style::new().cyan()`. glamour
+	// only honours numeric ANSI palette indices and hex colours, so the palette
+	// index 6 (cyan) is used instead of the colour name.
+	style.Code = ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: styleString("6")}}
 	style.Strikethrough = ansi.StylePrimitive{CrossedOut: styleBool(true)}
 	style.Link = ansi.StylePrimitive{Color: styleString("cyan"), Underline: styleBool(true)}
 	style.BlockQuote = ansi.StyleBlock{

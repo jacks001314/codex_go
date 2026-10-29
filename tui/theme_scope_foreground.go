@@ -100,6 +100,16 @@ func themeScopeForeground(themeID string, scopes ...string) (TerminalColor, bool
 	style := chromastyles.Get(ChromaThemeForCodexTheme(id))
 	defaultText := style.Get(chroma.Text).Colour
 	for _, scope := range scopes {
+		// A bundled bat theme resolves the scopes recorded in
+		// bat_theme_scopes.go exactly as Rust does; a theme that leaves the
+		// scope unstyled has no foreground to borrow, so the next scope (and
+		// ultimately the caller's fallback) still applies.
+		if colour, ok, known := batThemeRawInlineForeground(id, scope); known {
+			if ok {
+				return colour, true
+			}
+			continue
+		}
 		token, ok := tmThemeSelectorToken(scope)
 		if !ok {
 			continue
