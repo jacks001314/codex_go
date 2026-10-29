@@ -13791,9 +13791,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/6; needs review: credit_amount, filtered_history"
+    "Rust #45741 adds two presentation helpers: analytics/tokens.rs builds daily enterprise text-token history grouped by model or token type with date-range and model filtering, data freshness, strict integer validation, and support for reported per-model totals when components are missing; analytics/data.rs adds amount, credit_amount, credits(micros) and short-date formatting that keeps tiny signed adjustments and formats integer millionths without floating-point rounding. Go mirrors both: tui/analytics/tokens.go implements tokenHistory/tokenFilteredHistory (groups win over models, Other dimension label, Unknown fallback, model filter applied before validation, reported total only used for model grouping when components are all missing or the total is non-zero, \"Token counts were not reported.\" for missing components, \"Invalid token count.\" for negative/fractional/non-finite values, \"Invalid token report date.\" for unparseable dates, \"Token breakdown is not available in this report.\" when neither groups nor models are present), tui/analytics/data.go implements the four formatters including Rust's trailing-zero trimming, grouped integer part, 1% visible-refund exponent form (-4.00e-6 instead of Go's padded exponent) and micros path that avoids float entirely (i64::MIN included), and models.go gains AccountAnalyticsUnitTokens. Regression coverage in tui/analytics/tokens_like_rust_test.go mirrors the upstream tests: token components across type/model groupings, model filtering plus freshness equality, reported model totals with the token-type error, explicit zero totals with a component-only model, and the full credit/amount/micros formatting table including 1,212.22, -0.004, 19,350.04 and both i64 limits. Verified with go test ./tui/analytics -count=1, go vet ./tui/analytics and go build ./tui/... ."
    ]
   },
   {

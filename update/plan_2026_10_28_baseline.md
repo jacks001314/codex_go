@@ -1141,6 +1141,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - normalize_like_rust_test.go mirrors the upstream cases including task-start denominators, duplicate message dates, unsupported groupings and the typed projection path; not wired to /usage yet, matching upstream.
 - Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./tui/... .
 
-Status after reconciliation: `2010 complete`, `395 not_applicable`,
-`484 audit_pending`, `258 regression_pending`, `2 partial`,
+### Token history and credit formatting helpers for TUI analytics (Round 833)
+
+## Round 833 - #45741 Add token history and credit formatting helpers for analytics
+
+- tui/analytics/tokens.go builds daily text-token history by model or token type with date-range/model filtering, freshness, strict integer validation and reported model totals when components are missing.
+- tui/analytics/data.go adds amount, credit_amount, credits(micros) and short-date formatting: tiny signed refunds stay visible, ordinary amounts align to two decimals, integer millionths avoid float rounding (i64 limits included), and Rust's exponent form is preserved.
+- models.go gains AccountAnalyticsUnitTokens; tokens_like_rust_test.go mirrors the upstream token and formatting cases.
+- Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./tui/... .
+
+Status after reconciliation: `2011 complete`, `395 not_applicable`,
+`483 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
