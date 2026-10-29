@@ -13131,9 +13131,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 19/20 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go's network package already implements every primitive: DestinationPolicy (https/wss + exact host, trailing-dot normalization), NetworkPolicyController Publish/Unavailable/Invalidate with revision and account generations, revocable NetworkPermit with Check/Revoked/RunWithNetworkPermit cancellation, AcquireForUnsupportedSDK denying restricted policies, RestrictToEndpoints scope, and ForCurrentAccount binding; PolicyHTTPDoer/PolicyHTTPClient carry the policy into transports with an unmanaged default. Rust's HttpClientFactory equality has no Go counterpart (clients are built through PolicyHTTPClient), so only its behaviour is covered. Regression: go test ./network, go test ./app -run Network, go test ./appserver -run 'NetworkPolicy|ApplicationNetwork' all pass."
    ]
   },
   {

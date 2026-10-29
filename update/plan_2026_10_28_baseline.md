@@ -918,6 +918,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Tests: Rust's wide and narrow inline snapshots, the boundary-filter cases, the file citation path between two inline formulas (`α/tmp/$x$/report.mdβ`), and streamed-vs-whole-source comparisons across `$$`/`\[` delimiters, widths 16/40, and a mid-stream resize.
 - Verified with `go test ./tui/markdown ./tui/streaming ./tui ./tui/history_cell ./tui/chatwidget`.
 
-Status after reconciliation: `1992 complete`, `390 not_applicable`,
-`500 audit_pending`, `267 regression_pending`, `0 partial`,
+### Verify revocable network policy primitives (#45503) (Round 807)
+
+- Go's `network` package already carries every primitive from this commit, so the round was a regression pass rather than a port.
+- Covered: `DestinationPolicy` (https/wss only, exact host, trailing-dot normalization), `NetworkPolicyController.Publish`/`Unavailable`/`Invalidate` with revision and account generations, revocable `NetworkPermit` (`Check`, `Revoked`, `RunWithNetworkPermit` cancellation), `AcquireForUnsupportedSDK` denying restricted policies, `RestrictToEndpoints` scoping, `ForCurrentAccount` binding, and `PolicyHTTPDoer`/`PolicyHTTPClient` carrying the policy into transports with an unmanaged default.
+- Rust's `HttpClientFactory` has no Go counterpart (clients come from `PolicyHTTPClient`), so only its behaviour is mirrored; factory identity equality has nothing to compare.
+- Verified with `go test ./network`, `go test ./app -run Network`, and `go test ./appserver -run 'NetworkPolicy|ApplicationNetwork'`.
+
+Status after reconciliation: `1993 complete`, `390 not_applicable`,
+`500 audit_pending`, `266 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
