@@ -12027,9 +12027,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go renders the status line setup preview with the footer's accent and per-thread identity styling (tui/tea/status_surface_preview_color.go), suppresses every color when tui.status_line_use_colors=false, keys the cached palette per syntax theme with an explicit reset regression, and asserts preview/footer equality plus picker, agents-overview, and identity-span coloring (tui/tea/status_surface_preview_color_like_rust_test.go, tui/thread_color_test.go, tui/bottom_pane/status_line_style_test.go, tui/session_picker_color_test.go). Startup pickers already open from the theme-aware tea model, so no pre-render theme load is needed."
    ]
   },
   {

@@ -747,6 +747,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - `ProjectTrustLookupFromPaths` already takes explicit `ProjectTrustPath` inputs plus an optional repository root and builds keys without filesystem access, so root canonicalization stays deferred (Rust #47924).
 - Added the missing precedence case: a cwd entry without a `trust_level` still wins over a trusted repository root and reports no decision; removing it falls back to the root.
 
-Status after reconciliation: `1971 complete`, `385 not_applicable`,
-`510 audit_pending`, `283 regression_pending`, `0 partial`,
+### Share theme-based thread colors with the status line preview (Round 784)
+
+- `tui/tea`: the status line setup preview now renders with the footer's accent resolver and per-thread identity color (`statusLinePreviewStyled`), so thread-name/thread-title previews match the live status line while a thread is renamed or auto-named; `tui.status_line_use_colors=false` suppresses every span color in both places.
+- `tui/thread_color.go` caches accents per resolved syntax theme, so a theme switch picks that theme's palette; `ResetThreadColorPaletteCache` reloads deterministically.
+- Regression: preview/footer styled equality and identity-color fallback (`tui/tea/status_surface_preview_color_like_rust_test.go`), palette follow/reset (`tui/thread_color_test.go`), identity suppression on a disabled line (`tui/bottom_pane/status_line_style_test.go`), plus the existing picker and agents-overview color tests.
+- Startup pickers already open from the theme-aware tea model, so Rust's pre-render theme load has no Go counterpart; `go test ./tui ./tui/bottom_pane ./tui/agents_overview ./tui/chatwidget ./tui/tea` passes.
+
+Status after reconciliation: `1972 complete`, `385 not_applicable`,
+`510 audit_pending`, `282 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
