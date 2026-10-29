@@ -14847,9 +14847,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/9; needs review: file_duration, run_duration"
+    "rollout/compression.go carries RolloutCompressionTrigger (startup/rpc) from SpawnRolloutCompressionWorker callers (appserver/router.go rollout/compress, appserver/rollout_migration_startup.go startup) through run, scan, file, temp-cleanup and metadata-diagnostics metrics, tagging <name>.trigger on counters, durations, byte counts and ratios, and omitting the tag for materialize failures like Rust; rollout/compression_metrics_test.go asserts startup and rpc tags across run/file/scan/temp-cleanup samples and the absent trigger on materialize failure, and ./rollout Compression tests pass"
    ]
   },
   {

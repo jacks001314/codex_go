@@ -1740,6 +1740,21 @@ Document and test `?` wildcards in network proxy domain patterns (#46027).
   and pattern normalization, exercised against both allow and deny matcher
   configurations.
 
-Status after reconciliation: `2031 complete`, `400 not_applicable`,
-`461 audit_pending`, `254 regression_pending`, `3 partial`,
+### Tag rollout compression metrics by trigger (#46047) (Round 866)
+
+Tag rollout compression metrics by trigger (#46047, closure).
+
+- `rollout/compression.go` already threads `RolloutCompressionTrigger`
+  (`startup` from `appserver/rollout_migration_startup.go`, `rpc` from the
+  `rollout/compress` handler) through the worker into run, file, scan-error,
+  temporary-file cleanup, and metadata-diagnostic metrics, tagging counters,
+  durations, byte counts, and compression ratios with `trigger`, and omitting
+  the tag for materialize failures the way Rust does.
+- `rollout/compression_metrics_test.go` pins the `startup` and `rpc` label sets
+  across run/file/scan/temp-cleanup samples, including the deliberate absence of
+  `trigger` on the materialize failure sample, and `go test ./rollout/
+  -run Compression` passes.
+
+Status after reconciliation: `2032 complete`, `400 not_applicable`,
+`460 audit_pending`, `254 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
