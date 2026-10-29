@@ -167,12 +167,13 @@ func TestUsageMenuOpensAnalyticsLikeRust(t *testing.T) {
 		analytics.AnalyticsSectionActivity,
 		analytics.AnalyticsSectionPlugins,
 		analytics.AnalyticsSectionSkills,
+		analytics.AnalyticsSectionChats,
 	}
 	if got := analyticsSectionList(model.analyticsDashboard.visibleSections()); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("consumer sections = %v, want %v", got, want)
 	}
 	view := model.View()
-	for _, want := range []string{"Analytics", "Live account", "tab/1–4", "Total usage history"} {
+	for _, want := range []string{"Analytics", "Live account", "tab/1–5", "Total usage history"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard view missing %q:\n%s", want, view)
 		}

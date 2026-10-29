@@ -31,7 +31,7 @@ func TestAnalyticsToolNameMatchesRust(t *testing.T) {
 // order.
 func TestAnalyticsVisibleSectionsMatchRust(t *testing.T) {
 	consumer := AnalyticsVisibleSections(auth.PlanPlus, true)
-	want := []AnalyticsSection{AnalyticsSectionUsage, AnalyticsSectionActivity, AnalyticsSectionPlugins, AnalyticsSectionSkills}
+	want := []AnalyticsSection{AnalyticsSectionUsage, AnalyticsSectionActivity, AnalyticsSectionPlugins, AnalyticsSectionSkills, AnalyticsSectionChats}
 	if !analyticsSameSections(consumer, want) {
 		t.Fatalf("consumer sections = %v, want %v", consumer, want)
 	}
@@ -216,11 +216,11 @@ func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
 		History:  func(section AnalyticsSection, width, height int) []string { return []string{"7d", "chart"} },
 	}
 	lines, start, end := AnalyticsDashboardLines(opts)
-	if len(lines) != 39 {
-		t.Fatalf("two-column rows = %d, want 39", len(lines))
+	if len(lines) != 50 {
+		t.Fatalf("two-column rows = %d, want 50", len(lines))
 	}
-	if start != 0 || end != 19 {
-		t.Fatalf("focused range = (%d,%d), want (0,19)", start, end)
+	if start != 0 || end != 16 {
+		t.Fatalf("focused range = (%d,%d), want (0,16)", start, end)
 	}
 	if !strings.HasPrefix(lines[0], "╭─") || !strings.Contains(lines[0], "1 Usage history") {
 		t.Fatalf("first card top = %q", lines[0])
@@ -230,8 +230,10 @@ func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
 	}
 	for index, line := range lines {
 		if strings.HasPrefix(line, "╭") || strings.HasPrefix(line, "│") || strings.HasPrefix(line, "╰") {
-			if got := analyticsDisplayWidth(line); got != 120 {
-				t.Fatalf("line %d width = %d, want 120 (%q)", index, got, line)
+			// An odd number of cards leaves the last row's single card at the
+			// column width, like Rust's unpadded leftover chunk.
+			if got := analyticsDisplayWidth(line); got != 120 && got != 58 {
+				t.Fatalf("line %d width = %d, want 120 or 58 (%q)", index, got, line)
 			}
 		}
 	}
@@ -239,8 +241,8 @@ func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
 	narrow.Width = 80
 	narrow.Height = 40
 	lines, _, _ = AnalyticsDashboardLines(narrow)
-	if len(lines) != 4*16+3 {
-		t.Fatalf("single-column rows = %d, want %d", len(lines), 4*16+3)
+	if len(lines) != 5*16+4 {
+		t.Fatalf("single-column rows = %d, want %d", len(lines), 5*16+4)
 	}
 }
 

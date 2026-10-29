@@ -82,6 +82,11 @@ type AnalyticsDashboardOptions struct {
 	Chats       *AnalyticsChats
 	ChatMessage string
 	ChatReady   bool
+	// Tasks supplies the consumer Top chats card (Rust #45768).
+	Tasks       *AnalyticsTaskChats
+	TaskMessage string
+	TaskReady   bool
+	ChatMetric  int
 	History     func(section AnalyticsSection, width, height int) []string
 }
 
@@ -179,7 +184,17 @@ func analyticsDashboardCard(
 		content = append(content, "By "+strings.ToLower(section.GroupLabel(opts.Groups[section], opts.ConsumerAttribution)))
 	}
 	if section == AnalyticsSectionChats {
-		content = AnalyticsChatOverviewLines(opts.Chats, opts.ChatMessage, opts.ChatReady, innerWidth)
+		if opts.Business {
+			content = AnalyticsChatOverviewLines(opts.Chats, opts.ChatMessage, opts.ChatReady, innerWidth)
+		} else {
+			content = AnalyticsTaskPanelLines(AnalyticsTaskPanelOptions{
+				Chats:   opts.Tasks,
+				Message: opts.TaskMessage,
+				Ready:   opts.TaskReady,
+				Metric:  opts.ChatMetric,
+				Width:   innerWidth,
+			}).Lines
+		}
 	} else if focused && opts.GroupPicker != nil {
 		for index, group := range opts.GroupOptions {
 			marker := " "

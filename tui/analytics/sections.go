@@ -114,7 +114,8 @@ func (s AnalyticsSection) GroupLabel(group int, consumerAttribution bool) string
 
 // AnalyticsVisibleSections is the account-specific card order. Unknown and
 // unresolved accounts show nothing (Rust AnalyticsView::visible_sections).
-// Top chats appears only for plans whose backend exposes thread estimates.
+// The consumer and thread-estimate plans both expose Top chats: consumers see
+// current allowance and balance debits, businesses see lifetime estimates.
 func AnalyticsVisibleSections(plan auth.PlanType, resolved bool) []AnalyticsSection {
 	if !resolved {
 		return nil
@@ -126,6 +127,7 @@ func AnalyticsVisibleSections(plan auth.PlanType, resolved bool) []AnalyticsSect
 			AnalyticsSectionActivity,
 			AnalyticsSectionPlugins,
 			AnalyticsSectionSkills,
+			AnalyticsSectionChats,
 		}
 	case AccountKindBusiness, AccountKindEnterprise:
 		if AnalyticsThreadUsageSupported(plan) {

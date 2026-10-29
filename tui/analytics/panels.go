@@ -15,9 +15,15 @@ type AnalyticsPanelOptions struct {
 	History *AccountAnalyticsHistory
 	// Chats supplies the Top chats rows; the section never loads a history
 	// report (Rust #45765).
-	Chats                *AnalyticsChats
-	ChatMessage          string
-	ChatReady            bool
+	Chats       *AnalyticsChats
+	ChatMessage string
+	ChatReady   bool
+	// Tasks supplies the consumer Top chats rows; the section renders current
+	// allowance and balance debits instead of lifetime estimates (Rust #45768).
+	Tasks                *AnalyticsTaskChats
+	TaskMessage          string
+	TaskReady            bool
+	ChatMetric           int
 	ShowZeroCreditGroups bool
 	ViewportHeight       int
 	Width                int
@@ -78,18 +84,39 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 	selectionStart := 0
 	selectionEnd := len(lines)
 	if opts.Section == AnalyticsSectionChats {
-		panel := AnalyticsChatPanelLines(AnalyticsChatPanelOptions{
-			Chats:                opts.Chats,
-			Message:              opts.ChatMessage,
-			Ready:                opts.ChatReady,
-			Cursor:               opts.State.Cursor,
-			Detail:               opts.State.Detail,
-			ShowZeroCreditGroups: opts.ShowZeroCreditGroups,
-			Width:                width,
-			Zoomed:               true,
-			ViewportHeight:       opts.ViewportHeight,
-			ModelName:            opts.ModelName,
-		})
+		var panel AnalyticsChatPanel
+		if opts.Business {
+			panel = AnalyticsChatPanelLines(AnalyticsChatPanelOptions{
+				Chats:                opts.Chats,
+				Message:              opts.ChatMessage,
+				Ready:                opts.ChatReady,
+				Cursor:               opts.State.Cursor,
+				Detail:               opts.State.Detail,
+				ShowZeroCreditGroups: opts.ShowZeroCreditGroups,
+				Width:                width,
+				Zoomed:               true,
+				ViewportHeight:       opts.ViewportHeight,
+				ModelName:            opts.ModelName,
+			})
+		} else {
+			tasks := AnalyticsTaskPanelLines(AnalyticsTaskPanelOptions{
+				Chats:          opts.Tasks,
+				Message:        opts.TaskMessage,
+				Ready:          opts.TaskReady,
+				Cursor:         opts.State.Cursor,
+				Detail:         opts.State.Detail,
+				Metric:         opts.ChatMetric,
+				Width:          width,
+				Zoomed:         true,
+				ViewportHeight: opts.ViewportHeight,
+				ModelName:      opts.ModelName,
+			})
+			panel = AnalyticsChatPanel{
+				Lines:          tasks.Lines,
+				SelectionStart: tasks.SelectionStart,
+				SelectionEnd:   tasks.SelectionEnd,
+			}
+		}
 		selectionStart = len(lines) + panel.SelectionStart
 		selectionEnd = len(lines) + panel.SelectionEnd
 		lines = append(lines, panel.Lines...)

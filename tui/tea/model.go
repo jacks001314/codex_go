@@ -1304,6 +1304,10 @@ type Options struct {
 	// section (Rust #45765). Nil leaves the section unavailable, as it does for
 	// runtimes without a thread source.
 	OnAnalyticsChats analytics.AnalyticsChatLister
+	// OnAnalyticsTaskThreads lists the descendants of one local root, including
+	// archived pages, for the consumer Top chats table (Rust #45768). Nil leaves
+	// the consumer ranking unavailable.
+	OnAnalyticsTaskThreads analytics.AnalyticsTaskDescendantLister
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1768,6 +1772,8 @@ type Model struct {
 	// analyticsChats lists recent local roots for the Top chats section. Nil
 	// leaves the section unavailable (Rust #45765).
 	analyticsChats analytics.AnalyticsChatLister
+	// analyticsTaskThreads lists descendants for the consumer Top chats table.
+	analyticsTaskThreads analytics.AnalyticsTaskDescendantLister
 	// agentsOverviewRemoved tombstones archived/deleted tasks so a delayed
 	// dynamic-tool registration cannot restore their rows (Rust #46946).
 	agentsOverviewRemoved  map[string]bool
@@ -2882,6 +2888,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewTogglePin:       togglePin,
 		onStartAgentsDaemon:             options.OnStartAgentsDaemon,
 		analyticsChats:                  options.OnAnalyticsChats,
+		analyticsTaskThreads:            options.OnAnalyticsTaskThreads,
 		agentsOverviewDrafts:            map[string]string{},
 		onExternalEditor:                options.OnExternalEditor,
 		externalEditorDirectory:         options.OnExternalEditorDirectory,
