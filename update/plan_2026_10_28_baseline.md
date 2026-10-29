@@ -531,6 +531,7 @@ go test ./sandbox/windowssandbox/... -count=1
 go test ./parity -count=1
 go build ./...
 ```
+
 ### Windows sandbox security audit batch closed (#51527, #51547, #51678, #52256)
 
 - `#51527` is implemented: the Linux deny-glob expansion invokes ripgrep with
@@ -2590,7 +2591,7 @@ Session-only model and reasoning selection (#45831, complete).
 - #42667 is implemented by `tui.DaybreakNotice`, the cyber refusal history cell, the tea notice selection, chatwidget runtime, and safety recourse. Targeted appserver, tool, turn, TUI, and history-cell tests pass.
 
 Status after reconciliation: `2104 complete`, `410 not_applicable`,
-`423 audit_pending`, `208 regression_pending`, `2 partial`,
+`423 audit_pending`, `207 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
 
 ### Read-only summary history fallback (Round 936)
@@ -2901,12 +2902,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `appserver/guardian_reviewer.go:904` fails the review closed when preparation fails, and the review request carries the prepared read-only profile, provider id, session id and parent ephemeral intent.
 - Tests: `TestGuardianPrepareReviewerOptionsIsolatesParentConfigLikeRust`, `TestGuardianPrepareReviewerOptionsKeepsSameModelContextLikeRust`, `TestGuardianPrepareReviewerOptionsRetainsClientDeveloperMessagesLikeRust`, `TestGuardianPrepareReviewerOptionsNarrowsEnvironmentsLikeRust`, `TestGuardianPrepareReviewerOptionsRejectsUnresolvedEnvironmentsLikeRust`, `TestGuardianPrepareReviewerOptionsExternalSandboxFallbackLikeRust`, `TestGuardianReviewPlanPreparesReviewerSessionLikeRust`.
 - Verified with `go test ./appserver -run 'Guardian|InternalSession' -count=1`, `go test ./state ./sandbox ./model ./config ./features -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`. Full `go test ./appserver` still hits the pre-existing `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust` / `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust` timeouts and the Rust-checkout `https_mock` manifest drift, all reproduced at `c1f05435` without these changes.
+
 ### Typed retained section content (Round 969)
 
 - Rust #51642 matches retained instruction splitting, assistant framing markers and empty assistant-context detection on `SectionContent::Other(ContentItem::InputText)` instead of bare `ContentItem::InputText`, and extends the snapshot-split test over line/JSON transcripts with and without a source message ID (#51642, complete).
 - Go's split is structurally typed already: `state/guardian_retained_context.go:371` partitions by `RetainedInstructionPolicy(fragment.Kind)`, `:387` adds the assistant markers only while building the framed section, and `:613` accepts only a complete captured source as delivery proof, so no text comparison can move a message between sections.
 - `state/guardian_retained_typed_sections_like_rust_test.go` mirrors the extended matrix: `line`/`json` x source id present/absent over four generations, asserting a stable instruction prefix, one delivery of the instruction, assistant originals framed behind the transcript, format-correct transcript records, banner-only deduplication for sourced records, no delivery proof without a message ID, and idempotent repeated preparation.
 - Verified with `go test ./state -run TestRetainedInstructionTypedSectionsAcrossTranscriptFormatsLikeRust -count=1` and `go test ./state -count=1`.
+
 ### Thread unloading after disconnect during MCP startup (Round 970)
 
 - Rust #50380 starts the thread listener even when the requesting connection closed during required MCP startup, so normal idle unloading reclaims the thread while the result stays `ConnectionClosed` (#50380, partial).
@@ -2915,6 +2918,7 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `TestThreadStartFinishingAfterConnectionCloseStillUnloadsLikeRust` (disconnect before publish, then no subscriber, idle unload, empty `thread/loaded/list`, `thread/closed`), `TestThreadStartWithLiveConnectionSubscribesThenUnloadsLikeRust`, `TestInitializeReopensClosedConnectionLikeRust`.
 - Residual: `idleThreadEvictable` admits only persistent non-subagent children (existing #52081 policy), so Go keeps root and ephemeral-root threads resident and Rust's ephemeral `thread/start` unload-by-idle path has no Go counterpart; the fix covers every thread Go can evict.
 - Verified with `go test ./appserver -run 'Idle|ThreadLifecycle|ThreadLoad|ThreadStart|ConnectionClosed|WorkspaceSwitch|AccountSession|ThreadClosed' -count=1`. Full `go test ./appserver` fails only on the pre-existing Rust-checkout protocol/manifest drift and `RuntimeRouter` analytics timeouts, reproduced without these changes.
+
 ### Disconnected multi-agent v2 child cleanup (Round 971)
 
 - Rust #52081 starts lifecycle listeners for persisted multi-agent v2 children created after the client disconnects, defers attachment until an earlier runtime cleanup finishes, keeps ephemeral children loaded, and raised the default unload delay to 30 minutes (#52081, complete).
@@ -2923,6 +2927,7 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Round 970 (this session) added the closed-connection guard so a start that outlives its connection cannot re-attach a dead subscriber.
 - Tests: `TestIdleChildCreatedWithoutClientDisconnectsLikeRust`, `TestIdleLifecycleWaitsForPendingCleanupLikeRust`, `TestIdleLifecycleKeepsEphemeralAndRootThreadsLikeRust`, `TestIdleEphemeralThreadWithZeroOverrideUnloadsLikeRust`, `TestIdleEphemeralSubagentStaysLoadedEvenWithZeroOverrideLikeRust`, `TestIdleUnloadPreservesQueuedMailLikeRust`, `TestThreadUnloadDelayDefaultsToOneMinuteLikeRust`.
 - Verified with `go test ./appserver -run 'TestIdle|TestThreadUnloadDelay' -count=1`.
+
 ### Daemon restart feature overrides (Round 972)
 
 - Rust #53751 applies `--enable`/`--disable` and boolean `features.*` overrides to `codex app-server daemon restart`, accepts nested `enabled` values, normalizes aliases, replaces conflicting saved aliases while preserving unrelated settings, persists them, and rejects invalid toggles before stopping the daemon (#53751, complete).
@@ -2930,6 +2935,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `appserverdaemon/lifecycle.go:215` replaces every saved spelling of a requested canonical feature, stores the canonical key, and restarts the managed backend for running and stopped daemons; `RestartWithFeatures` keeps the compatibility path that reuses an unchanged backend.
 - Tests: `TestDaemonRestartFeatureOverridesLikeRust`, `TestLifecycleRunnerRestartApplyingFeaturesLikeRust`, `TestLifecycleRunnerRestartWithFeaturesLikeRust`, `TestDaemonSettingsFeatureOverridesAndUpdaterLikeRust`.
 - Verified with `go test ./app -run 'TestDaemonRestartFeatureOverridesLikeRust|TestAppServerDaemon' -count=1` and `go test ./appserverdaemon -run 'TestLifecycleRunnerRestartApplyingFeaturesLikeRust|TestLifecycleRunnerRestartWithFeaturesLikeRust|TestDaemonSettings' -count=1`.
-Status after reconciliation: `2134 complete`, `442 not_applicable`,
-`361 audit_pending`, `210 regression_pending`, `4 partial`,
+
+### WebSocket continuation failure reasons (Round 973)
+
+- Rust #51895 replaces the boolean continuation-reuse check with typed `NonIncrementalReason` values (changed request properties, `input_shortened`, `input_mismatch`, missing response state/ID) and adds `previous_item_type`/`current_item_type` labels (#51895, not applicable).
+- Go has no client-side continuation-eligibility comparison to annotate: `model/responses_agent.go` sends the accumulated input with an optional caller-resolved `previous_response_id`, and `model/agent_metrics.go:424` classifies sends only as `incremental/previous_response`, `full/connection_reused` or `full/initial`.
+- The per-item and per-property reasons therefore have no Go code path; diagnostics stay bounded metadata with no request contents or identifiers. The same architecture difference was recorded for `#46051` (Round 705).
+- Verified with `go test ./model -run 'WebsocketContinuation|ContinuationMetric|PrewarmUsesWebSocket' -count=1`.
+Status after reconciliation: `2134 complete`, `443 not_applicable`,
+`361 audit_pending`, `207 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

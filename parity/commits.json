@@ -28463,9 +28463,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #51895 replaces the boolean continuation-reuse check with typed NonIncrementalReason values (no_previous_request, no_previous_response, no_previous_response_id, model_changed, tools_changed, tool_choice_changed, parallel_tool_calls_changed, reasoning_changed, store_changed, stream_changed, include_changed, service_tier_changed, prompt_cache_key_changed, text_changed, input_shortened, input_mismatch) and adds previous_item_type/current_item_type labels. Go has no client-side continuation-eligibility comparison to annotate: model/responses_agent.go sends the accumulated input with an optional caller-resolved previous_response_id, and model/agent_metrics.go:424 classifies sends only as incremental/previous_response, full/connection_reused or full/initial. The per-item and per-property reasons therefore have no Go code path, and diagnostics remain bounded metadata without request contents or identifiers. The architecture difference was already recorded for #46051 (Round 705). Verified with go test ./model -run 'WebsocketContinuation|ContinuationMetric|PrewarmUsesWebSocket' -count=1."
    ]
   },
   {
