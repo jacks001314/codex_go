@@ -1043,63 +1043,149 @@ func responseHeaderBool(headers http.Header, name string) (bool, bool) {
 	}
 }
 
+// maxSSEEventBytes bounds a single SSE event. Providers send the whole item in
+// response.output_item.done, so a large tool result arrives as one data line;
+// this is a safety net against unbounded buffering, not a protocol rule.
+const maxSSEEventBytes = 128 << 20
+
+var errSSEEventTooLarge = errors.New("responses: SSE event exceeds size limit")
+
 func newResponsesSSEParser(reader io.Reader) *responsesSSEParser {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16<<20)
-	return &responsesSSEParser{scanner: scanner}
+	return &responsesSSEParser{
+		reader:        bufio.NewReaderSize(reader, 64*1024),
+		maxEventBytes: maxSSEEventBytes,
+	}
 }
 
+// responsesSSEParser decodes the text/event-stream framing. It reads lines
+// through a bufio.Reader instead of bufio.Scanner so a single large event does
+// not hit the scanner token limit: a 32 MiB item in one "data:" line is a
+// normal provider response, not an error.
 type responsesSSEParser struct {
-	scanner *bufio.Scanner
-	event   string
-	data    bytes.Buffer
+	reader        *bufio.Reader
+	line          []byte
+	event         string
+	data          bytes.Buffer
+	maxEventBytes int
 }
 
 func (p *responsesSSEParser) Next() (*responsesSSEEvent, error) {
-	for p.scanner.Scan() {
-		line := strings.TrimRight(p.scanner.Text(), "\r")
-		if line == "" {
+	for {
+		blank, err := p.nextLine()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return nil, err
+			}
 			if event := p.flush(); event != nil {
 				return event, nil
 			}
-			continue
+			return nil, io.EOF
 		}
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-		field, value, hasValue := strings.Cut(line, ":")
-		if hasValue {
-			value = strings.TrimPrefix(value, " ")
-		}
-		switch field {
-		case "event":
-			p.event = value
-		case "data":
-			if p.data.Len() > 0 {
-				p.data.WriteByte('\n')
+		if blank {
+			if event := p.flush(); event != nil {
+				return event, nil
 			}
-			p.data.WriteString(value)
 		}
 	}
-	if err := p.scanner.Err(); err != nil {
-		return nil, err
+}
+
+// nextLine reads one SSE line. "data" values are appended straight into the
+// event buffer instead of being reassembled as a line first: a provider can
+// send the whole output item in one multi-megabyte data line, and buffering it
+// twice would double both the allocation and the resident heap for that frame.
+// The return value reports a blank line, which terminates the pending event.
+func (p *responsesSSEParser) nextLine() (bool, error) {
+	p.line = p.line[:0]
+	first := true
+	inData := false
+	inEvent := false
+	for {
+		fragment, err := p.reader.ReadSlice('\n')
+		last := !errors.Is(err, bufio.ErrBufferFull)
+		body := fragment
+		if last {
+			body = bytes.TrimSuffix(body, []byte{'\n'})
+			body = bytes.TrimSuffix(body, []byte{'\r'})
+		}
+		switch {
+		case first && last && len(body) == 0:
+			return true, err
+		case first:
+			first = false
+			field, value := splitSSEField(body)
+			switch string(field) {
+			case "data":
+				inData = true
+				if p.data.Len() > 0 {
+					p.data.WriteByte('\n')
+				}
+				_, _ = p.data.Write(value)
+				if limitErr := p.dataLimitError(); limitErr != nil {
+					return false, limitErr
+				}
+			case "event":
+				inEvent = true
+				p.line = append(p.line, value...)
+			default:
+				// Comments and unsupported fields are ignored; their value is
+				// not needed, so a long line is never buffered.
+			}
+		case inData:
+			_, _ = p.data.Write(body)
+			if limitErr := p.dataLimitError(); limitErr != nil {
+				return false, limitErr
+			}
+		case inEvent:
+			p.line = append(p.line, body...)
+		}
+		if last {
+			if inEvent {
+				p.event = string(p.line)
+			}
+			if cap(p.line) > 1<<20 {
+				// A pathological event name must not stay resident.
+				p.line = nil
+			}
+			return false, err
+		}
 	}
-	if event := p.flush(); event != nil {
-		return event, nil
+}
+
+// splitSSEField splits "field: value" into its parts. A line with no colon is
+// a field with an empty value, which is how SSE treats it.
+func splitSSEField(line []byte) ([]byte, []byte) {
+	index := bytes.IndexByte(line, ':')
+	if index < 0 {
+		return line, nil
 	}
-	return nil, io.EOF
+	field := line[:index]
+	value := line[index+1:]
+	if len(value) > 0 && value[0] == ' ' {
+		value = value[1:]
+	}
+	return field, value
+}
+
+func (p *responsesSSEParser) dataLimitError() error {
+	limit := p.maxEventBytes
+	if limit > 0 && p.data.Len() > limit {
+		return fmt.Errorf("%w: %d bytes > %d", errSSEEventTooLarge, p.data.Len(), limit)
+	}
+	return nil
 }
 
 func (p *responsesSSEParser) flush() *responsesSSEEvent {
 	if p.event == "" && p.data.Len() == 0 {
 		return nil
 	}
+	// Hand the buffer to the event rather than copying it: the next frame
+	// writes into a fresh buffer, so the payload is copied once, not twice.
 	event := &responsesSSEEvent{
 		Event: p.event,
-		Data:  append([]byte(nil), p.data.Bytes()...),
+		Data:  p.data.Bytes(),
 	}
 	p.event = ""
-	p.data.Reset()
+	p.data = bytes.Buffer{}
 	return event
 }
 
@@ -1109,7 +1195,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 	}
 	rawType := strings.TrimSpace(sse.Event)
 	if rawType == "" && len(bytes.TrimSpace(sse.Data)) > 0 {
-		rawType = jsonStringField(sse.Data, "type")
+		rawType = streamEventType(sse.Data)
 	}
 	if rawType == "" || rawType == "[DONE]" {
 		return false, nil
@@ -1171,7 +1257,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			RawType:    rawType,
 		})
 	case "response.output_item.added":
-		item, err := agentItemFromStreamEventData(sse.Data, len(a.items), true)
+		item, rawItem, err := agentItemAndRawFromStreamEventData(sse.Data, len(a.items), true)
 		if err != nil {
 			return false, err
 		}
@@ -1183,13 +1269,13 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			Kind:       ResponsesStreamEventOutputAdded,
 			ResponseID: a.responseID,
 			Item:       item,
-			RawItem:    rawResponseItemFromStreamEventData(sse.Data),
+			RawItem:    rawItem,
 			ItemID:     agentItemID(item),
 			CallID:     agentItemCallID(item),
 			RawType:    rawType,
 		})
 	case "response.output_item.done":
-		item, err := agentItemFromStreamEventData(sse.Data, len(a.items), false)
+		item, rawItem, err := agentItemAndRawFromStreamEventData(sse.Data, len(a.items), false)
 		if err != nil {
 			return false, err
 		}
@@ -1202,18 +1288,18 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			Kind:       ResponsesStreamEventOutputDone,
 			ResponseID: a.responseID,
 			Item:       item,
-			RawItem:    rawResponseItemFromStreamEventData(sse.Data),
+			RawItem:    rawItem,
 			ItemID:     agentItemID(item),
 			CallID:     agentItemCallID(item),
 			RawType:    rawType,
 		})
 	case "response.output_text.delta":
-		delta := jsonStringField(sse.Data, "delta")
+		delta, itemID := outputTextDeltaFields(sse.Data)
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
 			Kind:       ResponsesStreamEventOutputText,
 			ResponseID: a.responseID,
 			Delta:      delta,
-			ItemID:     jsonStringField(sse.Data, "item_id"),
+			ItemID:     itemID,
 			RawType:    rawType,
 		})
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -2000,6 +2086,12 @@ func turnModerationMetadataFromStreamMetadata(data []byte) (any, bool) {
 }
 
 func safetyBufferingFromStreamMetadata(data []byte, treatment safetyBufferingTreatment) *ResponsesSafetyBuffering {
+	// Rust calls this for every event, but only a handful actually carry the
+	// field. Scanning for the key keeps a multi-megabyte item event from being
+	// decoded into a map (and a second copy of its text) for nothing.
+	if !bytes.Contains(data, []byte("safety_buffering")) && !bytes.Contains(data, []byte(`"metadata"`)) {
+		return nil
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil
@@ -2150,18 +2242,30 @@ func responsesTimingMetricsFromEventData(data []byte) map[string]any {
 	return cloneMapAny(metrics)
 }
 
-func agentItemFromStreamEventData(data []byte, index int, allowEmptyMessage bool) (*AgentItem, error) {
+// agentItemAndRawFromStreamEventData decodes one streamed output item together
+// with the raw JSON it came from. Stream handlers need both, and decoding the
+// same multi-megabyte payload twice is pure overhead, so the raw item is
+// returned from the only decode instead of being re-extracted by the caller.
+func agentItemAndRawFromStreamEventData(data []byte, index int, allowEmptyMessage bool) (*AgentItem, json.RawMessage, error) {
 	var payload struct {
-		Item *responsesAgentOutputItem `json:"item"`
+		Item json.RawMessage `json:"item"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("failed to decode responses stream output item: %w", err)
+		return nil, nil, fmt.Errorf("failed to decode responses stream output item: %w", err)
 	}
-	if payload.Item == nil {
-		return nil, nil
+	rawItem := payload.Item
+	if len(rawItem) == 0 || bytes.Equal(bytes.TrimSpace(rawItem), []byte("null")) {
+		return nil, nil, nil
 	}
-	rawItem := rawResponseItemFromStreamEventData(data)
-	return agentItemFromResponseOutput(payload.Item, rawItem, index, allowEmptyMessage)
+	var output responsesAgentOutputItem
+	if err := json.Unmarshal(rawItem, &output); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode responses stream output item: %w", err)
+	}
+	item, err := agentItemFromResponseOutput(&output, rawItem, index, allowEmptyMessage)
+	if err != nil {
+		return nil, nil, err
+	}
+	return item, rawItem, nil
 }
 
 func completedAgentItemsFromStreamEventData(data []byte, index int) ([]AgentItem, error) {
@@ -2240,25 +2344,21 @@ func agentItemFromResponseOutput(output *responsesAgentOutputItem, rawItem json.
 	return &AgentItem{ID: id, Type: "agent_message", Text: text, Data: data}, nil
 }
 
-func rawResponseItemFromStreamEventData(data []byte) json.RawMessage {
-	var payload struct {
-		Item json.RawMessage `json:"item"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil || len(payload.Item) == 0 {
-		return nil
-	}
-	return append(json.RawMessage(nil), payload.Item...)
-}
-
 func reasoningAgentItemFromRaw(raw json.RawMessage, index int) (*AgentItem, bool) {
 	if len(raw) == 0 {
 		return nil, false
 	}
-	var item map[string]any
-	if err := json.Unmarshal(raw, &item); err != nil {
+	// Probe the discriminator before decoding the whole item: a large
+	// assistant message must not be turned into a map just to learn it is not
+	// a reasoning item.
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || probe.Type != "reasoning" {
 		return nil, false
 	}
-	if stringFromAnyMap(item, "type") != "reasoning" {
+	var item map[string]any
+	if err := json.Unmarshal(raw, &item); err != nil {
 		return nil, false
 	}
 	id := stringFromAnyMap(item, "id")
@@ -2423,6 +2523,18 @@ func endTurnFromStreamEventData(data []byte) *bool {
 		return nil
 	}
 	return payload.Response.EndTurn
+}
+
+// streamEventType reads the event discriminator without decoding the rest of
+// the payload, which may be a whole multi-megabyte output item.
+func streamEventType(data []byte) string {
+	var payload struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+	return payload.Type
 }
 
 func streamMetadataValue(data []byte, keys ...string) any {
@@ -2903,6 +3015,19 @@ func responseErrorCode(errBody *responsesAgentAPIErrorBody) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(code))
 	}
+}
+
+// outputTextDeltaFields decodes the two fields an output_text delta carries in
+// one pass. Decoding the event twice would allocate the delta string twice.
+func outputTextDeltaFields(data []byte) (string, string) {
+	var payload struct {
+		Delta  string `json:"delta"`
+		ItemID string `json:"item_id"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", ""
+	}
+	return payload.Delta, payload.ItemID
 }
 
 func jsonStringField(data []byte, key string) string {
