@@ -13863,9 +13863,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #45760 sets --no-maglev --no-turbolev --no-turbo-inline-array-builtins during code-mode V8 initialization because the pinned V8 can inline Array.prototype.sort with incompatible element kinds when a comparator mutates the receiver, allowing an object to be stored in an integer-elements array, and adds an integration test that requests top-tier and Maglev optimization and inspects element kinds via native syntax. Go has no V8: code-mode cells execute through codemode.NewSobekEngine (github.com/grafana/sobek, a pure-Go ECMAScript engine, see codemode/sobek_engine.go), and a repository-wide search finds no deno_core/rusty_v8 binding, no v8:: API use and no maglev/turbolev flags, so there is no optimizer tier to disable and no element-kind representation that the miscompile could corrupt. The mitigation itself is therefore not applicable. What does carry over is the observable behaviour Rust also asserts, so codemode/array_sort_like_rust_test.go runs a cell that sorts [1,2] and [{},{}] 100 times with a comparator that fills the receiver, then sorts [object,{}] the same way and fails if the original element is still in place; the cell finishes by emitting JSON.stringify([3,1,2].sort((a,b)=>a-b)) and the test asserts the single text item is [1,2,3]. Verified with go test ./codemode -count=1."
    ]
   },
   {

@@ -1115,6 +1115,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - shell/startup_test.go pins the exact script bytes, the empty result for sh/powershell/cmd, and that interactive capture starts with the shared script while non-interactive capture does not.
 - Verified: go test ./shell -count=1, go test ./execserver -run 'Snapshot' -count=1, go build ./... .
 
-Status after reconciliation: `2009 complete`, `393 not_applicable`,
-`487 audit_pending`, `258 regression_pending`, `2 partial`,
+### V8 array-sort mitigation does not apply to the Sobek engine (Round 830)
+
+## Round 830 - #45760 Disable V8 optimization paths affected by array sort bugs
+
+- Rust turns off Maglev, Turbolev and TurboFan array builtin inlining during V8 initialization for a pinned-V8 mixed-element sort miscompile.
+- Go has no V8: code-mode cells run on the pure-Go Sobek engine and the repo has no deno_core/rusty_v8 binding, v8:: API use or maglev/turbolev flags, so there is no optimizer tier to disable - not_applicable.
+- codemode/array_sort_like_rust_test.go still pins the shared observable behaviour: a mutating comparator neither throws nor leaves a stale element, and [3,1,2].sort((a,b)=>a-b) emits [1,2,3].
+- Verified: go test ./codemode -count=1.
+
+Status after reconciliation: `2009 complete`, `394 not_applicable`,
+`486 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
