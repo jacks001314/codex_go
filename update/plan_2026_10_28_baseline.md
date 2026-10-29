@@ -624,13 +624,21 @@ Eight more entries moved to `complete`: `#41005` (`mcp/api.go` trusted access),
 Each evidence string cites the implementation site, the behaviour, and the
 package tests that pin it.
 
-Status after reconciliation: `1910 complete`, `381 not_applicable`,
-`571 audit_pending`, `287 regression_pending`, `0 partial`,
-`6 blocked_precondition`.
-`certificationReady` remains `false` because the ledger still contains partial,
-blocked, and audit-pending entries; the flag is derived from that evidence by
-`TestAlignmentCertificationReadinessIsDerivedFromEvidence`.
+### Worktree discovery and Windows daemon sweep (Round 764)
 
+Eight more entries moved to `complete`, concentrated in worktrees and the Windows
+managed daemon: `#42196` (`worktree/manager.go`), `#43120`
+(`tui/tea/worktree_browser.go`), `#43279` (`tui/session_source.go`), `#42744`
+(`appserver/node_repl_evidence.go`), `#42381`
+(`appserverdaemon/lifecycle.go`), `#42392`
+(`appserverdaemon/update_job_windows.go`), `#42405`
+(`appserverdaemon/detached_launch_windows.go`), and `#52176`
+(`app/gov_cloud_guidance.go`). The Windows daemon tests run natively on this
+host and pass.
+
+Status after reconciliation: `1918 complete`, `381 not_applicable`,
+`563 audit_pending`, `287 regression_pending`, `0 partial`,
+`6 blocked_precondition`.
 ## Verification
 
 ```powershell

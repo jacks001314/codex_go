@@ -5988,9 +5988,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/9; needs review: CreateWorktree, GitOperation, allocate_worktree_root, git_config_override_env"
+    "Round 764 (audit): #42196 implemented at worktree/manager.go:40 - // WorktreeManager creates and lists managed linked worktrees using the Behaviour: managed linked worktrees are created and listed through the Desktop contract, with owner validation, primary/nested/unmanaged rejection, managed-layout listing, and safe removal. Regression contract: worktree/manager_test.go -run 'TestWorktreeManagerCreateAndList|TestWorktreeOwnerRejectsPrimaryNestedAndUnmanagedCheckouts|TestWorktreeListExcludesNonManagedLayout|TestWorktreeManagerRemoveManagedSafety'; verify with `go test ./worktree -run 'TestWorktreeManagerCreateAndList|TestWorktreeOwnerRejectsPrimaryNestedAndUnmanagedCheckouts|TestWorktreeListExcludesNonManagedLayout|TestWorktreeManagerRemoveManagedSafety' -count=1`."
    ]
   },
   {
@@ -6590,9 +6590,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 7/9; needs review: ensure_detached, try_lock_file"
+    "Round 764 (audit): #42381 implemented at appserverdaemon/lifecycle.go:1 - package appserverdaemon Behaviour: the managed daemon lifecycle starts, restarts, stops, bootstraps, and waits for readiness on Windows, rejects unmanaged sockets, and applies feature/remote-control updates to a running daemon. Regression contract: appserverdaemon/lifecycle_test.go -run 'TestLifecycleRunnerStartVersionStop|TestLifecycleRunnerStartWithFeaturesLikeRust|TestLifecycleRunnerRestartWithFeaturesLikeRust|TestLifecycleRunnerWaitUntilReadyIncludesStderrTail'; verify with `go test ./appserverdaemon -run 'TestLifecycleRunnerStartVersionStop|TestLifecycleRunnerStartWithFeaturesLikeRust|TestLifecycleRunnerRestartWithFeaturesLikeRust|TestLifecycleRunnerWaitUntilReadyIncludesStderrTail' -count=1`."
    ]
   },
   {
@@ -6674,9 +6674,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/6; needs review: replace_current_updater, updater_job"
+    "Round 764 (audit): #42392 implemented at appserverdaemon/update_job_windows.go:1 - //go:build windows Behaviour: Windows updates run the installer inside a job object so the updater can observe and terminate the whole installer tree, and a missing command fails cleanly. Regression contract: appserverdaemon/update_job_windows_test.go -run 'TestRunWindowsUpdateInstallerRunsInsideJob|TestRunWindowsUpdateInstallerMissingCommandFails'; verify with `go test ./appserverdaemon -run 'TestRunWindowsUpdateInstallerRunsInsideJob|TestRunWindowsUpdateInstallerMissingCommandFails' -count=1`."
    ]
   },
   {
@@ -6759,9 +6759,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/4; needs review: connect_local_daemon"
+    "Round 764 (audit): #42405 implemented at appserverdaemon/detached_launch_windows.go:14 - // ensureDetachedLaunch mirrors Rust's `ensure_detached_launch` (#42405, Behaviour: the daemon launches detached on Windows by probing a suspended child, enforcing the restricted-error contract, and verifying the managed codex binary launch. Regression contract: appserverdaemon/detached_launch_windows_test.go -run 'TestEnsureDetachedLaunchProbesAndReapsSuspendedChild|TestDetachedLaunchRestrictedErrorContract|TestEnsureManagedCodexBinProbesTheLaunch'; verify with `go test ./appserverdaemon -run 'TestEnsureDetachedLaunchProbesAndReapsSuspendedChild|TestDetachedLaunchRestrictedErrorContract|TestEnsureManagedCodexBinProbesTheLaunch' -count=1`."
    ]
   },
   {
@@ -7407,9 +7407,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 11/21; needs review: UnscoredAction, disable_scoring, enforce_required_model, for_mcp_server, from_legacy"
+    "Round 764 (audit): #42744 implemented at appserver/node_repl_evidence.go:248 - // the legacy node_repl_auto_review_required bit (Rust #42744). Behaviour: node-repl review evidence honours the model-provided Guardian review policy: the session is invalidated when the policy changes and reused or recreated by the same policy identity. Regression contract: appserver/guardian_node_repl_policy_like_rust_test.go -run 'TestGuardianSessionInvalidatesOnNodeReplPolicyChangeLikeRust|TestGuardianReviewReusesOrInvalidatesSessionByNodeReplPolicyLikeRust'; verify with `go test ./appserver -run 'TestGuardianSessionInvalidatesOnNodeReplPolicyChangeLikeRust|TestGuardianReviewReusesOrInvalidatesSessionByNodeReplPolicyLikeRust' -count=1`."
    ]
   },
   {
@@ -8283,9 +8283,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/10; needs review: ManagedWorktreeMode, set_local_worktree_operations, show_managed_worktree_picker, show_session_checkout_picker, switch_to_managed_worktree"
+    "Round 764 (audit): #43120 implemented at tui/tea/worktree_browser.go:14 - // Managed worktree support mirrors Rust's TUI worktree commands Behaviour: `/worktree` offers starting or continuing a conversation in a new managed checkout or browsing existing ones, local-repository only. Regression contract: tui/tea/worktree_browser_test.go -run 'TestWorktreeCommandStartsManagedSession|TestWorktreeCommandAvailability'; verify with `go test ./tui/tea -run 'TestWorktreeCommandStartsManagedSession|TestWorktreeCommandAvailability' -count=1`."
    ]
   },
   {
@@ -8439,9 +8439,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/12; needs review: ManagedWorktreeCreated, PageCwdFilter, finish_managed_worktree, for_request, repository_cwd_filter"
+    "Round 764 (audit): #43279 implemented at tui/session_source.go:30 - // SessionPickerWorktreeCWDs returns the picker's directory filter: the Behaviour: the session picker expands a local session directory to include its linked worktrees and filters sessions against the expanded set, falling back to the requested directory when checkout identity is invalid. Regression contract: tui/session_source_worktree_test.go -run 'TestSessionPickerWorktreeCWDsExpandsLinkedCheckouts|TestSessionPickerFiltersAgainstExpandedWorktreeCWDs|TestSessionPickerWorktreeCWDsGating'; verify with `go test ./tui -run 'TestSessionPickerWorktreeCWDsExpandsLinkedCheckouts|TestSessionPickerFiltersAgainstExpandedWorktreeCWDs|TestSessionPickerWorktreeCWDsGating' -count=1`."
    ]
   },
   {
@@ -28635,9 +28635,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: check_gov_cloud, handle_guidance_key_event, run_gov_cloud_guidance"
+    "Round 764 (audit): #52176 implemented at app/gov_cloud_guidance.go:18 - // maybeRunGovCloudGuidance mirrors Rust #52176: already-configured GovCloud Behaviour: already-configured GovCloud providers see blocking startup guidance, acknowledgment is persisted as `notice.hide_gov_cloud_guidance`, and the onboarding step renders the same guidance. Regression contract: config/gov_cloud_guidance_notice_like_rust_test.go -run 'GovCloud'; verify with `go test ./config ./tui/onboarding -run 'GovCloud' -count=1`."
    ]
   },
   {
