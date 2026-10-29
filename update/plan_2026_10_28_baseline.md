@@ -985,6 +985,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Tests: `network/proxy_unix_socket_context_like_rust_test.go`, `execserver/managed_network_unix_sockets_like_rust_test.go`, `execserver/managed_network_unix_sockets_linux_like_rust_test.go`, plus the existing helper parse/malformed-JSON coverage.
 - Verified with `go test ./network ./execserver ./sandbox ./tool -count=1`, `GOOS=linux go vet ./execserver ./sandbox ./sandbox/linuxsandbox ./tool ./network`, and `GOOS=linux go test -c ./execserver`. The Linux test package did not compile before this round (`execserver/tty_unix_test.go` passed a `[]byte` chunk to `base64.DecodeString`); that stale test call was corrected so the Linux coverage could be built.
 
-Status after reconciliation: `1998 complete`, `392 not_applicable`,
-`494 audit_pending`, `265 regression_pending`, `0 partial`,
+### Classify tool analytics events by call origin (#45535) (Round 815)
+
+- Go already classifies tool analytics at emission time. `telemetry/command_execution_event.go` defines the `model_tool_call` and `inner_tool_call` values and exposes `tool_event_type` as a nullable field, so an unresolved call serializes as JSON `null`.
+- `appserver/tool_event_origin.go` classifies strictly from exact call-ID evidence: a call present in `sampledToolCalls` for the thread/turn and not in `codeModeChildCalls` is a model call, a recorded Code Mode child call is an inner call, and an unknown or conflicting call ID stays unclassified. Evidence arriving later does not rewrite an event already emitted.
+- Code Mode sampling accounts for both sides of the boundary: `appserver/code_mode_tool_call_analytics.go` records sampled exec/wait calls, while `rememberCodeModeCell`/`rememberCodeModeChildCall` record the tool calls dispatched by the cell. Command, file-change, MCP, and remaining tool-item emitters all use `toolEventTypeForCall`.
+- Regression coverage: `appserver/tool_event_origin_test.go` covers exact-evidence requirements, Code Mode child calls, and null/conflict cases; `telemetry/turn_event_test.go` checks the wire payload.
+- Verified with `go test ./appserver -run 'ToolEvent|SampledOutputToolCallID|ToolItem|CodeMode' -count=1` and `go test ./telemetry -run 'ToolEventType|CommandExecution|TurnEvent' -count=1`.
+
+Status after reconciliation: `1999 complete`, `392 not_applicable`,
+`494 audit_pending`, `264 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

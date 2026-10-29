@@ -13359,9 +13359,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go already classifies tool analytics by call origin at emission time. `telemetry/command_execution_event.go` defines `model_tool_call`/`inner_tool_call` and serializes `tool_event_type` as a nullable field; `appserver/tool_event_origin.go` classifies a call only from exact sampled-call evidence (`sampledToolCalls` for the thread/turn/item) and Code Mode child-call evidence (`codeModeChildCalls`), returning `model_tool_call` for a sampled call that is not a Code Mode child, `inner_tool_call` for a recorded child call, and `null` when the call ID is unknown or the evidence conflicts. `appserver/code_mode_tool_call_analytics.go` records exec/wait sampled calls and `rememberCodeModeCell`/`rememberCodeModeChildCall` record dispatched child calls; all tool analytics emitters pass the result through `toolEventTypeForCall`. Regression tests: `appserver/tool_event_origin_test.go` (exact-evidence requirement, Code Mode child classification, null/conflict handling) and `telemetry/turn_event_test.go` (wire payload shape). Verified with `go test ./appserver -run 'ToolEvent|SampledOutputToolCallID|ToolItem|CodeMode' -count=1` and `go test ./telemetry -run 'ToolEventType|CommandExecution|TurnEvent' -count=1`."
    ]
   },
   {
