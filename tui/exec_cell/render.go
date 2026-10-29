@@ -241,17 +241,60 @@ func (c ExecCell) exploringDisplayLines(width int) []string {
 		title = "Exploring"
 	}
 	out := []string{"• " + title}
-	for _, call := range c.Calls {
-		for _, parsed := range call.Parsed {
-			label, body := parsedDisplay(parsed)
-			wrapped := tui.AdaptiveWrapLine(body, tui.WrapOptions{
-				Width:            width,
-				InitialIndent:    "  └ " + label + " ",
-				SubsequentIndent: "    ",
-				BreakWords:       true,
-			})
-			out = append(out, wrapped...)
+	appendEntry := func(label string, body string) {
+		out = append(out, tui.AdaptiveWrapLine(body, tui.WrapOptions{
+			Width:            width,
+			InitialIndent:    "  └ " + label + " ",
+			SubsequentIndent: "    ",
+			BreakWords:       true,
+		})...)
+	}
+	for index := 0; index < len(c.Calls); {
+		call := c.Calls[index]
+		if _, failed := exploringNonzeroExit(call); !failed && exploringReadsOnly(call) {
+			// Rust #46487: adjacent successful reads collapse into one summary.
+			// The group stops before a failed call, or one that is not a read,
+			// so unsuccessful reads stay separate from successful read summaries.
+			names := []string{}
+			seen := map[string]bool{}
+			collect := func(current ExecCall) {
+				for _, parsed := range current.Parsed {
+					if seen[parsed.Name] {
+						continue
+					}
+					seen[parsed.Name] = true
+					names = append(names, parsed.Name)
+				}
+			}
+			collect(call)
+			end := index + 1
+			for end < len(c.Calls) {
+				next := c.Calls[end]
+				if _, failed := exploringNonzeroExit(next); failed || !exploringReadsOnly(next) {
+					break
+				}
+				collect(next)
+				end++
+			}
+			appendEntry("Read", strings.Join(names, ", "))
+			index = end
+			continue
 		}
+		exitCode, failed := exploringNonzeroExit(call)
+		for position, parsed := range call.Parsed {
+			label, body := parsedDisplay(parsed)
+			if failed && position == len(call.Parsed)-1 {
+				// A compound command has one exit code, not an outcome for each
+				// parsed action.
+				if len(call.Parsed) > 1 {
+					body += " (command exit " + tui.FormatInt(int64(exitCode)) + ")"
+				} else {
+					body += " (exit " + tui.FormatInt(int64(exitCode)) + ")"
+				}
+			}
+			appendEntry(label, body)
+		}
+		index++
 	}
 	// Rust #54433: the compact exploration summary counts the calls that exited
 	// nonzero with a neutral label, and the preview keeps the header plus the
@@ -273,6 +316,29 @@ func (c ExecCell) exploringDisplayLines(width int) []string {
 		out[0] += " · " + tui.FormatInt(int64(nonzeroExits)) + " " + label
 	}
 	return out
+}
+
+// exploringNonzeroExit reports the call's nonzero exit code once its output is
+// known, mirroring Rust's exploring_display_lines exit annotation (#46487).
+func exploringNonzeroExit(call ExecCall) (int, bool) {
+	if call.Output == nil || call.Output.ExitCode == 0 {
+		return 0, false
+	}
+	return call.Output.ExitCode, true
+}
+
+// exploringReadsOnly reports whether every parsed action is a read, which is
+// what Rust collapses into one "Read a, b" summary.
+func exploringReadsOnly(call ExecCall) bool {
+	if len(call.Parsed) == 0 {
+		return false
+	}
+	for _, parsed := range call.Parsed {
+		if parsed.Kind != ParsedRead {
+			return false
+		}
+	}
+	return true
 }
 
 func (c ExecCell) commandDisplayLines(width int) []string {

@@ -2134,6 +2134,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - `2f522c5dc0a0` is a Rust test-layout refactor (monolithic `analytics_client_tests.rs` split into per-event suites): not applicable, because the Go analytics surface is already covered per topic in `telemetry/*_test.go` and `appserver/turn_analytics_plugins_test.go`.
 - Verified with `go test ./rollout -count=1`, `go test ./model -run Gateway -count=1`, `go build ./...`, and a negative check that reverting the multi-key rule fails the new shape test.
 
-Status after reconciliation: `2057 complete`, `406 not_applicable`,
-`444 audit_pending`, `238 regression_pending`, `4 partial`,
+### Group exploration reads and annotate exit codes (Round 894)
+
+**Upstream:** 71406edbd58e (#46487), 4f3867123f4a (#46492).
+
+- `71406edbd58e` exploration grouping: `ShouldFlush` (`tui/exec_cell/model.go:122`) already kept adjacent read/list/search calls grouped after a failed call, and `AppendReasoning` (`:141`) plus `TranscriptLinesWithReasoning` (`tui/exec_cell/render.go:219`, wired at `tui/tea/model.go:5191` and `:7700`) already kept reasoning inside the group in transcript order while raw and compact history omit it. The missing content was the compact exploring renderer: `exploringDisplayLines` (`tui/exec_cell/render.go:238`) now collapses adjacent successful reads into one `Read a, b` summary with unique names, stops that group before a failed or non-read call so unsuccessful reads stay separate, and annotates each call's last line with `(exit N)` or `(command exit N)` for compound commands (`exploringNonzeroExit`/`exploringReadsOnly`, `:323`/`:332`). The header keeps the later neutral `· N nonzero exit(s)` count.
+- Residual, recorded rather than claimed: Go's exploring rows are emitted unstyled, so Rust's red/dim annotation colors and bold header are not represented by this renderer.
+- Tests: `tui/exec_cell/exploration_grouping_like_rust_test.go` covers grouping, the failure split, search exit 1 and compound `command exit`, alongside the existing group-stays-open and nonzero-count tests.
+- `4f3867123f4a` tool output previews were already implemented: `tui/tool_output_preview.go` mirrors Rust `tool_output.rs` (three rows, 16 KiB input bound, partial logical line counts as hidden, hard-wrapped URLs, hidden marker with the `ctrl+t` hint), and `tui/history_cell/mcp.go:131`/`:163` applies one preview budget across all MCP blocks while transcript and raw output keep the full text, covered by `tui/tool_output_preview_test.go` and `tui/history_cell/mcp_preview_test.go`.
+- Verified with `go test ./tui/exec_cell -count=1`, `go test ./tui ./tui/exec_cell ./tui/history_cell -count=1`, `go build ./...`, and a negative check that disabling read grouping fails the new test.
+
+Status after reconciliation: `2059 complete`, `406 not_applicable`,
+`444 audit_pending`, `236 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

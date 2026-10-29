@@ -15688,9 +15688,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Exploration grouping: tui/exec_cell/model.go:122 ShouldFlush already kept adjacent read/list/search calls grouped after a failed call, and model.go:141 AppendReasoning + render.go:219 TranscriptLinesWithReasoning (wired at tui/tea/model.go:5191 and :7700) already kept reasoning inside the group in transcript order while RawLines and the compact preview omit it. This round added the remaining content: tui/exec_cell/render.go:238 exploringDisplayLines now collapses adjacent successful reads into one Read summary with unique names, stops that group before a failed or non-read call so unsuccessful reads stay separate, and annotates each call last line with exit N or command exit N for compound commands (helpers :323/:332). The compact header keeps the later neutral nonzero-exit count. Residual, recorded not claimed: Go exploring rows are unstyled, so Rust red/dim annotation colors and the bold header are not represented. Tests: tui/exec_cell/exploration_grouping_like_rust_test.go (:20 grouping/failure split, :49 search exit 1 and compound command exit), plus existing TestExecCellExploringGroupStaysOpenLikeRust and TestExecCellExploringSummaryUsesNeutralNonzeroExitCountsLikeRust. Verified: go test ./tui/exec_cell -count=1 ok; go test ./tui ./tui/exec_cell ./tui/history_cell -count=1 ok; go build ./... ok; negative check disabling read grouping fails the new test."
    ]
   },
   {
@@ -15724,9 +15724,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Already implemented: tui/tool_output_preview.go mirrors Rust tool_output.rs (PreviewLines=3, MaxPreviewLineBytes=16KiB, a partially displayed logical line counts as hidden, hard-wrap so a long URL cannot exceed the row budget, hidden-line marker with the ctrl+t transcript hint while it still fits); tui/history_cell/mcp.go:131/:163 renders error and result blocks through the same one-shot preview so all MCP blocks share one budget, while TranscriptLines/RawLines keep every block and the trailing failure (tui/history_cell/mcp_preview_test.go). Tests: tui/tool_output_preview_test.go (leading rows, hidden counts, wrapped/partial lines, byte/rune bounds) and mcp_preview_test.go. Verified: go test ./tui -run ToolOutputPreview -count=1 ok; go test ./tui/history_cell -run McpToolCallPreview|McpToolCallTranscriptKeeps -count=1 ok."
    ]
   },
   {
