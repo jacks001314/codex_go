@@ -2721,8 +2721,19 @@ Eight ledger entries were re-audited; shared-lineage compression is covered by t
 - `#41915`, `#41925` (not applicable): Cargo/Bazel schema-generator relocation and a Rust formatter test; no Go product behavior.
 - Verified with `go test ./rollout -run 'ReadRolloutPrefix|Compression' -count=1`, `go test ./state -run 'PreparePaginatedFork' -count=1`, and `go test ./parity -run 'TestAlignment' -count=1`.
 
-Status after reconciliation: `2113 complete`, `420 not_applicable`,
-`403 audit_pending`, `210 regression_pending`, `3 partial`,
+### Rust build and test infrastructure (Round 949)
+
+Fifteen ledger entries are Rust-only build, Bazel, Cargo, or test-layout changes with no Go counterpart (not applicable).
+
+- `#41226`, `#42069`, `#42161`, `#42316` are test moves/removals and Rust module refactors (Guardian tests, tool JSON Schema modules, exec-server startup futures) that change no public API or observable behavior. Go has its own file layout and test suite.
+- `#43083`, `#43109`, `#43111`, `#43114`, `#43117`, `#43125`, `#43126`, `#43144` add Bazel targets, toolchains, and link steps for Rust's GStreamer-based voice runtime. The Go repository has no Bazel workspace; `third_party/voice/prepare_opus.py` handles the only native asset Go needs (libopus) and `voicehost/opus.go` loads it through purego.
+- `#43533`, `#46993` are Bazel musl jemalloc flags and Bazel lockfile diagnostics. Go does not link jemalloc and has no Bazel build path.
+- `#43325` sorts keys in the Rust Cargo/Bazel schema generator; Go does not run that generator and `parity/config_schema_surface_test.go` compares schema properties rather than key order.
+- No code change was required. Verified with `go test ./parity -run 'TestAlignment' -count=1`.
+
+Status after reconciliation: `2113 complete`, `435 not_applicable`,
+`388 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
+
 
 

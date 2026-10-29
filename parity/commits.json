@@ -3828,9 +3828,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust test-file reorganization only (Guardian review session tests moved to a separate module). Go keeps its Guardian tests in appserver/guardian_*_test.go with no behavior change; nothing to port."
    ]
   },
   {
@@ -5460,9 +5460,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust-only deletion of redundant TUI configuration and JSON/service-tier tests. Go has its own test suite and no product code changed; no parity action."
    ]
   },
   {
@@ -5892,9 +5892,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 14/19; needs review: JsonSchemaPrimitiveType, JsonSchemaType, for_each_schema_child_mut, string_enum, with_encrypted"
+    "Round 949: Rust module split of tool JSON Schema types, traversal helpers and compaction with no public API or behavior change. Go implements schema handling in its jsonschema package with its own layout; no action."
    ]
   },
   {
@@ -6205,9 +6205,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust CLI refactor that moves remote exec-server configuration/startup into a helper and builds run futures before shutdown wrapping. No observable behavior changes; Go execserver/appserver startup has its own structure, so there is nothing to mirror."
    ]
   },
   {
@@ -8127,9 +8127,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel build wiring that supplies Bazel-managed CMake and Ninja to the bundled Opus build. Go has no Bazel workspace; third_party/voice/prepare_opus.py resolves the pinned Ninja archive from sources.json and invokes system CMake directly."
    ]
   },
   {
@@ -8211,9 +8211,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel explicit toolchain inputs for native voice builds. Go builds its packaged libopus through prepare_opus.py with CMake and the pinned Ninja binary; there is no Bazel toolchain configuration in the Go repository."
    ]
   },
   {
@@ -8235,9 +8235,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel target for native voice dependencies. Go has no Bazel targets; the equivalent asset is third_party/voice/prepare_opus.py plus sources.json."
    ]
   },
   {
@@ -8259,9 +8259,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel preparation of native voice runtimes (GStreamer closure). Go helper ships only libopus and inspects it through voicehost/runtime_package.go, so there is no runtime closure to prepare with Bazel."
    ]
   },
   {
@@ -8271,9 +8271,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel links Unix bindings against the prepared GStreamer voice runtime. Go voicehost loads libopus dynamically via purego and stays CGO-free, so there are no native link steps or Bazel bindings to update."
    ]
   },
   {
@@ -8307,9 +8307,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel explicit Windows tool selection for native voice builds. Go Windows recipe uses native CMake+Ninja from prepare_opus.py; no Bazel toolchain selection exists."
    ]
   },
   {
@@ -8319,9 +8319,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel targets exposing native Windows build tools. Go has no Bazel workspace and obtains its pinned Ninja archive directly in prepare_opus.py."
    ]
   },
   {
@@ -8331,9 +8331,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel MSVC targets for native voice libraries. Go does not build voice libraries through Bazel; prepare_opus.py drives CMake for the single libopus shared library."
    ]
   },
   {
@@ -8547,9 +8547,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Cargo/Bazel schema generator now sorts JSON object keys for deterministic output. Go neither runs that generator nor depends on key order; parity/config_schema_surface_test.go compares schema properties, not serialization order."
    ]
   },
   {
@@ -8967,9 +8967,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel musl build fix for jemalloc tools and compiler flags. Go binaries do not link jemalloc and the Go repository has no Bazel musl configuration."
    ]
   },
   {
@@ -17563,9 +17563,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 949: Rust Bazel lockfile verification diagnostics only. Go has no Bazel lockfile or Bazel build path; no product behavior to port."
    ]
   },
   {
