@@ -28,3 +28,5 @@ third_party/bwrap/work/
 third_party/bwrap/build/
 func.md
 npm_token.md
+stability/reports/
+.tmp-stability-*.json.log

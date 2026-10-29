@@ -1,0 +1,25 @@
+{
+  "soak": {
+    "warmup_seconds": 1800,
+    "rss_drift_per_hour": 0.01,
+    "rss_peak_ratio": 2.0,
+    "goroutine_delta": 5,
+    "fd_delta": 5,
+    "max_active_connections": 8
+  },
+  "large": {
+    "peak_heap_bytes": 536870912,
+    "rollout_read_peak_bytes": 268435456,
+    "p95_latency_ms": 500
+  },
+  "ui": {
+    "key_to_frame_p99_ms": 50,
+    "frame_p95_ms": 16,
+    "events_per_second": 500
+  },
+  "disk": {
+    "bytes_per_1k_turns": 20971520,
+    "wal_bytes": 67108864,
+    "orphan_temp_files": 0
+  }
+}
