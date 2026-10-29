@@ -16,6 +16,9 @@ import (
 
 const (
 	binDirname                = "bin"
+	bundleAppDirname          = "CodexCLI.app"
+	bundleContentsDirname     = "Contents"
+	bundleMacOSDirname        = "MacOS"
 	packageMetadataFilename   = "codex-package.json"
 	pathDirname               = "codex-path"
 	releasesDirname           = "releases"
@@ -463,6 +466,19 @@ func PackageLayoutFromExe(exePath string) *CodexPackageLayout {
 		// The executable lives in the package codex-resources/ directory;
 		// resolve the sibling bin/ directory and require it to exist.
 		binDir = filepath.Join(filepath.Dir(exeDir), binDirname)
+		if existingDir(binDir) == nil {
+			return nil
+		}
+	case bundleMacOSDirname:
+		// A provisioned CLI keeps helpers and metadata in the outer package;
+		// the executable points inside CodexCLI.app/Contents/MacOS rather than
+		// at bin/codex (Rust #42068).
+		contentsDir := filepath.Dir(exeDir)
+		bundleDir := filepath.Dir(contentsDir)
+		if filepath.Base(contentsDir) != bundleContentsDirname || filepath.Base(bundleDir) != bundleAppDirname {
+			return nil
+		}
+		binDir = filepath.Join(filepath.Dir(bundleDir), binDirname)
 		if existingDir(binDir) == nil {
 			return nil
 		}
