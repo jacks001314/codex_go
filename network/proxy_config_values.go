@@ -44,8 +44,16 @@ func ProxyConfigFromConfigValues(values map[string]any) (*ProxyConfig, error) {
 		settings.MITM = settings.Mode == ProxyModeLimited || len(hooks) > 0
 	}
 	config := &ProxyConfig{Network: settings}
-	if _, err := ResolveProxyRuntime(*config); err != nil {
+	// Rust #46331: domain patterns and unix-socket paths are validated against
+	// the composed policy, not the selected configuration, because feature
+	// settings and managed requirements can replace them before use. Keep the
+	// selected values untouched here and reject them only when they survive
+	// composition, in NewProxySpecForPlatform*.
+	if err := ValidateProxyMITMHookConfig(*config); err != nil {
 		return nil, err
+	}
+	if settings.CredentialBroker && !settings.MITM {
+		return nil, fmt.Errorf("network.credential_broker requires network.mitm = true")
 	}
 	return config, nil
 }

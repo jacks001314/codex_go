@@ -155,6 +155,11 @@ func NewProxySpecForPlatformWithLocalBinding(config ProxyConfig, requirements *P
 	if err := ValidateProxyUnixSocketAllowlistPathsForPlatform(config, platform); err != nil {
 		return nil, err
 	}
+	// Rust #46331: domain patterns are validated against the composed policy,
+	// after managed requirements replaced any selected values.
+	if err := ValidateProxyDomainPatterns(config); err != nil {
+		return nil, err
+	}
 	if err := ValidateProxyPolicyAgainstConstraints(config, constraints); err != nil {
 		return nil, fmt.Errorf("network proxy constraints are invalid: %w", err)
 	}

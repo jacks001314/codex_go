@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"codex_go/utils"
 )
 
 func TestSettingsDefaultsAndDomainPrecedence(t *testing.T) {
@@ -175,14 +177,22 @@ func TestProxyConfigReadsFeatureNetworkProxyLikeRust(t *testing.T) {
 	}
 }
 
-func TestProxyConfigFromConfigValuesRejectsInvalidRuntime(t *testing.T) {
-	_, err := ProxyConfigFromConfigValues(map[string]any{
+// Rust #46331: parsing keeps an invalid selected socket allow entry; the
+// composed policy rejects it later, in NewProxySpecForPlatform*.
+func TestProxyConfigFromConfigValuesDefersRuntimeValidation(t *testing.T) {
+	config, err := ProxyConfigFromConfigValues(map[string]any{
 		"features": map[string]any{"network_proxy": map[string]any{
 			"allow_unix_sockets": []any{"relative.sock"},
 		}},
 	})
-	if err == nil && runtimeos.GOOS != "windows" {
-		t.Fatal("ProxyConfigFromConfigValues returned nil error")
+	if err != nil {
+		t.Fatalf("ProxyConfigFromConfigValues error = %v", err)
+	}
+	if got := config.Network.AllowUnixSockets(); len(got) != 1 || got[0] != "relative.sock" {
+		t.Fatalf("selected socket allow entries = %#v, want the unmodified entry", got)
+	}
+	if _, err := NewProxySpecForPlatform(*config, nil, false, utils.PlatformUnknown); err == nil && runtimeos.GOOS != "windows" {
+		t.Fatal("NewProxySpecForPlatform accepted a relative socket allow entry")
 	}
 }
 

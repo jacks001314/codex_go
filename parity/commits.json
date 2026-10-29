@@ -15495,9 +15495,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "plugin/remote_metadata.go:23 InstalledPluginMetadataEqual + :63 RemoteCatalogMetadataEqual mirror Rust installed_plugin_metadata_eq/remote_catalog_metadata_eq (behavioral fields only, catalog ignores plugin display order, marketplace order significant); plugin/api.go:1996 ReplaceInstalledRemotePlugins publishes the full payload yet reports only behavioral changes; appserver/plugin_remote_installed.go:141 gates effectivePluginsChanged on that result so display-only refreshes keep live MCP sessions and skill caches. Tests: plugin/remote_metadata_test.go and appserver/plugin_remote_metadata_test.go. Verified: go test ./plugin -run Metadata -count=1 ok; go test ./appserver -run TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust -count=1 ok; negative check forcing effectivePluginsChanged fails with display-only-refresh-cleared-caches."
    ]
   },
   {
@@ -15556,9 +15556,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/turn_analytics_plugins.go:65 activePluginIDsForTurnAnalytics + :91 activePluginTelemetryIDs mirror Rust TurnContext::active_plugin_ids_for_telemetry (#46323): active host plugin identities plus selected package keys, remote id wins over package key, 128-byte id and 512-distinct-id bounds return nil (JSON null), observed empty stays []; :27 turnAnalyticsPluginInventory memoizes the first observation on the active turn so post-compaction reconfiguration cannot re-sample it. telemetry/turn_event.go:93 serializes active_plugin_ids_at_turn_start. Tests: appserver/turn_analytics_plugins_test.go (first observation, source selection/validation, bounds) and telemetry/turn_event_test.go (null vs [] serialization). Verified: go test ./appserver -run TestTurnAnalyticsPluginInventory|TestRuntimeRouterTurnAnalyticsPluginInventory|TestActivePluginTelemetryIDs -count=1 ok; go test ./telemetry -run TurnEvent -count=1 ok; negative check widening the bounds to 513/129 fails TestActivePluginTelemetryIDsEnforceBounds."
    ]
   },
   {
@@ -15592,9 +15592,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust-only dependency refactor: the exponential backoff helper moved from codex_core::util into codex_async_utils (re-exported) so codex-cloud-config can drop its runtime dependency on codex-core, with retry delays and jitter explicitly unchanged (200 ms doubling, 0.9..1.1 jitter). Go has no crate boundary, and the identical formula already lives in model/responses_agent.go:4749 responsesRetryDelay (constant defaultResponsesRetryBaseDelay, annotated as mirroring codex_async_utils::backoff via Rust #46540, covered by model/responses_retry_delay_test.go). config/cloud_config_storage.go:128 uses the Go loader design (bounded primary attempt plus system-proxy fallback) rather than an attempt-loop backoff, unrelated to this move. No behavior delta to sync."
    ]
   },
   {
@@ -15604,9 +15604,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #46331 defers domain/socket validation to the composed policy. Go network/proxy_config_values.go:48 ProxyConfigFromConfigValues still composes features.network_proxy + selected permissions.<profile>.network tables but no longer runs ResolveProxyRuntime, so an invalid selected pattern or socket path survives parsing; only parse-level MITM CA/hook checks and credential-broker-requires-mitm remain. network/proxy_constraints.go:160 NewProxySpecForPlatformWithLocalBinding validates socket allowlist paths and the new network/proxy_config.go:323 ValidateProxyDomainPatterns (allow/deny/review compilation, also reused by ResolveProxyRuntimeForPlatform) after applyProxyRequirements replaced managed values. Tests: network/network_policy_deferred_validation_like_rust_test.go (invalid bracket-only domain pattern, relative.sock, tilde socket, NUL socket survive projection, fail when retained, pass when requirements replace; malformed allow/review patterns rejected on the composed policy), network/proxy_config_test.go TestProxyConfigFromConfigValuesDefersRuntimeValidation, appserver/managed_network_deferred_validation_like_rust_test.go (production managed-network builder with replacing requirements). Verified: go test ./network -count=1 ok; go test ./appserver -run ManagedNetwork|NetworkProxy|NetworkPolicy|NetworkGrant -count=1 ok; go test ./config -run Network -count=1 ok; go build ./... ok; negative check restoring the eager ResolveProxyRuntime fails both new tests."
    ]
   },
   {
