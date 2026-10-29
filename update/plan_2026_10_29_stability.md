@@ -133,6 +133,7 @@ Rust **没有**的能力（Go 侧新增，需自己校准）：2h soak 的 RSS �
 - composer 现在每帧是 O(draft)（`bubbles/textarea.wrap` 自身仍是线性重排）：20000 字 p99 34 ms 仍在预算内，但要更快只能换掉上游 textarea 或做增量换行，属后续优化而非稳定性缺口。
 - soak 家族的 Windows 句柄增量已定性：**不是泄漏**。两处证据一致：重连场景 120 轮"取消在途流"→ opened=120 / closed=120 / active=0，`GetProcessHandleCount` 第 40 轮后稳定在 +7；turn 场景 15,760 轮 → opened=927 / closed=927、retained=1，而同参数两次运行的句柄增量分别是 +8 与 +0。门禁因此统一改为**连接回收 + 稳态漂移**（`soak.reconnect.connections_reclaimed`、`soak.connections_reclaimed`、`soak.open_fds` 只判窗口后半段），句柄总增量与逐秒序列写进报告供趋势观察。预热也必须用被测动作本身：成功轮留下的是池内闲暇连接，与被取消的流不同。
 - 整帧布局缓存仍需逐消息 key 比较（20k 消息约 0.3 ms）；真正的增量布局（分段 rope）未做。
+- **已知依赖**：20k 消息帧渲染的修复（布局输出整帧缓存，§4.3 第 1 条）与并行 TUI 对齐任务同处 `tui/tea/model.go`，未随稳定性提交一起落地。因此在干净 HEAD 上跑 `-Suite all` 会是 45 过 1 挂，唯一失败项是 `TestUIFrameRenderLargeTranscript`（p95 18.98 ms vs 预算 16 ms）；带上该任务的在途改动即为 46 全绿。两边合流后需复跑确认。
 - soak 的 RSS 漂移在 < 60 s 窗口被跳过（设计如此），要等 weekly 24h 任务积累数据。
 - nightly workflow 尚未在 GitHub 上实际跑过；`scripts/stability.sh` 本机无 bash，未本地验证。
 - 旧报告（修复前留下）仍在本地 `stability/reports/`，趋势工具会继续对它们报失败，属预期行为。
