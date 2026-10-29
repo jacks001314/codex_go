@@ -1310,6 +1310,31 @@ Account Summary tab (#45769, part 2).
   ./tui/tea -count=1`, `go vet ./chatgptapi ./tui/analytics ./tui/tea
   ./tui/chatwidget`, and `go build ./...`.
 
-Status after reconciliation: `2017 complete`, `395 not_applicable`,
-`476 audit_pending`, `258 regression_pending`, `3 partial`,
+### Account Summary tab (Round 845)
+
+Account Summary tab (#45769, part 3).
+
+- `tui/chatwidget/usage.go` reduces the `/usage` menu to two rows: `View
+  analytics` (opens the dashboard) and `Redeem reset`. The separate `Show usage`
+  and `Explore analytics` entries are gone.
+- Explicit `/usage daily`, `/usage weekly` and `/usage cumulative` now open the
+  retained analytics dashboard on Summary through `openAnalyticsSummary`, which
+  selects the Summary section, zooms it, clears the scroll offset and grouping
+  picker, and maps the view onto `AnalyticsSummaryViews`, so the chart starts on
+  the requested grouping. No token-activity history cell is produced.
+- `tui/analytics/plot.go` formats count and token callouts and every axis tick
+  with the Rust compact amount; a 100M peak now renders `100M`/`50M`/`0`, the
+  gutter stays hidden below 30 columns, and the oversized-axis snapshot matches
+  Rust at widths 8, 30, 35 and 44 (a 1e30 peak still hides the axis).
+- `tui/analytics/history_lines.go` switches the headline total to the compact
+  amount from 1000 up, matching `chart.rs` `formatted_total`.
+- Tests cover the two-row menu, the analytics entry, all three explicit views
+  opening Summary with the matching grouping and no history cell, the compact
+  headline thresholds, the compact axis snapshot, and the reset-row navigation.
+- Verified with `go test ./chatgptapi ./tui/analytics ./tui/chatwidget
+  ./tui/tea -count=1`, `go vet ./chatgptapi ./tui/analytics ./tui/tea
+  ./tui/chatwidget`, and `go build ./...`.
+
+Status after reconciliation: `2018 complete`, `395 not_applicable`,
+`476 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
