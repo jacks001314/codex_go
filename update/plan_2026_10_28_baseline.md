@@ -839,6 +839,11 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - #45271 is N/A by architecture. Rust changes `ScrollbackStrategy::Standard` viewport growth to emit newlines inside a `DECSTBM` history region so QTermWidget/xterm.js keep scrollback. Go's TUI has no inline-history viewport or scroll-region writer (no `ScrollbackStrategy`/`grow_viewport`/`DECSTBM` carrier); transcript insertion and resize reflow live in `tui/app/resize_reflow.go`, and the bubbletea renderer owns the screen.
 - Verification: `rg 'ScrollbackStrategy|grow_viewport|PreparedWindowsSandboxCleanup|prepare_packaged|package_lifecycle' --glob '*.go'` finds no carrier, and the existing `sandbox/windowssandbox` legacy cleanup and `tui/app` resize-reflow tests remain unchanged and green.
 
-Status after reconciliation: `1984 complete`, `388 not_applicable`,
-`504 audit_pending`, `273 regression_pending`, `0 partial`,
+### Confirm MCP request metadata carries session and origin window (Round 797)
+
+- #45409 was already implemented. `mcp/api.go` `withMCPToolCallIDsMeta` replaces stale `threadId`/`sessionId`/`windowId`/`itemId` values in the `tools/call` `_meta` document and passes a non-object meta through; `appserver/runtime_router.go` fills `SessionID` from the thread record and `WindowID` from the current conversation window, and `tool/code_mode_exec.go` keeps `OriginItemIDContextKey` and `OriginWindowIDContextKey` on a cell across waits and compaction.
+- Existing regressions: `TestRuntimeRouterMCPRequestMetadataReportsCallIDsLikeRust` (direct MCP call metadata over a real loopback server), `TestMCPToolCallMetaCallIDsLikeRust` (merge, omitted item, session-less call, non-object passthrough), and the code-mode origin tests for resumed cells. `go test ./appserver -run MCPRequestMetadata`, `go test ./mcp -run MCPToolCallMetaCallIDs`, and `go test ./tool -run Origin` pass.
+
+Status after reconciliation: `1985 complete`, `388 not_applicable`,
+`504 audit_pending`, `272 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

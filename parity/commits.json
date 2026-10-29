@@ -12807,9 +12807,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go parity confirmed: mcp/api.go withMCPToolCallIDsMeta writes threadId, sessionId, the originating windowId and optional itemId into tools/call _meta (replacing stale values and passing a non-object meta through), appserver/runtime_router.go supplies SessionID from the thread record and WindowID from the conversation window, and tool/code_mode_exec.go retains OriginItemIDContextKey/OriginWindowIDContextKey across waits and compaction so nested calls keep the original origin. Regression coverage exists in appserver TestRuntimeRouterMCPRequestMetadataReportsCallIDsLikeRust, mcp TestMCPToolCallMetaCallIDsLikeRust, and the code-mode origin tests; each passes."
    ]
   },
   {
