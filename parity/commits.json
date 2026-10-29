@@ -2291,9 +2291,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/9; needs review: BedrockState, SELECT_FOURTH, handle_bedrock_key_event, handle_bedrock_paste, is_text_entry_active"
+    "Amazon Bedrock setup is part of the TUI onboarding wizard. tui/onboarding/auth.go adds the bedrock auth choice and SignInBedrock/SignInBedrockConfigured states, offers the option only when API login and the bedrock_setup_wizard feature are both allowed (AuthOptionsForPolicyWithBedrock), and tui/onboarding/bedrock.go implements the full flow: credential discovery, grouped method menu (detected profile/environment vs manual profile/access keys/environment instructions/API key), region entry, configuration, and GovCloud guidance. features/features.go registers bedrock_setup_wizard as stable and default-on. Tests: go test ./tui/onboarding -run Bedrock -count=1 (TestBedrockMethodMenuGroupsAPIKeyLikeRust, TestAuthOptionsIncludeBedrockOnlyWithAPIAndFeature, TestBedrockProfileFlowConfiguresAndCompletes, TestBedrockAccessKeyFlowUsesAccessKeyLogin, TestBedrockAPIKeyFlowAndGovCloudGuidance)."
    ]
   },
   {
@@ -4668,9 +4668,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 22/39; needs review: BannerDismissal, PendingCreditsNudge, RateLimitReadStatus, RateLimitRefreshOutcome, RateLimitRefreshState"
+    "The usage read carries the backend banner contract (account id plus rate_limit_upsell) and the TUI renders it with actionable CTAs. app/backend_banners.go parses and bounds the payload (title/description lengths, CTA count, model fallbacks, supported action kinds) and maps actions to the usage/workspace-usage destinations; app/backend_banner_wiring.go converts the account usage response into the inline banner view and recovery inputs; tui/tea/backend_banner.go tracks eligibility and tui/tea/backend_banner_fallback.go performs the automatic model fallback with the 'Automatically switched to ... due to usage limits.' message while keeping the existing recovery UI if the server declines. Tests: go test ./tui/tea -run BackendBanner -count=1; go test ./app -run BackendBanner -count=1 (TestInteractiveBackendBannerViewLikeRust, TestInteractiveBackendBannerReadRejectsAbsentPayload, TestInteractiveBackendBannerActionHandlerDispatches)."
    ]
   },
   {
@@ -4896,9 +4896,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/9; needs review: EventStreamConnectionSettings, McpEventStreamOpener, event_stream_cancellation_sender, event_stream_opener, forward_event_server_removals_to"
+    "Hosted-app MCP event streams own a dedicated connection from the app server instead of borrowing the task runtime, so unloading a task leaves the subscription alive. appserver/mcp_event_stream.go keeps subscriptions per owning connection and thread, validates the hosted server, enforces the per-connection limit and duplicate-id rule, and stops them on unsubscribe, connection close, or router close; appserver/mcp_event_stream_test.go now unloads the subscribed task mid-stream and asserts a later fileChanged event is still forwarded. Tests: go test ./appserver -run TestRuntimeRouterMCPEventStream -count=1."
    ]
   },
   {
@@ -14175,9 +14175,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/4; needs review: record_started_turn"
+    "Managed-daemon restarts resume interrupted work. appserver/daemon_recovery_continue.go re-reads the interrupted turn's rollout after restore, re-checks that the work is still unfinished, appends TurnAborted for the saved turn, and starts exactly one continuation turn carrying the hidden daemon_recovery input, the saved output schema, service tier, and root turn id; busy threads, missing turn context, and unloaded threads are skipped. Tests: go test ./appserver -run DaemonRecovery -count=1 (TestDaemonRecoveryContinuationStartsTurnLikeRust, TestDaemonRecoveryContinuationParamsLikeRust, TestDaemonRecoveryContinuationGatesLikeRust, TestDaemonRecoveryContinuationRequiresTurnContextLikeRust, TestDaemonRecoveryContinuationSkipsBusyThreadLikeRust, TestDaemonRecoveryContinuationRequiresLoadedThreadLikeRust, TestDaemonRecoveryRestoreContinuesSavedThreadsLikeRust, TestDaemonRecoverySandboxTagNormalizationLikeRust)."
    ]
   },
   {
@@ -15351,9 +15351,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/10; needs review: AccountRead, AccountReadError, CachedWorkspaceRouting, WorkspaceRoutingFetches, load_retained_session_config"
+    "Workspace discovery feeds model request routing. RuntimeRouter resolves workspace routing during account reads, caches it per credential/config identity, and refuses to reuse it after an account or configuration change; a 401 on accounts/check refreshes the credential owner and retries discovery. The resolved routing then supplies the workspace backend origin/account routing for model requests. Tests: go test ./appserver -run WorkspaceRouting -count=1 (TestRuntimeRouterGetAccountExposesWorkspaceRoutingLikeRust, TestRuntimeRouterGetAccountWorkspaceRoutingErrorsLikeRust, TestResolveWorkspaceRoutingLikeRust, TestResolveWorkspaceRoutingMatchesRust, TestRuntimeRouterWorkspaceRoutingRejectsCredentialChangeLikeRust, TestRuntimeRouterWorkspaceRoutingRecoversFromUnauthorizedLikeRust, TestRuntimeRouterWorkspaceRoutingRejectsConfigChangeLikeRust)."
    ]
   },
   {

@@ -19,7 +19,8 @@ import (
 // notifications to the owning connection, reject duplicate subscriptions, and
 // clean up on unsubscribe/stop.
 func TestRuntimeRouterMCPEventStreamStartStopForwardsAndScopesLikeRust(t *testing.T) {
-	release := make(chan struct{})
+	emitAfterUnload := make(chan struct{})
+	shutdown := make(chan struct{})
 	var eventsMu sync.Mutex
 	eventStreamRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,13 +55,19 @@ func TestRuntimeRouterMCPEventStreamStartStopForwardsAndScopesLikeRust(t *testin
 			}
 			writeSSE("notifications/events/active", `{}`)
 			writeSSE("notifications/events/fileChanged", `{"name":"fileChanged"}`)
-			<-release
+			select {
+			case <-emitAfterUnload:
+			case <-shutdown:
+				return
+			}
+			writeSSE("notifications/events/fileChanged", `{"name":"afterUnload"}`)
+			<-shutdown
 		default:
 			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{})
 		}
 	}))
 	defer func() {
-		close(release)
+		close(shutdown)
 		server.Close()
 	}()
 
@@ -162,6 +169,37 @@ func TestRuntimeRouterMCPEventStreamStartStopForwardsAndScopesLikeRust(t *testin
 	response = router.Handle(duplicate)
 	if response.Error == nil || !strings.Contains(response.Error.Message, "already exists") {
 		t.Fatalf("duplicate event stream start response = %+v", response)
+	}
+
+	// Rust #41899: unloading the task must not tear down the hosted-app event
+	// stream, because the subscription owns its own client.
+	router.markThreadUnloaded(threadID)
+	close(emitAfterUnload)
+	forwardedAfterUnload := false
+	deadline = time.Now().Add(2 * time.Second)
+	for !forwardedAfterUnload && time.Now().Before(deadline) {
+		for _, notification := range sink.List() {
+			if notification.Method != NotificationMCPServerEventStream {
+				continue
+			}
+			payload, ok := notification.Params.(*McpServerEventStreamNotification)
+			if !ok || payload.SubscriptionID != "sub-1" {
+				continue
+			}
+			if payload.Notification.Method != "notifications/events/fileChanged" {
+				continue
+			}
+			var params map[string]any
+			if err := json.Unmarshal(payload.Notification.Params, &params); err == nil && params["name"] == "afterUnload" {
+				forwardedAfterUnload = true
+			}
+		}
+		if !forwardedAfterUnload {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if !forwardedAfterUnload {
+		t.Fatalf("event stream stopped forwarding after task unload; notifications = %+v", sink.List())
 	}
 
 	stop := requestWithParams(t, IntID(5), MethodMCPServerEventStreamStop, McpServerEventStreamStopParams{SubscriptionID: "sub-1"})

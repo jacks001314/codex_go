@@ -682,6 +682,10 @@ Closed two audits. `#44939` (Windows sandbox setup) keeps the local app-server a
 
 Closed two audits. `#41328` was already implemented at the app-server layer: unified-exec processes retain launch sandbox permissions, additional/runtime-internal grants, and the managed-network flag, and the write_stdin review compares them with the current turn policy, failing closed on denied-read or unfittable drift while the approval action reports effective mode and user-visible grants without internal paths. `#43330` now matches Rust end to end: remote resume/fork requests omit permission fields when inheriting, the resume response refreshes the live approval/sandbox/profile state, and a new `app/remote_permission_overrides.go` mirrors Rust's explicit-override detection (launch flags, `-c` permission keys, session-flag and profile layers) so remote resume and fork refuse overrides with Rust's messages. Verified with `go test ./appserver -run WriteStdin`, `go test ./tool -run WriteStdin`, and `go test ./app -run 'RemoteResume|RemoteFork|RemotePermission|RemoteTUI|InteractiveRemote'`; `#44746` remains open because the Go TUI still has no in-session trust modal for a destination chosen after startup.
 
-Status after reconciliation: `1949 complete`, `381 not_applicable`,
-`532 audit_pending`, `287 regression_pending`, `0 partial`,
+### Onboarding, banner, recovery, routing, and event-stream audits (Round 771)
+
+Closed five audits by matching existing Go implementations: `#40679` Bedrock onboarding (`tui/onboarding/auth.go`, `bedrock.go`, `bedrock_setup_wizard` feature), `#41742` actionable usage banners with automatic model fallback (`app/backend_banners.go`, `app/backend_banner_wiring.go`, `tui/tea/backend_banner*.go`), `#45820` daemon-restart continuation (`appserver/daemon_recovery_continue.go`), and `#46281` workspace routing applied to model requests (`model/workspace_routing.go`, `appserver/agent_runtime.go`). `#41899` gained a new regression: `appserver/mcp_event_stream_test.go` now unloads the subscribed task mid-stream and asserts a later event is still forwarded, locking the dedicated-connection design.
+
+Status after reconciliation: `1954 complete`, `381 not_applicable`,
+`527 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
