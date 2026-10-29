@@ -1035,7 +1035,7 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 	if notification.Turn.Status == TurnStatusInterrupted {
 		blockingOutcome = "aborted"
 	}
-	r.endGuardianBlockingTurn(notification.ThreadID, notification.Turn.ID, blockingOutcome)
+	r.endGuardianTurn(notification.ThreadID, notification.Turn.ID, blockingOutcome)
 	r.publishThreadReadAttention(notification)
 	r.requireRealtime().CompleteHandoff(notification.ThreadID)
 	r.notify(NotificationTurnCompleted, notification)
@@ -3871,7 +3871,7 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	appTurn.ItemsView = TurnItemsNotLoaded
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(params.ThreadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: params.ThreadID, Turn: appTurn})
-	r.beginGuardianBlockingTurn(params.ThreadID, turnID)
+	r.beginGuardianTurn(params.ThreadID, turnID)
 	_ = r.appendRuntimeTurnStarted(params.ThreadID, turnID, rootTurnIDForTurn(nil, turnID), startedAt)
 	// Rust #49262: the compaction task runs in its own `codex.compaction`
 	// phase span (core/src/tasks/compact.rs).

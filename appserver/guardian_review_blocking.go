@@ -253,6 +253,16 @@ func (r *RuntimeRouter) beginGuardianBlockingTurn(threadID, turnID string) {
 	r.requireGuardianReviewBlocking().startTurn(threadID, turnID, r.services.TurnMetrics)
 }
 
+// beginGuardianTurn runs the Guardian turn-start hooks. Rust #45672
+// (ext/guardian-v2/src/sync_reviewer/mod.rs) consolidates the reviewer's turn
+// and thread lifecycle registration in one install; Go's router already owns
+// both, so one entry point starts the blocking sample and drops any denial
+// window left on the new turn before reviews can be recorded against it.
+func (r *RuntimeRouter) beginGuardianTurn(threadID, turnID string) {
+	r.beginGuardianBlockingTurn(threadID, turnID)
+	r.clearGuardianDenialsForTurn(turnID)
+}
+
 // endGuardianBlockingTurn mirrors Rust's turn stop/abort hook, exporting the
 // turn's blocking sample tagged with the outcome.
 func (r *RuntimeRouter) endGuardianBlockingTurn(threadID, turnID, outcome string) {
@@ -260,6 +270,33 @@ func (r *RuntimeRouter) endGuardianBlockingTurn(threadID, turnID, outcome string
 		return
 	}
 	r.requireGuardianReviewBlocking().finishTurn(threadID, turnID, outcome)
+}
+
+// endGuardianTurn runs the Guardian turn-stop and turn-abort hooks. Rust #45672
+// moved extension-owned denial cleanup out of core task handling and into these
+// hooks, so a completed or interrupted turn never leaves accounting behind for
+// a later review (or a reused turn id) to inherit.
+func (r *RuntimeRouter) endGuardianTurn(threadID, turnID, outcome string) {
+	r.endGuardianBlockingTurn(threadID, turnID, outcome)
+	r.clearGuardianDenialsForTurn(turnID)
+}
+
+// clearGuardianDenialsForTurn drops the reviewer's denial window for one turn.
+// The breaker is owned by the model reviewer, so a stub or missing reviewer has
+// no accounting to clear.
+func (r *RuntimeRouter) clearGuardianDenialsForTurn(turnID string) {
+	if r == nil {
+		return
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return
+	}
+	reviewer, ok := r.services.GuardianReviewer.(*modelGuardianReviewer)
+	if !ok || reviewer == nil || reviewer.breaker == nil {
+		return
+	}
+	reviewer.breaker.ClearTurn(turnID)
 }
 
 // forgetGuardianBlocking drops a closing thread's tracker, discarding saved
