@@ -15303,9 +15303,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/6; needs review: EnvironmentAccess, EnvironmentAccessExt, EnvironmentAccessKey, FileSystemEnvironmentAccessor, filesystem_ref"
+    "Pure Rust-internal API addition (EnvironmentAccess trait, FileSystemEnvironmentAccessor borrowing Arc<dyn ExecutorFileSystem> with a captured FileSystemSandboxContext, Environment::filesystem_ref) so later commits can stop callers selecting their own sandbox. Go has no ExecutorFileSystem-with-optional-sandbox handle to harden the same way: tool.EnvironmentFileSystem (tool/environment_filesystem.go:42) takes the sandbox per call, and the environment-permission binding already lives in appserver/executor_skill_sandbox.go:18 (executorSkillSandboxContextsForTurn), which builds one *execserver.FileSystemSandboxContext per environment and refuses restricted reads without one (requireExecutorSkillSandboxContext, :261). The opaque identity key has a Go equivalent in executorSkillSandboxContextKey (appserver/executor_skill_sandbox.go:219), used as the skill-root cache identity at appserver/turn_runtime.go:10789. No behaviour delta to port."
    ]
   },
   {
@@ -15399,9 +15399,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Behaviour-preserving refactor: Rust replaced direct ExecutorFileSystem calls with explicit None sandbox arguments in skill discovery, environment skill loading and plugin namespace resolution, wrapping host and executor filesystems in FileSystemEnvironmentAccessor::unrestricted so access stayed unrestricted. Go already expresses the same choice per call: readExecutorSkillEntryResource (appserver/executor_skill_provider.go:310) reads through exec-server with the captured sandbox context (readLocalEnvironmentSkillTextWithSandbox/readRemoteEnvironmentSkillTextWithSandbox) and falls back to the unrestricted os.ReadFile when no context was captured, while requireExecutorSkillSandboxContext still demands a context for restricted environments. Access semantics are unchanged by the upstream commit, so there is nothing to port."
    ]
   },
   {

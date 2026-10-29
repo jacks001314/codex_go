@@ -2058,6 +2058,16 @@ The transcript test was confirmed to fail with the filter removed. Commands: `go
 - Added `tui/history_cell/recap_styled_like_rust_test.go` covering the dim/reset on every line, the bold labels, the absence of cyan, and that styling never changes the wrapped text.
 - Verified with `go test ./tui/history_cell ./tui/tea ./tui/markdown -count=1`.
 
-Status after reconciliation: `2049 complete`, `402 not_applicable`,
-`448 audit_pending`, `246 regression_pending`, `4 partial`,
+### Environment-bound filesystem access has Go equivalents (Round 886)
+
+**Upstream:** 3d3ae4965ab3 "Add filesystem accessors bound to environment permissions (#46268)" and 47fc8d661e42 "Route skill discovery and loading through `EnvironmentAccess` (#46293)".
+
+- #46268 adds the `EnvironmentAccess` trait, `FileSystemEnvironmentAccessor` (a borrowed filesystem plus a captured `FileSystemSandboxContext`), the unrestricted constructor and an opaque cache key, plus `Environment::filesystem_ref()`. It is Rust-internal API hygiene: callers stop being able to pick their own sandbox for a shared filesystem handle.
+- Go has no such handle to protect. `tool.EnvironmentFileSystem` (`tool/environment_filesystem.go:42`) takes the sandbox per call, and the per-environment permission binding already lives in `appserver/executor_skill_sandbox.go:18` (`executorSkillSandboxContextsForTurn`), which builds one `*execserver.FileSystemSandboxContext` per environment and refuses restricted reads without one (`requireExecutorSkillSandboxContext`, `appserver/executor_skill_sandbox.go:261`).
+- The opaque identity key has a direct Go counterpart in `executorSkillSandboxContextKey` (`appserver/executor_skill_sandbox.go:219`), used as the skill-root cache identity at `appserver/turn_runtime.go:10789`.
+- #46293 only rewires discovery/loading/namespace callers onto the accessor with `unrestricted`, so access semantics do not change. Go already makes the same decision per call: `readExecutorSkillEntryResource` (`appserver/executor_skill_provider.go:310`) uses the captured sandbox through `readLocalEnvironmentSkillTextWithSandbox`/`readRemoteEnvironmentSkillTextWithSandbox` when a context exists and the unrestricted `os.ReadFile` otherwise.
+- Both recorded as not_applicable; no code change and no new test, because neither commit carries a behavioural delta.
+
+Status after reconciliation: `2049 complete`, `404 not_applicable`,
+`446 audit_pending`, `246 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
