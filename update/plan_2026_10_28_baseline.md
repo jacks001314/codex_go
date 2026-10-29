@@ -826,6 +826,13 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - #45135 was already implemented. `tui/streaming` keeps a disposable `prosePreview` bounded to the newest 8 KiB at a rune boundary with a leading ellipsis, never enqueues it into the stable queue, reflows it on resize, drops it on a committed newline, retains the last safe preview when a pipe reveals table structure, and holds back fences; `pushDelta` reports preview changes and `currentTailLines` appends the preview to the live tail. Existing controller tests cover visibility before completion, finalization without duplication, bounds, table holdback and resize reflow.
 - Tests: `go test ./tui/app ./tui/history_cell ./tui/tea ./tui/streaming -count=1` passes.
 
-Status after reconciliation: `1983 complete`, `386 not_applicable`,
-`506 audit_pending`, `274 regression_pending`, `0 partial`,
+### Attribute request metadata and hooks to the issuing step (Round 795)
+
+- #45248 needed two gaps closed. The agent loop already refreshed `AgentStepSettings` per sampling step, but `ToolDispatcher` only used it for truncation: the hook adapter kept the turn-start model and approval policy. `AgentStepSettings` now carries `HookPermissionMode`, the loop calls `SetStepSettings(model, effort, permissionMode)` before each step's tool batch, and the dispatcher stamps a `tool.StepAttribution` onto every invocation so parallel calls cannot race a shared adapter.
+- `ToolHookAdapter` prefers the invocation's captured model/permission mode for PreToolUse and PostToolUse and keeps the adapter fallback for calls without a captured step; `PermissionRequest` hooks resolve the running turn's step model and effective approval policy before dispatch. `turn.Runtime.ToolNamespacesInfo()` exposes the issuing router's finalized inventory, and `compactResponsesClientMetadataForWindow` now writes it into the remote-compaction turn-metadata document without disturbing the compaction fields.
+- New regressions: `TestAgentLoopUsesCapturedStepSettingsForToolHooksLikeRust` (two steps, model/effort/approval change mid-turn), `TestToolHookAdapterReportsInvocationStepAttributionLikeRust` (hook stdin plus partial/absent fallbacks), and `TestAttachToolInventoryToCompactionMetadataLikeRust`.
+- Tests: `go build ./turn ./tool ./appserver ./app`, `go test ./turn ./tool -count=1`, and `go test ./appserver -run 'Hook|Compact|StepSettings|StepCapabilities' -count=1` pass.
+
+Status after reconciliation: `1984 complete`, `386 not_applicable`,
+`506 audit_pending`, `273 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

@@ -12711,9 +12711,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go parity completed for #45248. The agent loop refreshes AgentStepSettings each step (model/effort/summary/tier) and now also passes the step's hook permission mode to ToolDispatcher.SetStepSettings, which stamps tool.StepAttribution onto every invocation of that step. ToolHookAdapter prefers the invocation's captured model/permission mode for PreToolUse/PostToolUse (falling back to turn attribution), and PermissionRequest hooks take the running turn's step model and approval policy. Remote compaction now attaches the issuing turn runtime's finalized tool.ToolNamespacesInfo to the turn-metadata document. New tests cover mid-turn model/effort/approval changes reaching tool invocations, step attribution overriding the adapter, and compaction inventory attachment; go test ./turn ./tool and go test ./appserver -run 'Hook|Compact|StepSettings|StepCapabilities' pass."
    ]
   },
   {
