@@ -14223,9 +14223,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust 5bf132cd5273 (#45825) adds opt-in nonfatal clock handling: features.nonfatal_clock_read_errors, the CurrentTimeUnavailable developer fragment, per-turn and per-compaction-window notice deduplication, generic clock and sleep tool failures returned to the model, fork filtering, and the current_date_removed rendering (<current_date status=unavailable />). Go already carried the #46006 round of that work: features/features.go:280 registers the key, context/fragments.go:577 defines CurrentTimeUnavailableMessage plus the CurrentTimeUnavailable fragment with the current_time_unavailable markers, appserver/turn_runtime.go:10004 readClockForContext deduplicates per turn and context window, tool/handlers.go:568 and tool/handlers.go:665 return the generic message for the clock and sleep tools, and appserver/agent_controller.go:1727 fork-excludes the notice. The missing piece was the environment removal marker. Go now persists the environments world-state snapshot (session/world_state.go Environments field) and appserver/environment_world_state.go recordEnvironmentWorldState mirrors EnvironmentsState::render_diff: a value visible before and gone now renders once, a repeated comparison is a no-op, and recovery renders the date again; the compaction path renders the whole context so it records the empty snapshot without a removal marker, matching Rust render_full. The renderer appserver/turn_runtime.go turnEnvironmentContextText also covers shell_version_removed (#41232), which the Go tree previously omitted. Tests: appserver/environment_clock_removal_like_rust_test.go TestEnvironmentContextDateRemovalRendersUnavailableOnceLikeRust, TestCompactEnvironmentContextSkipsDateRemovalNoticeLikeRust, TestEnvironmentWorldStateRemovalSnapshotLikeRust, and TestRuntimeRouterSleepClockFailureReturnsNoticeAndCompletesTurnLikeRust (sleep item completion preserved and the failed result text reaches the second inference). Verified: go build ./... and go test ./appserver -run Environment|Clock|Compact and go test ./session ./turn ./tool ./context ./compact."
    ]
   },
   {

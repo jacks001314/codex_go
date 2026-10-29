@@ -2356,6 +2356,29 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
   - `TestSemanticSpansDistinguishLabelsFromEndpointGlyphsLikeRust` checks that a sequence message label and an endpoint glyph sharing a character keep `text` and `edge` roles and that box borders are `node` spans.
 - Verified with `go test ./mermaid`.
 
-Status after reconciliation: `2083 complete`, `408 not_applicable`,
-`432 audit_pending`, `222 regression_pending`, `4 partial`,
+### Nonfatal clock failures: clear the environment date like Rust (Round 922)
+
+- Upstream `5bf132cd5273` (#45825) adds opt-in nonfatal clock reads. The Go tree
+  already had the feature flag, the `CurrentTimeUnavailable` fragment, the
+  per-turn/per-window deduplication, the generic clock and sleep tool failures,
+  and the fork filter from the #46006 round; the missing behaviour was the
+  environment date removal marker.
+- `session/world_state.go` now stores the `environments` section snapshot.
+  `appserver/environment_world_state.go` mirrors `EnvironmentsState::render_diff`:
+  a value the model already saw and that is gone now renders as
+  `<current_date status="unavailable" />` exactly once, a repeated comparison is
+  a no-op, and a recovery renders the date normally again.
+- `appserver/turn_runtime.go` renders the marker for the turn path and, matching
+  Rust `render_full`, records the empty snapshot for the compaction window
+  without a removal marker. The same renderer now covers Rust's
+  `shell_version_removed` arm (#41232), previously omitted in Go.
+- New tests in `appserver/environment_clock_removal_like_rust_test.go` cover the
+  date removal/recovery sequence, the compaction window, the snapshot
+  bookkeeping, and a sleep-tool clock failure that still completes its item and
+  returns `failed to read current time` to the next inference.
+- Verified with `go build ./...`, `go test ./appserver -run Environment|Clock|Compact`,
+  and `go test ./session ./turn ./tool ./context ./compact`.
+
+Status after reconciliation: `2084 complete`, `408 not_applicable`,
+`432 audit_pending`, `221 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -6887,6 +6887,16 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 			})
 		}
 	}
+	currentDate := ""
+	if current != nil {
+		currentDate = current.In(time.Local).Format("2006-01-02")
+	}
+	// Rust renders the whole world state for a compaction window (render_full),
+	// so a value that disappeared is already explicit and no unavailable marker
+	// is emitted; the snapshot still records what the model will see.
+	if _, err := r.recordEnvironmentWorldState(record, currentDate, "", false, false); err != nil {
+		return nil, err
+	}
 	text := r.turnEnvironmentContextTextAtDateWithTime(r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime())
 	return append(items, compact.Item{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
@@ -8433,7 +8443,18 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 	}
 	params = r.environmentContextParams(threadID, params)
 	shellVersion := r.powershellShellVersionForTurn(ctx, cfg, params)
-	text := r.turnEnvironmentContextTextAtDateWithTime(params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime())
+	currentDate := ""
+	if current != nil {
+		currentDate = current.In(time.Local).Format("2006-01-02")
+	}
+	removals := environmentWorldStateRemovals{}
+	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, true); recordErr == nil && record != nil {
+		removals, err = r.recordEnvironmentWorldState(record, currentDate, shellVersion, true, true)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	text := r.turnEnvironmentContextText(params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), removals)
 	items := []any{}
 	sessionItems := []session.Item{}
 	if emitNotice {
@@ -8536,6 +8557,13 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAtDate(params *turn.TurnStartP
 // for None - so both <current_date> and <timezone> disappear entirely instead of
 // rendering as empty elements. An unset flag is true (core/src/config/mod.rs:4161).
 func (r *RuntimeRouter) turnEnvironmentContextTextAtDateWithTime(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool) string {
+	return r.turnEnvironmentContextText(params, date, timezone, shellVersion, includeTime, environmentWorldStateRemovals{})
+}
+
+// turnEnvironmentContextText renders the environment context, reporting values
+// that were visible before and are gone now as `status="unavailable"` elements
+// (Rust EnvironmentsState::render_diff, #41232/#45825).
+func (r *RuntimeRouter) turnEnvironmentContextText(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals) string {
 	environments := r.unifiedExecEnvironmentsForTurn(params)
 	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
@@ -8565,6 +8593,11 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAtDateWithTime(params *turn.Tu
 	}
 	if strings.TrimSpace(shellVersion) != "" {
 		fmt.Fprintf(&b, "  <shell_version>%s</shell_version>\n", escapeEnvironmentXML(shellVersion))
+	} else if removals.ShellVersion {
+		b.WriteString("  <shell_version status=\"unavailable\" />\n")
+	}
+	if removals.CurrentDate {
+		b.WriteString("  <current_date status=\"unavailable\" />\n")
 	}
 	if includeTime {
 		if date != nil {

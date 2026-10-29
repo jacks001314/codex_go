@@ -33,6 +33,13 @@ type WorldState struct {
 	// HostSkillsCatalog carries the incremental host skill catalog snapshot
 	// (Rust #57262 section id `host_skills`).
 	HostSkillsCatalog json.RawMessage `json:"hostSkillsCatalog,omitempty"`
+	// Environments carries the environment section snapshot (Rust section id
+	// `environments`, codex-rs/core/src/context/world_state/environment.rs).
+	// The Go renderer always emits the full environment context, so only the
+	// removal-sensitive values are recorded here: they let a later turn report
+	// `<current_date status="unavailable" />` (and the shell_version
+	// equivalent) when a value the model already saw disappears (#45825).
+	Environments json.RawMessage `json:"environments,omitempty"`
 }
 
 func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
@@ -59,6 +66,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.BaseInstructions = append(json.RawMessage(nil), state.BaseInstructions...)
 	state.SkillsCatalog = append(json.RawMessage(nil), state.SkillsCatalog...)
 	state.HostSkillsCatalog = append(json.RawMessage(nil), state.HostSkillsCatalog...)
+	state.Environments = append(json.RawMessage(nil), state.Environments...)
 	return &state, nil
 }
 
