@@ -121,6 +121,9 @@ func trustedExecutableDirectories() []string {
 			"/opt/homebrew/bin",
 			"/usr/local/bin",
 			"/opt/local/bin",
+			// Rust #45457: Nix system profiles resolve into the trusted store.
+			"/run/current-system/sw/bin",
+			"/nix/var/nix/profiles/default/bin",
 			"/Library/Developer/CommandLineTools/usr/bin",
 			"/Applications/Xcode.app/Contents/Developer/usr/bin",
 			"/usr/bin",
@@ -129,7 +132,11 @@ func trustedExecutableDirectories() []string {
 			"/sbin",
 		}
 		if runtime.GOOS == "linux" && isWSL() {
-			directories = append(directories, "/mnt/c/Windows/System32")
+			// Rust #45457: PowerShell lives in its own directory under System32.
+			directories = append(directories,
+				"/mnt/c/Windows/System32",
+				"/mnt/c/Windows/System32/WindowsPowerShell/v1.0",
+			)
 		}
 		return directories
 	}

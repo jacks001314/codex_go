@@ -3,6 +3,8 @@ package envutil
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -72,5 +74,26 @@ func TestTrustedSystemPathUsesTrustedDirectories(t *testing.T) {
 		if !withinAny(directory, trustedInstallationRoots()) {
 			t.Fatalf("trusted PATH contains an untrusted directory: %q", directory)
 		}
+	}
+}
+
+// Rust #45457: Nix system profiles and the WSL PowerShell directory are trusted
+// helper locations.
+func TestTrustedExecutableDirectoriesIncludeNixAndWSLPowerShellLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix system directories only")
+	}
+	directories := trustedExecutableDirectories()
+	for _, want := range []string{"/run/current-system/sw/bin", "/nix/var/nix/profiles/default/bin"} {
+		if !slices.Contains(directories, want) {
+			t.Fatalf("trusted directories %v missing %q", directories, want)
+		}
+	}
+	if runtime.GOOS != "linux" {
+		return
+	}
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	if directories := trustedExecutableDirectories(); !slices.Contains(directories, "/mnt/c/Windows/System32/WindowsPowerShell/v1.0") {
+		t.Fatalf("WSL trusted directories %v missing PowerShell", directories)
 	}
 }

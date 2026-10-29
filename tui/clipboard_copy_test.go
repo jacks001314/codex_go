@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -230,15 +231,215 @@ func TestClipboardCopyWithLocalTmuxFallbackMatchesRust(t *testing.T) {
 	}
 }
 
-func TestTmuxClipboardCopyReadyMatchesRust(t *testing.T) {
-	if err := TmuxClipboardCopyReady("external\n", "193: Ms: (string) \\033]52;%p1%s;%p2%s\\a\n"); err != nil {
-		t.Fatalf("ready err = %v", err)
+// Rust #45457 tmux_clipboard_copy_ready_accepts_forwarding_configuration: the
+// most recently active client of the current session is selected.
+func TestTmuxClipboardTargetAcceptsForwardingConfigurationLikeRust(t *testing.T) {
+	client, err := TmuxClipboardTarget(
+		func() (string, error) { return "external\n", nil },
+		func() (string, error) { return "42 /dev/pts/7\n1 /dev/pts/8\n", nil },
+		func(client string) (string, error) {
+			if client != "/dev/pts/7" {
+				t.Fatalf("capability probe client = %q", client)
+			}
+			return "193: Ms: (string) \\033]52;%p1%s;%p2%s\\a\n", nil
+		},
+	)
+	if err != nil || client != "/dev/pts/7" {
+		t.Fatalf("target = %q err = %v", client, err)
 	}
-	if err := TmuxClipboardCopyReady("off\n", ""); err == nil || err.Error() != "tmux clipboard forwarding is disabled" {
+}
+
+func TestTmuxClipboardTargetRejectsDisabledForwardingLikeRust(t *testing.T) {
+	_, err := TmuxClipboardTarget(
+		func() (string, error) { return "off\n", nil },
+		func() (string, error) {
+			t.Fatal("clients must not be queried when forwarding is disabled")
+			return "", nil
+		},
+		func(string) (string, error) {
+			t.Fatal("capabilities must not be queried when forwarding is disabled")
+			return "", nil
+		},
+	)
+	if err == nil || err.Error() != "tmux clipboard forwarding is disabled" {
 		t.Fatalf("disabled err = %v", err)
 	}
-	if err := TmuxClipboardCopyReady("external\n", "193: Ms: [missing]\n"); err == nil || err.Error() != "tmux clipboard forwarding is unavailable: missing Ms capability" {
-		t.Fatalf("missing Ms err = %v", err)
+}
+
+func TestTmuxClipboardTargetRequiresNonemptyMsCapabilityLikeRust(t *testing.T) {
+	for _, info := range []string{"", "193: Ms: [missing]\n", "193: Ms: (string) \n"} {
+		_, err := TmuxClipboardTarget(
+			func() (string, error) { return "external\n", nil },
+			func() (string, error) { return "42 /dev/pts/7\n", nil },
+			func(client string) (string, error) {
+				if client != "/dev/pts/7" {
+					t.Fatalf("capability probe client = %q", client)
+				}
+				return info, nil
+			},
+		)
+		if err == nil || err.Error() != "tmux clipboard forwarding is unavailable: missing Ms capability" {
+			t.Fatalf("info %q err = %v", info, err)
+		}
+	}
+}
+
+func TestTmuxClipboardTargetRejectsNoAttachedClientLikeRust(t *testing.T) {
+	_, err := TmuxClipboardTarget(
+		func() (string, error) { return "external\n", nil },
+		func() (string, error) { return "\n", nil },
+		func(string) (string, error) { t.Fatal("capabilities require an attached client"); return "", nil },
+	)
+	if err == nil || err.Error() != "tmux clipboard forwarding is unavailable: no attached client" {
+		t.Fatalf("no client err = %v", err)
+	}
+}
+
+// Rust #45457 tmux.rs::copy: every probe and the buffer load target the same
+// client, and the text travels over stdin.
+func TestTmuxClipboardCopyTargetsMostActiveClientAndSendsStdinLikeRust(t *testing.T) {
+	var calls [][]string
+	payload := ""
+	run := func(args []string, stdin *string) (string, error) {
+		calls = append(calls, args)
+		switch args[0] {
+		case "show-options":
+			return "external\n", nil
+		case "display-message":
+			return " $3 \n", nil
+		case "list-clients":
+			return "42 /dev/pts/7\n1 /dev/pts/8\n", nil
+		case "show-messages":
+			return "193: Ms: (string) \\033]52;%p1%s;%p2%s\\a\n", nil
+		case "load-buffer":
+			if stdin == nil {
+				t.Fatal("load-buffer requires a stdin payload")
+			}
+			payload = *stdin
+			return "", nil
+		}
+		return "", ClipboardError("unexpected tmux command")
+	}
+	if err := tmuxClipboardCopyWith("hello", "%1", true, run); err != nil {
+		t.Fatalf("tmux copy err = %v", err)
+	}
+	if payload != "hello" {
+		t.Fatalf("stdin payload = %q", payload)
+	}
+	want := [][]string{
+		{"show-options", "-gv", "set-clipboard"},
+		{"display-message", "-p", "-t", "%1", "#{session_id}"},
+		{"list-clients", "-t", "$3", "-F", "#{client_activity} #{client_name}"},
+		{"show-messages", "-T", "-t", "/dev/pts/7"},
+		{"load-buffer", "-w", "-t", "/dev/pts/7", "-"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("tmux calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestTmuxClipboardCopyRequiresCurrentPaneLikeRust(t *testing.T) {
+	err := tmuxClipboardCopyWith("hello", "", false, func([]string, *string) (string, error) {
+		t.Fatal("tmux must not run without a current pane")
+		return "", nil
+	})
+	if err == nil || err.Error() != "tmux clipboard forwarding is unavailable: no current pane" {
+		t.Fatalf("no pane err = %v", err)
+	}
+}
+
+// Rust #45457 empty_copy_reports_failure_without_touching_clipboards.
+func TestClipboardCopyRejectsEmptySelectionWithoutTouchingClipboardsLikeRust(t *testing.T) {
+	_, err := CopyToClipboardWith(
+		"",
+		ClipboardEnvironment{TmuxSession: true, SSHSession: true, WSLSession: true},
+		func(string) error { t.Fatal("empty input must not reach tmux"); return nil },
+		func(string) error { t.Fatal("empty input must not reach OSC 52"); return nil },
+		func(string) (*ClipboardLease, error) {
+			t.Fatal("empty input must not reach the native clipboard")
+			return nil, nil
+		},
+		func(string) error { t.Fatal("empty input must not reach PowerShell"); return nil },
+	)
+	if err == nil || err.Error() != "nothing to copy: the selected content is empty" {
+		t.Fatalf("empty copy err = %v", err)
+	}
+}
+
+// Rust #45457 oversized_tmux_copy_preserves_native_copy: the terminal payload
+// limit applies to tmux copies but never discards a successful native copy.
+func TestClipboardCopyWithOversizedTmuxPayloadMatchesRust(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int
+		want []string
+	}{
+		{name: "at limit", size: OSC52MaxRawBytes, want: []string{"native", "tmux"}},
+		{name: "over limit", size: OSC52MaxRawBytes + 1, want: []string{"native", "osc52"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := strings.Repeat("x", tc.size)
+			var order []string
+			lease, err := CopyToClipboardWith(
+				text,
+				ClipboardEnvironment{TmuxSession: true},
+				func(string) error { order = append(order, "tmux"); return nil },
+				func(string) error {
+					order = append(order, "osc52")
+					return ClipboardError("payload too large")
+				},
+				func(string) (*ClipboardLease, error) {
+					order = append(order, "native")
+					return &ClipboardLease{}, nil
+				},
+				func(string) error { t.Fatal("PowerShell fallback should not be needed"); return nil },
+			)
+			if err != nil || lease == nil {
+				t.Fatalf("lease = %#v err = %v", lease, err)
+			}
+			if !reflect.DeepEqual(order, tc.want) {
+				t.Fatalf("call order = %v, want %v", order, tc.want)
+			}
+		})
+	}
+}
+
+// Rust #45457 copy_uses_osc52_when_tmux_fails_even_if_native_copy_succeeds: a
+// failed tmux send still falls back to OSC 52 while the native lease survives.
+func TestClipboardCopyWithTmuxFailingFallsBackToOSC52LikeRust(t *testing.T) {
+	var order []string
+	lease, err := CopyToClipboardWith(
+		"hello",
+		ClipboardEnvironment{TmuxSession: true},
+		func(string) error { order = append(order, "tmux"); return ClipboardError("tmux unavailable") },
+		func(string) error { order = append(order, "osc52"); return nil },
+		func(string) (*ClipboardLease, error) { order = append(order, "native"); return &ClipboardLease{}, nil },
+		func(string) error { t.Fatal("native copy succeeded"); return nil },
+	)
+	if err != nil || lease == nil {
+		t.Fatalf("lease = %#v err = %v", lease, err)
+	}
+	want := []string{"native", "tmux", "osc52"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("call order = %v, want %v", order, want)
+	}
+}
+
+// Rust #45457: the terminal payload limit error is reported with the tmux
+// prefix and the OSC 52 fallback failure.
+func TestClipboardCopyWithOversizedTmuxPayloadReportsBothBackends(t *testing.T) {
+	text := strings.Repeat("x", OSC52MaxRawBytes+1)
+	_, err := CopyToClipboardWith(
+		text,
+		ClipboardEnvironment{TmuxSession: true},
+		func(string) error { t.Fatal("oversized payloads must not reach tmux"); return nil },
+		func(string) error { return ClipboardError("OSC 52 payload too large") },
+		func(string) (*ClipboardLease, error) { return nil, ClipboardError("native unavailable") },
+		func(string) error { t.Fatal("PowerShell fallback should not be needed"); return nil },
+	)
+	want := "native clipboard: native unavailable; terminal clipboard: tmux clipboard: tmux clipboard payload too large (100001 bytes; max 100000); OSC 52 fallback: OSC 52 payload too large"
+	if err == nil || err.Error() != want {
+		t.Fatalf("oversized tmux err = %v", err)
 	}
 }
 

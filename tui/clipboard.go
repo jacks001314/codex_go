@@ -83,6 +83,10 @@ func CopyToClipboardWith(
 	nativeCopy NativeClipboardCopyFunc,
 	wslCopy ClipboardCopyFunc,
 ) (*ClipboardLease, error) {
+	// Rust #45457: an empty selection fails before any clipboard is touched.
+	if text == "" {
+		return nil, ClipboardError("nothing to copy: the selected content is empty")
+	}
 	if tmuxCopy == nil {
 		tmuxCopy = func(string) error { return ClipboardError("tmux clipboard unavailable") }
 	}
@@ -137,10 +141,21 @@ func CopyToClipboardWith(
 	return nil, ClipboardError(fmt.Sprintf("%v; terminal clipboard: %v", nativeErr, terminalErr))
 }
 
-// WriteTerminalClipboard sends text through OSC 52 to the attached terminal.
-// Unix prefers the controlling TTY; other platforms and unavailable TTYs use
-// stdout. The tmux flag wraps the sequence for tmux passthrough.
+// WriteTerminalClipboard sends text to the attached terminal's clipboard.
+//
+// In a tmux session it forwards through tmux's own clipboard integration so
+// clients attached after Codex started receive the copy (Rust #45457); the
+// caller falls back to OSC 52 when that fails. Otherwise it writes an OSC 52
+// sequence, wrapped for tmux passthrough when TMUX is set, as Rust's
+// osc52_copy does.
 func WriteTerminalClipboard(text string, tmux bool) error {
+	if tmux {
+		return TmuxClipboardCopy(text)
+	}
+	return writeOSC52ToTerminal(text, os.Getenv("TMUX") != "")
+}
+
+func writeOSC52ToTerminal(text string, tmux bool) error {
 	sequence, err := OSC52Sequence(text, tmux)
 	if err != nil {
 		return err
@@ -162,7 +177,12 @@ func TerminalClipboardCopyWith(text string, tmuxSession bool, tmuxCopy Clipboard
 
 func terminalClipboardCopyWith(text string, tmuxSession bool, tmuxCopy ClipboardCopyFunc, osc52Copy ClipboardCopyFunc) error {
 	if tmuxSession {
-		if err := tmuxCopy(text); err == nil {
+		// Rust #45457: the terminal payload limit applies to tmux copies too.
+		err := tmuxPayloadTooLarge(text)
+		if err == nil {
+			err = tmuxCopy(text)
+		}
+		if err == nil {
 			return nil
 		} else if oscErr := osc52Copy(text); oscErr != nil {
 			return ClipboardError(fmt.Sprintf("tmux clipboard: %v; OSC 52 fallback: %v", err, oscErr))
@@ -172,14 +192,9 @@ func terminalClipboardCopyWith(text string, tmuxSession bool, tmuxCopy Clipboard
 	return osc52Copy(text)
 }
 
-func TmuxClipboardCopyReady(setClipboardOutput string, tmuxInfoOutput string) error {
-	if strings.TrimSpace(setClipboardOutput) == "off" {
-		return ClipboardError("tmux clipboard forwarding is disabled")
-	}
-	for _, line := range strings.Split(tmuxInfoOutput, "\n") {
-		if strings.Contains(line, "Ms: [missing]") {
-			return ClipboardError("tmux clipboard forwarding is unavailable: missing Ms capability")
-		}
+func tmuxPayloadTooLarge(text string) error {
+	if len(text) > OSC52MaxRawBytes {
+		return ClipboardError(fmt.Sprintf("tmux clipboard payload too large (%d bytes; max %d)", len(text), OSC52MaxRawBytes))
 	}
 	return nil
 }
