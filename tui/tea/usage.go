@@ -35,7 +35,9 @@ func (m *Model) applyUsageCommand(args string) bubbletea.Cmd {
 			m.notice = "Usage: /usage [daily|weekly|cumulative|plan]"
 			return nil
 		}
-		return m.openTokenActivity(view)
+		// Explicit modes open the Summary tab with the requested chart
+		// (Rust #45769).
+		return m.openAnalyticsSummary(&view)
 	}
 	view := chatwidget.NewUsageMenuView(chatwidget.UsageMenuState{
 		HasChatGPTAccount:                m.hasChatGPTAccount,

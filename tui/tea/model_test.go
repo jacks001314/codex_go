@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 	"codex_go/protocol"
 	"codex_go/review"
 	codextui "codex_go/tui"
+	"codex_go/tui/analytics"
 	bottompane "codex_go/tui/bottom_pane"
 	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
@@ -7337,7 +7339,7 @@ func TestModelGoalWithoutThreadStartsSession(t *testing.T) {
 	}
 }
 
-func TestModelUsageCommandOpensMenuAndShowsTokenActivity(t *testing.T) {
+func TestModelUsageCommandOpensMenuAndShowsAnalytics(t *testing.T) {
 	two := int64(2)
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{
@@ -7378,16 +7380,33 @@ func TestModelUsageCommandDirectViewAndInvalidView(t *testing.T) {
 		t.Fatalf("invalid usage view missing notice:\n%s", model.View())
 	}
 
-	typeText(t, model, "/usage weekly")
-	model.Update(key(bubbletea.KeyEnter))
-	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
-		t.Fatalf("history count = %d, want 1; messages=%#v", got, state.Messages)
-	}
-	if raw := state.Messages[0].RawText; !strings.Contains(raw, "/usage weekly") || !strings.Contains(raw, "Token activity unavailable") {
-		t.Fatalf("usage history = %q", raw)
+	// Rust #45769 routes explicit views into the Summary tab instead of a
+	// standalone token-activity card.
+	for index, args := range []string{"daily", "weekly", "cumulative"} {
+		state := codextui.NewState(nil)
+		model := NewModel(state, Options{
+			Width:             80,
+			Height:            24,
+			HasChatGPTAccount: true,
+			CodexHome:         t.TempDir(),
+		})
+		typeText(t, model, "/usage "+args)
+		model.Update(key(bubbletea.KeyEnter))
+		dashboard := model.analyticsDashboard
+		if dashboard == nil || !dashboard.active {
+			t.Fatalf("/usage %s did not open analytics; notice=%q", args, model.notice)
+		}
+		if dashboard.section != analytics.AnalyticsSectionSummary || !dashboard.zoomed {
+			t.Fatalf("/usage %s section = %v zoomed = %v", args, dashboard.section, dashboard.zoomed)
+		}
+		if got := dashboard.sections[analytics.AnalyticsSectionSummary].Group; got != index {
+			t.Fatalf("/usage %s summary view = %d, want %d", args, got, index)
+		}
+		if got := countRole(state.Messages, codextui.RoleHistory); got != 0 {
+			t.Fatalf("/usage %s history count = %d, want none", args, got)
+		}
 	}
 }
-
 func TestModelUsageCommandRequiresChatGPTLogin(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
@@ -7402,43 +7421,31 @@ func TestModelUsageCommandRequiresChatGPTLogin(t *testing.T) {
 	}
 }
 
-func TestModelUsageCommandReadsTokenActivity(t *testing.T) {
-	state := codextui.NewState(nil)
-	lifetime := int64(12345)
-	model := NewModel(state, Options{
-		Width:             80,
-		Height:            24,
-		HasChatGPTAccount: true,
-		OnReadTokenActivity: func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {
-			if view != chatwidget.TokenActivityWeekly {
-				t.Fatalf("read token activity view = %q, want weekly", view)
-			}
-			return chatwidget.TokenActivityResponse{
-				Summary: chatwidget.TokenActivitySummary{LifetimeTokens: &lifetime},
-				DailyUsageBuckets: &[]chatwidget.TokenActivityDailyBucket{
-					{StartDate: fixedTeaTime().Format("2006-01-02"), Tokens: 9},
-				},
-			}, nil
-		},
-	})
+func TestModelUsageWeeklyOpensSummaryWeeklyView(t *testing.T) {
+	backend := startSummaryAnalyticsBackend(t, "account-a", "plus", analyticsSummaryTestProfile, http.StatusOK)
+	model := newAnalyticsTestModel(t, "plus", backend)
 
 	typeText(t, model, "/usage weekly")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
-	if cmd == nil {
-		t.Fatal("usage command did not return token activity cmd")
+	model.Update(key(bubbletea.KeyEnter))
+
+	dashboard := model.analyticsDashboard
+	if dashboard == nil || !dashboard.active {
+		t.Fatalf("/usage weekly did not open analytics; notice=%q", model.notice)
 	}
-	model.Update(cmd())
-	if got := countRole(state.Messages, codextui.RoleHistory); got != 2 {
-		t.Fatalf("history count = %d, want loading and loaded cards; messages=%#v", got, state.Messages)
+	if dashboard.section != analytics.AnalyticsSectionSummary {
+		t.Fatalf("section = %v, want summary", dashboard.section)
 	}
-	loaded := state.Messages[1].RawText
-	for _, want := range []string{"Token activity", "Lifetime 12.3K", "Each column = 1 week", "WEEKLY"} {
-		if !strings.Contains(loaded, want) {
-			t.Fatalf("loaded usage history missing %q:\n%s", want, loaded)
-		}
+	if !dashboard.zoomed || dashboard.scrollOffset != 0 || dashboard.groupPicker != nil {
+		t.Fatalf("summary state = zoomed:%v scroll:%d picker:%v", dashboard.zoomed, dashboard.scrollOffset, dashboard.groupPicker)
+	}
+	if got := dashboard.sections[analytics.AnalyticsSectionSummary].Group; got != 1 {
+		t.Fatalf("summary view = %d, want 1 (weekly)", got)
+	}
+	waitForAnalyticsLoads(t, model)
+	if view := stripAnalyticsTestANSI(model.View()); !strings.Contains(view, "Daily  [Weekly]  Cumulative") {
+		t.Fatalf("summary did not select Weekly:\n%s", view)
 	}
 }
-
 func TestModelUsageMenuResetStates(t *testing.T) {
 	state := codextui.NewState(nil)
 	zero := int64(0)
@@ -7455,9 +7462,10 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 	if !strings.Contains(view, "Redeem reset") || !strings.Contains(view, "None available.") {
 		t.Fatalf("usage menu disabled reset missing:\n%s", view)
 	}
+	// Rust #45769 makes the analytics row first and the reset row second, so
+	// a disabled reset keeps the selection on the analytics row.
 	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
-	if !strings.Contains(model.View(), codextui.NumberedSelectionPrefix(0, true)+"Show usage") {
+	if !strings.Contains(model.View(), codextui.NumberedSelectionPrefix(0, true)+"View analytics") {
 		t.Fatalf("disabled reset should be skipped:\n%s", model.View())
 	}
 
@@ -7470,7 +7478,6 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 	})
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyEnter))
 	view = model.View()
@@ -7489,7 +7496,6 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 	})
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyEnter))
 	if view = model.View(); !strings.Contains(view, "Reset your current monthly usage limit.") {
@@ -7521,7 +7527,6 @@ func TestModelUsageRateLimitResetCallbacks(t *testing.T) {
 
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyDown))
 	_, cmd := model.Update(key(bubbletea.KeyEnter))
 	if cmd == nil {

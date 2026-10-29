@@ -92,7 +92,11 @@ func AnalyticsHistoryLines(
 		if section == AnalyticsSectionActivity {
 			reported = "reported "
 		}
-		lines = append(lines, formatAmount(total)+" "+reported+unit)
+		formatted := formatAmount(total)
+		if math.Abs(total) >= 1000 {
+			formatted = analyticsCompactAmount(total)
+		}
+		lines = append(lines, formatted+" "+reported+unit)
 	}
 	if section == AnalyticsSectionUsage && !opts.Business && opts.Zoomed {
 		lines = append(lines, "Approximate · may be delayed up to 6 hours")

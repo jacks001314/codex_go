@@ -48,7 +48,7 @@ func TestUsageMenuNarrowHidesDescriptionsLikeRust(t *testing.T) {
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	if !strings.Contains(view, "Show usage") || !strings.Contains(view, "Redeem reset") {
+	if !strings.Contains(view, "View analytics") || !strings.Contains(view, "Redeem reset") {
 		t.Fatalf("narrow usage menu missing rows:\n%s", view)
 	}
 	if strings.Contains(view, "Usage history.") || strings.Contains(view, "2 available.") {
@@ -68,9 +68,8 @@ func TestRateLimitResetConfirmationUsesConfirmHintLikeRust(t *testing.T) {
 	})
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	// Rust #45764 places "Explore analytics" between token activity and the
-	// reset entry.
+	// Rust #45769 makes "View analytics" the first entry, so one row down
+	// reaches "Redeem reset".
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyEnter))
 	if model.modal == nil {

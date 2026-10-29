@@ -441,3 +441,35 @@ func TestAnalyticsHistoryLinesMessageStatesLikeRust(t *testing.T) {
 		t.Fatalf("empty history lines = %v", lines)
 	}
 }
+
+// TestAnalyticsHistoryLinesCompactLargeTotalsLikeRust mirrors Rust #45769's
+// chart.rs formatted_total rule: totals at or above 1000 switch to the compact
+// form while smaller totals keep the plain amount.
+func TestAnalyticsHistoryLinesCompactLargeTotalsLikeRust(t *testing.T) {
+	end := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+	state := DefaultAnalyticsSectionState()
+	opts := AnalyticsHistoryOptions{Width: 44, ChartHeight: 4, RangeIndex: 0, EndDate: end, Zoomed: true}
+	for _, test := range []struct {
+		total float64
+		unit  AccountAnalyticsUnit
+		want  string
+	}{
+		{total: 1_500_000, unit: AccountAnalyticsUnitTokens, want: "1.5M tokens"},
+		{total: 999, unit: AccountAnalyticsUnitTokens, want: "999 tokens"},
+		{total: 1_000, unit: AccountAnalyticsUnitCredits, want: "1K credits"},
+		{total: 12_500, unit: AccountAnalyticsUnitCredits, want: "12.5K credits"},
+	} {
+		history := &AccountAnalyticsHistory{
+			Unit: test.unit,
+			Data: []AccountAnalyticsDay{{
+				Date:   end,
+				Total:  test.total,
+				Values: []AccountAnalyticsValue{{Key: "a", Label: "a", Value: test.total}},
+			}},
+		}
+		lines, _ := AnalyticsHistoryLines(AnalyticsSectionUsage, state, history, opts)
+		if len(lines) == 0 || lines[0] != test.want {
+			t.Fatalf("total %v headline = %q, want %q", test.total, lines, test.want)
+		}
+	}
+}

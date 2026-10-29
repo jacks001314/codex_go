@@ -138,9 +138,11 @@ func NewUsageMenuView(state UsageMenuState) SelectionView {
 
 	items := []SelectionItem{
 		{
-			Name:            "Show usage",
-			Description:     "Usage history.",
-			Action:          UsageMenuActionShowTokenActivity,
+			// Rust #45769 replaces the separate token-activity view with the
+			// account analytics dashboard.
+			Name:            "View analytics",
+			Description:     "Browse account usage and activity.",
+			Action:          UsageMenuActionOpenAnalytics,
 			DismissOnSelect: true,
 		},
 		{
@@ -151,19 +153,6 @@ func NewUsageMenuView(state UsageMenuState) SelectionView {
 			DismissOnSelect: true,
 		},
 	}
-	// Rust #45764: ChatGPT accounts get the full-screen analytics dashboard
-	// between the token activity and reset entries.
-	if state.HasChatGPTAccount {
-		items = append(items, SelectionItem{})
-		copy(items[2:], items[1:])
-		items[1] = SelectionItem{
-			Name:            "Explore analytics",
-			Description:     "Browse account usage and activity.",
-			Action:          UsageMenuActionOpenAnalytics,
-			DismissOnSelect: true,
-		}
-	}
-
 	return SelectionView{
 		ViewID:   UsageMenuViewID,
 		Title:    "Usage",

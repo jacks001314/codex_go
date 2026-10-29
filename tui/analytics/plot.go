@@ -373,7 +373,8 @@ type analyticsPlotRenderer struct {
 func analyticsPlotAmount(value float64, unit AccountAnalyticsUnit) string {
 	switch unit {
 	case AccountAnalyticsUnitCount, AccountAnalyticsUnitTokens:
-		return analyticsAmount(math.Round(value))
+		// Rust #45769 compacts large chart values to one decimal.
+		return analyticsCompactAmount(math.Round(value))
 	case AccountAnalyticsUnitCredits:
 		return analyticsCreditAmount(value)
 	default:
@@ -381,14 +382,10 @@ func analyticsPlotAmount(value float64, unit AccountAnalyticsUnit) string {
 	}
 }
 
-// analyticsTickLabel formats an axis tick. Credit axes intentionally use the
-// plain amount form while credit callouts use the two-decimal form
-// (Rust analytics/plot.rs tick).
+// analyticsTickLabel formats an axis tick with the shared compact form for
+// every unit (Rust analytics/plot.rs tick, #45769).
 func analyticsTickLabel(value float64, unit AccountAnalyticsUnit) string {
-	if unit == AccountAnalyticsUnitCredits {
-		return analyticsAmount(value)
-	}
-	return analyticsPlotAmount(value, unit)
+	return analyticsCompactAmount(value)
 }
 
 func analyticsMaxInt(left, right int) int {

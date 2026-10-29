@@ -14,6 +14,7 @@ import (
 	"codex_go/chatgptapi"
 	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
+	"codex_go/tui/chatwidget"
 	"codex_go/tui/styles"
 	"codex_go/utils"
 )
@@ -114,6 +115,29 @@ func (m *Model) openAnalyticsDashboard() bubbletea.Cmd {
 	}
 	m.analyticsDashboard.open(factory, modelNames, m.analyticsChats, m.analyticsTaskThreads)
 	return m.analyticsDashboard.nextPollCmd()
+}
+
+// openAnalyticsSummary opens the retained dashboard on the Summary tab with an
+// optional activity view (Rust AppEvent::OpenAnalytics { view }, #45769).
+func (m *Model) openAnalyticsSummary(view *chatwidget.TokenActivityView) bubbletea.Cmd {
+	cmd := m.openAnalyticsDashboard()
+	if m == nil || m.analyticsDashboard == nil {
+		return cmd
+	}
+	dashboard := m.analyticsDashboard
+	dashboard.section = analytics.AnalyticsSectionSummary
+	dashboard.zoomed = true
+	dashboard.scrollOffset = 0
+	dashboard.groupPicker = nil
+	if view != nil {
+		for index, candidate := range analytics.AnalyticsSummaryViews {
+			if candidate == *view {
+				dashboard.sections[analytics.AnalyticsSectionSummary].Group = index
+				break
+			}
+		}
+	}
+	return cmd
 }
 
 // open attaches a live session factory and restarts every report. Navigation

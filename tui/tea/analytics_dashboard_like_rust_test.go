@@ -144,7 +144,7 @@ func openAnalyticsFromUsageMenu(t *testing.T, model *Model) {
 	t.Helper()
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
+	// Rust #45769 makes "View analytics" the first usage-menu entry.
 	model.Update(key(bubbletea.KeyEnter))
 	if model.analyticsDashboard == nil || !model.analyticsDashboard.active {
 		t.Fatalf("analytics dashboard did not open; notice=%q", model.notice)

@@ -198,11 +198,13 @@ func TestAnalyticsPlotHidesOversizedAxesLikeRust(t *testing.T) {
 	for _, width := range []int{8, 30, 35, 44} {
 		chart := AnalyticsPlot(days, day.Values, 0, width, 4, AccountAnalyticsUnitTokens)
 		baseline := plotTestLineTexts(chart)[5]
-		if startsWithAxis := strings.HasPrefix(baseline, "─"); startsWithAxis != (width < 36) {
+		// Rust #45769 compacts the axis labels and still hides the gutter below
+		// the 30-column minimum (plot_tests.rs oversized_axes_are_hidden...).
+		if startsWithAxis := strings.HasPrefix(baseline, "─"); startsWithAxis != (width < 30) {
 			t.Fatalf("width=%d baseline starts with axis = %v", width, startsWithAxis)
 		}
-		if width == 8 && strings.TrimSpace(plotTestLineTexts(chart)[0]) != "" {
-			t.Fatalf("width=8 first row = %q, want empty", plotTestLineTexts(chart)[0])
+		if width == 8 && !strings.Contains(plotTestLineTexts(chart)[0], "100M") {
+			t.Fatalf("width=8 first row = %q, want the compact peak", plotTestLineTexts(chart)[0])
 		}
 	}
 }
