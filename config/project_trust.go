@@ -107,8 +107,17 @@ func (l ProjectTrustLookup) normalize(key string) string {
 // so the selection stays deterministic on Windows. The entry may omit its trust
 // level, which still counts as a match.
 func (l ProjectTrustLookup) ActiveProject(projects map[string]any) (map[string]any, bool) {
+	_, project, ok := l.ActiveProjectKey(projects)
+	return project, ok
+}
+
+// ActiveProjectKey is ActiveProject plus the map key it matched. Rust's TUI
+// trust lookup (codex-rs/tui/src/config_update.rs, #44746) reports the saved key
+// as the folder's trust target, so callers need the spelling the projects table
+// actually stores.
+func (l ProjectTrustLookup) ActiveProjectKey(projects map[string]any) (string, map[string]any, bool) {
 	if len(projects) == 0 {
-		return nil, false
+		return "", nil, false
 	}
 	keys := make([]string, 0, len(projects))
 	for key := range projects {
@@ -117,19 +126,41 @@ func (l ProjectTrustLookup) ActiveProject(projects map[string]any) (map[string]a
 	sort.Strings(keys)
 	for _, wanted := range l.keys {
 		if project, ok := projectEntry(projects[wanted]); ok {
-			return project, true
+			return wanted, project, true
 		}
 		for _, candidate := range keys {
 			if l.normalize(candidate) != wanted {
 				continue
 			}
 			if project, ok := projectEntry(projects[candidate]); ok {
-				return project, true
+				return candidate, project, true
 			}
 			break
 		}
 	}
-	return nil, false
+	return "", nil, false
+}
+
+// CanonicalProjectTrustPath returns the comparison spelling for a project trust
+// key: absolute, cleaned, and ASCII-lowercased on Windows (Rust
+// normalize_for_path_comparison plus normalize_project_trust_lookup_key).
+func CanonicalProjectTrustPath(path string) string {
+	return normalizeProjectTrustLookupKey(canonicalProjectPath(path))
+}
+
+// NormalizedProjectTrustKeys ports Rust's normalized_project_trust_keys
+// (codex-rs/config/src/loader/mod.rs): the canonical spelling first, then the
+// original spelling, both normalized for the host path convention. The original
+// spelling is omitted when it matches the canonical one.
+func NormalizedProjectTrustKeys(path string) []string {
+	return ProjectTrustLookupFromNativePath(strings.TrimSpace(path)).Keys()
+}
+
+func normalizeProjectTrustLookupKey(key string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(key)
+	}
+	return key
 }
 
 // projectEntry accepts a project table; a non-table value is not a project.

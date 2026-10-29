@@ -710,6 +710,14 @@ Closed `#42149` end to end. Explicit upgrades now select Git marketplaces from t
 
 Audited `#42207` and recorded it as not applicable. The upstream change only narrows the retry predicate inside Rust's automatic app-server reconnect loop. Go's TUI has no in-place out-of-process reconnect transition — `#41916` and `#41918` were already closed on that architectural difference: remote turns open a fresh per-turn connection, explicit resume failures return to the session picker, and there is no `finish_reconnect`/unavailable-thread state where this retry could apply. Verification confirmed that a `-32600` `thread ... is closing;` response is classified as a server RPC error, not a transport failure, and never enters the voice-only disconnect path; `app/remote_tui_reconnect_like_rust_test.go` now freezes that classification. Next: `#44746` startup folder trust.
 
-Status after reconciliation: `1967 complete`, `383 not_applicable`,
-`512 audit_pending`, `287 regression_pending`, `0 partial`,
+### Resolve folder trust after the startup destination (Round 778)
+
+- `app/remote_trust.go`: `config/read` now carries the destination cwd, and local connections resolve the folder trust target through project markers, the Git root, and canonical-before-original keys (cwd decision > project root > Git root), honouring a disabled project layer's own target and skipping consent for projectless folders and enabled project layers.
+- `app/remote_trust.go`: a remote cwd inside an explicitly untrusted project returns Rust's `pass the repository root explicitly with --cd` error, and explicitly untrusted folders open restricted without persisting a decision.
+- `app/remote_trust.go`: `checkDirectoryTrust` covers the resolved destination plus a local daemon resume's saved folder, flags the existing-task disclosure, and re-reads the task after consent.
+- `app/remote_tui.go`: consent runs before server settings are read, so a persisted decision is part of the starting configuration; agents overview worktrees use the local host lookup.
+- Tests: `config/project_trust_lookup_keys_test.go`, `app/remote_trust_destination_like_rust_test.go`; `go test ./config`, `go test ./app -run 'ReadRemoteProjectTrust|EnsureRemoteProjectTrust|CheckDirectoryTrust'`, and `go test ./parity` pass.
+
+Status after reconciliation: `1968 complete`, `383 not_applicable`,
+`511 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

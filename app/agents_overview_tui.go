@@ -73,7 +73,8 @@ func interactiveRemoteAgentsOverviewNewWorktree(ctx context.Context, endpoint *a
 		}
 		defer client.close()
 		// Rust requires a trusted source project before creating its worktree.
-		if status, statusErr := remoteProjectTrustStatus(ctx, client, cwd, cwd); statusErr == nil && status == TrustStatusUntrusted {
+		// Managed worktrees are local-only, so the lookup uses the local host.
+		if status, statusErr := remoteProjectTrustStatus(ctx, client, cwd, remoteTrustHostLocal); statusErr == nil && status == TrustStatusUntrusted {
 			return codextea.AgentThreadSwitchResponse{}, errors.New("the source project is not trusted")
 		}
 		manager := worktree.NewWorktreeManager(settings)

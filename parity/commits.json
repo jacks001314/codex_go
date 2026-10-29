@@ -11931,9 +11931,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: check_directory_trust, normalized_project_trust_keys"
+    "Round 778: app/remote_trust.go now resolves folder trust the way Rust read_remote_project_trust does: config/read carries the destination cwd with include_layers, local connections resolve the trust target through configured project markers (config.FindProjectRoot), the Git root (config.GitRootForTrust) and canonical-before-original keys (config.NormalizedProjectTrustKeys), so a cwd decision beats the project root, which beats the Git root; a disabled project layer names its own target; a projectless folder or an enabled project layer needs no consent; a remote cwd inside an explicitly untrusted project fails with Rust's 'pass the repository root explicitly with --cd' message. checkDirectoryTrust mirrors onboarding/directory_trust.rs: it checks the resolved destination plus, for a local daemon resume, the task's saved folder, opens an explicitly untrusted folder restricted without persisting trust, reports the existing-task disclosure flag, and re-reads the task after consent so a folder changed during the prompt is checked. The remote TUI runs consent before reading server settings so a persisted decision is part of the starting configuration, and agents overview worktrees use the local host lookup. Go has no TUI onboarding consent modal, so the screen itself is not rendered (the consent-before-task wiring stays tracked by #44755). Tests: config/project_trust_lookup_keys_test.go (NormalizedProjectTrustKeys, FindProjectRoot, GitRootForTrust, ActiveProjectKey) and app/remote_trust_destination_like_rust_test.go (config/read cwd, git-root and custom-marker targets, cwd precedence, remote explicit-untrusted error, restricted no-persist, saved+selected cwd checks, post-consent re-read, declined exit). Verify with: go test ./config -run 'NormalizedProjectTrustKeys|FindProjectRoot|GitRootForTrust|ActiveProjectKey' -count=1; go test ./app -run 'ReadRemoteProjectTrust|EnsureRemoteProjectTrust|CheckDirectoryTrust' -count=1."
    ]
   },
   {

@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // Rust #49160 (Support projectless TUI sessions with workspace defaults)
 // promoted `discover_project_root` in codex-rs/config/src/loader/mod.rs:1505 to
 // `pub` so the TUI can ask whether a folder has a project root *without* the cwd
@@ -52,4 +54,31 @@ func DiscoveredProjectlessFolder(cwd string, markers []string) bool {
 	}
 	_, found := DiscoverProjectRoot(cwd, DefaultProjectRootMarkers())
 	return !found
+}
+
+// FindProjectRoot ports Rust's `find_project_root`
+// (codex-rs/config/src/loader/mod.rs): the nearest ancestor carrying one of the
+// markers, or cwd when none does. An empty marker list disables discovery before
+// the walk, so the cwd fallback is the whole result.
+func FindProjectRoot(cwd string, markers []string) string {
+	if root, found := DiscoverProjectRoot(cwd, markers); found {
+		return root
+	}
+	return strings.TrimSpace(cwd)
+}
+
+// GitRootForTrust ports Rust's `resolve_root_git_project_for_trust`
+// (codex-rs/git-utils/src/trust.rs): the nearest Git checkout root, resolved to
+// the main repository when the checkout is a linked worktree. The TUI trust
+// lookup (#44746) uses it to prefer a saved repository decision over a
+// project-marker root.
+func GitRootForTrust(cwd string) (string, bool) {
+	root := nearestGitRoot(cwd)
+	if root == "" {
+		return "", false
+	}
+	if checkout := rootCheckoutForLinkedWorktree(root); checkout != "" {
+		return checkout, true
+	}
+	return root, true
 }

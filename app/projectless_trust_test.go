@@ -214,7 +214,8 @@ func TestEnsureRemoteProjectTrustPromptsOutsideProjectlessFoldersLikeRust(t *tes
 	}
 	_ = server
 
-	// A project config layer keeps the prompt.
+	// An enabled project config layer means project configuration already
+	// loaded, so Rust #44746 needs no folder consent.
 	layer := config.Layer{Name: config.LayerSource{Type: config.LayerSourceProject, DotCodexFolder: filepath.Join(cwd, ".gcode")}}
 	client, _ = newTrustDriverClient(t, map[string]any{"projects": nil}, []config.Layer{layer})
 	prompted = false
@@ -230,8 +231,33 @@ func TestEnsureRemoteProjectTrustPromptsOutsideProjectlessFoldersLikeRust(t *tes
 	if err != nil {
 		t.Fatalf("ensureRemoteProjectTrust() error = %v", err)
 	}
+	if prompted || status != TrustStatusTrusted {
+		t.Fatalf("enabled project layer = %v/%q, want no prompt + trusted", prompted, status)
+	}
+
+	// A disabled project layer (a foreign server reporting the blocked folder)
+	// still needs consent.
+	disabledReason := "the folder is not trusted"
+	disabledLayer := config.Layer{
+		Name:           config.LayerSource{Type: config.LayerSourceProject, DotCodexFolder: filepath.Join(cwd, ".gcode")},
+		DisabledReason: &disabledReason,
+	}
+	client, _ = newTrustDriverClient(t, map[string]any{"projects": nil}, []config.Layer{disabledLayer})
+	prompted = false
+	status, err = ensureRemoteProjectTrust(context.Background(), client, remoteTrustRequest{
+		CWD:         cwd,
+		Interactive: true,
+		Local:       true,
+		Confirm: func(string, string) (bool, error) {
+			prompted = true
+			return false, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ensureRemoteProjectTrust() error = %v", err)
+	}
 	if !prompted || status != TrustStatusDeclined {
-		t.Fatalf("project-layer prompt = %v/%q, want prompt + declined", prompted, status)
+		t.Fatalf("disabled project layer = %v/%q, want prompt + declined", prompted, status)
 	}
 }
 

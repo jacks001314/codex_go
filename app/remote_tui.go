@@ -406,6 +406,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	}
 	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, endpoint, interactiveRemoteEndpointIsExplicitRemote(root)), appServerMode)
 	defer tuiTelemetry.close()
+	// Rust #39082/#44746: query remote project config layers before starting a
+	// thread and persist accepted trust through config/batchWrite on the remote
+	// server. Consent runs before server settings are read so a newly saved
+	// decision is part of the configuration this session starts with.
+	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
 	if remoteSettings, err := interactiveRemoteLoadSettings(ctx, endpoint); err == nil {
 		settings = remoteSettings
 	}
@@ -425,9 +430,6 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// is the local daemon; every picker target it produces carries this
 	// identity so selections cannot leak into the embedded backend.
 	backendID := codextui.NewBackendID()
-	// Rust #39082: query remote project config layers before starting a thread
-	// and persist accepted trust through config/batchWrite on the remote server.
-	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
 	// A local-daemon TUI hosts its codex_tui task tools as a local MCP server
