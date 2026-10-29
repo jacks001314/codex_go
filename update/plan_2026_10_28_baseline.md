@@ -1070,6 +1070,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - The local behavior Go does own — rejecting helper-owned provisioning for registered Core — is already covered by `sandbox/windowssandbox/bin/setup_main/win/setup_runtime_like_rust_windows_test.go`.
 - Verified with `go test ./sandbox/windowssandbox ./sandbox/windowssandbox/bin/setup_main/win -count=1`.
 
+### Guardian reviewer turn lifecycle ownership (Round 825)
+
+- Rust #45672 consolidates Guardian reviewer lifecycle ownership in three parts: cancellation guards tie reusable reviewers and temporary forks to their lifetimes (a cancelled reusable reviewer is replaced before reuse), `ReviewerTasks` is shared between the pool and `ThreadManager` with tracked cleanup awaited on pool shutdown, and denial cleanup moves out of core task handling into Guardian's turn start/stop/abort hooks through `install_reviewer`.
+- Go implements the third part: `RuntimeRouter.beginGuardianTurn`/`endGuardianTurn` wrap the existing blocking-sample hooks and clear the model reviewer's denial window for the turn (`state.CircuitBreaker.ClearTurn`). All three turn-start call sites (regular turns, standalone shell commands, manual compaction) and the single terminal path (completed and interrupted both flow through `notifyTurnCompletedOnce`) use the combined hooks, so a finished, interrupted or restarted turn cannot inherit stale denials.
+- The pool half has no Go counterpart by design: Go owns one in-process model reviewer and reuses only the last successfully committed response cursor (`previous`/`seeded` in `guardianSessionRunner`), so a cancelled or dropped review never becomes the reuse base and there is no `ReviewerPool`, `ReviewerTasks`, fork snapshot or shutdown protocol to guard.
+- Regression: `appserver/guardian_denial_lifecycle_like_rust_test.go` seeds `MaxConsecutiveDenialsPerTurn-1` denials, asserts a control turn reaches the limit, then shows turn start, completion and abort each clear the window, and uses a stub reviewer to prove the hook is a no-op when no accounting exists.
+- Verified with `go test ./appserver -run 'Guardian|GuardianReview|GuardianTurn' -count=1`, `go test ./appserver -count=1` (only the two known unrelated RuntimeRouter analytics tests fail), and `go build ./...`.
+
 Status after reconciliation: `2005 complete`, `393 not_applicable`,
-`489 audit_pending`, `261 regression_pending`, `1 partial`,
+`488 audit_pending`, `261 regression_pending`, `2 partial`,
 `6 blocked_precondition`.

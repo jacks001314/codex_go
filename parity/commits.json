@@ -13599,9 +13599,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #45672 consolidates Guardian reviewer lifecycle ownership: cancellation guards tie reusable reviewers and temporary forks to their lifetimes (a cancelled reusable reviewer is replaced before reuse), ReviewerTasks is shared between the pool and ThreadManager with tracked cleanup awaited on pool shutdown, and denial cleanup moves out of core task handling into Guardian's turn start/stop/abort hooks through install_reviewer. Go implements the third part: RuntimeRouter.beginGuardianTurn/endGuardianTurn wrap the existing blocking-sample hooks and clear the model reviewer's denial window for the turn (state.CircuitBreaker.ClearTurn), so a completed, interrupted or restarted turn cannot inherit stale denials; all three turn-start call sites (regular turns in turn_runtime.go, standalone shell commands in thread_shell_command.go, and manual compaction in runtime_router.go) and the single terminal path (completed and interrupted both flow through notifyTurnCompletedOnce) use the combined hooks. The pool half has no Go counterpart by design: Go owns one in-process model reviewer and reuses only the last successfully committed response cursor (previous/seeded in guardianSessionRunner), so a cancelled or dropped review never becomes the reuse base and there is no ReviewerPool, ReviewerTasks, fork snapshot or shutdown protocol to guard. Regression: appserver/guardian_denial_lifecycle_like_rust_test.go seeds MaxConsecutiveDenialsPerTurn-1 denials, asserts a control turn reaches the limit, then shows turn start, completion and abort each clear the window, with a stub reviewer proving the hook is a no-op when no accounting exists. Verified with go test ./appserver -run 'Guardian|GuardianReview|GuardianTurn' -count=1, go test ./appserver -count=1 (only the two known unrelated RuntimeRouter analytics tests fail), and go build ./... ."
    ]
   },
   {
