@@ -1674,9 +1674,11 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	}
 	// Rust #41360: measure local Codex home storage once at startup (background
 	// so it does not delay process initialization); cancel the scan on shutdown.
+	// Rust #42043 tags every sample with the startup compression feature gate.
 	var codexHomeScanCanceled int32
 	scanCancel := func() bool { return atomic.LoadInt32(&codexHomeScanCanceled) == 1 }
-	go recordCodexHomeMetrics(runtimeMetrics, codexHome, scanCancel)
+	compressionEnabled := codexHomeCompressionEnabled(configService)
+	go recordCodexHomeMetrics(runtimeMetrics, codexHome, compressionEnabled, scanCancel)
 	threadRouter := NewRouter(store)
 	// Rust #47900: LocalThreadStore defaults new threads to paginated history.
 	threadRouter.SetDefaultHistoryMode(ThreadHistoryPaginated)

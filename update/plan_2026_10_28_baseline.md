@@ -690,6 +690,10 @@ Closed five audits by matching existing Go implementations: `#40679` Bedrock onb
 
 Closed three audits. `#41260` is already reflected in `historynotes`: the tool returns the backend result unchanged (the backend enforces the output budget before encryption) while still sending the truncation-policy header, and the test keeps a large encrypted payload intact. `#44622` is implemented end to end: the TUI exposes `/voice settings`, loads supported voices plus the saved preference, persists a new choice through local and remote savers, and the slash description matches upstream. `#44915` is not applicable because codex_go never exposed the deprecated `thread/rollback` method; only `thread/revert` exists.
 
-Status after reconciliation: `1956 complete`, `382 not_applicable`,
-`524 audit_pending`, `287 regression_pending`, `0 partial`,
+### Codex home size metric compression tag (Round 773)
+
+Closed `#42043`: every `codex.app_server.codex_home.size_bytes` sample now carries `compression_enabled`. `appserver/codex_home_metrics.go` gained `codexHomeCompressionEnabled`, which reads the effective app-server config (including `--enable`/`--disable` feature defaults) and reports the `local_thread_store_compression` gate, matching Rust's `config.features.enabled(Feature::LocalThreadStoreCompression)`. `recordCodexHomeMetrics` tags both the `sessions` and `archived_sessions` samples with the startup value (not compression progress), and `appserver/runtime_router.go` resolves it once before spawning the background scan, mirroring Rust capturing the config before `spawn_blocking`. Verified with `go test ./appserver -run CodexHomeMetrics -count=1`; the three pre-existing analytics timing failures (`TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`, `TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust`, `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`) reproduce unchanged in a clean `1ffdc32b` worktree.
+
+Status after reconciliation: `1957 complete`, `382 not_applicable`,
+`523 audit_pending`, `287 regression_pending`, `0 partial`,
 `6 blocked_precondition`.

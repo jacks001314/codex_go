@@ -5376,9 +5376,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #42043 tags every codex.app_server.codex_home.size_bytes sample with compression_enabled taken from the effective startup configuration (config.features.enabled(Feature::LocalThreadStoreCompression)), not from compression completion. appserver/codex_home_metrics.go: codexHomeCompressionEnabled reads the effective config through the app-server ConfigService (so CLI --enable/--disable feature defaults are included) and reports the local_thread_store_compression gate; recordCodexHomeMetrics takes that boolean and adds compression_enabled=<true|false> to both the sessions and archived_sessions samples while keeping the seven Rust bucket boundaries. appserver/runtime_router.go resolves the flag once at router construction, mirroring Rust's config captured before spawning the blocking scan, and passes it into the background goroutine. Tests: go test ./appserver -run CodexHomeMetrics -count=1 (TestCodexHomeMetricsScanLikeRust asserts compression_enabled=false on both samples; TestCodexHomeMetricsCompressionTagTracksStartupFeatureLikeRust asserts the tag flips to true once the feature is enabled in the effective config, keeps the directory tag, and reports disabled for a nil config service)."
    ]
   },
   {

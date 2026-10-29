@@ -3,8 +3,11 @@ package appserver
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"codex_go/config"
+	"codex_go/features"
 	"codex_go/rollout"
 	"codex_go/state"
 )
@@ -97,9 +100,24 @@ func scanCodexHomeSizes(codexHome string, cancel codexHomeScanCancel) (codexHome
 	return sizes, nil
 }
 
+// codexHomeCompressionEnabled reports whether local thread store compression is
+// enabled in the effective startup configuration (Rust #42043). The size metric
+// tag reflects this configuration, not whether compression has completed.
+func codexHomeCompressionEnabled(cfg *config.ConfigService) bool {
+	if cfg == nil {
+		return false
+	}
+	read, err := cfg.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil || read.Config == nil {
+		return false
+	}
+	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "local_thread_store_compression")
+}
+
 // recordCodexHomeMetrics scans codexHome and records the size histogram for the
-// sessions / archived_sessions subdirectories (Rust #43790).
-func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string, cancel codexHomeScanCancel) {
+// sessions / archived_sessions subdirectories (Rust #43790). compressionEnabled
+// is tagged on every sample (Rust #42043).
+func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string, compressionEnabled bool, cancel codexHomeScanCancel) {
 	if metrics == nil {
 		return
 	}
@@ -107,6 +125,7 @@ func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string, cancel
 	if err != nil {
 		return
 	}
+	compression := strconv.FormatBool(compressionEnabled)
 	for _, metric := range []struct {
 		label string
 		bytes int64
@@ -114,6 +133,9 @@ func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string, cancel
 		{rollout.SessionsSubdir, sizes.sessions},
 		{rollout.ArchivedSessionsSubdir, sizes.archivedSessions},
 	} {
-		metrics.HistogramWithBounds(codexHomeSizeBytesMetric, int(metric.bytes), codexHomeSizeBytesBoundaries, map[string]string{"directory": metric.label})
+		metrics.HistogramWithBounds(codexHomeSizeBytesMetric, int(metric.bytes), codexHomeSizeBytesBoundaries, map[string]string{
+			"directory":           metric.label,
+			"compression_enabled": compression,
+		})
 	}
 }

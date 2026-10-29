@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"codex_go/config"
 	"codex_go/rollout"
 	"codex_go/state"
 )
@@ -35,7 +36,7 @@ func TestCodexHomeMetricsScanLikeRust(t *testing.T) {
 	}
 
 	metrics := state.NewTaskMetrics()
-	recordCodexHomeMetrics(metrics, home, nil)
+	recordCodexHomeMetrics(metrics, home, false, nil)
 	records := metrics.Records()
 	if len(records) != 2 {
 		t.Fatalf("records = %#v", records)
@@ -44,6 +45,9 @@ func TestCodexHomeMetricsScanLikeRust(t *testing.T) {
 	for _, record := range records {
 		if record.Name != codexHomeSizeBytesMetric || record.Kind != "histogram" || len(record.Boundaries) != 7 {
 			t.Fatalf("metric = %+v", record)
+		}
+		if got := record.Tags["compression_enabled"]; got != "false" {
+			t.Fatalf("compression_enabled = %q, want false", got)
 		}
 		found[record.Tags["directory"]] = record.Value
 	}
@@ -100,8 +104,47 @@ func TestCodexHomeMetricsCancelAbortsScanLikeRust(t *testing.T) {
 		t.Fatal("cancelled scan returned no error")
 	}
 	metrics := state.NewTaskMetrics()
-	recordCodexHomeMetrics(metrics, home, func() bool { return true })
+	recordCodexHomeMetrics(metrics, home, false, func() bool { return true })
 	if len(metrics.Records()) != 0 {
 		t.Fatalf("cancelled metric records = %#v", metrics.Records())
+	}
+}
+
+// TestCodexHomeMetricsCompressionTagTracksStartupFeatureLikeRust mirrors Rust
+// #42043: every sample carries compression_enabled from the effective startup
+// configuration (not the scan's compression progress).
+func TestCodexHomeMetricsCompressionTagTracksStartupFeatureLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, rollout.SessionsSubdir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, rollout.SessionsSubdir, "s.jsonl"), make([]byte, 12), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.NewConfigService(home)
+	if codexHomeCompressionEnabled(cfg) {
+		t.Fatal("local_thread_store_compression is enabled by default")
+	}
+	cfg.SetFeatureEnablementDefaults(map[string]bool{"local_thread_store_compression": true})
+	if !codexHomeCompressionEnabled(cfg) {
+		t.Fatal("local_thread_store_compression enablement did not reach the effective config")
+	}
+
+	metrics := state.NewTaskMetrics()
+	recordCodexHomeMetrics(metrics, home, codexHomeCompressionEnabled(cfg), nil)
+	records := metrics.Records()
+	if len(records) != 2 {
+		t.Fatalf("records = %#v", records)
+	}
+	for _, record := range records {
+		if got := record.Tags["compression_enabled"]; got != "true" {
+			t.Fatalf("compression_enabled = %q, want true", got)
+		}
+		if record.Tags["directory"] == "" {
+			t.Fatalf("missing directory tag: %+v", record.Tags)
+		}
+	}
+	if got := codexHomeCompressionEnabled(nil); got {
+		t.Fatal("nil config service reported compression enabled")
 	}
 }
