@@ -11,6 +11,40 @@ import (
 	codextea "codex_go/tui/tea"
 )
 
+// Rust #45519: a resume response's collaborationMode becomes part of the
+// thread's settings so the TUI applies the restored mode instead of falling back
+// to Default, while an older server that omits it leaves the field unset.
+func TestRemoteTUIResumeCarriesCollaborationModeLikeRust(t *testing.T) {
+	effort := appserver.ReasoningEffort("high")
+	instructions := "Keep planning"
+	settings := remoteTUISettingsFromResume(&appserver.ThreadResumeResponse{
+		Thread: &appserver.Thread{ID: "thread-plan"},
+		CollaborationMode: &appserver.CollaborationMode{
+			Mode: appserver.ModeKindPlan,
+			Settings: appserver.CollaborationSettings{
+				Model:                 "gpt-5.4",
+				ReasoningEffort:       &effort,
+				DeveloperInstructions: &instructions,
+			},
+		},
+	})
+	if settings == nil || settings.CollaborationMode == nil {
+		t.Fatalf("settings = %#v, want the restored collaboration mode", settings)
+	}
+	if mode, _ := settings.CollaborationMode["mode"].(string); mode != "plan" {
+		t.Fatalf("mode = %#v", settings.CollaborationMode["mode"])
+	}
+	inner, _ := settings.CollaborationMode["settings"].(map[string]any)
+	if inner["model"] != "gpt-5.4" || inner["reasoning_effort"] != "high" || inner["developer_instructions"] != "Keep planning" {
+		t.Fatalf("collaboration settings = %#v", inner)
+	}
+
+	old := remoteTUISettingsFromResume(&appserver.ThreadResumeResponse{Thread: &appserver.Thread{ID: "thread-old"}})
+	if old == nil || old.CollaborationMode != nil {
+		t.Fatalf("older server settings = %#v, want no collaboration mode", old)
+	}
+}
+
 // TestRemoteTUIRoutesThreadSettingsUpdated covers Rust #43330/#43340/#44957: the
 // app-server settings notification applies to the active thread, while another
 // thread's update is forwarded thread-scoped so the agents dashboard can patch

@@ -1986,7 +1986,32 @@ func remoteTUISettingsFromResume(resumed *appserver.ThreadResumeResponse) *appse
 			settings.ActivePermissionProfile = &id
 		}
 	}
+	// Rust #45519: the resume response carries the restored collaboration mode so
+	// a reconnecting client keeps the saved Plan mode for the first prompt. An
+	// older server omits it and the local selection stands.
+	settings.CollaborationMode = remoteTUICollaborationModeSettings(resumed.CollaborationMode)
 	return &settings
+}
+
+// remoteTUICollaborationModeSettings renders a resume response's collaboration
+// mode in the app server settings shape (Rust #45519 keeps the restored mode on
+// the thread session).
+func remoteTUICollaborationModeSettings(mode *appserver.CollaborationMode) map[string]any {
+	if mode == nil {
+		return nil
+	}
+	settings := map[string]any{
+		"model":                  strings.TrimSpace(mode.Settings.Model),
+		"reasoning_effort":       nil,
+		"developer_instructions": nil,
+	}
+	if mode.Settings.ReasoningEffort != nil {
+		settings["reasoning_effort"] = string(*mode.Settings.ReasoningEffort)
+	}
+	if mode.Settings.DeveloperInstructions != nil {
+		settings["developer_instructions"] = *mode.Settings.DeveloperInstructions
+	}
+	return map[string]any{"mode": string(mode.Mode), "settings": settings}
 }
 
 // remoteTUISettingsFromStartedThread maps a freshly started thread's settings

@@ -50,6 +50,21 @@ func (m *Model) applyThreadSettingsUpdated(msg ThreadSettingsUpdatedMsg) bubblet
 // applyThreadSettingsValues applies one settings snapshot to the TUI state
 // (shared by the settings notification and the resume response, Rust
 // #43330/#43340).
+// applyReportedCollaborationMode adopts the server's collaboration mode kind
+// (Rust #45519 restores `session.collaboration_mode` from the resume response
+// and applies it before the first turn of the resumed thread).
+func (m *Model) applyReportedCollaborationMode(mode map[string]any) {
+	if m == nil || m.State == nil {
+		return
+	}
+	switch strings.ToLower(metadataString(mode, "mode")) {
+	case string(chatwidget.CollaborationModeKindPlan):
+		m.State.PlanMode = true
+	case string(chatwidget.CollaborationModeKindDefault):
+		m.State.PlanMode = false
+	}
+}
+
 func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	if m == nil || m.State == nil {
 		return
@@ -78,6 +93,12 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	}
 	if provider := strings.TrimSpace(settings.ModelProvider); provider != "" {
 		m.State.Provider = provider
+	}
+	// Rust #45519: the resumed thread's server-reported collaboration mode is
+	// authoritative, so the first prompt after a resume keeps the saved Plan
+	// mode. Older servers omit it, and the local selection then stands.
+	if settings.CollaborationMode != nil {
+		m.applyReportedCollaborationMode(settings.CollaborationMode)
 	}
 	// The server's optional settings clear the local override when absent
 	// (Rust assigns the Option directly).
