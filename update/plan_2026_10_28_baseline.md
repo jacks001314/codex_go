@@ -1150,6 +1150,16 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - models.go gains AccountAnalyticsUnitTokens; tokens_like_rust_test.go mirrors the upstream token and formatting cases.
 - Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./tui/... .
 
-Status after reconciliation: `2011 complete`, `395 not_applicable`,
-`483 audit_pending`, `258 regression_pending`, `2 partial`,
+### #45742 Add account-bound authentication for analytics requests (Round 834)
+
+## Round 834 - #45742 Add account-bound authentication for analytics requests
+
+- tui/analytics/client.go adds AnalyticsSession: local ChatGPT credentials load from the auth store (environment API keys ignored), the session requires an account id plus ChatGPT user id, and reloads credentials before and after every request so an account or user switch fails with "Account changed. Press R to refresh Analytics.".
+- Requests rebuild the cloud client from the reloaded snapshot with chatgptapi.NewCloudClientWithoutRedirects, so a rotated token and its account header reach the wire; a 401 gets one bounded remotecontrol.UnauthorizedRecovery plan (Go's counterpart of codex-login's UnauthorizedRecovery) and reports "Sign in again to view Analytics." when recovery fails.
+- Live/AnalyticsLiveSession add lazy initialization that retries after sign-in, AccountLabel as "email <middle dot> id" (or just the id), and CreditGroups defaulting to the surface position before initialization; models.go adds AccountKind/AccountKindFor and CreditGroupings (team-like to Business, other workspace plans to Enterprise), data.go adds the seven-entry grouping order and CreditGroupIndices.
+- client_like_rust_test.go mirrors the upstream cases: identity change mid-request sends no traffic, account and user changes are rejected before the request, missing and API-key-only auth are refused, reloaded credentials are used for the same identity, a 401 recovers once, session initialization retries after sign-in, and plan to credit-group mapping matches Rust.
+- Verified: go test ./tui/analytics -count=1, go vet ./tui/analytics, go build ./... .
+
+Status after reconciliation: `2012 complete`, `395 not_applicable`,
+`482 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
