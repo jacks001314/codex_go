@@ -13287,9 +13287,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Mirrored the exec-server MXC gate: `execserver/sandbox_process_windows.go` now rejects only `arg0` or `windowsSandboxPrivateDesktop` with `MXC custom argv0 and private-desktop launches are not supported` before the availability check, so TTY and managed-network launches fall through to the same fail-closed `native MXC is unavailable on this executor` diagnostic Rust uses on a host without native MXC; the pre-availability managed-network validation was dropped because Rust validates it after that check. `execserver.EnvironmentCapabilities` gained the always-serialized `windowsMxc` bit (Rust reports `codex_mxc_sandbox::is_available()`, Go has no native runner so `EnvironmentInfo::local()` reports false). ManagedProxyRouting::DedicatedListeners and the restricting-SID exemption are N/A: Go's network package has no managed-proxy routing modes and `sandbox/mxc` never launches natively, so no proxy route is ever created for MXC. Tests: `execserver/windows_mxc_test.go` covers pipe/TTY/managed-network fail-closed, the new argv0+private-desktop message, and `windowsMxc:false` on the wire. Verified with `go test ./execserver ./sandbox/mxc ./tool -count=1`, `go build ./...`."
    ]
   },
   {

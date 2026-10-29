@@ -942,6 +942,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Known Go-specific gap: the in-process (embedded) resume path has no thread-settings snapshot to read because local turns do not yet persist one; the app-server-backed path is complete.
 - Verified with `go test ./tui/tea ./tui ./tui/chatwidget` and `go test ./app -run 'RemoteTUI|ThreadSettings|Collaboration|Resume'`.
 
-Status after reconciliation: `1995 complete`, `390 not_applicable`,
-`499 audit_pending`, `265 regression_pending`, `0 partial`,
+### Enable MXC TTY launches and managed networking in the exec server (#45524) (Round 810)
+
+- Rust #45524 narrows the MXC request gate: TTY and managed networking are now accepted, only custom `argv0` and private-desktop launches are rejected, and a missing native MXC still fails closed.
+- `execserver/sandbox_process_windows.go`: the MXC branch now rejects `params.Arg0 != nil || sandboxContext.WindowsSandboxPrivateDesktop` with `MXC custom argv0 and private-desktop launches are not supported` before the availability check, matching Rust's order, so every other MXC shape (pipes, TTY, managed network, network proxy) reaches `native MXC is unavailable on this executor`. The managed-network validation that used to run first was removed because Rust only validates it after the availability check, which Go never passes.
+- `execserver/server.go`: `EnvironmentCapabilities` gained `windowsMxc`, always serialized like Rust. Rust gates it on `codex_mxc_sandbox::is_available()`; Go has no native MXC runner (`sandbox/mxc` always returns `NativeUnavailableMessage`), so `localEnvironmentInfo` reports false on every platform.
+- `ManagedProxyRouting::DedicatedListeners` and the "dedicated listeners need no restricting SID" exemption are N/A in Go: the `network` package has no managed-proxy routing modes, and no MXC proxy route is ever created because the launcher never runs.
+- Coverage: `execserver/windows_mxc_test.go` asserts the pipe, TTY, managed-network and network-proxy shapes fail closed, the new argv0/private-desktop message, and that the advertised capability serializes as `"windowsMxc":false`.
+- Verified with `go test ./execserver -count=1`, `go test ./sandbox/mxc -count=1`, `go test ./tool -count=1`, and `go build ./...`.
+
+Status after reconciliation: `1996 complete`, `390 not_applicable`,
+`498 audit_pending`, `265 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
