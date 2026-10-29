@@ -15003,9 +15003,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "The 5-row head/tail split introduced here was superseded upstream by #46492, and Go already mirrors the resulting HEAD behavior: tui/tool_output_preview.go implements Rust tool_output.rs ToolOutputPreview (PREVIEW_LINES=3, MAX_PREVIEW_LINE_BYTES=16KiB, rendered-row budget applied after adaptive wrapping so an overlong URL cannot exceed it, all later lines counted hidden, `+N lines (ctrl+t to view transcript)` marker), and tui/history_cell/mcp.go routes compact node_repl detail lines through ToolOutputPreviewLines while TranscriptLines/RawLines keep the full text; tui/history_cell/mcp_preview_test.go pins the shared budget across result blocks and transcript preservation, and ./tui Preview tests pass"
    ]
   },
   {

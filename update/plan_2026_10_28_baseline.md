@@ -1710,6 +1710,22 @@ Remove the `done` prefix from TUI completion timestamps (#46067, closure).
   and the separator/completion tests (including
   `TestCompletionLabelShowsShortDurationsLikeRust`) pass.
 
-Status after reconciliation: `2029 complete`, `400 not_applicable`,
-`463 audit_pending`, `254 regression_pending`, `3 partial`,
+### Bound code-mode output previews across result blocks (#46073) (Round 864)
+
+Bound code-mode output previews across result blocks (#46073, closure).
+
+- This change's five-row head/tail split was superseded upstream by #46492's
+  shared `ToolOutputPreview`; Go already implements the resulting HEAD behavior.
+- `tui/tool_output_preview.go` keeps three rendered rows (`PreviewLines`), bounds
+  one logical line at 16 KiB, adaptively wraps before counting rows so an
+  overlong URL cannot exceed the budget, reports every partially displayed or
+  later line as hidden, and appends the `+N lines (ctrl+t to view transcript)`
+  marker only while it fits.
+- `tui/history_cell/mcp.go` routes compact `node_repl` detail rows through the
+  shared preview while `TranscriptLines`/`RawLines` keep the full text;
+  `tui/history_cell/mcp_preview_test.go` pins the shared budget across multiple
+  result blocks and transcript preservation.
+
+Status after reconciliation: `2030 complete`, `400 not_applicable`,
+`462 audit_pending`, `254 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
