@@ -1,4 +1,4 @@
-﻿package doctor
+package doctor
 
 import (
 	"os"
@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/config"
 )
@@ -123,4 +124,146 @@ func TestFilesystemPathsCheckListsWithoutProbingLikeRust(t *testing.T) {
 
 func quoteDoctorTOML(value string) string {
 	return "\"" + strings.ReplaceAll(value, "\\", "\\\\") + "\""
+}
+
+// filesystemTestClock advances by step on every read so the per-path budget,
+// total budget, and slow-probe rule stay deterministic.
+func filesystemTestClock(step time.Duration) func() time.Time {
+	now := time.Unix(0, 0)
+	return func() time.Time {
+		current := now
+		now = now.Add(step)
+		return current
+	}
+}
+
+// writeFilesystemDoctorConfig points the profile at one literal read grant per
+// name so tests can drive many probe targets.
+func writeFilesystemDoctorConfig(t *testing.T, home string, root string, names []string) {
+	t.Helper()
+	body := "default_permissions = \"dev\"\n\n[permissions.dev.filesystem]\n"
+	for _, name := range names {
+		body += quoteDoctorTOML(filepath.Join(root, name)) + " = \"read\"\n"
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+}
+
+// stubFilesystemProbes replaces the probe seams for one test.
+func stubFilesystemProbes(t *testing.T, step time.Duration, runner func(string) filesystemProbeOutcome) {
+	t.Helper()
+	originalSupported := filesystemProbeSupported
+	originalRunner := filesystemProbeRunner
+	originalClock := filesystemProbeClock
+	t.Cleanup(func() {
+		filesystemProbeSupported = originalSupported
+		filesystemProbeRunner = originalRunner
+		filesystemProbeClock = originalClock
+	})
+	filesystemProbeSupported = func() bool { return true }
+	filesystemProbeClock = filesystemTestClock(step)
+	filesystemProbeRunner = func(path string, _ time.Duration) filesystemProbeOutcome {
+		return runner(path)
+	}
+}
+
+// Mirrors Rust #46543's probe outcomes: a timed-out helper warns, a denied path
+// warns, a missing path is reported without a warning, and a resolved path
+// stays clean.
+func TestFilesystemPathsCheckProbeOutcomesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	names := []string{"blocked", "missing", "denied", "resolved"}
+	writeFilesystemDoctorConfig(t, home, root, names)
+	outcomes := map[string]filesystemProbeOutcome{
+		filepath.Join(root, "blocked"):  filesystemOutcomeTimedOut,
+		filepath.Join(root, "missing"):  filesystemOutcomeMissing,
+		filepath.Join(root, "denied"):   filesystemOutcomeDenied,
+		filepath.Join(root, "resolved"): filesystemOutcomeResolved,
+	}
+	stubFilesystemProbes(t, 0, func(path string) filesystemProbeOutcome {
+		outcome, ok := outcomes[path]
+		if !ok {
+			t.Fatalf("unexpected probe target %q", path)
+		}
+		return outcome
+	})
+
+	check := filesystemPathsCheck(home, &Options{CodexHome: home})
+	details := strings.Join(check.Details, "\n")
+	for _, want := range []string{
+		"path probe timed out",
+		"missing (may be intentional)",
+		"access denied to doctor",
+		"path resolved (read/write access not tested)",
+		"paths checked: 4 of 4",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+	if check.Status != CheckStatusWarning || check.Summary != "some configured filesystem paths are slow or could not be checked" {
+		t.Fatalf("check status = %q summary = %q", check.Status, check.Summary)
+	}
+	if len(check.Issues) != 2 {
+		t.Fatalf("issues = %#v, want one warning each for the blocked and denied paths", check.Issues)
+	}
+	for _, issue := range check.Issues {
+		if strings.Contains(issue.Cause, "missing") {
+			t.Fatalf("a missing path produced a warning: %#v", issue)
+		}
+		if issue.Remedy == nil || !strings.Contains(*issue.Remedy, "mount and host permissions") {
+			t.Fatalf("issue remedy = %#v", issue.Remedy)
+		}
+	}
+}
+
+// Mirrors Rust #46543's probe ceiling: at most 32 paths are checked and the rest
+// are reported as unchecked.
+func TestFilesystemPathsCheckStopsAtProbeLimitLikeRust(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	names := make([]string, 0, maxFilesystemPaths+1)
+	for index := 0; index <= maxFilesystemPaths; index++ {
+		names = append(names, "path-"+time.Duration(index).String())
+	}
+	writeFilesystemDoctorConfig(t, home, root, names)
+	stubFilesystemProbes(t, 0, func(string) filesystemProbeOutcome { return filesystemOutcomeResolved })
+
+	check := filesystemPathsCheck(home, &Options{CodexHome: home})
+	details := strings.Join(check.Details, "\n")
+	if !strings.Contains(details, "paths checked: 32 of 33") {
+		t.Fatalf("details = %s", details)
+	}
+	if !strings.Contains(details, "unchecked paths: 1 (probe budget exhausted)") {
+		t.Fatalf("details = %s", details)
+	}
+	if check.Status != CheckStatusWarning || check.Summary != "filesystem path check is incomplete" {
+		t.Fatalf("check status = %q summary = %q", check.Status, check.Summary)
+	}
+}
+
+// Mirrors Rust #46543's total budget: a slow probe consumes the eight-second
+// budget and the remaining paths stay unchecked.
+func TestFilesystemPathsCheckStopsWhenTotalBudgetIsExhaustedLikeRust(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	writeFilesystemDoctorConfig(t, home, root, []string{"first", "second"})
+	stubFilesystemProbes(t, 3*time.Second, func(string) filesystemProbeOutcome { return filesystemOutcomeResolved })
+
+	check := filesystemPathsCheck(home, &Options{CodexHome: home})
+	details := strings.Join(check.Details, "\n")
+	if !strings.Contains(details, "paths checked: 1 of 2") {
+		t.Fatalf("details = %s", details)
+	}
+	if !strings.Contains(details, "unchecked paths: 1 (probe budget exhausted)") {
+		t.Fatalf("details = %s", details)
+	}
+	if !strings.Contains(details, "latency: over 1 second") {
+		t.Fatalf("slow probe detail missing:\n%s", details)
+	}
+	if check.Summary != "filesystem path check is incomplete" {
+		t.Fatalf("summary = %q", check.Summary)
+	}
 }

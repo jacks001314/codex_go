@@ -35,6 +35,19 @@ const (
 	maxFilesystemPaths     = 32
 )
 
+// filesystemProbeRunner runs the disposable helper for one path. Tests replace
+// it to simulate blocked, denied, or failing helpers without spawning them.
+var filesystemProbeRunner = runFilesystemProbe
+
+// filesystemProbeSupported reports whether this platform may probe paths at all
+// (Rust disables probes on Windows). Tests override it so the probe budgets are
+// covered on every platform.
+var filesystemProbeSupported = func() bool { return runtime.GOOS != "windows" }
+
+// filesystemProbeClock supplies probe timestamps so the per-path budget,
+// total budget, and slow-probe rule are testable without sleeping.
+var filesystemProbeClock = time.Now
+
 // Hidden probe-helper exit codes (Rust filesystem_paths::probe_exit_code).
 const (
 	filesystemProbeResolved = 0
@@ -131,38 +144,39 @@ func filesystemPathsCheck(codexHome string, opts *Options) *DoctorCheck {
 	}
 	check.Detail("operation: resolve paths only; read/write access is not tested")
 	check.Detail("probe budgets: 2 seconds per path, 8 seconds total, at most 32 paths")
+	probeDisabled := !filesystemProbeSupported()
 	switch {
 	case readRestricted:
 		check.Summary = "configured filesystem paths listed; read restrictions prevent probes"
-	case runtime.GOOS == "windows":
+	case probeDisabled:
 		check.Summary = "configured filesystem paths listed; probes disabled on Windows"
 	}
 
-	started := time.Now()
+	started := filesystemProbeClock()
 	checked := 0
 	for _, target := range targets {
 		if checked >= maxFilesystemPaths {
 			break
 		}
-		remaining := filesystemTotalTimeout - time.Since(started)
+		remaining := filesystemTotalTimeout - filesystemProbeClock().Sub(started)
 		if remaining <= 0 {
 			break
 		}
 		label := fmt.Sprintf("path %d", checked+1)
-		probeStarted := time.Now()
+		probeStarted := filesystemProbeClock()
 		outcome := filesystemOutcomeSkippedReadRestrictions
 		switch {
 		case readRestricted:
-		case runtime.GOOS == "windows":
+		case probeDisabled:
 			outcome = filesystemOutcomeSkippedWindows
 		default:
 			budget := filesystemProbeTimeout
 			if remaining < budget {
 				budget = remaining
 			}
-			outcome = runFilesystemProbe(target.Path, budget)
+			outcome = filesystemProbeRunner(target.Path, budget)
 		}
-		slow := time.Since(probeStarted) >= filesystemSlowProbe
+		slow := filesystemProbeClock().Sub(probeStarted) >= filesystemSlowProbe
 		checked++
 		check.Detail(fmt.Sprintf("%s: %s (%s); %s", label, target.Path, strings.Join(target.Accesses, ", "), outcome.description()))
 		if slow {

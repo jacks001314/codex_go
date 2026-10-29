@@ -2247,6 +2247,14 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `sandbox/linuxsandbox/daemon_mounts_test.go`: `TestValidateDaemonSocketMountIsolationNamespaceMountsLikeRust` accepts unrelated mount/network namespaces and rejects a nested namespace mount, a relative destination, and an invalid destination escape. `TestValidateDaemonSocketMountIsolationNamespaceMountKeepsAliasChecksLikeRust` proves a real socket alias is still rejected next to an unrelated namespace mount.
 - Verification: `gofmt` clean, `GOOS=linux go vet ./sandbox/linuxsandbox` and `GOOS=linux go test -c ./sandbox/linuxsandbox` succeed; the same logic re-run without the linux build tag on POSIX path semantics passes every case on this Windows host.
 
-Status after reconciliation: `2069 complete`, `408 not_applicable`,
-`438 audit_pending`, `230 regression_pending`, `4 partial`,
+### Bound doctor filesystem path diagnostics (Round 908)
+
+- `doctor/filesystem_paths.go` already reports `sandbox.filesystem_paths` with literal grants, merged access modes, resolution outcomes, budgets, and provenance, excluding deny rules and denied paths; the hidden probe helper short-circuits before configuration loading, and `FeedbackDoctorReportTimeout` is already 35 seconds.
+- Added the missing regression seams - `filesystemProbeRunner`, `filesystemProbeSupported`, `filesystemProbeClock` - so probe outcomes and budgets are testable on every platform without spawning helpers or sleeping.
+- `doctor/filesystem_paths_test.go`: timeout and denied paths warn with the mount/host remedy, a missing path reports without a warning, a resolved path stays clean, the 32-path ceiling reports one unchecked path, and a slow probe that consumes the eight-second budget leaves the rest unchecked.
+- `app/doctor_probe_helper_like_rust_test.go`: `doctor --probe-filesystem-path` exits silently with the probe status (2 on POSIX, 5 on Windows) even with an unparsable `config.toml`, proving the helper never loads configuration.
+- Verification: `go test ./doctor -count=1` and `go test ./app -run Doctor -count=1` pass.
+
+Status after reconciliation: `2070 complete`, `408 not_applicable`,
+`438 audit_pending`, `229 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -16216,9 +16216,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #46543 parity: doctor/filesystem_paths.go already reports sandbox.filesystem_paths with literal grants, merged access modes, resolution outcomes, budgets and provenance, excluding deny rules and denied paths; the probe helper short-circuits before configuration loading (app/app.go:117) and FeedbackDoctorReportTimeout is already 35s (appserver/feedback_doctor_report.go:20). This round added the missing regression seams (filesystemProbeRunner, filesystemProbeSupported, filesystemProbeClock) so budgets and outcomes are testable on every platform, and cover: TestFilesystemPathsCheckProbeOutcomesLikeRust (timeout and denied paths warn with the mount/host remedy, a missing path reports without warning, a resolved path stays clean), TestFilesystemPathsCheckStopsAtProbeLimitLikeRust (32 of 33 checked, incomplete summary), TestFilesystemPathsCheckStopsWhenTotalBudgetIsExhaustedLikeRust (one probe consumes the eight-second budget, unchecked paths reported, slow-probe latency detail), plus TestDoctorProbeHelperSkipsConfigurationLikeRust proving doctor --probe-filesystem-path exits 2/5 silently with a broken config.toml. go test ./doctor and go test ./app -run Doctor pass."
    ]
   },
   {
