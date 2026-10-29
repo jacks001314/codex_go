@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -19,7 +20,9 @@ const (
 	mcpProtocolVersionMetadataKey    = "io.modelcontextprotocol/protocolVersion"
 	mcpClientInfoMetadataKey         = "io.modelcontextprotocol/clientInfo"
 	mcpClientCapabilitiesMetadataKey = "io.modelcontextprotocol/clientCapabilities"
+	mcpJSONRPCInvalidRequestCode     = int64(-32600)
 	mcpJSONRPCMethodNotFoundCode     = int64(-32601)
+	mcpJSONRPCInvalidParamsCode      = int64(-32602)
 	mcpLegacyPrevalidationErrorCode  = int64(-32000)
 	maxMCPInputRequiredRounds        = 1000
 )
@@ -326,13 +329,23 @@ type mcpInputRequiredRequest struct {
 	Params json.RawMessage `json:"params"`
 }
 
-func nextMCP2026RequestParams(ctx context.Context, serverName string, elicitation MCPElicitationHandler, baseParams any, result *json.RawMessage) (any, bool, error) {
+// mcpContinuationState carries one tool call's input-required bookkeeping
+// across rounds, mirroring Rust's request_input loop state (Rust #44346).
+type mcpContinuationState struct {
+	stateOnlyRounds            int
+	submittedVerificationProof bool
+}
+
+func nextMCP2026RequestParams(ctx context.Context, serverName string, elicitation MCPElicitationHandler, features mcpClientFeatures, state *mcpContinuationState, baseParams any, result *json.RawMessage) (any, bool, error) {
 	if result == nil {
 		return nil, false, nil
 	}
 	var required mcpInputRequiredResult
 	if err := json.Unmarshal(*result, &required); err != nil || required.ResultType != "input_required" {
 		return nil, false, nil
+	}
+	if state == nil {
+		state = &mcpContinuationState{}
 	}
 
 	params := map[string]any{}
@@ -345,28 +358,184 @@ func nextMCP2026RequestParams(ctx context.Context, serverName string, elicitatio
 			return nil, false, err
 		}
 	}
-	if state := bytes.TrimSpace(required.RequestState); len(state) > 0 && !bytes.Equal(state, []byte("null")) {
-		params["requestState"] = append(json.RawMessage(nil), state...)
+	hasRequestState := false
+	if rawState := bytes.TrimSpace(required.RequestState); len(rawState) > 0 && !bytes.Equal(rawState, []byte("null")) {
+		params["requestState"] = append(json.RawMessage(nil), rawState...)
+		hasRequestState = true
 	}
+	if len(required.InputRequests) == 0 {
+		if !hasRequestState {
+			// Rust treats a continuation that carries neither prompts nor the
+			// opaque state as an unexpected response.
+			return nil, false, fmt.Errorf("MCP input-required response carried neither input requests nor request state")
+		}
+		// A state-only round means the server is still working; back off
+		// 50/100/200/250ms instead of spinning on the transport.
+		delay := 50 << min(state.stateOnlyRounds, 3)
+		if delay > 250 {
+			delay = 250
+		}
+		state.stateOnlyRounds++
+		if err := sleepMCPContinuationRound(ctx, time.Duration(delay)*time.Millisecond); err != nil {
+			return nil, false, err
+		}
+		return params, true, nil
+	}
+	state.stateOnlyRounds = 0
 
-	if len(required.InputRequests) > 0 {
-		keys := make([]string, 0, len(required.InputRequests))
-		for key := range required.InputRequests {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		responses := make(map[string]any, len(keys))
-		for _, key := range keys {
-			request := required.InputRequests[key]
-			response, rpcErr := mcpClientRequestResult(ctx, serverName, elicitation, request.Method, nextMCPInputRequestIDValue(), request.Params)
-			if rpcErr != nil {
-				return nil, false, newMCPRemoteError(request.Method, rpcErr)
-			}
-			responses[key] = response
-		}
-		params["inputResponses"] = responses
+	keys := make([]string, 0, len(required.InputRequests))
+	for key := range required.InputRequests {
+		keys = append(keys, key)
 	}
+	sort.Strings(keys)
+	// Parse the whole round before presenting any prompt. Only standard MCP
+	// inputs and supported OpenAI elicitation modes are accepted, so an
+	// unsupported or malformed request never reaches the user (Rust #44346).
+	for _, key := range keys {
+		request := required.InputRequests[key]
+		if rpcErr := validateMCPToolInputRequest(request.Method, request.Params, features); rpcErr != nil {
+			return nil, false, newMCPRemoteError(request.Method, rpcErr)
+		}
+	}
+	responses := make(map[string]any, len(keys))
+	for _, key := range keys {
+		request := required.InputRequests[key]
+		response, rpcErr := mcpToolInputRequestResult(ctx, serverName, elicitation, request.Method, nextMCPInputRequestIDValue(), request.Params)
+		if rpcErr != nil {
+			return nil, false, newMCPRemoteError(request.Method, rpcErr)
+		}
+		if isNativeVerificationRequest(request.Method, request.Params) && mcpElicitationResponseAccepted(response) {
+			// Once a signed proof is on the wire the call must not be replayed
+			// by session recovery (Rust #44346).
+			state.submittedVerificationProof = true
+		}
+		responses[key] = response
+	}
+	params["inputResponses"] = responses
 	return params, true, nil
+}
+
+// validateMCPToolInputRequest mirrors Rust's tool_input::parse_input plus the
+// capability-gated elicitation dispatch: unsupported methods, modes, and
+// unadvertised capabilities are rejected before the user is prompted.
+func validateMCPToolInputRequest(method string, params json.RawMessage, features mcpClientFeatures) *stdioRPCError {
+	method = strings.TrimSpace(method)
+	switch method {
+	case "roots/list":
+		return nil
+	case "elicitation/create":
+		if !isMCPJSONObject(params) {
+			return mcpInvalidRequest("invalid MCP tool input request")
+		}
+		return nil
+	case "openai/elicitation/create":
+		switch mcpElicitationRequestMode(params) {
+		case "form":
+			if rpcErr := validateMCPOpenAIElicitationForm(params); rpcErr != nil {
+				return rpcErr
+			}
+			if !features.OpenAIForm {
+				if features.UserVerification {
+					return mcpInvalidParams("invalid elicitation mode")
+				}
+				return mcpMethodNotFound(method)
+			}
+			return nil
+		case UserVerificationMode:
+			if rpcErr := validateMCPUserVerificationRequest(params); rpcErr != nil {
+				return rpcErr
+			}
+			if !features.UserVerification {
+				return mcpMethodNotFound(method)
+			}
+			return nil
+		default:
+			return mcpInvalidRequest("unsupported OpenAI elicitation mode")
+		}
+	default:
+		return mcpInvalidRequest("unsupported MCP tool input request")
+	}
+}
+
+// validateMCPOpenAIElicitationForm requires the fields Rust's
+// OpenAiElicitationRequestParams deserializer requires for the form mode.
+func validateMCPOpenAIElicitationForm(params json.RawMessage) *stdioRPCError {
+	var payload struct {
+		Mode            string          `json:"mode"`
+		Message         *string         `json:"message"`
+		RequestedSchema json.RawMessage `json:"requestedSchema"`
+	}
+	if len(params) == 0 || json.Unmarshal(params, &payload) != nil || payload.Mode != "form" || payload.Message == nil {
+		return mcpInvalidParams("invalid OpenAI elicitation request")
+	}
+	schema := bytes.TrimSpace(payload.RequestedSchema)
+	if len(schema) == 0 || bytes.Equal(schema, []byte("null")) {
+		return mcpInvalidParams("invalid OpenAI elicitation request")
+	}
+	return nil
+}
+
+// mcpToolInputRequestResult answers one validated continuation prompt through
+// the same elicitation handler the connection uses for server-initiated
+// requests.
+func mcpToolInputRequestResult(ctx context.Context, serverName string, elicitation MCPElicitationHandler, method string, id json.RawMessage, params json.RawMessage) (any, *stdioRPCError) {
+	switch strings.TrimSpace(method) {
+	case "roots/list":
+		return map[string]any{"roots": mcpRootsFromContext(ctx)}, nil
+	case "elicitation/create", "openai/form", "openai/elicitation/create":
+		return mcpElicitationResult(ctx, serverName, elicitation, method, id, params), nil
+	default:
+		return nil, mcpMethodNotFound(method)
+	}
+}
+
+func isNativeVerificationRequest(method string, params json.RawMessage) bool {
+	return strings.TrimSpace(method) == "openai/elicitation/create" && mcpElicitationRequestMode(params) == UserVerificationMode
+}
+
+func mcpElicitationResponseAccepted(response any) bool {
+	switch value := response.(type) {
+	case *MCPElicitationResponse:
+		return value != nil && value.Action == MCPElicitationActionAccept
+	case MCPElicitationResponse:
+		return value.Action == MCPElicitationActionAccept
+	case map[string]any:
+		action, _ := value["action"].(string)
+		return action == string(MCPElicitationActionAccept)
+	default:
+		return false
+	}
+}
+
+func isMCPJSONObject(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed)
+}
+
+func mcpInvalidRequest(message string) *stdioRPCError {
+	return &stdioRPCError{Code: mcpJSONRPCInvalidRequestCode, Message: message}
+}
+
+func mcpInvalidParams(message string) *stdioRPCError {
+	return &stdioRPCError{Code: mcpJSONRPCInvalidParamsCode, Message: message}
+}
+
+func mcpMethodNotFound(method string) *stdioRPCError {
+	return &stdioRPCError{Code: mcpJSONRPCMethodNotFoundCode, Message: "method not found: " + method}
+}
+
+func sleepMCPContinuationRound(ctx context.Context, delay time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // mcpStdioHandshakeMode maps a configured protocol policy plus the server's

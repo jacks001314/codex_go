@@ -2986,6 +2986,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #50189 replaces the Figma OAuth issuer-binding exception with Mercado Pago (#50189, complete). `mcp/oauth_discovery.go` already carries the Mercado Pago and Robinhood triples with exact issuer/origin matching; the provider-exception test now also covers the two Robinhood lookalikes from upstream.
 - Tests: `TestMCPOAuthDiscoveryKeepsIssuerBindingExceptionsAndRejectsLookalikes`, the `plugin` suite, the `safety` secret tests, and the `tool` suite.
 - Verified with `go test ./mcp -run TestMCPOAuthDiscoveryKeepsIssuerBindingExceptionsAndRejectsLookalikes -count=1`, `go test ./plugin -count=1`, `go test ./safety -run Secret -count=1`, and `go test ./tool -count=1`.
-Status after reconciliation: `2142 complete`, `449 not_applicable`,
-`347 audit_pending`, `207 regression_pending`, `4 partial`,
+### Native verification in MCP tool continuations (Round 981)
+
+- Rust #44346 routes MCP 2026-07-28 tool inputs through the client elicitation service, accepts `openai/elicitation/create` form and `openai/userVerification` inputs, preserves opaque `requestState`, backs off on state-only rounds, and refuses to replay a tool after a proof was submitted (#44346, complete).
+- `mcp/protocol_2026.go` validates the whole input-required round before prompting, rejects unsupported methods/modes and unadvertised capabilities without prompting, answers `openai/userVerification` through `mcpElicitationResult`, and sleeps 50/100/200/250ms for state-only rounds.
+- `mcp/user_verification.go` validates the request payload like Rust's `user_verification::parse_request`; `mcp/elicitation_runtime.go` now populates `Title`/`Description`/`Challenge` for the TUI prompt.
+- `mcp/http_client.go` tracks a submitted proof across rounds and returns `the tool was not restarted` instead of replaying the call after a 404/410 session expiry, while 401 auth challenges still surface unchanged.
+- Tests: `TestNativeVerificationContinuationValidatesAndPreservesLikeRust`, `TestNativeVerificationContinuationRejectsBeforePromptingLikeRust`, `TestNativeVerificationContinuationRejectsUnsupportedModesLikeRust`, `TestNativeVerificationContinuationBacksOffStateOnlyRoundsLikeRust`, `TestNativeVerificationContinuationDoesNotRestartAfterProofLikeRust`, `TestNativeVerificationContinuationPreservesAuthChallengesLikeRust`.
+- Verified with `go test ./mcp -count=1`, `go vet ./mcp`, and `go build ./...`.
+
+Status after reconciliation: `2143 complete`, `449 not_applicable`,
+`347 audit_pending`, `206 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -11095,9 +11095,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 981: Go drives MCP 2026-07-28 tool continuations like Rust rmcp-client request_input. mcp/protocol_2026.go nextMCP2026RequestParams validates the whole input-required round before presenting any prompt (unsupported methods/modes and unadvertised form or user-verification capabilities are rejected without prompting), routes openai/elicitation/create with mode openai/userVerification through the same mcpElicitationResult path as server-initiated requests, returns the server opaque requestState, backs off 50/100/200/250ms for state-only rounds, and rejects a round carrying neither prompts nor state. mcp/user_verification.go validateMCPUserVerificationRequest mirrors Rust user_verification::parse_request (mode/title/description/challenge plus optional _meta, title <= 256 bytes, description <= 4096, base64url challenge <= 4096 decoded); rejection never prompts. mcp/elicitation_runtime.go now populates MCPElicitationRequest.Title/Description/Challenge so the TUI renders the verification copy. mcp/http_client.go tracks submittedVerificationProof across rounds and refuses HTTP session recovery replay after a proof (errMCPToolContinuationNotRestarted, \"the tool was not restarted\"), while 401 challenges still surface unchanged. Tests: mcp/native_verification_continuation_like_rust_test.go covers mixed standard/form/native inputs with preserved _meta, unadvertised and malformed and unsupported requests rejected before prompting, unsupported elicitation modes, state-only backoff with requestState progression, no restart after proof on a 404 session expiry, and preserved auth challenges. Verified with go test ./mcp -count=1, go vet ./mcp, and go build ./..."
    ]
   },
   {

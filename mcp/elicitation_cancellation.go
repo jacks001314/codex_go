@@ -158,7 +158,7 @@ func mcpCancelledNotificationRequestID(params json.RawMessage) json.RawMessage {
 // elicitation request whose response honors cancellation (Rust #44238).
 func isMCPElicitationMethod(method string) bool {
 	switch strings.TrimSpace(method) {
-	case "elicitation/create", "openai/form":
+	case "elicitation/create", "openai/form", "openai/elicitation/create", UserVerificationMode:
 		return true
 	default:
 		return false

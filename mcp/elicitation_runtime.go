@@ -112,9 +112,12 @@ func parseMCPElicitationRequest(serverName string, method string, id json.RawMes
 	// The OpenAI elicitation arrives on the umbrella method
 	// `openai/elicitation/create` with its kind in the payload's mode.
 	request.Mode = stringFromAnyMap(raw, "mode")
-	if request.Mode == "" && request.Method == "openai/userVerification" {
+	if request.Mode == "" && request.Method == UserVerificationMode {
 		request.Mode = request.Method
 	}
+	request.Title = stringFromAnyMap(raw, "title")
+	request.Description = stringFromAnyMap(raw, "description")
+	request.Challenge = stringFromAnyMap(raw, "challenge")
 	request.URL = stringFromAnyMap(raw, "url")
 	request.ElicitationID = stringFromAnyMap(raw, "elicitationId")
 	if request.ElicitationID == "" {

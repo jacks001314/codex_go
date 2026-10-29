@@ -358,6 +358,7 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 	stderr := c.currentStderr()
 	baseParams := params
 	requestParams := params
+	continuation := &mcpContinuationState{}
 	for round := 0; ; round++ {
 		requestCtx, cancelRequest := budget.context(ctx)
 		response, err := c.doRequest(requestCtx, options, method, requestParams)
@@ -372,7 +373,7 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 			// The caller's own timeout is paused while the user answers, so the
 			// waiting time is not charged to the request (Rust #57196).
 			inputStarted := time.Now()
-			nextParams, inputRequired, err := nextMCP2026RequestParams(ctx, serverNameFromStdioOptions(options), elicitationFromStdioOptions(options), baseParams, response.Result)
+			nextParams, inputRequired, err := nextMCP2026RequestParams(ctx, serverNameFromStdioOptions(options), elicitationFromStdioOptions(options), c.clientFeatures(), continuation, baseParams, response.Result)
 			if err != nil {
 				return err
 			}

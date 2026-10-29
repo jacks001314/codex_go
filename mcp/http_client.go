@@ -31,6 +31,11 @@ const (
 
 var mcpStreamableHTTPRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
 
+// errMCPToolContinuationNotRestarted reports that session recovery refused to
+// replay a tool call whose continuation had already submitted a signed
+// verification proof (Rust #44346).
+var errMCPToolContinuationNotRestarted = errors.New("MCP tool continuation failed; the tool was not restarted")
+
 // tokenHasExpired reports whether a stored access token is past its expiry
 // boundary. Rust #43947 uses the real expiry here (not the refresh-skew buffer)
 // so a failed proactive refresh stays an ordinary error while the token is
@@ -656,14 +661,22 @@ func (c *httpClient) CallWithOptionsContext(ctx context.Context, options *httpCl
 			return err
 		}
 	}
-	err := c.callWithTransientRetries(ctx, options, method, params, out)
+	submittedProof, err := c.callWithTransientRetries(ctx, options, method, params, out)
 	if err == nil || !isMCPHTTPSessionInvalidError(err) || strings.TrimSpace(c.sessionID) == "" {
 		return err
+	}
+	if submittedProof {
+		// Session recovery must not replay the original operation after a
+		// continuation already consumed a signed verification proof
+		// (Rust #44346). Authentication challenges never reach this branch:
+		// a 401 is not a session-invalid status.
+		return errMCPToolContinuationNotRestarted
 	}
 	if resetErr := c.reinitialize(ctx); resetErr != nil {
 		return resetErr
 	}
-	return c.callWithTransientRetries(ctx, options, method, params, out)
+	_, err = c.callWithTransientRetries(ctx, options, method, params, out)
+	return err
 }
 
 // CallStream performs a long-lived streamable HTTP request (Rust
@@ -910,21 +923,24 @@ func (c *httpClient) handshakeRequestTimeout(method string) time.Duration {
 	return remaining
 }
 
-func (c *httpClient) callWithTransientRetries(ctx context.Context, options *httpClientCallOptions, method string, params any, out any) error {
+func (c *httpClient) callWithTransientRetries(ctx context.Context, options *httpClientCallOptions, method string, params any, out any) (bool, error) {
+	submittedProof := false
 	for attempt := 0; ; attempt++ {
 		attemptParams, err := c.paramsWithSessionMeta(options, params)
 		if err != nil {
-			return err
+			return submittedProof, err
 		}
-		err = c.callWithSession(ctx, method, attemptParams, out, c.sessionID)
+		var proof bool
+		proof, err = c.callWithSession(ctx, method, attemptParams, out, c.sessionID)
+		submittedProof = submittedProof || proof
 		if err == nil {
-			return nil
+			return submittedProof, nil
 		}
 		if method != "tools/list" || attempt >= len(mcpStreamableHTTPRetryDelays) || !isRetryableMCPStreamableHTTPError(err) {
-			return err
+			return submittedProof, err
 		}
 		if err := c.sleepBeforeRetryContext(ctx, mcpStreamableHTTPRetryDelays[attempt]); err != nil {
-			return err
+			return submittedProof, err
 		}
 	}
 }
@@ -962,40 +978,41 @@ func (c *httpClient) sleepBeforeRetryContext(ctx context.Context, delay time.Dur
 	}
 }
 
-func (c *httpClient) callWithSession(ctx context.Context, method string, params any, out any, sessionID string) error {
+func (c *httpClient) callWithSession(ctx context.Context, method string, params any, out any, sessionID string) (bool, error) {
 	baseParams := params
 	requestParams := params
+	continuation := &mcpContinuationState{}
 	for round := 0; ; round++ {
 		response, requestID, err := c.doRPC(ctx, method, requestParams, sessionID, true)
 		if err != nil {
-			return err
+			return continuation.submittedVerificationProof, err
 		}
 		rpc, readErr := c.readRPCResponse(ctx, response, requestID, sessionID)
 		_ = response.Body.Close()
 		if readErr != nil {
-			return readErr
+			return continuation.submittedVerificationProof, readErr
 		}
 		if rpc.Error != nil {
-			return newMCPRemoteError(method, rpc.Error)
+			return continuation.submittedVerificationProof, newMCPRemoteError(method, rpc.Error)
 		}
 		if c.protocolMode == MCPProtocol20260728 {
 			requestCtx := contextWithMCPClientContextAndRoots(ctx, c.threadID, c.turnID, c.itemID, c.roots)
-			nextParams, inputRequired, err := nextMCP2026RequestParams(requestCtx, c.serverName, c.elicitation, baseParams, rpc.Result)
+			nextParams, inputRequired, err := nextMCP2026RequestParams(requestCtx, c.serverName, c.elicitation, c.clientFeatures(), continuation, baseParams, rpc.Result)
 			if err != nil {
-				return err
+				return continuation.submittedVerificationProof, err
 			}
 			if inputRequired {
 				if round >= maxMCPInputRequiredRounds {
-					return fmt.Errorf("MCP %s exceeded %d input-required rounds", method, maxMCPInputRequiredRounds)
+					return continuation.submittedVerificationProof, fmt.Errorf("MCP %s exceeded %d input-required rounds", method, maxMCPInputRequiredRounds)
 				}
 				requestParams = nextParams
 				continue
 			}
 		}
 		if out == nil || rpc.Result == nil {
-			return nil
+			return continuation.submittedVerificationProof, nil
 		}
-		return json.Unmarshal(*rpc.Result, out)
+		return continuation.submittedVerificationProof, json.Unmarshal(*rpc.Result, out)
 	}
 }
 
