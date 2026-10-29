@@ -3,7 +3,6 @@
 package windowssandbox
 
 import (
-	"errors"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -34,8 +33,5 @@ func CurrentProcessHasPackageIdentity() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !hasIdentity && RegisteredCoreRequested() {
-		return false, errors.New("registered Core process has no package identity")
-	}
-	return hasIdentity, nil
+	return PackageIdentityDecision(hasIdentity, RegisteredCoreRequested())
 }

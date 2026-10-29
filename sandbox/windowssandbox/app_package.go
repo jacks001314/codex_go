@@ -102,6 +102,19 @@ func RequestedValue(value string, present bool) bool {
 	return setupenv.RequestedValue(value, present)
 }
 
+// PackageIdentityDecision ports the policy half of Rust's
+// `current_process_has_package_identity` (#46575): an OS-assigned package
+// identity keeps the caller's desktop app context for sandboxed descendants,
+// while a registered-core launch without one fails instead of silently
+// dropping that context. An ordinary unpackaged caller continues without
+// preserving app context.
+func PackageIdentityDecision(hasIdentity bool, registeredCore bool) (bool, error) {
+	if !hasIdentity && registeredCore {
+		return false, errors.New("registered Core process has no package identity")
+	}
+	return hasIdentity, nil
+}
+
 // RegisteredCoreRequested captures the startup request once (Rust's
 // `registered_core_requested` OnceLock). The flag never authorizes a package or
 // process by itself; it only decides whether a missing package identity is an

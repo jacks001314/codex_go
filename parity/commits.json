@@ -16553,9 +16553,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Already implemented in Go and now regression covered: sandbox/windowssandbox/app_package_windows.go CurrentProcessHasPackageIdentity queries the caller's OS package identity and the decision is factored into app_package.go PackageIdentityDecision, which preserves desktop app context when an identity exists and fails a registered-core launch without one (registered Core process has no package identity); process_windows.go:394 and conpty/conpty_windows.go:114 both drive ProcThreadAttributeCountForLaunch plus PreserveDesktopAppContext from that decision, and no executable-name or staged-runner verification gates it (Rust #46575). Tests: sandbox/windowssandbox/app_package_decision_like_rust_test.go TestPackageIdentityDecisionLikeRust plus existing TestProcThreadAttributeListPreservesDesktopAppContext and TestCurrentProcessHasPackageIdentityReadsTheOsPackageState. Verified: go build ./..., GOOS=darwin go build ./sandbox/windowssandbox, go test ./sandbox/windowssandbox/... -count=1."
    ]
   },
   {

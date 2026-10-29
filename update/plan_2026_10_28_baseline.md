@@ -2294,6 +2294,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - Regression: `network/proxy_static_config_platform_like_rust_test.go` adds `TestStaticProxyConfigValidatesNativePlatformPolicyLikeRust` covering a rejected relative socket path, an accepted absolute path, and the credential-broker MITM requirement.
 - Verified with `go build ./network/... ./cmd/...`, `go test ./network -count=1`, and `go vet ./network ./cmd/codex-network-proxy`.
 
-Status after reconciliation: `2075 complete`, `408 not_applicable`,
-`434 audit_pending`, `228 regression_pending`, `4 partial`,
+### Preserve Windows package identity for sandboxed descendants (Round 914)
+
+- Upstream (`fd59b42a09df`, #46575) lets the caller's OS-assigned package identity decide whether sandboxed descendants keep desktop app context, drops the `codex-command-runner.exe` and staged-runner verification, and rejects a registered-core caller that has no identity.
+- Go already implements this: `CurrentProcessHasPackageIdentity` queries `GetPackageFullName` for the current process, and both the regular and ConPTY launch paths derive `ProcThreadAttributeCountForLaunch` plus `PreserveDesktopAppContext` from it.
+- The policy is now factored into `PackageIdentityDecision` so the registered-core rejection is testable, and `app_package_decision_like_rust_test.go` adds `TestPackageIdentityDecisionLikeRust` covering identity present (with and without registered core), an unpackaged caller, and the rejection branch.
+- Verified with `go build ./...`, `GOOS=darwin go build ./sandbox/windowssandbox`, and `go test ./sandbox/windowssandbox/... -count=1`.
+
+Status after reconciliation: `2076 complete`, `408 not_applicable`,
+`434 audit_pending`, `227 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
