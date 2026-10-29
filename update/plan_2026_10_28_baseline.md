@@ -1213,6 +1213,15 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - `tui/tea` now stores the account plan (not just the kind), matching Rust's `Load<PlanType>`.
 - Verified: go test ./chatgptapi ./tui/analytics -count=1, go test ./tui/tea -run Analytics -count=1, go vet on the same packages, go build ./... .
 
-Status after reconciliation: `2015 complete`, `395 not_applicable`,
-`478 audit_pending`, `258 regression_pending`, `3 partial`,
+### Top chats table and dashboard card (#45765, part 2) (Round 840)
+
+- `tui/analytics/chat_panel.go` renders the Top chats table: the 30-day lifetime-credit header, the unavailable-estimate count, the lifetime-credit column with an "Est. $ spent" companion (stacked below width 70), `›` cursor markers, and a detail block that repeats truncated titles, sorts groups by descending credits, shows a model/effort/speed table or stacked lines, reports "Breakdown unavailable", and toggles zero-credit groups with `a`.
+- `analyticsChatRowWindow` fits the maximized viewport (with a five-row cap for the card), reports the cursor row's line range, and ends with "Showing a–b of n chats" and the local-chats coverage note; `AnalyticsChatOverviewLines` renders "30d active · lifetime credits", five rows, and "Some estimates unavailable" when any row lacks an estimate.
+- `tui/tea/analytics_dashboard.go` loads chats through the injected lister with a 90s budget, keeps the load independent from the reports, and mirrors Rust keys: `a` only with an open detail, `r` ignored on Chats, accept/move_right refused without an estimate, move_left closing details, and `↑/↓ row · accept details` instead of the 7/30d range row.
+- `tea.Options.OnAnalyticsChats` lets a runtime supply the thread lister; the dashboard copies it at open time.
+- Tests: table/stacked layouts, zero-credit toggle, unavailable breakdown, cursor window selection, overview five-row limit, business five-tab Top chats layout, row-hint footer, detail gating on unavailable rows, and `r` leaving the range untouched.
+- Verified: go test ./tui/analytics ./tui/tea -count=1, go vet ./tui/analytics ./tui/tea ./chatgptapi, go build ./..., plus a build/test of the staged snapshot in a throwaway worktree.
+
+Status after reconciliation: `2016 complete`, `395 not_applicable`,
+`478 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
