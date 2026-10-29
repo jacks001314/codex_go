@@ -2538,6 +2538,13 @@ Closed #46505 (cc7591646ef1) by making the Multi-Agent V2 catalog parameter sche
 - `JoinDescendant` now rejects any Windows segment carrying `:` in addition to `\`-rooted and drive-relative inputs.
 - Residual: protected metadata names still use host `filepath.Join` plus `PathWithin` (`sandbox/integrity/policy.go:300`), so a foreign executor convention is not applied there.
 
-Status after reconciliation: `2091 complete`, `409 not_applicable`,
-`428 audit_pending`, `218 regression_pending`, `3 partial`,
+### Enterprise ID-JAG authorization_details rejection (Round 930)
+
+- Rust #40722 adds the enterprise ID-JAG exchange; Go already ports the two-step exchange, destination policy, claim binding and credential redaction (`mcp/ema_exchange.go`, `mcp/ema_claims.go`, `mcp/ema_auth_policy.go`).
+- The audit missed the rmcp profile rule that rejects a non-empty `authorization_details` list: Go decoded the three carriers into structs that silently dropped the field.
+- `mcp/ema_claims.go:230` now rejects non-empty `authorization_details` in the signed ID-JAG claims and in the IdP response, and `mcp/ema_claims.go:297` does the same for the resource token response; an absent or empty list still validates.
+- New `mcp/ema_authorization_details_like_rust_test.go` covers absent, empty and non-empty lists for all three carriers.
+
+Status after reconciliation: `2092 complete`, `409 not_applicable`,
+`428 audit_pending`, `217 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

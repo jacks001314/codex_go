@@ -2531,9 +2531,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 15/16 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "mcp/ema_claims.go:230 and :297 reject non-empty authorization_details in the signed ID-JAG claims, the IdP response and the resource token response before a bearer is returned, matching the rmcp EMA profile used by Rust; mcp/ema_authorization_details_like_rust_test.go covers absent, empty and non-empty lists for all three carriers; existing mcp/ema_exchange_test.go already covers the round trip, signed narrowing, destination binding and credential redaction"
    ]
   },
   {
