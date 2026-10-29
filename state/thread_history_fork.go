@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"codex_go/rollout"
@@ -26,8 +27,8 @@ type threadHistoryForkTurnRow struct {
 
 // PreparePaginatedFork freezes a physical rollout prefix using the same
 // lineage and SQLite positions as Rust's thread-store paginated fork path.
-func (r *StateRuntime) PreparePaginatedFork(ctx context.Context, threadID, boundaryKind, turnID string) (*rollout.HistoryPosition, error) {
-	if err := r.materializePaginatedLineageForReference(ctx, threadID); err != nil {
+func (r *StateRuntime) PreparePaginatedFork(ctx context.Context, codexHome, threadID, boundaryKind, turnID string) (*rollout.HistoryPosition, error) {
+	if err := r.materializePaginatedLineageForReference(ctx, codexHome, threadID); err != nil {
 		return nil, err
 	}
 	lineage, db, err := r.prepareThreadHistoryRead(ctx, threadID, "prepare_fork")
@@ -121,7 +122,7 @@ func (r *StateRuntime) PreparePaginatedFork(ctx context.Context, threadID, bound
 	return normalizeThreadHistoryForkPosition(visibleLineage, position)
 }
 
-func (r *StateRuntime) materializePaginatedLineageForReference(ctx context.Context, requestedThreadID string) error {
+func (r *StateRuntime) materializePaginatedLineageForReference(ctx context.Context, codexHome, requestedThreadID string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -144,6 +145,9 @@ func (r *StateRuntime) materializePaginatedLineageForReference(ctx context.Conte
 		if !ok {
 			return invalidPaginatedLineage(threadID, "missing source rollout")
 		}
+		if err := validateManagedRolloutReference(codexHome, existing); err != nil {
+			return err
+		}
 		plain, err := rollout.MaterializeRolloutForReference(existing)
 		if err != nil {
 			return fmt.Errorf("failed to materialize referenced rollout %s: %w", existing, err)
@@ -163,6 +167,40 @@ func (r *StateRuntime) materializePaginatedLineageForReference(ctx context.Conte
 		}
 		threadID = strings.TrimSpace(meta.HistoryBase.ThreadID)
 	}
+}
+
+// validateManagedRolloutReference ports Rust #42135: reference lineages may use
+// either the logical Codex home path or its canonical target, but the resolved
+// rollout must stay inside the canonical managed `sessions` or
+// `archived_sessions` root so a nested symlink cannot escape Codex home.
+func validateManagedRolloutReference(codexHome, rolloutPath string) error {
+	outsideCodexHome := invalidThreadHistory(fmt.Sprintf("rollout path `%s` must be in Codex home directory", rolloutPath))
+	canonicalPath, err := canonicalizePath(rolloutPath)
+	if err != nil {
+		return outsideCodexHome
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return outsideCodexHome
+	}
+	for _, subdir := range []string{rollout.SessionsSubdir, rollout.ArchivedSessionsSubdir} {
+		canonicalRoot, err := canonicalizePath(filepath.Join(codexHome, subdir))
+		if err != nil {
+			continue
+		}
+		if pathWithinRoot(canonicalPath, canonicalRoot) {
+			return nil
+		}
+	}
+	return outsideCodexHome
+}
+
+func pathWithinRoot(path, root string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func findThreadHistoryForkTurn(ctx context.Context, db *sql.DB, lineage []threadHistoryLineageSegment, turnID string, newest bool) (*threadHistoryForkTurnRow, error) {

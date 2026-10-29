@@ -2701,6 +2701,17 @@ Four early MCP/remote-executor ledger entries were re-audited; one real MCP pack
 - `#40710` (not applicable): Go has no lazy persistent remote exec-server client or `Environment::refresh_connection`. `EnvironmentManager` opens a fresh client per info/status/tool path and closes it, so an executor replacement is observed by the next lookup and there is no stale session to retire or resume.
 - Verified with `go test ./app -run 'TestMCPAddRemovePackageStyleServerNameLikeRust|TestMCPAddListGetRemove' -count=1`, `go test ./mcp -run 'TestMCPOAuthFileCredentialsKeepRepeatedLocalPrefixesIsolatedLikeRust|TestComputeMCPOAuthStoreKeyLikeRust' -count=1`, and `go test ./tui/markdown -run 'LocalFileLink' -count=1`.
 
-Status after reconciliation: `2110 complete`, `414 not_applicable`,
-`412 audit_pending`, `210 regression_pending`, `3 partial`,
+### Symlinked session roots for paginated forks (Round 947)
+
+Paginated `thread/fork` lineage references are now validated against the canonical managed roots (#42135, complete).
+
+- Rust's `PlainForReference` lineage resolution canonicalizes each referenced rollout and accepts it only when it stays under the canonical `codex_home/sessions` or `codex_home/archived_sessions` root, so a resumed rollout beneath a symlinked managed root can fork while a nested link that escapes the root is rejected.
+- Go previously had no managed-root check in `materializePaginatedLineageForReference`, so a nested link could escape Codex home. `state.PreparePaginatedFork` now takes the Codex home (the router passes `session.Store.Root()`), and `validateManagedRolloutReference` applies the same canonical containment rule with the InvalidRequest message `rollout path ... must be in Codex home directory`.
+- `state.canonicalizePath` resolves Windows junctions the way Rust's `std::fs::canonicalize` does; `filepath.EvalSymlinks` does not follow them, which would leave the escape check ineffective there.
+- Tests: `TestPreparePaginatedForkAcceptsRolloutUnderSymlinkedSessionsRoot`, `TestPreparePaginatedForkRejectsReferenceEscapingSymlinkedSessionsRoot`, and `TestThreadForkAcceptsRolloutUnderSymlinkedSessionsRootLikeRust`. They use directory symlinks where permitted and fall back to Windows junctions, so all three execute on this host.
+- Verified with `go build ./...`, `go test ./state -count=1`, and `go test ./appserver -run 'Fork|History|Resume' -count=1`.
+
+Status after reconciliation: `2111 complete`, `414 not_applicable`,
+`411 audit_pending`, `210 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
+

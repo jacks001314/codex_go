@@ -2676,7 +2676,7 @@ func (r *Router) preparePaginatedForkHistoryBase(source *session.Record, params 
 			kind, turnID = state.ThreadHistoryForkBeforeTurn, strings.TrimSpace(params.BeforeTurnID)
 		}
 	}
-	position, err := r.state.PreparePaginatedFork(context.Background(), string(source.ID), kind, turnID)
+	position, err := r.state.PreparePaginatedFork(context.Background(), r.store.Root(), string(source.ID), kind, turnID)
 	if err != nil {
 		return nil, true, paginatedForkPrepareError(err)
 	}
