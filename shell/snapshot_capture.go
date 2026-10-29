@@ -120,16 +120,10 @@ func snapshotStartupPrefix(shellType ShellType, startup SnapshotStartup) string 
 	if startup != SnapshotStartupInteractive {
 		return ""
 	}
-	switch shellType {
-	case ShellZsh:
-		return shellStartupZsh
-	case ShellBash:
-		return shellStartupBash
-	case ShellSh:
+	if shellType == ShellSh {
 		return posixEnvPathExpansionFunction + "\n" + snapshotShStartupScript
-	default:
-		return ""
 	}
+	return ShellStartupScript(shellType)
 }
 
 // SnapshotExportsScript returns the native export-declaration capture script for
