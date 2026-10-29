@@ -1726,6 +1726,20 @@ Bound code-mode output previews across result blocks (#46073, closure).
   `tui/history_cell/mcp_preview_test.go` pins the shared budget across multiple
   result blocks and transcript preservation.
 
-Status after reconciliation: `2030 complete`, `400 not_applicable`,
-`462 audit_pending`, `254 regression_pending`, `3 partial`,
+### Document and test `?` wildcards in network proxy domain patterns (#46027) (Round 865)
+
+Document and test `?` wildcards in network proxy domain patterns (#46027).
+
+- Go already matched this grammar: `network/proxy_policy.go` compiles byte-level
+  `?`/`*` matchers with Rust `domain_matcher.rs` semantics, and
+  `CompileProxyDomainMatcher` expands `*.`/`**.` the same way (`?*.<domain>`,
+  plus the apex for `**.`).
+- This round ports the upstream table into
+  `network/proxy_policy_question_mark_like_rust_test.go`: single and repeated
+  `?`, `?` combined with `*`, `*.`/`**.` combinations, dot matching, and host
+  and pattern normalization, exercised against both allow and deny matcher
+  configurations.
+
+Status after reconciliation: `2031 complete`, `400 not_applicable`,
+`461 audit_pending`, `254 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

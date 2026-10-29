@@ -14691,9 +14691,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go already implements question-mark wildcards in network proxy domain patterns: network/proxy_policy.go ProxyDomainMatcher compiles byte-level `?`/`*` matchers (Rust domain_matcher.rs semantics), and CompileProxyDomainMatcher expands `*.`/`**.` exactly like Rust (subdomain prefixes become `?*.<domain>`, and `**.` also keeps the apex); new network/proxy_policy_question_mark_like_rust_test.go ports the upstream table (single/repeated `?`, `?`+`*`, `*.`/`**.` combinations, dot matching, host/pattern normalization) and passes for both allow and deny matcher configurations"
    ]
   },
   {
