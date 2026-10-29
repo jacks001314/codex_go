@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codex_go/sandbox/windowssandbox/internal/setupenv"
 )
 
 func TestPipePairUsesRunnerPrefix(t *testing.T) {
@@ -44,5 +46,24 @@ func TestFindRunnerExeMaterializesSingleFileCLI(t *testing.T) {
 	}
 	if string(data) != "single-file-cli" {
 		t.Fatalf("materialized runner = %q", data)
+	}
+}
+
+// TestResolveHelperForRuntimeRegisteredUsesAppContainedRunnerLikeRust verifies
+// that an opt-in registered runtime resolves the app-contained runner directly
+// and never copies a helper or searches PATH (Rust #45550).
+func TestResolveHelperForRuntimeRegisteredUsesAppContainedRunnerLikeRust(t *testing.T) {
+	home := t.TempDir()
+	currentExe := filepath.Join(t.TempDir(), "codex.exe")
+	got := resolveHelperForRuntime(home, currentExe, setupenv.Registered)
+	want := filepath.Join(filepath.Dir(currentExe), commandRunnerFileName)
+	if got != want {
+		t.Fatalf("resolveHelperForRuntime(registered) = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(got); !os.IsNotExist(err) {
+		t.Fatalf("registered runner unexpectedly exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, sandboxBinDirname)); !os.IsNotExist(err) {
+		t.Fatalf("registered runtime created the legacy bin dir: %v", err)
 	}
 }

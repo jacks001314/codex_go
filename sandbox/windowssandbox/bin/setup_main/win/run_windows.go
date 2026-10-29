@@ -47,6 +47,7 @@ type setupPayload struct {
 	RealUser          string          `json:"real_user"`
 	Mode              setupMode       `json:"mode,omitempty"`
 	RefreshOnly       bool            `json:"refresh_only,omitempty"`
+	Runtime           string          `json:"runtime,omitempty"`
 }
 
 func run(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -127,6 +128,11 @@ func payloadFromArgs(args []string) (*setupPayload, error) {
 	default:
 		return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "unknown setup mode: %s", payload.Mode)
 	}
+	switch payload.Runtime {
+	case "", string(windowssandbox.SetupRuntimeLegacy), string(windowssandbox.SetupRuntimeRegistered):
+	default:
+		return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "unknown setup runtime: %s", payload.Runtime)
+	}
 	if strings.TrimSpace(payload.CodexHome) == "" {
 		return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "codex_home is required")
 	}
@@ -134,6 +140,9 @@ func payloadFromArgs(args []string) (*setupPayload, error) {
 }
 
 func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error {
+	if err := validateSetupRuntimeForProvisioning(payload); err != nil {
+		return err
+	}
 	writesSetupMarker := !payload.RefreshOnly && payload.Mode != setupModeReadACLsOnly
 	if writesSetupMarker {
 		if err := prepareSetupMarker(payload.CodexHome, payload.RealUser); err != nil {
@@ -162,6 +171,19 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 		}
 	}
 	return nil
+}
+
+// validateSetupRuntimeForProvisioning keeps registered Core accounts owned by
+// the packaged service; the helper must never provision them itself (Rust
+// setup_provisioning "registered Core requires service-owned provisioning").
+func validateSetupRuntimeForProvisioning(payload *setupPayload) error {
+	if payload == nil || payload.Runtime != string(windowssandbox.SetupRuntimeRegistered) {
+		return nil
+	}
+	if payload.Mode == setupModeReadACLsOnly || payload.RefreshOnly {
+		return nil
+	}
+	return setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "registered Core requires service-owned provisioning")
 }
 
 func runReadACLOnly(payload *setupPayload, log io.Writer) error {
@@ -580,6 +602,11 @@ func commitSetupMarker(codexHome string, offlineUsername string, onlineUsername 
 }
 
 func lockSandboxBinDir(payload *setupPayload, sandboxGroupSID []byte, log io.Writer) error {
+	// Registered Core has no legacy bin directory to lock (Rust
+	// `lock_sandbox_bin_dir`).
+	if payload.Runtime == string(windowssandbox.SetupRuntimeRegistered) {
+		return nil
+	}
 	err := lockSandboxDir(
 		windowssandbox.SandboxBinDir(payload.CodexHome),
 		payload.RealUser,

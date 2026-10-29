@@ -50,7 +50,7 @@ func (r *RuntimeRouter) windowsSandboxSetupCWD(param *string) (string, error) {
 	return filepath.Clean(cwd), nil
 }
 
-func (r *RuntimeRouter) windowsSandboxSetupRuntimeRequest(mode sandbox.WindowsSetupMode, cwd string) (*WindowsSandboxSetupRuntimeRequest, error) {
+func (r *RuntimeRouter) windowsSandboxSetupRuntimeRequest(mode sandbox.WindowsSetupMode, cwd string, hasRequestedCWD bool) (*WindowsSandboxSetupRuntimeRequest, error) {
 	read, err := r.requireConfig().Read(&config.ConfigReadParams{CWD: &cwd})
 	if err != nil {
 		return nil, err
@@ -67,13 +67,20 @@ func (r *RuntimeRouter) windowsSandboxSetupRuntimeRequest(mode sandbox.WindowsSe
 			Profile: &profile,
 		}
 	}
+	// Setup without a project must not grant writes to the app's install
+	// directory, which is only the fallback cwd (Rust #45550
+	// `omitted_cwd_does_not_make_the_server_directory_a_workspace`).
+	workspaceRoots := []string{}
+	if hasRequestedCWD {
+		workspaceRoots = threadRuntimeWorkspaceRoots(cwd, resolved.WorkspaceRoots)
+	}
 	return &WindowsSandboxSetupRuntimeRequest{
 		Mode:                mode,
 		CWD:                 cwd,
 		CodexHome:           r.requireConfig().CodexHome(),
 		PermissionProfileID: strings.TrimSpace(resolved.ID),
 		PermissionProfile:   resolved.Profile,
-		WorkspaceRoots:      threadRuntimeWorkspaceRoots(cwd, resolved.WorkspaceRoots),
+		WorkspaceRoots:      workspaceRoots,
 		Env:                 windowsSandboxSetupEnvMap(os.Environ()),
 	}, nil
 }

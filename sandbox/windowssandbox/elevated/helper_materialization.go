@@ -8,6 +8,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+
+	"codex_go/sandbox/windowssandbox/internal/setupenv"
 )
 
 const (
@@ -22,6 +24,20 @@ const (
 var helperPathCache sync.Map
 
 func resolveHelperForLaunch(codexHome string, currentExe string) string {
+	return resolveHelperForRuntime(codexHome, currentExe, setupenv.Current())
+}
+
+// resolveHelperForRuntime selects the command runner for the requested runtime.
+// A registered runtime uses the app-contained runner and must fail rather than
+// materialize a copy or search PATH (Rust #45550).
+func resolveHelperForRuntime(codexHome string, currentExe string, runtime setupenv.Runtime) string {
+	if !runtime.IsLegacy() {
+		dir := filepath.Dir(currentExe)
+		if strings.TrimSpace(currentExe) == "" || dir == "." {
+			return commandRunnerFileName
+		}
+		return filepath.Join(dir, commandRunnerFileName)
+	}
 	path, err := copyCommandRunnerIfNeeded(codexHome, currentExe)
 	if err == nil {
 		return path

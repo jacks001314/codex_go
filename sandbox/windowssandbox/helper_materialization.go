@@ -55,8 +55,18 @@ func ResolveCurrentExeForLaunch(currentExe string) (string, error) {
 }
 
 func ResolveExeForLaunch(source string, codexHome string) (string, error) {
+	return ResolveExeForRuntime(source, codexHome, CurrentSetupRuntime())
+}
+
+// ResolveExeForRuntime resolves the executable used to launch a helper. A
+// registered runtime selects the app-contained source directly and never
+// materializes a copy (Rust `resolve_exe_for_runtime`).
+func ResolveExeForRuntime(source string, codexHome string, runtime SetupRuntime) (string, error) {
 	if strings.TrimSpace(source) == "" {
 		return "", ErrInvalidRequest
+	}
+	if !runtime.IsLegacy() {
+		return source, nil
 	}
 	fileName := filepath.Base(source)
 	if fileName == "." || fileName == string(filepath.Separator) {
@@ -70,11 +80,30 @@ func ResolveExeForLaunch(source string, codexHome string) (string, error) {
 }
 
 func ResolveHelperForLaunch(kind HelperExecutable, codexHome string, currentExe string) string {
+	return ResolveHelperForRuntime(kind, codexHome, currentExe, CurrentSetupRuntime())
+}
+
+// ResolveHelperForRuntime resolves a helper for launch. A registered runtime
+// must use the app-contained helper without copying it into the sandbox bin
+// directory or falling back to a PATH lookup (Rust #45550).
+func ResolveHelperForRuntime(kind HelperExecutable, codexHome string, currentExe string, runtime SetupRuntime) string {
+	if !runtime.IsLegacy() {
+		return AppContainedHelperPath(kind, currentExe)
+	}
 	path, err := CopyHelperIfNeeded(kind, codexHome, currentExe)
 	if err == nil {
 		return path
 	}
 	return LegacyLookup(kind, currentExe)
+}
+
+// AppContainedHelperPath returns the helper path beside the current executable.
+func AppContainedHelperPath(kind HelperExecutable, currentExe string) string {
+	dir := filepath.Dir(currentExe)
+	if strings.TrimSpace(currentExe) == "" || dir == "." {
+		return kind.FileName()
+	}
+	return filepath.Join(dir, kind.FileName())
 }
 
 func CopyHelperIfNeeded(kind HelperExecutable, codexHome string, currentExe string) (string, error) {

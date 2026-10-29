@@ -373,6 +373,7 @@ func spawnWindowsSandboxLiveSessionElevated(capture *windowssandbox.CaptureReque
 	session := &LiveSession{Stdin: input, Readers: readers}
 	session.wait = func() (int, error) {
 		result := <-exitCh
+		elevated.RecordCommandOutcome(result.exitCode, result.err)
 		return result.exitCode, result.err
 	}
 	session.terminate = input.terminate

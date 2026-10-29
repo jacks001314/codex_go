@@ -12899,7 +12899,8 @@ func (r *RuntimeRouter) handleWindowsSandboxSetupStart(request *Request) (*sandb
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	cwd, err := r.windowsSandboxSetupCWD(params.CWD)
+	requestedCWD := params.CWD
+	cwd, err := r.windowsSandboxSetupCWD(requestedCWD)
 	if err != nil {
 		return nil, err
 	}
@@ -12909,7 +12910,7 @@ func (r *RuntimeRouter) handleWindowsSandboxSetupStart(request *Request) (*sandb
 	}
 	params.Mode = sandbox.WindowsSetupMode(resolved)
 	params.CWD = &cwd
-	setupRequest, err := r.windowsSandboxSetupRuntimeRequest(params.Mode, cwd)
+	setupRequest, err := r.windowsSandboxSetupRuntimeRequest(params.Mode, cwd, requestedCWD != nil)
 	if err != nil {
 		return nil, err
 	}

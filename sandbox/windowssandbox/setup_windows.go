@@ -50,6 +50,26 @@ type setupElevationPayload struct {
 	RealUser          string   `json:"real_user"`
 	Mode              string   `json:"mode"`
 	RefreshOnly       bool     `json:"refresh_only,omitempty"`
+	Runtime           string   `json:"runtime,omitempty"`
+}
+
+// setupPayloadRuntime serializes the selected setup runtime. Legacy stays
+// omitted so payloads remain wire-compatible (Rust skips serializing Legacy).
+func setupPayloadRuntime() string {
+	if CurrentSetupRuntime().IsLegacy() {
+		return ""
+	}
+	return string(SetupRuntimeRegistered)
+}
+
+// requireLegacySetupRuntime rejects helper-owned account provisioning for a
+// registered Core, which must be provisioned by the packaged service
+// (Rust "registered Core requires service-owned provisioning").
+func requireLegacySetupRuntime() error {
+	if CurrentSetupRuntime().IsLegacy() {
+		return nil
+	}
+	return setupFailuref(SetupErrorHelperRequestArgsFailed, "registered Core requires service-owned provisioning")
 }
 
 func setupExecutableArgs(payloadB64 string, useDispatchFlag bool) []string {
@@ -86,6 +106,9 @@ type shellExecuteInfoW struct {
 }
 
 func runElevatedSetup(req *SandboxSetupRequest) error {
+	if err := requireLegacySetupRuntime(); err != nil {
+		return err
+	}
 	if req.Permissions == nil || !req.Permissions.IsEnforceableByWindowsSandbox() {
 		return fmt.Errorf("unsupported filesystem permissions for Windows sandbox setup")
 	}
@@ -116,6 +139,7 @@ func runElevatedSetup(req *SandboxSetupRequest) error {
 		AllowLocalBinding: offlineProxySettings.AllowLocalBinding,
 		RealUser:          setupRealUser(req.RealUser),
 		Mode:              setupModeFull,
+		Runtime:           setupPayloadRuntime(),
 	}
 	elevated, err := isElevated()
 	if err != nil {
@@ -125,6 +149,9 @@ func runElevatedSetup(req *SandboxSetupRequest) error {
 }
 
 func runElevatedProvisioningSetup(req *SandboxSetupRequest) error {
+	if err := requireLegacySetupRuntime(); err != nil {
+		return err
+	}
 	if req.CodexHome == "" {
 		return ErrInvalidRequest
 	}
@@ -161,6 +188,7 @@ func runElevatedProvisioningSetup(req *SandboxSetupRequest) error {
 		ProxyPorts:      []uint16{},
 		RealUser:        setupRealUser(req.RealUser),
 		Mode:            setupModeProvisionOnly,
+		Runtime:         setupPayloadRuntime(),
 	}
 	return runSetupExe(payload, false, req.CodexHome, true)
 }
@@ -192,6 +220,7 @@ func runSetupRefresh(codexHome string) error {
 		RealUser:          setupRealUser(""),
 		Mode:              setupModeFull,
 		RefreshOnly:       true,
+		Runtime:           setupPayloadRuntime(),
 	}
 	return runSetupExe(payload, false, codexHome, true)
 }
@@ -228,6 +257,7 @@ func runSetupRefreshForRequest(req *SandboxSetupRequest) error {
 		RealUser:          setupRealUser(req.RealUser),
 		Mode:              setupModeFull,
 		RefreshOnly:       true,
+		Runtime:           setupPayloadRuntime(),
 	}
 	return runSetupExe(payload, false, req.CodexHome, true)
 }
@@ -244,6 +274,9 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 		if err := EncodeSandboxLaunchPayload(payloadB64, launchEnv); err != nil {
 			return setupFailuref(SetupErrorOrchestratorPayloadSerializeFailed, "failed to encode elevation payload environment: %v", err)
 		}
+		// The helper is a separate process; carry the parent's runtime selection
+		// explicitly instead of inheriting a shell override.
+		ApplyWrapperRuntimeEnv(launchEnv)
 	}
 	clearedReport := true
 	if err := ClearSetupErrorReport(codexHome); err != nil {
@@ -404,6 +437,9 @@ func setupRealUser(value string) string {
 	if value != "" {
 		return value
 	}
+	if user, err := currentSetupUser(); err == nil && user != "" {
+		return user
+	}
 	if user := os.Getenv("USERNAME"); user != "" {
 		return user
 	}
@@ -411,6 +447,32 @@ func setupRealUser(value string) string {
 		return user
 	}
 	return "Administrators"
+}
+
+// currentSetupUser resolves the requesting process identity from its token
+// rather than USERNAME, which elevation cannot change (Rust
+// `runtime_ownership::current_setup_user`).
+func currentSetupUser() (string, error) {
+	var token windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
+		return "", err
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	if user == nil || user.User.Sid == nil || !user.User.Sid.IsValid() {
+		return "", fmt.Errorf("token user SID not present")
+	}
+	account, domain, _, err := user.User.Sid.LookupAccount("")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(domain) != "" {
+		return domain + `\` + account, nil
+	}
+	return account, nil
 }
 
 func offlineProxySettingsForRequest(req *SandboxSetupRequest, networkIdentity SandboxNetworkIdentity) OfflineProxySettings {

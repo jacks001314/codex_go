@@ -1,0 +1,43 @@
+//go:build windows
+
+package win
+
+import (
+	"strings"
+	"testing"
+
+	"codex_go/sandbox/windowssandbox"
+)
+
+// TestRegisteredRuntimeRejectsHelperOwnedProvisioningLikeRust pins Rust #45550:
+// a registered Core's managed accounts belong to the packaged service, so the
+// helper refuses to provision them but still allows refresh-only and read-ACL
+// passes.
+func TestRegisteredRuntimeRejectsHelperOwnedProvisioningLikeRust(t *testing.T) {
+	registered := string(windowssandbox.SetupRuntimeRegistered)
+	cases := []struct {
+		name    string
+		payload setupPayload
+		wantErr bool
+	}{
+		{name: "registered full", payload: setupPayload{Runtime: registered, Mode: setupModeFull}, wantErr: true},
+		{name: "registered provision", payload: setupPayload{Runtime: registered, Mode: setupModeProvision}, wantErr: true},
+		{name: "registered refresh", payload: setupPayload{Runtime: registered, Mode: setupModeFull, RefreshOnly: true}},
+		{name: "registered read acls", payload: setupPayload{Runtime: registered, Mode: setupModeReadACLsOnly}},
+		{name: "legacy full", payload: setupPayload{Mode: setupModeFull}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSetupRuntimeForProvisioning(&tc.payload)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateSetupRuntimeForProvisioning() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "registered Core requires service-owned provisioning") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+	if err := validateSetupRuntimeForProvisioning(nil); err != nil {
+		t.Fatalf("nil payload error = %v", err)
+	}
+}

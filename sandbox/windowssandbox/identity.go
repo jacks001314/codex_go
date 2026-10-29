@@ -295,7 +295,25 @@ func SandboxSetupIsComplete(codexHome string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	return users.VersionMatches(), nil
+	if !users.VersionMatches() {
+		return false, nil
+	}
+	if !CurrentSetupRuntime().IsLegacy() {
+		ready, err := registeredSetupIsReady()
+		if err != nil || !ready {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// registeredSetupIsReady checks the receipt Go can verify for an opt-in
+// registered Core. The service-owned installation record and staged alias do
+// not exist in Go's direct-setup architecture, so the observable requirement is
+// that the requesting process actually carries an OS package identity
+// (Rust `registered_setup_is_ready`).
+func registeredSetupIsReady() (bool, error) {
+	return CurrentProcessHasPackageIdentity()
 }
 
 func WriteSandboxUsersFile(codexHome string, users *SandboxUsersFile) error {

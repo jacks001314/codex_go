@@ -3,8 +3,9 @@ package windowssandbox
 import (
 	"errors"
 	"fmt"
-	"os"
-	"sync"
+	"strings"
+
+	"codex_go/sandbox/windowssandbox/internal/setupenv"
 )
 
 // Windows package-name query results (winerror.h / appmodel.h).
@@ -19,7 +20,16 @@ const (
 
 // registeredCoreEnv selects the registered-core runtime for Windows sandbox
 // wrappers (Rust `CODEX_WINDOWS_REGISTERED_CORE`).
-const registeredCoreEnv = "CODEX_WINDOWS_REGISTERED_CORE"
+const registeredCoreEnv = setupenv.RegisteredCoreEnv
+
+// SetupRuntime selects legacy helper materialization or verified app-contained
+// Core for setup (Rust `SetupRuntime`).
+type SetupRuntime = setupenv.Runtime
+
+const (
+	SetupRuntimeLegacy     = setupenv.Legacy
+	SetupRuntimeRegistered = setupenv.Registered
+)
 
 // PackageNameQuery mirrors Rust's `query_package_name` query closure: it
 // receives the length pointer and an optional buffer and returns the Win32
@@ -89,22 +99,43 @@ func decodePackageName(units []uint16) (string, error) {
 // RequestedValue ports Rust's `requested_value`: only the exact value `1`
 // requests registered-core execution.
 func RequestedValue(value string, present bool) bool {
-	return present && value == "1"
+	return setupenv.RequestedValue(value, present)
 }
-
-var (
-	registeredCoreOnce  sync.Once
-	registeredCoreValue bool
-)
 
 // RegisteredCoreRequested captures the startup request once (Rust's
 // `registered_core_requested` OnceLock). The flag never authorizes a package or
 // process by itself; it only decides whether a missing package identity is an
 // error.
 func RegisteredCoreRequested() bool {
-	registeredCoreOnce.Do(func() {
-		value, present := os.LookupEnv(registeredCoreEnv)
-		registeredCoreValue = RequestedValue(value, present)
-	})
-	return registeredCoreValue
+	return setupenv.Requested()
+}
+
+// CurrentSetupRuntime returns the runtime selected when this process started
+// (Rust `current_setup_runtime`).
+func CurrentSetupRuntime() SetupRuntime {
+	return setupenv.Current()
+}
+
+// ApplyWrapperRuntimeEnv propagates the parent's runtime selection to an
+// external sandbox wrapper process (Rust
+// `add_windows_sandbox_wrapper_setup_env`). Any inherited or shell-supplied
+// spelling is removed first so a child cannot override the parent's choice.
+func ApplyWrapperRuntimeEnv(env map[string]string) {
+	ApplyWrapperRuntimeEnvForSelection(env, RegisteredCoreRequested())
+}
+
+// ApplyWrapperRuntimeEnvForSelection is the injectable form used by tests and
+// by callers that already captured the startup selection.
+func ApplyWrapperRuntimeEnvForSelection(env map[string]string, registeredCore bool) {
+	if env == nil {
+		return
+	}
+	for key := range env {
+		if strings.EqualFold(key, registeredCoreEnv) {
+			delete(env, key)
+		}
+	}
+	if registeredCore {
+		env[registeredCoreEnv] = "1"
+	}
 }

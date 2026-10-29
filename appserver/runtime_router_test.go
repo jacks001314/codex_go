@@ -2609,6 +2609,38 @@ func TestRuntimeRouterWindowsSandboxSetupStartUsesEffectiveWorkspaceRootsLikeRus
 	}
 }
 
+// TestRuntimeRouterWindowsSandboxSetupStartWithoutCWDHasNoWorkspaceRootsLikeRust
+// ports `omitted_cwd_does_not_make_the_server_directory_a_workspace`: setup
+// without a project keeps the fallback cwd but grants no workspace writes there.
+func TestRuntimeRouterWindowsSandboxSetupStartWithoutCWDHasNoWorkspaceRootsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	installDir := t.TempDir()
+	requests := make(chan *WindowsSandboxSetupRuntimeRequest, 1)
+	router := NewRuntimeRouter(RuntimeServices{
+		Windows:    sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:     config.NewConfigService(home),
+		DefaultCWD: installDir,
+		WindowsSetupRunner: func(request *WindowsSandboxSetupRuntimeRequest) error {
+			requests <- request
+			return errors.New("stop after capture")
+		},
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodWindowsSandboxSetupStart, sandbox.WindowsSetupStartParams{
+		Mode: sandbox.WindowsSetupUnelevated,
+	}))
+	if response.Error != nil || !response.Result.(*sandbox.WindowsSetupStartResponse).Started {
+		t.Fatalf("windows setup start = %+v", response)
+	}
+	setupRequest := <-requests
+	if !sameAppPath(setupRequest.CWD, installDir) {
+		t.Fatalf("setup cwd = %q, want fallback %q", setupRequest.CWD, installDir)
+	}
+	if len(setupRequest.WorkspaceRoots) != 0 {
+		t.Fatalf("setup workspace roots = %#v, want none", setupRequest.WorkspaceRoots)
+	}
+}
+
 func TestRuntimeRouterWindowsSandboxSetupStartNotificationReportsFailureLikeRust(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()

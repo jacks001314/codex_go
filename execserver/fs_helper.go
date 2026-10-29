@@ -468,6 +468,9 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
+	// The wrapper runs in a separate process and must inherit the parent's
+	// runtime selection, not a shell-supplied override (Rust #45550).
+	windowssandbox.ApplyWrapperRuntimeEnv(env)
 	return append([]string{executable}, args...), env, nil
 }
 

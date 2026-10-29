@@ -196,6 +196,21 @@ func RetryRunnerSpawnOnce[T any](
 	spawn func(SandboxCredentials) (T, error),
 	refresh func() (SandboxCredentials, error),
 ) (T, error) {
+	result, err := retryRunnerSpawnOnce(creds, command, spawn, refresh)
+	if err != nil {
+		recordRunnerResult("startup", "error")
+	} else {
+		recordRunnerResult("startup", "success")
+	}
+	return result, err
+}
+
+func retryRunnerSpawnOnce[T any](
+	creds SandboxCredentials,
+	command []string,
+	spawn func(SandboxCredentials) (T, error),
+	refresh func() (SandboxCredentials, error),
+) (T, error) {
 	result, err := spawn(creds)
 	if err == nil {
 		return result, nil
