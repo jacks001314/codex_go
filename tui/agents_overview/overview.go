@@ -900,15 +900,15 @@ func (v *View) VisibleIndices() []int {
 	v.sortPinnedBySectionPosition(pinned)
 	switch v.State.Grouping {
 	case GroupingModel:
-		// Model grouping: sort by model name while preserving host recency
-		// order within a group (Rust #44957).
-		v.stableSortByGroupKey(visible, func(index int) string {
+		// Model grouping: sort by model name, newest task first within a group
+		// (Rust #44957).
+		v.sortByGroupKeyThenRecency(visible, func(index int) string {
 			return ModelName(v.Rows[index].Model)
 		})
 	case GroupingDirectory:
-		// Directory grouping: sort by canonical directory while preserving host
-		// recency order within a group (Rust #56308).
-		v.stableSortByGroupKey(visible, func(index int) string {
+		// Directory grouping: sort by canonical directory, newest task first
+		// within a group (Rust #56308).
+		v.sortByGroupKeyThenRecency(visible, func(index int) string {
 			return v.directoryGroupAt(index)
 		})
 	case GroupingStatus:
@@ -917,9 +917,9 @@ func (v *View) VisibleIndices() []int {
 		v.sortByRetainedStatusRank(visible)
 	default:
 		// Project grouping: sort by the project-group key (linked checkouts of
-		// one repository share a key, Rust #43279) while preserving host
-		// recency order within a group.
-		v.stableSortByGroupKey(visible, func(index int) string {
+		// one repository share a key, Rust #43279), newest task first within a
+		// group.
+		v.sortByGroupKeyThenRecency(visible, func(index int) string {
 			group := v.projectGroupAt(index)
 			return group.commonDir + "\x00" + group.relativeCWD
 		})
@@ -1001,20 +1001,25 @@ func (v *View) renameTargetIndex() int {
 	return -1
 }
 
-// stableSortByGroupKey sorts rows by a group key with an insertion sort, which
-// keeps the host's recency order within each group.
-func (v *View) stableSortByGroupKey(indices []int, key func(index int) string) {
+// sortByGroupKeyThenRecency sorts rows by group key and then newest first, so a
+// keyed grouping never depends on the host's list order (Rust
+// AgentsOverviewGrouping::visible_indices sorts by `(key, Reverse(updated_at))`).
+// Equal timestamps keep the host's order.
+func (v *View) sortByGroupKeyThenRecency(indices []int, key func(index int) string) {
 	less := func(left int, right int) bool {
-		return key(left) < key(right)
+		if leftKey, rightKey := key(left), key(right); leftKey != rightKey {
+			return leftKey < rightKey
+		}
+		return v.Rows[left].UpdatedAt > v.Rows[right].UpdatedAt
 	}
 	for i := 1; i < len(indices); i++ {
-		key := indices[i]
+		current := indices[i]
 		j := i - 1
-		for j >= 0 && less(key, indices[j]) {
+		for j >= 0 && less(current, indices[j]) {
 			indices[j+1] = indices[j]
 			j--
 		}
-		indices[j+1] = key
+		indices[j+1] = current
 	}
 }
 
