@@ -1231,6 +1231,32 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Part 2 will render the consumer table, `s` sort cycling, and the dashboard card.
 - Verified: go test ./chatgptapi ./tui/analytics -count=1, go test ./tui/tea -run Analytics -count=1, go vet ./chatgptapi ./tui/analytics, go build ./... .
 
-Status after reconciliation: `2016 complete`, `395 not_applicable`,
-`477 audit_pending`, `258 regression_pending`, `3 partial`,
+### Consumer Top chats table and dashboard card (#45768, part 2) (Round 842)
+
+Consumer Top chats table and dashboard card (#45768, part 2).
+
+- `tui/analytics/task_panel.go` renders the consumer ranking: metric cycling
+  (`Weekly %`, `5-hour %`, `Balance credits`) clamped onto the metrics present
+  in the data, descending order with missing values last, optional multi-metric
+  columns when the width fits, per-row partial markers, a detail pane with the
+  limit/balance figures and the `Model / effort / speed` group table, plus
+  coverage, truncation, freshness and unavailable footers. The overview card
+  keeps five rows and a `Showing top N of M chats` counter.
+- Consumers now receive Chats as the fifth dashboard section; businesses keep
+  the lifetime usage card. `AnalyticsPanelOptions` and
+  `AnalyticsDashboardOptions` carry the task rows, readiness and active metric.
+- `tui/tea/analytics_dashboard.go` loads consumer task usage on a 120s budget,
+  invalidates it on refresh/cancel, clamps the cursor, cycles the metric with
+  `s`, gates detail on available accounting, and adds the `s sort` footer hint.
+  `Options.OnAnalyticsTaskThreads` supplies the descendant lister.
+- Tests cover metric availability and fallback, ranking (`1e-20` below `0`,
+  missing last), partial and unavailable rendering, footers, the five-row card,
+  and an end-to-end consumer run with hidden titles, exact credits, `s` cycling
+  `0→1→2→0`, gated detail and the top-two counter.
+- Verified with `go test ./chatgptapi -count=1`, `go test ./tui/analytics
+  -count=1`, `go test ./tui/tea -count=1`, `go vet ./chatgptapi
+  ./tui/analytics ./tui/tea`, and `go build ./...`.
+
+Status after reconciliation: `2017 complete`, `395 not_applicable`,
+`477 audit_pending`, `258 regression_pending`, `2 partial`,
 `6 blocked_precondition`.
