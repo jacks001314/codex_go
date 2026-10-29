@@ -13215,9 +13215,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Already implemented: config.Config.GuardianPolicyTemplate() reads [auto_review] experimental_policy_template through autoReviewConfigValue (trimmed, blank treated as unset); appserver.guardianReviewInstructions prefers the config override over the model catalog template and falls back to the bundled state.GuardianPolicyTemplate(); state.RenderGuardianPolicyInstructions substitutes {{ tenant_policy_config }}. Rust's config.schema.json has no Go counterpart. Existing tests cover deserialization/trimming (config/guardian_policy_config_test.go), catalog-vs-config precedence and rendered policy text (appserver/guardian_reviewer_test.go), and placeholder rendering (state/guardian_instructions_test.go). Regression: go test ./config -run Guardian, ./appserver -run Guardian, ./state -run Guardian all pass."
    ]
   },
   {

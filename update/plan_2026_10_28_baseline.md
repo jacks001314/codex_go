@@ -925,6 +925,14 @@ Audited `#42207` and recorded it as not applicable. The upstream change only nar
 - Rust's `HttpClientFactory` has no Go counterpart (clients come from `PolicyHTTPClient`), so only its behaviour is mirrored; factory identity equality has nothing to compare.
 - Verified with `go test ./network`, `go test ./app -run Network`, and `go test ./appserver -run 'NetworkPolicy|ApplicationNetwork'`.
 
-Status after reconciliation: `1993 complete`, `390 not_applicable`,
-`500 audit_pending`, `266 regression_pending`, `0 partial`,
+### Verify the configurable Guardian prompt template (#45516) (Round 808)
+
+- Already implemented end to end, so this round is a regression pass.
+- `config.Config.GuardianPolicyTemplate()` reads `[auto_review] experimental_policy_template` through `autoReviewConfigValue`: the value is trimmed, and a blank value counts as unset so the catalog/bundled layers still apply.
+- `appserver.guardianReviewInstructions` prefers the config override over the model catalog template and keeps the bundled `state.GuardianPolicyTemplate()` as the final fallback; `state.RenderGuardianPolicyInstructions` substitutes `{{ tenant_policy_config }}` with the resolved policy.
+- Rust's `config.schema.json` has no Go counterpart, so the schema entry has nothing to mirror.
+- Coverage: `config/guardian_policy_config_test.go` (deserialization, trimming, managed-vs-config precedence), `appserver/guardian_reviewer_test.go` (catalog-vs-config precedence, rendered policy text), `state/guardian_instructions_test.go` (placeholder rendering). Verified with `go test ./config -run Guardian`, `go test ./appserver -run Guardian`, `go test ./state -run Guardian`.
+
+Status after reconciliation: `1994 complete`, `390 not_applicable`,
+`499 audit_pending`, `266 regression_pending`, `0 partial`,
 `6 blocked_precondition`.
