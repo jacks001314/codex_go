@@ -14823,9 +14823,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Windows sandbox setup now mirrors #46043 in the setup helper: ReadLocalUserFlags (NetUserGetInfo level 1) exposes account flags; sandboxAccountNeedsFullSetup treats missing, disabled, and password-expired accounts as needing full setup; refresh-only setup fails with \"registration refresh cannot repair or replace a sandbox account\" before ACL work; provisioning and full setup verify neither account is still UF_PASSWORD_EXPIRED (\"Windows sandbox account password is still expired after setup\"). The orchestrator already classified 1330/1907 logon rejections as a credential mismatch, ran one full setup, and reloaded credentials. Service-side registered.rs is N/A: Go has no Windows sandbox service runtime registration. Tests: go test ./sandbox/windowssandbox/... -count=1; go build ./...; linux/darwin cross-build of the sandbox tree."
    ]
   },
   {

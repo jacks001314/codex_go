@@ -50,6 +50,10 @@ type setupPayload struct {
 	Runtime           string          `json:"runtime,omitempty"`
 }
 
+func (p *setupPayload) sandboxUsernames() []string {
+	return []string{p.OfflineUsername, p.OnlineUsername}
+}
+
 func run(args []string, stdout io.Writer, stderr io.Writer) error {
 	payload, err := payloadFromArgs(args)
 	if err != nil {
@@ -234,6 +238,9 @@ func runProvisionOnly(payload *setupPayload, log io.Writer, sbxDir string) error
 	if err := provisionAndHideSandboxUsers(payload, log, sbxDir); err != nil {
 		return err
 	}
+	if err := verifySandboxAccountPasswordsRepaired(payload.sandboxUsernames()); err != nil {
+		return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "%v", err)
+	}
 	offlineSID, err := resolveSIDString(payload.OfflineUsername)
 	if err != nil {
 		return setupFailuref(windowssandbox.SetupErrorHelperSIDResolveFailed, "resolve SID for offline user %s failed: %v", payload.OfflineUsername, err)
@@ -256,9 +263,20 @@ func runProvisionOnly(payload *setupPayload, log io.Writer, sbxDir string) error
 }
 
 func runSetupFull(payload *setupPayload, log io.Writer, sbxDir string) error {
+	if payload.RefreshOnly {
+		// An ACL refresh cannot rotate account passwords or rewrite the stored
+		// credentials, so an account that needs full setup must fail the
+		// refresh instead of leaving unusable credentials behind (Rust #46043).
+		if err := rejectUnrepairableSandboxAccountsDuringRefresh(payload.sandboxUsernames()); err != nil {
+			return setupFailuref(windowssandbox.SetupErrorHelperUserCreateOrUpdateFailed, "%v", err)
+		}
+	}
 	if !payload.RefreshOnly {
 		if err := provisionAndHideSandboxUsers(payload, log, sbxDir); err != nil {
 			return err
+		}
+		if err := verifySandboxAccountPasswordsRepaired(payload.sandboxUsernames()); err != nil {
+			return setupFailuref(windowssandbox.SetupErrorHelperUserProvisionFailed, "%v", err)
 		}
 	}
 	offlineSID, err := resolveSIDString(payload.OfflineUsername)

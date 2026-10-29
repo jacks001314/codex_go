@@ -1894,6 +1894,28 @@ Go has no macOS managed-preference loader to harden. `config/local_layers.go` re
 
 Adding a darwin+cgo `CFPreferences` reader would create a call site with no callers in the Go composition and could not be exercised on the supported build targets, so the commit is recorded as `not_applicable` rather than drifting into a parallel unused layer.
 
-Status after reconciliation: `2039 complete`, `401 not_applicable`,
-`456 audit_pending`, `250 regression_pending`, `3 partial`,
+### Repair expired Windows sandbox passwords (Round 875)
+
+# Round 875 - repair expired Windows sandbox passwords
+
+Rust #46043 (`51c30ad800a16502dc18ac0019af253670cb9c64`) treats `UF_PASSWORD_EXPIRED` as incomplete setup: full setup is required before logon, refresh-only passes must refuse to proceed, and setup must verify the rotated passwords are no longer expired.
+
+## What Go already covered
+
+The orchestrator already repairs rejected credentials: `storedCredentialsNeedRepair` logs on with both stored accounts, classifies `ERROR_PASSWORD_EXPIRED`/`ERROR_PASSWORD_MUST_CHANGE` (1330/1907) as a credential mismatch, runs one elevated full setup, and reloads credentials. `EnsureLocalUser` already resets only the password through `USER_INFO_1003`, preserving account flags.
+
+## Gap closed
+
+- New `ReadLocalUserFlags` (`NetUserGetInfo` level 1, `NERR_UserNotFound` -> not found) in the setup helper, mirroring Rust `local_user_flags`.
+- `sandboxAccountNeedsFullSetup` treats missing, disabled, and password-expired accounts alike.
+- Refresh-only setup now fails with `registration refresh cannot repair or replace a sandbox account` before ACL work when either account needs full setup.
+- Provisioning and full setup verify neither account is still flagged expired, failing with `Windows sandbox account password is still expired after setup`.
+- Tests cover either account expiring, preserved unrelated flags, a single failed repair read, missing accounts, and unreadable accounts ignored after provisioning.
+
+The service-side `registered.rs` portion is not applicable: Go has no Windows sandbox service runtime registration; its refresh-only payload is the equivalent surface and now carries the same gate.
+
+Verification: `go test ./sandbox/windowssandbox/... -count=1`; `go build ./...`; linux/darwin cross-build of the sandbox tree.
+
+Status after reconciliation: `2040 complete`, `401 not_applicable`,
+`455 audit_pending`, `250 regression_pending`, `3 partial`,
 `6 blocked_precondition`.
