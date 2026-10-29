@@ -83,10 +83,11 @@ func TestMarkInheritedUserMessagesMarksDeveloperApprovalLikeRust(t *testing.T) {
 	}
 }
 
-// TestGuardianTranscriptExcludesInheritedDeveloperApprovalLikeRust pins
-// requirement (2): the copied approval never reaches the reviewer, the child's
-// own approval still does, and the ordinary conversation keeps its order.
-func TestGuardianTranscriptExcludesInheritedDeveloperApprovalLikeRust(t *testing.T) {
+// TestGuardianTranscriptFiltersRolesAndPreservesManualApprovalLikeRust pins
+// Rust #52535/#46064: the copied approval never reaches the reviewer, ordinary
+// developer context is filtered out, the child's own approval still does reach
+// it as developer evidence, and the ordinary conversation keeps its order.
+func TestGuardianTranscriptFiltersRolesAndPreservesManualApprovalLikeRust(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(home)
 	threadID := "123e4567-e89b-42d3-a456-426614174200"
@@ -94,6 +95,7 @@ func TestGuardianTranscriptExcludesInheritedDeveloperApprovalLikeRust(t *testing
 	items := []session.Item{
 		{ID: "user-1", Type: "message", Role: "user", Text: "Keep files private.", CreatedAt: now},
 		inheritedMetadataItem(t, copiedManualApprovalItem("approval-inherited", `{"action":"inherited-action"}`, now), `{"inherited_user_message":true}`),
+		{ID: "developer-1", Type: "message", Role: "developer", Text: "ordinary developer context", CreatedAt: now},
 		{ID: "assistant-1", Type: "message", Role: "assistant", Text: "Understood.", CreatedAt: now},
 		copiedManualApprovalItem("approval-own", `{"action":"own-action"}`, now),
 		{ID: "user-2", Type: "message", Role: "user", Text: "Also keep backups private.", CreatedAt: now},
@@ -115,6 +117,9 @@ func TestGuardianTranscriptExcludesInheritedDeveloperApprovalLikeRust(t *testing
 
 	if strings.Contains(joined, "inherited-action") {
 		t.Fatalf("inherited manual approval reached the review transcript: %q", joined)
+	}
+	if strings.Contains(joined, "ordinary developer context") {
+		t.Fatalf("ordinary developer message reached the review transcript: %q", joined)
 	}
 	if !strings.Contains(joined, "own-action") {
 		t.Fatalf("the child's own manual approval is missing from the transcript: %q", joined)

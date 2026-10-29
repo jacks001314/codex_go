@@ -2118,7 +2118,23 @@ func guardianTranscriptExcludedItem(item *session.Item, includeReasoning bool) b
 	case "context_compaction", "compaction_trigger":
 		return true
 	}
+	// Rust #46064 (guardian-context/src/transcript.rs): a developer message is
+	// the only role the transcript filters by text. The manual-approval marker
+	// that authorizes a previously rejected action survives as `developer`
+	// evidence; ordinary developer context never reaches the reviewer.
+	if guardianTranscriptDropsDeveloperMessage(item) {
+		return true
+	}
 	return guardianTranscriptIsInheritedManualApproval(item)
+}
+
+// guardianTranscriptDropsDeveloperMessage reports whether a developer message is
+// ordinary context rather than the manual-approval marker the transcript keeps.
+func guardianTranscriptDropsDeveloperMessage(item *session.Item) bool {
+	if item == nil || !strings.EqualFold(strings.TrimSpace(item.Role), "developer") {
+		return false
+	}
+	return !sessionItemIsManualApprovalMessage(item)
 }
 
 // guardianTranscriptOptionsIncludeItem applies the profile's independent source

@@ -1979,6 +1979,28 @@ Rust #46058 (`8ace915aced81ed841e34fa069b2e489c324731c`) adds `voice_session_id`
 
 Commands: `go test ./appserver -run 'Voice|Realtime|TurnEvent|Mcp|MCP|Skill' -count=1`; `go test ./telemetry -count=1`; `go build ./...`.
 
-Status after reconciliation: `2043 complete`, `401 not_applicable`,
-`454 audit_pending`, `248 regression_pending`, `3 partial`,
+### Consolidate Guardian tests at shared boundaries (Round 879)
+
+# Round 879 - consolidate Guardian tests at shared boundaries
+
+Rust #46064 (`08663cc91b0bdc4a2f6f3660da089c61d21a7652`) is a test-consolidation commit: approval routing moves to the `guardian-reviewer` policy boundary, the reviewer-configuration checks merge into one isolation test, and `guardian-context` gains ordinary developer messages to its role-filtering coverage.
+
+## Gap closed
+
+Porting the new assertion exposed a real difference. Rust's `guardian-context/src/transcript.rs::collect_transcript` matches the message role and keeps a `developer` message only when its text starts with `MANUAL_APPROVAL_DEVELOPER_PREFIX`; every other developer message hits the catch-all `continue`. Go kept ordinary developer messages - they entered the transcript as `developer: ...` evidence, so parent developer context could reach the reviewer.
+
+`appserver/guardian_reviewer.go` now applies the same rule through `guardianTranscriptDropsDeveloperMessage`, called from `guardianTranscriptExcludedItem`: a developer message survives only as the manual-approval marker, while inherited approvals stay excluded as before.
+
+## Tests consolidated
+
+- `TestAutoReviewEnabledForTurnRoutesApprovalPolicyToGuardian` now covers the full matrix Rust #46064 pins: `unless-trusted`, `on-request`, `granular` and `never` against both `user` and `auto_review`, so only `on-request`/`granular` with `auto_review` route to Guardian.
+- `TestGuardianReviewRequestIgnoresParentCustomizationsLikeRust` merges the reviewer-configuration isolation checks: a parent config with `developer_instructions` and a legacy `notify` hook produces the same Guardian request - empty top-level instructions, the rendered Guardian policy fragment, and neither parent string anywhere in the request.
+- `TestGuardianTranscriptFiltersRolesAndPreservesManualApprovalLikeRust` adds an ordinary developer message next to the inherited and own approvals, asserting the ordinary message is filtered while the inherited approval stays hidden and the child's own approval still arrives with developer attribution.
+
+## Verification
+
+The transcript test was confirmed to fail with the filter removed. Commands: `go test ./appserver -run 'Guardian|AutoReview' -count=1`; `go build ./...`.
+
+Status after reconciliation: `2044 complete`, `401 not_applicable`,
+`453 audit_pending`, `248 regression_pending`, `3 partial`,
 `6 blocked_precondition`.

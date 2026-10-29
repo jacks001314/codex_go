@@ -17743,43 +17743,30 @@ func TestRuntimeRouterAppTurnDisablesStorageForAllResponsesProviders(t *testing.
 }
 
 func TestAutoReviewEnabledForTurnRoutesApprovalPolicyToGuardian(t *testing.T) {
-	cases := []struct {
-		name     string
-		values   map[string]any
-		params   *turn.TurnStartParams
-		reviewer *string
-		want     bool
+	// Rust #46064 consolidates the routing matrix at the policy boundary:
+	// approval routing depends on both the approval policy and the reviewer, so
+	// UnlessTrusted and Never never reach Guardian even with auto_review.
+	for _, tc := range []struct {
+		policy string
+		want   [2]bool // user, auto_review
 	}{
-		{
-			name:   "on-request plus auto_review routes to guardian",
-			values: map[string]any{"approval_policy": "on-request", "approvals_reviewer": "auto_review"},
-			want:   true,
-		},
-		{
-			name:   "granular plus auto_review routes to guardian",
-			values: map[string]any{"approval_policy": "granular", "approvals_reviewer": "auto_review"},
-			want:   true,
-		},
-		{
-			name:   "never plus auto_review does not route to guardian",
-			values: map[string]any{"approval_policy": "never", "approvals_reviewer": "auto_review"},
-			want:   false,
-		},
-		{
-			name:   "on-request plus user reviewer does not route to guardian",
-			values: map[string]any{"approval_policy": "on-request", "approvals_reviewer": "user"},
-			want:   false,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := &config.Config{Values: map[string]any{}}
-			for key, value := range tc.values {
-				cfg.Values[key] = value
-			}
-			enabled := autoReviewEnabledForTurn(cfg, tc.params)
-			if enabled == nil || *enabled != tc.want {
-				t.Fatalf("autoReviewEnabledForTurn() = %v, want %v (Rust f2a6f2585c)", enabled, tc.want)
+		{policy: "unless-trusted", want: [2]bool{false, false}},
+		{policy: "on-request", want: [2]bool{false, true}},
+		{policy: "granular", want: [2]bool{false, true}},
+		{policy: "never", want: [2]bool{false, false}},
+	} {
+		t.Run(tc.policy, func(t *testing.T) {
+			reviewers := []string{string(config.ApprovalsReviewerUser), string(config.ApprovalsReviewerAutoReview)}
+			for index, reviewer := range reviewers {
+				cfg := &config.Config{Values: map[string]any{
+					"approval_policy":    tc.policy,
+					"approvals_reviewer": reviewer,
+				}}
+				enabled := autoReviewEnabledForTurn(cfg, nil)
+				if enabled == nil || *enabled != tc.want[index] {
+					t.Fatalf("autoReviewEnabledForTurn(%s, %s) = %v, want %v (Rust #46064)",
+						tc.policy, reviewer, enabled, tc.want[index])
+				}
 			}
 		})
 	}

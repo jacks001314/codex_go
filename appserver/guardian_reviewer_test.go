@@ -661,6 +661,73 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 	}
 }
 
+// TestGuardianReviewRequestIgnoresParentCustomizationsLikeRust consolidates the
+// reviewer-configuration checks Rust #46064 keeps together: a review session is
+// isolated from parent customizations. Parent developer instructions and the
+// legacy turn-ended notify hook never reach the reviewer, and the reviewer's
+// instructions stay the Guardian policy documents.
+func TestGuardianReviewRequestIgnoresParentCustomizationsLikeRust(t *testing.T) {
+	const parentMarker = "parent or managed config should not replace guardian policy"
+	home := t.TempDir()
+	configText := "developer_instructions = \"" + parentMarker + "\"\n" +
+		"notify = [\"/path/to/notify\", \"turn-ended\"]\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	var captured *model.AgentRequest
+	agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		copyRequest := *request
+		captured = &copyRequest
+		return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"isolation"}`}, nil
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		Agent:        agent,
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	const (
+		threadID    = "thread-review-isolation"
+		turnID      = "turn-review-isolation"
+		parentModel = "gpt-parent"
+	)
+	if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{
+		ThreadID: threadID,
+		Model:    parentModel,
+	}); err != nil {
+		t.Fatalf("register active turn: %v", err)
+	}
+	router.updateActiveRuntimeTurnAnalytics(threadID, turnID, "", &appTurnRunConfig{Model: parentModel})
+	reviewer := router.ensureGuardianReviewer(agent)
+	if _, _, err := reviewer.Review(context.Background(), threadID, turnID, "call-isolation", state.Action{
+		Type: "mcp_tool_call", Server: "apps", ToolName: "calendar",
+	}); err != nil {
+		t.Fatalf("Guardian review error = %v", err)
+	}
+	if captured == nil {
+		t.Fatal("Guardian review issued no agent request")
+	}
+	if captured.Instructions != "" {
+		t.Fatalf("Guardian top-level instructions = %q, want empty", captured.Instructions)
+	}
+	want := state.RenderGuardianPolicyInstructions(state.GuardianPolicy(), "", state.GuardianPolicyTemplate(), state.GuardianOutputContractPrompt())
+	if got := guardianPolicyInputText(captured.InputItems); got != want {
+		t.Fatalf("Guardian policy fragment = %q, want %q", got, want)
+	}
+	texts := []string{captured.Instructions, captured.Prompt}
+	for _, item := range captured.InputItems {
+		if encoded, err := json.Marshal(item); err == nil {
+			texts = append(texts, string(encoded))
+		}
+	}
+	joined := strings.Join(texts, "\n")
+	if strings.Contains(joined, parentMarker) {
+		t.Fatalf("parent developer instructions reached the reviewer: %s", joined)
+	}
+	if strings.Contains(joined, "turn-ended") {
+		t.Fatalf("parent notify hook reached the reviewer: %s", joined)
+	}
+}
+
 // TestGuardianReviewInjectsNodeReplPolicyLikeRust mirrors Rust
 // ensure_guardian_node_repl_policy: a `js` call on a node-repl-backed server
 // gets the resolved node-REPL policy as its own unmarked developer fragment when

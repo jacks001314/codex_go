@@ -14907,9 +14907,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Guardian test consolidation for #46064 with the one behaviour gap it exposed closed: the Guardian transcript now drops ordinary developer messages and keeps only the manual-approval marker (Rust guardian-context collect_transcript role match), so parent developer context can no longer reach the reviewer; appserver/guardian_reviewer.go adds guardianTranscriptDropsDeveloperMessage. Tests consolidated at the shared boundaries: TestAutoReviewEnabledForTurnRoutesApprovalPolicyToGuardian now covers UnlessTrusted/OnRequest/Granular/Never against both reviewers, TestGuardianReviewRequestIgnoresParentCustomizationsLikeRust pins reviewer isolation from parent developer_instructions and notify, and TestGuardianTranscriptFiltersRolesAndPreservesManualApprovalLikeRust adds the ordinary developer message alongside the inherited and own approvals. Verified the transcript test fails without the filter. go test ./appserver -run 'Guardian|AutoReview' -count=1; go build ./..."
    ]
   },
   {
