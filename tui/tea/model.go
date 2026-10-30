@@ -4033,7 +4033,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		// Rust #51411: any key other than the image-paste shortcut clears the
 		// suppression window so a fresh paste can proceed immediately.
-		if m != nil && msg.Type != bubbletea.KeyCtrlV {
+		if m != nil && !isImagePasteKey(msg) {
 			m.suppressImagePasteUntil = time.Time{}
 		}
 		// Rust #42584: legacy terminals encode Alt+character the same way as
@@ -4159,6 +4159,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// presentation instead of interrupting or quitting the session.
 			m.cancelMainTranscriptFind()
 			return m, nil
+		}
+		// Rust #51411: Alt+V is the keymap's fixed image-paste alias alongside
+		// Ctrl+V, and Bubble Tea delivers it as an Alt rune rather than a
+		// dedicated key type. It shares the same suppression window.
+		if isImagePasteKey(msg) && msg.Type != bubbletea.KeyCtrlV &&
+			m.modal == nil && m.overlay == nil {
+			return m, m.pasteClipboardShortcut()
 		}
 		switch msg.Type {
 		case bubbletea.KeyCtrlC:
@@ -5507,6 +5514,16 @@ func (m *Model) currentTime() time.Time {
 	return time.Now()
 }
 
+// isImagePasteKey reports the fixed image-paste shortcuts: Ctrl+V and the
+// keymap's Alt+V alias, which Bubble Tea delivers as an Alt rune (Rust #51411).
+func isImagePasteKey(msg bubbletea.KeyMsg) bool {
+	if msg.Type == bubbletea.KeyCtrlV {
+		return true
+	}
+	return msg.Type == bubbletea.KeyRunes && msg.Alt && !msg.Paste && len(msg.Runes) == 1 &&
+		(msg.Runes[0] == 'v' || msg.Runes[0] == 'V')
+}
+
 // noteImagePastePress applies Rust #51411's sliding suppression window for the
 // image-paste shortcut. It refreshes the window to `now + imagePasteRepeatWindow`
 // and reports whether the press landed inside it, so the caller can ignore an
@@ -5518,6 +5535,15 @@ func (m *Model) noteImagePastePress(now time.Time) bool {
 	suppressed := now.Before(m.suppressImagePasteUntil)
 	m.suppressImagePasteUntil = now.Add(imagePasteRepeatWindow)
 	return suppressed
+}
+
+// refreshImagePasteWindow restarts Rust #51411's suppression window once an
+// image paste completes, matching ChatWidget::paste_image.
+func (m *Model) refreshImagePasteWindow() {
+	if m == nil {
+		return
+	}
+	m.suppressImagePasteUntil = m.currentTime().Add(imagePasteRepeatWindow)
 }
 
 func (m *Model) noteComposerRunes(runes []rune, now time.Time) {

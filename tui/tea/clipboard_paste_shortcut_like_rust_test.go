@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
@@ -92,6 +93,22 @@ func TestWindowsShiftInsertPastesLikeRust(t *testing.T) {
 
 	if got := model.composerText(); got != "shift insert" {
 		t.Fatalf("composer after Shift+Insert = %q", got)
+	}
+}
+
+// Rust #51411: Alt+V shares the image-paste shortcut and its repeat window.
+func TestAltVPastesImageAndSuppressesRepeatsLikeRust(t *testing.T) {
+	stubClipboardShortcut(t, "alt v", nil)
+	model := clipboardShortcutModel(t)
+	now := time.Unix(0, 0)
+	model.now = func() time.Time { return now }
+	altV := bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'v'}, Alt: true}
+
+	model.Update(altV)
+	model.Update(altV)
+
+	if got := model.composerText(); got != "alt v" {
+		t.Fatalf("composer after repeated Alt+V = %q, want a single paste", got)
 	}
 }
 

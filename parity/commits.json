@@ -27311,9 +27311,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/tea/model.go owns the 250 ms sliding image-paste window: noteImagePastePress suppresses a repeated Ctrl+V/Alt+V press and refreshes the window, refreshImagePasteWindow restarts it when the paste finishes (matching ChatWidget::paste_image), and any other key press clears it (Bubble Tea v1 has no key-release events, which clears on release in Rust)",
+    "tui/tea/clipboard_paste_shortcut.go gates the clipboard read behind the window and refreshes on completion; the model now also routes the keymap's fixed Alt+V alias to the same shortcut",
+    "Verified by TestImagePasteSuppressionWindowLikeRust, TestModelImagePasteSuppressionWiringLikeRust, TestImagePasteCompletionRefreshesWindowLikeRust, TestAltVPastesImageAndSuppressesRepeatsLikeRust, and go test ./tui/tea ./tui -count=1"
    ]
   },
   {

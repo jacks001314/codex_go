@@ -40,6 +40,10 @@ func (m *Model) pasteClipboardShortcut() bubbletea.Cmd {
 	if m.noteImagePastePress(m.currentTime()) {
 		return nil
 	}
+	// Rust #51411 refreshes the window when the paste finishes as well, so a
+	// clipboard read slower than the window cannot let auto-repeat presses
+	// through while the paste is still settling.
+	defer m.refreshImagePasteWindow()
 	if path, err := readClipboardImageForPaste(); err == nil {
 		m.attachments = append(m.attachments, bottompane.ComposerAttachment{Kind: bottompane.AttachmentImage, Path: path})
 		m.notice = "Attached image " + path

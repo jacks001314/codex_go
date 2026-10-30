@@ -701,6 +701,34 @@ func TestModelImagePasteSuppressionWiringLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #51411 refreshes the suppression window after the paste completes, not
+// only when the key arrives, so a slow clipboard read cannot expire it early.
+func TestImagePasteCompletionRefreshesWindowLikeRust(t *testing.T) {
+	previousImage, previousText := readClipboardImageForPaste, readClipboardTextForPaste
+	t.Cleanup(func() {
+		readClipboardImageForPaste, readClipboardTextForPaste = previousImage, previousText
+	})
+
+	model := NewModel(nil, Options{Width: 80, Height: 24})
+	start := time.Unix(0, 0)
+	now := start
+	model.now = func() time.Time { return now }
+	readClipboardImageForPaste = func() (string, error) {
+		now = now.Add(400 * time.Millisecond)
+		return "", errors.New("slow clipboard")
+	}
+	readClipboardTextForPaste = func() (string, error) { return "", nil }
+
+	model.Update(key(bubbletea.KeyCtrlV))
+
+	if want := now.Add(imagePasteRepeatWindow); !model.suppressImagePasteUntil.Equal(want) {
+		t.Fatalf("window after a slow paste = %s, want %s", model.suppressImagePasteUntil, want)
+	}
+	if !model.noteImagePastePress(model.currentTime()) {
+		t.Fatal("press right after the slow paste must stay suppressed")
+	}
+}
+
 func TestModelPasteBurstEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
 	now := time.Unix(0, 0)
 	var requests []SubmitRequest

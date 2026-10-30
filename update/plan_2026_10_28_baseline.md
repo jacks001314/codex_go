@@ -3615,6 +3615,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Also fixed the Round 1068 ledger misalignment: the #51070 evidence had been written to `b995d060` (#42671), so #42671 is back to `regression_pending` with its own symbol-coverage note and #51070 keeps the `not_applicable` decision.
 - Verified with `go test ./tui/tea ./tui -count=1` and `go test ./tui -run 'TestWebLinksInText' -count=1`.
 
-Status after reconciliation: `2223 complete`, `462 not_applicable`,
-`322 audit_pending`, `137 regression_pending`, `5 partial`,
+### Image paste repeat suppression in legacy terminals (Round 1071)
+
+- Rust #51411 suppresses repeated `Ctrl+V`/`Alt+V` image-paste presses inside a sliding 250 ms window, refreshes the window on every suppressed press and again when the paste completes, and clears it on any other key press or key release.
+- Complete: `tui/tea/model.go` already held the sliding window (`noteImagePastePress`) and cleared it on other presses. This round adds the missing post-completion refresh (`refreshImagePasteWindow`), wires the keymap's fixed `ctrl-alt-v` alias through `isImagePasteKey` to the clipboard shortcut instead of leaking the rune to the composer, and excludes that alias from the "other key clears the window" branch. Bubble Tea v1 has no key-release messages, so release-driven clearing has no carrier; the next ordinary press still clears it.
+- Regression: `TestImagePasteCompletionRefreshesWindowLikeRust` advances the clock inside a slow clipboard read and proves the window restarts at completion; `TestAltVPastesImageAndSuppressesRepeatsLikeRust` proves Alt+V pastes once for a repeated burst.
+- Verified with `go test ./tui/tea ./tui -count=1`.
+
+Status after reconciliation: `2224 complete`, `462 not_applicable`,
+`322 audit_pending`, `136 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
