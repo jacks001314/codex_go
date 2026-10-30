@@ -245,9 +245,11 @@ func (s *Server) serveNoiseRelayConnection(
 	writerDone := make(chan error, 1)
 	validationDone := make(chan remoteRelayValidationResult, maxPendingHandshakeValidations)
 	closedStreams := make(chan remoteRelayClosedStream, maxActiveNoiseRelayStreams)
+	transportDiag := newRelayTransportDiagnostics(outgoing, incoming)
+	defer transportDiag.logClosure()
 
-	go runRemoteRelayWriter(connectionCtx, conn, outgoing, writerDone)
-	go runRemoteRelayReader(connectionCtx, conn, incoming)
+	go runRemoteRelayWriter(connectionCtx, conn, outgoing, writerDone, transportDiag)
+	go runRemoteRelayReader(connectionCtx, conn, incoming, transportDiag)
 
 	streams := map[string]*remoteNoiseVirtualStream{}
 	pending := map[string]pendingRemoteRelayHandshake{}
@@ -267,10 +269,14 @@ func (s *Server) serveNoiseRelayConnection(
 	for {
 		select {
 		case <-connectionCtx.Done():
+			transportDiag.setExitReason(relayExitWebsocketClose)
 			return nil
 		case err := <-writerDone:
 			if err == nil || ctx.Err() != nil {
 				return nil
+			}
+			if transportDiag.exitReason == "" {
+				transportDiag.setExitReason(relayExitWebsocketWrite)
 			}
 			return err
 		case closed := <-closedStreams:
@@ -321,8 +327,10 @@ func (s *Server) serveNoiseRelayConnection(
 		case event := <-incoming:
 			if event.err != nil {
 				if ctx.Err() != nil || websocket.CloseStatus(event.err) != -1 {
+					transportDiag.setExitReason(relayExitWebsocketClose)
 					return nil
 				}
+				transportDiag.setExitReason(relayExitWebsocketRead)
 				return event.err
 			}
 			frame := event.frame
@@ -447,7 +455,7 @@ func (s *Server) serveNoiseRelayConnection(
 // pin the relay writer forever.
 const remoteRelayWriteTimeout = 60 * time.Second
 
-func runRemoteRelayWriter(ctx context.Context, conn *websocket.Conn, outgoing <-chan []byte, done chan<- error) {
+func runRemoteRelayWriter(ctx context.Context, conn *websocket.Conn, outgoing <-chan []byte, done chan<- error, diagnostics *relayTransportDiagnostics) {
 	ticker := time.NewTicker(remoteRelayKeepaliveInterval)
 	defer ticker.Stop()
 	for {
@@ -456,12 +464,15 @@ func runRemoteRelayWriter(ctx context.Context, conn *websocket.Conn, outgoing <-
 			done <- nil
 			return
 		case payload := <-outgoing:
+			diagnostics.recordMessageDequeued()
+			diagnostics.recordWriteStart("data")
 			// The write budget is independent of pong deadlines: a pong may clear
 			// its own deadline, never the in-flight write.
 			writeCtx, cancelWrite := context.WithTimeout(ctx, remoteRelayWriteTimeout)
 			err := conn.Write(writeCtx, websocket.MessageBinary, payload)
 			cancelWrite()
 			if err != nil {
+				diagnostics.setExitReason(relayWriteExitReason(err))
 				if errors.Is(err, context.DeadlineExceeded) {
 					done <- errors.New("Noise multiplexed environment websocket write timed out")
 					return
@@ -469,22 +480,35 @@ func runRemoteRelayWriter(ctx context.Context, conn *websocket.Conn, outgoing <-
 				done <- fmt.Errorf("Noise multiplexed environment websocket write failed: %w", err)
 				return
 			}
+			diagnostics.recordWriteComplete("data", 1)
 		case <-ticker.C:
+			// A ping only proves the relay peer is reachable; it says nothing about
+			// executor receipt. Record both the write and the pong separately.
+			diagnostics.recordWriteStart("keepalive")
 			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			err := conn.Ping(pingCtx)
 			cancel()
 			if err != nil {
+				diagnostics.setExitReason(relayWriteExitReason(err))
 				done <- fmt.Errorf("Noise multiplexed environment websocket keepalive failed: %w", err)
 				return
 			}
+			diagnostics.recordWriteComplete("keepalive", 0)
+			diagnostics.recordPongReceived()
 		}
 	}
 }
 
-func runRemoteRelayReader(ctx context.Context, conn *websocket.Conn, incoming chan<- remoteRelayIncoming) {
+// remoteRelayApplicationDeliveryTimeout bounds a delivery into the executor
+// application queue so a stalled consumer is reported as application
+// backpressure rather than looking like a missing transport read (#58025).
+const remoteRelayApplicationDeliveryTimeout = 60 * time.Second
+
+func runRemoteRelayReader(ctx context.Context, conn *websocket.Conn, incoming chan<- remoteRelayIncoming, diagnostics *relayTransportDiagnostics) {
 	for {
 		messageType, payload, err := conn.Read(ctx)
 		if err != nil {
+			diagnostics.recordReadError(err)
 			select {
 			case incoming <- remoteRelayIncoming{err: err}:
 			case <-ctx.Done():
@@ -494,13 +518,22 @@ func runRemoteRelayReader(ctx context.Context, conn *websocket.Conn, incoming ch
 		if messageType != websocket.MessageBinary {
 			continue
 		}
+		diagnostics.recordFrameRead()
 		frame, err := decodeRelayMessageFrame(payload)
 		if err != nil {
 			continue
 		}
+		startedAt := time.Now()
+		timer := time.NewTimer(remoteRelayApplicationDeliveryTimeout)
 		select {
 		case incoming <- remoteRelayIncoming{frame: frame}:
+			timer.Stop()
+		case <-timer.C:
+			logRelayApplicationBackpressure(time.Since(startedAt), len(incoming), cap(incoming))
+			diagnostics.setExitReason(relayExitApplicationDelivery)
+			return
 		case <-ctx.Done():
+			timer.Stop()
 			return
 		}
 	}
@@ -686,6 +719,7 @@ func (s *remoteNoiseVirtualStream) runInboundWriter(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case message := <-s.incoming:
+			logNoiseRequestReceipt(message)
 			message = append(message, '\n')
 			if _, err := s.conn.Write(message); err != nil {
 				s.Close()

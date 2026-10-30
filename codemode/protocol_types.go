@@ -169,15 +169,13 @@ type SessionOptions struct {
 	OutputTruncation    OutputTruncation
 }
 
-// ValidateSessionOptions rejects settings this host cannot honor. Providers
-// keep client-side truncation by default and reject server mode until they
-// advertise bounded-output-v1 (Rust #57272).
+// ValidateSessionOptions rejects malformed truncation settings. Whether a
+// provider can honor server truncation depends on the host's bounded-output-v1
+// capability and is negotiated when the session opens (Rust #58125).
 func ValidateSessionOptions(options SessionOptions) error {
 	switch options.OutputTruncation {
-	case "", OutputTruncationClient:
+	case "", OutputTruncationClient, OutputTruncationServer:
 		return nil
-	case OutputTruncationServer:
-		return fmt.Errorf("code-mode session provider does not support server output truncation")
 	default:
 		return fmt.Errorf("unknown code-mode output truncation %q", options.OutputTruncation)
 	}

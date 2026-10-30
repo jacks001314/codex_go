@@ -41,6 +41,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/memories"
 	"codex_go/model"
+	"codex_go/network"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
 	"codex_go/protocol"
@@ -51,6 +52,7 @@ import (
 	"codex_go/session"
 	"codex_go/shell"
 	"codex_go/skillprovider"
+	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
@@ -100,6 +102,15 @@ type activeRuntimeTurn struct {
 	// across sampling retries - so a Guardian review still has a parent response
 	// id while the next response is in flight.
 	LatestResponseID string
+	// LatestRoutingAffinity is the transport routing pin captured from the
+	// WebSocket handshake that produced LatestResponseID (Rust #57710). It stays
+	// turn-scoped and never enters prompts, history, or serialized metadata.
+	LatestRoutingAffinity *network.RoutingAffinity
+	// ServingAssessments retains the final serving assessment delivered with an
+	// output item, keyed by its call id (Rust #58075 keeps it with the
+	// invocation or code cell across waits). A matching low-risk value may
+	// replace the synchronous review; hooks that rewrite the input discard it.
+	ServingAssessments map[string]state.ServingAssessment
 	// Timing is the turn's timing profile state. It carries the direct-tool
 	// critical-path registry so Guardian review and user waits can attribute
 	// their blocking time to the owning tool invocation (Rust #57201/#57207).
@@ -113,7 +124,7 @@ type activeRuntimeTurn struct {
 // recordRuntimeTurnResponseID stores the turn's newest response id (Rust #45441).
 // It is turn-scoped, so a fresh turn starts without a parent response id and a
 // retry that never reaches `response.created` keeps the last known one.
-func (r *RuntimeRouter) recordRuntimeTurnResponseID(threadID string, turnID string, responseID string) {
+func (r *RuntimeRouter) recordRuntimeTurnResponseID(threadID string, turnID string, responseID string, affinity *network.RoutingAffinity) {
 	if r == nil || r.threads == nil {
 		return
 	}
@@ -123,6 +134,7 @@ func (r *RuntimeRouter) recordRuntimeTurnResponseID(threadID string, turnID stri
 	}
 	r.threads.UpdateTurn(strings.TrimSpace(threadID), strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
 		active.LatestResponseID = responseID
+		active.LatestRoutingAffinity = affinity
 	})
 }
 
@@ -554,6 +566,9 @@ type responsesStreamNotificationState struct {
 	applyPatchStreamingEvents bool
 	showRawAgentReasoning     bool
 	retrying                  bool
+	// pendingGuardianAssessment is the final serving value emitted immediately
+	// before the matching output item's completion (Rust #58075).
+	pendingGuardianAssessment *model.ResponsesGuardianAssessment
 	// Turn timing (Rust core/src/turn_timing.rs): the turn start, the session
 	// metrics sink, and the once-per-turn latches.
 	turnStartedAtMS int64
@@ -984,7 +999,12 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	}
 	state.rememberResponse(event)
 	if event.Kind == model.ResponsesStreamEventCreated {
-		r.recordRuntimeTurnResponseID(threadID, turnID, event.ResponseID)
+		r.recordRuntimeTurnResponseID(threadID, turnID, event.ResponseID, event.RoutingAffinity)
+	}
+	if event.Kind == model.ResponsesStreamEventGuardianAssessment && event.GuardianAssessment != nil {
+		// Rust #58075 delivers one final serving value immediately before the
+		// matching output item's completion; retain it until that item arrives.
+		state.pendingGuardianAssessment = event.GuardianAssessment
 	}
 	switch event.Kind {
 	case model.ResponsesStreamEventRetrying:
@@ -1035,6 +1055,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			StartedAtMS: time.Now().UTC().UnixMilli(),
 		})
 	case model.ResponsesStreamEventOutputDone:
+		r.applyStreamGuardianAssessment(threadID, turnID, event, state)
 		state.rememberOutputItem(event)
 		state.rememberAnalyticsToolCallID(event.Item)
 		if event.Item != nil && event.Item.Type == "reasoning" {
@@ -6094,6 +6115,9 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 	extra["server_reasoning_included"] = serverReasoningIncluded
 	extra["token_usage_info"] = map[string]any{
 		"total_token_usage": totalMap, "last_token_usage": lastMap, "model_context_window": window,
+		// Rust #57839: the reasoning-inclusion bit belongs to the saved usage so
+		// resume and fork keep this response's accounting decision.
+		"last_usage_includes_reasoning": serverReasoningIncluded,
 	}
 	// BodyAfterPrefix scope: the first server-observed request input in a
 	// window becomes the carried-prefix baseline (mirrors Rust
@@ -6352,6 +6376,22 @@ func isContextWindowExceededError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr != nil && apiErr.Kind == codexapi.ErrorContextWindowExceeded
 }
 
+// tokenUsageIncludesReasoning reports whether the saved token usage already
+// accounts for retained reasoning. Rust #57839 stores that decision inside
+// `token_usage_info.last_usage_includes_reasoning` so a resumed or forked thread
+// keeps the accounting instead of re-estimating reasoning it already paid for.
+// Go rollouts written before the move kept the same bit next to the usage map
+// (`server_reasoning_included`), so those stay honored; a usage record that
+// carries neither falls back to Rust's legacy re-estimating count.
+func tokenUsageIncludesReasoning(extra map[string]any) bool {
+	if info, ok := extra["token_usage_info"].(map[string]any); ok {
+		if value, ok := info["last_usage_includes_reasoning"]; ok && value != nil {
+			return boolFromAny(value)
+		}
+	}
+	return boolFromAny(extra["server_reasoning_included"])
+}
+
 func (r *RuntimeRouter) compactTokenStatusForThread(threadID string) compact.TokenStatus {
 	if r == nil {
 		return compact.TokenStatus{}
@@ -6392,7 +6432,7 @@ func (r *RuntimeRouter) compactTokenStatusForTurnWithPolicy(threadID string, mod
 		// last sampling request did not report that the server already includes
 		// it (Rust #55991).
 		active = compact.EstimateActiveContextTokensWithServerReasoning(
-			compactItemsFromSessionItems(record.Items), active, boolFromAny(extra["server_reasoning_included"]))
+			compactItemsFromSessionItems(record.Items), active, tokenUsageIncludesReasoning(extra))
 	}
 	policy := r.compactPolicyForTurn(modelID, params, extra)
 	if adjust != nil {

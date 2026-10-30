@@ -115,11 +115,20 @@ func loadMarketplaceManifest(marketplace Marketplace, manifestPath string, cache
 		marketplaceName = marketplace.Name
 	}
 	root := marketplaceRootForManifest(marketplace.RootPath, manifestPath)
+	// Rust #57819: load independent plugin entries concurrently while keeping
+	// manifest order, which decides duplicate MCP precedence.
+	type loadedDetail struct {
+		detail PluginDetail
+		ok     bool
+	}
+	loaded := loadPluginsConcurrently(len(manifest.Plugins), func(index int) loadedDetail {
+		detail, ok := loadMarketplacePluginDetail(root, marketplaceName, manifestPath, manifest.Plugins[index], cache)
+		return loadedDetail{detail: detail, ok: ok}
+	})
 	details := make([]PluginDetail, 0, len(manifest.Plugins))
-	for _, plugin := range manifest.Plugins {
-		detail, ok := loadMarketplacePluginDetail(root, marketplaceName, manifestPath, plugin, cache)
-		if ok {
-			details = append(details, detail)
+	for _, result := range loaded {
+		if result.ok {
+			details = append(details, result.detail)
 		}
 	}
 	return details, nil

@@ -82,8 +82,12 @@ func serverRequestThreadID(request *ServerRequest) string {
 type ExecApprovalKind string
 
 const (
-	ExecApprovalKindCommand    ExecApprovalKind = "command"
-	ExecApprovalKindWriteStdin ExecApprovalKind = "writeStdin"
+	ExecApprovalKindCommand ExecApprovalKind = "command"
+	// ExecApprovalKindHumanCommand is a managed checkpoint that requires a fresh
+	// human decision (Rust #58045). Only accept, decline, and cancel are valid,
+	// and it requires the requiredHumanApproval initialize capability.
+	ExecApprovalKindHumanCommand ExecApprovalKind = "humanCommand"
+	ExecApprovalKindWriteStdin   ExecApprovalKind = "writeStdin"
 )
 
 func (k ExecApprovalKind) orDefault() ExecApprovalKind {

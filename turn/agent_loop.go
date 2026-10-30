@@ -130,9 +130,12 @@ type AgentLoopRequest struct {
 	Model                   string
 	ToolMode                string
 	DisableCodeModeFallback bool
-	ProviderID              string
-	TaskKind                model.AgentTaskKind
-	ThreadID                string
+	// InterruptOnCancel asks a cancelled Responses Lite sampling request to
+	// interrupt upstream and drain its terminal event (Rust #57864).
+	InterruptOnCancel bool
+	ProviderID        string
+	TaskKind          model.AgentTaskKind
+	ThreadID          string
 	// SessionID is the Responses session identity, which differs from ThreadID
 	// for host-owned internal sessions that reuse their parent session
 	// (Rust #39994). Empty keeps the thread-id fallback.
@@ -590,6 +593,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			// Rust #48141: new user input preempts the unfinished sampling
 			// request so the queued input reaches the model without waiting.
 			Preempt: stepPreempt.Done(),
+			// Rust #57864: a cancelled Responses Lite turn interrupts the
+			// upstream response and drains its completed part.
+			InterruptOnCancel: request.InterruptOnCancel,
 			// Rust #49119: a sampling block records its recovery guidance into
 			// the conversation before the retry is issued. The model layer
 			// appends the item to the retried request; recording it here keeps
@@ -638,6 +644,19 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				}
 			}
 			return nil, err
+		}
+		if response.Canceled {
+			// Rust #57864: a cancelled Responses Lite request interrupts the
+			// upstream response; whatever it completed is still charged, and
+			// the turn ends as aborted.
+			endSamplingRequestSpan()
+			if request.OnIncompleteResponseUsage != nil {
+				request.OnIncompleteResponseUsage(response.Usage)
+			}
+			if err := stepCtx.Err(); err != nil {
+				return nil, err
+			}
+			return nil, context.Canceled
 		}
 		if response.Preempted {
 			if l.steerMailbox.HasPendingMailboxItems(request.ThreadID, request.TurnID) {

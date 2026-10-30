@@ -374,6 +374,13 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.applyThreadSettingsValues(*message.Response.ThreadSettings)
 	}
 	m.setReadOnlyThread(message.Response.ReadOnly)
+	if message.Response.ProviderError != nil {
+		// Rust #58202: a provider admission failure keeps the switched-to
+		// transcript readable and shows the recovery notice.
+		m.showProviderError(message.Response.ProviderError, message.Response.RolloutPath)
+	} else {
+		m.clearProviderError()
+	}
 	m.setThreadUnavailable(message.Response.Entry.IsClosed)
 	m.restorePendingAgentsOverviewDraft()
 	m.refreshTranscript()

@@ -78,3 +78,44 @@ func TestRemoteTUISettingsFromStartedThreadIncludesInstructionSources(t *testing
 		t.Fatalf("started settings = %#v", settings)
 	}
 }
+
+// TestRemoteTUIModelProviderErrorDecoding covers Rust #58202: the structured
+// provider admission error in `thread/resume` error data becomes a
+// ModelProviderError the TUI can render, while unknown errors stay opaque.
+func TestRemoteTUIModelProviderErrorDecoding(t *testing.T) {
+	mismatch := remoteTUIModelProviderError(&remoteRPCError{
+		Code:    -32602,
+		Message: "invalid request",
+		Data: map[string]any{
+			"type":                 "modelProviderMismatch",
+			"modelProvider":        "gateway",
+			"currentModelProvider": "openai",
+		},
+	})
+	if mismatch == nil || mismatch.Kind != appserver.ModelProviderMismatch ||
+		mismatch.ModelProvider != "gateway" || mismatch.CurrentModelProvider != "openai" {
+		t.Fatalf("mismatch = %#v", mismatch)
+	}
+	notConfigured := remoteTUIModelProviderError(&remoteRPCError{
+		Data: map[string]any{"type": "modelProviderNotConfigured", "modelProvider": "retired"},
+	})
+	if notConfigured == nil || notConfigured.Kind != appserver.ModelProviderNotConfigured || notConfigured.ModelProvider != "retired" {
+		t.Fatalf("not configured = %#v", notConfigured)
+	}
+	policy := remoteTUIModelProviderError(&remoteRPCError{
+		Data: map[string]any{
+			"type":                  "modelProviderPolicyConflict",
+			"modelProvider":         "gateway",
+			"requiredModelProvider": "required",
+		},
+	})
+	if policy == nil || policy.Kind != appserver.ModelProviderPolicyConflict || policy.RequiredModelProvider != "required" {
+		t.Fatalf("policy = %#v", policy)
+	}
+	if remoteTUIModelProviderError(errors.New("boom")) != nil {
+		t.Fatal("plain errors must not decode")
+	}
+	if remoteTUIModelProviderError(&remoteRPCError{Data: map[string]any{"type": "unexpected"}}) != nil {
+		t.Fatal("unknown error data must stay opaque")
+	}
+}

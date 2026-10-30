@@ -80,6 +80,8 @@ SOURCE: /[\s\S]+/
 `
 
 type codeModeExecExecutor struct {
+	// sessionOptions are the settings requested for the remote session.
+	sessionOptions    CodeModeSessionOptions
 	bindingMu         sync.RWMutex
 	registry          *Registry
 	nestedCommandTool ToolName
@@ -204,6 +206,36 @@ type CodeModeRemoteProvider interface {
 	NewSession(delegate CodeModeRemoteDelegate) CodeModeRemoteSession
 }
 
+// CodeModeProcessMetrics is a cumulative observation of one code-mode host
+// process, shared across its sessions (Rust #57841).
+type CodeModeProcessMetrics struct {
+	ProcessID               uint32
+	ProcessStartTimeSeconds float64
+	CPUSecondsTotal         float64
+	ResidentMemoryBytes     uint64
+}
+
+// CodeModeProcessMetricsSampleKind distinguishes an unsupported collector and an
+// absent process from a failed sample.
+type CodeModeProcessMetricsSampleKind int
+
+const (
+	CodeModeProcessMetricsUnsupported CodeModeProcessMetricsSampleKind = iota
+	CodeModeProcessMetricsNotRunning
+	CodeModeProcessMetricsSnapshot
+)
+
+type CodeModeProcessMetricsSample struct {
+	Kind    CodeModeProcessMetricsSampleKind
+	Metrics CodeModeProcessMetrics
+}
+
+// CodeModeProcessMetricsSampler exposes an optional host-level observation that
+// does not open sessions and cannot reset the execution connection.
+type CodeModeProcessMetricsSampler interface {
+	SampleProcessMetrics(context.Context) (CodeModeProcessMetricsSample, error)
+}
+
 // CodeModeRemotePrewarmer establishes the shared host connection without
 // creating a cell. Rust #40678 uses this to warm the host at session startup.
 type CodeModeRemotePrewarmer interface {
@@ -219,9 +251,48 @@ type CodeModeRemoteSession interface {
 	// fires, the session ends the observation early while the cell keeps running.
 	// A nil signal never preempts.
 	Execute(context.Context, CodeModeRemoteExecuteRequest, *YieldSignal) (CodeModeRemoteResponse, error)
-	Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error)
-	Terminate(context.Context, string) (CodeModeRemoteResponse, error)
+	// Wait carries the observation budget forwarded to a server-truncation host
+	// and ignored by client-truncation hosts (Rust #58125).
+	Wait(context.Context, string, uint64, *int, *YieldSignal) (CodeModeRemoteResponse, error)
+	// Terminate carries the final-observation budget (Rust #58125).
+	Terminate(context.Context, string, *int) (CodeModeRemoteResponse, error)
 	Close() error
+}
+
+// CodeModeOutputTruncation names who applies an observation's output budget
+// (Rust CodeModeOutputTruncation).
+type CodeModeOutputTruncation string
+
+const (
+	CodeModeOutputTruncationClient CodeModeOutputTruncation = "client"
+	CodeModeOutputTruncationServer CodeModeOutputTruncation = "server"
+)
+
+// CodeModeSessionOptions mirrors Rust CodeModeSessionOptions: settings shared
+// by every cell in one code-mode session.
+type CodeModeSessionOptions struct {
+	CellExecutionLimits *CodeModeCellExecutionLimits
+	OutputTruncation    CodeModeOutputTruncation
+}
+
+// CodeModeCellExecutionLimits mirrors Rust CodeModeSessionCellExecutionLimits.
+type CodeModeCellExecutionLimits struct {
+	MaxYieldTimeMS   *uint64
+	MaxHeapSizeBytes *uint64
+}
+
+// CodeModeRemoteSessionOptionsProvider is implemented by providers that honor
+// session-wide options (Rust CodeModeSessionProvider::create_session_with_options).
+// Providers without it retain control of their session settings.
+type CodeModeRemoteSessionOptionsProvider interface {
+	NewSessionWithOptions(delegate CodeModeRemoteDelegate, options CodeModeSessionOptions) CodeModeRemoteSession
+}
+
+// CodeModeRemoteOutputTruncation reports the output policy pinned by the
+// session's first successful open; providers that cannot negotiate it report
+// client truncation (Rust CodeModeSession::output_truncation).
+type CodeModeRemoteOutputTruncation interface {
+	OutputTruncation() CodeModeOutputTruncation
 }
 
 type CodeModeRemoteDelegate interface {
@@ -354,15 +425,27 @@ type CodeModeRuntime struct {
 }
 
 func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *CodeModeRuntime {
+	return NewCodeModeRuntimeWithOptions(provider, disableFallback, CodeModeSessionOptions{})
+}
+
+// NewCodeModeRuntimeWithOptions creates a runtime whose remote host session
+// honors the requested session options (Rust create_session_with_options).
+func NewCodeModeRuntimeWithOptions(provider CodeModeRemoteProvider, disableFallback bool, options CodeModeSessionOptions) *CodeModeRuntime {
 	exec := &codeModeExecExecutor{
-		store: map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},
+		sessionOptions: options,
+		store:          map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},
 		remoteCellOrigins: map[string]codeModeCallOrigin{}, remoteCellReleases: map[string]func(){},
 		remoteCellInvocations: map[string]*Invocation{},
 		remoteClosedCells:     map[string]struct{}{},
 		provider:              provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
 	}
 	if provider != nil {
-		exec.remote = provider.NewSession(&codeModeRemoteDelegate{exec: exec})
+		delegate := &codeModeRemoteDelegate{exec: exec}
+		if optionsProvider, ok := provider.(CodeModeRemoteSessionOptionsProvider); ok {
+			exec.remote = optionsProvider.NewSessionWithOptions(delegate, options)
+		} else {
+			exec.remote = provider.NewSession(delegate)
+		}
 	}
 	return &CodeModeRuntime{exec: exec, wait: &codeModeWaitExecutor{exec: exec}, provider: provider}
 }
@@ -603,7 +686,7 @@ func (r *CodeModeRuntime) InterruptActiveCells() {
 	cellIDs = append(cellIDs, remoteIDs...)
 	if e.remote != nil {
 		for _, cellID := range cellIDs {
-			_, _ = e.remote.Terminate(context.Background(), cellID)
+			_, _ = e.remote.Terminate(context.Background(), cellID, nil)
 		}
 	}
 	// Release retained delegates for live cells as part of cancellation cleanup
@@ -965,7 +1048,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		})
 		releaseOnReturn = false
 	}
-	return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(options.MaxOutputTokens), time.Since(startedAt), e.cellOverheadEnabled())
+	return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(options.MaxOutputTokens), e.remoteOutputTruncation(), time.Since(startedAt), e.cellOverheadEnabled())
 }
 
 func (e *codeModeExecExecutor) CodeModeToolNames() map[string]CodeModeToolNameMetadata {
@@ -1404,7 +1487,8 @@ func (d *codeModeRemoteDelegate) CellClosed(cellID string) {
 	d.exec.forgetRemoteCell(cellID)
 }
 
-func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTokens int, wallTime time.Duration, showOverhead bool) (*Output, error) {
+func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTokens int, truncation CodeModeOutputTruncation, wallTime time.Duration, showOverhead bool) (*Output, error) {
+	serverTruncation := truncation == CodeModeOutputTruncationServer
 	// The host's own measurement feeds the overhead breakdown (Rust's
 	// `code_mode_host_duration`).
 	var hostDuration *time.Duration
@@ -1426,15 +1510,24 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 	}
 	if strings.TrimSpace(response.ErrorText) != "" {
 		// Rust's failed response: partial content, then the `Script error:`
-		// block, with the header reporting "Script failed".
-		output := codeModeScriptFailureOutput(callID, response.ErrorText, response.ContentItems, nil, nil, nil)
+		// block, with the header reporting "Script failed". A server-truncation
+		// host already bounded and formatted the observation, so the client must
+		// neither append the error again nor truncate a second time (#58125).
+		var output *Output
+		if serverTruncation {
+			output = codeModeScriptFailureOutputServerTruncated(callID, response.ContentItems)
+		} else {
+			output = codeModeScriptFailureOutput(callID, response.ErrorText, response.ContentItems, nil, nil, nil)
+		}
 		if hostDuration != nil {
 			output.Data["code_mode_host_duration_ns"] = response.HostDurationNS
 		}
 		if response.State != "yielded" && response.State != "terminated" {
 			output.Data["result_buffered_for_ns"] = response.ResultBufferedForNS
 		}
-		output = truncateCodeModeOutput(output, maxTokens)
+		if !serverTruncation {
+			output = truncateCodeModeOutput(output, maxTokens)
+		}
 		return applyCodeModeHeader(output, "Script failed", modelWallTime, hostDuration, showOverhead), nil
 	}
 	body := strings.Join(texts, "\n")
@@ -1453,7 +1546,9 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 	} else if response.State != "terminated" {
 		output.Data["result_buffered_for_ns"] = response.ResultBufferedForNS
 	}
-	output = truncateCodeModeOutput(output, maxTokens)
+	if !serverTruncation {
+		output = truncateCodeModeOutput(output, maxTokens)
+	}
 	return applyCodeModeHeader(output, status, modelWallTime, hostDuration, showOverhead), nil
 }
 
@@ -2033,6 +2128,44 @@ func codeModeCellStatus(cell *codeModeCell) string {
 // script's partial output content followed by a `Script error:` block, marked
 // unsuccessful, so clients render the same failure text instead of a generic
 // execution error.
+// codeModeScriptFailureOutputServerTruncated keeps the host's bounded content
+// items as-is; the host already appended its own error text (Rust #58125).
+func codeModeScriptFailureOutputServerTruncated(callID string, contentItems []map[string]any) *Output {
+	items := append([]map[string]any(nil), contentItems...)
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		if item["type"] != "input_text" {
+			continue
+		}
+		if text := fmt.Sprint(item["text"]); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return &Output{
+		CallID:   callID,
+		ToolName: PlainName(CodeModeExecToolName),
+		Success:  false,
+		Body:     strings.Join(texts, "\n"),
+		Data:     map[string]any{"content_items": items},
+	}
+}
+
+// remoteOutputTruncation reports the output policy the session pinned on its
+// first successful open. Providers that cannot negotiate it use client mode.
+func (e *codeModeExecExecutor) remoteOutputTruncation() CodeModeOutputTruncation {
+	if e == nil || e.remote == nil {
+		return CodeModeOutputTruncationClient
+	}
+	reporter, ok := e.remote.(CodeModeRemoteOutputTruncation)
+	if !ok {
+		return CodeModeOutputTruncationClient
+	}
+	if reporter.OutputTruncation() == CodeModeOutputTruncationServer {
+		return CodeModeOutputTruncationServer
+	}
+	return CodeModeOutputTruncationClient
+}
+
 func codeModeScriptFailureOutput(callID string, errorText string, contentItems []map[string]any, commands []string, nestedOutputs []string, exitCodes []int) *Output {
 	items := append([]map[string]any(nil), contentItems...)
 	items = append(items, map[string]any{"type": "input_text", "text": "Script error:\n" + errorText})
@@ -2148,20 +2281,21 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		var response CodeModeRemoteResponse
 		var remoteErr error
 		startedAt := time.Now()
+		budget := codeModeWaitRemoteBudget(params.MaxTokens)
 		if params.Terminate {
-			response, remoteErr = e.exec.remote.Terminate(ctx, params.CellID)
+			response, remoteErr = e.exec.remote.Terminate(ctx, params.CellID, budget)
 		} else {
 			waitMS := params.YieldTimeMS
 			if waitMS <= 0 {
 				waitMS = 10000
 			}
-			response, remoteErr = e.exec.remote.Wait(ctx, params.CellID, uint64(waitMS), YieldSignalFromInvocation(invocation))
+			response, remoteErr = e.exec.remote.Wait(ctx, params.CellID, uint64(waitMS), budget, YieldSignalFromInvocation(invocation))
 		}
 		if remoteErr == nil {
 			if response.State != "yielded" {
 				e.exec.forgetRemoteCell(params.CellID)
 			}
-			return remoteResponseOutput(invocation.CallID, response, codeModeWaitTokenLimit(params.MaxTokens), time.Since(startedAt), e.exec.cellOverheadEnabled())
+			return remoteResponseOutput(invocation.CallID, response, codeModeWaitTokenLimit(params.MaxTokens), e.exec.remoteOutputTruncation(), time.Since(startedAt), e.exec.cellOverheadEnabled())
 		}
 		var callErr *FunctionCallError
 		if AsFunctionCallError(remoteErr, &callErr) {
@@ -2224,6 +2358,15 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		// #48123: the caller yielded the observation; the cell keeps running.
 		return runningOutput()
 	}
+}
+
+// codeModeWaitRemoteBudget forwards an explicit wait budget to the host; a
+// zero value keeps the host's default observation budget (Rust #58125).
+func codeModeWaitRemoteBudget(value int) *int {
+	if value <= 0 {
+		return nil
+	}
+	return &value
 }
 
 func codeModeWaitTokenLimit(value int) int {

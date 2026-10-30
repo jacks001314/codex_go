@@ -39,6 +39,7 @@ func gatewayAuthConfigFromInfo(config *GatewayOAuthConfig) auth.GatewayAuthConfi
 		Resource:         resource,
 		Scopes:           append([]string(nil), config.Scopes...),
 		RedirectPort:     config.RedirectPort,
+		CredentialsStore: strings.TrimSpace(config.CredentialsStore),
 	}
 }
 
@@ -93,7 +94,8 @@ func gatewayAuthConfigEqual(left auth.GatewayAuthConfig, right auth.GatewayAuthC
 	if left.AuthorizationURL != right.AuthorizationURL ||
 		left.TokenURL != right.TokenURL ||
 		left.ClientID != right.ClientID ||
-		left.Resource != right.Resource {
+		left.Resource != right.Resource ||
+		left.CredentialsStore != right.CredentialsStore {
 		return false
 	}
 	if len(left.Scopes) != len(right.Scopes) {

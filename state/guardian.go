@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"codex_go/context"
 	"codex_go/retainedctx"
@@ -135,10 +136,12 @@ type Action struct {
 	// `arguments` and `annotations`.
 	Arguments   any                `json:"-"`
 	Annotations *ActionAnnotations `json:"-"`
-	// EnvironmentID / SessionID / Chars mirror Rust WriteStdinApprovalAction.
-	EnvironmentID string `json:"-"`
-	SessionID     *int   `json:"-"`
-	Chars         string `json:"-"`
+	// EnvironmentID / SessionID / Chars mirror Rust WriteStdinApprovalAction,
+	// and OriginalCommand carries the terminal's launch command (Rust #57758).
+	EnvironmentID   string `json:"-"`
+	SessionID       *int   `json:"-"`
+	Chars           string `json:"-"`
+	OriginalCommand string `json:"-"`
 	// ApprovalID / ProcessID mirror Rust GuardianAssessmentAction::WriteStdin.
 	ApprovalID string `json:"-"`
 	ProcessID  string `json:"-"`
@@ -160,9 +163,19 @@ type Action struct {
 // (Rust GuardianReviewedAction::NativeToolCall).
 const ActionNativeToolCall = "native_tool_call"
 
-// GuardianNativeToolCallMaxTokens mirrors guardian-context's 9,000-token cap on
-// the native call evidence, counting the paired evidence output.
-const GuardianNativeToolCallMaxTokens = 9_000
+// GuardianMaxTextPartEstimatedTokens mirrors guardian-context's delivery cap on
+// one text part: it sits below the 10K-token context-item guidance and also
+// bounds native call evidence (Rust #58071).
+const GuardianMaxTextPartEstimatedTokens = 9_000
+
+// GuardianMaxTextPartBytes is that cap in bytes at the four-bytes-per-token
+// estimate Rust's TruncationPolicy uses (36KB).
+const GuardianMaxTextPartBytes = GuardianMaxTextPartEstimatedTokens * 4
+
+// GuardianNativeToolCallMaxTokens mirrors guardian-context's cap on the native
+// call evidence, counting the paired evidence output. It shares the delivered
+// text-part limit (Rust #58071).
+const GuardianNativeToolCallMaxTokens = GuardianMaxTextPartEstimatedTokens
 
 // ActionAnnotations mirrors Rust GuardianMcpAnnotations: the privileged hints
 // the invoked MCP tool declared, rendered with the reviewed action.
@@ -786,10 +799,14 @@ func BuildPromptPartsWithSectionCosts(
 			}
 			recordCost(section.id, len(trimmed), 0, 0)
 			if len(parts) > 0 && len(parts[len(parts)-1].Native) == 0 {
-				parts[len(parts)-1].Text += "\n\n" + trimmed
-				continue
+				trimmed = parts[len(parts)-1].Text + "\n\n" + trimmed
+				parts = parts[:len(parts)-1]
 			}
-			parts = append(parts, GuardianPromptPart{Text: trimmed})
+			// Rust #58071 bounds individual delivered text parts without
+			// changing the source text or entry identity.
+			for _, chunk := range SplitGuardianTextParts(trimmed, GuardianMaxTextPartBytes) {
+				parts = append(parts, GuardianPromptPart{Text: chunk})
+			}
 		}
 		textSections = nil
 	}
@@ -910,6 +927,33 @@ func BuildPromptPartsWithSectionCosts(
 		}
 	}
 	return parts, costs, nil
+}
+
+// SplitGuardianTextParts splits one delivered text into parts of at most
+// maxBytes, cutting on UTF-8 boundaries. The parts concatenate back to text.
+func SplitGuardianTextParts(text string, maxBytes int) []string {
+	if maxBytes <= 0 || len(text) <= maxBytes {
+		return []string{text}
+	}
+	var parts []string
+	remaining := text
+	for len(remaining) > maxBytes {
+		end := maxBytes
+		for end > 0 && !utf8.RuneStart(remaining[end]) {
+			end--
+		}
+		if end == 0 {
+			// The first rune alone exceeds the budget; keep it whole.
+			_, size := utf8.DecodeRuneInString(remaining)
+			end = size
+		}
+		parts = append(parts, remaining[:end])
+		remaining = remaining[end:]
+	}
+	if remaining != "" {
+		parts = append(parts, remaining)
+	}
+	return parts
 }
 
 // appendGuardianNativeToolCallParts mirrors Rust's sync-only planned-action

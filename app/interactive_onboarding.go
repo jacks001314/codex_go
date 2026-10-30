@@ -129,6 +129,13 @@ func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFl
 		options.BedrockLoginAccessKeys = loginAccessKeys
 		options.BedrockCheckGovCloud = checkGovCloud
 	}
+	// Rust #57857 should_show_provider_setup_wizard(Feature::GcpSetupWizard):
+	// the Google Cloud Vertex AI wizard follows the same embedded/openai gate as
+	// Bedrock but is opt-in behind its own feature flag.
+	if features.Enabled(loaded.FeatureSettings(), "gcp_setup_wizard") && effectiveProviderID == modelpkg.OpenAIProviderID {
+		options.GcpAllowed = true
+		options.GcpSetup = interactiveGcpCallbacks(codexHome)
+	}
 	// Rust binds the local application policy to the embedded login flow
 	// (tui/src/lib.rs `bind_bootstrap_auth`): the login runs before the effective
 	// policy - which can depend on a cloud fetch - exists, so the locally loaded

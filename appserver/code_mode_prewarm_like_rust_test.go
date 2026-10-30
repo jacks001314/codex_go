@@ -32,10 +32,10 @@ type recordingCodeModePrewarmSession struct{}
 func (recordingCodeModePrewarmSession) Execute(context.Context, tool.CodeModeRemoteExecuteRequest, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{}, nil
 }
-func (recordingCodeModePrewarmSession) Wait(context.Context, string, uint64, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
+func (recordingCodeModePrewarmSession) Wait(context.Context, string, uint64, *int, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{}, nil
 }
-func (recordingCodeModePrewarmSession) Terminate(context.Context, string) (tool.CodeModeRemoteResponse, error) {
+func (recordingCodeModePrewarmSession) Terminate(context.Context, string, *int) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{}, nil
 }
 func (recordingCodeModePrewarmSession) Close() error { return nil }

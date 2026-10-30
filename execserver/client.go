@@ -1332,6 +1332,13 @@ func (c *Client) discoverCapabilityRoots(ctx context.Context, params *Capability
 	if params == nil || len(params.Roots) == 0 {
 		return &response, nil
 	}
+	sandboxes := make([]*FileSystemSandboxContext, 0, len(params.Roots))
+	for i := range params.Roots {
+		sandboxes = append(sandboxes, params.Roots[i].Sandbox)
+	}
+	if err := c.validateDiscoveryMXC(ctx, sandboxes); err != nil {
+		return nil, err
+	}
 	normalizedRoots := make([]CapabilityRootDiscoverRequest, len(params.Roots))
 	for i := range params.Roots {
 		normalizedRoots[i] = params.Roots[i]
@@ -1379,6 +1386,9 @@ func (c *Client) DiscoverCapabilitiesV2(ctx context.Context, params *DiscoverV2C
 	}
 	if !supported {
 		return nil, errors.New("capabilities/discoverV2 is unavailable in this environment session")
+	}
+	if err := c.validateDiscoveryMXC(ctx, []*FileSystemSandboxContext{params.Sandbox}); err != nil {
+		return nil, err
 	}
 	response, err := c.discoverCapabilitiesV2Once(ctx, params)
 	if err != nil && IsRetryableRecoveryError(err) {

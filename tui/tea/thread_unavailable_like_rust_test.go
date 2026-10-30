@@ -152,3 +152,46 @@ func TestClosedAgentSwitchEntersUnavailableModeLikeRust(t *testing.T) {
 		t.Fatal("live agent switch stayed unavailable")
 	}
 }
+
+// TestUnavailableThreadAllowsLocalSetupAndQuitCommandsLikeRust covers Rust
+// #57820: restricted input keeps local warnings, configuration, and quit
+// commands usable, in addition to the recovery allowlist.
+func TestUnavailableThreadAllowsLocalSetupAndQuitCommandsLikeRust(t *testing.T) {
+	cases := []struct {
+		command string
+		check   func(m *Model) bool
+		want    string
+	}{
+		{command: "/warnings", check: func(m *Model) bool { return m.warningsView != nil }, want: "warnings view"},
+		{command: "/config", check: func(m *Model) bool { return m.modal != nil && m.modal.configPanel != nil }, want: "config panel"},
+	}
+	for _, tc := range cases {
+		model, submitted := unavailableThreadModel()
+		typeText(t, model, tc.command)
+		model.Update(key(bubbletea.KeyEnter))
+		if len(*submitted) != 0 {
+			t.Fatalf("%q was submitted as a prompt while unavailable", tc.command)
+		}
+		if got := model.composerText(); got != "" {
+			t.Fatalf("%q did not clear the composer: %q", tc.command, got)
+		}
+		if !tc.check(model) {
+			t.Fatalf("%q did not open the %s: notice=%q", tc.command, tc.want, model.notice)
+		}
+	}
+
+	for _, command := range []string{"/quit", "/exit"} {
+		model, submitted := unavailableThreadModel()
+		typeText(t, model, command)
+		_, cmd := model.Update(key(bubbletea.KeyEnter))
+		if len(*submitted) != 0 {
+			t.Fatalf("%q was submitted as a prompt while unavailable", command)
+		}
+		if cmd == nil {
+			t.Fatalf("%q did not request exit while unavailable", command)
+		}
+		if _, ok := cmd().(bubbletea.QuitMsg); !ok {
+			t.Fatalf("%q did not return a quit command", command)
+		}
+	}
+}

@@ -51,10 +51,17 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 			allowUserInteraction:      true,
 		}
 		sessionKey := mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}
+		readOnly, destructive, idempotent, openWorld := false, false, true, true
 		decision, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
-			Server:                  "docs",
-			Tool:                    "search",
-			ToolTitle:               "Search docs",
+			Server:    "docs",
+			Tool:      "search",
+			ToolTitle: "Search docs",
+			Annotations: &mcp.RuntimeToolAnnotations{
+				ReadOnlyHint:    &readOnly,
+				DestructiveHint: &destructive,
+				IdempotentHint:  &idempotent,
+				OpenWorldHint:   &openWorld,
+			},
 			ApprovalMode:            apps.AppToolApprovalAuto,
 			CallID:                  "call-1",
 			SessionKey:              &sessionKey,
@@ -94,6 +101,17 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 		}
 		if meta[key] != want {
 			t.Fatalf("elicitation meta[%s] = %#v, want %#v (meta=%#v)", key, meta[key], want, meta)
+		}
+	}
+	annotations, _ := meta["tool_annotations"].(map[string]any)
+	for key, want := range map[string]any{
+		"readOnlyHint":    false,
+		"destructiveHint": false,
+		"idempotentHint":  true,
+		"openWorldHint":   true,
+	} {
+		if annotations[key] != want {
+			t.Fatalf("tool_annotations[%s] = %#v, want %#v (meta=%#v)", key, annotations[key], want, meta)
 		}
 	}
 	schema, ok := params.RequestedSchema.(map[string]any)

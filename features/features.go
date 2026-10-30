@@ -135,7 +135,12 @@ var Registry = []Spec{
 		ExperimentalMenuDescription: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
 		ExperimentalAnnouncement:    "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
 	},
-	{Key: "respect_system_proxy", Stage: StageUnderDevelopment},
+	{
+		Key:                         "respect_system_proxy",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "System proxy",
+		ExperimentalMenuDescription: "Use macOS or Windows system proxy settings for Codex requests.",
+	},
 	// Rust (codex-rs/features/src/lib.rs #46562): retry eligible bootstrap
 	// requests through the system proxy after normal routing fails.
 	{Key: "system_proxy_fallback", Stage: StageStable, DefaultEnabled: true},
@@ -157,6 +162,10 @@ var Registry = []Spec{
 	// observations when new user input arrives, so a queued message is delivered
 	// while the cell keeps running.
 	{Key: "instant_interrupt", Stage: StageUnderDevelopment, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #57864): interrupt upstream inference
+	// when a Responses Lite turn is cancelled so the socket stays reusable and
+	// the completed part of the response keeps its usage accounting.
+	{Key: "interrupt_on_cancel", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #47946): shared discussion tools for an
 	// agent tree (the in-memory agent message board).
 	{Key: "agent_message_board", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -189,6 +198,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #50464): track top-level tool
 	// definitions in world state and emit incremental context updates.
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #58122): diff CodeModeOnly exec
+	// definitions within the incremental tool catalog.
+	{Key: "incremental_exec_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "prediction_preserve_parent_tools", Stage: StageStable, DefaultEnabled: true},
 	{Key: "subagent_thread_environments", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "non_prefixed_mcp_tool_names", Stage: StageUnderDevelopment},
@@ -340,6 +352,13 @@ var Registry = []Spec{
 	// stable and enabled by default for eligible onboarding; users can still
 	// opt out with features.bedrock_setup_wizard = false.
 	{Key: "bedrock_setup_wizard", Stage: StageStable, DefaultEnabled: true},
+	// Rust #57857 (codex-rs/features/src/lib.rs): the Google Cloud Vertex AI
+	// setup wizard is stable but disabled by default; users opt in with
+	// features.gcp_setup_wizard = true.
+	{Key: "gcp_setup_wizard", Stage: StageStable, DefaultEnabled: false},
+	// Rust #57970 (codex-rs/features/src/lib.rs): the shared UI tree renderer for
+	// the status line is under development and disabled by default.
+	{Key: "tui_extensions_statusline", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "step_model_switching", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 307ce6cda9): write_stdin_approval
 	// added; compaction_image_budget promoted to stable/default-on (sync28).
@@ -411,6 +430,9 @@ var Registry = []Spec{
 	// and disabled by default in Rust; behaviour work is tracked separately.
 	{Key: "async_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_host_grpc", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #58159): let the process-owned
+	// code-mode host apply output budgets before sending results to Core.
+	{Key: "code_mode_host_output_truncation", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "credential_masking", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "executor_capability_discovery_v2", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_trust_orchestrator_connectors", Stage: StageUnderDevelopment, DefaultEnabled: false},

@@ -107,7 +107,7 @@ func providerCapabilitiesOverrideFromConfig(values map[string]any) (*ProviderCap
 	}
 	out := &ProviderCapabilitiesOverride{}
 	for key := range values {
-		if key != "external_web_access" && key != "remote_compaction" {
+		if key != "external_web_access" && key != "remote_compaction" && key != "cyber_access_programs" {
 			return nil, fmt.Errorf("model_providers capabilities has unknown field `%s`", key)
 		}
 	}
@@ -117,6 +117,13 @@ func providerCapabilitiesOverrideFromConfig(values map[string]any) (*ProviderCap
 			return nil, fmt.Errorf("model_providers capabilities.external_web_access must be a boolean")
 		}
 		out.ExternalWebAccess = &value
+	}
+	if raw, ok := values["cyber_access_programs"]; ok {
+		value, ok := raw.(bool)
+		if !ok {
+			return nil, fmt.Errorf("model_providers capabilities.cyber_access_programs must be a boolean")
+		}
+		out.CyberAccessPrograms = &value
 	}
 	if raw, ok := values["remote_compaction"]; ok {
 		text, ok := raw.(string)
@@ -422,6 +429,23 @@ func gatewayOAuthConfigFromConfig(values map[string]any) (*GatewayOAuthConfig, e
 		}
 		value := uint16(port)
 		gateway.RedirectPort = &value
+	}
+	if rawStore := configValue(values, "credentials_store"); rawStore != nil {
+		// Rust #58219: OAuthCredentialsStore accepts only `keyring` (the
+		// default, normalized away so the serialized provider identity is
+		// unchanged) and `file`.
+		store, ok := rawStore.(string)
+		if !ok {
+			return nil, fmt.Errorf("gateway_oauth.credentials_store must be a string")
+		}
+		switch strings.TrimSpace(store) {
+		case "keyring":
+			gateway.CredentialsStore = ""
+		case "file":
+			gateway.CredentialsStore = "file"
+		default:
+			return nil, fmt.Errorf("gateway_oauth.credentials_store must be `keyring` or `file`")
+		}
 	}
 	rawDelivery := configValue(values, "delivery")
 	if rawDelivery == nil {

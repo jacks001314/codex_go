@@ -4829,7 +4829,9 @@ func TestInteractiveRemoteSessionPickerPreservesItemsOnLaterPageFailureLikeRust(
 	}
 }
 
-func TestInteractiveSessionPickerFiltersByConfiguredProviderLikeRust(t *testing.T) {
+// Rust #58202: the resume picker lists chats from every provider so switching
+// providers cannot hide saved conversations.
+func TestInteractiveSessionPickerIncludesAllProvidersLikeRust(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
@@ -4856,8 +4858,12 @@ func TestInteractiveSessionPickerFiltersByConfiguredProviderLikeRust(t *testing.
 		}
 	}
 	items := interactiveSessionPickerItems(&cli.RootOptions{Shared: cli.SharedOptions{CWD: cwd}})
-	if len(items) != 1 || items[0].ThreadID != "thread-ollama" || items[0].Provider != "ollama" {
-		t.Fatalf("session picker items = %#v", items)
+	providers := map[string]string{}
+	for _, item := range items {
+		providers[item.ThreadID] = item.Provider
+	}
+	if len(items) != 2 || providers["thread-ollama"] != "ollama" || providers["thread-openai"] != "openai" {
+		t.Fatalf("session picker items = %#v, want both providers", items)
 	}
 }
 

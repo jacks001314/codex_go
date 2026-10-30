@@ -23312,8 +23312,8 @@ func TestRuntimeRouterThreadForkActivePaginatedTurnStoresInterruptedDelta(t *tes
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
 	t.Cleanup(func() { _ = router.Close() })
 	if err := router.registerActiveRuntimeTurn("thread-active-paginated-fork", "turn-active", func() {}, startedAt.UnixMilli(), &turn.TurnStartParams{
-		ThreadID: "thread-active-paginated-fork",
-		Prompt:   "active prompt",
+		ThreadID:   "thread-active-paginated-fork",
+		Prompt:     "active prompt",
 		RootTurnID: "causal-root",
 	}); err != nil {
 		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)

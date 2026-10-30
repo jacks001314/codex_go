@@ -120,6 +120,8 @@ func (m *Model) startFreshNamedSession(args string, defaultNotice string) {
 		return
 	}
 	m.setThreadUnavailable(false)
+	m.clearProviderError()
+	m.setReadOnlyThread(false)
 	m.clearMisalignmentState()
 	name := strings.TrimSpace(args)
 	// Daybreak is session-scoped for a fresh thread: retain the current

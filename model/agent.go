@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"codex_go/codexapi"
+	"codex_go/network"
 	"codex_go/protocol"
 	"codex_go/sandbox"
 )
@@ -35,8 +36,13 @@ type AgentRequest struct {
 	// Endpoint selects the Responses-compatible backend route. The zero value
 	// is the standard /responses route; Guardian callers may opt into /guardian.
 	Endpoint ResponsesEndpoint
-	TaskKind AgentTaskKind
-	ThreadID string
+	// RoutingAffinity is the transport-only routing pin captured with the
+	// reviewed parent response (Rust #57710). Only a Guardian reviewer request
+	// carries it, and it is never projected into prompts, history, or
+	// serialized metadata.
+	RoutingAffinity *network.RoutingAffinity
+	TaskKind        AgentTaskKind
+	ThreadID        string
 	// SessionID is the session (rollout) identity that Rust passes to
 	// ResponsesOptions::session_id. Go keeps one rollout per thread, so an
 	// empty value falls back to ThreadID (see addSessionIdentityHeaders).
@@ -103,6 +109,12 @@ type AgentRequest struct {
 	// reaches the model without waiting for the unfinished response. A
 	// preempted request returns a response with Preempted set and no output.
 	Preempt <-chan struct{}
+	// InterruptOnCancel mirrors Rust #57864's `features.interrupt_on_cancel`:
+	// when a Responses Lite turn is cancelled the request tells the server to
+	// interrupt the response and drains the terminal event (bounded by one
+	// second) instead of abandoning the socket. The completed part keeps its
+	// usage accounting and the connection stays reusable.
+	InterruptOnCancel bool
 }
 
 type AgentUsage struct {
@@ -420,6 +432,15 @@ type AgentResponse struct {
 	// turn records them and continues from ResponseID instead of resending full
 	// history.
 	Drained bool
+	// Canceled reports that the turn was cancelled while sampling and the
+	// upstream response was interrupted (Rust #57864). Items and Usage are the
+	// completed part the server retained; the turn still ends as aborted but
+	// the usage is accounted for.
+	Canceled bool
+	// RoutingAffinity is the routing pin from the WebSocket handshake that
+	// produced this response, kept so a Guardian review of it can reuse the
+	// same edge route (Rust #57710's ResponseStream::routing_affinity).
+	RoutingAffinity *network.RoutingAffinity
 }
 
 func AgentResponseMetadata(response *AgentResponse) map[string]any {

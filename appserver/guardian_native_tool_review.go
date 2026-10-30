@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"codex_go/session"
 	"codex_go/state"
 	"codex_go/tool"
 )
@@ -36,6 +35,13 @@ func (r *RuntimeRouter) nativeToolGuardianReview(threadID, turnID string) tool.G
 		return nil
 	}
 	return func(ctx context.Context, invocation *tool.Invocation) error {
+		// Rust #58075 discards a serving assessment when a hook rewrites the
+		// tool input: it no longer describes the call being reviewed.
+		if invocation != nil && len(invocation.NativeCall) > 0 {
+			if recorded := nativeCallArguments(invocation.NativeCall); recorded != "" && recorded != invocation.Payload.Arguments {
+				r.forgetGuardianServingAssessment(threadID, turnID, invocation.CallID)
+			}
+		}
 		action, err := r.nativeToolGuardianAction(threadID, invocation)
 		if err != nil {
 			return err
@@ -56,6 +62,20 @@ func (r *RuntimeRouter) nativeToolGuardianReview(threadID, turnID string) tool.G
 	}
 }
 
+// nativeCallArguments returns the retained call's original argument string.
+func nativeCallArguments(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var call struct {
+		Arguments string `json:"arguments"`
+	}
+	if err := json.Unmarshal(raw, &call); err != nil {
+		return ""
+	}
+	return call.Arguments
+}
+
 // nativeToolGuardianAction builds Rust's `GuardianApprovalRequest::NativeToolCall`
 // for one invocation: the persisted function call when history holds it, so
 // encrypted replay content survives, otherwise the invocation's own call.
@@ -68,37 +88,11 @@ func (r *RuntimeRouter) nativeToolGuardianAction(threadID string, invocation *to
 	if invocation.Payload.Kind != tool.PayloadFunction {
 		return state.Action{}, tool.RespondToModel("Native review requires a function call")
 	}
-	raw, err := nativeToolCallEvidenceItem(r.nativeToolHistoryCall(threadID, invocation.CallID), invocation)
+	raw, err := nativeToolCallEvidenceItem(invocation.NativeCall, invocation)
 	if err != nil {
 		return state.Action{}, err
 	}
 	return state.Action{Type: state.ActionNativeToolCall, NativeCall: raw}, nil
-}
-
-// nativeToolHistoryCall returns the thread's most recent persisted call item for
-// the invocation, or nil when history does not hold it.
-func (r *RuntimeRouter) nativeToolHistoryCall(threadID, callID string) json.RawMessage {
-	callID = strings.TrimSpace(callID)
-	if r == nil || callID == "" {
-		return nil
-	}
-	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
-	if err != nil || record == nil {
-		return nil
-	}
-	for index := len(record.Items) - 1; index >= 0; index-- {
-		item := &record.Items[index]
-		if item == nil || len(item.Raw) == 0 || !strings.EqualFold(strings.TrimSpace(item.Type), "function_call") {
-			continue
-		}
-		if itemCallID, _, ok := state.GuardianNativeFunctionCall(item.Raw); ok && itemCallID == callID {
-			return append(json.RawMessage(nil), item.Raw...)
-		}
-		if strings.TrimSpace(item.CallID) == callID {
-			return append(json.RawMessage(nil), item.Raw...)
-		}
-	}
-	return nil
 }
 
 // nativeToolCallEvidenceItem reconciles the recorded call with the invocation's

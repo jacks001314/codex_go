@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -79,8 +80,14 @@ func (p *WebSocketProvider) Availability() error { return nil }
 func (p *WebSocketProvider) TakeUnavailableWarning(string) string { return "" }
 
 func (p *WebSocketProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
+	return p.NewSessionWithOptions(delegate, tool.CodeModeSessionOptions{})
+}
+
+// NewSessionWithOptions honors the requested session options (Rust
+// CodeModeSessionProvider::create_session_with_options, #58125).
+func (p *WebSocketProvider) NewSessionWithOptions(delegate tool.CodeModeRemoteDelegate, options tool.CodeModeSessionOptions) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
-	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
+	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value)), options: sessionOptionsFromTool(options)}
 }
 
 func (p *WebSocketProvider) nextGeneration() uint64 {
@@ -155,7 +162,10 @@ func connectRemoteTransportWithHandshake(ctx context.Context, transport remoteTr
 	// yield-observation capability (the latter #48123) as optional capabilities.
 	limits, _ := NewCapability(SessionCellExecutionResourceLimitsCapability)
 	yield, _ := NewCapability(YieldObservationCapability)
-	requested := []Capability{limits, yield}
+	// Rust #58125 asks for bounded-output-v1 so sessions can negotiate
+	// server-side truncation with hosts that support it.
+	bounded, _ := NewCapability(BoundedOutputCapability)
+	requested := []Capability{limits, yield, bounded}
 	if options != nil && strings.TrimSpace(options.websocketURL) != "" {
 		requested = append(requested, dual)
 	}
@@ -242,11 +252,44 @@ type remoteSession struct {
 	delegate   tool.CodeModeRemoteDelegate
 	id         SessionID
 	generation uint64
+	options    SessionOptions
 
 	openMu   sync.Mutex
 	mu       sync.Mutex
 	openedOn *remoteConnection
-	closed   bool
+	// outputTruncation is pinned by the first successful open and preserved
+	// across reconnects (Rust #58125).
+	outputTruncation OutputTruncation
+	closed           bool
+}
+
+// NewSessionWithOptions mirrors Rust's create_session_with_options: the
+// provider honors the requested session options when the transport supports
+// them. Providers that cannot negotiate a requested mode fall back to client
+// truncation.
+func (s *remoteSession) OutputTruncation() tool.CodeModeOutputTruncation {
+	if s == nil {
+		return tool.CodeModeOutputTruncationClient
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.outputTruncation == OutputTruncationServer {
+		return tool.CodeModeOutputTruncationServer
+	}
+	return tool.CodeModeOutputTruncationClient
+}
+
+func (s *remoteSession) serverOutputBudget(budget *int) *int {
+	if budget == nil || s.OutputTruncation() != tool.CodeModeOutputTruncationServer {
+		return nil
+	}
+	// The V1 wire encodes the exec budget as i32; its maximum already exceeds
+	// the host collector limit.
+	if *budget > math.MaxInt32 {
+		clamped := math.MaxInt32
+		return &clamped
+	}
+	return budget
 }
 
 const execRuntimeResetError = "The exec runtime was replaced. Stored values and running cells were lost. Prior external tool operations may have completed; inspect their results before retrying. You may continue with a fresh exec call."
@@ -326,14 +369,14 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 	delegate := s.delegateForGeneration(actualGeneration)
 	response, err := connection.Execute(ctx, s.id, delegate, ExecuteRequest{
 		ToolCallID: request.ToolCallID, EnabledTools: definitions, Source: request.Source,
-		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: request.MaxOutputTokens,
+		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: s.serverOutputBudget(request.MaxOutputTokens),
 		TraceContext: codeModeTraceContextFromContext(ctx),
 	}, preempt)
 	s.invalidateSessionOnNotFound(connection, err)
 	return publicRemoteResponseForGeneration(response, actualGeneration), err
 }
 
-func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uint64, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
+func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uint64, maxOutputTokens *int, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	generation, hadBinding := s.bindingGeneration()
 	connection, err := s.connection(ctx)
 	if err != nil {
@@ -351,7 +394,7 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 		return tool.CodeModeRemoteResponse{}, err
 	}
 	outcome, err := connection.withTransportDeadline(runtimeTimeout, "wait", func(ctx context.Context) (HostResponse, error) {
-		return connection.RequestWithYield(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: remoteCellID, YieldTimeMS: yieldTimeMS}), preempt)
+		return connection.RequestWithYield(ctx, WaitSessionRequestWithBudget(s.id, WaitRequest{CellID: remoteCellID, YieldTimeMS: yieldTimeMS}, s.serverOutputBudget(maxOutputTokens)), preempt)
 	})
 	if err != nil {
 		s.invalidateSessionOnNotFound(connection, err)
@@ -366,7 +409,7 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 	return publicRemoteResponseForGeneration(outcome.Outcome.Response, actualGeneration), nil
 }
 
-func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.CodeModeRemoteResponse, error) {
+func (s *remoteSession) Terminate(ctx context.Context, cellID string, maxOutputTokens *int) (tool.CodeModeRemoteResponse, error) {
 	connection, err := s.existingConnection()
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
@@ -377,7 +420,7 @@ func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.Code
 		return tool.CodeModeRemoteResponse{}, err
 	}
 	outcome, err := connection.withTransportDeadline(0, "terminate", func(ctx context.Context) (HostResponse, error) {
-		return connection.Request(ctx, TerminateSessionRequest(s.id, remoteCellID))
+		return connection.Request(ctx, TerminateSessionRequestWithBudget(s.id, TerminateRequest{CellID: remoteCellID, MaxOutputTokens: s.serverOutputBudget(maxOutputTokens)}))
 	})
 	if err != nil {
 		s.invalidateSessionOnNotFound(connection, err)
@@ -501,6 +544,19 @@ func (s *remoteSession) connection(ctx context.Context) (*remoteConnection, erro
 // pre-#51185 connection() body verbatim so non-retrying providers observe
 // identical behavior.
 func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
+	// Rust #57782: an established session keeps its host channel. Only session
+	// admission may replace a dead host, so a live binding is returned without
+	// touching the provider's process/channel generation.
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("code mode session is shutting down")
+	}
+	if existing := s.openedOn; existing != nil && existing.Alive() {
+		s.mu.Unlock()
+		return existing, nil
+	}
+	s.mu.Unlock()
 	connection, err := s.provider.connect(ctx)
 	if err != nil {
 		return nil, err
@@ -515,7 +571,22 @@ func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
 		return connection, nil
 	}
 	s.mu.Unlock()
-	response, err := connection.Request(ctx, OpenSessionRequest(s.id))
+	options := s.options
+	s.mu.Lock()
+	pinned := s.outputTruncation
+	s.mu.Unlock()
+	supportsBounded := connection.capabilities.Contains(Capability(BoundedOutputCapability))
+	switch {
+	case supportsBounded:
+		if pinned != "" {
+			options.OutputTruncation = pinned
+		}
+	case pinned == OutputTruncationServer:
+		return nil, fmt.Errorf("code-mode host cannot preserve server output truncation after reconnect")
+	default:
+		options.OutputTruncation = OutputTruncationClient
+	}
+	response, err := connection.Request(ctx, OpenSessionRequestWithOptions(s.id, options))
 	if err != nil {
 		return nil, err
 	}
@@ -528,6 +599,10 @@ func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
 		return nil, fmt.Errorf("code mode session is shutting down")
 	}
 	s.openedOn = connection
+	s.outputTruncation = options.OutputTruncation
+	if s.outputTruncation == "" {
+		s.outputTruncation = OutputTruncationClient
+	}
 	s.generation = s.provider.nextGeneration()
 	s.mu.Unlock()
 	connection.SetDelegate(s.id, s.delegateForGeneration(s.generation))

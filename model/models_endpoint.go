@@ -287,6 +287,11 @@ type RemoteModelsManager struct {
 	apiKeyModelDiscovery    *apiKeyModelDiscoveryPolicy
 	explicitProviderCatalog bool
 	now                     func() time.Time
+	// providerModelIDs holds the slugs the provider response, or the catalog
+	// loaded from its cache, advertised before merging, so catalog origins
+	// survive merges, cache reloads, and empty responses (Rust #57770
+	// CatalogState::provider_model_ids).
+	providerModelIDs map[string]struct{}
 
 	// initialModels is the catalog seed used when partitioning an originator.
 	initialModels []ModelInfo
@@ -530,6 +535,42 @@ func (m *RemoteModelsManager) GetRemoteModels() []ModelInfo {
 	return cloneModelInfos(models)
 }
 
+// ModelCatalogWithOrigins mirrors Rust model_catalog_with_origins: every entry
+// the provider response advertised is Provider, everything else in the merged
+// catalog is Bundled.
+func (m *RemoteModelsManager) ModelCatalogWithOrigins(strategy RefreshStrategy) []CatalogModel {
+	if m == nil {
+		return nil
+	}
+	m.refreshAvailableModels(strategy)
+	models := m.GetRemoteModels()
+	m.mu.RLock()
+	providerIDs := m.providerModelIDs
+	m.mu.RUnlock()
+	catalog := make([]CatalogModel, 0, len(models))
+	for _, info := range models {
+		origin := ModelOriginBundled
+		if _, ok := providerIDs[strings.TrimSpace(info.Slug)]; ok {
+			origin = ModelOriginProvider
+		}
+		catalog = append(catalog, CatalogModel{Model: info, Origin: origin})
+	}
+	return catalog
+}
+
+func modelSlugSet(models []ModelInfo) map[string]struct{} {
+	if len(models) == 0 {
+		return nil
+	}
+	ids := make(map[string]struct{}, len(models))
+	for _, info := range models {
+		if slug := strings.TrimSpace(info.Slug); slug != "" {
+			ids[slug] = struct{}{}
+		}
+	}
+	return ids
+}
+
 func (m *RemoteModelsManager) GetDefaultModel(model string, allowProviderModelFallback bool, strategy RefreshStrategy) string {
 	availableModels := m.ListModels(strategy)
 	if allowProviderModelFallback {
@@ -637,6 +678,11 @@ func (m *RemoteModelsManager) refreshAvailableModels(strategy RefreshStrategy) {
 	if m == nil || m.endpoint == nil {
 		return
 	}
+	// Rust #57789: InMemory never loads the cache or fetches, so a catalog
+	// recovered by an explicit refresh survives a failed disk-cache write.
+	if strategy == RefreshInMemory {
+		return
+	}
 	// Gate cache loading as well as requests (Rust #44392/#46561): API-key auth
 	// must have an enabled, supported catalog before a remote catalog is reused,
 	// so a custom base URL without `model_catalog_url` keeps the bundled models
@@ -690,6 +736,7 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 		if err != nil && m.explicitProviderCatalog && modelsCatalogRefreshRejected(err) {
 			m.mu.Lock()
 			m.remoteModels = nil
+			m.providerModelIDs = nil
 			m.etag = ""
 			m.fetched = false
 			cachePath := m.cachePath
@@ -708,6 +755,7 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 	m.mu.Lock()
 	m.fetched = true
 	m.fetchedIdentity = m.identity
+	m.providerModelIDs = modelSlugSet(response.Models)
 	if len(response.Models) > 0 || m.explicitProviderCatalog {
 		if m.explicitProviderCatalog || (m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(response.Models)) {
 			m.remoteModels = cloneModelInfos(response.Models)
@@ -763,6 +811,7 @@ func (m *RemoteModelsManager) tryLoadFreshCache() bool {
 	m.fetched = true
 	m.etag = strings.TrimSpace(cache.ETag)
 	m.fetchedIdentity = m.identity
+	m.providerModelIDs = modelSlugSet(cache.Models)
 	if len(cache.Models) > 0 || m.explicitProviderCatalog {
 		if m.explicitProviderCatalog || (m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(cache.Models)) {
 			m.remoteModels = cloneModelInfos(cache.Models)

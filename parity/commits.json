@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "7ac6081623928adead75caa2882e307444edad82",
+ "rustToInclusive": "c9750d7f50052b29f53def02b5cf2160ae49a3d9",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -38209,6 +38209,1230 @@
    "evidence": [
     "plan_2026_10_28_sync8.md:10: `#55969`, `#55954`, and packaging-only `#57628`.",
     "October plan records this as landed/complete for the Go tree."
+   ]
+  },
+  {
+   "sha": "6ba3a84680236c621b93e0b8dc140687a37f41fc",
+   "subject": "Restore spawned descendants when unarchiving a thread (#57635)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:135: #57635 完成 — unarchive 线程时恢复 spawned descendants，并逐条发送 ThreadUnarchived"
+   ]
+  },
+  {
+   "sha": "424916ee94204587dc4412539442a91b01727fe9",
+   "subject": "Add OpenTelemetry requirement types to the app-server protocol (#57638)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:136: #57638 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "d63fe536ee2bf4ea7d18d81e0e1be17543bf5b5b",
+   "subject": "Generate Rust bindings that match Bazel-built V8 archives (#57644)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:137: #57644 N/A — Rust Bazel/V8 绑定生成"
+   ]
+  },
+  {
+   "sha": "727283cea5ba30e8cf8bbac6b68a03a4d91cf1b7",
+   "subject": "Support managed OpenTelemetry configuration requirements (#57649)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:138: #57649 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "bea47c06dfac12ecce362090418e12a6faeedbf9",
+   "subject": "Redact OTEL exporter headers in app-server config responses (#57654)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:139: #57654 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "0736b26422266631c8df55c465fafc6a7fbf7dd3",
+   "subject": "Fix trace exporter activation after account switches (#57657)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:140: #57657 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "154e8736a51224e12b2d990753622a2cd8118f54",
+   "subject": "Support managed OpenTelemetry metadata and PEM client identities (#57658)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:141: #57658 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "26ad281fd1ca712e4f0c7920a6273cf18c961b8a",
+   "subject": "Remove detached delivery from `review/start` (#57667)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:142: #57667 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "f021168bde5357009fceb0477835ad90bd54c17c",
+   "subject": "Wait for turn profiles before asserting sampling counts in trace tests (#57692)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:143: #57692 N/A — Rust trace 测试等待"
+   ]
+  },
+  {
+   "sha": "d09a5cd8cfbbdaeb956c1de5ac1a9d733ef475bd",
+   "subject": "Move Guardian review state into the reviewer extension (#57697)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:144: #57697 N/A — Guardian crate 文件搬迁"
+   ]
+  },
+  {
+   "sha": "13b0217567d310bd1c295f12539422a2bc224480",
+   "subject": "Move Guardian context policy and prompts into the reviewer extension (#57698)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:145: #57698 N/A — Guardian crate 文件搬迁"
+   ]
+  },
+  {
+   "sha": "e6de6a2423f9a723c098db3d17ea6c71e93bfcf2",
+   "subject": "Move Guardian review evidence into the reviewer extension (#57702)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:146: #57702 N/A — Guardian crate 文件搬迁"
+   ]
+  },
+  {
+   "sha": "e742db9f7ba98e63e502b310857d49d047888518",
+   "subject": "Preserve parent routing affinity for Guardian reviews (#57710)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:147: #57710 完成 — `network.RoutingAffinity`（捕获 `__oailb`/`__cflb`，保留 scope/expiry，合并时替换 routing cookie）、WS 握手捕获与 `response.created` 透传、review 期间快照（含重试）且仅随匹配的 `parent_response_id` 下发，pin 变更重连 reviewer socket。`go test ./"
+   ]
+  },
+  {
+   "sha": "5d5e5c507def46c4e53b30441cf8198c8663c9d2",
+   "subject": "Move `ReviewAction` into the Guardian reviewer crate (#57720)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:148: #57720 N/A — Guardian crate 文件搬迁"
+   ]
+  },
+  {
+   "sha": "6f8bf683cee83ed4d580a2e106b587d8451db936",
+   "subject": "Disable optimization for the on-demand Bazel schema generator (#57723)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:149: #57723 N/A — Bazel 生成器优化"
+   ]
+  },
+  {
+   "sha": "5fd36fc5502136160a28a6bebec3590b0df9179a",
+   "subject": "Remove `free_guardian` configuration from Guardian tests (#57729)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:150: #57729 N/A — Rust 测试配置清理"
+   ]
+  },
+  {
+   "sha": "6c839b3694167f73a4f66bba098576fe4281b18f",
+   "subject": "Separate test-only Rust sources from Bazel library and binary inputs (#57741)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:151: #57741 N/A — Bazel 测试源拆分"
+   ]
+  },
+  {
+   "sha": "29e3c61b482bf7f3f03c1fa8954fda68408a3780",
+   "subject": "Avoid recompiling Bazel integration tests for runtime fixture changes (#57742)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:152: #57742 N/A — Bazel 增量编译"
+   ]
+  },
+  {
+   "sha": "ce2d47bdc4dd2513d5b3567090593b07b0fdfa0a",
+   "subject": "Move Guardian MCP elicitation helpers into the reviewer crate (#57743)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:153: #57743 N/A — Guardian MCP helper 搬迁"
+   ]
+  },
+  {
+   "sha": "fc916a22b57e9d7b17988f044a54794d2222ae2c",
+   "subject": "Expose Guardian assessments in response streams (#57757)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:154: #57757 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "7c11b8074dbdbab2a3afedf30df7c55f0c6907d8",
+   "subject": "Include terminal launch commands in Guardian stdin reviews (#57758)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:155: #57758 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "5c0e42161ee26af222eb3e9853f9c898706b375b",
+   "subject": "Respect model catalog origins when selecting Guardian reviewers (#57770)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:156: #57770 完成 — 新增 `ModelOrigin`（bundled/provider/explicit_config）与 `ModelsManager.ModelCatalogWithOrigins`，origin 跨合并/缓存重载/空响应保持；Guardian 选择 reviewer 时排除 bundled（有 `auto_review_model_override` 时放行）；static manager 记录"
+   ]
+  },
+  {
+   "sha": "1cc3cf8060c5f1dbd4e3a4d75e1a77b523e0c1ad",
+   "subject": "Skip non-regular files when detecting pasted image paths (#57774)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:157: #57774 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "5fdb50af9518cf39c134e3df0bdfec2be8f09b42",
+   "subject": "Restrict code-mode host replacement to session admission (#57782)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:158: #57782 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "c8bd6c1da9782bb92cf300a8768f87232b2d5631",
+   "subject": "Exclude unrelated network shares from MXC default reads (#57783)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:159: #57783 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "575cc5351efff4380396c0d76f0e93886e4c1806",
+   "subject": "Fix app-server thread listener startup and shutdown races (#57787)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:160: #57787 完成 — 修复 app-server thread listener 启停竞态"
+   ]
+  },
+  {
+   "sha": "7f4d53e928d16ccbb47c00f0fdc39f6f16782437",
+   "subject": "Release app-server thread runtimes after shutdown (#57788)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:161: #57788 完成 — shutdown 后释放 app-server thread runtime"
+   ]
+  },
+  {
+   "sha": "84bef6ea8c747f01216df126bbb40fbc12a8adb1",
+   "subject": "Refresh the model catalog once when Guardian's default reviewer is missing (#57789)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:162: #57789 完成 — `model.RefreshInMemory` + `appserver/guardian_review_catalog_refresh.go`（每 parent thread 一次共享刷新，waiter 取消不中断；override/custom catalog/guardian session 跳过；review deadline 经 `reviewPlanContext` 生效）；历史回放的"
+   ]
+  },
+  {
+   "sha": "c6fce1caceaae6c4b2896e5c5ae456b5be3bf501",
+   "subject": "Centralize synchronous Guardian prompt preparation (#57790)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:163: #57790 N/A — Guardian prompt 准备重构（无行为变化）"
+   ]
+  },
+  {
+   "sha": "22aec5f2b01a6d4d9e43f8ffad40cfaf41583494",
+   "subject": "Extend GitHub release read retries and add jitter (#57796)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:164: #57796 N/A — .github release 重试"
+   ]
+  },
+  {
+   "sha": "c92700d2993707ee16eb63b35a1cdd7fcc563f69",
+   "subject": "Backfill exec completion items through paginated history (#57800)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:165: #57800 N/A — 核对为 N/A：Go exec 直接使用 agent-loop 结果 items，不经 app-server 分页通知回填"
+   ]
+  },
+  {
+   "sha": "ef186f812ae447283776a2968fe1f8083e0d8ce7",
+   "subject": "Detach realtime sideband observers without ending the session (#57817)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:166: #57817 完成 — realtime sideband 分离仅关闭传输、不结束会话；realtime/sideband_detach_like_rust_test.go 通过"
+   ]
+  },
+  {
+   "sha": "f37aa4b1c202236f16099cbed191355f9165303b",
+   "subject": "Reduce unnecessary work in configuration processing (#57818)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:167: #57818 N/A — 配置处理性能优化（无行为变化）"
+   ]
+  },
+  {
+   "sha": "7f60546e85efb3146cb4eb4d27deeb43ff43025e",
+   "subject": "Load up to eight plugins concurrently (#57819)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:168: #57819 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "78a3185ecba7ca3422f14589aeac97059649f60f",
+   "subject": "Improve TUI reconnect recovery and offline exit handling (#57820)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:169: #57820 完成 — Go 无持久 app-server 重连循环，reconnect stage 上报与 serverShuttingDown 重试为 N/A（见 `TestRemoteClosingThreadErrorDoesNotTriggerReconnectLikeRust`）；可落地部分：`tui/tea/thread_unavailable.go` 受限输入允许 `/warnings`、`/config"
+   ]
+  },
+  {
+   "sha": "e6c5a837995581da973a3e6e9cbb7fcd2d99f4ce",
+   "subject": "Include directly attached threads in diagnostic uploads (#57824)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:170: #57824 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "2f47f9779282e6b273ad14bd29bec4561627083e",
+   "subject": "Update CI setup to use `meta/install-dotslash` (#57825)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:171: #57825 N/A — .github CI dotslash"
+   ]
+  },
+  {
+   "sha": "ab190cdfdf3f9796a27232b4e206c106462cbf3b",
+   "subject": "Build V8 from source by default in Bazel (#57832)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:172: #57832 N/A — Bazel V8 构建"
+   ]
+  },
+  {
+   "sha": "3da7de59b6411caa96b56856ac87370518ac1653",
+   "subject": "Add isolated Guardian assessments for prepared actions (#57834)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:173: #57834 完成 — `guardianIsolatedReviewInput`（动作 + 捕获的历史/证据 + 父响应路由）、`modelGuardianReviewer.AssessIsolated` 走 `RunIsolated` 新会话、不发布实时审批，deadline/cancel 生效并返回 `state.Assessment` 或错误。`go test ./appserver -run TestGuard"
+   ]
+  },
+  {
+   "sha": "55503b23d4cfcef7ad2dd0acf409143832ec01d2",
+   "subject": "Limit concurrent image availability checks to eight (#57835)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:174: #57835 完成 — image availability 检查并发上限 8，新增并发上界回归测试"
+   ]
+  },
+  {
+   "sha": "d359945843dbb73b89204b1f793f7737ba39f821",
+   "subject": "Declare the image generation result type in code mode (#57836)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:175: #57836 完成 — imagegen code-mode 返回 `{image_url, output_hint?}`；新增 CodeModeOutputSchema，直接 API payload 不变"
+   ]
+  },
+  {
+   "sha": "b91f2515f5719446dad5402036ac59f43a4c407a",
+   "subject": "Ship the standalone executor in release packages (#57837)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:176: #57837 完成 — build.sh/build.ps1/npm build-packages.mjs 构建并在 codex-package.json 声明 codex-exec-server；真实 release 布局验证通过；测试 scripts/exec_server_package_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "c62e9df39f3bc2e1eae124a79075e9bc5555fe1a",
+   "subject": "Preserve reasoning token accounting across resume and fork (#57839)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:177: #57839 完成 — resume/fork 时保留 reasoning token 记账"
+   ]
+  },
+  {
+   "sha": "7ce5fa7bdc1e816cc1306f93dba7dc7bede3a3de",
+   "subject": "Validate thread providers before resume and input (#57840)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:178: #57840 完成 — resume/input 前校验 thread provider"
+   ]
+  },
+  {
+   "sha": "d373d649673ca8a5bca71f54be0ae47dbd79b466",
+   "subject": "Add optional process metrics sampling for code-mode hosts (#57841)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:179: #57841 完成 — 新增 GetProcessMetrics RPC/协议类型与 1s 有界采样（Unimplemented→Unsupported、NotRunning、失效不重置连接）、bounded 单许可采集器与 /proc 采集；测试 codemode/process_metrics_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "6d97d6ecb4795fe8ae1e1051425a0b812871592d",
+   "subject": "Add bounded Code Mode output collection and rendering (#57848)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:180: #57848 完成 — 新增 `codemode/output_collection.go`（BoundedOutput：1MiB 文本滚动头尾保留、8MiB 图像/62MiB 音频独立配额、32768 项上限、媒体驱逐回收空间）与 `codemode/output_render.go`（共享 token 预算格式化 + 有界丢失提示聚合）；`codemode/protocol_host.go` 补 `BoundedOu"
+   ]
+  },
+  {
+   "sha": "92e802fb613674a50b82942c4fb11a768c5f5451",
+   "subject": "Wire bounded output collection into the code mode runtime (#57850)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:181: #57850 完成 — `SessionRuntime` 新增 `outputTruncation`/`SetOutputTruncation`/`OutputTruncationMode`；Cell 记录 `OutputItems`（`AppendOutputItems`/`AppendTerminatedOutputItems`）；每次 observation 经 `renderObservation` 按自身预算渲"
+   ]
+  },
+  {
+   "sha": "f5f1d598566c97f504bf31260287980d29339992",
+   "subject": "Load TUI plugin mentions from installed plugins (#57855)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:182: #57855 完成 — `tui/app/plugin_mentions.go` 新增 `PluginMentionsFromInstalledResponse`；`go test ./tui/app -run PluginMention` ✅"
+   ]
+  },
+  {
+   "sha": "f91edce53b09d71b9ac38aaf05134c9a657a8be8",
+   "subject": "Add Google Cloud Vertex AI setup to TUI onboarding (#57857)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:183: #57857 完成 — `tui/onboarding/gcp.go` 新增 Project→Location→Credentials→Configuring 向导；`auth.go` 增 `AuthChoiceGCP`/`SignInGCP*` 与 `AuthOptionsForPolicyWithProviders`；`auth_flow.go` 接入选择、按键、渲染与 `GcpSetup` 回调；`features"
+   ]
+  },
+  {
+   "sha": "94d919e31e64fdcd63b37682711389fe9c5fe92b",
+   "subject": "Extend the provider OAuth sign-in timeout to ten minutes (#57859)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:184: #57859 完成 — provider 浏览器 OAuth 回调超时 180s→600s"
+   ]
+  },
+  {
+   "sha": "bd2e9bf0f4c13688f34c3c03629216f287445a8d",
+   "subject": "Skip resource template discovery for hosted Apps (#57861)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:185: #57861 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "f9c10053fb3d9b960e78cfeae1f3ffa21e0dc00a",
+   "subject": "Keep resume picker pagination moving across backends (#57862)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:186: #57862 完成 — TUI 无后台多源分页循环，按可落地面实现：`tui/session_catalog.go` 新增 `NextCursor`（`catalog`/`sources_pending` 区分待回包与可继续，避免重复请求）；`tui/resume_picker.go` 新增 `IngestItems`（按身份保留选中项 + 全局时间排序 + 保留 pending page-down 距离）、`Selec"
+   ]
+  },
+  {
+   "sha": "f276b82185f021e7b8d532a3851413bc79a67594",
+   "subject": "Allow upstream interruption when canceling Responses Lite turns (#57864)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:187: #57864 完成 — 取消 Responses Lite turn 时允许上游中断"
+   ]
+  },
+  {
+   "sha": "4e2dfd22306985f846115758bbf7f9a59351bb29",
+   "subject": "Retry transient environment startup failures on the next turn (#57866)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:188: #57866 完成 — 下一轮重试瞬时 environment 启动失败"
+   ]
+  },
+  {
+   "sha": "edd1ae37ec82650e8d7a97a7e84db39fd5722441",
+   "subject": "Enable server-side output truncation for Code Mode sessions (#57870)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:189: #57870 完成 — server 模式在上游截断：`session/open` 固定 runtime 模式，`session/wait` 传递 wire 上的 `maxOutputTokens`，`session/terminate` 使用请求预算；错误诊断进入同一预算并另给 64KiB `TruncateMiddleWithMarker` 日志副本；`audioutil.EstimateAudioTokenCoun"
+   ]
+  },
+  {
+   "sha": "e75e4af22938c8715b2a1e0d3fc142836ab4d962",
+   "subject": "Reuse the cached runtime keymap for default configuration (#57876)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:190: #57876 完成 — Go 运行时已缓存 keymap 配置，无重复解析路径；架构等价，补 `TestModel...Keymap` 等价测试（见 TUI 车道）"
+   ]
+  },
+  {
+   "sha": "6c776cfc8c3b2aa4e429813c52c0e044ff01104b",
+   "subject": "Preserve status-line hyperlinks through footer layout and animations (#57883)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:191: #57883 完成 — `tui/bottom_pane/status_line_style.go` 新增 `FitToWidth`/`PullRequestHyperlinks`：按宽度裁剪状态线，省略号在链接之外，链接范围裁剪到可见前缀；`tui/ui_tree.go` 的 `RenderLine`/`ClipHyperlinksToWidth` 提供同一语义；测试覆盖半角假名/Arabic 前缀与窄宽度 `Test"
+   ]
+  },
+  {
+   "sha": "797bab474649e6df315f4dc3fec4d1486029fdde",
+   "subject": "Add an experimental UI tree renderer for the status line (#57970)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:192: #57970 完成 — `tui/ui_tree.go` 新增 `codex-tui/1` 子集（text/link/row/spacer/divider、gap、预算 16 层/256 节点/16KiB、`LinkHref` 校验、宽度裁剪省略号在链接外、OSC-8 输出）；`chatwidget.StatusLineExtensionsTree` 构建共享树（PR 号变链接）；`features` 注册 `tui_e"
+   ]
+  },
+  {
+   "sha": "2e764743a651907fa3c4a4ad76c796cac4572bb8",
+   "subject": "Apply session plugin overrides during MCP config refresh (#57974)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:193: #57974 完成 — 核对为架构等价：Go ConfigService 每次 MCP refresh 重新读取完整层栈，无 per-session 插件覆盖层可丢失；已有 plugin policy refresh 测试覆盖"
+   ]
+  },
+  {
+   "sha": "8fdf6472955749a731fd9e4b8ffc218e8e80c51d",
+   "subject": "Add per-chat leases for shared MCP connections (#57978)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:194: #57978 完成 — `mcp/connection_pool.go`：协商 `codex/connection-lease` 后为每个 chat 生成 host-owned lease id 并惰性 `codex/connection/open`（5s 上限，失败移出池）；释放时先按 lease 取消该 chat 的 pending 请求（本地立即失败 + `notifications/cancelled`）再写 `"
+   ]
+  },
+  {
+   "sha": "23934d31b15b1127c83535f84854e5009f7cd51d",
+   "subject": "Skip read-only volume-root expansion in the MXC sandbox (#57985)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:195: #57985 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "a29c7b97e88367044ae84c28c85451ec3e72af9f",
+   "subject": "Fix argument comment lint tests after rust-clippy branch rename (#58013)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:196: #58013 N/A — Rust clippy 分支改名"
+   ]
+  },
+  {
+   "sha": "a3697361dfc0bc438b65ae8a9aa0e598ecd45251",
+   "subject": "Add trace-safe diagnostics for Noise relay request progress (#58025)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:197: #58025 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "3535c22b43e5d7a67322f6e85b267ef65577c227",
+   "subject": "Add direct Guardian review of recorded exec calls (#58028)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:198: #58028 完成 — `tool.ShellExecutor.PrepareExecCommand` 复用实时环境/权限/审批解析（不执行），`modelGuardianReviewer.ReviewAssessment` 暴露结构化 assessment，复核 transcript 省略被复核调用；测试 tool/shell_prepare_exec_command_test.go、appserver/thread_"
+   ]
+  },
+  {
+   "sha": "588a277b301c3994455885d7f771d7d9db5d82b8",
+   "subject": "Add an option to disable successful SSE delta logs (#58034)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:199: #58034 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "058e99a3aa5f325c3d2b2b3ad1872bfca5a86be8",
+   "subject": "Preserve native tool-call evidence through Guardian review (#58040)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:200: #58040 完成 — native-review 策略在注册期进入 `tool.Registry`（`NativeReviewPolicyProvider`/`NativeReviewRequired`，MAv2 executor 声明），`tool.Router.BuildToolCall` 仅为需要审查的工具保留原始 call（`Invocation.NativeCall`，缺失时合成），dispatcher 提供"
+   ]
+  },
+  {
+   "sha": "9cc14e79882ff8885cd5d33b4adadae014045aef",
+   "subject": "Add managed command checkpoints requiring fresh human approval (#58045)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:201: #58045 完成 — 受管 command checkpoint 需新鲜人工批准（70 文件，拆 2-3 子轮）"
+   ]
+  },
+  {
+   "sha": "79be2e201fb61e105178a62c8d8d77fa5ed6ad93",
+   "subject": "Initialize `native_call` in agent host test fixtures (#58057)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:202: #58057 N/A — Rust 测试 fixture 初始化"
+   ]
+  },
+  {
+   "sha": "6b3b3349f3f559d65b101998a65cad44e5b2ee7b",
+   "subject": "Share the Guardian context delivery token limit (#58071)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:203: #58071 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "9def09afa71e1443a1028866ac22dc82aedea00e",
+   "subject": "Use serving assessments for adaptive Guardian review (#58075)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:204: #58075 完成 — `state.ServingAssessment/ServingAuthorization`；流内 assessment 按 response+item 匹配后随 turn 保留（跨 wait），review 时重新校验权限/策略与 retained 完整性；匹配的低风险值可跳过同步 review（显式 fresh 要求、`requires_review`、陈旧授权仍走完整 review），缺失则"
+   ]
+  },
+  {
+   "sha": "b75d1e89665d256bf2c674b9590776f440c9bae7",
+   "subject": "Use a dedicated binary for Bazel schema generation (#58083)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:205: #58083 N/A — Bazel schema 生成二进制"
+   ]
+  },
+  {
+   "sha": "2681f8cba2831ef72bca2c0672b2e49d5f690745",
+   "subject": "Update default models for memory extraction and consolidation (#58091)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:206: #58091 完成 — 记忆抽取/整合默认模型改为 gpt-6-luna / gpt-6.1-terra"
+   ]
+  },
+  {
+   "sha": "02ca1e0d990e496366bda7c30e2981cf296783ce",
+   "subject": "Ignore RUSTSEC-2026-0418 for the Windows-only libz-sys dependency (#58110)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:207: #58110 N/A — Rust RUSTSEC 忽略"
+   ]
+  },
+  {
+   "sha": "6174d05a6a17255dda97be686072eee00c4a1bc9",
+   "subject": "Add experimental Guardian review for injected thread commands (#58119)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:208: #58119 完成 — 新增 `thread/guardianReview`（ThreadGuardianReviewParams/Response/Assessment、实验方法门控、schema 注册、idle/direct-input/provider 校验、订阅连接、断连取消）、空 assessment 表示策略跳过、错误映射取消/超时；测试同上"
+   ]
+  },
+  {
+   "sha": "53d3d7f64efbf25166e9de4e9e49d81ea6c1dcf7",
+   "subject": "Centralize provider request preparation auth checks (#58121)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:209: #58121 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "b05c1a457e45b46c6ae4f8d0358a4d91e8ba1289",
+   "subject": "Add an incremental exec tools feature flag (#58122)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:210: #58122 完成 — 新增 incremental_exec_tools 功能位（under development，默认关闭）"
+   ]
+  },
+  {
+   "sha": "3062f7aa4a8c293f4d3ab44c055a779ae5059b98",
+   "subject": "Add validated elastic section budget configuration for Guardian (#58123)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:211: #58123 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "09db085f9456c608a7960fdd4c5c55a34c6a84ea",
+   "subject": "Support negotiated server-side truncation in Code Mode clients (#58125)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:212: #58125 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "468b71f7a64c0dcafe8d44f3cafd18f75932b8a3",
+   "subject": "Honor the tooltip preference for TUI startup help (#58127)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:213: #58127 完成 — TUI 启动帮助尊重 tooltip 偏好（见 TUI 车道）"
+   ]
+  },
+  {
+   "sha": "875a1a78f06731a8ecd20dd45378f61bd9c7701d",
+   "subject": "Persist subagent relationships before creating child storage (#58129)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:214: #58129 完成 — spawn edge 先于子线程存储持久化，失败即 fatal"
+   ]
+  },
+  {
+   "sha": "03b7e22f9448469f0834ca05a12a1a92ddc52f3a",
+   "subject": "Support pasted search text in the skills toggle view (#58130)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:215: #58130 完成 — `tui/bottom_pane` 新增 `HandlePaste` + `NormalizePastedSearchQuery`，`tui/tea` 粘贴走该路径；`go test ./tui/bottom_pane ./tui/tea -run SkillsToggle\\|ManageSkillsPaste` ✅"
+   ]
+  },
+  {
+   "sha": "7d764a236e1dab9dcd9711ae8d68b8b44e4d3a08",
+   "subject": "Prefer documented replacements for deprecation-driven model migrations (#58134)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:216: #58134 完成 — openai-docs skill 资产同步（Go 缺 model-migration.md 等）"
+   ]
+  },
+  {
+   "sha": "f32b6cfd2bda4fc1c16c6d93dcc38f854828b8be",
+   "subject": "Route standalone web search through the thread's workspace context (#58140)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:217: #58140 完成 — 改为搜索请求时解析路由（`turn.WebSearchOptions.PrepareRequest`），与 Rust 在 `WebSearchTool::run` 内解析一致；`go test ./appserver -run StandaloneWebSearch` ✅"
+   ]
+  },
+  {
+   "sha": "2ca71f1683524176427aaa5fdfbf0358d541fd15",
+   "subject": "Record additional context counts, sizes, and truncation metrics (#58144)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:218: #58144 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "184c9c555ec7b30bacde5a5bdfa92ff156315aa3",
+   "subject": "Return standalone web search failures to the model (#58147)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:219: #58147 完成 — 独立 web search 失败改为回传模型的 failed tool output，并截断到 1KiB UTF-8 边界"
+   ]
+  },
+  {
+   "sha": "7f1c09979c79579c43b953762effe22eabc20e06",
+   "subject": "Expose system proxy support as an experimental setting (#58157)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:220: #58157 完成 — respect_system_proxy 升为 Experimental 菜单项（System proxy）"
+   ]
+  },
+  {
+   "sha": "fa4ebe87af384bfbd4588c78502b76d550c0532f",
+   "subject": "Add a feature flag for code-mode host output truncation (#58159)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:221: #58159 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "4bc746c94fce95ec7ca5f1a91a786156d240c8a2",
+   "subject": "Include tool names and annotation hints in MCP approval metadata (#58161)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:222: #58161 完成 — MCP 审批 elicitation meta 携带 tool_annotations（含 idempotentHint）"
+   ]
+  },
+  {
+   "sha": "f5fbe7accd7baff73d18f45c1a451be25ae791f3",
+   "subject": "Keep remote plugin bundle URLs out of diagnostics (#58165)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:223: #58165 完成 — 已核对：Go 的 remote plugin bundle 错误从不拼接 URL，无需改码"
+   ]
+  },
+  {
+   "sha": "297f5e33a5f917863a7b83f262c9ef1431bc0267",
+   "subject": "Make rollout recording failures and completion explicit (#58166)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:224: #58166 N/A — 核对为 N/A：Go 仅实现 trace bundle 的 replay/reduce（app/app.go），没有 CODEX_ROLLOUT_TRACE_ROOT 写入器可失败"
+   ]
+  },
+  {
+   "sha": "b5c5d462dce8208f5cef386f7fa686a221b9ff37",
+   "subject": "Create missing parent directories for MXC deny paths on Windows (#58168)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:225: #58168 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "d04071d3ff517193d405901c46ac2839041f2a4e",
+   "subject": "Stabilize cancellation and tracing tests (#58171)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:226: #58171 N/A — trace/cancel 测试稳定化"
+   ]
+  },
+  {
+   "sha": "e9854c0aa52d494fa4f4c3683741461e2640011b",
+   "subject": "Validate trace completion records and payload UTF-8 during replay (#58172)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:227: #58172 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "dfcb5b59942a0c1139162a74b6d3a80fa4ca66e5",
+   "subject": "Support managed network requirements under `permissions.network` (#58182)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:228: #58182 完成 — permissions.network 下的受管网络要求"
+   ]
+  },
+  {
+   "sha": "94d89c74d680df96b98c2554e0e9c5152db98ef3",
+   "subject": "Use turn-scoped permissions for standalone web search (#58189)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:229: #58189 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "708e3e2c70142c75682a375669ca60754f76976d",
+   "subject": "Allow providers to opt into Cyber access programs (#58190)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:230: #58190 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "98f79517ab2392879c581626ec0588851b03d183",
+   "subject": "Preserve remote read compatibility with older executors (#58195)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:231: #58195 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "2f1e4f99e0a631510fbdf1989b00858fb1b3de5f",
+   "subject": "Require Bazel release artifacts and publish DotSlash manifests (#58196)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:232: #58196 N/A — .github release 制品"
+   ]
+  },
+  {
+   "sha": "b91cedc080ffbf636cd5985a592730c7c4ab8d65",
+   "subject": "Centralize TOML config deserialization (#58198)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30.md:233: #58198 N/A — Rust TOML 反序列化集中（无行为变化）"
+   ]
+  },
+  {
+   "sha": "55c099a142eb302188fee00ab9e9062f2db1c359",
+   "subject": "Keep chats accessible across model provider changes (#58202)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:234: #58202 完成 — provider 切换后聊天仍可访问（42 文件，拆 2-3 子轮）"
+   ]
+  },
+  {
+   "sha": "cc2f80d5157ccf7540589de764318315c4443948",
+   "subject": "Add file-backed storage for gateway OAuth credentials (#58219)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:235: #58219 完成 — 核心对齐待实现"
+   ]
+  },
+  {
+   "sha": "c9750d7f50052b29f53def02b5cf2160ae49a3d9",
+   "subject": "Preserve realtime V3 transcripts in conversation history (#58221)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30.md:236: #58221 完成 — realtime V3 转录保留到 conversation history（10 文件）"
    ]
   }
  ]

@@ -1485,6 +1485,9 @@ func responseItemFromAgentItem(item *model.AgentItem) (*tool.ResponseItem, bool)
 			CallID:                firstNonEmptyTurnString(item.CallID, item.ID),
 			Arguments:             item.Arguments,
 			EncryptedFunctionArgs: cloneTurnStringSlicePtr(item.EncryptedFunctionArgs),
+			// Rust #58040 keeps the original wire item for native-review tools;
+			// the registry decides whether dispatch retains it.
+			Raw: marshalTurnAgentItemRaw(item),
 		}, true
 	case "custom_tool_call":
 		return &tool.ResponseItem{
@@ -1513,6 +1516,17 @@ func cloneTurnStringSlicePtr(value *[]string) *[]string {
 	}
 	cloned := append([]string{}, (*value)...)
 	return &cloned
+}
+
+func marshalTurnAgentItemRaw(item *model.AgentItem) json.RawMessage {
+	if item == nil {
+		return nil
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 func outputBody(output *tool.Output) any {

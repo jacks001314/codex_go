@@ -95,6 +95,9 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 	if err := normalizeNetworkRequirementAliases(values); err != nil {
 		return nil, err
 	}
+	if err := liftPermissionsNetworkRequirement(values); err != nil {
+		return nil, err
+	}
 	if raw, ok := values["network_proxy"]; ok {
 		networkValues, ok := raw.(map[string]any)
 		if !ok {
@@ -112,6 +115,49 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 		return nil, err
 	}
 	return requirements, nil
+}
+
+// permissionsNetworkReservedProfileError mirrors Rust #58182: in
+// requirements.toml `permissions.network` is reserved for shared network
+// constraints and cannot name a permission profile.
+const permissionsNetworkReservedProfileError = "`permissions.network` in requirements.toml is reserved for shared network constraints; rename the managed profile (for example, to `network-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `network` in config.toml remain valid"
+
+// liftPermissionsNetworkRequirement moves a `permissions.network` constraint
+// table to the top-level managed network requirement (Rust #58182), rejecting
+// the reserved profile spellings and a second managed-network surface.
+func liftPermissionsNetworkRequirement(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	permissions, ok := values["permissions"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, present := permissions["network"]
+	if !present {
+		return nil
+	}
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid type for permissions.network: expected table")
+	}
+	if len(table) == 0 {
+		return fmt.Errorf("%s", permissionsNetworkReservedProfileError)
+	}
+	for _, key := range []string{"description", "extends", "workspace_roots", "filesystem", "network"} {
+		if _, reserved := table[key]; reserved {
+			return fmt.Errorf("%s", permissionsNetworkReservedProfileError)
+		}
+	}
+	if _, topLevel := values["network_proxy"]; topLevel {
+		return fmt.Errorf("`permissions.network` cannot be combined with top-level managed network requirements; specify managed network requirements through exactly one surface")
+	}
+	values["network_proxy"] = table
+	delete(permissions, "network")
+	if len(permissions) == 0 {
+		delete(values, "permissions")
+	}
+	return nil
 }
 
 // validatePermissionProfileRequirements mirrors Rust's
@@ -416,6 +462,13 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	}
 	if value, ok := stringAnyKey(values, "guardian_policy_config", "guardianPolicyConfig"); ok {
 		out.GuardianPolicyConfig = &value
+	}
+	if raw, ok := mapAnyKey(values, "rules"); ok {
+		policy, err := rulesRequirementFromAny(raw)
+		if err != nil {
+			return nil, err
+		}
+		out.Rules = policy
 	}
 	if value, ok := stringAnyKey(values, "guardian_extra_policy", "guardianExtraPolicy"); ok {
 		out.GuardianExtraPolicy = &value
@@ -1196,6 +1249,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AdditionalDeveloperInstructions == nil &&
 			value.GuardianPolicyConfig == nil &&
 			value.GuardianExtraPolicy == nil &&
+			value.Rules == nil &&
 			value.Permissions == nil &&
 			value.AllowedWebSearchModes == nil &&
 			value.AllowManagedHooksOnly == nil &&

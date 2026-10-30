@@ -1442,6 +1442,11 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 				} else {
 					provider = codemode.NewProcessProvider(program)
 				}
+				// Rust #58159: the opt-in flag lets the process-owned host
+				// truncate output before it crosses the transport.
+				if run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "code_mode_host_output_truncation") {
+					provider = codemode.NewLocalServerOutputProvider(provider)
+				}
 			} else {
 				provider = codemode.NewDisabledProvider()
 			}
@@ -1484,6 +1489,8 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		// response's planned tool calls when inter-agent mail is queued at a
 		// commentary/partial-answer boundary instead of cutting the response off.
 		DeferMailboxPreemption: run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "defer_mailbox_preemption"),
+		// Rust #57864: interrupt upstream when a Responses Lite turn is cancelled.
+		InterruptOnCancel: run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "interrupt_on_cancel"),
 	}).Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                  run.Prompt,
 		Instructions:            run.Instructions,
@@ -2053,6 +2060,7 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		agent.ApiKeyCyberAccessPrograms = model.ApiKeyCyberAccessProgramsFromConfig(
 			cfg.FeatureSettings(),
 			firstNonEmpty(providerID, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID),
+			runtimeProvider.Info(),
 		)
 		// Rust sets the process-wide enforce_residency from config; the exec
 		// path mirrors it on every model request.
@@ -4566,14 +4574,15 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 	if strings.TrimSpace(record.Metadata.SessionPrefix) == "" {
 		record.Metadata.SessionPrefix = session.PrefixForSessionID(firstNonEmpty(record.SessionID, threadID))
 	}
-	record.Metadata.Extra = execTokenUsageMetadata(record.Metadata.Extra, tokenUsage)
 	// Rust #55991: seed the reasoning-inclusion state from the model's Responses
 	// Lite setting and let the server-reported flag override it, so a resumed
 	// turn does not re-charge retained reasoning the server already counted.
+	// Rust #57839 then stores that decision with the usage it belongs to.
 	if record.Metadata.Extra == nil {
 		record.Metadata.Extra = map[string]any{}
 	}
 	record.Metadata.Extra["server_reasoning_included"] = execServerReasoningIncluded(record.Metadata.Model, result.ReasoningIncluded)
+	record.Metadata.Extra = execTokenUsageMetadata(record.Metadata.Extra, tokenUsage)
 	execCompleteTurnSnapshot(&record.Metadata, turnID, now)
 	record.UpdatedAt = now
 	record.RecencyAt = now
@@ -5208,11 +5217,40 @@ func execTokenUsageMetadata(extra map[string]any, usage *protocol.ThreadTokenUsa
 		out["model_context_window"] = *usage.ModelContextWindow
 	}
 	out["token_usage_info"] = map[string]any{
-		"total_token_usage":    total,
-		"last_token_usage":     last,
-		"model_context_window": execContextWindowMetadataValue(usage.ModelContextWindow),
+		"total_token_usage":             total,
+		"last_token_usage":              last,
+		"model_context_window":          execContextWindowMetadataValue(usage.ModelContextWindow),
+		"last_usage_includes_reasoning": execTokenUsageIncludesReasoning(extra),
 	}
 	return out
+}
+
+// execStoredReasoningIncluded reports the reasoning-inclusion decision saved
+// with a thread's token usage. Rust #57839 keeps that decision inside
+// `token_usage_info.last_usage_includes_reasoning` so resume and fork preserve
+// it; Go rollouts written before the move stored the same bit beside the usage
+// map as `server_reasoning_included`, so both are honored. The bool result is
+// false when the record carries neither form (legacy count).
+func execStoredReasoningIncluded(extra map[string]any) (bool, bool) {
+	if info, ok := extra["token_usage_info"].(map[string]any); ok {
+		if value, ok := info["last_usage_includes_reasoning"]; ok && value != nil {
+			if out, ok := value.(bool); ok {
+				return out, true
+			}
+		}
+	}
+	if value, ok := extra["server_reasoning_included"].(bool); ok {
+		return value, true
+	}
+	return false, false
+}
+
+// execTokenUsageIncludesReasoning reports whether the saved usage already
+// accounts for retained reasoning. A record with neither saved form falls back
+// to Rust's legacy count, which re-estimates retained reasoning.
+func execTokenUsageIncludesReasoning(extra map[string]any) bool {
+	value, _ := execStoredReasoningIncluded(extra)
+	return value
 }
 
 func execProtocolUsageMetadata(usage protocol.Usage) map[string]any {
@@ -5450,7 +5488,9 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 		// last sampling request did not report that the server includes it
 		// (Rust #55991).
 		serverReasoningIncluded := execModelInfo(modelID, cfg).UseResponsesLite
-		if value, ok := record.Metadata.Extra["server_reasoning_included"].(bool); ok {
+		// Rust #57839 reads the saved usage's own accounting decision; a usage
+		// record that carries neither form keeps the model-derived default.
+		if value, ok := execStoredReasoningIncluded(record.Metadata.Extra); ok {
 			serverReasoningIncluded = value
 		}
 		active = int64(compact.EstimateActiveContextTokensWithServerReasoning(

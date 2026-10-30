@@ -113,6 +113,9 @@ type WriteStdinApprovalRequest struct {
 	AdditionalPermissions *sandbox.AdditionalPermissionProfile
 	InternalPermissions   *sandbox.AdditionalPermissionProfile
 	PermissionProfile     *sandbox.PermissionProfile
+	// OriginalCommand is the command that launched the terminal (Rust #57758);
+	// the review names it so the reviewer sees what the input reaches.
+	OriginalCommand string
 	// Escalated reports that the launch bypassed the sandbox.
 	Escalated bool
 	// ManagedNetwork reports that the launch enforced an environment-owned
@@ -1238,6 +1241,7 @@ func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArg
 					TurnID:                process.turnID,
 					EnvironmentID:         process.environmentID,
 					Chars:                 args.Chars,
+					OriginalCommand:       process.hookCommand,
 					CWD:                   process.cwd,
 					TTY:                   process.tty,
 					SandboxPermissions:    process.launchSandboxPermissions,

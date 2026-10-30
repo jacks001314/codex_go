@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex_go/codexapi"
+	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
@@ -157,20 +158,22 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		ReasoningEffort:      effort,
 		ResponsesAPIMetadata: params.ResponsesAPIClientMetadata,
 	})
+	interruptOnCancel := threadSampleInterruptOnCancel(cfg, &params)
 	agentRequest := &model.AgentRequest{
-		Prompt:          prompt,
-		Instructions:    instructions,
-		InputItems:      inputItems,
-		Tools:           tools,
-		Model:           providerConfig.Model,
-		ProviderID:      providerConfig.ProviderID,
-		ThreadID:        threadID,
-		TurnID:          sampleTurnID,
-		Originator:      threadSampleOriginator,
-		ReasoningEffort: effort,
-		Trace:           requestTrace,
-		Ephemeral:       true,
-		ClientMetadata:  clientMetadata,
+		Prompt:            prompt,
+		InterruptOnCancel: interruptOnCancel,
+		Instructions:      instructions,
+		InputItems:        inputItems,
+		Tools:             tools,
+		Model:             providerConfig.Model,
+		ProviderID:        providerConfig.ProviderID,
+		ThreadID:          threadID,
+		TurnID:            sampleTurnID,
+		Originator:        threadSampleOriginator,
+		ReasoningEffort:   effort,
+		Trace:             requestTrace,
+		Ephemeral:         true,
+		ClientMetadata:    clientMetadata,
 	}
 	agent := r.requireAgentForTurn(paramsForTurn)
 	sampleContext, cancel := context.WithTimeout(sampleBase, threadSampleTimeout)
@@ -214,6 +217,17 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		result.OutputTokens = &outputTokens
 	}
 	return result, nil
+}
+
+// threadSampleInterruptOnCancel resolves Rust #57864's per-sample override:
+// `interrupt_on_cancel` follows the parent configuration unless the request
+// sets it explicitly.
+func threadSampleInterruptOnCancel(cfg *config.Config, params *ThreadSampleParams) bool {
+	enabled := cfg != nil && features.Enabled(cfg.FeatureSettings(), "interrupt_on_cancel")
+	if params != nil && params.InterruptOnCancel != nil {
+		return *params.InterruptOnCancel
+	}
+	return enabled
 }
 
 func (r *RuntimeRouter) registerThreadSampleCancel(request *Request) (context.Context, func()) {

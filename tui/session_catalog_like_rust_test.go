@@ -209,3 +209,61 @@ func TestStampSessionSummariesBackendPreservesSourcesLikeRust(t *testing.T) {
 		t.Fatalf("tagged row backend = %v, want preserved %v", items[1].BackendID, second)
 	}
 }
+
+// TestThreadCatalogNextCursorDistinguishesPendingLikeRust mirrors Rust #57862:
+// the catalog reports a ready page over sources that are still mid-request so
+// the picker waits instead of issuing a redundant request.
+func TestThreadCatalogNextCursorDistinguishesPendingLikeRust(t *testing.T) {
+	catalog := NewThreadCatalog()
+	if cursor, ok := catalog.NextCursor(nil); ok {
+		t.Fatalf("empty catalog next cursor = %q, want none", cursor)
+	}
+	first := NewBackendID()
+	second := NewBackendID()
+	firstRequest, ok := catalog.BeginPage(first, SessionPageLoadStoreDefault)
+	if !ok {
+		t.Fatal("first backend did not begin")
+	}
+	if cursor, ok := catalog.NextCursor(nil); !ok || cursor != SessionPageCursorSourcesPending {
+		t.Fatalf("single pending cursor = %q,%v, want sources_pending", cursor, ok)
+	}
+	secondRequest, ok := catalog.BeginPage(second, SessionPageLoadStoreDefault)
+	if !ok {
+		t.Fatal("second backend did not begin")
+	}
+	if cursor, ok := catalog.NextCursor(nil); !ok || cursor != SessionPageCursorSourcesPending {
+		t.Fatalf("both pending cursor = %q,%v, want sources_pending", cursor, ok)
+	}
+	// Completing one backend with more rows makes a ready page available even
+	// while the other backend is still mid-request.
+	if _, _, accepted := catalog.FinishPage(firstRequest, SessionPage{
+		Rows:       []SessionSummary{{ThreadID: "first"}},
+		NextCursor: catalogStringPointer("first-next"),
+	}, nil); !accepted {
+		t.Fatal("first backend page was rejected")
+	}
+	if cursor, ok := catalog.NextCursor(nil); !ok || cursor != SessionPageCursorCatalog {
+		t.Fatalf("ready-over-pending cursor = %q,%v, want catalog", cursor, ok)
+	}
+	// Excluding the only ready backend falls back to waiting.
+	if cursor, ok := catalog.NextCursor(map[BackendID]bool{first: true}); !ok || cursor != SessionPageCursorSourcesPending {
+		t.Fatalf("excluded ready cursor = %q,%v, want sources_pending", cursor, ok)
+	}
+	if _, _, accepted := catalog.FinishPage(secondRequest, SessionPage{}, nil); !accepted {
+		t.Fatal("second backend page was rejected")
+	}
+	// Now only the ready first backend remains.
+	if cursor, ok := catalog.NextCursor(nil); !ok || cursor != SessionPageCursorCatalog {
+		t.Fatalf("remaining ready cursor = %q,%v, want catalog", cursor, ok)
+	}
+	nextFirst, ok := catalog.BeginPage(first, SessionPageLoadStoreDefault)
+	if !ok {
+		t.Fatal("first backend did not begin its next page")
+	}
+	if _, _, accepted := catalog.FinishPage(nextFirst, SessionPage{Rows: []SessionSummary{{ThreadID: "first"}}}, nil); !accepted {
+		t.Fatal("first backend exhaustion was rejected")
+	}
+	if cursor, ok := catalog.NextCursor(nil); ok {
+		t.Fatalf("exhausted catalog next cursor = %q, want none", cursor)
+	}
+}

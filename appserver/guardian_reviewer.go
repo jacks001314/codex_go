@@ -24,6 +24,7 @@ import (
 	"codex_go/features"
 	"codex_go/mcp"
 	"codex_go/model"
+	"codex_go/network"
 	"codex_go/retainedctx"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -35,6 +36,36 @@ import (
 
 type GuardianReviewer interface {
 	Review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error)
+}
+
+// GuardianAssessmentReviewer reports the structured assessment behind a review
+// decision. A direct review (Rust #58028/#58119 thread/guardianReview) returns
+// Guardian's own assessment, so it needs more than the decision and message the
+// approval path consumes.
+type GuardianAssessmentReviewer interface {
+	ReviewAssessment(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, *state.Assessment, string, error)
+}
+
+// guardianOmittedCallIDKey carries the recorded call a direct review must omit
+// from the reviewer transcript because it is delivered as the proposed action.
+type guardianOmittedCallIDKey struct{}
+
+// withGuardianOmittedCall marks a review as reviewing callID itself, so the
+// transcript renders that item as an omission placeholder.
+func withGuardianOmittedCall(ctx context.Context, callID string) context.Context {
+	callID = strings.TrimSpace(callID)
+	if callID == "" || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, guardianOmittedCallIDKey{}, callID)
+}
+
+func guardianOmittedCallIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	callID, _ := ctx.Value(guardianOmittedCallIDKey{}).(string)
+	return strings.TrimSpace(callID)
 }
 
 // guardianTimingCallIDKey carries the tool call whose critical-path entry should
@@ -182,7 +213,11 @@ type modelGuardianReviewer struct {
 	// reviewed turn: the model, its request-level reasoning effort, and the
 	// reviewer's policy instructions (Rust's resolve_review_model /
 	// select_review_model plus build_guardian_review_session_config).
-	reviewPlan                 func(threadID, turnID string) guardianReviewPlan
+	reviewPlan func(threadID, turnID string) guardianReviewPlan
+	// reviewPlanContext resolves the same plan with the review deadline and
+	// cancellation, which Rust #57789 also applies to reviewer setup. It wins
+	// over reviewPlan when set.
+	reviewPlanContext          func(ctx context.Context, threadID, turnID string) guardianReviewPlan
 	reviewEndpoint             func(threadID, turnID string) model.ResponsesEndpoint
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
@@ -217,7 +252,19 @@ type modelGuardianReviewer struct {
 	targetEnvironmentAvailable func(threadID, turnID, environmentID string) bool
 	// latestResponseID resolves the reviewed turn's newest response id for the
 	// review request's `parent_response_id` client metadata (Rust #45441).
-	latestResponseID      func(threadID, turnID string) string
+	latestResponseID func(threadID, turnID string) string
+	// parentResponse resolves the reviewed turn's newest response id together
+	// with the routing pin captured from its handshake (Rust #57710). When set
+	// it replaces latestResponseID and the pair is snapshotted once per review,
+	// so retries keep the affinity captured when the review was requested.
+	parentResponse func(threadID, turnID string) (string, *network.RoutingAffinity)
+	// servingAssessment resolves the final serving value retained for one
+	// invocation (Rust #58075). A matching low-risk value may replace the
+	// synchronous review; a missing or stale value falls back to it.
+	servingAssessment func(threadID, turnID, callID string) *state.ServingAssessment
+	// servingAuthorization captures the current authorization and policy the
+	// assessment is revalidated against.
+	servingAuthorization  func(threadID, turnID string) state.ServingAuthorization
 	nodeReplEvidence      func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
 	rootUserAuthorization func(threadID, turnID string) []state.RootMessage
 	// syncImageContextWindow resolves the review model's usable context window.
@@ -824,9 +871,25 @@ func (r *modelGuardianReviewer) Prewarm(ctx context.Context) error {
 	return session.Prewarm(ctx)
 }
 
+// Review reports the decision and rejection message of one approval review.
+// Callers that need Guardian's structured assessment use ReviewAssessment.
 func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+	decision, _, reason, err := r.review(ctx, threadID, turnID, targetItemID, action)
+	return decision, reason, err
+}
+
+// ReviewAssessment reports the structured assessment behind one review, so a
+// direct review returns the same risk level, authorization and rationale as a
+// live approval (Rust #58028/#58119 thread/guardianReview). The assessment is
+// nil for decisions that never reached an assessment (fast approvals, failed
+// or cancelled reviews).
+func (r *modelGuardianReviewer) ReviewAssessment(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, *state.Assessment, string, error) {
+	return r.review(ctx, threadID, turnID, targetItemID, action)
+}
+
+func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, *state.Assessment, string, error) {
 	if r == nil || r.agent == nil {
-		return state.DecisionAborted, "", errors.New("guardian reviewer is unavailable")
+		return state.DecisionAborted, nil, "", errors.New("guardian reviewer is unavailable")
 	}
 	// Rust #51330 (f5fa209bb0, ext/guardian-reviewer/src/routing.rs): the total
 	// decision timer wraps the complete approval decision -- fast decisions,
@@ -835,6 +898,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// the guard above stays outside the timer.
 	decisionStartedAt := time.Now()
 	defer r.recordGuardianDecisionDuration(decisionStartedAt)
+	// Rust #57710 installs the parent response snapshot for the exclusive
+	// lifetime of one review, including its inference retries.
+	parentResponse := guardianParentResponseSnapshot(r, threadID, turnID)
 	// Rust #55591 (ext/guardian-reviewer/src/routing.rs): the blocking guard
 	// wraps the complete decision -- fast decisions, preparation and
 	// cancellation -- so the thread's approval-wait union is charged to the
@@ -849,7 +915,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// equivalent guard is this single check ahead of the full-access and
 	// user-approval-mode fast paths.
 	if ctx != nil && ctx.Err() != nil {
-		return state.DecisionAborted, "", nil
+		return state.DecisionAborted, nil, "", nil
 	}
 	// Rust #57433: a native tool call keeps review accounting and metrics but has
 	// no action-specific client assessment event, so its started/completed
@@ -878,15 +944,40 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// (no stale-score auto-approval), mirroring the stale-data guard while
 	// keeping the established refuse-approval convention.
 	if lag := r.maxToolCallLagValue(threadID, turnID); lag > 0 && r.scoreLag(threadID, targetItemID) > lag {
-		return state.DecisionDenied, "guardian review skipped: risk score lag exceeds max_tool_call_lag", nil
+		return state.DecisionDenied, nil, "guardian review skipped: risk score lag exceeds max_tool_call_lag", nil
 	}
 	if r.fullAccess != nil && r.fullAccess(threadID, turnID) {
 		if r.fastDecision != nil {
 			r.fastDecision(ctx, threadID, turnID, targetItemID)
 		}
-		return state.DecisionApproved, "full access", nil
+		return state.DecisionApproved, nil, "full access", nil
 	}
 	requiredReview := r.requiredReview != nil && r.requiredReview(threadID, turnID)
+	// Rust #58075: a final serving assessment may replace the synchronous
+	// review for a low-risk action. An explicit fresh-review requirement, an
+	// elevated-risk value, or a stale/incomplete authorization still runs the
+	// full review below.
+	if r.servingAssessment != nil && !requiredReview {
+		if assessment := r.servingAssessment(threadID, turnID, targetItemID); assessment != nil {
+			current := state.ServingAuthorization{}
+			if r.servingAuthorization != nil {
+				current = r.servingAuthorization(threadID, turnID)
+			}
+			if assessment.AllowsSynchronousReviewSkip(current) {
+				r.beginApprovalToolCall(threadID, targetItemID)
+				r.markScored(threadID)
+				if r.fastDecision != nil {
+					r.fastDecision(ctx, threadID, turnID, targetItemID)
+				}
+				if r.metrics != nil {
+					r.metrics.Counter(telemetry.GuardianReviewRouteMetric, 1, map[string]string{
+						"route": "serving_assessment", "reason": "low_risk",
+					})
+				}
+				return state.DecisionApproved, nil, "serving assessment", nil
+			}
+		}
+	}
 	if !requiredReview && r.approvalsReviewer != nil && strings.EqualFold(r.approvalsReviewer(threadID, turnID), string(config.ApprovalsReviewerUser)) &&
 		action.Type == "mcp_tool_call" &&
 		mcp.IsNodeReplBackedConnector(strings.TrimSpace(action.Server), action.ConnectorID) &&
@@ -894,7 +985,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		if r.fastDecision != nil {
 			r.fastDecision(ctx, threadID, turnID, targetItemID)
 		}
-		return state.DecisionApproved, "user approval mode", nil
+		return state.DecisionApproved, nil, "user approval mode", nil
 	}
 	r.beginApprovalToolCall(threadID, targetItemID)
 	// The review attempt starts here: Rust builds ReviewReport/tracking before
@@ -937,7 +1028,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		attribution.TerminalStatus = "aborted"
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
-		return state.DecisionAborted, "", err
+		return state.DecisionAborted, nil, "", err
 	}
 	emit(threadID, event)
 	// Rust #47630 ReviewAction::validate: an action may only be reviewed against
@@ -955,7 +1046,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "environment_unavailable"
 		emitReviewMetrics()
-		return state.DecisionDenied, message, nil
+		return state.DecisionDenied, nil, message, nil
 	}
 	if r.tracer != nil {
 		if tracer := r.tracer(); tracer != nil {
@@ -983,7 +1074,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	}
 	reviewCtx, cancel := guardianReviewContext(ctx, timeout)
 	defer cancel()
-	plan := r.planForTurn(threadID, turnID)
+	plan := r.planForTurn(reviewCtx, threadID, turnID)
 	reviewOrigin := guardianReviewOriginFromContext(reviewCtx)
 	plan = guardianReviewPlanWithOrigin(plan, reviewOrigin)
 	// Rust #40742 fails the decision closed when the reviewer session cannot be
@@ -999,7 +1090,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
 		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, message, nil
+		return state.DecisionDenied, nil, message, nil
 	}
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.EnsureReviewPolicy(plan.NodeReplPolicy)
@@ -1015,7 +1106,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// Rust #53987/#53797: retries share one attempt budget and deadline. A
 	// changed local review context is stale authorization, refreshed without
 	// the service backoff; parse failures keep Rust's exponential backoff.
-	finishTimedOut := func() (state.ReviewDecision, string, error) {
+	finishTimedOut := func() (state.ReviewDecision, *state.Assessment, string, error) {
 		if historyCheckpointReady {
 			if runner, ok := r.agent.(*guardianSessionRunner); ok {
 				runner.rollbackReviewHistory(historyCheckpoint)
@@ -1037,9 +1128,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		// assessment event and publishes it as the GuardianWarning, while the
 		// tool rejection carries the resolved timeout instructions.
 		r.emitWarning(threadID, state.GuardianTimeoutRationale())
-		return state.DecisionTimedOut, timeoutMessage, finishErr
+		return state.DecisionTimedOut, nil, timeoutMessage, finishErr
 	}
-	finishAborted := func() (state.ReviewDecision, string, error) {
+	finishAborted := func() (state.ReviewDecision, *state.Assessment, string, error) {
 		if historyCheckpointReady {
 			if runner, ok := r.agent.(*guardianSessionRunner); ok {
 				runner.rollbackReviewHistory(historyCheckpoint)
@@ -1054,7 +1145,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		attribution.TerminalStatus = "aborted"
 		attribution.FailureReason = "cancelled"
 		emitReviewMetrics()
-		return state.DecisionAborted, "", finishErr
+		return state.DecisionAborted, nil, "", finishErr
 	}
 	attempts := 0
 	var assessment *state.Assessment
@@ -1077,16 +1168,22 @@ reviewAttempt:
 	} else if r.transcript != nil {
 		transcript = r.transcript(threadID)
 	}
-	nativeCallID := ""
+	omittedCallID := ""
 	if nativeToolCall {
 		if callID, _, ok := state.GuardianNativeFunctionCall(action.NativeCall); ok {
-			nativeCallID = callID
+			omittedCallID = callID
 		}
 	}
-	if nativeCallID != "" {
+	if omittedCallID == "" {
+		// A direct review of a recorded exec_command delivers the call as the
+		// planned action too, so its history copy must be omitted for the prompt
+		// to match the live review (Rust #58028).
+		omittedCallID = guardianOmittedCallIDFromContext(ctx)
+	}
+	if omittedCallID != "" {
 		// The proposed call is delivered as the planned action, so its history
 		// copy becomes an omission placeholder at the same position.
-		transcriptEntries = state.GuardianTranscriptWithoutProposedCall(transcriptEntries, nativeCallID)
+		transcriptEntries = state.GuardianTranscriptWithoutProposedCall(transcriptEntries, omittedCallID)
 		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
 	}
 	nodeReplAutoReviewRequired := false
@@ -1194,7 +1291,7 @@ reviewAttempt:
 			attribution.FailureReason = "session_error"
 			emitReviewMetrics()
 			r.emitWarning(threadID, rationale)
-			return state.DecisionDenied, message, nil
+			return state.DecisionDenied, nil, message, nil
 		}
 	}
 	var (
@@ -1306,7 +1403,7 @@ reviewAttempt:
 			attribution.FailureReason = "prompt_build_error"
 			emitReviewMetrics()
 			r.emitWarning(threadID, rationale)
-			return state.DecisionDenied, message, nil
+			return state.DecisionDenied, nil, message, nil
 		}
 		requestTokens := guardianCompleteRequestTokens(prompt, inputItems, outputSchema, historyTokens)
 		if requestTokens <= budgetLimit {
@@ -1346,7 +1443,7 @@ reviewAttempt:
 		attribution.FailureReason = "input_budget"
 		emitReviewMetrics()
 		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, guardianReviewFailureMessage(guardianInputBudgetMessage), nil
+		return state.DecisionDenied, nil, guardianReviewFailureMessage(guardianInputBudgetMessage), nil
 	}
 	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
 	reviewRequest := &model.AgentRequest{
@@ -1376,7 +1473,11 @@ reviewAttempt:
 		// reviewed parent thread (guardian_prompt_cache_key override).
 		PromptCacheKey: guardianPromptCacheKeyOverride(guardianReviewerName, threadID),
 		OutputSchema:   guardianAssessmentOutputSchema(),
-		ClientMetadata: r.reviewClientMetadata(threadID, turnID, targetItemID),
+		// Rust #57710: the reviewer request reuses the parent response's edge
+		// route. The pin is transport-only and never enters the prompt,
+		// history, or client metadata.
+		RoutingAffinity: parentResponse.affinity,
+		ClientMetadata:  r.reviewClientMetadata(threadID, turnID, targetItemID, parentResponse.id),
 	}
 	if plan.Prepared != nil && plan.Prepared.PermissionProfile != nil {
 		reviewRequest.PermissionProfile = plan.Prepared.PermissionProfile
@@ -1408,7 +1509,7 @@ reviewAttempt:
 		runner.markPriorReview()
 	}
 	var staleAuthorization bool
-	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, nativeCallID) {
+	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) {
 		// Rust #47819 only invalidates a completed allow: a deny stands on the
 		// evidence it saw, while an approval must match the latest authorization.
 		if parsed, parseErr := state.ParseAssessment([]byte(guardianAssessmentText(response))); parseErr == nil && parsed.Outcome == state.OutcomeAllow {
@@ -1447,7 +1548,7 @@ reviewAttempt:
 		attribution.FailureReason = "stale_authorization"
 		emitReviewMetrics()
 		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, guardianReviewFailureMessage(message), nil
+		return state.DecisionDenied, nil, guardianReviewFailureMessage(message), nil
 	}
 	if err != nil && attempts < guardianMaxReviewAttempts && isContextWindowExceededError(err) {
 		// Rust #41215 rolls the reviewer over before the next review. Go has no
@@ -1533,7 +1634,7 @@ reviewAttempt:
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
 		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, message, nil
+		return state.DecisionDenied, nil, message, nil
 	}
 	assessment, err = state.ParseAssessment([]byte(guardianAssessmentText(response)))
 	if err != nil && attempts < guardianMaxReviewAttempts {
@@ -1561,7 +1662,7 @@ reviewAttempt:
 		attribution.FailureReason = "parse_error"
 		emitReviewMetrics()
 		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, message, nil
+		return state.DecisionDenied, nil, message, nil
 	}
 	completed, err := store.Complete(event.ID, *assessment)
 	if err != nil {
@@ -1569,7 +1670,7 @@ reviewAttempt:
 		attribution.TerminalStatus = "aborted"
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
-		return state.DecisionAborted, "", err
+		return state.DecisionAborted, nil, "", err
 	}
 	if r.logAssessment != nil && !nativeToolCall {
 		r.logAssessment(threadID, completed)
@@ -1607,7 +1708,7 @@ reviewAttempt:
 		feedbackCapture.decisionText = guardianAssessmentText(response)
 		rationale = guardianRejectionMessage(plan.AutoReview, rationale)
 	}
-	return decision, rationale, nil
+	return decision, assessment, rationale, nil
 }
 
 // retainedOmissionDelivery returns the omission state the thread's reviewer
@@ -1638,11 +1739,39 @@ func (r *modelGuardianReviewer) markRetainedOmissionsDelivered(threadID string, 
 	r.retainedOmissions[threadID] = value
 }
 
+// guardianParentResponse is the reviewed parent response and the routing pin
+// captured with it, snapshotted for one review and its retries (Rust #57710).
+type guardianParentResponse struct {
+	id       string
+	affinity *network.RoutingAffinity
+}
+
+// guardianParentResponseSnapshot resolves the reviewed turn's newest response
+// once per review. A pin without an id is meaningless: the reviewer only
+// applies an affinity to a request whose parent response matches.
+func guardianParentResponseSnapshot(r *modelGuardianReviewer, threadID, turnID string) guardianParentResponse {
+	if r == nil {
+		return guardianParentResponse{}
+	}
+	if r.parentResponse != nil {
+		id, affinity := r.parentResponse(threadID, turnID)
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return guardianParentResponse{}
+		}
+		return guardianParentResponse{id: id, affinity: affinity}
+	}
+	if r.latestResponseID != nil {
+		return guardianParentResponse{id: strings.TrimSpace(r.latestResponseID(threadID, turnID))}
+	}
+	return guardianParentResponse{}
+}
+
 // reviewClientMetadata builds the guardian review request's client metadata.
 // Rust #44298 attributes guardian reviews to the `guardian_review` turn trigger
 // and emits it in x-codex-turn-metadata; Go's reviewer issues a direct agent
 // request, so the review reuses the parent turn's identity.
-func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetItemID string) map[string]string {
+func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetItemID, parentResponseID string) map[string]string {
 	installationID := ""
 	if r != nil && r.installationID != nil {
 		installationID = strings.TrimSpace(r.installationID())
@@ -1665,10 +1794,8 @@ func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetIte
 	}
 	// Rust #45441: a review request reports the reviewed turn's latest response
 	// id as `parent_response_id`, and omits the key when the turn has none yet.
-	if r != nil && r.latestResponseID != nil {
-		if parent := strings.TrimSpace(r.latestResponseID(threadID, turnID)); parent != "" {
-			client["parent_response_id"] = parent
-		}
+	if parent := strings.TrimSpace(parentResponseID); parent != "" {
+		client["parent_response_id"] = parent
 	}
 	return client
 }
@@ -1707,8 +1834,14 @@ func isNodeReplJSApprovalAction(action state.Action) bool {
 // planForTurn resolves the reviewer plan the review request uses. A reviewer
 // without a resolver keeps the pre-selection shape: no explicit model, effort,
 // or instructions, so the agent's own defaults apply.
-func (r *modelGuardianReviewer) planForTurn(threadID, turnID string) guardianReviewPlan {
-	if r == nil || r.reviewPlan == nil {
+func (r *modelGuardianReviewer) planForTurn(ctx context.Context, threadID, turnID string) guardianReviewPlan {
+	if r == nil {
+		return guardianReviewPlan{}
+	}
+	if r.reviewPlanContext != nil {
+		return r.reviewPlanContext(ctx, threadID, turnID)
+	}
+	if r.reviewPlan == nil {
 		return guardianReviewPlan{}
 	}
 	return r.reviewPlan(threadID, turnID)
@@ -1716,7 +1849,7 @@ func (r *modelGuardianReviewer) planForTurn(threadID, turnID string) guardianRev
 
 // modelForTurn keeps the model-only view used by review metrics and telemetry.
 func (r *modelGuardianReviewer) modelForTurn(threadID, turnID string) string {
-	return strings.TrimSpace(r.planForTurn(threadID, turnID).Selection.Model)
+	return strings.TrimSpace(r.planForTurn(context.Background(), threadID, turnID).Selection.Model)
 }
 
 func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {
@@ -3075,15 +3208,15 @@ func waitGuardianReviewRetry(ctx context.Context, delay time.Duration) error {
 // guardianReviewContextChanged mirrors Rust #53797's widened invalidation
 // predicate: local or root review evidence that changed while the reviewer was
 // running makes the assessment stale and triggers a fresh attempt.
-func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, omissionNote string, rootAuthorization []state.RootMessage, nativeCallID string) bool {
+func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, omissionNote string, rootAuthorization []state.RootMessage, omittedCallID string) bool {
 	if r == nil {
 		return false
 	}
 	if r.transcriptSelection != nil {
 		selection := r.transcriptSelection(threadID)
-		// The proposed native call is part of the plan, not a context change, so
-		// both sides of the comparison drop it.
-		fresh := state.GuardianTranscriptWithoutProposedCall(selection.Entries, nativeCallID)
+		// The proposed call is part of the plan, not a context change, so both
+		// sides of the comparison drop it.
+		fresh := state.GuardianTranscriptWithoutProposedCall(selection.Entries, omittedCallID)
 		if !reflect.DeepEqual(entries, fresh) || omissionNote != selection.OmissionNote {
 			return true
 		}

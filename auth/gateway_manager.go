@@ -82,7 +82,7 @@ func NewGatewayAuthManager(config GatewayAuthConfig, codexHome string, client *h
 	manager := &GatewayAuthManager{
 		config:    config,
 		codexHome: codexHome,
-		storage:   newGatewayAuthStorage(codexHome, store),
+		storage:   newGatewayAuthStorage(codexHome, store, config.CredentialsStore),
 		client:    client,
 	}
 	manager.control = gatewayLoginControlFor(codexHome, manager)

@@ -1104,9 +1104,33 @@ type ModelsManagerConfig struct {
 	ModelCatalog                    *ModelsResponse
 }
 
+// ModelOrigin mirror's Rust codex_models_manager::ModelOrigin (#57770): where an
+// effective catalog entry came from. A bundled entry does not establish that a
+// custom gateway offers that model.
+type ModelOrigin string
+
+const (
+	// ModelOriginBundled is a model that ships with the binary.
+	ModelOriginBundled ModelOrigin = "bundled"
+	// ModelOriginProvider is a model the provider's catalog advertised.
+	ModelOriginProvider ModelOrigin = "provider"
+	// ModelOriginExplicitConfig is a model the configuration supplied.
+	ModelOriginExplicitConfig ModelOrigin = "explicit_config"
+)
+
+// CatalogModel pairs model metadata with the source of that metadata, captured
+// from one catalog snapshot (Rust CatalogModel).
+type CatalogModel struct {
+	Model  ModelInfo
+	Origin ModelOrigin
+}
+
 type RefreshStrategy string
 
 const (
+	// RefreshInMemory mirrors Rust RefreshStrategy::InMemory (#57789): use the
+	// current in-memory catalog, loading no disk cache and never fetching.
+	RefreshInMemory         RefreshStrategy = "in_memory"
 	RefreshOnline           RefreshStrategy = "online"
 	RefreshOffline          RefreshStrategy = "offline"
 	RefreshOnlineIfUncached RefreshStrategy = "online_if_uncached"
@@ -1115,6 +1139,9 @@ const (
 type ModelsManager interface {
 	ListModels(strategy RefreshStrategy) []ModelPreset
 	RawModelCatalog(strategy RefreshStrategy) ModelsResponse
+	// ModelCatalogWithOrigins mirrors Rust model_catalog_with_origins: the
+	// effective catalog with each entry's source (#57770).
+	ModelCatalogWithOrigins(strategy RefreshStrategy) []CatalogModel
 	GetRemoteModels() []ModelInfo
 	GetDefaultModel(model string, allowProviderModelFallback bool, strategy RefreshStrategy) string
 	GetModelInfo(model string, config *ModelsManagerConfig) ModelInfo
@@ -1131,10 +1158,30 @@ type ModelsManager interface {
 
 type StaticModelsManager struct {
 	remoteModels []ModelInfo
+	origin       ModelOrigin
 }
 
+// NewStaticModelsManager builds a catalog whose entries are bundled models.
 func NewStaticModelsManager(modelCatalog ModelsResponse) *StaticModelsManager {
-	return &StaticModelsManager{remoteModels: cloneModelInfos(modelCatalog.Models)}
+	return NewStaticModelsManagerWithOrigin(modelCatalog, ModelOriginBundled)
+}
+
+// NewStaticModelsManagerWithOrigin builds a catalog whose entries all carry the
+// supplied source (Rust StaticModelsManager::new's `origin`).
+func NewStaticModelsManagerWithOrigin(modelCatalog ModelsResponse, origin ModelOrigin) *StaticModelsManager {
+	if origin == "" {
+		origin = ModelOriginBundled
+	}
+	return &StaticModelsManager{remoteModels: cloneModelInfos(modelCatalog.Models), origin: origin}
+}
+
+func (m *StaticModelsManager) ModelCatalogWithOrigins(_ RefreshStrategy) []CatalogModel {
+	models := m.GetRemoteModels()
+	catalog := make([]CatalogModel, 0, len(models))
+	for _, info := range models {
+		catalog = append(catalog, CatalogModel{Model: info, Origin: m.origin})
+	}
+	return catalog
 }
 
 func (m *StaticModelsManager) ListModels(strategy RefreshStrategy) []ModelPreset {

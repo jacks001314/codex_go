@@ -8,7 +8,9 @@ package auth
 // from the initial read through token exchange and save.
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +20,7 @@ import (
 
 	"codex_go/keyring"
 	"codex_go/safety"
+	"codex_go/utils"
 )
 
 const (
@@ -64,18 +67,71 @@ func gatewayCredentialSecretName(credentialID string) (*safety.SecretName, error
 }
 
 // gatewayAuthStorage reads and writes gateway credentials in their own encrypted
-// namespace with an independent keyring key.
+// namespace with an independent keyring key, or in a single JSON file when the
+// provider selects the file-backed store (Rust #58219 OAuthCredentialsStore).
 type gatewayAuthStorage struct {
 	backend *safety.LocalBackend
+	// filePath is set for the file-backed store; the credential entries share
+	// one JSON object keyed by credential id.
+	filePath string
 }
 
-func newGatewayAuthStorage(codexHome string, store keyring.Store) *gatewayAuthStorage {
+func newGatewayAuthStorage(codexHome string, store keyring.Store, credentialsStore ...string) *gatewayAuthStorage {
+	mode := ""
+	if len(credentialsStore) > 0 {
+		mode = strings.TrimSpace(credentialsStore[0])
+	}
+	if mode == "file" {
+		return &gatewayAuthStorage{filePath: filepath.Join(codexHome, "secrets", "gateway_oauth.json")}
+	}
 	return &gatewayAuthStorage{
 		backend: safety.NewLocalSecretBackendWithKeyring(codexHome, safety.LocalNamespaceGatewayOAuth, store),
 	}
 }
 
+// readGatewayTokenFile returns the stored credential entries, treating a missing
+// file as an empty store. Deserialization errors never surface credential text.
+func readGatewayTokenFile(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	entries := map[string]string{}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return entries, nil
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, errors.New("stored provider OAuth credentials are invalid")
+	}
+	return entries, nil
+}
+
+func writeGatewayTokenFile(path string, entries map[string]string) error {
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return utils.WriteAtomically(path, string(data))
+}
+
 func (s *gatewayAuthStorage) load(credentialID string) (string, bool, error) {
+	if s.filePath != "" {
+		if _, err := gatewayCredentialSecretName(credentialID); err != nil {
+			return "", false, err
+		}
+		entries, err := readGatewayTokenFile(s.filePath)
+		if err != nil {
+			return "", false, errors.New("failed to load provider OAuth credentials")
+		}
+		value, ok := entries[credentialID]
+		return value, ok, nil
+	}
 	name, err := gatewayCredentialSecretName(credentialID)
 	if err != nil {
 		return "", false, err
@@ -89,6 +145,20 @@ func (s *gatewayAuthStorage) load(credentialID string) (string, bool, error) {
 }
 
 func (s *gatewayAuthStorage) save(credentialID string, value string) error {
+	if s.filePath != "" {
+		if _, err := gatewayCredentialSecretName(credentialID); err != nil {
+			return err
+		}
+		entries, err := readGatewayTokenFile(s.filePath)
+		if err != nil {
+			return errors.New("failed to save provider OAuth credentials")
+		}
+		entries[credentialID] = value
+		if err := writeGatewayTokenFile(s.filePath, entries); err != nil {
+			return errors.New("failed to save provider OAuth credentials")
+		}
+		return nil
+	}
 	name, err := gatewayCredentialSecretName(credentialID)
 	if err != nil {
 		return err
@@ -103,6 +173,23 @@ func (s *gatewayAuthStorage) save(credentialID string, value string) error {
 // delete removes the persisted grant and reports whether one was present
 // (Rust OAuthSessionManager::logout).
 func (s *gatewayAuthStorage) delete(credentialID string) (bool, error) {
+	if s.filePath != "" {
+		if _, err := gatewayCredentialSecretName(credentialID); err != nil {
+			return false, err
+		}
+		entries, err := readGatewayTokenFile(s.filePath)
+		if err != nil {
+			return false, errors.New("failed to remove provider OAuth credentials")
+		}
+		if _, ok := entries[credentialID]; !ok {
+			return false, nil
+		}
+		delete(entries, credentialID)
+		if err := writeGatewayTokenFile(s.filePath, entries); err != nil {
+			return false, errors.New("failed to remove provider OAuth credentials")
+		}
+		return true, nil
+	}
 	name, err := gatewayCredentialSecretName(credentialID)
 	if err != nil {
 		return false, err

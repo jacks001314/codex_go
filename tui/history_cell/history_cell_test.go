@@ -705,7 +705,7 @@ func TestPatchSearchAndSessionHistoryCells(t *testing.T) {
 			t.Fatalf("halfwidth session header exceeds width=%d line=%q", tui.DisplayWidth(line), line)
 		}
 	}
-	info := NewSessionInfo(header, true, "")
+	info := NewSessionInfo(header, true, true, "")
 	if got := strings.Join(info.RawLines(), "\n"); !strings.Contains(got, "/init - create an AGENTS.md") {
 		t.Fatalf("session info raw:\n%s", got)
 	}

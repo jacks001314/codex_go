@@ -679,12 +679,25 @@ func cloneRealtimeStringMap(values map[string]string) map[string]string {
 }
 
 func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Event) {
-	if r == nil || (event.Type != "handoff.requested" && event.Type != "transcript_tail.flush") {
+	if r == nil {
+		return
+	}
+	if len(event.CompletedTranscript) == 0 && event.Type != "handoff.requested" && event.Type != "transcript_tail.flush" {
 		return
 	}
 	eventLock := r.realtimeEventLock(threadID)
 	eventLock.Lock()
 	defer eventLock.Unlock()
+	// Rust #58221: a completed transcript travels with its event so it reaches
+	// history before a later handoff can consume the same speech.
+	if len(event.CompletedTranscript) > 0 {
+		text := wrapRealtimeDelegation("", formatRealtimeTranscript(event.CompletedTranscript))
+		if text != "" {
+			if _, err := r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptChunkKind, "transcript_delta"); err != nil {
+				return
+			}
+		}
+	}
 	// Rust #50531: the terminal realtime transcript is written straight into
 	// thread history. Saving it must never trigger another model request, so a
 	// transcript tail never routes through a turn; only an explicit handoff
@@ -693,11 +706,12 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 		r.recordRealtimeTranscriptTail(threadID, event)
 		return
 	}
-	// Both sides of the handoff agree on the same bounded active transcript:
-	// the realtime transport already applied the budget, and the appserver
-	// re-applies it so an unbounded producer cannot exceed it (#54257).
-	activeTranscript := realtime.TrimRealtimeTranscript(event.ActiveTranscript)
-	transcriptDelta := formatRealtimeTranscript(activeTranscript)
+	if event.Type != "handoff.requested" {
+		return
+	}
+	// Rust #58221 removed the active-transcript byte budget; V3 handoffs carry
+	// every retained utterance in conversation order.
+	transcriptDelta := formatRealtimeTranscript(event.ActiveTranscript)
 	delegation := wrapRealtimeDelegation(event.InputTranscript, transcriptDelta)
 	if delegation == "" {
 		return
@@ -720,21 +734,32 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 // transcript tail flush.
 const realtimeTranscriptTailKind = "realtime_transcript_tail"
 
-// recordRealtimeTranscriptTail mirrors Rust #50531 `transcript_tail::record`:
+// realtimeTranscriptChunkKind tags a completed transcript chunk flushed while
+// the realtime session is still running (Rust #58221).
+const realtimeTranscriptChunkKind = "realtime_transcript_chunk"
+
+// recordRealtimeTranscriptTail mirrors Rust #50531 \`transcript_tail::record\`:
 // the terminal realtime speech is persisted into thread history without
 // starting or steering a turn, so closing the session cannot trigger another
-// model request. A running turn absorbs the message; when the thread is idle
-// the message is recorded under its own completed history turn, which keeps the
-// transcript visible to the next text turn immediately.
+// model request.
 func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event realtime.Event) {
 	if !r.hasRuntimeThreadStore() {
 		return
 	}
-	// Rust `take_transcript_tail` bounds the active transcript before draining
-	// it (methods.rs:792-797); the same bound applies to the recorded tail.
-	text := realtimeTranscriptTailText(realtime.TrimRealtimeTranscript(event.ActiveTranscript))
+	text := realtimeTranscriptTailText(event.ActiveTranscript)
 	if text == "" {
 		return
+	}
+	_, _ = r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptTailKind, "transcript_tail_flush")
+}
+
+// recordRealtimeTranscriptMessage persists one realtime transcript message. A
+// running turn absorbs the message; when the thread is idle the message is
+// recorded under its own completed history turn, which keeps the transcript
+// visible to the next text turn immediately.
+func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text string, kind string, source string) (*session.Item, error) {
+	if !r.hasRuntimeThreadStore() || text == "" {
+		return nil, nil
 	}
 	now := runtimeRouterNow(r).UTC()
 	turnID := ""
@@ -743,27 +768,27 @@ func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event real
 	}
 	recordingTurn := turnID == ""
 	if recordingTurn {
-		// Rust records the tail under a fresh, already-completed turn when no
-		// model turn owns the thread yet.
-		turnID = "realtime-transcript-tail-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
+		// Rust records the transcript under a fresh, already-completed turn
+		// when no model turn owns the thread yet.
+		turnID = "realtime-transcript-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
 		_ = r.appendRuntimeTurnStarted(threadID, turnID, turnID, now)
 	}
 	item := session.Item{
-		ID:        "user-realtime-transcript-tail-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano())),
+		ID:        "user-realtime-transcript-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano())),
 		Type:      "message",
 		Role:      "user",
 		Text:      text,
 		CreatedAt: now,
 		Metadata: appTurnMetadata(turnID, map[string]any{
-			"kind":   realtimeTranscriptTailKind,
-			"source": "transcript_tail_flush",
+			"kind":   kind,
+			"source": source,
 		}),
 	}
 	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), item); err != nil {
 		if recordingTurn {
 			_ = r.appendRuntimeTurnComplete(threadID, turnID, turnID, now, 0)
 		}
-		return
+		return nil, err
 	}
 	_ = r.appendRuntimeRollout(threadID, []session.Item{item}, now)
 	threadItem := threadItemPayload(BuildThreadItem(item))
@@ -782,6 +807,7 @@ func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event real
 	if recordingTurn {
 		_ = r.appendRuntimeTurnComplete(threadID, turnID, turnID, now, 0)
 	}
+	return &item, nil
 }
 
 // realtimeTranscriptTailText renders the tail entries as the plain transcript

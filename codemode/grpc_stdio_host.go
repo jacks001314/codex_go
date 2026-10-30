@@ -11,6 +11,8 @@ import (
 
 	codemodev1 "codex_go/codemode/grpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // stdioConn adapts a duplex pipe pair to net.Conn so gRPC can run over a host
@@ -110,7 +112,10 @@ func RunGrpcStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 		grpc.MaxRecvMsgSize(ProtocolMaxFrameBytes),
 		grpc.MaxSendMsgSize(ProtocolMaxFrameBytes),
 	)
-	codemodev1.RegisterCodeModeHostServer(server, &grpcStdioHostServer{ctx: ctx})
+	codemodev1.RegisterCodeModeHostServer(server, &grpcStdioHostServer{
+		ctx:     ctx,
+		metrics: newProcessMetricsSampler(defaultProcessMetricsCollector),
+	})
 	go func() {
 		<-ctx.Done()
 		server.Stop()
@@ -145,7 +150,27 @@ func (c *connectionCloseNotifier) Close() error {
 
 type grpcStdioHostServer struct {
 	codemodev1.UnimplementedCodeModeHostServer
-	ctx context.Context
+	ctx     context.Context
+	metrics *processMetricsSampler
+}
+
+// GetProcessMetrics reports a bounded host observation without opening a
+// session (Rust #57841). A host built without a collector answers UNIMPLEMENTED
+// so clients can distinguish unsupported from a failed sample.
+func (s *grpcStdioHostServer) GetProcessMetrics(ctx context.Context, _ *codemodev1.GetProcessMetricsRequest) (*codemodev1.GetProcessMetricsResponse, error) {
+	if s == nil || s.metrics == nil {
+		return nil, status.Error(codes.Unimplemented, "process metrics are unsupported")
+	}
+	metrics, err := s.metrics.sample(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &codemodev1.GetProcessMetricsResponse{
+		ProcessId:               metrics.ProcessID,
+		ProcessStartTimeSeconds: metrics.ProcessStartTimeSeconds,
+		CpuSecondsTotal:         metrics.CPUSecondsTotal,
+		ResidentMemoryBytes:     metrics.ResidentMemoryBytes,
+	}, nil
 }
 
 // Transport runs the shared code-mode host loop over one framed gRPC stream.

@@ -103,36 +103,32 @@ func TestWaitAndTerminateOutputBudgetWireShapeLikeRust(t *testing.T) {
 }
 
 func TestValidateSessionOptionsLikeRust(t *testing.T) {
-	for _, options := range []SessionOptions{{}, {OutputTruncation: OutputTruncationClient}} {
+	for _, options := range []SessionOptions{{}, {OutputTruncation: OutputTruncationClient}, {OutputTruncation: OutputTruncationServer}} {
 		if err := ValidateSessionOptions(options); err != nil {
 			t.Fatalf("ValidateSessionOptions(%#v) error = %v", options, err)
 		}
-	}
-	err := ValidateSessionOptions(SessionOptions{OutputTruncation: OutputTruncationServer})
-	if err == nil || err.Error() != "code-mode session provider does not support server output truncation" {
-		t.Fatalf("server truncation error = %v", err)
 	}
 	if err := ValidateSessionOptions(SessionOptions{OutputTruncation: "host"}); err == nil {
 		t.Fatalf("unknown truncation should fail")
 	}
 }
 
-func TestCreateSessionWithOptionsRejectsServerTruncationLikeRust(t *testing.T) {
+func TestCreateSessionWithOptionsLikeRust(t *testing.T) {
 	provider := &recordingSessionProvider{}
-	if _, err := CreateSessionWithOptions(provider, nil, SessionOptions{}); err != nil {
-		t.Fatalf("client session error = %v", err)
+	if _, err := CreateSessionWithOptions(provider, nil, SessionOptions{OutputTruncation: OutputTruncationServer}); err != nil {
+		t.Fatalf("server session error = %v", err)
 	}
-	if provider.created != 1 {
-		t.Fatalf("client session created %d times", provider.created)
-	}
-	if _, err := CreateSessionWithOptions(provider, nil, SessionOptions{OutputTruncation: OutputTruncationServer}); err == nil {
-		t.Fatalf("server truncation should be rejected")
-	}
-	if provider.created != 1 {
-		t.Fatalf("rejected server session created a session")
+	if provider.created != 1 || provider.options.OutputTruncation != tool.CodeModeOutputTruncationServer {
+		t.Fatalf("server session created %d times with %#v", provider.created, provider.options)
 	}
 	if _, err := CreateSessionWithOptions(nil, nil, SessionOptions{}); err == nil {
 		t.Fatalf("nil provider should fail")
+	}
+	// A provider without session-option support keeps client truncation and
+	// refuses a server request instead of silently narrowing it.
+	legacy := &legacySessionProvider{}
+	if _, err := CreateSessionWithOptions(legacy, nil, SessionOptions{OutputTruncation: OutputTruncationServer}); err == nil {
+		t.Fatalf("server truncation should be rejected by a legacy provider")
 	}
 }
 
@@ -153,9 +149,21 @@ func TestSessionHostCapturesOutputTruncationLikeRust(t *testing.T) {
 
 type recordingSessionProvider struct {
 	created int
+	options tool.CodeModeSessionOptions
 }
 
-func (p *recordingSessionProvider) NewSession(tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
+func (p *recordingSessionProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
+	return p.NewSessionWithOptions(delegate, tool.CodeModeSessionOptions{})
+}
+
+func (p *recordingSessionProvider) NewSessionWithOptions(delegate tool.CodeModeRemoteDelegate, options tool.CodeModeSessionOptions) tool.CodeModeRemoteSession {
 	p.created++
+	p.options = options
+	return nil
+}
+
+type legacySessionProvider struct{}
+
+func (*legacySessionProvider) NewSession(tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
 	return nil
 }

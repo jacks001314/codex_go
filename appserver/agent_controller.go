@@ -219,6 +219,17 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	forkedHistory := false
 	var forkContext time.Duration
 	var childCreateStartedAt time.Time
+	var durabilityWait time.Duration
+	// Rust #58129: publish the deletion relationship before any child storage so
+	// a fork that copies history cannot leave an undiscoverable child behind.
+	if c.router.services.SpawnGraph != nil {
+		durabilityStartedAt := time.Now()
+		if err := c.router.services.SpawnGraph.UpsertThreadSpawnEdge(c.parentID, string(threadID), agent.ThreadSpawnEdgeOpen); err != nil {
+			c.cleanupProvisionalSpawn(string(threadID))
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
+		}
+		durabilityWait = time.Since(durabilityStartedAt)
+	}
 	if c.version == agent.VersionV2 && forkTurns != "none" {
 		// Rust #51329: partial-history forks are gone. `all` and the legacy
 		// positive-integer spellings both inherit the parent's full history, so the
@@ -226,17 +237,20 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		if forkTurns != "all" {
 			count, parseErr := strconv.ParseUint(forkTurns, 10, 64)
 			if parseErr != nil || count == 0 {
+				c.cleanupProvisionalSpawn(string(threadID))
 				return nil, recordRuntimeAgentSpawnFailure(c, ctx, fmt.Errorf("fork_turns must be `none` or `all`"), tool.AgentErrorContextForkHistory, forkMode)
 			}
 		}
 		forkContextStartedAt := time.Now()
 		parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), true, true)
 		if readErr != nil || parent == nil {
+			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, firstNonNilError(readErr, fmt.Errorf("parent thread %s is unavailable", c.parentID)), tool.AgentErrorContextForkHistory, forkMode)
 		}
 		forkOptions := session.ForkOptions{NewID: threadID, ParentThreadID: session.ThreadID(c.parentID), Now: now, Mode: session.ForkAll}
 		forked, forkErr := c.router.services.ThreadRouter.store.ForkRecord(parent, forkOptions)
 		if forkErr != nil {
+			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, forkErr, tool.AgentErrorContextForkHistory, forkMode)
 		}
 		record = forked
@@ -252,6 +266,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		childCreateStartedAt = time.Now()
 		record = &session.Record{ID: threadID, SessionID: string(threadID), ParentThreadID: session.ThreadID(c.parentID), CreatedAt: now, UpdatedAt: now, RecencyAt: now}
 		if err := c.router.services.ThreadRouter.store.Create(record); err != nil {
+			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 		}
 	}
@@ -287,19 +302,10 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	// items are recorded while the fallback cannot re-read the forked parent.
 	c.router.captureGuardianReviewHistory(string(threadID), nil)
 	if err := c.router.runtimeSaveThreadRecord(record); err != nil {
-		_ = c.router.services.ThreadRouter.store.Delete(threadID)
+		c.cleanupProvisionalSpawn(string(threadID))
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 	}
 	childCreate := time.Since(childCreateStartedAt)
-	var durabilityWait time.Duration
-	if c.router.services.SpawnGraph != nil {
-		durabilityStartedAt := time.Now()
-		if err := c.router.services.SpawnGraph.UpsertThreadSpawnEdge(c.parentID, string(threadID), agent.ThreadSpawnEdgeOpen); err != nil {
-			c.cleanupProvisionalSpawn(string(threadID))
-			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
-		}
-		durabilityWait = time.Since(durabilityStartedAt)
-	}
 	if err := ctx.Err(); err != nil {
 		c.cleanupProvisionalSpawn(string(threadID))
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)

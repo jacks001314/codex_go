@@ -26,6 +26,10 @@ type GatewayAuthConfig struct {
 	Resource         string
 	Scopes           []string
 	RedirectPort     *uint16
+	// CredentialsStore selects the grant store: "" or "keyring" uses the
+	// encrypted keyring namespace, "file" uses <codex_home>/secrets/gateway_oauth.json
+	// (Rust #58219 OAuthCredentialsStore).
+	CredentialsStore string
 }
 
 // gatewayStoredToken is the persisted credential shape. A missing expiry means

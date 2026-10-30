@@ -568,17 +568,50 @@ const unifiedExecWindowsShellGuidance = "Windows safety rules:\n" +
 	"- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.\n" +
 	"- When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control."
 
-func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
-	args, err := decodeExecCommandInvocation(invocation)
+// ExecCommandPreparation is the resolved state of an exec_command invocation up
+// to (but not including) execution. Rust's RecordedExecCall::prepare (#58028)
+// resolves the same pieces so a recorded call is reviewed with the live approval
+// request instead of an approximation of it.
+type ExecCommandPreparation struct {
+	Args        *ExecCommandArgs
+	Request     *ShellRequest
+	Environment *UnifiedExecEnvironment
+	Validation  ShellValidationOptions
+	Shell       *Shell
+}
+
+// PrepareExecCommand resolves a recorded exec_command invocation without
+// executing it: the selected environment, its permissions and the shell request
+// whose ApprovalRequired reports the command's approval requirement.
+func (e *ShellExecutor) PrepareExecCommand(invocation *Invocation) (*ExecCommandPreparation, error) {
+	prepared, err := e.prepareExecCommand(invocation)
 	if err != nil {
 		return nil, err
 	}
-	// Rust #45445: the command's analytics attribution is the model that invoked
-	// it, captured before execution so a model switch during a background process
-	// cannot retarget it.
-	modelSlug, reasoningEffort := "", ""
-	if e.modelContext != nil {
-		modelSlug, reasoningEffort = e.modelContext()
+	return &ExecCommandPreparation{
+		Args:        prepared.args,
+		Request:     prepared.req,
+		Environment: prepared.environment,
+		Validation:  prepared.validation,
+		Shell:       prepared.shell,
+	}, nil
+}
+
+type execCommandPreparation struct {
+	args        *ExecCommandArgs
+	req         *ShellRequest
+	environment *UnifiedExecEnvironment
+	validation  ShellValidationOptions
+	shell       *Shell
+}
+
+// prepareExecCommand builds the shell request an exec_command runs or is
+// reviewed with, resolving the environment and every approval-relevant option
+// before the approval decision.
+func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommandPreparation, error) {
+	args, err := decodeExecCommandInvocation(invocation)
+	if err != nil {
+		return nil, err
 	}
 	args.MaxOutputTokens = clampShellMaxOutputTokens(args.MaxOutputTokens, e.maxOutputTokens)
 	if args.TTY && !e.allowTTY {
@@ -688,6 +721,22 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if environment != nil {
 		req.UnifiedExecEnvironmentID = environment.ID
 	}
+	return &execCommandPreparation{args: args, req: req, environment: environment, validation: validation, shell: sessionShell}, nil
+}
+
+func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
+	// Rust #45445: the command's analytics attribution is the model that invoked
+	// it, captured before execution so a model switch during a background process
+	// cannot retarget it.
+	modelSlug, reasoningEffort := "", ""
+	if e.modelContext != nil {
+		modelSlug, reasoningEffort = e.modelContext()
+	}
+	prepared, err := e.prepareExecCommand(invocation)
+	if err != nil {
+		return nil, err
+	}
+	args, req, environment, validation, sessionShell := prepared.args, prepared.req, prepared.environment, prepared.validation, prepared.shell
 	if req.ApprovalRequired {
 		if e.approval != nil {
 			decision, approvalErr := e.approval(ctx, &ShellApprovalRequest{Request: req, Invocation: invocation})

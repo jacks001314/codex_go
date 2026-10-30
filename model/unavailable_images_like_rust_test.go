@@ -126,6 +126,37 @@ type concurrentImageStore struct {
 	release chan struct{}
 }
 
+type boundedImageStore struct {
+	mu       sync.Mutex
+	inFlight int
+	maxSeen  int
+	entered  chan struct{}
+	release  chan struct{}
+}
+
+func (s *boundedImageStore) Upload(request attachmentstore.UploadRequest) (attachmentstore.UploadResult, error) {
+	return attachmentstore.InlineUploadResult(request.Data), nil
+}
+
+func (s *boundedImageStore) Resolve(attachmentstore.ResolveRequest) (attachmentstore.AttachmentMetadata, error) {
+	return attachmentstore.AttachmentMetadata{}, attachmentstore.NewStoreError(attachmentstore.ErrorKindNotFound, "missing")
+}
+
+func (s *boundedImageStore) IsResolvable(string) bool {
+	s.mu.Lock()
+	s.inFlight++
+	if s.inFlight > s.maxSeen {
+		s.maxSeen = s.inFlight
+	}
+	s.mu.Unlock()
+	s.entered <- struct{}{}
+	<-s.release
+	s.mu.Lock()
+	s.inFlight--
+	s.mu.Unlock()
+	return true
+}
+
 func (s *concurrentImageStore) Upload(request attachmentstore.UploadRequest) (attachmentstore.UploadResult, error) {
 	return attachmentstore.InlineUploadResult(request.Data), nil
 }
@@ -171,5 +202,51 @@ func TestResponsesInputChecksFileIDsConcurrentlyLikeRust(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("responses input preparation did not finish")
+	}
+}
+
+// Rust #57835 bounds image availability probes with buffer_unordered(8).
+func TestResponsesInputLimitsImageAvailabilityChecksToEightLikeRust(t *testing.T) {
+	const distinct = 12
+	store := &boundedImageStore{entered: make(chan struct{}, distinct), release: make(chan struct{})}
+	request := &AgentRequest{Store: true}
+	for index := 0; index < distinct; index++ {
+		request.InputItems = append(request.InputItems, map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_image", "file_id": "file-" + string(rune('a'+index))},
+			},
+		})
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		responsesInputItemsWithStore(request, store)
+	}()
+	for index := 0; index < maxConcurrentImageAvailabilityChecks; index++ {
+		select {
+		case <-store.entered:
+		case <-time.After(5 * time.Second):
+			close(store.release)
+			t.Fatalf("only %d checks started, want %d", index, maxConcurrentImageAvailabilityChecks)
+		}
+	}
+	select {
+	case <-store.entered:
+		t.Fatalf("more than %d image availability checks ran concurrently", maxConcurrentImageAvailabilityChecks)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(store.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("responses input preparation did not finish")
+	}
+	store.mu.Lock()
+	maxSeen := store.maxSeen
+	store.mu.Unlock()
+	if maxSeen > maxConcurrentImageAvailabilityChecks {
+		t.Fatalf("max concurrent image checks = %d, want <= %d", maxSeen, maxConcurrentImageAvailabilityChecks)
 	}
 }

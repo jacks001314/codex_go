@@ -182,6 +182,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodThreadPredictionRequest):                true,
 		string(MethodThreadSample):                           true,
 		string(MethodThreadSampleCancel):                     true,
+		string(MethodThreadGuardianReview):                   true,
 		string(MethodThreadQueueAdd):                         true,
 		string(MethodThreadQueueList):                        true,
 		string(MethodThreadQueueUpdate):                      true,

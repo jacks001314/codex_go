@@ -218,6 +218,9 @@ func guardianActionJSONValue(action Action) map[string]any {
 			"sandbox_permissions": action.SandboxPermissions,
 			"tty":                 action.TTY != nil && *action.TTY,
 		}
+		// Rust #57758: a terminal-input review always names the command that
+		// launched the terminal, so the reviewer sees what the input reaches.
+		value["original_command"] = action.OriginalCommand
 		if permissions := action.AdditionalPermissions; len(permissions) > 0 {
 			value["additional_permissions"] = permissions
 		}

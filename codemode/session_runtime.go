@@ -27,6 +27,9 @@ type SessionRuntime struct {
 	// detached (Rust #48207).
 	engines map[string]*engineState
 	factory EngineFactory
+	// outputTruncation selects who applies each observation's output budget.
+	// It is fixed when the session opens (Rust #57272/#57870).
+	outputTruncation OutputTruncation
 }
 
 func NewSessionRuntime() *SessionRuntime {
@@ -37,6 +40,34 @@ func NewSessionRuntime() *SessionRuntime {
 		engines: map[string]*engineState{},
 		factory: SobekEngineFactory{},
 	}
+}
+
+// SetOutputTruncation pins the session's output policy. Server truncation
+// makes every observation render through the bounded collector with its own
+// budget; client truncation returns raw items for the caller to truncate.
+func (r *SessionRuntime) SetOutputTruncation(mode OutputTruncation) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if mode != OutputTruncationServer {
+		mode = OutputTruncationClient
+	}
+	r.outputTruncation = mode
+}
+
+// OutputTruncation reports the pinned output policy.
+func (r *SessionRuntime) OutputTruncationMode() OutputTruncation {
+	if r == nil {
+		return OutputTruncationClient
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.outputTruncation == OutputTruncationServer {
+		return OutputTruncationServer
+	}
+	return OutputTruncationClient
 }
 
 func (r *SessionRuntime) Cells() *CellStore {
@@ -110,7 +141,7 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest, p
 		if outcome == nil {
 			return nil, fmt.Errorf("code mode cell %s lost its script outcome", cellID.String())
 		}
-		response, err := r.completeCellFromEngine(cellID, *outcome, startedAt)
+		response, err := r.completeCellFromEngine(cellID, *outcome, startedAt, request.MaxOutputTokens)
 		if err != nil {
 			return nil, err
 		}
@@ -146,7 +177,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 		deadline = time.Duration(ProtocolDefaultWaitYieldTimeMS) * time.Millisecond
 	}
 	if cell, ok := r.cells.Get(cellID); ok && cell.Status != CellRunning {
-		outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt))
+		outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
 		return &outcome, nil
 	}
 	wakeup := r.wakeup(cellID)
@@ -166,7 +197,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 		outcome := MissingCell(response)
 		return &outcome, nil
 	}
-	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt))
+	outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
 	return &outcome, nil
 }
 
@@ -201,7 +232,7 @@ func (r *SessionRuntime) Terminate(request TerminateRequest) (*WaitOutcome, erro
 	}
 	r.releaseEngine(cellID.String())
 	r.signal(cellID.String())
-	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt))
+	outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
 	return &outcome, nil
 }
 
@@ -327,8 +358,8 @@ func (r *SessionRuntime) drainEngineOutputIntoTerminatedCell(cellID string) {
 	if outcome == nil {
 		return
 	}
-	if output := contentItemsOutput(engineOutcomeItems(*outcome)); output != "" {
-		_, _ = r.cells.AppendTerminatedOutput(cellID, output)
+	if items := engineOutcomeItems(*outcome); len(items) > 0 {
+		_, _ = r.cells.AppendTerminatedOutputItems(cellID, items)
 	}
 }
 
@@ -356,16 +387,15 @@ func (r *SessionRuntime) applyEngineOutcome(cellID CellID, outcome engineOutcome
 	if outcome.result != nil {
 		items = outcome.result.ContentItems
 	}
-	output := contentItemsOutput(items)
-	if output != "" {
-		if _, err := r.cells.AppendOutput(cellID.String(), output); err != nil {
+	if len(items) > 0 {
+		if _, err := r.cells.AppendOutputItems(cellID.String(), items); err != nil {
 			// The script finished while its cell was being terminated: keep the
 			// produced output on the terminated event (Rust #48207).
 			cell, ok := r.cells.Get(cellID.String())
 			if !ok || cell.Status != CellTerminated {
 				return nil, err, outcome.execErr
 			}
-			if _, appendErr := r.cells.AppendTerminatedOutput(cellID.String(), output); appendErr != nil {
+			if _, appendErr := r.cells.AppendTerminatedOutputItems(cellID.String(), items); appendErr != nil {
 				return nil, appendErr, outcome.execErr
 			}
 		}
@@ -382,7 +412,7 @@ func (r *SessionRuntime) finishCellFromEngine(cellID CellID, engineWake <-chan s
 		if outcome == nil {
 			return
 		}
-		if _, err := r.completeCellFromEngine(cellID, *outcome, time.Now()); err != nil {
+		if _, err := r.completeCellFromEngine(cellID, *outcome, time.Now(), nil); err != nil {
 			return
 		}
 	case <-wakeup:
@@ -398,7 +428,7 @@ func (r *SessionRuntime) finishCellFromEngine(cellID CellID, engineWake <-chan s
 // completeCellFromEngine records a finished script on its cell. A cell that was
 // terminated while the script finished keeps its terminated status, with the
 // produced output already attached (Rust #48207).
-func (r *SessionRuntime) completeCellFromEngine(cellID CellID, outcome engineOutcome, startedAt time.Time) (RuntimeResponse, error) {
+func (r *SessionRuntime) completeCellFromEngine(cellID CellID, outcome engineOutcome, startedAt time.Time, maxOutputTokens *int) (RuntimeResponse, error) {
 	items, appendErr, execErr := r.applyEngineOutcome(cellID, outcome)
 	if appendErr != nil {
 		return RuntimeResponse{}, appendErr
@@ -413,9 +443,10 @@ func (r *SessionRuntime) completeCellFromEngine(cellID CellID, outcome engineOut
 	}
 	r.signal(cellID.String())
 	if !completed {
-		return withHostDuration(runtimeResponseFromCell(cell, r.cells.Now()), startedAt), nil
+		return withHostDuration(r.responseForCell(cell, r.cells.Now(), maxOutputTokens), startedAt), nil
 	}
-	return withHostDuration(Result(cellID, cloneContentItems(items), errorText(execErr)), startedAt), nil
+	rendered, boundedErr := r.renderObservation(items, maxOutputTokens, errorText(execErr))
+	return withHostDuration(Result(cellID, rendered, boundedErr), startedAt), nil
 }
 
 func (r *SessionRuntime) wakeup(cellID string) <-chan struct{} {
@@ -441,33 +472,73 @@ func (r *SessionRuntime) signal(cellID string) {
 	}
 }
 
-func runtimeResponseFromCell(cell *Cell, now time.Time) RuntimeResponse {
+// responseForCell builds the observation for a wait, terminate, or late
+// completion. Each observation renders with its own token budget when the
+// session uses server output truncation (Rust #57850/#57870).
+func (r *SessionRuntime) responseForCell(cell *Cell, now time.Time, maxOutputTokens *int) RuntimeResponse {
 	if cell == nil {
 		return Result("", nil, stringPtrLocal("exec cell not found"))
 	}
-	items := []ContentItem{}
-	if cell.Output != "" {
-		items = append(items, InputText(cell.Output))
-	}
+	items := cellObservationItems(cell)
 	cellID := NewCellID(cell.ID)
 	switch cell.Status {
 	case CellRunning:
-		return Yielded(cellID, items)
+		rendered, _ := r.renderObservation(items, maxOutputTokens, nil)
+		return Yielded(cellID, rendered)
 	case CellTerminated:
-		return Terminated(cellID, items)
+		rendered, _ := r.renderObservation(items, maxOutputTokens, nil)
+		return Terminated(cellID, rendered)
 	}
-	var response RuntimeResponse
+	var errorText *string
 	if cell.Status == CellFailed {
-		response = Result(cellID, items, stringPtrLocal(cell.Error))
-	} else {
-		response = Result(cellID, items, nil)
+		errorText = stringPtrLocal(cell.Error)
 	}
+	rendered, boundedErr := r.renderObservation(items, maxOutputTokens, errorText)
+	response := Result(cellID, rendered, boundedErr)
 	// Rust #55653: a Result retrieved after completion reports how long it was
 	// buffered; immediate delivery keeps the zero default.
 	if buffered, ok := cell.ResultBufferedFor(now); ok {
 		response.ResultBufferedForNS = uint64(buffered.Nanoseconds())
 	}
 	return response
+}
+
+// cellObservationItems reports the typed items a cell has produced, falling
+// back to the flattened text view for cells written before item tracking.
+func cellObservationItems(cell *Cell) []ContentItem {
+	if cell == nil {
+		return nil
+	}
+	if len(cell.OutputItems) > 0 {
+		return cloneContentItems(cell.OutputItems)
+	}
+	if cell.Output != "" {
+		return []ContentItem{InputText(cell.Output)}
+	}
+	return []ContentItem{}
+}
+
+// renderObservation applies the session's output policy to one observation.
+// Server truncation charges the diagnostic against the same budget and returns
+// an independently bounded copy for logging; client truncation returns the raw
+// items so the caller can budget them.
+func (r *SessionRuntime) renderObservation(items []ContentItem, maxOutputTokens *int, errorText *string) ([]ContentItem, *string) {
+	if r.OutputTruncationMode() != OutputTruncationServer {
+		if items == nil {
+			return []ContentItem{}, errorText
+		}
+		return items, errorText
+	}
+	collector := newOutputCollector(OutputTruncationServer)
+	for _, item := range items {
+		collector.push(item)
+	}
+	var boundedErr *string
+	if errorText != nil {
+		bounded := collector.collectError(*errorText)
+		boundedErr = &bounded
+	}
+	return renderOutput(collector.intoCollectedOutput(), maxOutputTokens), boundedErr
 }
 
 func errorText(err error) *string {

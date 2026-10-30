@@ -32,6 +32,10 @@ func (m *Model) setThreadUnavailable(unavailable bool) {
 
 // unavailableThreadCommand reports whether input may run while the current
 // thread is unavailable. The command must occupy one line.
+//
+// Rust #57820 keeps local warnings/configuration/quit commands usable while the
+// connection is restricted, so the offline allowlist is the union of the
+// recovery commands and those local commands.
 func unavailableThreadCommand(input string) bool {
 	input = strings.TrimSpace(input)
 	if input == "" || strings.Contains(input, "\n") {
@@ -49,6 +53,8 @@ func unavailableThreadCommand(input string) bool {
 		codextui.CommandAgent,
 		codextui.CommandExit,
 		codextui.CommandStatus,
+		codextui.CommandWarnings,
+		codextui.CommandConfig,
 		codextui.CommandDebugConfig,
 		codextui.CommandPwd,
 		codextui.CommandRollout,

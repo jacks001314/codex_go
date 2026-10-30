@@ -43,6 +43,10 @@ type Router struct {
 	// lower-level Router is feature-agnostic, so the runtime installs this
 	// predicate.
 	retainClientDeveloperMessages func() bool
+	// resumeModelProviderCheck, when installed by the runtime, validates the
+	// provider a resume would use before any override rewrites the thread's
+	// settings (Rust #57840's ConfigManager::load_for_resume).
+	resumeModelProviderCheck func(record *session.Record, params *ThreadResumeParams) error
 	// tracer, when set by the runtime that built the OTEL provider, instruments
 	// every request with Rust's `app_server.request` span.
 	tracer *telemetry.Tracer
@@ -1588,6 +1592,13 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 			}
 		}
 	}
+	// Rust #57840: resume admits only the provider the current configuration
+	// selects, so a chat never silently continues under another provider.
+	if r.resumeModelProviderCheck != nil {
+		if err := r.resumeModelProviderCheck(record, &params); err != nil {
+			return nil, err
+		}
+	}
 	paginatedResume := false
 	if r.state != nil {
 		mode, found, modeErr := r.threadHistoryModeWithRepair(sourceID)
@@ -1875,6 +1886,13 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 			Extra:         extra,
 		},
 		Items: items,
+	}
+	// Rust #57840: supplied-history resume validates the requested provider
+	// before the new thread becomes durable.
+	if r.resumeModelProviderCheck != nil {
+		if checkErr := r.resumeModelProviderCheck(record, params); checkErr != nil {
+			return nil, checkErr
+		}
 	}
 	if err := r.store.Create(record); err != nil {
 		return nil, err

@@ -157,6 +157,7 @@ func (h *ImageGenerationHandler) Spec() tool.Spec {
 		Name:                 tool.NamespacedName(ImageGenerationNamespace, ImageGenerationToolName),
 		Description:          imageGenerationDescription,
 		InputSchema:          imageGenerationSchema(),
+		CodeModeOutputSchema: imageGenerationOutputSchema(),
 		Exposure:             tool.ExposureModelVisible,
 		Parallel:             false,
 		NamespaceDescription: "Tools in the image_gen namespace.",
@@ -873,6 +874,20 @@ func imageGenerationSchema() map[string]any {
 				"minimum":     1,
 				"maximum":     imageGenerationMaxEditImages,
 			},
+		},
+	}
+}
+
+// imageGenerationOutputSchema declares the code-mode return type for imagegen
+// (Rust #57836). Direct API serialization ignores the schema.
+func imageGenerationOutputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"image_url"},
+		"properties": map[string]any{
+			"image_url":   map[string]any{"type": "string"},
+			"output_hint": map[string]any{"type": "string"},
 		},
 	}
 }

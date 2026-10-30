@@ -181,3 +181,38 @@ func (r *StateRuntime) FirstAttachedThreadID(ctx context.Context, parentThreadID
 	}
 	return child, nil
 }
+
+// ListAttachedThreadIDs returns every saved thread attached to parent (Rust
+// #57824 `list_attached_thread_ids`): feedback uploads include directly
+// attached threads in addition to the spawned subtree.
+func (r *StateRuntime) ListAttachedThreadIDs(ctx context.Context, parentThreadID string) ([]string, error) {
+	if r == nil || r.stateDB == nil {
+		return nil, errors.New("state runtime is nil")
+	}
+	parent := strings.TrimSpace(parentThreadID)
+	if parent == "" {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rows, err := r.stateDB.QueryContext(ctx, "SELECT id FROM threads WHERE attached_thread_parent_id = ?", parent)
+	if err != nil {
+		return nil, fmt.Errorf("list attached threads: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan attached thread: %w", err)
+		}
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			ids = append(ids, trimmed)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list attached threads: %w", err)
+	}
+	return ids, nil
+}

@@ -39,13 +39,17 @@ func (f ServerRequestSinkFunc) SendServerRequest(request *ServerRequest) {
 }
 
 type ServerRequestBroker struct {
-	mu          sync.Mutex
-	nextID      atomic.Uint64
-	pending     map[string]*pendingServerRequest
-	sink        ServerRequestSink
-	onRequested func(request *ServerRequest)
-	onResolved  func(request *ServerRequest)
-	onResponse  func(request *ServerRequest, response *Response)
+	mu      sync.Mutex
+	nextID  atomic.Uint64
+	pending map[string]*pendingServerRequest
+	// humanApprovalConnections tracks the connections that initialized with the
+	// requiredHumanApproval capability (Rust #58045). Only they may receive or
+	// answer a managed humanCommand checkpoint.
+	humanApprovalConnections map[string]bool
+	sink                     ServerRequestSink
+	onRequested              func(request *ServerRequest)
+	onResolved               func(request *ServerRequest)
+	onResponse               func(request *ServerRequest, response *Response)
 }
 
 type serverRequestResult struct {
@@ -58,10 +62,82 @@ type pendingServerRequest struct {
 	request      *ServerRequest
 	connectionID string
 	claimed      atomic.Bool
+	// humanApproval marks a managed checkpoint; humanApprovalRecipients lists the
+	// capable connections it was delivered to, which are the only ones whose
+	// response may resolve it.
+	humanApproval           bool
+	humanApprovalRecipients map[string]struct{}
 }
 
 func NewServerRequestBroker() *ServerRequestBroker {
-	return &ServerRequestBroker{pending: map[string]*pendingServerRequest{}}
+	return &ServerRequestBroker{
+		pending:                  map[string]*pendingServerRequest{},
+		humanApprovalConnections: map[string]bool{},
+	}
+}
+
+// EnableHumanApprovalConnection records a connection that initialized with the
+// requiredHumanApproval capability (Rust #58045).
+func (b *ServerRequestBroker) EnableHumanApprovalConnection(connectionID string) {
+	if b == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	if connectionID == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.humanApprovalConnections == nil {
+		b.humanApprovalConnections = map[string]bool{}
+	}
+	b.humanApprovalConnections[connectionID] = true
+}
+
+// DisableHumanApprovalConnection drops the capability when its connection
+// closes, so a closed client never keeps a checkpoint deliverable.
+func (b *ServerRequestBroker) DisableHumanApprovalConnection(connectionID string) {
+	if b == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.humanApprovalConnections, connectionID)
+}
+
+func (b *ServerRequestBroker) humanApprovalCapableLocked(connectionID string) bool {
+	return b.humanApprovalConnections[normalizeConnectionID(connectionID)]
+}
+
+func (b *ServerRequestBroker) humanApprovalRecipientsLocked() []string {
+	recipients := make([]string, 0, len(b.humanApprovalConnections))
+	for connectionID, enabled := range b.humanApprovalConnections {
+		if enabled {
+			recipients = append(recipients, connectionID)
+		}
+	}
+	sort.Strings(recipients)
+	return recipients
+}
+
+// requiresHumanApprovalRequest reports whether a server request is a managed
+// humanCommand checkpoint (Rust #58045).
+func requiresHumanApprovalRequest(request *ServerRequest) bool {
+	if request == nil || request.Method != ServerRequestCommandExecutionApproval {
+		return false
+	}
+	switch params := request.Params.(type) {
+	case *CommandExecutionRequestApprovalParams:
+		return params != nil && params.Kind.orDefault() == ExecApprovalKindHumanCommand
+	case CommandExecutionRequestApprovalParams:
+		return params.Kind.orDefault() == ExecApprovalKindHumanCommand
+	case map[string]any:
+		kind, _ := params["kind"].(string)
+		return ExecApprovalKind(strings.TrimSpace(kind)) == ExecApprovalKindHumanCommand
+	default:
+		return false
+	}
 }
 
 func (b *ServerRequestBroker) SetSink(sink ServerRequestSink) {
@@ -120,7 +196,23 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 		return fmt.Errorf("%w: server request sink is not configured", ErrInvalidRequest)
 	}
 	b.notifyRequested(request)
-	if connectionID != "" {
+	if requiresHumanApprovalRequest(request) {
+		// A managed checkpoint is delivered only to capable clients; with none
+		// connected the command is rejected instead of waiting forever.
+		recipients := b.authorizeHumanApprovalDelivery(id, connectionID)
+		if len(recipients) == 0 {
+			b.unregister(id)
+			return fmt.Errorf("%w: managed command policy requires a human approver, but no capable connection is connected", ErrInvalidRequest)
+		}
+		targeted, ok := sink.(TargetedServerRequestSink)
+		if !ok {
+			b.unregister(id)
+			return fmt.Errorf("%w: server request sink cannot target a human approval connection", ErrInvalidRequest)
+		}
+		for _, recipient := range recipients {
+			targeted.SendServerRequestToConnection(recipient, request)
+		}
+	} else if connectionID != "" {
 		if targeted, ok := sink.(TargetedServerRequestSink); ok {
 			targeted.SendServerRequestToConnection(connectionID, request)
 		} else {
@@ -277,10 +369,20 @@ func (b *ServerRequestBroker) requestedCallback() func(request *ServerRequest) {
 }
 
 func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {
+	return b.ResolveFromConnection("", response)
+}
+
+// ResolveFromConnection resolves a pending server request with the responding
+// connection's identity. A managed humanCommand checkpoint only accepts a
+// response from one of the connections it was delivered to (Rust #58045).
+func (b *ServerRequestBroker) ResolveFromConnection(connectionID string, response *Response) (bool, error) {
 	if b == nil || response == nil || response.ID.IsZero() {
 		return false, nil
 	}
 	id := response.ID.String()
+	if !b.authorizeHumanApprovalResponse(id, connectionID) {
+		return false, nil
+	}
 	entry := b.claimPending(id)
 	if entry == nil || entry.ch == nil {
 		return false, nil
@@ -330,6 +432,14 @@ func truncateServerRequestErrorDetail(message string, limit int) string {
 }
 
 func (b *ServerRequestBroker) ReplayThread(threadID string) int {
+	return b.ReplayThreadToConnection(threadID, "")
+}
+
+// ReplayThreadToConnection replays a thread's pending server requests to one
+// connection. Managed humanCommand checkpoints are replayed only to a
+// capable connection, and the replayed request is registered to it before it
+// is sent so its response cannot race ahead of authorization (Rust #58045).
+func (b *ServerRequestBroker) ReplayThreadToConnection(threadID string, connectionID string) int {
 	threadID = strings.TrimSpace(threadID)
 	if b == nil || threadID == "" {
 		return 0
@@ -338,10 +448,91 @@ func (b *ServerRequestBroker) ReplayThread(threadID string) int {
 	if sink == nil {
 		return 0
 	}
+	b.mu.Lock()
+	humanApproval := b.humanApprovalCapableLocked(connectionID)
+	b.mu.Unlock()
+	targeted, targetsOneConnection := sink.(TargetedServerRequestSink)
+	sent := 0
 	for _, request := range requests {
+		if requiresHumanApprovalRequest(request) {
+			if !humanApproval {
+				continue
+			}
+			b.addHumanApprovalRecipient(request.ID.String(), normalizeConnectionID(connectionID))
+			if targetsOneConnection {
+				targeted.SendServerRequestToConnection(connectionID, request)
+			} else {
+				sink.SendServerRequest(request)
+			}
+			sent++
+			continue
+		}
 		sink.SendServerRequest(request)
+		sent++
 	}
-	return len(requests)
+	return sent
+}
+
+// authorizeHumanApprovalDelivery records a managed checkpoint's recipients and
+// reports whether it may be delivered. An empty connectionID broadcasts to
+// every capable connection.
+func (b *ServerRequestBroker) authorizeHumanApprovalDelivery(id string, connectionID string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var recipients []string
+	if strings.TrimSpace(connectionID) == "" {
+		recipients = b.humanApprovalRecipientsLocked()
+	} else if b.humanApprovalCapableLocked(connectionID) {
+		recipients = []string{normalizeConnectionID(connectionID)}
+	}
+	if len(recipients) == 0 {
+		return nil
+	}
+	entry := b.pending[id]
+	if entry == nil {
+		return nil
+	}
+	entry.humanApproval = true
+	if entry.humanApprovalRecipients == nil {
+		entry.humanApprovalRecipients = map[string]struct{}{}
+	}
+	for _, recipient := range recipients {
+		entry.humanApprovalRecipients[recipient] = struct{}{}
+	}
+	return recipients
+}
+
+func (b *ServerRequestBroker) addHumanApprovalRecipient(id string, connectionID string) {
+	if connectionID == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.pending[id]
+	if entry == nil || !entry.humanApproval {
+		return
+	}
+	if entry.humanApprovalRecipients == nil {
+		entry.humanApprovalRecipients = map[string]struct{}{}
+	}
+	entry.humanApprovalRecipients[connectionID] = struct{}{}
+}
+
+// authorizeHumanApprovalResponse reports whether connectionID may resolve the
+// pending request. Non-checkpoint requests keep their previous behavior.
+func (b *ServerRequestBroker) authorizeHumanApprovalResponse(id string, connectionID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.pending[id]
+	if entry == nil || !entry.humanApproval {
+		return true
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	if connectionID == "" || !b.humanApprovalCapableLocked(connectionID) {
+		return false
+	}
+	_, ok := entry.humanApprovalRecipients[connectionID]
+	return ok
 }
 
 func (b *ServerRequestBroker) nextRequestID() string {

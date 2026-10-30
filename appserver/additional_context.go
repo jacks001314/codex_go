@@ -7,6 +7,8 @@ import (
 	"codex_go/config"
 	contextfrag "codex_go/context"
 	"codex_go/features"
+	"codex_go/metrics"
+	"codex_go/telemetry"
 	"codex_go/turn"
 	"codex_go/utils"
 )
@@ -53,6 +55,10 @@ func (s storedAdditionalContext) equal(other storedAdditionalContext) bool {
 func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[string]turn.AdditionalContextEntry, toolOutputs bool) ([]string, []any) {
 	next := make(map[string]storedAdditionalContext, len(values))
 	for key, entry := range values {
+		// Rust #58144: every submitted entry is measured, including entries
+		// that deduplication leaves unchanged and entries whose rendered
+		// fragment is dropped.
+		recordAdditionalContextMetrics(entry)
 		if toolOutputs && entry.Kind == turn.AdditionalContextUntrusted {
 			name := derivedAdditionalContextToolName(key)
 			if entry.Name != nil {
@@ -176,6 +182,45 @@ func isAdditionalContextToolNameChar(char rune) bool {
 func truncateAdditionalContextValue(value string) string {
 	truncated, _ := utils.TruncateMiddleWithTokenBudget(value, additionalContextValueTokenBudget)
 	return truncated
+}
+
+// recordAdditionalContextMetrics mirrors Rust AdditionalContextStore::record_metrics
+// (#58144): one count sample and before/after byte histograms per submitted
+// entry, tagged by kind, truncation status, and an explicitly supplied name.
+func recordAdditionalContextMetrics(entry turn.AdditionalContextEntry) {
+	bounded, originalTokens := utils.TruncateMiddleWithTokenBudget(entry.Value, additionalContextValueTokenBudget)
+	kind := "application"
+	if entry.Kind == turn.AdditionalContextUntrusted {
+		kind = "untrusted"
+	}
+	truncated := "false"
+	if originalTokens != nil {
+		truncated = "true"
+	}
+	tags := map[string]string{"kind": kind, "truncated": truncated}
+	if entry.Name != nil {
+		tags["name"] = *entry.Name
+	}
+	metrics.Counter(telemetry.AdditionalContextCountMetric, 1, tags)
+	for _, stage := range []struct {
+		name  string
+		bytes int
+	}{
+		{"before", len(entry.Value)},
+		{"after", len(bounded)},
+	} {
+		sizeTags := make(map[string]string, len(tags)+1)
+		for key, value := range tags {
+			sizeTags[key] = value
+		}
+		sizeTags["stage"] = stage.name
+		metrics.HistogramWithBounds(
+			telemetry.AdditionalContextValueBytesMetric,
+			stage.bytes,
+			telemetry.AdditionalContextValueBytesBuckets,
+			sizeTags,
+		)
+	}
 }
 
 func sortedStoredAdditionalContextKeys(values map[string]storedAdditionalContext) []string {

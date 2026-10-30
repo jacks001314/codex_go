@@ -61,6 +61,7 @@ type OtelExporterKind struct {
 // after defaults are applied.
 type OtelConfig struct {
 	ToolResult             protocol.ToolResultLogConfig
+	LogSSEDeltas           bool
 	LogUserPrompt          bool
 	LogGuardianAssessments bool
 	LogAgentResponses      bool
@@ -78,6 +79,7 @@ type OtelConfig struct {
 func DefaultOtelConfig() OtelConfig {
 	return OtelConfig{
 		ToolResult:      protocol.DefaultToolResultLogConfig(),
+		LogSSEDeltas:    true,
 		Environment:     DefaultOtelEnvironment,
 		Exporter:        OtelExporterKind{Kind: OtelExporterKindNone},
 		TraceExporter:   OtelExporterKind{Kind: OtelExporterKindNone},
@@ -101,6 +103,9 @@ func ResolveOtelConfig(values map[string]any) (OtelConfig, []string) {
 	}
 	if logUserPrompt, ok := otel["log_user_prompt"].(bool); ok {
 		resolved.LogUserPrompt = logUserPrompt
+	}
+	if logSSEDeltas, ok := otel["log_sse_deltas"].(bool); ok {
+		resolved.LogSSEDeltas = logSSEDeltas
 	}
 	if logGuardian, ok := otel["log_guardian_assessments"].(bool); ok {
 		resolved.LogGuardianAssessments = logGuardian
@@ -146,6 +151,11 @@ func ValidateOtelConfigValues(values map[string]any) error {
 	if value, ok := otel["log_user_prompt"]; ok && value != nil {
 		if _, isBool := value.(bool); !isBool {
 			return errors.New("otel.log_user_prompt must be a boolean")
+		}
+	}
+	if value, ok := otel["log_sse_deltas"]; ok && value != nil {
+		if _, valid := value.(bool); !valid {
+			return errors.New("otel.log_sse_deltas must be a boolean")
 		}
 	}
 	if value, ok := otel["log_guardian_assessments"]; ok && value != nil {

@@ -80,7 +80,7 @@ func TestRemoteResponseOutputBufferedResultLikeRust(t *testing.T) {
 		State:               "completed",
 		ContentItems:        []map[string]any{{"type": "input_text", "text": "done"}},
 		ResultBufferedForNS: 321,
-	}, 1000, time.Millisecond, false)
+	}, 1000, CodeModeOutputTruncationClient, time.Millisecond, false)
 	if err != nil {
 		t.Fatalf("completed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRemoteResponseOutputBufferedResultLikeRust(t *testing.T) {
 			CellID:              "cell-1",
 			State:               state,
 			ResultBufferedForNS: 321,
-		}, 1000, time.Millisecond, false)
+		}, 1000, CodeModeOutputTruncationClient, time.Millisecond, false)
 		if err != nil {
 			t.Fatalf("%s: %v", state, err)
 		}

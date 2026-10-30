@@ -63,6 +63,51 @@ func (c *ThreadCatalog) Reset() {
 	c.sources = map[BackendID]*threadCatalogSource{}
 }
 
+// SessionPageCursor is the catalog-level continuation handed back to the
+// picker instead of a raw per-source cursor. Rust resume_picker::PageCursor
+// (#57862) distinguishes a ready page from sources that are still mid-request.
+type SessionPageCursor string
+
+const (
+	// SessionPageCursorCatalog means at least one available source can serve
+	// another page right now.
+	SessionPageCursorCatalog SessionPageCursor = "catalog"
+	// SessionPageCursorSourcesPending means every remaining source is already
+	// mid-request, so the picker waits for those results instead of issuing a
+	// redundant request.
+	SessionPageCursorSourcesPending SessionPageCursor = "sources_pending"
+)
+
+// NextCursor reports the catalog-level continuation for the current listing
+// (Rust ThreadCatalog::next_cursor, #57862). A ready page wins over pending
+// sources; ok is false only when the listing is exhausted.
+func (c *ThreadCatalog) NextCursor(excluded map[BackendID]bool) (SessionPageCursor, bool) {
+	if c == nil {
+		return "", false
+	}
+	available := false
+	pending := false
+	for backendID, source := range c.sources {
+		if source == nil {
+			continue
+		}
+		if source.hasToken {
+			pending = true
+			continue
+		}
+		if !source.exhausted && !excluded[backendID] {
+			available = true
+		}
+	}
+	if available {
+		return SessionPageCursorCatalog, true
+	}
+	if pending {
+		return SessionPageCursorSourcesPending, true
+	}
+	return "", false
+}
+
 // HasMore reports whether any source that is not excluded still has pages.
 func (c *ThreadCatalog) HasMore(excluded map[BackendID]bool) bool {
 	if c == nil {

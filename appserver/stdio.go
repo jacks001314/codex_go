@@ -206,7 +206,7 @@ readLoop:
 			if line == "" {
 				continue
 			}
-			response, request := decodeJSONLine(router, []byte(line))
+			response, request := decodeJSONLineWithConnection(router, connectionID, []byte(line))
 			if request == nil {
 				if response != nil {
 					setWriteErr(writeJSONLine(response))
@@ -278,7 +278,11 @@ func (s *StdioServer) decodeLine(data []byte) (any, *Request) {
 }
 
 func decodeJSONLine(router *RuntimeRouter, data []byte) (any, *Request) {
-	if response, ok := handleServerResponseLine(router, data); ok {
+	return decodeJSONLineWithConnection(router, "", data)
+}
+
+func decodeJSONLineWithConnection(router *RuntimeRouter, connectionID string, data []byte) (any, *Request) {
+	if response, ok := handleServerResponseLineFromConnection(router, connectionID, data); ok {
 		return response, nil
 	}
 	if isClientNotificationLine(data) {
@@ -365,6 +369,10 @@ func (s *StdioServer) handleServerResponseLine(data []byte) (any, bool) {
 }
 
 func handleServerResponseLine(router *RuntimeRouter, data []byte) (any, bool) {
+	return handleServerResponseLineFromConnection(router, "", data)
+}
+
+func handleServerResponseLineFromConnection(router *RuntimeRouter, connectionID string, data []byte) (any, bool) {
 	var envelope struct {
 		ID     RequestID       `json:"id"`
 		Method *Method         `json:"method"`
@@ -381,7 +389,7 @@ func handleServerResponseLine(router *RuntimeRouter, data []byte) (any, bool) {
 	if err := json.Unmarshal(data, &response); err != nil {
 		return ErrorResponse(envelope.ID, -32600, fmt.Sprintf("invalid response: %v", err), nil), true
 	}
-	if router != nil && router.resolveServerResponse(&response) {
+	if router != nil && router.resolveServerResponseFromConnection(connectionID, &response) {
 		return nil, true
 	}
 	return nil, true

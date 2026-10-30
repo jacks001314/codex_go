@@ -180,3 +180,37 @@ func (t *AuthChangeTracker) SeedLastAuth(current *AuthDotJSON) {
 	defer t.mu.Unlock()
 	t.lastAuth = cloneAuthDotJSON(current)
 }
+
+// RequestAuthChange reports whether request preparation can use the credentials
+// it selected (Rust #58121 RequestAuthChange).
+type RequestAuthChange int
+
+const (
+	// RequestAuthUnchanged keeps the prepared request.
+	RequestAuthUnchanged RequestAuthChange = iota
+	// RequestCredentialsChanged means preparation must repeat against refreshed
+	// credentials.
+	RequestCredentialsChanged
+	// RequestAuthOwnerChanged means the account identity changed mid-preparation
+	// and the request must not be sent.
+	RequestAuthOwnerChanged
+)
+
+// CompareRequestAuthChange classifies a completed preparation attempt against
+// its starting state (Rust AuthChangeState::compare_for_request). Either state
+// becoming absent means the provider gained or lost its auth manager during
+// setup, which is an owner change.
+func CompareRequestAuthChange(before, after *AuthChangeState) RequestAuthChange {
+	switch {
+	case before == nil && after == nil:
+		return RequestAuthUnchanged
+	case before == nil || after == nil:
+		return RequestAuthOwnerChanged
+	case after.OwnerGeneration != before.OwnerGeneration:
+		return RequestAuthOwnerChanged
+	case after.Generation != before.Generation:
+		return RequestCredentialsChanged
+	default:
+		return RequestAuthUnchanged
+	}
+}

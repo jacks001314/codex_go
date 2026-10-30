@@ -87,6 +87,7 @@ const (
 	MethodThreadItemsRead                    Method = "thread/items/read"
 	MethodThreadTurnsList                    Method = "thread/turns/list"
 	MethodThreadInjectItems                  Method = "thread/inject_items"
+	MethodThreadGuardianReview               Method = "thread/guardianReview"
 	MethodThreadRealtimeStart                Method = "thread/realtime/start"
 	MethodThreadRealtimeAppendAudio          Method = "thread/realtime/appendAudio"
 	MethodThreadRealtimeAppendText           Method = "thread/realtime/appendText"

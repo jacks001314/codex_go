@@ -32,30 +32,39 @@ func nativeToolReviewRouter(t *testing.T, items ...session.Item) *RuntimeRouter 
 }
 
 func nativeToolReviewInvocation(arguments string) *tool.Invocation {
+	return nativeToolReviewInvocationWithCall(arguments, nil)
+}
+
+func nativeToolReviewInvocationWithCall(arguments string, nativeCall json.RawMessage) *tool.Invocation {
 	return &tool.Invocation{
-		CallID:   "action",
-		ToolName: tool.NamespacedName("team", "send_message"),
-		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: arguments},
-		Source:   "direct_plaintext_message",
+		CallID:     "action",
+		ToolName:   tool.NamespacedName("team", "send_message"),
+		Payload:    tool.Payload{Kind: tool.PayloadFunction, Arguments: arguments},
+		Source:     "direct_plaintext_message",
+		NativeCall: nativeCall,
 	}
 }
 
+// Mirrors Rust #58040: the call retained by dispatch is the review evidence,
+// so it survives even when the live history no longer holds the call. A hook
+// rewrite keeps the call identity and encrypted-argument metadata while
+// dropping the stale replay content.
 func TestNativeToolGuardianActionPreservesEncryptedReplayLikeRust(t *testing.T) {
 	recorded := json.RawMessage(`{"type":"function_call","id":"fc_action","call_id":"action","namespace":"team","name":"send_message","arguments":"{\"target\":\"worker\",\"message\":\"opaque-message\"}","encrypted_content":"opaque-replay","encrypted_function_args":["message"]}`)
-	router := nativeToolReviewRouter(t, session.Item{ID: "fc_action", Type: "function_call", CallID: "action", Raw: recorded})
+	// No persisted history: the retained call alone carries the evidence.
+	router := nativeToolReviewRouter(t)
 
-	// Unchanged arguments keep the recorded encrypted replay content.
-	action, err := router.nativeToolGuardianAction("native-review-thread", nativeToolReviewInvocation(`{"target":"worker","message":"opaque-message"}`))
+	action, err := router.nativeToolGuardianAction("native-review-thread", nativeToolReviewInvocationWithCall(`{"target":"worker","message":"opaque-message"}`, recorded))
 	if err != nil {
 		t.Fatalf("nativeToolGuardianAction() error = %v", err)
 	}
 	if action.Type != state.ActionNativeToolCall || !strings.Contains(string(action.NativeCall), `"opaque-replay"`) {
-		t.Fatalf("action = %#v, want the recorded call with encrypted content", action)
+		t.Fatalf("action = %#v, want the retained call with encrypted content", action)
 	}
 
 	// A hook rewrite reviews the updated arguments and discards the original
 	// encrypted replay content, which no longer describes the call.
-	action, err = router.nativeToolGuardianAction("native-review-thread", nativeToolReviewInvocation(`{"target":"/root","message":"opaque-message"}`))
+	action, err = router.nativeToolGuardianAction("native-review-thread", nativeToolReviewInvocationWithCall(`{"target":"/root","message":"opaque-message"}`, recorded))
 	if err != nil {
 		t.Fatalf("nativeToolGuardianAction(rewritten) error = %v", err)
 	}
@@ -72,13 +81,15 @@ func TestNativeToolGuardianActionPreservesEncryptedReplayLikeRust(t *testing.T) 
 	if _, ok := reviewed["encrypted_function_args"]; !ok {
 		t.Fatalf("rewritten call dropped the encrypted argument fields: %s", action.NativeCall)
 	}
+	if reviewed["call_id"] != "action" || reviewed["name"] != "send_message" || reviewed["namespace"] != "team" {
+		t.Fatalf("rewritten call lost its identity: %s", action.NativeCall)
+	}
 
-	// A call missing from history is synthesized from the invocation; plaintext
-	// sources carry an empty encrypted-argument list.
-	missing := nativeToolReviewRouter(t)
-	action, err = missing.nativeToolGuardianAction("native-review-thread", nativeToolReviewInvocation(`{"target":"/root"}`))
+	// Without a retained call the review synthesizes one from the invocation;
+	// plaintext sources carry an empty encrypted-argument list.
+	action, err = router.nativeToolGuardianAction("native-review-thread", nativeToolReviewInvocation(`{"target":"/root"}`))
 	if err != nil {
-		t.Fatalf("nativeToolGuardianAction(missing) error = %v", err)
+		t.Fatalf("nativeToolGuardianAction(synthesized) error = %v", err)
 	}
 	var synthesized map[string]any
 	if err := json.Unmarshal(action.NativeCall, &synthesized); err != nil {

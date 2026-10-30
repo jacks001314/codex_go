@@ -327,13 +327,13 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 
 	profile := sandbox.WorkspaceWritePermissionProfile()
 	result, err := NewLocalShellRunner().Run(context.Background(), &ShellRequest{
-		Command:                      []string{"cmd", "/c", "echo sandboxed"},
-		CWD:                          cwd,
-		Env:                          map[string]string{"CODEX_RUNNER_ENV": "runner"},
-		PermissionProfileID:          ":workspace",
-		PermissionProfile:            &profile,
-		WindowsSandboxLevel:          sandbox.WindowsSandboxUnelevated,
-		ApprovalPolicy:               sandbox.ApprovalNever,
+		Command:             []string{"cmd", "/c", "echo sandboxed"},
+		CWD:                 cwd,
+		Env:                 map[string]string{"CODEX_RUNNER_ENV": "runner"},
+		PermissionProfileID: ":workspace",
+		PermissionProfile:   &profile,
+		WindowsSandboxLevel: sandbox.WindowsSandboxUnelevated,
+		ApprovalPolicy:      sandbox.ApprovalNever,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)

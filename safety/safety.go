@@ -32,17 +32,19 @@ type ApprovalPolicy struct {
 type Decision string
 
 const (
-	DecisionAllow     Decision = "allow"
-	DecisionPrompt    Decision = "prompt"
-	DecisionForbidden Decision = "forbidden"
+	DecisionAllow      Decision = "allow"
+	DecisionPrompt     Decision = "prompt"
+	DecisionPromptUser Decision = "prompt-user"
+	DecisionForbidden  Decision = "forbidden"
 )
 
 type ExecRequirementKind string
 
 const (
-	ExecSkip          ExecRequirementKind = "skip"
-	ExecNeedsApproval ExecRequirementKind = "needs_approval"
-	ExecForbidden     ExecRequirementKind = "forbidden"
+	ExecSkip               ExecRequirementKind = "skip"
+	ExecNeedsApproval      ExecRequirementKind = "needs_approval"
+	ExecNeedsHumanApproval ExecRequirementKind = "needs_human_approval"
+	ExecForbidden          ExecRequirementKind = "forbidden"
 )
 
 type ExecRequirement struct {
@@ -88,16 +90,26 @@ func RequirementFromEvaluation(command []string, policy ApprovalPolicy, evaluati
 	switch evaluation.Decision {
 	case DecisionForbidden:
 		return ExecRequirement{Kind: ExecForbidden, Reason: reasonForDecision(command, &evaluation, "forbidden by policy")}
-	case DecisionPrompt:
+	case DecisionPrompt, DecisionPromptUser:
+		// Rust #58045 derives the rule-ness from the evaluation's own decision so
+		// a prompt-user checkpoint is treated as a policy rule.
 		promptIsRule := false
 		for _, match := range evaluation.MatchedRules {
-			if match.IsPolicy && match.Decision == DecisionPrompt {
+			if match.IsPolicy && match.Decision == evaluation.Decision {
 				promptIsRule = true
 				break
 			}
 		}
 		if reason, rejected := PromptRejectedByPolicy(policy, promptIsRule); rejected {
 			return ExecRequirement{Kind: ExecForbidden, Reason: reason}
+		}
+		if evaluation.Decision == DecisionPromptUser {
+			// A managed checkpoint needs a fresh human decision, so it never
+			// proposes a reusable exec-policy amendment.
+			return ExecRequirement{
+				Kind:   ExecNeedsHumanApproval,
+				Reason: humanApprovalReason(command, &evaluation),
+			}
 		}
 		return ExecRequirement{
 			Kind:      ExecNeedsApproval,
@@ -159,6 +171,25 @@ func bannedPrefixes() [][]string {
 		{"lua"}, {"lua", "-e"},
 		{"osascript"},
 	}
+}
+
+// humanApprovalReason mirrors Rust derive_prompt_reason for a prompt-user
+// checkpoint: "`cmd` requires human approval: <justification>" or
+// "`cmd` requires human approval by policy".
+func humanApprovalReason(command []string, evaluation *Evaluation) string {
+	if evaluation != nil {
+		for _, match := range evaluation.MatchedRules {
+			if match.IsPolicy && match.Decision == DecisionPromptUser {
+				if strings.TrimSpace(match.Reason) != "" {
+					return "`" + strings.Join(command, " ") + "` requires human approval: " + strings.TrimSpace(match.Reason)
+				}
+			}
+		}
+	}
+	if len(command) == 0 {
+		return "human approval required by policy"
+	}
+	return "`" + strings.Join(command, " ") + "` requires human approval by policy"
 }
 
 func reasonForDecision(command []string, evaluation *Evaluation, fallback string) string {

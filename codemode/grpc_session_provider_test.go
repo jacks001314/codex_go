@@ -106,7 +106,7 @@ func TestGrpcCodeModeSessionProviderEndToEnd(t *testing.T) {
 	if response.State != "completed" || len(response.ContentItems) != 1 || response.ContentItems[0]["text"] != "hello from host" {
 		t.Fatalf("execute response = %#v", response)
 	}
-	wait, err := session.Wait(ctx, "cell-1", 0, nil)
+	wait, err := session.Wait(ctx, "cell-1", 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}

@@ -3487,10 +3487,12 @@ func interactiveKeymapEditMessage(edit codextui.KeymapEdit) string {
 }
 
 func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSummary {
+	// Rust #58202: the resume picker includes every provider so chats saved
+	// under a previous provider stay discoverable; fork lookups still filter by
+	// the current provider.
 	items, err := codextui.LoadSessionSummariesFromStore(newSessionStore(), codextui.SessionSourceOptions{
 		CWD:             interactiveSessionPickerCWD(root),
 		IncludeArchived: true,
-		ModelProvider:   interactiveHistoryModelProvider(root),
 		// Rust #54175: local session discovery always groups linked checkouts;
 		// the retired `worktrees` flag no longer gates it.
 		WorktreesEnabled: true,

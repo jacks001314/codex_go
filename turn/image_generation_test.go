@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/codemode"
 	"codex_go/codexapi"
 	"codex_go/eventmap"
 	"codex_go/model"
@@ -37,6 +38,21 @@ func TestImageGenerationUsageLimitFailureDetectionLikeRust(t *testing.T) {
 	}
 	if got := imageGenerationUsageLimitFailure([]byte(`not json`), nil); got != nil {
 		t.Fatalf("malformed failure = %#v, want nil", got)
+	}
+}
+
+func TestImageGenerationDeclaresCodeModeResultWithoutChangingDirectAPILikeRust(t *testing.T) {
+	spec := NewImageGenerationHandler(nil).Spec()
+	augmented := codemode.AugmentToolSpec(spec)
+	if want := "): Promise<{ image_url: string; output_hint?: string; }>;"; !strings.Contains(augmented.Description, want) {
+		t.Fatalf("code-mode declaration = %q, want return type %q", augmented.Description, want)
+	}
+	payload, err := json.Marshal(model.ResponsesToolsFromSpecs([]tool.Spec{spec}))
+	if err != nil {
+		t.Fatalf("marshal tools: %v", err)
+	}
+	if strings.Contains(string(payload), "output_schema") {
+		t.Fatalf("direct API payload gained an output schema: %s", payload)
 	}
 }
 

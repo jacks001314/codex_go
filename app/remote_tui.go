@@ -1597,15 +1597,13 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 		return nil, ""
 	}
 	defer client.close()
-	provider := remoteTUIHistoryModelProvider(ctx, client, root)
+	// Rust #58202: the resume picker includes every provider so chats saved
+	// under a previous provider stay discoverable; fork lookups still filter.
 	items := []codextui.SessionSummary{}
 	catalog := codextui.NewThreadCatalog()
 	for _, archived := range []bool{false, true} {
 		catalog.Reset()
 		params := remoteTUIThreadListParams(root, archived)
-		if provider != "" {
-			params.ModelProviders = []string{provider}
-		}
 		seenCursors := map[string]bool{}
 		for {
 			request, ok := catalog.BeginPage(backendID, codextui.SessionPageLoadStoreDefault)
@@ -1850,7 +1848,8 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 			response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
 			return response, nil
 		}
-		if !remoteTUIResumeConflict(resumeErr) {
+		providerErr := remoteTUIModelProviderError(resumeErr)
+		if !remoteTUIResumeConflict(resumeErr) && providerErr == nil {
 			return codextea.SessionResumeResponse{}, resumeErr
 		}
 		thread, notice, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
@@ -1860,6 +1859,7 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		response := remoteTUIResumeResponseFromThread(thread)
 		response.ReadOnly = true
 		response.HistoryNotice = notice
+		response.ProviderError = providerErr
 		return response, nil
 	}
 }
@@ -1969,6 +1969,48 @@ func remoteTUIResumeConflict(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "already has an active writer")
+}
+
+// remoteTUIModelProviderError decodes the structured provider admission error
+// the server returns from thread/resume (Rust #58202). A nil result keeps the
+// caller's ordinary error handling.
+func remoteTUIModelProviderError(err error) *appserver.ModelProviderError {
+	var rpc *remoteRPCError
+	if !errors.As(err, &rpc) || rpc == nil || rpc.Data == nil {
+		return nil
+	}
+	kind := appserver.ModelProviderErrorKind(strings.TrimSpace(remoteDataString(rpc.Data["type"])))
+	provider := strings.TrimSpace(remoteDataString(rpc.Data["modelProvider"]))
+	switch kind {
+	case appserver.ModelProviderMismatch:
+		return &appserver.ModelProviderError{
+			Kind:                 kind,
+			ModelProvider:        provider,
+			CurrentModelProvider: strings.TrimSpace(remoteDataString(rpc.Data["currentModelProvider"])),
+		}
+	case appserver.ModelProviderNotConfigured:
+		return &appserver.ModelProviderError{Kind: kind, ModelProvider: provider}
+	case appserver.ModelProviderPolicyConflict:
+		return &appserver.ModelProviderError{
+			Kind:                  kind,
+			ModelProvider:         provider,
+			RequiredModelProvider: strings.TrimSpace(remoteDataString(rpc.Data["requiredModelProvider"])),
+		}
+	default:
+		return nil
+	}
+}
+
+// remoteDataString renders one decoded JSON-RPC error-data value as a string.
+func remoteDataString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(typed)
+	}
 }
 
 // remoteTUISettingsFromResume converts a resume response's thread settings into
@@ -2361,7 +2403,8 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 		response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
 		return response, nil
 	}
-	if !remoteTUIResumeConflict(resumeErr) {
+	providerErr := remoteTUIModelProviderError(resumeErr)
+	if !remoteTUIResumeConflict(resumeErr) && providerErr == nil {
 		return codextea.AgentThreadSwitchResponse{}, resumeErr
 	}
 	thread, notice, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
@@ -2373,6 +2416,10 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	response := remoteTUIAgentSwitchResponseFromThread(thread)
 	response.ReadOnly = true
 	response.HistoryNotice = notice
+	response.ProviderError = providerErr
+	if thread != nil && thread.Path != nil {
+		response.RolloutPath = strings.TrimSpace(*thread.Path)
+	}
 	return response, nil
 }
 

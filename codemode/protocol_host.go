@@ -28,6 +28,19 @@ const YieldObservationCapability = "yield-observation"
 // host can apply observation output budgets itself (Rust #57272).
 const BoundedOutputCapability = "bounded-output-v1"
 
+// BoundedOutputMaxBytes is the maximum aggregate text bytes retained per
+// server-truncated observation (Rust #57848).
+const BoundedOutputMaxBytes = 1024 * 1024
+
+// BoundedOutputMaxImageBytes is the maximum aggregate inline image bytes
+// retained per server-truncated observation (Rust #57848).
+const BoundedOutputMaxImageBytes = 8 * 1024 * 1024
+
+// BoundedOutputMaxAudioBytes is the maximum aggregate encoded audio URL bytes
+// retained per server-truncated observation. The whole URL counts, including
+// any data URL prefix and base64 payload (Rust #57848).
+const BoundedOutputMaxAudioBytes = 62 * 1024 * 1024
+
 type RequestID int64
 
 type DelegateRequestID int64
@@ -618,6 +631,14 @@ func WaitSessionRequest(sessionID SessionID, request WaitRequest) HostRequest {
 
 func TerminateSessionRequest(sessionID SessionID, cellID CellID) HostRequest {
 	return HostRequest{Method: "session/terminate", SessionID: sessionID, CellID: cellID}
+}
+
+// WaitSessionRequestWithBudget carries the observation budget that a
+// server-truncation session applies on the host (Rust #58125).
+func WaitSessionRequestWithBudget(sessionID SessionID, request WaitRequest, maxOutputTokens *int) HostRequest {
+	hostRequest := WaitSessionRequest(sessionID, request)
+	hostRequest.MaxOutputTokens = maxOutputTokens
+	return hostRequest
 }
 
 // TerminateSessionRequestWithBudget carries an optional final-observation

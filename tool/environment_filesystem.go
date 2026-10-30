@@ -271,9 +271,14 @@ func (f remoteEnvironmentFileSystem) GetMetadata(ctx context.Context, path strin
 		return nil, err
 	}
 	defer client.Close()
+	resolved := f.resolve(path)
+	resolvedSandbox, err := execserver.ReadSandboxForPath(ctx, client, sandbox, resolved)
+	if err != nil {
+		return nil, err
+	}
 	return client.FSGetMetadata(ctx, &execserver.FSGetMetadataParams{
-		Path:    f.resolve(path),
-		Sandbox: sandbox,
+		Path:    resolved,
+		Sandbox: resolvedSandbox,
 	})
 }
 
@@ -283,9 +288,14 @@ func (f remoteEnvironmentFileSystem) ReadFile(ctx context.Context, path string, 
 		return nil, err
 	}
 	defer client.Close()
+	resolved := f.resolve(path)
+	resolvedSandbox, err := execserver.ReadSandboxForPath(ctx, client, sandbox, resolved)
+	if err != nil {
+		return nil, err
+	}
 	response, err := client.FSReadFile(ctx, &execserver.FSReadFileParams{
-		Path:    f.resolve(path),
-		Sandbox: sandbox,
+		Path:    resolved,
+		Sandbox: resolvedSandbox,
 	})
 	if err != nil {
 		return nil, err
@@ -332,9 +342,15 @@ func (f remoteEnvironmentFileSystem) ReadFileStream(ctx context.Context, path st
 	if err != nil {
 		return nil, nil, err
 	}
+	resolved := f.resolve(path)
+	resolvedSandbox, err := execserver.ReadSandboxForPath(ctx, client, sandbox, resolved)
+	if err != nil {
+		client.Close()
+		return nil, nil, err
+	}
 	stream, err := client.FSReadFileStream(ctx, &execserver.FSReadFileParams{
-		Path:    f.resolve(path),
-		Sandbox: sandbox,
+		Path:    resolved,
+		Sandbox: resolvedSandbox,
 	})
 	if err != nil {
 		client.Close()

@@ -26,10 +26,10 @@ func (s *prewarmRemoteSession) session() CodeModeRemoteSession { return s }
 func (*prewarmRemoteSession) Execute(context.Context, CodeModeRemoteExecuteRequest, *YieldSignal) (CodeModeRemoteResponse, error) {
 	return CodeModeRemoteResponse{}, nil
 }
-func (*prewarmRemoteSession) Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error) {
+func (*prewarmRemoteSession) Wait(context.Context, string, uint64, *int, *YieldSignal) (CodeModeRemoteResponse, error) {
 	return CodeModeRemoteResponse{}, nil
 }
-func (*prewarmRemoteSession) Terminate(context.Context, string) (CodeModeRemoteResponse, error) {
+func (*prewarmRemoteSession) Terminate(context.Context, string, *int) (CodeModeRemoteResponse, error) {
 	return CodeModeRemoteResponse{}, nil
 }
 func (*prewarmRemoteSession) Close() error { return nil }

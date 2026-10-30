@@ -59,8 +59,14 @@ func (p *GrpcCodeModeSessionProvider) Availability() error {
 func (p *GrpcCodeModeSessionProvider) TakeUnavailableWarning(string) string { return "" }
 
 func (p *GrpcCodeModeSessionProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
+	return p.NewSessionWithOptions(delegate, tool.CodeModeSessionOptions{})
+}
+
+// NewSessionWithOptions honors the requested session options (Rust
+// CodeModeSessionProvider::create_session_with_options, #58125).
+func (p *GrpcCodeModeSessionProvider) NewSessionWithOptions(delegate tool.CodeModeRemoteDelegate, options tool.CodeModeSessionOptions) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
-	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
+	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value)), options: sessionOptionsFromTool(options)}
 }
 
 // nextGeneration keeps replacement sessions from reusing cell IDs after a

@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"codex_go/model"
 )
@@ -208,4 +209,24 @@ func (t *SessionTelemetry) RecordAPIRequest(ctx context.Context, record model.AP
 		fields["auth.env_provider_key_present"] = strconv.FormatBool(*authEnv.ProviderEnvKeyPresent)
 	}
 	t.LogAndTraceEvent(ctx, "codex.api_request", fields, nil, nil)
+}
+
+// RecordSSEDelta mirrors SessionTelemetry's successful per-delta record: the
+// event kind and payload size are logged, and #58034's log_sse_deltas switch
+// drops the successful delta records while leaving errors and metrics intact.
+func (t *SessionTelemetry) RecordSSEDelta(ctx context.Context, eventKind string, payloadBytes int) {
+	if t == nil || t.Logs == nil || !t.LogSSEDeltas {
+		return
+	}
+	kind := strings.TrimSpace(eventKind)
+	if !strings.HasSuffix(kind, ".delta") {
+		// Only successful delta records are gated; completed and error records
+		// always report.
+		return
+	}
+	fields := map[string]string{
+		"event.kind":    kind,
+		"payload_bytes": strconv.Itoa(payloadBytes),
+	}
+	t.LogAndTraceEvent(ctx, "codex.sse_event", fields, nil, nil)
 }
