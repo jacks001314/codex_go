@@ -180,6 +180,10 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs eb680c0558 #44318): hosted Codex Apps
 	// get an independent MCP protocol opt-in.
 	{Key: "codex_apps_mcp_2026_07_28", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #58352): let host-owned Apps catalog
+	// reads overlap the initial tool inventory. The Go resource path never waits
+	// for the inventory, so only the registry entry is required here.
+	{Key: "apps_early_resource_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #54656): honor ordinary MCP server
 	// tools/list_changed notifications within a turn.
 	{Key: "mcp_tool_list_changed", Stage: StageUnderDevelopment, DefaultEnabled: false},
