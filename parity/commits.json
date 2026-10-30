@@ -11527,9 +11527,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1034 (audit): N/A by architecture. Rust #44617 invalidates cached async-scorer approvals for unscored exec_command sandbox_permissions=with_additional_permissions. Go has no cached-score auto-approval path: modelGuardianReviewer runs a full review except for full access and the node_repl fast path, and it fails closed when score lag exceeds max_tool_call_lag. Existing wrapper-lag and required-review regressions pin that behavior. Validation: go test ./appserver -run 'GuardianWrapperLag|RequiredReview|GuardianReview' -count=1; go test ./parity -run TestAlignment -count=1."
    ]
   },
   {
@@ -11539,9 +11539,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1035 (audit): N/A by architecture. Rust #44619 narrows a V8 scope so discarded tool-promise delivery handles do not root responses until the cell ends. Go's in-process code-mode engine is Sobek and has no pendingToolCalls resolver/V8 delivery-handle layer; its result path copies content items by value. Validation: go test ./codemode -run 'Sobek|Result|Discard' -count=1; go build ./...; go test ./parity -run TestAlignment -count=1."
    ]
   },
   {
@@ -11551,9 +11551,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1036 (implementation+regression): Rust #44620 resolves MXC :tmpdir from the filtered command environment, drops :slash_tmp on Windows, includes platform read roots only for a readable :minimal entry, and preserves explicit denies. Go already materialized :tmpdir, ignored :slash_tmp, and applied deny precedence. sandbox/mxc/prepare_windows.go now gates PrepareEntriesPolicy platform defaults on a readable/writable :minimal entry instead of adding them unconditionally. New prepare_windows_test.go matrices cover case-insensitive TEMP/TMP, two temporary roots, invalid relative/home/drive paths, /tmp omission, :minimal opt-in, and explicit deny preservation. Validation: go build ./...; go test ./sandbox/mxc -count=1; go test ./sandbox/integrity -count=1; go vet ./sandbox/mxc; go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

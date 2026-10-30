@@ -3375,6 +3375,25 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `TestEnterpriseCallbackSettingsMatchesRust` is now a table-driven matrix covering listener-only ports, localhost, alternate IPv4 and IPv6 loopback addresses, URL port inheritance, matching and conflicting URL/listener ports, missing client IDs, non-HTTPS issuers, and non-loopback callbacks. `TestValidateEnterpriseOAuthCredentialsMatchesRust` now also rejects whitespace-only refresh tokens.
 - Verified with `go build ./...`, `go test ./mcp -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2198 complete`, `451 not_applicable`,
-`339 audit_pending`, `157 regression_pending`, `4 partial`,
+### Guardian cached approvals for permission widening (Round 1034)
+
+- Rust #44617 invalidates cached async-scorer approvals when an unscored `exec_command` requests `sandbox_permissions=with_additional_permissions`.
+- N/A by architecture: Go's Guardian reviewer has no cached-score auto-approval path. It performs a full review outside the Full Access and user-mode node_repl fast paths and denies when score lag exceeds `max_tool_call_lag`; existing wrapper-lag and required-review regressions pin the fail-closed behavior.
+- Verified with `go test ./appserver -run 'GuardianWrapperLag|RequiredReview|GuardianReview' -count=1` and `go test ./parity -run TestAlignment -count=1`.
+
+### Code-mode discarded tool response collection (Round 1035)
+
+- Rust #44619 narrows the V8 scope in `resolve_tool_response`, releasing delivery handles before the cell ends while live promises retain their results.
+- N/A by architecture: Go's in-process code-mode engine uses Sobek and has no V8 pending-tool-call resolver or delivery-handle rooting layer; results are copied into Go content items by value.
+- Verified with `go test ./codemode -run 'Sobek|Result|Discard' -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`.
+
+### MXC temporary and minimal filesystem grants (Round 1036)
+
+- Rust #44620 resolves `:tmpdir` from the filtered command environment for MXC, drops `:slash_tmp` on Windows, permits `:minimal` during volume materialization, and adds platform-default read roots only when the policy contains a readable `:minimal` entry. Explicit denies retain precedence.
+- Go already materialized `:tmpdir` from the command environment, ignored `:slash_tmp`, and applied deny precedence. `sandbox/mxc/prepare_windows.go` now gates platform default reads in `PrepareEntriesPolicy` on a readable/writable `:minimal` entry instead of adding them unconditionally.
+- New regressions in `sandbox/mxc/prepare_windows_test.go` cover case-insensitive `TEMP`/`TMP`, two distinct temporary roots, missing/empty/relative/home/drive-relative values, `/tmp` omission, minimal opt-in, and explicit deny preservation.
+- Verified with `go build ./...`, `go test ./sandbox/mxc -count=1`, `go test ./sandbox/integrity -count=1`, `go vet ./sandbox/mxc`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2199 complete`, `453 not_applicable`,
+`336 audit_pending`, `157 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

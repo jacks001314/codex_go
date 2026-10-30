@@ -125,6 +125,7 @@ func PrepareEntriesPolicy(
 	read := pathSet{}
 	fullWrite := false
 	fullRead := false
+	includePlatformDefaults := false
 	var denyPolicy windowssandbox.DenyReadPolicy
 	add := func(set *pathSet, path string) {
 		path = strings.TrimSpace(path)
@@ -162,8 +163,11 @@ func PrepareEntriesPolicy(
 		case kind == "slash_tmp":
 			// /tmp has no special meaning on a Windows executor.
 		case kind == "minimal":
-			for _, path := range platformReadRoots() {
-				add(&read, path)
+			if entry.Access == sandbox.FileSystemAccessRead || entry.Access == sandbox.FileSystemAccessWrite {
+				includePlatformDefaults = true
+				for _, path := range platformReadRoots() {
+					add(&read, path)
+				}
 			}
 		case kind == "project_roots" || kind == "current_working_directory":
 			path := policyCWD
@@ -204,8 +208,10 @@ func PrepareEntriesPolicy(
 			read.add(volume)
 		}
 	}
-	for _, root := range platformReadRoots() {
-		read.add(root)
+	if includePlatformDefaults && !fullRead {
+		for _, root := range platformReadRoots() {
+			read.add(root)
+		}
 	}
 	for _, root := range sandboxpath.WritableRootsWithProtectedSubpaths(write.values()) {
 		for _, carveout := range root.ReadOnlySubpaths {
