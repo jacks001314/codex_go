@@ -97,7 +97,8 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 	if guardianHistoryReplaysRequestPermissions(record.Items) {
 		return nil, invalidParams("direct review does not support replaying request_permissions")
 	}
-	prepared, err := r.prepareRecordedExecCommand(threadID, record, call)
+	turnID := newMemoryTurnID()
+	prepared, err := r.prepareRecordedExecCommand(reviewCtx, threadID, turnID, record, call)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +117,6 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 		return nil, errors.New("Guardian review failed: the reviewer cannot report an assessment")
 	}
 	action := commandApprovalAction(prepared.Request)
-	turnID := newMemoryTurnID()
 	decision, assessment, reason, err := assessmentReviewer.ReviewAssessment(
 		withGuardianOmittedCall(reviewCtx, call.CallID), threadID, turnID, call.CallID, action)
 	if err != nil {
@@ -325,8 +325,10 @@ func guardianHistoryReplaysRequestPermissions(items []session.Item) bool {
 
 // prepareRecordedExecCommand resolves the recorded call through the same
 // environment and permission resolution a live exec_command uses, without
-// executing it (Rust's RecordedExecCall::prepare).
-func (r *RuntimeRouter) prepareRecordedExecCommand(threadID string, record *session.Record, call *guardianRecordedExecCall) (*tool.ExecCommandPreparation, error) {
+// executing it (Rust's RecordedExecCall::prepare). PreToolUse hooks run before
+// the approval requirement is evaluated so a rewrite or denial cannot be
+// bypassed by policy (#58357/#58368 apply_pre_tool_use).
+func (r *RuntimeRouter) prepareRecordedExecCommand(ctx context.Context, threadID string, turnID string, record *session.Record, call *guardianRecordedExecCall) (*tool.ExecCommandPreparation, error) {
 	params := r.guardianReviewTurnParams(threadID, record)
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
@@ -364,11 +366,56 @@ func (r *RuntimeRouter) prepareRecordedExecCommand(threadID string, record *sess
 		Validation:              validation,
 		UnifiedExecEnvironments: r.unifiedExecEnvironmentsForTurn(params),
 	})
-	prepared, err := executor.PrepareExecCommand(invocation)
+	effective, err := r.applyRecordedExecPreToolUse(ctx, params, turnID, executor, invocation)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := executor.PrepareExecCommand(effective)
 	if err != nil {
 		return nil, invalidParams(err.Error())
 	}
 	return prepared, nil
+}
+
+// applyRecordedExecPreToolUse runs the shared PreToolUse hook handling for a
+// recorded exec_command and returns the possibly rewritten invocation. A hook
+// denial fails the review even when exec policy would otherwise skip it.
+func (r *RuntimeRouter) applyRecordedExecPreToolUse(ctx context.Context, params *turn.TurnStartParams, turnID string, executor *tool.ShellExecutor, invocation *tool.Invocation) (*tool.Invocation, error) {
+	hooks := r.turnHookAdapter(params, turnID)
+	if hooks == nil || executor == nil || invocation == nil {
+		return invocation, nil
+	}
+	payload, ok := executor.PreToolUsePayload(invocation)
+	if !ok || payload == nil {
+		return invocation, nil
+	}
+	if environments := executor.HookEnvironmentIDs(invocation); len(environments) > 0 {
+		payload.TargetEnvironments = environments
+	}
+	outcome, err := hooks.RunPreToolUse(ctx, invocation, payload)
+	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, errors.New("Guardian review failed: the review was cancelled")
+		}
+		return nil, invalidParams("exec_command hook failed: " + err.Error())
+	}
+	if outcome == nil {
+		return invocation, nil
+	}
+	if outcome.Fatal {
+		return nil, invalidParams(tool.PreToolUseStoppedMessage(outcome.FatalReason))
+	}
+	if outcome.Blocked {
+		return nil, invalidParams(tool.PreToolUseBlockMessage(invocation, outcome.BlockReason))
+	}
+	if outcome.UpdatedInput == nil {
+		return invocation, nil
+	}
+	updated, err := executor.WithUpdatedHookInput(invocation, outcome.UpdatedInput)
+	if err != nil {
+		return nil, invalidParams(err.Error())
+	}
+	return updated, nil
 }
 
 // guardianReviewTurnParams rebuilds the thread's turn parameters for an idle

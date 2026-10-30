@@ -274,8 +274,12 @@ type MCPServerStatus struct {
 	RuntimeStatus *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
 	// PluginID reports the owning plugin for plugin-contributed servers and is
 	// nil for servers from other sources (Rust 78d3665d15).
-	PluginID   *string        `json:"pluginId,omitempty"`
-	ServerInfo *MCPServerInfo `json:"serverInfo,omitempty"`
+	PluginID *string `json:"pluginId,omitempty"`
+	// pluginHostRoot is the installed root of the plugin registration that won
+	// this server name (Rust #58378 AgentMcpMetadataRecipient matching).
+	// Internal-only: the wire status does not expose it.
+	pluginHostRoot string
+	ServerInfo     *MCPServerInfo `json:"serverInfo,omitempty"`
 	// ServerCapabilities carries the initialized server's advertised
 	// capabilities object, or null when unavailable (Rust #44826).
 	ServerCapabilities json.RawMessage `json:"serverCapabilities,omitempty"`
@@ -940,14 +944,15 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 				pluginID = cloneStringPtr(&registration.PluginID)
 			}
 			service.servers[name] = MCPServerStatus{
-				Name:          name,
-				PluginID:      pluginID,
-				Server:        info,
-				ServerInfo:    &info,
-				State:         MCPServerReady,
-				AuthStatus:    authStatus,
-				source:        SourceFromRegistration(&registration),
-				hostOwnedApps: isHostOwnedCodexAppsRegistration(name, registration),
+				Name:           name,
+				PluginID:       pluginID,
+				pluginHostRoot: strings.TrimSpace(registration.PluginHostRoot),
+				Server:         info,
+				ServerInfo:     &info,
+				State:          MCPServerReady,
+				AuthStatus:     authStatus,
+				source:         SourceFromRegistration(&registration),
+				hostOwnedApps:  isHostOwnedCodexAppsRegistration(name, registration),
 			}
 		}
 		service.permissionProfile = cloneMCPPermissionProfile(runtime.PermissionProfile)
@@ -2964,6 +2969,37 @@ func (s *MCPService) serverConfig(name string) (ServerConfig, bool) {
 // apply per-server tool exposure policies (Rust 51c9ed6d4f).
 func (s *MCPService) ServerConfigForServer(name string) (ServerConfig, bool) {
 	return s.serverConfig(name)
+}
+
+// ResolvedServerForServer returns the effective registration for an enabled
+// server: its winning source, plugin attribution, and config. It mirrors the
+// resolved-catalog lookup Rust's AgentMcpMetadataRecipient performs (#58378).
+func (s *MCPService) ResolvedServerForServer(name string) (ResolvedServer, bool) {
+	if s == nil {
+		return ResolvedServer{}, false
+	}
+	name = strings.TrimSpace(name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	config, ok := s.configs[name]
+	if !ok || !config.Enabled {
+		return ResolvedServer{}, false
+	}
+	status, ok := s.servers[name]
+	if !ok {
+		return ResolvedServer{}, false
+	}
+	resolved := ResolvedServer{
+		Source:           status.source,
+		Config:           cloneServerConfig(&config),
+		CredentialPolicy: EffectiveCredentialPolicy(config.CredentialPolicy),
+	}
+	if status.PluginID != nil {
+		if pluginID := strings.TrimSpace(*status.PluginID); pluginID != "" {
+			resolved.PluginAttribution = &PluginAttribution{PluginID: pluginID, HostRoot: status.pluginHostRoot}
+		}
+	}
+	return resolved, true
 }
 
 // serverEnvironmentID reports the environment that owns one runtime server

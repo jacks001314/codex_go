@@ -1145,6 +1145,9 @@ const (
 	ModelOriginProvider ModelOrigin = "provider"
 	// ModelOriginExplicitConfig is a model the configuration supplied.
 	ModelOriginExplicitConfig ModelOrigin = "explicit_config"
+	// ModelOriginSynthetic is generic metadata synthesized because no catalog
+	// entry matched the requested slug (Rust #58361 ModelOrigin::Synthetic).
+	ModelOriginSynthetic ModelOrigin = "synthetic"
 )
 
 // CatalogModel pairs model metadata with the source of that metadata, captured
@@ -1174,6 +1177,10 @@ type ModelsManager interface {
 	GetRemoteModels() []ModelInfo
 	GetDefaultModel(model string, allowProviderModelFallback bool, strategy RefreshStrategy) string
 	GetModelInfo(model string, config *ModelsManagerConfig) ModelInfo
+	// GetCatalogModel resolves metadata together with its local catalog origin
+	// (Rust #58361). Origin survives config overrides and runtime snapshots,
+	// unlike the serialized model metadata it accompanies.
+	GetCatalogModel(model string, config *ModelsManagerConfig) CatalogModel
 	RefreshIfNewETag(etag string)
 	// RefreshAfterAuthChange is Rust ModelsManager::refresh_after_auth_change
 	// (#46508): a best-effort catalog refresh when the in-memory catalog belongs
@@ -1240,7 +1247,11 @@ func (m *StaticModelsManager) GetDefaultModel(model string, allowProviderModelFa
 }
 
 func (m *StaticModelsManager) GetModelInfo(model string, config *ModelsManagerConfig) ModelInfo {
-	return ConstructModelInfoFromCandidates(model, m.GetRemoteModels(), config)
+	return m.GetCatalogModel(model, config).Model
+}
+
+func (m *StaticModelsManager) GetCatalogModel(model string, config *ModelsManagerConfig) CatalogModel {
+	return ConstructCatalogModelFromCandidates(model, m.GetRemoteModels(), m.origin, config)
 }
 
 func (m *StaticModelsManager) RefreshIfNewETag(_ string) {}
@@ -2226,19 +2237,30 @@ func setInstructionsTemplate(model *ModelInfo, template string) {
 }
 
 func ConstructModelInfoFromCandidates(model string, candidates []ModelInfo, config *ModelsManagerConfig) ModelInfo {
+	return ConstructCatalogModelFromCandidates(model, candidates, ModelOriginBundled, config).Model
+}
+
+// ConstructCatalogModelFromCandidates resolves metadata and keeps the catalog
+// origin it was found in (Rust #58361 construct_model_info_from_candidates).
+// A slug with no catalog entry resolves to synthetic metadata.
+func ConstructCatalogModelFromCandidates(model string, candidates []ModelInfo, origin ModelOrigin, config *ModelsManagerConfig) CatalogModel {
 	remote, ok := findModelByLongestPrefix(model, candidates)
 	if !ok {
 		remote, ok = findModelByNamespacedSuffix(model, candidates)
 	}
 	var info ModelInfo
+	if origin == "" {
+		origin = ModelOriginBundled
+	}
 	if ok {
 		info = remote
 		info.Slug = model
 		info.UsedFallbackModelMetadata = false
 	} else {
 		info = ModelInfoFromSlug(model)
+		origin = ModelOriginSynthetic
 	}
-	return WithConfigOverrides(info, config)
+	return CatalogModel{Model: WithConfigOverrides(info, config), Origin: origin}
 }
 
 // ConstructModelInfoFromExactCandidate resolves metadata only for an exact
@@ -2246,8 +2268,18 @@ func ConstructModelInfoFromCandidates(model string, candidates []ModelInfo, conf
 // prefix and namespaced-suffix fallback would invent metadata from an
 // unrelated model.
 func ConstructModelInfoFromExactCandidate(model string, candidates []ModelInfo, config *ModelsManagerConfig) ModelInfo {
+	return ConstructCatalogModelFromExactCandidate(model, candidates, ModelOriginBundled, config).Model
+}
+
+// ConstructCatalogModelFromExactCandidate is ConstructCatalogModelFromCandidates
+// restricted to an exact catalog slug (Rust #49135), preserving the catalog
+// origin together with the resolved metadata.
+func ConstructCatalogModelFromExactCandidate(model string, candidates []ModelInfo, origin ModelOrigin, config *ModelsManagerConfig) CatalogModel {
 	var info ModelInfo
 	found := false
+	if origin == "" {
+		origin = ModelOriginBundled
+	}
 	for _, candidate := range candidates {
 		if candidate.Slug == model {
 			info = candidate
@@ -2259,8 +2291,9 @@ func ConstructModelInfoFromExactCandidate(model string, candidates []ModelInfo, 
 		info.UsedFallbackModelMetadata = false
 	} else {
 		info = ModelInfoFromSlug(model)
+		origin = ModelOriginSynthetic
 	}
-	return WithConfigOverrides(info, config)
+	return CatalogModel{Model: WithConfigOverrides(info, config), Origin: origin}
 }
 
 func mergeModelInfos(base []ModelInfo, updates []ModelInfo) []ModelInfo {

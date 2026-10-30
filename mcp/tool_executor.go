@@ -103,6 +103,18 @@ type ToolExecutorOptions struct {
 	// TurnRootTurnID supplies the issuing turn's root turn id for host-owned
 	// Apps calls (Rust #51421). Nil or empty omits the field.
 	TurnRootTurnID func() string
+	// AgentMetadataRecipient is the host-selected plugin registration that
+	// receives private agent attribution in every tool-call `_meta`
+	// (Rust #58378). Nil omits both keys unless the turn installed one.
+	AgentMetadataRecipient *AgentMCPMetadataRecipient
+	// ResolvedServer is this executor's effective MCP registration. Matching the
+	// recipient requires the loaded source, plugin attribution, environment and
+	// transport, not just the server name.
+	ResolvedServer *ResolvedServer
+	// TurnCyberAccessProgram supplies the issuing turn's explicit Cyber program
+	// (Rust turn_context.cyber_access_program). Nil or empty sends JSON null on a
+	// matching agent registration.
+	TurnCyberAccessProgram func() string
 	// ToolInputSchemaMaxBytes bounds best-effort compaction of this server's
 	// model-visible input schema (Rust #47936).
 	ToolInputSchemaMaxBytes int
@@ -174,6 +186,14 @@ type AuthElicitationOptions struct {
 // entry).
 const MCPToolTurnMetadataMetaKey = "x-codex-turn-metadata"
 
+const (
+	// MCPAgentRootTurnIDMetaKey and MCPAgentCyberAccessProgramMetaKey carry the
+	// private agent attribution Rust sends only to a host-selected plugin
+	// registration (#58378). Unset values are explicit JSON nulls.
+	MCPAgentRootTurnIDMetaKey         = "x-codex-root-turn-id"
+	MCPAgentCyberAccessProgramMetaKey = "x-codex-cyber-access-program"
+)
+
 type ToolExecutor struct {
 	service                       *MCPService
 	serverName                    string
@@ -194,6 +214,9 @@ type ToolExecutor struct {
 	requestMeta                   map[string]any
 	turnMetadata                  func() map[string]any
 	turnRootTurnID                func() string
+	agentMetadataRecipient        *AgentMCPMetadataRecipient
+	resolvedServer                *ResolvedServer
+	turnCyberAccessProgram        func() string
 	hostOwnedApps                 bool
 	binding                       *Binding
 	openAIFileRewriter            *OpenAIFileRewriter
@@ -237,6 +260,9 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.turnMetadata = options.TurnMetadata
 	executor.turnRootTurnID = options.TurnRootTurnID
+	executor.agentMetadataRecipient = options.AgentMetadataRecipient
+	executor.resolvedServer = options.ResolvedServer
+	executor.turnCyberAccessProgram = options.TurnCyberAccessProgram
 	executor.toolInputSchemaMaxBytes = options.ToolInputSchemaMaxBytes
 	executor.codeModeInputSchemaMaxBytes = options.CodeModeInputSchemaMaxBytes
 	executor.hostOwnedApps = options.HostOwnedApps
@@ -687,6 +713,14 @@ func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
 			requestMeta[MCPToolTurnMetadataMetaKey] = document
 		}
 	}
+	// Rust #58378: private agent attribution reaches only the exact host-selected
+	// plugin registration, and a matching registration gets JSON null for an
+	// unset value.
+	if e.agentMetadataRecipient != nil && e.resolvedServer != nil &&
+		e.agentMetadataRecipient.Matches(e.resolvedServerName(), *e.resolvedServer) {
+		requestMeta[MCPAgentRootTurnIDMetaKey] = mcpOptionalMetadataValue(e.turnRootTurnID)
+		requestMeta[MCPAgentCyberAccessProgramMetaKey] = mcpOptionalMetadataValue(e.turnCyberAccessProgram)
+	}
 	if IsCodexAppsMCPServerName(e.resolvedServerName()) {
 		appsMeta, _ := requestMeta["_codex_apps"].(map[string]any)
 		appsMeta = cloneAnyMap(appsMeta)
@@ -714,6 +748,16 @@ func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
 		return nil
 	}
 	return requestMeta
+}
+
+func mcpOptionalMetadataValue(provider func() string) any {
+	if provider == nil {
+		return nil
+	}
+	if value := strings.TrimSpace(provider()); value != "" {
+		return value
+	}
+	return nil
 }
 
 // actorConfirmationPoliciesMeta builds the openai/confirmation_policies value for

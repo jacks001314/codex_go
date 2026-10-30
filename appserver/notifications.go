@@ -55,6 +55,7 @@ const (
 	NotificationThreadRealtimeSdp                   NotificationMethod = NotificationThreadRealtimeSDP
 	NotificationThreadQueueChanged                  NotificationMethod = "thread/queue/changed"
 	NotificationThreadReverted                      NotificationMethod = "thread/reverted"
+	NotificationThreadSectionChanged                NotificationMethod = "thread/section/changed"
 )
 
 type ErrorNotification struct {

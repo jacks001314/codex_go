@@ -103,6 +103,10 @@ func (m *LazyModelsManager) GetModelInfo(model string, config *ModelsManagerConf
 	return m.resolve().GetModelInfo(model, config)
 }
 
+func (m *LazyModelsManager) GetCatalogModel(model string, config *ModelsManagerConfig) CatalogModel {
+	return m.resolve().GetCatalogModel(model, config)
+}
+
 func (m *LazyModelsManager) RefreshIfNewETag(etag string) {
 	m.resolve().RefreshIfNewETag(etag)
 }

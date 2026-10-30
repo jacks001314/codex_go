@@ -48,6 +48,10 @@ func (m *countingModelsManager) GetModelInfo(string, *model.ModelsManagerConfig)
 	return model.ModelInfo{}
 }
 
+func (m *countingModelsManager) GetCatalogModel(slug string, config *model.ModelsManagerConfig) model.CatalogModel {
+	return model.ConstructCatalogModelFromCandidates(slug, m.GetRemoteModels(), model.ModelOriginBundled, config)
+}
+
 func (m *countingModelsManager) RefreshIfNewETag(string) {}
 func (m *countingModelsManager) RefreshAfterAuthChange() {}
 func (m *countingModelsManager) CatalogIdentity() string { return "" }

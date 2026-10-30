@@ -290,6 +290,59 @@ func (r *RuntimeRouter) mcpTurnRootTurnIDProvider(threadID string, turnID string
 	}
 }
 
+// SetThreadAgentMCPMetadataRecipient installs the host-selected MCP plugin
+// registration for one thread (Rust #58378's thread extension data). Passing
+// nil removes the thread override so the router default applies.
+func (r *RuntimeRouter) SetThreadAgentMCPMetadataRecipient(threadID string, recipient *mcp.AgentMCPMetadataRecipient) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.agentMCPMetadataMu.Lock()
+	defer r.agentMCPMetadataMu.Unlock()
+	if r.agentMCPMetadataRecipients == nil {
+		r.agentMCPMetadataRecipients = map[string]*mcp.AgentMCPMetadataRecipient{}
+	}
+	if recipient == nil {
+		delete(r.agentMCPMetadataRecipients, threadID)
+		return
+	}
+	r.agentMCPMetadataRecipients[threadID] = recipient
+}
+
+// threadAgentMCPMetadataRecipient resolves the recipient installed for a
+// thread, falling back to the router-wide host selection.
+func (r *RuntimeRouter) threadAgentMCPMetadataRecipient(threadID string) *mcp.AgentMCPMetadataRecipient {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.agentMCPMetadataMu.Lock()
+	defer r.agentMCPMetadataMu.Unlock()
+	if recipient := r.agentMCPMetadataRecipients[threadID]; recipient != nil {
+		return recipient
+	}
+	return r.agentMCPMetadataDefault
+}
+
+// mcpCyberAccessProgramProvider returns the issuing turn's explicit Cyber
+// program for a matching agent MCP registration (Rust #58378 reads
+// turn_context.cyber_access_program).
+func (r *RuntimeRouter) mcpCyberAccessProgramProvider(threadID string, turnID string) func() string {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	return func() string {
+		active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+		if active == nil || active.RunConfig == nil {
+			return ""
+		}
+		return appCyberAccessProgramForTurn(active.Params, active.RunConfig.ProviderID)
+	}
+}
+
 func (r *RuntimeRouter) attributeCommandExecutionItem(item *ThreadItem) {
 	if r == nil || item == nil || threadItemWireType(item) != "commandExecution" || r.services.Plugins == nil || r.services.Config == nil {
 		return
@@ -8109,7 +8162,12 @@ type appTurnRunConfig struct {
 	// started (Rust GuardianReviewContext::model_info). Guardian reviews fall
 	// back to it when they reuse the parent model, so a later catalog refresh
 	// cannot change the metadata of an action already being reviewed (#44574).
-	ModelInfo               *model.ModelInfo
+	ModelInfo *model.ModelInfo
+	// ModelOrigin records where ModelInfo came from in the local catalog
+	// (Rust #58361 CatalogModel::origin). It is kept outside the captured
+	// metadata so a config override cannot erase the provenance, and only its
+	// Synthetic value marks fallback metadata.
+	ModelOrigin             model.ModelOrigin
 	AutoReviewModelOverride string
 	ToolMode                string
 	// IncrementalTools is the effective incremental-tool mode for this turn's
@@ -8246,7 +8304,11 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	if err != nil {
 		return nil, err
 	}
-	modelInfo := r.modelInfoForAppTurn(modelProviderConfig.Model, cfg, params)
+	modelCatalog := r.catalogModelForAppTurn(modelProviderConfig.Model, cfg, params)
+	var modelInfo *model.ModelInfo
+	if modelCatalog != nil {
+		modelInfo = &modelCatalog.Model
+	}
 	baseInstructionsExplicit := params != nil && params.BaseInstructions != nil
 	instructions, err := appBaseInstructionsForConfig(cfg)
 	if err != nil {
@@ -8602,6 +8664,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	return &appTurnRunConfig{
 		Model:                   modelProviderConfig.Model,
 		ModelInfo:               modelInfo,
+		ModelOrigin:             catalogModelOrigin(modelCatalog),
 		AutoReviewModelOverride: autoReviewModelOverride,
 		ToolMode:                toolMode,
 		IncrementalTools:        incrementalActive,
@@ -12977,6 +13040,46 @@ func (r *RuntimeRouter) modelInfoForRuntimeWithModelsConfigAndOriginator(modelID
 		return &info
 	}
 	return r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig, Originator: originator})
+}
+
+// catalogModelForRuntimeWithModelsConfigAndOriginator resolves the metadata
+// together with its catalog origin (Rust #58361). Callers that snapshot model
+// metadata into a runtime config use this form so provenance survives config
+// overrides and later catalog refreshes.
+func (r *RuntimeRouter) catalogModelForRuntimeWithModelsConfigAndOriginator(modelID string, cfg *config.Config, modelConfig *model.ModelsManagerConfig, originator string) *model.CatalogModel {
+	if strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	var values map[string]any
+	if cfg != nil {
+		values = cfg.Values
+	}
+	if catalog := model.ModelsCatalogFromConfigValues(values); catalog != nil {
+		resolved := model.NewStaticModelsManager(*catalog).GetCatalogModel(modelID, modelConfig)
+		return &resolved
+	}
+	return r.requireModels().CatalogInfo(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig, Originator: originator})
+}
+
+// catalogModelForAppTurn is modelInfoForAppTurn with the catalog origin kept.
+func (r *RuntimeRouter) catalogModelForAppTurn(modelID string, cfg *config.Config, params *turn.TurnStartParams) *model.CatalogModel {
+	if strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	modelConfig := modelConfigForAppTurn(cfg)
+	modelConfig.Personality = appPersonalityForTurn(cfg, params)
+	originator := ""
+	if params != nil {
+		originator = params.Originator
+	}
+	return r.catalogModelForRuntimeWithModelsConfigAndOriginator(modelID, cfg, modelConfig, originator)
+}
+
+func catalogModelOrigin(catalog *model.CatalogModel) model.ModelOrigin {
+	if catalog == nil {
+		return ""
+	}
+	return catalog.Origin
 }
 
 // modelInfoForAppTurn resolves a model with the turn's personality selection

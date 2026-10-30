@@ -299,6 +299,18 @@ func (s *ModelService) PresetsForOriginator(strategy RefreshStrategy, originator
 }
 
 func (s *ModelService) Info(params *ModelInfoReadParams) *ModelInfo {
+	catalog := s.CatalogInfo(params)
+	if catalog == nil {
+		return nil
+	}
+	return &catalog.Model
+}
+
+// CatalogInfo resolves model metadata together with the origin of the catalog
+// entry it came from (Rust #58361 ModelsManager::get_model_info returning
+// CatalogModel). The origin survives config overrides because it is tracked
+// outside the serialized metadata.
+func (s *ModelService) CatalogInfo(params *ModelInfoReadParams) *CatalogModel {
 	if params == nil {
 		params = &ModelInfoReadParams{}
 	}
@@ -313,7 +325,7 @@ func (s *ModelService) Info(params *ModelInfoReadParams) *ModelInfo {
 	if modelID == "" {
 		modelID = manager.GetDefaultModel("", true, strategy)
 	}
-	info := manager.GetModelInfo(modelID, params.Config)
+	info := manager.GetCatalogModel(modelID, params.Config)
 	return &info
 }
 

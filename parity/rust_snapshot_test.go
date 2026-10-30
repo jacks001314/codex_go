@@ -221,6 +221,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"memories/write",
 		"mermaid",
 		"message-board",
+		"message-board-mcp",
 		"model-provider-info",
 		"mxc-sandbox",
 		"models-manager",
@@ -336,7 +337,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// app-server-protocol/src/protocol/common.rs).
 		// Re-anchored to upstream e8e6a922c0: Cargo.toml gained the
 		// exec-server-cli member (#57589/#57590).
-		{Path: "Cargo.toml", SHA256: "47087649747b97d4db20e1154e2861962b2f786f0f87f89aba499aedfcf31d07"},
+		{Path: "Cargo.toml", SHA256: "aecd7c71d6ea3dc6c50069a09dfae45f3c92c4228befc30c1536a26a53495750"},
 		{Path: "cli/src/lib.rs", SHA256: "bc73cee3f5714a1ab90ca8853bbaa74f16dc5abd6edc6bb888d8648b6c49f14a"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -344,7 +345,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// ThreadListParams literals in resolve_resume_thread_id gained
 		// `excluded_thread_ids: None` (mechanical consequence of the
 		// thread/list exclusion field; Go side already landed as sync551).
-		{Path: "exec/src/lib.rs", SHA256: "e1860499175b5c8d37e061773621f41aa4098fced7c83a7bbb3bfd6c735b497e"},
+		{Path: "exec/src/lib.rs", SHA256: "53e0d7cac90466dc088dd5457c72813ef8c0a8c56fe6466eb602c85b8f45a6f3"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -365,19 +366,19 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// unavailable images (#57585) and the catalog-heading metadata changed.
 		// Re-anchored to upstream 68b67f0ff4: model providers and catalogs share
 		// runtime authentication through ProviderAuthContext (#57607).
-		{Path: "core/src/client.rs", SHA256: "5ef6f7136cdb85c9b40ef83dbc4570ffe510cb961edd9a575bcde6c1591ced29"},
+		{Path: "core/src/client.rs", SHA256: "fde206e30b0aac0ce652b1495999cf719794f7a485d9bc6e82337accfb2d7250"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "4d42dd4aabf5b3210e0953c8d9ba5f6e7d76f2cba8418d16d76bf4512993f918"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "4c449f1da399848c714c780fc1304ba566d0089aeaef8c33c3a9c7eb986e4272"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.
 		// Re-pinned to upstream 8c076942 (#54930/#54949/#54961): the
 		// WebSocket-compression and agent-message-wake suites joined the list.
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "2a41c2232f39d7f23b3b7d1348cd73b0b1516d621e4ef46312c62349a2f95482"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "0647c48d28641955a47d99b5400032b08aa334a212ab4ad3f8c1a355b34b9b66"},
 		// Re-pinned to upstream 8ae55c863d (#47407/#47679/#47819/#47820/#47879):
 		// the network-policy, extension-hook, guardian-authorization,
 		// agent-controller and macOS patch-permission suites joined the module

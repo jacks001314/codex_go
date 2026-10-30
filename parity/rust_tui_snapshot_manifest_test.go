@@ -45,9 +45,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// history-search absorbed-slash composer snapshot (1433 total).
 	// Re-anchored to upstream e8e6a922c0: the colourless-shading (#57554) and
 	// Vim-register (#57564) snapshots plus the resume-picker backend-failure
-	// snapshot landed in this window (1437 -> 1452).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1452 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1452", got)
+	// snapshot landed in this window (1437 -> 1452). Round 1017 re-anchored to
+	// upstream b0f977c3a9: the onboarding, app, and bottom-pane suites gained
+	// goldens in the intervening windows (1452 -> 1466).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1466 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1466", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -120,7 +122,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-pinned to upstream 18e28fe1b9: #48621 removed follow-up prompt
 			// suggestions from the TUI, so the prompt-suggestion request-history
 			// snapshot is gone and the dir now holds 85 files.
-			Files:    94,
+			Files:    95,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -153,7 +155,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// two startup-warning summaries into the warnings-viewer snapshots.
 			// #48121 added the command-center draft-handoff snapshot.
 			// #48135 added the remapped-left external-writer view snapshot.
-			Files:    80,
+			Files:    82,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -213,7 +215,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46680-#46710 added the shared picker presentation and filled-tab
 			// snapshots; #46734/#46749/#46751 added the clipped mention popup,
 			// the customized shortcut overlays and the narrow warnings view.
-			Files:    257,
+			Files:    259,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -438,7 +440,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			Path: "tui/src/onboarding/snapshots",
 			// #46695 added the four restricted/long-path trust-directory pickers;
 			// #46752 added the animated welcome logo at 160x48.
-			Files:    16,
+			Files:    25,
 			Owner:    "tui/onboarding",
 			Focus:    "trust-directory onboarding states",
 			Priority: []string{"onboarding"},

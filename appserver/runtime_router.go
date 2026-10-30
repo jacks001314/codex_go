@@ -296,6 +296,10 @@ type RuntimeRouterOptions struct {
 	// CloudSkillProvider is the native cloud skill source loaded from
 	// --cloud-skills-snapshot (Rust #55631). Nil keeps MCP-backed discovery.
 	CloudSkillProvider skillprovider.Provider
+	// AgentMCPMetadataRecipient is the host-selected MCP plugin registration
+	// that receives private agent attribution in tool-call `_meta`
+	// (Rust #58378). Per-thread overrides win; nil disables the injection.
+	AgentMCPMetadataRecipient *mcp.AgentMCPMetadataRecipient
 }
 
 type RuntimeRouter struct {
@@ -518,19 +522,25 @@ type RuntimeRouter struct {
 	restoredWindows map[string]bool
 	// clockFailures records the last reported nonfatal clock failure per thread
 	// (Rust's session-level `last_clock_failure`, #46006).
-	clockFailuresMu     sync.Mutex
-	clockFailures       map[string]clockFailureKey
-	codeModeRuntimesMu  sync.Mutex
-	codeModeRuntimes    map[string]*tool.CodeModeRuntime
-	pendingGoalMu       sync.Mutex
-	pendingGoalByConn   map[string][]*Notification
-	deferredGoalMode    atomic.Bool
-	toolItemReviews     map[string]toolItemReviewSummary
-	skillMCPPromptMu    sync.Mutex
-	skillMCPPrompted    map[string]struct{}
-	orchestratorSkillMu sync.Mutex
-	orchestratorSkills  map[string]*runtimeOrchestratorSkillCatalog
-	orchestratorWarned  map[string]bool
+	clockFailuresMu    sync.Mutex
+	clockFailures      map[string]clockFailureKey
+	codeModeRuntimesMu sync.Mutex
+	codeModeRuntimes   map[string]*tool.CodeModeRuntime
+	// agentMCPMetadataMu guards the thread-selected private MCP attribution
+	// recipient (Rust #58378 thread extension data). The default from router
+	// options applies when a thread installed none.
+	agentMCPMetadataMu         sync.Mutex
+	agentMCPMetadataDefault    *mcp.AgentMCPMetadataRecipient
+	agentMCPMetadataRecipients map[string]*mcp.AgentMCPMetadataRecipient
+	pendingGoalMu              sync.Mutex
+	pendingGoalByConn          map[string][]*Notification
+	deferredGoalMode           atomic.Bool
+	toolItemReviews            map[string]toolItemReviewSummary
+	skillMCPPromptMu           sync.Mutex
+	skillMCPPrompted           map[string]struct{}
+	orchestratorSkillMu        sync.Mutex
+	orchestratorSkills         map[string]*runtimeOrchestratorSkillCatalog
+	orchestratorWarned         map[string]bool
 	// cloudCatalogs tracks per-thread cloud plugin and skill catalog refresh
 	// cooldowns plus the successful discovery a turn can reuse across model
 	// steps (Rust #55957/#55968). Its zero value is ready to use.
@@ -879,77 +889,78 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	memoryStartupCtx, memoryStartupCancel := context.WithCancel(context.Background())
 	realtimeOpsCtx, realtimeOpsCancel := context.WithCancel(context.Background())
 	router := &RuntimeRouter{
-		services:                services,
-		config:                  configService,
-		threads:                 threads,
-		turnsMu:                 &threads.turnsMu,
-		emaState:                mcp.NewEMAState(),
-		active:                  threads.active,
-		diffs:                   threads.diffs,
-		ephemeralMu:             &threads.ephemeralMu,
-		ephemeralThreads:        threads.ephemeral,
-		subscriptionsMu:         &threads.subscriptionsMu,
-		threadSubscriptions:     threads.subscriptions,
-		clientInfo:              map[string]ClientInfo{},
-		notificationOptOut:      map[string]map[NotificationMethod]struct{}{},
-		experimentalAPI:         map[string]bool{},
-		diagnosticsGauges:       newServerDiagnosticsGaugeRegistry(),
-		requestAttestation:      map[string]bool{},
-		mcpOpenAIForm:           map[string]bool{},
-		mcpStandardFormInput:    map[string]bool{},
-		userVerification:        map[string]bool{},
-		mcpRuntimes:             newMCPRuntimeCoordinator(),
-		authChanged:             make(chan struct{}),
-		authChangeTracker:       auth.NewAuthChangeTracker(nil),
-		mcpEventStreams:         newMCPEventStreamManager(),
-		commandApprovals:        map[string]struct{}{},
-		fileApprovals:           map[string]struct{}{},
-		serverRequestGuards:     map[string]*ThreadStatusActiveGuard{},
-		executedToolCalls:       map[string]*turn.ExecutedToolCallRecorder{},
-		codeModeRuntimes:        map[string]*tool.CodeModeRuntime{},
-		toolItemReviews:         map[string]toolItemReviewSummary{},
-		skillMCPPrompted:        map[string]struct{}{},
-		orchestratorSkills:      map[string]*runtimeOrchestratorSkillCatalog{},
-		orchestratorWarned:      map[string]bool{},
-		skillWarnings:           map[string]map[string]struct{}{},
-		selectedSkills:          map[string]map[string]*runtimeSelectedSkillCatalog{},
-		unifiedExecPending:      map[string][]session.Item{},
-		unifiedExecAnalytics:    map[string]unifiedExecAnalyticsContext{},
-		toolItemModelContexts:   map[string]modelInvocationContext{},
-		sampledToolCalls:        map[string]map[string]string{},
-		codeModeChildCalls:      map[string]map[string]string{},
-		codeModeCells:           map[string]map[string]codeModeCellState{},
-		pendingToolEvents:       map[string][]pendingToolEvent{},
-		analyticsTurnKnown:      map[string]struct{}{},
-		connectorSelections:     map[string]*state.SessionState{},
-		appUsedEmittedKeys:      map[string]bool{},
-		managedNetworks:         map[string]*network.PreparedProxyManagedNetwork{},
-		managedNetworkInputs:    map[string]managedNetworkReloadInput{},
-		goalAccountingTurns:     map[string]stateGoalTurnSnapshot{},
-		goalTurnUsage:           map[string]model.AgentUsage{},
-		execFailureTurns:        map[string]goalExecutionFailureState{},
-		emptyResponseTurns:      map[string]goalEmptyResponseState{},
-		goalInterruptedTurns:    map[string]bool{},
-		descendantTokenUsage:    map[string]int64{},
-		lastAccountedDescendant: map[string]int64{},
-		memoryStartupCtx:        memoryStartupCtx,
-		memoryStartupCancel:     memoryStartupCancel,
-		realtimeOpsCtx:          realtimeOpsCtx,
-		realtimeOpsCancel:       realtimeOpsCancel,
-		realtimeOpsQueues:       map[string]chan func(context.Context){},
-		realtimeEventLocks:      map[string]*sync.Mutex{},
-		voiceSessionWindows:     map[string][]voiceSessionWindow{},
-		voiceTurnSessions:       map[string]string{},
-		voiceHandoffQueue:       map[string][]string{},
-		voiceActiveSessions:     map[string]string{},
-		voiceActiveTurns:        map[string]string{},
-		agentRegistry:           agent.NewRegistry(),
-		agentRegistries:         map[string]*agent.Registry{},
-		agentActivity:           map[string]chan string{},
-		agentMessages:           map[string][]any{},
-		networkPolicy:           embeddedEffectiveNetworkPolicy(services.EmbeddedNetworkPolicy),
-		localNetworkPolicy:      embeddedLocalNetworkPolicy(services.EmbeddedNetworkPolicy),
-		messageBoardHandles:     map[string]agentboard.Board{},
+		services:                   services,
+		config:                     configService,
+		threads:                    threads,
+		turnsMu:                    &threads.turnsMu,
+		emaState:                   mcp.NewEMAState(),
+		active:                     threads.active,
+		diffs:                      threads.diffs,
+		ephemeralMu:                &threads.ephemeralMu,
+		ephemeralThreads:           threads.ephemeral,
+		subscriptionsMu:            &threads.subscriptionsMu,
+		threadSubscriptions:        threads.subscriptions,
+		clientInfo:                 map[string]ClientInfo{},
+		notificationOptOut:         map[string]map[NotificationMethod]struct{}{},
+		experimentalAPI:            map[string]bool{},
+		diagnosticsGauges:          newServerDiagnosticsGaugeRegistry(),
+		requestAttestation:         map[string]bool{},
+		mcpOpenAIForm:              map[string]bool{},
+		mcpStandardFormInput:       map[string]bool{},
+		userVerification:           map[string]bool{},
+		mcpRuntimes:                newMCPRuntimeCoordinator(),
+		authChanged:                make(chan struct{}),
+		authChangeTracker:          auth.NewAuthChangeTracker(nil),
+		mcpEventStreams:            newMCPEventStreamManager(),
+		commandApprovals:           map[string]struct{}{},
+		fileApprovals:              map[string]struct{}{},
+		serverRequestGuards:        map[string]*ThreadStatusActiveGuard{},
+		executedToolCalls:          map[string]*turn.ExecutedToolCallRecorder{},
+		codeModeRuntimes:           map[string]*tool.CodeModeRuntime{},
+		agentMCPMetadataRecipients: map[string]*mcp.AgentMCPMetadataRecipient{},
+		toolItemReviews:            map[string]toolItemReviewSummary{},
+		skillMCPPrompted:           map[string]struct{}{},
+		orchestratorSkills:         map[string]*runtimeOrchestratorSkillCatalog{},
+		orchestratorWarned:         map[string]bool{},
+		skillWarnings:              map[string]map[string]struct{}{},
+		selectedSkills:             map[string]map[string]*runtimeSelectedSkillCatalog{},
+		unifiedExecPending:         map[string][]session.Item{},
+		unifiedExecAnalytics:       map[string]unifiedExecAnalyticsContext{},
+		toolItemModelContexts:      map[string]modelInvocationContext{},
+		sampledToolCalls:           map[string]map[string]string{},
+		codeModeChildCalls:         map[string]map[string]string{},
+		codeModeCells:              map[string]map[string]codeModeCellState{},
+		pendingToolEvents:          map[string][]pendingToolEvent{},
+		analyticsTurnKnown:         map[string]struct{}{},
+		connectorSelections:        map[string]*state.SessionState{},
+		appUsedEmittedKeys:         map[string]bool{},
+		managedNetworks:            map[string]*network.PreparedProxyManagedNetwork{},
+		managedNetworkInputs:       map[string]managedNetworkReloadInput{},
+		goalAccountingTurns:        map[string]stateGoalTurnSnapshot{},
+		goalTurnUsage:              map[string]model.AgentUsage{},
+		execFailureTurns:           map[string]goalExecutionFailureState{},
+		emptyResponseTurns:         map[string]goalEmptyResponseState{},
+		goalInterruptedTurns:       map[string]bool{},
+		descendantTokenUsage:       map[string]int64{},
+		lastAccountedDescendant:    map[string]int64{},
+		memoryStartupCtx:           memoryStartupCtx,
+		memoryStartupCancel:        memoryStartupCancel,
+		realtimeOpsCtx:             realtimeOpsCtx,
+		realtimeOpsCancel:          realtimeOpsCancel,
+		realtimeOpsQueues:          map[string]chan func(context.Context){},
+		realtimeEventLocks:         map[string]*sync.Mutex{},
+		voiceSessionWindows:        map[string][]voiceSessionWindow{},
+		voiceTurnSessions:          map[string]string{},
+		voiceHandoffQueue:          map[string][]string{},
+		voiceActiveSessions:        map[string]string{},
+		voiceActiveTurns:           map[string]string{},
+		agentRegistry:              agent.NewRegistry(),
+		agentRegistries:            map[string]*agent.Registry{},
+		agentActivity:              map[string]chan string{},
+		agentMessages:              map[string][]any{},
+		networkPolicy:              embeddedEffectiveNetworkPolicy(services.EmbeddedNetworkPolicy),
+		localNetworkPolicy:         embeddedLocalNetworkPolicy(services.EmbeddedNetworkPolicy),
+		messageBoardHandles:        map[string]agentboard.Board{},
 	}
 	router.allowedSymlinkedCodexHome = allowedSymlinkedCodexHomeForConfigService(configService)
 	if router.services.ThreadRouter != nil {
@@ -1848,6 +1859,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	if options != nil {
 		// Emitted once during initialize (#49701).
 		router.stateDBRecoveryNotice = options.StateDBRecoveryNotice
+		router.agentMCPMetadataDefault = options.AgentMCPMetadataRecipient
 	}
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
@@ -3752,6 +3764,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		if isThreadLifecycleNotificationMethod(request.Method) {
 			return r.handleThreadLifecycleRuntime(request)
 		}
+		if request.Method == MethodThreadSectionMove {
+			return r.handleThreadSectionMoveRuntime(request)
+		}
 		return r.services.ThreadRouter.dispatch(request)
 	}
 	switch request.Method {
@@ -5107,6 +5122,35 @@ func normalizeWindowsExtendedPathPrefix(path string) string {
 	default:
 		return path
 	}
+}
+
+// handleThreadSectionMoveRuntime mirrors Rust #58380: a successful
+// thread/section/move responds first and then broadcasts
+// thread/section/changed to the connected clients so they can refresh section
+// membership and ordering, including moves within one section. A failed move
+// emits nothing.
+func (r *RuntimeRouter) handleThreadSectionMoveRuntime(request *Request) (any, error) {
+	if r == nil || request == nil || r.services.ThreadRouter == nil {
+		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+	}
+	var params ThreadSectionMoveParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	sectionID := params.SectionID.Value
+	if sectionID != nil {
+		trimmed := strings.TrimSpace(*sectionID)
+		sectionID = &trimmed
+	}
+	r.emitDeferredNotification(request.normalizedConnectionID(), NotificationThreadSectionChanged, &ThreadSectionChangedNotification{
+		ThreadID:  strings.TrimSpace(params.ThreadID),
+		SectionID: sectionID,
+	})
+	return result, nil
 }
 
 func (r *RuntimeRouter) handleThreadListRuntime(request *Request) (any, error) {
@@ -17329,6 +17373,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// metadata document in `_meta`.
 	options.MCPTurnMetadata = r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID))
 	options.MCPTurnRootTurnID = r.mcpTurnRootTurnIDProvider(threadID, strings.TrimSpace(turnID))
+	// Rust #58378: private agent attribution is scoped to the host-selected
+	// plugin registration installed on this thread.
+	options.MCPAgentMetadataRecipient = r.threadAgentMCPMetadataRecipient(threadID)
+	options.MCPCyberAccessProgram = r.mcpCyberAccessProgramProvider(threadID, strings.TrimSpace(turnID))
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
 	options.EnableSleepTool = enableSleepTool

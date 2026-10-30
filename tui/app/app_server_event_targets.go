@@ -19,6 +19,7 @@ const (
 	ServerNotificationThreadDeleted                       = "thread_deleted"
 	ServerNotificationThreadUnarchived                    = "thread_unarchived"
 	ServerNotificationThreadNameUpdated                   = "thread_name_updated"
+	ServerNotificationThreadSectionChanged                = "thread_section_changed"
 	ServerNotificationThreadTokenUsageUpdated             = "thread_token_usage_updated"
 	ServerNotificationThreadGoalUpdated                   = "thread_goal_updated"
 	ServerNotificationThreadPredictionUpdated             = "thread_prediction_updated"

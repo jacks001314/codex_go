@@ -2646,6 +2646,21 @@ func (p *ThreadSectionMoveParams) Validate() error {
 
 type ThreadSectionMoveResponse struct{}
 
+// ThreadSectionChangedNotification is broadcast after a successful move into,
+// within, or out of a thread section (Rust #58380). SectionID is null when the
+// thread was removed from its section.
+type ThreadSectionChangedNotification struct {
+	ThreadID  string  `json:"threadId"`
+	SectionID *string `json:"sectionId"`
+}
+
+func (n ThreadSectionChangedNotification) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ThreadID  string  `json:"threadId"`
+		SectionID *string `json:"sectionId"`
+	}{ThreadID: n.ThreadID, SectionID: n.SectionID})
+}
+
 type ThreadListParams struct {
 	Cursor *string `json:"cursor,omitempty"`
 	Limit  *int    `json:"limit,omitempty"`

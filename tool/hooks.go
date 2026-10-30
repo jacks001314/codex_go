@@ -484,6 +484,19 @@ func preToolUseBlockMessage(invocation *Invocation, reason string) string {
 	return fmt.Sprintf("Tool call blocked by PreToolUse hook: %s. Tool: %s", reason, toolName)
 }
 
+// PreToolUseBlockMessage exposes the model-facing rejection a blocked
+// pre-tool-use hook produces. Shared by the live dispatch path and direct
+// Guardian review, which applies the same hooks before checking approval
+// policy (Rust #58357/#58368 `apply_pre_tool_use`).
+func PreToolUseBlockMessage(invocation *Invocation, reason string) string {
+	return preToolUseBlockMessage(invocation, reason)
+}
+
+// PreToolUseStoppedMessage exposes the fatal pre-tool-use hook message.
+func PreToolUseStoppedMessage(reason string) string {
+	return hookFatalMessage("PreToolUse", reason)
+}
+
 func cloneInvocation(invocation *Invocation) *Invocation {
 	if invocation == nil {
 		return nil

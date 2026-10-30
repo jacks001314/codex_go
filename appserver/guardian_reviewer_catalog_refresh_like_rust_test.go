@@ -106,6 +106,17 @@ func (m *guardianCatalogManager) GetModelInfo(slug string, _ *model.ModelsManage
 	return model.ModelInfo{Slug: slug}
 }
 
+func (m *guardianCatalogManager) GetCatalogModel(slug string, _ *model.ModelsManagerConfig) model.CatalogModel {
+	origin := model.ModelOriginSynthetic
+	for _, info := range m.GetRemoteModels() {
+		if info.Slug == slug {
+			origin = model.ModelOriginBundled
+			break
+		}
+	}
+	return model.CatalogModel{Model: m.GetModelInfo(slug, nil), Origin: origin}
+}
+
 func (m *guardianCatalogManager) RefreshIfNewETag(string) {}
 func (m *guardianCatalogManager) RefreshAfterAuthChange() {}
 func (m *guardianCatalogManager) CatalogIdentity() string { return "guardian-catalog-test" }

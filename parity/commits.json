@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "c9750d7f50052b29f53def02b5cf2160ae49a3d9",
+ "rustToInclusive": "b0f977c3a9c2e68e46e58e589e98f5297d2c8c10",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -39554,6 +39554,330 @@
    "status": "complete",
    "evidence": [
     "update/plan_2026_10_30.md:236: #58221 完成 — realtime V3 转录保留到 conversation history（10 文件）"
+   ]
+  },
+  {
+   "sha": "c2e4631a34cfcc89828e71952a7a0ffeb36858ac",
+   "subject": "Preserve unrelated side conversations when archiving or deleting threads (#58237)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 1: CloseRelated keeps unrelated side conversations when archiving or deleting a thread (1ed4f808, app/agents_overview_embedded.go, app/agents_overview_embedded_test.go)"
+   ]
+  },
+  {
+   "sha": "7689f21b79f8faf318bab98f1cd98dd5f5aa59ad",
+   "subject": "Enable the agent command center for embedded sessions (#58238)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 2: embedded dashboard callbacks are wired in app/interactive.go (1ed4f808)"
+   ]
+  },
+  {
+   "sha": "bf877af4180a40412794c64dad2ab49332c3def1",
+   "subject": "Enable the agent command center in embedded mode (#58239)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 3: embedded source, --remote conflict, and archive-cancel return path (f0e38975, 1ed4f808)"
+   ]
+  },
+  {
+   "sha": "536ae056ee102efe77af629413198c59fc80d433",
+   "subject": "Enable TUI task tools for embedded app-server sessions (#58240)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 4: Go exposes task and worktree tools under the single codex_tui namespace (9d394765)"
+   ]
+  },
+  {
+   "sha": "c15d0ce323f2197da865871502dc6ea7ef5b8ddb",
+   "subject": "Update mio from 1.2.0 to 1.2.4 (#58241)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 5: Cargo.lock-only dependency bump"
+   ]
+  },
+  {
+   "sha": "582a8812e023b08cbf10b4603ac41644b8d99261",
+   "subject": "Reload remote executor credentials safely across token rotation (#58251)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 6: remote executor credential reload (96d18153)"
+   ]
+  },
+  {
+   "sha": "d5cbb90b721ea73427f296868a444cfda7608882",
+   "subject": "Reuse LocalImageAttachment throughout the TUI composer (#58260)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 7: LocalImageAttachment reuse (459a4bd0)"
+   ]
+  },
+  {
+   "sha": "8b5ce2fd61ca5b1096c93c00f651edc8493ffeea",
+   "subject": "Add local image thumbnails to the TUI composer (#58261)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 8: visible/hidden ordering, height, and Sixel tile raster in tui/transcript_image/composer.go with tea overlays (7e3e6296)"
+   ]
+  },
+  {
+   "sha": "025f6d715d8e54581611506c3a2722dfd8be1382",
+   "subject": "Show unread results in the TUI command center (#58263)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 9: unread markers in tui/agents_overview plus app readStates and receipts"
+   ]
+  },
+  {
+   "sha": "d7b77a5e74370f7af4d52ca2dc6e51cb8126660a",
+   "subject": "Show unread sessions and acknowledge viewed transcripts in the picker (#58264)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 10: picker readStates and acknowledgement handlers with focused-view ack in tui/tea"
+   ]
+  },
+  {
+   "sha": "5e769a1cdae3fd93efd5e7b9df71e39efb2223ab",
+   "subject": "Preserve transcript history when clearing the terminal with Ctrl+L (#58266)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 11: Ctrl+L keeps the transcript (32084763)"
+   ]
+  },
+  {
+   "sha": "788b9d7bf6e37f735647b7f84b556c2a807df4d8",
+   "subject": "Recognize Rex terminals and enable Kitty graphics for pets (#58270)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 12: Rex terminal detection (ada7b2f6)"
+   ]
+  },
+  {
+   "sha": "eab2603712f90ec08ac44207a04eed158be293a3",
+   "subject": "Reuse connected backends in the in-app resume picker (#58280)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 13: live picker refresh through the connected endpoint"
+   ]
+  },
+  {
+   "sha": "f752c97f7d0be0cbef5cece327f52a16ad6fb1c6",
+   "subject": "Allow inline patch review during approval prompts (#58281)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 14: inline patch review during approval (382e7577)"
+   ]
+  },
+  {
+   "sha": "f2ac9983552d187aa1c9a53c4707cf3b2c4afde6",
+   "subject": "Treat auth reload failures as transient during token refresh (#58324)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1014.md item 15: transient auth reload failures (96d18153)"
+   ]
+  },
+  {
+   "sha": "a9e474c8fc7874cdb13b03ef8ffec0bead7c4fbd",
+   "subject": "Add an MCP adapter for message-board tools (#58341)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1015.md item 7: agentboard/mcp_server.go republishes executor schemas, maps results and protocol errors, and scopes dedup per turn; agentboard/mcp_server_like_rust_test.go covers discovery, calls, identity spoofing, bounded reads, and read-only denial"
+   ]
+  },
+  {
+   "sha": "13ab0b254e7b9ed0ab473d38d978fa100bf417ae",
+   "subject": "Preserve fallback token refreshes when the keyring is unreadable (#58343)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1015.md item 6: auth/oauth.go re-reads the keyring at commit and writes only the file fallback when unreadable; stale recovered generations are rejected (1de38a00)"
+   ]
+  },
+  {
+   "sha": "4969675f0120bbd1052998b2669094496bdc97e0",
+   "subject": "Resolve network approval prompts when their requests end (#58350)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1015.md item 5: a cancelled proxy context withdraws the prompt and emits serverRequest/resolved; TestNetworkApprovalDisconnectedRequestWithdrawsPromptLikeRust (eb7e1d36)"
+   ]
+  },
+  {
+   "sha": "80f469ce8aeadcdb0b79b1a1daf6b88d92ff8799",
+   "subject": "Serialize manual network approval prompts per endpoint (#58351)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1015.md item 4: appserver/network_approval.go serializes the visible manual prompt per endpoint while hook and Guardian paths bypass it (eb7e1d36)"
+   ]
+  },
+  {
+   "sha": "9630b2e0193e596b2505316f794e74ee1143e069",
+   "subject": "Allow Apps catalog discovery before the initial tool inventory completes (#58352)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1015.md item 3: mcp/codex_apps_resources.go performs resources/list after an on-demand handshake without waiting for tools/list, plus the apps_early_resource_discovery feature key (2ffb6c77)"
+   ]
+  },
+  {
+   "sha": "9b8c2bb50b4baee873ef1baa41a7136cc3e2c04a",
+   "subject": "Fix remote executor authentication timeout recovery (#58355)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1015.md item 2: pre-send credential deadlines classify as ErrRegistryCredentialsTransient and app/exec_server_auth.go re-reads storage after a refresh error (a27c78f9)"
+   ]
+  },
+  {
+   "sha": "85d042c71aef6b04e8f2acb24dc3da08e74bc95d",
+   "subject": "Extract pre-tool-use hook handling into a helper (#58357)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "update/plan_2026_10_30_round1015.md item 1 plus this round: shared pre-tool-use handling lives in tool/hooks.go DispatchWithHooksAfterPreHooks and the exported tool.PreToolUseBlockMessage/PreToolUseStoppedMessage used by appserver/thread_guardian_review.go"
+   ]
+  },
+  {
+   "sha": "dc40446064cc0896851a5f2ef69f10f62d2206a1",
+   "subject": "Preserve model metadata origin through runtime resolution (#58361)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "model.GetCatalogModel returns CatalogModel with Bundled, Provider, or Synthetic origin through config overrides and cache reloads (model/catalog.go, model/models_endpoint.go, model/lazy_models.go, model/api.go). Runtime snapshots record appTurnRunConfig.ModelOrigin from catalogModelForAppTurn. Tests: go test ./model -run GetCatalogModel -count=1; go test ./appserver -run CatalogModelOriginSurvives -count=1"
+   ]
+  },
+  {
+   "sha": "a4b4082b5f14a8a037386d823ddb96a85fd25975",
+   "subject": "Apply PreToolUse hooks before direct Guardian review policy checks (#58368)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/thread_guardian_review.go applyRecordedExecPreToolUse runs the turn hook adapter, propagates blocked/stopped messages, rewrites the reviewed command, and only then evaluates policy. appserver/guardian_direct_pre_tool_use_like_rust_test.go covers rewrite, deny-before-policy-skip, and cancellation"
+   ]
+  },
+  {
+   "sha": "483d98a441ee21e05fa81b07048040c6b1f1f234",
+   "subject": "Scope agent MCP metadata to a host-selected plugin registration (#58378)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "mcp/agent_metadata.go adds AgentMCPMetadataRecipient with exact plugin id, root, server name, local environment, and transport matching; ToolExecutor injects x-codex-root-turn-id and x-codex-cyber-access-program with JSON null for unset values only for a matching registration; RuntimeRouter installs a per-thread recipient. Tests: mcp/agent_metadata_like_rust_test.go, appserver/agent_mcp_metadata_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "1f0290c6073762085ed50a10aab0ff8337e3b4c0",
+   "subject": "Broadcast thread section changes to connected clients (#58380)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver emits thread/section/changed after a successful section move, including same-section moves and explicit null sectionId on removal; failures send no notification. stdio defers the notification until after the response and websocket flushes deferred goal notifications after the response. appserver/thread_section_changed_like_rust_test.go covers deferred ordering, same-section moves, null removal, and failed moves"
+   ]
+  },
+  {
+   "sha": "b0f977c3a9c2e68e46e58e589e98f5297d2c8c10",
+   "subject": "Fix unsettled refresh detection after workspace switching (#58381)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "auth/chatgpt_refresh_progress.go records the auth JSON tokens, not the workspace-rewritten claims, when an exchange starts; a workspace switch is therefore still detected as unsettled. auth/chatgpt_refresh_progress_like_rust_test.go TestChatGPTRefreshProgressDetectsWorkspaceSwitchLikeRust covers account_id=workspace-b with an id_token for another workspace"
    ]
   }
  ]

@@ -586,10 +586,44 @@ func (m *RemoteModelsManager) GetDefaultModel(model string, allowProviderModelFa
 }
 
 func (m *RemoteModelsManager) GetModelInfo(model string, config *ModelsManagerConfig) ModelInfo {
+	return m.GetCatalogModel(model, config).Model
+}
+
+// GetCatalogModel resolves metadata with the origin of the catalog entry it
+// came from (Rust #58361): provider-advertised entries keep Provider through
+// cache reloads, merged bundled entries stay Bundled, and a slug with no entry
+// is Synthetic even after config overrides.
+func (m *RemoteModelsManager) GetCatalogModel(model string, config *ModelsManagerConfig) CatalogModel {
+	origin := m.modelOrigin(model)
 	if m != nil && m.explicitProviderCatalog {
-		return ConstructModelInfoFromExactCandidate(model, m.GetRemoteModels(), config)
+		return ConstructCatalogModelFromExactCandidate(model, m.GetRemoteModels(), origin, config)
 	}
-	return ConstructModelInfoFromCandidates(model, m.GetRemoteModels(), config)
+	return ConstructCatalogModelFromCandidates(model, m.GetRemoteModels(), origin, config)
+}
+
+// modelOrigin reports the catalog state that owns the requested slug.
+func (m *RemoteModelsManager) modelOrigin(model string) ModelOrigin {
+	if m == nil {
+		return ModelOriginSynthetic
+	}
+	model = strings.TrimSpace(model)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.providerModelIDs[model]; ok {
+		return ModelOriginProvider
+	}
+	for _, info := range m.remoteModels {
+		if strings.TrimSpace(info.Slug) == model {
+			return ModelOriginBundled
+		}
+	}
+	if candidate, ok := findModelByNamespacedSuffix(model, m.remoteModels); ok {
+		if _, provider := m.providerModelIDs[strings.TrimSpace(candidate.Slug)]; provider {
+			return ModelOriginProvider
+		}
+		return ModelOriginBundled
+	}
+	return ModelOriginSynthetic
 }
 
 func (m *RemoteModelsManager) RefreshIfNewETag(etag string) {

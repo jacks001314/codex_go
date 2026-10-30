@@ -366,6 +366,10 @@ func serveWebSocketConnectionWithCompression(
 			setWriteErr(writeJSON(notification))
 		},
 	})
+	// Rust sends a request-scoped notification after its response on the wire.
+	// Buffer those notifications and flush them once the response was written.
+	router.SetDeferredGoalNotifications(true)
+	defer router.SetDeferredGoalNotifications(false)
 	router.SetServerRequestSink(connectionServerRequestSink{
 		connectionID: connectionID,
 		send: func(request *ServerRequest) {
@@ -445,6 +449,9 @@ func serveWebSocketConnectionWithCompression(
 					}
 					router.notifyWorkspaceRoutingToConnection(connectionID)
 				}
+				for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
+					setWriteErr(writeJSON(notification))
+				}
 			}
 			continue
 		}
@@ -454,6 +461,9 @@ func serveWebSocketConnectionWithCompression(
 			response := router.Handle(request)
 			if response != nil {
 				setWriteErr(writeJSON(response))
+				for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
+					setWriteErr(writeJSON(notification))
+				}
 			}
 		}(request)
 	}
