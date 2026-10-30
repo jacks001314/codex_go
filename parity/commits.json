@@ -18062,9 +18062,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1115: TUI task-tool responses now use Rust's 8,000-byte budget instead of the old 999-byte shape, so answers below the harness fallback limit survive. Oversized turn responses keep only each turn's latest agentMessage while retaining id/status/error, oversized wait responses retain every target's latestAssistantMessage, and oversized thread lists keep every entry so the pagination cursor stays valid. Supporting text/title/summary/message fields are shortened by a binary search that recomputes from the compact result; failure text is bounded to 248 characters. The read tool no longer pre-truncates assistant messages at 2,000 characters and reports their phase, and archived list pagination no longer shrinks the requested limit. Tests: TestDynamicToolResponsePreservesWaitTargetsLikeRust, TestDynamicToolResponsePreservesListEntriesLikeRust, TestDynamicToolResponsePreservesReadAnswerLikeRust, TestDynamicItemSummaryKeepsFullAssistantAnswerLikeRust; go build ./... and go test ./app -run 'Dynamic|TaskTool' pass."
    ]
   },
   {

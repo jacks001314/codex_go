@@ -4010,3 +4010,7 @@ Status after this batch: `2335 complete`, `464 not_applicable`, `322 audit_pendi
 - Ledger correction: Round 1115 accidentally marked this entry complete with #47100's evidence; this round replaces it with the #42047 evidence, so the status counts below are unchanged.
 
 Status after this batch: `2335 complete`, `464 not_applicable`, `322 audit_pending`, `23 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+Ledger fix after Round 1116: the Round 1115 status/evidence update had landed on #42047's entry instead of `8e7f50cba9` (#47100). #47100 now carries its own Round 1115 evidence and `complete` status; #42047 keeps the Round 1116 evidence.
+
+Status after this fix: `2336 complete`, `464 not_applicable`, `322 audit_pending`, `22 regression_pending`, `5 partial`, `6 blocked_precondition`.
