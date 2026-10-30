@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -48,6 +49,38 @@ func TestRemoteReconnectBackoffJitterStaysWithinWindowLikeRust(t *testing.T) {
 			window = next
 		} else {
 			window = defaultRemoteMaxBackoff
+		}
+	}
+}
+
+// TestRemoteReconnectBackoffJitterWindowBoundsLikeRust mirrors Rust #50465
+// `ef8cfe5e96`
+// (remote/reconnect_backoff_tests.rs::reconnect_jitter_stays_within_each_backoff_window):
+// every window jitters inside [backoff/2, backoff], both extremes are
+// reachable, and distinct samples do not collapse onto one delay.
+func TestRemoteReconnectBackoffJitterWindowBoundsLikeRust(t *testing.T) {
+	for _, seconds := range []int64{1, 2, 4, 8, 16, 30} {
+		window := time.Duration(seconds) * time.Second
+		newWindow := func() *remoteReconnectBackoff {
+			backoff := newRemoteReconnectBackoff(defaultRemoteBackoff, defaultRemoteMaxBackoff)
+			backoff.delay = window
+			return backoff
+		}
+		if got := newWindow().nextDelay(0); got != window/2 {
+			t.Fatalf("nextDelay(0) over a %v window = %v, want the %v floor", window, got, window/2)
+		}
+		halfMillis := uint64(seconds) * 500
+		if got := newWindow().nextDelay(halfMillis); got != window {
+			t.Fatalf("nextDelay(%d) over a %v window = %v, want the full window", halfMillis, window, got)
+		}
+		for _, sample := range []uint64{1, 1234, 987654, math.MaxUint64} {
+			delay := newWindow().nextDelay(sample)
+			if delay < window/2 || delay > window {
+				t.Fatalf("nextDelay(%d) over a %v window = %v, want within [%v, %v]", sample, window, delay, window/2, window)
+			}
+		}
+		if first, second := newWindow().nextDelay(1), newWindow().nextDelay(2); first == second {
+			t.Fatalf("nextDelay(1) == nextDelay(2) == %v over a %v window, want distinct jitter", first, window)
 		}
 	}
 }

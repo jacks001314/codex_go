@@ -3516,6 +3516,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression coverage: `state/delegated_preview_test.go` verifies metadata preservation and database listing before a user follow-up in both legacy and paginated history modes; `appserver/thread_manager_test.go` verifies the first live preview wins.
 - Verified with `go test ./state -run Delegated -count=1`, `go test ./appserver -run ThreadManagerDelegatedPreviewLikeRust -count=1`, `go test ./session -run Delegated -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2209 complete`, `461 not_applicable`,
-`322 audit_pending`, `152 regression_pending`, `5 partial`,
+### Registry auth retry jitter (Round 1056)
+
+- Rust #50465 retries registry responses with HTTP 502 and `authentication_service_unavailable` alongside HTTP 503 `registration_conflict`, accepts a structured registry error in `detail` while keeping `error` authoritative, and randomizes reconnect delays inside `[backoff/2, backoff]` with the 30s cap retained.
+- Complete: `execserver/remote.go` already carried the full behavior from `9b6ac1ab`: `retryableRegistryRegistrationError` gates replay to the two confirmed pre-write failures, `registryErrorBody.intoError` prefers the canonical envelope, and `remoteReconnectBackoff.nextDelay` jitters each window. This round adds the Rust test matrix.
+- Regression coverage: `execserver/remote_retry_test.go` pins the status/code classification table, envelope precedence, the auth-outage message, and now asserts both 503 and 502 replays reuse the caller's executor Noise public key (`registration_retries_preserve_noise_identity_and_initialized_session`); `execserver/remote_reconnect_backoff_test.go` pins the 1s/2s/4s/8s/16s/30s window floor (`sample=0`), ceiling (`sample=half`), in-window samples, and distinct jitter for samples 1 vs 2.
+- Residual: the Rust `rmcp-client` change is test-only cleanup that waits for the helper PID; Go's `mcp/http_headers_helper.go` already shares one helper attempt across a refresh cohort, so there is no behavior to port.
+- Verified with `go test ./execserver -run 'RemoteReconnectBackoff|RegistrationRetry|RegistrationConflictRetryDelay|RegistryRegistrationPreWriteRetry|RegistryErrorDetail|RegistryAuthOutage' -count=1`, `go test ./execserver -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2210 complete`, `461 not_applicable`,
+`322 audit_pending`, `151 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

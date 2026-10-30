@@ -26000,9 +26000,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "execserver/remote.go already retried only HTTP 503 registration_conflict and HTTP 502 authentication_service_unavailable (retryableRegistryRegistrationError), parsed structured detail envelopes with error precedence (registryErrorBody.intoError), and jittered reconnects inside [backoff/2, backoff] with the 30s cap (remoteReconnectBackoff.nextDelay); Round 1056 pins the Rust test matrix",
+    "Regression coverage: execserver/remote_retry_test.go covers the status/code retry matrix, error-envelope precedence, the auth-outage message, and reuses the caller's executor Noise key across 503 and 502 replays; execserver/remote_reconnect_backoff_test.go pins each 1s/2s/4s/8s/16s/30s window floor, ceiling, and distinct jitter samples",
+    "Residual: Rust's rmcp http_headers helper change is test-only cleanup (waits for the helper PID); Go's mcp/http_headers_helper.go already shares one helper attempt across a refresh cohort, so there is no behavior to port"
    ]
   },
   {

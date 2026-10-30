@@ -246,6 +246,71 @@ func TestRegistryRegistrationPreWriteRetryClassificationLikeRust(t *testing.T) {
 	}
 }
 
+// TestRegistrationRetryPreservesExecutorPublicKeyLikeRust mirrors Rust #50465
+// `ef8cfe5e96`
+// (codex-rs/exec-server/tests/relay/registration_retry_tests.rs::registration_retries_preserve_noise_identity_and_initialized_session,
+// parameterized over 503 `registration_conflict` and 502
+// `authentication_service_unavailable`): replaying a registration must keep the
+// caller's executor Noise identity instead of minting a fresh key.
+func TestRegistrationRetryPreservesExecutorPublicKeyLikeRust(t *testing.T) {
+	key, err := generateRemotePublicKey()
+	if err != nil {
+		t.Fatalf("generateRemotePublicKey() error = %v", err)
+	}
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"registration_conflict", http.StatusServiceUnavailable, `{"error":{"code":"registration_conflict","message":"registration unavailable"}}`},
+		{"authentication_service_unavailable", http.StatusBadGateway, `{"detail":{"code":"authentication_service_unavailable","message":"Authentication service unavailable"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var registeredKeys []RemotePublicKey
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request remoteRegistrationRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode registration request: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				registeredKeys = append(registeredKeys, request.ExecutorPublicKey)
+				w.Header().Set("Content-Type", "application/json")
+				if len(registeredKeys) == 1 {
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(tc.body))
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(remoteRegistrationResponse{
+					EnvironmentID:   "env-1",
+					SecurityProfile: RemoteSecurityProfile,
+				})
+			}))
+			defer server.Close()
+
+			cfg := RemoteEnvironmentConfig{
+				BaseURL:       server.URL,
+				EnvironmentID: "env-1",
+				HTTPClient:    server.Client(),
+			}
+			if _, err := registerRemoteEnvironmentWithRetry(context.Background(), cfg, key); err != nil {
+				t.Fatalf("registerRemoteEnvironmentWithRetry() error = %v", err)
+			}
+			if len(registeredKeys) != 2 {
+				t.Fatalf("registration attempts = %d, want 2", len(registeredKeys))
+			}
+			if registeredKeys[0] != key {
+				t.Fatalf("first registered key = %#v, want the caller's identity", registeredKeys[0])
+			}
+			if registeredKeys[1] != registeredKeys[0] {
+				t.Fatalf("retry registered key %#v, want the original %#v", registeredKeys[1], registeredKeys[0])
+			}
+		})
+	}
+}
+
 // TestRegistryAuthOutageMessageLikeRust checks the retryable 502 body keeps the
 // registry's message and code (Rust #50465 test
 // `auth_outage_backoff_is_cancellable` asserts message == "Authentication service unavailable").
