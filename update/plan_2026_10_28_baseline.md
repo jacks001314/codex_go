@@ -3553,6 +3553,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression coverage: `tui/agents_overview/selection_after_removal_like_rust_test.go` pins next/previous/batched/empty outcomes, filtered display order, duplicate and successor removals, pending consumption across repaints, unprepared server-side removals, hide-at-end adjacency, and the current-task fallback.
 - Verified with `go test ./tui/agents_overview -count=1`, `go test ./tui/tea -run AgentsOverview -count=1`, `go test ./app -run 'AgentsDashboard|AgentsOverview|CommandCenter' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2214 complete`, `461 not_applicable`,
-`322 audit_pending`, `147 regression_pending`, `5 partial`,
+### Realtime transcript tail persistence before closure (Round 1061)
+
+- Rust #50531 records the terminal realtime transcript directly into model and client history before emitting `RealtimeConversationClosed`, attaching it to the active turn or creating a completed history turn when idle, without another model request; the realtime context stays active until the tail is recorded.
+- Complete: `appserver/realtime_runtime.go` already handled `transcript_tail.flush` without routing through a turn, and `realtime/transport.go` bounds and drains the tail once while `Manager.Stop` flushes it before the closed notifications. This round adds the missing next-turn visibility regression: the flushed tail appears in `historyInputItemsForTurn` and carries a completed turn id for both legacy and paginated threads.
+- Verified with `go test ./appserver -run 'TestRealtimeTranscriptTail' -count=1`, `go test ./realtime -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2215 complete`, `461 not_applicable`,
+`322 audit_pending`, `146 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

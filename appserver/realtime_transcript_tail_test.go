@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -30,7 +31,12 @@ func newRealtimeTailRouter(t *testing.T) (*RuntimeRouter, *session.Store, *Notif
 
 func startRealtimeTailThread(t *testing.T, router *RuntimeRouter) string {
 	t.Helper()
-	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	return startRealtimeTailThreadWithMode(t, router, "")
+}
+
+func startRealtimeTailThreadWithMode(t *testing.T, router *RuntimeRouter, historyMode ThreadHistoryMode) string {
+	t.Helper()
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), HistoryMode: historyMode}))
 	if threadStart.Error != nil {
 		t.Fatalf("thread/start: %+v", threadStart.Error)
 	}
@@ -155,6 +161,62 @@ func TestRealtimeTranscriptTailFlushJoinsActiveTurnWithoutSteeringLikeRust(t *te
 	}
 	if startedCount != 1 {
 		t.Fatalf("turn/started count = %d, want 1 (the tail must not add a turn)", startedCount)
+	}
+}
+
+// Rust #50531: the flushed tail is real conversation history, so a later text
+// turn sees it in its model input for both legacy and paginated threads. It is
+// recorded under a completed history turn and never steers a model turn.
+func TestRealtimeTranscriptTailFeedsNextTurnHistoryLikeRust(t *testing.T) {
+	for _, mode := range []ThreadHistoryMode{ThreadHistoryLegacy, ThreadHistoryPaginated} {
+		t.Run(string(mode), func(t *testing.T) {
+			router, store, _, agent := newRealtimeTailRouter(t)
+			threadID := startRealtimeTailThreadWithMode(t, router, mode)
+			router.handleRealtimeEvent(threadID, realtime.Event{
+				Type:             "transcript_tail.flush",
+				ActiveTranscript: []realtime.TranscriptEntry{{Role: "user", Text: "remember the milk"}},
+			})
+
+			record, err := store.Read(session.ThreadID(threadID), true, true)
+			if err != nil {
+				t.Fatalf("read realtime thread: %v", err)
+			}
+			if !strings.EqualFold(strings.TrimSpace(record.Metadata.HistoryMode), string(mode)) {
+				t.Fatalf("history mode = %q, want %q", record.Metadata.HistoryMode, mode)
+			}
+			recorded := false
+			for index := range record.Items {
+				item := &record.Items[index]
+				if item.Metadata["kind"] != realtimeTranscriptTailKind || item.Text != "remember the milk" {
+					continue
+				}
+				recorded = true
+				if turnID, _ := item.Metadata["turnId"].(string); strings.TrimSpace(turnID) == "" {
+					t.Fatalf("transcript tail item has no completed turn id: %#v", item.Metadata)
+				}
+				if item.Metadata["steered"] == true {
+					t.Fatalf("transcript tail steered a turn: %#v", item.Metadata)
+				}
+			}
+			if !recorded {
+				t.Fatalf("transcript tail missing from %s history: %#v", mode, record.Items)
+			}
+
+			// The next text turn must reuse the tail as prior user history.
+			history, _ := router.historyInputItemsForTurn(threadID)
+			encoded, err := json.Marshal(history)
+			if err != nil {
+				t.Fatalf("marshal history input: %v", err)
+			}
+			if !strings.Contains(string(encoded), "remember the milk") {
+				t.Fatalf("next-turn history input does not contain the tail: %s", encoded)
+			}
+			select {
+			case <-agent.started:
+				t.Fatal("flushing the transcript tail invoked the model agent")
+			default:
+			}
+		})
 	}
 }
 

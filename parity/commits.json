@@ -5729,9 +5729,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/realtime_runtime.go mirrors Rust transcript_tail::record: a `transcript_tail.flush` event is written straight into thread history and never routed through turn/steer, so closure cannot trigger inference; an idle thread gets its own completed history turn (appendRuntimeTurnStarted/appendRuntimeTurnComplete plus item/started and item/completed), while a running turn absorbs the tail without steering it",
+    "realtime/transport.go takeTranscriptTail applies the Rust active-transcript budget before draining, flushes once (tailFlushed), and Manager Stop/replacement call flushRealtimeTranscriptTail before publishing the session-closed notifications; realtime/realtime_test.go::TestNormalTransportCloseFlushesTranscriptTailBeforeClosed pins tail-before-closed ordering",
+    "Regression coverage: appserver/realtime_transcript_tail_test.go covers idle recording without inference, joining an active turn without a steer, and (new this round) tail visibility in the next text turn's history input plus the tail item's completed turn for both legacy and paginated threads; appserver/realtime_transcript_budget_test.go pins the transcript bound",
+    "Verified with `go test ./appserver -run 'TestRealtimeTranscriptTail' -count=1`, `go test ./realtime -count=1`, and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {
