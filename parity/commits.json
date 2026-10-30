@@ -27761,9 +27761,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Complete: execserver/remote.go bounds every rendezvous dial with the shared 10s defaultRemoteDialTimeout, retains jittered exponential reconnect backoff across short-lived connections, and resets it only after remoteStableConnectionDuration (120s), matching Rust ReconnectBackoff. execserver/remote_relay.go gives each relayed data write an independent 60s budget, while coder/websocket processes control frames in its concurrent read loop, so Go has no separate pong watchdog that could expire during a blocked write; connection cancellation cancels the writer context. Regression tests TestRemoteReconnectBackoffRetainsDelayUntilStableLikeRust, TestRemoteReconnectBackoffJitterWindowBoundsLikeRust, TestRendezvousDialAttemptsAreBoundedLikeRust, TestRunRemoteEnvironmentReusesRegistrationUntilWebSocketURLIsRejectedLikeRust, and TestMalformedHandshakesPreservePhysicalRelayLikeRust pass. Verified with go test ./execserver -run 'Noise|Relay|Remote' -count=1."
    ]
   },
   {

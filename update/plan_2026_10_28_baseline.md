@@ -3643,6 +3643,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: pin-related tests cover core grouping/order/filtering, shortcut and duplicate suppression, configurable hints, tea dispatch, pagination, unsupported-server fallback, transport calls, host row seeding, and the real dashboard integration.
 - Verified with `go test ./tui/agents_overview -run 'Pin|Pinned' -count=1`, `go test ./tui/tea -run 'Pin|Pinned' -count=1`, `go test ./app -run 'Pin|Pinned' -count=1`, and `go test ./tui -run 'TogglePin|Pin' -count=1`.
 
-Status after reconciliation: `2227 complete`, `462 not_applicable`,
-`322 audit_pending`, `133 regression_pending`, `5 partial`,
+### Bounded relay dials and blocked-write heartbeat handling (Round 1075)
+
+- Rust #51502 bounds rendezvous WebSocket upgrades with the shared 10-second connect timeout, retains reconnect backoff until a connection has stayed up for 120 seconds, processes pongs during blocked writes without extending the independent write budget, and aborts the relay writer with its owning connection.
+- Complete: `execserver/remote.go` wraps every rendezvous dial in `defaultRemoteDialTimeout` and uses `remoteReconnectBackoff` with `remoteStableConnectionDuration`; `execserver/remote_relay.go` gives every data write its own 60-second timeout and cancels the writer through the connection context. Go's `coder/websocket` handles control frames in its concurrent read loop and has no separate pong watchdog, so a blocked write cannot falsely expire a pong deadline; the write timeout still bounds backpressure.
+- Regression: backoff retains/grows across flapping connections, resets after 120 seconds, stays inside each jitter window, and stalled rendezvous dials carry a deadline and keep retrying. Relay/remote integration tests cover malformed handshakes, registration reuse, and URL rejection.
+- Verified with `go test ./execserver -run 'Noise|Relay|Remote' -count=1`.
+
+Status after reconciliation: `2228 complete`, `462 not_applicable`,
+`322 audit_pending`, `132 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
