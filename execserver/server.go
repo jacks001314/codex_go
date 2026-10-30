@@ -1402,13 +1402,14 @@ func (s *Server) serveStream(ctx context.Context, stdin io.Reader, stdout io.Wri
 		}
 		_ = json.Unmarshal(requestData, &envelope)
 		if idErr != nil || !hasID || envelope.Method == MethodInitialize || !concurrentRequests {
-			out, ok := s.handleLineWithLabel(notifyCtx, requestData, "exec-server stdio")
+			out, ok, timing := s.dispatchLine(notifyCtx, requestData, "exec-server stdio")
 			if !ok {
 				continue
 			}
 			writeMu.Lock()
 			err := encoder.Encode(out)
 			writeMu.Unlock()
+			timing.record(execServerWriteResult(err), time.Now())
 			if err != nil {
 				detach()
 				requests.Wait()
@@ -1420,13 +1421,14 @@ func (s *Server) serveStream(ctx context.Context, stdin io.Reader, stdout io.Wri
 		go func() {
 			defer requests.Done()
 			requestCtx, afterResponse := withAfterResponseActions(notifyCtx)
-			out, ok := s.handleLineWithLabel(requestCtx, requestData, "exec-server stdio")
+			out, ok, timing := s.dispatchLine(requestCtx, requestData, "exec-server stdio")
 			if !ok {
 				return
 			}
 			writeMu.Lock()
 			err := encoder.Encode(out)
 			writeMu.Unlock()
+			timing.record(execServerWriteResult(err), time.Now())
 			afterResponse.run()
 			if err != nil {
 				writeMu.Lock()
@@ -1484,18 +1486,26 @@ func (s *Server) handleLine(ctx context.Context, line []byte) (any, bool) {
 }
 
 func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectionLabel string) (any, bool) {
+	out, ok, _ := s.dispatchLine(ctx, line, connectionLabel)
+	return out, ok
+}
+
+// dispatchLine handles one decoded line. For JSON-RPC requests it also returns
+// the dispatcher timings so the caller can record request metrics after the
+// response is enqueued (Rust #44207).
+func (s *Server) dispatchLine(ctx context.Context, line []byte, connectionLabel string) (any, bool, *execServerRequestTiming) {
 	receivedAt := time.Now()
 	hasID, err := lineHasTopLevelID(line)
 	if err != nil {
-		return malformedRPCResponse(connectionLabel, err), true
+		return malformedRPCResponse(connectionLabel, err), true, nil
 	}
 	if hasID {
 		var req request
 		if err := json.Unmarshal(line, &req); err != nil {
-			return malformedRPCResponse(connectionLabel, err), true
+			return malformedRPCResponse(connectionLabel, err), true, nil
 		}
 		if req.Method == "" {
-			return malformedRPCResponse(connectionLabel, errors.New("JSON-RPC request is missing method")), true
+			return malformedRPCResponse(connectionLabel, errors.New("JSON-RPC request is missing method")), true, nil
 		}
 		trace := TraceContext{}
 		if req.TraceContext != nil {
@@ -1506,27 +1516,34 @@ func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectio
 		}
 		requestCtx := withTraceContext(ctx, trace)
 		setExecServerSpanAttribute(requestCtx, "rpc.dispatch_offset_ns", execServerOffsetNanos(receivedAt))
+		startedAt := time.Now()
 		result, err := s.handleRequest(requestCtx, &req)
 		setExecServerSpanAttribute(requestCtx, "rpc.response_enqueue_offset_ns", execServerOffsetNanos(receivedAt))
 		outcome := "success"
 		if err != nil {
 			outcome = "error"
 		}
+		timing := &execServerRequestTiming{
+			method:     execServerRequestMethodLabel(req.Method),
+			result:     outcome,
+			receivedAt: receivedAt,
+			startedAt:  startedAt,
+		}
 		emitExecServerTraceEvent(requestCtx, execServerResponseEnqueuedEvent, map[string]string{
 			"rpc.method": req.Method,
 			"outcome":    outcome,
 		})
 		if err != nil {
-			return errorResponseForRequest(req.ID, err), true
+			return errorResponseForRequest(req.ID, err), true, timing
 		}
-		return response{ID: req.ID, Result: result, TraceContext: &trace}, true
+		return response{ID: req.ID, Result: result, TraceContext: &trace}, true, timing
 	}
 	var note notification
 	if err := json.Unmarshal(line, &note); err != nil {
-		return malformedRPCResponse(connectionLabel, err), true
+		return malformedRPCResponse(connectionLabel, err), true, nil
 	}
 	if note.Method == "" {
-		return malformedRPCResponse(connectionLabel, errors.New("JSON-RPC notification is missing method")), true
+		return malformedRPCResponse(connectionLabel, errors.New("JSON-RPC notification is missing method")), true, nil
 	}
 	if note.Method == MethodInitialized {
 		state := protocolStateFromContext(ctx)
@@ -1538,7 +1555,7 @@ func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectio
 			state.mu.Unlock()
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 func malformedRPCResponse(connectionLabel string, err error) response {

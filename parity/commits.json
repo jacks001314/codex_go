@@ -9772,9 +9772,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "turn/tool_dispatcher.go sets conversation.id from the dispatcher thread ID on code-mode handler spans instead of inheriting it from a turn span, so callbacks resumed outside turn ancestry keep thread identity"
    ]
   },
   {
@@ -9993,9 +9993,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "app/tui_telemetry.go tags codex.tui.start with terminal_name and multiplexer from tui.TerminalTelemetryName and TerminalMultiplexerTag, which map to the fixed Rust categories (unknown for unrecognized terminals, none for no multiplexer)"
    ]
   },
   {
@@ -10269,9 +10269,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Pure Rust signature refactor: fork entry points now share StartThreadOptions and box one large future. Go already passes a single ThreadForkParams struct through handleThreadFork and has no behavior to change"
    ]
   },
   {
@@ -10629,9 +10629,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "execserver/request_metrics.go records exec_server_requests_total plus dispatch, total, and queue second durations from decoded receipt through response enqueue; dispatchLine returns per-request timings used by the stdio and websocket write paths, and request_metrics_test.go covers success, unknown method, and disconnected delivery"
    ]
   },
   {

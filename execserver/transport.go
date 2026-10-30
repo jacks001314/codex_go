@@ -315,15 +315,17 @@ func (s *Server) serveWebSocketConnection(ctx context.Context, conn *websocket.C
 		go func() {
 			defer requests.Done()
 			requestCtx, afterResponse := withAfterResponseActions(connectionCtx)
-			out, ok := s.handleLineWithLabel(requestCtx, requestData, "exec-server websocket")
+			out, ok, timing := s.dispatchLine(requestCtx, requestData, "exec-server websocket")
 			if !ok {
 				return
 			}
 			if err := writeJSON(out); err != nil {
+				timing.record(execServerWriteResult(err), time.Now())
 				afterResponse.run()
 				reportError(err)
 				return
 			}
+			timing.record("", time.Now())
 			afterResponse.run()
 		}()
 	}
