@@ -67,6 +67,9 @@ type CodexReviewEventParams struct {
 	StartedAtMS     uint64                       `json:"started_at_ms"`
 	CompletedAtMS   uint64                       `json:"completed_at_ms"`
 	DurationMS      *uint64                      `json:"duration_ms"`
+	// GuardianContextMode is set only for Guardian reviews, when the selected
+	// review-history policy is known.
+	GuardianContextMode *string `json:"guardian_context_mode,omitempty"`
 }
 
 func NewCodexReviewEvent(params CodexReviewEventParams) CodexReviewEventRequest {

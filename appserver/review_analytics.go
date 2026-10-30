@@ -107,6 +107,7 @@ type reviewAnalyticsInput struct {
 	Resolution    string
 	StartedAtMS   uint64
 	CompletedAtMS uint64
+	ContextMode   string
 }
 
 func (r *RuntimeRouter) emitReviewAnalyticsEvent(ctx context.Context, input reviewAnalyticsInput) {
@@ -135,24 +136,25 @@ func (r *RuntimeRouter) emitReviewAnalyticsEvent(ctx context.Context, input revi
 	}
 	lineage := r.responsesMetadataLineage(input.ThreadID)
 	event := telemetry.NewCodexReviewEvent(telemetry.CodexReviewEventParams{
-		ThreadID:        strings.TrimSpace(input.ThreadID),
-		TurnID:          strings.TrimSpace(input.TurnID),
-		ItemID:          stringPtrIfNotEmpty(input.ItemID),
-		ReviewID:        strings.TrimSpace(input.ReviewID),
-		AppServerClient: client,
-		Runtime:         telemetry.CurrentRuntimeMetadata(),
-		ThreadSource:    stringPtrIfNotEmpty(lineage.ThreadSource),
-		SubagentSource:  stringPtrIfNotEmpty(lineage.SubagentKind),
-		ParentThreadID:  stringPtrIfNotEmpty(lineage.ParentThreadID),
-		SubjectKind:     input.SubjectKind,
-		SubjectName:     strings.TrimSpace(input.SubjectName),
-		Reviewer:        input.Reviewer,
-		Trigger:         input.Trigger,
-		Status:          input.Status,
-		Resolution:      input.Resolution,
-		StartedAtMS:     input.StartedAtMS,
-		CompletedAtMS:   input.CompletedAtMS,
-		DurationMS:      uint64PtrFromNonNegativeInt64(int64(input.CompletedAtMS) - int64(input.StartedAtMS)),
+		ThreadID:            strings.TrimSpace(input.ThreadID),
+		TurnID:              strings.TrimSpace(input.TurnID),
+		ItemID:              stringPtrIfNotEmpty(input.ItemID),
+		ReviewID:            strings.TrimSpace(input.ReviewID),
+		AppServerClient:     client,
+		Runtime:             telemetry.CurrentRuntimeMetadata(),
+		ThreadSource:        stringPtrIfNotEmpty(lineage.ThreadSource),
+		SubagentSource:      stringPtrIfNotEmpty(lineage.SubagentKind),
+		ParentThreadID:      stringPtrIfNotEmpty(lineage.ParentThreadID),
+		SubjectKind:         input.SubjectKind,
+		SubjectName:         strings.TrimSpace(input.SubjectName),
+		Reviewer:            input.Reviewer,
+		Trigger:             input.Trigger,
+		Status:              input.Status,
+		Resolution:          input.Resolution,
+		StartedAtMS:         input.StartedAtMS,
+		CompletedAtMS:       input.CompletedAtMS,
+		DurationMS:          uint64PtrFromNonNegativeInt64(int64(input.CompletedAtMS) - int64(input.StartedAtMS)),
+		GuardianContextMode: stringPtrIfNotEmpty(input.ContextMode),
 	})
 	sink.TrackCodexReviewEvent(ctx, event)
 }
@@ -316,6 +318,7 @@ func (r *RuntimeRouter) emitGuardianReviewCompletedAnalytics(ctx context.Context
 		Resolution:    result.Resolution,
 		StartedAtMS:   notification.StartedAtMS,
 		CompletedAtMS: notification.CompletedAtMS,
+		ContextMode:   notification.guardianContextMode,
 	})
 	r.emitGuardianV2ClassificationAnalytics(ctx, notification, result)
 }
@@ -358,14 +361,15 @@ func (r *RuntimeRouter) emitGuardianV2ClassificationAnalytics(ctx context.Contex
 		SubagentSource:  stringPtrIfNotEmpty(lineage.SubagentKind),
 		ParentThreadID:  stringPtrIfNotEmpty(lineage.ParentThreadID),
 		GuardianV2Event: telemetry.GuardianV2Event{
-			ThreadID:     strings.TrimSpace(notification.ThreadID),
-			TurnID:       strings.TrimSpace(notification.TurnID),
-			ItemID:       notification.TargetItemID,
-			Model:        stringPtrIfNotEmpty(active.RunConfig.Model),
-			OccurredAtMS: notification.CompletedAtMS,
-			Outcome:      guardianV2AnalyticsOutcome(result.Status),
-			RiskLevel:    risk,
-			DurationMS:   guardianV2DurationMS(notification.StartedAtMS, notification.CompletedAtMS),
+			ThreadID:            strings.TrimSpace(notification.ThreadID),
+			TurnID:              strings.TrimSpace(notification.TurnID),
+			ItemID:              notification.TargetItemID,
+			Model:               stringPtrIfNotEmpty(active.RunConfig.Model),
+			OccurredAtMS:        notification.CompletedAtMS,
+			Outcome:             guardianV2AnalyticsOutcome(result.Status),
+			RiskLevel:           risk,
+			DurationMS:          guardianV2DurationMS(notification.StartedAtMS, notification.CompletedAtMS),
+			GuardianContextMode: stringPtrIfNotEmpty(notification.guardianContextMode),
 		},
 	})
 	sink.TrackCodexGuardianV2Event(ctx, event)

@@ -43,6 +43,9 @@ type guardianReviewMetricAttribution struct {
 	UserAuthorization *state.UserAuthorization
 	Outcome           *state.Outcome
 	GuardianModel     string
+	// ContextMode is the conversation-history policy captured before reviewer
+	// preparation. An empty value is reported as `unknown` (#49294).
+	ContextMode state.GuardianContextMode
 	// ContextChanged mirrors Rust's GuardianReviewAnalyticsResult field, kept
 	// across retries and exposed as the counter-only `context_changed` tag.
 	ContextChanged   bool
@@ -148,6 +151,7 @@ func guardianReviewMetricTags(attribution guardianReviewMetricAttribution) map[s
 		guardianModel = telemetry.SanitizeMetricTagValue(guardianModel)
 	}
 	return map[string]string{
+		"context_mode":              guardianContextModeTag(attribution.ContextMode),
 		"decision":                  guardianReviewDecisionTag(attribution.Decision),
 		"terminal_status":           attribution.TerminalStatus,
 		"failure_reason":            failureReason,
@@ -164,6 +168,14 @@ func guardianReviewMetricTags(attribution guardianReviewMetricAttribution) map[s
 		"guardian_reasoning_effort": "none",
 		"guardian_model":            guardianModel,
 	}
+}
+
+func guardianContextModeTag(mode state.GuardianContextMode) string {
+	value := strings.TrimSpace(mode.String())
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }
 
 // emitGuardianContextMetrics exports the complete synchronous request estimate
@@ -339,6 +351,9 @@ func (r *modelGuardianReviewer) newGuardianReviewAttribution(threadID, turnID st
 		FailureReason:  "none",
 		ReviewedAction: action,
 		GuardianModel:  r.modelForTurn(threadID, turnID),
+	}
+	if r.contextMode != nil {
+		attribution.ContextMode = r.contextMode(threadID, turnID)
 	}
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		attribution.SessionKind, attribution.HadPriorContext = runner.reviewSessionAttribution()

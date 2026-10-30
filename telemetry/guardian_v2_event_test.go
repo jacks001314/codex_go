@@ -15,14 +15,15 @@ func TestGuardianV2EventRequestsSerializeLikeRust(t *testing.T) {
 		SubagentSource:  stringPointer("root"),
 		ParentThreadID:  stringPointer("parent"),
 		GuardianV2Event: GuardianV2Event{
-			ThreadID:     "thread-1",
-			TurnID:       "turn-1",
-			ItemID:       stringPointer("item-1"),
-			Model:        stringPointer("gpt-guardian"),
-			OccurredAtMS: 123,
-			Outcome:      "allow",
-			RiskLevel:    &risk,
-			DurationMS:   7,
+			ThreadID:            "thread-1",
+			TurnID:              "turn-1",
+			ItemID:              stringPointer("item-1"),
+			Model:               stringPointer("gpt-guardian"),
+			OccurredAtMS:        123,
+			Outcome:             "allow",
+			RiskLevel:           &risk,
+			DurationMS:          7,
+			GuardianContextMode: stringPointer("thread_owned"),
 		},
 	})
 	if event.EventType != CodexGuardianV2ClassificationEventType {
@@ -32,7 +33,7 @@ func TestGuardianV2EventRequestsSerializeLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	for _, want := range []string{`"outcome":"allow"`, `"risk_level":"low"`, `"thread_id":"thread-1"`} {
+	for _, want := range []string{`"outcome":"allow"`, `"risk_level":"low"`, `"thread_id":"thread-1"`, `"guardian_context_mode":"thread_owned"`} {
 		if !jsonContainsString(data, want) {
 			t.Fatalf("Marshal() = %s missing %q", data, want)
 		}
@@ -53,6 +54,9 @@ func TestGuardianV2EventRequestsSerializeLikeRust(t *testing.T) {
 	}
 	if !jsonContainsString(data, `"decision":"approved"`) {
 		t.Fatalf("fast Marshal() = %s", data)
+	}
+	if jsonContainsString(data, `"guardian_context_mode"`) {
+		t.Fatalf("fast Marshal() unexpectedly included guardian_context_mode: %s", data)
 	}
 }
 

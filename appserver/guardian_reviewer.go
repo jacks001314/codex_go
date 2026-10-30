@@ -183,6 +183,7 @@ type modelGuardianReviewer struct {
 	// reviewer's policy instructions (Rust's resolve_review_model /
 	// select_review_model plus build_guardian_review_session_config).
 	reviewPlan                 func(threadID, turnID string) guardianReviewPlan
+	contextMode                func(threadID, turnID string) state.GuardianContextMode
 	reviewEndpoint             func(threadID, turnID string) model.ResponsesEndpoint
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
@@ -939,6 +940,8 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
+	event.GuardianContextMode = attribution.ContextMode.String()
+	store.SetGuardianContextMode(event.ID, event.GuardianContextMode)
 	emit(threadID, event)
 	// Rust #47630 ReviewAction::validate: an action may only be reviewed against
 	// the environment that owns it. Manual approval routing still sees the
@@ -2545,6 +2548,7 @@ func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.
 	r.notify(NotificationItemGuardianApprovalReviewCompleted, &ItemGuardianApprovalReviewCompletedNotification{
 		ThreadID: threadID, TurnID: event.TurnID, StartedAtMS: uint64(event.StartedAtMS), CompletedAtMS: uint64(completedAt), ReviewID: event.ID, TargetItemID: targetItemID,
 		DecisionSource: AutoReviewDecisionSourceAgent, Review: review, Action: action,
+		guardianContextMode: event.GuardianContextMode,
 	})
 }
 

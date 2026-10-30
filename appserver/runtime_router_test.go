@@ -20347,7 +20347,7 @@ func TestRuntimeRouterCommandNetworkPolicyAmendmentReviewAnalyticsLikeRust(t *te
 
 func TestRuntimeRouterGuardianReviewCompletedEmitsReviewAnalyticsLikeRust(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-5\"\n\n[features]\nguardianv2 = true\n"), 0o600); err != nil {
 		t.Fatalf("write config error = %v", err)
 	}
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -20413,6 +20413,7 @@ func TestRuntimeRouterGuardianReviewCompletedEmitsReviewAnalyticsLikeRust(t *tes
 			Command: "rm -rf build",
 			CWD:     t.TempDir(),
 		},
+		guardianContextMode: "thread_owned",
 	})
 	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "guardian-review-command")
 	reviewParams := reviewEvent.EventParams
@@ -20426,6 +20427,15 @@ func TestRuntimeRouterGuardianReviewCompletedEmitsReviewAnalyticsLikeRust(t *tes
 	}
 	if reviewParams.StartedAtMS != startedAtMS || reviewParams.CompletedAtMS != completedAtMS || reviewParams.DurationMS == nil {
 		t.Fatalf("guardian command review timing = %#v", reviewParams)
+	}
+	if reviewParams.GuardianContextMode == nil || *reviewParams.GuardianContextMode != "thread_owned" {
+		t.Fatalf("guardian command review context mode = %#v", reviewParams.GuardianContextMode)
+	}
+	classification := waitForGuardianV2ClassificationEvent(t, analyticsSink, turnID)
+	if classification.EventType != telemetry.CodexGuardianV2ClassificationEventType ||
+		classification.EventParams.GuardianContextMode == nil ||
+		*classification.EventParams.GuardianContextMode != "thread_owned" {
+		t.Fatalf("guardian classification event = %#v", classification)
 	}
 	summary := router.toolItemReviewSummary(threadID, turnID, commandItemID)
 	if summary.ReviewCount != 1 ||
@@ -26271,6 +26281,7 @@ type recordingTurnEventSink struct {
 	imageGeneration    chan telemetry.CodexImageGenerationEventRequest
 	skillInvocation    chan telemetry.SkillInvocationEventRequest
 	artifactOperation  chan telemetry.ArtifactOperationEventRequest
+	guardianV2         chan telemetry.GuardianV2EventRequest
 }
 
 type standaloneWebSearchRuntimeAgent struct {
@@ -26416,6 +26427,7 @@ func newRecordingTurnEventSink() *recordingTurnEventSink {
 		imageGeneration:    make(chan telemetry.CodexImageGenerationEventRequest, 8),
 		skillInvocation:    make(chan telemetry.SkillInvocationEventRequest, 8),
 		artifactOperation:  make(chan telemetry.ArtifactOperationEventRequest, 8),
+		guardianV2:         make(chan telemetry.GuardianV2EventRequest, 8),
 	}
 }
 
@@ -26571,6 +26583,13 @@ func (s *recordingTurnEventSink) TrackCodexReviewEvent(ctx context.Context, even
 		return
 	}
 	s.review <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexGuardianV2Event(ctx context.Context, event telemetry.GuardianV2EventRequest) {
+	if s == nil || s.guardianV2 == nil {
+		return
+	}
+	s.guardianV2 <- event
 }
 
 func (s *recordingTurnEventSink) TrackCodexMCPToolCallEvent(ctx context.Context, event telemetry.CodexMCPToolCallEventRequest) {
@@ -27223,6 +27242,21 @@ func waitForReviewAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, rev
 			}
 		case <-deadline:
 			t.Fatalf("timed out waiting for codex_review_event %s", reviewID)
+		}
+	}
+}
+
+func waitForGuardianV2ClassificationEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.GuardianV2EventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.guardianV2:
+			if event.EventType == telemetry.CodexGuardianV2ClassificationEventType && event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_guardian_v2_classification for turn %s", turnID)
 		}
 	}
 }

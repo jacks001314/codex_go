@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/state"
 	"codex_go/telemetry"
@@ -42,8 +43,10 @@ func TestGuardianReviewMetricTagsLikeRust(t *testing.T) {
 		UserAuthorization: &authorization,
 		Outcome:           &outcome,
 		GuardianModel:     "gpt-5.1-guardian",
+		ContextMode:       state.GuardianContextModeThreadOwned,
 	})
 	want := map[string]string{
+		"context_mode":              "thread_owned",
 		"decision":                  "denied",
 		"terminal_status":           "timed_out",
 		"failure_reason":            "timeout",
@@ -76,6 +79,7 @@ func TestGuardianReviewMetricTagsLikeRust(t *testing.T) {
 		SessionKind:    "trunk_new",
 	})
 	for key, expected := range map[string]string{
+		"context_mode":              "unknown",
 		"decision":                  "denied",
 		"terminal_status":           "failed_closed",
 		"failure_reason":            "none",
@@ -199,6 +203,9 @@ func TestModelGuardianReviewerEmitsMetricsLikeRust(t *testing.T) {
 		reviewPlan: func(string, string) guardianReviewPlan {
 			return guardianReviewPlan{Selection: model.ApprovalReviewModel{Model: "gpt-5-guardian"}}
 		},
+		contextMode: func(string, string) state.GuardianContextMode {
+			return state.GuardianContextModeThreadOwned
+		},
 		metrics: metrics,
 	}
 	decision, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{
@@ -214,6 +221,7 @@ func TestModelGuardianReviewerEmitsMetricsLikeRust(t *testing.T) {
 	}
 	counter := counters[0]
 	for key, expected := range map[string]string{
+		"context_mode":              "thread_owned",
 		"decision":                  "denied",
 		"terminal_status":           "denied",
 		"failure_reason":            "none",
@@ -282,7 +290,8 @@ func TestModelGuardianReviewerFailureMetricsLikeRust(t *testing.T) {
 	if counter.Tags["decision"] != "denied" || counter.Tags["terminal_status"] != "failed_closed" ||
 		counter.Tags["failure_reason"] != "parse_error" ||
 		counter.Tags["approval_request_source"] != "delegated_subagent" ||
-		counter.Tags["action"] != "apply_patch" {
+		counter.Tags["action"] != "apply_patch" ||
+		counter.Tags["context_mode"] != "unknown" {
 		t.Fatalf("counter tags = %#v", counter.Tags)
 	}
 	if _, ok := counter.Tags["tool"]; ok {
@@ -326,5 +335,86 @@ func TestModelGuardianReviewerTimeoutMetricsLikeRust(t *testing.T) {
 	}
 	if len(warnings) != 1 || warnings[0] != state.GuardianTimeoutRationale() {
 		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+// Rust captures the review-history policy before preparation and keeps it when
+// the reviewer fails to start. The started and fail-closed events both retain
+// the host-only attribution used by the review and classification telemetry.
+func TestModelGuardianReviewerCapturesContextModeBeforePreparationFailure(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	var events []*state.Event
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+			t.Fatal("review agent ran after preparation failed")
+			return nil, nil
+		}),
+		metrics: metrics,
+		reviewPlan: func(string, string) guardianReviewPlan {
+			return guardianReviewPlan{PreparedError: "reviewer startup failed"}
+		},
+		contextMode: func(string, string) state.GuardianContextMode {
+			return state.GuardianContextModeThreadOwned
+		},
+		notify: func(_ string, event *state.Event) {
+			if event == nil {
+				return
+			}
+			cloned := *event
+			events = append(events, &cloned)
+		},
+		warn: func(string, string) {},
+	}
+	decision, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{
+		Type: "command", Command: "echo hi", CWD: t.TempDir(),
+	})
+	if err != nil || decision != state.DecisionDenied {
+		t.Fatalf("decision = %s err = %v", decision, err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %#v", events)
+	}
+	for index, event := range events {
+		if event.GuardianContextMode != string(state.GuardianContextModeThreadOwned) {
+			t.Fatalf("event %d status=%s context mode = %q", index, event.Status, event.GuardianContextMode)
+		}
+	}
+	if events[0].Status != state.StatusInProgress || !events[1].Terminal() {
+		t.Fatalf("event statuses = %s, %s", events[0].Status, events[1].Status)
+	}
+	counters := guardianMetricRecords(metrics, telemetry.GuardianReviewCountMetric)
+	if len(counters) != 1 ||
+		counters[0].Tags["context_mode"] != "thread_owned" ||
+		counters[0].Tags["failure_reason"] != "session_error" {
+		t.Fatalf("counters = %#v", counters)
+	}
+}
+
+func TestGuardianContextModeForConfigFollowsParentCompactionPolicy(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		values map[string]any
+		want   state.GuardianContextMode
+	}{
+		{
+			name:   "reuse parent compaction",
+			values: map[string]any{"features": map[string]any{"guardian_reuse_parent_compaction": true}},
+			want:   state.GuardianContextModeThreadOwned,
+		},
+		{
+			name:   "independent review history",
+			values: map[string]any{"features": map[string]any{"guardian_reuse_parent_compaction": false}},
+			want:   state.GuardianContextModeIndependent,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := &config.Config{Values: testCase.values}
+			if got := guardianContextModeForConfig(cfg); got != testCase.want {
+				t.Fatalf("context mode = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+	if got := guardianContextModeForConfig(nil); got != "" {
+		t.Fatalf("nil config context mode = %q", got)
 	}
 }

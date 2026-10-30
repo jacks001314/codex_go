@@ -247,6 +247,9 @@ type Event struct {
 	Rationale         string             `json:"rationale,omitempty"`
 	DecisionSource    *DecisionSource    `json:"decisionSource,omitempty"`
 	Action            Action             `json:"action"`
+	// GuardianContextMode is host telemetry attribution, not part of the
+	// persisted or client-visible review event.
+	GuardianContextMode string `json:"-"`
 }
 
 func NewInProgressEvent(id string, turnID string, targetItemID string, action Action, now time.Time) (*Event, error) {
@@ -486,6 +489,23 @@ func (s *ReviewStore) Start(turnID string, targetItemID string, action Action) (
 	defer s.mu.Unlock()
 	s.events[id] = event
 	return cloneEvent(event), nil
+}
+
+// SetGuardianContextMode records host-only telemetry attribution on the stored
+// review event. Start returns a clone, so updating only that clone would lose
+// the mode when a later failure transition copies the stored event.
+func (s *ReviewStore) SetGuardianContextMode(id string, mode string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	event := s.events[id]
+	if event == nil {
+		return false
+	}
+	event.GuardianContextMode = mode
+	return true
 }
 
 func (s *ReviewStore) Complete(id string, assessment Assessment) (*Event, error) {

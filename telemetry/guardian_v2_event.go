@@ -48,6 +48,9 @@ type GuardianV2Event struct {
 	RiskLevel    *string `json:"risk_level,omitempty"`
 	DurationMS   uint64  `json:"duration_ms,omitempty"`
 	Decision     string  `json:"decision,omitempty"`
+	// GuardianContextMode is present on classification events and absent from
+	// fast-decision events.
+	GuardianContextMode *string `json:"guardian_context_mode,omitempty"`
 }
 
 // NewGuardianV2ClassificationEvent builds a classification event request.

@@ -23552,9 +23552,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Guardian reviews capture the review-history mode before preparation and persist it on the stored event across fail-closed, timeout, and abort transitions. Review events and Guardian V2 classification events emit guardian_context_mode; review metrics tag context_mode and fall back to unknown when unavailable. Verified with go test ./state ./telemetry -count=1, targeted appserver Guardian/Review/Classification tests, and go test ./tool ./turn ./retainedctx -count=1. go vet ./appserver ./state ./telemetry reports only the pre-existing thread_sample.go cancel warning; the full appserver package still has unrelated pre-existing manifest-drift and notification-timeout failures."
    ]
   },
   {

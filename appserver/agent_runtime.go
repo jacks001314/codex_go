@@ -132,6 +132,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.feedbackCaptureEnabled = r.guardianFeedbackCaptureEnabled
 		modelReviewer.persistFeedback = r.persistGuardianReviewFeedback
 		modelReviewer.reviewPlan = r.guardianReviewPlanForTurn
+		modelReviewer.contextMode = r.guardianContextModeForTurn
 		modelReviewer.reviewEndpoint = r.guardianReviewEndpointForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.maxToolCallLagFor = r.guardianMaxToolCallLagForTurn
@@ -707,6 +708,31 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 		plan.Prepared = prepared
 	}
 	return plan
+}
+
+// guardianContextModeForTurn reads the reviewer history policy from the same
+// turn configuration that owns the review evidence. The reviewer captures it
+// before preparation so failure metrics retain it (#49294).
+func (r *RuntimeRouter) guardianContextModeForTurn(threadID, turnID string) state.GuardianContextMode {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return ""
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return guardianContextModeForConfig(cfg)
+}
+
+func guardianContextModeForConfig(cfg *config.Config) state.GuardianContextMode {
+	if cfg == nil {
+		return ""
+	}
+	if features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction") {
+		return state.GuardianContextModeThreadOwned
+	}
+	return state.GuardianContextModeIndependent
 }
 
 // guardianNodeReplPolicy mirrors Rust

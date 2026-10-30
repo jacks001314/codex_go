@@ -1018,6 +1018,29 @@ func TestCodexReviewEventSerializesExpectedRustShape(t *testing.T) {
 	}
 }
 
+func TestCodexReviewEventSerializesGuardianContextModeWhenPresent(t *testing.T) {
+	mode := "independent"
+	event := NewCodexReviewEvent(CodexReviewEventParams{
+		ThreadID:            "thread-1",
+		TurnID:              "turn-1",
+		ReviewID:            "review-1",
+		SubjectKind:         ReviewSubjectKindCommandExecution,
+		SubjectName:         "command_execution",
+		Reviewer:            ReviewerGuardian,
+		Trigger:             ReviewTriggerInitial,
+		Status:              ReviewStatusApproved,
+		Resolution:          ReviewResolutionNone,
+		GuardianContextMode: &mode,
+	})
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !jsonContainsString(data, `"guardian_context_mode":"independent"`) {
+		t.Fatalf("Marshal() = %s", data)
+	}
+}
+
 func TestCodexThreadInitializedEventSerializesExpectedRustShape(t *testing.T) {
 	isWorktree := true
 	event := NewCodexThreadInitializedEvent(CodexThreadInitializedEventInput{

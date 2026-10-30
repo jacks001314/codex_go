@@ -762,15 +762,16 @@ type ItemGuardianApprovalReviewStartedNotification struct {
 }
 
 type ItemGuardianApprovalReviewCompletedNotification struct {
-	ThreadID       string                       `json:"threadId"`
-	TurnID         string                       `json:"turnId"`
-	StartedAtMS    uint64                       `json:"startedAtMs"`
-	CompletedAtMS  uint64                       `json:"completedAtMs"`
-	ReviewID       string                       `json:"reviewId"`
-	TargetItemID   *string                      `json:"targetItemId"`
-	DecisionSource AutoReviewDecisionSource     `json:"decisionSource"`
-	Review         GuardianApprovalReview       `json:"review"`
-	Action         GuardianApprovalReviewAction `json:"action"`
+	ThreadID            string                       `json:"threadId"`
+	TurnID              string                       `json:"turnId"`
+	StartedAtMS         uint64                       `json:"startedAtMs"`
+	CompletedAtMS       uint64                       `json:"completedAtMs"`
+	ReviewID            string                       `json:"reviewId"`
+	TargetItemID        *string                      `json:"targetItemId"`
+	DecisionSource      AutoReviewDecisionSource     `json:"decisionSource"`
+	Review              GuardianApprovalReview       `json:"review"`
+	Action              GuardianApprovalReviewAction `json:"action"`
+	guardianContextMode string
 }
 
 // StrictReviewRequiredNotification mirrors Rust

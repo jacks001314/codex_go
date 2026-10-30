@@ -17,6 +17,27 @@ const (
 	ContextTargetAsync
 )
 
+// GuardianContextMode identifies the conversation-history policy a Guardian
+// review actually selected. It mirrors Rust's GuardianContextMode (#49294)
+// without coupling telemetry to the transcript retention profile.
+type GuardianContextMode string
+
+const (
+	// GuardianContextModeLegacy reviews a compatibility transcript rather than
+	// the parent checkpoint.
+	GuardianContextModeLegacy GuardianContextMode = "legacy"
+	// GuardianContextModeIndependent retains a review transcript independently
+	// of parent compaction.
+	GuardianContextModeIndependent GuardianContextMode = "independent"
+	// GuardianContextModeThreadOwned reviews the thread-owned parent context.
+	GuardianContextModeThreadOwned GuardianContextMode = "thread_owned"
+)
+
+// String returns the stable, bounded label used by Guardian telemetry.
+func (m GuardianContextMode) String() string {
+	return string(m)
+}
+
 // Default transcript entry and retention limits from Rust's
 // guardian-context ContextProfile (#43806). The asynchronous profile lowers the
 // per-entry message cap and total message budget while keeping the same tool
