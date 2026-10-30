@@ -341,7 +341,7 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 		request.Header.Set("Accept", "application/json")
 		return request, nil
 	}
-	response, executorCredential, err := sendRegistryAuthenticated(ctx, cfg, build)
+	response, executorCredential, err := sendRegistryAuthenticated(ctx, cfg, build, true)
 	if err != nil {
 		return nil, err
 	}

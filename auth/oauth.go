@@ -632,36 +632,53 @@ func RefreshChatGPTTokens(ctx context.Context, opts *RefreshChatGPTTokenOptions)
 	if value := RefreshReasonValue(reason); value != "" {
 		body["refresh_reason"] = value
 	}
-	var out ExchangedTokens
-	if err := postJSON(ctx, normalized.HTTPClient, refreshTokenURL(normalized.Issuer), body, &out); err != nil {
-		var statusErr *httpStatusError
-		if errors.As(err, &statusErr) {
-			// RFC 6749 reports an unusable refresh token as invalid_grant
-			// without preserving the legacy expired/reused/revoked subtype.
-			// Keep it terminal with the generic reason (#39637).
-			code := extractRefreshTokenErrorCode(statusErr.Body)
-			isInvalidGrantBadRequest := statusErr.StatusCode == http.StatusBadRequest &&
-				strings.EqualFold(code, "invalid_grant")
-			failed := classifyRefreshTokenFailure(statusErr.Body)
-			if statusErr.StatusCode == http.StatusUnauthorized ||
-				failed.Reason != RefreshTokenFailedOther ||
-				isInvalidGrantBadRequest {
-				RecordPermanentRefreshFailureIfUnchangedWithOptions(normalized.CodexHome, attempted, failed, opts.StoreOptions)
-				return nil, failed
+	// Rust #58355: this generation is unsettled from the start of the exchange
+	// until the refreshed credentials are persisted. A cancelled exchange keeps
+	// the record, while a completed failure restores the record it replaced so
+	// it cannot settle an earlier cancelled attempt.
+	previousUnsettled := beginChatGPTRefresh(normalized.CodexHome, nilSafeTokens(attempted))
+	refreshed, refreshErr := func() (*AuthDotJSON, error) {
+		var out ExchangedTokens
+		if err := postJSON(ctx, normalized.HTTPClient, refreshTokenURL(normalized.Issuer), body, &out); err != nil {
+			var statusErr *httpStatusError
+			if errors.As(err, &statusErr) {
+				// RFC 6749 reports an unusable refresh token as invalid_grant
+				// without preserving the legacy expired/reused/revoked subtype.
+				// Keep it terminal with the generic reason (#39637).
+				code := extractRefreshTokenErrorCode(statusErr.Body)
+				isInvalidGrantBadRequest := statusErr.StatusCode == http.StatusBadRequest &&
+					strings.EqualFold(code, "invalid_grant")
+				failed := classifyRefreshTokenFailure(statusErr.Body)
+				if statusErr.StatusCode == http.StatusUnauthorized ||
+					failed.Reason != RefreshTokenFailedOther ||
+					isInvalidGrantBadRequest {
+					RecordPermanentRefreshFailureIfUnchangedWithOptions(normalized.CodexHome, attempted, failed, opts.StoreOptions)
+					return nil, failed
+				}
 			}
+			return nil, err
 		}
-		return nil, err
+		if strings.TrimSpace(out.AccessToken) == "" {
+			return nil, errors.New("refresh response omitted access_token")
+		}
+		if strings.TrimSpace(out.RefreshToken) == "" {
+			out.RefreshToken = refreshToken
+		}
+		if err := persistRefreshedChatGPTTokens(normalized.CodexHome, attempted, &out, opts.StoreOptions); err != nil {
+			return nil, err
+		}
+		return NewStoreWithOptions(normalized.CodexHome, opts.StoreOptions).Load()
+	}()
+	switch {
+	case refreshErr == nil:
+		settleChatGPTRefresh(normalized.CodexHome)
+	case ctx.Err() != nil:
+		// The exchange was interrupted after it started, so the stored token may
+		// already have been rotated even if this call never saw the response.
+	default:
+		restoreChatGPTRefresh(normalized.CodexHome, previousUnsettled)
 	}
-	if strings.TrimSpace(out.AccessToken) == "" {
-		return nil, errors.New("refresh response omitted access_token")
-	}
-	if strings.TrimSpace(out.RefreshToken) == "" {
-		out.RefreshToken = refreshToken
-	}
-	if err := persistRefreshedChatGPTTokens(normalized.CodexHome, attempted, &out, opts.StoreOptions); err != nil {
-		return nil, err
-	}
-	return NewStoreWithOptions(normalized.CodexHome, opts.StoreOptions).Load()
+	return refreshed, refreshErr
 }
 
 func refreshAttemptSnapshot(codexHome string, provided *AuthDotJSON, storeOptions *StoreOptions) *AuthDotJSON {

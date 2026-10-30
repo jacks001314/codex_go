@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"os"
-	"reflect"
 	"sync"
 	"time"
 
@@ -37,10 +34,6 @@ type execServerRegistryAuth struct {
 	// (Rust #58251 ReloadingChatgptAuthProvider).
 	identity *execServerCredentialIdentity
 
-	// uncertainMu guards the token generation whose refresh outcome is unknown
-	// because the exchange timed out after the request was sent.
-	uncertainMu     sync.Mutex
-	uncertainTokens map[string]any
 }
 
 func newExecServerRegistryAuth(codexHome string, storeOptions *auth.StoreOptions, httpClient *http.Client, expected *auth.AuthDotJSON) *execServerRegistryAuth {
@@ -114,10 +107,22 @@ func (a *execServerRegistryAuth) resolveAuth(ctx context.Context) (*auth.AuthDot
 			if err := a.checkExecutorCredential(snapshot); err != nil {
 				return nil, nil, err
 			}
-		} else if refreshErr != nil && isCredentialRefreshTimeout(refreshErr) {
-			// The exchange may already have rotated the stored token, so that
-			// generation is blocked until different credentials appear.
-			a.markUncertainRefresh(snapshot)
+		} else if refreshErr != nil {
+			// Rust #58355: Rust's provider falls back to the selected stored
+			// source after a refresh error. Re-read it so a credential another
+			// writer rotated is used, while a generation whose exchange was
+			// cancelled stays withheld by checkExecutorCredential.
+			resolved, loadErr := auth.NewStoreWithOptions(a.codexHome, a.storeOptions).Resolve()
+			if loadErr != nil {
+				return nil, nil, transientCredentialError(loadErr)
+			}
+			if resolved == nil {
+				return nil, nil, errExecServerRemoteAuthRequired
+			}
+			snapshot = &resolved.Auth
+			if err := a.checkExecutorCredential(snapshot); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	headers, err := execServerRemoteAuthHeaders(snapshot)
@@ -186,35 +191,10 @@ func (a *execServerRegistryAuth) checkExecutorCredential(snapshot *auth.AuthDotJ
 	if a.identity != nil && *a.identity != execServerIdentityFromAuth(snapshot) {
 		return errExecServerAuthChanged
 	}
-	if a.uncertainRefreshMatches(snapshot) {
+	if auth.ChatGPTRefreshUnsettled(a.codexHome, snapshot.Tokens) {
 		return fmt.Errorf("%w: executor refresh outcome is unknown; replace or renew stored credentials", execserver.ErrRegistryCredentialsTransient)
 	}
 	return nil
-}
-
-func (a *execServerRegistryAuth) uncertainRefreshMatches(snapshot *auth.AuthDotJSON) bool {
-	a.uncertainMu.Lock()
-	defer a.uncertainMu.Unlock()
-	return a.uncertainTokens != nil && reflect.DeepEqual(a.uncertainTokens, snapshot.Tokens)
-}
-
-func (a *execServerRegistryAuth) markUncertainRefresh(snapshot *auth.AuthDotJSON) {
-	a.uncertainMu.Lock()
-	defer a.uncertainMu.Unlock()
-	a.uncertainTokens = snapshot.Tokens
-}
-
-// isCredentialRefreshTimeout reports a refresh whose outcome is unknown because
-// the exchange did not finish (Rust #58251 quarantines that token generation).
-func isCredentialRefreshTimeout(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
-		return true
-	}
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // refreshIfUnchanged mirrors Rust's `AuthManager::refresh_token_if_unchanged`:

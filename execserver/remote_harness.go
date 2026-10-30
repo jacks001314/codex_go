@@ -213,7 +213,7 @@ func (p *registryNoiseRendezvousConnectProvider) ConnectBundle(ctx context.Conte
 		request.Header.Set("Accept", "application/json")
 		return request, nil
 	}
-	response, _, err := sendRegistryAuthenticated(connectCtx, p.config, build)
+	response, _, err := sendRegistryAuthenticated(connectCtx, p.config, build, false)
 	if err != nil {
 		return nil, err
 	}

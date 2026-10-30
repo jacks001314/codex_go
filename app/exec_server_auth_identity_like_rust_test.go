@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/auth"
 	"codex_go/execserver"
@@ -97,17 +99,30 @@ func TestExecServerRegistryAuthDoesNotReuseCredentialsAfterLogoutLikeRust(t *tes
 	}
 }
 
-// Rust #58251: a token generation whose refresh outcome is unknown stays
-// unavailable until different credentials appear.
+// Rust #58251/#58355: a token generation whose refresh exchange was cancelled
+// stays unavailable until different credentials appear.
 func TestExecServerRegistryAuthBlocksUncertainRefreshGenerationLikeRust(t *testing.T) {
 	home := t.TempDir()
 	saveExecServerChatGPTAuthForTest(t, home, execServerIdentityTestTokens("workspace-a", "user-a", "business", "token-1"))
-	live, options := execServerIdentityTestProvider(t, home)
-	current, err := auth.NewStoreWithOptions(home, options).Load()
-	if err != nil || current == nil {
-		t.Fatalf("load current auth = %#v, %v", current, err)
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(500 * time.Millisecond):
+		}
+	}))
+	defer refreshServer.Close()
+	t.Setenv(auth.RefreshTokenURLEnvOverride, refreshServer.URL)
+	live, _ := execServerIdentityTestProvider(t, home)
+
+	rejected, err := live.ResolveAuthHeaders(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveAuthHeaders() error = %v", err)
 	}
-	live.markUncertainRefresh(current)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if live.RefreshAfterUnauthorized(ctx, rejected) {
+		t.Fatal("RefreshAfterUnauthorized() = true for a cancelled exchange")
+	}
 	if _, err := live.ResolveAuthHeaders(context.Background()); !errors.Is(err, execserver.ErrRegistryCredentialsTransient) {
 		t.Fatalf("uncertain generation error = %v, want transient credentials", err)
 	}

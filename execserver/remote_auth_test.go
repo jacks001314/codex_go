@@ -201,7 +201,7 @@ func TestRegistryUnauthorizedReplayOnlyOn401AndOnlyOnceLikeRust(t *testing.T) {
 			}
 			response, _, err := sendRegistryAuthenticated(context.Background(), cfg, func() (*http.Request, error) {
 				return http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, nil)
-			})
+			}, false)
 			if err != nil {
 				t.Fatalf("sendRegistryAuthenticated() error = %v", err)
 			}
@@ -242,7 +242,7 @@ func TestRegistryUnauthorizedWithoutReplacementIsNotReplayedLikeRust(t *testing.
 	}
 	response, _, err := sendRegistryAuthenticated(context.Background(), cfg, func() (*http.Request, error) {
 		return http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, nil)
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("sendRegistryAuthenticated() error = %v", err)
 	}

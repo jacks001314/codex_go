@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 )
 
 // Rust #55987 (codex-rs/exec-server/src/remote/auth.rs,
@@ -29,7 +31,13 @@ type registryRequestBuilder func() (*http.Request, error)
 // credentials and returns the final response plus the scoped executor
 // credential, if any. Only a 401 answered by RefreshAfterUnauthorized is
 // replayed, and only once, so a repeatedly rejected credential cannot loop.
-func sendRegistryAuthenticated(ctx context.Context, cfg RemoteEnvironmentConfig, build registryRequestBuilder) (*http.Response, string, error) {
+//
+// notSentRetryable mirrors Rust #58355 passing an attempt deadline into
+// `send_authenticated` for registration only: a credential deadline reached
+// before the first send is RequestNotSent and may be replayed. Connection and
+// harness validation wrap the whole operation instead, so their deadline stays
+// a transport timeout.
+func sendRegistryAuthenticated(ctx context.Context, cfg RemoteEnvironmentConfig, build registryRequestBuilder, notSentRetryable bool) (*http.Response, string, error) {
 	client, err := remoteRegistryHTTPClientForAuth(cfg)
 	if err != nil {
 		return nil, "", err
@@ -42,6 +50,12 @@ func sendRegistryAuthenticated(ctx context.Context, cfg RemoteEnvironmentConfig,
 		}
 		headers, executorCredential, err := resolveRemoteEnvironmentAuth(ctx, cfg)
 		if err != nil {
+			// Rust #58355: a deadline reached while resolving credentials, before
+			// the first transport send, is `RequestNotSent`, not a transport
+			// timeout, so registration may safely retry it.
+			if notSentRetryable && registryAuthResolutionTimedOut(err) {
+				return nil, "", fmt.Errorf("%w: environment registry credential resolution timed out: %v", ErrRegistryCredentialsTransient, err)
+			}
 			return nil, "", fmt.Errorf("environment registry auth resolution failed: %w", err)
 		}
 		for key, values := range headers {
@@ -71,4 +85,19 @@ func sendRegistryAuthenticated(ctx context.Context, cfg RemoteEnvironmentConfig,
 		_ = response.Body.Close()
 		retried = true
 	}
+}
+
+// registryAuthResolutionTimedOut mirrors Rust #58355
+// `ExecServerError::RequestNotSent("environment registry credential resolution
+// timed out")`: the credential stage exhausted its deadline before anything was
+// written, so the registration replay loop may recover.
+func registryAuthResolutionTimedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }

@@ -573,7 +573,7 @@ func validateRemoteHarnessKey(
 		}
 		return request, nil
 	}
-	response, executorCredential, err := sendRegistryAuthenticated(ctx, cfg, build)
+	response, executorCredential, err := sendRegistryAuthenticated(ctx, cfg, build, false)
 	if err != nil {
 		return err
 	}
