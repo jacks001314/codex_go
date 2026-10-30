@@ -3496,6 +3496,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Residual: Go's feedback pipeline ends at the prepared attachment list and has no Sentry envelope or network upload, so Rust's envelope-framing size check has no carrier; the archive bytes themselves remain bounded by `MAX_DECODED_UPLOAD_BYTES`.
 - Verified with `go test ./appserver -run Feedback -count=1` and `go test ./parity -run TestAlignment -count=1`. Full `./appserver` still fails on pre-existing drift: the v2 suite manifest (`https_mock`) and two runtime-router analytics tests time out on the unmodified tree.
 
-Status after reconciliation: `2206 complete`, `461 not_applicable`,
-`322 audit_pending`, `155 regression_pending`, `5 partial`,
+### Persisted MCP result cap (Round 1053)
+
+- Rust #50458 caps oversized MCP tool results at 64 KiB when persisting paginated history: the stored result becomes a text preview of the serialized JSON, keeps `is_error`, clears `structuredContent`/`_meta`, and leaves small results untouched. The helper is shared with the core MCP event path, and #50470 later makes the preview budget absorb JSON escaping overhead.
+- Complete: `rollout/persist_policy.go` already had the equivalent loop and wiring in `AppendItemCompleted`. This round adds the thread-history regression the Rust PR added: `state/thread_history_writer_test.go` appends an oversized MCP item to a paginated rollout, projects it through `MaterializeThreadHistory`, and reads `thread_items.item_json` to assert the bounded preview, preserved arguments, failed status, and cleared structured content/metadata.
+- The shared helper's second Rust caller (event-copy truncation in `mcp_tool_call.rs`) has no Go carrier because Go's legacy rollout mirror does not persist an `mcp_tool_call` EventMsg with a `CallToolResult`.
+- Verified with `go test ./state -run 'ThreadHistory|Paginated' -count=1`, `go test ./rollout -run 'Persisted|MCPResult|Truncate' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2207 complete`, `461 not_applicable`,
+`322 audit_pending`, `154 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
