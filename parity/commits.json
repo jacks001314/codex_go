@@ -4192,9 +4192,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "audit_pending",
    "evidence": [
-    "Round 1033 (audit): Go's enterpriseCallbackSettings and validateEnterpriseOAuthCredentials already match Rust #44616's callback and credential behavior; the private helper inlining is an implementation-only refactor. Expanded mcp/enterprise_oauth_login_test.go to cover listener-only ports, IPv4/IPv6 loopback, URL port inheritance, matching and conflicting URL/listener ports, invalid callback/issuer/client ID, and whitespace-only refresh tokens. Validation: go build ./...; go test ./mcp -count=1; go test ./parity -run TestAlignment -count=1."
+    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
    ]
   },
   {
@@ -5392,9 +5392,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "regression_pending",
    "evidence": [
-    "Certified against Rust 4150a2c2 (#44626, Round 1037): the authenticated baseline reuses codex_windows_sandbox::environment_transport with the CODEX_SANDBOX_LAUNCH_ prefix, 16 KiB chunks, a 16 MiB payload cap, Windows startup-value injection, and launcher-entry scrubbing. Go already implements this in sandbox/windowssandbox/environment_transport.go and sandbox/mxc/command.go. sandbox/mxc/transport_like_rust_test.go now covers a large Unicode launcher roundtrip under Windows environment limits with host-owned SystemDrive/LOCALAPPDATA replacement, malformed payload rejection with scrub, oversized payload non-mutation, and default-child-environment clearing. Verified with go build ./..., go test ./sandbox/mxc -count=1, go vet ./sandbox/mxc, and go test ./parity -run TestAlignment -count=1."
+    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
    ]
   },
   {
@@ -6916,13 +6916,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "regression_pending",
    "evidence": [
-    "appserverdaemon/prepare_install_windows.go mirrors Rust #50802 select_release: native junction creation/retargeting that fails with fs.ErrPermission or ERROR_ACCESS_DENIED falls back to `cmd.exe` `mklink /J`, with the link/target passed through CODEX_DAEMON_JUNCTION_LINK/CODEX_DAEMON_JUNCTION_TARGET, delayed expansion disabled (/v:off), and the raw /s command line so quoted paths survive shell metacharacters",
-    "Replacement order matches Rust: installJunction creates the replacement before moving `current` aside, attempts to restore the previous junction when publishing fails, preserves the staging directory for recovery when restoration also fails, and removes the previous junction with os.Remove (never recursively walking the release)",
-    "Regression coverage: appserverdaemon/prepare_install_windows_junction_test.go covers fallback creation, native retargeting, fallback replacement under a root containing spaces, `&`, `%` and `!`, verifies the final selection, and asserts no standalone installation appears; TestIsPermissionDeniedRecognizesAccessDenialsLikeRust pins the fallback predicate",
-    "Residual: the restore-after-failed-replacement branch has no injected os.Rename failure seam, so only the success paths and the predicate are exercised",
-    "Verified with `go test ./appserverdaemon -run 'DaemonJunction|PermissionDenied' -count=1` and `go test ./parity -run TestAlignment -count=1`"
+    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
    ]
   },
   {
@@ -7052,12 +7048,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "regression_pending",
    "evidence": [
-    "model/inference_tools.go implements the Rust #50964 ModelClientSession::inference_tools_changed contract: the first model-visible tool list establishes a baseline, later comparisons use the full serialized tool list (schema, additions, ordering, parameter changes and emptying all count), and the baseline survives turns, new sessions and transport-handler reset; Go keys the retained list per conversation so a shared runner still mirrors Rust's per-client state",
-    "turn/turn.go and turn/inference_tools paths record the change on the active turn profile (`RecordToolsChange` ignores completed/unstarted profiles and saturates), both agent loops consult the tracker before sampling, and turn analytics serialization emits `tools_change_count` plus `toolsChangeCount` in appserver/turn_runtime.go and exec/exec.go",
-    "Regression coverage: model/inference_tools_test.go follows Rust core client_tests across schema/addition/ordering/parameter/empty cases, a new session and a second conversation; turn/inference_tools_test.go pins per-sampling-request counting with a retained baseline and the timing-state active-profile rules; telemetry/turn_event_test.go pins the serialized `tools_change_count` field",
-    "Verified with `go test ./model -run InferenceTools -count=1`, `go test ./turn -run 'InferenceTools|ToolsChange' -count=1`, `go test ./telemetry -run TurnEvent -count=1`, and `go test ./parity -run TestAlignment -count=1`"
+    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
    ]
   },
   {
@@ -8556,9 +8549,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "regression_pending",
    "evidence": [
-    "Round 1052: `appserver/rollout_archive.go` mirrors #50446: buffered and path-backed rollouts are partitioned from diagnostics, bundled into `rollouts.tar.gz` (GNU tar, mode 0600, mtime 0, path-backed then buffered order), diagnostics stay separate, invalid/traversal/duplicate names and oversized rollouts are skipped, a bounded writer caps the archive at `FeedbackMaxDecodedUploadBytes`, and only a complete archive is published. `FeedbackRolloutArchive` now matches Rust's `with_individual_fallback`: `Ok(None)` (every rollout skipped) uploads nothing, while archive/read failures fall back to the individual rollouts. The report thread index carries `rollout_archive_filename`; local saves null it. Regression contract: `appserver/rollout_archive_test.go` (compressed `.jsonl.zst` archived under its decoded `.jsonl` name, damaged source preserved as raw `.jsonl.zst`, and the no-fallback case) plus `appserver/feedback_save_like_rust_test.go`; verify with `go test ./appserver -run Feedback -count=1`. Residual: Go's feedback port stops at the prepared attachment list (no Sentry envelope or network upload), so Rust's envelope-framing size guard has no carrier; the archive itself is still bounded by `MAX_DECODED_UPLOAD_BYTES`."
+    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
    ]
   },
   {
@@ -11543,9 +11536,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1033 (audit): Go's enterpriseCallbackSettings and validateEnterpriseOAuthCredentials already match Rust #44616's callback and credential behavior; the private helper inlining is an implementation-only refactor. Expanded mcp/enterprise_oauth_login_test.go to cover listener-only ports, IPv4/IPv6 loopback, URL port inheritance, matching and conflicting URL/listener ports, invalid callback/issuer/client ID, and whitespace-only refresh tokens. Validation: go build ./...; go test ./mcp -count=1; go test ./parity -run TestAlignment -count=1."
    ]
   },
   {
@@ -11603,9 +11596,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Certified against Rust 4150a2c2 (#44626, Round 1037): the authenticated baseline reuses codex_windows_sandbox::environment_transport with the CODEX_SANDBOX_LAUNCH_ prefix, 16 KiB chunks, a 16 MiB payload cap, Windows startup-value injection, and launcher-entry scrubbing. Go already implements this in sandbox/windowssandbox/environment_transport.go and sandbox/mxc/command.go. sandbox/mxc/transport_like_rust_test.go now covers a large Unicode launcher roundtrip under Windows environment limits with host-owned SystemDrive/LOCALAPPDATA replacement, malformed payload rejection with scrub, oversized payload non-mutation, and default-child-environment clearing. Verified with go build ./..., go test ./sandbox/mxc -count=1, go vet ./sandbox/mxc, and go test ./parity -run TestAlignment -count=1."
    ]
   },
   {
@@ -25943,9 +25936,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1052: `appserver/rollout_archive.go` mirrors #50446: buffered and path-backed rollouts are partitioned from diagnostics, bundled into `rollouts.tar.gz` (GNU tar, mode 0600, mtime 0, path-backed then buffered order), diagnostics stay separate, invalid/traversal/duplicate names and oversized rollouts are skipped, a bounded writer caps the archive at `FeedbackMaxDecodedUploadBytes`, and only a complete archive is published. `FeedbackRolloutArchive` now matches Rust's `with_individual_fallback`: `Ok(None)` (every rollout skipped) uploads nothing, while archive/read failures fall back to the individual rollouts. The report thread index carries `rollout_archive_filename`; local saves null it. Regression contract: `appserver/rollout_archive_test.go` (compressed `.jsonl.zst` archived under its decoded `.jsonl` name, damaged source preserved as raw `.jsonl.zst`, and the no-fallback case) plus `appserver/feedback_save_like_rust_test.go`; verify with `go test ./appserver -run Feedback -count=1`. Residual: Go's feedback port stops at the prepared attachment list (no Sentry envelope or network upload), so Rust's envelope-framing size guard has no carrier; the archive itself is still bounded by `MAX_DECODED_UPLOAD_BYTES`."
    ]
   },
   {
@@ -26456,9 +26449,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserverdaemon/prepare_install_windows.go mirrors Rust #50802 select_release: native junction creation/retargeting that fails with fs.ErrPermission or ERROR_ACCESS_DENIED falls back to `cmd.exe` `mklink /J`, with the link/target passed through CODEX_DAEMON_JUNCTION_LINK/CODEX_DAEMON_JUNCTION_TARGET, delayed expansion disabled (/v:off), and the raw /s command line so quoted paths survive shell metacharacters",
+    "Replacement order matches Rust: installJunction creates the replacement before moving `current` aside, attempts to restore the previous junction when publishing fails, preserves the staging directory for recovery when restoration also fails, and removes the previous junction with os.Remove (never recursively walking the release)",
+    "Regression coverage: appserverdaemon/prepare_install_windows_junction_test.go covers fallback creation, native retargeting, fallback replacement under a root containing spaces, `&`, `%` and `!`, verifies the final selection, and asserts no standalone installation appears; TestIsPermissionDeniedRecognizesAccessDenialsLikeRust pins the fallback predicate",
+    "Residual: the restore-after-failed-replacement branch has no injected os.Rename failure seam, so only the success paths and the predicate are exercised",
+    "Verified with `go test ./appserverdaemon -run 'DaemonJunction|PermissionDenied' -count=1` and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {
@@ -26552,9 +26549,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "model/inference_tools.go implements the Rust #50964 ModelClientSession::inference_tools_changed contract: the first model-visible tool list establishes a baseline, later comparisons use the full serialized tool list (schema, additions, ordering, parameter changes and emptying all count), and the baseline survives turns, new sessions and transport-handler reset; Go keys the retained list per conversation so a shared runner still mirrors Rust's per-client state",
+    "turn/turn.go and turn/inference_tools paths record the change on the active turn profile (`RecordToolsChange` ignores completed/unstarted profiles and saturates), both agent loops consult the tracker before sampling, and turn analytics serialization emits `tools_change_count` plus `toolsChangeCount` in appserver/turn_runtime.go and exec/exec.go",
+    "Regression coverage: model/inference_tools_test.go follows Rust core client_tests across schema/addition/ordering/parameter/empty cases, a new session and a second conversation; turn/inference_tools_test.go pins per-sampling-request counting with a retained baseline and the timing-state active-profile rules; telemetry/turn_event_test.go pins the serialized `tools_change_count` field",
+    "Verified with `go test ./model -run InferenceTools -count=1`, `go test ./turn -run 'InferenceTools|ToolsChange' -count=1`, `go test ./telemetry -run TurnEvent -count=1`, and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {

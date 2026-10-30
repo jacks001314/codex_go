@@ -3693,6 +3693,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: background-priority wrapping, probe-timeout fallback, direct launch off Darwin, and platform startup budgets.
 - Verified with `go test ./appserverdaemon -count=1`, `GOOS=darwin GOARCH=arm64 go test -c ./appserverdaemon`, and `go test ./parity -run TestAlignment -count=1`.
 
+### Ledger evidence repair (Round 1082)
+
+- Five certification rounds had written their evidence into the wrong ledger entry because the text replacement matched the first pending block instead of the upstream SHA: #44616 landed on #41385, #44626 on #42047, #50802 on #42451, #50446 on #43315, and #50964 on #42593.
+- Each clobbered entry is restored to its prior state (one `audit_pending`, four `regression_pending`) and each evidence block now sits on the correct upstream commit.
+- Re-verified the moved implementations: `go test ./mcp -run 'EnterpriseOAuth|Callback'`, `go test ./sandbox/mxc`, `go test ./appserverdaemon -run 'DaemonJunction|PermissionDenied'`, `go test ./appserver -run Feedback`, `go test ./model -run InferenceTools`, `go test ./turn -run 'InferenceTools|ToolsChange'`, and `go test ./telemetry -run TurnEvent`.
+- Status distribution is unchanged by the repair: `2234 complete`, `462 not_applicable`, `322 audit_pending`, `126 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
