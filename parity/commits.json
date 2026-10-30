@@ -5484,9 +5484,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "npm/codex/bin/package-manager.js centralises shim package-manager detection: Vite+ ownership metadata in packages/@jacks001314/codex-go.json supports both #-suffixed and subdirectory install IDs, is checked before pnpm across package-root and entrypoint ancestors, and maps to vp install -g @jacks001314/codex-go@latest plus CODEX_MANAGED_BY_VITE_PLUS; codex.js now uses the shared update hint and clears all managed-by markers. install/doctor/tui Vite+ handling already existed. Added npm/codex/bin/package-manager.test.mjs (node --test, 7 pass)."
    ]
   },
   {
