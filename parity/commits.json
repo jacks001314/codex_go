@@ -26079,9 +26079,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserverdaemon/installer.go already captures the installer's stderr through installerStderrTail (last 2 KiB), drains it concurrently with a one-second bounded timeout (installerStderrDrainTimeout), appends the trimmed tail to the failure through installerExitError, and appserverdaemon/installer_windows.go configures PowerShell OutputEncoding as UTF-8 while running with a hidden window",
+    "Round 1059 pins the response budget: appserverdaemon/installer_stderr_test.go now asserts a worst-case `\\u00XX`-escaped 2 KiB tail still fits manualUpdateResponseLimit (16 KiB) and decodes; existing tests cover the rolling window, drain timeout, Windows stderr capture, and non-ASCII diagnostics",
+    "Verified with `go test ./appserverdaemon -run 'Installer|ManualUpdate' -count=1` and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {

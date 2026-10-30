@@ -3540,6 +3540,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - #42110 audit: `appserver/bundled_hooks.go` owns the shared allowlist (including `unified-computer-use` via `cua_repl`); discovery marks matches builtin, `hookEnabled` keeps them enabled regardless of hook state, `hookTrustStatus` reports them trusted without saved trust, `hooks.go` keeps `Builtin json:"-"`, and `hideBuiltinHooks` strips them from public listings.
 - Verified with `go test ./state -run Delegated -count=1`, `go test ./session -run Delegated -count=1`, `go test ./appserver -run 'ThreadManagerDelegatedPreview|Bundled|Hook' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2212 complete`, `461 not_applicable`,
-`322 audit_pending`, `149 regression_pending`, `5 partial`,
+### Daemon installer stderr diagnostics (Round 1059)
+
+- Rust #50499 captures the last 2 KiB of installer stderr, drains it concurrently with a one-second cap after failure, appends the tail to the update error, keeps the encoded manual-update response inside the 16 KiB client read limit, and runs PowerShell with UTF-8 output.
+- Complete: `appserverdaemon/installer.go` already had `installerStderrTail`, `installerStderrDrainTimeout`, and `installerExitError`; `appserverdaemon/installer_windows.go` sets `[Console]::OutputEncoding` to UTF-8. Round 1059 adds the missing response-budget regression: a worst-case `\u00XX`-escaped 2 KiB tail still fits `manualUpdateResponseLimit` and decodes.
+- Verified with `go test ./appserverdaemon -run 'Installer|ManualUpdate' -count=1` and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2213 complete`, `461 not_applicable`,
+`322 audit_pending`, `148 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

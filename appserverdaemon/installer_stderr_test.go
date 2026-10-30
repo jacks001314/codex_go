@@ -1,10 +1,42 @@
 package appserverdaemon
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 )
+
+// TestInstallerStderrTailFitsTheManualUpdateResponseLimitLikeRust pins the
+// budget behind INSTALLER_STDERR_TAIL_BYTES (Rust #50499): even when every
+// captured byte needs the six-byte `\u00XX` JSON escape, the encoded error
+// response still fits the 16 KiB the client reads.
+func TestInstallerStderrTailFitsTheManualUpdateResponseLimitLikeRust(t *testing.T) {
+	tail := &installerStderrTail{}
+	payload := bytes.Repeat([]byte{0x01}, installerStderrTailBytes)
+	if _, err := tail.Write(payload); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	message := installerExitError(errors.New("exit status 1"), tail).Error()
+	encoded, err := json.Marshal(map[string]any{"Err": message})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if len(encoded) > manualUpdateResponseLimit {
+		t.Fatalf("escaped response = %d bytes, want <= %d", len(encoded), manualUpdateResponseLimit)
+	}
+	var outcome struct {
+		Err *string `json:"Err"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	if err := decoder.Decode(&outcome); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if outcome.Err == nil || !strings.Contains(*outcome.Err, "standalone Codex updater exited with error: exit status 1") {
+		t.Fatalf("decoded error = %v", outcome.Err)
+	}
+}
 
 // TestInstallerStderrTailKeepsNewestWindowLikeRust covers the bounded capture
 // (Rust update_loop::INSTALLER_STDERR_TAIL_BYTES): a single oversized chunk
