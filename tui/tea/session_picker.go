@@ -145,10 +145,16 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 	picker.ThemeID = m.tuiTheme
 	picker.Density = m.sessionPickerDensity
 	picker.UseThemeColors = m.statusLineUseColors
+	pickerID := "session-picker-" + string(action)
 	visible := picker.VisibleItems()
 	if len(visible) == 0 {
-		m.notice = "No sessions available to " + action.Label() + "."
-		return nil
+		if m.onListSessionPickerItems == nil {
+			m.notice = "No sessions available to " + action.Label() + "."
+			return nil
+		}
+		// Rust #58280: the live backend listing may still find sessions even
+		// though the startup snapshot was empty.
+		picker.Loading = true
 	}
 	modalOptions := make([]ModalOption, 0, len(visible))
 	for i, item := range visible {
@@ -160,7 +166,7 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		})
 	}
 	m.openModal(ModalRequestMsg{
-		ID:      "session-picker-" + string(action),
+		ID:      pickerID,
 		Kind:    ModalKindPicker,
 		Title:   action.Title(),
 		Body:    "Choose a session to " + action.Label() + ".",
@@ -171,11 +177,16 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		m.modal.sessionPickerNotice = strings.TrimSpace(m.sessionPickerLoadNotice)
 		m.modal.selected = picker.Selected
 	}
+	var cmds []bubbletea.Cmd
+	if refresh := m.sessionPickerRefreshCmd(pickerID); refresh != nil {
+		cmds = append(cmds, refresh)
+	}
 	if m.noAltScreen {
-		return nil
+		return bubbletea.Batch(cmds...)
 	}
 	m.sessionPickerAltScreen = true
-	return bubbletea.EnterAltScreen
+	cmds = append(cmds, bubbletea.EnterAltScreen)
+	return bubbletea.Batch(cmds...)
 }
 
 func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelection) {

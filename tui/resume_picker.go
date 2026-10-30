@@ -629,15 +629,24 @@ func (s *SessionPickerState) IngestItems(items []SessionSummary) {
 		}
 	}
 	seen := make(map[string]bool, len(s.Items)+len(items))
-	for _, item := range s.Items {
-		seen[sessionTargetRowKey(s.itemTarget(item))] = true
+	indexByKey := make(map[string]int, len(s.Items)+len(items))
+	for i, item := range s.Items {
+		key := sessionTargetRowKey(s.itemTarget(item))
+		seen[key] = true
+		indexByKey[key] = i
 	}
 	for _, item := range items {
 		key := sessionTargetRowKey(s.itemTarget(item))
 		if seen[key] {
+			// Rust ingest_page refreshes the unread receipt before skipping a
+			// duplicate row (#58264/#58280).
+			if i, ok := indexByKey[key]; ok {
+				s.Items[i].UnreadRevision = strings.TrimSpace(item.UnreadRevision)
+			}
 			continue
 		}
 		seen[key] = true
+		indexByKey[key] = len(s.Items)
 		s.Items = append(s.Items, item)
 	}
 	// VisibleItems sorts on demand, so appending already keeps the merged list

@@ -1212,6 +1212,10 @@ type Options struct {
 	SessionPickerItems      []codextui.SessionSummary
 	SessionPickerCWD        string
 	SessionPickerView       string
+	// OnListSessionPickerItems lists sessions from the connected backend when
+	// the picker opens, so in-app resumes see sessions created after startup
+	// (Rust #58280). Nil keeps the startup snapshot.
+	OnListSessionPickerItems SessionPickerItemsFunc
 	// SessionPickerNotice preserves already-loaded sessions when a later remote
 	// history page fails (Rust #51230's inline "Could not load more sessions").
 	SessionPickerNotice string
@@ -2439,6 +2443,7 @@ type Model struct {
 	onLoadTranscriptPreview  TranscriptPreviewFunc
 	onReadSessionTranscript  SessionTranscriptFunc
 	onAcknowledgeSessionRead SessionReadAcknowledgeFunc
+	onListSessionPickerItems SessionPickerItemsFunc
 	// sessionTranscriptThreadID identifies the picker transcript overlay's
 	// session so a late load result is ignored after the overlay changes.
 	sessionTranscriptThreadID string
@@ -3089,6 +3094,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onLoadTranscriptPreview:          options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:          options.OnReadSessionTranscript,
 		onAcknowledgeSessionRead:         options.OnAcknowledgeSessionRead,
+		onListSessionPickerItems:         options.OnListSessionPickerItems,
 		disableAutoRecap:                 options.AutoRecap != nil && !*options.AutoRecap,
 		promptSuggestionsEnabled:         options.PromptSuggestions != nil && *options.PromptSuggestions,
 		composerPlaceholder:              firstNonEmpty(options.Placeholder, "Ask Codex to do anything"),
@@ -3884,6 +3890,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case SessionTranscriptAcknowledgedMsg:
 		m.applySessionTranscriptAcknowledged(msg)
+		return m, nil
+	case SessionPickerRefreshMsg:
+		m.applySessionPickerRefresh(msg)
 		return m, nil
 	case DynamicToolThreadStartedMsg:
 		return m, m.applyDynamicToolThreadStarted(msg)

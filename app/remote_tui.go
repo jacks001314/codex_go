@@ -528,9 +528,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// enables them (Rust #43120/#43286, #54175).
 		WorktreesEnabled: false,
 		// Rust #43340: the connected server owns named permission profiles.
-		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
-		OnUpdateThreadPermissions:   interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
-		SessionPickerItems:          sessionPickerItems,
+		OnListPermissionProfiles:  interactiveRemoteListPermissionProfiles(ctx, endpoint),
+		OnUpdateThreadPermissions: interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
+		SessionPickerItems:        sessionPickerItems,
+		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
+			items, notice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
+			return items, notice, nil
+		},
 		SessionPickerNotice:         sessionPickerNotice,
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
