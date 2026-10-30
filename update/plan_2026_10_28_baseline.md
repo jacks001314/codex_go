@@ -3259,6 +3259,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `config/cloud_config_speed_modes_like_rust_test.go` and `model/service_tier_flex_test.go` pin legacy denial normalization, higher-priority enterprise overrides, and independent Ultra Fast gating; existing TUI and app-server tests cover the remaining surfaces.
 - Verified with `go build ./...`, `go test ./config ./model ./applypatch ./envutil -count=1`, `go test ./tool -run 'ApplyPatch' -count=1`, `go test ./features -count=1`, `go test ./appserver -run 'ServiceTier|SpeedMode|Ultrafast|FastMode' -count=1`, `go test ./tui/... -run 'ServiceTier|Speed|Ultrafast|FastMode' -count=1`, and full `go test ./appserver -count=1` (only the known seven pre-existing failures remain).
 
-Status after reconciliation: `2180 complete`, `451 not_applicable`,
-`345 audit_pending`, `169 regression_pending`, `4 partial`,
+### Code-mode admission retries and spawn-failure diagnostics (Round 1019)
+
+- Rust #51185 retries only the gRPC code-mode session admission (connect plus `session/open`) on `Unavailable`/`ResourceExhausted`, bounded and never replaying established executions. Go already implements this in `codemode/remote_provider.go` and `codemode/grpc_session_provider.go`, including the later Rust #52381 five-attempt jittered schedule; regressions prove transient recovery and execute/wait/terminate non-retry (#51185, complete).
+- Rust #51355 attaches bounded `detail`/`error_kind` classifications to spawn-failure metrics and trace events while preserving the user-visible error. Go already implements the annotations and emission in `appserver/agent_spawn_failure.go`; `TestSpawnFailureContextDistinguishesCapacityAndRegistryLikeRust` pins distinct capacity/registry origins, depth-rejection exclusion, metric aggregation, and trace labels (#51355, complete).
+- Verified with `go test ./codemode -run 'Admission|NeverRetried' -count=1` and `go test ./appserver -run 'SpawnFailureContext|SpawnFailure' -count=1`.
+
+Status after reconciliation: `2182 complete`, `451 not_applicable`,
+`345 audit_pending`, `167 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

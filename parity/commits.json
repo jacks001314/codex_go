@@ -26742,9 +26742,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go already implements Rust #51185/#52381 admission retry: the remote session retries only gRPC connect plus session/open, at most five attempts, on Unavailable/ResourceExhausted, with an immediate first retry and jittered 50/100/200ms backoff; execute/wait/terminate never pass through the admission loop. codemode/grpc_admission_test.go covers transient open recovery and proves an established execute is never retried; grpc_session_routing_like_rust_test.go pins the bounded attempt count and delay schedule. Verified with go test ./codemode -run 'Admission|NeverRetried' -count=1."
    ]
   },
   {
@@ -27186,9 +27186,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Go already implements bounded spawn-failure diagnostics: appserver/agent_spawn_failure.go annotates the first failure origin (execution/registry/residency capacity, duplicate path, runtime unavailable, child startup, fork history, input admission), preserves the original error kind and user-visible message, and emits telemetry counters plus trace events with bounded reason/detail/error_kind/fork_mode/multi_agent_version labels and the turn id. TestSpawnFailureContextDistinguishesCapacityAndRegistryLikeRust covers distinct capacity/registry origins, exclusion of the pre-spawn depth rejection, metric aggregation, and trace events. Verified with go test ./appserver -run 'SpawnFailureContext|SpawnFailure' -count=1."
    ]
   },
   {
