@@ -3919,3 +3919,12 @@ Status after this batch: `2315 complete`, `462 not_applicable`, `322 audit_pendi
 - Tests: `TestLiveVoiceTranscriptAnimatesAndStopsFramesLikeRust`, `TestLiveVoiceTranscriptKeepsSettledTilesOnAppendLikeRust`, `TestLiveVoiceTranscriptSealsIntoHistoryCellLikeRust`, `TestLiveVoiceTranscriptRespectsReducedMotionLikeRust`; focused and full `go test ./tui/tea ./tui/chatwidget` pass.
 
 Status after this batch: `2316 complete`, `462 not_applicable`, `322 audit_pending`, `44 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### close_agent snapshots and agent status streams (Round 1106)
+
+- #47252 `CloseAgent` now resolves a target through the live registry and the persisted agent graph, so a known agent whose runtime was unloaded still closes and records its spawn edge as closed. Unexpected lookup failures propagate before shutdown instead of being reported as a successful NotFound close.
+- The pre-close snapshot is returned as `previous_status`; the collab completion item fills `agentsStates[target]` from it and marks the item failed when that snapshot was NotFound or Errored, matching Rust `collab_tool_call_status`.
+- #47267 is an API reshape: Go has no watch channel/`StatusSubscription`, and `WaitAgent` already collects initial snapshots before waiting, coalesces updates by polling, returns the latest status at the end, and propagates context cancellation.
+- Tests: `TestRuntimeAgentControllerClosesKnownUnloadedAgentLikeRust`, `TestCloseAgentCompletionItemUsesSnapshotLikeRust`, `TestRuntimeAgentControllerWaitAgentUsesInitialSnapshotsLikeRust`, updated `TestRuntimeAgentControllerReportsNotFound`; focused `go test ./appserver -run 'AgentController|Collab|CloseAgent|WaitAgent|Subagent'` passes.
+
+Status after this batch: `2318 complete`, `462 not_applicable`, `322 audit_pending`, `42 regression_pending`, `5 partial`, `6 blocked_precondition`.

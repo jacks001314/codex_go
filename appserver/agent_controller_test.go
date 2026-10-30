@@ -406,9 +406,10 @@ func TestRuntimeAgentControllerReportsNotFound(t *testing.T) {
 	if err != nil || resumed.Status.Kind != agent.AgentMessageStatusNotFound {
 		t.Fatalf("resumed = %+v, err=%v", resumed, err)
 	}
-	closed, err := controller.CloseAgent(context.Background(), &agent.CloseAgentArgs{Target: "missing"})
-	if err != nil || closed.PreviousStatus.Kind != agent.AgentMessageStatusNotFound {
-		t.Fatalf("closed = %+v, err=%v", closed, err)
+	// Rust #47252 propagates the thread lookup for an unknown close target
+	// instead of reporting a successful no-op close.
+	if closed, err := controller.CloseAgent(context.Background(), &agent.CloseAgentArgs{Target: "missing"}); err == nil {
+		t.Fatalf("closing an unknown agent returned %+v, want an error", closed)
 	}
 }
 

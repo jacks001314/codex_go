@@ -3168,7 +3168,8 @@ func collaborationCompletedThreadItem(execution *turn.ToolExecutionResult, sende
 		return ThreadItem{}, false
 	}
 	status := string(CollabAgentToolCallCompleted)
-	if execution.Output == nil || !execution.Output.Success {
+	if execution.Output == nil || !execution.Output.Success ||
+		(toolKind == CollabAgentToolCloseAgent && appCollabCloseStatusFails(execution.Output)) {
 		status = string(CollabAgentToolCallFailed)
 	}
 	return appCollabAgentThreadItem(execution.Invocation, execution.Output, senderThreadID, turnID, status, toolKind, execution.FinishedAt), true
@@ -3214,6 +3215,16 @@ func appCollabAgentThreadItem(invocation *tool.Invocation, output *tool.Output, 
 		if raw, ok := result["status"].(map[string]any); ok {
 			for key, value := range raw {
 				states[key] = appCollabAgentStateFromAny(value)
+			}
+		}
+		// Rust #47252: close_agent reports the snapshot captured before shutdown
+		// as the target's state instead of leaving the map empty.
+		if kind == CollabAgentToolCloseAgent {
+			if previous, ok := result["previous_status"]; ok {
+				state := appCollabAgentStateFromAny(previous)
+				for _, receiver := range receivers {
+					states[receiver] = state
+				}
 			}
 		}
 	}
@@ -3299,6 +3310,27 @@ func appCollabStatus(kind agent.AgentMessageStatusKind) string {
 		return string(CollabAgentStatusShutdown)
 	default:
 		return string(CollabAgentStatusNotFound)
+	}
+}
+
+// appCollabCloseStatusFails mirrors Rust's collab_tool_call_status for
+// close_agent: the completed item is failed when the pre-close snapshot is
+// NotFound or Errored, even though the tool call itself succeeded.
+func appCollabCloseStatusFails(output *tool.Output) bool {
+	result := appCollabResultMap(output)
+	if result == nil {
+		return false
+	}
+	previous, ok := result["previous_status"]
+	if !ok {
+		return false
+	}
+	state := appCollabAgentStateFromAny(previous)
+	switch state["status"] {
+	case string(CollabAgentStatusNotFound), string(CollabAgentStatusErrored):
+		return true
+	default:
+		return false
 	}
 }
 

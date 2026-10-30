@@ -18524,9 +18524,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Go commit 37377500+: `runtimeAgentController.CloseAgent` resolves the target through the live registry and then the persisted agent graph (`closeAgentTarget`/`persistedAgentRecord`), so a known agent whose runtime was unloaded still closes and records its spawn edge as closed; unexpected lookup errors now propagate before shutdown instead of being reported as a successful NotFound close.",
+   "The pre-close snapshot travels back as `previous_status`, and the collab completion item fills `agentsStates[target]` from it and marks the item failed when that snapshot was NotFound/Errored, matching Rust `collab_tool_call_status`.",
+   "Tests: TestRuntimeAgentControllerClosesKnownUnloadedAgentLikeRust, TestCloseAgentCompletionItemUsesSnapshotLikeRust, and the updated TestRuntimeAgentControllerReportsNotFound in appserver."
    ]
   },
   {
@@ -18584,9 +18586,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Rust-only API reshape: Go has no watch channel or `StatusSubscription`; `runtimeAgentController.WaitAgent` reads snapshots from the live router/thread store, so the observable contract is preserved rather than the stream type.",
+   "`WaitAgent` collects each target's initial snapshot before waiting (missing threads become final NotFound), coalesces updates by polling at most every 200ms, returns the latest status when the wait ends, and propagates context cancellation like Rust's subscription error path.",
+   "Tests: TestRuntimeAgentControllerWaitAgentUsesInitialSnapshotsLikeRust plus the existing pending/live injection wait tests; focused `go test ./appserver -run 'AgentController|Collab|CloseAgent|WaitAgent|Subagent'` passes."
    ]
   },
   {

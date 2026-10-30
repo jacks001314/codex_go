@@ -742,9 +742,9 @@ func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.Clo
 	if args == nil || strings.TrimSpace(args.Target) == "" {
 		return nil, fmt.Errorf("target is required")
 	}
-	target, _, err := c.resolveTarget(args.Target)
+	target, err := c.closeAgentTarget(args.Target)
 	if err != nil {
-		return &agent.CloseAgentResult{PreviousStatus: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusNotFound}}, nil
+		return nil, err
 	}
 	previous := c.status(target)
 	// Rust's close_agent shuts down the target and any open descendants
@@ -769,6 +769,36 @@ func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.Clo
 		result.ShutdownReport = &report
 	}
 	return result, nil
+}
+
+// closeAgentTarget resolves a close target through the live registry and then
+// the persisted agent graph, so a known agent that is no longer loaded still
+// closes (Rust #47252 returns an Unloaded snapshot for it). Unexpected lookup
+// failures propagate before any shutdown begins instead of being reported as a
+// missing agent.
+func (c *runtimeAgentController) closeAgentTarget(target string) (string, error) {
+	threadID, _, err := c.resolveTarget(target)
+	if err == nil {
+		return threadID, nil
+	}
+	record, recordErr := c.router.threadRecord(session.ThreadID(strings.TrimSpace(target)), true, false)
+	if recordErr == nil && record != nil && persistedAgentRecord(record) {
+		return string(record.ID), nil
+	}
+	if recordErr != nil && !errors.Is(recordErr, session.ErrThreadNotFound) {
+		return "", recordErr
+	}
+	return "", err
+}
+
+// persistedAgentRecord reports whether a thread record belongs to a spawned
+// agent, which close_agent can still shut down after the runtime was unloaded.
+func persistedAgentRecord(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(record.Metadata.ThreadSource))
+	return source == "subagentthreadspawn" || (strings.HasPrefix(source, "subagent") && strings.TrimSpace(record.Metadata.AgentPath) != "")
 }
 
 // agentShutdownErrorKind maps an error to a stable, payload-free category for the
