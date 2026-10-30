@@ -641,6 +641,13 @@ func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommand
 			args.Workdir = ""
 		}
 		validation.CWD = environmentCWD
+		if remoteEnvironment {
+			// Rust #42577: the approval request and the launch both carry the
+			// selected executor's working directory, so the path grammar of the
+			// target (not the host) decides how it is resolved and how
+			// permission grants are materialized.
+			validation.PathConvention = PathConventionForPath(environmentCWD)
+		}
 		if environment.Shell != nil {
 			sessionShell = environment.Shell
 		}

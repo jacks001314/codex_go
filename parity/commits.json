@@ -7006,9 +7006,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: can_read_local_path_with_cwd, can_write_local_path_with_cwd, has_explicit_non_write_entry_for_local_path_with_cwd, resolve_access_for_local_path_with_cwd"
+    "Shell requests resolve the launch directory in the selected executor's path grammar (foreign conventions are cleaned lexically, not host-absolutized), the remote PathConvention feeds permission materialization, and command approvals carry the target-native cwd unchanged; covered by tool and app-server tests (#42577)"
    ]
   },
   {

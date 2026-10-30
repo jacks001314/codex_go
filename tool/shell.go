@@ -622,7 +622,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if justificationPresent && !sandboxPermissionsPresent {
 		return nil, errors.New("`justification` requires an explicit `sandbox_permissions`; use `sandbox_permissions: \"require_escalated\"` for unsandboxed execution, or omit `justification`.")
 	}
-	cwd, err := resolveShellRequestCWD(opts.CWD, firstNonEmptyString(args.CWD, args.Workdir))
+	cwd, err := resolveShellRequestCWDForConvention(opts.CWD, firstNonEmptyString(args.CWD, args.Workdir), opts.PathConvention)
 	if err != nil {
 		return nil, err
 	}
@@ -856,6 +856,22 @@ func resolveShellRequestCWD(base string, override string) (string, error) {
 		}
 	}
 	return filepath.Clean(cwd), nil
+}
+
+// resolveShellRequestCWDForConvention resolves the launch directory in the
+// selected executor's path grammar. A foreign convention (a POSIX executor
+// driven from a Windows host, for example) must not be absolutized against the
+// host, because that rewrites the target-native path the executor and its
+// approval request need (Rust #42577).
+func resolveShellRequestCWDForConvention(base string, override string, convention utils.PathConvention) (string, error) {
+	if convention == "" || convention == utils.NativePathConvention() {
+		return resolveShellRequestCWD(base, override)
+	}
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return "", errors.New("cwd must not be empty")
+	}
+	return resolveRemoteUnifiedExecCWD(base, override)
 }
 
 func cloneEnv(in map[string]string) map[string]string {
