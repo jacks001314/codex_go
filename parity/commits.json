@@ -20393,9 +20393,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only generic deduplication of RPC send-and-wait and Markdown writer type parameters; Go has no corresponding monomorphized generic implementation and no behavioral surface changed"
    ]
   },
   {
@@ -20405,9 +20405,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only consolidation of typed app-server response decoding across in-process and remote clients; Go decodes through its shared typed RPC helpers and no protocol behavior changed"
    ]
   },
   {
@@ -20417,9 +20417,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go BoundedProductSKU already uses the codex allowlist, omits empty values as unknown, and collapses every other SKU to other; tests cover exact, empty, mixed-case, and whitespace cases"
    ]
   },
   {
@@ -20597,9 +20597,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go records the already-selected retry delay directly in retry telemetry before sleeping, so no second clock sample can shorten the reported backoff; Rosetta fixture timing is Rust-test-only"
    ]
   },
   {
@@ -23667,9 +23667,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go bundled catalog already pins gpt-6.1-sol at priority 1 as the default with matching reasoning levels and older Sol descriptions; catalog tests cover default selection and ordering"
    ]
   },
   {
@@ -24291,9 +24291,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go escapeRecoveredCommandDraftText already escapes shell and slash command drafts before appending recovered answers; added Rust-equivalent coverage and fixed leading-space slash drafts to remain unchanged"
    ]
   },
   {

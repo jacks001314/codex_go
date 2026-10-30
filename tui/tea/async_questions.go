@@ -485,6 +485,11 @@ func composerCommandEscapeIndex(text string) (int, bool) {
 		return offset, true
 	}
 	if strings.HasPrefix(trimmed, "/") {
+		// A literal leading space keeps the draft from being parsed as a slash
+		// command, so Rust leaves it untouched instead of adding a backslash.
+		if strings.HasPrefix(text, " ") {
+			return 0, false
+		}
 		parsed := bottompane.ParseSlashName(trimmed)
 		if parsed.OK && strings.Contains(parsed.Name, "/") {
 			return 0, false
