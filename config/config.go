@@ -67,6 +67,10 @@ type Config struct {
 	// Config::chatgpt_base_url_is_explicit). An explicit commercial default must
 	// not be replaced by a credential-dependent government endpoint.
 	chatgptBaseURLExplicit bool
+	// filesystemRequirementsSource records which requirement layer supplied the
+	// managed [permissions.filesystem] policy (Rust RequirementSource). Doctor
+	// reports it without exposing the denied paths.
+	filesystemRequirementsSource string
 }
 
 type ForcedLoginMethod string
@@ -460,6 +464,8 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	requirementsHadFilesystem := requirementsHaveFilesystem(requirements)
+	cloudRequirementsHadFilesystem := false
 	var cloudConfigBinding *CloudConfigBundleBinding
 	if opts != nil && opts.IncludeManagedConfig && opts.CloudConfigBundle != nil {
 		// Rust #49269: the loader returns the bundle together with the policy
@@ -471,11 +477,12 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			return nil, snapshot.Err
 		}
 		if bundle := snapshot.Bundle; bundle != nil && !bundle.IsEmpty() {
-			cloudRequirements, err := applyCloudConfigBundle(values, requirements, *bundle, codexHome)
+			cloudRequirements, cloudFilesystem, err := applyCloudConfigBundleWithFilesystemSource(values, requirements, *bundle, codexHome)
 			if err != nil {
 				return nil, err
 			}
 			requirements = cloudRequirements
+			cloudRequirementsHadFilesystem = cloudFilesystem
 		}
 		cloudConfigBinding = snapshot.Binding
 	}
@@ -490,13 +497,24 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if requirements != nil && requirements.ChatgptBaseURL != nil {
 		chatgptBaseURLExplicit = true
 	}
+	filesystemRequirementsSource := ""
+	switch {
+	case !requirementsHadFilesystem && !cloudRequirementsHadFilesystem:
+	case requirementsHadFilesystem && cloudRequirementsHadFilesystem:
+		filesystemRequirementsSource = "multiple layers"
+	case cloudRequirementsHadFilesystem:
+		filesystemRequirementsSource = "cloud"
+	default:
+		filesystemRequirementsSource = "system"
+	}
 	cfg := &Config{
-		Values:                    values,
-		Requirements:              requirements,
-		allowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
-		isProjectless:             isProjectless,
-		cloudConfigBinding:        cloudConfigBinding,
-		chatgptBaseURLExplicit:    chatgptBaseURLExplicit,
+		Values:                       values,
+		Requirements:                 requirements,
+		allowedSymlinkedCodexHome:    allowedSymlinkedCodexHome,
+		isProjectless:                isProjectless,
+		cloudConfigBinding:           cloudConfigBinding,
+		chatgptBaseURLExplicit:       chatgptBaseURLExplicit,
+		filesystemRequirementsSource: filesystemRequirementsSource,
 	}
 	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
 		return nil, err
@@ -593,6 +611,31 @@ func (c *Config) CloudConfigBinding() *CloudConfigBundleBinding {
 		return nil
 	}
 	return c.cloudConfigBinding
+}
+
+// FilesystemRequirementsSource reports where the managed filesystem policy was
+// supplied from, using Rust's RequirementSource display values. It returns
+// "none" when no [permissions.filesystem] requirement is active and "unknown"
+// when a Config was assembled without load-time provenance.
+func (c *Config) FilesystemRequirementsSource() string {
+	if c == nil || !requirementsHaveFilesystem(c.Requirements) {
+		return "none"
+	}
+	if source := strings.TrimSpace(c.filesystemRequirementsSource); source != "" {
+		return source
+	}
+	return "unknown"
+}
+
+// requirementsHaveFilesystem reports whether a requirements layer carries the
+// managed [permissions.filesystem] table (Rust ConfigRequirementsToml
+// permissions.filesystem).
+func requirementsHaveFilesystem(requirements *ConfigRequirements) bool {
+	if requirements == nil || requirements.Permissions == nil {
+		return false
+	}
+	value, ok := requirements.Permissions["filesystem"]
+	return ok && value != nil
 }
 
 // applyManagedExactOverrides mirrors Rust ConfigRequirementsToml::apply_to_config

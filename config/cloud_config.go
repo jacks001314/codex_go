@@ -594,39 +594,51 @@ func MergeCloudConfigLayers(layers []CloudConfigLayer) map[string]any {
 }
 
 func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequirements, bundle CloudConfigBundle, baseDir string) (*ConfigRequirements, error) {
+	merged, _, err := applyCloudConfigBundleWithFilesystemSource(values, requirements, bundle, baseDir)
+	return merged, err
+}
+
+// applyCloudConfigBundleWithFilesystemSource applies the bundle and reports
+// whether any enterprise-managed fragment supplied a [permissions.filesystem]
+// requirement, which doctor uses to name the managed policy source.
+func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requirements *ConfigRequirements, bundle CloudConfigBundle, baseDir string) (*ConfigRequirements, bool, error) {
 	layers, err := CloudConfigLayersFromBundle(bundle, baseDir)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	mergeConfigMaps(values, MergeCloudConfigLayers(layers.EnterpriseManagedConfig))
 
 	managedRequirementValues := map[string]any{}
+	cloudFilesystem := false
 	for _, layer := range layers.EnterpriseManagedRequirements {
 		parsed, err := parseRequirementsTOMLValues([]byte(layer.RawTOML))
 		if err != nil {
-			return nil, fmt.Errorf("%w: failed to parse cloud requirements fragment %s: %s", ErrInvalidCloudConfig, layer.Source.Name, err)
+			return nil, false, fmt.Errorf("%w: failed to parse cloud requirements fragment %s: %s", ErrInvalidCloudConfig, layer.Source.Name, err)
 		}
 		normalizeFeatureRequirementAliases(parsed)
 		if err := normalizeNetworkRequirementAliases(parsed); err != nil {
-			return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+			return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 		}
 		if permissions, ok := parsed["permissions"].(map[string]any); ok {
+			if _, ok := permissions["filesystem"]; ok {
+				cloudFilesystem = true
+			}
 			pathContext := layer.PathContext
 			if pathContext == nil {
 				pathContext, err = NewHostConfigPathContext(layer.BaseDir)
 				if err != nil {
-					return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+					return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 				}
 			}
 			if err := resolveFilesystemDenyReadPathsWithContext(permissions, pathContext); err != nil {
-				return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+				return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 			}
 		}
 		mergeConfigMaps(managedRequirementValues, parsed)
 	}
 	managedRequirements, err := configRequirementsFromValidatedMap(managedRequirementValues)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+		return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 	}
 	// Rust 0f21cb3413 (#39043): cli_auth_credentials_store and chatgpt_base_url
 	// are local-only authentication requirements and are ignored in
@@ -647,7 +659,7 @@ func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequireme
 	if defaultProfile, ok := managedRequirementValues["default_permissions"].(string); ok && strings.TrimSpace(defaultProfile) != "" {
 		values["default_permissions"] = strings.TrimSpace(defaultProfile)
 	}
-	return mergeConfigRequirements(requirements, managedRequirements), nil
+	return mergeConfigRequirements(requirements, managedRequirements), cloudFilesystem, nil
 }
 
 // normalizeFeatureRequirementAliases mirrors Rust #42863: within a single

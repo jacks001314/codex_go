@@ -253,7 +253,6 @@ func (b *Builder) networkOnlyReport(codexHome string, opts *Options) *Report {
 		configResult.Detail("network diagnostics: effective network configuration is unavailable")
 		return b.newReport([]*DoctorCheck{configResult})
 	}
-	configResult.Detail(fmt.Sprintf("configuration load ms: %d", loadDuration.Milliseconds()))
 	configResult.DurationMS = loadDuration.Milliseconds()
 	checks := []*DoctorCheck{
 		configResult,
@@ -1029,6 +1028,7 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 	if opts == nil {
 		opts = &Options{}
 	}
+	loadStarted := time.Now()
 	cfg, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
 		Profile:         opts.Root.Shared.Profile,
 		CWD:             opts.Root.Shared.CWD,
@@ -1036,6 +1036,7 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 		EnableFeatures:  append([]string(nil), opts.Root.EnableFeatures...),
 		DisableFeatures: append([]string(nil), opts.Root.DisableFeatures...),
 	})
+	loadDuration := time.Since(loadStarted)
 	details := []string{"config.toml: " + config.ConfigPath(codexHome)}
 	if err != nil {
 		// Rust #46962: configuration load errors can echo configuration values
@@ -1054,6 +1055,10 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 		modelName = "<default>"
 	}
 	details = []string{
+		// Rust #42821: state the configuration scope doctor inspected instead of
+		// implying it saw live thread overrides.
+		"configuration scope: invocation config, including cloud-managed policy",
+		"active thread overrides: not inspected",
 		"GCODE_HOME: " + codexHome,
 		"cwd: " + doctorCWD(opts),
 		"model: " + modelName,
@@ -1067,6 +1072,7 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 	}
 	featureFlagDetails(cfg, &details)
 	configTomlDetailsForDoctor(codexHome, &details)
+	details = append(details, fmt.Sprintf("configuration load ms: %d", loadDuration.Milliseconds()))
 	return NewCheck("config.load", "config", CheckStatusOK, "config loaded").DetailsList(details)
 }
 
@@ -2936,8 +2942,8 @@ func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config
 	}
 	check = check.Detail("glob scan max depth: " + globDepth)
 	managedSource := "none"
-	if cfg != nil && cfg.Requirements != nil && (len(cfg.Requirements.Permissions) > 0 || cfg.Requirements.DefaultPermissions != nil) {
-		managedSource = "managed requirements"
+	if cfg != nil {
+		managedSource = cfg.FilesystemRequirementsSource()
 	}
 	check = check.Detail("managed filesystem source: " + managedSource)
 	check = check.Detail("denied-read restrictions: " + restrictions)

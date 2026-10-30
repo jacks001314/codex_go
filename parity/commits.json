@@ -7666,9 +7666,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1061: Go doctor now names the managed [permissions.filesystem] source like Rust #42821. config.Config tracks whether the local requirements.toml (system), an enterprise-managed cloud fragment (cloud), or both (multiple layers) supplied the filesystem requirement; Config.FilesystemRequirementsSource reports none/system/cloud/multiple layers/unknown, and applyCloudConfigBundleWithFilesystemSource reports the cloud contribution while the existing applyCloudConfigBundle wrapper keeps test callers intact. doctor.sandboxCheck uses that method without exposing denied paths, and configCheck adds the configuration scope, active-thread limitation, and configuration load ms details. Tests: config/filesystem_requirements_source_like_rust_test.go and doctor/filesystem_requirements_source_like_rust_test.go. Verified with go test ./config -count=1, go test ./doctor -count=1, go build ./...."
    ]
   },
   {
