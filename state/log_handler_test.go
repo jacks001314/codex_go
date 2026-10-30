@@ -167,6 +167,62 @@ func TestLogDBHandlerReportsAndReplaysWriteFailureLikeRust(t *testing.T) {
 	})
 }
 
+// Rust #47886: a lost SQLite batch stays in the in-memory feedback ring, the
+// diagnostic reports only the classified category, and later writes recover
+// without clearing the incomplete-database marker.
+func TestLogDBHandlerPreservesFailedBatchInFeedbackRingLikeRust(t *testing.T) {
+	runtime := newGoalTestRuntime(t)
+	ctx := context.Background()
+	if _, err := runtime.LogsDB().ExecContext(ctx,
+		"CREATE TRIGGER fail_log_insert BEFORE INSERT ON logs BEGIN SELECT RAISE(ABORT, 'synthetic-secret'); END",
+	); err != nil {
+		t.Fatalf("install failure trigger: %v", err)
+	}
+	handler := NewLogDBHandlerWithConfig(runtime, nil, LogSinkQueueConfig{QueueCapacity: 8, BatchSize: 1, FlushInterval: time.Hour})
+	defer func() { _ = handler.Close(ctx) }()
+	reporter := &recordingLogWriteFailureReporter{}
+	handler.SetFailureReporter(reporter)
+
+	slog.New(handler).Info("lost diagnostic body", "target", "codex_test", "thread_id", "thread-ring")
+	if err := handler.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if !handler.HasWriteFailure() {
+		t.Fatal("HasWriteFailure() = false after failed batch")
+	}
+	if len(reporter.diagnostics) != 1 || !strings.Contains(reporter.diagnostics[0], `error="constraint"`) {
+		t.Fatalf("reported diagnostics = %#v", reporter.diagnostics)
+	}
+	logs := string(handler.FeedbackLogs())
+	if !strings.Contains(logs, "lost diagnostic body") {
+		t.Fatalf("feedback ring lost the failed batch: %q", logs)
+	}
+	if !strings.Contains(logs, `failed to flush logs to SQLite error="constraint" entries=1`) {
+		t.Fatalf("feedback ring diagnostic = %q", logs)
+	}
+	if strings.Contains(logs, "synthetic-secret") {
+		t.Fatalf("feedback ring leaked raw SQLite error details: %q", logs)
+	}
+
+	if _, err := runtime.LogsDB().ExecContext(ctx, "DROP TRIGGER fail_log_insert"); err != nil {
+		t.Fatalf("remove failure trigger: %v", err)
+	}
+	slog.New(handler).Info("recovered log", "target", "codex_test", "thread_id", "thread-ring")
+	if err := handler.Flush(ctx); err != nil {
+		t.Fatalf("flush recovered batch: %v", err)
+	}
+	if !handler.HasWriteFailure() {
+		t.Fatal("HasWriteFailure() cleared after recovery; SQLite remains incomplete")
+	}
+	if got := strings.Count(string(handler.FeedbackLogs()), "failed to flush logs to SQLite"); got != 1 {
+		t.Fatalf("feedback ring diagnostics = %d, want 1", got)
+	}
+	rows, err := runtime.QueryLogs(ctx, LogQuery{ThreadIDs: []string{"thread-ring"}})
+	if err != nil || len(rows) != 1 || rows[0].Message == nil || *rows[0].Message != "recovered log" {
+		t.Fatalf("recovered rows = %#v, %v", rows, err)
+	}
+}
+
 // Mirrors Rust's `post_sampling_token_estimate_is_disabled_by_always_on_sinks`
 // (#50054): the always-on log-DB sink filter must never persist the
 // post-sampling token estimate target, checked directly on the sink filter.

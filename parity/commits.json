@@ -20633,9 +20633,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go does not maintain a system-proxy cache behind a lock. network/http_client.go delegates system proxy resolution to net/http DefaultTransport Proxy (ProxyFromEnvironment) and only wraps the transport for proxy authentication; there is no cache entry, try_lock, or async-worker blocking point to change."
    ]
   },
   {
@@ -20670,9 +20670,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: tui/onboarding/auth_flow.go stores SignInState as a plain value on authFlowModel and renders from that copy; it has no RwLock or nested read-lock path, so the Rust deadlock cannot occur."
    ]
   },
   {
@@ -20754,9 +20754,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/8; needs review: LogWriteFailureReporter, SharedWriter, SharedWriterGuard, has_write_failure, refresh_logs"
+    "Round 1112 (parity): the SQLite log sink now keeps a bounded 4 MiB in-memory diagnostic ring, records every persisted log line there before queueing, appends flush-failure diagnostics that report only the classified SQLite category and batch size, and exposes LogDBHandler.FeedbackLogs(). Feedback preparation discards the incomplete SQLite selection when HasWriteFailure is set while keeping legacy/log metadata, and upload/save refresh snapshot log bytes from the ring after collection so logs written during collection and the failure diagnostic reach the same submission. Raw SQLite messages no longer enter the diagnostic. Tests: go test ./state -run LogDBHandler -count=1; go test ./appserver -run Feedback -count=1."
    ]
   },
   {
@@ -21929,9 +21929,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/6; needs review: DisableModifyOtherKeys, TerminalHandoff, previous_buffer, release_input, with_restored"
+    "N/A by architecture: the Go TUI delegates terminal ownership to Bubble Tea. tui/tea/external_editor.go runs editors through bubbletea.Exec, whose ReleaseTerminal/RestoreTerminal keeps the alternate screen active, restores input modes, and repaints on return. Go has no TerminalHandoff, separate keyboard-mode stack, or keep-screen mode to adjust."
    ]
   },
   {
@@ -23291,9 +23291,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go has no turn lifecycle contributor registry or TurnErrorInput carrier. appserver/internal_session.go exposes only thread-ready lifecycle handlers, and turn/compaction errors are built directly as TurnError values with codexErrorInfo and additionalDetails for protocol notifications; no extension hook consumes CodexErrorDetails."
    ]
   },
   {

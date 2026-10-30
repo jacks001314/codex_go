@@ -18,6 +18,9 @@ const (
 	defaultLogQueueCapacity = 512
 	defaultLogBatchSize     = 128
 	defaultLogFlushInterval = 2 * time.Second
+	// defaultFeedbackLogBytes mirrors Rust's `DEFAULT_MAX_BYTES` feedback ring
+	// (4 MiB): recent log lines stay available when SQLite writes are lost.
+	defaultFeedbackLogBytes = 4 * 1024 * 1024
 )
 
 type LogSinkQueueConfig struct {
@@ -58,8 +61,52 @@ type logDBSink struct {
 	closed           bool
 	runtime          *StateRuntime
 	failureReporter  LogWriteFailureReporter
+	feedbackLogs     *logMemoryRing
 	hasWriteFailure  bool
 	lastWriteFailure string
+}
+
+// logMemoryRing keeps the tail of the diagnostic log stream. Rust #47886 uses
+// the feedback ring buffer as the fallback source when SQLite lost a batch, so
+// the failed entries remain available to `/feedback` even though the database
+// write was dropped.
+type logMemoryRing struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func newLogMemoryRing(max int) *logMemoryRing {
+	if max <= 0 {
+		max = defaultFeedbackLogBytes
+	}
+	return &logMemoryRing{max: max}
+}
+
+func (r *logMemoryRing) write(data []byte) {
+	if r == nil || len(data) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(data) >= r.max {
+		r.buf = append([]byte(nil), data[len(data)-r.max:]...)
+		return
+	}
+	needed := len(r.buf) + len(data)
+	if needed > r.max {
+		r.buf = append([]byte(nil), r.buf[needed-r.max:]...)
+	}
+	r.buf = append(r.buf, data...)
+}
+
+func (r *logMemoryRing) snapshot() []byte {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]byte(nil), r.buf...)
 }
 
 type LogDBHandler struct {
@@ -77,9 +124,10 @@ func NewLogDBHandler(runtime *StateRuntime, next slog.Handler) *LogDBHandler {
 func NewLogDBHandlerWithConfig(runtime *StateRuntime, next slog.Handler, config LogSinkQueueConfig) *LogDBHandler {
 	config = config.normalized()
 	sink := &logDBSink{
-		commands: make(chan logDBCommand, config.QueueCapacity),
-		done:     make(chan struct{}),
-		runtime:  runtime,
+		commands:     make(chan logDBCommand, config.QueueCapacity),
+		done:         make(chan struct{}),
+		runtime:      runtime,
+		feedbackLogs: newLogMemoryRing(defaultFeedbackLogBytes),
 	}
 	go sink.run(runtime, config)
 	return &LogDBHandler{
@@ -105,6 +153,7 @@ func (h *LogDBHandler) Handle(ctx context.Context, record slog.Record) error {
 	if entry == nil {
 		return nextErr
 	}
+	h.sink.appendFeedbackLog(*entry)
 	h.sink.tryEntry(*entry)
 	return nextErr
 }
@@ -170,6 +219,16 @@ func (h *LogDBHandler) LastWriteFailure() string {
 		return ""
 	}
 	return h.sink.lastFailure()
+}
+
+// FeedbackLogs returns the recent diagnostic log tail. It mirrors Rust's
+// `FeedbackSnapshot::refresh_logs` source: the in-memory ring, which also
+// receives flush-failure diagnostics without re-entering the SQLite sink.
+func (h *LogDBHandler) FeedbackLogs() []byte {
+	if h == nil || h.sink == nil {
+		return nil
+	}
+	return h.sink.feedbackLogs.snapshot()
 }
 
 func (h *LogDBHandler) entry(record slog.Record) *LogEntry {
@@ -405,20 +464,39 @@ func (s *logDBSink) recordWriteFailure(err error, entryCount int) {
 	if s == nil || err == nil {
 		return
 	}
+	// Rust #47886 reports only the classified error category and batch size so
+	// raw SQLite messages (which may contain user data) never leak into the
+	// feedback attachment.
 	diagnostic := fmt.Sprintf(
-		"%s ERROR failed to flush logs to SQLite error=%v entries=%d",
+		"%s ERROR failed to flush logs to SQLite error=%q entries=%d",
 		time.Now().UTC().Format(time.RFC3339Nano),
-		err,
+		classifyReclamationError(err),
 		entryCount,
 	)
 	s.mu.Lock()
 	s.hasWriteFailure = true
 	s.lastWriteFailure = diagnostic
+	s.feedbackLogs.write([]byte(diagnostic + "\n"))
 	reporter := s.failureReporter
 	s.mu.Unlock()
 	if reporter != nil {
 		reporter.ReportLogWriteFailure(diagnostic)
 	}
+}
+
+func (s *logDBSink) appendFeedbackLog(entry LogEntry) {
+	if s == nil {
+		return
+	}
+	body := ""
+	if entry.FeedbackLogBody != nil {
+		body = *entry.FeedbackLogBody
+	} else if entry.Message != nil {
+		body = *entry.Message
+	}
+	timestamp := time.Unix(entry.TS, entry.TSNanos).UTC().Format(time.RFC3339Nano)
+	line := fmt.Sprintf("%s %s %s %s\n", timestamp, entry.Level, entry.Target, body)
+	s.feedbackLogs.write([]byte(line))
 }
 
 func (s *logDBSink) hasFailure() bool {

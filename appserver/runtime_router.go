@@ -13342,6 +13342,7 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	}
 	snapshot := r.requireFeedback()
 	snapshot.ThreadID = threadID
+	r.refreshFeedbackSnapshotLogs(snapshot)
 	snapshot.PrepareUpload(options)
 	return &FeedbackUploadResponse{ThreadID: threadID, PromptHash: promptHash}, nil
 }
@@ -13362,6 +13363,7 @@ func (r *RuntimeRouter) handleFeedbackSave(request *Request) (*FeedbackSaveRespo
 	}
 	snapshot := r.requireFeedback()
 	snapshot.ThreadID = threadID
+	r.refreshFeedbackSnapshotLogs(snapshot)
 	if err := snapshot.SaveFeedback(options, params.SavePath); err != nil {
 		return nil, fmt.Errorf("failed to save feedback: %w", err)
 	}
@@ -13455,6 +13457,11 @@ func (r *RuntimeRouter) prepareFeedbackResponse(params FeedbackUploadParams, req
 				}
 			}
 		}
+		// Rust #47886: when the SQLite writer lost a batch, persisted logs are
+		// incomplete, so the report uses the in-memory diagnostic ring instead.
+		if handler := r.logDBHandler(); handler != nil && handler.HasWriteFailure() {
+			logsOverride = nil
+		}
 		rolloutThreadIDs = feedbackThreadIDs
 		if params.IncludeLogs && strings.TrimSpace(threadID) != "" {
 			failureThreadIDs := feedbackThreadIDs
@@ -13518,6 +13525,23 @@ func (r *RuntimeRouter) prepareFeedbackResponse(params FeedbackUploadParams, req
 		ExtraAttachments: historyAttachments,
 		AttachmentPaths:  attachmentPaths,
 	}, threadID, promptHash, nil
+}
+
+// refreshFeedbackSnapshotLogs mirrors Rust's `FeedbackSnapshot::refresh_logs`
+// (#47886): the snapshot keeps its captured tags and thread identity while its
+// log bytes are replaced with the current in-memory ring contents. Recent logs
+// written while SQLite collection was running therefore reach the same report.
+func (r *RuntimeRouter) refreshFeedbackSnapshotLogs(snapshot *FeedbackSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	handler := r.logDBHandler()
+	if handler == nil {
+		return
+	}
+	if logs := handler.FeedbackLogs(); len(logs) > 0 {
+		snapshot.Logs = logs
+	}
 }
 
 func (r *RuntimeRouter) handleConfigRead(request *Request) (*config.ConfigReadResponse, error) {
