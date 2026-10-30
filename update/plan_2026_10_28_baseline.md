@@ -3426,6 +3426,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - N/A by architecture: Go has no `agents_overview.dispatched_requests`, `thread_event_listener_tasks`, `side_threads`/embedded-app-server split, or `reset_thread_event_state`. Per-turn remote clients keep their own notification read loops while a fork runs on a separate short-lived connection, non-active thread notifications are buffered per thread in `backgroundThreadEvents` and replayed on switch, and active-thread requests always render in the active UI, so a fork cannot interrupt or duplicate background request routing.
 - Verified with `rg` over `dispatched_requests|thread_event_listener|reset_thread_event_state`, `go test ./tui/tea -run 'Fork|ThreadScoped|BackgroundThread|DynamicTool' -count=1`, `go test ./tui/app -run 'Routing|Replay|ThreadEvent' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2201 complete`, `456 not_applicable`,
-`332 audit_pending`, `156 regression_pending`, `4 partial`,
+### Retained conversation support for Guardian async sampling (Round 1042)
+
+- Rust #49792 adds retained-request preparation and retained sampling to the Guardian V2 async scorer: committed-history transfer after input-budget admission, transcript/image deduplication, early-score publication with assistant/encrypted-reasoning retention, a shared snapshot/retained execution path, `ConversationState::take_history`, and `ContextPresentation::AsyncDelta`. The commit notes retained sampling is not wired into the active backend yet.
+- N/A by architecture: Go has no Guardian V2 async scorer or sampler (`LunaSampler`/`LunaSamplingRequest`, snapshot/retained `SamplingMode`, `PreparedRequest`/`RetainedCompletion`, conversation checkpoint/cursor, or input-token admission). Guardian reviews use the synchronous `modelGuardianReviewer` plus the shared retention layer already covered by #48110, and the new `AsyncDelta` presentation exists only for the unwired retained sampler, so there is no Go consumer or carrier.
+- Verified with `rg` over `async_scorer|LunaSampler|PreparedRequest|RetainedCompletion|AsyncDelta|take_history`, `go test ./appserver -run 'Guardian(Async|Retained|Conversation|Transcript|RequestBudget|Admitted)' -count=1` (15 tests), `go test ./state -run Guardian -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2201 complete`, `457 not_applicable`,
+`331 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

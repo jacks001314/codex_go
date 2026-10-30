@@ -24484,9 +24484,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 4/13; needs review: CollectedTranscript, PreparedRequest, RetainedCompletion, SamplingMode, collect_context"
+    "Round 1042 (audit): N/A by architecture - Rust #49792 adds retained-request preparation, retained sampling, and shared execution plumbing to the Guardian V2 async scorer (async_scorer/request.rs PreparedRequest/estimate_input_tokens admission, sampler SamplingMode/RetainedCompletion, transcript CollectedTranscript/select/compose), adds ConversationState::take_history, and adds ContextPresentation::AsyncDelta; the commit states retained sampling is not yet wired into the active backend. Go has no Guardian V2 async scorer or sampler: no LunaSampler/LunaSamplingRequest, snapshot/retained SamplingMode, PreparedRequest/RetainedCompletion, ConversationState checkpoint/cursor/take_history, or input-token-based request admission. Guardian reviews run through the synchronous modelGuardianReviewer with the shared state retention layer (ActionPresentationAsync + retained context, already covered by #48110), and AsyncDelta has no unwired retained-sampler consumer to reach. Verified with rg over async_scorer|LunaSampler|PreparedRequest|RetainedCompletion|AsyncDelta|take_history, go test ./appserver -run 'Guardian(Async|Retained|Conversation|Transcript|RequestBudget|Admitted)' -count=1 (15 tests), and go test ./state -run Guardian -count=1."
    ]
   },
   {
