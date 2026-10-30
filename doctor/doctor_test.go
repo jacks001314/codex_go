@@ -800,6 +800,24 @@ func TestRedactDoctorDetailPreservesMissingEnvDiagnostics(t *testing.T) {
 	}
 }
 
+// TestRedactDoctorDetailDistinguishesDatabasePathsLikeRust mirrors Rust #47330:
+// a Windows drive letter inside an unlabeled path must not be mistaken for a
+// field label, while labeled diagnostics keep their label.
+func TestRedactDoctorDetailDistinguishesDatabasePathsLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		detail string
+		want   string
+	}{
+		{`C:\doctor-secret-sqlite\logs_2.sqlite database failed integrity check`, "<redacted>"},
+		{"C:/doctor-secret-sqlite/logs_2.sqlite database failed integrity check", "<redacted>"},
+		{"/tmp/doctor-secret-sqlite/logs_2.sqlite database failed integrity check", "<redacted>"},
+		{`log database: C:\doctor-secret-sqlite\logs_2.sqlite`, "log database: <redacted>"},
+	} {
+		if got := redactDoctorDetail(tc.detail); got != tc.want {
+			t.Fatalf("detail %q: got %q, want %q", tc.detail, got, tc.want)
+		}
+	}
+}
 func TestMissingEnvDiagnosticsInJSON(t *testing.T) {
 	check := NewCheck("mcp.config", "mcp", CheckStatusWarning, "missing inputs").
 		Detail("demo: bearer token env var DOCS_TOKEN is not set").
@@ -2066,6 +2084,72 @@ func TestStateCheckReportsRustPathDBAndRolloutDetails(t *testing.T) {
 	}
 }
 
+// TestStateCheckIdentifiesFailedSQLiteDatabasesLikeRust covers Rust #47330: a
+// failed integrity check names every damaged database in a structured issue,
+// keeps the recovery remedy there, preserves the damaged bytes, and reports the
+// same cause through the JSON projection.
+func TestStateCheckIdentifiesFailedSQLiteDatabasesLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		databases []string
+	}{
+		{"single", []string{"logs_2.sqlite"}},
+		{"multiple", []string{"logs_2.sqlite", "goals_1.sqlite"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			sqliteHome := t.TempDir()
+			t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+			paths := make([]string, 0, len(tc.databases))
+			for _, name := range tc.databases {
+				path := filepath.Join(sqliteHome, name)
+				if err := os.WriteFile(path, []byte("not a SQLite database"), 0o600); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+				paths = append(paths, path)
+			}
+
+			check := stateCheck(home, &Options{})
+			if check.Status != CheckStatusFail || check.Summary != "state database integrity check failed" {
+				t.Fatalf("check = %+v", check)
+			}
+			noun := "databases"
+			if len(paths) == 1 {
+				noun = "database"
+			}
+			wantCause := strings.Join(paths, ", ") + " " + noun + " failed integrity check"
+			if len(check.Issues) != 1 {
+				t.Fatalf("issues = %#v, want one", check.Issues)
+			}
+			issue := check.Issues[0]
+			if issue.Severity != CheckStatusFail || issue.Cause != wantCause {
+				t.Fatalf("issue = %+v, want severity fail and cause %q", issue, wantCause)
+			}
+			if issue.Remedy == nil || !strings.Contains(*issue.Remedy, "Move the damaged SQLite database aside") {
+				t.Fatalf("issue remedy = %v", issue.Remedy)
+			}
+			if check.Remediation != nil {
+				t.Fatalf("check remediation = %v, want the remedy on the issue", *check.Remediation)
+			}
+
+			report := JSONReportFromReport(&Report{Checks: []*DoctorCheck{check}})
+			jsonCheck := report.Checks["state.paths"]
+			if jsonCheck == nil || len(jsonCheck.Issues) != 1 || jsonCheck.Issues[0].Cause != wantCause {
+				t.Fatalf("json check = %+v", jsonCheck)
+			}
+
+			for _, path := range paths {
+				contents, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read damaged database: %v", err)
+				}
+				if string(contents) != "not a SQLite database" {
+					t.Fatalf("damaged database contents changed: %q", contents)
+				}
+			}
+		})
+	}
+}
 func TestRolloutDBParityCheckWarnsForMissingAndArchiveMismatch(t *testing.T) {
 	home := t.TempDir()
 	dbPath := createDoctorStateDB(t, home)

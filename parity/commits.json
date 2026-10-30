@@ -18868,9 +18868,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "doctor/doctor.go stateCheck collects every database whose integrity check fails and attaches an issue '<paths> database(s) failed integrity check' with the recovery remedy, leaving check.Remediation empty; redactDoctorDetail now splits sensitive details on ': ' and fully redacts unlabeled paths so Windows drive letters are not treated as labels. Tests: doctor/doctor_test.go covers single and multiple failed databases (text check, JSON cause, preserved damaged bytes) and path-versus-label redaction"
    ]
   },
   {
@@ -23960,9 +23960,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust truncates the derived Debug previews of ContentItem::InputText and UserInput::Text to a 512-byte prefix; codex_go has no derived Debug rendering for protocol inputs and does not log request or params payloads in model/appserver, so there is no Go formatter to bound"
    ]
   },
   {

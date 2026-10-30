@@ -493,9 +493,12 @@ func redactDoctorDetail(detail string) string {
 	}
 	for _, key := range secretKeys {
 		if strings.Contains(lower, key) {
-			name, _, ok := strings.Cut(detail, ":")
+			// Rust #47330: split on the field-label separator so a Windows
+			// drive letter inside a path is not mistaken for a label; a detail
+			// without a label is redacted completely.
+			name, _, ok := strings.Cut(detail, ": ")
 			if !ok {
-				name = detail
+				return "<redacted>"
 			}
 			return name + ": <redacted>"
 		}
@@ -4450,13 +4453,18 @@ func stateCheck(codexHome string, opts *Options) *DoctorCheck {
 
 	status := CheckStatusOK
 	feedback := opts != nil && opts.Feedback
+	failedDatabases := []string{}
 	for _, dbPath := range runtimeDBPathsForDoctor(sqliteHome) {
 		pushPathReadinessDetail(&details, dbPath.Label, dbPath.Path)
 		var deadline time.Time
 		if feedback {
 			deadline = time.Now().Add(feedbackIntegrityCheckDeadline)
 		}
-		status = worseCheckStatus(status, sqliteIntegrityDetailForDoctor(&details, dbPath.Label, dbPath.Path, deadline))
+		dbStatus := sqliteIntegrityDetailForDoctor(&details, dbPath.Label, dbPath.Path, deadline)
+		if dbStatus == CheckStatusFail {
+			failedDatabases = append(failedDatabases, dbPath.Path)
+		}
+		status = worseCheckStatus(status, dbStatus)
 	}
 	rolloutStatsDetailsForDoctor(&details, codexHome)
 	standaloneReleaseCacheDetailsForDoctor(&details)
@@ -4469,8 +4477,18 @@ func stateCheck(codexHome string, opts *Options) *DoctorCheck {
 		summary = "state database integrity check failed"
 	}
 	check := NewCheck("state.paths", "state", status, summary).DetailsList(details)
-	if status == CheckStatusFail {
-		check.Remediate("Move the damaged SQLite database aside, then restart the interactive CLI or app server so it can rebuild that runtime database from saved data. Other entry points may not rebuild automatically.")
+	if status == CheckStatusFail && len(failedDatabases) > 0 {
+		// Rust #47330: name every database that failed integrity checking so the
+		// user knows which file needs attention, and keep the recovery guidance
+		// on the issue rather than on the whole check.
+		noun := "databases"
+		if len(failedDatabases) == 1 {
+			noun = "database"
+		}
+		check.Issue(NewIssue(
+			CheckStatusFail,
+			fmt.Sprintf("%s %s failed integrity check", strings.Join(failedDatabases, ", "), noun),
+		).WithRemedy("Move the damaged SQLite database aside, then restart the interactive CLI or app server so it can rebuild that runtime database from saved data. Other entry points may not rebuild automatically."))
 	}
 	return check
 }
