@@ -4077,3 +4077,11 @@ Status after this batch: `2342 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestCreateWindowsSandboxCommandArgsResolvesDenyReadPathsFromProfileLikeRust`, `TestCreateWindowsSandboxCommandArgsRejectsRestrictedTokenWithDenyReadLikeRust`; `go test ./sandbox/windowssandbox -run DenyRead` passes.
 
 Status after this batch: `2343 complete`, `465 not_applicable`, `322 audit_pending`, `14 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Configured product SKU in remote plugin requests (Round 1125)
+
+- #47116 now resolves `apps_mcp_product_sku` (default `codex`) from the effective config and stamps `OAI-Product-Sku` on every Go-owned remote plugin request: suggested-plugin discovery, CLI catalog list/detail/install/uninstall, app-server installed-plugin sync, and authenticated measurement reads.
+- The configured SKU is part of the suggested-provider cache key, so changing SKU with the same endpoint replaces the provider and refetches recommendations. Remote catalog cache paths also include the effective SKU, matching Rust's remote service-config comparison.
+- Tests: `TestRemotePluginProviderUsesConfiguredProductSKULikeRust`, `TestFetchRemoteCatalogPluginsPagesAndCachesLikeRust`, `TestPluginListRemoteCatalogLikeRust`, `TestPluginRemoteAddAndRemoveLikeRust`, `TestConfigureSuggestedPluginProviderUsesConfiguredProductSKULikeRust`, `TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust`, `TestAuthenticatedMeasurementBundleFetcherLikeRust`; `go build ./...` and targeted `go test ./plugin ./app ./appserver` pass.
+
+Status after this batch: `2344 complete`, `465 not_applicable`, `322 audit_pending`, `13 regression_pending`, `5 partial`, `6 blocked_precondition`.

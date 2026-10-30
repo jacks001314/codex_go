@@ -31,10 +31,15 @@ func TestRemoteCatalogScopeMarketplaceMappingLikeRust(t *testing.T) {
 
 func TestFetchRemoteCatalogPluginsPagesAndCachesLikeRust(t *testing.T) {
 	var requests atomic.Int32
+	var expectedSKU atomic.Value
+	expectedSKU.Store("tpp")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
 		if request.Header.Get("Authorization") != "Bearer token" || request.Header.Get("ChatGPT-Account-ID") != "account" {
 			t.Errorf("headers = %#v", request.Header)
+		}
+		if got, want := request.Header.Get("OAI-Product-Sku"), expectedSKU.Load().(string); got != want {
+			t.Errorf("product sku header = %q, want %q", got, want)
 		}
 		if request.URL.Query().Get("scope") != RemoteCatalogScopeGlobal || request.URL.Query().Get("collection") != "beta" {
 			t.Errorf("query = %s", request.URL.RawQuery)
@@ -65,7 +70,7 @@ func TestFetchRemoteCatalogPluginsPagesAndCachesLikeRust(t *testing.T) {
 	home := t.TempDir()
 	options := &RemoteCatalogOptions{
 		BaseURL: server.URL, AccessToken: "token", AccountID: "account",
-		Scope: RemoteCatalogScopeGlobal, Collection: "beta", CodexHome: home,
+		ProductSKU: "tpp", Scope: RemoteCatalogScopeGlobal, Collection: "beta", CodexHome: home,
 	}
 	plugins, err := FetchRemoteCatalogPlugins(context.Background(), options)
 	if err != nil {
@@ -90,11 +95,23 @@ func TestFetchRemoteCatalogPluginsPagesAndCachesLikeRust(t *testing.T) {
 	if got := requests.Load(); got != 4 {
 		t.Fatalf("forced requests = %d, want 4", got)
 	}
+	options.ForceRefresh = false
+	options.ProductSKU = "team"
+	expectedSKU.Store("team")
+	if _, err := FetchRemoteCatalogPlugins(context.Background(), options); err != nil {
+		t.Fatalf("FetchRemoteCatalogPlugins() after SKU change error = %v", err)
+	}
+	if got := requests.Load(); got != 6 {
+		t.Fatalf("requests after SKU change = %d, want 6", got)
+	}
 }
 
 func TestRemotePluginMutationsLikeRust(t *testing.T) {
 	var installed, uninstalled bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("OAI-Product-Sku") != "tpp" {
+			t.Errorf("product sku header = %q", request.Header.Get("OAI-Product-Sku"))
+		}
 		switch request.URL.Path {
 		case "/ps/plugins/remote-1/install":
 			installed = true
@@ -113,7 +130,7 @@ func TestRemotePluginMutationsLikeRust(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	options := &RemoteCatalogOptions{BaseURL: server.URL, AccessToken: "token"}
+	options := &RemoteCatalogOptions{BaseURL: server.URL, AccessToken: "token", ProductSKU: "tpp"}
 	apps, err := InstallRemotePluginMutation(context.Background(), options, "remote-1")
 	if err != nil || len(apps) != 1 || apps[0] != "app-1" {
 		t.Fatalf("install = %#v, %v", apps, err)

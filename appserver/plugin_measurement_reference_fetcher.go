@@ -18,9 +18,10 @@ type authenticatedMeasurementBundleFetcher struct {
 	client interface {
 		Do(*http.Request) (*http.Response, error)
 	}
-	baseURL   string
-	token     string
-	accountID string
+	baseURL    string
+	token      string
+	accountID  string
+	productSKU string
 }
 
 func (f *authenticatedMeasurementBundleFetcher) FetchMeasurementBundle(ctx context.Context, target plugin.PluginMeasurementTarget) (*plugin.PluginMeasurementBundle, error) {
@@ -53,6 +54,11 @@ func (f *authenticatedMeasurementBundleFetcher) FetchMeasurementBundle(ctx conte
 		if strings.TrimSpace(f.accountID) != "" {
 			request.Header.Set("ChatGPT-Account-ID", f.accountID)
 		}
+		sku := strings.TrimSpace(f.productSKU)
+		if sku == "" {
+			sku = plugin.CODEXProductSKU
+		}
+		request.Header.Set("OAI-Product-Sku", sku)
 		response, err := f.client.Do(request)
 		if err != nil {
 			return nil, fmt.Errorf("fetch installed plugins: %w", err)

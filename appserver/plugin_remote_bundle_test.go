@@ -87,7 +87,7 @@ func TestFetchInstalledRemotePluginDetailsPaginatesAndKeepsDisabledCacheLikeRust
 	}))
 	defer server.Close()
 
-	details, err := fetchInstalledRemotePluginDetails(context.Background(), server.Client(), server.URL, "token", "account-1", home)
+	details, err := fetchInstalledRemotePluginDetails(context.Background(), server.Client(), server.URL, "token", "account-1", "tpp", home)
 	if err != nil {
 		t.Fatalf("fetchInstalledRemotePluginDetails() error = %v", err)
 	}

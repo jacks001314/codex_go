@@ -45,12 +45,13 @@ func measurementTestBundleArchive(t *testing.T) []byte {
 func TestAuthenticatedMeasurementBundleFetcherLikeRust(t *testing.T) {
 	t.Setenv("CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS", "1")
 	bundle := measurementTestBundleArchive(t)
-	var sawAuth, sawAccount bool
+	var sawAuth, sawAccount, sawProductSKU bool
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/ps/plugins/installed":
 			sawAuth = request.Header.Get("Authorization") == "Bearer token"
 			sawAccount = request.Header.Get("ChatGPT-Account-ID") == "account"
+			sawProductSKU = request.Header.Get("OAI-Product-Sku") == "tpp"
 			if request.URL.Query().Get("scope") != "GLOBAL" || request.URL.Query().Get("includeDownloadUrls") != "true" {
 				t.Errorf("unexpected query = %q", request.URL.RawQuery)
 			}
@@ -78,16 +79,17 @@ func TestAuthenticatedMeasurementBundleFetcherLikeRust(t *testing.T) {
 	defer server.Close()
 
 	fetcher := &authenticatedMeasurementBundleFetcher{
-		client:    server.Client(),
-		baseURL:   server.URL,
-		token:     "token",
-		accountID: "account",
+		client:     server.Client(),
+		baseURL:    server.URL,
+		token:      "token",
+		accountID:  "account",
+		productSKU: "tpp",
 	}
 	resolved, err := fetcher.FetchMeasurementBundle(context.Background(), plugin.PluginMeasurementTarget{PluginName: "demo", Version: "1.0.0"})
 	if err != nil || resolved == nil {
 		t.Fatalf("FetchMeasurementBundle() = %#v, %v", resolved, err)
 	}
-	if !sawAuth || !sawAccount {
+	if !sawAuth || !sawAccount || !sawProductSKU {
 		t.Fatalf("auth headers: authorization=%v account=%v", sawAuth, sawAccount)
 	}
 	if resolved.RemotePluginID != "remote-demo" || resolved.Version != "1.0.0" {

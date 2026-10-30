@@ -18146,9 +18146,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Remote plugin requests resolve apps_mcp_product_sku (default codex) and stamp OAI-Product-Sku for suggested discovery, CLI catalog list/detail/install/uninstall, and app-server installed/measurement reads; the SKU participates in the suggested-provider key and catalog cache key (Rust #47116). Tests: TestRemotePluginProviderUsesConfiguredProductSKULikeRust, TestFetchRemoteCatalogPluginsPagesAndCachesLikeRust, TestPluginListRemoteCatalogLikeRust, TestPluginRemoteAddAndRemoveLikeRust, TestConfigureSuggestedPluginProviderUsesConfiguredProductSKULikeRust, TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust, TestAuthenticatedMeasurementBundleFetcherLikeRust; go build ./... and targeted go test ./plugin ./app ./appserver pass."
    ]
   },
   {

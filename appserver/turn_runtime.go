@@ -10154,12 +10154,23 @@ func (r *RuntimeRouter) configureSuggestedPluginProviderForTurn(cfg *config.Conf
 	}
 	baseURL := cfg.ChatGPTBaseURL()
 	accountID := suggestedPluginAccountIDFromAuth(&resolved.Auth)
-	// Rust #49100: the provider shares the plugin service's lazily created
-	// remote connection pool instead of a per-construction pool, so repeated
-	// turns reuse connections while the endpoint, product SKU and
-	// authentication stay current.
-	provider := r.services.Plugins.NewRemotePluginProvider(baseURL, accessToken, accountID, client)
-	r.services.Plugins.SetSuggestedPluginProviderWithKey(provider, strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	productSKU := strings.TrimSpace(stringFromMapAny(cfg.Values, "apps_mcp_product_sku", "appsMcpProductSku", "appsMCPProductSKU"))
+	if productSKU == "" {
+		productSKU = plugin.CODEXProductSKU
+	}
+	// Rust #49100/#47116: the provider shares the plugin service's lazily
+	// created remote connection pool, while the configured product SKU stays
+	// current and participates in the cached-configuration comparison.
+	provider := r.services.Plugins.NewRemotePluginProviderWithProductSKU(baseURL, accessToken, accountID, productSKU, client)
+	r.services.Plugins.SetSuggestedPluginProviderWithKey(provider, suggestedPluginProviderKey(baseURL, productSKU))
+}
+
+func suggestedPluginProviderKey(baseURL string, productSKU string) string {
+	productSKU = strings.TrimSpace(productSKU)
+	if productSKU == "" {
+		productSKU = plugin.CODEXProductSKU
+	}
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "\x00" + productSKU
 }
 
 // prewarmSuggestedPluginsForThreadStart overlaps the recommendation catalog

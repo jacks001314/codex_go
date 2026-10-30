@@ -101,6 +101,7 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 	}
 	accountID := auth.AccountIDFromAuthForRestrictions(snapshot)
 	baseURL := strings.TrimRight(cfg.ChatGPTBaseURL(), "/")
+	productSKU := strings.TrimSpace(stringFromMap(read.Config, "apps_mcp_product_sku"))
 	client := r.accountHTTPClient()
 	generation, releaseSync, ok := tryAcquireRemoteInstalledPluginSync(codexHome)
 	if !ok {
@@ -110,7 +111,7 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	detailsByMarketplace, err := fetchInstalledRemotePluginDetails(ctx, client, baseURL, token, accountID, codexHome)
+	detailsByMarketplace, err := fetchInstalledRemotePluginDetails(ctx, client, baseURL, token, accountID, productSKU, codexHome)
 	if err != nil {
 		return false, err
 	}
@@ -159,7 +160,7 @@ func (r *RuntimeRouter) accountAuthSnapshot(codexHome string) *auth.AuthDotJSON 
 
 func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
-}, baseURL string, token string, accountID string, codexHome string) (map[string][]plugin.PluginDetail, error) {
+}, baseURL string, token string, accountID string, productSKU string, codexHome string) (map[string][]plugin.PluginDetail, error) {
 	clearRemoteInstalledPluginSyncFailures()
 	installed := map[string]remoteInstalledPlugin{}
 	for _, scope := range []string{"GLOBAL", "USER", "WORKSPACE"} {
@@ -185,6 +186,11 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 			if strings.TrimSpace(accountID) != "" {
 				request.Header.Set("ChatGPT-Account-ID", accountID)
 			}
+			sku := strings.TrimSpace(productSKU)
+			if sku == "" {
+				sku = plugin.CODEXProductSKU
+			}
+			request.Header.Set("OAI-Product-Sku", sku)
 			response, err := client.Do(request)
 			if err != nil {
 				return nil, fmt.Errorf("fetch installed plugins: %w", err)

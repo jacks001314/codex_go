@@ -262,11 +262,16 @@ func remoteCatalogCachePath(opts *RemoteCatalogOptions, baseURL, scope string) (
 	if home == "" {
 		return "", false
 	}
+	productSKU := strings.TrimSpace(opts.ProductSKU)
+	if productSKU == "" {
+		productSKU = CODEXProductSKU
+	}
 	key := strings.Join([]string{
 		baseURL,
 		strings.TrimSpace(opts.AccountID),
 		scope,
 		strings.TrimSpace(opts.Collection),
+		productSKU,
 	}, "\x00")
 	sum := sha256.Sum256([]byte(key))
 	return filepath.Join(home, remoteCatalogCacheDir, hex.EncodeToString(sum[:])+".json"), true

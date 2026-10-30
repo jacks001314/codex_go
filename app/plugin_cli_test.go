@@ -29,6 +29,9 @@ func TestPluginListRemoteCatalogLikeRust(t *testing.T) {
 			http.NotFound(w, request)
 			return
 		}
+		if request.Header.Get("OAI-Product-Sku") != "tpp" {
+			t.Errorf("product sku header = %q", request.Header.Get("OAI-Product-Sku"))
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"plugins": []any{map[string]any{
 				"id": "remote-sample", "name": "remote-sample", "scope": "GLOBAL",
@@ -40,7 +43,7 @@ func TestPluginListRemoteCatalogLikeRust(t *testing.T) {
 	}))
 	defer server.Close()
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("chatgpt_base_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("chatgpt_base_url = \""+server.URL+"\"\napps_mcp_product_sku = \"tpp\"\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"token","account_id":"account"}}`), 0o600); err != nil {
@@ -76,6 +79,9 @@ func TestPluginRemoteAddAndRemoveLikeRust(t *testing.T) {
 	var installed, uninstalled bool
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/ps/plugins") && request.Header.Get("OAI-Product-Sku") != "tpp" {
+			t.Errorf("product sku header for %s = %q", request.URL.Path, request.Header.Get("OAI-Product-Sku"))
+		}
 		switch {
 		case request.URL.Path == "/ps/plugins/list":
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -110,7 +116,7 @@ func TestPluginRemoteAddAndRemoveLikeRust(t *testing.T) {
 	}))
 	defer server.Close()
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("chatgpt_base_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("chatgpt_base_url = \""+server.URL+"\"\napps_mcp_product_sku = \"tpp\"\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"token","account_id":"account"}}`), 0o600); err != nil {

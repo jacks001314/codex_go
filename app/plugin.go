@@ -121,13 +121,16 @@ func (ctx *pluginCLIContext) remoteOptionsForScope(scope string) (*plugin.Remote
 		return nil, err
 	}
 	baseURL := ""
+	productSKU := ""
 	if cfg != nil {
 		baseURL = cfg.ChatGPTBaseURL()
+		productSKU, _ = cfg.Values["apps_mcp_product_sku"].(string)
 	}
 	return &plugin.RemoteCatalogOptions{
 		BaseURL:     baseURL,
 		AccessToken: token,
 		AccountID:   auth.AccountIDFromAuthForRestrictions(snapshot),
+		ProductSKU:  strings.TrimSpace(productSKU),
 		Scope:       scope,
 		CodexHome:   ctx.codexHome,
 		HTTPClient:  codexnetwork.NewHTTPClient(true, 0),

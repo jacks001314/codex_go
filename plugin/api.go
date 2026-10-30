@@ -1471,18 +1471,25 @@ func (s *PluginService) RemotePluginHTTPPool() *RemotePluginHTTPPool {
 }
 
 // NewRemotePluginProvider builds a remote plugin service configuration that
-// shares this service's connection pool while keeping the current endpoint,
-// product SKU and authentication (Rust #49100
-// PluginsConfigInput::remote_plugin_service_config). It is the constructor the
-// app-server uses for turn-scoped suggested-plugin providers.
+// shares this service's connection pool while using the bundled product SKU
+// (Rust #49100 PluginsConfigInput::remote_plugin_service_config).
 func (s *PluginService) NewRemotePluginProvider(baseURL string, accessToken string, accountID string, client HTTPDoer) *HTTPSuggestedPluginProvider {
+	return s.NewRemotePluginProviderWithProductSKU(baseURL, accessToken, accountID, "", client)
+}
+
+// NewRemotePluginProviderWithProductSKU keeps the current endpoint, configured
+// product SKU and authentication while sharing this service's connection pool
+// (Rust #47116). An empty SKU falls back to CODEXProductSKU.
+func (s *PluginService) NewRemotePluginProviderWithProductSKU(baseURL string, accessToken string, accountID string, productSKU string, client HTTPDoer) *HTTPSuggestedPluginProvider {
 	var pool *RemotePluginHTTPPool
 	if s != nil {
 		pool = s.RemotePluginHTTPPool()
 		// get_or_init: the first service configuration creates the shared pool.
 		pool.Client()
 	}
-	return NewHTTPSuggestedPluginProviderWithPool(baseURL, accessToken, accountID, client, pool)
+	provider := NewHTTPSuggestedPluginProviderWithPool(baseURL, accessToken, accountID, client, pool)
+	provider.ProductSKU = strings.TrimSpace(productSKU)
+	return provider
 }
 
 func (s *PluginService) SetClock(clock func() time.Time) {

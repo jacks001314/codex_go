@@ -30,6 +30,9 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 			http.NotFound(w, request)
 			return
 		}
+		if request.Header.Get("OAI-Product-Sku") != "tpp" {
+			t.Errorf("product sku header = %q", request.Header.Get("OAI-Product-Sku"))
+		}
 		if request.URL.Query().Get("includeExtensions") != "true" {
 			http.Error(w, "missing includeExtensions", http.StatusBadRequest)
 			return
@@ -42,7 +45,7 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 	}))
 	defer server.Close()
 
-	if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf("chatgpt_base_url = %q\n\n[features]\nplugins = true\nremote_plugin = true\n", server.URL)), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf("chatgpt_base_url = %q\napps_mcp_product_sku = \"tpp\"\n\n[features]\nplugins = true\nremote_plugin = true\n", server.URL)), 0o600); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
 	account := auth.NewAccountManager()

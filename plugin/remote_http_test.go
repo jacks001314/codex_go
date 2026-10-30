@@ -1,7 +1,9 @@
 package plugin
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -80,5 +82,34 @@ func TestRemotePluginProviderFallsBackWithoutAPoolLikeRust(t *testing.T) {
 	}
 	if CODEXProductSKU != "codex" || provider.productSKU() != "codex" {
 		t.Fatalf("bundled product SKU = %q / %q", CODEXProductSKU, provider.productSKU())
+	}
+}
+
+// Rust #47116: remote plugin discovery sends the configured
+// apps_mcp_product_sku and keeps "codex" as the default.
+func TestRemotePluginProviderUsesConfiguredProductSKULikeRust(t *testing.T) {
+	var skuHeaders []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/ps/plugins/suggested/codex" {
+			http.NotFound(w, request)
+			return
+		}
+		skuHeaders = append(skuHeaders, request.Header.Get("OAI-Product-Sku"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"enabled":true,"plugins":[]}`))
+	}))
+	defer server.Close()
+
+	service := NewPluginService()
+	configured := service.NewRemotePluginProviderWithProductSKU(server.URL, "token", "account", "tpp", server.Client())
+	if _, err := configured.ListSuggestedPlugins(context.Background()); err != nil {
+		t.Fatalf("configured ListSuggestedPlugins() error = %v", err)
+	}
+	defaulted := service.NewRemotePluginProvider(server.URL, "token", "account", server.Client())
+	if _, err := defaulted.ListSuggestedPlugins(context.Background()); err != nil {
+		t.Fatalf("default ListSuggestedPlugins() error = %v", err)
+	}
+	if len(skuHeaders) != 2 || skuHeaders[0] != "tpp" || skuHeaders[1] != CODEXProductSKU {
+		t.Fatalf("OAI-Product-Sku headers = %#v", skuHeaders)
 	}
 }
