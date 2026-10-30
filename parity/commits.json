@@ -7738,9 +7738,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1054: Rust #42836 only edits the GPT-6-Astra model_messages.instructions_template in codex-rs/models-manager/models.json. Go parses that template through ModelMessages.UnmarshalJSON and applies ModelInfo.InstructionsTemplate, so the conditional guidance ships with the vendored catalog and the offline fallback (which uses BaseInstructions). model/catalog_messages_test.go and model/catalog_test.go pin template parsing and fallback behavior. No Go change required; verified with `go test ./model -run TestModelMessages -count=1`."
    ]
   },
   {
