@@ -106,7 +106,13 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 			Model:           modelID,
 			ServiceTier:     serviceTier,
 			ReasoningEffort: effort,
-			Originator:      "session_startup",
+			// Rust #47912: thread/start registers the creating connection before
+			// the startup prewarm dials, so the handshake can request attestation
+			// for the thread. The request therefore carries the thread id and the
+			// app-server attestation provider.
+			ThreadID:            threadID,
+			AttestationProvider: r.appServerAttestationProvider(),
+			Originator:          "session_startup",
 		})
 		if err == nil {
 			status = "ready"
@@ -209,14 +215,17 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 		var responseID string
 		status := "failed"
 		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
-			Model:            modelID,
-			ServiceTier:      strings.TrimSpace(record.Metadata.ServiceTier),
-			ReasoningEffort:  effort,
-			Instructions:     instructions,
-			InputItems:       historyItems,
-			ThreadID:         threadID,
-			Originator:       "session_startup",
-			PrewarmInputMode: "history",
+			Model:           modelID,
+			ServiceTier:     strings.TrimSpace(record.Metadata.ServiceTier),
+			ReasoningEffort: effort,
+			Instructions:    instructions,
+			InputItems:      historyItems,
+			ThreadID:        threadID,
+			// Rust #47912 applies to the idle-thread prewarm as well: the
+			// handshake resolves attestation through the creating connection.
+			AttestationProvider: r.appServerAttestationProvider(),
+			Originator:          "session_startup",
+			PrewarmInputMode:    "history",
 		})
 		if err == nil {
 			status = "ready"

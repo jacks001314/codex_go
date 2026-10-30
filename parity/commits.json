@@ -20937,9 +20937,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1083: Go already installs the creating connection subscription before scheduleStartupPrewarm, so attestation can select it; the missing piece was that startup and idle-history prewarm requests carried no thread id/provider. Both prewarm requests now set ThreadID and AttestationProvider: r.appServerAttestationProvider(), so Prewarm handshakes call addAttestationHeader through the registered connection. TestStartupPrewarmCarriesThreadAttestationLikeRust asserts the captured prewarm request fields, the injected token, and the targeted connection; go test ./appserver -run Prewarm|Attestation passes."
    ]
   },
   {
