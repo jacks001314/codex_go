@@ -28451,9 +28451,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Equivalent implementation already present and certified against Rust HEAD: session.RecordChangedToolMetrics records codex.tools.incremental_updates for every added, schema_changed (including description-only definition edits), and removed declaration; unchanged declarations and namespace headers are excluded, every member of a removed namespace is counted even when the removal notice collapses it, and the initial catalog of a window records nothing. appserver/incremental_tools.go emits the metrics from the same diff it renders, and the later Rust #54133 per-tool tag plus spec_description_bytes histogram are also present. Verified with go test ./appserver -run 'IncrementalToolCatalogRecordsChangedToolMetrics|RecordChangedToolMetrics|ToolSpecDescriptionBytesBucketProbe' -count=1."
    ]
   },
   {

@@ -3244,6 +3244,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `turn/executed_tool_calls_gap_regression_like_rust_test.go` cover close-before-first-attachment, pressure reclamation, large late metadata, wrapped ambiguous arguments, reuse before commit, duplicate outputs, and duplicate nested IDs. `metadataEqual` now uses deep equality for nested metadata objects.
 - Verified with `go test ./turn -count=1`, `go test ./state -count=1`, `go test ./parity -run TestAlignment -count=1`, and `go test ./appserver -count=1` (only the seven known pre-existing failures remain).
 
-Status after reconciliation: `2177 complete`, `451 not_applicable`,
-`345 audit_pending`, `172 regression_pending`, `4 partial`,
+### Incremental tool-update metrics (Round 1017)
+
+- Rust #51893 records `codex.tools.incremental_updates` for rendered incremental catalogs: each added and `schema_changed` declaration counts once, description-only edits count as `schema_changed`, unchanged declarations and namespace headers are excluded, and every member of a removed namespace is counted even when the removal notice collapses it into the namespace section. The initial catalog of a window records nothing.
+- Go already implements the family in `session.RecordChangedToolMetrics` and emits it from the single production call site beside `session.TopLevelToolsUpdatesWithMessages` in `appserver/incremental_tools.go`; the later Rust #54133 extension (per-tool `tool` tag plus `codex.tools.spec_description_bytes`) is also present and matches Rust HEAD.
+- Existing regressions pin the Rust transition table (`TestRecordChangedToolMetricsTagsPerToolLikeRust`), the initial-catalog exclusion, unchanged/header exclusions, removed-namespace member counting, description-only changes through the turn path (`TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust`), and replacement-only description histograms.
+- Verified with `go test ./appserver -run 'IncrementalToolCatalogRecordsChangedToolMetrics|RecordChangedToolMetrics|ToolSpecDescriptionBytesBucketProbe' -count=1` and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2178 complete`, `451 not_applicable`,
+`345 audit_pending`, `171 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
