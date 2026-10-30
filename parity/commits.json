@@ -7046,9 +7046,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1113: a successful plugin install already runs RuntimeRouter.effectivePluginsChanged, which clears the plugin/skill caches, re-reads user configuration plus managed requirements, republishes the process-wide MCP runtime, invalidates every per-thread MCP runtime, prewarms loaded threads and rebuilds hook discovery from the current plugin hook sources. Go resolves most thread state per request, so this covers the Rust reload_user_config plus invalidate_mcp_runtimes/refresh_hook_runtimes sequence. A reload failure is logged and leaves the installation successful. Tests: TestRuntimeRouterPluginInstallRefreshesMCPRuntimesLikeRust, TestRuntimeRouterPluginInstallReloadsStagedUserConfigLikeRust (a config.toml edit made while running becomes visible after install), TestRuntimeRouterPluginInstallSurvivesConfigReloadFailureLikeRust; go test ./appserver -run PluginInstall passes."
    ]
   },
   {

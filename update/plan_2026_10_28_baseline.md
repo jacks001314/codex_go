@@ -3978,3 +3978,10 @@ Status after this batch: `2331 complete`, `464 not_applicable`, `322 audit_pendi
 - Tests: `TestPendingSteerReceiptAcknowledgesByIdentityLikeRust`, `TestPendingSteerReceiptFallsBackToContentLikeRust`, `TestInactiveThreadReceiptAcknowledgesParkedSteerLikeRust`, `TestPendingSteerSurvivesThreadSwitchLikeRust`, `TestSubmitRequestAssignsUniqueClientMessageID`, `TestRemoteTurnStartCarriesClientMessageIDLikeRust`, `TestRemoteTurnSteerParamsFallsBackToRequestClientIDLikeRust`, `TestRemoteProtocolUserMessageCarriesClientIDAndImageCountLikeRust`; full `go test ./tui/tea` and focused `go test ./app` pass (the pre-existing `TestLocalSessionForksRustRolloutWithoutGoSnapshot` and `TestExecJSONEndToEnd` failures remain at HEAD).
 
 Status after this batch: `2332 complete`, `464 not_applicable`, `322 audit_pending`, `26 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Plugin install config reload certification (Round 1113)
+
+- #42593 Go's `RuntimeRouter.effectivePluginsChanged` already performs the upstream sequence after a successful install: clear plugin/skill caches, re-read user configuration and managed requirements, republish the process-wide MCP runtime, invalidate all per-thread MCP runtimes, prewarm loaded threads, and rebuild hook discovery from current plugin sources. Because Go resolves most thread state per request, this covers the Rust `reload_user_config` + `invalidate_mcp_runtimes` + `refresh_hook_runtimes` calls.
+- A configuration reload failure is logged without failing the install. Strengthened coverage: `TestRuntimeRouterPluginInstallReloadsStagedUserConfigLikeRust` proves a `config.toml` edit made while the server is running reaches the MCP runtime after install, and `TestRuntimeRouterPluginInstallSurvivesConfigReloadFailureLikeRust` covers the unloadable-config path alongside the existing runtime-invalidation test.
+
+Status after this batch: `2333 complete`, `464 not_applicable`, `322 audit_pending`, `25 regression_pending`, `5 partial`, `6 blocked_precondition`.
