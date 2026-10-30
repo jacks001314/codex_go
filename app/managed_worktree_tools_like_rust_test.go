@@ -233,7 +233,7 @@ func TestRemoteTUIToolsNamespaceConflictUsesHostedNamespaceLikeRust(t *testing.T
 	if !remoteTUIToolsNamespaceConflict(values, DynamicToolNamespace) {
 		t.Fatal("codex_tui namespace was not reported as a conflict")
 	}
-	if !remoteTUIToolsNamespaceConflict(values, managedWorktreeToolsNamespace) {
+	if !remoteTUIToolsNamespaceConflict(values, "codex_worktrees") {
 		t.Fatal("codex_worktrees namespace was not reported as a conflict")
 	}
 	if !remoteTUIToolsNamespaceConflict(values, "unrelated_server") {

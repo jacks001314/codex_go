@@ -31,7 +31,6 @@ import (
 // changes the caller's cwd or grants filesystem permissions.
 
 const (
-	managedWorktreeToolsNamespace            = "codex_worktrees"
 	managedWorktreeMaxArgumentBytes          = 1024
 	managedWorktreeMaxResultBytes            = 999
 	managedWorktreeMaxOperations             = 64

@@ -364,3 +364,42 @@ func TestTaskToolsMCPToolCallRoutesThroughTheAppServerLikeRust(t *testing.T) {
 		t.Fatalf("tools/call text = %q, want the app-server thread payload", text)
 	}
 }
+
+// TestTaskToolsMCPHostsWorktreeToolsInTheTUITNamespaceLikeRust covers Rust
+// #58240: the hosted `codex_tui` server lists the task tools and the
+// managed-worktree tools together, so a session no longer publishes a separate
+// `codex_worktrees` namespace.
+func TestTaskToolsMCPHostsWorktreeToolsInTheTUITNamespaceLikeRust(t *testing.T) {
+	server, err := startTaskToolsMCPServer(&taskToolsMCPConnection{}, &managedWorktreeTools{})
+	if err != nil {
+		t.Fatalf("start task-tools server: %v", err)
+	}
+	defer server.close()
+	values := server.configValues()
+	config, _ := values["mcp_servers."+DynamicToolNamespace].(map[string]any)
+	if config == nil {
+		t.Fatalf("hosted config = %#v, want the codex_tui namespace", values)
+	}
+	if _, ok := values["mcp_servers.codex_worktrees"]; ok {
+		t.Fatalf("hosted config = %#v, must not publish a codex_worktrees namespace", values)
+	}
+	listed := taskToolsMCPPost(t, config, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+	listResult, _ := listed["result"].(map[string]any)
+	rawTools, _ := listResult["tools"].([]any)
+	names := map[string]bool{}
+	for _, entry := range rawTools {
+		listedTool, _ := entry.(map[string]any)
+		name, _ := listedTool["name"].(string)
+		names[name] = true
+	}
+	for _, name := range []string{"list_threads", "set_thread_title"} {
+		if !names[name] {
+			t.Fatalf("tools/list is missing the task tool %q: %#v", name, names)
+		}
+	}
+	for _, spec := range ManagedWorktreeDynamicToolSpecs() {
+		if !names[spec.Name] {
+			t.Fatalf("tools/list is missing the worktree tool %q: %#v", spec.Name, names)
+		}
+	}
+}
