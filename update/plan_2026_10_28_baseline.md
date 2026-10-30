@@ -3962,3 +3962,11 @@ Status after this batch: `2327 complete`, `464 not_applicable`, `322 audit_pendi
 - Tests: `TestStartupLaunchChoicesOmitUnselectedSettingsLikeRust`, `TestLocalThreadStartOmitsImplicitModelLikeRust`, updated `TestRemoteFreshStartUsesServerModelDefaultsLikeRust` and `TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust`; `go build ./...` and focused `go test ./app` pass (the pre-existing `TestExecJSONEndToEnd` and `TestLocalSessionForksRustRolloutWithoutGoSnapshot` failures reproduce at HEAD).
 
 Status after this batch: `2328 complete`, `464 not_applicable`, `322 audit_pending`, `30 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Voice helper lifecycle certification (Round 1111)
+
+- #41897 `voicehost` already provides the same-build bounded control protocol, the `--build-commit` probe, the hardened `cmd/codex-voice-host` entrypoint with staged exit codes, orderly close acknowledgement, parent-pipe-loss retirement and fail-closed malformed/incompatible/out-of-order handling. Added `TestHelperLifecycleSubprocessLikeRust`, which drives the real helper binary through handshake, explicit close, parent pipe loss, oversized/truncated/malformed frames, wrong build, wrong protocol and close-before-hello.
+- #41902 `Connect`/`ConnectPackage` resolve the packaged helper, launch it with an allowlisted child environment, perform the handshake under a bounded deadline and terminate/reap on failure; `InspectRuntimePackage`/`VerifyRuntimePackage` probe the layout and stamped build identity. Rust's Python package-assembly step is build tooling without a Go runtime counterpart.
+- #43079 the protocol carries `openDevices`/`setAudioControls`/`listDevices`/`inspectAudio`, devices open only after runtime and transport readiness, sessions start muted and suppressed, and controls are serviced every 5 ms ahead of capture; bounded queues, generation epochs and stale-backlog rejection are covered by existing `voicehost` tests. The Go helper uses miniaudio instead of CPAL/GStreamer.
+
+Status after this batch: `2331 complete`, `464 not_applicable`, `322 audit_pending`, `27 regression_pending`, `5 partial`, `6 blocked_precondition`.

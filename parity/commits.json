@@ -4888,9 +4888,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1111: voicehost implements the same-build bounded control protocol (hello/ready/close/closed plus the later transport and audio messages), a --build-commit probe, the hardened cmd/codex-voice-host entrypoint with process hardening and staged exit codes, orderly close acknowledgement, clean parent-pipe-loss retirement, and fail-closed malformed/incompatible/out-of-order handling without echoing input. Added TestHelperLifecycleSubprocessLikeRust, which runs the real built helper as a subprocess through handshake, explicit close, parent pipe loss, oversized/truncated/malformed frames, wrong build, wrong protocol and close-before-hello; full go test ./voicehost passes."
    ]
   },
   {
@@ -4924,9 +4924,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1111: voicehost.Connect resolves the packaged helper (ConnectPackage/InspectRuntimePackage/VerifyRuntimePackage), launches it with an allowlisted child environment, runs the same-build handshake under a bounded deadline, and terminates and reaps the process on failure or Close. The packaged layout, missing-helper and build-identity paths are covered by TestPackagedHelperCompletesSameBuildHandshake, TestInspectRuntimePackageReportsMissingHelper (which also asserts VerifyRuntimePackage rejects a missing helper), TestResolvePackageExecutable and TestChildEnvironmentFiltersAndAddsRuntimeEnvironment; Rust's Python package-assembly tool is Rust build tooling with no Go runtime counterpart (Go builds its helper binary directly)."
    ]
   },
   {
@@ -8126,9 +8126,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 16/17 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1111: the helper protocol carries openDevices/setAudioControls/devicesOpened/audioControlsApplied plus listDevices/inspectAudio, devices open only after runtime and transport readiness, sessions start muted and speaker-suppressed, and controls are serviced every 5 ms ahead of capture. voicehost's bounded block queue, generation/epoch transitions, capture boundary and stale-backlog rejection mirror the Rust device buffers. Tests: TestRunHostDeviceControlSequence, TestRunHostOpensSelectedDevicesLikeRust, TestRunHostRejectsStaleDeviceSelectionLikeRust, TestRunHostRejectsOutOfOrderDeviceControls, TestRunHostInspectAudioBeforeDevicesReportsDefault, TestAudioPackerRejectsUnboundedBacklog, TestCaptureBoundaryRejectsPreUnmuteBuffer, TestCaptureRejectsStaleBacklog; full go test ./voicehost passes. The Go helper uses miniaudio instead of CPAL/GStreamer, so the upstream native-dependency CI/build changes have no Go counterpart."
    ]
   },
   {
