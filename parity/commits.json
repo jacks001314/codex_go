@@ -8227,9 +8227,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1009 (回归+核对): #43110 引入 disabled-by-default 的 reasoning_effort_override feature: 在 OpenAI 且模型声明 supports_reasoning_effort_updates 时，接受用户输入后若无 established effort 或解析后的 effort 变化，则追加一条 harness-authored configuration_update，保持历史前缀与 prompt cache key 不变，请求本身仍用所选 effort; effort 归一化通过 ModelInfo::resolve_reasoning_effort 共享 (ultra 解析为模型支持的 high/max，persistent 转为 disabled，其他自定义值不写入历史)，且只与 harness-authored update 比较。Go 已完整实现: reasoningoverride.EffortForConfigurationUpdate/OverrideInputItems、model.ResolveReasoningEffort/IsKnownReasoningEffort、rollout/session 的 trusted configuration_update 持久化与回放、exec 的 PostPromptInputItems 与 execReasoningEffortOverride，以及 appserver 的 reasoningEffortOverrideInputItems/reasoningEffortForRequest; 已有 exec 端到端、rollout 持久化、model 归一化与 appserver gating 测试。本轮补充 appserver/reasoning_effort_history_like_rust_test.go: 多轮 high/low 变更加只在变化时追加且请求 baseline 保持首次 pin、ultra 解析为模型 effort 后显式等价选择不重复追加、persistent 与 high 来回切换分别追加 disabled/high 且重复选择不追加。验证: go test ./appserver -run 'TestReasoningEffortOverrideAppendsOnlyOnChangeLikeRust|TestReasoningEffortOverrideNormalizesUltraBeforeComparingLikeRust|TestReasoningEffortOverridePersistentTransitionsLikeRust' -count=1; go test ./exec -run 'ReasoningEffort|ConfigurationUpdate' -count=1; go test ./model -run ReasoningEffort -count=1; go test ./appserver -run 'ReasoningEffort|Prewarm' -count=1; go test ./appserver -count=1 (仅剩 7 个既有失败); go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

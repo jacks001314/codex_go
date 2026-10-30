@@ -3188,6 +3188,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `appserver/session_startup_prewarm.go` now resolves the effort with the same feature/provider/model-support/exempt gates and `effortForConfigurationUpdate` path as sampling, pins it before launching the warmup goroutine, and sends it on both startup and idle-history warmup requests.
 - New `appserver/reasoning_effort_prewarm_like_rust_test.go` covers the prewarm baseline surviving a later high selection, overrides-disabled warmup, history warmup effort, model-switch re-baselining, and resume clearing the pin.
 - Verified with `go test ./appserver -run 'Prewarm|ReasoningEffort|ThreadResume' -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2168 complete`, `451 not_applicable`,
-`345 audit_pending`, `181 regression_pending`, `4 partial`,
+### Reasoning-effort history updates (Round 1009)
+
+- Rust #43110 records trusted `configuration_update` items after accepted input when no effort is established or the resolved effort changes, keeps the history prefix and prompt cache key stable, normalizes `ultra`/`persistent` through the model, and ignores custom efforts (#43110, complete).
+- Go already implements the decision in `reasoningoverride`, the persistence/replay path, the exec entry point, and the appserver turn wiring; existing tests cover gating, exec end-to-end persistence, rollout round-trips, and model normalization.
+- New `appserver/reasoning_effort_history_like_rust_test.go` covers append-only-on-change with a stable request baseline, ultra normalization before comparison, and `persistent` ↔ `high` transitions appending `disabled`/`high` exactly once.
+- Verified with the three new tests, `go test ./exec -run 'ReasoningEffort|ConfigurationUpdate' -count=1`, `go test ./model -run ReasoningEffort -count=1`, `go test ./appserver -run 'ReasoningEffort|Prewarm' -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2169 complete`, `451 not_applicable`,
+`345 audit_pending`, `180 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
