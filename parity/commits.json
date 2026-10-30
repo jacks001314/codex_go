@@ -7331,9 +7331,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "N/A by architecture: Rust #51070 changes ext/guardian-v2/src/async_scorer/decisions.rs and guardian-context TrustedTool::KIND so the optional asynchronous Decisions comparison classifier can append host-annotated trusted-tool developer text to its rubric. Go has no guardian-v2 async scorer/Decisions adapter or LunaSampler, and no guardian TrustedTool fragment whose kind could be matched (consistent with earlier async_scorer entries #40393/#40431/#56556 and the TrustedTool fragment commit)",
+    "Go's Guardian path is the synchronous reviewer, which already renders trusted host/connector tool descriptions through state.renderGuardianToolDescriptions and the <guardian_tool_descriptions> fragment, so the review-visible trusted-tool context is retained without the Decisions wire adapter",
+    "No Go source change or regression test applies; `go test ./parity -run TestAlignment -count=1` records the status change"
    ]
   },
   {

@@ -3595,6 +3595,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `model/inference_tools.go` already tracked the list per conversation, `turn/turn.go` recorded the count, and both turn loops plus the analytics payloads carried it. Round 1067 re-verified schema/addition/ordering/empty cases, cross-session retention, timing rules, and serialization.
 - Verified with `go test ./model -run InferenceTools -count=1`, `go test ./turn -run 'InferenceTools|ToolsChange' -count=1`, `go test ./telemetry -run TurnEvent -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2221 complete`, `461 not_applicable`,
-`322 audit_pending`, `140 regression_pending`, `5 partial`,
+### Guardian Decisions trusted-tool context (Round 1068)
+
+- Rust #51070 lets the optional `ext/guardian-v2` asynchronous Decisions classifier append developer text annotated `guardian.trusted_tool` to its rubric while still rejecting other developer messages.
+- Not applicable: Go has no guardian-v2 async scorer, Decisions adapter, LunaSampler, or guardian `TrustedTool` fragment, matching the earlier async-scorer ledger decisions. Go's synchronous Guardian reviewer already carries trusted tool descriptions through `state.renderGuardianToolDescriptions`.
+- No source change or regression test applies.
+
+Status after reconciliation: `2221 complete`, `462 not_applicable`,
+`322 audit_pending`, `139 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
