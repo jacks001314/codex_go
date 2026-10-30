@@ -4014,3 +4014,11 @@ Status after this batch: `2335 complete`, `464 not_applicable`, `322 audit_pendi
 Ledger fix after Round 1116: the Round 1115 status/evidence update had landed on #42047's entry instead of `8e7f50cba9` (#47100). #47100 now carries its own Round 1115 evidence and `complete` status; #42047 keeps the Round 1116 evidence.
 
 Status after this fix: `2336 complete`, `464 not_applicable`, `322 audit_pending`, `22 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Inline-code selection copy is not applicable (Round 1117)
+
+- #49041 only changes Rust's app-owned Markdown selection serializer so a selection fully inside one inline code span (or one table cell) is emitted as plain text without backticks.
+- Go's transcript selection remains terminal-owned: `SelectedText` slices the rendered plain cells, so inline-code and table-cell copies already contain no backticks and there is no `CopyLine`/`TableLine` serializer to patch. This follows the existing `not_applicable` decision for #47896; whole-response copy still offers Markdown plus HTML.
+- No code change; ledger evidence updated to point at the shared rationale.
+
+Status after this batch: `2336 complete`, `465 not_applicable`, `322 audit_pending`, `21 regression_pending`, `5 partial`, `6 blocked_precondition`.

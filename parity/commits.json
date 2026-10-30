@@ -22843,9 +22843,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Same Markdown-selection copy pipeline as #47896: Rust reconstructs semantic Markdown for an app-owned transcript selection, so it needs this inline-code exception to stop adding backticks. Go keeps in-transcript selection terminal-owned and copies the rendered cells directly as plain text, so copying inside inline code or a table cell can never introduce backticks and there is no CopyLine/TableLine path to change. Whole-response copy still provides Markdown plus HTML."
    ]
   },
   {
