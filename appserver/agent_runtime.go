@@ -35,7 +35,10 @@ func (r *RuntimeRouter) agentForAppTurn(params *turn.TurnStartParams, turnID str
 	streaming.ModelsManager = model.ModelsManagerForOriginator(streaming.ModelsManager, params.Originator)
 	streaming.AuthRecoveryHandler = r.authRecoveryEventHandler(params.ThreadID, turnID)
 	streaming.ExternalAuthRefresh = r.externalAuthRefresh
-	streaming.StoreOptions = r.authStoreOptions()
+	// Credential refreshes performed by this turn persist with the thread's
+	// originator so storage telemetry attributes them to the requesting client
+	// (Rust AuthStorageOriginator scope on the turn task).
+	streaming.StoreOptions = r.authStoreOptionsForOriginator(params.Originator)
 	if cfg, err := r.effectiveConfigForTurn(params); err == nil {
 		streaming.AgentIdentity = agentIdentityOptionsForAppTurn(cfg)
 		streaming.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
@@ -1048,8 +1051,9 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 		return nil, err
 	}
 	codexHome := r.codexHomeForRollout()
+	storeOptions := r.authStoreOptionsForOriginator(params.Originator)
 	var snapshot *auth.AuthDotJSON
-	if resolved, err := r.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
+	if resolved, err := r.resolveAuthWithLoginRestrictionsAndOptions(codexHome, storeOptions); err == nil && resolved != nil {
 		snapshot = &resolved.Auth
 	} else if err != nil {
 		return nil, err
@@ -1057,7 +1061,7 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	// Rust AuthManager::auth() proactively refreshes managed ChatGPT auth that
 	// is inside the expiry window or overdue on its eight-day schedule, and the
 	// refresh request reports the matching reason (#53991).
-	snapshot = r.proactiveRefreshManagedChatGPT(context.Background(), codexHome, cfg, snapshot)
+	snapshot = r.proactiveRefreshManagedChatGPTForOriginator(context.Background(), codexHome, cfg, snapshot, params.Originator)
 	if snapshot == nil && provider.RequiresOpenAIAuth {
 		return nil, nil
 	}
@@ -1074,7 +1078,7 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	if err := r.applyWorkspaceRoutingToAgent(context.Background(), provider, snapshot, agent); err != nil {
 		return nil, err
 	}
-	agent.StoreOptions = r.authStoreOptions()
+	agent.StoreOptions = storeOptions
 	// Rust #45556: the thread manager owns the configured attachment store and
 	// hands it to every session it spawns, so a turn's prepared images upload
 	// through the host backend instead of the inline default. Delegated
@@ -1112,6 +1116,10 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 // refresh is non-fatal, as in Rust, which logs the error and keeps serving the
 // cached auth.
 func (r *RuntimeRouter) proactiveRefreshManagedChatGPT(ctx context.Context, codexHome string, cfg *config.Config, snapshot *auth.AuthDotJSON) *auth.AuthDotJSON {
+	return r.proactiveRefreshManagedChatGPTForOriginator(ctx, codexHome, cfg, snapshot, "")
+}
+
+func (r *RuntimeRouter) proactiveRefreshManagedChatGPTForOriginator(ctx context.Context, codexHome string, cfg *config.Config, snapshot *auth.AuthDotJSON, originator string) *auth.AuthDotJSON {
 	if r == nil || snapshot == nil {
 		return snapshot
 	}
@@ -1120,7 +1128,7 @@ func (r *RuntimeRouter) proactiveRefreshManagedChatGPT(ctx context.Context, code
 		CodexHome:    codexHome,
 		HTTPClient:   r.policyHTTPClientForConfig(cfg),
 		AuthSnapshot: snapshot,
-		StoreOptions: r.authStoreOptions(),
+		StoreOptions: r.authStoreOptionsForOriginator(originator),
 	}, time.Now())
 	if !attempted || err != nil || refreshed == nil {
 		return snapshot

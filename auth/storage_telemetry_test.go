@@ -53,11 +53,16 @@ func TestCLIAuthStorageTelemetryKeyringUnavailableLikeRust(t *testing.T) {
 	}
 	for _, event := range events {
 		wantActual := "direct_keyring"
+		wantSecureOutcome := "error"
+		wantSecureError := "unavailable"
 		if event.Operation == "delete" {
+			// Rust records a multi-store delete without a secure attempt.
 			wantActual = "multiple"
+			wantSecureOutcome = "not_attempted"
+			wantSecureError = "none"
 		}
 		if event.StoreMode != "keyring" || event.SelectedStore != "direct_keyring" || event.ActualStore != wantActual ||
-			event.Outcome != "error" || event.SecureOutcome != "error" || event.SecureError != "unavailable" {
+			event.Outcome != "error" || event.SecureOutcome != wantSecureOutcome || event.SecureError != wantSecureError {
 			t.Fatalf("keyring telemetry = %#v", event)
 		}
 	}

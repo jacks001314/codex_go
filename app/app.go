@@ -2084,6 +2084,11 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 	if err != nil {
 		return exitMessagef("Error loading configuration: %v", err)
 	}
+	// Rust installs a small file-backed tracing layer for direct `codex login`
+	// flows so sanitized credential-storage fallback warnings stay visible
+	// (#49384). The handler is restored when the command returns.
+	restoreLoginLogging := installLoginFileLogging(codexHome, loadedConfig)
+	defer restoreLoginLogging()
 	authStoreOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
 	store := auth.NewStoreWithOptions(codexHome, authStoreOptions)
 	if opts.WithAPIKey && opts.WithAccessToken {
@@ -2186,6 +2191,31 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 
 func clearExistingAuthBeforeLogin(ctx context.Context, codexHome string, storeOptions *auth.StoreOptions) {
 	_, _ = auth.LogoutWithRevoke(ctx, codexHome, storeOptions)
+}
+
+// installLoginFileLogging appends login diagnostics to codex-login.log under
+// the configured log_dir (default `<codexHome>/log`) and returns a restore
+// function. A missing or unwritable log file never fails the login flow.
+func installLoginFileLogging(codexHome string, cfg *config.Config) func() {
+	logDir := filepath.Join(codexHome, "log")
+	if cfg != nil {
+		if configured, ok := cfg.ConfiguredLogDir(); ok && strings.TrimSpace(configured) != "" {
+			logDir = configured
+		}
+	}
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		return func() {}
+	}
+	file, err := os.OpenFile(filepath.Join(logDir, "codex-login.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return func() {}
+	}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return func() {
+		slog.SetDefault(previous)
+		_ = file.Close()
+	}
 }
 
 func authFromCodexAccessToken(ctx context.Context, accessToken string, cfg *config.Config) (auth.AuthDotJSON, error) {

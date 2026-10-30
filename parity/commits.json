@@ -23796,9 +23796,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1138: auth storage telemetry now records every load/save/delete attempt with the bounded originator, keeps secure-store failures visible through auto-mode file fallbacks (secure_error/secure_entry_missing), emits the separate cleanup observation after a keyring write, and reports multi-store deletes without a secure attempt. Credential JSON decode failures are replaced with classify/line/column diagnostics (Syntax/Data) so error text, %+v output, and the new CLI codex-login.log never carry credential values or home paths. App-server request and turn paths carry the client/turn originator through StoreOptions; `codex login` appends sanitized fallback warnings to codex-login.log under log_dir. Tests: auth/storage_attempt_like_rust_test.go, appserver oauth storage metrics/originator and proactive-refresh tests, app login file-log tests."
    ]
   },
   {

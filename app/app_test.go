@@ -249,6 +249,70 @@ func TestLoginWithKeyringStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
 	}
 }
 
+// TestLoginFileLogRecordsSanitizedStorageFallbackLikeRust covers Rust #49384:
+// a successful plaintext fallback must remain visible in codex-login.log
+// without leaking credential values or the home path.
+func TestLoginFileLogRecordsSanitizedStorageFallbackLikeRust(t *testing.T) {
+	clearAuthEnvApp(t)
+	previousKeyring := auth.OSKeyringAvailable
+	auth.OSKeyringAvailable = false
+	t.Cleanup(func() { auth.OSKeyringAvailable = previousKeyring })
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "--with-api-key"}, strings.NewReader("private-api-key\n"), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("auto login returned error: %v", err)
+	}
+	logs, err := os.ReadFile(filepath.Join(home, "log", "codex-login.log"))
+	if err != nil {
+		t.Fatalf("read codex-login.log: %v", err)
+	}
+	text := string(logs)
+	for _, want := range []string{
+		"credential storage file fallback completed",
+		"store_mode=auto",
+		"selected_store=secrets",
+		"actual_store=file",
+		"operation=save",
+		"secure_outcome=error",
+		"outcome=success",
+		"fallback_reason=secure_error",
+		"originator=none",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("codex-login.log missing %q: %s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"private-api-key", home} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("codex-login.log leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
+func TestLoginFileLogUsesConfiguredLogDirLikeRust(t *testing.T) {
+	clearAuthEnvApp(t)
+	previousKeyring := auth.OSKeyringAvailable
+	auth.OSKeyringAvailable = false
+	t.Cleanup(func() { auth.OSKeyringAvailable = previousKeyring })
+	home := t.TempDir()
+	logDir := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	body := "cli_auth_credentials_store = \"auto\"\nlog_dir = " + strconv.Quote(logDir) + "\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+	if err := Run(context.Background(), []string{"login", "--with-api-key"}, strings.NewReader("sk-log-dir\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("auto login returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, "codex-login.log")); err != nil {
+		t.Fatalf("codex-login.log was not written to log_dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "log", "codex-login.log")); !os.IsNotExist(err) {
+		t.Fatalf("codex-login.log ignored log_dir: %v", err)
+	}
+}
+
 func TestLoginCredentialSourceConflictsMatchRustExit(t *testing.T) {
 	clearAuthEnvApp(t)
 	t.Setenv("CODEX_HOME", t.TempDir())

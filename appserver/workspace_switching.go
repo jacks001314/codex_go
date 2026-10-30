@@ -190,10 +190,10 @@ func (r *RuntimeRouter) handleAccountSessionSwitch(request *Request) (*auth.Acco
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.switchAccountSession(&params)
+	return r.switchAccountSession(&params, r.authStorageOriginatorForRequest(request))
 }
 
-func (r *RuntimeRouter) switchAccountSession(params *auth.AccountSessionsSwitchParams) (*auth.AccountSessionsSwitchResponse, error) {
+func (r *RuntimeRouter) switchAccountSession(params *auth.AccountSessionsSwitchParams, originator string) (*auth.AccountSessionsSwitchResponse, error) {
 	if r == nil || params == nil {
 		return nil, jsonRPCInvalidRequest("Authentication is unavailable")
 	}
@@ -232,7 +232,7 @@ func (r *RuntimeRouter) switchAccountSession(params *auth.AccountSessionsSwitchP
 		if !params.AllowBrowserLogin {
 			return nil, jsonRPCInvalidRequest("The selected workspace requires a new sign-in")
 		}
-		return r.startWorkspaceBrowserLogin(current, params, target)
+		return r.startWorkspaceBrowserLogin(current, params, target, originator)
 	}
 	pause, err := r.threads.PauseTurnAdmission(context.Background())
 	if err != nil {
@@ -283,12 +283,12 @@ func (r *RuntimeRouter) switchAccountSession(params *auth.AccountSessionsSwitchP
 	return r.accountSessionSwitchResponse(params)
 }
 
-func (r *RuntimeRouter) startWorkspaceBrowserLogin(snapshot *auth.AuthDotJSON, params *auth.AccountSessionsSwitchParams, target chatgptapi.AccountsCheckEntry) (*auth.AccountSessionsSwitchResponse, error) {
+func (r *RuntimeRouter) startWorkspaceBrowserLogin(snapshot *auth.AuthDotJSON, params *auth.AccountSessionsSwitchParams, target chatgptapi.AccountsCheckEntry, originator string) (*auth.AccountSessionsSwitchResponse, error) {
 	connection := ""
 	if target.SSOConnectionName != nil {
 		connection = *target.SSOConnectionName
 	}
-	login, err := auth.NewWorkspaceLogin(snapshot, r.codexHomeForRollout(), r.authStoreOptions(), params.SessionID, params.AccountID, connection)
+	login, err := auth.NewWorkspaceLogin(snapshot, r.codexHomeForRollout(), r.authStoreOptionsForOriginator(originator), params.SessionID, params.AccountID, connection)
 	if err != nil {
 		return nil, jsonRPCInvalidRequest(err.Error())
 	}
@@ -306,7 +306,7 @@ func (r *RuntimeRouter) startWorkspaceBrowserLogin(snapshot *auth.AuthDotJSON, p
 		pause.Release()
 		return nil, err
 	}
-	options := r.accountOAuthOptions()
+	options := r.accountOAuthOptionsForOriginator(originator)
 	options.WorkspaceLogin = login
 	options.ForcedWorkspaces = []string{strings.TrimSpace(params.AccountID)}
 	if err := r.startAccountLoginRuntimeWithOptions(&loginParams, response, options, pause); err != nil {

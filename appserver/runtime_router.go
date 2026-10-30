@@ -1581,7 +1581,11 @@ func buildAccountScopedModelsManagerForCWD(codexHome string, read *config.Config
 }
 
 func (r *RuntimeRouter) resolveAuthWithLoginRestrictions(codexHome string) (*auth.ResolvedAuth, error) {
-	store := r.authStore(codexHome)
+	return r.resolveAuthWithLoginRestrictionsAndOptions(codexHome, r.authStoreOptions())
+}
+
+func (r *RuntimeRouter) resolveAuthWithLoginRestrictionsAndOptions(codexHome string, options *auth.StoreOptions) (*auth.ResolvedAuth, error) {
+	store := auth.NewStoreWithOptions(codexHome, options)
 	resolved, err := store.Resolve()
 	if err != nil || resolved == nil {
 		return resolved, err
@@ -13535,7 +13539,7 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 		return nil, err
 	}
 	if response != nil && response.LoginID != "" {
-		if err := r.startAccountLoginRuntime(&params, response); err != nil {
+		if err := r.startAccountLoginRuntimeWithOptions(&params, response, r.accountOAuthOptionsForRequest(request), nil); err != nil {
 			_, _ = r.requireAccount().CancelLogin(&auth.CancelLoginAccountParams{LoginID: response.LoginID})
 			return nil, err
 		}
@@ -13543,7 +13547,7 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 	r.applyChatGPTLoginConfig(params, response)
 	if snapshot := authSnapshotFromLoginParams(&params); snapshot != nil {
 		if codexHome := r.codexHomeForRollout(); codexHome != "" {
-			if err := r.authStore(codexHome).Save(*snapshot); err != nil {
+			if err := r.authStoreForRequest(codexHome, request).Save(*snapshot); err != nil {
 				return nil, err
 			}
 		}
@@ -13932,7 +13936,7 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 	}
 	response := r.requireAccount().Logout()
 	if codexHome := r.codexHomeForRollout(); codexHome != "" {
-		if _, err := auth.LogoutWithRevoke(context.Background(), codexHome, r.authStoreOptions()); err != nil {
+		if _, err := auth.LogoutWithRevoke(context.Background(), codexHome, r.authStoreOptionsForRequest(request)); err != nil {
 			return nil, err
 		}
 	}
@@ -14045,7 +14049,7 @@ func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResp
 	}
 	codexHome := r.codexHomeForRollout()
 	var snapshot *auth.AuthDotJSON
-	if resolved, err := r.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
+	if resolved, err := r.resolveAuthWithLoginRestrictionsAndOptions(codexHome, r.authStoreOptionsForRequest(request)); err == nil && resolved != nil {
 		snapshot = &resolved.Auth
 	} else if err != nil {
 		return nil, err
@@ -14059,7 +14063,7 @@ func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResp
 	}
 	if snapshot != nil {
 		if params.RefreshToken {
-			refreshed, _ := r.refreshManagedAuthForStatus(context.Background(), snapshot)
+			refreshed, _ := r.refreshManagedAuthForStatusWithOptions(context.Background(), snapshot, r.authStoreOptionsForRequest(request))
 			if refreshed != nil {
 				snapshot = refreshed
 			}

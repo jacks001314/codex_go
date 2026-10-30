@@ -67,7 +67,46 @@ func TestOAuthStorageTelemetryEmitsBoundedMetricsLikeRust(t *testing.T) {
 	}
 	authTags := metrics.counters[1]
 	if authTags["credential_kind"] != "codex" || authTags["operation"] != "save" || authTags["outcome"] != "success" ||
-		authTags["actual_store"] != "file" || authTags["originator"] != "cli" {
+		authTags["actual_store"] != "file" || authTags["originator"] != "none" {
 		t.Fatalf("CLI auth telemetry tags = %#v", authTags)
+	}
+}
+
+func TestAuthStorageOriginatorFollowsConnectionClientNameLikeRust(t *testing.T) {
+	metrics := &oauthStorageMetricRecorder{}
+	router := &RuntimeRouter{services: RuntimeServices{TurnMetrics: metrics}}
+	router.configureOAuthStorageTelemetry()
+	defer mcp.SetOAuthStorageTelemetryObserver(nil)
+	defer auth.SetStorageTelemetryObserver(nil)
+	connections := map[string]string{
+		"desktop": "Codex Desktop",
+		"vscode":  "codex_vscode",
+		"private": "private-client-name",
+	}
+	for connectionID, clientName := range connections {
+		router.rememberConnectionClientInfo(connectionID, ClientInfo{Name: clientName, Version: "0.1.0"})
+	}
+	codexHome := t.TempDir()
+	for connectionID := range connections {
+		request := &Request{JSONRPC: "2.0", ID: IntID(1), Method: MethodGetAccount, ConnectionID: connectionID}
+		store := auth.NewStoreWithOptions(codexHome, router.authStoreOptionsForRequest(request))
+		if err := store.Save(auth.FromAPIKey("sk-originator-" + connectionID)); err != nil {
+			t.Fatalf("save with connection %q: %v", connectionID, err)
+		}
+	}
+	if len(metrics.counters) != len(connections) {
+		t.Fatalf("storage telemetry counters = %#v", metrics.counters)
+	}
+	originators := map[string]int{}
+	for _, tags := range metrics.counters {
+		originators[tags["originator"]]++
+	}
+	for _, want := range []string{"codex_desktop", "codex_vscode", "other"} {
+		if originators[want] != 1 {
+			t.Fatalf("originator telemetry = %#v (want one %q)", originators, want)
+		}
+	}
+	if _, leaked := originators["private-client-name"]; leaked {
+		t.Fatalf("unbounded client name leaked into telemetry: %#v", originators)
 	}
 }

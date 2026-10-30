@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -129,6 +130,9 @@ type StoreOptions struct {
 	Mode           AuthCredentialsStoreMode
 	KeyringBackend KeyringBackendKind
 	KeyringStore   *KeyringStore
+	// Originator is the bounded client attribution carried by credential
+	// storage observations (Rust AuthStorageOriginator).
+	Originator string
 	// WorkloadIdentity, when set, configures process-scoped workload identity
 	// authentication selected from OPENAI_FEDERATION_RULE_ID /
 	// OPENAI_IDENTITY_TOKEN_FILE (Rust 96c8be200c, #38188).
@@ -160,6 +164,7 @@ func NewStoreWithOptions(codexHome string, options *StoreOptions) *Store {
 	if store.options.KeyringBackend == "" || store.options.KeyringBackend == KeyringBackendAuto {
 		store.options.KeyringBackend = KeyringBackendDirect
 	}
+	store.options.Originator = normalizeStorageOriginator(store.options.Originator)
 	return store
 }
 
@@ -242,22 +247,15 @@ func (s *Store) Load() (*AuthDotJSON, error) {
 
 func (s *Store) loadLocked() (auth *AuthDotJSON, err error) {
 	backend := s.backend()
-	actualStore := authStorageBackendName(backend.Source())
-	attempt := newStorageAttempt(s.options.Mode, "load")
-	secureOutcome := "not_attempted"
-	secureError := "none"
-	defer func() {
-		if secureOutcome == "not_attempted" && (actualStore == "direct_keyring" || s.options.Mode == AuthCredentialsStoreAuto) {
-			secureOutcome = authStorageLoadOutcome(auth, err)
-			if err != nil {
-				secureError = classifyAuthStorageError(err)
-			}
-		}
-		attempt.finish(actualStore, authStorageLoadOutcome(auth, err), secureOutcome, secureError)
-	}()
+	if _, ok := backend.(*autoAuthStorage); ok {
+		return backend.Load()
+	}
+	attempt := newStorageAttempt(s.options.Mode, s.options.KeyringBackend, "load", s.options.Originator)
+	defer attempt.finish()
 	auth, err = backend.Load()
-	if err != nil {
-		secureError = classifyAuthStorageError(err)
+	attempt.recordLoadAttempt(storageTelemetryStoreName(backend), auth, err)
+	if s.options.Mode == AuthCredentialsStoreKeyring && err != nil {
+		attempt.recordSecureError(err)
 	}
 	return auth, err
 }
@@ -283,14 +281,13 @@ func (s *Store) Resolve() (*ResolvedAuth, error) {
 	} else if resolved != nil {
 		return resolved, nil
 	}
-	backend := s.backend()
 	authStorageCommitMu.Lock()
-	loaded, err := backend.Load()
+	loaded, err := s.loadLocked()
 	authStorageCommitMu.Unlock()
 	if err != nil || loaded == nil {
 		return nil, err
 	}
-	return &ResolvedAuth{Auth: *loaded, Source: backend.Source()}, nil
+	return &ResolvedAuth{Auth: *loaded, Source: s.backend().Source()}, nil
 }
 
 // resolveWorkloadIdentity resolves process-configured workload identity when
@@ -374,20 +371,21 @@ func authDotJSONEqual(left *AuthDotJSON, right *AuthDotJSON) bool {
 
 func (s *Store) saveLocked(auth AuthDotJSON) (err error) {
 	backend := s.backend()
-	actualStore := authStorageBackendName(backend.Source())
-	attempt := newStorageAttempt(s.options.Mode, "save")
-	secureOutcome := "not_attempted"
-	secureError := "none"
-	defer func() {
-		if actualStore == "direct_keyring" || s.options.Mode == AuthCredentialsStoreAuto {
-			secureOutcome = authStorageSaveOutcome(err)
-			if err != nil {
-				secureError = classifyAuthStorageError(err)
-			}
+	if _, ok := backend.(*autoAuthStorage); ok {
+		if err = backend.Save(auth); err != nil {
+			return err
 		}
-		attempt.finish(actualStore, authStorageSaveOutcome(err), secureOutcome, secureError)
-	}()
-	if err = backend.Save(auth); err != nil {
+		ClearPermanentRefreshFailure(s.CodexHome)
+		return nil
+	}
+	attempt := newStorageAttempt(s.options.Mode, s.options.KeyringBackend, "save", s.options.Originator)
+	defer attempt.finish()
+	err = backend.Save(auth)
+	attempt.recordSaveAttempt(storageTelemetryStoreName(backend), err)
+	if s.options.Mode == AuthCredentialsStoreKeyring && err != nil {
+		attempt.recordSecureError(err)
+	}
+	if err != nil {
 		return err
 	}
 	ClearPermanentRefreshFailure(s.CodexHome)
@@ -407,23 +405,25 @@ func (s *Store) Delete() (bool, error) {
 
 func (s *Store) deleteLocked() (removed bool, err error) {
 	backend := s.backend()
-	actualStore := authStorageBackendName(backend.Source())
-	if actualStore == "direct_keyring" {
+	if _, ok := backend.(*autoAuthStorage); ok {
+		removed, err = backend.Delete()
+		if err != nil {
+			return false, err
+		}
+		ClearPermanentRefreshFailure(s.CodexHome)
+		return removed, nil
+	}
+	attempt := newStorageAttempt(s.options.Mode, s.options.KeyringBackend, "delete", s.options.Originator)
+	defer attempt.finish()
+	removed, err = backend.Delete()
+	actualStore := storageTelemetryStoreName(backend)
+	if isSecureStorageStore(actualStore) {
+		// The keyring backend also removes the plaintext fallback, so the
+		// logical operation touches more than one store (Rust Store::Multiple)
+		// and never attributes a secure outcome to a delete.
 		actualStore = "multiple"
 	}
-	attempt := newStorageAttempt(s.options.Mode, "delete")
-	secureOutcome := "not_attempted"
-	secureError := "none"
-	defer func() {
-		if actualStore == "multiple" || s.options.Mode == AuthCredentialsStoreAuto {
-			secureOutcome = authStorageDeleteOutcome(removed, err)
-			if err != nil {
-				secureError = classifyAuthStorageError(err)
-			}
-		}
-		attempt.finish(actualStore, authStorageDeleteOutcome(removed, err), secureOutcome, secureError)
-	}()
-	removed, err = backend.Delete()
+	attempt.recordDeleteAttempt(actualStore, removed, err)
 	if err != nil {
 		return false, err
 	}
@@ -447,11 +447,13 @@ func (s *Store) backend() authStorageBackend {
 	mode := s.options.Mode
 	switch mode {
 	case AuthCredentialsStoreKeyring:
-		return newKeyringAuthStorage(s.CodexHome, s.options.KeyringBackend, s.options.KeyringStore)
+		return newKeyringAuthStorage(s.CodexHome, s.options.KeyringBackend, s.options.KeyringStore, mode, s.options.Originator)
 	case AuthCredentialsStoreAuto:
+		keyringStorage := newKeyringAuthStorage(s.CodexHome, s.options.KeyringBackend, s.options.KeyringStore, mode, s.options.Originator)
 		return &autoAuthStorage{
-			keyring: newKeyringAuthStorage(s.CodexHome, s.options.KeyringBackend, s.options.KeyringStore),
-			file:    &fileAuthStorage{store: s},
+			keyring:    keyringStorage,
+			file:       &fileAuthStorage{store: s},
+			originator: s.options.Originator,
 		}
 	case AuthCredentialsStoreEphemeral:
 		return &ephemeralAuthStorage{codexHome: s.CodexHome}
@@ -474,7 +476,7 @@ func (s *fileAuthStorage) Load() (*AuthDotJSON, error) {
 	}
 	var auth AuthDotJSON
 	if err := json.Unmarshal(data, &auth); err != nil {
-		return nil, err
+		return nil, credentialStorageJSONContext("failed to load CLI auth from file", data, err)
 	}
 	return &auth, nil
 }
@@ -513,15 +515,18 @@ func (s *fileAuthStorage) Source() string {
 }
 
 type keyringAuthStorage struct {
-	codexHome string
-	keyring   *KeyringStore
+	codexHome  string
+	keyring    *KeyringStore
+	backend    KeyringBackendKind
+	mode       AuthCredentialsStoreMode
+	originator string
 	// available reports whether the keyring can durably hold credentials: an
 	// explicitly injected store is the test seam, otherwise this build has no OS
 	// keyring.
 	available bool
 }
 
-func newKeyringAuthStorage(codexHome string, backend KeyringBackendKind, store *KeyringStore) *keyringAuthStorage {
+func newKeyringAuthStorage(codexHome string, backend KeyringBackendKind, store *KeyringStore, mode AuthCredentialsStoreMode, originator string) *keyringAuthStorage {
 	injected := store != nil
 	if store == nil {
 		if OSKeyringAvailable {
@@ -530,7 +535,14 @@ func newKeyringAuthStorage(codexHome string, backend KeyringBackendKind, store *
 			store = NewKeyringStore(backend)
 		}
 	}
-	return &keyringAuthStorage{codexHome: codexHome, keyring: store, available: injected || OSKeyringAvailable}
+	return &keyringAuthStorage{
+		codexHome:  codexHome,
+		keyring:    store,
+		backend:    backend,
+		mode:       mode,
+		originator: originator,
+		available:  injected || OSKeyringAvailable,
+	}
 }
 
 // keyringUnavailable reports the Rust "keyring when available, otherwise fail"
@@ -551,11 +563,11 @@ func (s *keyringAuthStorage) Load() (*AuthDotJSON, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to load CLI auth from keyring: %w", err)
+		return nil, credentialStorageContext("failed to load CLI auth from keyring", err)
 	}
 	var auth AuthDotJSON
 	if err := json.Unmarshal([]byte(value), &auth); err != nil {
-		return nil, fmt.Errorf("failed to deserialize CLI auth from keyring: %w", err)
+		return nil, credentialStorageJSONContext("failed to deserialize CLI auth from keyring", []byte(value), err)
 	}
 	return &auth, nil
 }
@@ -573,10 +585,18 @@ func (s *keyringAuthStorage) Save(auth AuthDotJSON) error {
 		return err
 	}
 	if err := s.keyring.Set(authKeyringService, authStoreKey(s.codexHome), string(data)); err != nil {
-		return fmt.Errorf("failed to write OAuth tokens to keyring: %w", err)
-	}
-	if _, err := (&fileAuthStorage{store: NewStore(s.codexHome)}).Delete(); err != nil {
+		err = credentialStorageContext("failed to write OAuth tokens to keyring", err)
+		if s.mode == AuthCredentialsStoreKeyring {
+			slog.Warn(err.Error())
+		}
 		return err
+	}
+	attempt := newStorageAttempt(s.mode, s.backend, "cleanup", s.originator)
+	removed, cleanupErr := (&fileAuthStorage{store: NewStore(s.codexHome)}).Delete()
+	attempt.recordDeleteAttempt("file", removed, cleanupErr)
+	attempt.finish()
+	if cleanupErr != nil {
+		slog.Warn("failed to remove CLI auth fallback file", "error", cleanupErr)
 	}
 	return nil
 }
@@ -587,7 +607,7 @@ func (s *keyringAuthStorage) Delete() (bool, error) {
 	}
 	keyringRemoved, err := s.keyring.Delete(authKeyringService, authStoreKey(s.codexHome))
 	if err != nil {
-		return false, fmt.Errorf("failed to delete auth from keyring: %w", err)
+		return false, credentialStorageContext("failed to delete auth from keyring", err)
 	}
 	fileRemoved, err := (&fileAuthStorage{store: NewStore(s.codexHome)}).Delete()
 	if err != nil {
@@ -600,17 +620,34 @@ func (s *keyringAuthStorage) Source() string {
 	return "keyring"
 }
 
+func (s *keyringAuthStorage) telemetryStoreName() string {
+	if s == nil {
+		return "direct_keyring"
+	}
+	return keyringStoreName(s.backend)
+}
+
 type autoAuthStorage struct {
-	keyring authStorageBackend
-	file    authStorageBackend
+	keyring    *keyringAuthStorage
+	file       authStorageBackend
+	originator string
 }
 
 func (s *autoAuthStorage) Load() (*AuthDotJSON, error) {
+	attempt := newStorageAttempt(AuthCredentialsStoreAuto, s.keyring.backend, "load", s.originator)
+	defer attempt.finish()
 	auth, err := s.keyring.Load()
+	attempt.recordLoadAttempt(s.keyring.telemetryStoreName(), auth, err)
 	if err == nil && auth != nil {
 		return auth, nil
 	}
-	return s.file.Load()
+	if err != nil {
+		attempt.recordSecureError(err)
+		slog.Warn("failed to load CLI auth from keyring, falling back to file storage", "error", err)
+	}
+	auth, err = s.file.Load()
+	attempt.recordLoadAttempt("file", auth, err)
+	return auth, err
 }
 
 // LoadAccountGrant propagates an unavailable keyring instead of falling back to
@@ -627,29 +664,50 @@ func (s *autoAuthStorage) LoadAccountGrant() (*AuthDotJSON, error) {
 }
 
 func (s *autoAuthStorage) Save(auth AuthDotJSON) error {
-	if err := s.keyring.Save(auth); err == nil {
+	attempt := newStorageAttempt(AuthCredentialsStoreAuto, s.keyring.backend, "save", s.originator)
+	defer attempt.finish()
+	err := s.keyring.Save(auth)
+	attempt.recordSaveAttempt(s.keyring.telemetryStoreName(), err)
+	if err == nil {
 		return nil
 	}
-	return s.file.Save(auth)
+	attempt.recordSecureError(err)
+	slog.Warn("failed to save auth to keyring, falling back to file storage", "error", err)
+	err = s.file.Save(auth)
+	attempt.recordSaveAttempt("file", err)
+	return err
 }
 
 func (s *autoAuthStorage) Delete() (bool, error) {
+	attempt := newStorageAttempt(AuthCredentialsStoreAuto, s.keyring.backend, "delete", s.originator)
+	defer attempt.finish()
 	keyringRemoved, keyringErr := s.keyring.Delete()
 	fileRemoved, fileErr := s.file.Delete()
 	if keyringErr != nil && fileErr != nil {
+		attempt.recordDeleteAttempt("multiple", false, keyringErr)
 		return false, keyringErr
 	}
 	if fileErr != nil {
+		attempt.recordDeleteAttempt("multiple", false, fileErr)
 		return false, fileErr
 	}
 	if keyringErr != nil {
+		attempt.recordDeleteAttempt("multiple", fileRemoved, nil)
 		return fileRemoved, nil
 	}
+	attempt.recordDeleteAttempt("multiple", keyringRemoved || fileRemoved, nil)
 	return keyringRemoved || fileRemoved, nil
 }
 
 func (s *autoAuthStorage) Source() string {
 	return "auto"
+}
+
+func storageTelemetryStoreName(backend authStorageBackend) string {
+	if named, ok := backend.(interface{ telemetryStoreName() string }); ok {
+		return named.telemetryStoreName()
+	}
+	return authStorageBackendName(backend.Source())
 }
 
 var ephemeralAuthStore = struct {

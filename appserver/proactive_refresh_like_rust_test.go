@@ -100,6 +100,48 @@ func TestResponsesAgentProactivelyRefreshesManagedChatGPTLikeRust(t *testing.T) 
 	}
 }
 
+// Rust #49384 scopes AuthStorageOriginator to the turn task, so a refresh
+// persisted mid-turn must report the thread's originator.
+func TestProactiveRefreshPersistsTurnOriginatorLikeRust(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	now := time.Now().UTC()
+	home := t.TempDir()
+	snapshot := appserverManagedChatGPTAuth("opaque-access-token", now.Add(-9*24*time.Hour))
+	if err := auth.NewStore(home).Save(*snapshot); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"access_token":  "new-access-token",
+			"refresh_token": "new-refresh-token",
+		})
+	}))
+	defer server.Close()
+	t.Setenv(auth.RefreshTokenURLEnvOverride, server.URL)
+
+	var events []auth.StorageTelemetry
+	auth.SetStorageTelemetryObserver(func(event auth.StorageTelemetry) { events = append(events, event) })
+	defer auth.SetStorageTelemetryObserver(nil)
+	router := NewRuntimeRouter(RuntimeServices{
+		Account:    auth.NewAccountManager(),
+		Config:     config.NewConfigService(home),
+		HTTPClient: &http.Client{},
+	})
+	refreshed := router.proactiveRefreshManagedChatGPTForOriginator(
+		context.Background(), home, &config.Config{Values: map[string]any{}}, snapshot, "codex_vscode",
+	)
+	if refreshed == nil || refreshed.Tokens["access_token"] != "new-access-token" {
+		t.Fatalf("refreshed snapshot = %#v", refreshed)
+	}
+	for _, event := range events {
+		if event.Operation == "save" && event.Originator == "codex_vscode" && event.Outcome == "success" {
+			return
+		}
+	}
+	t.Fatalf("turn refresh save telemetry = %#v", events)
+}
+
 func TestResponsesAgentKeepsFreshManagedChatGPTAuth(t *testing.T) {
 	clearAuthEnvAppserver(t)
 	now := time.Now().UTC()

@@ -80,6 +80,10 @@ func authStatusFromSnapshot(snapshot *auth.AuthDotJSON, params *AuthStatusParams
 }
 
 func (r *RuntimeRouter) refreshManagedAuthForStatus(ctx context.Context, snapshot *auth.AuthDotJSON) (*auth.AuthDotJSON, error) {
+	return r.refreshManagedAuthForStatusWithOptions(ctx, snapshot, r.authStoreOptions())
+}
+
+func (r *RuntimeRouter) refreshManagedAuthForStatusWithOptions(ctx context.Context, snapshot *auth.AuthDotJSON, storeOptions *auth.StoreOptions) (*auth.AuthDotJSON, error) {
 	if snapshot == nil || snapshot.Mode() != "chatgpt" {
 		return nil, nil
 	}
@@ -89,7 +93,7 @@ func (r *RuntimeRouter) refreshManagedAuthForStatus(ctx context.Context, snapsho
 		CodexHome:    codexHome,
 		RefreshToken: stringFromMap(snapshot.Tokens, "refresh_token"),
 		AuthSnapshot: snapshot,
-		StoreOptions: r.authStoreOptions(),
+		StoreOptions: storeOptions,
 	})
 	if err != nil {
 		return nil, err
