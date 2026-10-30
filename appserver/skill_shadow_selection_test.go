@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -55,6 +56,54 @@ func (m *recordingSkillShadowMetrics) Records() []recordedSkillShadowMetric {
 	return append([]recordedSkillShadowMetric(nil), m.records...)
 }
 
+func skillShadowMetricRecords(metrics *recordingSkillShadowMetrics, name string) []recordedSkillShadowMetric {
+	out := make([]recordedSkillShadowMetric, 0)
+	for _, record := range metrics.Records() {
+		if record.name == name {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+// waitForSkillShadowMetric waits for background ranking output to land, since
+// shadow ranking now runs off the turn preparation path (Rust #49812).
+func waitForSkillShadowMetric(t *testing.T, metrics *recordingSkillShadowMetrics, name string, want int) []recordedSkillShadowMetric {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		matched := skillShadowMetricRecords(metrics, name)
+		if len(matched) >= want {
+			return matched
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s records = %d, want %d", name, len(matched), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func skillShadowTurnForTest(t *testing.T, router *RuntimeRouter, threadID string) *skillShadowTurn {
+	t.Helper()
+	state := router.skillShadowThreadStateFor(threadID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.turn == nil {
+		t.Fatalf("no shadow turn for thread %q", threadID)
+	}
+	return state.turn
+}
+
+func waitForSkillShadowRanked(t *testing.T, turn *skillShadowTurn) []skillShadowRankedSelection {
+	t.Helper()
+	select {
+	case <-turn.rankedCh:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("shadow ranking for turn %q did not finish", turn.turnID)
+	}
+	return turn.waitRanked()
+}
+
 func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatalog(t *testing.T) {
 	metrics := &recordingSkillShadowMetrics{}
 	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
@@ -67,6 +116,7 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 		{Name: "hidden", Description: "Create slides secretly.", AllowImplicitInvocation: &disabled},
 	}
 	router.runSkillShadowSelection("thread-one", "turn-one", cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "text", Text: "create slides"}}}, skills)
+	waitForSkillShadowMetric(t, metrics, skillShadowRunMetric, 11)
 
 	records := metrics.Records()
 	if len(records) != 66 {
@@ -113,6 +163,7 @@ func TestRuntimeRouterSkillShadowSelectionExcludesExplicitSkillsLikeRust(t *test
 		{Name: "slides", Description: "Create presentations."},
 		{Name: "sheets", Description: "Analyze tabular data."},
 	})
+	waitForSkillShadowMetric(t, metrics, skillShadowCatalogMetric, 11)
 	for _, record := range metrics.Records() {
 		if record.name == skillShadowCatalogMetric && record.value != 1 {
 			t.Fatalf("catalog metric = %#v, want explicitly selected skill excluded", record)
@@ -216,22 +267,17 @@ func TestSkillShadowInvocationRecordingEmitsRankMetrics(t *testing.T) {
 	router.runSkillShadowSelection("thread-invocation", "turn-one", cfg, params, skills)
 	router.recordSkillShadowInvocation("thread-invocation", "turn-one", skills[1])
 
-	invocations := 0
+	// The invocation is recorded before the background ranking exists; it is
+	// queued and scored once the frozen rankings are ready (Rust #49812).
+	invocations := waitForSkillShadowMetric(t, metrics, skillShadowInvocationMetric, 11)
 	var lruRank string
-	for _, record := range metrics.Records() {
-		if record.name != skillShadowInvocationMetric {
-			continue
-		}
-		invocations++
+	for _, record := range invocations {
 		if record.tags["query_script"] != "ascii_latin" {
 			t.Fatalf("invocation tags = %#v", record.tags)
 		}
 		if record.tags["method"] == "lru_v1" {
 			lruRank = record.tags["rank"]
 		}
-	}
-	if invocations != 11 {
-		t.Fatalf("invocation records = %d, want 11", invocations)
 	}
 	if lruRank != "miss" {
 		t.Fatalf("lru_v1 rank before history = %q, want miss", lruRank)
@@ -240,8 +286,8 @@ func TestSkillShadowInvocationRecordingEmitsRankMetrics(t *testing.T) {
 	// Second turn: lru_v1 recovers the skill invoked on the earlier turn.
 	router.runSkillShadowSelection("thread-invocation", "turn-two", cfg, params, skills)
 	router.recordSkillShadowInvocation("thread-invocation", "turn-two", skills[1])
-	for _, record := range metrics.Records() {
-		if record.name != skillShadowInvocationMetric || record.tags["method"] != "lru_v1" {
+	for _, record := range waitForSkillShadowMetric(t, metrics, skillShadowInvocationMetric, 22) {
+		if record.tags["method"] != "lru_v1" {
 			continue
 		}
 		lruRank = record.tags["rank"]
@@ -258,6 +304,7 @@ func TestSkillShadowInvocationSkipsExplicitInvokeType(t *testing.T) {
 	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
 	skills := []promptctx.InstructionsSkillMetadata{{Name: "slides", Path: "/skills/slides", Description: "Create presentations."}}
 	router.runSkillShadowSelection("thread-explicit-type", "turn-one", cfg, &turn.TurnStartParams{Prompt: "slides"}, skills)
+	waitForSkillShadowRanked(t, skillShadowTurnForTest(t, router, "thread-explicit-type"))
 	router.trackSkillInvocationEvent(context.Background(), "thread-explicit-type", "turn-one", "model", "", skills[0], telemetry.SkillInvocationTypeExplicit)
 	for _, record := range metrics.Records() {
 		if record.name == skillShadowInvocationMetric {
@@ -282,10 +329,7 @@ func TestSkillShadowTaskContextFusionRecoversEarlierTurnSkill(t *testing.T) {
 	// Turn two: a bare continuation; the task-context fusion must recover the
 	// python-tools skill from the earlier turn (Rust #39008).
 	router.runSkillShadowSelection("thread-tc", "turn-two", cfg, &turn.TurnStartParams{Prompt: "continue"}, skills)
-	state := router.skillShadowThreadStateFor("thread-tc")
-	state.mu.Lock()
-	ranked := append([]skillShadowRankedSelection(nil), state.ranked...)
-	state.mu.Unlock()
+	ranked := waitForSkillShadowRanked(t, skillShadowTurnForTest(t, router, "thread-tc"))
 	var taskFusion []string
 	for _, selection := range ranked {
 		if selection.method == "task_context_fusion_v1" {
@@ -301,5 +345,145 @@ func TestSkillShadowTaskContextFusionRecoversEarlierTurnSkill(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("task_context_fusion_v1 did not recover python-tools: %#v", taskFusion)
+	}
+}
+
+func TestSkillShadowTurnPreparationAdvancesWhileRankingBlocked(t *testing.T) {
+	metrics := &recordingSkillShadowMetrics{}
+	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	t.Cleanup(func() { _ = router.Close() })
+	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	skills := []promptctx.InstructionsSkillMetadata{
+		{Name: "slides", Path: "/skills/slides", Description: "Create presentations."},
+		{Name: "python-tools", Path: "/skills/python-tools", Description: "Manage Python environments."},
+	}
+	// Occupy the whole process-wide ranking budget (Rust RANKING_SLOTS).
+	held := 0
+	for ; held < skillShadowRankingSlots; held++ {
+		skillShadowRankingBudget <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for ; held > 0; held-- {
+			<-skillShadowRankingBudget
+		}
+	})
+	prepared := make(chan struct{})
+	go func() {
+		router.runSkillShadowSelection("thread-blocked", "turn-one", cfg, &turn.TurnStartParams{Prompt: "manage python environments"}, skills)
+		close(prepared)
+	}()
+	select {
+	case <-prepared:
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn preparation waited for a ranking slot")
+	}
+	if runs := skillShadowMetricRecords(metrics, skillShadowRunMetric); len(runs) != 0 {
+		t.Fatalf("ranking ran while the budget was occupied: %#v", runs)
+	}
+	// Relevance history advances immediately, before any ranking exists.
+	router.recordSkillShadowInvocation("thread-blocked", "turn-one", skills[1])
+	state := router.skillShadowThreadStateFor("thread-blocked")
+	state.mu.Lock()
+	recent := append([]string(nil), state.recent...)
+	state.mu.Unlock()
+	if len(recent) != 1 || recent[0] != "/skills/python-tools" {
+		t.Fatalf("recent = %#v, want the invocation recorded while ranking is blocked", recent)
+	}
+	for ; held > 0; held-- {
+		<-skillShadowRankingBudget
+	}
+	// The queued observation is scored against the frozen rankings once the
+	// worker gets a slot.
+	waitForSkillShadowMetric(t, metrics, skillShadowInvocationMetric, 11)
+}
+
+func TestSkillShadowRankingSharesProcessWideCapacity(t *testing.T) {
+	metrics := &recordingSkillShadowMetrics{}
+	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	t.Cleanup(func() { _ = router.Close() })
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var mu sync.Mutex
+	started := 0
+	original := skillShadowRank
+	skillShadowRank = func(query promptctx.ShadowQuery, documents []promptctx.SkillSelectionDocument, recentSkillIDs []int, taskQuery promptctx.ShadowQuery, taskRecentIDs []int) []promptctx.SkillShadowSelectionObservation {
+		mu.Lock()
+		started++
+		mu.Unlock()
+		<-release
+		return nil
+	}
+	t.Cleanup(func() { skillShadowRank = original })
+	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	skills := []promptctx.InstructionsSkillMetadata{{Name: "slides", Path: "/skills/slides", Description: "Create presentations."}}
+	for _, threadID := range []string{"thread-a", "thread-b", "thread-c"} {
+		router.runSkillShadowSelection(threadID, "turn-one", cfg, &turn.TurnStartParams{Prompt: "create slides"}, skills)
+	}
+	waitForSkillShadowRankingsStarted(t, &mu, &started, 2)
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	blocked := started
+	mu.Unlock()
+	if blocked != 2 {
+		t.Fatalf("rankings started = %d, want the shared budget of 2", blocked)
+	}
+	releaseOnce.Do(func() { close(release) })
+	waitForSkillShadowRankingsStarted(t, &mu, &started, 3)
+}
+
+func waitForSkillShadowRankingsStarted(t *testing.T, mu *sync.Mutex, started *int, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		value := *started
+		mu.Unlock()
+		if value >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rankings started = %d, want %d", value, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestSkillShadowScoresQueuedInvocationsAfterTurnStateDropped(t *testing.T) {
+	metrics := &recordingSkillShadowMetrics{}
+	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	t.Cleanup(func() { _ = router.Close() })
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	original := skillShadowRank
+	skillShadowRank = func(query promptctx.ShadowQuery, documents []promptctx.SkillSelectionDocument, recentSkillIDs []int, taskQuery promptctx.ShadowQuery, taskRecentIDs []int) []promptctx.SkillShadowSelectionObservation {
+		<-release
+		return original(query, documents, recentSkillIDs, taskQuery, taskRecentIDs)
+	}
+	t.Cleanup(func() { skillShadowRank = original })
+	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	params := &turn.TurnStartParams{Prompt: "manage python environments"}
+	skills := []promptctx.InstructionsSkillMetadata{
+		{Name: "slides", Path: "/skills/slides", Description: "Create presentations."},
+		{Name: "python-tools", Path: "/skills/python-tools", Description: "Manage Python environments."},
+	}
+	router.runSkillShadowSelection("thread-dropped", "turn-one", cfg, params, skills)
+	router.recordSkillShadowInvocation("thread-dropped", "turn-one", skills[1])
+	// Starting the next turn drops the first turn's state, but its queued
+	// observation must still be scored against its own frozen history.
+	router.runSkillShadowSelection("thread-dropped", "turn-two", cfg, params, skills)
+	router.recordSkillShadowInvocation("thread-dropped", "turn-two", skills[1])
+	releaseOnce.Do(func() { close(release) })
+	records := waitForSkillShadowMetric(t, metrics, skillShadowInvocationMetric, 22)
+	ranks := make([]string, 0, 2)
+	for _, record := range records {
+		if record.tags["method"] == "lru_v1" {
+			ranks = append(ranks, record.tags["rank"])
+		}
+	}
+	sort.Strings(ranks)
+	if len(ranks) != 2 || ranks[0] != "1" || ranks[1] != "miss" {
+		t.Fatalf("lru_v1 ranks per turn = %#v, want the first turn frozen cold and the second warm", ranks)
 	}
 }

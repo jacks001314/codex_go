@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"codex_go/config"
@@ -20,19 +21,25 @@ const (
 	skillShadowReductionMetric  = "codex.skills.shadow_selection.reduction_bps"
 	skillShadowInvocationMetric = "codex.skills.shadow_selection.invocation"
 	skillShadowMaxQueryBytes    = 16 * 1024
+	skillShadowRankingSlots     = 2
 )
 
+// skillShadowRankingBudget is the process-wide ranking capacity (Rust
+// RANKING_SLOTS: Semaphore::const_new(2)). Admission happens only on the
+// background worker, so turn preparation never waits for a ranking slot.
+var skillShadowRankingBudget = make(chan struct{}, skillShadowRankingSlots)
+
+// skillShadowRank runs one shadow ranking. Tests replace it to hold the shared
+// budget and observe when a worker actually starts ranking (Rust spawn_blocking).
+var skillShadowRank = promptctx.RunSkillShadowSelectionWithTaskContext
+
 // skillShadowThreadState is the per-thread shadow-selection state (Rust
-// SkillsThreadState): the recent skill-invocation history plus the current
-// turn's eligible resources, seen set, and ranked selections used to emit
-// invocation metrics.
+// SkillsThreadState): the recent skill-invocation history, the task context,
+// and the latest turn's observation target.
 type skillShadowThreadState struct {
 	mu          sync.Mutex
 	recent      []string
-	turnID      string
-	eligible    map[string]bool
-	seen        map[string]bool
-	ranked      []skillShadowRankedSelection
+	turn        *skillShadowTurn
 	taskContext *promptctx.ShadowTaskContext
 }
 
@@ -40,6 +47,97 @@ type skillShadowRankedSelection struct {
 	method         string
 	queryScript    string
 	skillResources []string
+}
+
+// skillShadowTurn is one turn's shadow-selection observation target (Rust
+// ShadowSelectionTurnState): eligibility and the seen set frozen at turn start
+// plus the queue of invocations waiting to be scored against the frozen
+// rankings.
+type skillShadowTurn struct {
+	turnID   string
+	eligible map[string]bool
+	ranked   []skillShadowRankedSelection
+	rankedCh chan struct{}
+	queue    *skillShadowInvocationQueue
+	mu       sync.Mutex
+	seen     map[string]bool
+}
+
+// setRanked publishes the frozen rankings and unblocks waiters.
+func (t *skillShadowTurn) setRanked(ranked []skillShadowRankedSelection) {
+	t.mu.Lock()
+	t.ranked = ranked
+	t.mu.Unlock()
+	close(t.rankedCh)
+}
+
+// waitRanked blocks until the background ranking finishes and returns its
+// frozen selections; tests use it instead of observing metrics as they land.
+func (t *skillShadowTurn) waitRanked() []skillShadowRankedSelection {
+	<-t.rankedCh
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]skillShadowRankedSelection(nil), t.ranked...)
+}
+
+// skillShadowInvocationQueue holds invocations observed for a turn until its
+// frozen rankings are ready. Sends never block turn execution, and closing the
+// queue lets the worker drain and score everything already queued.
+type skillShadowInvocationQueue struct {
+	mu     sync.Mutex
+	items  []string
+	closed bool
+	notify chan struct{}
+}
+
+func newSkillShadowInvocationQueue() *skillShadowInvocationQueue {
+	return &skillShadowInvocationQueue{notify: make(chan struct{}, 1)}
+}
+
+func (q *skillShadowInvocationQueue) push(resource string) {
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return
+	}
+	q.items = append(q.items, resource)
+	q.mu.Unlock()
+	q.signal()
+}
+
+func (q *skillShadowInvocationQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+	q.signal()
+}
+
+// drain returns the queued resources and whether the queue is closed; the
+// caller keeps scoring until closed and empty.
+func (q *skillShadowInvocationQueue) drain() ([]string, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	items := q.items
+	q.items = nil
+	return items, q.closed
+}
+
+func (q *skillShadowInvocationQueue) signal() {
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+// skillShadowSelectionInput is the turn-start state frozen before the turn can
+// contribute new invocation history (Rust ShadowSelectionInput).
+type skillShadowSelectionInput struct {
+	query          promptctx.ShadowQuery
+	documents      []promptctx.SkillSelectionDocument
+	resources      []string
+	recentSkillIDs []int
+	taskQuery      promptctx.ShadowQuery
+	taskRecentIDs  []int
 }
 
 func (r *RuntimeRouter) skillShadowThreadStateFor(threadID string) *skillShadowThreadState {
@@ -56,6 +154,10 @@ func (r *RuntimeRouter) skillShadowThreadStateFor(threadID string) *skillShadowT
 	return state
 }
 
+// runSkillShadowSelection freezes the turn's ranking inputs and hands the
+// ranking to a background worker (Rust ShadowSelectionExperiment::start,
+// #49812). Turn preparation never waits for the shared ranking budget, and
+// invocations recorded from now on queue up for scoring once rankings exist.
 func (r *RuntimeRouter) runSkillShadowSelection(threadID string, turnID string, cfg *config.Config, params *turn.TurnStartParams, groups ...[]promptctx.InstructionsSkillMetadata) {
 	if r == nil || cfg == nil || !cfg.SkillShadowSelectionEnabled() {
 		return
@@ -78,52 +180,43 @@ func (r *RuntimeRouter) runSkillShadowSelection(threadID string, turnID string, 
 		}
 	}
 	state := r.skillShadowThreadStateFor(threadID)
-	recentSkillIDs := make([]int, 0)
+	shadowQuery := promptctx.ShadowQuery{Text: query, Truncated: queryTruncated}
+	snapshot := state.taskContext.BeginTurn(turnID, shadowQuery, skillShadowIsSubstantive(query, params))
+	eligible := make(map[string]bool, len(resources))
 	eligibleByResource := make(map[string]int, len(resources))
 	for index, resource := range resources {
+		eligible[resource] = true
 		eligibleByResource[resource] = index
 	}
+	recentSkillIDs := make([]int, 0)
 	state.mu.Lock()
+	taskContext := state.taskContext
 	for _, resource := range state.recent {
 		if index, ok := eligibleByResource[resource]; ok {
 			recentSkillIDs = append(recentSkillIDs, index)
 		}
 	}
+	turn := &skillShadowTurn{
+		turnID: turnID, eligible: eligible, seen: map[string]bool{},
+		rankedCh: make(chan struct{}), queue: newSkillShadowInvocationQueue(),
+	}
+	// The new turn becomes the observation target before it can record
+	// anything; the previous turn's worker keeps draining what it observed.
+	previous := state.turn
+	state.turn = turn
 	state.mu.Unlock()
-	shadowQuery := promptctx.ShadowQuery{Text: query, Truncated: queryTruncated}
-	state.mu.Lock()
-	taskContext := state.taskContext
-	state.mu.Unlock()
-	snapshot := taskContext.BeginTurn(turnID, shadowQuery, skillShadowIsSubstantive(query, params))
+	if previous != nil {
+		previous.queue.close()
+	}
 	taskRecentIDs := make([]int, 0, len(snapshot.RecentSkills))
 	for _, resource := range snapshot.RecentSkills {
 		if index, ok := eligibleByResource[resource]; ok {
 			taskRecentIDs = append(taskRecentIDs, index)
 		}
 	}
-	observations := promptctx.RunSkillShadowSelectionWithTaskContext(shadowQuery, documents, recentSkillIDs, snapshot.Query, taskRecentIDs)
-	eligible := make(map[string]bool, len(resources))
-	for _, resource := range resources {
-		eligible[resource] = true
-	}
-	ranked := make([]skillShadowRankedSelection, 0, len(observations))
-	for _, observation := range observations {
-		selected := skillShadowSanitizeSelectedIDs(observation.CandidateIDs, len(documents))
-		ranked = append(ranked, skillShadowRankedSelection{
-			method:         observation.Method,
-			queryScript:    observation.QueryScript,
-			skillResources: skillShadowResourcesForIDs(selected, resources),
-		})
-	}
-	state.mu.Lock()
-	state.turnID = turnID
-	state.eligible = eligible
-	state.seen = map[string]bool{}
-	state.ranked = ranked
-	state.mu.Unlock()
 	// Explicit intent is a relevance signal for future turns even when the
 	// subsequent prompt read fails; predictions were frozen before recording it
-	// (Rust ShadowSelectionExperiment::run).
+	// (Rust ShadowSelectionExperiment::start).
 	for _, group := range groups {
 		for _, skill := range group {
 			if !skill.AllowsImplicitInvocation() {
@@ -134,7 +227,40 @@ func (r *RuntimeRouter) runSkillShadowSelection(threadID string, turnID string, 
 			}
 		}
 	}
-	if r.services.SkillShadowMetrics == nil {
+	r.skillShadowWG.Add(1)
+	go r.evaluateSkillShadowSelection(turn, skillShadowSelectionInput{
+		query: shadowQuery, documents: documents, resources: resources,
+		recentSkillIDs: recentSkillIDs, taskQuery: snapshot.Query, taskRecentIDs: taskRecentIDs,
+	})
+}
+
+// evaluateSkillShadowSelection ranks a turn's frozen inputs off the turn
+// preparation path, then scores every invocation observed for the turn,
+// including ones queued before the turn state was dropped (Rust evaluate).
+func (r *RuntimeRouter) evaluateSkillShadowSelection(turn *skillShadowTurn, input skillShadowSelectionInput) {
+	defer r.skillShadowWG.Done()
+	skillShadowRankingBudget <- struct{}{}
+	observations := skillShadowRank(input.query, input.documents, input.recentSkillIDs, input.taskQuery, input.taskRecentIDs)
+	// Release capacity only once the ranking itself finished, then keep scoring
+	// queued observations without holding a slot (Rust drops the permit when
+	// the blocking worker returns).
+	<-skillShadowRankingBudget
+	ranked := make([]skillShadowRankedSelection, 0, len(observations))
+	for _, observation := range observations {
+		selected := skillShadowSanitizeSelectedIDs(observation.CandidateIDs, len(input.documents))
+		ranked = append(ranked, skillShadowRankedSelection{
+			method:         observation.Method,
+			queryScript:    observation.QueryScript,
+			skillResources: skillShadowResourcesForIDs(selected, input.resources),
+		})
+	}
+	turn.setRanked(ranked)
+	r.recordSkillShadowRankMetrics(input.query.Truncated, input.documents, observations, ranked)
+	r.drainSkillShadowInvocations(turn, ranked)
+}
+
+func (r *RuntimeRouter) recordSkillShadowRankMetrics(queryTruncated bool, documents []promptctx.SkillSelectionDocument, observations []promptctx.SkillShadowSelectionObservation, ranked []skillShadowRankedSelection) {
+	if r == nil || r.services.SkillShadowMetrics == nil {
 		return
 	}
 	for index, observation := range observations {
@@ -159,9 +285,48 @@ func (r *RuntimeRouter) runSkillShadowSelection(threadID string, turnID string, 
 	}
 }
 
-// recordSkillShadowInvocation mirrors Rust ShadowSelectionExperiment
-// record_invocation: it records the invoked skill in the per-thread recent
-// history and emits per-method invocation metrics with rank buckets.
+// drainSkillShadowInvocations scores queued invocations against the turn's
+// frozen rankings until the queue is closed and empty (Rust evaluate's
+// invocation loop).
+func (r *RuntimeRouter) drainSkillShadowInvocations(turn *skillShadowTurn, ranked []skillShadowRankedSelection) {
+	metrics := r.services.SkillShadowMetrics
+	for {
+		items, closed := turn.queue.drain()
+		for _, resource := range items {
+			recordSkillShadowInvocationMetrics(metrics, ranked, resource)
+		}
+		if closed {
+			return
+		}
+		<-turn.queue.notify
+	}
+}
+
+func recordSkillShadowInvocationMetrics(metrics SkillShadowMetricSink, ranked []skillShadowRankedSelection, resource string) {
+	if metrics == nil {
+		return
+	}
+	for _, selection := range ranked {
+		rank := 0
+		for index, candidate := range selection.skillResources {
+			if candidate == resource {
+				rank = index + 1
+				break
+			}
+		}
+		metrics.Counter(skillShadowInvocationMetric, 1, map[string]string{
+			"method":       selection.method,
+			"hit":          strconv.FormatBool(rank > 0),
+			"rank":         skillShadowRankBucket(rank),
+			"query_script": selection.queryScript,
+		})
+	}
+}
+
+// recordSkillShadowInvocation mirrors Rust ShadowSelectionTurnState
+// record_invocation: the invoked skill advances the per-thread relevance
+// history immediately for future turns, while its rank metrics are scored once
+// the turn's frozen rankings are ready.
 func (r *RuntimeRouter) recordSkillShadowInvocation(threadID string, turnID string, skill promptctx.InstructionsSkillMetadata) {
 	if r == nil {
 		return
@@ -172,33 +337,46 @@ func (r *RuntimeRouter) recordSkillShadowInvocation(threadID string, turnID stri
 	}
 	state := r.skillShadowThreadStateFor(threadID)
 	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.turnID != turnID || !state.eligible[resource] || state.seen[resource] {
+	turn := state.turn
+	if turn == nil || turn.turnID != turnID || !turn.eligible[resource] {
+		state.mu.Unlock()
 		return
 	}
-	state.seen[resource] = true
+	turn.mu.Lock()
+	duplicate := turn.seen[resource]
+	if !duplicate {
+		turn.seen[resource] = true
+	}
+	turn.mu.Unlock()
+	if duplicate {
+		state.mu.Unlock()
+		return
+	}
 	state.recent = skillShadowRecordRecent(state.recent, resource)
-	if state.taskContext != nil {
-		state.taskContext.Record(turnID, resource)
-	}
-	if r.services.SkillShadowMetrics == nil {
-		return
-	}
-	for _, selection := range state.ranked {
-		rank := 0
-		for index, candidate := range selection.skillResources {
-			if candidate == resource {
-				rank = index + 1
-				break
-			}
+	taskContext := state.taskContext
+	state.mu.Unlock()
+	taskContext.Record(turnID, resource)
+	turn.queue.push(resource)
+}
+
+// closeSkillShadowSelection closes every thread's turn queue and waits for the
+// background workers to drain, so invocations observed before shutdown are
+// still scored (Rust drops the turn states and their observers drain the queue).
+func (r *RuntimeRouter) closeSkillShadowSelection() {
+	r.skillShadowMu.Lock()
+	turns := make([]*skillShadowTurn, 0, len(r.skillShadowState))
+	for _, state := range r.skillShadowState {
+		state.mu.Lock()
+		if state.turn != nil {
+			turns = append(turns, state.turn)
 		}
-		r.services.SkillShadowMetrics.Counter(skillShadowInvocationMetric, 1, map[string]string{
-			"method":       selection.method,
-			"hit":          strconv.FormatBool(rank > 0),
-			"rank":         skillShadowRankBucket(rank),
-			"query_script": selection.queryScript,
-		})
+		state.mu.Unlock()
 	}
+	r.skillShadowMu.Unlock()
+	for _, turn := range turns {
+		turn.queue.close()
+	}
+	_ = waitForWaitGroup(&r.skillShadowWG, 5*time.Second)
 }
 
 // skillShadowRecordRecent pushes a resource to the front of the per-thread

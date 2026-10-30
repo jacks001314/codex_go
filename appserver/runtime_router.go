@@ -459,6 +459,9 @@ type RuntimeRouter struct {
 	mcpEventStreams  *mcpEventStreamManager
 	skillShadowMu    sync.Mutex
 	skillShadowState map[string]*skillShadowThreadState
+	// skillShadowWG tracks background shadow-ranking workers so shutdown can
+	// drain queued observations (Rust #49812).
+	skillShadowWG    sync.WaitGroup
 	startupPrewarmMu sync.Mutex
 	startupPrewarms  map[string]*startupPrewarmState
 	mcpRuntimes      *mcpRuntimeCoordinator
@@ -2710,6 +2713,7 @@ func (r *RuntimeRouter) close() error {
 			closeErr = err
 		}
 	}
+	r.closeSkillShadowSelection()
 	if r.services.UnifiedExec != nil {
 		if err := r.services.UnifiedExec.Close(); err != nil && closeErr == nil {
 			closeErr = err

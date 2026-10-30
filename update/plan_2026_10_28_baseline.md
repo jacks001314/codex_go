@@ -4110,3 +4110,12 @@ Status after this batch: `2346 complete`, `465 not_applicable`, `322 audit_pendi
 - Marked `blocked_precondition` rather than `not_applicable`: the upstream behavior is a real hardening Go should eventually carry, but porting it means introducing the whole allowed-source policy (config requirements, Git source and host-pattern validation) as a separate piece of work, not a per-PR shim.
 
 Status after this batch: `2346 complete`, `465 not_applicable`, `322 audit_pending`, `10 regression_pending`, `5 partial`, `7 blocked_precondition`.
+
+### Shadow skill ranking runs off the turn preparation path (Round 1129)
+
+- #49812 moves the shadow-selection experiment onto background workers. `runSkillShadowSelection` now only freezes the turn inputs (query, documents, eligible resources, recent-invocation snapshot, task-context snapshot), publishes the turn's observation target, records explicit intent for future turns, and returns; a worker acquires the process-wide budget of two rankings, runs `promptctx.RunSkillShadowSelectionWithTaskContext`, releases the slot only after ranking finishes, then emits the selection metrics and scores queued invocations.
+- `recordSkillShadowInvocation` advances the per-thread recent history and task context immediately and pushes the resource onto a non-blocking per-turn queue, so invocations observed while ranking is pending — or after the turn state was replaced and its queue closed — are still scored against that turn's frozen rankings. `RuntimeRouter.Close` closes the queues and waits up to 5s for the workers.
+- Tests: `TestSkillShadowTurnPreparationAdvancesWhileRankingBlocked`, `TestSkillShadowRankingSharesProcessWideCapacity`, `TestSkillShadowScoresQueuedInvocationsAfterTurnStateDropped`, plus asynchronous assertions in the existing selection/invocation tests; `go build ./...` and `go test -race -run SkillShadow ./appserver` pass.
+- Known unrelated failure: the full `go test ./appserver` run still fails only the Rust-protocol coverage checks for the not-yet-ported `thread/guardianReview` method, because the local Rust checkout is ahead of Go; no skill-shadow test fails.
+
+Status after this batch: `2347 complete`, `465 not_applicable`, `322 audit_pending`, `9 regression_pending`, `5 partial`, `7 blocked_precondition`.

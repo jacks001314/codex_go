@@ -24782,9 +24782,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1129 (lead): #49812 moves shadow skill ranking off the turn preparation path. `runSkillShadowSelection` freezes the query, documents, eligible resources, recent-invocation snapshot and task-context snapshot, publishes the new per-turn observation target, records explicit intent for future turns, and returns immediately; a background worker acquires the process-wide ranking budget (2 slots), runs `promptctx.RunSkillShadowSelectionWithTaskContext`, releases the slot only after the ranking finishes, publishes the frozen rankings, emits the selection metrics, and then scores every queued invocation against those rankings with the same per-method/rank-bucket tags. `recordSkillShadowInvocation` advances the per-thread recent history and task context immediately and enqueues the resource on a non-blocking queue, so invocations observed while ranking is pending - or after the turn state was replaced, when the previous queue is closed and drained - are still scored. `RuntimeRouter.Close` closes the per-thread queues and waits up to 5s for the workers. Tests: TestSkillShadowTurnPreparationAdvancesWhileRankingBlocked, TestSkillShadowRankingSharesProcessWideCapacity, TestSkillShadowScoresQueuedInvocationsAfterTurnStateDropped, plus asynchronous assertions in the existing selection/invocation tests; `go test -race -run SkillShadow ./appserver` and `go build ./...` pass. Note: the full `go test ./appserver` run still fails only in the pre-existing Rust-protocol coverage checks for the unported `thread/guardianReview` method (Rust checkout is ahead of Go), which is unrelated to this change."
    ]
   },
   {
