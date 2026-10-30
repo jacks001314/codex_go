@@ -3902,3 +3902,11 @@ Status after this batch: `2313 complete`, `462 not_applicable`, `322 audit_pendi
 - Detection runs once per process and is ANDed with configured `tui.animations`; unavailable or unknown values preserve the configured behavior, and saved configuration is never modified.
 
 Status after this batch: `2314 complete`, `462 not_applicable`, `322 audit_pending`, `46 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Computer activity grouping certification (Round 1104)
+
+- #43576 adjacent `cua_repl` calls group into one `ComputerActivityCell` with active/completed/failed/interrupted rendering, reasoning in transcript order, and the platform control-label disclosure.
+- The tea model keeps one live group, appends CUA calls and transcript-only reasoning, and flushes on any other item or turn boundary.
+- Focused `go test ./tui/tea ./tui/history_cell -run ComputerActivity` passes.
+
+Status after this batch: `2315 complete`, `462 not_applicable`, `322 audit_pending`, `45 regression_pending`, `5 partial`, `6 blocked_precondition`.

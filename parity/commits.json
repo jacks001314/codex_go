@@ -9139,9 +9139,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "`historycell.ComputerActivityCell` groups adjacent `cua_repl` MCP calls and renders the active/completed/failed/interrupted forms, optional reasoning in transcript order, and the hidden-rows disclosure with the platform control label.",
+    "`tui/tea` keeps one live `computerActivityGroup`: CUA calls append to it, transcript-only reasoning stays ordered inside it, and any other item or turn boundary flushes it into the transcript (Rust #43576 grouping boundaries).",
+    "Tests: `TestComputerActivityGroupsAdjacentCalls`, active/failure/transcript/interruption rendering, `TestComputerActivityGroupsAdjacentCallsInOneMessage`, group-boundary and turn-boundary tests, and `TestComputerActivityKeepsReasoningInOrderLikeRust`; focused `go test ./tui/tea ./tui/history_cell -run ComputerActivity` passes."
    ]
   },
   {
