@@ -6239,9 +6239,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1058: Go appserverdaemon/managed_install.go:ManagedCodexBin already mirrors Rust #42318. It prefers packages/<root>/current/bin/codex[.exe] when that file exists, otherwise uses the legacy flat current/codex file, and reports the expected packaged path on Windows when neither exists (Unix keeps the historical legacy fallback); Go also keeps the dedicated app-server-daemon root. appserverdaemon/managed_install_test.go:TestManagedCodexBinLikeRust pins the empty, legacy-only, and packaged-both layouts, including the Windows expectation. No Go change required."
    ]
   },
   {
