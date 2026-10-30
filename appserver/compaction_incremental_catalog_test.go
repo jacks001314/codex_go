@@ -122,8 +122,19 @@ func TestCompactionPlacesToolCatalogBeforeSummaryLikeRust(t *testing.T) {
 	// The replacement window replays the recorded declarations instead of
 	// re-declaring them, while a later declaration change still travels as an
 	// incremental update.
+	//
+	// Rust #51117 rebuilds the replacement history from the current step, so
+	// the base-instruction developer message after the catalog carries the
+	// refreshed instructions rather than the replaced window's text.
+	replayInstructions := instructions
+	if catalogIndex+1 < len(cold.Items) {
+		candidate := cold.Items[catalogIndex+1]
+		if candidate.Type == "message" && candidate.Role == "developer" {
+			replayInstructions = candidate.Text
+		}
+	}
 	history := incrementalHistoryItems(t, router, threadID)
-	replay, err := router.incrementalToolCatalogForTurn(threadID, history, definitions, instructions, "turn-2", created.Add(time.Minute))
+	replay, err := router.incrementalToolCatalogForTurn(threadID, history, definitions, replayInstructions, "turn-2", created.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +142,7 @@ func TestCompactionPlacesToolCatalogBeforeSummaryLikeRust(t *testing.T) {
 		t.Fatalf("replacement window turn = %#v, want a replay without updates", replay)
 	}
 	changed := incrementalCatalogLikeRust("Updated execution instructions.", incrementalToolSearchLikeRust())
-	update, err := router.incrementalToolCatalogForTurn(threadID, history, changed, instructions, "turn-3", created.Add(2*time.Minute))
+	update, err := router.incrementalToolCatalogForTurn(threadID, history, changed, replayInstructions, "turn-3", created.Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

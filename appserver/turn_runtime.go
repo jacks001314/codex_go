@@ -156,16 +156,19 @@ func (r *RuntimeRouter) postTurnCompact(ctx context.Context, threadID string, tu
 		return false, nil
 	}
 	_, compactErr := r.compactThread(ctx, &runtimeCompactRequest{
-		ThreadID:                  strings.TrimSpace(threadID),
-		TurnID:                    strings.TrimSpace(turnID),
-		ConnectionID:              connectionID,
-		Trigger:                   compact.TriggerAuto,
-		Reason:                    compact.ReasonTokenLimit,
-		Phase:                     compact.PhasePostTurn,
-		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
-		CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
-		BaseInstructions:          appStringPointer(runConfig.Instructions),
-		WindowModel:               runConfig.Model,
+		ThreadID:                      strings.TrimSpace(threadID),
+		TurnID:                        strings.TrimSpace(turnID),
+		ConnectionID:                  connectionID,
+		Trigger:                       compact.TriggerAuto,
+		Reason:                        compact.ReasonTokenLimit,
+		Phase:                         compact.PhasePostTurn,
+		ActiveContextTokensBefore:     int64(status.ActiveContextTokens),
+		CyberAccessProgram:            appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+		ReplacementParams:             params,
+		ReplacementModel:              runConfig.Model,
+		ReplacementCyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+		BaseInstructions:              appStringPointer(runConfig.Instructions),
+		WindowModel:                   runConfig.Model,
 		// Rust #49097: Rust runs the post-turn compaction with
 		// `fallback_step_context = None` (core/src/session/turn.rs), and
 		// compact_remote_v2 returns the attempt error when no fallback step
@@ -1721,9 +1724,12 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			ThreadID: threadID, TurnID: turnID, ConnectionID: connectionID,
 			Trigger: compact.TriggerAuto, Reason: compact.ReasonContextWindowExceeded,
 			Phase: compact.PhasePreTurn, ActiveContextTokensBefore: int64(preTurnStatus.ActiveContextTokens),
-			CyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
-			BaseInstructions:   appStringPointer(runConfig.Instructions),
-			WindowModel:        runConfig.Model,
+			CyberAccessProgram:            appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+			ReplacementParams:             params,
+			ReplacementModel:              runConfig.Model,
+			ReplacementCyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+			BaseInstructions:              appStringPointer(runConfig.Instructions),
+			WindowModel:                   runConfig.Model,
 		})
 		if compactErr != nil {
 			r.persistCompactionFailure(threadID, compactErr)
@@ -2342,17 +2348,20 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 		}
 		buildHistory()
 		_, compactedItems, err := r.compactThreadWithHistory(context.Background(), &runtimeCompactRequest{
-			ThreadID:                  threadID,
-			TurnID:                    turnID,
-			ConnectionID:              connectionID,
-			Trigger:                   compact.TriggerAuto,
-			Reason:                    compactReasonFromStatus(&status),
-			Phase:                     compact.PhaseMidTurn,
-			ActiveContextTokensBefore: int64(status.ActiveContextTokens),
-			History:                   history,
-			CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
-			BaseInstructions:          r.compactionStepBaseInstructions(stepInfo, runConfig, params),
-			WindowModel:               stepModel,
+			ThreadID:                      threadID,
+			TurnID:                        turnID,
+			ConnectionID:                  connectionID,
+			Trigger:                       compact.TriggerAuto,
+			Reason:                        compactReasonFromStatus(&status),
+			Phase:                         compact.PhaseMidTurn,
+			ActiveContextTokensBefore:     int64(status.ActiveContextTokens),
+			History:                       history,
+			CyberAccessProgram:            appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+			ReplacementParams:             params,
+			ReplacementModel:              stepModel,
+			ReplacementCyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+			BaseInstructions:              r.compactionStepBaseInstructions(stepInfo, runConfig, params),
+			WindowModel:                   stepModel,
 		}, nil)
 		if err != nil {
 			return nil, err
@@ -4454,6 +4463,25 @@ func (r *RuntimeRouter) appendRuntimeCompactedWithResponse(threadID string, turn
 		}
 		guardianHistory := r.guardianReviewHistoryCheckpointWire(threadID, now)
 		return recorder.AppendCompactedWithCheckpoint(message, items, retained, resume, windowNumber, compactionResponseID, latest, guardianHistory, now)
+	})
+}
+
+// appendRuntimeCompactionBaseline writes the full world-state and turn-context
+// baselines that belong to the replacement history. Rust persists both after
+// the Compacted item so a cold resume restores the exact context the new window
+// was built from (#51117).
+func (r *RuntimeRouter) appendRuntimeCompactionBaseline(threadID string, worldState json.RawMessage, turnContext rollout.TurnContextRecord, payload json.RawMessage, now time.Time) error {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	if len(payload) > 0 {
+		r.setRuntimeTurnContext(threadID, payload)
+	}
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		if err := recorder.AppendWorldState(worldState, now); err != nil {
+			return err
+		}
+		return recorder.AppendTurnContext(turnContext, now)
 	})
 }
 
@@ -6623,6 +6651,13 @@ type runtimeCompactRequest struct {
 	// context into the replacement incremental-tools window (#53872).
 	BaseInstructions *string
 	WindowModel      string
+	// ReplacementParams, ReplacementModel and ReplacementCyberAccessProgram
+	// describe the context the replacement history belongs to. They can differ
+	// from the model that summarizes: a previous-model compaction still installs
+	// the selected model's refreshed context (Rust #51117).
+	ReplacementParams             *turn.TurnStartParams
+	ReplacementModel              string
+	ReplacementCyberAccessProgram *string
 }
 
 func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompactRequest) (*ContextCompactedNotification, error) {
@@ -6683,18 +6718,23 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	// leave headroom for the compaction instructions, prompt, tool-call
 	// metadata and response framing.
 	request.MaxHistoryTokens = r.compactionHistoryTokenBudget(record, params)
+	replacementContext, err := r.buildCompactionReplacementContext(ctx, params, record)
+	if err != nil {
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
+		return nil, nil, err
+	}
+	if replacementContext != nil && replacementContext.Record != nil {
+		record = replacementContext.Record
+	}
 	hookCtx := r.compactHookContext(record, request)
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
 	if err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, nil, err
 	}
-	environmentContext, err := r.compactEnvironmentContext(ctx, record, request)
-	if err != nil {
-		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
-		return nil, nil, err
+	if replacementContext != nil {
+		initialContext = append(append([]compact.Item(nil), replacementContext.Items...), initialContext...)
 	}
-	initialContext = append(initialContext, environmentContext...)
 	compactionItem := session.Item{
 		ID:        string(newThreadID()),
 		Type:      "contextCompaction",
@@ -6760,6 +6800,9 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	// of the compaction summary and the window's first user message. Capture it
 	// from the history being replaced before the replacement overwrites it.
 	declarationPrefix := incrementalDeclarationPrefixItems(record.Items)
+	if replacementContext != nil {
+		declarationPrefix = incrementalDeclarationPrefixItems(sessionItemsFromCompactItems(initialContext, now))
+	}
 	compactedItems := sessionItemsFromCompactItems(compacted.NewHistory, now)
 	if backgroundHistory != nil {
 		compactedItems = sessionItemsFromCompactItems(backgroundHistory, now)
@@ -6851,18 +6894,29 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		extra["auto_compact_context_window_id"] = windowID
 	}
 	record.Metadata.Extra = extra
+	if replacementContext != nil {
+		record.Metadata.WorldState = append(json.RawMessage(nil), replacementContext.WorldState...)
+		record.Metadata.TurnContext = append(json.RawMessage(nil), replacementContext.TurnContextPayload...)
+	}
 	// Rust #51188: place the replacement window's declaration prefix ahead of the
 	// rebuilt history before the checkpoint is persisted, so a cold replay reads
 	// the tool catalog before the compaction summary. The same call records the
 	// new window's catalog baseline, so the window's first turn replays the
 	// recorded declarations instead of re-declaring them.
-	if placeErr := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, r.windowNumberForThread(request.ThreadID), params.WindowModel, params.BaseInstructions); placeErr != nil {
+	if replacementContext != nil {
+		if placeErr := recordIncrementalCatalogBaseline(record, declarationPrefix, r.windowNumberForThread(request.ThreadID), params.WindowModel, params.BaseInstructions); placeErr != nil {
+			return nil, nil, placeErr
+		}
+	} else if placeErr := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, r.windowNumberForThread(request.ThreadID), params.WindowModel, params.BaseInstructions); placeErr != nil {
 		return nil, nil, placeErr
 	}
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, nil, err
 	}
 	_ = r.appendRuntimeCompactedWithResponse(request.ThreadID, request.TurnID, compacted.Summary, record.Items, compacted.ResponseID, now)
+	if replacementContext != nil {
+		_ = r.appendRuntimeCompactionBaseline(request.ThreadID, record.Metadata.WorldState, replacementContext.TurnContext, replacementContext.TurnContextPayload, now)
+	}
 	r.notifyContextCompactionItemCompleted(request.ThreadID, request.TurnID, compactionItem)
 	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, params.ActiveContextTokensBefore)
 	// Rust c2bcb9a26b: restart Guardian review sessions after parent history
@@ -7997,6 +8051,11 @@ type appTurnRunConfig struct {
 	CollaborationMode          string
 	Personality                string
 	InputItems                 []any
+	// InitialContextItems is the window prefix and model-visible context
+	// (instructions, world state, skills, environment, ...) that precedes the
+	// conversation in InputItems. Compaction installs this same context in the
+	// replacement history (Rust #51117 build_initial_context_with_world_state).
+	InitialContextItems []any
 	// ResponsesLiteDeclarationItems is the recorded (or freshly derived)
 	// responses-lite tool declaration prefix the turn prepended to InputItems
 	// for this context window (Rust #51480). It is empty for legacy windows and
@@ -8069,6 +8128,13 @@ type responsesMetadataLineage struct {
 }
 
 func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turnID string, connectionID string, params *turn.TurnStartParams, startedAtMS int64, turnRuntime *turn.Runtime) (*appTurnRunConfig, error) {
+	return r.appTurnConfigWithOptions(ctx, threadID, turnID, connectionID, params, startedAtMS, turnRuntime, true)
+}
+
+// appTurnConfigWithOptions builds the turn configuration. Compaction disables
+// prewarm consumption: preparing its replacement context is not a sampling
+// request and must not consume the next turn's prepared response.
+func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID string, turnID string, connectionID string, params *turn.TurnStartParams, startedAtMS int64, turnRuntime *turn.Runtime, consumePrewarm bool) (*appTurnRunConfig, error) {
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
 		return nil, err
@@ -8110,7 +8176,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		// request keeps only the latest while saved history keeps all of them.
 		historyItems = coalesceAdjacentReasoningEffortUpdates(historyItems)
 	}
-	if previousResponseID == "" {
+	if previousResponseID == "" && consumePrewarm {
 		// Rust core/src/tasks/regular.rs: the first regular turn consumes the
 		// session-startup websocket prewarm (its response id chains the first
 		// request). A prewarm that has not finished is skipped and the turn
@@ -8131,6 +8197,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		}
 	}
 	inputItems := append([]any(nil), historyItems...)
+	historyInputItemCount := len(historyItems)
 	modelWorldStateItems, err := r.modelWorldStateInputItems(threadID, modelInfo, instructions)
 	if err != nil {
 		return nil, err
@@ -8304,6 +8371,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	postToolInputItems = r.currentTimePostToolInputItems(threadID, turnID, cfg, params, currentTimeState, postToolInputItems, appendExtraSessionItems)
 	postToolInputItems = r.networkApprovalPostToolInputItems(threadID, turnID, postToolInputItems, appendExtraSessionItems)
 	inputItems = append(inputItems, skillInputItems...)
+	initialContextItems := append([]any(nil), inputItems[historyInputItemCount:]...)
 	// Rust #54053: the request's client-metadata update (replacement then patch)
 	// lands on the turn's own client metadata, which is then merged over the
 	// configured Responses metadata.
@@ -8372,8 +8440,16 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	reasoningEffortOverride := r.reasoningEffortOverrideEnabled(threadID, cfg, modelInfo, modelProviderConfig.ProviderID)
 	reasoningEffortModel := reasoningEffortModelSlug(modelInfo, modelProviderConfig.Model)
 	overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(threadID, cfg, params, modelInfo, modelProviderConfig.ProviderID)
-	overrideInputItems := r.reasoningEffortOverrideInputItems(threadID, reasoningEffortModel, overrideEffort, overrideAvailable, historyItems)
-	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortOverride, overrideEffort, overrideAvailable, requestEffortSampling)
+	// Compaction renders a replacement context instead of issuing a sampling
+	// request: it reuses the pinned effort and must neither retire the pin nor
+	// record a new trusted configuration_update (Rust #51117, #43796).
+	overrideInputItems := []any(nil)
+	requestEffortUsage := requestEffortCompaction
+	if consumePrewarm {
+		overrideInputItems = r.reasoningEffortOverrideInputItems(threadID, reasoningEffortModel, overrideEffort, overrideAvailable, historyItems)
+		requestEffortUsage = requestEffortSampling
+	}
+	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortOverride, overrideEffort, overrideAvailable, requestEffortUsage)
 	// Rust #51480: a responses-lite context window records its tool declarations
 	// once and replays them unchanged. The recorded prefix is placed ahead of the
 	// conversation so a resumed window never moves the declarations it already
@@ -8409,9 +8485,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 				declarationItems = incremental.Items
 				if len(declarationItems) > 0 {
 					inputItems = append(append([]any(nil), declarationItems...), inputItems...)
+					initialContextItems = append(append([]any(nil), declarationItems...), initialContextItems...)
 				}
 			} else if len(incremental.Items) > 0 {
 				inputItems = append(inputItems, incremental.Items...)
+				initialContextItems = append(initialContextItems, incremental.Items...)
 			}
 		}
 	}
@@ -8419,8 +8497,10 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		declarationItems = r.responsesLiteWindowDeclarationItemsForTurn(threadID, historyItems, modelInfo.UseResponsesLite, features.Enabled(cfg.FeatureSettings(), "incremental_tools"), hostedTools, instructions)
 		if len(declarationItems) > 0 {
 			inputItems = append(append([]any(nil), declarationItems...), inputItems...)
+			initialContextItems = append(append([]any(nil), declarationItems...), initialContextItems...)
 		}
 	}
+	initialContextItems = ensureInitialContextInstructions(initialContextItems, instructions)
 	return &appTurnRunConfig{
 		Model:                   modelProviderConfig.Model,
 		ModelInfo:               modelInfo,
@@ -8456,6 +8536,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		CollaborationMode:              analyticsCollaborationMode(params),
 		Personality:                    analyticsOptionalModeString(personality),
 		InputItems:                     inputItems,
+		InitialContextItems:            initialContextItems,
 		ResponsesLiteDeclarationItems:  declarationItems,
 		HostedTools:                    hostedTools,
 		SessionItems:                   sessionItems,

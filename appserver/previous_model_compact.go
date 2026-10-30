@@ -151,9 +151,12 @@ func (r *RuntimeRouter) runPreviousModelInlineCompact(
 		Model:        decision.PreviousModel,
 		// The previous model pairs with the previous turn's program; an absent
 		// program must not inherit the current selection (Rust #48224).
-		CyberAccessProgram:        appStringPointer(decision.PreviousProgram),
-		RemoteOnly:                remoteOnly,
-		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+		CyberAccessProgram:            appStringPointer(decision.PreviousProgram),
+		ReplacementParams:             params,
+		ReplacementModel:              runConfig.Model,
+		ReplacementCyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+		RemoteOnly:                    remoteOnly,
+		ActiveContextTokensBefore:     int64(status.ActiveContextTokens),
 	})
 	if err == nil {
 		return true, nil
@@ -183,9 +186,12 @@ func (r *RuntimeRouter) runPreviousModelInlineCompact(
 		Model:        runConfig.Model,
 		// The retry compacts with the selected model, so it uses the current
 		// turn's program.
-		CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
-		RemoteOnly:                remoteOnly,
-		ActiveContextTokensBefore: int64(fallbackStatus.ActiveContextTokens),
+		CyberAccessProgram:            appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+		ReplacementParams:             params,
+		ReplacementModel:              runConfig.Model,
+		ReplacementCyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+		RemoteOnly:                    remoteOnly,
+		ActiveContextTokensBefore:     int64(fallbackStatus.ActiveContextTokens),
 	})
 	r.recordCompactionModelFallback(decision.PreviousModel, runConfig.Model, decision.Reason, fallbackErr)
 	if fallbackErr != nil {

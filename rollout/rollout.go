@@ -1091,6 +1091,33 @@ func (r *Recorder) AppendTurnContext(record TurnContextRecord, now time.Time) er
 	})
 }
 
+// AppendWorldState persists a full world-state comparison baseline. Rust
+// compacted replacement histories write this immediately after the Compacted
+// item and before the replacement TurnContext (#51117).
+func (r *Recorder) AppendWorldState(state json.RawMessage, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if len(state) == 0 || string(state) == "null" {
+		state = json.RawMessage(`{}`)
+	}
+	payload, err := json.Marshal(struct {
+		Full  bool            `json:"full"`
+		State json.RawMessage `json:"state"`
+	}{
+		Full:  true,
+		State: state,
+	})
+	if err != nil {
+		return err
+	}
+	return r.AppendLine(Line{
+		Type:      "world_state",
+		Timestamp: now.UTC().Format(time.RFC3339Nano),
+		Payload:   payload,
+	})
+}
+
 // AppendTokenUsageRecord persists one response's usage observation.
 func (r *Recorder) AppendTokenUsageRecord(record TokenUsageRecord, now time.Time) error {
 	payload, err := json.Marshal(record)

@@ -3601,6 +3601,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Not applicable: Go has no guardian-v2 async scorer, Decisions adapter, LunaSampler, or guardian `TrustedTool` fragment, matching the earlier async-scorer ledger decisions. Go's synchronous Guardian reviewer already carries trusted tool descriptions through `state.renderGuardianToolDescriptions`.
 - No source change or regression test applies.
 
-Status after reconciliation: `2221 complete`, `462 not_applicable`,
-`322 audit_pending`, `139 regression_pending`, `5 partial`,
+### Full compaction replacement context (Round 1069)
+
+- Rust #51117 installs the complete initial context in every local/remote compaction replacement, ahead of the last real user message or summary while keeping the summary last; it persists the matching full world-state and turn-context baselines and builds them for the current model even when the previous model summarizes.
+- Complete: `appserver/compaction_replacement_context.go` renders the replacement window's catalog, refreshed base-instruction developer message, world state, skills and environment context with the replacement model/program and without consuming the startup prewarm or mutating the reasoning-effort pin. `appserver/turn_runtime.go` installs that context, records the catalog baseline without prepending it twice, and appends the full `world_state` plus `turn_context` after the compacted checkpoint. `rollout/rollout.go` writes `{full:true,state}` and `rollout/session_items.go` unwraps it on replay.
+- Verified with `go test ./compact ./rollout ./appserver -run 'Compaction|Compact|TurnContext|PreviousModel|WorldState|Environment|Replacement' -count=1` and `go build ./...`.
+
+Status after reconciliation: `2222 complete`, `462 not_applicable`,
+`322 audit_pending`, `138 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

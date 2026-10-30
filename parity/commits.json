@@ -26650,9 +26650,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1069 (implementation): appserver/compaction_replacement_context.go renders the replacement window's full initial context (tool catalog, refreshed base-instruction developer message, world state, environment) with the current replacement model/program, and appserver/turn_runtime.go installs it ahead of the summary while persisting the full world_state and turn_context baselines immediately after the compacted checkpoint. Preparing the context no longer consumes the startup prewarm or mutates the reasoning-effort pin; rollout/rollout.go writes world_state {full:true,state} and rollout/session_items.go unwraps it on replay. Tests: TestCompactionInstallsFullReplacementContextLikeRust, TestCompactionPlacesToolCatalogBeforeSummaryLikeRust, TestCompactionFailureKeepsPinAndSuccessRetiresItLikeRust; go test ./compact ./rollout ./appserver -run 'Compaction|Compact|TurnContext|PreviousModel|WorldState|Environment|Replacement' -count=1."
    ]
   },
   {

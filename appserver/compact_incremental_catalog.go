@@ -177,6 +177,17 @@ func incrementalDeclarationItemObject(item *session.Item) map[string]any {
 // are already in history instead of re-deriving and duplicating them, while a
 // later declaration change still travels as an incremental update.
 func placeIncrementalCatalogBeforeCompactedHistory(record *session.Record, prefix []session.Item, windowNumber uint64, modelID string, instructions *string) error {
+	return applyIncrementalCatalogBaseline(record, prefix, windowNumber, modelID, instructions, true)
+}
+
+// recordIncrementalCatalogBaseline updates the replacement window's comparison
+// snapshots without prepending the declaration prefix. The full compaction
+// path installs that prefix as part of the rendered initial context (#51117).
+func recordIncrementalCatalogBaseline(record *session.Record, prefix []session.Item, windowNumber uint64, modelID string, instructions *string) error {
+	return applyIncrementalCatalogBaseline(record, prefix, windowNumber, modelID, instructions, false)
+}
+
+func applyIncrementalCatalogBaseline(record *session.Record, prefix []session.Item, windowNumber uint64, modelID string, instructions *string, prepend bool) error {
 	if record == nil {
 		return nil
 	}
@@ -200,7 +211,9 @@ func placeIncrementalCatalogBeforeCompactedHistory(record *session.Record, prefi
 	if strings.TrimSpace(modelID) == "" {
 		modelID = strings.TrimSpace(record.Metadata.Model)
 	}
-	record.Items = append(append([]session.Item(nil), prefix...), record.Items...)
+	if prepend {
+		record.Items = append(append([]session.Item(nil), prefix...), record.Items...)
+	}
 	state, err := session.DecodeWorldState(record.Metadata.WorldState)
 	if err != nil {
 		return err

@@ -22639,8 +22639,26 @@ func TestRuntimeRouterThreadCompactStartRunsHooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if len(record.Items) < 2 || record.Items[0].Text != "pre compact context" {
-		t.Fatalf("compacted items = %#v", record.Items)
+	// Rust #51117 installs the full initial context (refreshed instructions,
+	// world state, ...) ahead of the compaction summary, so the pre-compact hook
+	// context travels inside that block instead of opening the replacement.
+	hookIndex, summaryIndex := -1, -1
+	for i := range record.Items {
+		if record.Items[i].Text == "pre compact context" {
+			if hookIndex < 0 {
+				hookIndex = i
+			}
+			continue
+		}
+		if kind, _ := record.Items[i].Metadata["kind"].(string); kind == "compaction_summary" && summaryIndex < 0 {
+			summaryIndex = i
+		}
+	}
+	if hookIndex < 0 {
+		t.Fatalf("compacted items lost the pre-compact hook context = %#v", record.Items)
+	}
+	if summaryIndex >= 0 && hookIndex > summaryIndex {
+		t.Fatalf("pre-compact hook context follows the compaction summary = %#v", record.Items)
 	}
 	notifications := sink.List()
 	if !notificationsContainHook(notifications, HookEventPreCompact) || !notificationsContainHook(notifications, HookEventPostCompact) {

@@ -26,6 +26,28 @@ func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string,
 	if record != nil {
 		cwd = strings.TrimSpace(record.Metadata.CWD)
 	}
+	turnContext, ok := r.turnContextRecordForRunConfig(turnID, rootTurnID, cwd, runConfig)
+	if !ok {
+		return
+	}
+	payload, err := json.Marshal(turnContext)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	_ = r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return recorder.AppendTurnContext(turnContext, now)
+	})
+	r.setRuntimeTurnContext(threadID, payload)
+}
+
+// turnContextRecordForRunConfig builds the durable context baseline for one
+// turn. Compaction uses it to persist the replacement model's baseline even
+// when a different model produced the summary (Rust #51117).
+func (r *RuntimeRouter) turnContextRecordForRunConfig(turnID string, rootTurnID string, cwd string, runConfig *appTurnRunConfig) (rollout.TurnContextRecord, bool) {
+	if r == nil || runConfig == nil || strings.TrimSpace(turnID) == "" {
+		return rollout.TurnContextRecord{}, false
+	}
 	turnContext := rollout.TurnContextRecord{
 		TurnID: strings.TrimSpace(turnID),
 		// Rust #51402: the context record keeps the turn's root lineage so a
@@ -52,17 +74,9 @@ func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string,
 		turnContext.PermissionProfile = json.RawMessage(raw)
 	}
 	if strings.TrimSpace(turnContext.Model) == "" {
-		return
+		return rollout.TurnContextRecord{}, false
 	}
-	payload, err := json.Marshal(turnContext)
-	if err != nil {
-		return
-	}
-	now := time.Now().UTC()
-	_ = r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		return recorder.AppendTurnContext(turnContext, now)
-	})
-	r.setRuntimeTurnContext(threadID, payload)
+	return turnContext, true
 }
 
 // modelCompHash returns the model's compaction compatibility hash (Rust

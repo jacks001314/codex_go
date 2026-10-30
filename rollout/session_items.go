@@ -542,12 +542,22 @@ func applyRolloutContextMetadata(record *session.Record, lines []Line) {
 			applyTurnContextMetadata(&record.Metadata, lines[i].TurnContext)
 		}
 		if len(lines[i].WorldState) > 0 {
-			record.Metadata.WorldState = append(json.RawMessage(nil), lines[i].WorldState...)
+			record.Metadata.WorldState = worldStateBaselineFromLine(lines[i].WorldState)
 		}
 	}
 	if approvalPolicy, ok := LatestPersistedApprovalPolicy(lines); ok {
 		record.Metadata.ApprovalPolicy = approvalPolicy
 	}
+}
+
+func worldStateBaselineFromLine(raw json.RawMessage) json.RawMessage {
+	var wrapper struct {
+		State json.RawMessage `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &wrapper); err == nil && len(wrapper.State) > 0 && string(wrapper.State) != "null" {
+		return append(json.RawMessage(nil), wrapper.State...)
+	}
+	return append(json.RawMessage(nil), raw...)
 }
 
 // LatestPersistedApprovalPolicy returns the approval policy that a cold
