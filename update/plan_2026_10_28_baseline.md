@@ -3408,6 +3408,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - The new regression in `appserver/subagent_initialization_analytics_like_rust_test.go` verifies creation and close/resume modes, parent/session/subagent lineage, inherited client metadata, model, and the unchanged original creation timestamp.
 - Verified with `go build ./...`, `go test ./appserver -run 'SubagentInitialization|ThreadInitializedAnalytics|RuntimeAgentController' -count=1`, `go test ./telemetry -run ThreadInitialized -count=1`, and `go test ./parity -run TestAlignment -count=1`. `go vet ./appserver` retains the unrelated pre-existing `thread_sample.go` context-cancel warning.
 
-Status after reconciliation: `2201 complete`, `453 not_applicable`,
-`335 audit_pending`, `156 regression_pending`, `4 partial`,
+### Submission diagnostics without payloads (Round 1039)
+
+- Rust #51467 replaces blanket `Op` debug formatting with selective fields, adds thread/submission/operation/parent/root fields to the central submission log, and preserves Guardian review identity when logging denied-action retries.
+- N/A by architecture: Go dispatches typed app-server requests directly and has no core `Op` enum, `Submission` struct, or central submission-debug log. Its diagnostics record only explicitly chosen identifiers and errors, never request params or payload text, so there is no equivalent unsafe formatting site or Go carrier for the added metadata shape.
+- Audited `appserver/router.go`, `appserver/runtime_router.go`, and diagnostics/error logging call sites; no request body or operation payload is logged.
+
+Status after reconciliation: `2201 complete`, `454 not_applicable`,
+`334 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

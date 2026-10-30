@@ -4624,9 +4624,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture (Round 1039): Rust #51467 adds selective Debug formatting for its core session Op enum and logs operation, submission, parent-turn, and root-turn fields from the central submission loop. Go routes each app-server request directly to typed handlers and has no Op enum, Submission struct, or debug log of an operation/request payload. Its diagnostics emit only explicitly selected slog fields (method/request/thread/turn identifiers, error text) and never format request params, user input, tool output, commands, or paths. There is therefore no payload-leaking submission log to harden; the Rust-only metadata log shape has no Go carrier. Verified by auditing appserver/router.go, appserver/runtime_router.go, and fprintf/error logging call sites; go test ./appserver -run 'Trace|Credential|Log' -count=1 remains green."
    ]
   },
   {
