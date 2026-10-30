@@ -7219,9 +7219,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1025 (fix): tui/git_action_directives.go ports Rust parse_assistant_markdown (::git-stage/commit/create-branch/push/create-pr receipts with dedup and last-created-branch cwd), strip_line_directives (including malformed candidates), and ::code-comment rewriting (priority prefix, start/end clamping, cwd-shortened file paths); tui/completed_assistant_markdown.go now strips those directives from completed/copied assistant markdown via the same parser and adds a cwd-aware form. file:// drive and UNC destinations were verified against Rust's foreign-Windows snapshot without change to tui/markdown/local_links.go. Regression contract: tui/git_action_directives_like_rust_test.go:TestStripAndParseGitActionDirectivesLikeRust, tui/git_action_directives_like_rust_test.go:TestRendersCodeCommentDirectivesAsMarkdownLikeRust, tui/git_action_directives_like_rust_test.go:TestNormalizeCompletedAssistantMarkdownStripsDirectivesLikeRust, tui/markdown/foreign_windows_links_like_rust_test.go:TestFileLinksPreserveForeignWindowsPathsAndAnchorsLikeRust; verify with `go test ./tui/... -count=1`."
    ]
   },
   {

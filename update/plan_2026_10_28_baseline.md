@@ -3301,6 +3301,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `appserver/guardian_request_budget_like_rust_test.go` pin the margin/fallback limit, the complete-request estimate, the history floor, the omission notice text and ordering, optional-evidence dropping order, required-evidence rejection before sampling, and the end-to-end omission path; `TestGuardianReviewDropsImagesBeyondContextWindowLikeRust` now measures the resized request so the image is dropped while the required review still fits. `TestRuntimeAgentControllerSpawnUsesCapturedStepSettingsLikeRust` no longer overrides with the retired `gpt-5.4-mini` slug (#44250).
 - Verified with `go build ./...`, `go test ./appserver -run Guardian -count=1`, `go test ./state -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2189 complete`, `451 not_applicable`,
-`344 audit_pending`, `161 regression_pending`, `4 partial`,
+### Assistant directive stripping and foreign file links (Round 1025)
+
+- Rust #42640 shares one directive parser between Git action receipts and code comments, strips `::git-*` receipts from completed assistant markdown, hides malformed directive candidates without materializing rows, renders `::code-comment` blocks as Markdown bullet evidence (priority prefix, clamped `start`/`end`, cwd-relative file path), and parses `file://` destinations with `PathUri` so Windows drive and UNC paths render independently of the TUI host.
+- Go already had the shared parser in `tui/assistant_directives.go`, but `tui/git_action_directives.go` only declared two unused constants, so `::git-*` receipts and `::code-comment` blocks stayed visible in the transcript and in `/copy`. The file now ports `parse_assistant_markdown`, `strip_line_directives`, and the code-comment rewrite, including deduplicated `GitAction` receipts (stage, commit, create-branch, push, create-pr) and `LastCreatedBranchCWD` (#42640, complete).
+- `NormalizeCompletedAssistantMarkdown` now runs the same parser (plus a cwd-aware `NormalizeCompletedAssistantMarkdownForCWD`), so transcript rendering, `/copy`, and follow-up label handling share one visible-markdown path; the `str::lines` whitespace contract from #48549 is preserved by the ported line splitter.
+- Rust's `PathUri`-based `file://` parsing was verified rather than changed: `tui/markdown/local_links.go` already infers drive and UNC forms from the destination instead of the host, and a new regression pins Rust's foreign-Windows snapshot (`C:/repo/Quarterly%20Report.xlsx#L4C2` and `file://server/share/...` both render `report (Quarterly Report.xlsx:4:2)`).
+- New regressions in `tui/git_action_directives_like_rust_test.go` mirror Rust's directive, malformed-input, unquoted-flag/braced-attribute, code-comment snapshot, non-directive-preservation, and last-created-branch cases plus the completed-markdown integration; `tui/markdown/foreign_windows_links_like_rust_test.go` covers the foreign link snapshot.
+- Verified with `go build ./...`, `go test ./tui/... -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2190 complete`, `451 not_applicable`,
+`344 audit_pending`, `160 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

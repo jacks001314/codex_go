@@ -1,40 +1,23 @@
 package tui
 
-import "strings"
-
-// NormalizeCompletedAssistantMarkdown reproduces the whitespace half of the
-// visible-markdown normalization Rust applies to a completed assistant response
-// in `git_action_directives::parse_assistant_markdown` (#48549): the response is
-// split with `str::lines` semantics -- on '\n', dropping the '\r' of a "\r\n"
-// terminator and not yielding an empty final element for a trailing newline --
-// and trailing whitespace-only lines are dropped. Every other byte is preserved
+// NormalizeCompletedAssistantMarkdown reproduces the visible-markdown
+// normalization Rust applies to a completed assistant response in
+// `git_action_directives::parse_assistant_markdown` (#48549, #42640): assistant
+// directives such as `::git-*` receipts and `::code-comment` blocks are removed
+// from the visible text, the response is split with `str::lines` semantics, and
+// trailing whitespace-only lines are dropped. Every other byte is preserved
 // verbatim, so the trailing whitespace that Markdown hard breaks and code
 // padding depend on survives copying and `/copy`.
-//
-// Rust strips assistant directives in the same pass; Go has no `::git-*`
-// directive stripper (see tui/git_action_directives.go), so only the whitespace
-// half applies here.
 func NormalizeCompletedAssistantMarkdown(text string) string {
+	return NormalizeCompletedAssistantMarkdownForCWD(text, "")
+}
+
+// NormalizeCompletedAssistantMarkdownForCWD is the cwd-aware form used when the
+// caller knows the session working directory, which lets a `::code-comment`
+// file path shorten the way Rust's `strip_prefix(cwd)` does.
+func NormalizeCompletedAssistantMarkdownForCWD(text string, cwd string) string {
 	if text == "" {
 		return ""
 	}
-	text = FollowupLabels(text)
-	lines := strings.Split(text, "\n")
-	// `str::lines()` treats the final line ending as optional: a trailing '\n'
-	// terminates the last line instead of starting a new empty one.
-	trailingNewline := lines[len(lines)-1] == ""
-	if trailingNewline {
-		lines = lines[:len(lines)-1]
-	}
-	for i := range lines {
-		// Only a '\r' that belongs to a "\r\n" terminator is dropped; a bare
-		// carriage return inside the text is content, as it is in Rust.
-		if i < len(lines)-1 || trailingNewline {
-			lines[i] = strings.TrimSuffix(lines[i], "\r")
-		}
-	}
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return strings.Join(lines, "\n")
+	return ParseAssistantMarkdown(FollowupLabels(text), cwd).VisibleMarkdown
 }
