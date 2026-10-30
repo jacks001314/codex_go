@@ -10687,9 +10687,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1022 (fix): the offline fallback bundled catalog in ./model/catalog.go now drops the retired gpt-5.2 and gpt-5.4-mini entries, matching codex-rs/models-manager/models.json after Rust #44250. Saved selections of retired slugs still migrate and resolve: ModelUpgradeForMigration keeps the provider-scoped gpt-5.4-mini -> gpt-6-luna fallback because only the replacement model needs a catalog entry, and ModelInfoFromSlug still returns Rust's descriptor for the absent slug. Regression contract: model/catalog_test.go:TestFallbackBundledCatalogDropsRetiredModelsLikeRust and tui/app/startup_prompts_test.go:TestRetiredSavedModelMigrationStillPromptsLikeRust; verify with `go test ./model -count=1`, `go test ./tui/... ./config -count=1`, and `go test ./appserver -run 'Catalog|Model' -count=1`."
    ]
   },
   {

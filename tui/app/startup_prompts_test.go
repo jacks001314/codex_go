@@ -192,6 +192,32 @@ func TestModelUpgradeForMigrationPrefersCatalogMetadataLikeRust(t *testing.T) {
 	}
 }
 
+// TestRetiredSavedModelMigrationStillPromptsLikeRust covers Rust #44250: the
+// bundled catalog no longer carries gpt-5.2 or gpt-5.4-mini, but a saved
+// selection of a retired slug still migrates through the provider-scoped
+// fallback because the replacement model remains in the catalog.
+func TestRetiredSavedModelMigrationStillPromptsLikeRust(t *testing.T) {
+	bundled := model.BundledModelsResponse()
+	models := make([]model.ModelSummary, 0, len(bundled.Models))
+	for _, entry := range bundled.Models {
+		models = append(models, model.ModelSummary{ID: entry.Slug, Model: entry.Slug})
+	}
+	for _, slug := range []string{"gpt-5.2", "gpt-5.4-mini"} {
+		for _, entry := range models {
+			if entry.Model == slug {
+				t.Fatalf("bundled catalog still lists retired model %q", slug)
+			}
+		}
+	}
+	upgrade, ok := ModelUpgradeForMigration(model.OpenAIProviderID, "gpt-5.4-mini", models)
+	if !ok || upgrade.ID != "gpt-6-luna" {
+		t.Fatalf("saved gpt-5.4-mini upgrade = %#v, ok = %v", upgrade, ok)
+	}
+	if !ShouldShowModelMigrationPrompt(model.OpenAIProviderID, "gpt-5.4-mini", "gpt-6-luna", nil, models) {
+		t.Fatal("a saved gpt-5.4-mini selection should still prompt for GPT-6 Luna")
+	}
+}
+
 func TestModelMigrationPromptUsesProviderScopedFallbackLikeRust(t *testing.T) {
 	models := []model.ModelSummary{{ID: "gpt-6-sol", Model: "gpt-6-sol"}}
 	if !ShouldShowModelMigrationPrompt(model.OpenAIProviderID, "gpt-5.4", "gpt-6-sol", nil, models) {

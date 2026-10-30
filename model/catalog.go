@@ -1327,31 +1327,6 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				SupportsParallelToolCalls:      true,
 			},
 			{
-				Slug: "gpt-5.2", DisplayName: "GPT-5.2", Description: "Optimized for professional work and long-running agents.",
-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 29, BaseInstructions: BaseInstructions,
-				DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh"},
-				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
-				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
-			},
-			{
-				Slug:                           "gpt-5.4-mini",
-				DisplayName:                    "GPT-5.4-Mini",
-				Description:                    "Small, fast, and cost-efficient model for simpler coding tasks.",
-				Visibility:                     VisibilityHide,
-				SupportedInAPI:                 true,
-				Priority:                       23,
-				BaseInstructions:               BaseInstructions,
-				IncludeSkillsUsageInstructions: true,
-				DefaultReasoningLevel:          "medium",
-				SupportedReasoningLevels:       []string{"low", "medium", "high", "xhigh"},
-				TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
-				ContextWindow:                  272000,
-				MaxContextWindow:               272000,
-				EffectiveContextWindowPercent:  95,
-				InputModalities:                []string{"text", "image"},
-				SupportsParallelToolCalls:      true,
-			},
-			{
 				Slug:                          "codex-auto-review",
 				DisplayName:                   "Codex Auto Review",
 				Description:                   "Automatic approval review model for Codex.",
@@ -1420,9 +1395,10 @@ var bundledShellCommandSlugs = map[string]bool{
 // catalog with the values codex-rs/models-manager/models.json @ b17c74cfd5
 // carries: supports_reasoning_summary_parameter is true for every bundled
 // entry, while include_apps_usage_instructions is on only for the 5.6 family
-// and gpt-5.5. Slugs that catalog no longer lists (the legacy gpt-5.2 /
-// gpt-5.4-mini fallbacks) keep Rust's model_info_from_slug descriptor, i.e.
-// reasoning summaries on and no apps guidance (openai_models.rs:1072-1075).
+// and gpt-5.5. Slugs that catalog no longer lists (including retired saved
+// selections such as gpt-5.2 or gpt-5.4-mini, Rust #44250) keep Rust's
+// model_info_from_slug descriptor, i.e. reasoning summaries on and no apps
+// guidance (openai_models.rs:1072-1075).
 func applyBundledCatalogBooleans(response *ModelsResponse) {
 	appsUsageInstructions := map[string]bool{
 		"gpt-5.6-sol":   true,

@@ -3278,6 +3278,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust's `guardian/input_budget.rs` token estimate and `prompt_debug.rs` are not modelled in Go; the Guardian input-budget architecture remains tracked by #44281.
 - Verified with `go test ./appserver -run 'ResponsesLite|IncrementalToolCatalog' -count=1`, `go test ./model -run 'ToolDeclaration|WindowHasToolDeclarations' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2185 complete`, `451 not_applicable`,
-`345 audit_pending`, `164 regression_pending`, `4 partial`,
+### Retired bundled model entries (Round 1022)
+
+- Rust #44250 removes `gpt-5.2` and `gpt-5.4-mini` from the bundled model catalog while keeping migration prompts for saved selections. Go still shipped both entries in the offline fallback catalog, so the fallback disagreed with `codex-rs/models-manager/models.json`; the entries are now removed (#44250, complete).
+- The migration path needed no code change: `tui/app.ModelUpgradeForMigration` already maps an absent `gpt-5.4-mini` selection to `gpt-6-luna`, and `model.ModelInfoFromSlug` still resolves Rust's descriptor for retired slugs, so a saved selection keeps its prompt and replacement metadata.
+- New regressions: `TestFallbackBundledCatalogDropsRetiredModelsLikeRust` pins the removed entries plus the retained GPT-6 Luna target, and `TestRetiredSavedModelMigrationStillPromptsLikeRust` exercises the migration against the real bundled catalog.
+- Verified with `go build ./...`, `go test ./model -count=1`, `go test ./tui/... ./config -count=1`, and `go test ./appserver -run 'Catalog|Model' -count=1`.
+
+Status after reconciliation: `2186 complete`, `451 not_applicable`,
+`345 audit_pending`, `163 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

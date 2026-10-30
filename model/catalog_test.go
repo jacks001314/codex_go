@@ -279,22 +279,33 @@ func TestFallbackBundledCatalogUsesShellCommandLikeRust(t *testing.T) {
 	}
 }
 
-func TestFallbackBundledCatalogDropsGPT54LikeRust(t *testing.T) {
-	// Rust #47932 (694d8d45bd): gpt-5.4 is removed from the bundled catalog.
-	// The GPT-5.4 Mini entry stays because its migration target (GPT-6 Luna)
-	// still needs the saved-selection prompt.
+func TestFallbackBundledCatalogDropsRetiredModelsLikeRust(t *testing.T) {
+	// Rust #47932 (694d8d45bd) removed gpt-5.4, and Rust #44250 (eb7bd64ef9)
+	// removed the remaining retired entries gpt-5.2 and gpt-5.4-mini from the
+	// bundled catalog. Saved selections of those slugs still migrate through the
+	// provider-scoped fallback prompt, which only needs the replacement model in
+	// the catalog.
 	presets := NewStaticModelsManager(fallbackBundledModelsResponse()).ListModels(RefreshOffline)
-	sawMini := false
+	retired := map[string]bool{"gpt-5.4": true, "gpt-5.2": true, "gpt-5.4-mini": true}
+	sawReplacement := false
 	for _, preset := range presets {
-		if preset.Model == "gpt-5.4" {
-			t.Fatalf("bundled catalog still lists %q", preset.Model)
+		if retired[preset.Model] {
+			t.Fatalf("bundled catalog still lists retired model %q", preset.Model)
 		}
-		if preset.Model == "gpt-5.4-mini" {
-			sawMini = true
+		if preset.Model == "gpt-6-luna" {
+			sawReplacement = true
 		}
 	}
-	if !sawMini {
-		t.Fatal("bundled catalog lost the gpt-5.4-mini entry")
+	if !sawReplacement {
+		t.Fatal("bundled catalog lost the GPT-6 Luna migration target")
+	}
+	// A saved retired slug still resolves Rust's model_info_from_slug descriptor
+	// when the catalog no longer carries it.
+	for _, slug := range []string{"gpt-5.2", "gpt-5.4-mini"} {
+		info := ModelInfoFromSlug(slug)
+		if info.Slug != slug || !info.SupportsReasoningSummaries {
+			t.Fatalf("retired slug %q descriptor = %#v", slug, info)
+		}
 	}
 }
 
@@ -2287,10 +2298,6 @@ func TestBundledFallbackCarriesCatalogJSONBooleans(t *testing.T) {
 	for _, model := range fromCatalogJSON.Models {
 		bySlug[model.Slug] = model
 	}
-	// Slugs the catalog JSON no longer carries resolve through Rust's
-	// model_info_from_slug descriptor instead.
-	goOnly := map[string]bool{"gpt-5.2": true, "gpt-5.4-mini": true}
-
 	fallback := fallbackBundledModelsResponse()
 	if len(fallback.Models) == 0 {
 		t.Fatal("fallback catalog is empty")
@@ -2298,10 +2305,7 @@ func TestBundledFallbackCarriesCatalogJSONBooleans(t *testing.T) {
 	for _, model := range fallback.Models {
 		source, ok := bySlug[model.Slug]
 		if !ok {
-			if !goOnly[model.Slug] {
-				t.Fatalf("fallback slug %q has no models.json counterpart", model.Slug)
-			}
-			source = ModelInfoFromSlug(model.Slug)
+			t.Fatalf("fallback slug %q has no models.json counterpart", model.Slug)
 		}
 		if model.SupportsReasoningSummaries != source.SupportsReasoningSummaries {
 			t.Fatalf("%s: supports_reasoning_summary_parameter = %v on the fallback path, %v on the models.json path",
