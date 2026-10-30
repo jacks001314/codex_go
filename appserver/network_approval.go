@@ -52,6 +52,10 @@ type networkApprovalService struct {
 	router  *RuntimeRouter
 	mu      sync.Mutex
 	pending map[pendingNetworkApprovalKey]*pendingNetworkApproval
+	// persistAmendment appends an approved network policy amendment to
+	// execpolicy. It is a field so tests can hold persistence open while a
+	// process finishes (Rust #42746).
+	persistAmendment func(*NetworkPolicyAmendment, NetworkApprovalProtocol) error
 	// promptQueues serializes the visible manual prompt for one endpoint so
 	// concurrent executions cannot stack duplicate approvals (Rust #58351).
 	promptQueues map[networkApprovalKey]*networkApprovalPromptQueue
@@ -120,15 +124,25 @@ type networkApprovalTurn struct {
 
 func newNetworkApprovalService(router *RuntimeRouter) *networkApprovalService {
 	return &networkApprovalService{
-		router:       router,
-		pending:      map[pendingNetworkApprovalKey]*pendingNetworkApproval{},
-		promptQueues: map[networkApprovalKey]*networkApprovalPromptQueue{},
-		allowed:      map[networkApprovalKey]struct{}{},
-		denied:       map[networkApprovalKey]struct{}{},
-		saved:        map[string][]networkRuleSavedFragment{},
-		calls:        map[string]*activeNetworkApprovalCall{},
-		executions:   map[string]*activeNetworkApprovalCall{},
+		router:           router,
+		pending:          map[pendingNetworkApprovalKey]*pendingNetworkApproval{},
+		persistAmendment: router.persistNetworkPolicyAmendment,
+		promptQueues:     map[networkApprovalKey]*networkApprovalPromptQueue{},
+		allowed:          map[networkApprovalKey]struct{}{},
+		denied:           map[networkApprovalKey]struct{}{},
+		saved:            map[string][]networkRuleSavedFragment{},
+		calls:            map[string]*activeNetworkApprovalCall{},
+		executions:       map[string]*activeNetworkApprovalCall{},
 	}
+}
+
+// persistNetworkPolicyAmendment appends an approved amendment through the
+// configured persistence function.
+func (s *networkApprovalService) persistNetworkPolicyAmendment(amendment *NetworkPolicyAmendment, protocol NetworkApprovalProtocol) error {
+	if s == nil || s.persistAmendment == nil {
+		return errors.New("network policy persistence is unavailable")
+	}
+	return s.persistAmendment(amendment, protocol)
 }
 
 func (s *networkApprovalService) Decide(ctx context.Context, request network.ProxyPolicyRequest) network.ProxyDecision {
@@ -488,7 +502,12 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 				networkApprovalUserDecision(response.Decision, false, false), "")
 			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 		}
-		if err := s.router.persistNetworkPolicyAmendment(amendment, protocol); err != nil {
+		if amendment.Action == NetworkPolicyRuleDeny {
+			// Rust #42746: record the explicit denial before waiting on the
+			// policy commit so process cleanup cannot replace the call outcome.
+			s.recordUserDenialForThread(active.threadID)
+		}
+		if err := s.persistNetworkPolicyAmendment(amendment, protocol); err != nil {
 			slog.Warn("Failed to apply network policy amendment", "error", err)
 			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
 				networkApprovalUserDecision(response.Decision, false, false), "")

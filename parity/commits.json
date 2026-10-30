@@ -7450,9 +7450,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: NetworkRequestCancellation, NetworkRequestCancellationReason"
+    "execserver client withdraws a pending review through the closed process session without recording a failure; appserver/network_approval.go now stores an explicit deny amendment outcome before execpolicy persistence; network_approval_denial_before_persist_like_rust_test.go holds persistence open across call completion"
    ]
   },
   {
