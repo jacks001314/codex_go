@@ -211,6 +211,11 @@ type Output struct {
 	Error       string         `json:"error,omitempty"`
 	LogPreview  string         `json:"logPreview,omitempty"`
 	CompletedAt time.Time      `json:"completedAt"`
+	// DeliveredAssistantMessage is the bounded text a successful host-owned
+	// User Messaging call confirmed after its input hooks. It is retained as
+	// untrusted assistant context for Guardian reviews and never serialized to
+	// the model (Rust `CodexHarnessMetadata::delivered_assistant_message`).
+	DeliveredAssistantMessage string `json:"-"`
 	// SandboxType is the observed process backend for a command execution
 	// (Rust #47568). It is analytics-only and never serialized or model-visible.
 	SandboxType *sandbox.SandboxType `json:"-"`
@@ -1257,6 +1262,9 @@ func (r *Router) Dispatch(ctx context.Context, invocation *Invocation) (*Output,
 	output.ToolName = invocation.ToolName
 	if output.CompletedAt.IsZero() {
 		output.CompletedAt = r.now().UTC()
+	}
+	if payload, ok := postToolUsePayload(executor, invocation, output); ok {
+		captureDeliveredAssistantMessage(output, payload)
 	}
 	return output, nil
 }

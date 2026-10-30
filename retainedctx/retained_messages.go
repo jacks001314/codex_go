@@ -241,6 +241,17 @@ func (c *RetainedContext) advanceOrder(order uint64) {
 	}
 }
 
+// ObserveOrder advances the local acceptance counter past a recorded position
+// without retaining synthetic evidence. Function calls share the ordering
+// sequence with user and assistant messages but are not retained messages, so a
+// reloaded thread must still account for their persisted positions.
+func (c *RetainedContext) ObserveOrder(order uint64) {
+	if c == nil {
+		return
+	}
+	c.advanceOrder(order)
+}
+
 func findOrderedMessageIndex(items []orderedUserMessage, id *string) int {
 	if id == nil {
 		return -1

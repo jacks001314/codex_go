@@ -50,9 +50,9 @@ func TestMarkInheritedUserMessagesLikeRust(t *testing.T) {
 	if assistantMetadata == nil || !assistantMetadata.InheritedUserMessage || assistantMetadata.UserInputOrder != nil {
 		t.Fatalf("assistant provenance = %#v", assistantMetadata)
 	}
-	// A non-message item keeps its own metadata untouched.
-	if raw := harnessMetadataRawFromItem(&items[2]); string(raw) != `{"user_input_order":5}` {
-		t.Fatalf("tool metadata = %s", raw)
+	// A tool position belongs to the parent's counter and loses it when copied.
+	if raw := harnessMetadataRawFromItem(&items[2]); string(raw) != `{}` {
+		t.Fatalf("tool metadata = %s, want the parent order removed", raw)
 	}
 
 	// A copied delivery drops the parent's sender evidence.

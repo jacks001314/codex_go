@@ -626,7 +626,7 @@ func guardianRootDeliveredTexts(items []session.Item) map[string]string {
 	count := 0
 	for index := len(items) - 1; index >= 0 && count < guardianMaxRootMessages; index-- {
 		item := &items[index]
-		if !strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") {
+		if !sessionItemIsFunctionCallOutput(item) {
 			continue
 		}
 		metadata := harnessMetadataFromSessionItem(item)

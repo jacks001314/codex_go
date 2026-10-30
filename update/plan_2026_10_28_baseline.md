@@ -4159,3 +4159,11 @@ Status after this batch: `2351 complete`, `465 not_applicable`, `322 audit_pendi
 - Added `TestRuntimeAgentMessageUsesCapturedCallerIdentityLikeRust` (caller-relative reference, evicted recipient, receipt metadata, non-waking delivery, decoy subtree) and `TestRuntimeAgentFollowupToRootIsRejectedLikeRust`. The targeted appserver wake/mailbox/idle tests and `agent` MultiAgent/V2/Registry tests pass. No production source change was needed.
 
 Status after this batch: `2352 complete`, `465 not_applicable`, `322 audit_pending`, `4 regression_pending`, `5 partial`, `7 blocked_precondition`.
+
+### Ordered assistant context in Guardian reviews (Round 1135)
+
+- #47030 captures the bounded text a successful User Messaging call confirmed after input hooks and retains it as untrusted assistant context at the originating call's position. `tool/user_messaging.go` recognizes the current Rust hook-name aliases, requires success and non-empty text, and applies the 900-token Guardian message budget; both hooked and no-hook `Router.Dispatch` paths set the host-only `Output.DeliveredAssistantMessage` field.
+- `appserver/retained_context.go` now gives assistant messages, function calls and genuine user authorization messages one shared acceptance sequence, reuses the position reserved when an assistant response starts streaming, records delivered assistant text against the call instead of the delayed output, rebuilds the evidence after resume, and clears parent assistant/tool positions when forking. `guardian_root_context.go` joins delivered evidence from both persisted `function_call_output` and runtime `tool_output` forms.
+- Tests: `TestRouterCapturesRewrittenUserMessagingTextLikeRust`, `TestRouterDispatchCapturesUserMessagingWithoutHooksLikeRust`, `TestRuntimeRouterRetainsDeliveredAssistantFromToolOutputLikeRust`, `TestRuntimeAppendPreservesReservedAssistantOrderLikeRust`, the failed/empty/unrelated send cases, resume ordering, and inherited-position removal. Verified with `go test ./tool ./turn ./retainedctx -count=1` and `go test ./appserver -run GuardianRoot|Retained|ToolOutput|DeliveredAssistant|Inherited|StreamOrder -count=1`.
+
+Status after this batch: `2353 complete`, `465 not_applicable`, `322 audit_pending`, `3 regression_pending`, `5 partial`, `7 blocked_precondition`.

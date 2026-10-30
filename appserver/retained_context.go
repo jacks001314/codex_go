@@ -275,9 +275,9 @@ func (r *RuntimeRouter) verifiedAnswerRecorderForTurn(threadID string, turnID st
 	}
 }
 
-// recordRetainedUserMessages records every accepted user message the thread's
-// history still holds. Identical messages dedupe by id, so repeated calls only
-// add what arrived since the last one.
+// recordRetainedUserMessages records every accepted user message and confirmed
+// assistant delivery the thread's history still holds. Identical messages
+// dedupe by id, so repeated calls only add what arrived since the last one.
 func (r *RuntimeRouter) recordRetainedUserMessages(context *retainedctx.RetainedContext, threadID string) {
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil || record == nil {
@@ -287,11 +287,23 @@ func (r *RuntimeRouter) recordRetainedUserMessages(context *retainedctx.Retained
 	for index := range record.Items {
 		item := &record.Items[index]
 		metadata := harnessMetadataFromSessionItem(item)
+		if metadata != nil && !metadata.InheritedUserMessage && metadata.UserInputOrder != nil {
+			// Function calls share the acceptance counter but are not retained
+			// messages. Observing their persisted positions keeps a reloaded
+			// thread from minting a colliding order for later evidence.
+			context.ObserveOrder(*metadata.UserInputOrder)
+		}
 		record, ok := retainedRecordForSessionItem(item, index, metadata, retainInherited)
 		if !ok {
 			continue
 		}
 		recordRetainedSessionItem(context, record, metadata)
+	}
+	for _, record := range deliveredAssistantRecordsFromHistory(record.Items) {
+		if record.source.Inherited && !retainInherited {
+			continue
+		}
+		context.RecordAssistantMessage(record.message, record.source)
 	}
 }
 
@@ -540,17 +552,18 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 		return
 	}
 	threadKey := strings.TrimSpace(string(threadID))
-	delivered := r.deliveredAssistantRecords(threadID, items)
-	if threadKey == "" || (!retainedHarnessCandidates(items) && !retainedSenderCandidates(items) && len(delivered) == 0) {
+	if threadKey == "" || !retainedBatchNeedsProcessing(items) {
 		return
 	}
-	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	r.retainedContextsMu.Lock()
 	defer r.retainedContextsMu.Unlock()
 	context := r.retainedLiveContextLocked(threadKey)
-	// Rust's delivered-assistant evidence is recorded at the originating call's
-	// position, so its call lookup reads the thread's stored history before the
-	// retained lock is held (the call and its output are usually appended apart).
+	// Rust gives assistant messages and calls a position before recording the
+	// batch. The order then travels with the call, so a delayed output can retain
+	// its assistant text at the call's position instead of the completion order.
+	annotateMissingRetainedInputOrders(context, items)
+	delivered := r.deliveredAssistantRecords(threadID, items)
+	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	for _, record := range delivered {
 		if record.source.Inherited && !retainInherited {
 			continue
@@ -584,9 +597,6 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 	}
 }
 
-// retainedHarnessCandidates reports whether the batch holds a message the
-// retained model can record, so appending unrelated items never resolves a
-// thread's retained evidence.
 // deliveredAssistantEvidence is one messaging tool result's confirmed assistant
 // text, paired with the source of the call it belongs to.
 type deliveredAssistantEvidence struct {
@@ -604,8 +614,15 @@ func (r *RuntimeRouter) deliveredAssistantRecords(threadID session.ThreadID, ite
 	if r == nil || len(items) == 0 {
 		return nil
 	}
-	var history []session.Item
-	loaded := false
+	history := r.retainedCallLookupHistory(threadID)
+	return deliveredAssistantRecordsFromHistory(append(history, items...))
+}
+
+// deliveredAssistantRecordsFromHistory resolves each confirmed output against
+// the call that precedes it in the same recorded history. Rebuilding this during
+// a context reload preserves the evidence across resume instead of depending on
+// the live append path having observed the output.
+func deliveredAssistantRecordsFromHistory(items []session.Item) []deliveredAssistantEvidence {
 	var records []deliveredAssistantEvidence
 	for index := range items {
 		item := &items[index]
@@ -613,18 +630,14 @@ func (r *RuntimeRouter) deliveredAssistantRecords(threadID session.ThreadID, ite
 		if metadata == nil || metadata.DeliveredAssistantMessage == nil {
 			continue
 		}
-		if !strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") {
+		if !sessionItemIsFunctionCallOutput(item) {
 			continue
 		}
 		callID := strings.TrimSpace(item.CallID)
 		if callID == "" {
 			continue
 		}
-		if !loaded {
-			history = r.retainedCallLookupHistory(threadID)
-			loaded = true
-		}
-		call, ok := findFunctionCallSessionItem(append(append([]session.Item(nil), history...), items[:index]...), callID)
+		call, ok := findFunctionCallSessionItem(items[:index], callID)
 		if !ok {
 			// Rust's `?`: an output whose call is gone retains nothing.
 			continue
@@ -644,6 +657,20 @@ func (r *RuntimeRouter) deliveredAssistantRecords(threadID session.ThreadID, ite
 		})
 	}
 	return records
+}
+
+// sessionItemIsFunctionCallOutput recognizes both the persisted turn-runtime
+// form and the response-item form used by rollout reconstruction.
+func sessionItemIsFunctionCallOutput(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "function_call_output", "tool_output":
+		return true
+	default:
+		return false
+	}
 }
 
 // retainedCallLookupHistory returns the thread's stored items so a retained
@@ -670,6 +697,9 @@ func findFunctionCallSessionItem(items []session.Item, callID string) (*session.
 	return nil, false
 }
 
+// retainedHarnessCandidates reports whether the batch holds a message the
+// retained harness records directly, as opposed to only sender or delivered
+// evidence.
 func retainedHarnessCandidates(items []session.Item) bool {
 	for index := range items {
 		item := &items[index]
@@ -681,6 +711,90 @@ func retainedHarnessCandidates(items []session.Item) bool {
 		}
 	}
 	return false
+}
+
+// retainedBatchNeedsProcessing reports whether appending the batch can change
+// retained evidence or the shared input-order counter.
+func retainedBatchNeedsProcessing(items []session.Item) bool {
+	for index := range items {
+		item := &items[index]
+		if sessionItemIsCompactionOutput(item) {
+			continue
+		}
+		if sessionItemIsUserMessage(item) || sessionItemIsAssistantMessage(item) {
+			return true
+		}
+		metadata := harnessMetadataFromSessionItem(item)
+		if metadata != nil && (metadata.SenderUserMessages != nil || metadata.DeliveredAssistantMessage != nil) {
+			return true
+		}
+		if metadata != nil && (metadata.InheritedUserMessage || metadata.UserInputOrder != nil) {
+			continue
+		}
+		if sessionItemNeedsRetainedInputOrder(item) {
+			return true
+		}
+	}
+	return false
+}
+
+// annotateMissingRetainedInputOrders gives assistant output, calls and genuine
+// user authorization messages the same per-thread order sequence Rust reserves
+// before recording a batch. Entries whose source position came from a parent
+// keep no local order.
+func annotateMissingRetainedInputOrders(context *retainedctx.RetainedContext, items []session.Item) {
+	if context == nil {
+		return
+	}
+	for index := range items {
+		item := &items[index]
+		if sessionItemIsCompactionOutput(item) || !sessionItemNeedsRetainedInputOrder(item) {
+			continue
+		}
+		metadata := harnessMetadataFromSessionItem(item)
+		if metadata != nil && (metadata.InheritedUserMessage || metadata.UserInputOrder != nil) {
+			continue
+		}
+		order, hasOrder := reservedRetainedInputOrder(context, item)
+		if !hasOrder {
+			order = context.ReserveOrder()
+		}
+		mergeSessionItemHarnessMetadata(item, map[string]any{"user_input_order": order})
+	}
+}
+
+// reservedRetainedInputOrder reuses an assistant source's existing position.
+// Rust reserves that position when the response item starts streaming, so a
+// reply accepted before completion cannot overtake the assistant message.
+func reservedRetainedInputOrder(context *retainedctx.RetainedContext, item *session.Item) (uint64, bool) {
+	if context == nil || item == nil || !sessionItemIsAssistantMessage(item) {
+		return 0, false
+	}
+	messageID := strings.TrimSpace(item.ID)
+	if messageID == "" {
+		return 0, false
+	}
+	if order, ok := context.AssistantMessageOrder(&messageID); ok {
+		return order, true
+	}
+	return context.TakePendingAssistantMessageOrder(messageID)
+}
+
+func sessionItemNeedsRetainedInputOrder(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(item.Type), "function_call") {
+		return true
+	}
+	if sessionItemIsAssistantMessage(item) {
+		return true
+	}
+	if !sessionItemIsUserMessage(item) {
+		return false
+	}
+	responseItem, ok := sessionItemResponseItemFieldsFromItem(item)
+	return sessionItemIsUserAuthorizationMessage(responseItem, ok)
 }
 
 // retainedSenderCandidates reports whether the batch carries a recorded sender
@@ -1051,17 +1165,20 @@ func markInheritedUserMessages(items []session.Item) {
 		// also removes an item from the child's retained Guardian context, and
 		// inherited developer commentary is not approval evidence.
 		inheritedManualApproval := sessionItemIsManualApprovalMessage(item)
-		if !userMessage && !sessionItemIsAssistantMessage(item) && !inheritedManualApproval {
+		metadata := harnessMetadataFromSessionItem(item)
+		markInherited := userMessage || sessionItemIsAssistantMessage(item) || inheritedManualApproval
+		dropParentOrder := !userMessage || (metadata != nil && metadata.SenderUserMessages != nil)
+		if !markInherited && !(dropParentOrder && metadata != nil && metadata.UserInputOrder != nil) {
 			continue
 		}
-		metadata := harnessMetadataFromSessionItem(item)
 		merged := map[string]any{}
 		if raw := harnessMetadataRawFromItem(item); len(raw) > 0 {
 			_ = json.Unmarshal(raw, &merged)
 		}
-		merged["inherited_user_message"] = true
+		if markInherited {
+			merged["inherited_user_message"] = true
+		}
 		// Assistant and tool positions belong to the parent's counter, not the child's.
-		dropParentOrder := metadata == nil || metadata.SenderUserMessages != nil || !userMessage
 		if dropParentOrder {
 			delete(merged, "user_input_order")
 		}

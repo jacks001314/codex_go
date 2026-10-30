@@ -7907,6 +7907,11 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 	functionOrCustom := execution.Invocation.Payload.Kind == tool.PayloadFunction ||
 		execution.Invocation.Payload.Kind == tool.PayloadCustom
 	session.ApplyHistoryTruncationBudget(&item, execution.Invocation.Truncation, functionOrCustom)
+	if execution.Output.Success && execution.Output.DeliveredAssistantMessage != "" {
+		mergeSessionItemHarnessMetadata(&item, map[string]any{
+			"delivered_assistant_message": execution.Output.DeliveredAssistantMessage,
+		})
+	}
 	return item, true
 }
 

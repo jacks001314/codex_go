@@ -230,6 +230,10 @@ func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation 
 
 	if output.Success {
 		if payload, ok := postToolUsePayload(executor, current, output); ok {
+			// Capture confirmed messaging text from the post-hook input. The
+			// pre-tool rewrite is already reflected in current's arguments, and
+			// the result must not be recorded before the tool succeeds.
+			captureDeliveredAssistantMessage(output, payload)
 			payload.TargetEnvironments = targetEnvironments
 			outcome, err := runCancellableStep(ctx, func() (*PostToolUseHookOutcome, error) {
 				return hooks.RunPostToolUse(ctx, current, payload)

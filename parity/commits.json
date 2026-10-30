@@ -17715,9 +17715,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tool/user_messaging.go captures post-hook text only after a successful send from the four accepted User Messaging hook names and bounds it to 900 tokens; hooked and no-hook Router dispatch paths persist DeliveredAssistantMessage without serializing it. appserver/retained_context.go reserves one acceptance order for assistant messages, function calls and genuine user authorization, reuses stream-start assistant reservations, retains delivered text at the originating call, rebuilds it on resume, and clears parent assistant and tool positions for forks; guardian_root_context.go joins both function_call_output and tool_output forms.",
+    "Regression coverage: tool/user_messaging_test.go covers hook rewrites, failed or empty sends, unrelated tools, the 900-token budget and dispatch without hooks; retained_delivered_assistant_delivery_test.go covers delayed outputs, retained order, resume and failed sends; retained_stream_order_like_rust_test.go covers stream-start reservations; retained_inherited_test.go covers fork order removal. Verified with go test ./tool ./turn ./retainedctx -count=1 and go test ./appserver -run GuardianRoot|Retained|ToolOutput|DeliveredAssistant|Inherited|StreamOrder -count=1."
    ]
   },
   {
