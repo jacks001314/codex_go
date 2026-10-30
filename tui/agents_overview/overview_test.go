@@ -478,7 +478,7 @@ func TestRenderLayout(t *testing.T) {
 		"Working",
 		"/work/b  1",
 		"/work/c  1",
-		"✓ Untitled task",
+		"○ Untitled task",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("render missing %q:\n%s", want, joined)

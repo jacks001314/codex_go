@@ -256,8 +256,8 @@ func (g Group) StatusLabelForRow(row *Row) string {
 	return g.StatusLabel(row.StatusType)
 }
 
-// Dot returns the status marker glyph (Rust: red/green filled dots, cyan
-// hollow dot, dim check mark). Styling is applied by the renderer.
+// Dot returns the status marker glyph (Rust: red/green filled dots and cyan/dim
+// hollow dots). Styling is applied by the renderer.
 func (g Group) Dot() string {
 	switch g {
 	case GroupNeedsYou:
@@ -267,7 +267,7 @@ func (g Group) Dot() string {
 	case GroupReady:
 		return "○"
 	default:
-		return "✓"
+		return "○"
 	}
 }
 
