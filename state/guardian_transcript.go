@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"codex_go/retainedctx"
 	"codex_go/utils"
 )
 
@@ -49,7 +50,15 @@ type GuardianTranscriptEntry struct {
 	LineRole string
 	// RetainedSourceOrder mirrors Rust's optional retained section label.
 	RetainedSourceOrder string
-	Text                string
+	// RetainedSource carries the complete original revision this user entry
+	// proves the request delivered (#48110). The composer omits a retained
+	// instruction whose source the transcript already carries; nil means the
+	// entry has no delivery proof.
+	RetainedSource *retainedctx.RetainedSource
+	// Async marks an entry rendered for the asynchronous independent snapshot,
+	// whose transcript records terminate with an extra newline (#48110).
+	Async bool
+	Text  string
 	// Native carries a complete encrypted agent-message item. Rust delivers
 	// these as native response items (ciphertext cannot be truncated or
 	// rendered as text), so they are excluded from the text rendering and
@@ -84,7 +93,11 @@ func (e GuardianTranscriptEntry) Render(format GuardianTranscriptFormat) string 
 		if err := encoder.Encode(record); err != nil {
 			return ""
 		}
-		return strings.TrimSuffix(builder.String(), "\n")
+		rendered := strings.TrimSuffix(builder.String(), "\n")
+		if e.Async {
+			return rendered + "\n"
+		}
+		return rendered
 	}
 	if e.RetainedSourceOrder != "" {
 		var builder strings.Builder
@@ -99,6 +112,13 @@ func (e GuardianTranscriptEntry) Render(format GuardianTranscriptFormat) string 
 				builder.WriteString(line)
 			}
 		}
+		// Rust's TranscriptRecord writes every retained-source-order line with
+		// writeln!, so the record always ends with a newline; the asynchronous
+		// framing adds its extra blank line on top (#48110).
+		builder.WriteString("\n")
+		if e.Async {
+			builder.WriteString("\n")
+		}
 		return builder.String()
 	}
 	role := strings.TrimSpace(e.LineRole)
@@ -111,7 +131,26 @@ func (e GuardianTranscriptEntry) Render(format GuardianTranscriptFormat) string 
 	if role == "" {
 		return e.Text
 	}
-	return role + ": " + e.Text
+	rendered := role + ": " + e.Text
+	if e.Async {
+		rendered += "\n"
+	}
+	return rendered
+}
+
+// GuardianTranscriptRetainedSources returns the complete originals this
+// request's transcript entries prove delivered (#48110). Each asynchronous
+// sample is self-contained, so callers pass only the sample's own transcript
+// and never a previous sample's history.
+func GuardianTranscriptRetainedSources(entries []GuardianTranscriptEntry) []retainedctx.RetainedSource {
+	sources := make([]retainedctx.RetainedSource, 0, len(entries))
+	for _, entry := range entries {
+		if entry.RetainedSource == nil || len(entry.Native) > 0 || strings.TrimSpace(entry.Text) == "" {
+			continue
+		}
+		sources = append(sources, *entry.RetainedSource)
+	}
+	return sources
 }
 
 // GuardianNativeEvidenceOutputText is Rust's evidence-only paired output for a

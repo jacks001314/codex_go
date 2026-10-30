@@ -813,7 +813,18 @@ func BuildPromptPartsWithSectionCosts(
 	// (#51627): the stateful synchronous reviewer renders one section ahead of the
 	// transcript, while the asynchronous independent snapshot keeps the
 	// instruction prefix there and moves the assistant context behind it.
-	retainedSections := RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
+	// The asynchronous scorer omits instructions this request's own transcript
+	// already carries (#48110); the ordering banners remain, and nothing from a
+	// previous sample can suppress an original.
+	var retainedSections RetainedInstructionSections
+	if options.Presentation == ActionPresentationAsync {
+		retainedSections = DeduplicateRetainedInstructions(
+			options.RetainedContext,
+			GuardianTranscriptRetainedSources(transcript),
+		)
+	} else {
+		retainedSections = RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
+	}
 	retainedSections = ApplyRetainedOmissionDeduplication(retainedSections, options.PreviousRetainedOmissions, HasLegacyRetainedOrder(options.RetainedContext))
 	if len(retainedSections.Instructions) > 0 {
 		addSection("retained_user_instructions", strings.Join(retainedSections.Instructions, ""))

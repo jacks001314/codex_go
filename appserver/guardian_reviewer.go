@@ -1749,6 +1749,54 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 	return r.guardianReviewTranscriptSelection(threadID).Entries
 }
 
+// guardianTranscriptRetainedSource resolves the retained original one
+// transcript user entry proves delivered (#48110). Rust requires a complete
+// user source whose message id and turn match the item, and an asynchronous
+// copy proves delivery only when its retained-source-order rendering fits the
+// instruction budget; otherwise the original must be redelivered.
+func guardianTranscriptRetainedSource(
+	context *retainedctx.RetainedContext,
+	item *session.Item,
+	index int,
+	truncated bool,
+	target state.ContextTarget,
+) (*retainedctx.RetainedSource, string) {
+	// Legacy checkpoints have no comparable acceptance order, so their
+	// positional labels cannot prove reusable delivery through a transcript
+	// copy (Rust filters the whole retained context in that case).
+	if context == nil || item == nil || truncated || state.HasLegacyRetainedOrder(context) {
+		return nil, ""
+	}
+	turnID := runtimeSessionItemTurnID(item, index)
+	itemID := strings.TrimSpace(item.ID)
+	responseItemID := strings.TrimSpace(item.ResponseItemID)
+	budget := state.RetainedInstructionByteBudget()
+	for _, labeled := range state.RetainedSourceOrderLabels(context) {
+		message := labeled.Entry.UserMessage
+		if message == nil {
+			continue
+		}
+		source := context.Source(labeled.Entry)
+		if source == nil || !source.Complete || source.ID.Role != retainedctx.RetainedSourceRoleUser {
+			continue
+		}
+		sourceID := strings.TrimSpace(source.ID.MessageID)
+		if source.ID.TurnID != turnID ||
+			sourceID == "" ||
+			(sourceID != itemID && sourceID != responseItemID) {
+			continue
+		}
+		rendered := "Retained source order: " + labeled.Label + "\n" +
+			state.RootMessage{Kind: state.RootMessageUser, Text: message.Text}.Render()
+		if target == state.ContextTargetAsync && len(rendered) > budget {
+			return nil, ""
+		}
+		captured := *source
+		return &captured, labeled.Label
+	}
+	return nil, ""
+}
+
 // guardianReviewTranscriptSelection collects the full host snapshot, applies
 // the shared synchronous profile's per-entry caps and aggregate retention, and
 // preserves original entry numbering for JSON records (#43806, #51465).
@@ -1773,6 +1821,7 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 		return guardianTranscriptSelection{}
 	}
 	items := r.guardianReviewHistoryItems(threadID, record)
+	retainedContext := r.guardianRetainedContextForTurn(threadID, "")
 	toolCalls := map[string]session.Item{}
 	for _, item := range items {
 		switch strings.ToLower(strings.TrimSpace(item.Type)) {
@@ -1948,18 +1997,27 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
 			}
 		}
-		limited, _ := truncateGuardianTranscriptEntry(text, tokenLimit)
+		limited, truncated := truncateGuardianTranscriptEntry(text, tokenLimit)
+		var retainedSource *retainedctx.RetainedSource
+		var retainedOrder string
+		if kind == state.GuardianTranscriptUser {
+			retainedSource, retainedOrder = guardianTranscriptRetainedSource(retainedContext, &item, i, truncated, profile.Target)
+		}
 		if role != "" {
 			entries = append(entries, state.GuardianTranscriptEntry{
-				Author:   guardianTranscriptAuthor(role),
-				Label:    guardianTranscriptLabel(role),
-				LineRole: role,
-				Text:     limited,
+				Author:              guardianTranscriptAuthor(role),
+				Label:               guardianTranscriptLabel(role),
+				LineRole:            role,
+				RetainedSourceOrder: retainedOrder,
+				RetainedSource:      retainedSource,
+				Text:                limited,
 			})
 		} else {
 			entries = append(entries, state.GuardianTranscriptEntry{
-				Author: guardianTranscriptAuthor(role),
-				Text:   limited,
+				Author:              guardianTranscriptAuthor(role),
+				RetainedSourceOrder: retainedOrder,
+				RetainedSource:      retainedSource,
+				Text:                limited,
 			})
 		}
 		label := guardianTranscriptLabel(role)
@@ -1999,8 +2057,16 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 	// carry ciphertext instead of text and are never scheduler messages.
 	for index := range entries {
 		if len(entries[index].Native) == 0 {
+			// Rust clears an asynchronous scheduled copy's source when heartbeat
+			// compression rewrites it, so the rewritten entry cannot claim to
+			// carry the original revision (#57519, #48110).
+			if profile.Target == state.ContextTargetAsync && evidence[index].Scheduled && evidence[index].Text != entries[index].Text {
+				entries[index].RetainedSource = nil
+				entries[index].RetainedSourceOrder = ""
+			}
 			entries[index].Text = evidence[index].Text
 		}
+		entries[index].Async = profile.Target == state.ContextTargetAsync
 	}
 	rendered := profile.RenderTranscript(evidence, 0)
 	retained := make([]state.GuardianTranscriptEntry, 0, len(rendered.Indices))

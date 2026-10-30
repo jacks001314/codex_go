@@ -21481,9 +21481,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1015: async transcript user entries now carry retained source-order labels and complete source revisions (sync unbounded, async bounded by the 900-token instruction budget), and ActionPresentationAsync deduplicates retained instructions against only the request own transcript while keeping the ordering banners and assistant context. Incomplete or missing source proof preserves the original, and stored heartbeat rewrites clear the async proof. Tests: state/guardian_async_retained_dedup_like_rust_test.go, appserver/guardian_async_retained_dedup_like_rust_test.go."
    ]
   },
   {

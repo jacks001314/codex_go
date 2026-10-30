@@ -160,6 +160,14 @@ func RetainedSourceOrderLabels(context *retainedctx.RetainedContext) []RetainedS
 	return labels
 }
 
+// RetainedInstructionByteBudget mirrors Rust's
+// `TruncationPolicy::Tokens(MAX_INSTRUCTION_TOKENS).byte_budget()`. An
+// asynchronous transcript copy proves delivery only when its
+// retained-source-order rendering fits this budget (#48110).
+func RetainedInstructionByteBudget() int {
+	return utils.ApproxBytesForTokens(retainedInstructionTokens)
+}
+
 // RetainedAssistantMessage mirrors Rust's `retained_assistant_message`: only a
 // complete message whose rendered framing fits the per-record budget is
 // selected, so a partial question can never narrow its original scope.

@@ -3228,6 +3228,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `HistoryBuildOptions.TruncationPolicy` makes replay deterministic: a saved budget wins over the new model, while legacy outputs without a stamp use the replaying model's policy. The main app-server turn and exec resume paths pass the effective model policy.
 - New tests: `session/history_truncation_budget_like_rust_test.go`, `appserver/tool_output_truncation_budget_like_rust_test.go`, and `exec/tool_output_truncation_budget_like_rust_test.go`.
 - Verified with `go test ./session -count=1`, `go test ./rollout -count=1`, `go test ./state -count=1`, the new tests by name, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2174 complete`, `451 not_applicable`,
-`345 audit_pending`, `175 regression_pending`, `4 partial`,
+### Async Guardian retained-instruction deduplication (Round 1015)
+
+- Rust #48110 gives async Guardian user transcript entries the same retained source metadata and order labels as the synchronous path, bounded by the 900-token instruction budget, and has each async sample deduplicate retained instructions against only its own transcript. Ordering banners and assistant context stay, incomplete or missing source proof redelivers the original, and a compressed scheduled copy loses its proof (#48110, complete).
+- Go already had `DeduplicateRetainedInstructions`, source-order labels, and the 900-token budget, but no production caller: transcript selection never stamped `RetainedSourceOrder`, async composition never deduplicated, and async records lacked Rust's trailing newline.
+- `state.GuardianTranscriptEntry` now carries the complete `RetainedSource` and async rendering suffix; `guardianReviewTranscriptSelectionWithProfile` matches a user entry's message id and turn against a complete retained source (sync unbounded, async under the instruction byte budget) and clears the proof when heartbeat compression rewrites a scheduled async copy.
+- `BuildPromptPartsWithSectionCosts` now runs `DeduplicateRetainedInstructions(options.RetainedContext, GuardianTranscriptRetainedSources(transcript))` for `ActionPresentationAsync`, so each sample is self-contained while the synchronous reviewer layout is unchanged.
+- New tests: `state/guardian_async_retained_dedup_like_rust_test.go` and `appserver/guardian_async_retained_dedup_like_rust_test.go`, covering request-local dedup, banner retention, assistant context, incomplete/missing source proof, the async size gate, and the trailing-newline rendering.
+- Verified with `go test ./state -count=1`, `go test ./retainedctx -count=1`, the new tests by name, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2175 complete`, `451 not_applicable`,
+`345 audit_pending`, `174 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
