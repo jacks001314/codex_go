@@ -3067,6 +3067,11 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - The new `appserver/guardian_review_history_bounds_like_rust_test.go` floods 300 tool outputs without evicting a user instruction (and stays within 128 non-user items), then forces the byte budget with 6x1MiB tool outputs to confirm only old tool evidence is dropped.
 - Verified with `go test ./appserver -run 'TestGuardianReviewHistory' -count=1`.
 
-Status after reconciliation: `2151 complete`, `450 not_applicable`,
-`346 audit_pending`, `197 regression_pending`, `5 partial`,
+### Boxed session startup future audit (Round 992)
+
+- Rust #41853 makes `Session::spawn` return a `BoxFuture`, marks the wrapper `#[inline(never)]`, and awaits it directly at creation sites; initialization stays lazy and no protocol or persistence behavior changes (#41853, not applicable).
+- Go has no future type to box and no concrete-future-at-API-boundary or inlined-megaframe problem: session startup is built synchronously in the appserver thread-creation path, so there is no corresponding call site to change.
+
+Status after reconciliation: `2151 complete`, `451 not_applicable`,
+`346 audit_pending`, `196 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

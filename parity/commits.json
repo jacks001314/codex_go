@@ -4756,9 +4756,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 992 (审计): #41853 纯属 Rust 异步实现细节：把 Session::spawn 的返回类型改为 BoxFuture<'static, ...> 并加 #[inline(never)] 隐藏具体 future，调用点从 Box::pin(Session::spawn(..)) 改为直接 await，语义仍是惰性启动且无任何协议、工具或持久化行为变化。Go 没有 future/BoxFuture 概念，也不存在具体 future 类型跨 API 边界暴露或巨大栈帧内联的问题：Go 的会话启动在 appserver 的运行时线程创建路径中同步构建（agent_controller.go / runtime_router.go 的 createThread/startThread），没有可对应的装箱点。因此该提交在 Go 侧无可实现面，判定 not_applicable。"
    ]
   },
   {
