@@ -3685,6 +3685,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: UTF-8 boundary truncation, general-description preservation, cache reuse across equivalent metadata and invalidation on change, bounded agent-plugin spec/search metadata with a complete catalog copy, and long ordinary namespace retention.
 - Verified with `go test ./mcp -count=1`, `go test ./turn -count=1`, `go vet ./mcp`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2233 complete`, `462 not_applicable`,
-`322 audit_pending`, `127 regression_pending`, `5 partial`,
+### macOS daemon background priority and ledger repair (Round 1081)
+
+- Rust #54401 launches managed macOS processes through `taskpolicy -b` after a five-second probe, preserves the PID, falls back to a direct launch on probe failure or timeout, raises the macOS startup budget to 30 seconds, and keeps `CREATE_NO_WINDOW` with the Windows detachment flags.
+- Complete: already implemented by `e19cd8f7` in `appserverdaemon/managed_command_darwin.go`, `appserverdaemon/pid_timeout_darwin.go`, and `appserverdaemon/pid_process_windows.go`.
+- Ledger repair: Round 1073 wrote the #51470 evidence into the `b995d060` (#42671) entry. That entry is back to `regression_pending` with its symbol-coverage note, and `8519cde1` (#51470) now carries its managed-daemon nofile evidence, verified again with `go test ./appserver -run ManagedDaemonNoFileTarget` and a Linux cross-build.
+- Regression: background-priority wrapping, probe-timeout fallback, direct launch off Darwin, and platform startup budgets.
+- Verified with `go test ./appserverdaemon -count=1`, `GOOS=darwin GOARCH=arm64 go test -c ./appserverdaemon`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2234 complete`, `462 not_applicable`,
+`322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

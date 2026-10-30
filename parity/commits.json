@@ -7331,9 +7331,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "regression_pending",
    "evidence": [
-    "Complete: appserver/managed_daemon_unix.go raises RLIMIT_NOFILE to 4096 (capped by the inherited hard limit, never lowering a higher soft limit) when appserver/unix_socket.go starts a managed daemon socket; failures are logged as warnings. app/app.go selects DaemonShutdownManaged only when CODEX_DAEMON_SHUTDOWN_SOCKET is set, matching Rust's managed-daemon condition. The target calculation is cross-platform in appserver/managed_daemon.go and appserver/managed_daemon_test.go pins raise, preserve-higher-soft, hard-cap, already-at-target, and unlimited-hard cases. Verified with go test ./appserver -run 'ManagedDaemonNoFileTarget|UnixSocket' -count=1 and GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./appserver."
+    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
    ]
   },
   {
@@ -27617,9 +27617,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Complete: appserver/managed_daemon_unix.go raises RLIMIT_NOFILE to 4096 (capped by the inherited hard limit, never lowering a higher soft limit) when appserver/unix_socket.go starts a managed daemon socket; failures are logged as warnings. app/app.go selects DaemonShutdownManaged only when CODEX_DAEMON_SHUTDOWN_SOCKET is set, matching Rust's managed-daemon condition. The target calculation is cross-platform in appserver/managed_daemon.go and appserver/managed_daemon_test.go pins raise, preserve-higher-soft, hard-cap, already-at-target, and unlimited-hard cases. Verified with go test ./appserver -run 'ManagedDaemonNoFileTarget' -count=1 and a GOOS=linux GOARCH=amd64 CGO_ENABLED=0 build of ./appserver."
    ]
   },
   {
@@ -31935,9 +31935,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1081 (audit): already implemented by e19cd8f7. appserverdaemon/managed_command_darwin.go validates the managed executable, probes /usr/sbin/taskpolicy -b /usr/bin/true with a five-second timeout, and launches through taskpolicy -b when the probe succeeds, preserving the managed PID because taskpolicy uses POSIX_SPAWN_SETEXEC; a denied, failed or timed-out probe falls back to a direct detached launch. appserverdaemon/pid_timeout_darwin.go raises the macOS readiness budget to 30 seconds while other platforms keep 10 seconds. appserverdaemon/pid_process_windows.go retains CREATE_NO_WINDOW alongside DETACHED_PROCESS, CREATE_NEW_PROCESS_GROUP and CREATE_BREAKAWAY_FROM_JOB. Regression tests: TestDarwinManagedPIDCommandUsesBackgroundPriorityWhenAvailable, TestDarwinManagedPIDCommandFallsBackAfterProbeTimeout, TestManagedPIDCommandDirectLaunchOffDarwin, and TestPIDStartTimeoutMatchesPlatformLikeRust. Verified with go test ./appserverdaemon -count=1 and a GOOS=darwin GOARCH=arm64 test compile of ./appserverdaemon."
    ]
   },
   {
