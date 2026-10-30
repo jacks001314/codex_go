@@ -21189,9 +21189,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Prebuilt V8 archives for Bazel are Rust build infrastructure for the V8 proof-of-concept; Go has no V8 runtime or Bazel targets"
    ]
   },
   {
@@ -21249,9 +21249,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Transparent huge page hints for Cargo and Bazel rustc jobs are Rust build tuning; Go toolchain builds have no equivalent configuration"
    ]
   },
   {
@@ -21430,9 +21430,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Removed includeExtensions from installed-plugin discovery, dropped extensions from the remote installed model, removed PluginSummary.extensions and the hosted extension types, and updated the remote metadata test to reject the query"
    ]
   },
   {
@@ -22307,9 +22307,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go does not bundle the plugin-creator sample skill or its assets; the remaining Plugin Creator strings are local popup-test fixtures only"
    ]
   },
   {
@@ -22973,9 +22973,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Bazel and Cargo package-version propagation is Rust build infrastructure; Go builds through go build and has no corresponding Bazel target metadata"
    ]
   },
   {
@@ -24436,9 +24436,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Dylint and argument-comment lint toolchain upgrade is Rust-only lint infrastructure with no Go counterpart"
    ]
   },
   {
@@ -24485,9 +24485,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Repository-local AGENTS.md, .codex skills, and environment.toml are Rust workspace housekeeping; Go keeps its own repository guidance and no product behavior changed"
    ]
   },
   {
