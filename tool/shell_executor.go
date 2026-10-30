@@ -1003,6 +1003,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			}
 			if batch := metricsSidecar.Finish(exitCode); batch != nil && e.pluginMeasurementTracker != nil {
 				batch.ModelSlug, batch.ReasoningEffort = modelSlug, reasoningEffort
+				// Rust #42445 labels the measurement with the call that produced
+				// it: `item_id` is the tool call id.
+				batch.ItemID = strings.TrimSpace(invocation.CallID)
 				e.pluginMeasurementTracker(ctx, *batch)
 			}
 		}

@@ -16944,7 +16944,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return trustedPluginRoots.ResolveMetricsOperation(command, commandCWD)
 		}
 		options.PluginMeasurementTracker = func(ctx context.Context, batch plugin.PluginMeasurementBatch) {
-			r.emitPluginMeasurements(ctx, threadID, strings.TrimSpace(turnID), batch)
+			r.emitPluginMeasurements(ctx, threadID, strings.TrimSpace(turnID), strings.TrimSpace(originator), batch)
 		}
 	}
 	if cfg != nil {

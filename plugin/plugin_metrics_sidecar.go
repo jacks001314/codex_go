@@ -32,6 +32,9 @@ type PluginMeasurementBatch struct {
 	// executing tool, not by the sidecar, and are never serialized here.
 	ModelSlug       string
 	ReasoningEffort string
+	// ItemID is the tool call that produced the batch. Rust #42445 publishes it
+	// as the `item_id` label; the executing tool fills it, never the sidecar.
+	ItemID string
 }
 
 func (s *PluginMetricsSidecar) Cleanup() {

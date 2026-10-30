@@ -72,6 +72,35 @@ func TestPluginMeasurementEventsBoundAndValidateLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #42445: the event params always serialize `originator`, even
+// when the measurement carried none, so the payload shape stays stable.
+func TestPluginMeasurementEventAlwaysSerializesOriginator(t *testing.T) {
+	events := PluginMeasurementEvents(CodexPluginMeasurementsInput{
+		ThreadID:    "thread-1",
+		TurnID:      "turn-1",
+		ItemID:      "item-1",
+		PluginID:    "sample@test",
+		ExecutionID: "exec-1",
+		Operation:   "run_measure",
+		Rows:        []PluginMeasurementRow{{MeasurementName: "tokens", NumberValue: 1}},
+	})
+	if len(events) != 1 {
+		t.Fatalf("events = %#v", events)
+	}
+	data, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	params := payload["event_params"].(map[string]any)
+	if value, ok := params["originator"]; !ok || value != "" {
+		t.Fatalf("originator = %#v, want a present empty string", params["originator"])
+	}
+}
+
 func TestCodexPluginInstallFailedEventSerializesExpectedRustShape(t *testing.T) {
 	metadata := CodexPluginMetadata{
 		PluginID:        stringPtrTelemetry("sample@test"),

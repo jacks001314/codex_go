@@ -6922,9 +6922,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Originator is taken from the turn originator (thread record fallback), measurement events carry item_id = the tool call id, and originator is always serialized like Rust (#42445)"
    ]
   },
   {

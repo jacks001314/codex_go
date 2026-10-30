@@ -112,6 +112,7 @@ func TestPluginMeasurementEventCarriesTheInvokingModelLikeRust(t *testing.T) {
 	threadID := "thread-plugin-measurement"
 	turnID := "turn-plugin-measurement"
 	batch := plugin.PluginMeasurementBatch{
+		ItemID:          "item-plugin-measurement",
 		PluginID:        "sample@openai-curated",
 		ExecutionID:     "execution-1",
 		Operation:       "security_scan",
@@ -122,12 +123,18 @@ func TestPluginMeasurementEventCarriesTheInvokingModelLikeRust(t *testing.T) {
 			NumberValue:     3,
 		}},
 	}
-	router.emitPluginMeasurements(context.Background(), threadID, turnID, batch)
+	router.emitPluginMeasurements(context.Background(), threadID, turnID, "codex_vscode", batch)
 
 	select {
 	case input := <-sink.pluginMeasurements:
 		if input.ThreadID != threadID || input.TurnID != turnID || input.PluginID != "sample@openai-curated" || input.Operation != "security_scan" {
 			t.Fatalf("plugin measurement input = %#v", input)
+		}
+		if input.ItemID != "item-plugin-measurement" {
+			t.Fatalf("item_id = %q, want the tool call id", input.ItemID)
+		}
+		if input.Originator != "codex_vscode" {
+			t.Fatalf("originator = %q, want the turn originator", input.Originator)
 		}
 		if input.ModelSlug == nil || *input.ModelSlug != "invoking-model" {
 			t.Fatalf("model_slug = %#v, want the invoking model", input.ModelSlug)
@@ -140,7 +147,7 @@ func TestPluginMeasurementEventCarriesTheInvokingModelLikeRust(t *testing.T) {
 	}
 
 	// A batch without a captured context reports absent labels.
-	router.emitPluginMeasurements(context.Background(), threadID, turnID, plugin.PluginMeasurementBatch{
+	router.emitPluginMeasurements(context.Background(), threadID, turnID, "", plugin.PluginMeasurementBatch{
 		PluginID:    "sample@openai-curated",
 		ExecutionID: "execution-2",
 		Operation:   "security_scan",
@@ -156,6 +163,52 @@ func TestPluginMeasurementEventCarriesTheInvokingModelLikeRust(t *testing.T) {
 		}
 	default:
 		t.Fatal("no second plugin measurement event was recorded")
+	}
+}
+
+// Mirrors Rust #42445: the emitted measurement carries the turn's originator,
+// and a turn without one falls back to the originator its session started with.
+func TestPluginMeasurementEventCarriesTheTurnOriginatorLikeRust(t *testing.T) {
+	router, sink := newModelAttributionRouter(t)
+	threadID := "thread-plugin-originator"
+	now := time.Now().UTC()
+	if err := router.services.ThreadRouter.store.Create(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{Originator: "codex_work_desktop"},
+	}); err != nil {
+		t.Fatalf("create thread record error = %v", err)
+	}
+	measured := plugin.PluginMeasurementBatch{
+		PluginID:    "sample@openai-curated",
+		ExecutionID: "execution-originator",
+		Operation:   "security_scan",
+		Rows: []plugin.PluginMeasurementRow{{
+			MeasurementName: "issues_found",
+			NumberValue:     3,
+		}},
+	}
+	router.emitPluginMeasurements(context.Background(), threadID, "turn-plugin-originator", "codex_vscode", measured)
+	select {
+	case input := <-sink.pluginMeasurements:
+		if input.Originator != "codex_vscode" {
+			t.Fatalf("originator = %q, want the turn originator", input.Originator)
+		}
+	default:
+		t.Fatal("no turn-attributed plugin measurement event was recorded")
+	}
+
+	router.emitPluginMeasurements(context.Background(), threadID, "turn-plugin-originator", "", measured)
+	select {
+	case input := <-sink.pluginMeasurements:
+		if input.Originator != "codex_work_desktop" {
+			t.Fatalf("fallback originator = %q, want the thread originator", input.Originator)
+		}
+	default:
+		t.Fatal("no thread-attributed plugin measurement event was recorded")
 	}
 }
 

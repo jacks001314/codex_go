@@ -38,7 +38,7 @@ type CodexPluginMeasurementsInput struct {
 	PluginID    string `json:"plugin_id"`
 	ExecutionID string `json:"execution_id"`
 	Operation   string `json:"operation"`
-	Originator  string `json:"originator,omitempty"`
+	Originator  string `json:"originator"`
 	// ModelSlug and ReasoningEffort attribute the measurement to the model that
 	// invoked the measured command (Rust #45445); absent when the execution
 	// carried no context.
@@ -54,7 +54,7 @@ type CodexPluginMeasurementEventParams struct {
 	PluginID        string            `json:"plugin_id"`
 	ExecutionID     string            `json:"execution_id"`
 	Operation       string            `json:"operation"`
-	Originator      string            `json:"originator,omitempty"`
+	Originator      string            `json:"originator"`
 	ModelSlug       *string           `json:"model_slug"`
 	ReasoningEffort *string           `json:"reasoning_effort"`
 	MeasurementName string            `json:"measurement_name"`

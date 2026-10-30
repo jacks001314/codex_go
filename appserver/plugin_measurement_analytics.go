@@ -12,8 +12,10 @@ import (
 // emitPluginMeasurements publishes one validated measurement batch. Rust #45445
 // attributes the measurement to the model that invoked the measured command, so
 // the labels the executing tool captured when the command started travel with
-// the batch; a batch without them reports absent labels.
-func (r *RuntimeRouter) emitPluginMeasurements(ctx context.Context, threadID string, turnID string, batch plugin.PluginMeasurementBatch) {
+// the batch; a batch without them reports absent labels. Rust #42445 also
+// labels the event with the turn originator, so the caller passes the turn's
+// originator and the thread record is only the fallback.
+func (r *RuntimeRouter) emitPluginMeasurements(ctx context.Context, threadID string, turnID string, originator string, batch plugin.PluginMeasurementBatch) {
 	if r == nil {
 		return
 	}
@@ -32,13 +34,16 @@ func (r *RuntimeRouter) emitPluginMeasurements(ctx context.Context, threadID str
 			Dimensions:      row.Dimensions,
 		})
 	}
-	originator := ""
-	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
-		originator = strings.TrimSpace(record.Metadata.Originator)
+	originator = strings.TrimSpace(originator)
+	if originator == "" {
+		if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
+			originator = strings.TrimSpace(record.Metadata.Originator)
+		}
 	}
 	input := telemetry.CodexPluginMeasurementsInput{
 		ThreadID:    strings.TrimSpace(threadID),
 		TurnID:      strings.TrimSpace(turnID),
+		ItemID:      strings.TrimSpace(batch.ItemID),
 		PluginID:    batch.PluginID,
 		ExecutionID: batch.ExecutionID,
 		Operation:   batch.Operation,

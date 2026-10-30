@@ -83,6 +83,9 @@ func TestShellExecutorPluginMeasurementsCarryTheInvokingModelLikeRust(t *testing
 	if captured.PluginID != "sample@openai-curated" || captured.Operation != "security_scan" || captured.ExecutionID == "" {
 		t.Fatalf("measurement batch = %#v", captured)
 	}
+	if captured.ItemID != "call-plugin-measurement" {
+		t.Fatalf("measurement item id = %q, want the tool call id", captured.ItemID)
+	}
 	if captured.ModelSlug != "invoking-model" || captured.ReasoningEffort != "max" {
 		t.Fatalf("measurement attribution = %q/%q", captured.ModelSlug, captured.ReasoningEffort)
 	}
@@ -117,6 +120,9 @@ func TestShellExecutorPluginMeasurementsCarryTheInvokingModelLikeRust(t *testing
 	}
 	if captured.ModelSlug != "" || captured.ReasoningEffort != "" {
 		t.Fatalf("unattributed measurement = %q/%q", captured.ModelSlug, captured.ReasoningEffort)
+	}
+	if captured.ItemID != "call-plugin-measurement-unattributed" {
+		t.Fatalf("unattributed measurement item id = %q", captured.ItemID)
 	}
 }
 
