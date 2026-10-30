@@ -240,6 +240,54 @@ func TestVoicePlayoutKeepsNewestAudio(t *testing.T) {
 	}
 }
 
+// Rust #46880: a scheduling pause can deliver a valid RTP burst beyond the
+// jitter buffer's reordering window. Every admitted packet must still reach the
+// decoder and playback queue.
+func TestMediaSessionForwardsAdmittedBurstLikeRust(t *testing.T) {
+	pipeline := newPCMPipeline()
+	pipeline.speaker.setEnabled(true)
+	session := newMediaSession(&fakeCodec{}, pipeline, &fakeSender{})
+	now := time.Now()
+	const packets = 12
+	for packet := 0; packet < packets; packet++ {
+		payload := make([]byte, voiceFrameSamples)
+		for index := range payload {
+			payload[index] = byte(packet + 1)
+		}
+		if err := session.handleRTP(payload, 7, now); err != nil {
+			t.Fatalf("inbound packet %d: %v", packet, err)
+		}
+	}
+	if got := session.playout.length(); got != packets {
+		t.Fatalf("playout packets = %d, want %d", got, packets)
+	}
+	if _, err := session.service(now.Add(voicePlayoutLatency + time.Millisecond)); err != nil {
+		t.Fatalf("service burst: %v", err)
+	}
+	if got := session.playout.length(); got != 0 {
+		t.Fatalf("playout packets after service = %d, want 0", got)
+	}
+
+	wantBlocks := packets * voiceFrameSamples / audioBlockSamples
+	if got := pipeline.playback.length(); got != wantBlocks {
+		t.Fatalf("playback blocks = %d, want %d", got, wantBlocks)
+	}
+	for packet := 0; packet < packets; packet++ {
+		for block := 0; block < voiceFrameSamples/audioBlockSamples; block++ {
+			queued, ok := pipeline.playback.pop()
+			if !ok {
+				t.Fatalf("packet %d block %d was dropped", packet, block)
+			}
+			if queued.length != audioBlockSamples {
+				t.Fatalf("packet %d block %d length = %d, want %d", packet, block, queued.length, audioBlockSamples)
+			}
+			if want := int16(packet + 1); queued.samples[0] != want {
+				t.Fatalf("packet %d block %d sample = %d, want %d", packet, block, queued.samples[0], want)
+			}
+		}
+	}
+}
+
 func TestMediaSessionPumpsCaptureAndPlayout(t *testing.T) {
 	pipeline := newPCMPipeline()
 	pipeline.microphone.setEnabled(true)

@@ -200,6 +200,41 @@ func TestPipelineQueueIsBounded(t *testing.T) {
 	}
 }
 
+// Rust #46880: a native-sink pause must not overwrite queued speech with
+// silence. Pull-based playback naturally retains the queue while no device
+// callback consumes it.
+func TestPipelinePlaybackSurvivesPauseLikeRust(t *testing.T) {
+	pipeline := newPCMPipeline()
+	pipeline.speaker.setEnabled(true)
+	const blocks = 4
+	for index := 0; index < blocks; index++ {
+		var block audioBlock
+		block.length = 1
+		block.samples[0] = int16(index + 1)
+		if !pipeline.pushPlayback(block) {
+			t.Fatalf("playback block %d was rejected", index)
+		}
+	}
+
+	// Reapplying the current controls models a pause/control refresh. It must
+	// not advance the speaker epoch or drain audio that is waiting to resume.
+	pipeline.setControls(AudioControls{})
+	if got := pipeline.playback.length(); got != blocks {
+		t.Fatalf("queued playback after pause = %d, want %d", got, blocks)
+	}
+
+	var state audioBlock
+	for index := 0; index < blocks; index++ {
+		sample, ok := pipeline.nextPlaybackSample(&state)
+		if !ok {
+			t.Fatalf("playback sample %d was lost after resume", index)
+		}
+		if want := int16(index + 1); sample != want {
+			t.Fatalf("playback sample %d = %d, want %d", index, sample, want)
+		}
+	}
+}
+
 func TestPipelineSpeakerPeakFollowsRenderedSamples(t *testing.T) {
 	pipeline := newPCMPipeline()
 	pipeline.speaker.setEnabled(true)

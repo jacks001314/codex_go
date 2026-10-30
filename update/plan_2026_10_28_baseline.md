@@ -4143,3 +4143,11 @@ Status after this batch: `2349 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: the `tui/worktree_browser_test.go` row/owner/action/confirmation cases, `TestWorktreeManagerRemoveManagedSafety`, and `TestInteractiveWorktreeOwnerLookupResolvesThreads`; `go test -run Worktree ./worktree ./tui ./tui/tea ./app` passes. No source change needed.
 
 Status after this batch: `2350 complete`, `465 not_applicable`, `322 audit_pending`, `6 regression_pending`, `5 partial`, `7 blocked_precondition`.
+
+### Voice playback survives pauses and RTP bursts (Round 1133)
+
+- #46880's Rust-only failure came from the GStreamer `AudioSink` second ring overwriting late speech with silence plus `rtpjitterbuffer` `drop-on-latency` discarding valid bursts. Go uses a pull-based miniaudio output callback and `pcmPipeline`: `voiceIncoming` bounds packets and bytes, `voicePlayout` retains every admitted packet through the 60 ms reordering window, and decoded PCM remains in the playback queue until the device callback consumes it. Speaker suppression is the only operation that advances the epoch and discards playback, so a pause cannot be mistaken for privacy mute.
+- Added `TestPipelinePlaybackSurvivesPauseLikeRust` and `TestMediaSessionForwardsAdmittedBurstLikeRust`. There is no blocking GStreamer/CPAL writer or native flush to cancel in Go, because playback is pulled from a bounded queue by the device callback.
+- Verification: `go test ./voicehost -count=1` and `go test -race ./voicehost -run 'TestPipelinePlaybackSurvivesPauseLikeRust|TestMediaSessionForwardsAdmittedBurstLikeRust' -count=1` pass. No production source change was needed.
+
+Status after this batch: `2351 complete`, `465 not_applicable`, `322 audit_pending`, `5 regression_pending`, `5 partial`, `7 blocked_precondition`.

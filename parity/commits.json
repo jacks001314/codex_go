@@ -17302,9 +17302,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1133: behavior certified. Go has no GStreamer AudioSink second ring or CPAL drop-on-latency surface: voiceIncoming admits RTP under packet and byte budgets, voicePlayout keeps admitted packets after the 60 ms reorder window, and the pull-based pcmPipeline retains decoded PCM while the device callback is paused. The media session decodes every due admitted packet into the bounded playback queue; speaker suppression advances the epoch and discards only muted audio, never an unsuppressed pause. Added TestPipelinePlaybackSurvivesPauseLikeRust and TestMediaSessionForwardsAdmittedBurstLikeRust; go test ./voicehost and the race run for both tests pass. Native flush cancellation has no Go counterpart because writes never block on a GStreamer source pad."
    ]
   },
   {
