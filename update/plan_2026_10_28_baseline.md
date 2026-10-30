@@ -3353,6 +3353,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `appserver/network_approval_originating_execution_like_rust_test.go` cover cross-turn cwd/environment snapshots, current review settings, cancellation during review, cancellation after acceptance, late callbacks, original-outcome preservation, and grant reuse.
 - Verified with `go build ./...`, `go test ./appserver -run 'OriginatingExecution|CancellationDuringReview|AcceptedReviewSurvivesCancellation' -count=1 -race`, `go test ./appserver -run 'NetworkApproval|Network|Guardian' -count=1`, and `go test ./parity -run TestAlignment -count=1`. The full `./appserver` package still reports the same pre-existing manifest/analytics failures reproduced on clean HEAD.
 
-Status after reconciliation: `2195 complete`, `451 not_applicable`,
-`342 audit_pending`, `157 regression_pending`, `4 partial`,
+### Skill invocation analytics without repository URL (Round 1031)
+
+- Rust #44586 removes `repo_url` from `SkillInvocationEventParams` and from both reducer branches. The origin URL still participates in the derived host skill ID, but it is no longer part of the analytics payload.
+- Go already matched the wire shape from `4817c58b`: `SkillInvocationEventParams` has no repository URL field and `trackSkillInvocationEvent` does not populate one. The new `telemetry/skill_invocation_event_like_rust_test.go` freezes the complete `event_params` key set and rejects any future `repo_url` serialization.
+- Verified with `go build ./...`, `go test ./telemetry -run SkillInvocation -count=1`, `go test ./appserver -run SkillInvocation -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2196 complete`, `451 not_applicable`,
+`341 audit_pending`, `157 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

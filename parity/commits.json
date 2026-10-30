@@ -11455,9 +11455,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1031 (审计+回归): #44586 从 Rust SkillInvocationEventParams 删除 repo_url，reducer 的 Host/Resource 两个分支只保留 skill_id 和 skill_scope；仓库 URL 仍参与 host skill ID 派生，但不再进入 analytics payload。Go 已在 4817c58b 删除 RepoURL 字段、trackSkillInvocationEvent 的赋值及旧断言；本轮新增 telemetry/skill_invocation_event_like_rust_test.go，精确冻结 event_params 的九个键（product_client_id、skill_scope、plugin_id、remote_plugin_id、thread_id、turn_id、voice_session_id、invoke_type、model_slug）并断言 repo_url 即使有仓库上下文也不会被序列化。验证: go build ./...; go test ./telemetry -run SkillInvocation -count=1; go test ./appserver -run SkillInvocation -count=1; go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {
