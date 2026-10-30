@@ -96,6 +96,23 @@ func TestIdleChildCreatedWithoutClientDisconnectsLikeRust(t *testing.T) {
 	waitForIdleUnload(t, router, "child")
 }
 
+// Rust #42320: gaining a subscriber resets the unload countdown even when the
+// thread had already been scheduled with a zero delay.
+func TestIdleLifecycleResubscribeResetsUnloadLikeRust(t *testing.T) {
+	router, _ := newIdleLifecycleTestRouter(t, 0)
+	retainIdleLifecycleThread(t, router, "child")
+	router.scheduleThreadIdleUnload("child")
+	router.subscribeThreadConnection("child", "conn-resubscribe")
+	time.Sleep(120 * time.Millisecond)
+	if router.threads.LiveThread("child") == nil {
+		t.Fatal("resubscribed child was evicted")
+	}
+	if !router.unsubscribeThreadConnection("child", "conn-resubscribe") {
+		t.Fatal("unsubscribe returned false")
+	}
+	waitForIdleUnload(t, router, "child")
+}
+
 func TestIdleLifecycleKeepsPersistentRootAndEphemeralChildThreadsLikeRust(t *testing.T) {
 	router, _ := newIdleLifecycleTestRouter(t, 0)
 	retainIdleLifecycleThread(t, router, "root")

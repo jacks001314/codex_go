@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,5 +36,41 @@ func TestThreadUnloadDelayDefaultsToOneMinuteLikeRust(t *testing.T) {
 				t.Fatalf("ThreadUnloadDelaySecs() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+// Rust #42320 rejects non-u64 values and deadlines that cannot fit a monotonic
+// clock at config load, rather than silently using the default.
+func TestThreadUnloadDelayConfigLoadRejectsInvalidValuesLikeRust(t *testing.T) {
+	for name, value := range map[string]string{
+		"negative":   "-1",
+		"fractional": "1.5",
+		"string":     `"60"`,
+		"overflow":   "9223372036854775807",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			body := "thread_unload_delay_secs = " + value + "\n"
+			if err := os.WriteFile(ConfigPath(home), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadEffectiveWithOptions(home, nil); err == nil || !strings.Contains(err.Error(), "thread_unload_delay_secs") {
+				t.Fatalf("LoadEffectiveWithOptions() error = %v, want a thread_unload_delay_secs rejection", err)
+			}
+		})
+	}
+}
+
+func TestThreadUnloadDelayConfigLoadAcceptsZeroLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(ConfigPath(home), []byte("thread_unload_delay_secs = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadEffectiveWithOptions(home, nil)
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions() error = %v", err)
+	}
+	if got := cfg.ThreadUnloadDelaySecs(); got != 0 {
+		t.Fatalf("ThreadUnloadDelaySecs() = %v, want zero", got)
 	}
 }

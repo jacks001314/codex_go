@@ -6263,9 +6263,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1033: effective config loading validates thread_unload_delay_secs as a non-negative integer and rejects deadlines beyond math.MaxInt64/time.Second, matching Rust #42320 instead of silently defaulting.",
+    "Existing app-server idle lifecycle already defaults to 60 seconds, supports zero-delay unloading, per-thread overrides, subscriber/activity reset, active-turn preservation, thread/closed and thread/status/changed notifications, and cold-resume reattachment; added a resubscribe regression test.",
+    "Verified with go test ./config -run ThreadUnloadDelay, go test ./appserver -run IdleLifecycle|ThreadUnloadDelay|IdleChild|IdleEphemeral, go test ./parity, and go build ./..."
    ]
   },
   {

@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -827,6 +828,12 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	// (SleepToolMode::ModelDriven | AlwaysOn), so an unrecognized value fails
 	// config load instead of silently falling back to model_driven.
 	if err := validateSleepToolConfigValues(cfg.Values); err != nil {
+		return nil, err
+	}
+	// Rust #42320 deserializes `thread_unload_delay_secs` as an optional u64 and
+	// rejects a deadline that cannot fit a monotonic clock. Validate at load time
+	// instead of letting the accessor silently fall back to the default.
+	if err := validateThreadUnloadDelayValue(cfg.Values); err != nil {
 		return nil, err
 	}
 	// Rust #46541: the post-turn compaction threshold is a percentage of the
@@ -2195,6 +2202,35 @@ func (c *Config) ThreadUnloadDelaySecs() time.Duration {
 		return defaultThreadUnloadDelay
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func validateThreadUnloadDelayValue(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	raw, ok := values["thread_unload_delay_secs"]
+	if !ok || raw == nil {
+		return nil
+	}
+	const maxSeconds = float64((1<<63 - 1) / int64(time.Second))
+	var seconds float64
+	switch value := raw.(type) {
+	case int:
+		seconds = float64(value)
+	case int64:
+		seconds = float64(value)
+	case float64:
+		seconds = value
+	default:
+		return fmt.Errorf("`thread_unload_delay_secs` must be a non-negative integer")
+	}
+	if seconds < 0 || math.Trunc(seconds) != seconds {
+		return fmt.Errorf("`thread_unload_delay_secs` must be a non-negative integer")
+	}
+	if seconds > maxSeconds {
+		return fmt.Errorf("`thread_unload_delay_secs` is too large")
+	}
+	return nil
 }
 
 func (c *Config) WaitAgentEnabled() bool {
