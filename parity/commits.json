@@ -6545,9 +6545,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 1/12; needs review: ExecMetadata, ExecutorLogIdentity, ExecutorRegistration, NetworkProxyProcessLogMetadata, ProcessTelemetry"
+    "ExecMetadata (threadId/toolCallId) is carried on ExecParams and sent by unified exec, and launch spans plus request/response trace events exist; missing the bounded process_start/spawn_failed/sandbox_denied/process_exit events with launch trace, executor identity and exit fields, and network-policy audit attribution (#42373)"
    ]
   },
   {
