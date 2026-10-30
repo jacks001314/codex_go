@@ -7102,9 +7102,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1056: superseded upstream. Rust #42602 kept delivery detached usable but emitted deprecationNotice; later Rust #57667 removed the detached variant entirely. At the frozen baseline codex-rs/app-server-protocol/src/protocol/v2/review.rs defines ReviewDelivery with only Inline, so detached is an invalid-params error and no deprecation notice is emitted. Go appserver/review_inline_only_like_rust_test.go:TestRuntimeRouterReviewStartIsInlineOnlyLikeRust already pins that exact behavior for nil, inline, and detached delivery. No Go change required."
    ]
   },
   {
