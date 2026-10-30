@@ -3045,6 +3045,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `context.ParseDelegatedPrompt` now decodes `&lt;`/`&gt;` before `&amp;` (so `&amp;lt;` stays escaped) and `ParseDelegatedToolOutput` trusts `codex_tui`/`codex_app` only; `context.DelegatedToolOutputNotice` and `tui/history_cell.NewDelegatedPromptCell` provide the Rust `PrefixedWrappedHistoryCell` shape, and `chatwidget.ReplayDelegatedToolOutput(Cell)` plus `ReplayItemRouteFunctionCallOutput` expose the replay/transcript behavior without touching composer history.
 - Tests: `context/delegation_like_rust_test.go`, `tui/chatwidget/delegated_replay_like_rust_test.go`. Verified with `go test ./context -count=1`, `go test ./tui/... -count=1`, and the delegated session/state tests.
 
-Status after reconciliation: `2148 complete`, `450 not_applicable`,
-`346 audit_pending`, `200 regression_pending`, `5 partial`,
+### Bundled resource directory move (Round 989)
+
+- Rust #41477 moves core/tui include_str! resources into `core/assets` and `tui/assets` and narrows Bazel compile data; asset bytes are unchanged (#41477, complete).
+- Go vendors the same blobs rather than mirroring the Bazel layout: `context/templates/persistent_mode.md`, `state/templates/guardian/policy_template.md`, and `applypatch.LarkGrammar` already had frozen-snapshot comparisons, and the new `parity/tui_assets_like_rust_test.go` compares `tui/tooltips.txt` and `tui/tea/prompt_for_init_command.md` byte-for-byte against `codex-rs/tui/assets` from the pinned snapshot.
+- `tui/tooltips.txt` carried a Go-only `/presets` tip that no Rust revision had while missing Rust's `chat.open_presets` 0-9 menu tip; Go already implements that menu (`tui/tea/quick_dials.go`), so the file now matches upstream exactly.
+- Resources Go builds in code instead of vendoring (`agent_names.txt`, agent builtins, consequential tool templates, inline-visualization viewer html/css) are implementation details with no asset counterpart, not behavioral drift from the move.
+- Verified with `go test ./parity -run 'TestRustTuiAssetsMatchGo|TestRustPersistentModePromptMatchesGo|TestRustGuardianPolicyPrompt|TestRustApplyPatchFreeformSpecMatchesGo' -count=1` and `go test ./tui/... -count=1`.
+
+Status after reconciliation: `2149 complete`, `450 not_applicable`,
+`346 audit_pending`, `199 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

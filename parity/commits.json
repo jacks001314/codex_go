@@ -4516,9 +4516,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 989 (回归证书): #41477 只把 Rust 内嵌资源从 crate 源码树移入 core/assets 与 tui/assets 并更新 include_str! 路径，资源内容本身零变更，Go 侧需要证明的是 vendored 资源仍与上游一致，而不是复刻 Bazel 数据布局。Go 已有内容对照覆盖 core 侧：context/templates/persistent_mode.md（parity/rust_persistent_mode_prompt_test.go）、state/templates/guardian/policy_template.md（parity/rust_guardian_policy_prompt_test.go）、applypatch.LarkGrammar（parity/apply_patch_spec_test.go）。本轮补齐 tui 侧：新增 parity/tui_assets_like_rust_test.go，从冻结快照 candidateRustTo 读取 codex-rs/tui/assets/tooltips.txt 与 codex-rs/tui/assets/prompt_for_init_command.md，与 tui/tooltips.txt、tui/tea/prompt_for_init_command.md 做 LF 归一化后逐字节比较。比较过程中发现 Go 的 tui/tooltips.txt 自造了一行 'Use **/presets** or press {key:chat.open_presets} to run a saved prompt.'（Rust 任何版本都没有该文案），同时缺少 Rust 自 #54381 起追加的 'Use {key:chat.open_presets}, then 0–9 to run a preset; Enter browses, s saves, and d deletes.'；Go quick_dials.go 已实现 0-9/n/s/e/d 菜单语义，故直接删除自造行并在文件末尾采用 Rust 原文，使该资源与上游完全一致。未 vendored 的资源（agent/agent_names.txt、agent/builtins/*.toml、consequential_tool_message_templates.json、inline_visualization/visualize.{html,css}）在 Go 中由代码内建（agent/role.go 角色表、guardian 模板渲染、tui/inline_visualization.go 生成 sandboxed viewer 文档），不属于本次目录重组引入的行为差异。验证：go test ./parity -run 'TestRustTuiAssetsMatchGo|TestRustPersistentModePromptMatchesGo|TestRustGuardianPolicyPrompt|TestRustApplyPatchFreeformSpecMatchesGo' -count=1、go test ./tui/... -count=1。"
    ]
   },
   {
