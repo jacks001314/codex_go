@@ -3438,6 +3438,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - N/A by architecture: Go has no Guardian V2 async classifier or conversation backend, so the config knobs, conversation backend, and model-default fields have no consumer. Go resolves Guardian v2 through `config.GuardianV2*` accessors and `model.GuardianV2ModelConfig` and reviews synchronously, matching the N/A classification of #53733 and #56556 for the same subsystem.
 - Verified with `rg` over `async_classifier|AsyncClassifierMode|ConversationBackend|classifier_mode`, `go test ./config -run GuardianV2 -count=1`, `go test ./model -run 'Guardian|CatalogMessages' -count=1`, and `go test ./parity -run 'ConfigSchema|TestAlignment' -count=1`.
 
-Status after reconciliation: `2201 complete`, `458 not_applicable`,
-`330 audit_pending`, `156 regression_pending`, `4 partial`,
+### Replay-only side conversation cleanup (Round 1044)
+
+- Rust #49800 treats a `turn/interrupt` `-32600 thread not found: <id>` error as success when the side thread's event channel is `ReplayOnly`, letting unsubscribe and local cleanup finish, while still interrupting replay-only sides (empty-turn startup interrupt when no active turn is known).
+- N/A by architecture: Go has no replay-only side-conversation restore path or thread-event attachment check at close. Embedded side close interrupts locally and then deletes the record without a blocking server error; remote close logs interrupt failures as best-effort warnings before `thread/unsubscribe`, which reports `notLoaded` for a gone thread instead of failing. Go's `turn/interrupt` also requires a non-empty `turnId`, so the empty-turn startup interrupt has no carrier.
+- Verified with `rg` over `replayOnly|ReplayOnly|interrupt_side_thread|thread/unsubscribe`, `go test ./tui/tea -run Side -count=1`, `go test ./app -run 'Side|Archive' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2201 complete`, `459 not_applicable`,
+`329 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

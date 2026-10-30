@@ -24556,9 +24556,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1044 (audit): N/A by architecture - Rust #49800 makes interrupt_side_thread treat a turn/interrupt -32600 `thread not found: <id>` error as success only when the side thread's event channel attachment is ReplayOnly, so unsubscribe and local cleanup still finish; it keeps sending an interrupt for replay-only sides (startup_interrupt with an empty turnId when no active turn is known). Go has no replay-only side-conversation restore path or thread-event-channel attachment test at side close: side conversations are per-session in memory, the embedded close performs a best-effort local interrupt and then deletes the local record with no server error to block it, and the remote close logs turn/interrupt failures as best-effort warnings before thread/unsubscribe, which returns the notLoaded status for an already-gone thread instead of an error. The missing-thread interrupt therefore cannot block side cleanup or parent archiving in Go, and Go's turn/interrupt RPC requires a non-empty turnId, so Rust's empty-turn startup interrupt has no equivalent carrier. Verified with rg over replayOnly|ReplayOnly|interrupt_side_thread|thread/unsubscribe and go test ./tui/tea -run Side -count=1 plus go test ./app -run 'Side|Archive' -count=1."
    ]
   },
   {
