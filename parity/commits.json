@@ -19422,9 +19422,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "rollout/compression_metrics.go adds bounded `reason` and `read_progress` labels to the compressed-rollout read counter/duration metrics (#47565), captured at the first failure: rolloutReadFailureReason distinguishes OS errors, reader-busy and task-join failures and the known zstd error families with `stream_error` as the fallback, and the line reader records whether the failure happened before or after the first line while keeping error messages, paths and rollout contents out of labels. rollout/read_diagnostics.go surfaces the classified failure in the throttled warning.",
+    "Regression coverage: rollout/line_reader_47565_test.go pins the reason/read-progress matrix (zstd invalid frame before/after the first line, task join, busy reader, fallback) and rollout/read_diagnostics_like_rust_test.go covers truncated compressed rollouts plus the rate-limited diagnostic. Verified with `go test ./rollout -run 'ReadDiagnostic|CompressionMetric' -count=1`."
    ]
   },
   {
@@ -19458,9 +19459,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/markdown/mermaid.go explains Mermaid fallbacks (#47572): unsupported syntax, renderer size limits and terminal-width overflow keep the original highlighted source behind a dimmed reason notice; wrapDimmedNotice word-wraps the notice to the block width and dims every line, list/blockquote indentation is preserved, and unfinished fences or disabled Mermaid rendering keep the source without a notice.",
+    "Regression coverage: tui/markdown/mermaid_test.go TestMermaidFallbackNoticesPreserveSource (all three reasons, dimmed styling, source preservation, nested indentation) and TestMermaidUnclosedBlocksKeepSourceWithoutNotice. Verified with `go test ./tui/markdown -run Mermaid -count=1`."
    ]
   },
   {
@@ -25405,9 +25407,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/motion.go centralizes the loading glyph (#50112): LoadingGlyphFrames holds Rust's 10 braille frames at the shared 100 ms cadence, LoadingGlyphReducedMotion is the static reduced-motion glyph, LoadingGlyph returns the frame for an elapsed time (wrapping and clamping backwards clocks), and loadingGlyphWithDelay renders nothing until the caller's delay expires while reporting the wait until the next frame instead of owning a frame requester. tui/bottom_pane/voice_strip.go renders the voice connection spinner through these helpers, preserving 100 ms animation and the static reduced-motion glyph.",
+    "Regression coverage: tui/loading_glyph_like_rust_test.go TestLoadingGlyphLikeRust and TestLoadingGlyphSchedulesNextFrameLikeRust (delay, cadence, wrap and reduced motion), plus tui/bottom_pane/voice_strip_test.go TestVoiceLoadingGlyphHonoursReducedMotion and its frame-table comparison. Verified with `go test ./tui -run LoadingGlyph -count=1` and `go test ./tui/bottom_pane -run Voice -count=1`."
    ]
   },
   {

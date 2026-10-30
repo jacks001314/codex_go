@@ -3729,6 +3729,14 @@ Status after this batch: `2239 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2245 complete`, `462 not_applicable`, `322 audit_pending`, `115 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1086)
+
+- #50112 shared loading glyphs: `tui/motion.go` holds the 10-frame table, 100 ms cadence, reduced-motion glyph and the delayed helper (Go reports the next-frame wait instead of owning a frame requester); the voice strip renders through it.
+- #47572 Mermaid fallback notices: unsupported syntax, size limits and width overflow keep highlighted source behind a dimmed, width-wrapped reason notice; unfinished fences and disabled rendering stay silent.
+- #47565 rollout read diagnostics: bounded `reason`/`read_progress` metric labels classify zstd families, OS, busy-reader and task-join failures without leaking paths or contents, and the line reader records before/after-first-line progress.
+
+Status after this batch: `2248 complete`, `462 not_applicable`, `322 audit_pending`, `112 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
