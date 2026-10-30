@@ -7534,9 +7534,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/7; needs review: AcceptedUserInputResponse, reserve_input_order, reserve_user_input_order"
+    "Go reserves the shared acceptance sequence through retainedctx.ReserveOrder at steer admission and request_user_input acceptance, persists user_input_order with user messages and verified answers, uses it for ordering/bounding/replay/rollback with legacy recording-order fallback, and covers delayed queued input plus steer-aware rollback"
    ]
   },
   {
