@@ -3432,6 +3432,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - N/A by architecture: Go has no Guardian V2 async scorer or sampler (`LunaSampler`/`LunaSamplingRequest`, snapshot/retained `SamplingMode`, `PreparedRequest`/`RetainedCompletion`, conversation checkpoint/cursor, or input-token admission). Guardian reviews use the synchronous `modelGuardianReviewer` plus the shared retention layer already covered by #48110, and the new `AsyncDelta` presentation exists only for the unwired retained sampler, so there is no Go consumer or carrier.
 - Verified with `rg` over `async_scorer|LunaSampler|PreparedRequest|RetainedCompletion|AsyncDelta|take_history`, `go test ./appserver -run 'Guardian(Async|Retained|Conversation|Transcript|RequestBudget|Admitted)' -count=1` (15 tests), `go test ./state -run Guardian -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2201 complete`, `457 not_applicable`,
-`331 audit_pending`, `156 regression_pending`, `4 partial`,
+### Guardian v2 async classifier conversation mode (Round 1043)
+
+- Rust #49793 adds `features.guardianv2.async_classifier_mode` (`snapshot`/`conversation`), `async_classifier_conversation_token_limit` (default 100,000), retained classifier request/response history with delta appends and rebuild triggers, ordered admission with queue bounds and stale-work rejection, token-cost metrics, and the matching `AsyncClassifierMode` protocol/model/config-schema surface.
+- N/A by architecture: Go has no Guardian V2 async classifier or conversation backend, so the config knobs, conversation backend, and model-default fields have no consumer. Go resolves Guardian v2 through `config.GuardianV2*` accessors and `model.GuardianV2ModelConfig` and reviews synchronously, matching the N/A classification of #53733 and #56556 for the same subsystem.
+- Verified with `rg` over `async_classifier|AsyncClassifierMode|ConversationBackend|classifier_mode`, `go test ./config -run GuardianV2 -count=1`, `go test ./model -run 'Guardian|CatalogMessages' -count=1`, and `go test ./parity -run 'ConfigSchema|TestAlignment' -count=1`.
+
+Status after reconciliation: `2201 complete`, `458 not_applicable`,
+`330 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

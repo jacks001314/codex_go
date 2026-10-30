@@ -24496,9 +24496,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 4/11; needs review: AsyncClassifierMode, ConversationBackend, ConversationRequest, classifier_mode, max_input_tokens"
+    "Round 1043 (audit): N/A by architecture - Rust #49793 adds the Guardian V2 async classifier's conversation backend: features.guardianv2.async_classifier_mode (snapshot|conversation with local-over-model precedence), async_classifier_conversation_token_limit (default 100,000), retained classifier request/response history with delta appends and rebuild triggers, ordered admission/queue bounds/stale-work rejection, token-cost metrics, and the AsyncClassifierMode protocol/model fields plus config schema entries. Go has no Guardian V2 async classifier or conversation backend, so neither the config knobs nor the model-default fields have a consumer: Go resolves Guardian v2 settings through config.GuardianV2* accessors (max_tool_call_lag, transcript_mode, max_parent_compaction_tokens, persist_scores, free_guardian) and model.GuardianV2ModelConfig, and its Guardian reviews are synchronous. Consistent with the N/A classification of #53733 and #56556 for the same subsystem. Verified with rg over async_classifier|AsyncClassifierMode|ConversationBackend|classifier_mode, go test ./config -run GuardianV2 -count=1, go test ./model -run 'Guardian|CatalogMessages' -count=1, and go test ./parity -run 'ConfigSchema|TestAlignment' -count=1."
    ]
   },
   {
