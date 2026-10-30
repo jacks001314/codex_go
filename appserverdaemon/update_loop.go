@@ -320,6 +320,17 @@ func updateOnce(ctx context.Context, runner *LifecycleRunner, runningIdentity *i
 		}
 		mode = installerMode{Kind: installerRestoreProduction, Release: previousName}
 	}
+	if trigger.Kind == UpdateTriggerScheduled {
+		// Re-read before installing: the preference may have changed while the
+		// selection checks ran (Rust #43542).
+		enabled, err := readAutoUpdateEnabled(daemon)
+		if err != nil {
+			return UpdateLoopContinue, nil, "", err
+		}
+		if !enabled {
+			return UpdateLoopStop, nil, "", nil
+		}
+	}
 	if err := options.Install(ctx, mode, root); err != nil {
 		return UpdateLoopContinue, nil, "", err
 	}

@@ -1,6 +1,7 @@
 package appserverdaemon
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -77,6 +78,153 @@ func TestLifecycleRunnerBootstrapAndRemoteControlSettings(t *testing.T) {
 	}
 	if disabled.AppServerVersion == nil || *disabled.AppServerVersion != "9.9.9" {
 		t.Fatalf("disabled app server version = %#v", disabled.AppServerVersion)
+	}
+}
+
+func writeDaemonSettingsForTest(t *testing.T, daemon *Daemon, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(daemon.Paths.SettingsFile), 0o700); err != nil {
+		t.Fatalf("MkdirAll settings dir error = %v", err)
+	}
+	if err := os.WriteFile(daemon.Paths.SettingsFile, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile settings error = %v", err)
+	}
+}
+
+func firstEventIndex(events []string, name string) int {
+	for i, event := range events {
+		if event == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestLifecycleRunnerBootstrapPreservesUpdaterPreferencesLikeRust mirrors Rust
+// #43542: bootstrap loads the stored settings, replaces only the remote-control
+// preference, and never launches a disabled updater even transiently.
+func TestLifecycleRunnerBootstrapPreservesUpdaterPreferencesLikeRust(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	home := privateDaemonTestHome(t)
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	writeDaemonSettingsForTest(t, daemon, `{"remoteControlEnabled":false,"featureOverrides":{"code_mode_host":true},"shutdownGraceSeconds":15,"updater":{"autoUpdateEnabled":false,"updateIntervalMinutes":17},"futureSetting":42}`)
+
+	output, err := NewLifecycleRunner(daemon).Bootstrap(&BootstrapOptions{RemoteControlEnabled: true})
+	if err != nil {
+		t.Fatalf("Bootstrap error = %v", err)
+	}
+	if output.AutoUpdateEnabled {
+		t.Fatal("bootstrap reported automatic updates enabled for a disabled preference")
+	}
+	if stub.updaterStarts != 0 {
+		t.Fatalf("updater launches = %d, want none while automatic updates are disabled", stub.updaterStarts)
+	}
+	settings, err := LoadSettings(daemon.Paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("LoadSettings error = %v", err)
+	}
+	if !settings.RemoteControlEnabled {
+		t.Fatal("bootstrap did not persist the launch remote-control preference")
+	}
+	if settings.AutoUpdateEnabled() {
+		t.Fatal("bootstrap lost the stored autoUpdateEnabled=false")
+	}
+	if got := settings.UpdateInterval(); got != 17*time.Minute {
+		t.Fatalf("stored update interval = %v, want 17m", got)
+	}
+	if got := settings.ShutdownGraceSecondsValue(); got != 15 {
+		t.Fatalf("stored shutdown grace = %d, want 15", got)
+	}
+	if !FeatureOverridesEqual(settings.FeatureOverrides, map[string]bool{"code_mode_host": true}) {
+		t.Fatalf("stored feature overrides = %#v", settings.FeatureOverrides)
+	}
+	data, err := os.ReadFile(daemon.Paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("ReadFile settings error = %v", err)
+	}
+	values := map[string]any{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		t.Fatalf("parse settings error = %v", err)
+	}
+	if values["futureSetting"] != float64(42) {
+		t.Fatalf("unknown setting = %#v, want preserved", values["futureSetting"])
+	}
+}
+
+// TestLifecycleRunnerRestartStopsUpdaterBeforeRestartWhenDisabledLikeRust pins
+// Rust #43542: a disabled preference retires the updater before the app-server
+// restart can replace the selected package.
+func TestLifecycleRunnerRestartStopsUpdaterBeforeRestartWhenDisabledLikeRust(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	home := privateDaemonTestHome(t)
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	writeDaemonSettingsForTest(t, daemon, `{"updater":{"autoUpdateEnabled":false}}`)
+	stub.appRunning = true
+	stub.socketReady = true
+	stub.updaterRunning = true
+
+	output, err := NewLifecycleRunner(daemon).Run(LifecycleRestart)
+	if err != nil {
+		t.Fatalf("Run(restart) error = %v", err)
+	}
+	if output.Status != StatusRestarted || stub.appStops != 1 {
+		t.Fatalf("restart output = %#v, appStops = %d", output, stub.appStops)
+	}
+	if stub.updaterRunning {
+		t.Fatal("restart left the updater running with automatic updates disabled")
+	}
+	stopUpdater := firstEventIndex(stub.events, "stop-updater")
+	stopApp := firstEventIndex(stub.events, "stop-app")
+	if stopUpdater < 0 || stopApp < 0 || stopUpdater > stopApp {
+		t.Fatalf("events = %v, want the updater stopped before the app-server", stub.events)
+	}
+}
+
+// TestLifecycleRunnerStartStopsUpdaterWhenDisabledLikeRust pins that reusing a
+// running server still applies the saved disabled preference (Rust Daemon::start
+// ensures the updater for every backend).
+func TestLifecycleRunnerStartStopsUpdaterWhenDisabledLikeRust(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	home := privateDaemonTestHome(t)
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	writeDaemonSettingsForTest(t, daemon, `{"updater":{"autoUpdateEnabled":false}}`)
+	stub.appRunning = true
+	stub.socketReady = true
+	stub.updaterRunning = true
+
+	output, err := NewLifecycleRunner(daemon).Run(LifecycleStart)
+	if err != nil {
+		t.Fatalf("Run(start) error = %v", err)
+	}
+	if output.Status != StatusAlreadyRunning {
+		t.Fatalf("start output = %#v, want already running", output)
+	}
+	if stub.updaterRunning {
+		t.Fatal("start left the updater running with automatic updates disabled")
+	}
+}
+
+// TestLifecycleRunnerSetRemoteControlStopsUpdaterWhenDisabledLikeRust pins that
+// a remote-control restart applies the saved updater preference (Rust
+// Daemon::set_remote_control_locked).
+func TestLifecycleRunnerSetRemoteControlStopsUpdaterWhenDisabledLikeRust(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	home := privateDaemonTestHome(t)
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	writeDaemonSettingsForTest(t, daemon, `{"remoteControlEnabled":false,"updater":{"autoUpdateEnabled":false}}`)
+	stub.appRunning = true
+	stub.socketReady = true
+	stub.updaterRunning = true
+
+	output, err := NewLifecycleRunner(daemon).SetRemoteControl(RemoteControlEnabled)
+	if err != nil {
+		t.Fatalf("SetRemoteControl error = %v", err)
+	}
+	if output.Status != RemoteStatusEnabled || !output.RemoteControlEnabled {
+		t.Fatalf("remote-control output = %#v", output)
+	}
+	if stub.updaterRunning {
+		t.Fatal("remote-control restart left the updater running with automatic updates disabled")
 	}
 }
 
@@ -396,7 +544,12 @@ type lifecycleManagedDaemonStub struct {
 	socketReady    bool
 	// appStops counts app-server backend stops so a test can tell a restart
 	// (stop + start) from a reused daemon.
-	appStops   int
+	appStops int
+	// updaterStarts counts updater launches; a disabled preference must not
+	// start one even transiently.
+	updaterStarts int
+	// events records backend transitions in order for preference-ordering tests.
+	events     []string
 	nextPID    uint32
 	appVersion string
 }
@@ -430,10 +583,13 @@ func stubLifecycleManagedDaemon(t *testing.T) *lifecycleManagedDaemonStub {
 	startPIDBackend = func(backend *PIDBackend) (*uint32, error) {
 		if backend != nil && backend.CommandKind == PIDCommandUpdateLoop {
 			stub.updaterRunning = true
+			stub.updaterStarts++
+			stub.events = append(stub.events, "start-updater")
 			return nil, nil
 		}
 		stub.appRunning = true
 		stub.socketReady = true
+		stub.events = append(stub.events, "start-app")
 		stub.nextPID++
 		pid := stub.nextPID
 		return &pid, nil
@@ -441,6 +597,7 @@ func stubLifecycleManagedDaemon(t *testing.T) *lifecycleManagedDaemonStub {
 	stopPIDBackend = func(backend *PIDBackend, graceSeconds int) error {
 		if backend != nil && backend.CommandKind == PIDCommandUpdateLoop {
 			stub.updaterRunning = false
+			stub.events = append(stub.events, "stop-updater")
 			return nil
 		}
 		if stub.appRunning {
@@ -448,6 +605,7 @@ func stubLifecycleManagedDaemon(t *testing.T) *lifecycleManagedDaemonStub {
 		}
 		stub.appRunning = false
 		stub.socketReady = false
+		stub.events = append(stub.events, "stop-app")
 		return nil
 	}
 	probeAppServerVersionOnSocket = func(string, time.Duration) (string, error) {

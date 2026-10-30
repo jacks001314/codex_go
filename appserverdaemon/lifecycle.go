@@ -251,9 +251,17 @@ func (r *LifecycleRunner) RestartApplyingFeatures(featureOverrides map[string]bo
 
 func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*BootstrapOutput, error) {
 	daemon := r.daemon()
-	settings := &DaemonSettings{}
+	// Bootstrap keeps stored updater preferences, feature overrides, and the
+	// shutdown grace period; only the launch's remote-control setting changes
+	// (Rust #43542).
+	settings, err := daemon.LoadSettings()
+	if err != nil {
+		return nil, err
+	}
 	if options != nil {
 		settings.RemoteControlEnabled = options.RemoteControlEnabled
+	} else {
+		settings.RemoteControlEnabled = false
 	}
 	socketPath := daemonSocketPath(daemon)
 	if socketPath != "" {
@@ -279,6 +287,11 @@ func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*Bootstrap
 	if err := daemon.SaveSettings(settings); err != nil {
 		return nil, err
 	}
+	// Stop an existing updater before replacing the app-server so it cannot
+	// swap the selected package mid-bootstrap (Rust #43542).
+	if err := stopPIDBackend(r.updateLoopBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
+		return nil, err
+	}
 	if running, err := pidBackendIsStartingOrRunning(r.appServerBackend(settings)); err != nil {
 		return nil, err
 	} else if running {
@@ -290,16 +303,6 @@ func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*Bootstrap
 		}
 	}
 	if _, err := startPIDBackend(r.appServerBackend(settings)); err != nil {
-		return nil, err
-	}
-	if running, err := pidBackendIsStartingOrRunning(r.updateLoopBackend(settings)); err != nil {
-		return nil, err
-	} else if running {
-		if err := stopPIDBackend(r.updateLoopBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := startPIDBackend(r.updateLoopBackend(settings)); err != nil {
 		return nil, err
 	}
 	autoUpdateEnabled, err := ensureManagedUpdater(daemon, settings)
@@ -463,6 +466,11 @@ func (r *LifecycleRunner) setRemoteControlLocked(mode RemoteControlMode) (*Remot
 			return nil, err
 		}
 		appServerVersion = &version
+		// The restarted server keeps the saved updater preference (Rust
+		// Daemon::set_remote_control_locked).
+		if _, err := ensureManagedUpdater(daemon, settings); err != nil {
+			daemon.Diagnostic("warning: failed to ensure managed updater after remote-control restart: %v", err)
+		}
 	}
 	return daemon.RemoteControlOutput(status, backendFromVersion(appServerVersion), enabled, appServerVersion), nil
 }
@@ -604,6 +612,13 @@ func (r *LifecycleRunner) startWithFeatureOverrides(settings *DaemonSettings, ov
 			if err != nil {
 				return nil, err
 			}
+			// A reused managed server still applies the saved updater preference
+			// (Rust Daemon::start calls ensure_managed_updater for every backend).
+			if backend != nil {
+				if _, err := ensureManagedUpdater(daemon, settings); err != nil {
+					daemon.Diagnostic("warning: failed to ensure managed updater after app-server start: %v", err)
+				}
+			}
 			return daemon.LifecycleOutput(StatusAlreadyRunning, backend, nil, &version, r.managedVersion()), nil
 		}
 	}
@@ -615,6 +630,9 @@ func (r *LifecycleRunner) startWithFeatureOverrides(settings *DaemonSettings, ov
 		version, err := r.waitUntilReady()
 		if err != nil {
 			return nil, err
+		}
+		if _, err := ensureManagedUpdater(daemon, settings); err != nil {
+			daemon.Diagnostic("warning: failed to ensure managed updater after app-server start: %v", err)
 		}
 		return daemon.LifecycleOutput(StatusAlreadyRunning, backend, nil, &version, r.managedVersion()), nil
 	}
@@ -663,6 +681,13 @@ func (r *LifecycleRunner) restart(settings *DaemonSettings, backend *BackendKind
 			if running == nil {
 				return nil, errors.New("app server is running but is not managed by codex app-server daemon")
 			}
+		}
+	}
+	// A saved disabled preference retires the updater before this restart can
+	// replace the selected package (Rust #43542).
+	if !settings.AutoUpdateEnabled() {
+		if err := stopPIDBackend(r.updateLoopBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
+			return nil, err
 		}
 	}
 	if err := prepareManagedDaemon(daemon, settings); err != nil {

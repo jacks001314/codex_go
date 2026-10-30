@@ -68,6 +68,60 @@ func TestUpdateOnceRestoreUsesReleaseNameLikeRust(t *testing.T) {
 	}
 }
 
+// TestNextUpdateDelayReadsPersistedSettingsLikeRust mirrors Rust #43542's
+// recurring wait: the configured interval applies to the next wait, a disabled
+// preference stops the loop, and unreadable settings retry after a minute.
+func TestNextUpdateDelayReadsPersistedSettingsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	writeDaemonSettingsForTest(t, daemon, `{"updater":{"updateIntervalMinutes":2}}`)
+	delay, ok := nextUpdateDelay(daemon)
+	if !ok || delay != 2*time.Minute {
+		t.Fatalf("nextUpdateDelay(enabled) = %v/%v, want 2m/true", delay, ok)
+	}
+
+	writeDaemonSettingsForTest(t, daemon, `{"updater":{"autoUpdateEnabled":false,"updateIntervalMinutes":2}}`)
+	if _, ok := nextUpdateDelay(daemon); ok {
+		t.Fatal("nextUpdateDelay kept waiting with automatic updates disabled")
+	}
+
+	if err := os.WriteFile(daemon.Paths.SettingsFile, []byte("{malformed"), 0o600); err != nil {
+		t.Fatalf("WriteFile malformed settings error = %v", err)
+	}
+	delay, ok = nextUpdateDelay(daemon)
+	if !ok || delay != time.Minute {
+		t.Fatalf("nextUpdateDelay(malformed) = %v/%v, want 1m/true", delay, ok)
+	}
+}
+
+// TestScheduledUpdateOnceStopsWhenDisabledLikeRust pins that a scheduled run
+// never reaches the installer once automatic updates are disabled.
+func TestScheduledUpdateOnceStopsWhenDisabledLikeRust(t *testing.T) {
+	stubLifecycleManagedDaemon(t)
+	home := t.TempDir()
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	writeDaemonSettingsForTest(t, daemon, `{"updater":{"autoUpdateEnabled":false}}`)
+	installed := false
+	options := &UpdateLoopOptions{
+		Install: func(context.Context, installerMode, string) error {
+			installed = true
+			return nil
+		},
+		ReadFile:      os.ReadFile,
+		ReexecUpdater: func(string) error { return nil },
+	}
+	control, _, _, err := updateOnce(context.Background(), NewLifecycleRunner(daemon), nil, options, UpdateTrigger{Kind: UpdateTriggerScheduled})
+	if err != nil {
+		t.Fatalf("updateOnce error = %v", err)
+	}
+	if control != UpdateLoopStop {
+		t.Fatalf("control = %s, want stop", control)
+	}
+	if installed {
+		t.Fatal("installer ran while automatic updates were disabled")
+	}
+}
+
 func TestUpdateModesForIdentities(t *testing.T) {
 	same := ExecutableIdentityFromBytes([]byte("same"))
 	runningChanged := ExecutableIdentityFromBytes([]byte("old"))

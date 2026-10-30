@@ -4093,3 +4093,12 @@ Status after this batch: `2344 complete`, `465 not_applicable`, `322 audit_pendi
 - Test: `TestRuntimeAgentControllerResumeRestoresMissingThreadFromRolloutLikeRust`; `go build ./...` and `go test ./appserver -run RuntimeAgentController` pass.
 
 Status after this batch: `2345 complete`, `465 not_applicable`, `322 audit_pending`, `12 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Configurable daemon automatic updates (Round 1127)
+
+- #43542 is now reflected in Go's managed daemon lifecycle. `bootstrap` loads the stored settings and replaces only `remoteControlEnabled`, so `updater` preferences, feature overrides, `shutdownGraceSeconds`, and unknown keys survive; the old updater is stopped before the app-server restart and restarted only through `ensureManagedUpdater`.
+- `restart` stops the updater before replacing the app-server when automatic updates are disabled; `start` and `setRemoteControl` re-apply the saved preference for an already-running server; scheduled `updateOnce` re-reads the preference immediately before installing so a concurrent disable stops the run.
+- On Unix the updater's graceful stop now signals its process group (SIGTERM to `-pid`), matching the updater's `Setsid` launch and terminating installer children; forced termination already used the group.
+- Tests: `TestLifecycleRunnerBootstrapPreservesUpdaterPreferencesLikeRust`, `TestLifecycleRunnerRestartStopsUpdaterBeforeRestartWhenDisabledLikeRust`, `TestLifecycleRunnerStartStopsUpdaterWhenDisabledLikeRust`, `TestLifecycleRunnerSetRemoteControlStopsUpdaterWhenDisabledLikeRust`, `TestNextUpdateDelayReadsPersistedSettingsLikeRust`, `TestScheduledUpdateOnceStopsWhenDisabledLikeRust`, `TestStoppingUpdaterSignalsItsInstallerProcessGroup`; `go build ./...`, `go vet ./appserverdaemon`, `go test ./appserverdaemon ./cli`, and a Linux cross-compile of the package tests pass.
+
+Status after this batch: `2346 complete`, `465 not_applicable`, `322 audit_pending`, `11 regression_pending`, `5 partial`, `6 blocked_precondition`.

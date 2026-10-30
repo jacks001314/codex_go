@@ -130,6 +130,17 @@ func terminatePIDProcess(pid uint32) error {
 	return fmt.Errorf("failed to terminate pid-managed app server %d: %w", pid, err)
 }
 
+// terminatePIDProcessGroup signals the updater's whole process group so an
+// in-flight installer child is stopped with it (Rust #43542). The updater is
+// launched with Setsid, so its process group id is its pid.
+func terminatePIDProcessGroup(pid uint32) error {
+	err := syscall.Kill(-int(pid), syscall.SIGTERM)
+	if err == nil || errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return fmt.Errorf("failed to terminate pid-managed updater group %d: %w", pid, err)
+}
+
 func forceTerminatePIDProcess(pid uint32, processGroup bool) error {
 	target := int(pid)
 	if processGroup {

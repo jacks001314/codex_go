@@ -9034,9 +9034,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1127: Go app-server daemon parity for configurable automatic updates. Bootstrap loads stored settings and replaces only remoteControlEnabled, preserving updater preferences, feature overrides, shutdown grace, and unknown keys; restart retires the updater before replacing the app-server when updates are disabled; start and setRemoteControl re-apply the updater preference for an already-running server; scheduled update_once re-reads the preference before installing; Unix graceful updater shutdown signals its process group so installer children stop too. Tests: TestLifecycleRunnerBootstrapPreservesUpdaterPreferencesLikeRust, TestLifecycleRunnerRestartStopsUpdaterBeforeRestartWhenDisabledLikeRust, TestLifecycleRunnerStartStopsUpdaterWhenDisabledLikeRust, TestLifecycleRunnerSetRemoteControlStopsUpdaterWhenDisabledLikeRust, TestNextUpdateDelayReadsPersistedSettingsLikeRust, TestScheduledUpdateOnceStopsWhenDisabledLikeRust, TestStoppingUpdaterSignalsItsInstallerProcessGroup. Validation: go build ./...; go test ./appserverdaemon ./cli."
    ]
   },
   {
