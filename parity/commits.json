@@ -19823,9 +19823,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1107 (audit): Rust adds AgentControl::ensure_child_loaded and routes ThreadManager V2 child reloads through the parent live control. Go has no AgentControl trait; the equivalent parent-owned V2 resume lives in RuntimeRouter.prepareParentOwnedV2ChildResume, which reloads a spawn-recorded V2 child only while its parent is loaded, keeps the stored child model, and strips public resume overrides. TestParentOwnedV2ChildResumeRequiresLoadedParentLikeRust covers the unloaded-parent rejection, V1 passthrough, and parent-controlled reload. Validation: go test ./appserver -run TestParentOwnedV2ChildResumeRequiresLoadedParentLikeRust -count=1."
    ]
   },
   {
@@ -20742,9 +20742,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1107 (audit): Rust replaces std::time::Instant with tokio::time::Instant in chat-composer paste classification and startup-draft newline tracking so async flush deadlines and input classification share one clock. Go already routes composer paste timing through Model.currentTime, an injectable now function used by noteComposerRunes, extendComposerPasteWindow, shouldPasteBurstEnterInsertNewline, and shouldPasteBurstTabInsertInsteadOfShortcut, and TestComposerPasteBurstKeepsMultilinePaste advances that clock across the burst and the expired window. Single-clock semantics are already present. Validation: go test ./tui/tea -run TestComposerPasteBurstKeepsMultilinePaste -count=1."
    ]
   },
   {
@@ -22014,9 +22014,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1107 (audit): Rust-only reconnect-loop policy change. Rust TUI App::begin_reconnect retries [0,1,2,4] then repeats 8 seconds until a shared 120-second deadline. Go has no persistent app-server reconnect loop: app/remote_tui.go classifies transport failures into AppServerDisconnectMsg, which tui/tea only uses to retire voice media while the TUI continues offline, and app/remote_tui_reconnect_like_rust_test.go documents that #41916/#41918 are not applicable. There is no attempt list or shared deadline to extend. No Go change required. Validation: go test ./app -run TestRemoteClosingThreadErrorDoesNotTriggerReconnectLikeRust -count=1."
    ]
   },
   {
