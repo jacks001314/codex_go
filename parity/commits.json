@@ -8762,9 +8762,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "guardianReviewContextChanged re-checks transcript, omission state and root authorization after the review; a changed allow retries then fails closed as stale_authorization, covered by guardian_retry_like_rust_test.go"
    ]
   },
   {
