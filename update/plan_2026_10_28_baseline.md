@@ -3589,6 +3589,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `appserverdaemon/prepare_install_windows.go` already implemented the fallback and replacement ordering. Round 1066 re-verified creation, native retargeting, and fallback replacement under a root containing spaces and shell metacharacters; the restore-on-failure branch remains untested because `os.Rename` is not injectable.
 - Verified with `go test ./appserverdaemon -run 'DaemonJunction|PermissionDenied' -count=1` and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2220 complete`, `461 not_applicable`,
-`322 audit_pending`, `141 regression_pending`, `5 partial`,
+### Inference tool changes in turn analytics (Round 1067)
+
+- Rust #50964 compares the full model-visible tool list before every sampling request, keeps the previous list across turns and connection resets, counts changes on the active turn profile, and emits `tools_change_count` in turn analytics.
+- Complete: `model/inference_tools.go` already tracked the list per conversation, `turn/turn.go` recorded the count, and both turn loops plus the analytics payloads carried it. Round 1067 re-verified schema/addition/ordering/empty cases, cross-session retention, timing rules, and serialization.
+- Verified with `go test ./model -run InferenceTools -count=1`, `go test ./turn -run 'InferenceTools|ToolsChange' -count=1`, `go test ./telemetry -run TurnEvent -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2221 complete`, `461 not_applicable`,
+`322 audit_pending`, `140 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

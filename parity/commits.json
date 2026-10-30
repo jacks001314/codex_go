@@ -7052,9 +7052,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "model/inference_tools.go implements the Rust #50964 ModelClientSession::inference_tools_changed contract: the first model-visible tool list establishes a baseline, later comparisons use the full serialized tool list (schema, additions, ordering, parameter changes and emptying all count), and the baseline survives turns, new sessions and transport-handler reset; Go keys the retained list per conversation so a shared runner still mirrors Rust's per-client state",
+    "turn/turn.go and turn/inference_tools paths record the change on the active turn profile (`RecordToolsChange` ignores completed/unstarted profiles and saturates), both agent loops consult the tracker before sampling, and turn analytics serialization emits `tools_change_count` plus `toolsChangeCount` in appserver/turn_runtime.go and exec/exec.go",
+    "Regression coverage: model/inference_tools_test.go follows Rust core client_tests across schema/addition/ordering/parameter/empty cases, a new session and a second conversation; turn/inference_tools_test.go pins per-sampling-request counting with a retained baseline and the timing-state active-profile rules; telemetry/turn_event_test.go pins the serialized `tools_change_count` field",
+    "Verified with `go test ./model -run InferenceTools -count=1`, `go test ./turn -run 'InferenceTools|ToolsChange' -count=1`, `go test ./telemetry -run TurnEvent -count=1`, and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {
