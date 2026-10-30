@@ -5631,9 +5631,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by tooling: the change widens the Rust repository's Ruff formatter pass to Python files outside scripts/ and updates its formatter-coverage test. The Go repository has no justfile, pyproject.toml, or Ruff configuration; its tracked Python files are SDK and fixture scripts with no repo-wide formatter, so there is no carrier or observable behavior."
    ]
   },
   {
@@ -5683,9 +5683,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/6; needs review: BoundedStdioTransport, LocalChild, MAX_MCP_STDIO_LINE_BYTES"
+    "N/A by architecture: Rust needs a private posix_spawn path only because Tokio's Command falls back to fork for a relative executable plus working directory on macOS, while Go launches MCP stdio servers with os/exec, which resolves relative programs against cmd.Dir natively. The commit's other half - one local child wrapper shared by legacy and 2026-07-28 framing with a bounded line size - is already the shape of stdioClient (single process, protocolMode switch, per-launch messageLimit). Documented earlier in update/plan_2026_09_05.md."
    ]
   },
   {
@@ -5986,9 +5986,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Bare MCP commands now resolve against the child's configured PATH on POSIX (empty entry = cwd, unset PATH = /usr/bin:/bin) and keep the configured spelling as argv[0] while the resolved path drives the launch (mcp/stdio_client.go resolveBareCommandInChildPath + preserveMCPStdioArgv0); Go already spawns through os/exec, so the macOS-only posix_spawn workaround itself has no carrier. Tests: mcp/stdio_command_child_path_test.go and mcp/stdio_command_posix_test.go; go test ./mcp -count=1 plus GOOS=linux/darwin go vet ./mcp."
    ]
   },
   {

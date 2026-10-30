@@ -756,6 +756,7 @@ func (c *stdioClient) startProcess(protocolMode MCPProtocolMode, launchEnv map[s
 	}
 	command := resolveMCPStdioCommand(c.config.Command, childEnv)
 	cmd := newMCPStdioCommand(command, c.config.Args...)
+	preserveMCPStdioArgv0(cmd, c.config.Command, command)
 	// Rust #43870: an escaped descendant can keep the stderr pipe open after the
 	// server exits. Drain queued diagnostics briefly, then let Wait close the
 	// pipes so descriptors are released.
@@ -966,7 +967,13 @@ func isMCPAuthenticationFailure(err error) bool {
 
 func resolveMCPStdioCommand(command string, env map[string]string) string {
 	command = strings.TrimSpace(command)
-	if runtime.GOOS != "windows" || command == "" || hasPathSeparator(command) || filepath.Ext(command) != "" {
+	if command == "" || hasPathSeparator(command) {
+		return command
+	}
+	if runtime.GOOS != "windows" {
+		return resolveBareCommandInChildPath(command, env)
+	}
+	if filepath.Ext(command) != "" {
 		return command
 	}
 	pathValue := ""
@@ -989,6 +996,59 @@ func resolveMCPStdioCommand(command string, env map[string]string) string {
 		}
 	}
 	return command
+}
+
+// resolveBareCommandInChildPath mirrors Rust #42192's macOS PATH search: a bare
+// command is looked up in the child's configured PATH rather than the parent's,
+// an empty entry means the current directory, and an unset PATH uses Apple's
+// default. A failed search keeps the bare spelling so the regular launcher and
+// its error behavior remain unchanged.
+func resolveBareCommandInChildPath(command string, env map[string]string) string {
+	pathValue := "/usr/bin:/bin"
+	if env != nil {
+		if value := firstNonEmptyMCP(env["PATH"], env["Path"], env["path"]); value != "" {
+			pathValue = value
+		}
+	}
+	for _, dir := range filepath.SplitList(pathValue) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, command)
+		info, err := os.Stat(candidate)
+		if err != nil || !isExecutableMCPCandidate(info) {
+			continue
+		}
+		return candidate
+	}
+	return command
+}
+
+// isExecutableMCPCandidate reports whether a PATH candidate can be executed.
+// Windows has no execute bit, so every regular file is a candidate there.
+func isExecutableMCPCandidate(info os.FileInfo) bool {
+	if info == nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode().Perm()&0o111 != 0
+}
+
+// preserveMCPStdioArgv0 keeps the configured spelling as argv[0] when a bare
+// command was resolved to an executor path (Rust #42192 preserves argv[0] and
+// script spelling). Windows builds the command line for a batch shim itself, so
+// only the POSIX launcher rewrites argv[0].
+func preserveMCPStdioArgv0(cmd *exec.Cmd, configured string, resolved string) {
+	if runtime.GOOS == "windows" || cmd == nil || len(cmd.Args) == 0 {
+		return
+	}
+	configured = strings.TrimSpace(configured)
+	if configured == "" || configured == resolved {
+		return
+	}
+	cmd.Args[0] = configured
 }
 
 func hasPathSeparator(value string) bool {
