@@ -3700,6 +3700,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Re-verified the moved implementations: `go test ./mcp -run 'EnterpriseOAuth|Callback'`, `go test ./sandbox/mxc`, `go test ./appserverdaemon -run 'DaemonJunction|PermissionDenied'`, `go test ./appserver -run Feedback`, `go test ./model -run InferenceTools`, `go test ./turn -run 'InferenceTools|ToolsChange'`, and `go test ./telemetry -run TurnEvent`.
 - Status distribution is unchanged by the repair: `2234 complete`, `462 not_applicable`, `322 audit_pending`, `126 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Ledger evidence repair (Round 1083)
+
+- Round 1053 (`094460ed`) carried the #50458 persisted-result cap evidence but wrote it onto #41953 (`633ab199cf`, "Enforce marketplace source policy for curated plugins") because the replacement matched the wrong pending block.
+- The evidence block (which also cites the #50470 JSON-overhead loop) now sits on `820f85cf59` (#50458) and is `complete`; `633ab199cf` (#41953) is restored to `regression_pending`. Go still has no marketplace Git-source allowlist for curated catalogs, so #41953 stays open.
+- #50470 (`be48ae396e`) keeps its own Round 736 audit evidence and remains `complete`.
+- Re-verified with `go test ./state -run 'ThreadHistory|Paginated' -count=1`, `go test ./rollout -run 'Persisted|MCPResult|Truncate' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+- Net status change is zero: `2234 complete`, `462 not_applicable`, `322 audit_pending`, `126 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

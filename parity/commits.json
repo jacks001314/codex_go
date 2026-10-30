@@ -5284,10 +5284,8 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
-   "evidence": [
-    "Round 1053: `rollout/persist_policy.go` applies the 64 KiB persisted-result cap to `McpToolCall` items in paginated history via `truncateMCPResultValue`, which matches current Rust `truncate_mcp_tool_result` including the #50470 JSON-overhead loop (preview budget shrinks until the serialized replacement fits, is error is preserved, and structured content/meta are dropped); small results are returned unchanged. `state/thread_history_writer_test.go` now projects an oversized MCP item through the SQLite thread-history writer and asserts bounded preview (head/tail/chars-truncated marker), preserved arguments, preserved failed status, and cleared structuredContent/_meta. Verify with `go test ./state -run 'ThreadHistory|Paginated' -count=1` and `go test ./rollout -run 'Persisted|MCPResult|Truncate' -count=1`. The shared helper's other Rust caller (event-copy truncation in mcp_tool_call.rs) has no Go carrier: Go's legacy rollout mirror does not persist an `mcp_tool_call` EventMsg carrying a CallToolResult, so paginated persistence is the only stored-result path."
-   ]
+   "status": "regression_pending",
+   "evidence": ["Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"]
   },
   {
    "sha": "c7fced56eb3f5b0b96f4957caefc06b07ef65940",
@@ -25972,9 +25970,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1053: `rollout/persist_policy.go` applies the 64 KiB persisted-result cap to `McpToolCall` items in paginated history via `truncateMCPResultValue`, which matches current Rust `truncate_mcp_tool_result` including the #50470 JSON-overhead loop (preview budget shrinks until the serialized replacement fits, is error is preserved, and structured content/meta are dropped); small results are returned unchanged. `state/thread_history_writer_test.go` now projects an oversized MCP item through the SQLite thread-history writer and asserts bounded preview (head/tail/chars-truncated marker), preserved arguments, preserved failed status, and cleared structuredContent/_meta. Verify with `go test ./state -run 'ThreadHistory|Paginated' -count=1` and `go test ./rollout -run 'Persisted|MCPResult|Truncate' -count=1`. The shared helper's other Rust caller (event-copy truncation in mcp_tool_call.rs) has no Go carrier: Go's legacy rollout mirror does not persist an `mcp_tool_call` EventMsg carrying a CallToolResult, so paginated persistence is the only stored-result path."
    ]
   },
   {
