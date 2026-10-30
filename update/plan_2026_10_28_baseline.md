@@ -3079,6 +3079,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Tests: `mcp/mcp_event_stream_retention_like_rust_test.go` drives a real SSE transport through active and follow-up notifications then asserts `Close` releases it, `mcp/mcp_event_stream_meta_like_rust_test.go` covers `_meta` forwarding and omission, and `appserver/mcp_event_stream_meta_like_rust_test.go` covers the end-to-end start request.
 - Residual: Rust's rmcp client auto-injects `progressToken` into `_meta`; Go handles progress through separate call options, so that token is not part of the emitted object.
 
-Status after reconciliation: `2152 complete`, `451 not_applicable`,
-`346 audit_pending`, `195 regression_pending`, `5 partial`,
+### Detached PID startup module split (Round 994)
+
+- Rust #42374 only moves Unix detached-process launch and PID publication from `pid.rs` into `pid_start.rs`; PID reservation and lifecycle behavior are unchanged (#42374, complete).
+- Go already splits the equivalent code by platform and concern (`pid_process_windows.go`, `managed_command_darwin.go`, `pid_identity_linux.go`), so there is no behavior to port; existing `appserverdaemon` tests cover detached launch probing/reaping, the restricted error contract, PID start timeouts, shutdown watching, and lifecycle start/restart/stop.
+- Verified with `go test ./appserverdaemon -count=1`.
+
+Status after reconciliation: `2153 complete`, `451 not_applicable`,
+`346 audit_pending`, `194 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

@@ -6534,9 +6534,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 994 (回归证书): #42374 只是把 Unix detached 进程启动与 PID 发布从 app-server-daemon 的 pid.rs 拆到 pid_start.rs，代码逐行搬移、PID 预留与生命周期行为不变。Go 的等价能力在 appserverdaemon 中已按平台拆分：pid_process_windows.go 的 startDetachedPIDProcess/startDetachedPIDProcessLegacy、managed_command_darwin.go/other.go 的 managedPIDCommand、pid_identity_linux.go 的进程身份校验，且文件划分与 Rust 模块无关。既有测试覆盖该路径：detached_launch_windows_test.go（探针并回收 suspended 子进程、受限错误契约、托管二进制探针）、managed_command_test.go（PID 启动超时与 Darwin 之外直接启动）、daemon_shutdown_watch_windows_test.go（匹配 PID 的关闭监视与优雅停止分支）、lifecycle_test.go（启动/重启/停止）。本次无 Go 代码改动，仅确认拆分不涉及行为差异。验证：go test ./appserverdaemon -count=1。"
    ]
   },
   {
