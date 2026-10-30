@@ -3140,6 +3140,18 @@ enabled = false
 approvals_reviewer = "user"
 destructive_enabled = false
 default_tools_approval_mode = "prompt"
+
+[apps.app1.links.link_work]
+approvals_reviewer = "auto_review"
+default_tools_approval_mode = "approve"
+
+[apps.app1.links.link_personal]
+default_tools_approval_mode = "writes"
+
+[apps.app_without_links]
+enabled = true
+
+[apps.app_with_empty_links.links]
 `
 	if err := os.WriteFile(config.ConfigPath(home), []byte(appsConfig), 0o600); err != nil {
 		t.Fatalf("WriteFile apps config error = %v", err)
@@ -3196,6 +3208,25 @@ default_tools_approval_mode = "prompt"
 		app1["default_tools_enabled"] != nil ||
 		app1["tools"] != nil {
 		t.Fatalf("apps.app1 = %#v, want Rust app config", app1)
+	}
+	links, ok := app1["links"].(map[string]any)
+	if !ok {
+		t.Fatalf("apps.app1.links = %#v, want per-account settings", app1["links"])
+	}
+	work := links["link_work"].(map[string]any)
+	if work["approvals_reviewer"] != "auto_review" || work["default_tools_approval_mode"] != "approve" {
+		t.Fatalf("apps.app1.links.link_work = %#v", work)
+	}
+	personal := links["link_personal"].(map[string]any)
+	if personal["approvals_reviewer"] != nil || personal["default_tools_approval_mode"] != "writes" {
+		t.Fatalf("apps.app1.links.link_personal = %#v", personal)
+	}
+	if linksValue, present := apps["app_without_links"].(map[string]any)["links"]; !present || linksValue != nil {
+		t.Fatalf("apps.app_without_links.links = %#v present=%v, want null", linksValue, present)
+	}
+	emptyLinks, ok := apps["app_with_empty_links"].(map[string]any)["links"].(map[string]any)
+	if !ok || len(emptyLinks) != 0 {
+		t.Fatalf("apps.app_with_empty_links.links = %#v, want empty object", apps["app_with_empty_links"])
 	}
 
 	desktopHome := t.TempDir()
@@ -23312,8 +23343,8 @@ func TestRuntimeRouterThreadForkActivePaginatedTurnStoresInterruptedDelta(t *tes
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
 	t.Cleanup(func() { _ = router.Close() })
 	if err := router.registerActiveRuntimeTurn("thread-active-paginated-fork", "turn-active", func() {}, startedAt.UnixMilli(), &turn.TurnStartParams{
-		ThreadID: "thread-active-paginated-fork",
-		Prompt:   "active prompt",
+		ThreadID:   "thread-active-paginated-fork",
+		Prompt:     "active prompt",
 		RootTurnID: "causal-root",
 	}); err != nil {
 		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)

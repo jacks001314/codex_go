@@ -393,6 +393,25 @@ func normalizeAppsConfig(values map[string]any) {
 		} else {
 			setDefaultJSONField(app, "tools", nil)
 		}
+		// Rust #42047: the protocol AppConfig serializes links as null when
+		// absent, and an explicitly empty `[apps.<id>.links]` table as {}.
+		// Each AppLinkConfig also serializes both optional fields as null.
+		if links, ok := app["links"].(map[string]any); ok {
+			links = cloneMap(links)
+			for linkID, linkValue := range links {
+				link, ok := linkValue.(map[string]any)
+				if !ok {
+					continue
+				}
+				link = cloneMap(link)
+				setDefaultJSONField(link, "approvals_reviewer", nil)
+				setDefaultJSONField(link, "default_tools_approval_mode", nil)
+				links[linkID] = link
+			}
+			app["links"] = links
+		} else {
+			setDefaultJSONField(app, "links", nil)
+		}
 		normalized[key] = app
 	}
 	values["apps"] = normalized

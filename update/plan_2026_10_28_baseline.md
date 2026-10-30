@@ -4001,3 +4001,12 @@ Status after this batch: `2334 complete`, `464 not_applicable`, `322 audit_pendi
 - Tests: `TestDynamicToolResponsePreservesWaitTargetsLikeRust`, `TestDynamicToolResponsePreservesListEntriesLikeRust`, `TestDynamicToolResponsePreservesReadAnswerLikeRust`, `TestDynamicItemSummaryKeepsFullAssistantAnswerLikeRust`; `go build ./...` and `go test ./app -run 'Dynamic|TaskTool'` pass.
 
 Status after this batch: `2335 complete`, `464 not_applicable`, `322 audit_pending`, `23 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Per-account app approval settings (Round 1116)
+
+- #42047 `apps.<app_id>.links.<link_id>` carries per-connected-account `approvals_reviewer` and `default_tools_approval_mode`. Go already parsed both fields into `AppLinkConfig`/`AppLinksConfig` and reused the link-level reviewer for MCP elicitation.
+- `config/read` now matches the protocol shape exactly: an app without a links section emits `"links": null`, an explicit empty `[apps.<id>.links]` emits `{}`, and each link object always contains both optional fields (`null` when unset). The protocol type deliberately omits the config-layer `skip_serializing_if`.
+- Test: `TestRuntimeRouterConfigReadAppsAndDesktopSettingsMatchRust` (populated, empty and absent links); `go build ./...`, `go test ./config ./apps` and the targeted appserver test pass. Full `go test ./appserver` still fails only on the known protocol-surface and `https_mock` cases.
+- Ledger correction: Round 1115 accidentally marked this entry complete with #47100's evidence; this round replaces it with the #42047 evidence, so the status counts below are unchanged.
+
+Status after this batch: `2335 complete`, `464 not_applicable`, `322 audit_pending`, `23 regression_pending`, `5 partial`, `6 blocked_precondition`.
