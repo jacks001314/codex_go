@@ -8786,9 +8786,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "ComputerUseReviewRequired now drives review-plan and compaction/web-search metadata; turn_runtime.go turn metadata still reads the legacy bit pending parallel-agent work"
    ]
   },
   {

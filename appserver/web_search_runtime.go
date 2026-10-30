@@ -83,6 +83,7 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
+	nodeReplAutoReviewRequired := modelInfo != nil && modelInfo.ComputerUseReviewRequired()
 	metadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		SessionID:                  threadID,
 		ThreadID:                   threadID,
@@ -90,7 +91,7 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 		RequestKind:                codexapi.ClientRequestTurn,
 		Model:                      modelProviderConfig.Model,
 		ReasoningEffort:            appReasoningEffortForTurn(cfg, params),
-		NodeReplAutoReviewRequired: &modelInfo.NodeReplAutoReviewRequired,
+		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 		NodeReplDisabled:           &modelInfo.NodeReplDisabled,
 		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(threadID),
 		Extra:                      turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), responsesMetadataFromTurnStart(params)),

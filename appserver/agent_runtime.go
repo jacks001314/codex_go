@@ -798,7 +798,7 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 		ReviewerEffort:                  selection.ReasoningEffort,
 		BaseInstructions:                guardianReviewBaseInstructions(cfg, autoReview),
 		ParentPermissionProfile:         r.guardianParentPermissionProfileForTurn(active, cfg),
-		PreserveClientDeveloperMessages: parentInfo != nil && parentInfo.NodeReplAutoReviewRequired,
+		PreserveClientDeveloperMessages: nodeReplAutoReviewRequiredForModel(parentInfo),
 		Ephemeral:                       active.RunConfig.Ephemeral,
 		ProviderID:                      active.RunConfig.ProviderID,
 		SessionID:                       active.RunConfig.SessionID,
@@ -1031,7 +1031,7 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 	if info == nil {
 		info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
 	}
-	return info != nil && info.NodeReplAutoReviewRequired
+	return nodeReplAutoReviewRequiredForModel(info)
 }
 
 // guardianAllowsInitialCUACallForTurn resolves the parent model's Guardian

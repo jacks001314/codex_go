@@ -115,7 +115,7 @@ func (r *RuntimeRouter) compactResponsesClientMetadataForWindow(record *session.
 		autoReviewEnabled = autoReviewEnabledForTurn(cfg, params)
 		if turnModel != "" {
 			if info := r.modelInfoForRuntimeWithConfig(turnModel, cfg); info != nil {
-				nodeReplAutoReviewRequired = info.NodeReplAutoReviewRequired
+				nodeReplAutoReviewRequired = info.ComputerUseReviewRequired()
 				nodeReplDisabled = info.NodeReplDisabled
 			}
 		}
