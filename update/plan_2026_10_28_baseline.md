@@ -4151,3 +4151,11 @@ Status after this batch: `2350 complete`, `465 not_applicable`, `322 audit_pendi
 - Verification: `go test ./voicehost -count=1` and `go test -race ./voicehost -run 'TestPipelinePlaybackSurvivesPauseLikeRust|TestMediaSessionForwardsAdmittedBurstLikeRust' -count=1` pass. No production source change was needed.
 
 Status after this batch: `2351 complete`, `465 not_applicable`, `322 audit_pending`, `5 regression_pending`, `5 partial`, `7 blocked_precondition`.
+
+### Agent delivery uses captured caller identity (Round 1134)
+
+- #46994 replaces Rust's `deliver_message` with a captured `SendRequest`, resolves references from the caller's registered identity, and returns recipient metadata plus a submission ID. Go's runtime controller already canonicalizes references from `c.scopePath`, resolves thread IDs through the root-tree registry (which loads persisted unloaded agents), and returns `ResolvedThreadID`/`ResolvedPath` for the `interacted` activity event.
+- Queue-only delivery stays in the runtime mailbox and does not wake a child; the idle-unload and mailbox tests confirm mail survives eviction. Follow-up delivery that resolves to `/root` is rejected before queueing or starting a turn.
+- Added `TestRuntimeAgentMessageUsesCapturedCallerIdentityLikeRust` (caller-relative reference, evicted recipient, receipt metadata, non-waking delivery, decoy subtree) and `TestRuntimeAgentFollowupToRootIsRejectedLikeRust`. The targeted appserver wake/mailbox/idle tests and `agent` MultiAgent/V2/Registry tests pass. No production source change was needed.
+
+Status after this batch: `2352 complete`, `465 not_applicable`, `322 audit_pending`, `4 regression_pending`, `5 partial`, `7 blocked_precondition`.

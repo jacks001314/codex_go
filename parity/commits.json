@@ -17629,9 +17629,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1134: behavior certified. Go runtime agent controllers resolve reference targets from the caller registered AgentPath, including persisted agents after unload, and publish the recipient thread/path through SendMessageArgs for the interacted activity event. Queue-only delivery remains in the mailbox and does not wake a child; a follow-up task whose resolved path is /root is rejected before queueing or starting a turn. Added TestRuntimeAgentMessageUsesCapturedCallerIdentityLikeRust and TestRuntimeAgentFollowupToRootIsRejectedLikeRust; targeted appserver wake/mailbox/idle tests and agent MultiAgent/V2/Registry tests pass. Existing idle-unload and mailbox tests cover messages surviving eviction. No production source change needed."
    ]
   },
   {
