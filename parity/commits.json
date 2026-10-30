@@ -7138,9 +7138,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1051: Go already carries gpt-6-astra with the Rust models.json fields (priority 2, list visibility, code_mode_only, multi-agent v2, 272000/872000 context, Responses Lite) in model/catalog.go fallbackBundledModelsResponse, and BundledModelsResponse prefers the vendored codex-rs/models-manager/models.json when present. model/catalog_test.go:TestFallbackBundledCatalogCarriesGPT6FamilyLikeRust and TestFallbackBundledCatalogUsesShellCommandLikeRust pin the entry. No Go change required; verified with `go test ./model -run TestFallbackBundled -count=1`."
    ]
   },
   {
