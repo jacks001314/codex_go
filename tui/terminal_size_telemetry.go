@@ -113,6 +113,8 @@ func TerminalTelemetryName(info *shell.TerminalInfo) string {
 		return "apple_terminal"
 	case shell.TerminalGhostty:
 		return "ghostty"
+	case shell.TerminalRex:
+		return "rex"
 	case shell.TerminalIterm2:
 		return "iterm2"
 	case shell.TerminalWarp:

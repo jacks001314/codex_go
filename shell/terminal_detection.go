@@ -16,6 +16,7 @@ type TerminalName string
 const (
 	TerminalAppleTerminal   TerminalName = "appleTerminal"
 	TerminalGhostty         TerminalName = "ghostty"
+	TerminalRex             TerminalName = "rex"
 	TerminalIterm2          TerminalName = "iterm2"
 	TerminalWarp            TerminalName = "warpTerminal"
 	TerminalVSCode          TerminalName = "vscode"
@@ -237,6 +238,8 @@ func fromTerm(term string, multiplexer *Multiplexer) *TerminalInfo {
 	switch term {
 	case "dumb":
 		name = TerminalDumb
+	case "xterm-rex":
+		name = TerminalRex
 	case "wezterm", "wezterm-mux":
 		name = TerminalWezTerm
 	}
@@ -264,6 +267,8 @@ func terminalNameFromTermProgram(value string) TerminalName {
 		return TerminalAppleTerminal
 	case "ghostty":
 		return TerminalGhostty
+	case "rex":
+		return TerminalRex
 	case "iterm", "iterm2", "itermapp":
 		return TerminalIterm2
 	case "warp", "warpterminal":
@@ -298,6 +303,8 @@ func terminalDisplayToken(name TerminalName, version *string) string {
 		base = "Apple_Terminal"
 	case TerminalGhostty:
 		base = "Ghostty"
+	case TerminalRex:
+		base = "rex"
 	case TerminalIterm2:
 		base = "iTerm.app"
 	case TerminalWarp:

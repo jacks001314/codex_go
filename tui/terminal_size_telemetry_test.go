@@ -136,6 +136,10 @@ func TestTerminalTelemetryDetectionsLikeRust(t *testing.T) {
 	if got := TerminalTelemetryName(&shell.TerminalInfo{Name: shell.TerminalUnknown}); got != "unknown" {
 		t.Fatalf("unknown terminal = %q", got)
 	}
+	// Rust #58270: Rex records the fixed "rex" category.
+	if got := TerminalTelemetryName(&shell.TerminalInfo{Name: shell.TerminalRex}); got != "rex" {
+		t.Fatalf("rex terminal = %q", got)
+	}
 	if got := TerminalMultiplexerTag(&shell.TerminalInfo{}); got != "none" {
 		t.Fatalf("no multiplexer = %q", got)
 	}

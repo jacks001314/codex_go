@@ -76,6 +76,9 @@ func TestWebLinkTerminalDetectionMatchesRust(t *testing.T) {
 	if !webLinkLabelsHiddenForTerminal(&shell.TerminalInfo{Name: shell.TerminalWindowsTerminal}, "") {
 		t.Fatal("Windows Terminal should hide destinations")
 	}
+	if !webLinkLabelsHiddenForTerminal(&shell.TerminalInfo{Name: shell.TerminalRex}, "xterm-rex") {
+		t.Fatal("Rex should hide destinations")
+	}
 	if webLinkLabelsHiddenForTerminal(&shell.TerminalInfo{
 		Name: shell.TerminalIterm2,
 		Multiplexer: &shell.Multiplexer{

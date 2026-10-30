@@ -95,8 +95,8 @@ func DetectImageSupport(env map[string]string) PetImageSupport {
 		}
 		return PetImageSupport{Reason: PetImageUnsupportedIterm2Old}
 	}
-	if strings.Contains(term, "kitty") || strings.Contains(term, "ghostty") || strings.Contains(term, "wezterm") ||
-		strings.Contains(termProgram, "kitty") || strings.Contains(termProgram, "ghostty") || strings.Contains(termProgram, "wezterm") {
+	if strings.Contains(term, "kitty") || strings.Contains(term, "ghostty") || strings.Contains(term, "wezterm") || strings.Contains(term, "rex") ||
+		strings.Contains(termProgram, "kitty") || strings.Contains(termProgram, "ghostty") || strings.Contains(termProgram, "wezterm") || termProgram == "rex" {
 		return PetImageSupport{Protocol: ImageProtocolKitty}
 	}
 	if strings.Contains(term, "sixel") || strings.Contains(term, "mlterm") || strings.Contains(term, "foot") ||

@@ -19,6 +19,7 @@ const (
 	TerminalAlacritty       TerminalName = "alacritty"
 	TerminalAppleTerminal   TerminalName = "apple-terminal"
 	TerminalGhostty         TerminalName = "ghostty"
+	TerminalRex             TerminalName = "rex"
 	TerminalITerm2          TerminalName = "iterm2"
 	TerminalWarp            TerminalName = "warp"
 	TerminalKitty           TerminalName = "kitty"

@@ -54,6 +54,9 @@ func TestDetectNamedTerminals(t *testing.T) {
 		{name: "term session id falls back to term", env: map[string]string{"TERM_SESSION_ID": "A1B2C3", "TERM": "xterm-256color"}, wantName: TerminalUnknown, wantToken: "xterm-256color"},
 		{name: "ghostty", env: map[string]string{"TERM_PROGRAM": "Ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
 		{name: "ghostty resources", env: map[string]string{"GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
+		// Rust #58270: Rex identifies itself through TERM_PROGRAM or TERM.
+		{name: "rex term program", env: map[string]string{"TERM_PROGRAM": "rex"}, wantName: TerminalRex, wantToken: "rex"},
+		{name: "rex term", env: map[string]string{"TERM": "xterm-rex"}, wantName: TerminalRex, wantToken: "xterm-rex"},
 		{name: "vscode", env: map[string]string{"TERM_PROGRAM": "vscode", "TERM_PROGRAM_VERSION": "1.86.0"}, wantName: TerminalVSCode, wantToken: "vscode/1.86.0"},
 		{name: "warp", env: map[string]string{"TERM_PROGRAM": "WarpTerminal", "TERM_PROGRAM_VERSION": "v0.2025.12.10.08.12.stable_03"}, wantName: TerminalWarp, wantToken: "WarpTerminal/v0.2025.12.10.08.12.stable_03"},
 		{name: "wezterm version", env: map[string]string{"WEZTERM_VERSION": "2024.2"}, wantName: TerminalWezTerm, wantToken: "WezTerm/2024.2"},

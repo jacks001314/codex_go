@@ -46,6 +46,7 @@ func webLinkLabelsHiddenForTerminal(info *shell.TerminalInfo, term string) bool 
 	case shell.TerminalGhostty,
 		shell.TerminalIterm2,
 		shell.TerminalWezTerm,
+		shell.TerminalRex,
 		shell.TerminalKitty,
 		shell.TerminalVSCode,
 		shell.TerminalAlacritty,

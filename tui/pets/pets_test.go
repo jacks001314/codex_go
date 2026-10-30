@@ -99,6 +99,13 @@ func TestImageSupportDetectionMatchesRustBranches(t *testing.T) {
 	if got := DetectImageSupport(map[string]string{"KITTY_WINDOW_ID": "1"}); got.Protocol != ImageProtocolKitty {
 		t.Fatalf("kitty support = %#v", got)
 	}
+	// Rust #58270: Rex reports Kitty graphics support.
+	if got := DetectImageSupport(map[string]string{"TERM_PROGRAM": "rex"}); got.Protocol != ImageProtocolKitty {
+		t.Fatalf("rex term program support = %#v", got)
+	}
+	if got := DetectImageSupport(map[string]string{"TERM": "xterm-rex"}); got.Protocol != ImageProtocolKitty {
+		t.Fatalf("rex term support = %#v", got)
+	}
 	if got := DetectImageSupport(map[string]string{"TERM_PROGRAM": "iTerm.app", "TERM_PROGRAM_VERSION": "3.6.0"}); got.Protocol != ImageProtocolKittyLocalFile {
 		t.Fatalf("iterm support = %#v", got)
 	}
