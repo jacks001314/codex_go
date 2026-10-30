@@ -3895,3 +3895,10 @@ Status after this batch: `2312 complete`, `462 not_applicable`, `322 audit_pendi
 - Added `TestMathRenderBigDelimitersAndZeroLikeRust`; existing detection and display-limit tests already pin the zero admission and stacked wedge rows.
 
 Status after this batch: `2313 complete`, `462 not_applicable`, `322 audit_pending`, `47 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### System reduced-motion batch (Round 1103)
+
+- #44666 the TUI now detects the host reduced-motion preference on all three Rust hosts without cgo: Windows `SPI_GETCLIENTAREAANIMATION`, macOS `defaults read com.apple.universalaccess reduceMotion`, and Linux `gdbus` reading the XDG appearance portal with a 250ms bound.
+- Detection runs once per process and is ANDed with configured `tui.animations`; unavailable or unknown values preserve the configured behavior, and saved configuration is never modified.
+
+Status after this batch: `2314 complete`, `462 not_applicable`, `322 audit_pending`, `46 regression_pending`, `5 partial`, `6 blocked_precondition`.

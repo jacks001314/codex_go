@@ -11783,9 +11783,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "The TUI reads the host motion preference once per process with a 250ms bound and combines it with the configured `tui.animations` (`tui.EffectiveAnimations`), so an explicit reduced-motion request suppresses every animation-governed effect without changing saved configuration; an unavailable preference preserves configured behavior.",
+    "Platform probes cover all three Rust hosts without cgo: Windows `SPI_GETCLIENTAREAANIMATION`, macOS `defaults read com.apple.universalaccess reduceMotion`, and Linux `gdbus` `org.freedesktop.portal.Settings.ReadOne org.freedesktop.appearance reduced-motion`; unsupported platforms keep the configured value.",
+    "Wiring: `app.interactiveAnimationsEnabled` feeds the effective value into the tea model (`Options.AnimationsEnabled`), which already drives spinners, shimmer, split-flap boards and pets. Tests: `TestEffectiveAnimationsHonorsSystemReducedMotion`, `TestSystemMotionModeIsReadOnce`, the new platform-output parsing test, `TestInteractiveAnimationsEnabledHonorsConfigAndSystemMotion`, plus Linux/Darwin cross-builds."
    ]
   },
   {

@@ -1,6 +1,9 @@
 package tui
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // Rust parity: codex-rs/tui/src/system_motion.rs (#44666).
 //
@@ -46,4 +49,45 @@ func EffectiveAnimations(configured bool) bool {
 func resetSystemMotionForTest() {
 	systemMotionOnce = sync.Once{}
 	systemMotionMode = MotionAnimated
+}
+
+// parseMacOSReduceMotion maps `defaults read com.apple.universalaccess
+// reduceMotion` to a motion mode. Any other value means no preference.
+func parseMacOSReduceMotion(output string) (MotionMode, bool) {
+	switch strings.TrimSpace(output) {
+	case "1":
+		return MotionReduced, true
+	case "0":
+		return MotionAnimated, true
+	default:
+		return MotionAnimated, false
+	}
+}
+
+// parsePortalReducedMotion maps the XDG desktop portal's `ReadOne` reply for
+// `org.freedesktop.appearance.reduced-motion` (for example `(<<uint32 1>>,)`)
+// to a motion mode. The portal defines values other than 1 as no preference.
+func parsePortalReducedMotion(output string) (MotionMode, bool) {
+	index := strings.Index(output, "uint32")
+	if index < 0 {
+		return MotionAnimated, false
+	}
+	digits := strings.Builder{}
+	for _, r := range output[index+len("uint32"):] {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+			continue
+		}
+		if digits.Len() > 0 {
+			break
+		}
+	}
+	switch digits.String() {
+	case "1":
+		return MotionReduced, true
+	case "0":
+		return MotionAnimated, true
+	default:
+		return MotionAnimated, false
+	}
 }

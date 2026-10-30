@@ -55,3 +55,36 @@ func TestSystemMotionModeIsReadOnce(t *testing.T) {
 		t.Fatalf("detection calls = %d, want 1", calls)
 	}
 }
+
+// Rust #44666 reads NSWorkspace on macOS and the XDG portal on Linux. The Go
+// probes parse those exact outputs; unknown values preserve the configured
+// animations.
+func TestSystemMotionPlatformProbeParsingLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		output string
+		want   MotionMode
+		ok     bool
+	}{
+		{"macOS reduce", "1\n", MotionReduced, true},
+		{"macOS animated", "0\n", MotionAnimated, true},
+		{"macOS missing", "", MotionAnimated, false},
+		{"portal reduce", "(<<uint32 1>>,)\n", MotionReduced, true},
+		{"portal animated", "(<<uint32 0>>,)\n", MotionAnimated, true},
+		{"portal unknown", "(<<uint32 2>>,)\n", MotionAnimated, false},
+		{"portal unparsable", "(error)", MotionAnimated, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var got MotionMode
+			var ok bool
+			if testCase.name[:6] == "portal" {
+				got, ok = parsePortalReducedMotion(testCase.output)
+			} else {
+				got, ok = parseMacOSReduceMotion(testCase.output)
+			}
+			if got != testCase.want || ok != testCase.ok {
+				t.Fatalf("parse(%q) = (%v, %v), want (%v, %v)", testCase.output, got, ok, testCase.want, testCase.ok)
+			}
+		})
+	}
+}

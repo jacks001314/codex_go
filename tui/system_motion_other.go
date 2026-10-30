@@ -1,11 +1,9 @@
-//go:build !windows
+//go:build !windows && !darwin && !linux
 
 package tui
 
-// platformSystemMotion reports that the host preference is unavailable. Rust
-// reads NSWorkspace on macOS and the XDG desktop portal with a 250ms bound on
-// Linux; the Go TUI has no cgo/D-Bus dependency, so those hosts preserve the
-// configured `tui.animations` behavior instead.
+// platformSystemMotion reports that the host preference is unavailable on
+// platforms without a supported system motion source.
 func platformSystemMotion() (MotionMode, bool) {
 	return MotionAnimated, false
 }
