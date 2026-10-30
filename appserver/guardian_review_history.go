@@ -260,6 +260,9 @@ func (r *RuntimeRouter) recordGuardianReviewHistoryAppend(threadID string, items
 	if r == nil || strings.TrimSpace(threadID) == "" || len(items) == 0 {
 		return
 	}
+	// Genuine user input advances the Guardian authorization revision even
+	// before a review history has been captured (Rust #41660).
+	r.recordGuardianUserMessageRevision(threadID, items)
 	r.guardianReviewHistoryMu.Lock()
 	defer r.guardianReviewHistoryMu.Unlock()
 	if state := r.guardianReviewHistory[threadID]; state != nil {
@@ -271,6 +274,9 @@ func (r *RuntimeRouter) truncateGuardianReviewHistoryBefore(threadID, turnID str
 	if r == nil || strings.TrimSpace(threadID) == "" {
 		return
 	}
+	// Rollback is a history reset, so prior authorization no longer applies
+	// (Rust #41660 `drop_last_n_user_turns` -> `replace_annotated`).
+	r.bumpGuardianUserMessageRevision(threadID)
 	r.guardianReviewHistoryMu.Lock()
 	defer r.guardianReviewHistoryMu.Unlock()
 	if state := r.guardianReviewHistory[threadID]; state != nil {
@@ -285,6 +291,7 @@ func (r *RuntimeRouter) forgetGuardianReviewHistory(threadID string) {
 	r.guardianReviewHistoryMu.Lock()
 	delete(r.guardianReviewHistory, threadID)
 	r.guardianReviewHistoryMu.Unlock()
+	r.forgetGuardianUserMessageRevision(threadID)
 }
 
 // forkGuardianReviewHistory preserves user-visible fork evidence. Subagent

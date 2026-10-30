@@ -30,6 +30,7 @@ func (r *RuntimeRouter) guardianServingAuthorization(threadID, turnID string) st
 		authorization.RetainedContextComplete = false
 	}
 	authorization.PolicyFingerprint = r.guardianServingPolicyFingerprint(threadID, turnID)
+	authorization.UserMessageRevision = r.guardianUserMessageRevision(threadID)
 	return authorization
 }
 

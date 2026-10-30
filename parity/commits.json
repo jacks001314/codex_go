@@ -4612,9 +4612,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: HistoryReplacement, replace_compacted"
+    "context/history.go: userMessageRevision + ReplaceCompacted (HistoryReplacement::Compaction) and Replace (HistoryReplacement::Reset); record/rollback advance the revision",
+    "context/user_authorization.go: IsUserAuthorizationMessage from host content_item_kinds, conservative for unknown/incomplete/media-preparation metadata",
+    "appserver/guardian_user_message_revision.go: thread-owned revision advanced on genuine user appends, resets, and rollbacks, preserved across compaction",
+    "state/guardian_serving_assessment.go: ServingAuthorization.Matches includes the user-message revision"
    ]
   },
   {

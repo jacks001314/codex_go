@@ -3118,8 +3118,15 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 // bumps the reset version that participates in the review-session reuse key.
 // Without the reset Go would keep appending to the pre-reset reviewer chain and
 // report trunk_reused/had_prior_review_context = true after the history reset.
-func (r *RuntimeRouter) resetGuardianAfterParentHistoryReset() {
-	if r == nil || r.services.GuardianReviewer == nil {
+func (r *RuntimeRouter) resetGuardianAfterParentHistoryReset(threadID string) {
+	if r == nil {
+		return
+	}
+	// Rust #41660: a destructive history replacement advances the host-owned
+	// user-message revision, so a retained Guardian authorization from before
+	// the reset can no longer approve anything.
+	r.bumpGuardianUserMessageRevision(threadID)
+	if r.services.GuardianReviewer == nil {
 		return
 	}
 	runner, ok := r.services.GuardianReviewer.(*modelGuardianReviewer)

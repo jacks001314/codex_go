@@ -19,6 +19,12 @@ type ServingAuthorization struct {
 	// PolicyFingerprint identifies the model, approval policy, and permission
 	// mode in effect when the assessment was issued.
 	PolicyFingerprint string
+	// UserMessageRevision is the host-owned user-input/reset revision of the
+	// reviewed history (Rust #41660's GuardianAuthorizationVersion). Compaction
+	// preserves it; genuine user input and history resets advance it, so a
+	// retained assessment survives a rewrite of what the model saw without
+	// surviving a change to what the user authorized.
+	UserMessageRevision uint64
 }
 
 // Matches reports whether two authorization snapshots describe the same
@@ -28,7 +34,8 @@ func (a ServingAuthorization) Matches(b ServingAuthorization) bool {
 		slices.Equal(a.DeniedPaths, b.DeniedPaths) &&
 		slices.Equal(a.DeniedGlobs, b.DeniedGlobs) &&
 		a.RetainedContextComplete == b.RetainedContextComplete &&
-		a.PolicyFingerprint == b.PolicyFingerprint
+		a.PolicyFingerprint == b.PolicyFingerprint &&
+		a.UserMessageRevision == b.UserMessageRevision
 }
 
 func sameOptionalString(left, right *string) bool {

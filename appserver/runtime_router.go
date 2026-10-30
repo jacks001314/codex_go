@@ -729,6 +729,13 @@ type RuntimeRouter struct {
 	// a separate concern (#42065).
 	guardianReviewHistoryMu sync.Mutex
 	guardianReviewHistory   map[string]*guardianReviewHistoryState
+	// guardianUserMessageRevisions is the thread's host-owned user-message
+	// revision (Rust #41660). Genuine user input and history resets advance it;
+	// compaction and internal context injection leave it untouched, so a
+	// retained Guardian authorization stays usable across a compaction but not
+	// across new user instructions.
+	guardianUserMessageRevisionMu sync.Mutex
+	guardianUserMessageRevisions  map[string]uint64
 	// guardianBlocking is the thread-owned approval-wait tracker the Guardian
 	// reviewer enters and the turn lifecycle exports from (Rust's per-thread
 	// ReviewBlocking, #55591).
@@ -3699,7 +3706,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 				// A cold resume replays the thread history into a fresh runtime,
 				// which Rust treats as a destructive history replacement; the
 				// Guardian reviewer must start a new trunk (Rust #45413).
-				r.resetGuardianAfterParentHistoryReset()
+				r.resetGuardianAfterParentHistoryReset(response.Thread.ID)
 				cfg, configErr := r.effectiveMCPConfigForThreadResume(response, request)
 				if configErr != nil {
 					r.rollbackThreadResumeInitialization(response.Thread.ID, request)
@@ -5563,7 +5570,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			// A fork replays the source history into a fresh thread, so the
 			// reusable Guardian reviewer must not carry the source's rationale
 			// (Rust #45413).
-			r.resetGuardianAfterParentHistoryReset()
+			r.resetGuardianAfterParentHistoryReset(response.Thread.ID)
 			// Rust #44944: the fork inherits its own retained provider route.
 			r.captureThreadModelProviderRouteByID(response.Thread.ID)
 			r.emitThreadReadyLifecycle(response.Thread.ID)

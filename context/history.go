@@ -34,7 +34,13 @@ type HistoryManager struct {
 	mu             sync.Mutex
 	items          []HistoryItem
 	historyVersion uint64
-	tokenInfo      *TokenUsageInfo
+	// userMessageRevision is a host-owned monotonic revision that advances only
+	// for genuine user input and history resets (Rust #41660). Compaction and
+	// internal context injection rewrite the model-visible conversation without
+	// changing what the user authorized, so Guardian must keep reusing an
+	// otherwise valid review across them.
+	userMessageRevision uint64
+	tokenInfo           *TokenUsageInfo
 	// referenceContextItem mirrors Rust's `ContextManager::reference_context_item`
 	// baseline: the persisted per-turn `TurnContextItem` (a JSON object) that the
 	// next real turn diffs against. Go has no typed `TurnContextItem` at this
@@ -73,6 +79,9 @@ func (m *HistoryManager) RecordItems(items ...HistoryItem) {
 			continue
 		}
 		m.items = append(m.items, cloneItem(item))
+		if IsUserAuthorizationMessage(&item) {
+			m.userMessageRevision++
+		}
 	}
 }
 
@@ -82,7 +91,22 @@ func (m *HistoryManager) RawItems() []HistoryItem {
 	return cloneItems(m.items)
 }
 
+// Replace performs a destructive history replacement (Rust's
+// `HistoryReplacement::Reset`). A reset discards the model-visible conversation
+// entirely, so it also invalidates prior Guardian authorization.
 func (m *HistoryManager) Replace(items []HistoryItem) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items = cloneItems(items)
+	m.historyVersion++
+	m.userMessageRevision++
+}
+
+// ReplaceCompacted installs a compacted history (Rust's
+// `HistoryReplacement::Compaction`). The conversation generation advances, but
+// the user-message revision is preserved: compaction changes what the model
+// sees, not what the user authorized.
+func (m *HistoryManager) ReplaceCompacted(items []HistoryItem) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items = cloneItems(items)
@@ -93,6 +117,14 @@ func (m *HistoryManager) HistoryVersion() uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.historyVersion
+}
+
+// UserMessageRevision returns the monotonic user-input/reset revision (Rust
+// `ConversationHistorySnapshot::user_message_revision`).
+func (m *HistoryManager) UserMessageRevision() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.userMessageRevision
 }
 
 func (m *HistoryManager) RemoveFirstItem() {
@@ -115,6 +147,9 @@ func (m *HistoryManager) DropLastUserTurns(count uint32) {
 	defer m.mu.Unlock()
 	positions := userTurnPositions(m.items)
 	if len(positions) == 0 {
+		// Rust still replaces the history in this branch, which advances the
+		// user-message revision even though no turn was removed.
+		m.userMessageRevision++
 		return
 	}
 	firstInstructionTurn := positions[0]
@@ -130,6 +165,9 @@ func (m *HistoryManager) DropLastUserTurns(count uint32) {
 		m.items = cloneItems(m.items[:cut])
 	}
 	m.historyVersion++
+	// Rollback is a history reset in Rust (`replace_annotated`), so it
+	// invalidates prior Guardian authorization.
+	m.userMessageRevision++
 }
 
 // trimPreTurnContextUpdates mirrors Rust's `trim_pre_turn_context_updates`: it
