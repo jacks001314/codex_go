@@ -8915,8 +8915,8 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		TurnID:                               record.ID,
 		VoiceSessionID:                       stringPtrIfNotEmpty(r.voiceSessionIDForTurn(record.ID)),
 		RootTurnID:                           r.analyticsRootTurnIDForEvent(params.ThreadID, record.ID, rootTurnIDForTurn(params, record.ID)),
-		TurnTrigger:                          params.TurnTrigger,
-		CodexTurnSource:                      runConfig.ClientMetadata["source"],
+		TurnTrigger:                          codexTurnAnalyticsTrigger(params.TurnTrigger),
+		CodexTurnSource:                      codexTurnAnalyticsSource(runConfig.ClientMetadata),
 		AppServerClient:                      client,
 		ThreadOriginator:                     runConfig.Originator,
 		Runtime:                              telemetry.CurrentRuntimeMetadata(),
@@ -8958,6 +8958,48 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		CompletedAt:                          uint64PtrFromUnixSeconds(completedAt),
 	})
 	r.services.Analytics.TrackCodexTurnEvent(ctx, event)
+}
+
+// codexTurnAnalyticsTrigger mirrors Rust TurnMetadataState::set_turn_trigger
+// followed by TurnAnalyticsMetadata::turn_trigger (Rust #42003): the trigger is
+// recorded unless it is blank, and analytics reports the raw value.
+func codexTurnAnalyticsTrigger(trigger string) string {
+	if strings.TrimSpace(trigger) == "" {
+		return ""
+	}
+	return trigger
+}
+
+// codexTurnAnalyticsSource mirrors Rust TurnMetadataState::codex_turn_source
+// (Rust #42003). The turn metadata document already applies Responses metadata
+// precedence (configured responses_api_metadata over client metadata) and is
+// rebuilt with accepted steer metadata, so its `source` is the effective value.
+// Values above the 128-byte Responses metadata limit are omitted.
+func codexTurnAnalyticsSource(clientMetadata map[string]string) *string {
+	if len(clientMetadata) == 0 {
+		return nil
+	}
+	if raw := clientMetadata[codexapi.ClientCodexTurnMetadataHeader]; raw != "" {
+		var document map[string]any
+		if err := json.Unmarshal([]byte(raw), &document); err == nil {
+			source, ok := document["source"].(string)
+			if !ok {
+				return nil
+			}
+			return boundedTurnAnalyticsMetadataValue(source)
+		}
+	}
+	if source, ok := clientMetadata["source"]; ok {
+		return boundedTurnAnalyticsMetadataValue(source)
+	}
+	return nil
+}
+
+func boundedTurnAnalyticsMetadataValue(value string) *string {
+	if len(value) > 128 {
+		return nil
+	}
+	return &value
 }
 
 func (r *RuntimeRouter) analyticsAppServerClient(connectionID string) (telemetry.CodexAppServerClientMetadata, bool) {

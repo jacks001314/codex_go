@@ -3115,6 +3115,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New `tui/tea/recap_auto_disable_like_rust_test.go` covers discarding an in-flight automatic success (with an enabled control that renders) and failure, plus manual `/recap` running while automatic recaps are disabled; existing tests cover defaults, invalid values, scheduling cancellation, and per-revision retries.
 - Verified with `go test ./tui/tea -run Recap -count=1` and `go test ./app -run AutoRecap -count=1`.
 
-Status after reconciliation: `2158 complete`, `451 not_applicable`,
-`346 audit_pending`, `189 regression_pending`, `5 partial`,
+### Turn analytics trigger and source (Round 999)
+
+- Rust #42003 adds `turn_trigger` and `codex_turn_source` to `codex_turn_event`, reads the source from effective Responses metadata (configured `responses_api_metadata` over client metadata, reflecting accepted steers), and omits values above the 128-byte metadata limit (#42003, complete).
+- Go previously passed `params.TurnTrigger` unfiltered and read `runConfig.ClientMetadata["source"]`, a key that is never populated because the effective source lives inside the `x-codex-turn-metadata` document; `codex_turn_source` was therefore always null.
+- `appserver/turn_runtime.go` now records a non-blank raw trigger and decodes the effective source from the merged turn metadata document (explicit empty values preserved, 128-byte limit applied in bytes); `telemetry/turn_event.go` stops trimming these values and distinguishes an explicitly empty source from an absent one.
+- New `appserver/turn_analytics_trigger_source_like_rust_test.go` covers configured-over-client precedence, client-only and empty sources, 128/130-byte boundaries, blank and whitespace-preserving triggers, and an accepted steer updating the reported source; `telemetry/turn_event_test.go` pins raw value preservation.
+- Verified with `go test ./telemetry ./turn -count=1`, `go test ./appserver -run 'TurnAnalyticsReportsTrigger|TurnAnalyticsReflectsAcceptedSteer' -count=1`, and `go test ./appserver -run 'Analytics|TurnTrigger|CodexTurn' -count=1` (only the two known pre-existing file-change analytics failures remain).
+
+Status after reconciliation: `2159 complete`, `451 not_applicable`,
+`346 audit_pending`, `188 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

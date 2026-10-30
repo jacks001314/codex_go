@@ -158,14 +158,17 @@ type CodexTurnEventParams struct {
 }
 
 type CodexTurnEventInput struct {
-	ThreadID                             string
-	SessionID                            string
-	TurnID                               string
-	VoiceSessionID                       *string
-	RootTurnID                           *string
-	ActivePluginIDsAtTurnStart           *[]string
-	TurnTrigger                          string
-	CodexTurnSource                      string
+	ThreadID                   string
+	SessionID                  string
+	TurnID                     string
+	VoiceSessionID             *string
+	RootTurnID                 *string
+	ActivePluginIDsAtTurnStart *[]string
+	TurnTrigger                string
+	// CodexTurnSource is the effective Responses metadata source. A pointer
+	// distinguishes "source was explicitly empty" from "no source was set",
+	// matching Rust's Option<String> (Rust #42003).
+	CodexTurnSource                      *string
 	SubmissionType                       *string
 	AppServerClient                      CodexAppServerClientMetadata
 	ThreadOriginator                     string
@@ -296,7 +299,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			RootTurnID:                           input.RootTurnID,
 			ActivePluginIDsAtTurnStart:           input.ActivePluginIDsAtTurnStart,
 			TurnTrigger:                          boundedTelemetryString(input.TurnTrigger),
-			CodexTurnSource:                      boundedTelemetryString(input.CodexTurnSource),
+			CodexTurnSource:                      boundedTelemetryOptionalString(input.CodexTurnSource),
 			SubmissionType:                       input.SubmissionType,
 			AppServerClient:                      client,
 			Runtime:                              input.Runtime,
@@ -386,11 +389,20 @@ func criticalPathDuration(path CodexTurnCriticalPath, value func(CodexTurnCritic
 }
 
 func boundedTelemetryString(value string) *string {
-	value = strings.TrimSpace(value)
 	if value == "" || len(value) > 128 {
 		return nil
 	}
 	return &value
+}
+
+// boundedTelemetryOptionalString preserves an explicitly empty value, mirroring
+// Rust's `Option<String>` filtering for turn analytics metadata (Rust #42003).
+func boundedTelemetryOptionalString(value *string) *string {
+	if value == nil || len(*value) > 128 {
+		return nil
+	}
+	bounded := *value
+	return &bounded
 }
 
 func toolCountPtr(counts *CodexTurnToolCounts, value func(CodexTurnToolCounts) int) *int {

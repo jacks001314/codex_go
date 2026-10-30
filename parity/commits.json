@@ -5332,9 +5332,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 999 (实现+回归): #42003 让 codex_turn_event 上报 turn_trigger 与 codex_turn_source。Go 之前 TurnTrigger 直接透传（空白值未按 set_turn_trigger 过滤），CodexTurnSource 读取 runConfig.ClientMetadata[\"source\"]，但该键实际不存在（source 位于 x-codex-turn-metadata 文档中），导致 source 恒为 null。现新增 codexTurnAnalyticsTrigger（空白 trigger 不记录，非空保留原始值）与 codexTurnAnalyticsSource（从已合并的 turn metadata 文档读取 source：configured responses_api_metadata 覆盖 client metadata，steer 后同一文档会重建；按 Rust MAX_EXTRA_METADATA_VALUE_BYTES=128 字节省略超长值）。telemetry 侧不再 trim，保留显式空 source，并按 128 字节上限过滤。新增 appserver/turn_analytics_trigger_source_like_rust_test.go（configured 覆盖 client、仅 client、显式空 source、64 个 é=128 字节边界、65 个 é=130 字节省略、空白/带空格 trigger、accepted steer 更新）与 telemetry 值保持测试。验证：go test ./telemetry ./turn -count=1；go test ./appserver -run 'TurnAnalyticsReportsTrigger|TurnAnalyticsReflectsAcceptedSteer' -count=1；go test ./appserver -run 'Analytics|TurnTrigger|CodexTurn' -count=1（仅剩既有 FileChange analytics 两个已知失败）。"
    ]
   },
   {

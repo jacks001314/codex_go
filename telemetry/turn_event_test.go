@@ -298,7 +298,7 @@ func TestCodexTurnEventBoundsTriggerAndSource(t *testing.T) {
 		SessionID:       "session-3",
 		TurnID:          "turn-3",
 		TurnTrigger:     "realtime",
-		CodexTurnSource: "codex_vscode",
+		CodexTurnSource: stringPtrTelemetry("codex_vscode"),
 		AppServerClient: sampleAppServerClientMetadata(),
 		Runtime:         sampleRuntimeMetadata(),
 		TimingProfile:   CodexTurnTimingProfile{},
@@ -321,7 +321,7 @@ func TestCodexTurnEventBoundsTriggerAndSource(t *testing.T) {
 		SessionID:       "session-4",
 		TurnID:          "turn-4",
 		TurnTrigger:     strings.Repeat("x", 129),
-		CodexTurnSource: strings.Repeat("y", 200),
+		CodexTurnSource: stringPtrTelemetry(strings.Repeat("y", 200)),
 	})
 	data, err = json.Marshal(oversized)
 	if err != nil {
@@ -333,6 +333,52 @@ func TestCodexTurnEventBoundsTriggerAndSource(t *testing.T) {
 	params = decoded["event_params"].(map[string]any)
 	if params["turn_trigger"] != nil || params["codex_turn_source"] != nil {
 		t.Fatalf("oversized trigger/source should be omitted: %#v", params)
+	}
+}
+
+// TestCodexTurnEventPreservesTriggerAndSourceValuesLikeRust mirrors Rust #42003:
+// analytics reports the raw trigger/source values, keeps an explicitly empty
+// source, and applies the Responses metadata limit in bytes (128 included,
+// 129 omitted) rather than trimming or dropping whitespace.
+func TestCodexTurnEventPreservesTriggerAndSourceValuesLikeRust(t *testing.T) {
+	paramsFor := func(trigger string, source *string) map[string]any {
+		t.Helper()
+		event := NewCodexTurnEvent(CodexTurnEventInput{
+			ThreadID:        "thread-values",
+			SessionID:       "session-values",
+			TurnID:          "turn-values",
+			TurnTrigger:     trigger,
+			CodexTurnSource: source,
+		})
+		var decoded map[string]any
+		if err := marshalUnmarshalTelemetry(event, &decoded); err != nil {
+			t.Fatalf("marshal event error = %v", err)
+		}
+		return decoded["event_params"].(map[string]any)
+	}
+
+	empty := ""
+	params := paramsFor("  user  ", &empty)
+	if params["turn_trigger"] != "  user  " {
+		t.Fatalf("turn_trigger = %#v, want raw value with whitespace", params["turn_trigger"])
+	}
+	if source, ok := params["codex_turn_source"].(string); !ok || source != "" {
+		t.Fatalf("codex_turn_source = %#v, want explicitly empty string", params["codex_turn_source"])
+	}
+
+	boundary := strings.Repeat("é", 64)
+	params = paramsFor("", &boundary)
+	if params["turn_trigger"] != nil {
+		t.Fatalf("blank turn_trigger = %#v, want null", params["turn_trigger"])
+	}
+	if params["codex_turn_source"] != boundary {
+		t.Fatalf("128-byte source = %#v, want %q", params["codex_turn_source"], boundary)
+	}
+
+	oversized := strings.Repeat("é", 65)
+	params = paramsFor(strings.Repeat("x", 129), &oversized)
+	if params["turn_trigger"] != nil || params["codex_turn_source"] != nil {
+		t.Fatalf("values above 128 bytes should be omitted: %#v", params)
 	}
 }
 
