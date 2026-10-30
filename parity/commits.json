@@ -20273,9 +20273,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only compile fix (POSIX_SPAWN_SETSID cast) plus a test-isolation tweak using LoaderOverrides::without_managed_config_for_tests; codex_go has no POSIX_SPAWN flag set and no managed-config test override of that shape"
    ]
   },
   {
@@ -20876,9 +20876,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "config/config.go mergeConfigMaps deep-clones and normalizes the overlay once through normalizeConfigKeyAliasesDeep, then mergeConfigMapsAt recurses over that owned map without cloning overlay tables at each nesting level, matching Rust merge_toml_values_at_path taking owned TomlValue"
    ]
   },
   {
@@ -22404,9 +22404,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go emits no WebSocket handshake info log: model/responses_agent.go reads only Retry-After, request-id, cf-ray and authorization-error headers from the dial response without logging them, and no ToolCall info entry renders tool payload previews. The closest Go log, appserver/websocket_compression_stats.go, records payload byte totals only, so response headers and tool payloads stay out of info logs"
    ]
   },
   {
