@@ -6581,9 +6581,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Realtime start has no per-thread feature check (ensureRealtimeThread only requires the record), features.realtime_conversation is a removed no-op that config and requirements ignore, and TestRealtimeStartIsAlwaysAvailableLikeRust covers fork/cold-resume with the flag absent, false and true (#42377)"
    ]
   },
   {
