@@ -7,6 +7,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/state"
+	"codex_go/utils"
 )
 
 // Mirrors Rust #44281 effective_input_token_limit plus request_budget's fixed
@@ -112,7 +113,7 @@ func TestGuardianDropOldestOptionalEvidenceLikeRust(t *testing.T) {
 
 func guardianBudgetTestEntries(commentary string) []state.GuardianTranscriptEntry {
 	entries := []state.GuardianTranscriptEntry{
-		{Author: "user", LineRole: "user", Text: "Run the command if the approval reviewer allows it."},
+		{Author: "user", LineRole: "user", Text: "Run the command if the approval reviewer allows it.", Historical: true},
 	}
 	if commentary != "" {
 		entries = append(entries, state.GuardianTranscriptEntry{
@@ -123,6 +124,123 @@ func guardianBudgetTestEntries(commentary string) []state.GuardianTranscriptEntr
 		})
 	}
 	return entries
+}
+
+// Mirrors Rust #44570's final HistoryTruncation::Allow arm: only the oldest
+// historical entry yields, its source label and both ends stay, and later
+// approvals or restrictions remain complete.
+func TestGuardianShortenOldestHistoricalEvidenceLikeRust(t *testing.T) {
+	older := strings.Repeat("older instruction ", 800) + "original suffix"
+	approval := state.ManualApprovalDeveloperPrefix + "\nApproved action:\nread_file README.md"
+	restriction := "Revoke permission to edit files. Only read README.md."
+	entries := []state.GuardianTranscriptEntry{
+		{Author: "user", LineRole: "user", RetainedSourceOrder: "3", Text: older, Historical: true},
+		{Author: "developer", LineRole: "developer", Text: approval, Historical: true},
+		{Author: "user", LineRole: "user", Text: restriction, Historical: true},
+		{Author: "assistant", LineRole: "assistant", Text: "complete action"},
+	}
+	excess := int64(utils.ApproxTokenCount(older) / 2)
+	if !guardianShortenOldestHistoricalEvidence(entries, state.GuardianTranscriptFormatLine, excess) {
+		t.Fatal("historical evidence was not shortened")
+	}
+	if !strings.HasPrefix(entries[0].Text, "older instruction") || !strings.HasSuffix(entries[0].Text, "original suffix") {
+		t.Fatalf("shortened historical entry lost an end: %q", entries[0].Text)
+	}
+	if !strings.Contains(entries[0].Text, "<truncated omitted_approx_tokens=") {
+		t.Fatalf("shortened historical entry has no marker: %q", entries[0].Text)
+	}
+	if entries[1].Text != approval || entries[2].Text != restriction {
+		t.Fatal("a later approval or restriction was shortened before older evidence")
+	}
+}
+
+// Mirrors Rust #44570 review_preserves_user_instructions_until_request_budgeting:
+// optional evidence leaves first; if the complete required request still cannot
+// fit, the oldest user instruction is shortened with markers while a later
+// approval and restriction stay complete.
+func TestGuardianReviewShortensOldestAuthorizationEvidenceLikeRust(t *testing.T) {
+	action := state.Action{Type: "command", Command: "echo guardian-history-budget", CWD: "/repo"}
+	older := strings.Repeat("older instruction ", 800) + "original suffix"
+	commentary := strings.Repeat("optional commentary ", 500)
+	approval := state.ManualApprovalDeveloperPrefix + "\nApproved action:\nread_file README.md"
+	restriction := "Revoke permission to edit files. Only read README.md."
+	entries := []state.GuardianTranscriptEntry{
+		{Author: "user", LineRole: "user", Text: older, Historical: true},
+		{Author: "assistant", LineRole: "assistant", Text: commentary, Optional: true},
+		{Author: "developer", LineRole: "developer", Text: approval, Historical: true},
+		{Author: "user", LineRole: "user", Text: restriction, Historical: true},
+	}
+	requiredEntries := []state.GuardianTranscriptEntry{entries[0], entries[2], entries[3]}
+
+	probe := func(selected []state.GuardianTranscriptEntry) *model.AgentRequest {
+		t.Helper()
+		var captured *model.AgentRequest
+		reviewer := &modelGuardianReviewer{
+			agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+				captured = request
+				return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
+			}),
+			store: state.NewReviewStore(),
+			transcriptSelection: func(string) guardianTranscriptSelection {
+				return guardianTranscriptSelection{Entries: selected}
+			},
+		}
+		reviewer.syncImageContextWindow = func(_, _ string) (int64, bool) { return 1 << 30, true }
+		if _, _, err := reviewer.Review(context.Background(), "thread-history-probe", "turn-1", "call-1", action); err != nil {
+			t.Fatalf("probe review error = %v", err)
+		}
+		if captured == nil {
+			t.Fatal("probe review did not reach the model")
+		}
+		return captured
+	}
+
+	requiredRequest := probe(requiredEntries)
+	requiredTokens := guardianCompleteRequestTokens(requiredRequest.Prompt, requiredRequest.InputItems, guardianAssessmentOutputSchema(), 0)
+	budget := requiredTokens - 1_500
+
+	var captured *model.AgentRequest
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+			captured = request
+			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
+		}),
+		store: state.NewReviewStore(),
+		transcriptSelection: func(string) guardianTranscriptSelection {
+			return guardianTranscriptSelection{Entries: entries}
+		},
+	}
+	reviewer.syncImageContextWindow = func(_, _ string) (int64, bool) {
+		return budget + guardianInputTokenMargin, true
+	}
+	decision, reason, err := reviewer.Review(context.Background(), "thread-history-fit", "turn-1", "call-1", action)
+	if err != nil {
+		t.Fatalf("review error = %v", err)
+	}
+	if decision != state.DecisionApproved {
+		t.Fatalf("decision = %q, want approved (reason: %q)", decision, reason)
+	}
+	if captured == nil {
+		t.Fatal("the reviewer request was not sent after shortening older evidence")
+	}
+	if strings.Contains(captured.Prompt, commentary) {
+		t.Fatalf("optional commentary survived request budgeting:\n%s", captured.Prompt)
+	}
+	if strings.Contains(captured.Prompt, older) {
+		t.Fatalf("the oldest instruction stayed complete despite the budget:\n%s", captured.Prompt)
+	}
+	if !strings.Contains(captured.Prompt, "<truncated omitted_approx_tokens=") ||
+		!strings.Contains(captured.Prompt, "User instructions and prior approvals may be incomplete where marked.") {
+		t.Fatalf("shortened evidence lacks its warning:\n%s", captured.Prompt)
+	}
+	approvalIndex := strings.Index(captured.Prompt, approval)
+	restrictionIndex := strings.Index(captured.Prompt, restriction)
+	if approvalIndex < 0 || restrictionIndex < 0 || approvalIndex > restrictionIndex {
+		t.Fatalf("later authorization evidence is missing or reordered:\n%s", captured.Prompt)
+	}
+	if total := guardianCompleteRequestTokens(captured.Prompt, captured.InputItems, guardianAssessmentOutputSchema(), 0); total > budget {
+		t.Fatalf("delivered request tokens = %d, want within the %d-token budget", total, budget)
+	}
 }
 
 // Mirrors Rust #44281 review_respects_complete_context_budget: evidence that

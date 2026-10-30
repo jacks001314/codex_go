@@ -22,8 +22,9 @@ const (
 // per-entry message cap and total message budget while keeping the same tool
 // limits and recent-entry window.
 const (
-	// MaxMessageEntryTokens caps one user, developer, assistant, or reasoning
-	// entry before transcript retention.
+	// MaxMessageEntryTokens caps one assistant or reasoning entry before transcript
+	// retention. User messages and manual approvals stay complete for request
+	// admission (Rust #44570).
 	MaxMessageEntryTokens = 5_000
 	// MaxToolEntryTokens caps one tool call or tool result entry.
 	MaxToolEntryTokens = 1_000
@@ -32,7 +33,8 @@ const (
 	// MaxToolTranscriptTokens budgets rendered tool evidence separately so it
 	// cannot crowd out the human conversation.
 	MaxToolTranscriptTokens = 10_000
-	// MaxRecentNonUserEntries bounds retained non-user entries.
+	// MaxRecentNonUserEntries bounds retained entries other than user messages
+	// and manual approvals.
 	MaxRecentNonUserEntries = 40
 
 	// AsyncMaxMessageEntryTokens is the asynchronous per-message cap.
@@ -58,7 +60,8 @@ const GuardianBudgetOmissionNotice = "<guardian_context_omission>\n" +
 
 // TranscriptEntryLimits holds per-entry caps resolved for the current review.
 type TranscriptEntryLimits struct {
-	// MessageTokens caps user, developer, assistant, and reasoning entries.
+	// MessageTokens caps assistant and reasoning entries. User messages and
+	// manual approvals stay complete until the complete-request budget.
 	MessageTokens int
 	// ToolTokens caps tool calls and ordinary tool outputs.
 	ToolTokens int
@@ -73,7 +76,8 @@ type TranscriptRetentionConfig struct {
 	MaxMessageTranscriptTokens int
 	// MaxToolTranscriptTokens budgets rendered tool entries.
 	MaxToolTranscriptTokens int
-	// MaxRecentNonUserEntries bounds retained entries other than user messages.
+	// MaxRecentNonUserEntries bounds retained entries other than user messages
+	// and manual approvals.
 	MaxRecentNonUserEntries int
 }
 
@@ -174,10 +178,12 @@ type GuardianTranscriptKind int
 
 const (
 	// GuardianTranscriptUser is a genuine user message; it is selected before
-	// non-user evidence and always keeps the first entry as an anchor.
+	// other evidence and remains complete through retention.
 	GuardianTranscriptUser GuardianTranscriptKind = iota
-	// GuardianTranscriptProtectedMessage is trusted developer context or a final
-	// assistant answer.
+	// GuardianTranscriptManualApproval is a trusted developer manual approval;
+	// like a user message it remains complete through retention.
+	GuardianTranscriptManualApproval
+	// GuardianTranscriptProtectedMessage is a final assistant answer.
 	GuardianTranscriptProtectedMessage
 	// GuardianTranscriptMessage is ordinary assistant commentary or reasoning.
 	GuardianTranscriptMessage
@@ -189,6 +195,8 @@ func (k GuardianTranscriptKind) defaultRole() string {
 	switch k {
 	case GuardianTranscriptUser:
 		return "user"
+	case GuardianTranscriptManualApproval:
+		return "developer"
 	case GuardianTranscriptProtectedMessage, GuardianTranscriptMessage:
 		return "assistant"
 	case GuardianTranscriptTool:
@@ -299,41 +307,6 @@ type RenderedTranscript struct {
 	Truncations  []TranscriptTruncationObservation
 }
 
-// UserMessageCost is the rendered token cost and original position of a
-// genuine user message.
-type UserMessageCost struct {
-	Index  int
-	Tokens int
-}
-
-// UserMessageSelection contains selected original indices and their total
-// rendered token cost.
-type UserMessageSelection struct {
-	Indices []int
-	Tokens  int
-}
-
-// SelectUserMessages keeps the first and latest user messages, then fills from
-// newest to oldest. The first message remains an anchor even when it exceeds
-// the budget; later messages are included only when they fit.
-func SelectUserMessages(messages []UserMessageCost, maxMessageTokens int) UserMessageSelection {
-	if len(messages) == 0 {
-		return UserMessageSelection{}
-	}
-	selection := UserMessageSelection{
-		Indices: []int{messages[0].Index},
-		Tokens:  messages[0].Tokens,
-	}
-	for i := len(messages) - 1; i >= 1; i-- {
-		message := messages[i]
-		if message.Tokens <= maxMessageTokens-selection.Tokens {
-			selection.Indices = append(selection.Indices, message.Index)
-			selection.Tokens += message.Tokens
-		}
-	}
-	return selection
-}
-
 type transcriptProfileEntry struct {
 	kind          GuardianTranscriptKind
 	tokens        int
@@ -347,7 +320,6 @@ type transcriptProfileEntry struct {
 // and original offset; empty placeholders remain a host concern.
 func (p ContextProfile) RenderTranscript(entries []TranscriptEvidenceEntry, entryNumberOffset int) RenderedTranscript {
 	profileEntries := make([]transcriptProfileEntry, 0, len(entries))
-	userMessages := make([]UserMessageCost, 0, len(entries))
 	for index, entry := range entries {
 		number := index + entryNumberOffset + 1
 		role := strings.TrimSpace(entry.Role)
@@ -370,21 +342,22 @@ func (p ContextProfile) RenderTranscript(entries []TranscriptEvidenceEntry, entr
 			originalBytes: entry.OriginalBytes,
 			retainedBytes: len(entry.Text),
 		})
-		if entry.Kind == GuardianTranscriptUser {
-			userMessages = append(userMessages, UserMessageCost{Index: index, Tokens: tokens})
-		}
 	}
 
 	included := make([]bool, len(profileEntries))
-	selection := SelectUserMessages(userMessages, p.Retention.MaxMessageTranscriptTokens)
-	for _, index := range selection.Indices {
+	authorizationTokens := 0
+	for index, entry := range profileEntries {
+		if entry.kind != GuardianTranscriptUser && entry.kind != GuardianTranscriptManualApproval {
+			continue
+		}
 		included[index] = true
+		authorizationTokens += entry.tokens
 	}
 	switch p.Target {
 	case ContextTargetSync:
-		p.retainSynchronous(profileEntries, selection.Tokens, included)
+		p.retainSynchronous(profileEntries, authorizationTokens, included)
 	case ContextTargetAsync:
-		available := p.Retention.MaxMessageTranscriptTokens - selection.Tokens
+		available := p.Retention.MaxMessageTranscriptTokens - authorizationTokens
 		if available < 0 {
 			available = 0
 		}
@@ -438,7 +411,7 @@ func (p ContextProfile) retainSynchronous(entries []transcriptProfileEntry, sele
 	retainedNonUser := 0
 	for index := len(entries) - 1; index >= 0; index-- {
 		entry := entries[index]
-		if entry.kind == GuardianTranscriptUser ||
+		if entry.kind == GuardianTranscriptUser || entry.kind == GuardianTranscriptManualApproval ||
 			retainedNonUser >= p.Retention.MaxRecentNonUserEntries {
 			continue
 		}
@@ -540,7 +513,7 @@ func newTranscriptWindow(entries []transcriptProfileEntry, config TranscriptRete
 
 func (w *transcriptWindow) insert(index int) {
 	entry := w.entries[index]
-	if entry.kind == GuardianTranscriptUser ||
+	if entry.kind == GuardianTranscriptUser || entry.kind == GuardianTranscriptManualApproval ||
 		w.maxEntries == 0 ||
 		!w.makeRoomForTokenBudget(entry.kind, entry.tokens) ||
 		!w.makeRoomForEntryLimit(entry.kind) {

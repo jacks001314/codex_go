@@ -64,7 +64,12 @@ type GuardianTranscriptEntry struct {
 	// assistant answers and encrypted native evidence stay required, so a
 	// budget that cannot fit them rejects the review instead.
 	Optional bool
-	Text     string
+	// Historical marks user instructions and manual approvals. They stay
+	// complete through collection and retention; only the complete-request
+	// budget may shorten them, oldest first, after optional evidence is gone
+	// (Rust HistoryTruncation, #44570).
+	Historical bool
+	Text       string
 	// Native carries a complete encrypted agent-message item. Rust delivers
 	// these as native response items (ciphertext cannot be truncated or
 	// rendered as text), so they are excluded from the text rendering and

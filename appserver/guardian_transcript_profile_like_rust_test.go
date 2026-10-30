@@ -74,32 +74,47 @@ func TestGuardianReviewTranscriptAppliesProfileRetentionLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust's collect_transcript per-entry caps: the profile applies the
-// message and tool token budgets before aggregate retention.
+// Mirrors Rust #44570's collect_transcript caps: assistant and tool evidence is
+// bounded before retention, while user instructions and manual approvals stay
+// complete for the complete-request budget.
 func TestGuardianReviewTranscriptAppliesPerEntryCapsLikeRust(t *testing.T) {
 	now := fixedTime()
+	userText := strings.Repeat("u", 3*utils.ApproxBytesForTokens(state.MaxMessageEntryTokens))
 	messageText := strings.Repeat("m", 3*utils.ApproxBytesForTokens(state.MaxMessageEntryTokens))
+	approvalText := state.ManualApprovalDeveloperPrefix + "\nApproved action:\n" +
+		strings.Repeat("a", 3*utils.ApproxBytesForTokens(state.MaxMessageEntryTokens))
 	toolText := strings.Repeat("t", 3*utils.ApproxBytesForTokens(state.MaxToolEntryTokens))
 	router := guardianProfileTestRouter(t, []session.Item{
-		{ID: "user", Type: "message", Role: "user", Text: messageText, CreatedAt: now},
+		{ID: "user", Type: "message", Role: "user", Text: userText, CreatedAt: now},
+		{ID: "assistant", Type: "message", Role: "assistant", Text: messageText, CreatedAt: now},
+		{ID: "approval", Type: "message", Role: "developer", Text: approvalText, CreatedAt: now},
 		{ID: "tool", Type: "function_call_output", Name: "read", Namespace: "drive", Text: toolText, CreatedAt: now},
 	})
 
-	selection := router.guardianReviewTranscriptSelection(guardianProfileTestThreadID)
-	if len(selection.Entries) != 2 {
-		t.Fatalf("entries = %d, want 2", len(selection.Entries))
+	profile := state.SynchronousContextProfile()
+	profile.Retention.MaxMessageTranscriptTokens = 1 << 20
+	profile.Retention.MaxToolTranscriptTokens = 1 << 20
+	selection := router.guardianReviewTranscriptSelectionWithProfile(guardianProfileTestThreadID, profile)
+	if len(selection.Entries) != 4 {
+		t.Fatalf("entries = %d, want 4", len(selection.Entries))
 	}
-	if got, limit := len(selection.Entries[0].Text), utils.ApproxBytesForTokens(state.MaxMessageEntryTokens)+64; got > limit {
-		t.Fatalf("message entry bytes = %d, want <= %d (marker allowance)", got, limit)
+	if selection.Entries[0].Text != userText || !selection.Entries[0].Historical {
+		t.Fatal("user instructions were shortened during collection")
 	}
-	if got, limit := len(selection.Entries[1].Text), utils.ApproxBytesForTokens(state.MaxToolEntryTokens)+64; got > limit {
+	if selection.Entries[2].Text != approvalText || !selection.Entries[2].Historical {
+		t.Fatal("manual approval was shortened during collection")
+	}
+	if got, limit := len(selection.Entries[1].Text), utils.ApproxBytesForTokens(state.MaxMessageEntryTokens)+64; got > limit {
+		t.Fatalf("assistant entry bytes = %d, want <= %d (marker allowance)", got, limit)
+	}
+	if got, limit := len(selection.Entries[3].Text), utils.ApproxBytesForTokens(state.MaxToolEntryTokens)+64; got > limit {
 		t.Fatalf("tool entry bytes = %d, want <= %d (marker allowance)", got, limit)
 	}
-	if !strings.Contains(selection.Entries[0].Text, "tokens truncated") {
-		t.Fatalf("message entry missing truncation marker: %q", selection.Entries[0].Text)
-	}
 	if !strings.Contains(selection.Entries[1].Text, "tokens truncated") {
-		t.Fatalf("tool entry missing truncation marker: %q", selection.Entries[1].Text)
+		t.Fatalf("assistant entry missing truncation marker: %q", selection.Entries[1].Text)
+	}
+	if !strings.Contains(selection.Entries[3].Text, "tokens truncated") {
+		t.Fatalf("tool entry missing truncation marker: %q", selection.Entries[3].Text)
 	}
 }
 

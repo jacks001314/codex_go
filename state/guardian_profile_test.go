@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -48,7 +49,7 @@ func TestManualApprovalDeveloperPrefixLikeRust(t *testing.T) {
 func TestGuardianContextProfilesPreserveDistinctRetentionAndOriginalNumberingLikeRust(t *testing.T) {
 	entries := []TranscriptEvidenceEntry{
 		{Kind: GuardianTranscriptUser, Role: "user", Text: "inspect only", OriginalBytes: len("inspect only")},
-		{Kind: GuardianTranscriptProtectedMessage, Role: "developer", Text: "approved action", OriginalBytes: len("approved action")},
+		{Kind: GuardianTranscriptProtectedMessage, Role: "assistant", Text: "proposed action", OriginalBytes: len("proposed action")},
 		{Kind: GuardianTranscriptMessage, Role: "assistant", Text: "working", OriginalBytes: len("working")},
 	}
 	synchronous := SynchronousContextProfile()
@@ -65,7 +66,7 @@ func TestGuardianContextProfilesPreserveDistinctRetentionAndOriginalNumberingLik
 	}
 
 	async := asynchronous.RenderTranscript(entries, 0)
-	if got, want := strings.Join(async.Items, "\n"), "[1] user: inspect only\n\n[2] developer: approved action\n"; got != want {
+	if got, want := strings.Join(async.Items, "\n"), "[1] user: inspect only\n\n[2] assistant: proposed action\n"; got != want {
 		t.Fatalf("async items = %q, want %q", got, want)
 	}
 	if async.OmissionNote != "" {
@@ -82,7 +83,10 @@ func TestGuardianContextProfilesPreserveDistinctRetentionAndOriginalNumberingLik
 	}
 }
 
-func TestGuardianSynchronousProfileKeepsFirstUserAnchorOverBudgetLikeRust(t *testing.T) {
+// Mirrors Rust #44570: user messages stay complete through profile retention
+// even when their aggregate cost exceeds the message allowance. The complete
+// request budget, not transcript collection, decides whether to shorten them.
+func TestGuardianSynchronousProfileKeepsCompleteUserInstructionsLikeRust(t *testing.T) {
 	entries := []TranscriptEvidenceEntry{
 		{Kind: GuardianTranscriptUser, Text: strings.Repeat("x", 400), OriginalBytes: 400},
 		{Kind: GuardianTranscriptUser, Text: strings.Repeat("y", 400), OriginalBytes: 400},
@@ -91,11 +95,39 @@ func TestGuardianSynchronousProfileKeepsFirstUserAnchorOverBudgetLikeRust(t *tes
 	profile := SynchronousContextProfile()
 	profile.Retention.MaxMessageTranscriptTokens = 50
 	rendered := profile.RenderTranscript(entries, 0)
-	if len(rendered.Indices) != 1 || rendered.Indices[0] != 0 {
-		t.Fatalf("retained indices = %#v, want the first anchor only", rendered.Indices)
+	if len(rendered.Indices) != len(entries) {
+		t.Fatalf("retained indices = %#v, want every complete user instruction", rendered.Indices)
 	}
-	if rendered.OmissionNote == "" {
-		t.Fatal("expected omission notice when later user messages do not fit")
+	if rendered.OmissionNote != "" {
+		t.Fatalf("omission note = %q, want none before complete-request budgeting", rendered.OmissionNote)
+	}
+	if rendered.Items[0] != fmt.Sprintf("[1] user: %s", entries[0].Text) {
+		t.Fatalf("first user instruction was changed: %q", rendered.Items[0])
+	}
+}
+
+// Mirrors Rust #44570: a manual developer approval is authorization evidence,
+// so neither retention limits nor source order may drop it.
+func TestGuardianProfilesKeepManualApprovalsCompleteLikeRust(t *testing.T) {
+	approval := strings.Repeat("approved action ", 500)
+	entries := []TranscriptEvidenceEntry{
+		{Kind: GuardianTranscriptUser, Role: "user", Text: "edit scratch files", OriginalBytes: len("edit scratch files")},
+		{Kind: GuardianTranscriptManualApproval, Role: "developer", Text: approval, OriginalBytes: len(approval)},
+		{Kind: GuardianTranscriptUser, Role: "user", Text: "only scratch files", OriginalBytes: len("only scratch files")},
+	}
+	for _, profile := range []ContextProfile{SynchronousContextProfile(), AsynchronousContextProfile()} {
+		profile.Retention.MaxMessageTranscriptTokens = 1
+		profile.Retention.MaxRecentNonUserEntries = 0
+		rendered := profile.RenderTranscript(entries, 0)
+		if got, want := len(rendered.Indices), len(entries); got != want {
+			t.Fatalf("target %v retained indices = %#v, want all authorization evidence", profile.Target, rendered.Indices)
+		}
+		if !strings.Contains(rendered.Items[1], approval) {
+			t.Fatalf("target %v manual approval was shortened during retention", profile.Target)
+		}
+		if !strings.Contains(rendered.Items[2], "only scratch files") {
+			t.Fatalf("target %v later restriction was dropped: %#v", profile.Target, rendered.Items)
+		}
 	}
 }
 

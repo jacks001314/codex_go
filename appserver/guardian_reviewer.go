@@ -1209,7 +1209,8 @@ reviewAttempt:
 	}
 	// Budget omission is a local delivery decision, not new evidence, so the
 	// staleness comparison keeps the selection the review started from.
-	budgetCompareEntries := transcriptEntries
+	budgetCompareEntries := append([]state.GuardianTranscriptEntry(nil), transcriptEntries...)
+	budgetNoteApplied := false
 	var inputItems []any
 	for {
 		var composeErr error
@@ -1224,30 +1225,45 @@ reviewAttempt:
 			r.emitWarning(threadID, rationale)
 			return state.DecisionDenied, message, nil
 		}
-		if guardianCompleteRequestTokens(prompt, inputItems, outputSchema, historyTokens) <= budgetLimit {
+		requestTokens := guardianCompleteRequestTokens(prompt, inputItems, outputSchema, historyTokens)
+		if requestTokens <= budgetLimit {
 			break
 		}
+		// Rust #44570 reserves the omission notice before reducing evidence, so
+		// the reviewer knows that instructions or approvals may be incomplete.
+		if !budgetNoteApplied {
+			buildOptions.TranscriptOmissionNote = guardianBudgetOmissionNote(transcriptOmissionNote)
+			budgetNoteApplied = true
+			continue
+		}
 		reduced, dropped := guardianDropOldestOptionalEvidence(transcriptEntries)
-		if !dropped {
-			// Only required evidence remains and it cannot fit the reviewer's
-			// complete-request budget, so the review fails closed without
-			// sampling. Rust reports the same rejection to the parent.
-			rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
-			completed, _ := store.FailClosed(event.ID, rationale)
-			emit(threadID, completed)
-			r.recordNonDenial(threadID, turnID)
-			attribution.Decision = state.DecisionDenied
-			attribution.TerminalStatus = "failed_closed"
-			attribution.FailureReason = "input_budget"
-			emitReviewMetrics()
-			r.emitWarning(threadID, rationale)
-			return state.DecisionDenied, guardianReviewFailureMessage(guardianInputBudgetMessage), nil
+		if dropped {
+			transcriptEntries = reduced
+			if transcriptEntries != nil {
+				transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
+			}
+			continue
 		}
-		transcriptEntries = reduced
-		buildOptions.TranscriptOmissionNote = guardianBudgetOmissionNote(transcriptOmissionNote)
-		if transcriptEntries != nil {
+		// Optional evidence is exhausted. Rust may now shorten older user
+		// instructions and manual approvals, oldest first, while later
+		// restrictions stay complete whenever older entries can supply room.
+		if guardianShortenOldestHistoricalEvidence(transcriptEntries, transcriptFormat, requestTokens-budgetLimit) {
 			transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
+			continue
 		}
+		// Required evidence remains and cannot fit the reviewer's
+		// complete-request budget, so the review fails closed without
+		// sampling. Rust reports the same rejection to the parent.
+		rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
+		completed, _ := store.FailClosed(event.ID, rationale)
+		emit(threadID, completed)
+		r.recordNonDenial(threadID, turnID)
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
+		attribution.FailureReason = "input_budget"
+		emitReviewMetrics()
+		r.emitWarning(threadID, rationale)
+		return state.DecisionDenied, guardianReviewFailureMessage(guardianInputBudgetMessage), nil
 	}
 	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
 	reviewRequest := &model.AgentRequest{
@@ -2044,7 +2060,13 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
 			}
 		}
-		limited, truncated := truncateGuardianTranscriptEntry(text, tokenLimit)
+		// Rust #44570 keeps user messages and manual approvals complete through
+		// transcript collection. They may be shortened only by the final
+		// complete-request budget so a later instruction is not lost first.
+		limited, truncated := text, false
+		if kind != state.GuardianTranscriptUser && kind != state.GuardianTranscriptManualApproval {
+			limited, truncated = truncateGuardianTranscriptEntry(text, tokenLimit)
+		}
 		var retainedSource *retainedctx.RetainedSource
 		var retainedOrder string
 		if kind == state.GuardianTranscriptUser {
@@ -2121,6 +2143,8 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 		entry := entries[index]
 		entry.Index = index
 		entry.Optional = guardianTranscriptEvidenceOptional(evidence[index])
+		entry.Historical = evidence[index].Kind == state.GuardianTranscriptUser ||
+			evidence[index].Kind == state.GuardianTranscriptManualApproval
 		retained = append(retained, entry)
 	}
 	return guardianTranscriptSelection{
@@ -2158,7 +2182,7 @@ func guardianTranscriptKindForItem(item *session.Item, role string) state.Guardi
 	case "user":
 		return state.GuardianTranscriptUser
 	case "developer":
-		return state.GuardianTranscriptProtectedMessage
+		return state.GuardianTranscriptManualApproval
 	case "tool":
 		return state.GuardianTranscriptTool
 	case "assistant":

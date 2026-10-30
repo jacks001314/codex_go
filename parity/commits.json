@@ -11395,9 +11395,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: HistoryTruncation"
+    "Round 1029 (fix): Guardian transcript collection keeps user instructions and manual approvals complete; sync and async profiles retain both as source-ordered authorization evidence; complete-request budgeting drops optional evidence first and only then shortens the oldest historical entry with the standard marker, preserving later approvals/restrictions and dropping the shortened entry's retained-source proof. Go's reviewer is synchronous, so an async budget cannot bypass this fallback. Regression contracts: state/guardian_profile_test.go:TestGuardianSynchronousProfileKeepsCompleteUserInstructionsLikeRust, TestGuardianProfilesKeepManualApprovalsCompleteLikeRust; appserver/guardian_transcript_profile_like_rust_test.go:TestGuardianReviewTranscriptAppliesPerEntryCapsLikeRust; appserver/guardian_request_budget_like_rust_test.go:TestGuardianShortenOldestHistoricalEvidenceLikeRust, TestGuardianReviewShortensOldestAuthorizationEvidenceLikeRust; verify with `go test ./state -run Guardian -count=1` and `go test ./appserver -run Guardian -count=1`."
    ]
   },
   {

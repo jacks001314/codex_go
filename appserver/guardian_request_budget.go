@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	codexctx "codex_go/context"
 	"codex_go/state"
 	"codex_go/utils"
 )
@@ -84,8 +85,9 @@ func guardianCompleteRequestTokens(prompt string, items []any, outputSchema any,
 // guardianDropOldestOptionalEvidence omits the earliest optional transcript
 // entry, mirroring Rust's ComposedContext::enforce_budget, which drops
 // commentary- and tool-priority evidence before shortening older history and
-// never drops required evidence. It reports false once only required evidence
-// remains, which is the signal to fail closed with the input-budget message.
+// never drops required evidence. It reports false once only historical and
+// required evidence remains; the caller then allows bounded history shortening
+// before failing closed with the input-budget message.
 func guardianDropOldestOptionalEvidence(entries []state.GuardianTranscriptEntry) ([]state.GuardianTranscriptEntry, bool) {
 	for index, entry := range entries {
 		if !entry.Optional {
@@ -97,6 +99,66 @@ func guardianDropOldestOptionalEvidence(entries []state.GuardianTranscriptEntry)
 		return reduced, true
 	}
 	return entries, false
+}
+
+// guardianShortenOldestHistoricalEvidence mirrors Rust #44570's
+// HistoryTruncation::Allow arm after optional evidence has been exhausted. It
+// shortens the oldest user instruction or manual approval first, keeping that
+// entry's source label and both ends around the standard truncation marker.
+// Later restrictions stay complete whenever the older entry can supply the
+// needed room. A shortened entry no longer proves delivery of its full retained
+// source.
+func guardianShortenOldestHistoricalEvidence(
+	entries []state.GuardianTranscriptEntry,
+	format state.GuardianTranscriptFormat,
+	excess int64,
+) bool {
+	if excess <= 0 {
+		return false
+	}
+	for index := range entries {
+		entry := &entries[index]
+		if !entry.Historical || len(entry.Native) > 0 || strings.TrimSpace(entry.Text) == "" {
+			continue
+		}
+		original := entry.Text
+		originalTokens := utils.ApproxTokenCount(entry.Render(format))
+		if originalTokens <= 0 {
+			continue
+		}
+		targetTokens := originalTokens - int(excess)
+		if targetTokens < 1 {
+			targetTokens = 1
+		}
+		upper := utils.ApproxTokenCount(original)
+		lower := min(32, upper)
+		if lower >= upper {
+			continue
+		}
+		best := ""
+		for low, high := lower, upper; low <= high; {
+			mid := low + (high-low)/2
+			candidate, _ := codexctx.GuardianTruncateText(original, mid)
+			entry.Text = candidate
+			if utils.ApproxTokenCount(entry.Render(format)) <= targetTokens {
+				best = candidate
+				low = mid + 1
+			} else {
+				high = mid - 1
+			}
+		}
+		if best == "" {
+			best, _ = codexctx.GuardianTruncateText(original, lower)
+		}
+		entry.Text = best
+		if entry.Text == original {
+			entry.Text = original
+			continue
+		}
+		entry.RetainedSource = nil
+		return true
+	}
+	return false
 }
 
 // guardianBudgetOmissionNote combines the profile's retention note with the
