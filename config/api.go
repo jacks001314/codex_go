@@ -3360,6 +3360,18 @@ func applyEdit(root map[string]any, edit *ConfigEdit) {
 		deleteAtPath(root, parts)
 		return
 	}
+	value := edit.Value
+	// Mirrors Rust ConfigDocument::apply (core/config/edit.rs): writing a
+	// boolean toggle to an existing structured feature table stores it as
+	// `<feature>.enabled` instead of replacing the table, preserving nested
+	// configuration such as `features.sleep_tool.mode` (#41243).
+	if _, ok := value.(bool); ok {
+		if _, structured := structuredFeatureName(parts); structured {
+			if _, isTable := getAtPath(root, parts).(map[string]any); isTable {
+				parts = append(parts, "enabled")
+			}
+		}
+	}
 	if strategy == MergeUpsert {
 		existing, ok := getAtPath(root, parts).(map[string]any)
 		incoming, incomingOK := edit.Value.(map[string]any)
@@ -3370,7 +3382,7 @@ func applyEdit(root map[string]any, edit *ConfigEdit) {
 			return
 		}
 	}
-	setAtPath(root, parts, edit.Value)
+	setAtPath(root, parts, value)
 }
 
 func deleteAtPath(root map[string]any, parts []string) bool {

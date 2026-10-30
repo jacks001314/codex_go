@@ -823,6 +823,12 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 			}
 		}
 	}
+	// Rust #41243: `features.sleep_tool.mode` is a closed enum
+	// (SleepToolMode::ModelDriven | AlwaysOn), so an unrecognized value fails
+	// config load instead of silently falling back to model_driven.
+	if err := validateSleepToolConfigValues(cfg.Values); err != nil {
+		return nil, err
+	}
 	// Rust #46541: the post-turn compaction threshold is a percentage of the
 	// usable context window; values above 100 are rejected at load time.
 	if percent, ok := configInt(cfg.Values["model_post_turn_compact_threshold_percent"]); ok && percent > 100 {
@@ -1527,6 +1533,17 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 		for key := range asyncCompaction {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `%s.async_compaction.%s`", prefix, key)
+			}
+		}
+	}
+	if sleepTool, ok := features["sleep_tool"].(map[string]any); ok {
+		// Mirrors Rust SleepToolConfigToml (#41243, serde
+		// deny_unknown_fields). The `mode` enum itself is validated during the
+		// load path (validateSleepToolConfigValues).
+		known := map[string]bool{"enabled": true, "mode": true}
+		for key := range sleepTool {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `%s.sleep_tool.%s`", prefix, key)
 			}
 		}
 	}
@@ -2604,6 +2621,61 @@ func (c *Config) SleepToolMode() SleepToolMode {
 	default:
 		return SleepToolModeModelDriven
 	}
+}
+
+// validateSleepToolConfigValues mirrors Rust FeaturesToml/sleep_tool
+// (config/src/features, #41243): the structured table is typed as
+// SleepToolConfigToml, whose `mode` field is a closed enum. Rust fails the
+// config load on an unknown variant, so Go rejects it here as well; the lenient
+// SleepToolMode accessor only exists for programmatic configs.
+func validateSleepToolConfigValues(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	if err := validateSleepToolModeAt(values["features"], "features"); err != nil {
+		return err
+	}
+	profiles, ok := values["profiles"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(profiles))
+	for name := range profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		profile, ok := profiles[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := validateSleepToolModeAt(profile["features"], "profiles."+name+".features"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSleepToolModeAt(value any, prefix string) error {
+	featuresValue, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	sleepTool, ok := featuresValue["sleep_tool"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawMode, ok := sleepTool["mode"]
+	if !ok {
+		return nil
+	}
+	if text, ok := rawMode.(string); ok {
+		if text == string(SleepToolModeModelDriven) || text == string(SleepToolModeAlwaysOn) {
+			return nil
+		}
+		return fmt.Errorf("invalid %s.sleep_tool.mode %q; expected \"model_driven\" or \"always_on\"", prefix, text)
+	}
+	return fmt.Errorf("invalid %s.sleep_tool.mode; expected \"model_driven\" or \"always_on\"", prefix)
 }
 
 func (c *Config) ChatGPTBaseURL() string {

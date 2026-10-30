@@ -3916,9 +3916,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 985 (实现+回归): 补齐 #41243 的三个剩余面并证书。Go 已有 stable sleep_tool feature（features/features.go）、结构化 features.sleep_tool 合并路径（config.structuredFeatureName + mergeConfigMaps 在 features 与 profiles.<name>.features 两层均支持 bool<->table 转换）、config.SleepToolMode()（model_driven 默认）以及 appserver/turn_runtime.go decideClockToolEnablement 的运行时门控：always_on 在 feature 开启时无条件注册 clock.sleep，model_driven 在 current_time_reminder 开启时沿用 legacy current_time_reminder.sleep_tool，否则回退到 model_has_clock，且两种模式都不影响 clock.curr_time。新增实现：config/config.go 的 validateSleepToolConfigValues 在 LoadEffective 路径拒绝非 model_driven/always_on 的 mode（含 profiles 与非字符串，对齐 Rust SleepToolMode closed enum），严格校验路径拒绝 features.sleep_tool 未知字段（SleepToolConfigToml deny_unknown_fields）；config/features_file.go SetFeature 对已存在的 [features.sleep_tool] 表或 [features] 内 sleep_tool = {...} inline 表写入 enabled，而不是追加冲突的 [features] 布尔键，使 codex features enable/disable 保留 mode（对齐 ConfigEditsBuilder::set_feature_enabled）；config/api.go applyEdit 将已存在结构化 feature 表上的布尔 SetPath 转为 <feature>.enabled（对齐 ConfigDocument::apply）。测试：config/sleep_tool_gating_like_rust_test.go（两种 override 顺序与两种 merge 方向均保留 enabled/mode，含 features 与 profiles.work.features；table 与 inline 形式的 toggle 保留 mode；top level/profile/非字符串 mode 拒绝；strict 未知字段拒绝；applyEdit 保留嵌套配置）与 appserver/sleep_tool_gating_like_rust_test.go（always_on 与 model_driven 在 legacy clock 配置、model clock、feature 门控下的矩阵）。验证：go test ./config -count=1、go test ./appserver -run 'SleepTool|CurrentTime|Clock' -count=1、go test ./app -run Feature -count=1、go vet ./config。"
    ]
   },
   {

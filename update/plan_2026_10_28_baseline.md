@@ -3016,6 +3016,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go's proxy routing has no listener handoff: the host bridge listens on a filesystem UDS and the bwrap inner helper runs a loopback bridge that dials it, with `Pdeathsig` bounding both helper lifetimes. No socketpair/SCM_RIGHTS or inherited control descriptor exists on this path.
 - Residual recorded for future work: the Go transport keeps the readable socket directory and the extra loopback hop, and stale `codex-linux-sandbox-proxy-*` directories are never removed.
 
-Status after reconciliation: `2144 complete`, `450 not_applicable`,
-`346 audit_pending`, `204 regression_pending`, `5 partial`,
+### Configurable sleep-tool gating (Round 985)
+
+- Rust #41243 adds a stable `sleep_tool` feature and a structured `features.sleep_tool.mode` (`model_driven` default, `always_on`) that gates `clock.sleep` independently of `clock.curr_time` (#41243, complete).
+- `appserver/turn_runtime.go` `decideClockToolEnablement` already implemented the runtime gate: `always_on` registers sleep whenever the feature is enabled, `model_driven` keeps the legacy `current_time_reminder.sleep_tool` value when the reminder feature is on and falls back to `model_has_clock` otherwise; `clock.curr_time` stays gated by the reminder feature or the model clock.
+- `config/config.go` now rejects an unknown `features.sleep_tool.mode` (closed enum, top level and profiles) on the `LoadEffective` path, and strict config rejects unknown `sleep_tool` fields, mirroring `SleepToolConfigToml`'s `deny_unknown_fields`.
+- `config/features_file.go` `SetFeature` writes `enabled` into an existing `[features.sleep_tool]` table or inline `sleep_tool = {...}` value instead of appending a conflicting boolean, so `codex features enable/disable sleep_tool` preserves `mode`; `config/api.go` `applyEdit` routes a boolean `SetPath` on an existing structured feature table to `<feature>.enabled`.
+- Tests: `config/sleep_tool_gating_like_rust_test.go` and `appserver/sleep_tool_gating_like_rust_test.go`. Verified with `go test ./config -count=1`, `go test ./appserver -run 'SleepTool|CurrentTime|Clock' -count=1`, `go test ./app -run Feature -count=1`, and `go vet ./config`.
+
+Status after reconciliation: `2145 complete`, `450 not_applicable`,
+`346 audit_pending`, `203 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

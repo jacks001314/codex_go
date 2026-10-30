@@ -46,6 +46,114 @@ func SetFeature(codexHome, feature string, enabled bool) error {
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
+	// Rust ConfigEditsBuilder::set_feature_enabled writes `enabled` into an
+	// existing structured feature table (core/config/edit.rs SetPath +
+	// is_structured_feature_path), so nested keys such as
+	// `features.sleep_tool.mode` survive an enable/disable toggle (#41243).
+	if lines, updated := setStructuredFeatureEnabled(lines, feature, enabled); updated {
+		return writeFeatureConfig(path, lines)
+	}
+	lines = setLegacyFeatureEnabled(lines, feature, enabled)
+	return writeFeatureConfig(path, lines)
+}
+
+// setStructuredFeatureEnabled writes `enabled` inside `[features.<feature>]` or
+// an inline `feature = { ... }` value under `[features]`, reporting whether
+// either form was found.
+func setStructuredFeatureEnabled(lines []string, feature string, enabled bool) ([]string, bool) {
+	if lines, ok := setFeatureTableEnabled(lines, feature, enabled); ok {
+		return lines, true
+	}
+	return setInlineFeatureEnabled(lines, feature, enabled)
+}
+
+func setFeatureTableEnabled(lines []string, feature string, enabled bool) ([]string, bool) {
+	header := "[features." + feature + "]"
+	for i, line := range lines {
+		if strings.TrimSpace(stripComment(line)) != header {
+			continue
+		}
+		for j := i + 1; j <= len(lines); j++ {
+			if j == len(lines) {
+				return insertConfigLine(lines, j, enabledFeatureLine(enabled)), true
+			}
+			body := strings.TrimSpace(stripComment(lines[j]))
+			if strings.HasPrefix(body, "[") && strings.HasSuffix(body, "]") {
+				return insertConfigLine(lines, j, enabledFeatureLine(enabled)), true
+			}
+			if key, _, ok := strings.Cut(body, "="); ok && strings.TrimSpace(key) == "enabled" {
+				lines[j] = enabledFeatureLine(enabled)
+				return lines, true
+			}
+		}
+	}
+	return lines, false
+}
+
+func setInlineFeatureEnabled(lines []string, feature string, enabled bool) ([]string, bool) {
+	inFeatures := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(stripComment(line))
+		if trimmed == "[features]" {
+			inFeatures = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inFeatures = false
+			continue
+		}
+		if !inFeatures {
+			continue
+		}
+		key, rawValue, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != feature {
+			continue
+		}
+		inline, ok := setInlineTableEnabled(strings.TrimSpace(rawValue), enabled)
+		if !ok {
+			return lines, false
+		}
+		lines[i] = fmt.Sprintf("%s = %s", feature, inline)
+		return lines, true
+	}
+	return lines, false
+}
+
+func setInlineTableEnabled(value string, enabled bool) (string, bool) {
+	inner := strings.TrimSpace(value)
+	if !strings.HasPrefix(inner, "{") || !strings.HasSuffix(inner, "}") {
+		return "", false
+	}
+	inner = strings.TrimSpace(inner[1 : len(inner)-1])
+	if updated, ok := replaceInlineTableKey(inner, "enabled", fmt.Sprintf("%t", enabled)); ok {
+		return "{ " + updated + " }", true
+	}
+	if inner == "" {
+		return fmt.Sprintf("{ enabled = %t }", enabled), true
+	}
+	return fmt.Sprintf("{ enabled = %t, %s }", enabled, inner), true
+}
+
+// replaceInlineTableKey replaces the `key = value` entry of a flat inline table
+// body.
+func replaceInlineTableKey(inner, key, value string) (string, bool) {
+	entries := strings.Split(inner, ",")
+	found := false
+	for i, entry := range entries {
+		entryKey, _, ok := strings.Cut(entry, "=")
+		if !ok || strings.TrimSpace(entryKey) != key {
+			continue
+		}
+		entries[i] = key + " = " + value
+		found = true
+	}
+	if !found {
+		return "", false
+	}
+	return strings.Join(entries, ","), true
+}
+
+func setLegacyFeatureEnabled(lines []string, feature string, enabled bool) []string {
 
 	inFeatures := false
 	featuresSeen := false
@@ -88,7 +196,21 @@ func SetFeature(codexHome, feature string, enabled bool) error {
 		copy(lines[insertAt+1:], lines[insertAt:])
 		lines[insertAt] = newLine
 	}
+	return lines
+}
 
+func insertConfigLine(lines []string, index int, line string) []string {
+	lines = append(lines, "")
+	copy(lines[index+1:], lines[index:])
+	lines[index] = line
+	return lines
+}
+
+func enabledFeatureLine(enabled bool) string {
+	return fmt.Sprintf("enabled = %t", enabled)
+}
+
+func writeFeatureConfig(path string, lines []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
