@@ -2,11 +2,9 @@ package chatcomposer
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/chat_composer/attachment_state.rs.
 
-type AttachedImage struct {
-	Placeholder string
-	Path        string
-}
-
+// LocalImageAttachment is the single attachment shape the composer carries
+// (Rust #58260 reuses LocalImageAttachment throughout instead of a separate
+// translated AttachedImage).
 type LocalImageAttachment struct {
 	Placeholder string
 	Path        string
@@ -14,7 +12,7 @@ type LocalImageAttachment struct {
 
 type AttachmentState struct {
 	Files                    []string
-	LocalImages              []AttachedImage
+	LocalImages              []LocalImageAttachment
 	RemoteImageURLs          []string
 	SelectedRemoteImageIndex *int
 }
@@ -38,11 +36,7 @@ func (a *AttachmentState) LocalImageAttachments() []LocalImageAttachment {
 	if a == nil {
 		return nil
 	}
-	out := make([]LocalImageAttachment, len(a.LocalImages))
-	for i, image := range a.LocalImages {
-		out[i] = LocalImageAttachment{Placeholder: image.Placeholder, Path: image.Path}
-	}
-	return out
+	return append([]LocalImageAttachment(nil), a.LocalImages...)
 }
 
 func (a *AttachmentState) SetRemoteImageURLs(urls []string, draft *DraftState) {
@@ -86,7 +80,7 @@ func (a *AttachmentState) ResetLocalImages(paths []string, draft *DraftState) {
 	}
 	a.LocalImages = nil
 	for index, path := range paths {
-		a.LocalImages = append(a.LocalImages, AttachedImage{
+		a.LocalImages = append(a.LocalImages, LocalImageAttachment{
 			Placeholder: LocalImageLabelText(len(a.RemoteImageURLs) + index + 1),
 			Path:        path,
 		})
@@ -95,11 +89,11 @@ func (a *AttachmentState) ResetLocalImages(paths []string, draft *DraftState) {
 	a.RelabelLocalImages(draft)
 }
 
-func (a *AttachmentState) AttachImage(draft *DraftState, path string) AttachedImage {
+func (a *AttachmentState) AttachImage(draft *DraftState, path string) LocalImageAttachment {
 	if a == nil {
-		return AttachedImage{}
+		return LocalImageAttachment{}
 	}
-	image := AttachedImage{
+	image := LocalImageAttachment{
 		Placeholder: LocalImageLabelText(len(a.RemoteImageURLs) + len(a.LocalImages) + 1),
 		Path:        path,
 	}
@@ -131,7 +125,7 @@ func (a *AttachmentState) TakeRecentSubmissionImagesWithPlaceholders() []LocalIm
 	if a == nil {
 		return nil
 	}
-	out := a.LocalImageAttachments()
+	out := a.LocalImages
 	a.LocalImages = nil
 	return out
 }
