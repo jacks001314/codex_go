@@ -8925,9 +8925,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/agents_overview/overview.go implements Rust 47379efd52 AgentsOverviewView::selection_after_removal (next surviving visible row, then previous, empty when everything displayed is removed, honoring grouping/search/pinned order) and prepare_agents_overview_removal through View.PrepareRemoval, with a one-shot selectionAfterRemoval successor that survives batched and duplicate removal notifications until ApplyRefresh consumes it",
+    "HideSelected/HideThread in tui/agents_overview/overview.go compute the successor before the row leaves the list, Rust's AgentsOverviewView::new keeps the rename target first and then falls back to the attached (IsCurrent) task, and ApplyRefresh falls back to an adjacent surviving row for removals the host did not prepare (server-side archive/delete notifications)",
+    "App wiring: app/agents_dashboard.go refreshes with the live selection, tui/tea/agents_overview.go forwards the view's pending successor, and app/agents_dashboard_test.go + tui/tea/agents_overview_lifecycle_test.go cover archive/delete/lifecycle paths",
+    "Regression coverage: tui/agents_overview/selection_after_removal_like_rust_test.go pins next/previous/batched/empty outcomes, filtered display order, duplicate and successor removals, pending consumption across refreshes, unprefixed external removals, hide-at-end adjacency, and the IsCurrent fallback; hide_selection_like_rust_test.go covers the earlier hide behavior",
+    "Verified with `go test ./tui/agents_overview -count=1`, `go test ./tui/tea -run AgentsOverview -count=1`, `go test ./app -run 'AgentsDashboard|AgentsOverview|CommandCenter' -count=1`, and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {

@@ -3546,6 +3546,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `appserverdaemon/installer.go` already had `installerStderrTail`, `installerStderrDrainTimeout`, and `installerExitError`; `appserverdaemon/installer_windows.go` sets `[Console]::OutputEncoding` to UTF-8. Round 1059 adds the missing response-budget regression: a worst-case `\u00XX`-escaped 2 KiB tail still fits `manualUpdateResponseLimit` and decodes.
 - Verified with `go test ./appserverdaemon -run 'Installer|ManualUpdate' -count=1` and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2213 complete`, `461 not_applicable`,
-`322 audit_pending`, `148 regression_pending`, `5 partial`,
+### Command Center adjacent selection after removal (Round 1060)
+
+- Rust #50505 chooses the next surviving task in displayed order before removing archived/deleted/hidden tasks, falls back to the previous task, and stores that one-shot successor so batched removals, duplicate notifications, and later view rebuilds keep an adjacent selection instead of jumping to the current task.
+- Complete: `tui/agents_overview/overview.go` already carried `selection_after_removal`, `PrepareRemoval`, and the adjacent fallback in `ApplyRefresh`/`HideSelected`/`HideThread`; `New` falls back to the attached `IsCurrent` task when the requested task disappeared, and `app/agents_dashboard.go`/`tui/tea/agents_overview.go` wire the pending successor through the dashboard lifecycle.
+- Regression coverage: `tui/agents_overview/selection_after_removal_like_rust_test.go` pins next/previous/batched/empty outcomes, filtered display order, duplicate and successor removals, pending consumption across repaints, unprepared server-side removals, hide-at-end adjacency, and the current-task fallback.
+- Verified with `go test ./tui/agents_overview -count=1`, `go test ./tui/tea -run AgentsOverview -count=1`, `go test ./app -run 'AgentsDashboard|AgentsOverview|CommandCenter' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2214 complete`, `461 not_applicable`,
+`322 audit_pending`, `147 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
