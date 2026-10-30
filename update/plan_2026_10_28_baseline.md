@@ -3985,3 +3985,11 @@ Status after this batch: `2332 complete`, `464 not_applicable`, `322 audit_pendi
 - A configuration reload failure is logged without failing the install. Strengthened coverage: `TestRuntimeRouterPluginInstallReloadsStagedUserConfigLikeRust` proves a `config.toml` edit made while the server is running reaches the MCP runtime after install, and `TestRuntimeRouterPluginInstallSurvivesConfigReloadFailureLikeRust` covers the unloadable-config path alongside the existing runtime-invalidation test.
 
 Status after this batch: `2333 complete`, `464 not_applicable`, `322 audit_pending`, `25 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Explicit daemon update with replacement retry (Round 1114)
+
+- #43562 the manual `codex app-server daemon update` request shares the automatic updater's socket and PID owner, so it still works when automatic updates are disabled. `RunPIDUpdateLoop` serves the manual request and returns the JSON `updated`/`noUpdate`/`unsupported` outcome; `updated` compares release selection and executable identity, so a same-version binary replacement is still reported.
+- `RequestManualUpdate` now keeps the request alive when a one-shot updater accepts the socket and exits before answering: it retries the successor updater for up to 30 seconds, returns to the normal startup path once no updater owns the PID record, and exits with a timeout otherwise. Windows reports the closed peer as `WSAECONNRESET`, so EOF/reset/abort reads map to the empty-response retry path.
+- Tests: `TestRequestManualUpdateRetriesReplacementUpdaterLikeRust`, `TestRequestManualUpdateFallsBackWhenReplacementIsGoneLikeRust`, plus the existing `TestRunPIDUpdateLoopServesManualRequestsLikeRust`, `TestRequestManualUpdateUnsupportedLikeRust`, `TestRequestManualUpdatePinnedPackageStartsAWorkerLikeRust`, `TestExchangeManualUpdateDecodesUpdaterErrorsLikeRust` and `TestUpdateFromCLIPinsTheCLIPackage`; `go build ./...` and full `go test ./appserverdaemon` pass.
+
+Status after this batch: `2334 complete`, `464 not_applicable`, `322 audit_pending`, `24 regression_pending`, `5 partial`, `6 blocked_precondition`.

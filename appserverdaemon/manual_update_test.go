@@ -2,6 +2,9 @@ package appserverdaemon
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +14,101 @@ import (
 
 	"codex_go/install"
 )
+
+// TestRequestManualUpdateRetriesReplacementUpdaterLikeRust covers Rust #43562:
+// when an updater accepts the request socket but exits before answering, the
+// CLI keeps the request alive and retries it against the successor.
+func TestRequestManualUpdateRetriesReplacementUpdaterLikeRust(t *testing.T) {
+	home := t.TempDir()
+	attempts := 0
+	options := &ManualUpdateOptions{
+		Connect: func(string, time.Duration) (net.Conn, error) {
+			attempts++
+			attempt := attempts
+			server, client := unixSocketPair(t)
+			go func() {
+				defer server.Close()
+				if attempt == 1 {
+					// The one-shot updater exits after accepting the connection.
+					return
+				}
+				request := make([]byte, len(manualUpdateRequest))
+				if _, err := io.ReadFull(server, request); err != nil {
+					return
+				}
+				payload, err := json.Marshal(map[string]any{"Ok": UpdateOutput{
+					Status:  UpdateNoUpdate,
+					Message: "successor answered",
+				}})
+				if err != nil {
+					return
+				}
+				_, _ = server.Write(payload)
+			}()
+			return client, nil
+		},
+	}
+	output, err := RequestManualUpdate(context.Background(), home, options)
+	if err != nil {
+		t.Fatalf("RequestManualUpdate error = %v", err)
+	}
+	if output == nil || output.Message != "successor answered" {
+		t.Fatalf("output = %#v", output)
+	}
+	if attempts != 2 {
+		t.Fatalf("connect attempts = %d, want 2", attempts)
+	}
+}
+
+// TestRequestManualUpdateFallsBackWhenReplacementIsGoneLikeRust covers the other
+// half of Rust #43562's replacement loop: when no updater owns the PID record
+// any more, the command returns to the normal startup path instead of waiting
+// for a successor that will never appear.
+func TestRequestManualUpdateFallsBackWhenReplacementIsGoneLikeRust(t *testing.T) {
+	home := t.TempDir()
+	attempts := 0
+	options := &ManualUpdateOptions{
+		Connect: func(string, time.Duration) (net.Conn, error) {
+			attempts++
+			switch attempts {
+			case 1:
+				server, client := unixSocketPair(t)
+				go func() { _ = server.Close() }()
+				return client, nil
+			case 2:
+				return nil, errors.New("updater gone")
+			default:
+				server, client := unixSocketPair(t)
+				go func() {
+					defer server.Close()
+					request := make([]byte, len(manualUpdateRequest))
+					if _, err := io.ReadFull(server, request); err != nil {
+						return
+					}
+					payload, err := json.Marshal(map[string]any{"Ok": UpdateOutput{
+						Status:  UpdateNoUpdate,
+						Message: "restarted worker",
+					}})
+					if err != nil {
+						return
+					}
+					_, _ = server.Write(payload)
+				}()
+				return client, nil
+			}
+		},
+	}
+	output, err := RequestManualUpdate(context.Background(), home, options)
+	if err != nil {
+		t.Fatalf("RequestManualUpdate error = %v", err)
+	}
+	if output == nil || output.Message != "restarted worker" {
+		t.Fatalf("output = %#v", output)
+	}
+	if attempts != 3 {
+		t.Fatalf("connect attempts = %d, want 3", attempts)
+	}
+}
 
 // TestRunPIDUpdateLoopServesManualRequestsLikeRust runs the real updater loop
 // against a real socket and drives it with the CLI's own request path.

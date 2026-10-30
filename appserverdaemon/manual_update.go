@@ -34,7 +34,15 @@ const (
 	manualUpdateWorkerTimeout = 30 * time.Second
 	// manualUpdateReadTimeout bounds reading the request on the updater side.
 	manualUpdateRequestTimeout = 5 * time.Second
+	// manualUpdateReplacementTimeout bounds waiting for the successor updater
+	// after one accepts a connection without answering (Rust 30s deadline).
+	manualUpdateReplacementTimeout = 30 * time.Second
 )
+
+// errManualUpdateNoResponse reports that the updater accepted the connection but
+// closed it before writing a response. Rust manual_update::request treats this
+// as an updater replacement and retries the request instead of failing.
+var errManualUpdateNoResponse = errors.New("daemon updater disconnected before responding")
 
 // ManualUpdateOptions injects the process and socket edges so the lane is
 // testable without spawning installers.
@@ -83,6 +91,44 @@ func RequestManualUpdate(ctx context.Context, codexHome string, options *ManualU
 	options = normalizeManualUpdateOptions(options)
 	daemon := NewDaemonForCodexHome(codexHome, "")
 	daemon.refreshInstallation()
+	var replacementDeadline time.Time
+	for {
+		output, err := requestManualUpdateOnce(ctx, codexHome, daemon, options)
+		if !errors.Is(err, errManualUpdateNoResponse) {
+			return output, err
+		}
+		// Rust manual_update::request: a one-shot updater may exit after
+		// accepting the connection but before reading the request. Give a
+		// successor time to appear, then return to the normal startup path if
+		// no updater owns the PID record any more.
+		if replacementDeadline.IsZero() {
+			replacementDeadline = time.Now().Add(manualUpdateReplacementTimeout)
+		}
+		socketPath := manualUpdateSocketPath(daemon)
+		if conn, connectErr := options.Connect(socketPath, manualUpdateConnectRetry); connectErr == nil {
+			output, exchangeErr := exchangeManualUpdate(conn, socketPath)
+			if !errors.Is(exchangeErr, errManualUpdateNoResponse) {
+				return output, exchangeErr
+			}
+		} else if !manualUpdaterStartingOrRunning(daemon) {
+			replacementDeadline = time.Time{}
+			continue
+		}
+		if !time.Now().Before(replacementDeadline) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(manualUpdateConnectRetry):
+		}
+	}
+}
+
+// requestManualUpdateOnce performs one full request/startup attempt. An empty
+// updater response is returned as errManualUpdateNoResponse so the caller can
+// retry across the replacement.
+func requestManualUpdateOnce(ctx context.Context, codexHome string, daemon *Daemon, options *ManualUpdateOptions) (*UpdateOutput, error) {
 	// A daemon that still serves the pre-dedicated standalone package moves to
 	// its dedicated package instead of forwarding a request to its updater
 	// (Rust update_loop::request_manual_update).
@@ -169,6 +215,20 @@ func RequestManualUpdate(ctx context.Context, codexHome string, options *ManualU
 	}
 }
 
+// manualUpdaterStartingOrRunning reports whether the updater PID record still
+// has an owner, which is when a request should keep waiting for its successor.
+func manualUpdaterStartingOrRunning(daemon *Daemon) bool {
+	if daemon == nil {
+		return false
+	}
+	settings, err := daemon.LoadSettings()
+	if err != nil {
+		return false
+	}
+	running, err := pidBackendIsStartingOrRunning(NewPIDUpdateLoopBackend(daemon.BackendPaths(settings)))
+	return err == nil && running
+}
+
 // exchangeManualUpdate writes the request and decodes the updater's answer,
 // which is either an update result or the updater's error text
 // (Rust's `Result<UpdateOutput, String>` wire shape).
@@ -195,6 +255,9 @@ func exchangeManualUpdate(conn net.Conn, socketPath string) (*UpdateOutput, erro
 	// socket peers keep open until their caller returns.
 	decoder := json.NewDecoder(io.LimitReader(conn, manualUpdateResponseLimit))
 	if err := decoder.Decode(&outcome); err != nil {
+		if manualUpdateResponseMissing(err) {
+			return nil, errManualUpdateNoResponse
+		}
 		return nil, fmt.Errorf("invalid response from daemon updater: %w", err)
 	}
 	if outcome.Err != nil {
@@ -204,6 +267,17 @@ func exchangeManualUpdate(conn net.Conn, socketPath string) (*UpdateOutput, erro
 		return nil, errors.New("invalid response from daemon updater: missing Ok payload")
 	}
 	return outcome.OK, nil
+}
+
+// manualUpdateResponseMissing reports whether the read ended because the
+// updater closed its side of the socket without writing a response. Windows
+// surfaces that as WSAECONNRESET rather than io.EOF, so the platform constant
+// comes from manualUpdateConnectionReset.
+func manualUpdateResponseMissing(err error) bool {
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) ||
+		manualUpdateConnectionReset(err)
 }
 
 // connectManualUpdaterSocket dials the updater socket without waiting. Rust

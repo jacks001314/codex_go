@@ -9094,9 +9094,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1114: the explicit app-server daemon update command forwards a manual request over the same updater socket owner as automatic updates, so it works even when automatic updates are disabled; RunPIDUpdateLoop serves the request and returns JSON updated/noUpdate/unsupported statuses, with updated decided by release selection or executable identity so a same-version binary replacement is still reported. When a one-shot updater accepts the socket but exits before responding, RequestManualUpdate retries the successor updater for up to 30s, returns to the normal startup path when no updater owns the PID record, and reports a timeout otherwise; on Windows a reset/abort or EOF read counts as an empty response. Tests: TestRequestManualUpdateRetriesReplacementUpdaterLikeRust, TestRequestManualUpdateFallsBackWhenReplacementIsGoneLikeRust, TestRunPIDUpdateLoopServesManualRequestsLikeRust, TestRequestManualUpdateUnsupportedLikeRust, TestRequestManualUpdatePinnedPackageStartsAWorkerLikeRust, TestExchangeManualUpdateDecodesUpdaterErrorsLikeRust, TestManualUpdateSupportedLikeRust, TestUpdateFromCLIPinsTheCLIPackage; go build ./... and go test ./appserverdaemon pass."
    ]
   },
   {
