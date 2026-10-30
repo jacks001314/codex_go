@@ -4276,9 +4276,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 986 (实现+回归): #41416 的 feature gate 与三处通知过滤已存在（features 里的 omit_app_server_notification_media 默认关闭；appserver/runtime_router.go notify 在 isOmitMediaNotificationMethod 且 notificationMediaFilterEnabled 时调用 withoutNotificationMedia；appserver/notification_media.go 递归删除 input_image/input_audio/image/audio 内容与 image_url/audio_url）。本轮补齐与 Rust notification_media.rs 的差异：imageGeneration / image_generation_call 的 inline result 现在被清除（保留 fileId、revisedPrompt、inputImages）；MCP result.content 中带 resource.blob 的二进制 resource 条目整体丢弃（保留 text 与无 blob 的 resource）；local_image/local_audio 仍保留；过滤只作用于 item/started、item/completed、rawResponseItem/completed 三类通知参数，模型输入不受影响。测试：appserver/notification_media_like_rust_test.go（image generation 与 raw image_generation_call、MCP blob 过滤、local media 保留、feature gate 对三类通知的开关行为）。验证：go test ./appserver -run NotificationMedia -count=1；go test ./appserver -count=1（仅已知 7 项既有失败：manifest / protocol surface / analytics 指纹）。"
    ]
   },
   {

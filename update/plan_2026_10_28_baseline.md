@@ -3024,6 +3024,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `config/features_file.go` `SetFeature` writes `enabled` into an existing `[features.sleep_tool]` table or inline `sleep_tool = {...}` value instead of appending a conflicting boolean, so `codex features enable/disable sleep_tool` preserves `mode`; `config/api.go` `applyEdit` routes a boolean `SetPath` on an existing structured feature table to `<feature>.enabled`.
 - Tests: `config/sleep_tool_gating_like_rust_test.go` and `appserver/sleep_tool_gating_like_rust_test.go`. Verified with `go test ./config -count=1`, `go test ./appserver -run 'SleepTool|CurrentTime|Clock' -count=1`, `go test ./app -run Feature -count=1`, and `go vet ./config`.
 
-Status after reconciliation: `2145 complete`, `450 not_applicable`,
-`346 audit_pending`, `203 regression_pending`, `5 partial`,
+### App-server notification media filtering (Round 986)
+
+- Rust #41416 adds the disabled-by-default `omit_app_server_notification_media` feature and strips inline image/audio content from `item/started`, `item/completed`, and `rawResponseItem/completed` while leaving model input untouched (#41416, complete).
+- `appserver/runtime_router.go` already gated `withoutNotificationMedia` on the feature and `appserver/notification_media.go` already dropped media content entries; this round closed the remaining Rust differences.
+- `imageGeneration` and raw `image_generation_call` items now clear their inline `result` payload while keeping `fileId`, `revisedPrompt`, and `inputImages`; MCP tool results drop content entries that carry `resource.blob` while keeping text and blob-less resources; `local_image`/`local_audio` references are preserved.
+- Tests: `appserver/notification_media_like_rust_test.go` covers image generation, raw image generation, MCP blob filtering, local media retention, and the feature gate over all three notification types. Verified with `go test ./appserver -run NotificationMedia -count=1` and `go test ./appserver -count=1` (only the seven known pre-existing manifest/protocol-surface/analytics failures remain).
+
+Status after reconciliation: `2146 complete`, `450 not_applicable`,
+`346 audit_pending`, `202 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

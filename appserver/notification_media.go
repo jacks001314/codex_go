@@ -49,6 +49,12 @@ func withoutNotificationItemMedia(item any) any {
 		if isMediaContentItemType(itemType) {
 			return nil
 		}
+		// Rust clears the inline base64 payload of image-generation items while
+		// keeping the file reference and prompts (notification_media.rs
+		// ThreadItem::ImageGeneration / ResponseItem::ImageGenerationCall).
+		if isImageGenerationItemType(itemType) {
+			delete(value, "result")
+		}
 		// Strip a top-level image/audio attachment.
 		if _, ok := value["image_url"]; ok {
 			delete(value, "image_url")
@@ -69,6 +75,11 @@ func withoutNotificationItemMedia(item any) any {
 				if isMediaContentItemType(strings.TrimSpace(stringFromAny(childMap["type"]))) {
 					continue
 				}
+				// Rust drops MCP content entries that embed a binary resource
+				// blob (`resource.blob`), keeping text and blob-less resources.
+				if hasContentResourceBlob(childMap) {
+					continue
+				}
 			}
 			filtered = append(filtered, withoutNotificationItemMedia(child))
 		}
@@ -85,4 +96,22 @@ func isMediaContentItemType(itemType string) bool {
 	default:
 		return false
 	}
+}
+
+func isImageGenerationItemType(itemType string) bool {
+	switch itemType {
+	case "imageGeneration", "image_generation", "image_generation_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasContentResourceBlob(item map[string]any) bool {
+	resource, ok := item["resource"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = resource["blob"]
+	return ok
 }
