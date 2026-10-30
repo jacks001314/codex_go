@@ -365,6 +365,94 @@ func (p *AdditionalPermissionProfile) IsEmpty() bool {
 	return p == nil || (p.Network == nil && len(p.FileSystem) == 0 && len(p.ReadFileSystem) == 0)
 }
 
+// NormalizeAdditionalPermissionsForExecutor resolves read/write grants against
+// the executor cwd. Rust #42314 carries the request cwd as the target
+// environment's native representation and converts the preserved value back to
+// a PathUri when materializing grants, so a foreign-convention cwd must not be
+// joined with host path rules.
+func NormalizeAdditionalPermissionsForExecutor(profile AdditionalPermissionProfile, cwd string) (AdditionalPermissionProfile, error) {
+	if !additionalPermissionsUseExecutorConvention(cwd) {
+		return NormalizeAdditionalPermissions(profile, cwd)
+	}
+	convention := utils.NativePathConvention()
+	nativeCWD := cwd
+	if cwdURI, ok := utils.InferredPathURI(cwd); ok {
+		if inferred, ok := cwdURI.InferConvention(); ok {
+			convention = inferred
+		}
+		// The convention resolver joins native spellings, so a URI-form cwd is
+		// rendered into the executor's native representation first.
+		if native := cwdURI.NativePathString(); native != "" {
+			nativeCWD = native
+		}
+	}
+	return NormalizeAdditionalPermissionsForConvention(profile, nativeCWD, convention)
+}
+
+// NormalizeAdditionalPermissionsForConvention resolves grants under the given
+// executor path convention. A grant already spelled with another convention is
+// rejected instead of silently reinterpreted (Rust #42314 fails closed when a
+// permission path does not match the executor cwd).
+func NormalizeAdditionalPermissionsForConvention(profile AdditionalPermissionProfile, cwd string, convention utils.PathConvention) (AdditionalPermissionProfile, error) {
+	if convention == "" {
+		return NormalizeAdditionalPermissions(profile, cwd)
+	}
+	out := AdditionalPermissionProfile{Network: profile.Network}
+	normalize := func(paths []string) ([]string, error) {
+		normalized := []string{}
+		seen := map[string]bool{}
+		for _, path := range paths {
+			if err := requireNonEmpty(path, "file_system permission path"); err != nil {
+				return nil, err
+			}
+			if uri, ok := utils.InferredPathURI(path); ok {
+				if inferred, ok := uri.InferConvention(); ok && inferred != convention {
+					return nil, fmt.Errorf("permission path %q does not match executor cwd %q", path, cwd)
+				}
+			}
+			resolved := resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: path}, cwd, convention)
+			if resolved == "" {
+				return nil, fmt.Errorf("permission path %q does not match executor cwd %q", path, cwd)
+			}
+			if !seen[resolved] {
+				seen[resolved] = true
+				normalized = append(normalized, resolved)
+			}
+		}
+		return normalized, nil
+	}
+	normalizedWrite, err := normalize(profile.FileSystem)
+	if err != nil {
+		return AdditionalPermissionProfile{}, err
+	}
+	normalizedRead, err := normalize(profile.ReadFileSystem)
+	if err != nil {
+		return AdditionalPermissionProfile{}, err
+	}
+	out.FileSystem = normalizedWrite
+	out.ReadFileSystem = normalizedRead
+	return out, nil
+}
+
+// additionalPermissionsUseExecutorConvention reports whether grants for this
+// cwd must be resolved with the executor convention: either the cwd is spelled
+// as a path URI, or its convention differs from the host's.
+func additionalPermissionsUseExecutorConvention(cwd string) bool {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return false
+	}
+	if strings.Contains(cwd, "://") {
+		return true
+	}
+	cwdURI, ok := utils.InferredPathURI(cwd)
+	if !ok {
+		return false
+	}
+	convention, ok := cwdURI.InferConvention()
+	return ok && convention != utils.NativePathConvention()
+}
+
 func MergePermissionProfiles(left, right *AdditionalPermissionProfile) *AdditionalPermissionProfile {
 	if left == nil && right == nil {
 		return nil

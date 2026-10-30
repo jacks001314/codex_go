@@ -9,6 +9,7 @@ import (
 	"codex_go/sandbox/sandboxpath"
 	"codex_go/session"
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 func emptyRequestPermissionsDecision() tool.RequestPermissionsDecision {
@@ -32,7 +33,9 @@ func (r *RuntimeRouter) approvedRequestPermissionsDecision(
 	if profile == nil {
 		profile = &sandbox.AdditionalPermissionProfile{}
 	}
-	normalized, err := sandbox.NormalizeAdditionalPermissions(*profile, cwd)
+	// Rust #42314: the request cwd keeps the target environment's native
+	// spelling, so grants materialize against that convention.
+	normalized, err := sandbox.NormalizeAdditionalPermissionsForExecutor(*profile, cwd)
 	if err != nil {
 		return tool.RequestPermissionsDecision{}, err
 	}
@@ -108,11 +111,11 @@ func intersectRequestedPermissions(requested, granted *sandbox.AdditionalPermiss
 	if requested == nil {
 		return &sandbox.AdditionalPermissionProfile{}
 	}
-	requestedNormalized, err := sandbox.NormalizeAdditionalPermissions(*requested, cwd)
+	requestedNormalized, err := sandbox.NormalizeAdditionalPermissionsForExecutor(*requested, cwd)
 	if err != nil {
 		return &sandbox.AdditionalPermissionProfile{}
 	}
-	grantedNormalized, err := sandbox.NormalizeAdditionalPermissions(*granted, cwd)
+	grantedNormalized, err := sandbox.NormalizeAdditionalPermissionsForExecutor(*granted, cwd)
 	if err != nil {
 		return &sandbox.AdditionalPermissionProfile{}
 	}
@@ -132,7 +135,7 @@ func permissionPathsWithin(granted, requested []string) []string {
 	seen := map[string]bool{}
 	for _, grant := range granted {
 		for _, request := range requested {
-			if grant != request && !sandboxpath.PathWithin(grant, request) {
+			if grant != request && !permissionPathWithin(grant, request) {
 				continue
 			}
 			if !seen[grant] {
@@ -143,6 +146,18 @@ func permissionPathsWithin(granted, requested []string) []string {
 		}
 	}
 	return out
+}
+
+// permissionPathWithin compares grant and request as path URIs so a grant
+// spelled with the executor's convention is matched even when that convention
+// differs from the Codex host (Rust #42314).
+func permissionPathWithin(grant, request string) bool {
+	grantURI, grantOK := utils.InferredPathURI(grant)
+	requestURI, requestOK := utils.InferredPathURI(request)
+	if grantOK && requestOK {
+		return grantURI.StartsWith(requestURI)
+	}
+	return sandboxpath.PathWithin(grant, request)
 }
 
 func (r *RuntimeRouter) activeTurnEnvironmentCWD(threadID, turnID, environmentID string) string {

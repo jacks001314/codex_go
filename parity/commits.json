@@ -6215,9 +6215,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Target-native cwd is already preserved end to end (string-typed app-server protocol, no host-native guard); grants now materialize with NormalizeAdditionalPermissionsForExecutor and match with permissionPathWithin against the executor convention (sandbox/executor_cwd_permission_normalization_like_rust_test.go, appserver/request_permissions_target_native_cwd_like_rust_test.go)"
    ]
   },
   {
