@@ -10401,9 +10401,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1084: audioutil.PrepareAudioURL decodes the data-URL payload and rejects an empty result with ErrInvalidDataURL (audio payload is empty) before the size bound, matching Rust #44070; TestPrepareAudioURLPlaceholders already asserts the empty payload is invalid, and appserver/audio_preparation.go maps it to the processing-error placeholder. go test ./audioutil passes."
    ]
   },
   {
@@ -21081,9 +21081,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1084: previousModelCompactionForTurn checks the comp-hash change first and then skips compaction when previousModel == currentModel, with no is_basic_session_source guard in the helper or its sole caller runPreviousModelInlineCompact, so the unchanged-model shortcut already covers every session source like Rust #47934. A changed hash still compacts for the same slug. TestPreviousModelCompactionDecisionLikeRust covers the hash-change and unchanged-model arms; go test ./appserver -run PreviousModelCompaction passes."
    ]
   },
   {
