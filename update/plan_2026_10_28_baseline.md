@@ -3325,6 +3325,16 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions: `app/transcript_preview_file_citations_like_rust_test.go` pins citation display with the row cwd, code-span literals, and Git-receipt stripping; `TestRewriteFileCitationsForPlainTextUsesDisplayPath` and `TestRewriteFileCitationsForPlainTextKeepsLiteralRegions` pin the plain-text helper including the cwd-less `./` prefix.
 - Verified with `go build ./...`, `go test ./app -run TranscriptPreview -count=1`, `go test ./tui/markdown ./tui -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2192 complete`, `451 not_applicable`,
-`344 audit_pending`, `158 regression_pending`, `4 partial`,
+### Captured step settings for model context (Round 1028)
+
+- Rust #44200 builds model, personality, approval, collaboration, app, plugin, and multi-agent world-state sections from the settings captured for each sampling step, resolves the multi-agent policy from that step's effective reasoning effort, uses the step's context window for full-context metadata, and retains the step when rebuilding the initial context for compaction.
+- Go's turn-start context already used the requested settings, but the per-step provider only refreshed model-switch instructions, context-window guidance, persistent mode, and realtime state. After a mid-turn model switch, permissions, collaboration instructions, and the catalog-provided multi-agent mode text kept the turn's initial model. `turnStepInputItemsProvider` now rebuilds those sections from the step's resolved model through the existing diff-and-persist world-state builders, so unchanged sections stay silent and switched models emit one replacement section (#44200, complete).
+- The multi-agent mode snapshot now records a custom policy's text (Rust `MultiAgentModeState` serializes `MultiAgentMode::Custom(text)`), so a model switch that changes the catalog mode message refreshes the section instead of matching the previous `custom` marker.
+- Mid-turn roll-over compaction now resolves the active step's model (`midTurnCompactionStep`) for the auto-compact policy and the replacement window's model, and `compactionStepBaseInstructions` uses that model's instructions unless the turn or config supplied an explicit override (#44200, complete).
+- Mid-turn replacements are recorded as hidden developer items keyed by content, so switching back to an earlier section reuses the existing history item instead of appending a duplicate id; unchanged sections stay silent because the persisted world-state snapshot already reflects them.
+- New regressions: `TestTurnStepWorldStateUsesCapturedModelLikeRust` pins the collaboration and multi-agent sections following a step model switch with no duplicate re-emission, and `TestMidTurnCompactionUsesCapturedStepModelLikeRust` pins the compaction step's policy window, instructions, and explicit-override precedence.
+- Verified with `go build ./...`, `go test ./appserver -run 'Step|Collaboration|MultiAgent|Permissions|Compact|WorldState|Realtime|PersistentMode' -count=1`, `go test ./turn ./session -count=1`, and `go test ./parity -run TestAlignment -count=1`. (Full `./appserver` still has the seven known pre-existing surface/analytics failures; `./app` has the two known failures.)
+
+Status after reconciliation: `2193 complete`, `451 not_applicable`,
+`344 audit_pending`, `157 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

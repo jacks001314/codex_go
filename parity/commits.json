@@ -10555,9 +10555,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1028 (fix): mid-turn sampling steps rebuild the permissions, collaboration-mode, multi-agent mode, and multi-agent usage-hint world-state sections from the captured step model, and mid-turn compaction keeps that step's model, context window, and instructions (appserver/turn_runtime.go). Regression contract: appserver/turn_step_world_state_like_rust_test.go:TestTurnStepWorldStateUsesCapturedModelLikeRust, appserver/turn_step_world_state_like_rust_test.go:TestMidTurnCompactionUsesCapturedStepModelLikeRust; verify with `go test ./appserver -run 'StepWorldStateUsesCapturedModel|MidTurnCompactionUsesCapturedStepModel' -count=1`."
    ]
   },
   {

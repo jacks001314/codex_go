@@ -2286,7 +2286,11 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 			return nil, err
 		}
 		extra := cloneAnyMap(record.Metadata.Extra)
-		policy := r.compactPolicyForTurn(runConfig.Model, params, extra)
+		// Rust #44200 keeps the step captured for the current sampling iteration
+		// when rebuilding the initial context for compaction, so the roll-over
+		// measures and recounts the window with that step's model.
+		stepModel, stepInfo := r.midTurnCompactionStep(threadID, turnID, runConfig)
+		policy := r.compactPolicyForTurn(stepModel, params, extra)
 		if policy.Scope == compact.ScopeBodyAfterPrefix && policy.PrefillTokens <= 0 {
 			policy.PrefillTokens = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
 		}
@@ -2347,8 +2351,8 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 			ActiveContextTokensBefore: int64(status.ActiveContextTokens),
 			History:                   history,
 			CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
-			BaseInstructions:          appStringPointer(runConfig.Instructions),
-			WindowModel:               runConfig.Model,
+			BaseInstructions:          r.compactionStepBaseInstructions(stepInfo, runConfig, params),
+			WindowModel:               stepModel,
 		}, nil)
 		if err != nil {
 			return nil, err
@@ -2382,6 +2386,53 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 			PreviousResponseID: "",
 		}, nil
 	}
+}
+
+// midTurnCompactionStep resolves the model captured for the turn's current
+// sampling step together with its catalog entry. Rust #44200 retains that step
+// when rebuilding the initial context for compaction, so a mid-turn model
+// switch compacts against the new model's context window and instructions
+// instead of the turn's initial model.
+func (r *RuntimeRouter) midTurnCompactionStep(threadID string, turnID string, runConfig *appTurnRunConfig) (string, *model.ModelInfo) {
+	var cfg *config.Config
+	if runConfig != nil {
+		cfg = runConfig.Config
+	}
+	modelID := r.currentTurnModel(threadID, turnID)
+	if modelID == "" && runConfig != nil {
+		modelID = strings.TrimSpace(runConfig.Model)
+	}
+	return modelID, r.modelInfoForRuntimeWithConfig(modelID, cfg)
+}
+
+// compactionStepBaseInstructions returns the base instructions for the retained
+// compaction step. An explicit turn or config override stays authoritative and
+// applies to every model; otherwise the step model's own instructions replace
+// the turn-start model's text (Rust #44200).
+func (r *RuntimeRouter) compactionStepBaseInstructions(info *model.ModelInfo, runConfig *appTurnRunConfig, params *turn.TurnStartParams) *string {
+	if runConfig == nil {
+		return nil
+	}
+	if params != nil && params.BaseInstructions != nil {
+		return appStringPointer(runConfig.Instructions)
+	}
+	if info == nil {
+		return appStringPointer(runConfig.Instructions)
+	}
+	cfg := runConfig.Config
+	if cfg != nil {
+		if configured, err := appBaseInstructionsForConfig(cfg); err == nil && strings.TrimSpace(configured) != "" {
+			return appStringPointer(runConfig.Instructions)
+		}
+	}
+	instructions := info.ModelInstructions(appPersonalityForTurn(cfg, params))
+	if instructions != "" && cfg != nil && !cfg.UpdatePlanEnabled() && modelUsesBundledInstructions(info) {
+		instructions = promptctx.WithoutUpdatePlanInstructions(instructions)
+	}
+	if strings.TrimSpace(instructions) == "" {
+		return appStringPointer(runConfig.Instructions)
+	}
+	return appStringPointer(instructions)
 }
 
 func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnStartParams, record *turn.TurnRecord, runtime *turn.Runtime, connectionID string) {
@@ -9316,10 +9367,11 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 	}
 }
 
-// turnStepInputItemsProvider rebuilds the model and context-window world-state
-// sections from the model captured for each sampling step. The turn-start
-// token-budget preferences stay fixed, while model-owned defaults are resolved
-// again against the step's model (Rust #41162).
+// turnStepInputItemsProvider rebuilds the model-owned world-state sections from
+// the settings captured for each sampling step. The turn-start token-budget
+// preferences stay fixed, while model-owned defaults, permissions, collaboration
+// instructions, and multi-agent policy are resolved again against the step's
+// model (Rust #41162, #44200).
 func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID string, runConfig *appTurnRunConfig) turn.StepInputItemsProvider {
 	threadID = strings.TrimSpace(threadID)
 	turnID = strings.TrimSpace(turnID)
@@ -9358,6 +9410,32 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID strin
 		if active != nil {
 			params = active.Params
 		}
+		// Rust #44200 builds the approval and collaboration sections from the
+		// step's captured settings, so a mid-turn model switch refreshes the
+		// model-owned approval prompts and collaboration instructions instead of
+		// keeping the turn's initial model context.
+		if params != nil {
+			if item, permissionsErr := r.permissionsWorldStateInputItem(threadID, params, info, runConfig.Config); permissionsErr != nil {
+				return nil, permissionsErr
+			} else if item != nil {
+				items = append(items, item)
+				if persisted, ok := permissionsWorldStateSessionItemForTurn(turnID, item, time.Now().UTC()); ok {
+					if appendErr := r.appendWorldStateStepItem(threadID, persisted); appendErr != nil {
+						return nil, appendErr
+					}
+				}
+			}
+			if item, collaborationErr := r.collaborationModeWorldStateInputItem(threadID, params, info, runConfig.Config); collaborationErr != nil {
+				return nil, collaborationErr
+			} else if item != nil {
+				items = append(items, item)
+				if persisted, ok := collaborationModeWorldStateSessionItemForTurn(turnID, item, time.Now().UTC()); ok {
+					if appendErr := r.appendWorldStateStepItem(threadID, persisted); appendErr != nil {
+						return nil, appendErr
+					}
+				}
+			}
+		}
 		if item, persistentErr := r.persistentModeWorldStateInputItem(
 			threadID,
 			params,
@@ -9369,6 +9447,21 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID strin
 			return nil, persistentErr
 		} else if item != nil {
 			items = append(items, item)
+		}
+		// Rust #44200 resolves the multi-agent policy from the step's captured
+		// model catalog and effective reasoning effort. Without a live turn the
+		// step has no stored settings to diff against, so the sections stay put.
+		if params != nil {
+			if item, modeErr := r.multiAgentModeInputItemForModel(threadID, params, info); modeErr != nil {
+				return nil, modeErr
+			} else if item != nil {
+				items = append(items, item)
+			}
+			if item, hintErr := r.multiAgentUsageHintInputItemForModel(threadID, runConfig.Config, info); hintErr != nil {
+				return nil, hintErr
+			} else if item != nil {
+				items = append(items, item)
+			}
 		}
 		if item, realtimeErr := r.realtimeWorldStateInputItem(threadID, runConfig.Config); realtimeErr != nil {
 			return nil, realtimeErr
@@ -14299,6 +14392,14 @@ func worldStateOptionalString(value string) *string {
 }
 
 func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.TurnStartParams) (any, error) {
+	return r.multiAgentModeInputItemForModel(threadID, params, nil)
+}
+
+// multiAgentModeInputItemForModel is multiAgentModeInputItem with the model
+// catalog captured for the sampling step. Rust #44200 resolves the multi-agent
+// mode from the step's model info, so a mid-turn model switch also switches the
+// catalog-provided mode text.
+func (r *RuntimeRouter) multiAgentModeInputItemForModel(threadID string, params *turn.TurnStartParams, info *model.ModelInfo) (any, error) {
 	mode := string(MultiAgentModeExplicitRequestOnly)
 	if params != nil && params.MultiAgentMode != nil {
 		candidate := strings.TrimSpace(*params.MultiAgentMode)
@@ -14320,11 +14421,13 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 			// Rust #38619: catalog multi-agent mode messages provide the
 			// explicit-delegation and hint text when no configuration override
 			// is present.
-			modelID := ""
-			if params != nil {
-				modelID = strings.TrimSpace(params.Model)
+			if info == nil {
+				modelID := ""
+				if params != nil {
+					modelID = strings.TrimSpace(params.Model)
+				}
+				info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
 			}
-			info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 			if info != nil && info.ModelMessages != nil && info.ModelMessages.MultiAgent != nil && info.ModelMessages.MultiAgent.Mode != nil {
 				if text, suppress := multiAgentModeCatalogText(mode, info.ModelMessages.MultiAgent.Mode); suppress {
 					suppressMode = true
@@ -14346,23 +14449,37 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 		return nil, err
 	}
 	previous := ""
+	previousText := ""
 	if len(state.MultiAgentMode) > 0 {
 		var snapshot struct {
 			Mode string `json:"mode"`
+			Text string `json:"text"`
 		}
 		if err := json.Unmarshal(state.MultiAgentMode, &snapshot); err != nil {
 			return nil, err
 		}
 		previous = strings.TrimSpace(snapshot.Mode)
+		previousText = strings.TrimSpace(snapshot.Text)
 	}
 	modeSnapshot := mode
 	if customModeText != "" {
 		modeSnapshot = "custom"
 	}
-	if previous == modeSnapshot {
+	// Rust's MultiAgentModeState snapshots a custom policy's text, so a model
+	// switch that changes the catalog-provided mode message refreshes the
+	// section instead of looking unchanged (#44200).
+	unchanged := previous == modeSnapshot
+	if unchanged && modeSnapshot == "custom" {
+		unchanged = previousText == customModeText
+	}
+	if unchanged {
 		return nil, nil
 	}
-	snapshot, err := json.Marshal(map[string]string{"mode": modeSnapshot})
+	snapshotValue := map[string]string{"mode": modeSnapshot}
+	if modeSnapshot == "custom" {
+		snapshotValue["text"] = customModeText
+	}
+	snapshot, err := json.Marshal(snapshotValue)
 	if err != nil {
 		return nil, err
 	}
@@ -14418,6 +14535,12 @@ func multiAgentModeCatalogText(mode string, modeMessages *model.MultiAgentModeMe
 // MultiAgentUsageHintState. The hint is persisted so it is only emitted again
 // when the configured text or the concurrency cap changes.
 func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *config.Config) (any, error) {
+	return r.multiAgentUsageHintInputItemForModel(threadID, cfg, nil)
+}
+
+// multiAgentUsageHintInputItemForModel resolves the multi-agent role hints from
+// the model catalog captured for the sampling step (Rust #44200).
+func (r *RuntimeRouter) multiAgentUsageHintInputItemForModel(threadID string, cfg *config.Config, info *model.ModelInfo) (any, error) {
 	if r == nil || cfg == nil {
 		return nil, nil
 	}
@@ -14436,7 +14559,7 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *confi
 	if err != nil {
 		return nil, err
 	}
-	rootCatalogHintText, subagentCatalogHintText := r.multiAgentCatalogRoleInstructions(cfg, nil)
+	rootCatalogHintText, subagentCatalogHintText := r.multiAgentCatalogRoleInstructionsForModel(cfg, nil, info)
 	hint := agent.MultiAgentV2UsageHint(agent.MultiAgentV2UsageHintOptions{
 		IsSubagent:                     strings.TrimSpace(record.Metadata.AgentPath) != "" || record.Metadata.AgentDepth > 0,
 		MaxConcurrency:                 v2Config.MaxConcurrentThreadsPerSession,
@@ -14479,19 +14602,28 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *confi
 // root/subagent usage-hint text takes precedence at render time; the catalog
 // values are used only when no configuration override exists.
 func (r *RuntimeRouter) multiAgentCatalogRoleInstructions(cfg *config.Config, params *turn.TurnStartParams) (*string, *string) {
-	modelID := ""
-	if params != nil {
-		modelID = strings.TrimSpace(params.Model)
-	}
-	if modelID == "" && cfg != nil {
-		if value, ok := cfg.Values["model"].(string); ok {
-			modelID = strings.TrimSpace(value)
+	return r.multiAgentCatalogRoleInstructionsForModel(cfg, params, nil)
+}
+
+// multiAgentCatalogRoleInstructionsForModel is
+// multiAgentCatalogRoleInstructions with the catalog entry resolved from the
+// captured sampling step, so a mid-turn model switch updates the role hints.
+func (r *RuntimeRouter) multiAgentCatalogRoleInstructionsForModel(cfg *config.Config, params *turn.TurnStartParams, info *model.ModelInfo) (*string, *string) {
+	if info == nil {
+		modelID := ""
+		if params != nil {
+			modelID = strings.TrimSpace(params.Model)
 		}
+		if modelID == "" && cfg != nil {
+			if value, ok := cfg.Values["model"].(string); ok {
+				modelID = strings.TrimSpace(value)
+			}
+		}
+		if modelID == "" {
+			return nil, nil
+		}
+		info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
 	}
-	if modelID == "" {
-		return nil, nil
-	}
-	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 	if info == nil || info.ModelMessages == nil || info.ModelMessages.MultiAgent == nil || info.ModelMessages.MultiAgent.Role == nil {
 		return nil, nil
 	}
@@ -14553,4 +14685,26 @@ func (r *RuntimeRouter) deferredToolsWorldStateInputItem(threadID string, runtim
 		return nil, err
 	}
 	return buildRenderedMessage(contextfrag.Render(fragment)), nil
+}
+
+// appendWorldStateStepItem records a mid-turn replacement section once. The
+// turn-start section keeps the per-turn id, so a replacement is keyed by its
+// content; switching back to an earlier section must not append a second copy
+// of the same text.
+func (r *RuntimeRouter) appendWorldStateStepItem(threadID string, item session.Item) error {
+	hash := sha256.Sum256([]byte(item.ID + "\x00" + item.Text))
+	item.ID = item.ID + "-" + hex.EncodeToString(hash[:6])
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return err
+	}
+	if record != nil {
+		for index := range record.Items {
+			if record.Items[index].ID == item.ID {
+				return nil
+			}
+		}
+	}
+	_, err = r.runtimeAppendItem(session.ThreadID(threadID), item)
+	return err
 }
