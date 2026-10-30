@@ -7642,9 +7642,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1060: appserver/feedback.go:FeedbackReport already mirrors Rust #42814. A trimmed non-blank feedback_title tag replaces the classification/thread title for the event message and exception type, the raw tag stays in the tags map, and the event fingerprint is the event id so independent reports with a shared title do not merge; absent or blank titles keep [Classification]: Codex session <thread_id> and leave fingerprint unset. Added regression contracts appserver/feedback_event_title_like_rust_test.go:TestFeedbackReportUsesCustomTitleLikeRust and TestFeedbackReportFallsBackForBlankTitlesLikeRust. Verified with go test ./appserver -run TestFeedbackReport -count=1."
    ]
   },
   {
