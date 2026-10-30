@@ -171,7 +171,7 @@ func TestCredentialStorageErrorsRedactPrivateValues(t *testing.T) {
 			t.Fatal("malformed auth.json loaded without error")
 		}
 		message := err.Error()
-		if !strings.Contains(message, "failed to load CLI auth from file") || !strings.Contains(message, "invalid credential JSON (Syntax at line 1 column ") {
+		if !strings.Contains(message, "failed to deserialize CLI auth from file") || !strings.Contains(message, "invalid credential JSON (Syntax at line 1 column ") {
 			t.Fatalf("file storage error = %q", message)
 		}
 		if strings.Contains(message, "private-credential-value") {

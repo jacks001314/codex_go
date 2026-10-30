@@ -225,8 +225,20 @@ func (r *ResponsesAgentRunner) reloadStoredChatGPTAuth(ctx context.Context) (boo
 		return false, permanentRefreshFailure(auth.RefreshTokenAccountMismatchMessage)
 	}
 	stored, err := auth.NewStoreWithOptions(r.CodexHome, r.StoreOptions).Load()
-	if err != nil || stored == nil {
+	if err != nil {
+		// Rust #58324: a storage read failure (interrupted write, malformed
+		// auth.json) is transient. Treating it as an account mismatch made the
+		// failure permanent, discarded the cached credential, and stopped
+		// unauthorized recovery from ever retrying.
+		return false, err
+	}
+	if stored == nil {
 		return false, permanentRefreshFailure(auth.RefreshTokenAccountMismatchMessage)
+	}
+	if err := auth.ValidateStoredAuthCredential(stored); err != nil {
+		// Rust rejects broken agent identity JWT material while building live
+		// auth, which surfaces here as a transient reload failure.
+		return false, err
 	}
 	if strings.TrimSpace(accountIDFromMap(stored.Tokens)) != strings.TrimSpace(expectedAccountID) {
 		return false, permanentRefreshFailure(auth.RefreshTokenAccountMismatchMessage)

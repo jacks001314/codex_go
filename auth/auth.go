@@ -329,6 +329,11 @@ func (s *Store) Save(auth AuthDotJSON) error {
 		return err
 	}
 	defer guard.release()
+	commit, err := s.lockCommit()
+	if err != nil {
+		return err
+	}
+	defer commit.release()
 	return s.saveLocked(auth)
 }
 
@@ -342,6 +347,11 @@ func (s *Store) ReplaceIfCurrent(expected *AuthDotJSON, updated AuthDotJSON) err
 		return err
 	}
 	defer guard.release()
+	commit, err := s.lockCommit()
+	if err != nil {
+		return err
+	}
+	defer commit.release()
 	current, err := s.backend().LoadAccountGrant()
 	if err != nil {
 		return err
@@ -395,11 +405,23 @@ func (s *Store) saveLocked(auth AuthDotJSON) (err error) {
 // Delete removes the stored credential atomically with other in-process
 // commits.
 func (s *Store) Delete() (bool, error) {
+	// A missing file-store home contains no credentials to delete; never create
+	// one just to leave a lock behind (Rust #58251).
+	if s.options.Mode == AuthCredentialsStoreFile {
+		if _, err := os.Stat(s.CodexHome); errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+	}
 	guard, err := s.lockForWrite()
 	if err != nil {
 		return false, err
 	}
 	defer guard.release()
+	commit, err := s.lockCommit()
+	if err != nil {
+		return false, err
+	}
+	defer commit.release()
 	return s.deleteLocked()
 }
 
@@ -467,18 +489,14 @@ type fileAuthStorage struct {
 }
 
 func (s *fileAuthStorage) Load() (*AuthDotJSON, error) {
-	data, err := os.ReadFile(s.store.Path())
+	data, err := readAuthFile(s.store.Path())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var auth AuthDotJSON
-	if err := json.Unmarshal(data, &auth); err != nil {
-		return nil, credentialStorageJSONContext("failed to load CLI auth from file", data, err)
-	}
-	return &auth, nil
+	return decodeStoredAuthDotJSON("failed to deserialize CLI auth from file", data)
 }
 
 func (s *fileAuthStorage) LoadAccountGrant() (*AuthDotJSON, error) {
@@ -493,10 +511,7 @@ func (s *fileAuthStorage) Save(auth AuthDotJSON) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(s.store.Path(), append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	return nil
+	return writeAuthFileAtomically(s.store.Path(), append(data, '\n'))
 }
 
 func (s *fileAuthStorage) Delete() (bool, error) {
@@ -565,11 +580,7 @@ func (s *keyringAuthStorage) Load() (*AuthDotJSON, error) {
 	if err != nil {
 		return nil, credentialStorageContext("failed to load CLI auth from keyring", err)
 	}
-	var auth AuthDotJSON
-	if err := json.Unmarshal([]byte(value), &auth); err != nil {
-		return nil, credentialStorageJSONContext("failed to deserialize CLI auth from keyring", []byte(value), err)
-	}
-	return &auth, nil
+	return decodeStoredAuthDotJSON("failed to deserialize CLI auth from keyring", []byte(value))
 }
 
 func (s *keyringAuthStorage) LoadAccountGrant() (*AuthDotJSON, error) {

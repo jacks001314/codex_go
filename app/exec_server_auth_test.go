@@ -116,7 +116,7 @@ func TestRunExecServerListenerWebSocketAuthLikeRust(t *testing.T) {
 // and codex-rs/cli/tests/exec_server/auth_refresh_tests.rs).
 func execServerAuthForTest(t *testing.T, home string, client *http.Client) *execServerRegistryAuth {
 	t.Helper()
-	return newExecServerRegistryAuth(home, auth.StoreOptionsFromConfig("file", false), client)
+	return newExecServerRegistryAuth(home, auth.StoreOptionsFromConfig("file", false), client, nil)
 }
 
 func saveExecServerChatGPTAuthForTest(t *testing.T, home string, tokens map[string]any) {

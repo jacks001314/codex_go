@@ -2,6 +2,7 @@ package execserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,12 @@ import (
 // resolves its credentials per attempt and is replayed at most once after an
 // HTTP 401 when the auth provider reports replacement credentials. Transport
 // failures and every other status are never replayed here.
+
+// ErrRegistryCredentialsTransient reports registry credential resolution that
+// failed before a request was sent. Registration may safely retry it, while
+// every other credential failure is terminal (Rust #58251
+// ExecServerError::RequestNotSent).
+var ErrRegistryCredentialsTransient = errors.New("environment registry credential resolution is temporarily unavailable")
 
 // registryRequestBuilder builds a fresh registry request for one attempt. Rust
 // clones the prepared request before replaying it, so the body has to be

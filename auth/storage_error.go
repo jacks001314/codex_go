@@ -63,7 +63,23 @@ func redactCredentialJSONError(data []byte, err error) error {
 		line, column := jsonErrorPosition(data, typeError.Offset)
 		return fmt.Errorf("invalid credential JSON (Data at line %d column %d)", line, column)
 	}
+	var dataError *credentialJSONDataError
+	if errors.As(err, &dataError) {
+		line, column := jsonErrorPosition(data, dataError.offset)
+		return fmt.Errorf("invalid credential JSON (Data at line %d column %d)", line, column)
+	}
 	return err
+}
+
+// credentialJSONDataError reports a decoded value that Rust's serde layer
+// rejects as data, such as an unknown AuthMode variant. Its message never
+// carries the rejected value.
+type credentialJSONDataError struct {
+	offset int64
+}
+
+func (e *credentialJSONDataError) Error() string {
+	return "invalid credential JSON data"
 }
 
 // jsonErrorPosition converts encoding/json's 1-based byte offset into the

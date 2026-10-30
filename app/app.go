@@ -979,7 +979,9 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		return errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY")
 	}
 	mode := resolved.Auth.BackendMode()
-	if mode != "chatgpt" && mode != "api-key" {
+	// Rust #58251 restricts remote executor auth to the modes
+	// load_exec_server_remote_auth_provider supports.
+	if mode != "chatgpt" && mode != "api-key" && mode != "personal-access-token" {
 		return errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; Agent Identity auth requires --use-agent-identity-auth")
 	}
 	if mode == "api-key" {
@@ -994,12 +996,18 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	registryHTTPClient := policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0))
 	var resolveHeaders func(context.Context) (http.Header, error)
 	var refreshAfterUnauthorized func(context.Context, http.Header) bool
-	if mode == "chatgpt" || resolved.Source == auth.WorkloadIdentitySource {
+	if mode == "chatgpt" || mode == "personal-access-token" || resolved.Source == auth.WorkloadIdentitySource {
 		// Rust #55987: ChatGPT and workload identity auth use the live
 		// auth-provider path rather than one-time static headers, so registry
 		// requests (Rust #38610) resolve managed credentials asynchronously,
 		// refresh proactively, and recover once from a rejected credential.
-		liveAuth := newExecServerRegistryAuth(codexHome, storeOptions, registryHTTPClient)
+		var expected *auth.AuthDotJSON
+		if mode != "api-key" && resolved.Source != auth.WorkloadIdentitySource {
+			// Pin the executor's credential owner; later rotations must keep it
+			// (Rust #58251 chatgpt_auth_provider).
+			expected = &resolved.Auth
+		}
+		liveAuth := newExecServerRegistryAuth(codexHome, storeOptions, registryHTTPClient, expected)
 		resolveHeaders = liveAuth.ResolveAuthHeaders
 		refreshAfterUnauthorized = liveAuth.RefreshAfterUnauthorized
 	}
@@ -1158,6 +1166,15 @@ func execServerRemoteAuthHeaders(snapshot *auth.AuthDotJSON) (http.Header, error
 			return headers, errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY")
 		}
 		headers.Set("Authorization", "Bearer "+accessToken)
+		if accountID := auth.AccountIDFromAuthForRestrictions(snapshot); accountID != "" {
+			headers.Set("ChatGPT-Account-ID", accountID)
+		}
+	case "personal-access-token":
+		token := strings.TrimSpace(snapshot.PersonalAccessToken)
+		if token == "" {
+			return headers, errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY")
+		}
+		headers.Set("Authorization", "Bearer "+token)
 		if accountID := auth.AccountIDFromAuthForRestrictions(snapshot); accountID != "" {
 			headers.Set("ChatGPT-Account-ID", accountID)
 		}

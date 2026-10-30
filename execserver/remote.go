@@ -389,6 +389,22 @@ func registerRemoteEnvironmentWithRetry(ctx context.Context, cfg RemoteEnvironme
 		if err == nil {
 			return registration, nil
 		}
+		// Credential resolution failed before any registration was sent. Keep
+		// the executor alive without replaying an ambiguous write (Rust #58251).
+		if errors.Is(err, ErrRegistryCredentialsTransient) {
+			attempt++
+			delay := registrationConflictRetryDelay(retryKey, attempt-1)
+			slog.Warn("Noise executor retrying unavailable credential resolution",
+				"noise_event", "registration",
+				"noise_outcome", "retry",
+				"retry_attempt", attempt,
+				"retry_delay_ms", delay.Milliseconds(),
+			)
+			if sleepErr := sleepContext(ctx, delay); sleepErr != nil {
+				return nil, sleepErr
+			}
+			continue
+		}
 		var httpErr *remoteRegistryHTTPError
 		if !errors.As(err, &httpErr) || !retryableRegistryRegistrationError(httpErr) {
 			return nil, err
