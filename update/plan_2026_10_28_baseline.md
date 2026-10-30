@@ -3060,6 +3060,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - The new `appserver/history_ingest_metadata_like_rust_test.go` exercises the production entry point (`RegisterTurn` + `activeTurnClientMetadata`): the key is true with the extension on, absent when off, and caller metadata can neither flip it to false nor forge it.
 - Verified with `go test ./appserver -run 'TestActiveTurnClientMetadataCarriesHistoryIngest|TestHistoryIngestRequestedForTurn|TestCompactResponsesClientMetadataCarriesHistoryIngest' -count=1`, `go test ./turn -run HistoryIngest -count=1`, and `go test ./codexapi -run 'HistoryIngest|Reserved' -count=1`.
 
-Status after reconciliation: `2150 complete`, `450 not_applicable`,
-`346 audit_pending`, `198 regression_pending`, `5 partial`,
+### Guardian review evidence across compaction (Round 991)
+
+- Rust #41846 keeps a bounded, chronological review transcript independent of the model's compacted history, limits user messages and other items separately, uses it for synchronous and asynchronous Guardian review, and resets it only on rollback or history reconstruction (#41846, complete).
+- Go mirrors that with `appserver/guardian_review_history.go`: per-kind count/byte limits with same-kind oldest-first eviction, `truncateBeforeTurn` for thread/revert, and `forget` on reconstruction; `turn_runtime.go` captures the pre-compaction items before replacing the record, and `guardian_reviewer.go` feeds the same selection to the synchronous and asynchronous reviewers.
+- The new `appserver/guardian_review_history_bounds_like_rust_test.go` floods 300 tool outputs without evicting a user instruction (and stays within 128 non-user items), then forces the byte budget with 6x1MiB tool outputs to confirm only old tool evidence is dropped.
+- Verified with `go test ./appserver -run 'TestGuardianReviewHistory' -count=1`.
+
+Status after reconciliation: `2151 complete`, `450 not_applicable`,
+`346 audit_pending`, `197 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

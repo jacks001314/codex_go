@@ -4732,9 +4732,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 991 (回归证书): #41846 让 Guardian 评审证据独立于模型历史的压缩保留：ContextManager 在首次压缩时启动 review history，之后原样记录非 contextual user 项；guardian-context 的 TranscriptHistory 按 user/其他两类分别限额（128 项、每类 4 MiB）且只淘汰同类最旧项；compaction 不得重置，仅 rollback/历史重建 reset；同步与异步 transcript 都读这份快照。Go 的等价实现早已存在：appserver/guardian_review_history.go 的 guardianReviewHistoryState 按 user/其他分类限额与同类淘汰、truncateBeforeTurn 回滚裁剪、reset/forget 重建清理；turn_runtime.go 的 compaction 分支在覆盖 record.Items 之前调用 captureGuardianReviewHistory；runtime_router.go 的 thread/revert 调用 truncateGuardianReviewHistoryBefore；agent_controller.go 在恢复时 capture 当前记录；guardian_reviewer.go 的 guardianReviewTranscriptSelection 供同步与异步（agent_runtime.go 的 modelReviewer.transcriptSelection + AsynchronousContextProfile）共用。既有 appserver/guardian_compaction_history_like_rust_test.go 覆盖压缩后仍可读到 user/tool 证据、回滚移除对应 turn、从 checkpoint 恢复、fork/subagent 隔离；本轮补 appserver/guardian_review_history_bounds_like_rust_test.go 覆盖两类独立限额：300 条 tool 输出不会挤掉 user 指令且非 user 保留数不超过 128，6×1 MiB tool 输出触发字节预算淘汰最旧同类项而 user 指令仍在首位。验证：go test ./appserver -run 'TestGuardianReviewHistory' -count=1。"
    ]
   },
   {
