@@ -3102,6 +3102,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already exposes `telemetry.InstallGlobalMetrics(*MetricsClient) *MetricsClient` (delegating to `metrics.InstallGlobal`, nil clears) and returns the client as the owner; `otelinit` calls it on startup/teardown. `telemetry/global_metrics_test.go` and `otelinit/otelinit_test.go` cover install, return identity, timer routing, and clearing.
 - Verified with `go test ./telemetry -run TestStartGlobalTimerUsesInstalledMetricsClientLikeRust -count=1`.
 
-Status after reconciliation: `2156 complete`, `451 not_applicable`,
-`346 audit_pending`, `191 regression_pending`, `5 partial`,
+### Exec-server release version in environment info (Round 997)
+
+- Rust #42270 adds `executorVersion` to `EnvironmentInfo`, returns it from `initialize` and `environment/info`, stabilizes it at process startup, and falls back to `0.0.0` for unknown or legacy executors (#42270, complete).
+- Go already sets the version once from `cmd/internal/codexmain` via `execserver.SetExecServerVersion`, defaults `ExecServerExecutorVersion` to `0.0.0`, serves it through `localEnvironmentInfo` on both surfaces, and caches the initialize response on the client (`rememberEnvironmentInfo`/`cachedEnvironmentInfo`).
+- Existing tests pin the fallback, stamped version, JSON serialization, and version-gated capability discovery. Verified with `go test ./execserver -run 'TestExecServerBuildIdentityMetadata|TestBuildIDVectorsMatchRust|TestCapabilityDiscoveryV2' -count=1` and `go test ./appserver -run ExecutorCapabilityDiscoveryV2 -count=1`.
+
+Status after reconciliation: `2157 complete`, `451 not_applicable`,
+`346 audit_pending`, `190 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

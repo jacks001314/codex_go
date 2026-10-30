@@ -6101,9 +6101,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 997 (回归证书): #42270 在 exec-server 的 EnvironmentInfo 增加 executorVersion，initialize 与 environment/info 都返回该值，进程启动时解析发布版本以保证生命周期内稳定，未知或旧执行器返回 0.0.0。Go 已完整实现：execserver/build_identity.go 的 SetExecServerVersion/ExecServerExecutorVersion（默认 0.0.0）由 cmd/internal/codexmain 在启动时用 appserver.CodexVersion() 写入一次；execserver/server.go 的 localEnvironmentInfo 填 ExecutorVersion 并同时服务 initialize 与 environment/info；execserver/client.go 在 initialize 时 rememberEnvironmentInfo 缓存、cachedEnvironmentInfo 仅在缺失时探测 environment/info，供版本相容判断使用。测试：execserver/build_identity_test.go 断言未知版本回落 0.0.0、打包版本注入与 executorVersion/providerId 的 JSON 序列化；execserver/capability_discovery_v2_version_test.go 与 appserver/executor_capability_discovery_v2_test.go 覆盖按版本门控与客户端缓存。本次无代码改动。验证：go test ./execserver -run 'TestExecServerBuildIdentityMetadata|TestBuildIDVectorsMatchRust|TestCapabilityDiscoveryV2' -count=1、go test ./appserver -run ExecutorCapabilityDiscoveryV2 -count=1。"
    ]
   },
   {
