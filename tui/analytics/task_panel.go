@@ -2,7 +2,9 @@ package analytics
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"codex_go/chatgptapi"
@@ -176,13 +178,61 @@ func analyticsTaskAmount(amounts *chatgptapi.TaskUsageAmounts, metric int) strin
 		if amounts.BalanceUsageCredits == nil {
 			return "—"
 		}
-		return amounts.BalanceUsageCredits.String()
+		return analyticsTaskCreditAmount(amounts.BalanceUsageCredits.String())
 	}
 	value := analyticsTaskPercent(amounts, metric)
 	if value == nil {
 		return "—"
 	}
 	return fmt.Sprintf("%.1f%%", *value)
+}
+
+// analyticsTaskCreditAmount mirrors Rust #47086: ordinary credit amounts are
+// rounded to cents directly from their decimal digits (so 1.005 becomes 1.01),
+// while zero normalizes to 0.00 and tiny or out-of-range values stay verbatim.
+func analyticsTaskCreditAmount(value string) string {
+	mantissa, exponent := value, "0"
+	if at := strings.IndexAny(value, "eE"); at >= 0 {
+		mantissa, exponent = value[:at], value[at+1:]
+	}
+	fraction := ""
+	if _, frac, ok := strings.Cut(mantissa, "."); ok {
+		fraction = frac
+	}
+	digits := strings.TrimLeft(mantissa, "+-")
+	digits = strings.ReplaceAll(digits, ".", "")
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return "0.00"
+	}
+	exp, err := strconv.ParseInt(exponent, 10, 32)
+	if err != nil {
+		exp = 0
+	}
+	centDigits := int64(len(digits)) + exp - int64(len(fraction)) + 2
+	// Retain tiny adjustments and bound the integer conversion before padding.
+	if centDigits < 1 || centDigits > 18 {
+		return value
+	}
+	cents := int64(0)
+	for index := int64(0); index < centDigits; index++ {
+		digit := byte('0')
+		if index < int64(len(digits)) {
+			digit = digits[index]
+		}
+		cents = cents*10 + int64(digit-'0')
+	}
+	if centDigits < int64(len(digits)) && digits[centDigits] >= '5' {
+		cents++
+	}
+	if cents > math.MaxInt64/10000 {
+		return value
+	}
+	micros := cents * 10000
+	if strings.HasPrefix(mantissa, "-") {
+		micros = -micros
+	}
+	return analyticsCredits(micros)
 }
 
 // AnalyticsTaskPanelLines renders the consumer Top chats table

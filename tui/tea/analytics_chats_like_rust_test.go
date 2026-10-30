@@ -326,7 +326,7 @@ func TestAnalyticsConsumerChatsTableAndSortCyclingLikeRust(t *testing.T) {
 		"Recorded usage / current full limit · may exceed 100%",
 		"Weekly review",
 		"Chat usage unavailable",
-		"12.500000000000000001",
+		"12.50",
 		"Local chats · includes discovered descendants · excludes archived roots",
 		"s sort · ",
 		"row · ",

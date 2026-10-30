@@ -17769,9 +17769,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go derives the user-agent and telemetry OS string from runtime.GOOS in utils/platform.go; it has no os_info subprocess discovery to cache"
    ]
   },
   {
@@ -17999,9 +17999,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "model/catalog.go already tracks upstream HEAD: gpt-5.6-sol uses Older generation workhorse model. at priority 5 and gpt-5.5 uses Legacy coding model. at priority 13"
    ]
   },
   {
@@ -18011,9 +18011,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "tui/analytics/task_panel.go analyticsTaskCreditAmount mirrors Rust digit rounding; task_panel_like_rust_test.go asserts the full #47086 table and the analyticsTaskAmount metric-2 wiring"
    ]
   },
   {

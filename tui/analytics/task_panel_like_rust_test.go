@@ -148,7 +148,7 @@ func TestAnalyticsTaskPanelRendersPartialAndUnavailableRowsLikeRust(t *testing.T
 	if !taskPanelContains(panel.Lines, "Weekly review · partial") {
 		t.Fatalf("partial marker missing: %q", panel.Lines)
 	}
-	if !taskPanelContains(panel.Lines, "12.500000000000000001") || !taskPanelContains(panel.Lines, "—") {
+	if !taskPanelContains(panel.Lines, "12.50") || !taskPanelContains(panel.Lines, "—") {
 		t.Fatalf("amounts missing: %q", panel.Lines)
 	}
 	if !taskPanelContains(panel.Lines, "Model / effort / speed") ||
@@ -213,5 +213,51 @@ func TestAnalyticsTaskPanelCardShowsTopFiveLikeRust(t *testing.T) {
 	custom := AnalyticsTaskPanelLines(AnalyticsTaskPanelOptions{Width: 80, Message: "Loading analytics…"})
 	if len(custom.Lines) != 1 || custom.Lines[0] != "Loading analytics…" {
 		t.Fatalf("custom message = %q", custom.Lines)
+	}
+}
+
+// TestAnalyticsTaskCreditAmountRoundsDecimalDigitsLikeRust mirrors Rust
+// #47086: credits round to cents straight from their decimal digits, and zero,
+// tiny, and out-of-range values keep their documented spellings.
+func TestAnalyticsTaskCreditAmountRoundsDecimalDigitsLikeRust(t *testing.T) {
+	for _, testCase := range []struct{ raw, want string }{
+		{"0E-10", "0.00"},
+		{"0.0000000000", "0.00"},
+		{"-0e+10", "0.00"},
+		{"1e-1000", "1e-1000"},
+		{"-1e-1000", "-1e-1000"},
+		{"1e1000", "1e1000"},
+		{"12.3", "12.30"},
+		{"12.3400000000", "12.34"},
+		{"12.346", "12.35"},
+		{"2.675", "2.68"},
+		{"-2.675", "-2.68"},
+		{"1.005", "1.01"},
+		{"1.0049999999", "1.00"},
+		{"9.999", "10.00"},
+		{"0012.3", "12.30"},
+		{"1.23e2", "123.00"},
+		{"1234e-2", "12.34"},
+		{"9007199254740993", "9007199254740993"},
+		{"999999999999999999", "999999999999999999"},
+		{"141436", "141,436.00"},
+		{"0.01", "0.01"},
+		{"-0.000004", "-0.000004"},
+		{"1e-7", "1e-7"},
+	} {
+		if got := analyticsTaskCreditAmount(testCase.raw); got != testCase.want {
+			t.Errorf("analyticsTaskCreditAmount(%q) = %q, want %q", testCase.raw, got, testCase.want)
+		}
+	}
+	for _, testCase := range []struct{ raw, want string }{
+		{"0E-10", "0.00"},
+		{"1.005", "1.01"},
+		{"141436", "141,436.00"},
+		{"-2.675", "-2.68"},
+	} {
+		amounts := chatgptapi.TaskUsageAmounts{BalanceUsageCredits: taskPanelCredits(testCase.raw)}
+		if got := analyticsTaskAmount(&amounts, 2); got != testCase.want {
+			t.Errorf("analyticsTaskAmount(%q, credits) = %q, want %q", testCase.raw, got, testCase.want)
+		}
 	}
 }
