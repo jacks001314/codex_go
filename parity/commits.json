@@ -27773,9 +27773,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Complete: mcp/selected_environments.go models the captured ordered TurnEnvironmentSelection list, preserving pending and failed entries and the distinction between a nil snapshot (threadless discovery) and an explicitly empty one. MCPServerContributionContext carries the cloned snapshot through WithSelectedEnvironments/SelectedEnvironments. appserver/runtime_router.go captures turnEnvironmentSelections from turn/start, publishes it on RuntimeConfig.SelectedEnvironments in runtimeMCPConfigForThread, and uses the same capture for thread MCP resolution and model-step plugin selection. Regression tests cover executor priority order, pending/failed retention and owner errors, absent versus explicitly empty snapshots, authority policy derivation, contribution-context copy semantics, and runtime config publication: TestTurnEnvironmentSelectionsPreserveExecutorOrderAndUnavailableEntriesLikeRust, TestTurnEnvironmentSelectionsDistinguishAbsentFromExplicitlyEmptyLikeRust, TestRuntimeMCPConfigPublishesSelectedEnvironmentSelectionsLikeRust, TestSelectedEnvironmentsPreserveOrderAndUnavailableSelectionsLikeRust, TestSelectedEnvironmentsDistinguishAbsentFromExplicitlyEmptyLikeRust, TestSelectedEnvironmentsAuthorityRestrictsOwnerPolicyLikeRust, and TestMCPServerContributionContextCarriesSelectionsLikeRust. Verified with go test ./mcp -run 'SelectedEnvironments|ContributionContext' -count=1 and go test ./appserver -run 'MCPEnvironment|EnvironmentSelections|MCPPolicy' -count=1."
    ]
   },
   {

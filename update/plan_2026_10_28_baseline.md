@@ -3650,6 +3650,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: backoff retains/grows across flapping connections, resets after 120 seconds, stays inside each jitter window, and stalled rendezvous dials carry a deadline and keep retrying. Relay/remote integration tests cover malformed handshakes, registration reuse, and URL rejection.
 - Verified with `go test ./execserver -run 'Noise|Relay|Remote' -count=1`.
 
-Status after reconciliation: `2228 complete`, `462 not_applicable`,
-`322 audit_pending`, `132 regression_pending`, `5 partial`,
+### Selected environments in MCP contributor contexts (Round 1076)
+
+- Rust #51503 adds `with_selected_environments` / `selected_environments` to `McpServerContributionContext`, passing the complete captured executor selection (priority order and pending/failed entries) to thread MCP resolution and model-step plugin selection, with `None` for threadless discovery and `Some(&[])` for an explicitly empty selection.
+- Complete: `mcp/selected_environments.go` captures and clones the ordered snapshot, preserves unavailable entries and owner errors, and distinguishes absent from explicitly empty snapshots. `MCPServerContributionContext` exposes `WithSelectedEnvironments`/`SelectedEnvironments`; `appserver/runtime_router.go` captures `turnEnvironmentSelections` once and publishes it on `RuntimeConfig.SelectedEnvironments` for both thread MCP resolution and model-step plugin selection.
+- Regression: tests cover priority order, pending/failed retention, owner errors, absent versus empty snapshots, authority derivation, context copy semantics, and runtime publication.
+- Verified with `go test ./mcp -run 'SelectedEnvironments|ContributionContext' -count=1` and `go test ./appserver -run 'MCPEnvironment|EnvironmentSelections|MCPPolicy' -count=1`.
+
+Status after reconciliation: `2229 complete`, `462 not_applicable`,
+`322 audit_pending`, `131 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
