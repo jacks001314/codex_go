@@ -242,6 +242,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"features",
 		"filesearch",
 		"gitutil",
+		"guardiancontext",
 		"history",
 		"historynotes",
 		"install",

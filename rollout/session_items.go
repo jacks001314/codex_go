@@ -551,28 +551,21 @@ func applyRolloutContextMetadata(record *session.Record, lines []Line) {
 	if record == nil {
 		return
 	}
+	// Rust reconstructs the context baseline from surviving replay segments
+	// (#41424): a full world-state snapshot keeps a fork's inherited context
+	// baseline alive even when the user message was removed, while partial
+	// snapshots and snapshots superseded by compaction do not.
+	baseline := ReconstructContextBaseline(lines)
+	record.Metadata.TurnContext = baseline.TurnContext
+	record.Metadata.WorldState = baseline.WorldState
 	for i := range lines {
 		if len(lines[i].TurnContext) > 0 {
-			record.Metadata.TurnContext = append(json.RawMessage(nil), lines[i].TurnContext...)
 			applyTurnContextMetadata(&record.Metadata, lines[i].TurnContext)
-		}
-		if len(lines[i].WorldState) > 0 {
-			record.Metadata.WorldState = worldStateBaselineFromLine(lines[i].WorldState)
 		}
 	}
 	if approvalPolicy, ok := LatestPersistedApprovalPolicy(lines); ok {
 		record.Metadata.ApprovalPolicy = approvalPolicy
 	}
-}
-
-func worldStateBaselineFromLine(raw json.RawMessage) json.RawMessage {
-	var wrapper struct {
-		State json.RawMessage `json:"state"`
-	}
-	if err := json.Unmarshal(raw, &wrapper); err == nil && len(wrapper.State) > 0 && string(wrapper.State) != "null" {
-		return append(json.RawMessage(nil), wrapper.State...)
-	}
-	return append(json.RawMessage(nil), raw...)
 }
 
 // LatestPersistedApprovalPolicy returns the approval policy that a cold

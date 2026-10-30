@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/model"
@@ -40,7 +41,18 @@ func TestTurnContextRootTurnIDPersistedLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read started thread error: %v", err)
 	}
+	if err := router.appendRuntimeTurnStarted(threadID, "turn-1", "root-a", time.Now().UTC()); err != nil {
+		t.Fatalf("appendRuntimeTurnStarted() error = %v", err)
+	}
 	router.recordRuntimeTurnContext(threadID, "turn-1", "root-a", &appTurnRunConfig{Model: "gpt-5"}, record)
+	if err := router.appendRuntimeRollout(threadID, []session.Item{{
+		ID:   "user-1",
+		Type: "message",
+		Role: "user",
+		Text: "continue",
+	}}, time.Now().UTC()); err != nil {
+		t.Fatalf("appendRuntimeRollout(user) error = %v", err)
+	}
 
 	rolloutPath := router.services.ThreadRouter.threadRolloutPath(record)
 	raw, err := os.ReadFile(rolloutPath)

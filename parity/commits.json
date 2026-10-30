@@ -4312,9 +4312,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1022: adds rollout.ReconstructContextBaseline, mirroring Rust #41424's finalize_active_segment rule that a surviving full world-state snapshot establishes a context baseline even when a nested fork removed the associated user message. Segments are delimited by turn_started; a segment restores the newest compatible turn_context when it counts as a real user turn or has a full snapshot newer than its latest compaction. Bare turn contexts, patches without a full snapshot, and full snapshots superseded by compaction are rejected. thread_rolled_back drops whole newest segments and consumes its budget only for real user-turn segments, so context-only fork segments are not rollback boundaries. World state replays survivors chronologically with compaction resetting, full snapshots replacing, and RFC 7386 patches merging only onto a live baseline. applyRolloutContextMetadata now seeds Metadata.TurnContext and Metadata.WorldState from this reconstruction while retaining model/CWD/approval/effort/permission projection. Tests: rollout/context_baseline_like_rust_test.go covers user turns, removed task messages, bare context, patch-only state, full-before-compaction, patch merge/ignore, rollback, and RecordFromPath cold restore; appserver previous-settings and root-lineage tests now persist a real turn first. Verification: go test ./rollout -count=1; go test ./appserver -run 'PreviousTurn|TurnContext|Checkpoint|Persisted|WorldState|Rollback|Reconstruct|Resume|Guardian' -count=1; go test ./session -count=1; go test ./parity -count=1."
    ]
   },
   {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/auth"
 	"codex_go/compact"
@@ -42,6 +43,9 @@ func TestRuntimePreviousTurnSettingsFollowRecordedTurnContextLikeRust(t *testing
 	if _, _, _, ok := router.runtimePreviousTurnSettings(threadID, nil); ok {
 		t.Fatal("a thread with no recorded turn reported previous settings")
 	}
+	if err := router.appendRuntimeTurnStarted(threadID, "turn-1", "turn-1", time.Now().UTC()); err != nil {
+		t.Fatalf("appendRuntimeTurnStarted() error = %v", err)
+	}
 	record, err := store.Read(session.ThreadID(threadID), true, false)
 	if err != nil {
 		t.Fatalf("read started thread error: %v", err)
@@ -53,6 +57,14 @@ func TestRuntimePreviousTurnSettingsFollowRecordedTurnContextLikeRust(t *testing
 		Personality:        "friendly",
 		CyberAccessProgram: "daybreak_blue",
 	}, record)
+	if err := router.appendRuntimeRollout(threadID, []session.Item{{
+		ID:   "user-1",
+		Type: "message",
+		Role: "user",
+		Text: "continue",
+	}}, time.Now().UTC()); err != nil {
+		t.Fatalf("appendRuntimeRollout(user) error = %v", err)
+	}
 
 	previousModel, previousHash, previousProgram, ok := router.runtimePreviousTurnSettings(threadID, nil)
 	if !ok || previousModel != "gpt-previous" || previousHash != "hash-previous" || previousProgram != "daybreak_blue" {

@@ -23,6 +23,14 @@ func TestAppendTurnContextRecordsPreviousTurnSettingsLikeRust(t *testing.T) {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
 	path := recorder.Path()
+	// Rust persists a turn context inside the turn that also carries the user
+	// message; #41424 only restores the baseline from a surviving segment.
+	if err := recorder.AppendTurnStarted("turn-1", now); err != nil {
+		t.Fatalf("AppendTurnStarted() error = %v", err)
+	}
+	if err := recorder.AppendItem(Item{Type: "message", Role: "user", Text: "Inspect the workspace."}); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
 	if err := recorder.AppendTurnContext(TurnContextRecord{
 		TurnID:             "turn-1",
 		CWD:                "/work",
