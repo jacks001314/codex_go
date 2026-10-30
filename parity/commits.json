@@ -7222,9 +7222,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1050: model/catalog.go bundledServiceTierDefinitions already reports the priority/Fast tier as \"2x speed, increased usage\", and model/bedrock_service_tiers_like_rust_test.go:TestBedrockCatalogTierDefinitionsMatchRust asserts it. Upstream #42638 only edits codex-rs/models-manager/models.json; no Go change required. Verified with `go test ./model -run TestBedrockCatalogTierDefinitionsMatchRust -count=1`."
    ]
   },
   {
