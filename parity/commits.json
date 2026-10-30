@@ -7171,9 +7171,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1054: Go already parses `model_providers.<id>.capabilities` (`providerCapabilitiesOverrideFromConfig`, unknown/malformed fields rejected) into `ProviderCapabilitiesOverride`, and resolves `ExternalWebAccess()`/`RemoteCompactionSupport()` with provider defaults preserved (OpenAI/Azure/Bedrock v2, Bedrock external access off, otherwise on). `exec/provider_capabilities_like_rust_test.go` now pins the request snapshot: a custom provider with `external_web_access = false` emits hosted search with `external_web_access: false` even when `web_search = live`, and `remote_compaction = v2` makes `execProviderSupportsRemoteCompaction` true; omitting both restores live access and local compaction. Verify with `go test ./exec -run CustomProviderCapabilityOverridesDriveRequestsLikeRust -count=1`, `go test ./model -run 'ProviderCapabil|SupportsRemoteCompaction|ProviderInfo' -count=1`, and `go test ./codexapi -run 'RestrictToProviderWebAccess|ExternalWebAccess' -count=1`."
    ]
   },
   {

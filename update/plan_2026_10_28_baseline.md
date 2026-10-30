@@ -3503,6 +3503,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - The shared helper's second Rust caller (event-copy truncation in `mcp_tool_call.rs`) has no Go carrier because Go's legacy rollout mirror does not persist an `mcp_tool_call` EventMsg with a `CallToolResult`.
 - Verified with `go test ./state -run 'ThreadHistory|Paginated' -count=1`, `go test ./rollout -run 'Persisted|MCPResult|Truncate' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2207 complete`, `461 not_applicable`,
-`322 audit_pending`, `154 regression_pending`, `5 partial`,
+### Custom provider capability overrides (Round 1054)
+
+- Rust #50459 adds `model_providers.<id>.capabilities` with `external_web_access` and `remote_compaction` (`v2` or `unsupported`); omitted values keep provider defaults. `external_web_access = false` pins hosted search to cached, and `remote_compaction = v2` enables `compaction_trigger` over Responses.
+- Complete: Go already parsed the capability table with strict unknown-field/malformed-value rejection and resolved both settings through `ProviderInfo.ExternalWebAccess`/`RemoteCompactionSupport`; hosted tools already apply `RestrictToProviderWebAccess`. This round adds `exec/provider_capabilities_like_rust_test.go`, a request-snapshot regression proving cached hosted search and V2 compaction for a custom provider, with defaults preserved when capabilities are omitted.
+- Verified with `go test ./exec -run CustomProviderCapabilityOverridesDriveRequestsLikeRust -count=1`, `go test ./model -run 'ProviderCapabil|SupportsRemoteCompaction|ProviderInfo' -count=1`, `go test ./codexapi -run 'RestrictToProviderWebAccess|ExternalWebAccess' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2208 complete`, `461 not_applicable`,
+`322 audit_pending`, `153 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
