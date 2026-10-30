@@ -7087,9 +7087,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 996 (回归证书): #42603 在 codex-otel 暴露 install_global_metrics 作为单线程启动期安装外部 MetricsClient 的公共入口，返回的句柄持有 exporter 以便 flush/shutdown。Go 的等价入口是 telemetry.InstallGlobalMetrics(*MetricsClient) *MetricsClient（内部转发 metrics.InstallGlobal，nil 表示清除），返回值即持有者，可继续 Flush/Shutdown；otelinit 在 provider 启动/关闭时调用它。测试 telemetry/global_metrics_test.go 断言安装返回同一 client、全局计时器通过它记录并在无 client 时为空操作，otelinit_test.go 覆盖 otelinit 的安装/清理路径。本次无代码改动。验证：go test ./telemetry -run TestStartGlobalTimerUsesInstalledMetricsClientLikeRust -count=1。"
    ]
   },
   {
@@ -7555,9 +7555,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 996 (回归证书): #42792 把 TUI 中可选的 feedback note 输入从 submission 模块拆到 bottom_pane/feedback_note_view.rs，并同步导出与快照元数据，提交行为不变。Go 的文件划分本就独立且已把 note 视图放在 tui/bottom_pane/feedback_view.go，行为面由既有测试覆盖：TestFeedbackNoteViewSubmitCancelPasteAndRowsMatchRustCore（提交/取消/粘贴/行高）、TestFeedbackNoteViewMultilinePasteBurstMatchesRust（多行粘贴突发归并）、TestFeedbackNoteViewExplicitPasteClearsBurstMatchesRust（显式粘贴清除突发），以及 feedback 类别/上传同意/附件名等用例。本次无代码改动。验证：go test ./tui/bottom_pane -run Feedback -count=1。"
    ]
   },
   {

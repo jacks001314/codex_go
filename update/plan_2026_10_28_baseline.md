@@ -3091,6 +3091,17 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already carries the newer shape of that catalog: `AmazonBedrockGPT6AstraModelID`, priority 1 in `AmazonBedrockModelCatalog`, and both Runtime prefixes. Existing tests pin ordering, display names, context windows, the Runtime variant list (with a comment naming #42619), and Astra's inherited `ultrafast` capability.
 - Verified with `go test ./model -run 'Bedrock|AmazonBedrock' -count=1`.
 
-Status after reconciliation: `2154 complete`, `451 not_applicable`,
-`346 audit_pending`, `193 regression_pending`, `5 partial`,
+### Feedback note view module split (Round 996)
+
+- Rust #42792 only moves the optional feedback note input and its tests out of the submission module into `bottom_pane/feedback_note_view.rs`, updating exports and snapshot metadata without changing submission behavior (#42792, complete).
+- Go's layout is already split (`tui/bottom_pane/feedback_view.go` with `feedback_view_test.go`); the note view's submit/cancel/paste/row behavior and multiline-paste burst handling are pinned by existing Rust-mirroring tests. Verified with `go test ./tui/bottom_pane -run Feedback -count=1`.
+
+### Global metrics installation entry point (Round 996)
+
+- Rust #42603 exposes `install_global_metrics` for installing an externally owned `MetricsClient` during startup and returning a handle that keeps the exporter alive for flush/shutdown (#42603, complete).
+- Go already exposes `telemetry.InstallGlobalMetrics(*MetricsClient) *MetricsClient` (delegating to `metrics.InstallGlobal`, nil clears) and returns the client as the owner; `otelinit` calls it on startup/teardown. `telemetry/global_metrics_test.go` and `otelinit/otelinit_test.go` cover install, return identity, timer routing, and clearing.
+- Verified with `go test ./telemetry -run TestStartGlobalTimerUsesInstalledMetricsClientLikeRust -count=1`.
+
+Status after reconciliation: `2156 complete`, `451 not_applicable`,
+`346 audit_pending`, `191 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
