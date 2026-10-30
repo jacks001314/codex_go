@@ -4342,6 +4342,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			(keySpec == "ctrl-7" && m.keyMatches("global", "toggle_side_conversation", "ctrl-/")) {
 			return m, m.toggleSideConversation()
 		}
+		if m.keyMatches("global", "clear_terminal", keySpec) {
+			// Rust #58266: Ctrl+L clears the screen without discarding the
+			// transcript; only the terminal's painted output is replaced.
+			return m, m.clearTerminalForCommand()
+		}
 		if m.keyMatches("global", "open_transcript", keySpec) {
 			return m, m.openTranscriptOverlay()
 		}

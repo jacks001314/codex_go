@@ -70,6 +70,40 @@ func TestNewCommandDoesNotClearTerminalLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #58266: Ctrl+L (global clear_terminal) clears the painted screen without
+// discarding the transcript, the draft, or the session.
+func TestCtrlLClearsTerminalAndPreservesTranscriptLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-before-clear-screen")
+	state.AddMessage(codextui.RoleUser, "old transcript")
+
+	var sequences []string
+	model := NewModel(state, Options{
+		OnClearTerminal: func(sequence string) bubbletea.Cmd {
+			sequences = append(sequences, sequence)
+			return func() bubbletea.Msg { return nil }
+		},
+	})
+	if !model.keyMatches("global", "clear_terminal", "ctrl-l") {
+		t.Fatal("ctrl-l is not bound to global clear_terminal")
+	}
+	typeText(t, model, "unsent draft")
+	model.Update(key(bubbletea.KeyCtrlL))
+
+	if len(sequences) != 1 || sequences[0] != "\x1b[2J\x1b[3J\x1b[H" {
+		t.Fatalf("terminal clear sequences = %#v", sequences)
+	}
+	if state.ThreadID != "thread-before-clear-screen" || len(state.Messages) != 1 {
+		t.Fatalf("ctrl-l changed the session: thread=%q messages=%d", state.ThreadID, len(state.Messages))
+	}
+	if got := model.composerText(); got != "unsent draft" {
+		t.Fatalf("ctrl-l cleared the draft: %q", got)
+	}
+	if !strings.Contains(model.View(), "old transcript") {
+		t.Fatalf("ctrl-l dropped the transcript:\n%s", model.View())
+	}
+}
+
 func TestClearCommandRejectsPendingPermissionRootSwitchLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-before-clear")
