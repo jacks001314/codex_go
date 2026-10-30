@@ -3509,6 +3509,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: Go already parsed the capability table with strict unknown-field/malformed-value rejection and resolved both settings through `ProviderInfo.ExternalWebAccess`/`RemoteCompactionSupport`; hosted tools already apply `RestrictToProviderWebAccess`. This round adds `exec/provider_capabilities_like_rust_test.go`, a request-snapshot regression proving cached hosted search and V2 compaction for a custom provider, with defaults preserved when capabilities are omitted.
 - Verified with `go test ./exec -run CustomProviderCapabilityOverridesDriveRequestsLikeRust -count=1`, `go test ./model -run 'ProviderCapabil|SupportsRemoteCompaction|ProviderInfo' -count=1`, `go test ./codexapi -run 'RestrictToProviderWebAccess|ExternalWebAccess' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2208 complete`, `461 not_applicable`,
-`322 audit_pending`, `153 regression_pending`, `5 partial`,
+### Delegated thread previews (Round 1055)
+
+- Rust #50462 fills a thread preview from completed `create_thread`/`send_message_to_thread` outputs in the `codex_app`/`codex_tui` namespaces, unwraps recognized `<codex_delegation>` inputs with escape decoding, and never replaces an existing preview or sets the title/first-user-message. It covers state metadata extraction and live metadata sync.
+- Complete: Go already had the equivalent decoder in `session/delegated_preview.go` and the preview-only fill behavior in `state/backfill.go` (metadata extraction), `appserver/thread_manager.go` (live/ephemeral records), and `rollout/session_items.go`.
+- Regression coverage: `state/delegated_preview_test.go` verifies metadata preservation and database listing before a user follow-up in both legacy and paginated history modes; `appserver/thread_manager_test.go` verifies the first live preview wins.
+- Verified with `go test ./state -run Delegated -count=1`, `go test ./appserver -run ThreadManagerDelegatedPreviewLikeRust -count=1`, `go test ./session -run Delegated -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2209 complete`, `461 not_applicable`,
+`322 audit_pending`, `152 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

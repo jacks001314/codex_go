@@ -5632,9 +5632,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1055: `session/delegated_preview.go` mirrors `codex_state::delegated_output_preview` (only `codex_app`/`codex_tui` `create_thread`/`send_message_to_thread` outputs, exact `<codex_delegation>` unwrapping with ordered `&lt;`/`&gt;`/`&amp;` decoding, raw text for other non-blank bodies, blank ignored); `state/backfill.go` fills only an empty preview during metadata extraction, `appserver/thread_manager.go` and `rollout/session_items.go` do the same for live/ephemeral metadata without touching title or first_user_message. Regression coverage: `state/delegated_preview_test.go` (user-message preservation and listing before follow-up in legacy and paginated modes), `appserver/thread_manager_test.go` (first live preview wins), and `session` decoding tests. Verify with `go test ./state -run Delegated -count=1`, `go test ./appserver -run ThreadManagerDelegatedPreviewLikeRust -count=1`, and `go test ./session -run Delegated -count=1`."
    ]
   },
   {
