@@ -712,6 +712,9 @@ func (c *runtimeAgentController) ResumeAgent(ctx context.Context, args *agent.Re
 		return nil, agent.ErrAgentDepthLimitReached
 	}
 	id := strings.TrimSpace(args.ID)
+	// Rust #47244: resume_agent reuses the loaded thread or restores it from
+	// its rollout on ThreadNotFound. threadRecord owns that fallback and
+	// persists the recovered record before metadata/status are returned.
 	record, err := c.router.threadRecord(session.ThreadID(id), true, false)
 	if errors.Is(err, session.ErrThreadNotFound) {
 		return &agent.ResumeAgentResult{Status: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusNotFound}}, nil

@@ -4085,3 +4085,11 @@ Status after this batch: `2343 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestRemotePluginProviderUsesConfiguredProductSKULikeRust`, `TestFetchRemoteCatalogPluginsPagesAndCachesLikeRust`, `TestPluginListRemoteCatalogLikeRust`, `TestPluginRemoteAddAndRemoveLikeRust`, `TestConfigureSuggestedPluginProviderUsesConfiguredProductSKULikeRust`, `TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust`, `TestAuthenticatedMeasurementBundleFetcherLikeRust`; `go build ./...` and targeted `go test ./plugin ./app ./appserver` pass.
 
 Status after this batch: `2344 complete`, `465 not_applicable`, `322 audit_pending`, `13 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Agent resume restores missing threads from rollout (Round 1126)
+
+- #47244 centralizes resume semantics in Rust's `LocalAgentControl`. Go already has the equivalent path: `runtimeAgentController.ResumeAgent` delegates to `threadRecord`, which reuses a loaded thread or reads the missing record from its rollout, persists it, and only then reports status and metadata.
+- Added an upstream-referenced comment at that boundary and an end-to-end test proving a thread absent from the session store is restored from its rollout, returns `completed`, persists parent/agent metadata, and re-registers the agent path/nickname/role.
+- Test: `TestRuntimeAgentControllerResumeRestoresMissingThreadFromRolloutLikeRust`; `go build ./...` and `go test ./appserver -run RuntimeAgentController` pass.
+
+Status after this batch: `2345 complete`, `465 not_applicable`, `322 audit_pending`, `12 regression_pending`, `5 partial`, `6 blocked_precondition`.

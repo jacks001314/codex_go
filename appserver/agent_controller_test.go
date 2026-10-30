@@ -413,6 +413,67 @@ func TestRuntimeAgentControllerReportsNotFound(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #47244: resume_agent reuses an existing runtime or restores a
+// missing thread from its rollout, then returns the recovered status and
+// metadata instead of reporting NotFound.
+func TestRuntimeAgentControllerResumeRestoresMissingThreadFromRolloutLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	threadRouter := NewRouter(store)
+	now := time.Now().UTC()
+	parent := &session.Record{
+		ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), AgentPath: "/root"},
+	}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	child := &session.Record{
+		ID: "restored-child", SessionID: "parent", ParentThreadID: "parent",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD: parent.Metadata.CWD, Model: "gpt-5.4", ModelProvider: "openai",
+			ThreadSource: "subAgentThreadSpawn", AgentPath: "/root/worker",
+			AgentNickname: "Sage", AgentRole: "reviewer", AgentDepth: 1,
+			RolloutTurns: []session.TurnSnapshot{{ID: "child-turn", Status: string(TurnStatusCompleted)}},
+		},
+		Items: []session.Item{{
+			ID: "child-message", Type: "message", Role: "assistant", Text: "restored reply",
+			CreatedAt: now, Metadata: map[string]any{"turnId": "child-turn"},
+		}},
+	}
+	if err := threadRouter.createThreadRollout(child, now); err != nil {
+		t.Fatalf("createThreadRollout() error = %v", err)
+	}
+	if _, err := store.Read(session.ThreadID(child.ID), true, false); !errors.Is(err, session.ErrThreadNotFound) {
+		t.Fatalf("store unexpectedly contains restored child before resume: %v", err)
+	}
+
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: threadRouter,
+		Config:       config.NewConfigService(home),
+	})
+	controller := newRuntimeAgentController(router, "parent", parent.Metadata.CWD, 4)
+	resumed, err := controller.ResumeAgent(context.Background(), &agent.ResumeAgentArgs{ID: string(child.ID)})
+	if err != nil {
+		t.Fatalf("ResumeAgent() error = %v", err)
+	}
+	if resumed.Status.Kind != agent.AgentMessageStatusCompleted {
+		t.Fatalf("resumed status = %+v", resumed.Status)
+	}
+	restored, err := store.Read(session.ThreadID(child.ID), true, false)
+	if err != nil {
+		t.Fatalf("restored child was not persisted: %v", err)
+	}
+	if restored.ParentThreadID != "parent" || restored.Metadata.AgentPath != "/root/worker" || restored.Metadata.AgentNickname != "Sage" || restored.Metadata.AgentRole != "reviewer" {
+		t.Fatalf("restored child metadata = %+v", restored)
+	}
+	metadata, ok := router.agentRegistry.MetadataForThread(string(child.ID))
+	if !ok || metadata.Path != "/root/worker" || metadata.Nickname != "Sage" || metadata.Role != "reviewer" {
+		t.Fatalf("restored agent registry metadata = %+v, ok=%v", metadata, ok)
+	}
+}
+
 // TestRuntimeAgentControllerPropagatesTurnTriggerLikeRust covers Rust #44659:
 // delegated work inherits the initiating turn's trigger so usage can be
 // attributed to that turn.

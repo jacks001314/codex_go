@@ -18494,9 +18494,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "RuntimeAgentController.ResumeAgent delegates to threadRecord, which reuses a loaded thread or restores a missing record from its rollout before persisting it; the controller then returns the recovered status and agent metadata (Rust #47244). Test: TestRuntimeAgentControllerResumeRestoresMissingThreadFromRolloutLikeRust; go build ./... and go test ./appserver -run RuntimeAgentController pass."
    ]
   },
   {
