@@ -1122,7 +1122,6 @@ func CreateAmazonBedrockProvider(aws *ProviderAWSAuthInfo) ProviderInfo {
 func CreateAmazonBedrockRuntimeProvider(aws *ProviderAWSAuthInfo) ProviderInfo {
 	provider := CreateAmazonBedrockProvider(aws)
 	provider.Name = AmazonBedrockRuntimeProviderName
-	provider.HTTPHeaders = nil
 	return provider
 }
 

@@ -269,6 +269,22 @@ func TestCreateAmazonBedrockProvider(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #47964: both the Mantle and Bedrock Runtime builders publish the
+// x-amzn-mantle-client-agent header, so a Bedrock Runtime request is not
+// reported as an unknown client.
+func TestAmazonBedrockProvidersKeepClientAgentHeaderLikeRust(t *testing.T) {
+	providers := []ProviderInfo{
+		CreateAmazonBedrockProvider(nil),
+		CreateAmazonBedrockRuntimeProvider(nil),
+		CreateAmazonBedrockRuntimeProvider(&ProviderAWSAuthInfo{Region: "us-west-2"}),
+	}
+	for _, provider := range providers {
+		if got := provider.HTTPHeaders[AmazonBedrockMantleClientHeader]; got != AmazonBedrockMantleClientValue {
+			t.Fatalf("provider %q %s = %q, want %q", provider.Name, AmazonBedrockMantleClientHeader, got, AmazonBedrockMantleClientValue)
+		}
+	}
+}
+
 func TestMergeConfiguredProvidersAddsCustomProvider(t *testing.T) {
 	custom := ProviderInfo{Name: "Custom", BaseURL: "https://example.com/v1"}
 	merged, err := MergeConfiguredProviders(BuiltInProviders(""), map[string]ProviderInfo{"custom": custom})

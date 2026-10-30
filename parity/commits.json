@@ -21261,9 +21261,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1081: CreateAmazonBedrockRuntimeProvider no longer clears ProviderInfo.HTTPHeaders, so Bedrock Runtime requests keep x-amzn-mantle-client-agent: codex exactly like the Mantle provider. CreateRuntimeProvider already applies ProviderInfo.HTTPHeaders to API requests. TestAmazonBedrockProvidersKeepClientAgentHeaderLikeRust covers the Mantle builder and runtime builders with and without AWS configuration; go test ./model passes."
    ]
   },
   {
