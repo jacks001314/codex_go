@@ -8618,9 +8618,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/15; needs review: disconnect_user_verification_connection, enable_user_verification_connection, filter_json, filter_ts, from_client_result"
+    "mcp.IsUserVerificationElicitation routes openai/userVerification to RuntimeRouter.userVerificationConnection, rejects non-owner or missing owners as approvalUnavailable, and maps closed/interrupted responses to Rust cancellation reasons; user_verification_mcp_reason_like_rust_test.go covers owner isolation and reasons"
    ]
   },
   {
