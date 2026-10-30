@@ -3420,6 +3420,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - N/A by architecture: Go ports the resume state machine (`SuspendContext`/`PrepareResumeAction`) and `TerminalStderr` pause/resume state but never delivers `SIGTSTP`, installs signal handlers, or changes the thread signal mask. There is no Go `suspend_process` equivalent, so the bounded resume wait, timeout error, and signal-state restoration have no carrier.
 - Verified with `rg` for `SIGTSTP|SIGCONT|SigTstp|SigCont|unix.Kill|syscall.Kill|SuspendKey` plus `go test ./tui/tui -run 'Suspend|TerminalStderr' -count=1` and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2201 complete`, `455 not_applicable`,
-`333 audit_pending`, `156 regression_pending`, `4 partial`,
+### Background thread requests across TUI fork (Round 1041)
+
+- Rust #49783 seeds `agents_overview.dispatched_requests` for tracked threads before a daemon-backed fork detaches, moves retained threads' pending replay requests into background routing inside `reset_thread_event_state`, keeps their `thread_event_listener_tasks` alive, stops background routing for the active thread, and registers a source thread before the dynamic `fork_thread` tool issues `thread/fork`.
+- N/A by architecture: Go has no `agents_overview.dispatched_requests`, `thread_event_listener_tasks`, `side_threads`/embedded-app-server split, or `reset_thread_event_state`. Per-turn remote clients keep their own notification read loops while a fork runs on a separate short-lived connection, non-active thread notifications are buffered per thread in `backgroundThreadEvents` and replayed on switch, and active-thread requests always render in the active UI, so a fork cannot interrupt or duplicate background request routing.
+- Verified with `rg` over `dispatched_requests|thread_event_listener|reset_thread_event_state`, `go test ./tui/tea -run 'Fork|ThreadScoped|BackgroundThread|DynamicTool' -count=1`, `go test ./tui/app -run 'Routing|Replay|ThreadEvent' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2201 complete`, `456 not_applicable`,
+`332 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

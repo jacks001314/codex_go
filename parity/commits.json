@@ -24424,9 +24424,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1041 (audit): N/A by architecture - Rust #49783 keeps its internal App routing alive across a daemon-backed fork: it seeds agents_overview.dispatched_requests for tracked or tracked-by-event-channel thread ids before detaching, moves retained threads' pending replay requests into that background routing inside reset_thread_event_state, retains their thread_event_listener_tasks, excludes the active thread from background routing, and registers the source thread before its dynamic fork_thread tool issues thread/fork. Go has none of that machinery: there is no agents_overview.dispatched_requests map, thread_event_listener_tasks, side_threads/embedded-app-server split, or reset_thread_event_state equivalent (rg over dispatched_requests|thread_event_listener|reset_thread_event_state finds only the Rust-derived decision helpers). Its per-turn app-server clients keep their own notification read loop alive while a fork runs on a separate short-lived connection, notifications for non-active threads are buffered per thread in tea backgroundThreadEvents and replayed when switching back, and active-thread requests always open in the active UI. There is therefore no background request routing that a fork can interrupt or duplicate. Verified with go test ./tui/tea -run 'Fork|ThreadScoped|BackgroundThread|DynamicTool' -count=1 and go test ./tui/app -run 'Routing|Replay|ThreadEvent' -count=1."
    ]
   },
   {
