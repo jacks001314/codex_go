@@ -6982,9 +6982,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1055: superseded upstream. Rust #42529 registered guardian_thread_context as UnderDevelopment/default-off, then #43104 renamed it into [features.guardianv2].thread_context and #47686-#47690 promoted then retired it. At the frozen baseline the spec key is guardianv2.thread_context, Stage::Removed, default false, with the legacy key recorded as a deprecated no-op. Go features/features.go already registers that exact removed spec, so configuration behavior matches the baseline. Verified with `go test ./features -count=1`."
    ]
   },
   {
