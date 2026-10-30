@@ -7888,7 +7888,12 @@ func providerFromTurnStart(params *turn.TurnStartParams) string {
 }
 
 type appTurnRunConfig struct {
-	Model                   string
+	Model string
+	// ModelInfo is the model metadata captured when the turn's context window
+	// started (Rust GuardianReviewContext::model_info). Guardian reviews fall
+	// back to it when they reuse the parent model, so a later catalog refresh
+	// cannot change the metadata of an action already being reviewed (#44574).
+	ModelInfo               *model.ModelInfo
 	AutoReviewModelOverride string
 	ToolMode                string
 	// IncrementalTools is the effective incremental-tool mode for this turn's
@@ -8354,6 +8359,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	return &appTurnRunConfig{
 		Model:                   modelProviderConfig.Model,
+		ModelInfo:               modelInfo,
 		AutoReviewModelOverride: autoReviewModelOverride,
 		ToolMode:                toolMode,
 		IncrementalTools:        incrementalActive,

@@ -11419,9 +11419,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1013 (实现+回归): #44574 让 Guardian review 使用被评审 action 捕获的设置。Rust 用捕获的 model/reasoning effort/reasoning summary/personality 配置 review，回退父模型时保留捕获的 model metadata、只把独立 reviewer 解析到当前 catalog，托管 required-review 判断与 computer-use 行为都读 action 的模型，并把 personality 纳入 review session 复用键。Go 已从 activeRuntimeTurn.RunConfig.Model 与 TurnStartParams.Effort 选择 reviewer，托管 requirements 每次读实时配置；本轮修复三个真实缺口: (1) RunConfig 新增 ModelInfo 捕获 (turn_runtime.buildTurnRunConfig 写入当时的 modelInfo)，guardianReviewPlanForTurn 回退父模型时优先使用捕获 metadata，目录刷新不再改变已评审 action 的模型信息；(2) guardianReviewNodeReplAutoReviewRequiredForTurn 之前读 Params.Model 的实时目录元数据，现优先使用 RunConfig.Model 对应的捕获 ModelInfo，computer-use review 行为与被评审 action 一致；(3) guardianReviewPlan 新增 ReasoningSummary 并写入 review request (RunConfig.ReasoningSummary 优先、TurnStartParams.Summary 回退)，review 采样沿用 action 捕获的 summary 而不是目录默认值。Personality 在 Go 的隔离 reviewer 配置中继续关闭 (personality feature 禁用且 base instructions 为 Guardian 模板)，Go 也没有 extension-owned reviewer session 缓存，因此 Rust 的 personality 复用键维度无对应观察面。新增 appserver/guardian_action_settings_like_rust_test.go: catalog 中 captured model 的 NodeReplAutoReviewRequired=false 而捕获 ModelInfo 为 true，断言 computer-use 判定与 plan 使用捕获 metadata、review request 带捕获 model 与 reasoning summary、RunConfig 无 summary 时回退 TurnStartParams.Summary。验证: go test ./appserver -run TestGuardianReviewUsesCapturedActionSettingsLikeRust -count=1; go test ./appserver -run 'Guardian|ReasoningEffort|Permission' -count=1; go test ./model -count=1; go test ./appserver -count=1 (仅剩 7 个既有失败); go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

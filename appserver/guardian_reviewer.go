@@ -1211,6 +1211,9 @@ reviewAttempt:
 		ProviderID:      plan.ProviderID,
 		Endpoint:        r.reviewEndpointValue(threadID, turnID),
 		ReasoningEffort: plan.Selection.ReasoningEffort,
+		// Rust #44574 configures the review session from the reviewed action's
+		// captured reasoning summary, not the current catalog default.
+		ReasoningSummary: plan.ReasoningSummary,
 		// Rust #52689 forwards the parent turn's Cyber program to the reviewer
 		// (turn_start_options.cyber_access_program), normalized to Blue for
 		// either Daybreak selection.

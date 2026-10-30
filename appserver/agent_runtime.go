@@ -584,6 +584,10 @@ type guardianReviewPlan struct {
 	// selection is reviewed as Blue and Standard is preserved, so the review
 	// request samples with the parent turn's selected program.
 	CyberAccessProgram string
+	// ReasoningSummary is the reviewed action's captured reasoning summary
+	// (Rust #44574): the review session samples with the parent step's setting
+	// instead of the current catalog default.
+	ReasoningSummary string
 }
 
 // guardianReviewPlanForTurn mirrors Rust resolve_review_model: every review
@@ -598,7 +602,13 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 	}
 	cfg, _ := r.effectiveConfigForTurn(active.Params)
 	parentModel := strings.TrimSpace(firstNonEmpty(active.RunConfig.Model, turnParamModel(active.Params)))
-	parentInfo := r.modelInfoForRuntimeWithConfig(parentModel, cfg)
+	// Rust #44574 preserves the action's captured metadata when the reviewer
+	// falls back to the parent model; only a separately selected reviewer is
+	// resolved against the current catalog.
+	parentInfo := capturedModelInfoForRunConfig(active.RunConfig, parentModel)
+	if parentInfo == nil {
+		parentInfo = r.modelInfoForRuntimeWithConfig(parentModel, cfg)
+	}
 	if parentInfo == nil {
 		parentInfo = &model.ModelInfo{
 			Slug:                    parentModel,
@@ -625,12 +635,17 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 		cloned := *catalogInfo.ModelMessages.AutoReview
 		autoReview = &cloned
 	}
+	reasoningSummary := strings.TrimSpace(active.RunConfig.ReasoningSummary)
+	if active.Params != nil {
+		reasoningSummary = firstNonEmpty(reasoningSummary, stringPtrValue(active.Params.Summary))
+	}
 	plan := guardianReviewPlan{
 		Selection:          selection,
 		AutoReview:         autoReview,
 		Instructions:       guardianReviewInstructions(cfg, autoReview),
 		NodeReplPolicy:     guardianNodeReplPolicy(autoReview),
 		CyberAccessProgram: model.GuardianCyberAccessProgram(active.RunConfig.CyberAccessProgram),
+		ReasoningSummary:   reasoningSummary,
 	}
 	var parentEnvironments []map[string]any
 	if active.Params != nil {
@@ -812,8 +827,29 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 	if err != nil || cfg == nil {
 		return false
 	}
-	info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
+	modelID := turnParamModel(active.Params)
+	if active.RunConfig != nil {
+		modelID = firstNonEmpty(active.RunConfig.Model, modelID)
+	}
+	info := capturedModelInfoForRunConfig(active.RunConfig, modelID)
+	if info == nil {
+		info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	}
 	return info != nil && info.NodeReplAutoReviewRequired
+}
+
+// capturedModelInfoForRunConfig returns the turn's captured model metadata when
+// it describes the requested model, mirroring Rust's GuardianReviewContext
+// retaining `Arc<ModelInfo>` from the reviewed step (#44574).
+func capturedModelInfoForRunConfig(runConfig *appTurnRunConfig, modelID string) *model.ModelInfo {
+	if runConfig == nil || runConfig.ModelInfo == nil {
+		return nil
+	}
+	captured := strings.TrimSpace(runConfig.ModelInfo.Slug)
+	if captured != "" && !strings.EqualFold(captured, strings.TrimSpace(modelID)) {
+		return nil
+	}
+	return runConfig.ModelInfo
 }
 
 // guardianParentPermissionProfileForTurn resolves the reviewed turn's own

@@ -3213,6 +3213,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `modelGuardianReviewer.targetEnvironmentAvailable` (wired to `guardianTurnEnvironmentForTurn` in `appserver/agent_runtime.go`) now denies unavailable environments before inference with Rust's request/terminal messages, while MCP actions without a target are unaffected. `state.GuardianMaxEnvironmentIDBytes` rejects ids over 256 UTF-8 bytes in `joinPlannedAction`, and `FormatGuardianActionPretty` still renders them for manual approval.
 - New `appserver/guardian_environments_like_rust_test.go` covers the unavailable/environment-specific/session-reuse and oversized-id paths; `state/guardian_environment_limit_like_rust_test.go` pins the byte boundary across ASCII, control, and multi-byte ids.
 - Verified with `go test ./state -count=1`, the three new appserver tests by name, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2172 complete`, `451 not_applicable`,
-`345 audit_pending`, `177 regression_pending`, `4 partial`,
+### Captured action settings for Guardian reviews (Round 1013)
+
+- Rust #44574 configures each review from the reviewed action's captured model, effort, reasoning summary, and personality; parent-model fallback keeps the captured model metadata while a separately selected reviewer uses the current catalog, and managed/computer-use decisions read the action's model (#44574, complete).
+- Go already selected the reviewer from the captured `RunConfig.Model` and turn effort, but computer-use review behavior read the live turn parameter, parent fallback re-resolved catalog metadata, and review requests never carried the captured reasoning summary.
+- `appTurnRunConfig` now captures the turn's `ModelInfo`; `guardianReviewPlanForTurn` and `guardianReviewNodeReplAutoReviewRequiredForTurn` prefer it for the reviewed action, and `guardianReviewPlan.ReasoningSummary` travels into the review request (`RunConfig.ReasoningSummary`, falling back to `TurnStartParams.Summary`). Personality stays disabled in the isolated reviewer config because the Guardian base instructions are custom and Go has no extension-owned reviewer session cache.
+- New `appserver/guardian_action_settings_like_rust_test.go` pins captured metadata over a refreshed catalog, the review request's captured model/summary, and the parameter-summary fallback.
+- Verified with the new test, `go test ./appserver -run 'Guardian|ReasoningEffort|Permission' -count=1`, `go test ./model -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2173 complete`, `451 not_applicable`,
+`345 audit_pending`, `176 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
