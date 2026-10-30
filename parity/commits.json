@@ -6872,9 +6872,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1045 (audit): N/A - this gates the Rust Guardian V2 async scorer and cached-score fast approval by the active model's REPL auto-review requirement, and invalidates stale scores when classification is skipped. Go has no async risk-scoring subsystem, score cache, or cached-score approval path; appserver/guardian_reviewer.go is synchronous and guardianScoreProgress only enforces max_tool_call_lag. Model-provided computer-use policy remains honored for the synchronous/evidence paths."
    ]
   },
   {
