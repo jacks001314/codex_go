@@ -119,6 +119,11 @@ func (m *Model) applyRecapGeneratedMsg(msg RecapGeneratedMsg) bubbletea.Cmd {
 	if msg.Trigger == RecapTriggerManual {
 		m.clearRecapLoading()
 	}
+	// Rust #42101: a pending automatic result is discarded, not rendered or
+	// retried, once the TUI opt-out is active.
+	if msg.Trigger == RecapTriggerAutomatic && m.disableAutoRecap {
+		return nil
+	}
 	if strings.TrimSpace(msg.ThreadID) != m.currentThreadID() {
 		return nil
 	}

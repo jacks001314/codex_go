@@ -5572,9 +5572,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 998 (实现+回归): #42101 新增 tui.auto_recap（默认开启）；关闭时取消已排期的自动 recap 检查、拒绝自动请求、丢弃在途的自动结果且不重试，手动 /recap 不受影响。Go 侧配置与调度门控已存在：config/config.go 允许 auto_recap，app/interactive.go 的 interactiveAutoRecap 解析 tui.auto_recap（默认 true，非法值回落 true）并经 Options.AutoRecap 传入 tui/tea（model.go 的 disableAutoRecap），scheduleRecapCheck/applyRecapCheck/failRecap 均按该开关短路，手动 applyRecapCommand 不受开关影响，/settings 修改可即时生效（settings_commands.go、config_panel.go）。本轮发现并修复缺口：applyRecapGeneratedMsg 之前未检查开关，关闭自动 recap 后在途的自动结果仍会被渲染；现按 Rust recap_trigger_enabled 语义在清理在途状态后直接丢弃（成功与失败两条路径都不渲染、不重试、不排期），手动结果照常处理。新增 tui/tea/recap_auto_disable_like_rust_test.go：关闭时丢弃在途成功结果（并对照开启时会渲染）与失败结果且清空 inFlight，关闭时手动 /recap 仍生成并渲染。既有 app/auto_recap_test.go 覆盖默认值与非法值，tui/tea/recap_test.go 覆盖排期取消、截止触发与每 revision 只重试一次，interactive_local_settings_test.go 覆盖 /settings 实时写入。验证：go test ./tui/tea -run Recap -count=1、go test ./app -run AutoRecap -count=1。"
    ]
   },
   {

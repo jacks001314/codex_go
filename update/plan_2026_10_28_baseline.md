@@ -3108,6 +3108,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already sets the version once from `cmd/internal/codexmain` via `execserver.SetExecServerVersion`, defaults `ExecServerExecutorVersion` to `0.0.0`, serves it through `localEnvironmentInfo` on both surfaces, and caches the initialize response on the client (`rememberEnvironmentInfo`/`cachedEnvironmentInfo`).
 - Existing tests pin the fallback, stamped version, JSON serialization, and version-gated capability discovery. Verified with `go test ./execserver -run 'TestExecServerBuildIdentityMetadata|TestBuildIDVectorsMatchRust|TestCapabilityDiscoveryV2' -count=1` and `go test ./appserver -run ExecutorCapabilityDiscoveryV2 -count=1`.
 
-Status after reconciliation: `2157 complete`, `451 not_applicable`,
-`346 audit_pending`, `190 regression_pending`, `5 partial`,
+### Automatic recap opt-out (Round 998)
+
+- Rust #42101 adds `tui.auto_recap` (default enabled); disabling it cancels scheduled checks, rejects automatic requests, and discards pending automatic results without retrying, while `/recap` stays available (#42101, complete).
+- Go already parsed the setting (`interactiveAutoRecap` -> `tea.Options.AutoRecap` -> `disableAutoRecap`) and gated scheduling, deadline checks, and retries; this round closed the missing result check so a late automatic success or failure is dropped once the opt-out is active.
+- New `tui/tea/recap_auto_disable_like_rust_test.go` covers discarding an in-flight automatic success (with an enabled control that renders) and failure, plus manual `/recap` running while automatic recaps are disabled; existing tests cover defaults, invalid values, scheduling cancellation, and per-revision retries.
+- Verified with `go test ./tui/tea -run Recap -count=1` and `go test ./app -run AutoRecap -count=1`.
+
+Status after reconciliation: `2158 complete`, `451 not_applicable`,
+`346 audit_pending`, `189 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
