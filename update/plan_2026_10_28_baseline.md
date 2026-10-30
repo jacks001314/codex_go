@@ -4063,3 +4063,10 @@ Status after this batch: `2340 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestWindowsDaemonShutdownWatcherConsumesMatchingPID`, `TestWindowsDaemonShutdownWatcherIgnoresOtherRequests`, `TestRequestGracefulPIDShutdownBranchesLikeRust`, plus the Unix control-socket limit tests (`TestControlSocketAdvertisesUnfragmentedMessageLimitLikeRust`, `TestManagedShutdownSocketAdvertisesUnfragmentedMessageLimitLikeRust`, `TestRejectedShutdownSocketOmitsUnfragmentedMessageLimitLikeRust`); targeted appserverdaemon tests pass.
 
 Status after this batch: `2341 complete`, `465 not_applicable`, `322 audit_pending`, `16 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Managed daemon restores saved threads (Round 1123)
+
+- #44314 was already implemented in `appserver/daemon_recovery_restore.go`: `daemonRecoveryConsume` reads the snapshot before serving requests and removes it unconditionally, so malformed or unreadable snapshots belong to one generation only; a missing file is an empty snapshot. Only managed launches restore, in a background task that resumes each saved root thread through the cold-resume path with `exclude_turns: true`, warns and continues on per-thread failures, and aborts during shutdown; already-loaded runtimes keep their owner.
+- Tests: `TestDaemonRecoveryConsumeReadsAndRemovesSnapshotLikeRust`, `TestDaemonRecoveryConsumeRemovesMalformedSnapshotLikeRust`, `TestDaemonRecoveryConsumeMissingFileIsEmptyLikeRust`, `TestDaemonRecoveryRestoreMissingFileIsNoopLikeRust`, `TestDaemonRecoveryRestoreForAccessOnlyManagedLikeRust`, `TestDaemonRecoveryRestoreResumesSavedThreadsLikeRust`, `TestDaemonRecoveryResumeUsesExcludeTurnsLikeRust`; `go test ./appserver -run DaemonRecovery` passes.
+
+Status after this batch: `2342 complete`, `465 not_applicable`, `322 audit_pending`, `15 regression_pending`, `5 partial`, `6 blocked_precondition`.

@@ -10969,9 +10969,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1123: Go already implements managed-daemon thread recovery in appserver/daemon_recovery_restore.go. `daemonRecoveryConsume` reads the snapshot before serving requests and removes it unconditionally, so malformed or unreadable snapshots belong to one generation only; missing files are an empty snapshot. Only `DaemonShutdownManaged` launches restore, in a background task that resumes each saved root thread through the cold-resume path with `exclude_turns: true`, warns and continues on per-thread failures, and is aborted during shutdown; already-loaded runtimes keep their owner. Tests: TestDaemonRecoveryConsumeReadsAndRemovesSnapshotLikeRust, TestDaemonRecoveryConsumeRemovesMalformedSnapshotLikeRust, TestDaemonRecoveryConsumeMissingFileIsEmptyLikeRust, TestDaemonRecoveryRestoreMissingFileIsNoopLikeRust, TestDaemonRecoveryRestoreForAccessOnlyManagedLikeRust, TestDaemonRecoveryRestoreResumesSavedThreadsLikeRust, TestDaemonRecoveryResumeUsesExcludeTurnsLikeRust; go test ./appserver -run DaemonRecovery passes."
    ]
   },
   {
