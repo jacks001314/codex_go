@@ -3756,6 +3756,17 @@ Status after this batch: `2252 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2257 complete`, `462 not_applicable`, `322 audit_pending`, `103 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1089)
+
+- #43906 catalog cache identity: disk/in-memory reuse requires provider and auth identity, legacy entries miss, post-fetch identity is rechecked and freshness renewal needs client version + identity + ETag.
+- #44628 `analytics_enabled` turn metadata: resolved from the session analytics client, omitted without context, reserved against overrides, carried on HTTP and WebSocket requests.
+- #44646 thread analytics opt-outs: disabled threads stay silent with shared clients while a host-disabled client remains authoritative.
+- #44656 per-model turn metrics: token usage accumulates per producing model with zero-valued samples preserved and compaction-only selections excluded; turn telemetry drives tool/memory/network/process metrics.
+- #45805 MCP App UI metadata: descriptor widgets and display mode ride on tool-call items through rollout history and the wire.
+- #46568 captured turn environments: workspace-root-anchored permission materialization, snapshot-derived turn profiles, attachment-owned profiles and daemon recovery of the captured selection.
+
+Status after this batch: `2263 complete`, `462 not_applicable`, `322 audit_pending`, `97 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

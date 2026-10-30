@@ -9809,9 +9809,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "model/models_endpoint.go and model/models_identity.go scope model-catalog caches to the current provider and authentication identity (#43906): disk and in-memory reuse require a matching identity, legacy entries without one are misses, an in-memory identity mismatch falls back to bundled metadata, the identity is rechecked after fetching and storing before a catalog is published, and cache freshness is renewed only when client version, identity and ETag all match.",
+    "Regression coverage: model/models_identity_test.go (account vs token refresh, header auth, provider routing and credentials, auth requirements, env-key absence, managed residency, ChatGPT token exclusion), model/model_catalog_url_test.go TestModelsCatalogIdentityTracksCatalogURL, and model/gateway_auth_test.go TestModelsCatalogIdentityIncludesGatewayOAuthLikeRust. Verified with `go test ./model -run 'Catalog|Identity|Cache' -count=1`."
    ]
   },
   {
@@ -11610,9 +11611,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "`x-codex-turn-metadata` carries an optional `analytics_enabled` sourced from the session's selected analytics client (appserver/analytics_metadata.go, codexapi/responses_metadata.go, turn/turn.go): it reports collection state independently of event eligibility, is omitted when no analytics context exists, and is reserved so configured or client-supplied metadata cannot override it while still being accepted in existing configuration. HTTP headers/body metadata and WebSocket prewarm/turn requests all reflect the resolved state.",
+    "Regression coverage: turn/turn_test.go TestBuildResponsesClientMetadataIncludesAnalyticsEnabled and TestMetadataStateAnalyticsEnabled, plus the reserved-key and HTTP/WebSocket cases in appserver/thread_analytics_optout_test.go and codexapi/client_context_test.go. Verified with `go test ./turn -run AnalyticsEnabled -count=1` and `go test ./appserver -run 'ThreadAnalytics|AnalyticsEnabled' -count=1`."
    ]
   },
   {
@@ -11670,9 +11672,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/thread_analytics_optout.go honors thread-level analytics opt-outs for shared clients (#44646): a disabled thread suppresses its analytics regardless of the shared client's state, while a host-level disabled client stays authoritative and enabled threads continue to report, without mutating the client or persisted configuration.",
+    "Regression coverage: appserver/thread_analytics_optout_test.go TestAnalyticsDisabledByConfigLikeRust, TestThreadAnalyticsDisabledLikeRust and TestAnalyticsEnabledOptionForThreadLikeRust. Verified with `go test ./appserver -run 'ThreadAnalytics|AnalyticsDisabled|AnalyticsEnabled' -count=1`."
    ]
   },
   {
@@ -11730,9 +11733,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "telemetry/turn_metric_emit.go attributes turn token usage to the models that produced it (#44656): usage accumulates per model from each response's resolved step settings and emits one histogram sample per model and token type per turn, zero-valued samples are preserved when no usage is reported, a selected model that only ran compaction gets no sample, and tool-call, memory, network-proxy and running-process metrics use turn telemetry instead of session-level state.",
+    "Regression coverage: appserver/turn_metrics_test.go TestTurnTokenUsageByModelAttributesUsageToProducingModel, TestRuntimeRouterTurnCompletionEmitsPerModelTokenUsage, TestEmitTurnTokenUsageMetricsEmitsPerModelSamples, and the memory/tool-call/process metric tests. Verified with `go test ./appserver -run TurnTokenUsage -count=1`."
    ]
   },
   {
@@ -14106,9 +14110,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "mcp/app_ui.go maps MCP App UI metadata (#45805): descriptor `ui://` resources, display mode and widget presentation are read from tool metadata (including nested `_meta` declarations and the plugin ID), carried on the tool-call item, persisted through rollout history and re-served on the wire, while tools without widgets keep the plain behaviour.",
+    "Regression coverage: mcp/app_ui_test.go TestMCPAppUIFromToolMetaCoversDescriptorDeclarations, appserver/mcp_app_ui_item_test.go TestMCPAppUIMetadataReachesTheToolCallItemAndWire, and rollout/turn_item_test.go TestMCPAppUISurvivesTheRolloutRoundTrip. Verified with `go test ./mcp -run AppUI -count=1`, `go test ./appserver -run MCPAppUI -count=1` and `go test ./rollout -run MCPAppUI -count=1`."
    ]
   },
   {
@@ -16496,9 +16501,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Turn environments use their captured permission state (#46568): config/permissions.go materializes project roots with path URIs anchored at the supplied workspace roots, appserver/runtime_router.go derives the turn's permission profile from the captured environment snapshot and primary workspace-root URIs (falling back to the thread profile), executor_skill_sandbox.go lets an attachment's own resolved profile govern its execution, and appserver/daemon_recovery_snapshot.go restores the captured environment selection on daemon recovery.",
+    "Regression coverage: config/permissions_test.go (workspace-root anchoring), appserver/turn_permission_environment_test.go TestTurnPermissionEnvironmentMaterializesFallbackProfileLikeRust, and the retained/daemon recovery snapshot tests. Verified with `go test ./config -run PermissionProfile -count=1` and `go test ./appserver -run 'PermissionEnvironment|TurnPermission' -count=1`."
    ]
   },
   {
