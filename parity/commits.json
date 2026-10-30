@@ -8721,9 +8721,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1131 (lead): #43428 is already implemented end to end in Go. `mcp/auth_changes.go` advertises the experimental `codex/auth-change` capability on stdio initialize only when the connection has an auth-change source (`mcpClientCapabilitiesWithAuthChange`), then sends `notifications/codex/authChanged` with `generation`/`ownerGeneration` and no credentials right after initialization and on every later change, bounds each send at 5s, and closes the transport when a follow-up send fails; the watcher is tied to the client and stopped on close/restart (`stopAuthChangeWatcherLocked`). Owner tracking lives in `auth.AuthChangeTracker` (Generation versus OwnerGeneration, with `ForceOwnerChange` for credential changes that lack a complete owner identity), and `appserver/mcp_auth_changes.go` bridges the router tracker into `MCPService.SetAuthChangeSource`, installed when the runtime MCP service is built. Tests: TestMCPClientCapabilitiesAdvertiseAuthChangeOnDemand, TestMCPServerSupportsAuthChangeReadsExperimentalCapability, TestStdioAuthChangeNotificationsFollowOptIn, TestStdioAuthChangeNotificationsRequireOptIn, TestRuntimeRouterAuthOwnerRevisionTracksIdentityChanges, and auth/change_state_test.go; `go test -run AuthChange ./mcp ./appserver ./auth` passes. No source change needed."
    ]
   },
   {

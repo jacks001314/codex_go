@@ -4127,3 +4127,11 @@ Status after this batch: `2347 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestRemoteNewSessionStartFailurePreservesComposedInputLikeRust`, `TestRemoteNewSessionDefaultsUnsupportedOnlyForOldServersLikeRust`, `TestNewSessionStartFailureRestoresComposedInputLikeRust`; `go build ./...`, `go test ./tui/...` and the targeted `./app` runs pass. `TestExecJSONEndToEnd` and `TestLocalSessionForksRustRolloutWithoutGoSnapshot` fail identically on the parent commit and are unrelated.
 
 Status after this batch: `2348 complete`, `465 not_applicable`, `322 audit_pending`, `8 regression_pending`, `5 partial`, `7 blocked_precondition`.
+
+### Stdio MCP auth-change notifications are already wired (Round 1131)
+
+- #43428 was already implemented end to end. `mcp/auth_changes.go` advertises the experimental `codex/auth-change` capability on stdio initialize only when the connection has an auth-change source, sends `notifications/codex/authChanged` with `generation`/`ownerGeneration` and no credentials after initialization and on later changes, bounds each send at 5s, and closes the transport when a follow-up send fails; the watcher stops with the client.
+- Owner changes are tracked separately in `auth.AuthChangeTracker` (`Generation` versus `OwnerGeneration`, `ForceOwnerChange` for incomplete-owner credential changes), and `appserver/mcp_auth_changes.go` bridges the router tracker into `MCPService.SetAuthChangeSource`.
+- Tests: `TestMCPClientCapabilitiesAdvertiseAuthChangeOnDemand`, `TestMCPServerSupportsAuthChangeReadsExperimentalCapability`, `TestStdioAuthChangeNotificationsFollowOptIn`, `TestStdioAuthChangeNotificationsRequireOptIn`, `TestRuntimeRouterAuthOwnerRevisionTracksIdentityChanges`, plus `auth/change_state_test.go`; `go test -run AuthChange ./mcp ./appserver ./auth` passes. No source change needed.
+
+Status after this batch: `2349 complete`, `465 not_applicable`, `322 audit_pending`, `7 regression_pending`, `5 partial`, `7 blocked_precondition`.
