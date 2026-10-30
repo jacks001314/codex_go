@@ -181,20 +181,27 @@ type mentionToken struct {
 }
 
 func parseHistoryLinkedMention(text string, textBytes []byte, start int, atMentionsEnabled bool) (rune, string, string, int, bool) {
-	if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, ToolMentionSigil); ok && !IsCommonEnvVar(name) && isToolPath(path) {
+	if name, path, end, ok := parseLinkedToolMentionAt(text, textBytes, start, ToolMentionSigil); ok && !IsCommonEnvVar(name) && isToolPath(path) {
 		return ToolMentionSigil, name, path, end, true
 	}
 	if atMentionsEnabled {
-		if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, PluginTextMentionSigil); ok && !IsCommonEnvVar(name) && isToolPath(path) {
+		if name, path, end, ok := parseLinkedToolMentionAt(text, textBytes, start, PluginTextMentionSigil); ok && !IsCommonEnvVar(name) && isToolPath(path) {
 			return PluginTextMentionSigil, name, path, end, true
 		}
-	} else if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, PluginTextMentionSigil); ok && !IsCommonEnvVar(name) && strings.HasPrefix(path, "plugin://") {
+	} else if name, path, end, ok := parseLinkedToolMentionAt(text, textBytes, start, PluginTextMentionSigil); ok && !IsCommonEnvVar(name) && strings.HasPrefix(path, "plugin://") {
 		return ToolMentionSigil, name, path, end, true
 	}
 	return 0, "", "", 0, false
 }
 
-func parseLinkedToolMention(text string, textBytes []byte, start int, sigil rune) (string, string, int, bool) {
+// ParseLinkedToolMention parses a linked mention at an opening `[` byte,
+// returning its name, path, and end offset (Rust #41218 shares this parser
+// between the mention codec and the skill-mention extractor).
+func ParseLinkedToolMention(text string, start int, sigil rune) (string, string, int, bool) {
+	return parseLinkedToolMentionAt(text, []byte(text), start, sigil)
+}
+
+func parseLinkedToolMentionAt(text string, textBytes []byte, start int, sigil rune) (string, string, int, bool) {
 	sigilIndex := start + 1
 	if sigilIndex >= len(textBytes) || textBytes[sigilIndex] != byte(sigil) {
 		return "", "", 0, false

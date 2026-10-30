@@ -7,6 +7,7 @@ import (
 
 	"codex_go/apps"
 	"codex_go/appserver"
+	codextui "codex_go/tui"
 	"codex_go/utils"
 )
 
@@ -383,8 +384,10 @@ func ExtractToolMentionsFromTextWithSigil(text string, sigil byte) ToolMentions 
 	index := 0
 	for index < len(text) {
 		if text[index] == '[' {
-			if name, path, end, ok := parseLinkedToolMention(text, index, sigil); ok {
-				if !isCommonEnvVar(name) {
+			// Rust #41218: reuse the mention codec's linked-tool parser so the
+			// composer and skill extraction agree on the syntax.
+			if name, path, end, ok := codextui.ParseLinkedToolMention(text, index, rune(sigil)); ok {
+				if !codextui.IsCommonEnvVar(name) {
 					if IsSkillMentionPath(path) {
 						mentions.Names[name] = true
 					}
@@ -401,16 +404,16 @@ func ExtractToolMentionsFromTextWithSigil(text string, sigil byte) ToolMentions 
 			continue
 		}
 		nameStart := index + 1
-		if nameStart >= len(text) || !isMentionNameChar(text[nameStart]) {
+		if nameStart >= len(text) || !isPlaintextMentionNameChar(text[nameStart]) {
 			index++
 			continue
 		}
 		nameEnd := nameStart + 1
-		for nameEnd < len(text) && isMentionNameChar(text[nameEnd]) {
+		for nameEnd < len(text) && isPlaintextMentionNameChar(text[nameEnd]) {
 			nameEnd++
 		}
 		name := text[nameStart:nameEnd]
-		if !isCommonEnvVar(name) {
+		if !codextui.IsCommonEnvVar(name) {
 			mentions.Names[name] = true
 		}
 		index = nameEnd
@@ -566,63 +569,18 @@ func AppIDFromMentionPath(path string) string {
 	return strings.TrimSpace(value)
 }
 
-func parseLinkedToolMention(text string, start int, sigil byte) (string, string, int, bool) {
-	sigilIndex := start + 1
-	if sigilIndex >= len(text) || text[sigilIndex] != sigil {
-		return "", "", start + 1, false
-	}
-	nameStart := sigilIndex + 1
-	if nameStart >= len(text) || !isMentionNameChar(text[nameStart]) {
-		return "", "", start + 1, false
-	}
-	nameEnd := nameStart + 1
-	for nameEnd < len(text) && isMentionNameChar(text[nameEnd]) {
-		nameEnd++
-	}
-	if nameEnd >= len(text) || text[nameEnd] != ']' {
-		return "", "", start + 1, false
-	}
-	pathStart := nameEnd + 1
-	for pathStart < len(text) && isASCIIWhitespace(text[pathStart]) {
-		pathStart++
-	}
-	if pathStart >= len(text) || text[pathStart] != '(' {
-		return "", "", start + 1, false
-	}
-	pathEnd := pathStart + 1
-	for pathEnd < len(text) && text[pathEnd] != ')' {
-		pathEnd++
-	}
-	if pathEnd >= len(text) || text[pathEnd] != ')' {
-		return "", "", start + 1, false
-	}
-	path := strings.TrimSpace(text[pathStart+1 : pathEnd])
-	if path == "" {
-		return "", "", start + 1, false
-	}
-	return text[nameStart:nameEnd], path, pathEnd + 1, true
-}
-
-func isCommonEnvVar(name string) bool {
-	switch strings.ToUpper(strings.TrimSpace(name)) {
-	case "PATH", "HOME", "USER", "SHELL", "PWD", "TMPDIR", "TEMP", "TMP", "LANG", "TERM", "XDG_CONFIG_HOME":
-		return true
-	default:
-		return false
-	}
-}
-
-func isMentionNameChar(ch byte) bool {
-	return ch >= 'a' && ch <= 'z' ||
-		ch >= 'A' && ch <= 'Z' ||
-		ch >= '0' && ch <= '9' ||
-		ch == '_' ||
-		ch == '-' ||
-		ch == ':'
-}
-
 func isASCIIWhitespace(ch byte) bool {
 	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+}
+
+// isPlaintextMentionNameChar keeps Go's qualified-skill spelling (for example
+// `$Docs:review`) in the plaintext scan. Rust #41218 shares the mention codec's
+// name characters with linked mentions; the composer still recognises
+// colon-qualified skill queries and binds them, so accepting the same spelling
+// while scanning text keeps submissions equivalent without widening
+// linked-tool syntax.
+func isPlaintextMentionNameChar(ch byte) bool {
+	return codextui.IsMentionNameByte(ch) || ch == ':'
 }
 
 func appMentionSlug(app apps.AppEntry) string {

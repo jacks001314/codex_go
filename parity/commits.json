@@ -3784,9 +3784,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 987 (重构+回归): #41218 将 TUI 的 linked-tool mention 解析收敛到 mention codec。Go 原本在 tui/chatwidget/skills.go 保留了一份与 tui/mention_codec.go 重复的 parseLinkedToolMention / isCommonEnvVar / isMentionNameChar；本轮导出 tui.ParseLinkedToolMention(text, start, sigil)（内部保留 parseLinkedToolMentionAt 供 history decode 复用同一实现），skills.go 改为调用 codec 的 ParseLinkedToolMention / IsCommonEnvVar / IsMentionNameByte 并删除重复实现，环境变量过滤与名称字符集不再分叉；普通文本扫描仍保留 Go 的 colon-qualified skill 拼写（$Docs:review），与 Rust 通过 composer 绑定 qualified skill 的提交结果一致。测试：tui/mention_codec_like_rust_test.go（Rust #41218 的两组用例：UTF-8 字节偏移 + 两种 sigil + 路径 trim；10 种畸形链接拒绝）与 tui/chatwidget/skills_mention_like_rust_test.go（共享解析器下的 unicode 路径、空白 trim、两种 sigil、env var/非 skill 链接过滤、qualified skill 拼写）。验证：go test ./tui/... -count=1 全绿。"
    ]
   },
   {

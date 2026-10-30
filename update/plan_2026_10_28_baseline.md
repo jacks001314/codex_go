@@ -3031,6 +3031,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `imageGeneration` and raw `image_generation_call` items now clear their inline `result` payload while keeping `fileId`, `revisedPrompt`, and `inputImages`; MCP tool results drop content entries that carry `resource.blob` while keeping text and blob-less resources; `local_image`/`local_audio` references are preserved.
 - Tests: `appserver/notification_media_like_rust_test.go` covers image generation, raw image generation, MCP blob filtering, local media retention, and the feature gate over all three notification types. Verified with `go test ./appserver -run NotificationMedia -count=1` and `go test ./appserver -count=1` (only the seven known pre-existing manifest/protocol-surface/analytics failures remain).
 
-Status after reconciliation: `2146 complete`, `450 not_applicable`,
-`346 audit_pending`, `202 regression_pending`, `5 partial`,
+### Shared linked-tool mention parsing (Round 987)
+
+- Rust #41218 removes the TUI skill extractor's duplicate linked-tool parser and reuses `mention_codec`'s parser, mention-name character set, and environment-variable filter (#41218, complete).
+- `tui/mention_codec.go` now exports `ParseLinkedToolMention` (history decoding keeps calling the same unexported implementation with its existing byte slice), and `tui/chatwidget/skills.go` calls it plus `IsCommonEnvVar`/`IsMentionNameByte` instead of its own copies.
+- The plaintext scan keeps Go's colon-qualified skill spelling (`$Docs:review`), matching the submission Rust produces after the composer binds a qualified skill, while linked mentions follow the codec's stricter name characters.
+- Tests: `tui/mention_codec_like_rust_test.go` mirrors the upstream UTF-8 byte-offset and malformed-link tables, and `tui/chatwidget/skills_mention_like_rust_test.go` covers Unicode/whitespace-trimmed paths, both sigils, env-var and non-skill links, and the qualified spelling. Verified with `go test ./tui/... -count=1`.
+
+Status after reconciliation: `2147 complete`, `450 not_applicable`,
+`346 audit_pending`, `201 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
