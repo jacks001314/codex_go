@@ -3121,11 +3121,14 @@ func optionalStringPointer(value string) *string {
 // seeds the new session; an absent compaction keeps the existing reviewer.
 // This is the Go equivalent of the sync30 Guardian history-retention and
 // compaction cluster (#41846-#41858, #41861, #41870, #41879,
-// #41931-#42085, #42290, #42579-#42852): review continuity is preserved
-// through the bounded parent-compaction response ID plus model-hash
-// compatibility (#42852), root-conversation authorization and node_repl
-// evidence stay in the review prompt, and missing/oversized/incompatible
-// checkpoints fail closed. Rust's thread-context/structured-subagent history
+// #41931-#42085, #42290, #42579-#42852, #47272): review continuity is
+// preserved through the bounded parent-compaction response ID, root-conversation
+// authorization and node_repl evidence stay in the review prompt, and
+// missing/oversized checkpoints fail closed. Rust #47272 drops the synchronous
+// reviewer's comp_hash compatibility gate: the reviewer can consume checkpoints
+// across advertised hashes and lets the backend validate the payload, so Go
+// reuses any usable checkpoint and only refuses to seed when none exists or
+// reuse is disabled. Rust's thread-context/structured-subagent history
 // machinery has no Go counterpart, so the cluster is satisfied by these Go
 // mechanisms rather than per-PR ports.
 func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, compacted *compact.Result) {
@@ -3171,18 +3174,12 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 		sessionRunner.DropStaleParentCompaction()
 		return
 	}
-	if threadContext {
-		// Rust #42588: missing or unknown provenance must fail closed just like
-		// a mismatched producer hash. Only a nonempty, matching producer hash
-		// may reuse the opaque checkpoint.
-		currentHash := ""
-		if compacted != nil {
-			currentHash = r.guardianReviewModelHashForTurn(threadID, compacted.Request.TurnID)
-		}
-		if compacted == nil || !guardianParentCompactionSeedAllowed(reuseParentCompaction, compacted.CompactionModelHash, currentHash) {
-			sessionRunner.DropStaleParentCompaction()
-			return
-		}
+	if threadContext && !reuseParentCompaction {
+		// Thread-owned review is the only mode Go enables checkpoint reuse for
+		// (guardian_reuse_parent_compaction), so an independent review still
+		// clears the seed instead of inheriting the parent checkpoint.
+		sessionRunner.DropStaleParentCompaction()
+		return
 	}
 	sessionRunner.ResetAfterParentCompaction(responseID)
 }
@@ -3214,19 +3211,6 @@ func (r *RuntimeRouter) resetGuardianAfterParentHistoryReset(threadID string) {
 		return
 	}
 	sessionRunner.ResetForParentHistoryReset()
-}
-
-// guardianParentCompactionSeedAllowed reports whether the producer hash of an
-// opaque checkpoint is safe to reuse for the currently selected Guardian model.
-// A checkpoint is reusable only when reuse is enabled and both sides declare
-// the same nonempty compatibility hash (Rust #42588).
-func guardianParentCompactionSeedAllowed(reuseParentCompaction bool, compactedHash, currentHash string) bool {
-	if !reuseParentCompaction {
-		return false
-	}
-	compactedHash = strings.TrimSpace(compactedHash)
-	currentHash = strings.TrimSpace(currentHash)
-	return compactedHash != "" && currentHash != "" && compactedHash == currentHash
 }
 
 // guardianParentCompactionResponseID returns the reusable compaction response

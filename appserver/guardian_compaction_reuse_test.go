@@ -244,26 +244,57 @@ func TestResetGuardianMessageText(t *testing.T) {
 	}
 }
 
-func TestGuardianParentCompactionSeedRequiresMatchingProvenanceLikeRust(t *testing.T) {
+// TestGuardianResetAcceptsCompactionAcrossModelHashesLikeRust mirrors Rust
+// #47272: thread-owned synchronous review reuses a usable parent compaction
+// checkpoint even when the reviewer's comp_hash differs, is unknown, or is
+// empty. The backend validates the payload; only a missing or unusable
+// checkpoint falls back to the existing reviewer.
+func TestGuardianResetAcceptsCompactionAcrossModelHashesLikeRust(t *testing.T) {
 	testCases := []struct {
-		name         string
-		reuse        bool
-		compacted    string
-		current      string
-		wantReusable bool
+		name string
+		hash string
 	}{
-		{name: "matching", reuse: true, compacted: "hash-a", current: "hash-a", wantReusable: true},
-		{name: "trimmed match", reuse: true, compacted: " hash-a ", current: "hash-a", wantReusable: true},
-		{name: "mismatched", reuse: true, compacted: "hash-a", current: "hash-b", wantReusable: false},
-		{name: "missing producer", reuse: true, compacted: "", current: "hash-a", wantReusable: false},
-		{name: "missing current", reuse: true, compacted: "hash-a", current: "", wantReusable: false},
-		{name: "both missing", reuse: true, compacted: "", current: "", wantReusable: false},
-		{name: "reuse disabled", reuse: false, compacted: "hash-a", current: "hash-a", wantReusable: false},
+		{name: "different hash", hash: "hash-different"},
+		{name: "matching hash", hash: "hash-current"},
+		{name: "unknown hash", hash: ""},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := guardianParentCompactionSeedAllowed(testCase.reuse, testCase.compacted, testCase.current); got != testCase.wantReusable {
-				t.Fatalf("guardianParentCompactionSeedAllowed() = %v, want %v", got, testCase.wantReusable)
+			home := t.TempDir()
+			now := fixedTime()
+			threadID := session.ThreadID("thread-guardian-compaction")
+			store := session.NewStore(filepath.Join(home, "sessions"))
+			threadRouter := NewRouter(store)
+			record := &session.Record{
+				ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+				Metadata: session.Metadata{CWD: t.TempDir(), SessionPrefix: session.PrefixForSessionID(string(threadID))},
+			}
+			if err := store.Create(record); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			raw, err := json.Marshal(map[string]any{
+				"type":              "compaction",
+				"id":                "cmp_checkpoint",
+				"encrypted_content": strings.Repeat("a", 64),
+			})
+			if err != nil {
+				t.Fatalf("marshal compaction: %v", err)
+			}
+			runner := &guardianSessionRunner{previous: "pre-compaction"}
+			router := NewRuntimeRouter(RuntimeServices{
+				ThreadRouter:     threadRouter,
+				Config:           config.NewConfigService(home),
+				GuardianReviewer: &modelGuardianReviewer{agent: runner},
+			})
+			router.resetGuardianAfterParentCompaction(string(threadID), &compact.Result{
+				ResponseID:          "cmp-checkpoint",
+				CompactionModelHash: testCase.hash,
+				NewHistory:          []compact.Item{{ID: "cmp_checkpoint", Type: "compaction", Raw: raw}},
+			})
+			request := &model.AgentRequest{Prompt: "review"}
+			runner.SeedForReview(request)
+			if request.PreviousResponseID != "cmp-checkpoint" {
+				t.Fatalf("PreviousResponseID = %q, want the parent checkpoint despite hash %q", request.PreviousResponseID, testCase.hash)
 			}
 		})
 	}

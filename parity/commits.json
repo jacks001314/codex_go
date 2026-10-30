@@ -18639,9 +18639,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1080: removed the synchronous reviewer comp_hash gate in appserver/guardian_reviewer.go. resetGuardianAfterParentCompaction now reuses any usable parent checkpoint whenever guardian_reuse_parent_compaction (Go thread-owned policy) is enabled, so different, unknown and empty producer hashes all seed retained evidence; missing or oversized checkpoints still drop the seed. Removed guardianParentCompactionSeedAllowed and the reviewer-hash lookup from the reset path. appserver/guardian_compaction_reuse_test.go drives the router reset across hashes and asserts the checkpoint stays seeded. Producer hashes remain in compaction rollout metadata for history provenance."
    ]
   },
   {
