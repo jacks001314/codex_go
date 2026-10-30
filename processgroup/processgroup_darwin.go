@@ -25,6 +25,13 @@ func Kill(pgid int) error {
 	return err
 }
 
+// Interrupt sends SIGINT to the process group. Rust's macOS interrupt helper
+// signals the group directly without the member fallback.
+func Interrupt(pgid int) error {
+	_, err := signalGroup(pgid, syscall.SIGINT)
+	return err
+}
+
 func darwinSignals() fallbackSignals {
 	return fallbackSignals{
 		group:   signalGroup,

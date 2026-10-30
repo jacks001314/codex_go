@@ -3843,3 +3843,9 @@ Status after this batch: `2305 complete`, `462 not_applicable`, `322 audit_pendi
 - #47568 command execution analytics now reports a nullable `sandbox_backend`: `SandboxType::as_metric_tag` maps to `none`/`seatbelt`/`seccomp`/`windows_sandbox`/`windows_mxc`, unified-exec terminal events carry the executor-observed backend, one-shot shell outputs propagate it through the tool result, and user-shell completions report explicit `none`. Begin events, cancelled launches and legacy remote executors without `sandboxType` stay null rather than being guessed, and the internal value never reaches the serialized command item, schemas or TypeScript surface.
 
 Status after this batch: `2306 complete`, `462 not_applicable`, `322 audit_pending`, `54 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Pipe child launcher batch (Round 1096)
+
+- #47605 piped children now launch through a shared child-launcher contract in Go: `processgroup.PrepareChildSession` starts a new session and adds Linux parent-death `SIGTERM`, `TerminateProcessTree`/`InterruptProcessTree` keep cleanup on the child's own process group with a direct-child fallback, and every Go pipe carrier (unified exec, `command/exec`, `process/exec`, exec-server `process/start`) uses them. NUL argv/cwd/env rejection is pinned by a no-side-effect test, and descriptor closure plus explicit-environment isolation by re-executed children.
+
+Status after this batch: `2307 complete`, `462 not_applicable`, `322 audit_pending`, `53 regression_pending`, `5 partial`, `6 blocked_precondition`.

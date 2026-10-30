@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+
+	"codex_go/processgroup"
 )
 
 func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedExecSandboxCommand, error) {
@@ -30,6 +32,9 @@ func startUnifiedExecCommand(cmd *osexec.Cmd, tty bool) (*startedUnifiedExecComm
 		}
 		return &startedUnifiedExecCommand{stdin: terminal, readers: []io.ReadCloser{terminal}}, nil
 	}
+	// Rust #47605: piped unified-exec children go through the shared child
+	// launcher with ProcessMode::NewSession and Linux parent-death termination.
+	processgroup.PrepareChildSession(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -48,7 +53,14 @@ func interruptUnifiedExecProcess(process *os.Process) error {
 	if process == nil {
 		return ErrUnifiedExecStdinClosed
 	}
-	return process.Signal(os.Interrupt)
+	return processgroup.InterruptProcessTree(process)
+}
+
+func terminateUnifiedExecProcess(process *os.Process) error {
+	if process == nil {
+		return nil
+	}
+	return processgroup.TerminateProcessTree(process)
 }
 
 func unifiedExecExitCode(state *os.ProcessState, err error) int {

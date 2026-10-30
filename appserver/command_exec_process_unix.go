@@ -4,15 +4,16 @@ package appserver
 
 import (
 	osexec "os/exec"
-	"syscall"
 
 	"codex_go/processgroup"
 )
 
 func prepareCommandExecProcess(cmd *osexec.Cmd) {
-	if cmd != nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
+	// Rust #47605: piped command children use ChildCommand's NewSession mode,
+	// which detaches the controlling terminal (setsid) and adds the Linux
+	// parent-death signal. A new session also makes the child its group leader,
+	// so process-group cleanup keeps working.
+	processgroup.PrepareChildSession(cmd)
 }
 
 func terminateCommandExecProcess(active *managedCommandExec) {
@@ -20,5 +21,5 @@ func terminateCommandExecProcess(active *managedCommandExec) {
 	if process == nil {
 		return
 	}
-	_ = processgroup.Kill(process.Pid)
+	_ = processgroup.TerminateProcessTree(process)
 }

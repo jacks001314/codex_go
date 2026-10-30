@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"codex_go/envutil"
+	"codex_go/processgroup"
 )
 
 type ProcessService struct {
@@ -100,9 +101,10 @@ func (s *ProcessService) SpawnWithOptions(ctx context.Context, params *ProcessSp
 	if params.TTY {
 		return s.spawnPTYWithConnection(execCtx, cancel, connectionID, cmd, params, stdout, stderr, notify)
 	}
-	// Rust's `process/exec` piped spawn goes through the pty child command, which
-	// sets CREATE_NO_WINDOW on Windows (Rust #48483).
-	suppressChildConsoleWindow(cmd)
+	// Rust's `process/exec` piped spawn goes through the pty child command: a
+	// new session plus Linux parent-death on Unix (Rust #47605) and
+	// CREATE_NO_WINDOW on Windows (Rust #48483).
+	prepareCommandExecProcess(cmd)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if params.StreamStdoutStderr {
@@ -236,6 +238,12 @@ func (s *ProcessService) KillWithConnection(connectionID string, params *Process
 		return nil, err
 	}
 	process.cancel()
+	s.mu.Lock()
+	cmd := process.cmd
+	s.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = processgroup.TerminateProcessTree(cmd.Process)
+	}
 	return &ProcessKillResponse{}, nil
 }
 

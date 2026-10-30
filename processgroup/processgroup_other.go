@@ -11,3 +11,8 @@ func Terminate(pgid int) (bool, error) {
 func Kill(pgid int) error {
 	return nil
 }
+
+// Interrupt is a no-op outside Unix, mirroring Rust's non-Unix stub.
+func Interrupt(pgid int) error {
+	return nil
+}

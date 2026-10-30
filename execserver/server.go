@@ -26,6 +26,7 @@ import (
 	"codex_go/envutil"
 	"codex_go/install"
 	"codex_go/network"
+	"codex_go/processgroup"
 	"codex_go/sandbox"
 	"codex_go/shell"
 	"codex_go/utils"
@@ -2087,6 +2088,10 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 	// exec server itself has no console. The supported-TTY branch above returned
 	// already and owns a pseudoconsole, so it is untouched.
 	envutil.SuppressConsoleWindow(cmd)
+	// Rust #47605: piped exec-server children use the shared child launcher's
+	// NewSession mode (with Linux parent-death termination) rather than
+	// inheriting the exec server's session.
+	processgroup.PrepareChildSession(cmd)
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -2147,7 +2152,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		}
 		_ = stdoutPipe.Close()
 		_ = stderrPipe.Close()
-		_ = cmd.Process.Kill()
+		_ = processgroup.TerminateProcessTree(cmd.Process)
 		_ = cmd.Wait()
 		return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
 	}
@@ -3843,7 +3848,7 @@ func (p *processState) terminate() *TerminateResponse {
 		if terminateFn != nil {
 			_ = terminateFn()
 		} else {
-			_ = cmd.Process.Kill()
+			_ = processgroup.TerminateProcessTree(cmd.Process)
 		}
 	}
 	return &TerminateResponse{Running: running}
@@ -3897,7 +3902,7 @@ func (p *processState) signal(params *SignalParams) (*SignalResponse, error) {
 		}
 		return &SignalResponse{}, nil
 	}
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+	if err := processgroup.InterruptProcessTree(cmd.Process); err != nil {
 		return nil, fmt.Errorf("failed to signal process: %w", err)
 	}
 	return &SignalResponse{}, nil

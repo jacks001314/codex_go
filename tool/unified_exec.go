@@ -2018,7 +2018,7 @@ func (p *unifiedExecProcess) terminate() error {
 	if process == nil {
 		return nil
 	}
-	return process.Kill()
+	return terminateUnifiedExecProcess(process)
 }
 
 func (p *unifiedExecProcess) enforceTimeout(timeout time.Duration) {

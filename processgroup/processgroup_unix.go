@@ -20,6 +20,13 @@ func Kill(pgid int) error {
 	return err
 }
 
+// Interrupt sends SIGINT to the process group (best-effort), mirroring Rust's
+// interrupt_process_group.
+func Interrupt(pgid int) error {
+	_, err := signalGroup(pgid, syscall.SIGINT)
+	return err
+}
+
 func signalGroup(pgid int, sig syscall.Signal) (bool, error) {
 	if pgid <= 0 {
 		return false, ErrInvalidProcessGroupID

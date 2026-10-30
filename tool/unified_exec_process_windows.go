@@ -107,6 +107,13 @@ func interruptUnifiedExecProcess(process *os.Process) error {
 	return process.Kill()
 }
 
+func terminateUnifiedExecProcess(process *os.Process) error {
+	if process == nil {
+		return nil
+	}
+	return process.Kill()
+}
+
 func unifiedExecExitCode(state *os.ProcessState, err error) int {
 	_ = err
 	if state == nil {
