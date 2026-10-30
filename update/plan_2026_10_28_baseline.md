@@ -3265,6 +3265,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #51355 attaches bounded `detail`/`error_kind` classifications to spawn-failure metrics and trace events while preserving the user-visible error. Go already implements the annotations and emission in `appserver/agent_spawn_failure.go`; `TestSpawnFailureContextDistinguishesCapacityAndRegistryLikeRust` pins distinct capacity/registry origins, depth-rejection exclusion, metric aggregation, and trace labels (#51355, complete).
 - Verified with `go test ./codemode -run 'Admission|NeverRetried' -count=1` and `go test ./appserver -run 'SpawnFailureContext|SpawnFailure' -count=1`.
 
-Status after reconciliation: `2182 complete`, `451 not_applicable`,
-`345 audit_pending`, `167 regression_pending`, `4 partial`,
+### Approval header hyperlinks and rendezvous diagnostics (Round 1020)
+
+- Rust #51439 renders command, permission, patch, and MCP elicitation approval headers with URL-preserving hyperlink text so wrapped web destinations stay clickable. Go already wraps URL-bearing approval header rows with `PreserveURLs` and annotates complete URLs in `tui/bottom_pane/approval_overlay.go`, then re-wraps and re-annotates the modal body in `tui/tea/modal.go`; `TestApprovalHeadersPreserveWrappedURLDestinationsLikeRust` covers all four header kinds with a 32-column URL that overflows the row (#51439, complete).
+- Rust #51483 adds correlated, credential-free rendezvous connection diagnostics. Go already implements the full contract in `execserver/connection_diagnostics.go` and `execserver/remote.go`: per-attempt `req_<32 hex>` request ids on `x-request-id`, typed `http`/`io`/`tls`/`protocol`/`connection_closed`/`other` categories, allowlisted `x-codex-rendezvous-rejection-reason`, and `connection_attempt`/`request_id` log fields (#51483, complete).
+- Verified with `go test ./tui/bottom_pane -run 'ApprovalHeader' -count=1`, `go test ./execserver -run 'Rendezvous' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2184 complete`, `451 not_applicable`,
+`345 audit_pending`, `165 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -27390,9 +27390,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1020 (audit): all four approval header kinds render through URL-preserving wrap plus OSC-8 annotation in ./tui/bottom_pane/approval_overlay.go (annotateApprovalHeaderRows, appendApplyPatchApprovalHeaderRows), with a second wrap/annotate pass in ./tui/tea/modal.go:annotationWrappedText, and ./tui/wrapping.go AdaptiveWrapLine auto-enabling PreserveURLs for URL-bearing text. Regression contract: approval_overlay_test.go:TestApprovalHeadersPreserveWrappedURLDestinationsLikeRust covers exec, permissions, apply_patch, and MCP elicitation; verify with `go test ./tui/bottom_pane -run 'ApprovalHeadersPreserveWrappedURL' -count=1`."
    ]
   },
   {
@@ -27642,9 +27642,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1020 (audit): rendezvous diagnostics already mirror Rust - ./execserver/connection_diagnostics.go assigns a per-attempt req_<32 lowercase hex> correlation id sent as the x-request-id header, classifies failures as http/io/tls/protocol/connection_closed/other, allowlists only x-codex-rendezvous-rejection-reason, and ./execserver/remote.go logs connection_attempt plus request_id without credentials. Regression contract: connection_diagnostics_test.go:TestOnlyKnownRendezvousRejectionHeadersAreReported, TestRendezvousIOFailuresAreTyped, TestRendezvousRequestIDIsCorrelatedAndFormatStable, TestRejectedRendezvousHandshakeReportsStatusAndReason; verify with `go test ./execserver -run 'Rendezvous' -count=1`."
    ]
   },
   {
