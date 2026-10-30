@@ -7810,9 +7810,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Build-target only: the commit selects tikv-jemallocator as the global allocator for Linux musl Rust binaries. codex_go is a Go program and uses the Go runtime allocator; there is no Cargo target or global allocator selection to change."
    ]
   },
   {
@@ -8870,7 +8870,7 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
     "Partial symbol coverage 3/6; needs review: guardian_output_schema, parse_guardian_assessment, read_only_guardian_permission_profile"
    ]
@@ -18311,9 +18311,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go remote TUI handles appserver NotificationThreadClosed by updating the side-parent status only (app/remote_tui.go). It never exits the TUI or switches away from the displayed thread on that notification, and embedded sessions share the router state, so a stale close cannot trigger the Rust failure; no thread/read confirmation round-trip is needed."
    ]
   },
   {
@@ -20093,9 +20093,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1115 (audit): Go mermaid/parse.go already has flowchartLabel, accepts double-quoted node and edge labels, strips the quotes, rejects Markdown backtick strings, embedded quotes, structural delimiters in unquoted labels, malformed quotes and HTML/markup. checkLabel allows literal ampersands while still rejecting entity/HTML markup. Tests in mermaid/mermaid_test.go mirror quoted_flowchart_labels_match_unquoted_labels, quoted_flowchart_labels_reject_malformed_and_unsafe_text, entity fallback and flowchart_ampersands_preserve_statement_separators. Validation: go test ./mermaid -count=1."
    ]
   },
   {
