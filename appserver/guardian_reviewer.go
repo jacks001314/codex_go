@@ -1088,32 +1088,17 @@ reviewAttempt:
 		prompt, promptCosts, buildErr = state.BuildPromptWithSectionCosts(action, transcript, buildOptions)
 		return buildErr
 	}
-	err = buildPrompt()
 	var rootAuthorization []state.RootMessage
-	if err == nil && r.rootUserAuthorization != nil {
+	if r.rootUserAuthorization != nil {
 		rootAuthorization = r.rootUserAuthorization(threadID, turnID)
 		if len(rootAuthorization) > 0 {
 			buildOptions.RootUserAuthorization = rootAuthorization
-			err = buildPrompt()
 		}
 	}
-	if err != nil {
-		rationale := guardianReviewFailureRationale(err.Error())
-		message := guardianReviewFailureMessage(err.Error())
-		attribution.Decision = state.DecisionDenied
-		attribution.TerminalStatus = "failed_closed"
-		attribution.FailureReason = "prompt_build_error"
-		emitReviewMetrics()
-		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, message, nil
-	}
-	var promptInputItems []any
-	if promptParts != nil {
-		prompt, promptInputItems = guardianPromptDelivery(promptParts)
-	}
-	inputItems := append([]any(nil), promptInputItems...)
+	var environmentItems []any
 	if r.environment != nil {
-		environmentItems, environmentErr := r.environment(reviewCtx, threadID, turnID)
+		var environmentErr error
+		environmentItems, environmentErr = r.environment(reviewCtx, threadID, turnID)
 		err = environmentErr
 		if err != nil {
 			rationale := guardianReviewFailureRationale(err.Error())
@@ -1128,7 +1113,6 @@ reviewAttempt:
 			r.emitWarning(threadID, rationale)
 			return state.DecisionDenied, message, nil
 		}
-		inputItems = append(inputItems, environmentItems...)
 	}
 	var (
 		admittedLedger      *codexctx.GuardianAdmittedImages
@@ -1136,70 +1120,133 @@ reviewAttempt:
 		reviewedEvidence    uint64
 		hasReviewedEvidence bool
 	)
-	imageItemStart := len(inputItems)
-	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
-		// Rust ComposedContext::retain_new_images (#54278): a reviewer that already
-		// admitted an image must not be shown it again. The host-prepared reference
-		// is compared against admitted history ignoring image detail, so a repeated
-		// reference in newer evidence is dropped while that evidence's text stays.
-		ledger := r.guardianAdmittedImages(threadID)
-		newImages := ledger.RetainNewImages(nodeReplEvidence.ImageRefs(), nil)
-		keepImage := func(ref codexctx.GuardianImageRef) bool {
-			for _, candidate := range newImages {
-				if candidate == ref {
-					return true
+	contextWindow, windowKnown := int64(0), false
+	if r.syncImageContextWindow != nil {
+		contextWindow, windowKnown = r.syncImageContextWindow(threadID, plan.Selection.Model)
+	}
+	// Rust #44281 (core/src/guardian/input_budget.rs::finalize): evidence is
+	// selected only after the rest of the request is resolved, against the
+	// reviewer's complete-request budget. Optional evidence is omitted
+	// oldest-first with the shared omission notice, and required evidence that
+	// cannot fit rejects the review instead of sending an oversized request.
+	budgetLimit := effectiveGuardianInputTokenLimit(contextWindow, windowKnown)
+	outputSchema := guardianAssessmentOutputSchema()
+	historyTokens := int64(0)
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		historyTokens = runner.lastUsageTokens()
+	}
+	composeRequest := func() (string, []any, error) {
+		if buildErr := buildPrompt(); buildErr != nil {
+			return "", nil, buildErr
+		}
+		composedPrompt := prompt
+		var promptInputItems []any
+		if promptParts != nil {
+			composedPrompt, promptInputItems = guardianPromptDelivery(promptParts)
+		}
+		inputItems := append([]any(nil), promptInputItems...)
+		inputItems = append(inputItems, environmentItems...)
+		admittedLedger = nil
+		admittedImages = nil
+		imageItemStart := len(inputItems)
+		if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
+			// Rust ComposedContext::retain_new_images (#54278): a reviewer that already
+			// admitted an image must not be shown it again. The host-prepared reference
+			// is compared against admitted history ignoring image detail, so a repeated
+			// reference in newer evidence is dropped while that evidence's text stays.
+			ledger := r.guardianAdmittedImages(threadID)
+			newImages := ledger.RetainNewImages(nodeReplEvidence.ImageRefs(), nil)
+			keepImage := func(ref codexctx.GuardianImageRef) bool {
+				for _, candidate := range newImages {
+					if candidate == ref {
+						return true
+					}
+				}
+				return false
+			}
+			for _, item := range nodeReplEvidence.MultimodalInputItemsFiltered(keepImage) {
+				inputItems = append(inputItems, item)
+			}
+			admittedLedger = ledger
+			admittedImages = newImages
+		}
+		imageItemEnd := len(inputItems)
+		// Rust ensure_guardian_node_repl_policy: the node-REPL rules are their own
+		// unmarked developer fragment, injected only when the reviewed action is a
+		// `js` call on a node-repl-backed server and the parent model requires
+		// computer-use review.
+		if nodeReplAutoReviewRequired && isNodeReplJSApprovalAction(action) {
+			if fragment := codexctx.NewGuardianNodeReplPolicy(plan.NodeReplPolicy); fragment != nil {
+				if item := buildRenderedMessage(codexctx.Render(fragment)); item != nil {
+					inputItems = append(inputItems, item)
 				}
 			}
-			return false
 		}
-		for _, item := range nodeReplEvidence.MultimodalInputItemsFiltered(keepImage) {
-			inputItems = append(inputItems, item)
-		}
-		admittedLedger = ledger
-		admittedImages = newImages
-	}
-	imageItemEnd := len(inputItems)
-	if nodeReplEvidence != nil {
-		reviewedEvidence = nodeReplEvidence.Sequence()
-		hasReviewedEvidence = true
-	}
-	// Rust ensure_guardian_node_repl_policy: the node-REPL rules are their own
-	// unmarked developer fragment, injected only when the reviewed action is a
-	// `js` call on a node-repl-backed server and the parent model requires
-	// computer-use review.
-	if nodeReplAutoReviewRequired && isNodeReplJSApprovalAction(action) {
-		if fragment := codexctx.NewGuardianNodeReplPolicy(plan.NodeReplPolicy); fragment != nil {
+		// Rust #40420 keeps the reviewer policy in a separate developer item with
+		// the guardian.policy content kind, making it auditable and preserving it
+		// independently from ordinary prompt instructions.
+		if fragment := codexctx.NewGuardianPolicy(plan.Instructions); fragment != nil {
 			if item := buildRenderedMessage(codexctx.Render(fragment)); item != nil {
 				inputItems = append(inputItems, item)
 			}
 		}
+		// Rust prepare_sync_images (#57494): the complete prompt must stay within the
+		// fixed image-item budget and the review model's remaining context window.
+		// A missing window is treated as unknown and rejects new images.
+		if imageItemEnd > imageItemStart {
+			promptTokens := guardianInputItemsTokenCount(inputItems)
+			if !guardianAdmitImages(promptTokens, historyTokens, contextWindow, windowKnown) {
+				inputItems = append(inputItems[:imageItemStart:imageItemStart], inputItems[imageItemEnd:]...)
+				admittedLedger = nil
+				admittedImages = nil
+			}
+		}
+		return composedPrompt, inputItems, nil
 	}
-	// Rust #40420 keeps the reviewer policy in a separate developer item with
-	// the guardian.policy content kind, making it auditable and preserving it
-	// independently from ordinary prompt instructions.
-	if fragment := codexctx.NewGuardianPolicy(plan.Instructions); fragment != nil {
-		if item := buildRenderedMessage(codexctx.Render(fragment)); item != nil {
-			inputItems = append(inputItems, item)
-		}
+	if nodeReplEvidence != nil {
+		reviewedEvidence = nodeReplEvidence.Sequence()
+		hasReviewedEvidence = true
 	}
-	// Rust prepare_sync_images (#57494): the complete prompt must stay within the
-	// fixed image-item budget and the review model's remaining context window.
-	// A missing window is treated as unknown and rejects new images.
-	if imageItemEnd > imageItemStart {
-		promptTokens := guardianInputItemsTokenCount(inputItems)
-		historyTokens := int64(0)
-		contextWindow := int64(0)
-		windowKnown := false
-		if r.syncImageContextWindow != nil {
-			contextWindow, windowKnown = r.syncImageContextWindow(threadID, plan.Selection.Model)
+	// Budget omission is a local delivery decision, not new evidence, so the
+	// staleness comparison keeps the selection the review started from.
+	budgetCompareEntries := transcriptEntries
+	var inputItems []any
+	for {
+		var composeErr error
+		prompt, inputItems, composeErr = composeRequest()
+		if composeErr != nil {
+			rationale := guardianReviewFailureRationale(composeErr.Error())
+			message := guardianReviewFailureMessage(composeErr.Error())
+			attribution.Decision = state.DecisionDenied
+			attribution.TerminalStatus = "failed_closed"
+			attribution.FailureReason = "prompt_build_error"
+			emitReviewMetrics()
+			r.emitWarning(threadID, rationale)
+			return state.DecisionDenied, message, nil
 		}
-		if runner, ok := r.agent.(*guardianSessionRunner); ok {
-			historyTokens = runner.lastUsageTokens()
+		if guardianCompleteRequestTokens(prompt, inputItems, outputSchema, historyTokens) <= budgetLimit {
+			break
 		}
-		if !guardianAdmitImages(promptTokens, historyTokens, contextWindow, windowKnown) {
-			inputItems = append(inputItems[:imageItemStart:imageItemStart], inputItems[imageItemEnd:]...)
-			admittedLedger = nil
-			admittedImages = nil
+		reduced, dropped := guardianDropOldestOptionalEvidence(transcriptEntries)
+		if !dropped {
+			// Only required evidence remains and it cannot fit the reviewer's
+			// complete-request budget, so the review fails closed without
+			// sampling. Rust reports the same rejection to the parent.
+			rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
+			completed, _ := store.FailClosed(event.ID, rationale)
+			emit(threadID, completed)
+			r.recordNonDenial(threadID, turnID)
+			attribution.Decision = state.DecisionDenied
+			attribution.TerminalStatus = "failed_closed"
+			attribution.FailureReason = "input_budget"
+			emitReviewMetrics()
+			r.emitWarning(threadID, rationale)
+			return state.DecisionDenied, guardianReviewFailureMessage(guardianInputBudgetMessage), nil
+		}
+		transcriptEntries = reduced
+		buildOptions.TranscriptOmissionNote = guardianBudgetOmissionNote(transcriptOmissionNote)
+		if transcriptEntries != nil {
+			transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
 		}
 	}
 	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
@@ -1262,7 +1309,7 @@ reviewAttempt:
 		runner.markPriorReview()
 	}
 	var staleAuthorization bool
-	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, transcriptEntries, transcriptOmissionNote, rootAuthorization, nativeCallID) {
+	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, nativeCallID) {
 		// Rust #47819 only invalidates a completed allow: a deny stands on the
 		// evidence it saw, while an approval must match the latest authorization.
 		if parsed, parseErr := state.ParseAssessment([]byte(guardianAssessmentText(response))); parseErr == nil && parsed.Outcome == state.OutcomeAllow {
@@ -2073,12 +2120,26 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 	for _, index := range rendered.Indices {
 		entry := entries[index]
 		entry.Index = index
+		entry.Optional = guardianTranscriptEvidenceOptional(evidence[index])
 		retained = append(retained, entry)
 	}
 	return guardianTranscriptSelection{
 		Entries:      retained,
 		OmissionNote: rendered.OmissionNote,
 		Truncations:  rendered.Truncations,
+	}
+}
+
+// guardianTranscriptEvidenceOptional reports whether Rust's composed budget may
+// omit this evidence (#44281): ordinary assistant commentary and tool
+// calls/results are optional, while user messages, developer context, final
+// assistant answers and encrypted native evidence are required.
+func guardianTranscriptEvidenceOptional(entry state.TranscriptEvidenceEntry) bool {
+	switch entry.Kind {
+	case state.GuardianTranscriptMessage, state.GuardianTranscriptTool:
+		return true
+	default:
+		return false
 	}
 }
 

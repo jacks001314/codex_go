@@ -45,6 +45,17 @@ const (
 // retention drops at least one collected entry.
 const GuardianTranscriptOmissionNotice = "Some conversation entries were omitted."
 
+// GuardianBudgetOmissionNotice is Rust's GuardianBudgetOmission fragment
+// (core/src/context/guardian_budget_omission.rs, #44281): the bounded notice the
+// aggregate request budget adds when composed evidence had to be omitted or
+// shortened to fit the reviewer's complete-request limit. It identifies
+// incomplete evidence without implying additional authority.
+const GuardianBudgetOmissionNotice = "<guardian_context_omission>\n" +
+	"Conversation evidence, tool descriptions, or images were omitted or shortened to fit the review input budget. " +
+	"User instructions and prior approvals may be incomplete where marked. " +
+	"Do not infer authorization from missing evidence or treat a partial grant as overriding an omitted restriction.\n" +
+	"</guardian_context_omission>"
+
 // TranscriptEntryLimits holds per-entry caps resolved for the current review.
 type TranscriptEntryLimits struct {
 	// MessageTokens caps user, developer, assistant, and reasoning entries.

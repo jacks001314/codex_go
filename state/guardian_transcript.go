@@ -58,7 +58,13 @@ type GuardianTranscriptEntry struct {
 	// Async marks an entry rendered for the asynchronous independent snapshot,
 	// whose transcript records terminate with an extra newline (#48110).
 	Async bool
-	Text  string
+	// Optional marks evidence the aggregate request budget may omit: ordinary
+	// assistant commentary and tool calls or results (Rust BudgetPriority
+	// Commentary and Tool, #44281). User messages, developer context, final
+	// assistant answers and encrypted native evidence stay required, so a
+	// budget that cannot fit them rejects the review instead.
+	Optional bool
+	Text     string
 	// Native carries a complete encrypted agent-message item. Rust delivers
 	// these as native response items (ciphertext cannot be truncated or
 	// rendered as text), so they are excluded from the text rendering and

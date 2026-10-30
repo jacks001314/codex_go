@@ -252,7 +252,9 @@ func TestRuntimeAgentControllerSpawnUsesCapturedStepSettingsLikeRust(t *testing.
 
 	// An explicit spawn override still wins over the captured settings.
 	override := "low"
-	overrideModel := "gpt-5.4-mini"
+	// gpt-5.4-mini is retired from the bundled catalog (#44250), so the override
+	// names a model the catalog still advertises.
+	overrideModel := "gpt-6-luna"
 	second, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{
 		ResolvedRole:    "worker",
 		Message:         &message,

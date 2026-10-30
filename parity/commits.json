@@ -10771,9 +10771,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/8; needs review: ExhaustedReviewBudget, INPUT_TOKEN_MARGIN, PendingReviewContext, build_responses_request, check_pending"
+    "Round 1024 (fix): appserver/guardian_request_budget.go, appserver/guardian_reviewer.go, state/guardian_profile.go, state/guardian_transcript.go enforce the complete-request Guardian review budget (effective window minus the 256-token margin, conservative 128k fallback, existing-usage floor), omit oldest optional transcript evidence with the shared <guardian_context_omission> notice, and fail closed with `the complete action and minimum review context exceed the reviewer input budget` when required evidence cannot fit. Regression contract: appserver/guardian_request_budget_like_rust_test.go:TestGuardianReviewOmitsOptionalEvidenceToFitCompleteRequestLikeRust, appserver/guardian_request_budget_like_rust_test.go:TestGuardianReviewRejectsRequiredEvidenceOverBudgetLikeRust, appserver/guardian_request_budget_like_rust_test.go:TestGuardianDropOldestOptionalEvidenceLikeRust, appserver/guardian_image_budget_like_rust_test.go:TestGuardianReviewDropsImagesBeyondContextWindowLikeRust; verify with `go test ./appserver -run Guardian -count=1`."
    ]
   },
   {
