@@ -27893,9 +27893,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Complete: dynamic tools already declared tool.Spec.FinishesOnCancellation and settled cancelled calls with a failed item (dynamicToolCancelledMessage) instead of hanging, and the dispatcher already mapped those calls to the Aborted lifecycle outcome. Round 1077 closed the remaining cancellation gaps. tool/hooks.go adds runCancellableStep so synchronous pre/post hooks, the guardian reviewBeforeDispatch gate, and Registry.WaitUntilReady are abandoned as soon as the context is done (ErrToolCancelled passes through instead of becoming a fatal hook error). turn/dynamic_tool_runtime.go adds requestDynamicToolResponse: the request runs on a buffered result channel, cancellation wins the race, and a successful response delivered after cancellation is discarded so it never reaches the model context. codemode.CellStore.Terminate/CompleteIfRunning already refuse to let a late completion overwrite a terminated cell. Regression tests cover blocked pre/post hooks, blocked readiness waiters, blocked pre-hook dispatch producing Aborted without touching the request sink, and late dynamic tool responses after cancellation: TestDynamicToolFinishesOnCancellationSpecLikeRust, TestDynamicToolCancellationSettlesWithFailedItemLikeRust, TestDynamicToolCancellationBeforeRequestLikeRust, TestToolDispatcherCancellationReportsAbortedOutcomeLikeRust, TestToolDispatcherCancellationWithoutObserverStaysFatalLikeRust, TestDynamicToolCancellationDuringBlockedPreHookAbortsLikeRust, TestDynamicToolLateResponseAfterCancellationIsExcludedLikeRust, TestRouterDispatchWithHooksCancelsBlockedHooksLikeRust, TestRouterWaitUntilReadyCancelsBlockedWaiterLikeRust, TestCellStoreCompleteDoesNotOverwriteTerminationLikeRust, and TestCellStoreCompleteIfRunningCompletesRunningCellLikeRust. Verified with go test ./tool -count=1, go test ./turn -count=1, go test ./codemode -run 'Cell|Terminat|Late' -count=1, and go test ./appserver -run 'Dynamic|ToolHook|Abort|Interrupt' -count=1."
    ]
   },
   {

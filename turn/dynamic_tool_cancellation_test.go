@@ -3,6 +3,8 @@ package turn
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"codex_go/tool"
@@ -134,6 +136,57 @@ func TestDynamicToolFinishesOnCancellationSpecLikeRust(t *testing.T) {
 	}
 }
 
+// blockingDispatchHookRunner blocks PreToolUse while ignoring its context, like
+// Rust's blocked-hook cancellation test. Dispatch must still settle the dynamic
+// call as aborted before the handler runs (#51556).
+type blockingDispatchHookRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (h *blockingDispatchHookRunner) RunPreToolUse(context.Context, *tool.Invocation, *tool.PreToolUsePayload) (*tool.PreToolUseHookOutcome, error) {
+	close(h.started)
+	<-h.release
+	return nil, nil
+}
+
+func (h *blockingDispatchHookRunner) RunPostToolUse(context.Context, *tool.Invocation, *tool.PostToolUsePayload) (*tool.PostToolUseHookOutcome, error) {
+	return nil, nil
+}
+
+// TestDynamicToolCancellationDuringBlockedPreHookAbortsLikeRust covers the
+// blocked-hook half of Rust #51556: cancellation before handler execution
+// settles with the aborted lifecycle outcome rather than waiting for the hook.
+func TestDynamicToolCancellationDuringBlockedPreHookAbortsLikeRust(t *testing.T) {
+	caller := &fakeDynamicToolCaller{result: &DynamicToolCallResponse{Success: true}}
+	registry := dynamicToolCancellationRegistry(t, caller)
+	hooks := &blockingDispatchHookRunner{started: make(chan struct{}), release: make(chan struct{})}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry), Hooks: hooks})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-hooks.started
+		cancel()
+	}()
+	result, err := dispatcher.executeToolInvocation(ctx, dynamicToolCancellationInvocation())
+	close(hooks.release)
+	if err != nil {
+		t.Fatalf("executeToolInvocation() error = %v", err)
+	}
+	if result == nil || result.Output == nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if !result.Aborted {
+		t.Fatalf("outcome = %#v, want Aborted", result)
+	}
+	if result.Output.Success || result.Output.Error != "tool call cancelled" {
+		t.Fatalf("output = %#v, want the respond-to-model cancellation", result.Output)
+	}
+	if caller.method != "" {
+		t.Fatalf("a cancelled call reached the request sink: method = %q", caller.method)
+	}
+}
+
 // blockingCancellationExecutor blocks until its invocation is cancelled and then
 // returns the context error, like a hook or handler that observes cancellation.
 type blockingCancellationExecutor struct {
@@ -223,5 +276,63 @@ func TestToolDispatcherCancellationWithoutObserverStaysFatalLikeRust(t *testing.
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want the context cancellation", err)
+	}
+}
+
+// lateDynamicToolCaller answers only after the request context is cancelled and
+// then reports success, like a client whose response races the cancellation.
+type lateDynamicToolCaller struct {
+	invoked chan struct{}
+}
+
+func (c *lateDynamicToolCaller) Request(ctx context.Context, _ string, _ any, target any) error {
+	select {
+	case c.invoked <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	if response, ok := target.(*DynamicToolCallResponse); ok {
+		*response = DynamicToolCallResponse{
+			Success: true,
+			ContentItems: []DynamicToolCallOutputContentItem{{
+				Type: "inputText",
+				Text: "LATE_RESULT_MUST_NOT_REACH_MODEL",
+			}},
+		}
+	}
+	return nil
+}
+
+// TestDynamicToolLateResponseAfterCancellationIsExcludedLikeRust covers the
+// late-response half of Rust #51556: cancellation wins the race, so a successful
+// response delivered after the turn is cancelled never reaches the model.
+func TestDynamicToolLateResponseAfterCancellationIsExcludedLikeRust(t *testing.T) {
+	caller := &lateDynamicToolCaller{invoked: make(chan struct{}, 1)}
+	registry := dynamicToolCancellationRegistry(t, caller)
+	executor, ok := registry.Lookup(tool.PlainName("gate"))
+	if !ok {
+		t.Fatal("dynamic tool missing")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-caller.invoked
+		cancel()
+	}()
+	output, err := executor.Execute(ctx, dynamicToolCancellationInvocation())
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output.Success {
+		t.Fatalf("late dynamic tool response was accepted: %#v", output)
+	}
+	if output.Error != dynamicToolCancelledMessage || output.Body != dynamicToolCancelledMessage {
+		t.Fatalf("output = %#v, want cancellation message %q", output, dynamicToolCancelledMessage)
+	}
+	if strings.Contains(output.Body, "LATE_RESULT_MUST_NOT_REACH_MODEL") {
+		t.Fatalf("late response text reached the model: %q", output.Body)
+	}
+	if data := fmt.Sprint(output.Data); strings.Contains(data, "LATE_RESULT") {
+		t.Fatalf("late response text reached the output data: %q", data)
 	}
 }

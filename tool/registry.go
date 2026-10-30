@@ -775,7 +775,10 @@ func (r *Router) reviewBeforeDispatch(ctx context.Context, invocation *Invocatio
 	if r == nil || r.guardianReview == nil || !r.RequiresGuardianReview(invocation) {
 		return nil
 	}
-	return r.guardianReview(ctx, invocation)
+	_, err := runCancellableStep(ctx, func() (struct{}, error) {
+		return struct{}{}, r.guardianReview(ctx, invocation)
+	})
+	return err
 }
 
 func (r *Router) SetClock(clock func() time.Time) {
@@ -1282,7 +1285,10 @@ func (r *Router) WaitUntilReady(ctx context.Context, invocation *Invocation) err
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return waiter.WaitUntilReady(ctx, invocation)
+	_, err := runCancellableStep(ctx, func() (struct{}, error) {
+		return struct{}{}, waiter.WaitUntilReady(ctx, invocation)
+	})
+	return err
 }
 
 func (r *Router) DispatchParallel(ctx context.Context, invocations []Invocation) ([]Output, error) {

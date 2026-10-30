@@ -3657,6 +3657,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: tests cover priority order, pending/failed retention, owner errors, absent versus empty snapshots, authority derivation, context copy semantics, and runtime publication.
 - Verified with `go test ./mcp -run 'SelectedEnvironments|ContributionContext' -count=1` and `go test ./appserver -run 'MCPEnvironment|EnvironmentSelections|MCPPolicy' -count=1`.
 
-Status after reconciliation: `2229 complete`, `462 not_applicable`,
-`322 audit_pending`, `131 regression_pending`, `5 partial`,
+### Dynamic tool lifecycles on cancellation (Round 1077)
+
+- Rust #51556 completes dynamic tool lifecycles when a turn is cancelled: blocked hooks and readiness waits must not delay cancellation, and a late response must not be fed back into the model context.
+- Complete: dynamic tools already set `FinishesOnCancellation`, returned a failed item when cancelled before or during the request, and the dispatcher emitted the `Aborted` outcome. `tool/hooks.go` now runs synchronous pre/post hooks through `runCancellableStep`, and `tool/registry.go` makes `reviewBeforeDispatch` and `WaitUntilReady` cancellable, so a hook or waiter that ignores its context no longer wedges dispatch. `turn/dynamic_tool_runtime.go` waits on a buffered result channel and lets cancellation win, discarding a response the caller writes after cancellation. Code Mode already keeps terminated cells from being overwritten by a late completion.
+- Regression: blocked pre/post hooks, blocked readiness waiters, cancellation during a blocked pre-hook producing `Aborted` without reaching the request sink, and a late successful response being replaced by the cancellation item.
+- Verified with `go test ./tool -count=1`, `go test ./turn -count=1`, `go test ./codemode -run 'Cell|Terminat|Late' -count=1`, and `go test ./appserver -run 'Dynamic|ToolHook|Abort|Interrupt' -count=1`.
+
+Status after reconciliation: `2230 complete`, `462 not_applicable`,
+`322 audit_pending`, `130 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

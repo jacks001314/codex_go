@@ -238,8 +238,8 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 		Tool:      e.tool,
 		Arguments: arguments,
 	}
-	var response DynamicToolCallResponse
-	if err := e.caller.Request(ctx, dynamicToolServerRequestMethod, params, &response); err != nil {
+	response, err := requestDynamicToolResponse(ctx, e.caller, params)
+	if err != nil {
 		// Rust #51556: a request aborted by cancellation is reported with the
 		// cancellation message so it is distinguishable from a generic failure.
 		message := "dynamic tool request failed"
@@ -247,6 +247,11 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 			message = dynamicToolCancelledMessage
 		}
 		return e.fallbackOutput(invocation, arguments, started, message), nil
+	}
+	// Rust #51556: once the turn is cancelled, a response that arrives late must
+	// not be fed back into the model context.
+	if ctx != nil && ctx.Err() != nil {
+		return e.fallbackOutput(invocation, arguments, started, dynamicToolCancelledMessage), nil
 	}
 	var valid bool
 	response.ContentItems, valid = normalizeDynamicToolContentItems(response.ContentItems)
@@ -266,6 +271,44 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 		Data:        e.outputData(arguments, response.ContentItems, response.Success, started),
 		CompletedAt: e.timeNow(),
 	}, nil
+}
+
+// dynamicToolResponseResult carries the outcome of a dynamic tool request so the
+// waiter can abandon it as soon as the turn is cancelled.
+type dynamicToolResponseResult struct {
+	response DynamicToolCallResponse
+	err      error
+}
+
+// requestDynamicToolResponse waits for a dynamic tool response while honouring
+// cancellation. Rust #51556 requires cancellation to win the race: a caller that
+// writes a successful response after the context is done must not be observed.
+func requestDynamicToolResponse(
+	ctx context.Context,
+	caller DynamicToolCaller,
+	params *DynamicToolCallParams,
+) (DynamicToolCallResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return DynamicToolCallResponse{}, context.Canceled
+	}
+	done := make(chan dynamicToolResponseResult, 1)
+	go func() {
+		var response DynamicToolCallResponse
+		err := caller.Request(ctx, dynamicToolServerRequestMethod, params, &response)
+		done <- dynamicToolResponseResult{response: response, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return DynamicToolCallResponse{}, context.Canceled
+	case result := <-done:
+		if ctx.Err() != nil {
+			return DynamicToolCallResponse{}, context.Canceled
+		}
+		return result.response, result.err
+	}
 }
 
 func (e *dynamicToolExecutor) fallbackOutput(invocation *tool.Invocation, arguments any, started time.Time, message string) *tool.Output {

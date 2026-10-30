@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -93,6 +94,39 @@ type HookRunner interface {
 	RunPostToolUse(ctx context.Context, invocation *Invocation, payload *PostToolUsePayload) (*PostToolUseHookOutcome, error)
 }
 
+// runCancellableStep waits for one dispatch step while keeping cancellation
+// authoritative. Rust #51556 wraps readiness and hook awaits with
+// OrCancelToolExt so a blocked hook cannot keep an interrupted call alive; Go
+// hooks receive ctx but may not observe it, so the dispatcher must stop waiting
+// even when the hook implementation ignores cancellation.
+func runCancellableStep[T any](ctx context.Context, run func() (T, error)) (T, error) {
+	var zero T
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return zero, ErrToolCancelled
+	}
+	type stepResult struct {
+		value T
+		err   error
+	}
+	results := make(chan stepResult, 1)
+	go func() {
+		value, err := run()
+		results <- stepResult{value: value, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return zero, ErrToolCancelled
+	case result := <-results:
+		if ctx.Err() != nil {
+			return zero, ErrToolCancelled
+		}
+		return result.value, result.err
+	}
+}
+
 type PreToolUsePayloadProvider interface {
 	PreToolUsePayload(invocation *Invocation) (*PreToolUsePayload, bool)
 }
@@ -153,8 +187,13 @@ func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation 
 	targetEnvironments := hookTargetEnvironments(executor, current)
 	if payload, ok := preToolUsePayload(executor, current); ok {
 		payload.TargetEnvironments = targetEnvironments
-		outcome, err := hooks.RunPreToolUse(ctx, current, payload)
+		outcome, err := runCancellableStep(ctx, func() (*PreToolUseHookOutcome, error) {
+			return hooks.RunPreToolUse(ctx, current, payload)
+		})
 		if err != nil {
+			if errors.Is(err, ErrToolCancelled) {
+				return nil, err
+			}
 			return nil, hookRunnerError(err)
 		}
 		if outcome != nil && outcome.Fatal {
@@ -192,8 +231,13 @@ func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation 
 	if output.Success {
 		if payload, ok := postToolUsePayload(executor, current, output); ok {
 			payload.TargetEnvironments = targetEnvironments
-			outcome, err := hooks.RunPostToolUse(ctx, current, payload)
+			outcome, err := runCancellableStep(ctx, func() (*PostToolUseHookOutcome, error) {
+				return hooks.RunPostToolUse(ctx, current, payload)
+			})
 			if err != nil {
+				if errors.Is(err, ErrToolCancelled) {
+					return nil, err
+				}
 				return nil, hookRunnerError(err)
 			}
 			if outcome != nil && outcome.Fatal {
