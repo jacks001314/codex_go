@@ -83,6 +83,29 @@ func TestMathRenderDisplayLimitsLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #48551 (issue 48403): `\bigl`/`\bigr` scale delimiters like
+// `\left`/`\right`, and the multi-line display body with a stacked big wedge
+// must not leak command names.
+func TestMathRenderBigDelimitersAndZeroLikeRust(t *testing.T) {
+	delimiters, ok := mathRender(`\bigl( x \bigr)`, true)
+	if !ok || delimiters != "( x )" {
+		t.Fatalf("big delimiters = %q (%v), want %q", delimiters, ok, "( x )")
+	}
+	body := "F_{n}(s)\\land\n\\bigwedge_{j=0}^{n}\n\\bigl(R(\\land T \\bigr)\n\\Rightarrow R."
+	rendered, ok := mathRender(body, true)
+	if !ok {
+		t.Fatalf("mathRender(%q) rejected the multiline display body", body)
+	}
+	for _, leaked := range []string{`\land`, `\bigwedge`, `\bigl`, `\bigr`, `\Rightarrow`} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("rendered math leaked %q:\n%s", leaked, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "⋀") || !strings.Contains(rendered, "j=0") || !strings.Contains(rendered, "⇒") {
+		t.Fatalf("multiline display body = %q", rendered)
+	}
+}
+
 // Mirrors Rust's structured bounds: aligned rows/cells, boxed and substack sizes
 // stay bounded, and a 16-row aligned block lays out.
 func TestMathRenderStructuredBoundsLikeRust(t *testing.T) {

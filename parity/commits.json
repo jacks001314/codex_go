@@ -22181,9 +22181,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "`$0$` is admitted as math while other bare numbers stay prose (`tui/markdown/math_detect.go`), and top-level display `\\bigwedge` stacks its limits through the shared display-operator layout, matching Rust's `display_operator`.",
+    "`\\bigl`/`\\bigr` join `\\left`/`\\right` and render the following delimiter without leaking the command name; `\\bigwedge` also resolves as a symbol in compact math.",
+    "Tests: the existing `TestMathRenderDisplayLimitsLikeRust` (stacked big wedge), `TestMathDetect` zero admission, and the new `TestMathRenderBigDelimitersAndZeroLikeRust` covering `\\bigl( x \\bigr)`, the issue-48403 multi-line display body and command leakage."
    ]
   },
   {

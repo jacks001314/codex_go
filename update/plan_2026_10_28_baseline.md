@@ -3888,3 +3888,10 @@ Status after this batch: `2311 complete`, `462 not_applicable`, `322 audit_pendi
 - Removed the obsolete promotions and the session fast-status helper used only to choose them; tooltip APIs dropped the fast-mode argument.
 
 Status after this batch: `2312 complete`, `462 not_applicable`, `322 audit_pending`, `48 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### TUI math zero/big-wedge certification (Round 1102)
+
+- #48551 `$0$` is admitted as math, top-level display `\bigwedge` stacks its limits, and `\bigl`/`\bigr` render delimiters like `\left`/`\right`; the multi-line issue-48403 body no longer leaks command names.
+- Added `TestMathRenderBigDelimitersAndZeroLikeRust`; existing detection and display-limit tests already pin the zero admission and stacked wedge rows.
+
+Status after this batch: `2313 complete`, `462 not_applicable`, `322 audit_pending`, `47 regression_pending`, `5 partial`, `6 blocked_precondition`.
