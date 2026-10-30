@@ -3236,6 +3236,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `BuildPromptPartsWithSectionCosts` now runs `DeduplicateRetainedInstructions(options.RetainedContext, GuardianTranscriptRetainedSources(transcript))` for `ActionPresentationAsync`, so each sample is self-contained while the synchronous reviewer layout is unchanged.
 - New tests: `state/guardian_async_retained_dedup_like_rust_test.go` and `appserver/guardian_async_retained_dedup_like_rust_test.go`, covering request-local dedup, banner retention, assistant context, incomplete/missing source proof, the async size gate, and the trailing-newline rendering.
 - Verified with `go test ./state -count=1`, `go test ./retainedctx -count=1`, the new tests by name, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2175 complete`, `451 not_applicable`,
-`345 audit_pending`, `174 regression_pending`, `4 partial`,
+### Code Mode attachment and late-result parity (Round 1016)
+
+- Rust #44472 and #48222 keep one output's recorded inventory, completeness proof, and late result metadata independent across failed sampling attempts. Rust drains a cell into a retained request snapshot at attachment time and invalidates that snapshot when its output, cell handle, or nested call ID becomes ambiguous.
+- Go previously consumed the pending inventory only in `CommitAttachment`, so a closed cell or a failed first sample could lose the binding before the late result arrived. `turn/executed_tool_calls.go` now records an uncommitted provisional binding, reserves each pending call for exactly one output, promotes provisional bindings on commit, and lets retries and later waits re-emit the original exec observation.
+- Provisional bindings now participate in duplicate-output, duplicate nested-ID, cell-reuse, wire-inventory, and capacity invalidation. `RecordToolResultMetadata` also routes reserved calls through the binding checks, preventing a retained pending slice from bypassing the revocations Rust applies after its attach-time drain.
+- New regressions in `turn/executed_tool_calls_gap_regression_like_rust_test.go` cover close-before-first-attachment, pressure reclamation, large late metadata, wrapped ambiguous arguments, reuse before commit, duplicate outputs, and duplicate nested IDs. `metadataEqual` now uses deep equality for nested metadata objects.
+- Verified with `go test ./turn -count=1`, `go test ./state -count=1`, `go test ./parity -run TestAlignment -count=1`, and `go test ./appserver -count=1` (only the seven known pre-existing failures remain).
+
+Status after reconciliation: `2177 complete`, `451 not_applicable`,
+`345 audit_pending`, `172 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

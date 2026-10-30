@@ -11239,9 +11239,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 8/8 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1016 (audit + fix): Rust #44472 completeness tracking is implemented in Go. turn/seen_ids.go indexes input/output/cell IDs with bounded budgets; turn/executed_tool_calls.go proves completeness only for uniquely matched custom exec/wait outputs and lossless inventories, and revokes it on reused cells, duplicate IDs, missing or mismatched inputs. The provisional attachment path now reserves pending calls exactly once per output, so an uncommitted attachment remains visible to retries without letting an old exec attach to a reused cell. Tests: TestExecutedToolCallRecorderPreservesLateMetadataAcrossCloseBeforeFirstAttachmentLikeRust, TestExecutedToolCallRecorderClearsProvisionalMetadataOnReuseBeforeCommitLikeRust, TestExecutedToolCallRecorderRejectsProvisionalMetadataForDuplicateOutputsLikeRust, TestExecutedToolCallRecorderAllowsFreshWaitCompletionOnNewThread, TestExecutedToolCallRecorderWithholdsWaitCompletionAfterHistory. Verified with go test ./turn -count=1."
    ]
   },
   {
@@ -21853,9 +21853,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1016 (audit + fix): Rust #48222 late result metadata is preserved for truncated Code Mode calls. Turn/executed_tool_calls.go now keeps provisional bindings between attachment and CommitAttachment, updates late metadata in both pending and bound copies, promotes all bindings for a committed cell, and clears/revokes them on cell reuse, duplicate outputs, duplicate nested IDs, and capacity pressure. Later waits re-emit the original exec call with its late result while wait outputs carry only cell/completion, matching Rust current HEAD. Tests: TestExecutedToolCallRecorderPreservesLateMetadataAcrossCloseBeforeFirstAttachmentLikeRust, TestExecutedToolCallRecorderReclaimsClosedTruncatedCellSafelyLikeRust, TestExecutedToolCallRecorderPreservesLargeLateTruncatedMetadataLikeRust, TestExecutedToolCallRecorderRejectsLateMetadataForWrappedAmbiguousOutputsLikeRust, TestExecutedToolCallRecorderRejectsProvisionalMetadataForDuplicateOutputsLikeRust, TestExecutedToolCallRecorderRejectsProvisionalMetadataAfterDuplicateNestedIDLikeRust. Verified with go test ./turn -count=1."
    ]
   },
   {

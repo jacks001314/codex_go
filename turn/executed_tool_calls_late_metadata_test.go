@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -314,10 +315,5 @@ func metadataEqual(got any, want map[string]any) bool {
 	if !ok || len(object) != len(want) {
 		return false
 	}
-	for key, value := range want {
-		if object[key] != value {
-			return false
-		}
-	}
-	return true
+	return reflect.DeepEqual(object, want)
 }

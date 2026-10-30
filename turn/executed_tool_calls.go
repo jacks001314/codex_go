@@ -51,6 +51,11 @@ type ExecutedToolCallRecorder struct {
 	// re-emit them and a late result can still update the original output
 	// (Rust RetainedToolCalls, #46044 and #48222).
 	retained map[string]*retainedToolCallBinding
+	// provisional holds bindings produced by an attachment that has not been
+	// committed yet. Rust drains the pending inventory at attachment time, so a
+	// retry (or the final wait after the cell closes) must still see the calls
+	// even when the first sampling request fails before CommitAttachment.
+	provisional map[string]*retainedToolCallBinding
 	// directCalls retains live direct-call observations by the response item ID
 	// assigned to their output. Persisted history may shed the bounded copy;
 	// sampling restores from here and prunes only when the item leaves the live
@@ -125,6 +130,10 @@ func (p *ExecutedToolCallPermit) Release() {
 
 type recordedToolCallGroup struct {
 	pending []recordedToolCall
+	// reservedPending is the prefix of pending already copied into a provisional
+	// or retained binding. Attachments expose only calls after this prefix, so a
+	// retry cannot attach the same calls to a second output.
+	reservedPending int
 	// finished mirrors Rust's CellCompletion::Complete (#46081): the cell's
 	// dispatch gate closed, so its inventory is final even when it is empty.
 	finished bool
@@ -329,14 +338,12 @@ type executedToolCallGroupAttachment struct {
 	outputCallID  string
 	originCallID  string
 	runtimeCellID string
-	count         int
 	// calls is the attached inventory, kept so the commit can bind it to the
 	// output for later re-emission and late-result backfill (Rust #48222).
 	calls []recordedToolCall
 	// complete is the completeness proved at attachment time; it is only
 	// meaningful when the output carries a cell marker.
 	complete bool
-	hasCell  bool
 }
 
 func NewExecutedToolCallRecorder() *ExecutedToolCallRecorder {
@@ -643,7 +650,7 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 	if !freshCallID {
 		// A repeated nested ID makes the late-result binding ambiguous, so drop
 		// the backfilled evidence before losing the binding that identified it.
-		for _, binding := range r.retained {
+		for _, binding := range r.allBindings() {
 			if _, ok := binding.truncatedCallIndexByID[trimmedCallID]; ok {
 				binding.clearLateTruncatedMetadata()
 			}
@@ -762,6 +769,12 @@ func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Inv
 	if group := r.groups[groupID]; group != nil {
 		for index := range group.pending {
 			if group.pending[index].callID == callID {
+				if index < group.reservedPending && !r.updateBoundResultMetadata(runtimeCellID, callID, bounded) {
+					// The call was already copied into an attachment. Retaining the
+					// pending slice until CommitAttachment must not bypass the
+					// binding's ambiguity checks (Rust drains the cell at attach).
+					return false
+				}
 				group.pending[index].call.SetToolResultMetadata(bounded)
 				return hasMetadata
 			}
@@ -770,27 +783,30 @@ func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Inv
 	// The call may already be bound to an output the current request attached
 	// (Rust #48222). A late result updates that binding so the original output
 	// keeps the evidence instead of dropping it with the pending inventory.
-	if runtimeCellID == "" {
+	if runtimeCellID == "" || !r.updateBoundResultMetadata(runtimeCellID, callID, bounded) {
 		return false
 	}
-	for _, binding := range r.retained {
-		if binding.runtimeCellID != runtimeCellID {
-			continue
-		}
+	return hasMetadata
+}
+
+// updateBoundResultMetadata updates exact recorded calls and, when the call had
+// truncated arguments, the unique binding eligible for late backfill. It
+// searches committed and provisional bindings together because Rust drains the
+// pending inventory as soon as an output is attached.
+func (r *ExecutedToolCallRecorder) updateBoundResultMetadata(runtimeCellID string, callID string, metadata model.ToolResultMetadata) bool {
+	bindings := r.bindingsForRuntimeCell(runtimeCellID)
+	for _, binding := range bindings {
 		index, ok := binding.callIndexByID[callID]
 		if !ok {
 			continue
 		}
-		binding.calls[index].call.SetToolResultMetadata(bounded)
-		return hasMetadata
+		binding.calls[index].call.SetToolResultMetadata(metadata)
+		return true
 	}
 	var candidate *retainedToolCallBinding
 	candidateIndex := -1
 	candidates := 0
-	for _, binding := range r.retained {
-		if binding.runtimeCellID != runtimeCellID {
-			continue
-		}
+	for _, binding := range bindings {
 		index, ok := binding.truncatedCallIndexByID[callID]
 		if !ok {
 			continue
@@ -805,8 +821,30 @@ func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Inv
 		return false
 	}
 	candidate.lateTruncatedIndices[candidateIndex] = struct{}{}
-	candidate.calls[candidateIndex].call.SetToolResultMetadata(bounded)
-	return hasMetadata
+	candidate.calls[candidateIndex].call.SetToolResultMetadata(metadata)
+	return true
+}
+
+func (r *ExecutedToolCallRecorder) bindingsForRuntimeCell(runtimeCellID string) []*retainedToolCallBinding {
+	bindings := make([]*retainedToolCallBinding, 0, len(r.retained)+len(r.provisional))
+	for _, binding := range r.retained {
+		if binding.runtimeCellID == runtimeCellID {
+			bindings = append(bindings, binding)
+		}
+	}
+	for _, binding := range r.provisional {
+		if binding.runtimeCellID == runtimeCellID {
+			bindings = append(bindings, binding)
+		}
+	}
+	return bindings
+}
+
+func (r *ExecutedToolCallRecorder) bindingForOutput(outputCallID string) *retainedToolCallBinding {
+	if binding := r.retained[outputCallID]; binding != nil {
+		return binding
+	}
+	return r.provisional[outputCallID]
 }
 
 func (r *ExecutedToolCallRecorder) RegisterCell(cellID string, outputCallID string) {
@@ -1019,7 +1057,7 @@ func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirec
 			}
 		}
 	}
-	if len(r.outputs) == 0 && len(r.retained) == 0 {
+	if len(r.outputs) == 0 && len(r.retained) == 0 && len(r.provisional) == 0 {
 		model.NormalizeExecutedToolCallCompleteness(out)
 		return out, nil
 	}
@@ -1060,8 +1098,21 @@ func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirec
 		// A retained binding re-emits the output's inventory on every request, so
 		// evidence attached before the cell finished (or before a late result
 		// arrived) is not dropped from later requests (Rust #46044/#48222).
-		if binding := r.retained[callID]; binding != nil {
+		if binding := r.bindingForOutput(callID); binding != nil {
 			attachRetainedBinding(r, out, index, callID, binding, outputCounts, inputIndices)
+			if r.retained[callID] == nil {
+				// An uncommitted attachment can be retried. Keep the token so the
+				// caller can promote the provisional binding after a successful
+				// sampling request, and so a later wait does not consume it again.
+				attachment.groups = append(attachment.groups, executedToolCallGroupAttachment{
+					groupID:       binding.groupID,
+					outputCallID:  callID,
+					originCallID:  binding.originCallID,
+					runtimeCellID: binding.runtimeCellID,
+					calls:         append([]recordedToolCall(nil), binding.calls...),
+					complete:      binding.complete,
+				})
+			}
 			continue
 		}
 		calls := make([]model.ExecutedToolCall, 0, 4)
@@ -1104,8 +1155,13 @@ func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirec
 			// cell attaches its partial inventory without the marker.
 			complete = complete && groupFinished
 			if _, seen := seenGroups[groupID]; !seen && group != nil {
-				if len(group.pending) > 0 || groupFinished {
-					for _, pending := range group.pending {
+				reserved := group.reservedPending
+				if reserved > len(group.pending) {
+					reserved = len(group.pending)
+				}
+				available := group.pending[reserved:]
+				if len(available) > 0 || groupFinished {
+					for _, pending := range available {
 						if !pending.call.HasCompleteInventory() {
 							complete = false
 						}
@@ -1118,11 +1174,10 @@ func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirec
 						outputCallID:  callID,
 						originCallID:  group.originCallID,
 						runtimeCellID: group.runtimeCellID,
-						count:         len(group.pending),
 						calls:         recorded,
 						complete:      complete,
-						hasCell:       strings.TrimSpace(cellID) != "",
 					})
+					group.reservedPending += len(available)
 				}
 			}
 		}
@@ -1138,6 +1193,10 @@ func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirec
 				completePtr = &complete
 			}
 			out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls, metadataCellID, completePtr)
+			if group != nil {
+				r.reserveBindingSlot(callID)
+				r.provisional[callID] = newRetainedToolCallBinding(groupID, group, group.originCallID, group.runtimeCellID, recorded, complete)
+			}
 		}
 	}
 	model.NormalizeExecutedToolCallCompleteness(out)
@@ -1191,46 +1250,76 @@ func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCall
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.ensureState()
+	touchedGroups := map[string]struct{}{}
 	for _, attached := range attachment.groups {
+		if attached.groupID != "" {
+			touchedGroups[attached.groupID] = struct{}{}
+		}
 		group := r.groups[attached.groupID]
-		if group == nil {
+		if group != nil {
+			count := group.reservedPending
+			if count > len(group.pending) {
+				count = len(group.pending)
+			}
+			group.pending = append([]recordedToolCall(nil), group.pending[count:]...)
+			group.reservedPending -= count
+		}
+		if attached.outputCallID != "" {
+			r.promoteProvisional(attached.outputCallID)
+			if r.retained[attached.outputCallID] == nil && group != nil {
+				// A caller may still construct an attachment directly; preserve
+				// the old path as a fallback for that case.
+				r.retainBinding(attached, group)
+			}
+			delete(r.outputs, attached.outputCallID)
+		}
+	}
+	// An earlier failed request can have attached a different output of the same
+	// cell. Once any attachment commits, all of that cell's provisional bindings
+	// are durable and the reserved pending calls can be drained exactly once.
+	for outputCallID, binding := range r.provisional {
+		if _, touched := touchedGroups[binding.groupID]; touched {
+			r.promoteProvisional(outputCallID)
+		}
+	}
+	for groupID := range touchedGroups {
+		group := r.groups[groupID]
+		if group == nil || len(group.pending) > 0 || group.reservedPending > 0 || r.keepTruncatedBinding(group) {
 			continue
 		}
-		count := attached.count
-		if count > len(group.pending) {
-			count = len(group.pending)
+		delete(r.groups, groupID)
+		delete(r.invalidGroups, groupID)
+		if cellID := strings.TrimPrefix(groupID, "cell:"); cellID != groupID {
+			delete(r.invalidCells, cellID)
 		}
-		// Bind the attached inventory to its output before dropping it from the
-		// pending state, so later requests re-emit it and a late result can still
-		// update the original output (Rust #48222).
-		if attached.outputCallID != "" {
-			r.retainBinding(attached, group)
-		}
-		group.pending = append([]recordedToolCall(nil), group.pending[count:]...)
-		if len(group.pending) == 0 && !r.keepTruncatedBinding(group) {
-			delete(r.groups, attached.groupID)
-			delete(r.invalidGroups, attached.groupID)
-			if cellID := strings.TrimPrefix(attached.groupID, "cell:"); cellID != attached.groupID {
-				delete(r.invalidCells, cellID)
-			}
-		}
-		delete(r.outputs, attached.outputCallID)
 	}
+}
+
+func (r *ExecutedToolCallRecorder) promoteProvisional(outputCallID string) {
+	binding := r.provisional[outputCallID]
+	if binding == nil {
+		return
+	}
+	r.retained[outputCallID] = binding
+	delete(r.provisional, outputCallID)
 }
 
 // retainBinding records the inventory attached to one output so the next request
 // can re-emit it without the pending state. Only a validated cell binding admits
 // truncated calls to late-result backfill (Rust #48222).
 func (r *ExecutedToolCallRecorder) retainBinding(attached executedToolCallGroupAttachment, group *recordedToolCallGroup) {
-	if _, exists := r.retained[attached.outputCallID]; !exists && len(r.retained) >= maxPendingExecutedToolCalls {
-		r.evictRetainedBinding()
-	}
+	r.reserveBindingSlot(attached.outputCallID)
+	r.retained[attached.outputCallID] = newRetainedToolCallBinding(attached.groupID, group, attached.originCallID, attached.runtimeCellID, attached.calls, attached.complete)
+}
+
+func newRetainedToolCallBinding(groupID string, group *recordedToolCallGroup, originCallID string, runtimeCellID string, calls []recordedToolCall, complete bool) *retainedToolCallBinding {
 	binding := &retainedToolCallBinding{
-		groupID:                attached.groupID,
-		originCallID:           attached.originCallID,
-		runtimeCellID:          attached.runtimeCellID,
-		calls:                  append([]recordedToolCall(nil), attached.calls...),
-		complete:               attached.complete,
+		groupID:                groupID,
+		originCallID:           originCallID,
+		runtimeCellID:          runtimeCellID,
+		calls:                  append([]recordedToolCall(nil), calls...),
+		complete:               complete,
 		callIndexByID:          map[string]int{},
 		truncatedCallIndexByID: map[string]int{},
 		lateTruncatedIndices:   map[int]struct{}{},
@@ -1247,7 +1336,7 @@ func (r *ExecutedToolCallRecorder) retainBinding(attached executedToolCallGroupA
 			binding.truncatedCallIndexByID[call.callID] = index
 		}
 	}
-	r.retained[attached.outputCallID] = binding
+	return binding
 }
 
 // keepTruncatedBinding reports whether a drained cell must stay registered so its
@@ -1283,7 +1372,7 @@ func (r *ExecutedToolCallRecorder) invalidateUntrustedTruncatedBindings(out []an
 		}
 		runtimeCellID := ""
 		previouslyRetained := false
-		if binding := r.retained[callID]; binding != nil {
+		if binding := r.bindingForOutput(callID); binding != nil {
 			runtimeCellID = binding.runtimeCellID
 			previouslyRetained = true
 		} else if group := r.groups[r.outputs[callID]]; group != nil {
@@ -1305,7 +1394,7 @@ func (r *ExecutedToolCallRecorder) invalidateUntrustedTruncatedBindings(out []an
 		if group := r.groups["cell:"+cellID]; group != nil {
 			group.truncatedMetadataBindingValid = false
 		}
-		for _, binding := range r.retained {
+		for _, binding := range r.allBindings() {
 			if binding.runtimeCellID != cellID {
 				continue
 			}
@@ -1319,7 +1408,7 @@ func (r *ExecutedToolCallRecorder) invalidateUntrustedTruncatedBindings(out []an
 // retained truncated call, or a validated cell holding a truncated call that has
 // no result yet (Rust #48222).
 func (r *ExecutedToolCallRecorder) hasTruncatedBindings() bool {
-	for _, binding := range r.retained {
+	for _, binding := range r.allBindings() {
 		if len(binding.truncatedCallIndexByID) > 0 {
 			return true
 		}
@@ -1337,18 +1426,49 @@ func (r *ExecutedToolCallRecorder) hasTruncatedBindings() bool {
 	return false
 }
 
-// evictRetainedBinding drops the lowest-key retained binding when the retained
-// budget is exhausted. The choice does not depend on Go's map iteration order.
-func (r *ExecutedToolCallRecorder) evictRetainedBinding() {
+// reserveBindingSlot keeps committed and provisional bindings within the same
+// budget Rust applies to RetainedToolCalls. A request that has not committed
+// yet must not grow this state without bound.
+func (r *ExecutedToolCallRecorder) reserveBindingSlot(outputCallID string) {
+	if r.retained[outputCallID] != nil || r.provisional[outputCallID] != nil {
+		return
+	}
+	if len(r.retained)+len(r.provisional) < maxPendingExecutedToolCalls {
+		return
+	}
+	r.evictBinding()
+}
+
+// evictBinding drops the lowest-key binding when the binding budget is
+// exhausted. The choice does not depend on Go's map iteration order.
+func (r *ExecutedToolCallRecorder) evictBinding() {
 	candidate := ""
 	for outputCallID := range r.retained {
 		if candidate == "" || outputCallID < candidate {
 			candidate = outputCallID
 		}
 	}
-	if candidate != "" {
-		delete(r.retained, candidate)
+	for outputCallID := range r.provisional {
+		if candidate == "" || outputCallID < candidate {
+			candidate = outputCallID
+		}
 	}
+	if _, retained := r.retained[candidate]; retained {
+		delete(r.retained, candidate)
+		return
+	}
+	delete(r.provisional, candidate)
+}
+
+func (r *ExecutedToolCallRecorder) allBindings() []*retainedToolCallBinding {
+	bindings := make([]*retainedToolCallBinding, 0, len(r.retained)+len(r.provisional))
+	for _, binding := range r.retained {
+		bindings = append(bindings, binding)
+	}
+	for _, binding := range r.provisional {
+		bindings = append(bindings, binding)
+	}
+	return bindings
 }
 
 func (r *ExecutedToolCallRecorder) ensureState() {
@@ -1369,6 +1489,9 @@ func (r *ExecutedToolCallRecorder) ensureState() {
 	}
 	if r.retained == nil {
 		r.retained = map[string]*retainedToolCallBinding{}
+	}
+	if r.provisional == nil {
+		r.provisional = map[string]*retainedToolCallBinding{}
 	}
 	if r.directCalls == nil {
 		r.directCalls = map[string]model.ExecutedToolCall{}
@@ -1444,7 +1567,7 @@ func (r *ExecutedToolCallRecorder) invalidateGroup(groupID string) {
 	// Retained bindings created from this grouping lose their completeness and
 	// any late-backfilled evidence; ambiguous attribution cannot be repaired by
 	// a later result (Rust #48222).
-	for _, binding := range r.retained {
+	for _, binding := range r.allBindings() {
 		if binding.groupID != groupID {
 			continue
 		}
@@ -1480,7 +1603,7 @@ func (r *ExecutedToolCallRecorder) dropReusedCell(cellID string) {
 			delete(r.outputs, outputCallID)
 		}
 	}
-	for _, binding := range r.retained {
+	for _, binding := range r.allBindings() {
 		if binding.runtimeCellID != cellID {
 			continue
 		}
@@ -1496,7 +1619,7 @@ func (r *ExecutedToolCallRecorder) hasRetainedTruncatedForCell(cellID string) bo
 	if cellID == "" {
 		return false
 	}
-	for _, binding := range r.retained {
+	for _, binding := range r.allBindings() {
 		if binding.runtimeCellID == cellID && len(binding.truncatedCallIndexByID) > 0 {
 			return true
 		}
