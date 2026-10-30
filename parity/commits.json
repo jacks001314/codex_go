@@ -6161,9 +6161,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1002 (实现+回归): #42298 让 retained verified answer 跟随其来源 function call 的 instruction boundary，而不是只按 turn ID 删除；steer 共享 turn ID 时，回滚 later steer 不得丢弃 earlier steer 之前已接受的答案。Go 原先在 resume 时由 rollout.RetainedContextEvents 无条件重放所有 verified_answer，CompactedRetainedContext 也不过滤 checkpoint，所以同一 turn 内 steer 前后的答案无法区分。新增 rollout/retained_context_rollback.go：顺序回放 legacy item/response_item 与 paginated event_msg/item_completed，记录 user instruction boundaries 和 (turn_id, call_id) 到 boundary 的映射；ThreadRolledBack 弹栈并把 boundary 标记为 dead，答案按来源 call 是否存活过滤，缺失来源 call 的 legacy answer 回退到 source-turn 规则；compaction checkpoint 的 retained snapshot 使用同一计划过滤，compaction 本身不删除边界。Go 没有 live thread/rollback app-server 入口，retainedctx.Rollback 已按 acceptance boundary 覆盖 live 语义；本轮闭环 reachable 的 resume/checkpoint 路径。新增 rollout/retained_context_steer_rollback_test.go 覆盖 legacy 与 paginated rollout、steer 前答案保留/steer 后答案删除、延迟答案归属原 call、checkpoint snapshot 过滤、无 rollback 不回归；appserver/retained_steer_rollback_like_rust_test.go 覆盖重启后仅恢复 steer 前来源调用的答案。验证：go test ./rollout -run 'RetainedContext|SteerRollback|CompactedRetained' -count=1；go test ./rollout ./retainedctx -count=1；go test ./appserver -run 'Retained|Verified|Guardian' -count=1。"
    ]
   },
   {

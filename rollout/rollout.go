@@ -1216,6 +1216,7 @@ func compactedDynamicToolsSnapshot(payload json.RawMessage) *DynamicToolsSnapsho
 // holds is idempotent (Rust's `RetainedContext::record`).
 func RetainedContextEvents(lines []Line) []retainedctx.RetainedContextEvent {
 	events := []retainedctx.RetainedContextEvent{}
+	plan := newRetainedRollbackPlan(lines)
 	for i := range lines {
 		if lines[i].Type != "retained_context" {
 			continue
@@ -1229,6 +1230,9 @@ func RetainedContextEvents(lines []Line) []retainedctx.RetainedContextEvent {
 		}
 		var event retainedctx.RetainedContextEvent
 		if err := json.Unmarshal(payload, &event); err != nil {
+			continue
+		}
+		if !plan.keepAnswer(&event.Answer) {
 			continue
 		}
 		events = append(events, event)
@@ -2248,6 +2252,7 @@ func ItemsFromLines(lines []Line) []Item {
 // resume rule of reading `CompactedItem::retained_context` from the newest
 // checkpoint before replaying later evidence.
 func CompactedRetainedContext(lines []Line) *retainedctx.RetainedContext {
+	plan := newRetainedRollbackPlan(lines)
 	for i := len(lines) - 1; i >= 0; i-- {
 		if lines[i].Type != "compacted" {
 			continue
@@ -2256,7 +2261,7 @@ func CompactedRetainedContext(lines []Line) *retainedctx.RetainedContext {
 		if event == nil || event.RetainedContext == nil {
 			continue
 		}
-		return event.RetainedContext
+		return plan.filterContext(event.RetainedContext)
 	}
 	return nil
 }

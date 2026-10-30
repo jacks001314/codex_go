@@ -3138,6 +3138,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - This round added a history round-trip test to `appserver/async_message_test.go`: questions survive session-item JSON persistence and project into `ThreadItem`, while older async messages without questions still decode with `questions: null`.
 - Verified with `go test ./tool -run 'RequestUserInputAsync|SendUserMessageAsync' -count=1`, `go test ./turn -run 'Async|RequestUserInput' -count=1`, and `go test ./appserver -run 'Async|StructuredAsyncQuestions' -count=1`.
 
-Status after reconciliation: `2161 complete`, `451 not_applicable`,
-`346 audit_pending`, `186 regression_pending`, `5 partial`,
+### Retained answers across steer rollbacks (Round 1002)
+
+- Rust #42298 keeps retained `request_user_input` answers attached to their source function call and instruction boundary, so rolling back a later steer preserves answers accepted before the steer even though both share one turn ID; the rule covers live rollback, resume, compaction, and rollout migration (#42298, complete).
+- Go previously replayed every `verified_answer` during resume and returned checkpoint snapshots unfiltered, so a same-turn steer rollback could not distinguish answers before and after the steer.
+- `rollout/retained_context_rollback.go` now replays legacy response items and paginated `item_completed` events, records user-instruction boundaries plus `(turn_id, call_id)` ownership, pops boundaries on `thread_rolled_back`, and filters both sparse events and compaction snapshots by surviving source calls; legacy answers without a source call keep the conservative source-turn rule.
+- New `rollout/retained_context_steer_rollback_test.go` covers legacy and paginated rollouts, delayed answers, checkpoint snapshots, and the no-rollback case; `appserver/retained_steer_rollback_like_rust_test.go` covers resume from a persisted steer rollback.
+- Verified with `go test ./rollout -run 'RetainedContext|SteerRollback|CompactedRetained' -count=1`, `go test ./rollout ./retainedctx -count=1`, and `go test ./appserver -run 'Retained|Verified|Guardian' -count=1`.
+
+Status after reconciliation: `2162 complete`, `451 not_applicable`,
+`346 audit_pending`, `185 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
