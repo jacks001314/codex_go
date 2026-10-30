@@ -6916,9 +6916,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserverdaemon/prepare_install_windows.go mirrors Rust #50802 select_release: native junction creation/retargeting that fails with fs.ErrPermission or ERROR_ACCESS_DENIED falls back to `cmd.exe` `mklink /J`, with the link/target passed through CODEX_DAEMON_JUNCTION_LINK/CODEX_DAEMON_JUNCTION_TARGET, delayed expansion disabled (/v:off), and the raw /s command line so quoted paths survive shell metacharacters",
+    "Replacement order matches Rust: installJunction creates the replacement before moving `current` aside, attempts to restore the previous junction when publishing fails, preserves the staging directory for recovery when restoration also fails, and removes the previous junction with os.Remove (never recursively walking the release)",
+    "Regression coverage: appserverdaemon/prepare_install_windows_junction_test.go covers fallback creation, native retargeting, fallback replacement under a root containing spaces, `&`, `%` and `!`, verifies the final selection, and asserts no standalone installation appears; TestIsPermissionDeniedRecognizesAccessDenialsLikeRust pins the fallback predicate",
+    "Residual: the restore-after-failed-replacement branch has no injected os.Rename failure seam, so only the success paths and the predicate are exercised",
+    "Verified with `go test ./appserverdaemon -run 'DaemonJunction|PermissionDenied' -count=1` and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {

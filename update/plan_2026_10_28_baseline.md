@@ -3583,6 +3583,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `tui/agents_overview` owns grouping and config parsing, `tui/tea/agents_overview.go` persists cycles through the shared settings writer, `Options.AgentsOverviewGrouping` seeds startup, and `app/interactive.go` reads the config value. Round 1065 re-verified persistence, failure messaging, and restore.
 - Verified with `go test ./app -run 'AgentsOverviewGrouping|SettingsCarryAgentsOverview' -count=1`, `go test ./tui/tea -run AgentsOverviewGrouping -count=1`, `go test ./tui/agents_overview -run Grouping -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2219 complete`, `461 not_applicable`,
-`322 audit_pending`, `142 regression_pending`, `5 partial`,
+### mklink fallback for Windows daemon junctions (Round 1066)
+
+- Rust #50802 falls back from in-process junction creation/retargeting to `cmd.exe` `mklink /J` on permission-denied, passes quoted paths through environment variables with delayed expansion disabled, creates the replacement before moving `current` aside, and restores or preserves the previous junction on failure.
+- Complete: `appserverdaemon/prepare_install_windows.go` already implemented the fallback and replacement ordering. Round 1066 re-verified creation, native retargeting, and fallback replacement under a root containing spaces and shell metacharacters; the restore-on-failure branch remains untested because `os.Rename` is not injectable.
+- Verified with `go test ./appserverdaemon -run 'DaemonJunction|PermissionDenied' -count=1` and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2220 complete`, `461 not_applicable`,
+`322 audit_pending`, `141 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
