@@ -17175,9 +17175,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go already parses ([label]) stadium declarations with shape-aware redeclaration checks in mermaid/parse.go and renders rounded corners transposed for horizontal layouts in mermaid/draw.go; mermaid_test.go stadium tests and tui/markdown/mermaid_test.go:139 cover references, mixed shapes in every direction, Unicode labels and over-wide source fallback; go test ./mermaid ./tui/markdown passes"
    ]
   },
   {
