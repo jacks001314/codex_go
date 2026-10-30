@@ -94,25 +94,12 @@ func TestRustEventMsgWireNamesCoverRecordedSurface(t *testing.T) {
 	}
 }
 
-// rustErrorCodeEmissionGaps documents Rust error-code wire values that Go does
-// not emit, with the reason so the gap stays auditable. Rust retains
-// `threadRollbackFailed` only for legacy rollout/error deserialization after the
-// deprecated thread/rollback API was removed (#44915); Go's app-server no
-// longer has an emitting path for it.
-// rustErrorCodeEmissionGaps is empty: Go now recognizes every documented error
-// code, including the legacy-only `threadRollbackFailed` value that Rust retains
-// for historical rollout deserialization after the thread/rollback removal
-// (#44915), which the rollout reader accepts as a known classification (#46482).
-var rustErrorCodeEmissionGaps = map[string]string{
-	// Rust #48796 (d7748e1185) added the opt-in structured Guardian
-	// circuit-breaker error: `auto_review.circuit_break_action = "strict"`
-	// attaches `CodexErrorInfo::TooManyDenials` to the interrupted turn, while
-	// the default leaves the error unset. Go's Guardian breaker interrupts the
-	// turn but does not yet implement the `circuit_break_action` config toggle
-	// (config/ and the Guardian port sit outside this task's write scope), so
-	// the classification has no emitting path in the Go tree yet.
-	"tooManyDenials": "Rust #48796 opt-in Guardian circuit-breaker classification; Go lacks the auto_review.circuit_break_action toggle",
-}
+// rustErrorCodeEmissionGaps is empty: Go now recognizes and emits every
+// documented error code, including the legacy-only `threadRollbackFailed`
+// value that Rust retains for historical rollout deserialization after the
+// thread/rollback removal (#44915), and the opt-in Guardian circuit-breaker
+// `tooManyDenials` classification (#48796).
+var rustErrorCodeEmissionGaps = map[string]string{}
 
 // TestRustErrorCodeSurfaceAgainstGo is the L0 enum-inventory check for error
 // codes: every wire value of the app-server v2 CodexErrorInfo and

@@ -148,3 +148,28 @@ func TestLoadGuardianConversationHistoryConfigLikeRust(t *testing.T) {
 		t.Fatalf("loaded max output tokens = %d, want 900", got)
 	}
 }
+
+// TestGuardianCircuitBreakActionLikeRust covers Rust #48796's opt-in strict
+// action. The default, including an absent or unknown value, keeps legacy
+// interrupted turns without a structured error.
+func TestGuardianCircuitBreakActionLikeRust(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want string
+	}{
+		{name: "nil config", want: "default"},
+		{name: "absent", cfg: &Config{Values: map[string]any{}}, want: "default"},
+		{name: "explicit default", cfg: &Config{Values: map[string]any{"auto_review": map[string]any{"circuit_break_action": "default"}}}, want: "default"},
+		{name: "strict", cfg: &Config{Values: map[string]any{"auto_review": map[string]any{"circuit_break_action": "strict"}}}, want: "strict"},
+		{name: "strict case insensitive", cfg: &Config{Values: map[string]any{"auto_review": map[string]any{"circuit_break_action": "STRICT"}}}, want: "strict"},
+		{name: "unknown", cfg: &Config{Values: map[string]any{"auto_review": map[string]any{"circuit_break_action": "unknown"}}}, want: "default"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.cfg.GuardianCircuitBreakAction(); got != testCase.want {
+				t.Fatalf("GuardianCircuitBreakAction() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}

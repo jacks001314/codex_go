@@ -50,6 +50,28 @@ func TestTurnRootTurnIDExposureLikeRust(t *testing.T) {
 	}
 }
 
+// TestInterruptedTurnSnapshotExposesStructuredErrorLikeRust pins Rust #48796:
+// saved interrupted turns carry an error, not only failed turns.
+func TestInterruptedTurnSnapshotExposesStructuredErrorLikeRust(t *testing.T) {
+	turnValue := Turn{ID: "turn-1"}
+	applyTurnSnapshot(&turnValue, session.TurnSnapshot{
+		ID: "turn-1", Status: string(TurnStatusInterrupted),
+		ErrorMessage: "Guardian denied the action three times.", CodexErrorInfo: "tooManyDenials",
+	})
+	if turnValue.Status != TurnStatusInterrupted || turnValue.Error == nil {
+		t.Fatalf("interrupted turn = %#v", turnValue)
+	}
+	if turnValue.Error.Message != "Guardian denied the action three times." || turnValue.Error.CodexErrorInfo != "tooManyDenials" {
+		t.Fatalf("interrupted turn error = %#v", turnValue.Error)
+	}
+
+	legacy := Turn{ID: "turn-2"}
+	applyTurnSnapshot(&legacy, session.TurnSnapshot{ID: "turn-2", Status: string(TurnStatusInterrupted)})
+	if legacy.Error != nil {
+		t.Fatalf("legacy interrupted turn error = %#v, want nil", legacy.Error)
+	}
+}
+
 func TestThreadResumeDecodesReasoningStringContentLikeRust(t *testing.T) {
 	raw := `{
 		"thread": {

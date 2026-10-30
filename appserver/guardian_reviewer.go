@@ -2581,6 +2581,7 @@ func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID,
 	if r == nil {
 		return
 	}
+	appErr := r.guardianCircuitBreakError(threadID, reason)
 	if r.activeRuntimeTurnSnapshot(threadID) != nil {
 		active, ok := r.interruptRuntimeTurnIfNoPendingInput(threadID, turnID)
 		if !ok {
@@ -2588,12 +2589,29 @@ func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID,
 		}
 		// Rust #49475: abort callbacks complete before the terminal event.
 		r.runInterruptHook(active)
-		r.finishTurnInterruptedAnalytics(threadID, turnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active), turnAbortReasonInterrupted)
+		r.finishTurnInterruptedAnalyticsWithError(threadID, turnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active), turnAbortReasonInterrupted, appErr)
 		r.deliverGuardianInterruptionToParent(threadID, reason)
 		return
 	}
 	_, _ = r.requireTurns().Interrupt(&turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID})
 	r.deliverGuardianInterruptionToParent(threadID, reason)
+}
+
+// guardianCircuitBreakError returns the opt-in structured error attached to a
+// Guardian denial-limit interruption (Rust #48796). Without the strict action,
+// older clients continue to receive only the interrupted turn and warning.
+func (r *RuntimeRouter) guardianCircuitBreakError(threadID, reason string) *TurnError {
+	if r == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+	if err != nil || cfg == nil || cfg.GuardianCircuitBreakAction() != "strict" {
+		return nil
+	}
+	return &TurnError{
+		Message:        firstNonEmpty(strings.TrimSpace(reason), "Guardian denied the action repeatedly."),
+		CodexErrorInfo: CodexErrorInfo("tooManyDenials"),
+	}
 }
 
 // deliverGuardianInterruptionToParent forwards a strict-mode

@@ -13,15 +13,24 @@ import (
 
 func guardianNotificationTestRouter(t *testing.T, strict bool) (*RuntimeRouter, session.ThreadID, session.ThreadID) {
 	t.Helper()
+	action := ""
+	if strict {
+		action = "strict"
+	}
+	return guardianNotificationTestRouterWithCircuitBreakAction(t, action)
+}
+
+func guardianNotificationTestRouterWithCircuitBreakAction(t *testing.T, action string) (*RuntimeRouter, session.ThreadID, session.ThreadID) {
+	t.Helper()
 	home := t.TempDir()
 	body := "model = \"gpt-5\"\napprovals_reviewer = \"auto_review\"\n[features]\nmulti_agent_v2 = true\n"
-	if strict {
-		body += "[auto_review]\ncircuit_break_action = \"strict\"\n"
+	if action != "" {
+		body += "[auto_review]\ncircuit_break_action = \"" + action + "\"\n"
 	}
 	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
-	store := session.NewStore(t.TempDir())
+	store := session.NewStore(home)
 	now := time.Now().UTC()
 	parentID := session.ThreadID("thread-parent")
 	childID := session.ThreadID("thread-child")

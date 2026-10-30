@@ -4347,8 +4347,16 @@ func (r *RuntimeRouter) appendRuntimeTurnError(threadID string, message string, 
 }
 
 func (r *RuntimeRouter) appendRuntimeTurnAborted(threadID string, turnID string, rootTurnID string, reason string, completedAt time.Time, durationMS int64) error {
+	return r.appendRuntimeTurnAbortedWithError(threadID, turnID, rootTurnID, reason, nil, completedAt, durationMS)
+}
+
+func (r *RuntimeRouter) appendRuntimeTurnAbortedWithError(threadID string, turnID string, rootTurnID string, reason string, appErr *TurnError, completedAt time.Time, durationMS int64) error {
+	var turnError *rollout.TurnAbortedError
+	if appErr != nil {
+		turnError = &rollout.TurnAbortedError{Message: appErr.Message, CodexErrorInfo: appErr.CodexErrorInfo}
+	}
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		return recorder.AppendTurnAbortedWithRoot(rootTurnID, turnID, reason, completedAt, durationMS)
+		return recorder.AppendTurnAbortedWithRootAndError(rootTurnID, turnID, reason, turnError, completedAt, durationMS)
 	})
 }
 
@@ -4704,6 +4712,10 @@ func (r *RuntimeRouter) finishTurnInterrupted(threadID string, turnID string, st
 }
 
 func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID string, startedAtMS int64, analytics *turnCompletionAnalyticsContext, reason string) {
+	r.finishTurnInterruptedAnalyticsWithError(threadID, turnID, startedAtMS, analytics, reason, nil)
+}
+
+func (r *RuntimeRouter) finishTurnInterruptedAnalyticsWithError(threadID string, turnID string, startedAtMS int64, analytics *turnCompletionAnalyticsContext, reason string, appErr *TurnError) {
 	if r == nil {
 		return
 	}
@@ -4725,13 +4737,13 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 		r.markGoalTurnInterrupted(threadID, turnID)
 	}
 	r.finishStateThreadGoalTurn(threadID, turnID, now, 0, nil)
-	_ = r.appendRuntimeTurnAborted(threadID, turnID, analyticsRootTurnID(analytics, turnID), firstNonEmpty(strings.TrimSpace(reason), turnAbortReasonInterrupted), now, durationMS)
+	_ = r.appendRuntimeTurnAbortedWithError(threadID, turnID, analyticsRootTurnID(analytics, turnID), firstNonEmpty(strings.TrimSpace(reason), turnAbortReasonInterrupted), appErr, now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
+		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, appErr, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusInterrupted})

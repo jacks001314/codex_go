@@ -433,7 +433,11 @@ func appendThreadRolloutRecord(recorder *rollout.Recorder, record *session.Recor
 				return err
 			}
 		case TurnStatusInterrupted, TurnStatusInProgress:
-			if err := recorder.AppendTurnAbortedWithRoot(rootTurnID, group.TurnID, "interrupted", completedAt, durationMS); err != nil {
+			var turnError *rollout.TurnAbortedError
+			if message := strings.TrimSpace(snapshot.ErrorMessage); message != "" || snapshot.CodexErrorInfo != nil {
+				turnError = &rollout.TurnAbortedError{Message: message, CodexErrorInfo: snapshot.CodexErrorInfo}
+			}
+			if err := recorder.AppendTurnAbortedWithRootAndError(rootTurnID, group.TurnID, "interrupted", turnError, completedAt, durationMS); err != nil {
 				return err
 			}
 		default:

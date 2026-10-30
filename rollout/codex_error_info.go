@@ -29,6 +29,8 @@ var codexErrorInfoUnitTags = map[string]bool{
 	"bioPolicy":                     true,
 	"misalignment_policy_violation": true,
 	"misalignmentPolicyViolation":   true,
+	"too_many_denials":              true,
+	"tooManyDenials":                true,
 	"internal_server_error":         true,
 	"internalServerError":           true,
 	"unauthorized":                  true,

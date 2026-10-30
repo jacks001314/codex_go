@@ -6352,7 +6352,8 @@ func applyTurnSnapshot(turn *Turn, snapshot session.TurnSnapshot) {
 	turn.CompletedAt = cloneInt64PtrAppserver(snapshot.CompletedAt)
 	turn.DurationMS = cloneInt64PtrAppserver(snapshot.DurationMS)
 	turn.Error = nil
-	if turn.Status == TurnStatusFailed && strings.TrimSpace(snapshot.ErrorMessage) != "" {
+	if (turn.Status == TurnStatusFailed || turn.Status == TurnStatusInterrupted) &&
+		(strings.TrimSpace(snapshot.ErrorMessage) != "" || snapshot.CodexErrorInfo != nil) {
 		turn.Error = &TurnError{
 			Message:        strings.TrimSpace(snapshot.ErrorMessage),
 			CodexErrorInfo: snapshot.CodexErrorInfo,

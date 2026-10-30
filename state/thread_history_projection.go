@@ -260,7 +260,7 @@ func projectThreadHistoryLine(line *rollout.Line) (threadHistoryChanges, error) 
 			return changes, nil
 		}
 		changes.Turns = append(changes.Turns, threadHistoryTurnChange{
-			TurnID: turnID, RootTurnID: rootTurnID, Status: "interrupted", StartedAt: firstHistoryInt64(event.StartedAt, event.StartedAtCamel), CompletedAt: firstHistoryInt64(event.CompletedAt, event.CompletedAtCamel), DurationMS: firstHistoryInt64(event.DurationMS, event.DurationMSCamel),
+			TurnID: turnID, RootTurnID: rootTurnID, Status: "interrupted", Error: cloneRawJSON(event.Error), StartedAt: firstHistoryInt64(event.StartedAt, event.StartedAtCamel), CompletedAt: firstHistoryInt64(event.CompletedAt, event.CompletedAtCamel), DurationMS: firstHistoryInt64(event.DurationMS, event.DurationMSCamel),
 		})
 	case "item_completed":
 		if turnID == "" || !rawJSONPresent(event.Item) {

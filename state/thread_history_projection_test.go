@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,6 +126,34 @@ func TestMaterializeThreadHistoryRollsBackRowsAndCheckpointTogetherLikeRust(t *t
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM thread_turns WHERE thread_id = ? AND turn_id = ?`, "thread-1", "turn-1").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed projection row count/error = %d/%v", count, err)
+	}
+}
+
+// TestMaterializeThreadHistoryCarriesInterruptedTurnErrorLikeRust pins Rust
+// #48796's turn_aborted ErrorEvent through the state history projection.
+func TestMaterializeThreadHistoryCarriesInterruptedTurnErrorLikeRust(t *testing.T) {
+	message := "Guardian denied the action three times."
+	contents := historyMetaLine(0) +
+		historyTurnLine(1, "turn-1", "2025-01-01T00:00:00Z") +
+		`{"timestamp":"2025-01-01T00:00:05Z","ordinal":2,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted","error":{"message":"` + message + `","codex_error_info":"tooManyDenials"},"completed_at":1735689605,"duration_ms":5000}}` + "\n"
+	db, path := openProjectionFixture(t, contents)
+	assertMaterialized(t, db, path)
+	var status, errorJSON string
+	if err := db.QueryRow(`SELECT status, error_json FROM thread_turns WHERE thread_id = ? AND turn_id = ?`, "thread-1", "turn-1").Scan(&status, &errorJSON); err != nil {
+		t.Fatal(err)
+	}
+	if status != "interrupted" {
+		t.Fatalf("status = %q, want interrupted", status)
+	}
+	var stored struct {
+		Message        string `json:"message"`
+		CodexErrorInfo string `json:"codex_error_info"`
+	}
+	if err := json.Unmarshal([]byte(errorJSON), &stored); err != nil {
+		t.Fatalf("Unmarshal(error_json) error = %v", err)
+	}
+	if stored.Message != message || stored.CodexErrorInfo != "tooManyDenials" {
+		t.Fatalf("stored interrupted error = %#v", stored)
 	}
 }
 

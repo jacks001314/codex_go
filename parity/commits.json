@@ -22544,9 +22544,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1137: strict Guardian circuit-breaker interruptions now attach `tooManyDenials` to the interrupted live turn/completed notification and persist the same structured error on turn_aborted. The rollout replay restores it into the saved turn snapshot, paginated state history retains it, and interrupted snapshots project it through Turn.Error. Unset and explicit `default` actions keep the legacy nil error. Existing Guardian warning, denial-limit metric, and interrupted status are unchanged, and no standalone error notification is emitted. Tests: TestGuardianCircuitBreakActionLikeRust, TestGuardianCircuitBreakStructuredErrorLikeRust (unset/default/strict, live/saved, no error notification), TestTurnAbortedStructuredErrorRoundTripsLikeRust, TestMaterializeThreadHistoryCarriesInterruptedTurnErrorLikeRust, TestInterruptedTurnSnapshotExposesStructuredErrorLikeRust, and TestRustErrorCodeSurfaceAgainstGo; `go test ./rollout ./state ./config -count=1`, targeted appserver `Guardian|TurnAbort|Interrupted|CodexReview|Classification|TurnRootTurnID`, and `go test ./parity -run 'TestRustErrorCodeSurfaceAgainstGo|TestRustEnumSurface' -count=1` pass."
    ]
   },
   {

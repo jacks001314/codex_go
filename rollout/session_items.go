@@ -347,7 +347,18 @@ func appendReplayedTurnTerminal(recorder *Recorder, turnID string, snapshot sess
 	}
 	switch status {
 	case "interrupted", "aborted", "cancelled", "canceled":
-		return recorder.AppendTurnAbortedWithRoot(snapshot.RootTurnID, turnID, firstNonEmptyString(snapshot.ErrorMessage, "interrupted"), completedAt, durationMS)
+		reason := "interrupted"
+		var turnError *TurnAbortedError
+		if message := strings.TrimSpace(snapshot.ErrorMessage); message != "" || snapshot.CodexErrorInfo != nil {
+			if snapshot.CodexErrorInfo != nil {
+				turnError = &TurnAbortedError{Message: message, CodexErrorInfo: snapshot.CodexErrorInfo}
+			} else {
+				// Older snapshots used the error message as the free-form abort
+				// reason; keep that shape when no structured classification exists.
+				reason = message
+			}
+		}
+		return recorder.AppendTurnAbortedWithRootAndError(snapshot.RootTurnID, turnID, reason, turnError, completedAt, durationMS)
 	case "failed", "error":
 		if err := recorder.AppendTurnError(snapshot.ErrorMessage, completedAt); err != nil {
 			return err
@@ -1450,6 +1461,10 @@ func (b *rolloutReplayBuilder) handleTurnComplete(payload rolloutEventPayload) {
 func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, lineIndex int) {
 	turnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel)
 	rootTurnID := rolloutEventRootTurnID(payload)
+	errorMessage, codexErrorInfo, hasError, readable := rolloutEventError(payload.Error)
+	if !readable {
+		return
+	}
 	apply := func(snapshot *session.TurnSnapshot) {
 		if snapshot == nil {
 			return
@@ -1458,6 +1473,13 @@ func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, li
 			snapshot.RootTurnID = rootTurnID
 		}
 		snapshot.Status = "interrupted"
+		if hasError {
+			snapshot.ErrorMessage = errorMessage
+			snapshot.CodexErrorInfo = codexErrorInfo
+		} else {
+			snapshot.ErrorMessage = ""
+			snapshot.CodexErrorInfo = nil
+		}
 		snapshot.CompletedAt = firstNonNilInt64(payload.CompletedAt, payload.CompletedAtCamel)
 		snapshot.DurationMS = firstNonNilInt64(payload.DurationMS, payload.DurationMSCamel)
 	}
