@@ -4552,9 +4552,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "blocked_precondition",
    "evidence": [
-    "Partial symbol coverage 3/18; needs review: DEFAULT_RATE_LIMIT, EnvelopeKind, FeedbackDelivery, FeedbackTransport, MAX_ATTACHMENTS_BYTES"
+    "Blocked precondition: Go has no diagnostic report upload transport at all. appserver feedback only builds the report event and attachments locally (PrepareUpload/SaveFeedback, app/remote_tui.go), and there is no Sentry envelope client, no HTTP/gzip envelope sender, no retry or rate-limit headers, and no delivery outcome type to harden. Without that transport the per-attachment envelope shipment, encoded/decoded size bounds, priority-preserving truncation, and retry-without-replaying-the-core-event contracts cannot be implemented or tested. Precondition: a diagnostic report (Sentry envelope) transport in the Go tree."
    ]
   },
   {
@@ -5559,9 +5559,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "blocked_precondition",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Blocked precondition: same missing transport as #41569 - Go prepares feedback uploads locally (appserver/feedback.go PrepareUpload, app/remote_tui.go) but never sends an envelope, so there is no shared five-minute deadline, no per-attachment send loop to stop on deadline or rate limit, and no app-server upload slot accounting. The overloaded JSON-RPC error and concurrency-slot release tests require that upload path. Precondition: the diagnostic report transport plus an app-server upload concurrency gate."
    ]
   },
   {
