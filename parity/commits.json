@@ -4852,9 +4852,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 993 (实现+回归): #41892 把 events/stream 的请求构造收拢到 McpEventStream::open（params = {name, arguments}，调用方 _meta 存在时写入 _meta），并让流持有 Arc<RmcpClient> 直到订阅完成或取消，替换此前持有整个 McpServerConnection 的做法，同时移除 client_with_connection_by_name 并把事件错误文案改为 MCP event server 口径。Go 侧流实现已按 goroutine + context 持有 per-stream HTTP client（mcp/events.go 的 openHTTPEventStream 直到 Close 或服务器结束时才释放），但发现真实缺口：appserver 的 mcpServer/event/stream/start 解析了 _meta 却从未转发，且 mcp 层没有携带 _meta 的入口。本轮补齐：mcp.OpenMCPEventStreamWithMeta 在 params 中写入调用方 _meta（无 _meta 时不写），OpenMCPEventStream 委托为 nil；appserver/runMCPEventStream 校验并解析 params.Meta（非对象时以 Rust 同义错误 failed to start MCP event stream for '<server>': MCP event request _meta must be a JSON object 拒绝），再把对象传给 OpenMCPEventStreamWithMeta。测试：mcp/mcp_event_stream_retention_like_rust_test.go 用真实 HTTP SSE 验证订阅期间持续收到 notifications/events/active 与后续事件且 Close 后传输被释放（client 保活语义），mcp/mcp_event_stream_meta_like_rust_test.go 验证 _meta 转发与省略，appserver/mcp_event_stream_meta_like_rust_test.go 验证 start 请求的 _meta 端到端到达 events/stream params。保留差异：Rust rmcp 客户端会自动注入 progressToken 到 _meta，Go 的进度处理走独立选项，本提交不涉及。验证：go test ./mcp -count=1、go test ./appserver -run 'TestRuntimeRouterMCPEventStream' -count=1。"
    ]
   },
   {

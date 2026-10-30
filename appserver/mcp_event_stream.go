@@ -254,6 +254,16 @@ func (r *RuntimeRouter) runMCPEventStream(ctx context.Context, entry *mcpEventSt
 	if len(params.Arguments) > 0 && string(params.Arguments) != "null" {
 		_ = json.Unmarshal(params.Arguments, &arguments)
 	}
+	var requestMeta map[string]any
+	if len(params.Meta) > 0 && strings.TrimSpace(string(params.Meta)) != "null" {
+		if err := json.Unmarshal(params.Meta, &requestMeta); err != nil {
+			ready <- jsonRPCInvalidRequest(fmt.Sprintf(
+				"failed to start MCP event stream for '%s': MCP event request _meta must be a JSON object, got %s",
+				params.Server, strings.TrimSpace(string(params.Meta)),
+			))
+			return
+		}
+	}
 	reconnectAttempts := 0
 	var reconnectDeadline <-chan time.Time
 	active := false
@@ -261,7 +271,7 @@ func (r *RuntimeRouter) runMCPEventStream(ctx context.Context, entry *mcpEventSt
 		r.sendMCPEventNotification(entry.connectionID, subscriptionID, "notifications/events/terminated", json.RawMessage(`{}`))
 	}
 	for {
-		stream, err := service.OpenMCPEventStream(codexAppsMCPServerName, params.Name, arguments)
+		stream, err := service.OpenMCPEventStreamWithMeta(codexAppsMCPServerName, params.Name, arguments, requestMeta)
 		if err != nil {
 			if !active && reconnectAttempts < maxMCPEventStreamReconnectAttempt {
 				reconnectAttempts++

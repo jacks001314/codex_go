@@ -72,6 +72,13 @@ func (s *MCPService) ListMCPEvents(serverName string) ([]MCPEventDefinition, err
 // returned stream until Close; stdio servers deliver the single response
 // notification and then end (the hosted Plugin Runtime path is HTTP).
 func (s *MCPService) OpenMCPEventStream(serverName string, eventName string, arguments any) (*MCPEventStream, error) {
+	return s.OpenMCPEventStreamWithMeta(serverName, eventName, arguments, nil)
+}
+
+// OpenMCPEventStreamWithMeta is OpenMCPEventStream plus the caller-supplied
+// `_meta` object that Rust McpEventStream::open copies into the events/stream
+// params (#41892).
+func (s *MCPService) OpenMCPEventStreamWithMeta(serverName string, eventName string, arguments any, requestMeta map[string]any) (*MCPEventStream, error) {
 	if s == nil {
 		return nil, invalidMCPRequest("MCP service is nil")
 	}
@@ -88,6 +95,9 @@ func (s *MCPService) OpenMCPEventStream(serverName string, eventName string, arg
 		return nil, invalidMCPRequest("unknown MCP server " + serverName)
 	}
 	params := map[string]any{"name": eventName, "arguments": arguments}
+	if requestMeta != nil {
+		params["_meta"] = requestMeta
+	}
 	if strings.TrimSpace(config.URL) != "" {
 		if err := ValidateServerAuth(serverName, &config); err != nil {
 			return nil, err

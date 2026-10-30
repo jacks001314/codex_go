@@ -3072,6 +3072,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #41853 makes `Session::spawn` return a `BoxFuture`, marks the wrapper `#[inline(never)]`, and awaits it directly at creation sites; initialization stays lazy and no protocol or persistence behavior changes (#41853, not applicable).
 - Go has no future type to box and no concrete-future-at-API-boundary or inlined-megaframe problem: session startup is built synchronously in the appserver thread-creation path, so there is no corresponding call site to change.
 
-Status after reconciliation: `2151 complete`, `451 not_applicable`,
-`346 audit_pending`, `196 regression_pending`, `5 partial`,
+### MCP event stream client retention (Round 993)
+
+- Rust #41892 builds the `events/stream` request inside `McpEventStream::open` (including the caller `_meta`), retains only the `RmcpClient` for the subscription lifetime, and drops the connection-level helper and Plugin Runtime wording (#41892, complete).
+- Go already keeps the per-stream HTTP client alive in the streaming goroutine until `Close` or server termination, but the app-server start path parsed `_meta` and never forwarded it. `mcp.OpenMCPEventStreamWithMeta` now copies the caller object into the request params, and `appserver/runMCPEventStream` validates and passes `params.Meta`, rejecting non-objects with the Rust-equivalent message.
+- Tests: `mcp/mcp_event_stream_retention_like_rust_test.go` drives a real SSE transport through active and follow-up notifications then asserts `Close` releases it, `mcp/mcp_event_stream_meta_like_rust_test.go` covers `_meta` forwarding and omission, and `appserver/mcp_event_stream_meta_like_rust_test.go` covers the end-to-end start request.
+- Residual: Rust's rmcp client auto-injects `progressToken` into `_meta`; Go handles progress through separate call options, so that token is not part of the emitted object.
+
+Status after reconciliation: `2152 complete`, `451 not_applicable`,
+`346 audit_pending`, `195 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
