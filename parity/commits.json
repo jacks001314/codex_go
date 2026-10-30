@@ -8834,9 +8834,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1079 (partial): the deleted hooks have no Go counterpart. appserver/guardian_reviewer.go has no ApprovalReviewContributor registry and keeps one fast-decision policy (full access, initial computer-use call, serving assessment, user-mode node-REPL) feeding the shared model review; agent_runtime.go injects a single emitGuardianV2FastDecision hook. Upstream retained the guardian v2 fast-decision event/metric, which Go mirrors (telemetry.NewGuardianV2FastDecisionEvent, GuardianV2FastDecisionMetric). Residual: Go models no GuardianReviewReason - state.Event has no review_reason, modelGuardianReviewer.Review takes no reason, and the synchronous review only labels its route metric policy/fresh_required."
    ]
   },
   {
