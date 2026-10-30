@@ -622,7 +622,7 @@ func TestNetworkApprovalRunsPermissionRequestHooksFirstLikeRust(t *testing.T) {
 			Protocol: network.ProxyProtocolHTTPSConnect,
 			Host:     "example.com",
 			Port:     443,
-		}, nil)
+		}, nil, nil)
 		return decision
 	}
 

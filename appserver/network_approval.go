@@ -18,6 +18,7 @@ import (
 	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/tool"
+	"codex_go/tooltiming"
 	"codex_go/turn"
 )
 
@@ -51,14 +52,25 @@ type networkApprovalService struct {
 	router  *RuntimeRouter
 	mu      sync.Mutex
 	pending map[pendingNetworkApprovalKey]*pendingNetworkApproval
-	allowed map[networkApprovalKey]struct{}
-	denied  map[networkApprovalKey]struct{}
-	saved   map[string][]networkRuleSavedFragment
-	callsMu sync.Mutex
-	calls   map[string]*activeNetworkApprovalCall
+	// promptQueues serializes the visible manual prompt for one endpoint so
+	// concurrent executions cannot stack duplicate approvals (Rust #58351).
+	promptQueues map[networkApprovalKey]*networkApprovalPromptQueue
+	allowed      map[networkApprovalKey]struct{}
+	denied       map[networkApprovalKey]struct{}
+	saved        map[string][]networkRuleSavedFragment
+	callsMu      sync.Mutex
+	calls        map[string]*activeNetworkApprovalCall
 	// executions keeps the originating execution snapshot and cancellation
 	// token for processes that outlive their launching tool call (Rust #44575).
 	executions map[string]*activeNetworkApprovalCall
+}
+
+// networkApprovalPromptQueue is a one-permit endpoint queue. refs counts the
+// executions holding or waiting for the permit, so an idle endpoint leaves no
+// entry behind.
+type networkApprovalPromptQueue struct {
+	permits chan struct{}
+	refs    int
 }
 
 type activeNetworkApprovalCall struct {
@@ -108,13 +120,14 @@ type networkApprovalTurn struct {
 
 func newNetworkApprovalService(router *RuntimeRouter) *networkApprovalService {
 	return &networkApprovalService{
-		router:     router,
-		pending:    map[pendingNetworkApprovalKey]*pendingNetworkApproval{},
-		allowed:    map[networkApprovalKey]struct{}{},
-		denied:     map[networkApprovalKey]struct{}{},
-		saved:      map[string][]networkRuleSavedFragment{},
-		calls:      map[string]*activeNetworkApprovalCall{},
-		executions: map[string]*activeNetworkApprovalCall{},
+		router:       router,
+		pending:      map[pendingNetworkApprovalKey]*pendingNetworkApproval{},
+		promptQueues: map[networkApprovalKey]*networkApprovalPromptQueue{},
+		allowed:      map[networkApprovalKey]struct{}{},
+		denied:       map[networkApprovalKey]struct{}{},
+		saved:        map[string][]networkRuleSavedFragment{},
+		calls:        map[string]*activeNetworkApprovalCall{},
+		executions:   map[string]*activeNetworkApprovalCall{},
 	}
 }
 
@@ -203,6 +216,16 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 	s.pending[pendingKey] = pending
 	s.mu.Unlock()
 
+	// Rust #58351: only the visible manual prompt is serialized per endpoint;
+	// hook and Guardian decisions proceed independently. The gate keeps this
+	// execution's tool result paused while it waits.
+	promptGate := &networkApprovalPromptGate{
+		service: s, router: s.router, ctx: approvalCtx,
+		key: key, pendingKey: pendingKey, pending: pending,
+		threadID: active.threadID, turnID: active.turnID, ownerCall: ownerCall,
+	}
+	defer promptGate.release()
+
 	// Cancelling the owning execution resolves a pending review as denied. A
 	// review result that is already accepted wins this race, which is why the
 	// execution watcher only cancels the approval context instead of publishing
@@ -211,7 +234,7 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 	if ownerCall != nil && ownerCall.executionCtx != nil {
 		stopExecutionWatch = context.AfterFunc(ownerCall.executionCtx, approvalCancel)
 	}
-	decision, cache := s.requestApproval(approvalCtx, active, key, request, ownerCall)
+	decision, cache := s.requestApproval(approvalCtx, active, key, request, ownerCall, promptGate)
 	if stopExecutionWatch != nil {
 		stopExecutionWatch()
 	}
@@ -237,7 +260,126 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 	return decision
 }
 
-func (s *networkApprovalService) requestApproval(ctx context.Context, active *networkApprovalTurn, key networkApprovalKey, request network.ProxyPolicyRequest, ownerCall *activeNetworkApprovalCall) (network.ProxyDecision, NetworkPolicyRuleAction) {
+// acquirePromptQueue takes the endpoint's manual-prompt permit, calling
+// onQueued when another execution already holds it. The returned release must
+// run after this execution commits or abandons its own decision so the next
+// waiter observes the committed session policy.
+func (s *networkApprovalService) acquirePromptQueue(ctx context.Context, key networkApprovalKey, onQueued func()) (func(), error) {
+	s.mu.Lock()
+	queue := s.promptQueues[key]
+	if queue == nil {
+		queue = &networkApprovalPromptQueue{permits: make(chan struct{}, 1)}
+		queue.permits <- struct{}{}
+		s.promptQueues[key] = queue
+	}
+	queue.refs++
+	select {
+	case <-queue.permits:
+		s.mu.Unlock()
+		return func() { s.releasePromptQueue(key, queue) }, nil
+	default:
+	}
+	s.mu.Unlock()
+	if onQueued != nil {
+		onQueued()
+	}
+	select {
+	case <-queue.permits:
+		return func() { s.releasePromptQueue(key, queue) }, nil
+	case <-ctx.Done():
+		s.releasePromptQueue(key, queue)
+		return nil, ctx.Err()
+	}
+}
+
+func (s *networkApprovalService) releasePromptQueue(key networkApprovalKey, queue *networkApprovalPromptQueue) {
+	if queue == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case queue.permits <- struct{}{}:
+	default:
+	}
+	queue.refs--
+	if queue.refs <= 0 && s.promptQueues[key] == queue {
+		delete(s.promptQueues, key)
+	}
+}
+
+// networkApprovalPromptGate serializes the visible manual prompt for one
+// endpoint (Rust #58351). It is created per execution and released when the
+// execution commits or abandons its decision, so the next waiter observes the
+// committed session policy.
+type networkApprovalPromptGate struct {
+	service    *networkApprovalService
+	router     *RuntimeRouter
+	ctx        context.Context
+	key        networkApprovalKey
+	pendingKey pendingNetworkApprovalKey
+	pending    *pendingNetworkApproval
+	threadID   string
+	turnID     string
+	ownerCall  *activeNetworkApprovalCall
+	queuedWait *tooltiming.BlockingGuard
+	releaseFn  func()
+}
+
+// acquire waits for the endpoint's prompt permit. It reports a decision when
+// the execution no longer needs its own prompt: it was cancelled while queued,
+// or a session grant/deny rule committed while it waited.
+func (g *networkApprovalPromptGate) acquire() (network.ProxyDecision, bool) {
+	if g == nil || g.service == nil {
+		return network.ProxyDecision{}, false
+	}
+	release, err := g.service.acquirePromptQueue(g.ctx, g.key, func() {
+		g.queuedWait = g.router.startUserWaitTiming(g.threadID, g.turnID,
+			g.router.userWaitTimingOwner(g.threadID, g.turnID, networkApprovalTimingCallID(g.ownerCall)))
+	})
+	if err != nil {
+		g.release()
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed), true
+	}
+	g.releaseFn = release
+	s := g.service
+	s.mu.Lock()
+	if s.pending[g.pendingKey] != g.pending {
+		decision := g.pending.decision
+		s.mu.Unlock()
+		return decision, true
+	}
+	var decision network.ProxyDecision
+	decided := false
+	if _, ok := s.denied[g.key]; ok {
+		decision = network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+		decided = true
+	} else if _, ok := s.allowed[g.key]; ok {
+		decision = network.AllowProxyDecision()
+		decided = true
+	}
+	s.mu.Unlock()
+	if decided && !decision.Allow {
+		s.recordUserDenialForThread(g.threadID)
+	}
+	return decision, decided
+}
+
+// release ends the queued-wait timing and returns the endpoint permit after the
+// execution committed its decision.
+func (g *networkApprovalPromptGate) release() {
+	if g == nil {
+		return
+	}
+	g.queuedWait.End()
+	if g.releaseFn != nil {
+		release := g.releaseFn
+		g.releaseFn = nil
+		release()
+	}
+}
+
+func (s *networkApprovalService) requestApproval(ctx context.Context, active *networkApprovalTurn, key networkApprovalKey, request network.ProxyPolicyRequest, ownerCall *activeNetworkApprovalCall, promptGate *networkApprovalPromptGate) (network.ProxyDecision, NetworkPolicyRuleAction) {
 	if ownerCall != nil && ownerCall.isCancelled() {
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 	}
@@ -281,6 +423,9 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 	}
 	if s.routesApprovalToGuardian(active) {
 		return s.requestGuardianApproval(ctx, active, request, protocol, target, ownerCall), ""
+	}
+	if decision, decided := promptGate.acquire(); decided {
+		return decision, ""
 	}
 	environmentID := key.environmentID
 	// Rust #56154: a review-domain host may be allowlisted, so the prompt must
