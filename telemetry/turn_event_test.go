@@ -913,6 +913,7 @@ func TestCodexImageGenerationEventSerializesExpectedRustShape(t *testing.T) {
 		RevisedPromptPresent:  true,
 		SavedPathPresent:      true,
 		TransparentBackground: &transparent,
+		GenerationID:          stringPtrTelemetry("gen-image-123"),
 	})
 
 	var got map[string]any
@@ -926,7 +927,8 @@ func TestCodexImageGenerationEventSerializesExpectedRustShape(t *testing.T) {
 		params["failure_kind"] != "tool_error" ||
 		params["revised_prompt_present"] != true ||
 		params["saved_path_present"] != true ||
-		params["transparent_background"] != true {
+		params["transparent_background"] != true ||
+		params["generation_id"] != "gen-image-123" {
 		t.Fatalf("image generation event JSON = %#v", got)
 	}
 

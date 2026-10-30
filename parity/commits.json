@@ -9897,9 +9897,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Repository-only cleanup: the Go tree has no .devcontainer directory or Dependabot devcontainer entry to remove"
    ]
   },
   {
@@ -10089,9 +10089,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "telemetry/command_execution_event.go carries GenerationID on CodexImageGenerationEventParams and appserver/remaining_tool_item_analytics.go reads generationId from the item; turn/image_generation.go already parses and stores the backend id"
    ]
   },
   {

@@ -21073,6 +21073,7 @@ func TestRuntimeRouterCollabAndImageToolAnalyticsLikeRust(t *testing.T) {
 			"status":        "failed",
 			"revisedPrompt": "a sharper prompt",
 			"savedPath":     filepath.Join(home, "generated.png"),
+			"generationId":  "gen-image-123",
 			"startedAtMs":   startedAtMS,
 			"completedAtMs": completedAtMS,
 		},
@@ -21094,6 +21095,9 @@ func TestRuntimeRouterCollabAndImageToolAnalyticsLikeRust(t *testing.T) {
 	}
 	if imageParams.ImagegenRequestID == nil || *imageParams.ImagegenRequestID != "req-imagegen-failed-123" {
 		t.Fatalf("imagegen_request_id = %#v", imageParams.ImagegenRequestID)
+	}
+	if imageParams.GenerationID == nil || *imageParams.GenerationID != "gen-image-123" {
+		t.Fatalf("generation_id = %#v", imageParams.GenerationID)
 	}
 	if imageParams.StartedAtMS != uint64(startedAtMS) ||
 		imageParams.CompletedAtMS != uint64(completedAtMS) ||

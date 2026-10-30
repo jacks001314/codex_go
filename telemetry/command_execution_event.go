@@ -250,6 +250,9 @@ type CodexImageGenerationEventParams struct {
 	// TransparentBackground mirrors Rust #40544: the optional image-generation
 	// transparent-background value is carried in the Analytics event params.
 	TransparentBackground *bool `json:"transparent_background,omitempty"`
+	// GenerationID mirrors Rust #43953: the selected image's backend generation
+	// id is analytics-only and omitted when the response carried none.
+	GenerationID *string `json:"generation_id,omitempty"`
 }
 
 func NewCodexCommandExecutionEvent(params CodexCommandExecutionEventParams) CodexCommandExecutionEventRequest {
