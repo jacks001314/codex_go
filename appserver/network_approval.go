@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -35,6 +36,9 @@ type pendingNetworkApproval struct {
 	connectionID string
 	cancel       context.CancelFunc
 	startedAt    time.Time
+	// persistent records that the approval belongs to a process that outlives
+	// the tool call, so turn cleanup must not resolve it (Rust #44575).
+	persistent bool
 }
 
 type pendingNetworkApprovalKey struct {
@@ -52,6 +56,9 @@ type networkApprovalService struct {
 	saved   map[string][]networkRuleSavedFragment
 	callsMu sync.Mutex
 	calls   map[string]*activeNetworkApprovalCall
+	// executions keeps the originating execution snapshot and cancellation
+	// token for processes that outlive their launching tool call (Rust #44575).
+	executions map[string]*activeNetworkApprovalCall
 }
 
 type activeNetworkApprovalCall struct {
@@ -62,6 +69,17 @@ type activeNetworkApprovalCall struct {
 	trigger       *guardianNetworkAccessTrigger
 	cancel        context.CancelCauseFunc
 	outcome       string
+	persistent    bool
+	// executionCtx is canceled when this execution ends. It is independent of
+	// the tool-call context so a background process keeps reviewing after its
+	// launching call and turn complete.
+	executionCtx    context.Context
+	executionCancel context.CancelCauseFunc
+	origin          *guardianReviewOrigin
+}
+
+func (c *activeNetworkApprovalCall) isCancelled() bool {
+	return c != nil && c.executionCtx != nil && c.executionCtx.Err() != nil
 }
 
 type guardianNetworkAccessTrigger struct {
@@ -90,12 +108,13 @@ type networkApprovalTurn struct {
 
 func newNetworkApprovalService(router *RuntimeRouter) *networkApprovalService {
 	return &networkApprovalService{
-		router:  router,
-		pending: map[pendingNetworkApprovalKey]*pendingNetworkApproval{},
-		allowed: map[networkApprovalKey]struct{}{},
-		denied:  map[networkApprovalKey]struct{}{},
-		saved:   map[string][]networkRuleSavedFragment{},
-		calls:   map[string]*activeNetworkApprovalCall{},
+		router:     router,
+		pending:    map[pendingNetworkApprovalKey]*pendingNetworkApproval{},
+		allowed:    map[networkApprovalKey]struct{}{},
+		denied:     map[networkApprovalKey]struct{}{},
+		saved:      map[string][]networkRuleSavedFragment{},
+		calls:      map[string]*activeNetworkApprovalCall{},
+		executions: map[string]*activeNetworkApprovalCall{},
 	}
 }
 
@@ -115,6 +134,12 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 		ctx = context.Background()
 	}
 	active := s.router.activeTurnForNetworkApprovalThread(threadID, request.EnvironmentID)
+	if active == nil && strings.TrimSpace(request.ExecutionID) != "" {
+		// An owned process keeps its environment even when the active turn
+		// selects a different one; review settings still come from that turn
+		// (Rust #44575).
+		active = s.router.activeTurnForNetworkApprovalThread(threadID, "")
+	}
 	if active == nil {
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 	}
@@ -132,7 +157,17 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 	if strings.TrimSpace(request.ExecutionID) != "" && ownerCall == nil {
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 	}
-	pendingKey := pendingNetworkApprovalKey{networkApprovalKey: key, turnID: active.turnID}
+	// Rust #44575 denies a request from an execution that has already ended
+	// before consulting the session host grants: a late proxy callback must not
+	// resurrect a cancelled process from an earlier approval.
+	if ownerCall != nil && ownerCall.isCancelled() {
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+	}
+	ownerTurnID := active.turnID
+	if ownerCall != nil && strings.TrimSpace(ownerCall.turnID) != "" {
+		ownerTurnID = ownerCall.turnID
+	}
+	pendingKey := pendingNetworkApprovalKey{networkApprovalKey: key, turnID: ownerTurnID}
 	if ownerCall != nil {
 		pendingKey.callID = ownerCall.callID
 	}
@@ -159,15 +194,27 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 	approvalCtx, approvalCancel := context.WithCancel(ctx)
 	pending := &pendingNetworkApproval{
 		done:         make(chan struct{}),
-		turnID:       active.turnID,
+		turnID:       ownerTurnID,
 		connectionID: active.connectionID,
 		cancel:       approvalCancel,
 		startedAt:    time.Now(),
+		persistent:   ownerCall != nil && ownerCall.persistent,
 	}
 	s.pending[pendingKey] = pending
 	s.mu.Unlock()
 
+	// Cancelling the owning execution resolves a pending review as denied. A
+	// review result that is already accepted wins this race, which is why the
+	// execution watcher only cancels the approval context instead of publishing
+	// a denial itself (Rust #44575 run_until_cancelled).
+	var stopExecutionWatch func() bool
+	if ownerCall != nil && ownerCall.executionCtx != nil {
+		stopExecutionWatch = context.AfterFunc(ownerCall.executionCtx, approvalCancel)
+	}
 	decision, cache := s.requestApproval(approvalCtx, active, key, request, ownerCall)
+	if stopExecutionWatch != nil {
+		stopExecutionWatch()
+	}
 	approvalCancel()
 	s.mu.Lock()
 	if s.pending[pendingKey] != pending {
@@ -191,6 +238,9 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 }
 
 func (s *networkApprovalService) requestApproval(ctx context.Context, active *networkApprovalTurn, key networkApprovalKey, request network.ProxyPolicyRequest, ownerCall *activeNetworkApprovalCall) (network.ProxyDecision, NetworkPolicyRuleAction) {
+	if ownerCall != nil && ownerCall.isCancelled() {
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
+	}
 	protocol := networkApprovalProtocol(request.Protocol)
 	target := networkApprovalTarget(request.Protocol, request.Host, request.Port)
 	// Rust #57207: a network approval has its own display identity, while the
@@ -237,6 +287,12 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 	// not claim the host is missing from the allowlist.
 	reason := fmt.Sprintf("Network access to %s requires approval", request.Host)
 	command := "network-access " + target
+	approvalCWD := firstNonEmpty(turnCWD(active.params), s.router.services.DefaultCWD)
+	if ownerCall != nil && ownerCall.trigger != nil {
+		// Rust #44575 keeps the originating execution's working directory even
+		// when a later turn's cwd has changed.
+		approvalCWD = firstNonEmpty(strings.TrimSpace(ownerCall.trigger.CWD), approvalCWD)
+	}
 	params := &CommandExecutionRequestApprovalParams{
 		ThreadID:               active.threadID,
 		TurnID:                 active.turnID,
@@ -246,7 +302,7 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 		Reason:                 &reason,
 		NetworkApprovalContext: &NetworkApprovalContext{Host: request.Host, Protocol: protocol},
 		Command:                &command,
-		CWD:                    stringPtrIfNotEmpty(firstNonEmpty(turnCWD(active.params), s.router.services.DefaultCWD)),
+		CWD:                    stringPtrIfNotEmpty(approvalCWD),
 		ProposedNetworkPolicyAmendments: []map[string]any{
 			{"host": request.Host, "action": string(NetworkPolicyRuleAllow)},
 			{"host": request.Host, "action": string(NetworkPolicyRuleDeny)},
@@ -257,6 +313,11 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 	var response CommandExecutionRequestApprovalResponse
 	err := s.router.requireServerRequests().RequestToConnection(ctx, active.connectionID, ServerRequestCommandExecutionApproval, params, &response)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Execution cancellation interrupted a pending review without a
+			// user decision; it is not a new denial (Rust #44575).
+			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
+		}
 		// Rust: a failed approval request reports denied("network approval failed").
 		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
 			telemetry.ToolDecisionDenied, "")
@@ -334,6 +395,7 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 		Target:        target,
 	}
 	if ownerCall != nil && ownerCall.trigger != nil {
+		action.CWD = strings.TrimSpace(ownerCall.trigger.CWD)
 		action.Extra = map[string]any{"trigger": *ownerCall.trigger}
 	}
 	if reviewer == nil {
@@ -345,11 +407,22 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 	// Rust #57207: the review's display identity stays empty, while its
 	// critical-path owner is the triggering tool call.
 	reviewCtx := withGuardianTimingCallID(ctx, networkApprovalTimingCallID(ownerCall))
+	if ownerCall != nil {
+		reviewCtx = withGuardianReviewOrigin(reviewCtx, ownerCall.origin)
+	}
+	if reviewCtx.Err() != nil {
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+	}
 	decision, reason, err := reviewer.Review(reviewCtx, active.threadID, active.turnID, "", action)
 	if err == nil && decision == state.DecisionApproved {
 		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
 			telemetry.ToolDecisionApproved, "")
 		return network.AllowProxyDecision()
+	}
+	if reviewCtx.Err() != nil {
+		// A ready approval wins the race inside Review; otherwise cancellation
+		// resolves the pending review as denied without inventing a rejection.
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" && err != nil {
@@ -426,15 +499,145 @@ func networkApprovalUserDecision(decision any, amendmentApplied bool, amendmentA
 }
 
 func (s *networkApprovalService) registerActiveCall(threadID string, turnID string, invocation *tool.Invocation) {
+	s.registerActiveCallWithContext(nil, threadID, turnID, invocation)
+}
+
+// registerActiveCallWithContext records the execution that owns a network
+// approval. toolCtx is the invocation context: once the tool call ends it
+// cancels the execution unless the process has been marked as outliving it.
+func (s *networkApprovalService) registerActiveCallWithContext(ctx context.Context, threadID string, turnID string, invocation *tool.Invocation) {
 	if s == nil || invocation == nil || !isNetworkApprovalCommandInvocation(invocation) {
 		return
 	}
 	callID := firstNonEmpty(strings.TrimSpace(invocation.CallID), invocation.ToolName.Key())
 	key := networkApprovalCallKey(threadID, turnID, callID)
 	environmentID, trigger := s.guardianTriggerForInvocation(threadID, invocation)
+	executionCtx, executionCancel := context.WithCancelCause(context.Background())
+	call := &activeNetworkApprovalCall{
+		threadID:        threadID,
+		turnID:          turnID,
+		callID:          callID,
+		environmentID:   environmentID,
+		trigger:         trigger,
+		cancel:          invocation.Cancel,
+		executionCtx:    executionCtx,
+		executionCancel: executionCancel,
+		origin:          s.guardianReviewOriginForInvocation(threadID, turnID, environmentID, trigger),
+	}
+	if ctx != nil {
+		context.AfterFunc(ctx, func() {
+			s.cancelExecutionIfNotPersistent(call, context.Cause(ctx))
+		})
+	}
 	s.callsMu.Lock()
-	s.calls[key] = &activeNetworkApprovalCall{threadID: threadID, turnID: turnID, callID: callID, environmentID: environmentID, trigger: trigger, cancel: invocation.Cancel}
+	s.calls[key] = call
 	s.callsMu.Unlock()
+}
+
+func (s *networkApprovalService) guardianReviewOriginForInvocation(threadID string, turnID string, environmentID string, trigger *guardianNetworkAccessTrigger) *guardianReviewOrigin {
+	if s == nil || s.router == nil {
+		return nil
+	}
+	origin := &guardianReviewOrigin{EnvironmentID: strings.TrimSpace(environmentID)}
+	if params := s.router.activeTurnParams(threadID); params != nil {
+		origin.Environments = cloneMapSlice(params.Environments)
+	}
+	if trigger != nil {
+		origin.CWD = strings.TrimSpace(trigger.CWD)
+	}
+	if profile, cwd, resolvedID := s.router.guardianTurnPermissionProfileForTurn(threadID, turnID, environmentID); profile != nil {
+		origin.PermissionProfile = profile
+		if origin.CWD == "" && strings.TrimSpace(cwd) != "" {
+			origin.CWD = strings.TrimSpace(cwd)
+		}
+		if resolvedID != nil && strings.TrimSpace(*resolvedID) != "" {
+			origin.EnvironmentID = strings.TrimSpace(*resolvedID)
+		}
+	}
+	return origin
+}
+
+func networkApprovalExecutionKey(threadID string, callID string) string {
+	return networkApprovalCallKey(threadID, "", callID)
+}
+
+// markExecutionPersistent detaches an execution from its launching tool call.
+// Unified exec processes can outlive the call and turn that started them, so
+// their environment snapshot and cancellation stay registered until the
+// process reports that it exited (Rust #44575).
+func (s *networkApprovalService) markExecutionPersistent(threadID string, turnID string, callID string) {
+	if s == nil {
+		return
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return
+	}
+	key := networkApprovalCallKey(threadID, turnID, callID)
+	s.callsMu.Lock()
+	call := s.calls[key]
+	if call == nil {
+		s.callsMu.Unlock()
+		return
+	}
+	call.persistent = true
+	// Detach unconditionally: a tool-context cancellation racing with this
+	// transition must not cancel the process-owned token.
+	call.executionCtx, call.executionCancel = context.WithCancelCause(context.Background())
+	executionKey := networkApprovalExecutionKey(threadID, callID)
+	s.executions[executionKey] = call
+	s.callsMu.Unlock()
+	s.mu.Lock()
+	for pendingKey, pending := range s.pending {
+		if pending != nil && pendingKey.callID == callID && pendingKey.threadID == strings.TrimSpace(threadID) {
+			pending.persistent = true
+		}
+	}
+	s.mu.Unlock()
+}
+
+// finishExecution retires an execution that outlived its tool call. It cancels
+// the execution token so an in-flight review resolves as denied, and drops the
+// snapshot so a late proxy callback cannot reuse it.
+func (s *networkApprovalService) finishExecution(threadID string, callID string, reason string) {
+	if s == nil {
+		return
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return
+	}
+	key := networkApprovalExecutionKey(threadID, callID)
+	s.callsMu.Lock()
+	call := s.executions[key]
+	delete(s.executions, key)
+	s.callsMu.Unlock()
+	if call == nil || call.executionCancel == nil {
+		return
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "execution finished"
+	}
+	call.executionCancel(errors.New(reason))
+}
+
+func (s *networkApprovalService) cancelExecutionIfNotPersistent(call *activeNetworkApprovalCall, cause error) {
+	if s == nil || call == nil {
+		return
+	}
+	s.callsMu.Lock()
+	persistent := call.persistent
+	cancel := call.executionCancel
+	s.callsMu.Unlock()
+	if persistent {
+		return
+	}
+	if cancel != nil {
+		if cause == nil {
+			cause = errors.New("execution finished")
+		}
+		cancel(cause)
+	}
 }
 
 func (s *networkApprovalService) guardianTriggerForInvocation(threadID string, invocation *tool.Invocation) (string, *guardianNetworkAccessTrigger) {
@@ -499,21 +702,51 @@ func (s *networkApprovalService) activeCallForApproval(active *networkApprovalTu
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
 	if executionID != "" {
-		call := s.calls[networkApprovalCallKey(active.threadID, active.turnID, executionID)]
-		if call != nil && firstNonEmpty(strings.TrimSpace(call.environmentID), "local") == environmentID {
-			return call
+		// The execution ID names a process, not the turn that is active now: a
+		// background process reports under a later turn but keeps the snapshot
+		// captured when it started (Rust #44575).
+		for _, call := range s.calls {
+			if call == nil || call.threadID != active.threadID || call.callID != executionID {
+				continue
+			}
+			if firstNonEmpty(strings.TrimSpace(call.environmentID), "local") == environmentID {
+				return call
+			}
+		}
+		if call := s.executions[networkApprovalExecutionKey(active.threadID, executionID)]; call != nil {
+			if firstNonEmpty(strings.TrimSpace(call.environmentID), "local") == environmentID {
+				return call
+			}
 		}
 		return nil
 	}
 	var selected *activeNetworkApprovalCall
+	matches := 0
+	consider := func(call *activeNetworkApprovalCall) {
+		if call == nil || call.threadID != active.threadID || firstNonEmpty(strings.TrimSpace(call.environmentID), "local") != environmentID {
+			return
+		}
+		matches++
+		if matches == 1 {
+			selected = call
+		}
+	}
 	for _, call := range s.calls {
-		if call == nil || call.threadID != active.threadID || call.turnID != active.turnID || firstNonEmpty(strings.TrimSpace(call.environmentID), "local") != environmentID {
+		if call == nil || call.turnID != active.turnID {
 			continue
 		}
-		if selected != nil {
-			return nil
+		consider(call)
+	}
+	if matches == 0 {
+		for _, call := range s.executions {
+			if call == nil || call.turnID != active.turnID {
+				continue
+			}
+			consider(call)
 		}
-		selected = call
+	}
+	if matches > 1 {
+		return nil
 	}
 	return selected
 }
@@ -529,6 +762,10 @@ func (s *networkApprovalService) recordGuardianOutcome(call *activeNetworkApprov
 	// recorded outcome for the execution instead of keeping the first one.
 	if active := s.calls[key]; active == call {
 		active.outcome = message
+		return
+	}
+	if active := s.executions[networkApprovalExecutionKey(call.threadID, call.callID)]; active == call {
+		active.outcome = message
 	}
 }
 
@@ -541,7 +778,14 @@ func (s *networkApprovalService) finishActiveCall(threadID string, turnID string
 	s.callsMu.Lock()
 	call := s.calls[key]
 	delete(s.calls, key)
+	cancelExecution := call != nil && !call.persistent
+	if call != nil && !call.persistent {
+		delete(s.executions, networkApprovalExecutionKey(threadID, callID))
+	}
 	s.callsMu.Unlock()
+	if cancelExecution && call.executionCancel != nil {
+		call.executionCancel(errors.New("execution finished"))
+	}
 	if call == nil {
 		return ""
 	}
@@ -552,12 +796,43 @@ func (s *networkApprovalService) clearActiveCallsForTurn(threadID string, turnID
 	if s == nil {
 		return
 	}
+	var cancels []context.CancelCauseFunc
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
 	for key, call := range s.calls {
 		if call.threadID == threadID && (turnID == "" || call.turnID == turnID) {
 			delete(s.calls, key)
+			// Persistent executions belong to their process, not the turn;
+			// they stay registered until the process exits (Rust #44575).
+			if !call.persistent && call.executionCancel != nil {
+				cancels = append(cancels, call.executionCancel)
+			}
 		}
+	}
+	for _, cancel := range cancels {
+		cancel(errors.New("turn finished"))
+	}
+}
+
+func (s *networkApprovalService) clearExecutionsForThread(threadID string) {
+	if s == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	var cancels []context.CancelCauseFunc
+	s.callsMu.Lock()
+	for key, call := range s.executions {
+		if call == nil || call.threadID != threadID {
+			continue
+		}
+		delete(s.executions, key)
+		if call.executionCancel != nil {
+			cancels = append(cancels, call.executionCancel)
+		}
+	}
+	s.callsMu.Unlock()
+	for _, cancel := range cancels {
+		cancel(errors.New("thread closed"))
 	}
 }
 
@@ -568,6 +843,9 @@ func (s *networkApprovalService) cancelPendingForTurn(threadID string, turnID st
 		return
 	}
 	s.cancelPending(func(key networkApprovalKey, pending *pendingNetworkApproval) bool {
+		if pending.persistent && turnID != "" {
+			return false
+		}
 		return key.threadID == threadID && (turnID == "" || pending.turnID == turnID)
 	})
 }
@@ -616,11 +894,27 @@ func (s *networkApprovalService) recordDisconnectOutcomeForConnection(connection
 	s.mu.Unlock()
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
+	seen := map[*activeNetworkApprovalCall]struct{}{}
 	for _, call := range s.calls {
-		if call == nil || call.outcome != "" {
+		if call == nil {
+			continue
+		}
+		seen[call] = struct{}{}
+		if call.outcome != "" {
 			continue
 		}
 		if _, ok := turns[call.turnID]; ok {
+			call.outcome = message
+		}
+	}
+	for _, call := range s.executions {
+		if call == nil {
+			continue
+		}
+		if _, ok := seen[call]; ok {
+			continue
+		}
+		if _, ok := turns[call.turnID]; ok && call.outcome == "" {
 			call.outcome = message
 		}
 	}
@@ -677,6 +971,7 @@ func (s *networkApprovalService) clearThread(threadID string) {
 	}
 	s.mu.Unlock()
 	s.clearActiveCallsForTurn(threadID, "")
+	s.clearExecutionsForThread(threadID)
 }
 
 func (s *networkApprovalService) recordUserDenialForThread(threadID string) {
@@ -685,16 +980,7 @@ func (s *networkApprovalService) recordUserDenialForThread(threadID string) {
 	}
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
-	var selected *activeNetworkApprovalCall
-	for _, call := range s.calls {
-		if threadID != "" && call.threadID != threadID {
-			continue
-		}
-		if selected != nil {
-			return
-		}
-		selected = call
-	}
+	selected := s.singleActiveCallLocked(threadID)
 	if selected != nil {
 		selected.outcome = "rejected by user"
 	}
@@ -706,19 +992,44 @@ func (s *networkApprovalService) recordPolicyDenialForThread(threadID string, me
 	}
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
-	var selected *activeNetworkApprovalCall
-	for _, call := range s.calls {
-		if threadID != "" && call.threadID != threadID {
-			continue
-		}
-		if selected != nil {
-			return
-		}
-		selected = call
-	}
+	selected := s.singleActiveCallLocked(threadID)
 	if selected != nil {
 		selected.outcome = message
 	}
+}
+
+// singleActiveCallLocked resolves the one execution a thread-scoped blocked
+// request or denial belongs to. Background executions stay in the registry
+// after their tool call completes, and the same call object may be present in
+// both maps, so pointers are counted once. Ambiguity resolves to no owner.
+func (s *networkApprovalService) singleActiveCallLocked(threadID string) *activeNetworkApprovalCall {
+	threadID = strings.TrimSpace(threadID)
+	seen := map[*activeNetworkApprovalCall]struct{}{}
+	var selected *activeNetworkApprovalCall
+	matches := 0
+	consider := func(call *activeNetworkApprovalCall) {
+		if call == nil || (threadID != "" && call.threadID != threadID) {
+			return
+		}
+		if _, ok := seen[call]; ok {
+			return
+		}
+		seen[call] = struct{}{}
+		matches++
+		if matches == 1 {
+			selected = call
+		}
+	}
+	for _, call := range s.calls {
+		consider(call)
+	}
+	for _, call := range s.executions {
+		consider(call)
+	}
+	if matches != 1 {
+		return nil
+	}
+	return selected
 }
 
 func (s *networkApprovalService) OnBlockedRequest(_ context.Context, blocked network.ProxyBlockedRequest) {
@@ -734,17 +1045,7 @@ func (s *networkApprovalService) onBlockedRequestForThread(threadID string, bloc
 		return
 	}
 	s.callsMu.Lock()
-	var call *activeNetworkApprovalCall
-	for _, active := range s.calls {
-		if threadID != "" && active.threadID != threadID {
-			continue
-		}
-		if call != nil {
-			s.callsMu.Unlock()
-			return
-		}
-		call = active
-	}
+	call := s.singleActiveCallLocked(threadID)
 	if call == nil {
 		s.callsMu.Unlock()
 		return

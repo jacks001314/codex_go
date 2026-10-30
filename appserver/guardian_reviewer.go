@@ -62,6 +62,66 @@ func guardianTimingCallIDFromContext(ctx context.Context) (string, bool) {
 	return callID, true
 }
 
+// guardianReviewOrigin carries the environment snapshot of the execution that
+// asked for a review (Rust #44575 GuardianReviewContext::environments). Review
+// settings stay those of the current turn; only the environment the reviewed
+// process started in comes from its owner.
+type guardianReviewOrigin struct {
+	Environments      []map[string]any
+	CWD               string
+	EnvironmentID     string
+	PermissionProfile *sandbox.PermissionProfile
+}
+
+type guardianReviewOriginKey struct{}
+
+func withGuardianReviewOrigin(ctx context.Context, origin *guardianReviewOrigin) context.Context {
+	if origin == nil || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, guardianReviewOriginKey{}, origin)
+}
+
+func guardianReviewOriginFromContext(ctx context.Context) *guardianReviewOrigin {
+	if ctx == nil {
+		return nil
+	}
+	origin, _ := ctx.Value(guardianReviewOriginKey{}).(*guardianReviewOrigin)
+	return origin
+}
+
+// guardianReviewPlanWithOrigin keeps the current review settings and swaps only
+// the environment state the reviewer is prepared against. Rust #44575 reviews a
+// background execution in the environments it started with even when the
+// current turn selects different ones.
+func guardianReviewPlanWithOrigin(plan guardianReviewPlan, origin *guardianReviewOrigin) guardianReviewPlan {
+	if origin == nil {
+		return plan
+	}
+	if plan.PrepareInput.ParentConfig != nil {
+		input := plan.PrepareInput
+		input.ParentEnvironments = cloneMapSlice(origin.Environments)
+		if origin.PermissionProfile != nil {
+			input.ParentPermissionProfile = origin.PermissionProfile
+		}
+		prepared, err := guardianPrepareReviewerOptions(input)
+		if err != nil {
+			plan.Prepared = nil
+			plan.PreparedError = err.Error()
+		} else {
+			plan.Prepared = prepared
+			plan.PreparedError = ""
+		}
+		return plan
+	}
+	if origin.PermissionProfile != nil && plan.Prepared != nil {
+		prepared := *plan.Prepared
+		prepared.PermissionProfile = guardianReviewerReadOnlyProfile(origin.PermissionProfile)
+		plan.Prepared = &prepared
+	}
+	return plan
+}
+
 type modelGuardianReviewer struct {
 	agent         model.AgentRunner
 	store         *state.ReviewStore
@@ -140,7 +200,10 @@ type modelGuardianReviewer struct {
 	// exhausted under the review model's defaults (Rust #41221).
 	rolloverForTokenBudget func(threadID, turnID string) bool
 	environment            func(context.Context, string, string) ([]any, error)
-	permissionProfile      func(threadID, turnID string) *sandbox.PermissionProfile
+	// environmentForOrigin renders the world-state items from an execution's
+	// captured environment snapshot instead of the current turn's selections.
+	environmentForOrigin func(context.Context, string, string, *guardianReviewOrigin) ([]any, error)
+	permissionProfile    func(threadID, turnID string) *sandbox.PermissionProfile
 	// turnPermissionProfile resolves the reviewed turn's own profile and cwd for
 	// the permission evidence, which is distinct from the read-only profile the
 	// reviewer's session uses, plus the reviewed environment's selection id when
@@ -921,6 +984,8 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	reviewCtx, cancel := guardianReviewContext(ctx, timeout)
 	defer cancel()
 	plan := r.planForTurn(threadID, turnID)
+	reviewOrigin := guardianReviewOriginFromContext(reviewCtx)
+	plan = guardianReviewPlanWithOrigin(plan, reviewOrigin)
 	// Rust #40742 fails the decision closed when the reviewer session cannot be
 	// prepared (for example an environment whose permissions are still pending).
 	if plan.PreparedError != "" {
@@ -1040,7 +1105,19 @@ reviewAttempt:
 	// profile supplies the denied read paths and globs the reviewer must not
 	// approve an escalation to read (core/src/guardian/permissions.rs).
 	var permissionContext *state.PermissionContext
-	if r.turnPermissionProfile != nil {
+	if reviewOrigin != nil && reviewOrigin.PermissionProfile != nil {
+		deniedPaths := sandbox.UnreadableRootsWithCWD(reviewOrigin.PermissionProfile, reviewOrigin.CWD)
+		deniedGlobs := sandbox.UnreadableGlobsWithCWD(reviewOrigin.PermissionProfile, reviewOrigin.CWD)
+		var environmentID *string
+		if id := strings.TrimSpace(reviewOrigin.EnvironmentID); id != "" {
+			environmentID = &id
+		}
+		permissionContext = &state.PermissionContext{
+			EnvironmentID: environmentID,
+			DeniedPaths:   deniedPaths,
+			DeniedGlobs:   deniedGlobs,
+		}
+	} else if r.turnPermissionProfile != nil {
 		if profile, cwd, environmentID := r.turnPermissionProfile(threadID, turnID, strings.TrimSpace(action.EnvironmentID)); profile != nil {
 			deniedPaths := sandbox.UnreadableRootsWithCWD(profile, cwd)
 			deniedGlobs := sandbox.UnreadableGlobsWithCWD(profile, cwd)
@@ -1096,9 +1173,15 @@ reviewAttempt:
 		}
 	}
 	var environmentItems []any
-	if r.environment != nil {
+	environmentSource := r.environment
+	if reviewOrigin != nil && r.environmentForOrigin != nil {
+		environmentSource = func(ctx context.Context, threadID string, turnID string) ([]any, error) {
+			return r.environmentForOrigin(ctx, threadID, turnID, reviewOrigin)
+		}
+	}
+	if environmentSource != nil {
 		var environmentErr error
-		environmentItems, environmentErr = r.environment(reviewCtx, threadID, turnID)
+		environmentItems, environmentErr = environmentSource(reviewCtx, threadID, turnID)
 		err = environmentErr
 		if err != nil {
 			rationale := guardianReviewFailureRationale(err.Error())

@@ -2911,7 +2911,7 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 		}
 		r.recordGuardianToolStart(threadID, invocation)
 		if r.networkApproval != nil {
-			r.networkApproval.registerActiveCall(threadID, turnID, invocation)
+			r.networkApproval.registerActiveCallWithContext(ctx, threadID, turnID, invocation)
 		}
 		// Rust brackets every MCP tool call with the `mcp.tools.call` span, so the
 		// trace-safe records the call emits attach to it.
@@ -3336,6 +3336,11 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 			if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.RunConfig != nil {
 				r.rememberUnifiedExecAnalytics(threadID, turnID, callID, active.ConnectionID, active.RunConfig)
 			}
+			if r.networkApproval != nil {
+				// A unified exec process can outlive this tool call and turn; keep
+				// its network-approval execution snapshot until it exits (#44575).
+				r.networkApproval.markExecutionPersistent(threadID, turnID, callID)
+			}
 			startedAt := event.StartedAt
 			if startedAt.IsZero() {
 				startedAt = time.Now()
@@ -3370,6 +3375,9 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 				Stdin:     event.Input,
 			})
 		case tool.UnifiedExecEventEnd:
+			if r.networkApproval != nil {
+				r.networkApproval.finishExecution(threadID, callID, "process exited")
+			}
 			status := CommandExecutionCompleted
 			if event.ExitCode != 0 {
 				status = CommandExecutionFailed

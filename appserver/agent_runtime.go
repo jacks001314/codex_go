@@ -155,6 +155,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		}
 		modelReviewer.installationID = r.guardianInstallationID
 		modelReviewer.environment = r.guardianEnvironmentInputItems
+		modelReviewer.environmentForOrigin = r.guardianEnvironmentInputItemsForOrigin
 		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn
 		modelReviewer.retainedContext = r.guardianRetainedContextForTurn
 		modelReviewer.conversationHistory = r.guardianConversationHistoryForTurn
@@ -373,6 +374,33 @@ func (r *RuntimeRouter) guardianEnvironmentInputItems(ctx context.Context, threa
 	return items, nil
 }
 
+// guardianEnvironmentInputItemsForOrigin renders the reviewed process's world
+// state with the environments it started in, while the review request itself
+// keeps the current turn's model settings (Rust #44575).
+func (r *RuntimeRouter) guardianEnvironmentInputItemsForOrigin(ctx context.Context, threadID, turnID string, origin *guardianReviewOrigin) ([]any, error) {
+	if origin == nil {
+		return r.guardianEnvironmentInputItems(ctx, threadID, turnID)
+	}
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return nil, nil
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil {
+		return nil, err
+	}
+	params := cloneTurnStartParams(active.Params)
+	params.Environments = cloneMapSlice(origin.Environments)
+	if cwd := strings.TrimSpace(origin.CWD); cwd != "" {
+		params.CWD = cwd
+	}
+	items, _, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, turnID, params, cfg)
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+	return items, nil
+}
+
 // guardianRetainedContextForTurn resolves the thread's retained evidence for the
 // review prompt.
 //
@@ -570,9 +598,13 @@ type guardianReviewPlan struct {
 	// the request boundary; PreparedError fails the review closed.
 	Prepared      *guardianReviewerPreparedOptions
 	PreparedError string
-	ProviderID    string
-	SessionID     string
-	Ephemeral     bool
+	// PrepareInput is the parent state the prepared options were derived from.
+	// An execution-scoped review re-prepares them with that execution's captured
+	// environments while keeping the current review settings (Rust #44575).
+	PrepareInput guardianReviewerPrepareInput
+	ProviderID   string
+	SessionID    string
+	Ephemeral    bool
 	// NodeReplPolicy is the resolved extra policy for `node_repl`/`cua_repl`
 	// reviews (Rust ResolvedAutoReviewMessages::node_repl_policy). The reviewer
 	// injects it as its own developer fragment only when the reviewed action
@@ -651,7 +683,7 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 	if active.Params != nil {
 		parentEnvironments = active.Params.Environments
 	}
-	prepared, prepareErr := guardianPrepareReviewerOptions(guardianReviewerPrepareInput{
+	prepareInput := guardianReviewerPrepareInput{
 		ParentConfig:                    cfg,
 		ParentEnvironments:              parentEnvironments,
 		ParentModel:                     parentModel,
@@ -663,7 +695,9 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 		Ephemeral:                       active.RunConfig.Ephemeral,
 		ProviderID:                      active.RunConfig.ProviderID,
 		SessionID:                       active.RunConfig.SessionID,
-	})
+	}
+	plan.PrepareInput = prepareInput
+	prepared, prepareErr := guardianPrepareReviewerOptions(prepareInput)
 	plan.ProviderID = strings.TrimSpace(active.RunConfig.ProviderID)
 	plan.SessionID = strings.TrimSpace(active.RunConfig.SessionID)
 	plan.Ephemeral = active.RunConfig.Ephemeral

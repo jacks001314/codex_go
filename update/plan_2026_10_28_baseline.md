@@ -3344,6 +3344,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions: `TestGuardianSynchronousProfileKeepsCompleteUserInstructionsLikeRust` and `TestGuardianProfilesKeepManualApprovalsCompleteLikeRust` pin profile retention; `TestGuardianReviewTranscriptAppliesPerEntryCapsLikeRust` pins complete authorization evidence beside capped assistant/tool entries; `TestGuardianShortenOldestHistoricalEvidenceLikeRust` and `TestGuardianReviewShortensOldestAuthorizationEvidenceLikeRust` pin optional-first eviction, oldest-first marked truncation, source order, later-restriction preservation, and the omission warning.
 - Verified with `go build ./...`, `go test ./state -count=1`, `go test ./appserver -run Guardian -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2194 complete`, `451 not_applicable`,
-`343 audit_pending`, `157 regression_pending`, `4 partial`,
+### Network approvals tied to their originating execution (Round 1030)
+
+- Rust #44575 captures the starting execution's environment snapshot for Guardian network reviews while continuing to resolve review settings from the current turn, and cancels a pending review when its execution ends.
+- Go now keeps an independent execution context and environment origin (selections, cwd, environment id, permission profile) on `activeNetworkApprovalCall`. Unified exec's begin event marks the execution persistent and registers it in a separate `executions` map; the process-end event cancels and removes it. Turn cleanup retains persistent executions, so a background process still resolves its owner by `ExecutionID` after its tool call and launching turn have finished.
+- An already-cancelled execution is denied before the session host-grant lookup. Execution cancellation during review only cancels the approval context, so a pending review resolves as `not_allowed` without overwriting the original call outcome; an accepted result that is already ready wins the race and keeps its session grant. Late callbacks are denied even with a grant, while a new execution reuses the accepted grant.
+- Guardian reviews keep the current turn's plan/model but render the origin execution's world state, cwd, and permission evidence; the manual approval prompt also uses the triggering execution's cwd.
+- New regressions in `appserver/network_approval_originating_execution_like_rust_test.go` cover cross-turn cwd/environment snapshots, current review settings, cancellation during review, cancellation after acceptance, late callbacks, original-outcome preservation, and grant reuse.
+- Verified with `go build ./...`, `go test ./appserver -run 'OriginatingExecution|CancellationDuringReview|AcceptedReviewSurvivesCancellation' -count=1 -race`, `go test ./appserver -run 'NetworkApproval|Network|Guardian' -count=1`, and `go test ./parity -run TestAlignment -count=1`. The full `./appserver` package still reports the same pre-existing manifest/analytics failures reproduced on clean HEAD.
+
+Status after reconciliation: `2195 complete`, `451 not_applicable`,
+`342 audit_pending`, `157 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

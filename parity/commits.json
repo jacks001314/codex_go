@@ -11431,9 +11431,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1030 (实现+回归): #44575 让网络审批绑定发起执行的 environment snapshot 与生命周期，同时保留当前 turn 的 review settings。Go 的 activeNetworkApprovalCall 现在保存独立 executionCtx/executionCancel 和 guardianReviewOrigin(环境选择、cwd、environment id、permission profile)；unified exec 的 Begin 事件把执行标记为 persistent 并登记到 executions，进程 End 事件调用 finishExecution 取消并移除它，因此后台进程可跨 tool call/turn 继续审查，turn 清理只保留 persistent 执行。activeCallForApproval 对带 ExecutionID 的请求按进程而不是当前 turn 解析 owner，迟到请求能命中原始执行快照；已取消执行在检查 session host grant 之前直接 denied。审查等待期间 execution 取消只取消 approval context，pending review 解析为 not_allowed 且不覆盖原 call outcome；已接受的 review 结果优先于并发取消并保留 session grant，迟到回调仍被拒绝，新执行可复用 grant。Guardian review 继续使用当前 turn 的 plan/model，但 origin 覆盖 world-state items、cwd 和权限证据，manual approval 的 CWD 也优先使用触发执行的 cwd。新增 appserver/network_approval_originating_execution_like_rust_test.go: 跨 turn 的原 cwd/环境快照、当前 review model、审查中取消(无 grant/无 pending/保留 outcome/迟到回答不再提示)、接受后取消保留 grant、迟到回调拒绝、新执行复用 grant。验证: go build ./...; go test ./appserver -run 'OriginatingExecution|CancellationDuringReview|AcceptedReviewSurvivesCancellation' -count=1 -race; go test ./appserver -run 'NetworkApproval|Network|Guardian' -count=1; go test ./parity -run TestAlignment -count=1。完整 ./appserver 仍有既有的 manifest/analytics 等失败，干净 HEAD 上复现一致。"
    ]
   },
   {
