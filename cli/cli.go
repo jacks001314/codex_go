@@ -577,9 +577,9 @@ type AgentsOptions struct {
 	ConfigOverrides []string
 	Cwd             string
 	NoAltScreen     bool
-	// NoDaemon is the hidden agents-only spelling Rust declares on
-	// AgentsCommand (#46088); it merges into the interactive launch and is then
-	// rejected because the overview requires a shared server.
+	// NoDaemon is the agents-only spelling Rust declares on AgentsCommand
+	// (#58239). It merges into the interactive launch, so the command center
+	// runs against an embedded app server instead of the shared one.
 	NoDaemon bool
 	Shared   SharedOptions
 }

@@ -204,13 +204,12 @@ func (m *Model) updateUnarchivePromptModal(message bubbletea.KeyMsg) bubbletea.C
 	case unarchiveChoiceQuit:
 		return bubbletea.Quit
 	case unarchiveChoiceCancel:
-		// Rust returns to the command center for a daemon/remote target and exits
-		// for an embedded server; Go's embedded TUI exits and the remote TUI opens
-		// the agents overview the same way its /agents command does.
-		if m.localSession {
-			return bubbletea.Quit
+		// Rust #58239: canceling returns to the command center whenever the
+		// target supports it, including an embedded app server.
+		if m.commandCenterAvailable() {
+			return m.applyAgentsCommand()
 		}
-		return m.applyAgentsCommand()
+		return bubbletea.Quit
 	}
 	if _, err := m.runSessionAction(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionUnarchive,

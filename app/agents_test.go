@@ -54,6 +54,33 @@ func TestRunAgentsCommandWithIOFallsBackToTextOverviewOffTerminal(t *testing.T) 
 	}
 }
 
+// TestRunAgentsCommandNoDaemonUsesEmbeddedOverviewLikeRust covers Rust #58239:
+// `codex agents --no-daemon` no longer requires a shared server, so off a
+// terminal it renders the overview from the local session store.
+func TestRunAgentsCommandNoDaemonUsesEmbeddedOverviewLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	if err := store.Create(&session.Record{
+		ID:        "44444444-4444-4444-4444-444444444444",
+		SessionID: "s-4",
+		Title:     "embedded-overview",
+		Metadata:  session.Metadata{HistoryMode: "legacy", Source: "cli"},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	previous := newAgentsDashboardStore
+	newAgentsDashboardStore = func() *session.Store { return store }
+	defer func() { newAgentsDashboardStore = previous }()
+	var stdout bytes.Buffer
+	var stdin bytes.Buffer
+	root := &cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}}
+	if err := runAgentsCommandWithIO(context.Background(), &cli.AgentsOptions{}, root, &stdin, &stdout); err != nil {
+		t.Fatalf("runAgentsCommandWithIO(--no-daemon) error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "embedded-overview") {
+		t.Fatalf("embedded overview = %q", stdout.String())
+	}
+}
+
 func TestParseAgentsCommandAcceptsDashboardFlagsLikeRust(t *testing.T) {
 	parsed, err := cli.Parse([]string{"agents", "--cd", "/workspace", "--no-alt-screen"})
 	if err != nil {

@@ -26,13 +26,9 @@ import (
 const (
 	// daemonFailureHint mirrors Rust daemon_startup::FAILURE_HINT.
 	daemonFailureHint = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments)."
-	// daemonOverviewHint mirrors the Rust #46088 agents-overview guidance.
-	daemonOverviewHint = "The agents overview requires a shared server. Use codex --no-daemon to work without it."
 
 	// daemonNoDaemonWithRemote mirrors the Rust rejection text.
 	daemonNoDaemonWithRemote = "--no-daemon cannot be used with --remote."
-	// daemonNoDaemonWithAgents mirrors the Rust rejection text.
-	daemonNoDaemonWithAgents = "--no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it."
 	// daemonNoDaemonWithQueue mirrors the Rust rejection text.
 	daemonNoDaemonWithQueue = "--no-daemon cannot be used with codex queue. Queuing must discover the shared server to avoid writing through a separate server."
 )

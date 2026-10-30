@@ -3,7 +3,6 @@ package tea
 import (
 	"context"
 	"errors"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -570,64 +569,24 @@ func TestModelAgentsDashboardOpenReadOnlyAppliesSnapshot(t *testing.T) {
 	}
 }
 
-func TestModelAgentsEmbeddedShowsUnavailableSelection(t *testing.T) {
+// TestModelAgentsEmbeddedOpensCommandCenterLikeRust covers Rust #58239: an
+// embedded session opens the command center directly instead of the retired
+// "Shared agents unavailable" selection view.
+func TestModelAgentsEmbeddedOpensCommandCenterLikeRust(t *testing.T) {
 	model := NewModel(nil, Options{
 		AgentsOverviewEmbedded: true,
 		Width:                  120,
 		Height:                 24,
-	})
-	typeText(t, model, "/agents")
-	updated, command := model.Update(key(bubbletea.KeyEnter))
-	model = updated.(*Model)
-	if command != nil {
-		t.Fatal("embedded /agents returned a command")
-	}
-	if model.modal == nil || model.modal.id != "agents-unavailable" || model.modal.kind != ModalKindAgents {
-		t.Fatalf("embedded /agents modal = %#v", model.modal)
-	}
-	// "Return to this session" closes the modal without side effects.
-	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "return")
-	updated, command = model.Update(key(bubbletea.KeyEnter))
-	model = updated.(*Model)
-	if command != nil || model.modal != nil {
-		t.Fatalf("return did not close modal: modal=%#v cmd=%v", model.modal, command)
-	}
-}
-
-func TestModelAgentsEmbeddedStartDaemon(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("start background server option is Unix-only (Rust cfg(unix))")
-	}
-	started := false
-	model := NewModel(nil, Options{
-		AgentsOverviewEmbedded: true,
-		Width:                  120,
-		Height:                 24,
-		OnStartAgentsDaemon: func() error {
-			started = true
-			return nil
+		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
 		},
 	})
-	typeText(t, model, "/agents")
-	updated, _ := model.Update(key(bubbletea.KeyEnter))
-	model = updated.(*Model)
-	if model.modal == nil || model.modal.id != "agents-unavailable" {
-		t.Fatalf("embedded modal = %#v", model.modal)
+	openAgentsDashboard(t, model)
+	if model.modal != nil {
+		t.Fatalf("embedded /agents opened a modal: %#v", model.modal)
 	}
-	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "start-daemon")
-	updated, command := model.Update(key(bubbletea.KeyEnter))
-	model = updated.(*Model)
-	if command == nil {
-		t.Fatal("start-daemon returned no command")
-	}
-	message := command()
-	updated, _ = model.Update(message)
-	model = updated.(*Model)
-	if !started {
-		t.Fatal("start-daemon callback was not invoked")
-	}
-	if !strings.Contains(model.notice, "Background server started") {
-		t.Fatalf("notice = %q", model.notice)
+	if got, want := len(model.agentsOverview.Rows), len(agentsOverviewTestRows()); got != want {
+		t.Fatalf("embedded command center rows = %d, want %d", got, want)
 	}
 }
 

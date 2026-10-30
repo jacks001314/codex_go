@@ -455,17 +455,3 @@ func interactiveRemoteAgentsOverviewTogglePin(request agentsOverviewPinRequestFu
 		return nil
 	}
 }
-
-// interactiveStartAgentsDaemon starts the local background app server (Rust
-// start_agents_daemon): it runs `codex app-server daemon start` through the
-// daemon lifecycle runner, including the Windows pid-managed daemon.
-func interactiveStartAgentsDaemon() error {
-	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
-	_, err := runner.Run(appserverdaemon.LifecycleStart)
-	if err != nil {
-		// Rust #46088: point users at `codex --no-daemon` when the agents
-		// overview cannot start its shared server.
-		return fmt.Errorf("%w\n%s", err, daemonOverviewHint)
-	}
-	return err
-}

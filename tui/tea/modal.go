@@ -1134,7 +1134,11 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			m.notice = ""
 			return nil
 		}
-		return m.applyAgentsModalOption(response.OptionID)
+		// Rust #58239: the command center no longer offers a background-server
+		// start action, so an agents-scoped modal outside the lifecycle flow just
+		// closes.
+		m.notice = ""
+		return nil
 	}
 	if modal.kind == ModalKindTheme {
 		m.modal = nil

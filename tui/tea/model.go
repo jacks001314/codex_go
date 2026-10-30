@@ -1276,7 +1276,6 @@ type Options struct {
 	// OnAgentsOverviewPinnedThreads and OnAgentsOverviewTogglePin from it, so the
 	// host only adapts its client.
 	OnAgentsOverviewPinRequest AgentsOverviewPinRequestFunc
-	OnStartAgentsDaemon        AgentsDaemonStartFunc
 	OnClipboardWrite           func(text string) error
 	// OnExportTranscript renders the active conversation as Markdown for
 	// /export (Rust transcript_export.rs). A nil hook leaves /export
@@ -1900,14 +1899,14 @@ type Model struct {
 	mainFind mainTranscriptFind
 	// activityFocus is the owned transcript's activity-group disclosure state
 	// (Rust #46734). Expanded identities persist after focus is cleared.
-	activityFocus         transcriptActivityFocus
+	activityFocus transcriptActivityFocus
 	// resumeFollowAfterApproval records the patch-approval prompt that paused
 	// following because the reader expanded transcript details while it was
 	// open; ending or advancing that approval resumes the latest output
 	// (Rust #58281 resume_after_approval).
 	resumeFollowAfterApproval string
-	lastTranscriptContent string
-	lastTranscriptHeight  int
+	lastTranscriptContent     string
+	lastTranscriptHeight      int
 
 	width       int
 	height      int
@@ -2357,7 +2356,6 @@ type Model struct {
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).
 	agentsOverviewLifecycleProgress string
-	onStartAgentsDaemon             AgentsDaemonStartFunc
 	onExternalEditor                ExternalEditorFunc
 	externalEditorDirectory         ExternalEditorDirectoryFunc
 	keymapConfig                    *codextui.KeymapConfig
@@ -3016,7 +3014,6 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewDelete:           options.OnAgentsOverviewDelete,
 		onAgentsOverviewPinnedThreads:    pinnedThreads,
 		onAgentsOverviewTogglePin:        togglePin,
-		onStartAgentsDaemon:              options.OnStartAgentsDaemon,
 		analyticsChats:                   options.OnAnalyticsChats,
 		analyticsTaskThreads:             options.OnAnalyticsTaskThreads,
 		agentsOverviewDrafts:             map[string]string{},
@@ -3995,13 +3992,6 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.refreshAgentsOverviewCmd()
 	case agentsOverviewLifecycleMsg:
 		return m, m.applyAgentsOverviewLifecycleResult(msg)
-	case agentsOverviewDaemonMsg:
-		if msg.err != nil {
-			m.notice = "Failed to start background server: " + strings.TrimSpace(msg.err.Error())
-		} else {
-			m.notice = "Background server started. Open `codex agents` in another terminal."
-		}
-		return m, nil
 	case rightClickPasteReadMsg:
 		m.applyRightClickPasteRead(msg)
 		return m, nil

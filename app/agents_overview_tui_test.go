@@ -13,16 +13,6 @@ import (
 	"codex_go/worktree"
 )
 
-func TestInteractiveStartAgentsDaemonPlatformGate(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
-	err := interactiveStartAgentsDaemon()
-	// A fresh daemon launch installs its own package first, so a binary that is
-	// not a packaged CLI reports Rust's missing-package error.
-	if err == nil || !strings.Contains(err.Error(), "this CLI has no complete local package") {
-		t.Fatalf("non-Windows start-daemon error = %v", err)
-	}
-}
-
 func TestInteractiveRemoteAgentsOverviewHandlersWireRemoteSource(t *testing.T) {
 	// The handlers must be non-nil and accept the remote endpoint; the row
 	// building itself is covered by TestAgentsOverviewRowsFromThreadsLikeRust.

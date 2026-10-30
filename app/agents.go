@@ -15,21 +15,22 @@ import (
 	"codex_go/session"
 )
 
-// runAgentsCommand mirrors Rust #39114 `codex agents`: open the shared agents
-// overview against a local background app server or a server supplied with
-// --remote, without creating a new session. On an interactive terminal the
-// full-screen agents-overview dashboard (#39094/#39112) is opened; otherwise
-// the active session list is rendered as a text overview.
+// runAgentsCommand mirrors Rust #39114 `codex agents`: open the agent command
+// center against a local background app server, an embedded app server, or a
+// server supplied with --remote, without creating a new session. On an
+// interactive terminal the full-screen agents-overview dashboard
+// (#39094/#39112) is opened; otherwise the active session list is rendered as a
+// text overview.
 func runAgentsCommand(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdout io.Writer) error {
 	return runAgentsCommandWithIO(ctx, opts, root, os.Stdin, stdout)
 }
 
 func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
-	// Rust #46088: the agents overview requires a shared server, so
-	// --no-daemon is rejected (the hidden agents-only spelling included).
-	if interactiveRootNoDaemon(root, agentsSharedOptions(opts)) {
-		return errors.New(daemonNoDaemonWithAgents)
-	}
+	// Rust #58239: `codex agents` follows the normal daemon startup rules, so
+	// --no-daemon (including the agents-only spelling) opens the command center
+	// against an embedded app server. Only --remote conflicts: the target cannot
+	// be both embedded and remote.
+	noDaemon := interactiveRootNoDaemon(root, agentsSharedOptions(opts))
 	remoteRoot := &cli.RootOptions{}
 	if root != nil {
 		*remoteRoot = *root
@@ -45,6 +46,9 @@ func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *
 		cwdOverride = strings.TrimSpace(opts.Cwd)
 	}
 	if strings.TrimSpace(remoteRoot.Remote) != "" || strings.TrimSpace(remoteRoot.RemoteAuthEnv) != "" {
+		if noDaemon {
+			return errors.New(daemonNoDaemonWithRemote)
+		}
 		endpoint, err := resolveInteractiveRemoteEndpoint(remoteRoot)
 		if err != nil {
 			return err
@@ -67,9 +71,18 @@ func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *
 		return runRemoteAgentsOverview(ctx, endpoint, stdout)
 	}
 	if shouldRunInteractiveTUI(stdin, stdout) {
-		source, err := newAgentsDashboardSourceForLocal(ctx)
-		if err != nil {
-			return err
+		var source agentsDashboardSource
+		if noDaemon {
+			// Rust #58239: an embedded session owns its app server, so the
+			// dashboard acts on this process's sessions instead of probing or
+			// starting the shared daemon.
+			source = newEmbeddedAgentsDashboardSource(newAgentsDashboardStore(), nil)
+		} else {
+			var err error
+			source, err = newAgentsDashboardSourceForLocal(ctx)
+			if err != nil {
+				return err
+			}
 		}
 		defer source.Close()
 		// Rust #54175: the retired `worktrees` flag no longer gates linked

@@ -1,7 +1,6 @@
 package tea
 
 import (
-	"runtime"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -13,10 +12,9 @@ import (
 
 // In-session `/agents` dashboard (Rust #39094/#39112). The dashboard is a
 // full-screen surface in the tea Model driven by the shared
-// tui/agents_overview core. Data comes from host callbacks: the remote TUI
-// talks to the shared app server, while the local embedded TUI marks the
-// dashboard unavailable (Rust embedded branch) and offers to start the
-// background server on Unix.
+// tui/agents_overview core. Data comes from host callbacks: the remote TUI and
+// an embedded session both reach their app server through host-provided
+// dashboard actions (Rust #58238/#58239).
 
 type AgentsOverviewRefreshFunc func(currentThreadID string) ([]agentsoverview.Row, error)
 
@@ -45,7 +43,6 @@ type AgentsOverviewPinnedThreadsFunc func() (threadIDs []string, supported bool,
 type AgentsOverviewTogglePinFunc func(threadID string, pinned bool) error
 type AgentsOverviewArchiveFunc func(threadID string) error
 type AgentsOverviewDeleteFunc func(threadID string) error
-type AgentsDaemonStartFunc func() error
 
 // Agents overview lifecycle confirmation (Rust #44433): archive or permanently
 // delete the selected task and its child agents after explicit confirmation.
@@ -106,13 +103,9 @@ type agentsOverviewRenameMsg struct {
 	err error
 }
 
-type agentsOverviewDaemonMsg struct {
-	err error
-}
-
-// applyAgentsCommand mirrors Rust open_agents_overview: the embedded branch
-// shows the "Shared agents unavailable" selection view, otherwise the
-// dashboard opens and refreshes loaded root sessions.
+// applyAgentsCommand mirrors Rust open_agents_overview: the dashboard opens and
+// refreshes loaded root sessions for daemon, remote, and embedded targets alike
+// (Rust #58239 retired the "Shared agents unavailable" selection view).
 // persistAgentsOverviewGroupingCmd saves the live Command Center grouping to
 // `tui.agents_overview_grouping` (Rust #50786
 // App::persist_agents_overview_grouping).
@@ -134,12 +127,6 @@ func (m *Model) persistAgentsOverviewGroupingCmd() bubbletea.Cmd {
 func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	if m == nil {
 		return nil
-	}
-	// Rust #58238: an embedded app server opens the command center when its
-	// session supports the dashboard actions; a session with no dashboard
-	// source keeps the shared-server hint.
-	if m.agentsOverviewEmbedded && m.onAgentsOverviewRefresh == nil {
-		return m.openAgentsUnavailableSelection()
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
@@ -255,51 +242,6 @@ func (m *Model) overviewCWD() string {
 		return ""
 	}
 	return strings.TrimSpace(m.State.CWD)
-}
-
-func (m *Model) openAgentsUnavailableSelection() bubbletea.Cmd {
-	if m == nil {
-		return nil
-	}
-	options := []ModalOption{
-		{ID: "return", Label: "Return to this session"},
-	}
-	if runtime.GOOS != "windows" && m.onStartAgentsDaemon != nil {
-		options = append([]ModalOption{{
-			ID:          "start-daemon",
-			Label:       "Start background server",
-			Description: "Open `codex agents` in another terminal afterward.",
-		}}, options...)
-	}
-	m.openModal(ModalRequestMsg{
-		ID:         "agents-unavailable",
-		Kind:       ModalKindAgents,
-		Title:      "Shared agents unavailable",
-		Body:       "This session isn't connected to a shared background server.",
-		Options:    options,
-		FooterHint: "Starting a background server will not interrupt or move this session.",
-	})
-	return nil
-}
-
-func (m *Model) applyAgentsModalOption(optionID string) bubbletea.Cmd {
-	if m == nil {
-		return nil
-	}
-	switch optionID {
-	case "start-daemon":
-		if m.onStartAgentsDaemon == nil {
-			m.notice = "Starting a background server is unavailable in this runtime."
-			return nil
-		}
-		return func() bubbletea.Msg {
-			err := m.onStartAgentsDaemon()
-			return agentsOverviewDaemonMsg{err: err}
-		}
-	default: // "return"
-		m.notice = ""
-		return nil
-	}
 }
 
 func (m *Model) refreshAgentsOverviewCmd() bubbletea.Cmd {
