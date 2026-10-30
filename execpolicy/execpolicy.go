@@ -1244,15 +1244,26 @@ func HostDangerousCommandPlatform() DangerousCommandPlatform {
 
 func executableLookupKeyForPlatform(raw string, platform DangerousCommandPlatform) string {
 	if platform != DangerousCommandPlatformWindows {
+		if index := strings.LastIndex(raw, "/"); index >= 0 {
+			return raw[index+1:]
+		}
 		return raw
 	}
-	raw = strings.ToLower(raw)
+	name := raw
+	if index := strings.LastIndexAny(name, `/\`); index >= 0 {
+		name = name[index+1:]
+	}
+	if len(name) >= 2 && name[1] == ':' &&
+		(name[0] >= 'a' && name[0] <= 'z' || name[0] >= 'A' && name[0] <= 'Z') {
+		name = name[2:]
+	}
+	name = strings.ToLower(name)
 	for _, suffix := range []string{".exe", ".cmd", ".bat", ".com"} {
-		if strings.HasSuffix(raw, suffix) {
-			return strings.TrimSuffix(raw, suffix)
+		if strings.HasSuffix(name, suffix) {
+			return strings.TrimSuffix(name, suffix)
 		}
 	}
-	return raw
+	return name
 }
 
 func executableLookupKey(raw string) string {

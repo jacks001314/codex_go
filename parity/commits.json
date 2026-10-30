@@ -5656,9 +5656,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: dangerous_command_match_for_platform, dangerous_powershell_words_match"
+    "Round 1032 (partial): executableLookupKeyForPlatform now applies target-platform basename, Windows drive-prefix, case, and executable-suffix normalization like Rust #42113, with regression coverage.",
+    "Model-facing exec_command launch failures now return `exec_command failed: ...` bounded to 900 retained bytes with middle truncation and never prepend the rejected command; cancellation errors stay unwrapped.",
+    "Unified-exec process IDs were already monotonic across release; added a regression test proving a released id is not reused.",
+    "Residual: Go has no Rust-equivalent dangerous-command classifier or unmatched-command heuristics, so commands_for_exec_policy_for_platform, dangerous_command_match_for_platform, and the executor_platform_os platform wiring cannot be ported onto an equivalent call site; remote Windows PowerShell dangerous-command semantics remain unimplemented."
    ]
   },
   {

@@ -27,6 +27,10 @@ const (
 	DefaultExecCommandToolName        = "exec_command"
 	DefaultShellCommandToolName       = "shell_command"
 	DefaultExecCommandMaxOutputTokens = 10000
+	// execCommandRejectionMaxBytes bounds a model-facing exec_command failure
+	// message (Rust #42113). The truncation marker sits outside the retained
+	// bytes, so the marker itself remains legible.
+	execCommandRejectionMaxBytes = 900
 )
 
 // ToolDecisionSink reports the approval decisions a tool call received without
@@ -724,6 +728,23 @@ func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommand
 	return &execCommandPreparation{args: args, req: req, environment: environment, validation: validation, shell: sessionShell}, nil
 }
 
+// boundedExecCommandError turns a launch/execution failure into the bounded,
+// model-facing rejection Rust's exec_command handler returns (#42113). The
+// message never prepends the rejected command, so a long command cannot be
+// echoed back through the error path. Cancellation stays unwrapped so callers
+// (and the exec span) can still classify it with errors.Is.
+func boundedExecCommandError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		(ctx != nil && ctx.Err() != nil) {
+		return err
+	}
+	message := "exec_command failed: " + err.Error()
+	return RespondToModel(utils.TruncateMiddleChars(message, execCommandRejectionMaxBytes))
+}
+
 func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	// Rust #45445: the command's analytics attribution is the model that invoked
 	// it, captured before execution so a model switch during a background process
@@ -953,7 +974,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if useUnifiedExec {
 		req, err = prepareUnifiedExecShellRequest(req)
 		if err != nil {
-			return nil, err
+			return nil, boundedExecCommandError(ctx, err)
 		}
 		req.UnifiedExecEventSink = e.unifiedExecEvents
 		req.UnifiedExecThreadID = e.unifiedExecThreadID
@@ -963,7 +984,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		result, err = e.shellRunner().Run(ctx, req)
 	}
 	if err != nil {
-		return nil, err
+		return nil, boundedExecCommandError(ctx, err)
 	}
 	// Rust #41393: a one-shot (completion-only) command terminated on timeout or
 	// turn cancellation reports a timed-out command with exit code 124.
