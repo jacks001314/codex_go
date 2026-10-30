@@ -83,13 +83,7 @@ func Load(path string, width int, protocol pets.ImageProtocol, cell CellSize) (*
 	if _, err := file.Seek(0, 0); err != nil {
 		return nil, err
 	}
-	source, _, err := image.Decode(file)
-	if err != nil {
-		return nil, err
-	}
-	if bounds := source.Bounds(); int64(bounds.Dx())*int64(bounds.Dy()) > MaxPixels {
-		return nil, fmt.Errorf("%w: decoded %dx%d", ErrTooLarge, bounds.Dx(), bounds.Dy())
-	}
+	_ = file.Close()
 	cellWidth, cellHeight := uint32(8), uint32(16)
 	maxWidth, maxHeight := uint32(384), uint32(160)
 	if protocol == pets.ImageProtocolSixel {
@@ -99,21 +93,11 @@ func Load(path string, width int, protocol pets.ImageProtocol, cell CellSize) (*
 		cellWidth, cellHeight = cell.Width, cell.Height
 		maxWidth, maxHeight = 160, 80
 	}
-	bounds := source.Bounds()
-	sourceWidth, sourceHeight := uint32(bounds.Dx()), uint32(bounds.Dy())
-	targetWidth := min(uint32(columns)*cellWidth, maxWidth, sourceWidth)
-	targetHeight := min(6*cellHeight, maxHeight, sourceHeight)
-	scale := min(
-		float64(targetWidth)/float64(sourceWidth),
-		float64(targetHeight)/float64(sourceHeight),
-	)
-	if scale > 1 {
-		scale = 1
+	pixels, err := LoadPixels(path, int(min(uint32(columns)*cellWidth, maxWidth)), int(min(6*cellHeight, maxHeight)))
+	if err != nil {
+		return nil, err
 	}
-	dstWidth := max(int(float64(sourceWidth)*scale), 1)
-	dstHeight := max(int(float64(sourceHeight)*scale), 1)
-	pixels := image.NewRGBA(image.Rect(0, 0, dstWidth, dstHeight))
-	xdraw.CatmullRom.Scale(pixels, pixels.Bounds(), source, bounds, draw.Src, nil)
+	dstWidth, dstHeight := pixels.Bounds().Dx(), pixels.Bounds().Dy()
 	return &TranscriptImage{
 		Protocol:   protocol,
 		Columns:    uint16((dstWidth + int(cellWidth) - 1) / int(cellWidth)),
@@ -122,6 +106,52 @@ func Load(path string, width int, protocol pets.ImageProtocol, cell CellSize) (*
 		CellWidth:  cellWidth,
 		CellHeight: cellHeight,
 	}, nil
+}
+
+// LoadPixels decodes path and scales the raster to fit maxWidth x maxHeight
+// without upscaling, applying the same encoded/decoded allocation bounds as
+// Load. Rust transcript_image::load_pixels shares this contract.
+func LoadPixels(path string, maxWidth int, maxHeight int) (*image.RGBA, error) {
+	if maxWidth <= 0 || maxHeight <= 0 {
+		return nil, fmt.Errorf("%w: no preview size", ErrUnsupported)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: not a regular file", ErrUnsupported)
+	}
+	if info.Size() > MaxEncodedBytes {
+		return nil, fmt.Errorf("%w: encoded size %d", ErrTooLarge, info.Size())
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	source, _, err := image.Decode(file)
+	if err != nil {
+		return nil, err
+	}
+	bounds := source.Bounds()
+	if int64(bounds.Dx())*int64(bounds.Dy()) > MaxPixels {
+		return nil, fmt.Errorf("%w: decoded %dx%d", ErrTooLarge, bounds.Dx(), bounds.Dy())
+	}
+	sourceWidth, sourceHeight := bounds.Dx(), bounds.Dy()
+	if sourceWidth <= 0 || sourceHeight <= 0 {
+		return nil, fmt.Errorf("%w: empty image", ErrUnsupported)
+	}
+	scale := min(
+		float64(maxWidth)/float64(sourceWidth),
+		float64(maxHeight)/float64(sourceHeight),
+		1,
+	)
+	dstWidth := max(int(float64(sourceWidth)*scale), 1)
+	dstHeight := max(int(float64(sourceHeight)*scale), 1)
+	pixels := image.NewRGBA(image.Rect(0, 0, dstWidth, dstHeight))
+	xdraw.CatmullRom.Scale(pixels, pixels.Bounds(), source, bounds, draw.Src, nil)
+	return pixels, nil
 }
 
 // Placement reserves rows in the transcript viewport.

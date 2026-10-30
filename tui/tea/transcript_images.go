@@ -97,6 +97,14 @@ type drawnTranscriptImage struct {
 	encoded *transcript_image.EncodedImage
 }
 
+// transcriptImageOverlay is an absolutely positioned graphic, used by the
+// composer thumbnail strip (Rust #58261). row is a zero-based frame row.
+type transcriptImageOverlay struct {
+	image *transcript_image.TranscriptImage
+	x     int
+	row   int
+}
+
 // transcriptImageRuntime owns terminal graphics state for the owned fullscreen
 // transcript. The Bubble Tea output wrapper calls beforeWrite before each text
 // frame and afterWrite afterwards, so displaced graphics never erase new text.
@@ -115,6 +123,7 @@ type transcriptImageRuntime struct {
 	surface        bool
 	drawn          []drawnTranscriptImage
 	pending        []drawnTranscriptImage
+	overlays       []transcriptImageOverlay
 }
 
 func newTranscriptImageRuntime(out io.Writer, env map[string]string) *transcriptImageRuntime {
@@ -145,6 +154,17 @@ func (r *transcriptImageRuntime) setFrame(plans []transcriptImagePlan, top int, 
 	r.surface = surface
 }
 
+// setOverlays publishes absolutely positioned graphics such as composer
+// thumbnails. It replaces any previous composer strip.
+func (r *transcriptImageRuntime) setOverlays(overlays []transcriptImageOverlay) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.overlays = append([]transcriptImageOverlay(nil), overlays...)
+}
+
 func (r *transcriptImageRuntime) hide() {
 	if r == nil {
 		return
@@ -152,6 +172,7 @@ func (r *transcriptImageRuntime) hide() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.plans = nil
+	r.overlays = nil
 	r.surface = false
 }
 
@@ -292,6 +313,28 @@ func (r *transcriptImageRuntime) targetsLocked() []drawnTranscriptImage {
 			},
 		})
 	}
+	for _, overlay := range r.overlays {
+		if overlay.image == nil || overlay.row < 0 {
+			continue
+		}
+		rows := int(overlay.image.Rows)
+		if r.terminalHeight > 0 && overlay.row+rows > r.terminalHeight {
+			rows = r.terminalHeight - overlay.row
+		}
+		if rows <= 0 || int(overlay.image.Columns) <= 0 {
+			continue
+		}
+		targets = append(targets, drawnTranscriptImage{
+			key: transcriptImageDrawKey{
+				image:    overlay.image,
+				x:        max(overlay.x, 0),
+				y:        overlay.row,
+				columns:  int(overlay.image.Columns),
+				rows:     rows,
+				firstRow: 0,
+			},
+		})
+	}
 	return targets
 }
 
@@ -410,6 +453,10 @@ func (m *Model) publishTranscriptImages() {
 		m.height,
 		true,
 	)
+	// Rust #58261: the composer thumbnail strip is part of the same frame, so
+	// it is published and cleared with the transcript graphics.
+	m.composerImageOverlays = m.publishComposerImageOverlays()
+	m.transcriptImages.setOverlays(m.composerImageOverlays)
 }
 
 func (m *Model) hideTranscriptImages() {

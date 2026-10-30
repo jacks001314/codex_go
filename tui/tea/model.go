@@ -1734,6 +1734,12 @@ type Model struct {
 	composerManual bool
 	composerTopRow int
 	composerRows   int
+	// composerImageTiles/composerImageOverlays carry the draft thumbnail strip
+	// (Rust #58261): the text cells reserved by the last View and the rasters
+	// the graphics runtime paints over them.
+	composerImageTiles    []composerThumbnail
+	composerImageOverlays []transcriptImageOverlay
+	composerImageCache    map[string]composerTileCacheEntry
 	// composerContentRowsCache memoizes the composer wrap pass. A frame asks
 	// for the prompt height several times (layout, reserved rows, scroll,
 	// selection), and each pass is linear in the draft.
@@ -4695,6 +4701,16 @@ func (m *Model) View() string {
 			sections = append(sections, "")
 		}
 		composer := m.renderComposerWindow()
+		composerStripRows := 0
+		if strip, tiles := m.composerThumbnailStrip(m.width); strip != "" {
+			// Rust #58261: the thumbnail strip sits above the draft inside the
+			// composer block, keeping the editable image references intact.
+			composer = strip + composer
+			m.composerImageTiles = tiles
+			composerStripRows = strings.Count(strip, "\n")
+		} else {
+			m.composerImageTiles = nil
+		}
 		composer = m.applyComposerSparkle(composer, m.currentTime())
 		composer = m.annotateInlineComposerHyperlinks(composer)
 		composer = m.renderComposerRegion(composer)
@@ -4704,7 +4720,7 @@ func (m *Model) View() string {
 		}
 		m.composerRows = m.composerSectionRows()
 		m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
-		m.composerTextTopRow = m.composerTopRow + 1
+		m.composerTextTopRow = m.composerTopRow + 1 + composerStripRows
 		m.composerTextLeft = 0
 		composerIndex = len(sections)
 		sections = append(sections, composer)
