@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -45,6 +46,60 @@ func TestPaginatedRecorderWritesAndResumesOrdinalsLikeRust(t *testing.T) {
 	}
 	if len(lines) != 3 || lines[2].Ordinal == nil || *lines[2].Ordinal != 2 {
 		t.Fatalf("resumed ordinal = %#v", lines[2].Ordinal)
+	}
+}
+
+// Rust #42378: a paginated rollout must resume after a token-count record with
+// fractional rate-limit values. Go's Line envelope keeps payloads raw, so the
+// decimal numbers survive and the next ordinal continues.
+func TestPaginatedResumeAfterFractionalTokenCountLikeRust(t *testing.T) {
+	home := t.TempDir()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-fractional", HistoryMode: "paginated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.AppendTurnStarted("turn-fractional", fixedProjectionTime()); err != nil {
+		t.Fatal(err)
+	}
+	path := recorder.Path()
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenCount := `{"timestamp":"2026-06-29T01:02:05Z","ordinal":2,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":130}},"rate_limits":{"primary":{"used_percent":12.5},"secondary":{"used_percent":0.000000000001}}}}` + "\n"
+	if _, err := file.WriteString(tokenCount); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := Resume(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.AppendTurnComplete("turn-fractional", fixedProjectionTime(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lines, parseErrors, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parseErrors != 0 || len(lines) != 4 {
+		t.Fatalf("lines/errors = %d/%d, want 4/0", len(lines), parseErrors)
+	}
+	if lines[2].Ordinal == nil || *lines[2].Ordinal != 2 || !bytes.Contains(lines[2].Payload, []byte("12.5")) || !bytes.Contains(lines[2].Payload, []byte("0.000000000001")) {
+		t.Fatalf("token-count line = %#v payload=%s", lines[2].Ordinal, lines[2].Payload)
+	}
+	if lines[3].Ordinal == nil || *lines[3].Ordinal != 3 {
+		t.Fatalf("resumed ordinal = %#v, want 3", lines[3].Ordinal)
 	}
 }
 
