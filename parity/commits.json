@@ -7690,9 +7690,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1053: Go consumes model_messages.instructions_template from the bundled codex-rs/models-manager/models.json (model/catalog.go ModelMessages.UnmarshalJSON -> ModelInfo.InstructionsTemplate), so the refined GPT-6 guidance lands without Go code changes. model/catalog_messages_test.go and model/catalog_test.go pin template parsing/resolution; the frozen baseline models.json carries the post-#42824 text. Verified with `go test ./model -run TestModelMessages -count=1`."
    ]
   },
   {
