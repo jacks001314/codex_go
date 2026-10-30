@@ -4192,9 +4192,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Guardian classifications mint their own UUIDv7 turn id before the review attempt loop and keep it across retries (appserver/guardian_reviewer.go guardianClassificationTurnID/classificationTurnID; appserver/guardian_isolated_assessment.go). client_metadata and x-codex-turn-metadata now report turn_id = the classification turn, parent_turn_id = the reviewed turn, and root_turn_id = the reviewed turn's recorded causal root, omitted when the turn has no trusted lineage (RuntimeRouter.guardianTrustedRootTurnIDForTurn in appserver/agent_runtime.go); codexapi.ClientMetadata() emits the top-level root_turn_id like Rust's CodexResponsesMetadata::to_client_metadata. Rust's tool-lifecycle extension root_turn_id input targets the extension contributor registry, which Go does not implement. Tests: go test ./appserver -run 'GuardianClassification|GuardianIsolatedAssessmentUsesDistinctTurnIdentity' -count=1; go test ./codexapi -count=1"
    ]
   },
   {

@@ -151,6 +151,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.targetEnvironmentAvailable = r.guardianTargetEnvironmentAvailableForTurn
 		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
 		modelReviewer.parentResponse = r.guardianLatestParentResponseForTurn
+		modelReviewer.trustedRootTurnID = r.guardianTrustedRootTurnIDForTurn
 		modelReviewer.servingAssessment = r.guardianServingAssessmentFor
 		modelReviewer.servingAuthorization = r.guardianServingAuthorization
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
@@ -214,6 +215,40 @@ func (r *RuntimeRouter) guardianLatestParentResponseForTurn(threadID, turnID str
 		return "", nil
 	}
 	return strings.TrimSpace(active.LatestResponseID), active.LatestRoutingAffinity
+}
+
+// guardianTrustedRootTurnIDForTurn resolves the reviewed turn's recorded causal
+// root for Guardian classification metadata (Rust #41385's
+// turn_metadata_state.root_turn_id()). Rust exposes the root only when the turn
+// recorded one, so a turn without explicit lineage omits root_turn_id instead
+// of advertising its own id as an ancestor.
+func (r *RuntimeRouter) guardianTrustedRootTurnIDForTurn(threadID, turnID string) (string, bool) {
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return "", false
+	}
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), turnID)
+	if active == nil {
+		return "", false
+	}
+	if active.AnalyticsRootTurnIDCaptured && active.AnalyticsRootTurnID == nil {
+		// A conflicting input marked the recorded root unknown; keep it omitted
+		// instead of reporting stale lineage.
+		return "", false
+	}
+	if active.Params != nil {
+		if root := strings.TrimSpace(active.Params.RootTurnID); root != "" {
+			return root, true
+		}
+	}
+	if active.RunConfig != nil {
+		// The run config also falls back to the turn itself; only an ancestor is
+		// recorded lineage.
+		if root := strings.TrimSpace(active.RunConfig.RootTurnID); root != "" && root != turnID {
+			return root, true
+		}
+	}
+	return "", false
 }
 
 // guardianMaxToolCallLagForTurn resolves the stale-score bound for the review's

@@ -87,6 +87,9 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	if client["parent_turn_id"] != "parent-turn" || !strings.Contains(client[ClientCodexTurnMetadataHeader], `"parent_turn_id":"parent-turn"`) {
 		t.Fatalf("ClientMetadata() missing parent turn: %v", client)
 	}
+	if client["root_turn_id"] != "root-turn" {
+		t.Fatalf("ClientMetadata() missing top-level root turn: %v", client)
+	}
 	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"root_turn_id":"root-turn"`) {
 		t.Fatalf("ClientMetadata() missing root turn: %v", client)
 	}

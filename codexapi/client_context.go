@@ -364,6 +364,11 @@ func (m *ClientMetadata) ClientMetadata() map[string]string {
 	if m.ParentTurnID != "" {
 		out["parent_turn_id"] = m.ParentTurnID
 	}
+	// Rust's CodexResponsesMetadata::to_client_metadata reports the trusted
+	// causal root both top-level and inside x-codex-turn-metadata (#41385).
+	if m.RootTurnID != "" {
+		out[RootTurnIDKey] = m.RootTurnID
+	}
 	if m.HasTurnMetadata() {
 		if jsonText, ok := m.TurnMetadataJSON(); ok {
 			out[ClientCodexTurnMetadataHeader] = jsonText

@@ -32,6 +32,8 @@ import (
 	"codex_go/telemetry"
 	"codex_go/turn"
 	"codex_go/utils"
+
+	"github.com/google/uuid"
 )
 
 type GuardianReviewer interface {
@@ -297,6 +299,16 @@ type modelGuardianReviewer struct {
 	// installationID supplies the Codex installation id for the review
 	// request's turn metadata (Rust #44298).
 	installationID func() string
+	// trustedRootTurnID resolves the reviewed turn's recorded causal root for
+	// classification metadata (Rust #41385's
+	// turn_metadata_state.root_turn_id). The second result is false when the
+	// turn has no trusted lineage, so the review omits root_turn_id instead of
+	// guessing one.
+	trustedRootTurnID func(threadID, turnID string) (string, bool)
+	// newClassificationTurnID mints the reviewer's own turn identity. Rust
+	// #41385 treats every Guardian classification as a distinct inference turn;
+	// nil uses the package UUIDv7 generator.
+	newClassificationTurnID func() string
 	// metrics receives the guardian review metrics (Rust's
 	// emit_guardian_review_metrics).
 	metrics telemetry.TurnMetricSink
@@ -1150,6 +1162,10 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 		emitReviewMetrics()
 		return state.DecisionAborted, nil, "", finishErr
 	}
+	// Rust #41385: a classification is its own inference turn. Mint one UUIDv7
+	// identity before the attempt loop so a retry keeps the same classification
+	// turn, while parent_turn_id stays the turn that requested the review.
+	classificationTurnID := r.classificationTurnID()
 	attempts := 0
 	var assessment *state.Assessment
 	var response *model.AgentResponse
@@ -1467,7 +1483,7 @@ reviewAttempt:
 		TaskKind:           model.AgentTaskReview,
 		ThreadID:           threadID,
 		SessionID:          plan.SessionID,
-		TurnID:             turnID,
+		TurnID:             classificationTurnID,
 		Originator:         "guardian",
 		// Rust #40742 preserves the parent's persistence setting for the
 		// reviewer session; Go carries it as the request's ephemeral intent.
@@ -1480,7 +1496,7 @@ reviewAttempt:
 		// route. The pin is transport-only and never enters the prompt,
 		// history, or client metadata.
 		RoutingAffinity: parentResponse.affinity,
-		ClientMetadata:  r.reviewClientMetadata(threadID, turnID, targetItemID, parentResponse.id),
+		ClientMetadata:  r.reviewClientMetadata(threadID, turnID, classificationTurnID, targetItemID, parentResponse.id),
 	}
 	if plan.Prepared != nil && plan.Prepared.PermissionProfile != nil {
 		reviewRequest.PermissionProfile = plan.Prepared.PermissionProfile
@@ -1770,11 +1786,36 @@ func guardianParentResponseSnapshot(r *modelGuardianReviewer, threadID, turnID s
 	return guardianParentResponse{}
 }
 
+// guardianClassificationTurnID mints a UUIDv7 identity for one Guardian
+// classification. Rust #41385 gives every classification its own turn id, so
+// reusing a Guardian session or WebSocket never merges two reviews into one
+// turn.
+func guardianClassificationTurnID() string {
+	if id, err := uuid.NewV7(); err == nil {
+		return id.String()
+	}
+	return uuid.NewString()
+}
+
+// classificationTurnID returns the identity for the review about to run. Each
+// call mints a new turn; retries reuse the value captured before the attempt
+// loop (Rust #41385).
+func (r *modelGuardianReviewer) classificationTurnID() string {
+	if r != nil && r.newClassificationTurnID != nil {
+		if id := strings.TrimSpace(r.newClassificationTurnID()); id != "" {
+			return id
+		}
+	}
+	return guardianClassificationTurnID()
+}
+
 // reviewClientMetadata builds the guardian review request's client metadata.
 // Rust #44298 attributes guardian reviews to the `guardian_review` turn trigger
-// and emits it in x-codex-turn-metadata; Go's reviewer issues a direct agent
-// request, so the review reuses the parent turn's identity.
-func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetItemID, parentResponseID string) map[string]string {
+// and emits it in x-codex-turn-metadata. Rust #41385 separates the identities:
+// classificationTurnID is the reviewer's own turn, parentTurnID is the turn
+// that requested the review, and root_turn_id is the parent's trusted causal
+// root (omitted when the parent has no recorded lineage).
+func (r *modelGuardianReviewer) reviewClientMetadata(threadID, parentTurnID, classificationTurnID, targetItemID, parentResponseID string) map[string]string {
 	installationID := ""
 	if r != nil && r.installationID != nil {
 		installationID = strings.TrimSpace(r.installationID())
@@ -1782,9 +1823,13 @@ func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetIte
 	metadata := codexapi.NewClientMetadata(installationID, threadID, threadID, "")
 	metadata.RequestKind = codexapi.ClientRequestTurn
 	metadata.TurnTrigger = "guardian_review"
-	metadata.TurnID = turnID
-	metadata.ParentTurnID = turnID
-	metadata.RootTurnID = turnID
+	metadata.TurnID = strings.TrimSpace(classificationTurnID)
+	metadata.ParentTurnID = strings.TrimSpace(parentTurnID)
+	if r != nil && r.trustedRootTurnID != nil {
+		if root, ok := r.trustedRootTurnID(threadID, parentTurnID); ok {
+			metadata.RootTurnID = root
+		}
+	}
 	metadata.SubagentHeader = "guardian"
 	targetItemID = strings.TrimSpace(targetItemID)
 	if targetItemID != "" {

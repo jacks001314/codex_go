@@ -114,6 +114,9 @@ func (r *modelGuardianReviewer) AssessIsolated(ctx context.Context, input guardi
 			items = append(items, item)
 		}
 	}
+	// Rust #41385: the isolated assessment is its own classification turn, so it
+	// gets a fresh identity while the captured action's turn stays its parent.
+	classificationTurnID := r.classificationTurnID()
 	request := &model.AgentRequest{
 		Prompt:             prompt,
 		InputItems:         items,
@@ -125,13 +128,13 @@ func (r *modelGuardianReviewer) AssessIsolated(ctx context.Context, input guardi
 		TaskKind:           model.AgentTaskReview,
 		ThreadID:           threadID,
 		SessionID:          plan.SessionID,
-		TurnID:             turnID,
+		TurnID:             classificationTurnID,
 		Originator:         "guardian",
 		Ephemeral:          plan.Ephemeral,
 		PromptCacheKey:     guardianPromptCacheKeyOverride(guardianReviewerName, threadID),
 		OutputSchema:       guardianAssessmentOutputSchema(),
 		RoutingAffinity:    input.RoutingAffinity,
-		ClientMetadata:     r.reviewClientMetadata(threadID, turnID, input.TargetItemID, input.ParentResponseID),
+		ClientMetadata:     r.reviewClientMetadata(threadID, turnID, classificationTurnID, input.TargetItemID, input.ParentResponseID),
 	}
 	if plan.Prepared != nil && plan.Prepared.PermissionProfile != nil {
 		request.PermissionProfile = plan.Prepared.PermissionProfile
