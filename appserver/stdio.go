@@ -255,6 +255,10 @@ readLoop:
 	if onShutdown != nil {
 		onShutdown()
 	}
+	// A pending remote-control enrollment must stop before RPC drain, otherwise
+	// it keeps the process and its thread writers alive after stdio EOF
+	// (Rust #42668).
+	router.CancelRemoteControlOperations()
 	requests.Wait()
 	router.ConnectionClosed(connectionID)
 	if scanErr != nil {

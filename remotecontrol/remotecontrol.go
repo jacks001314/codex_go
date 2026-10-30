@@ -15,6 +15,11 @@ import (
 
 var ErrInvalidRequest = errors.New("invalid remote-control request")
 
+// ErrRemoteControlShuttingDown interrupts network-bound remote-control work
+// once the owning app-server connection has begun shutting down. Cached or
+// persisted enrollments still enable and persist (Rust #42668).
+var ErrRemoteControlShuttingDown = errors.New("remote control is shutting down")
+
 // remoteControlPersistenceWriteTimeout bounds an admitted preference write that
 // must survive caller cancellation (Rust #44341).
 const remoteControlPersistenceWriteTimeout = 5 * time.Second

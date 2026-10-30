@@ -636,14 +636,18 @@ type RuntimeRouter struct {
 	memoryStartupCtx      context.Context
 	memoryStartupCancel   context.CancelFunc
 	memoryStartupWG       sync.WaitGroup
-	realtimeOpsMu         sync.Mutex
-	realtimeOpsClosing    bool
-	realtimeOpsCtx        context.Context
-	realtimeOpsCancel     context.CancelFunc
-	realtimeOpsWG         sync.WaitGroup
-	realtimeOpsQueues     map[string]chan func(context.Context)
-	realtimeEventMu       sync.Mutex
-	realtimeEventLocks    map[string]*sync.Mutex
+	// remoteControlOpsCtx bounds network-bound remote-control RPCs. The stdio
+	// transport cancels it before draining in-flight requests (Rust #42668).
+	remoteControlOpsCtx    context.Context
+	remoteControlOpsCancel context.CancelFunc
+	realtimeOpsMu          sync.Mutex
+	realtimeOpsClosing     bool
+	realtimeOpsCtx         context.Context
+	realtimeOpsCancel      context.CancelFunc
+	realtimeOpsWG          sync.WaitGroup
+	realtimeOpsQueues      map[string]chan func(context.Context)
+	realtimeEventMu        sync.Mutex
+	realtimeEventLocks     map[string]*sync.Mutex
 	// voiceDurationRecorded deduplicates the voice session duration metric by
 	// session start time, which is recorded once per completed session.
 	voiceDurationRecorded map[string]time.Time
@@ -894,6 +898,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	// compatibility service pointer as an immutable constructor snapshot.
 	services.ThreadStatus = threads.StatusManager()
 	memoryStartupCtx, memoryStartupCancel := context.WithCancel(context.Background())
+	remoteControlOpsCtx, remoteControlOpsCancel := context.WithCancel(context.Background())
 	realtimeOpsCtx, realtimeOpsCancel := context.WithCancel(context.Background())
 	router := &RuntimeRouter{
 		services:                   services,
@@ -952,6 +957,8 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		lastAccountedDescendant:    map[string]int64{},
 		memoryStartupCtx:           memoryStartupCtx,
 		memoryStartupCancel:        memoryStartupCancel,
+		remoteControlOpsCtx:        remoteControlOpsCtx,
+		remoteControlOpsCancel:     remoteControlOpsCancel,
 		realtimeOpsCtx:             realtimeOpsCtx,
 		realtimeOpsCancel:          realtimeOpsCancel,
 		realtimeOpsQueues:          map[string]chan func(context.Context){},
@@ -2696,6 +2703,9 @@ func (r *RuntimeRouter) close() error {
 		r.memoryStartupCancel()
 	}
 	r.memoryStartupMu.Unlock()
+	if r.remoteControlOpsCancel != nil {
+		r.remoteControlOpsCancel()
+	}
 	r.realtimeOpsMu.Lock()
 	r.realtimeOpsClosing = true
 	if r.realtimeOpsCancel != nil {
@@ -13203,7 +13213,7 @@ func (r *RuntimeRouter) handleRemoteControlEnable(request *Request) (*remotecont
 	if params == nil {
 		params = &remotecontrol.EnableParams{}
 	}
-	response, notification, err := r.requireRemote().EnableContext(context.Background(), params)
+	response, notification, err := r.requireRemote().EnableContext(r.remoteControlContext(), params)
 	if err != nil {
 		return nil, err
 	}
@@ -13219,7 +13229,7 @@ func (r *RuntimeRouter) handleRemoteControlDisable(request *Request) (*remotecon
 	if params == nil {
 		params = &remotecontrol.DisableParams{}
 	}
-	response, notification, err := r.requireRemote().DisableContext(context.Background(), params)
+	response, notification, err := r.requireRemote().DisableContext(r.remoteControlContext(), params)
 	if err != nil {
 		return nil, err
 	}
@@ -13232,7 +13242,7 @@ func (r *RuntimeRouter) handleRemoteControlPairingStart(request *Request) (*remo
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireRemote().StartPairingContext(context.Background(), &params)
+	return r.requireRemote().StartPairingContext(r.remoteControlContext(), &params)
 }
 
 func (r *RuntimeRouter) handleRemoteControlPairingStatus(request *Request) (*remotecontrol.PairingStatusResponse, error) {
@@ -13240,7 +13250,7 @@ func (r *RuntimeRouter) handleRemoteControlPairingStatus(request *Request) (*rem
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireRemote().PairingStatusContext(context.Background(), &params)
+	return r.requireRemote().PairingStatusContext(r.remoteControlContext(), &params)
 }
 
 func (r *RuntimeRouter) handleRemoteControlClientsList(request *Request) (*remotecontrol.ClientsListResponse, error) {
@@ -15170,6 +15180,25 @@ func (r *RuntimeRouter) requireRemote() *remotecontrol.Manager {
 		r.services.Remote = remotecontrol.NewManager("codex", "")
 	}
 	return r.services.Remote
+}
+
+// remoteControlContext returns the operation context shared by remote-control
+// RPCs. Stdio shutdown cancels it before RPC drain so a blocked enrollment
+// cannot keep the app server alive (Rust #42668).
+func (r *RuntimeRouter) remoteControlContext() context.Context {
+	if r == nil || r.remoteControlOpsCtx == nil {
+		return context.Background()
+	}
+	return r.remoteControlOpsCtx
+}
+
+// CancelRemoteControlOperations interrupts network-bound remote-control work
+// without cancelling durable preference writes.
+func (r *RuntimeRouter) CancelRemoteControlOperations() {
+	if r == nil || r.remoteControlOpsCancel == nil {
+		return
+	}
+	r.remoteControlOpsCancel()
 }
 
 func (r *RuntimeRouter) requireEnvironment() *EnvironmentManager {

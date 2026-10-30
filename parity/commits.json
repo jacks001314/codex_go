@@ -7330,9 +7330,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1049: RuntimeRouter now owns remoteControlOpsCtx, cancelled by stdio EOF/signal before requests.Wait() drains in-flight RPCs (appserver/stdio.go) and by Close(); enable/disable/pairing and remote client-management handlers use it instead of context.Background(). remotecontrol.enableDurable rejects an already-cancelled context before network enrollment, maps mid-flight cancellation to ErrRemoteControlShuttingDown, and performs persisted-enrollment reads plus the enabled preference write through a bounded context.WithoutCancel store context so in-memory and persisted enrollments still enable and save after shutdown with no backend contact. Covered by remotecontrol TestEnableAfterShutdown{UsesInMemoryEnrollment,UsesPersistedEnrollment,CancelsMissingEnrollment}LikeRust and appserver TestStdioShutdownCancelsPendingRemoteControlEnrollmentLikeRust (blocked enroll backend over a real JSON-line stdio connection). Verified with go test ./remotecontrol -count=1, go test ./appserver -run 'RemoteControl|Stdio' -count=1, go test ./app -run RemoteControl -count=1, go test ./parity -count=1, go build ./..."
    ]
   },
   {

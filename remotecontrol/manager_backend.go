@@ -29,11 +29,17 @@ func (m *Manager) enableDurable(ctx context.Context, params *EnableParams, backe
 		return nil, nil, ErrRemoteControlAuthRequired
 	}
 	target := cloneRemoteControlTarget(backend.Target)
+	// Local enrollment reads must survive shutdown too: Rust only interrupts
+	// the network enrollment, while cached or persisted enrollments still
+	// enable and persist (Rust #42668). The bound keeps a stalled store from
+	// hanging teardown.
+	storeCtx, cancelStore := context.WithTimeout(context.WithoutCancel(ctx), remoteControlPersistenceWriteTimeout)
+	defer cancelStore()
 	var enrollment *Enrollment
 	if current != nil && current.AccountID == auth.AccountID {
 		enrollment = current
 	} else if backend.Store != nil {
-		enrollment, err = LoadPersistedRemoteControlEnrollment(ctx, backend.Store, target, auth.AccountID, backend.AppServerClientName)
+		enrollment, err = LoadPersistedRemoteControlEnrollment(storeCtx, backend.Store, target, auth.AccountID, backend.AppServerClientName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -42,19 +48,25 @@ func (m *Manager) enableDurable(ctx context.Context, params *EnableParams, backe
 		}
 	}
 	if enrollment == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, ErrRemoteControlShuttingDown
+		}
 		enrollment, auth, err = m.enrollRemoteControlServerWithRecovery(ctx, backend, target, auth, installationID, serverName)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ErrRemoteControlShuttingDown
+			}
 			return nil, nil, err
 		}
 	}
 
-	rows, err := backend.Store.SetRemoteControlEnabled(ctx, target.WebSocketURL, auth.AccountID, backend.AppServerClientName, true)
+	rows, err := backend.Store.SetRemoteControlEnabled(storeCtx, target.WebSocketURL, auth.AccountID, backend.AppServerClientName, true)
 	if err != nil {
 		return nil, nil, err
 	}
 	if rows == 0 {
 		enabled := true
-		if err := UpdatePersistedRemoteControlEnrollment(ctx, backend.Store, target, auth.AccountID, backend.AppServerClientName, enrollment, &enabled); err != nil {
+		if err := UpdatePersistedRemoteControlEnrollment(storeCtx, backend.Store, target, auth.AccountID, backend.AppServerClientName, enrollment, &enabled); err != nil {
 			return nil, nil, err
 		}
 	}
