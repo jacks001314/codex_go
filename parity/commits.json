@@ -7498,9 +7498,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/7; needs review: GUARDIAN_TICKET_HEADER, GUARDIAN_TICKET_METADATA_KEY, GuardianTicket, from_server, without_body_logging"
+    "Superseded upstream: dee21ec1bc (#43002) deleted the Guardian ticket protocol and replaced it with parent_response_id from response.created; neither the audited baseline cbe16d525c nor the Go tree contains guardian_ticket, and Go already sends parent_response_id on Guardian reviews (round 1010)"
    ]
   },
   {
