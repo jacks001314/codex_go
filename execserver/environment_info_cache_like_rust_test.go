@@ -33,3 +33,24 @@ func TestEnvironmentInfoCacheUsesInitializationMetadataLikeRust(t *testing.T) {
 		t.Fatal("uncached EnvironmentInfo probe unexpectedly used the cache")
 	}
 }
+
+// Mirrors Rust #49798: cached executor metadata is shared rather than copied,
+// so every cached lookup returns the same value (Rust compares the Arc with
+// ptr_eq across a cloned client). The forced probe stays a fresh value.
+func TestEnvironmentInfoCacheSharesCachedValueLikeRust(t *testing.T) {
+	client := &Client{}
+	initial := &EnvironmentInfo{Shell: ShellInfo{Name: "bash", Path: "/bin/bash"}}
+	client.rememberEnvironmentInfo(initial)
+
+	first, err := client.cachedEnvironmentInfo(context.Background())
+	if err != nil {
+		t.Fatalf("cachedEnvironmentInfo() error = %v", err)
+	}
+	second, err := client.cachedEnvironmentInfo(context.Background())
+	if err != nil {
+		t.Fatalf("cachedEnvironmentInfo() second error = %v", err)
+	}
+	if first != initial || second != first {
+		t.Fatalf("cached lookups were not shared: initial=%p first=%p second=%p", initial, first, second)
+	}
+}

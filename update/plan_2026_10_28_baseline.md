@@ -3865,3 +3865,10 @@ Status after this batch: `2308 complete`, `462 not_applicable`, `322 audit_pendi
 - Tests: `TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust`, the concurrent-duplicate test (plus content read-back) and `TestFilesystemCloseReleasesCapacityWhileReadUsesFileLikeRust`; full `go test ./execserver`, filesystem tests under `-race`, and Linux/Darwin vet pass.
 
 Status after this batch: `2309 complete`, `462 not_applicable`, `322 audit_pending`, `51 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Cached environment info sharing certification (Round 1099)
+
+- #49798 Rust returns the cached executor metadata as `Arc<EnvironmentInfo>` so callers share instead of cloning. Go already stores and returns a `*EnvironmentInfo` pointer from the handshake-seeded cache, and the forced probe remains uncached.
+- Added `TestEnvironmentInfoCacheSharesCachedValueLikeRust` to pin pointer identity across cached lookups, the Go analogue of Rust's `Arc::ptr_eq`.
+
+Status after this batch: `2310 complete`, `462 not_applicable`, `322 audit_pending`, `50 regression_pending`, `5 partial`, `6 blocked_precondition`.

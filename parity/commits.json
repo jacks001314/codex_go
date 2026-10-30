@@ -24616,9 +24616,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust #49798 changes the cached cell to `OnceCell<Arc<EnvironmentInfo>>` so lookups share one value. Go's equivalent is the `*EnvironmentInfo` pointer cache seeded by the initialize handshake (`rememberEnvironmentInfo`) and read by `cachedEnvironmentInfo`; no clone is made on lookup and the forced `EnvironmentInfo` probe still returns a fresh value.",
+    "`TestEnvironmentInfoCacheSharesCachedValueLikeRust` pins the Arc-sharing contract with pointer identity across repeated cached lookups (the Go analogue of Rust's `Arc::ptr_eq` across a cloned client); the existing cache test also verifies handshake values win and the forced probe bypasses the cache."
    ]
   },
   {
