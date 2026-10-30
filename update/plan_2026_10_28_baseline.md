@@ -3910,3 +3910,12 @@ Status after this batch: `2314 complete`, `462 not_applicable`, `322 audit_pendi
 - Focused `go test ./tui/tea ./tui/history_cell -run ComputerActivity` passes.
 
 Status after this batch: `2315 complete`, `462 not_applicable`, `322 audit_pending`, `45 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Live voice transcript split-flap wiring (Round 1105)
+
+- #43656 the streaming voice caption now renders through `chatwidget.SplitFlapTranscriptCell` at the TUI layer: `tui/tea/voice_transcript.go` rebuilds the board on every delta with the previous cell as its retained prefix, so appended text keeps settled tiles and only new arrivals flip.
+- Animation frames follow `SplitFlapFrameInterval` and stop at `SplitFlapAnimationDuration`; a generation counter drops stale ticks after a rebuild, and a sealed caption removes the live cell so the completed transcript remains an ordinary spoken history cell.
+- Reduced motion mirrors Rust: `animations=false` keeps the assistant caption static and drops the streamed user caption entirely. Parked sessions on another thread no longer leak a live caption into the selected transcript.
+- Tests: `TestLiveVoiceTranscriptAnimatesAndStopsFramesLikeRust`, `TestLiveVoiceTranscriptKeepsSettledTilesOnAppendLikeRust`, `TestLiveVoiceTranscriptSealsIntoHistoryCellLikeRust`, `TestLiveVoiceTranscriptRespectsReducedMotionLikeRust`; focused and full `go test ./tui/tea ./tui/chatwidget` pass.
+
+Status after this batch: `2316 complete`, `462 not_applicable`, `322 audit_pending`, `44 regression_pending`, `5 partial`, `6 blocked_precondition`.

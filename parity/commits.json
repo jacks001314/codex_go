@@ -9333,9 +9333,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Go commit 9f2c1d6c+: tui/tea/voice_transcript.go wires chatwidget.SplitFlapTranscriptCell into the live caption path: refreshVoiceTranscript rebuilds the board per delta with the previous cell so settled tiles survive an append, animates at SplitFlapFrameInterval until SplitFlapAnimationDuration, and drops the live cell when the caption is sealed so the completed transcript stays an ordinary spoken history cell.",
+   "Reduced motion matches Rust: animations=false renders the assistant caption statically and suppresses the streamed user caption; the cell runs with animated=false and requests no frames.",
+   "Tests: TestLiveVoiceTranscriptAnimatesAndStopsFramesLikeRust, TestLiveVoiceTranscriptKeepsSettledTilesOnAppendLikeRust, TestLiveVoiceTranscriptSealsIntoHistoryCellLikeRust, TestLiveVoiceTranscriptRespectsReducedMotionLikeRust in tui/tea/voice_transcript_like_rust_test.go."
    ]
   },
   {

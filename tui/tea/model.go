@@ -1677,6 +1677,9 @@ type Model struct {
 	// retainedVoiceCaptions keeps completed captions per thread so a thread
 	// switch can restore them before later typed turns (Rust #44749).
 	retainedVoiceCaptions map[string][]retainedVoiceCaption
+	// liveVoiceTranscript renders the caption that is still streaming with the
+	// split-flap board (Rust #43656 live_transcript_cell).
+	liveVoiceTranscript liveVoiceTranscriptState
 	// voiceAttemptCounter identifies each local startup attempt so late async
 	// results can be discarded.
 	voiceAttemptCounter uint64
@@ -3725,6 +3728,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		m.sampleVoicePeaks()
 		return m, voiceMeterTickCmd()
+	case voiceTranscriptFrameMsg:
+		return m, m.handleVoiceTranscriptFrame(msg)
 	case turnTipTickMsg:
 		// A turn-tip deadline only needs a frame: the working tip is computed
 		// while rendering, so the message itself has no state to apply.
@@ -9989,7 +9994,9 @@ func (m *Model) handleVoiceNotification(notification chatwidget.VoiceNotificatio
 	}
 	// Rendering is deduplicated, so a completed caption appears exactly once
 	// whether it arrived live or while the session was stopping.
-	m.refreshVoiceTranscript()
+	if tick := m.refreshVoiceTranscript(); tick != nil {
+		cmd = bubbletea.Batch(cmd, tick)
+	}
 	return cmd
 }
 
@@ -10215,8 +10222,9 @@ func (m *Model) restoreUndeliveredVoiceSpeech() {
 }
 
 // refreshVoiceTranscript renders every retained caption that has not been shown
-// yet, so a stopped session still leaves its transcript behind.
-func (m *Model) refreshVoiceTranscript() {
+// yet, so a stopped session still leaves its transcript behind, and refreshes
+// the animated caption that is still streaming.
+func (m *Model) refreshVoiceTranscript() bubbletea.Cmd {
 	if m.renderedVoiceTranscripts == nil {
 		m.renderedVoiceTranscripts = map[chatwidget.VoiceTranscriptRecord]bool{}
 	}
@@ -10229,6 +10237,7 @@ func (m *Model) refreshVoiceTranscript() {
 		m.applyHistoryCell(historycell.NewSpokenHistoryCell(string(record.Role), record.Text))
 		m.retainVoiceCaption(record, position)
 	}
+	return m.syncLiveVoiceTranscript()
 }
 
 type retainedVoiceCaption struct {
@@ -10582,7 +10591,18 @@ func (m *Model) refreshTranscript() {
 			m.turnTips.acknowledge(turnTipSurfaceCompletion)
 		}
 	}
-	content = m.reserveRecapTailSpacing(content)
+	// Rust #43656 keeps the streaming caption below the settled transcript and
+	// replaces it with an ordinary history cell once the caption is sealed.
+	if live := m.liveVoiceTranscriptLines(m.transcript.Width); len(live) > 0 {
+		liveContent := strings.Join(live, "\n")
+		if m.State == nil || len(m.State.Messages) == 0 {
+			content = liveContent
+		} else {
+			content += "\n" + liveContent
+		}
+	} else {
+		content = m.reserveRecapTailSpacing(content)
+	}
 	m.recordTranscriptDisclosureHits(m.State, content, ranges)
 	if content == m.lastTranscriptContent {
 		if m.activityFollow && m.transcript.Height != m.lastTranscriptHeight {
