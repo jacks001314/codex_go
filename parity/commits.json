@@ -8858,9 +8858,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/8; needs review: UserMessageSource, record_user_authorization, restore_retained_context, with_guardian_context_mode"
+    "retainedctx models inherited prefix order separately from local acceptance counters, marks adopted evidence incomplete, exposes HasInheritedUserMessages, and covers adoption/rollback in retained_context_test.go"
    ]
   },
   {
