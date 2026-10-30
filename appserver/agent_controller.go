@@ -364,6 +364,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		c.router.agentRegistry.RegisterSpawnedThread(agent.Metadata{ThreadID: string(threadID), Path: agent.AgentPath(agentPath), Nickname: nickname, Role: args.ResolvedRole})
 	}
 	committed = true
+	c.router.emitSubagentThreadInitializedAnalytics(ctx, record, threadInitializationModeNew)
 	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	phases := map[string]time.Duration{
 		telemetry.AgentSpawnPhaseChildCreate:    childCreate,
@@ -734,6 +735,7 @@ func (c *runtimeAgentController) ResumeAgent(ctx context.Context, args *agent.Re
 	if c.router.services.SpawnGraph != nil {
 		_ = c.router.services.SpawnGraph.UpsertThreadSpawnEdge(string(record.ParentThreadID), id, agent.ThreadSpawnEdgeOpen)
 	}
+	c.router.emitSubagentThreadInitializedAnalytics(ctx, record, threadInitializationModeResumed)
 	return &agent.ResumeAgentResult{Status: c.status(id)}, nil
 }
 func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.CloseAgentArgs) (*agent.CloseAgentResult, error) {

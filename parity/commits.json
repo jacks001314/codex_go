@@ -4312,9 +4312,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Certified against Rust c19525e5 (#51206, Round 1038): agent-tool thread spawns now emit codex_thread_initialized both when created and when resumed, with initialization_mode new/resumed, subagent_source thread_spawn, parent_thread_id, session/model/ephemeral/fork lineage, and the child's original created_at. The event inherits the parent connection's product/client name/version while forcing Rust's in-process transport and omitting experimental-API metadata. It is emitted before the thread/started notification and skipped for non-thread-spawn subagents or missing parent client identity. New regression appserver/subagent_initialization_analytics_like_rust_test.go covers spawn, close/resume, inherited client metadata, mode, lineage, model, and stable creation time. Verified with go build ./..., go test ./appserver -run 'SubagentInitialization|ThreadInitializedAnalytics|RuntimeAgentController' -count=1, go test ./telemetry -run ThreadInitialized -count=1, and go test ./parity -run TestAlignment -count=1. go vet ./appserver still reports the pre-existing unrelated context-cancel warning in appserver/thread_sample.go."
    ]
   },
   {

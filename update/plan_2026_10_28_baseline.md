@@ -3401,6 +3401,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `sandbox/mxc/transport_like_rust_test.go` cover a large Unicode launcher roundtrip under Windows environment limits, host-owned startup-value replacement, malformed payload rejection and scrub, oversized payload non-mutation, and clearing the default child environment.
 - Verified with `go build ./...`, `go test ./sandbox/mxc -count=1`, `go vet ./sandbox/mxc`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2200 complete`, `453 not_applicable`,
-`336 audit_pending`, `156 regression_pending`, `4 partial`,
+### Subagent initialization analytics (Round 1038)
+
+- Rust #51206 emits `codex_thread_initialized` for resumed thread-spawn subagents as well as newly created ones. The event inherits the parent app-server client metadata, records `initialization_mode: resumed`, keeps the stored thread's original `created_at`, and refreshes stored analytics metadata without changing the `new` mode for fresh children.
+- Go's app-server runtime already emitted initialization analytics for thread start/resume/fork, but agent-tool spawns had no equivalent event. `emitSubagentThreadInitializedAnalytics` now emits for `subAgentThreadSpawn` records on both spawn and `ResumeAgent`, using the parent connection's client identity with Rust's in-process transport and no experimental-API flag. It runs before the thread-started notification and is gated off for other subagent kinds or missing parent identity.
+- The new regression in `appserver/subagent_initialization_analytics_like_rust_test.go` verifies creation and close/resume modes, parent/session/subagent lineage, inherited client metadata, model, and the unchanged original creation timestamp.
+- Verified with `go build ./...`, `go test ./appserver -run 'SubagentInitialization|ThreadInitializedAnalytics|RuntimeAgentController' -count=1`, `go test ./telemetry -run ThreadInitialized -count=1`, and `go test ./parity -run TestAlignment -count=1`. `go vet ./appserver` retains the unrelated pre-existing `thread_sample.go` context-cancel warning.
+
+Status after reconciliation: `2201 complete`, `453 not_applicable`,
+`335 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

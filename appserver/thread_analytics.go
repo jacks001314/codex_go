@@ -41,6 +41,58 @@ func (r *RuntimeRouter) emitThreadForkAnalytics(ctx context.Context, connectionI
 	r.emitCodexThreadInitializedAnalyticsEvent(ctx, connectionID, response.Thread, modelID, threadInitializationModeForked, r.threadRecordOriginatorForAnalytics(response.Thread.ID))
 }
 
+// emitSubagentThreadInitializedAnalytics mirrors Rust #51206's
+// emit_subagent_session_started for agent-tool thread spawns. New and resumed
+// children report the parent's app-server client identity, the child's original
+// creation time, and an in-process RPC transport because no client RPC created
+// the delegated thread.
+func (r *RuntimeRouter) emitSubagentThreadInitializedAnalytics(ctx context.Context, record *session.Record, initializationMode string) {
+	if r == nil || record == nil || !runtimeRecordIsThreadSpawn(record) || r.services.Analytics == nil || r.threadAnalyticsDisabled(string(record.ID)) {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.ThreadInitializedEventSink)
+	if !ok {
+		return
+	}
+
+	client := telemetry.CodexAppServerClientMetadata{}
+	parentID := strings.TrimSpace(string(record.ParentThreadID))
+	if parentID != "" {
+		if parent := r.threadRecordForAnalytics(parentID); parent != nil {
+			client.ProductClientID = strings.TrimSpace(parent.Metadata.Originator)
+		}
+		if active := r.threads.ActiveTurn(parentID); active != nil {
+			if inherited, ok := r.analyticsAppServerClient(active.ConnectionID); ok {
+				client = inherited
+			}
+		}
+	}
+	if client.ProductClientID == "" {
+		return
+	}
+	client.RPCTransport = telemetry.AppServerRPCTransportInProcess
+	client.ExperimentalAPIEnable = nil
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	subagentSource := "thread_spawn"
+	event := telemetry.NewCodexThreadInitializedEvent(telemetry.CodexThreadInitializedEventInput{
+		ThreadID:           string(record.ID),
+		SessionID:          firstNonEmpty(strings.TrimSpace(record.SessionID), string(record.ID)),
+		AppServerClient:    client,
+		Runtime:            telemetry.CurrentRuntimeMetadata(),
+		Model:              strings.TrimSpace(record.Metadata.Model),
+		Ephemeral:          runtimeRecordEphemeral(record),
+		InitializationMode: initializationMode,
+		SubagentSource:     &subagentSource,
+		ParentThreadID:     cloneString(&parentID),
+		ForkedFromThreadID: stringPtrIfNotEmpty(strings.TrimSpace(string(record.ForkedFromID))),
+		CreatedAt:          uint64FromNonNegativeInt64(record.CreatedAt.Unix()),
+	})
+	sink.TrackCodexThreadInitializedEvent(ctx, event)
+}
+
 func (r *RuntimeRouter) emitCodexThreadInitializedAnalyticsEvent(ctx context.Context, connectionID string, thread *Thread, modelID string, initializationMode string, threadOriginator string) {
 	if r == nil || r.services.Analytics == nil || thread == nil || r.threadAnalyticsDisabled(thread.ID) {
 		return
