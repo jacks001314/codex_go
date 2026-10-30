@@ -196,3 +196,48 @@ func TestRuntimeRouterRestoresInputOrderFromSurvivingMetadataLikeRust(t *testing
 		t.Fatalf("answer order = %d, want 6 (after the surviving order 5)", got)
 	}
 }
+
+// Mirrors Rust #42844: an oversized instruction is omitted atomically from the
+// retained-instructions section with an explicit host notice. The resumed
+// excerpt recovery must not turn it back into a partial permission.
+func TestRetainedInstructionsOmitOversizedCheckpointInstructionLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	threadID := session.ThreadID("thread-oversized-instruction")
+	original := strings.Repeat("Permission is conditional. ", 800)
+	messageID := "oversized"
+	retained := &retainedctx.RetainedContext{}
+	retained.RecordUserMessage(retainedctx.RetainedUserMessage{
+		TurnID: "turn-1", MessageID: &messageID, Text: original, Complete: true,
+	}, retainedctx.LocalInputSource(retainedOrderPtr(1)))
+	rolloutPath := writeRetainedCheckpointRollout(t, home, threadID, retained)
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: string(threadID),
+		Metadata: session.Metadata{Extra: map[string]any{"rollout_path": rolloutPath}},
+		Items:    []session.Item{{ID: messageID, Type: "message", Role: "user", Text: original}},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	context := router.retainedContextForThread(string(threadID))
+	if context == nil {
+		t.Fatal("retainedContextForThread() = nil")
+	}
+	if context.UserMessagesComplete() {
+		t.Fatal("an oversized checkpoint instruction must stay incomplete after resume")
+	}
+	fragments := state.RenderRetainedInstructions(context)
+	if len(fragments) == 0 ||
+		!strings.HasPrefix(fragments[0].Content, "Host notice: some retained user instructions are unavailable") {
+		t.Fatalf("retained instruction fragments = %#v, want the omission notice first", fragments)
+	}
+	for _, fragment := range fragments {
+		if strings.Contains(fragment.Content, "Permission is conditional") {
+			t.Fatalf("an over-budget instruction must be omitted whole: %q", fragment.Content)
+		}
+	}
+}

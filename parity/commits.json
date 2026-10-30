@@ -7759,9 +7759,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1006 (回归+核对): #42844 让 Guardian 在 compaction/transcript 选择后仍能看到原始用户指令: 完整用户消息进入 host-owned retained context，与 verified answers 一起按 acceptance order 作为授权证据; 超大指令整体省略并发出显式 incomplete 通知，而不是截断成部分授权; fork 继承的用户消息标记 inherited，保持模型可见但不成为子线程本地授权。Go 的实现位于 retainedctx (RetainedUserMessage 记录/边界/继承来源)、appserver/retained_context.go (从历史派生、inherited 过滤、fork 标记) 与 state/guardian_retained_context.go (RenderRetainedInstructions/RenderVerifiedAnswers: source-order 标签、900-token 整条预算、host notice)。本轮核对等价性并补充端到端回归: 从带超大指令的 retained checkpoint 恢复后 context 仍为 incomplete，section 只保留 host notice 且不出现该指令的任何片段，同时确认 #43472 的 excerpt recovery 不会把超大指令重新变成部分授权。既有 state/guardian_retained_context_test.go 与 appserver/retained_inherited_test.go 覆盖 source order、整条省略、legacy/inherited 顺序和 worker 排除。验证: go test ./appserver -run OversizedCheckpointInstruction|QueuedApproval|OmittedInstructionExcerpt|InputOrderFromSurviving -count=1; go test ./state -run Retained -count=1; go test ./appserver -run Guardian|Retained|Verified|Root|Compaction -count=1; go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

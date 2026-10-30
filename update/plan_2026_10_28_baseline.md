@@ -3168,6 +3168,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `restoreRetainedContextCheckpoint` passes surviving harness metadata to `RetainedContext.Restore` so the acceptance counter advances past accepted-but-unretained input, and calls `RecoverUserMessageExcerpts` when a checkpoint is present.
 - New `appserver/retained_reconciled_authorization_like_rust_test.go` covers a queued approval that reaches model history after a later restrictive instruction but sorts by acceptance order, resume-time excerpt recovery that preserves the checkpoint gap, and a legacy checkpoint where a new answer sorts after a surviving order-5 input.
 - Verified with `go test ./appserver -run 'Guardian|Retained|Verified|Root|Compaction' -count=1`, `go test ./retainedctx ./rollout -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2165 complete`, `451 not_applicable`,
-`345 audit_pending`, `184 regression_pending`, `4 partial`,
+### Retained user instructions in Guardian context (Round 1006)
+
+- Rust #42844 captures complete user messages in host-owned retained context, renders them as ordered authorization evidence beside verified answers, omits an oversized instruction whole with an explicit incomplete-evidence notice, and marks forked instructions inherited so they stay model-visible without becoming child-local authorization (#42844, complete).
+- Go already implements the families in `retainedctx`, derives them from durable history in `appserver/retained_context.go` (including inherited scope and worker exclusion), and renders `RetainedInstructions`/`VerifiedAnswers` in `state/guardian_retained_context.go` with source-order labels and a 900-token whole-record budget.
+- This round certified the parity and added an end-to-end regression: a retained checkpoint carrying an oversized instruction resumes incomplete, the retained-instructions section keeps only the host notice, and no fragment exposes the oversized text even after the #43472 excerpt recovery refills the bounded source.
+- Existing `state/guardian_retained_context_test.go` covers source order, whole-record omission, legacy and inherited ordering, and `appserver/retained_inherited_test.go` covers fork marking plus worker exclusion.
+- Verified with `go test ./appserver -run 'OversizedCheckpointInstruction|QueuedApproval|OmittedInstructionExcerpt|InputOrderFromSurviving' -count=1`, `go test ./state -run Retained -count=1`, `go test ./appserver -run 'Guardian|Retained|Verified|Root|Compaction' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2166 complete`, `451 not_applicable`,
+`345 audit_pending`, `183 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
