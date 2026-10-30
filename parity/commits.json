@@ -20802,9 +20802,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Rust test fixtures leaked TempDir::keep() homes. Go tests create homes with t.TempDir(), which removes the directory when the test ends, so there is no retained temp-home ownership to fix; a spot check of TUI tests shows t.TempDir usage throughout."
    ]
   },
   {
@@ -21394,9 +21394,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: this commit only fixes the Rust thread-manager-sample binary and its core-api re-exports. The Go repository ships no thread-manager sample; the real CLI and app server already load configured credentials, auth routing, and managed restrictions through auth.Store and config.NewConfigService."
    ]
   },
   {
@@ -22184,9 +22184,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1112 (audit): tui/tea/welcome_blossom.go already fades a replay from full color back to blossomStaticOpacity over blossomFadeSeconds (400ms) after blossomReplaySeconds, returns to the settled opacity, and clears replayStartedAt so redraw scheduling stops. TestWelcomeBlossomClickReplaysLikeRust covers replay start and return to idle. Validation: go test ./tui/tea -run Blossom -count=1."
    ]
   },
   {
@@ -22573,9 +22573,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go does not drive Windows console mouse capture or write SGR 1006 requests itself. tui/tea/mouse_capture.go only emits Bubble Tea EnableMouseCellMotion/DisableMouse commands, and Bubble Tea owns the Windows console mode and mouse encoding lifecycle."
    ]
   },
   {
@@ -22671,9 +22671,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/8; needs review: LinkHover, LinkPointer, link_at, refresh_link_hover, set_link_pointer"
+    "N/A by architecture: the Go TUI has no transcript link-hover or terminal pointer-policy layer. It renders OSC-8 hyperlinks but does not track hover coordinates, Kitty pointer overrides, or Ghostty pointer shapes, so there is no hit-testing/pointer state to align."
    ]
   },
   {
@@ -23692,9 +23692,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Superseded upstream: #49330 stopped the exponent at the 30-second reconnect cap, but the current Rust baseline (#50348, commit 9d2b60303e) advances the saturating attempt counter on every failure and keeps jitter at the cap. Go already implements the later rule in remotecontrol/websocket_connect.go NextReconnectDelay, and TestNextReconnectDelayStaysCappedLikeRust covers the capped ramp. No code change for the superseded behavior."
    ]
   },
   {
@@ -24096,9 +24096,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1112 (audit): Go does not link the Rust rmcp SDK, but mcp/ema_account.go, ema_claims.go, ema_runtime.go, and ema_auth_policy.go already implement the two-stage ID-JAG exchange, authorization_details rejection, signed-scope validation, invalid_grant source mapping, insufficient_user_authentication handling, and credential-lifecycle policy. Tests in ema_account_like_rust_test.go, ema_auth_lifecycle_like_rust_test.go, and ema_authorization_details_like_rust_test.go cover both endpoints and rejected grants. Validation: go test ./mcp -run EMA -count=1."
    ]
   },
   {
