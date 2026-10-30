@@ -4070,3 +4070,10 @@ Status after this batch: `2341 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestDaemonRecoveryConsumeReadsAndRemovesSnapshotLikeRust`, `TestDaemonRecoveryConsumeRemovesMalformedSnapshotLikeRust`, `TestDaemonRecoveryConsumeMissingFileIsEmptyLikeRust`, `TestDaemonRecoveryRestoreMissingFileIsNoopLikeRust`, `TestDaemonRecoveryRestoreForAccessOnlyManagedLikeRust`, `TestDaemonRecoveryRestoreResumesSavedThreadsLikeRust`, `TestDaemonRecoveryResumeUsesExcludeTurnsLikeRust`; `go test ./appserver -run DaemonRecovery` passes.
 
 Status after this batch: `2342 complete`, `465 not_applicable`, `322 audit_pending`, `15 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Windows CLI sandbox keeps managed deny reads (Round 1124)
+
+- #42835 was already covered: `CreateWindowsSandboxCommandArgsForPermissionProfile` resolves exact-path and glob deny entries from the selected permission profile via `ResolveDenyReadPathsFromProfile` whenever no override is supplied, then forwards them as `DenyReadPathsOverride`. The CLI `sandbox --permission-profile` path and the exec server share this helper, so each launch reconciles persistent deny ACLs instead of clearing them.
+- Tests: `TestCreateWindowsSandboxCommandArgsResolvesDenyReadPathsFromProfileLikeRust`, `TestCreateWindowsSandboxCommandArgsRejectsRestrictedTokenWithDenyReadLikeRust`; `go test ./sandbox/windowssandbox -run DenyRead` passes.
+
+Status after this batch: `2343 complete`, `465 not_applicable`, `322 audit_pending`, `14 regression_pending`, `5 partial`, `6 blocked_precondition`.
