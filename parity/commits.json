@@ -8441,9 +8441,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 15/16 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1121: Go already carries the user-verification contracts at appserver/user_verification.go: status/enroll/delete/verify (plus cancel from #43925) with camelCase proof, unavailable/cancellation/failure/invalidParams enums, typed JSON-RPC `data`, deny-unknown-field params, challenge/title/description bounds, and the experimentalApi capability gate. With no native platform provider the methods report `providerUnavailable` (status) or the typed `unavailable` error, matching a Rust build without a supported provider; a provider seam is present for a future backend. Tests: TestRuntimeRouterUserVerificationUnavailableSurface, TestUserVerificationMethodsRequireExperimentalAPICapability, TestRuntimeRouterUserVerificationVerifyValidation, TestRuntimeRouterUserVerificationCancelValidatesParams, TestRuntimeRouterUserVerificationParamsRejectUnknownFields, TestRuntimeRouterUserVerificationPeerOriginLikeRust, TestRuntimeRouterUserVerificationProviderSeamLikeRust; go test ./appserver -run UserVerification passes."
    ]
   },
   {

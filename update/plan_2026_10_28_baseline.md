@@ -4047,3 +4047,11 @@ Status after this batch: `2338 complete`, `465 not_applicable`, `322 audit_pendi
 - Test: `TestInteractiveResumeSessionHandlerReadsHistoryFromStore`; targeted `go test ./app` passes.
 
 Status after this batch: `2339 complete`, `465 not_applicable`, `322 audit_pending`, `18 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### User-verification API contracts (Round 1121)
+
+- #43265 was already implemented in Go: `appserver/user_verification.go` defines the status/enroll/delete/verify contracts (plus cancel), camelCase proof and readiness fields, unavailable/cancellation/failure/invalidParams enums, typed JSON-RPC error `data`, `deny_unknown_fields` parameter checks, and challenge/title/description bounds. All four methods sit behind the `experimentalApi` capability.
+- Without a native platform provider the server reports `providerUnavailable` for status and the typed `unavailable` error for mutations, matching a Rust build without a supported provider; an explicit provider seam allows a future backend.
+- Tests: `TestRuntimeRouterUserVerificationUnavailableSurface`, `TestUserVerificationMethodsRequireExperimentalAPICapability`, `TestRuntimeRouterUserVerificationVerifyValidation`, `TestRuntimeRouterUserVerificationCancelValidatesParams`, `TestRuntimeRouterUserVerificationParamsRejectUnknownFields`, `TestRuntimeRouterUserVerificationPeerOriginLikeRust`, `TestRuntimeRouterUserVerificationProviderSeamLikeRust`; `go test ./appserver -run UserVerification` passes.
+
+Status after this batch: `2340 complete`, `465 not_applicable`, `322 audit_pending`, `17 regression_pending`, `5 partial`, `6 blocked_precondition`.
