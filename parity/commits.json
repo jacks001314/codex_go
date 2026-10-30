@@ -27954,9 +27954,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Complete: the split retained-snapshot layout already existed, but independent async snapshots still placed both retained sections behind the transcript, and the split assistant omission was still deduplicated against the instruction section's earlier proof. state/guardian.go now renders retained user instructions ahead of the transcript for both the synchronous reviewer and the asynchronous independent snapshot, leaving only RETAINED ASSISTANT CONTEXT behind the transcript immediately before the planned action. state/guardian_retained_context.go adds hasSplitAssistantOmissionSection: ApplyRetainedOmissionDeduplication leaves a split assistant notice intact (it cannot be attested by an instruction-section proof), and CurrentRetainedOmissions records no omission delivery state when the notice is split, mirroring Rust's guardian_retained_omissions clearing. Regression tests cover the new section order, instruction-prefix stability across growing and evicting assistant context, suppression of a notice-only assistant section when there is no split notice, preservation of a split assistant notice, and the presentation-dependent omission state: TestAsyncGuardianRetainedInstructionsPrecedeTranscriptLikeRust, TestAsyncGuardianSplitAssistantOmissionSkipsPreviousOmissionDedupLikeRust, TestCurrentRetainedOmissionsClearsSplitAssistantOmissionLikeRust, TestGuardianAsyncRetainedGrowthKeepsHistoryPrefixLikeRust, TestGuardianRetainedSnapshotSplitOnlyForAsyncPresentationLikeRust, and TestRetainedOmissionDeduplicationAssistantContextLikeRust. Verified with go test ./state -count=1, go test ./appserver -run 'Guardian' -count=1, go test ./context -run 'Guardian' -count=1, go test ./state -race -run 'AsyncGuardian|CurrentRetainedOmissions|SplitAssistant' -count=1, and go build ./... + go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

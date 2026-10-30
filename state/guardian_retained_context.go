@@ -293,7 +293,13 @@ func RetainedOmissionState(sections RetainedInstructionSections) GuardianRetaine
 // CurrentRetainedOmissions reports the omission availability a review with this
 // snapshot would deliver.
 func CurrentRetainedOmissions(context *retainedctx.RetainedContext, presentation ActionPresentation) GuardianRetainedOmissions {
-	return RetainedOmissionState(RenderRetainedInstructionSectionsForPresentation(context, presentation))
+	sections := RenderRetainedInstructionSectionsForPresentation(context, presentation)
+	if hasSplitAssistantOmissionSection(sections.AssistantContext) {
+		// Rust #51627: a split assistant notice cannot attest to the instruction
+		// prefix, so the review records no retained-omission delivery proof.
+		return GuardianRetainedOmissions{}
+	}
+	return RetainedOmissionState(sections)
 }
 
 // ApplyRetainedOmissionDeduplication mirrors Rust's #49796 continuation rules:
@@ -303,6 +309,11 @@ func CurrentRetainedOmissions(context *retainedctx.RetainedContext, presentation
 // section if no retained originals remain. A nil previous state is unknown and
 // therefore never suppresses delivery.
 func ApplyRetainedOmissionDeduplication(sections RetainedInstructionSections, previous *GuardianRetainedOmissions, legacy bool) RetainedInstructionSections {
+	if hasSplitAssistantOmissionSection(sections.AssistantContext) {
+		// Rust #51627: the assistant omission notice lives in its own section,
+		// so an earlier instruction-section omission proof cannot suppress it.
+		return sections
+	}
 	current := RetainedOmissionState(sections)
 	if previous == nil {
 		return sections
@@ -344,6 +355,19 @@ func ApplyRetainedOmissionDeduplication(sections RetainedInstructionSections, pr
 		sections.Instructions = items
 	}
 	return sections
+}
+
+// hasSplitAssistantOmissionSection reports whether the assistant-context
+// section carries the exact host omission notice, which cannot attest to both
+// retained families at once (#51627).
+func hasSplitAssistantOmissionSection(assistantContext []string) bool {
+	notice := strings.TrimRight(RetainedAssistantOmissionNotice(), "\n")
+	for _, item := range assistantContext {
+		if strings.TrimRight(item, "\n") == notice {
+			return true
+		}
+	}
+	return false
 }
 
 // suppressedOmissionOnlySection drops a section whose every item is a host

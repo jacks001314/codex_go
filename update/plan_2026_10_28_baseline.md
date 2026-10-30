@@ -3664,6 +3664,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: blocked pre/post hooks, blocked readiness waiters, cancellation during a blocked pre-hook producing `Aborted` without reaching the request sink, and a late successful response being replaced by the cancellation item.
 - Verified with `go test ./tool -count=1`, `go test ./turn -count=1`, `go test ./codemode -run 'Cell|Terminat|Late' -count=1`, and `go test ./appserver -run 'Dynamic|ToolHook|Abort|Interrupt' -count=1`.
 
-Status after reconciliation: `2230 complete`, `462 not_applicable`,
-`322 audit_pending`, `130 regression_pending`, `5 partial`,
+### Stable Guardian snapshot prefixes (Round 1078)
+
+- Rust #51627 keeps independent Guardian snapshots cacheable: retained user instructions move ahead of the transcript, assistant originals and their omission notice stay in a separate `RETAINED ASSISTANT CONTEXT` section after it, and a split assistant notice stops reusing the instruction section's omission proof.
+- Complete: `state/guardian.go` renders the retained instruction prefix before the transcript for both presentations and leaves only the assistant context behind the transcript. `state/guardian_retained_context.go` preserves a split assistant omission through `ApplyRetainedOmissionDeduplication` and records no omission delivery state from a split notice, mirroring Rust's cleared `guardian_retained_omissions`.
+- Regression: section order, instruction-prefix stability across growing and evicting assistant context, notice-only suppression without a split, split-notice preservation, and presentation-dependent omission state.
+- Verified with `go test ./state -count=1`, `go test ./appserver -run 'Guardian' -count=1`, `go test ./context -run 'Guardian' -count=1`, and `go test ./state -race -run 'AsyncGuardian|CurrentRetainedOmissions|SplitAssistant' -count=1`.
+
+Status after reconciliation: `2231 complete`, `462 not_applicable`,
+`322 audit_pending`, `129 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

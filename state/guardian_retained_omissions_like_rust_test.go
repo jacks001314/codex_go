@@ -93,7 +93,8 @@ func TestRetainedOmissionStateIgnoresForgedNoticeTextLikeRust(t *testing.T) {
 	}
 }
 
-// The split assistant-context section deduplicates its notice independently.
+// A split assistant-context notice cannot be suppressed by an earlier
+// instruction-section proof (#51627).
 func TestRetainedOmissionDeduplicationAssistantContextLikeRust(t *testing.T) {
 	sections := RetainedInstructionSections{
 		AssistantContext: []string{
@@ -106,7 +107,11 @@ func TestRetainedOmissionDeduplicationAssistantContextLikeRust(t *testing.T) {
 	if !delivered.AssistantContext || delivered.UserInstructions {
 		t.Fatalf("omission state = %#v, want assistant context omitted only", delivered)
 	}
-	if got := ApplyRetainedOmissionDeduplication(sections, &delivered, false); got.AssistantContext != nil {
-		t.Fatalf("assistant context = %#v, want the notice-only section suppressed", got.AssistantContext)
+	got := ApplyRetainedOmissionDeduplication(sections, &delivered, false)
+	if len(got.AssistantContext) == 0 {
+		t.Fatalf("assistant context = %#v, want the split notice preserved", got.AssistantContext)
+	}
+	if !strings.Contains(strings.Join(got.AssistantContext, ""), strings.TrimRight(RetainedAssistantOmissionNotice(), "\n")) {
+		t.Fatalf("assistant context = %#v, want the host notice", got.AssistantContext)
 	}
 }

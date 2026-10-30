@@ -479,9 +479,9 @@ func TestGuardianRetainedSnapshotSplitOnlyForAsyncPresentationLikeRust(t *testin
 		}
 	}
 
-	// The asynchronous framing is the independent snapshot: it splits the
-	// instruction prefix from the assistant context and places both behind the
-	// transcript, immediately before the planned action (#49993).
+	// The asynchronous framing is the independent snapshot: the retained
+	// instruction prefix precedes the transcript, while the assistant context
+	// follows it immediately before the planned action (#51627, formerly #49993).
 	asyncPrompt, asyncContext := build(ActionPresentationAsync)
 	asyncRetainedAt := strings.Index(asyncPrompt, retainedUserInstructionsStart)
 	asyncRetainedEndAt := strings.Index(asyncPrompt, retainedUserInstructionsEnd)
@@ -491,8 +491,8 @@ func TestGuardianRetainedSnapshotSplitOnlyForAsyncPresentationLikeRust(t *testin
 	if asyncAssistantAt < 0 || !strings.Contains(asyncPrompt, retainedAssistantContextEnd) || asyncActionAt < 0 {
 		t.Fatalf("the asynchronous framing must split the retained snapshot:\n%s", asyncPrompt)
 	}
-	if !(asyncTranscriptAt < asyncRetainedAt && asyncRetainedAt < asyncRetainedEndAt && asyncRetainedEndAt < asyncAssistantAt && asyncAssistantAt < asyncActionAt) {
-		t.Fatalf("async order = transcript:%d retained:%d retainedEnd:%d assistant:%d action:%d\n%s", asyncTranscriptAt, asyncRetainedAt, asyncRetainedEndAt, asyncAssistantAt, asyncActionAt, asyncPrompt)
+	if !(asyncRetainedAt < asyncRetainedEndAt && asyncRetainedEndAt < asyncTranscriptAt && asyncTranscriptAt < asyncAssistantAt && asyncAssistantAt < asyncActionAt) {
+		t.Fatalf("async order = retained:%d retainedEnd:%d transcript:%d assistant:%d action:%d\n%s", asyncRetainedAt, asyncRetainedEndAt, asyncTranscriptAt, asyncAssistantAt, asyncActionAt, asyncPrompt)
 	}
 	if strings.Contains(asyncPrompt[asyncRetainedAt:asyncRetainedEndAt], "assistant: Deploy to staging?") {
 		t.Fatalf("the assistant originals leaked into the asynchronous instruction prefix:\n%s", asyncPrompt)
@@ -560,17 +560,21 @@ func TestGuardianAsyncRetainedGrowthKeepsHistoryPrefixLikeRust(t *testing.T) {
 		}
 		transcriptAt := strings.Index(prompt, "Recent transcript:")
 		retainedAt := strings.Index(prompt, retainedUserInstructionsStart)
+		assistantAt := strings.Index(prompt, retainedAssistantContextStart)
 		actionAt := strings.Index(prompt, ">>> APPROVAL REQUEST START")
-		if transcriptAt < 0 || retainedAt < 0 || actionAt < 0 {
+		if transcriptAt < 0 || retainedAt < 0 || assistantAt < 0 || actionAt < 0 {
 			t.Fatalf("generation %d prompt is missing a section:\n%s", generation, prompt)
 		}
-		if !(transcriptAt < retainedAt && retainedAt < actionAt) {
-			t.Fatalf("generation %d order = transcript:%d retained:%d action:%d\n%s", generation, transcriptAt, retainedAt, actionAt, prompt)
+		// Rust #51627: the retained instruction prefix precedes the transcript,
+		// and only the rolling assistant context follows it.
+		if !(retainedAt < transcriptAt && transcriptAt < assistantAt && assistantAt < actionAt) {
+			t.Fatalf("generation %d order = retained:%d transcript:%d assistant:%d action:%d\n%s",
+				generation, retainedAt, transcriptAt, assistantAt, actionAt, prompt)
 		}
-		if !strings.Contains(prompt[retainedAt:], assistantText) {
+		if !strings.Contains(prompt[assistantAt:], assistantText) {
 			t.Fatalf("generation %d lost the current assistant context:\n%s", generation, prompt)
 		}
-		prefix := prompt[:retainedAt]
+		prefix := prompt[:assistantAt]
 		if generation == 0 {
 			historyPrefix = prefix
 		} else if prefix != historyPrefix {

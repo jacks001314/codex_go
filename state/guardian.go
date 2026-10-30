@@ -811,10 +811,9 @@ func BuildPromptPartsWithSectionCosts(
 		addSection("sender_user_messages", strings.Join(items, ""))
 	}
 	// The retained snapshot layout follows the reviewed consumer's framing
-	// (#51627): the stateful synchronous reviewer renders one section ahead of the
-	// transcript, while the asynchronous independent snapshot separates the
-	// assistant context and, since #49993, places both retained sections behind
-	// the transcript and attestations.
+	// (#51627): the retained user-instruction prefix always precedes the
+	// transcript, while the asynchronous independent snapshot keeps the assistant
+	// context in its own section behind the transcript and attestations.
 	// The asynchronous scorer omits instructions this request's own transcript
 	// already carries (#48110); the ordering banners remain, and nothing from a
 	// previous sample can suppress an original.
@@ -829,7 +828,7 @@ func BuildPromptPartsWithSectionCosts(
 		retainedSections = RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
 	}
 	retainedSections = ApplyRetainedOmissionDeduplication(retainedSections, options.PreviousRetainedOmissions, HasLegacyRetainedOrder(options.RetainedContext))
-	if !isAsync && len(retainedSections.Instructions) > 0 {
+	if len(retainedSections.Instructions) > 0 {
 		addSection("retained_user_instructions", strings.Join(retainedSections.Instructions, ""))
 	}
 	// Rust feeds the review's selected-answer evidence into the composer as
@@ -887,12 +886,9 @@ func BuildPromptPartsWithSectionCosts(
 		addSection("permissions", strings.TrimLeft(strings.Join(items, ""), "\n"))
 	}
 	if isAsync {
-		// Rust #49993: the asynchronous retained snapshot follows the transcript
-		// and the action-specific attestations, immediately before the planned
-		// action, keeping the history prefix reusable while the window rolls.
-		if len(retainedSections.Instructions) > 0 {
-			addSection("retained_user_instructions", strings.Join(retainedSections.Instructions, ""))
-		}
+		// Rust #51627: independent snapshot preparation moves the retained user
+		// instructions ahead of the transcript, so only the rolling assistant
+		// context stays behind it (immediately before the planned action).
 		if len(retainedSections.AssistantContext) > 0 {
 			addSection("retained_assistant_context", strings.Join(retainedSections.AssistantContext, ""))
 		}
