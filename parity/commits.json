@@ -5508,9 +5508,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "mcp/invocation_registry.go + mcp/tool_executor.go RegisterToolInvocation retain invocation metadata for every MCP tools/call, including node_repl and cua_repl",
+    "appserver/mcp_elicitation.go: mcpElicitationLiveCallID reads the nested callId, service.LiveToolInvocation resolves a same-server live invocation, and reviewID becomes the originating call only then; the nested action keeps its own identity and every other case falls back to the elicitation id",
+    "Regression contract: appserver/guardian_node_repl_elicitation_attribution_like_rust_test.go -run 'NodeReplNestedReview'"
    ]
   },
   {
@@ -5532,9 +5534,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/guardian_review_metrics.go: guardianReviewMCPToolTag adds a sanitized tool tag to the review counter only for codex_apps MCP calls; duration and token histograms keep their existing tags",
+    "Existing coverage in appserver/guardian_review_metrics_test.go asserts the tool tag on the codex_apps counter and its absence for custom MCP actions"
    ]
   },
   {
@@ -23926,9 +23929,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only eval-order hygiene: the commit binds app_server_time_provider(...) to a local before passing it to avoid a temporary/borrow issue. Go evaluates the argument directly (appserver/clock_provider.go) and has no equivalent aliasing requirement, so no carrier exists."
    ]
   },
   {
