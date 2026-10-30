@@ -373,3 +373,55 @@ func TestModelAgentsArchiveKeepsSelectionAdjacentLikeRust(t *testing.T) {
 		t.Fatalf("pending successor was not consumed: %q", got)
 	}
 }
+
+// Rust #58238: an embedded session archives a task from its in-process command
+// center and keeps the dashboard open instead of exiting the TUI.
+func TestModelEmbeddedCommandCenterArchivesAndReturnsToDashboardLikeRust(t *testing.T) {
+	var archived []string
+	model := NewModel(nil, Options{
+		Width:                  120,
+		Height:                 24,
+		AgentsOverviewEmbedded: true,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnAgentsOverviewArchive: func(threadID string) error {
+			archived = append(archived, threadID)
+			return nil
+		},
+	})
+	updated, command := model.Update(key(bubbletea.KeyLeft))
+	model = updated.(*Model)
+	if command == nil || model.agentsOverview == nil {
+		t.Fatal("embedded Left did not open the command center")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(*Model)
+	if model.agentsOverview == nil {
+		t.Fatal("embedded command center closed after its first refresh")
+	}
+
+	model.Update(agentsKeyEvent('a'))
+	model.Update(key(bubbletea.KeyDown))
+	updated, command = model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("confirmed archive returned no lifecycle command")
+	}
+	updated, refresh := model.Update(command())
+	model = updated.(*Model)
+	if len(archived) != 1 || archived[0] != "root-1" {
+		t.Fatalf("archived = %#v, want [root-1]", archived)
+	}
+	if model.agentsOverview == nil {
+		t.Fatal("embedded command center closed after archiving a task")
+	}
+	if refresh == nil {
+		t.Fatal("embedded archive did not refresh the dashboard")
+	}
+	updated, _ = model.Update(refresh())
+	model = updated.(*Model)
+	if model.agentsOverview == nil {
+		t.Fatal("embedded command center closed after the refresh")
+	}
+}

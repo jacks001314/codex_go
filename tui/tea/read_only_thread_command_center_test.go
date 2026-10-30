@@ -59,6 +59,22 @@ func TestReadOnlyViewReturnsToCommandCenterWithLeftOrEscape(t *testing.T) {
 	}
 }
 
+// Rust #58238: embedded sessions with dashboard actions return to the command
+// center from a read-only conversation just like shared app servers.
+func TestReadOnlyViewReturnsToCommandCenterFromEmbeddedLikeRust(t *testing.T) {
+	options := availableCommandCenterOptions()
+	options.LocalDaemonSession = false
+	options.AgentsOverviewEmbedded = true
+	model := readOnlyCommandCenterModel(t, options)
+	notice := model.renderReadOnlyThreadNotice()
+	if !strings.Contains(notice, "\u2190/Esc command center") {
+		t.Fatalf("embedded notice = %q", notice)
+	}
+	if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft}); command == nil || model.agentsOverview == nil {
+		t.Fatal("embedded Left did not open the command center")
+	}
+}
+
 // A remapped composer move_left (or an action that claims Left) keeps Esc as the
 // command-center key, matching Rust's keymap gate.
 func TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable(t *testing.T) {
@@ -123,14 +139,13 @@ func TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable(t *testing.T) {
 	}
 }
 
-// The embedded TUI has no command center, so the notice keeps the exit grouping
-// and neither Left nor Esc opens the dashboard.
+// A session with no dashboard source has no command center, so the notice keeps
+// the exit grouping and neither Left nor Esc opens the dashboard.
 func TestReadOnlyViewWithoutCommandCenterKeepsExitKeys(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
 		options Options
 	}{
-		{name: "embedded", options: Options{OnAgentsOverviewRefresh: availableCommandCenterOptions().OnAgentsOverviewRefresh, AgentsOverviewEmbedded: true}},
 		{name: "no dashboard callback", options: Options{}},
 	} {
 		model := readOnlyCommandCenterModel(t, testCase.options)

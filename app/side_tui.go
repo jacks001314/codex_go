@@ -183,6 +183,29 @@ func (c *interactiveLocalSideCoordinator) CloseAll() error {
 	return firstErr
 }
 
+// CloseRelated shuts down the side conversations whose parent belongs to the
+// given thread subtree and reports whether they all closed. Conversations owned
+// by unrelated threads stay open (Rust #58237 shutdown_side_threads root).
+func (c *interactiveLocalSideCoordinator) CloseRelated(parentThreadIDs map[string]struct{}) bool {
+	if c == nil || c.store == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	closed := true
+	for sideThreadID, parentThreadID := range c.parentBySide {
+		if _, related := parentThreadIDs[strings.TrimSpace(parentThreadID)]; !related {
+			continue
+		}
+		if err := c.deleteSideLocked(sideThreadID); err != nil {
+			closed = false
+			continue
+		}
+		c.forgetSideLocked(sideThreadID)
+	}
+	return closed
+}
+
 func (c *interactiveLocalSideCoordinator) Instructions(threadID string) (string, bool) {
 	if c == nil || c.store == nil {
 		return "", false

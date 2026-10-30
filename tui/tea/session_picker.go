@@ -250,7 +250,7 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 }
 
 func (m *Model) sharedServerCommandCenterAvailable() bool {
-	return m != nil && !m.agentsOverviewEmbedded && (m.localDaemonSession || m.remoteAppServer)
+	return m != nil && m.commandCenterAvailable()
 }
 
 func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {

@@ -36,15 +36,17 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 }
 
 // commandCenterAvailable mirrors Rust's AppServerTarget::supports_command_center
-// (#57281): a session connected to a local daemon or a remote App Server can
-// return to the command center, while the embedded TUI target cannot.
+// (#57281/#58238): a session connected to a local daemon, a remote App Server,
+// or an embedded app server that provides dashboard actions can return to the
+// command center.
 func (m *Model) commandCenterAvailable() bool {
-	if m == nil {
+	if m == nil || m.onAgentsOverviewRefresh == nil {
 		return false
 	}
-	return (m.localDaemonSession || m.remoteAppServer) &&
-		!m.agentsOverviewEmbedded &&
-		m.onAgentsOverviewRefresh != nil
+	if m.agentsOverviewEmbedded {
+		return true
+	}
+	return m.localDaemonSession || m.remoteAppServer
 }
 
 // agentsNavigationKeyAvailable mirrors Rust BottomPane::agents_navigation_key_available

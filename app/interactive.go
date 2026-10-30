@@ -1415,6 +1415,15 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadAgents:               readAgents,
 		OnSwitchAgent:              switchAgent,
 		AgentsOverviewEmbedded:     true,
+		// Rust #58238/#58239: the embedded command center lists and manages
+		// this process's sessions; side conversations follow their task's
+		// subtree only (Rust #58237).
+		OnAgentsOverviewRefresh:    embeddedAgentsOverviewRefresh(store, sideCoordinator.CloseRelated),
+		OnAgentsOverviewNewSession: embeddedAgentsOverviewNewSession(store),
+		OnAgentsOverviewStop:       embeddedAgentsOverviewStop(store),
+		OnAgentsOverviewRename:     embeddedAgentsOverviewRename(store),
+		OnAgentsOverviewArchive:    embeddedAgentsOverviewArchive(store, sideCoordinator.CloseRelated),
+		OnAgentsOverviewDelete:     embeddedAgentsOverviewDelete(store, sideCoordinator.CloseRelated),
 		OnStartAgentsDaemon:        interactiveStartAgentsDaemon,
 		OnDetectExternalAgent:      interactiveExternalAgentDetectHandler(root),
 		OnImportExternalAgent:      interactiveExternalAgentImportHandler(root),

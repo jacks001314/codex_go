@@ -135,7 +135,10 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	if m.agentsOverviewEmbedded {
+	// Rust #58238: an embedded app server opens the command center when its
+	// session supports the dashboard actions; a session with no dashboard
+	// source keeps the shared-server hint.
+	if m.agentsOverviewEmbedded && m.onAgentsOverviewRefresh == nil {
 		return m.openAgentsUnavailableSelection()
 	}
 	m.agentsOverviewPendingDraft = nil

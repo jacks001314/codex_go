@@ -55,25 +55,32 @@ func TestAgentsNavigationOpensOverviewFromEmptyComposerLikeRust(t *testing.T) {
 	}
 }
 
-// Local-daemon and remote sessions enable the shortcut; embedded sessions keep
-// Left for the composer (Rust #57281 supports_command_center).
+// Local-daemon, remote, and dashboard-backed embedded sessions enable the
+// shortcut; a session with no command center keeps Left for the composer
+// (Rust #57281/#58238 supports_command_center).
 func TestAgentsNavigationRequiresSharedAppServerLikeRust(t *testing.T) {
-	for _, testCase := range []struct {
-		name    string
-		options Options
-	}{
-		{name: "embedded", options: Options{}},
-		{name: "embedded dashboard", options: Options{AgentsOverviewEmbedded: true}},
-	} {
-		model := agentsNavigationModel(t, testCase.options)
-		if strings.Contains(utils.StripANSI(model.View()), "for agents") {
-			t.Fatalf("%s session advertises the local-daemon shortcut", testCase.name)
-		}
-		updated, command := model.Update(key(bubbletea.KeyLeft))
-		model = updated.(*Model)
-		if command != nil || model.agentsOverview != nil {
-			t.Fatalf("%s session opened the agents overview", testCase.name)
-		}
+	model := agentsNavigationModel(t, Options{})
+	if strings.Contains(utils.StripANSI(model.View()), "for agents") {
+		t.Fatal("a session without a command center advertises the shortcut")
+	}
+	updated, command := model.Update(key(bubbletea.KeyLeft))
+	model = updated.(*Model)
+	if command != nil || model.agentsOverview != nil {
+		t.Fatal("a session without a command center opened the agents overview")
+	}
+}
+
+// Rust #58238: an embedded app server that provides dashboard actions runs the
+// command center in-process, so Left opens it from an empty composer.
+func TestAgentsNavigationOpensOverviewForEmbeddedDashboardLikeRust(t *testing.T) {
+	model := agentsNavigationModel(t, Options{AgentsOverviewEmbedded: true})
+	if !strings.Contains(utils.StripANSI(model.View()), "for agents") {
+		t.Fatal("embedded dashboard session is missing the agents footer hint")
+	}
+	updated, command := model.Update(key(bubbletea.KeyLeft))
+	model = updated.(*Model)
+	if command == nil || model.agentsOverview == nil {
+		t.Fatal("embedded dashboard session did not open the agents overview")
 	}
 }
 
