@@ -27618,9 +27618,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1021 (audit): the tool-declaration window mode is history-derived in Go. model.ResolveToolDeclarationMode/ResolveToolDeclarationWindow mirror Session::current_window_uses_incremental_tools (non-lite => legacy, empty window => current setting, existing window => has_tool_declarations), appserver.responsesLiteWindowDeclarationItemsForTurn freezes the decision per window number, model.ResponsesAgentRunner.buildResponsesAgentRequest replays recorded additional_tools/base-instruction items instead of rebuilding them (sampling and websocket prewarm both go through it), and appserver.placeIncrementalCatalogBeforeCompactedHistory plus ResolveToolDeclarationWindow re-derive the new window after a compaction or context reset while carrying the recorded prefix forward. Full-history forks use session.ForkAll, which keeps the declarations together with their baseline. Rust-only surfaces in this commit (guardian/input_budget.rs token estimation and prompt_debug.rs) have no Go counterpart; the budget architecture stays tracked by #44281. Regression contract: appserver/responses_lite_declarations_test.go TestResponsesLiteWindowDeclarationFreezeLikeRust / TestResponsesLiteLegacyResumeStaysLegacyLikeRust / TestResponsesLiteContextResetRedrivesDeclarationsLikeRust / TestResponsesLiteForkKeepsWindowDeclarationsLikeRust and appserver/incremental_tools_test.go TestIncrementalToolCatalogLegacyResumeLikeRust / TestIncrementalToolCatalogWindowReplacementLikeRust / TestIncrementalToolCatalogRequestsReplayFromHistoryLikeRust; verify with `go test ./appserver -run 'ResponsesLite|IncrementalToolCatalog' -count=1` and `go test ./model -run 'ToolDeclaration|WindowHasToolDeclarations' -count=1`."
    ]
   },
   {

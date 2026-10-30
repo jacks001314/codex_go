@@ -3271,6 +3271,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Rust #51483 adds correlated, credential-free rendezvous connection diagnostics. Go already implements the full contract in `execserver/connection_diagnostics.go` and `execserver/remote.go`: per-attempt `req_<32 hex>` request ids on `x-request-id`, typed `http`/`io`/`tls`/`protocol`/`connection_closed`/`other` categories, allowlisted `x-codex-rendezvous-rejection-reason`, and `connection_attempt`/`request_id` log fields (#51483, complete).
 - Verified with `go test ./tui/bottom_pane -run 'ApprovalHeader' -count=1`, `go test ./execserver -run 'Rendezvous' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2184 complete`, `451 not_applicable`,
-`345 audit_pending`, `165 regression_pending`, `4 partial`,
+### Tool declaration mode across resumed context windows (Round 1021)
+
+- Rust #51480 derives a context window's tool declaration mode from its history (`current_window_uses_incremental_tools`): non-lite models always rebuild, an empty window applies the current setting, and an existing window keeps whatever its history recorded. Go mirrors that in `model.ResolveToolDeclarationMode` and `model.ResolveToolDeclarationWindow`, which are consulted by `appserver.responsesLiteWindowDeclarationItemsForTurn`, `incrementalToolCatalogForTurn`, and the runner's `WindowHasToolDeclarations` branch.
+- The mode is applied consistently to sampling, websocket startup prewarm (both build requests through `model.ResponsesAgentRunner.buildResponsesAgentRequest`), compaction/context-reset windows (`placeIncrementalCatalogBeforeCompactedHistory` re-derives the new window while carrying the recorded prefix), and full-history forks (`session.ForkAll` keeps declarations with their baseline). Disabling incremental tools on resume preserves the live window's declarations and only affects the next window.
+- Rust's `guardian/input_budget.rs` token estimate and `prompt_debug.rs` are not modelled in Go; the Guardian input-budget architecture remains tracked by #44281.
+- Verified with `go test ./appserver -run 'ResponsesLite|IncrementalToolCatalog' -count=1`, `go test ./model -run 'ToolDeclaration|WindowHasToolDeclarations' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2185 complete`, `451 not_applicable`,
+`345 audit_pending`, `164 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
