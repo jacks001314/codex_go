@@ -11323,9 +11323,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "MCP tool and connector descriptions move out of the Guardian action JSON into an optional, explicitly untrusted `guardian_tool_descriptions` fragment (#44493): context/guardian_tool_descriptions.go bounds each description to 400 estimated tokens, escapes closing tags, and returns nil when both sources are blank, while state/guardian_action_prompt.go appends the fragment after the evidence so the required action JSON keeps nested arguments (such as `arguments.description`) intact and budget enforcement can omit only the descriptions.",
+    "Regression coverage: context/guardian_tool_descriptions_test.go (empty, truncation, closing-tag escaping) and state/guardian_test.go TestBuildPromptAppendsGuardianToolDescriptionsLikeRust plus TestGuardianActionJSONMatchesRust and the evidence-ordering test. Verified with `go test ./context -run GuardianToolDescriptions -count=1` and `go test ./state -run Guardian -count=1`."
    ]
   },
   {
@@ -14026,9 +14027,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Explicit `app-server daemon update` can restore pinned or local managed packages to the latest stable release (#45780): appserverdaemon/update_loop.go performs the restore through a single-use updater authorization (`RestoreRelease`) and installer guard, keeps the automatic-update preference, restarts a running daemon when its selected package changes even if binary/version match, leaves stopped daemons stopped, rejects incompatible production packages, resolves Windows junction targets for ownership checks, and ordinary scheduled updates still respect pins.",
+    "Regression coverage: appserverdaemon/update_loop_test.go TestUpdateOnceRestoreUsesReleaseNameLikeRust and the manual-update/installer tests covering pinned packages and restore authorization. Verified with `go test ./appserverdaemon -run UpdateOnceRestore -count=1`."
    ]
   },
   {
@@ -18765,9 +18767,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Compaction checkpoints persist resume metadata (#47323): appserver/compaction_checkpoint_resume_test.go drives the manual compaction RPC and verifies the checkpoint records the context window, resume metadata (multi-agent version, last started turn and previous turn settings), preserves absent-vs-empty metadata, and restores it on a cold resume; rollout/compaction_resume_metadata_test.go pins the wire shape and compatibility with older records.",
+    "Regression coverage: appserver/compaction_checkpoint_resume_test.go TestRuntimeCompactionPersistsCheckpointResumeMetadataLikeRust and rollout/compaction_resume_metadata_test.go. Verified with `go test ./appserver -run CompactionPersistsCheckpointResumeMetadata -count=1`."
    ]
   },
   {
@@ -19884,9 +19887,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Executor connections accept host-supplied bearer tokens (#47648): appserver/environment.go carries an optional bearer auth on environment/add, requires wss:// or loopback for it, and forwards it through execserver/connection_headers.go and execserver/client.go so both the initial dial and reconnects send the header; tool/shell.go threads the same credentials through shell upgrades. Plain ws:// to a non-loopback host is rejected.",
+    "Regression coverage: appserver/environment_bearer_token_test.go TestEnvironmentAddAuthBearerTokenLikeRust and the RPC/null variants, execserver/connection_headers_test.go and client_headers_test.go, and tool/shell.go's header plumbing tests. Verified with `go test ./appserver -run BearerToken -count=1`."
    ]
   },
   {
@@ -19944,9 +19948,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "GovCloud Bedrock Mantle endpoints get a restricted default model catalog (#47657): model/provider.go recognizes `bedrock-mantle.us-gov-*.api.aws` front doors and limits them to GPT-5.6 Terra, GPT-5.6 Luna and GPT-5.4 with Terra as the default, while a configured catalog is preserved with normalized service tiers and commercial Mantle/Runtime providers keep their broader catalogs.",
+    "Regression coverage: model/provider_test.go TestAmazonBedrockGovCloudMantleCatalogLikeRust and TestAmazonBedrockProviderModelsManagerUsesRuntimeCatalogLikeRust. Verified with `go test ./model -run Bedrock -count=1`."
    ]
   },
   {

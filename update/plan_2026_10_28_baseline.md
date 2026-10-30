@@ -3767,6 +3767,16 @@ Status after this batch: `2257 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2263 complete`, `462 not_applicable`, `322 audit_pending`, `97 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1090)
+
+- #44493 Guardian tool descriptions: bounded, escaped, untrusted fragment appended after evidence so the action JSON absorbs no optional metadata.
+- #47648 executor bearer tokens: optional auth on environment/add, wss/loopback enforcement, header on dial and reconnect.
+- #47657 GovCloud Mantle catalog: restricted three-model default for `bedrock-mantle.us-gov-*`, configured catalogs preserved.
+- #47323 compaction resume metadata: checkpoint records context window, multi-agent version, last turn and previous settings, absent-vs-empty preserved.
+- #45780 pinned-package restore: single-use updater authorization and installer guard, restart on package change, pins still respected by scheduled updates.
+
+Status after this batch: `2268 complete`, `462 not_applicable`, `322 audit_pending`, `92 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
