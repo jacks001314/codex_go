@@ -6970,9 +6970,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Thread responses and thread/started expose the persisted originator (JSON record and rollout session_meta), the local thread/list rejects non-empty originators filters, and TestThreadOriginatorSurfaceAndListFilter plus internal-session persistence tests cover the surface (#42458)"
    ]
   },
   {
