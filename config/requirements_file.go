@@ -11,6 +11,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"codex_go/apps"
+	"codex_go/plugin"
 	"codex_go/sandbox"
 )
 
@@ -600,6 +601,13 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		}
 		out.Plugins = parsed
 	}
+	if nested, ok := mapAnyKey(values, "marketplaces"); ok {
+		parsed, err := marketplaceRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.Marketplaces = parsed
+	}
 	if nested, ok := mapAnyKey(values, "otel"); ok {
 		parsed, err := otelRequirementsFromMap(nested)
 		if err != nil {
@@ -669,6 +677,97 @@ func pluginRequirementsFromMap(values map[string]any) (map[string]PluginRequirem
 			requirement.MCPServers = &parsed
 		}
 		out[pluginID] = requirement
+	}
+	return out, nil
+}
+
+func marketplaceRequirementsFromMap(values map[string]any) (*plugin.MarketplaceRequirements, error) {
+	out := &plugin.MarketplaceRequirements{
+		AllowedSources:    map[string]plugin.MarketplaceAllowedSource{},
+		RequirementSource: managedRequirementSource,
+	}
+	for key := range values {
+		switch key {
+		case "restrict_to_allowed_sources", "restrictToAllowedSources", "allowed_sources", "allowedSources":
+		default:
+			return nil, fmt.Errorf("marketplaces has unknown field `%s`", key)
+		}
+	}
+	if raw, ok := anyKey(values, "restrict_to_allowed_sources", "restrictToAllowedSources"); ok {
+		restricted, ok := raw.(bool)
+		if !ok {
+			return nil, fmt.Errorf("marketplaces.restrict_to_allowed_sources must be a boolean")
+		}
+		out.RestrictToAllowedSources = &restricted
+	}
+	allowedSources, ok := mapAnyKey(values, "allowed_sources", "allowedSources")
+	if !ok {
+		if _, present := anyKey(values, "allowed_sources", "allowedSources"); present {
+			return nil, fmt.Errorf("marketplaces.allowed_sources must be a table")
+		}
+		return out, nil
+	}
+	for key, raw := range allowedSources {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid marketplace allowed source `%s`: expected table", key)
+		}
+		allowed, err := marketplaceAllowedSourceFromMap(key, table)
+		if err != nil {
+			return nil, err
+		}
+		out.AllowedSources[key] = allowed
+	}
+	return out, nil
+}
+
+func marketplaceAllowedSourceFromMap(key string, values map[string]any) (plugin.MarketplaceAllowedSource, error) {
+	var out plugin.MarketplaceAllowedSource
+	for field := range values {
+		switch field {
+		case "source", "url", "ref", "host_pattern", "hostPattern", "path":
+		default:
+			return plugin.MarketplaceAllowedSource{}, fmt.Errorf("invalid marketplace allowed source `%s`: unknown field `%s`", key, field)
+		}
+	}
+	if raw, ok := anyKey(values, "source"); ok {
+		text, ok := raw.(string)
+		if !ok {
+			return plugin.MarketplaceAllowedSource{}, fmt.Errorf("invalid marketplace allowed source `%s`: source must be a string", key)
+		}
+		kind := plugin.MarketplaceAllowedSourceKind(strings.TrimSpace(text))
+		switch kind {
+		case plugin.MarketplaceAllowedSourceGit, plugin.MarketplaceAllowedSourceHostPattern, plugin.MarketplaceAllowedSourceLocal:
+			out.Source = &kind
+		default:
+			return plugin.MarketplaceAllowedSource{}, fmt.Errorf("invalid marketplace allowed source `%s`: unsupported source `%s`", key, text)
+		}
+	}
+	assignString := func(target **string, names ...string) error {
+		raw, ok := anyKey(values, names...)
+		if !ok {
+			return nil
+		}
+		text, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("invalid marketplace allowed source `%s`: %s must be a string", key, names[0])
+		}
+		value := text
+		*target = &value
+		return nil
+	}
+	for _, field := range []struct {
+		target **string
+		names  []string
+	}{
+		{&out.URL, []string{"url"}},
+		{&out.RefName, []string{"ref"}},
+		{&out.HostPattern, []string{"host_pattern", "hostPattern"}},
+		{&out.Path, []string{"path"}},
+	} {
+		if err := assignString(field.target, field.names...); err != nil {
+			return plugin.MarketplaceAllowedSource{}, err
+		}
 	}
 	return out, nil
 }
@@ -1283,6 +1382,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.Feedback == nil &&
 			value.MCPServers == nil &&
 			value.Plugins == nil &&
+			value.Marketplaces.IsEmpty() &&
 			len(value.Apps) == 0)
 }
 

@@ -1859,6 +1859,9 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		account.ApplyAuthSnapshot(&resolved.Auth)
 	}
 	router.configureMCPFromConfig()
+	// Install the marketplace source policy before any plugin startup task can
+	// clone or inspect configured marketplaces (#41953).
+	router.configurePluginMarketplacePolicy()
 	// Rust #42149: app-server startup synchronizes Git marketplaces selected
 	// from the effective merged configuration. If the user's configuration is
 	// invalid, Rust keeps the same defaults loader for the activation reload.
@@ -14096,6 +14099,7 @@ func (r *RuntimeRouter) maybeStartCuratedRepoSync(force bool) {
 	if err != nil || read == nil {
 		return
 	}
+	applyPluginMarketplacePolicy(r.services.Plugins, r.services.Config, read.Config)
 	cfg := &config.Config{Values: read.Config}
 	if !features.Enabled(cfg.FeatureSettings(), "plugins") || r.services.Plugins.TargetCuratedMarketplace() == plugin.TargetCuratedOpenAIWithRemote {
 		return
@@ -14148,6 +14152,7 @@ func (r *RuntimeRouter) startPluginStartupTasks() {
 		}
 		reload = readDefaults
 	}
+	applyPluginMarketplacePolicy(r.services.Plugins, r.services.Config, values)
 	cfg := &config.Config{Values: values}
 	if !features.Enabled(cfg.FeatureSettings(), "plugins") {
 		return
@@ -15293,9 +15298,40 @@ func (r *RuntimeRouter) requireSkills() *SkillsService {
 
 func (r *RuntimeRouter) requirePlugins() *plugin.PluginService {
 	if r.services.Plugins == nil {
-		r.services.Plugins = plugin.NewPluginService()
+		service := plugin.NewPluginService()
+		if r.services.Config != nil {
+			service.SetCodexHome(r.services.Config.CodexHome())
+		}
+		r.services.Plugins = service
 	}
+	r.configurePluginMarketplacePolicy()
 	return r.services.Plugins
+}
+
+// applyPluginMarketplacePolicy snapshots managed marketplace requirements and
+// the effective plugin configuration the policy evaluates.
+func applyPluginMarketplacePolicy(service *plugin.PluginService, configService *config.ConfigService, values map[string]any) {
+	if service == nil {
+		return
+	}
+	var requirements *plugin.MarketplaceRequirements
+	if configService != nil {
+		if read := configService.Requirements(); read != nil && read.Requirements != nil {
+			requirements = read.Requirements.Marketplaces
+		}
+	}
+	service.SetMarketplacePolicy(requirements, values)
+}
+
+func (r *RuntimeRouter) configurePluginMarketplacePolicy() {
+	if r == nil || r.services.Plugins == nil || r.services.Config == nil {
+		return
+	}
+	var values map[string]any
+	if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+		values = read.Config
+	}
+	applyPluginMarketplacePolicy(r.services.Plugins, r.services.Config, values)
 }
 
 func (r *RuntimeRouter) requireModels() *model.ModelService {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -98,10 +99,34 @@ func runPlugin(opts *cli.PluginOptions, stdout io.Writer) error {
 func newPluginCLIContext(codexHome string) *pluginCLIContext {
 	service := plugin.NewPluginService()
 	service.SetCodexHome(codexHome)
+	applyPluginMarketplacePolicyFromHome(service, codexHome)
 	if snapshot, err := auth.NewStore(codexHome).Load(); err == nil && snapshot != nil {
 		service.SetRuntimeRoute(snapshot.AuthMode, "openai")
 	}
 	return &pluginCLIContext{codexHome: codexHome, service: service}
+}
+
+// applyPluginMarketplacePolicyFromHome mirrors the app-server policy snapshot
+// for CLI plugin operations. If the merged config is invalid, the managed
+// requirements are still honored and the empty config projection fails closed.
+func applyPluginMarketplacePolicyFromHome(service *plugin.PluginService, codexHome string) {
+	if service == nil {
+		return
+	}
+	cfg, err := config.Load(codexHome)
+	if err == nil && cfg != nil {
+		var requirements *plugin.MarketplaceRequirements
+		if cfg.Requirements != nil {
+			requirements = cfg.Requirements.Marketplaces
+		}
+		service.SetMarketplacePolicy(requirements, cfg.Values)
+		return
+	}
+	var requirements *plugin.MarketplaceRequirements
+	if loaded, loadErr := config.LoadRequirementsFile(filepath.Join(codexHome, "requirements.toml")); loadErr == nil && loaded != nil {
+		requirements = loaded.Marketplaces
+	}
+	service.SetMarketplacePolicy(requirements, nil)
 }
 
 func (ctx *pluginCLIContext) remoteOptionsForScope(scope string) (*plugin.RemoteCatalogOptions, error) {

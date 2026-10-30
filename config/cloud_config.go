@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"codex_go/apps"
+	"codex_go/plugin"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -765,6 +766,9 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	}
 	if overlay.Plugins != nil {
 		out.Plugins = clonePluginRequirements(overlay.Plugins)
+	}
+	if overlay.Marketplaces != nil {
+		out.Marketplaces = plugin.MergeMarketplaceRequirements(out.Marketplaces, overlay.Marketplaces)
 	}
 	if len(overlay.Apps) > 0 {
 		// Rust merge_app_requirements_descending: either layer can disable an

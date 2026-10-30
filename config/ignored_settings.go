@@ -53,6 +53,7 @@ var knownRequirementsTopLevelFields = func() map[string]bool {
 		"models",
 		"mcp_servers", "mcpServers",
 		"plugins",
+		"marketplaces",
 	}
 	out := make(map[string]bool, len(keys))
 	for _, key := range keys {

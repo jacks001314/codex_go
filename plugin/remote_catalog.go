@@ -20,6 +20,12 @@ const (
 	RemoteCatalogScopeUser      = "USER"
 	RemoteCatalogScopeWorkspace = "WORKSPACE"
 
+	RemoteCreatedByMeMarketplaceName       = "created-by-me-remote"
+	RemoteWorkspaceMarketplaceName         = "workspace-directory"
+	RemoteWorkspaceSharedWithMeMarketplace = "workspace-shared-with-me"
+	RemoteWorkspaceSharedWithMePrivate     = "workspace-shared-with-me-private"
+	RemoteWorkspaceSharedWithMeUnlisted    = "workspace-shared-with-me-unlisted"
+
 	remoteCatalogCacheDir    = "cache/remote_plugin_catalog"
 	remoteCatalogPageLimit   = 100
 	remoteCatalogCacheTTL    = 10 * time.Minute
@@ -79,9 +85,9 @@ type remoteCatalogCacheFile struct {
 func RemoteMarketplaceNameForScope(scope string) string {
 	switch strings.ToUpper(strings.TrimSpace(scope)) {
 	case RemoteCatalogScopeUser:
-		return "created-by-me-remote"
+		return RemoteCreatedByMeMarketplaceName
 	case RemoteCatalogScopeWorkspace:
-		return "workspace-directory"
+		return RemoteWorkspaceMarketplaceName
 	default:
 		return RemoteGlobalMarketplaceName
 	}
@@ -93,9 +99,12 @@ func RemoteCatalogScopeForMarketplace(name string) (string, bool) {
 	switch strings.TrimSpace(name) {
 	case RemoteGlobalMarketplaceName:
 		return RemoteCatalogScopeGlobal, true
-	case "created-by-me-remote":
+	case RemoteCreatedByMeMarketplaceName:
 		return RemoteCatalogScopeUser, true
-	case "workspace-directory", "workspace-shared-with-me":
+	case RemoteWorkspaceMarketplaceName,
+		RemoteWorkspaceSharedWithMeMarketplace,
+		RemoteWorkspaceSharedWithMePrivate,
+		RemoteWorkspaceSharedWithMeUnlisted:
 		return RemoteCatalogScopeWorkspace, true
 	default:
 		return "", false

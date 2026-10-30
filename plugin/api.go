@@ -1416,6 +1416,8 @@ type PluginService struct {
 	authMode                   string
 	modelProviderID            string
 	targetCuratedMarketplace   TargetCuratedMarketplace
+	marketplacePolicy          *MarketplacePolicy
+	marketplacePolicyConfig    map[string]any
 	curatedSyncInFlight        bool
 	curatedSyncMetricsObserver CuratedSyncMetricsObserver
 	// manifests reuses parsed manifest revisions across the service's
@@ -1436,6 +1438,24 @@ func (s *PluginService) SetShareBackend(backend PluginShareBackend) {
 	}
 	s.mu.Lock()
 	s.shareBackend = backend
+	s.mu.Unlock()
+}
+
+// SetMarketplacePolicy installs the managed marketplace source policy and the
+// effective config projection it evaluates. Both are copied so later config
+// edits cannot mutate the policy in place.
+func (s *PluginService) SetMarketplacePolicy(requirements *MarketplaceRequirements, configValues map[string]any) {
+	if s == nil {
+		return
+	}
+	policy := NewMarketplacePolicy(requirements)
+	var config map[string]any
+	if cloned, ok := cloneMarketplacePolicyValue(configValues).(map[string]any); ok {
+		config = cloned
+	}
+	s.mu.Lock()
+	s.marketplacePolicy = policy
+	s.marketplacePolicyConfig = config
 	s.mu.Unlock()
 }
 
@@ -1558,8 +1578,16 @@ func (s *PluginService) AddMarketplace(params *MarketplaceAddParams) (*Marketpla
 	if name == "" {
 		return nil, fmt.Errorf("%w: marketplace name and source are required", ErrInvalidPluginRequest)
 	}
-	if IsReservedMarketplaceName(name) {
-		return nil, fmt.Errorf("marketplace `%s` is reserved and cannot be added from this source", name)
+	s.mu.Lock()
+	codexHome := s.codexHome
+	marketplacePolicy := s.marketplacePolicy
+	s.mu.Unlock()
+	expectedManagedName, err := marketplacePolicy.ValidateMarketplaceSourceForAdd(codexHome, parsedSource)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateMarketplaceNameForAdd(expectedManagedName, name); err != nil {
+		return nil, err
 	}
 	safeName, err := safeMarketplaceDirName(name)
 	if err != nil {
@@ -1629,6 +1657,7 @@ func (s *PluginService) AddMarketplace(params *MarketplaceAddParams) (*Marketpla
 		return nil, err
 	}
 	s.marketplaces[name] = marketplace
+	s.recordPolicyMarketplaceLocked(marketplace)
 	return &MarketplaceAddResponse{
 		MarketplaceName: name,
 		InstalledRoot:   marketplace.RootPath,
@@ -1709,6 +1738,7 @@ func (s *PluginService) UpgradeMarketplace(params *MarketplaceUpgradeParams) (*M
 	}
 	materializer := s.marketplaceMaterializer
 	resolver := s.marketplaceRevision
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
 
 	selected := make([]string, 0, len(marketplaces))
@@ -1732,6 +1762,14 @@ func (s *PluginService) UpgradeMarketplace(params *MarketplaceUpgradeParams) (*M
 			Kind:    MarketplaceSourceGit,
 			URL:     marketplaceConfigSource(&marketplace),
 			RefName: cloneStringPtr(marketplace.RefName),
+		}
+		normalizedSource, err := marketplacePolicy.ValidateGitSource(source.URL, source.RefName)
+		if err != nil {
+			upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{MarketplaceName: name, Message: err.Error()})
+			continue
+		}
+		if normalizedSource != nil {
+			source = normalizedSource
 		}
 		revision := ""
 		if resolver != nil {
@@ -2054,9 +2092,10 @@ func (s *PluginService) List(params *PluginListParams) *PluginListResponse {
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	policy := s.activationPolicy
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
 	loadedDetails, loadErrors := loadMarketplacePlugins(marketplaces, s.manifests)
-	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target)
+	details := routePluginDetails(filterPluginDetailsByMarketplacePolicy(mergePluginDetails(storedDetails, loadedDetails, policy), marketplaces, marketplacePolicy), target)
 	plugins := make([]PluginSummary, 0, len(details))
 	for _, detail := range details {
 		if !params.IncludeInstalled && detail.Summary.Installed {
@@ -2081,8 +2120,14 @@ func (s *PluginService) Installed(params *PluginInstalledParams) *PluginInstalle
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	plugins := make([]PluginSummary, 0)
+	marketplaces := s.marketplaceListLocked()
+	details := make([]PluginDetail, 0, len(s.plugins))
 	for _, detail := range s.plugins {
+		details = append(details, cloneDetail(detail))
+	}
+	details = s.filterPluginDetailsForPolicyLocked(details, marketplaces)
+	plugins := make([]PluginSummary, 0, len(details))
+	for _, detail := range details {
 		if detail.Summary.Installed && pluginEligibleForCuratedTarget(detail.Summary.ID, detail.Summary.MarketplaceName, s.targetCuratedMarketplace) {
 			plugins = append(plugins, cloneSummary(detail.Summary))
 		}
@@ -2105,7 +2150,7 @@ func (s *PluginService) Installed(params *PluginInstalledParams) *PluginInstalle
 		return plugins[i].ID < plugins[j].ID
 	})
 	return &PluginInstalledResponse{
-		Marketplaces:          marketplaceEntries(s.marketplaceListLocked(), plugins),
+		Marketplaces:          marketplaceEntries(marketplaces, plugins),
 		MarketplaceLoadErrors: []MarketplaceLoadErrorInfo{},
 		Plugins:               plugins,
 	}
@@ -2120,12 +2165,14 @@ func (s *PluginService) InstalledDetails() []PluginDetail {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	marketplaces := s.marketplaceListLocked()
 	details := make([]PluginDetail, 0, len(s.plugins))
 	for _, detail := range s.plugins {
 		if detail.Summary.Installed && strings.TrimSpace(detail.Summary.ID) != "" {
 			details = append(details, cloneDetail(detail))
 		}
 	}
+	details = s.filterPluginDetailsForPolicyLocked(details, marketplaces)
 	sort.SliceStable(details, func(i, j int) bool { return details[i].Summary.ID < details[j].Summary.ID })
 	return details
 }
@@ -2561,9 +2608,11 @@ func (s *PluginService) Read(params *PluginReadParams) (*PluginReadResponse, err
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	policy := s.activationPolicy
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
-	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target) {
+	details := filterPluginDetailsByMarketplacePolicy(mergePluginDetails(storedDetails, loadedDetails, policy), marketplaces, marketplacePolicy)
+	for _, detail := range routePluginDetails(details, target) {
 		if response := readPluginDetailResponse(detail, params); response != nil {
 			materialized, err := s.materializeMarketplacePluginDetail(&response.Plugin)
 			if err != nil {
@@ -2608,9 +2657,11 @@ func (s *PluginService) readInstalledPluginSkill(params *PluginSkillReadParams) 
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	policy := s.activationPolicy
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
-	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target) {
+	details := filterPluginDetailsByMarketplacePolicy(mergePluginDetails(storedDetails, loadedDetails, policy), marketplaces, marketplacePolicy)
+	for _, detail := range routePluginDetails(details, target) {
 		if !pluginDetailMatchesSkillRead(&detail, params) {
 			continue
 		}
@@ -2894,6 +2945,10 @@ func (s *PluginService) Install(params *PluginInstallParams) (*PluginInstallResp
 			s.mu.Unlock()
 			return nil, fmt.Errorf("%w: plugin %q is not available for the active authentication mode", ErrInvalidPluginRequest, id)
 		}
+		if err := s.validatePluginInstallPolicyLocked(detail); err != nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: %v", ErrInvalidPluginRequest, err)
+		}
 		configPath := s.marketplaceConfigPath
 		s.mu.Unlock()
 		if detail.Summary.InstallPolicy == InstallBlocked {
@@ -2985,6 +3040,10 @@ func (s *PluginService) HydrateRecommendedPluginMetadata(remotePluginID string) 
 		}
 	}
 	if found != nil {
+		if err := s.validatePluginInstallPolicyLocked(*found); err != nil {
+			s.mu.Unlock()
+			return nil, false, nil
+		}
 		s.mu.Unlock()
 		materialized, err := s.materializeMarketplacePluginDetail(found)
 		if err != nil {
@@ -3419,7 +3478,11 @@ func (s *PluginService) marketplaceListLocked() []Marketplace {
 	}
 	curated := s.implicitCuratedMarketplaceLocked()
 	marketplaces = appendImplicitCuratedMarketplace(marketplaces, curated)
-	marketplaces = filterReservedMarketplaceSpoofs(marketplaces, curated)
+	if s.marketplacePolicy != nil && s.marketplacePolicy.IsRestricted() {
+		marketplaces = s.filterMarketplacesByPolicyLocked(marketplaces)
+	} else {
+		marketplaces = filterReservedMarketplaceSpoofs(marketplaces, curated)
+	}
 	marketplaces = routeMarketplaces(marketplaces, s.targetCuratedMarketplace)
 	sort.SliceStable(marketplaces, func(i int, j int) bool {
 		return marketplaces[i].Name < marketplaces[j].Name

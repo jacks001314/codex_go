@@ -50,10 +50,17 @@ func (s *PluginService) ReloadConfig() error {
 	installRoot := s.marketplaceInstallRoot
 	manifests := s.manifests
 	now := s.now
+	codexHome := s.codexHome
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
 	values, err := readMarketplaceConfig(configPath)
 	if err != nil {
 		return err
+	}
+	if marketplacePolicy != nil {
+		if filtered, ok := marketplacePolicy.FilterPluginConfig(codexHome, values); ok {
+			values = filtered
+		}
 	}
 	marketplaces := configuredMarketplacesFromConfig(values, installRoot, now)
 	plugins := configuredPluginsFromConfig(values, manifests)
@@ -90,7 +97,14 @@ func (s *PluginService) ResolveConfigMarketplaces(values map[string]any) ([]Plug
 	installRoot := s.marketplaceInstallRoot
 	manifests := s.manifests
 	now := s.now
+	codexHome := s.codexHome
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
+	if marketplacePolicy != nil {
+		if filtered, ok := marketplacePolicy.FilterPluginConfig(codexHome, values); ok {
+			values = filtered
+		}
+	}
 	marketplaces := configuredMarketplacesFromConfig(values, installRoot, now)
 	if len(marketplaces) == 0 {
 		return nil, nil

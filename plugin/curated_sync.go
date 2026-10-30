@@ -73,6 +73,10 @@ func (s *PluginService) StartCuratedRepoSync(onChanged func()) bool {
 		s.mu.Unlock()
 		return false
 	}
+	if _, err := s.marketplacePolicy.ValidateGitSource(OpenAIPluginsGitURL, nil); err != nil {
+		s.mu.Unlock()
+		return false
+	}
 	s.curatedSyncInFlight = true
 	codexHome := s.codexHome
 	materializer := s.marketplaceMaterializer

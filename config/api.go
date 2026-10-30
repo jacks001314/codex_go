@@ -17,6 +17,7 @@ import (
 	"codex_go/apps"
 	"codex_go/execpolicy"
 	"codex_go/network"
+	"codex_go/plugin"
 	"codex_go/sandbox"
 )
 
@@ -655,6 +656,10 @@ type ConfigRequirements struct {
 	Otel       *OtelRequirements               `json:"otel,omitempty"`
 	MCPServers map[string]MCPServerRequirement `json:"-"`
 	Plugins    map[string]PluginRequirements   `json:"-"`
+	// Marketplaces carries the managed marketplace source allowlist (Rust
+	// ConfigRequirementsToml.marketplaces, #41953). It is internal policy and
+	// stays off the app-server wire schema.
+	Marketplaces *plugin.MarketplaceRequirements `json:"-"`
 	// Apps carries the managed app requirements (Rust
 	// ConfigRequirementsToml.apps): app disablement and per-tool approval
 	// modes enforced by Cloud/MDM layers. Internal, like MCPServers/Plugins.
@@ -4157,6 +4162,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.Models = cloneModels(requirements.Models)
 	clone.MCPServers = cloneMCPServerRequirements(requirements.MCPServers)
 	clone.Plugins = clonePluginRequirements(requirements.Plugins)
+	clone.Marketplaces = plugin.CloneMarketplaceRequirements(requirements.Marketplaces)
 	clone.Apps = apps.CloneAppsRequirements(requirements.Apps)
 	clone.CliAuthCredentialsStore = cloneAuthCredentialsStoreMode(requirements.CliAuthCredentialsStore)
 	clone.ChatgptBaseURL = cloneStringPtr(requirements.ChatgptBaseURL)

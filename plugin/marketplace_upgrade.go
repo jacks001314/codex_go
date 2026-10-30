@@ -72,6 +72,7 @@ func (s *PluginService) upgradeConfiguredMarketplaces(values map[string]any, mar
 	materializer := s.marketplaceMaterializer
 	resolver := s.marketplaceRevision
 	now := s.now
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
 	if automatic {
 		if gitMaterializer, ok := materializer.(*GitMarketplaceMaterializer); ok {
@@ -109,10 +110,6 @@ func (s *PluginService) upgradeConfiguredMarketplaces(values map[string]any, mar
 			})
 			continue
 		}
-		if _, err := safeMarketplaceDirName(name); err != nil {
-			upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{MarketplaceName: name, Message: err.Error()})
-			continue
-		}
 		source := &ParsedMarketplaceSource{
 			Kind:    MarketplaceSourceGit,
 			URL:     marketplaceConfigSource(&marketplace),
@@ -123,6 +120,20 @@ func (s *PluginService) upgradeConfiguredMarketplaces(values map[string]any, mar
 				MarketplaceName: name,
 				Message:         "configured Git marketplace is missing source",
 			})
+			continue
+		}
+		// Rust #41953 validates the configured source before any resolver,
+		// staging directory, or install root is touched.
+		normalizedSource, err := marketplacePolicy.ValidateGitSource(source.URL, source.RefName)
+		if err != nil {
+			upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{MarketplaceName: name, Message: err.Error()})
+			continue
+		}
+		if normalizedSource != nil {
+			source = normalizedSource
+		}
+		if _, err := safeMarketplaceDirName(name); err != nil {
+			upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{MarketplaceName: name, Message: err.Error()})
 			continue
 		}
 		revision := ""

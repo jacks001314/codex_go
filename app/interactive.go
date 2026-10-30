@@ -2985,7 +2985,9 @@ func interactiveSkillEnabledWriter(root *cli.RootOptions) codextea.SkillEnabledW
 
 func interactivePluginService() *plugin.PluginService {
 	service := plugin.NewPluginService()
-	service.SetCodexHome(auth.DefaultCodexHome())
+	codexHome := auth.DefaultCodexHome()
+	service.SetCodexHome(codexHome)
+	applyPluginMarketplacePolicyFromHome(service, codexHome)
 	return service
 }
 

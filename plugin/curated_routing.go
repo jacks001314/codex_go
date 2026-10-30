@@ -16,12 +16,17 @@ const (
 )
 
 var openAIReservedMarketplaceNames = map[string]bool{
-	OpenAICuratedMarketplaceName:       true,
-	OpenAIAPICuratedMarketplaceName:    true,
-	OpenAIRemoteCuratedMarketplaceName: true,
-	OpenAIBundledMarketplaceName:       true,
-	"openai-bundled-alpha":             true,
-	"openai-primary-runtime":           true,
+	OpenAICuratedMarketplaceName:           true,
+	OpenAIAPICuratedMarketplaceName:        true,
+	OpenAIRemoteCuratedMarketplaceName:     true,
+	OpenAIBundledMarketplaceName:           true,
+	"openai-bundled-alpha":                 true,
+	"openai-primary-runtime":               true,
+	RemoteCreatedByMeMarketplaceName:       true,
+	RemoteWorkspaceMarketplaceName:         true,
+	RemoteWorkspaceSharedWithMeMarketplace: true,
+	RemoteWorkspaceSharedWithMePrivate:     true,
+	RemoteWorkspaceSharedWithMeUnlisted:    true,
 }
 
 // IsReservedMarketplaceName reports names reserved for managed or remote
@@ -191,9 +196,10 @@ func (s *PluginService) enabledPluginDetailsSnapshot() []PluginDetail {
 	target := s.targetCuratedMarketplace
 	manifests := s.manifests
 	policy := s.activationPolicy
+	marketplacePolicy := s.marketplacePolicy
 	s.mu.Unlock()
 	discovered, _ := loadMarketplacePlugins(marketplaces, manifests)
-	details := routePluginDetails(mergePluginDetails(stored, discovered, policy), target)
+	details := routePluginDetails(filterPluginDetailsByMarketplacePolicy(mergePluginDetails(stored, discovered, policy), marketplaces, marketplacePolicy), target)
 	out := make([]PluginDetail, 0, len(details))
 	for _, detail := range details {
 		if detail.Summary.Installed && detail.Summary.Enabled {
