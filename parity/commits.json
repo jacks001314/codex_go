@@ -7630,9 +7630,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1059: Go now honors CODEX_APP_SERVER_LOGIN_ISSUER for app-server account and workspace login regardless of build type. auth/oauth.go exports LoginIssuerEnvOverride; appserver/runtime_router.go:applyLoginIssuerOverride overwrites the configured or caller-supplied issuer only when the trimmed env value is non-empty, in both accountOAuthOptions branches, matching Rust #42811 (the debug-only open-app redirect override remains intentionally unported). Regression contract: appserver/account_login_issuer_override_like_rust_test.go:TestAccountOAuthOptionsHonorPackagedLoginIssuerOverrideLikeRust. Verified with go test ./auth -count=1, go test ./appserver -run AccountOAuthOptions -count=1, and go build ./...."
    ]
   },
   {

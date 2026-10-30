@@ -29,8 +29,12 @@ const (
 	RefreshTokenURLEnvOverride = "CODEX_REFRESH_TOKEN_URL_OVERRIDE"
 	RevokeTokenURLEnvOverride  = "CODEX_REVOKE_TOKEN_URL_OVERRIDE"
 	LoginClientIDEnvOverride   = "CODEX_APP_SERVER_LOGIN_CLIENT_ID"
-	legacyLoginClientIDEnvVar  = "CODEX_APP_SERVER_LOGIN_CLIENT_ID"
-	chatGPTAuthClaimNamespace  = "https://api.openai.com/auth"
+	// LoginIssuerEnvOverride lets packaged clients point the app-server login
+	// flow at a staging issuer (Rust #42811). The matching open-app redirect
+	// override stays debug-only upstream and is not carried here.
+	LoginIssuerEnvOverride    = "CODEX_APP_SERVER_LOGIN_ISSUER"
+	legacyLoginClientIDEnvVar = "CODEX_APP_SERVER_LOGIN_CLIENT_ID"
+	chatGPTAuthClaimNamespace = "https://api.openai.com/auth"
 )
 
 type OAuthOptions struct {

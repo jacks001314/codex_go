@@ -13877,6 +13877,7 @@ func (r *RuntimeRouter) accountOAuthOptions() *auth.OAuthOptions {
 		// when the effective policy is stricter.
 		copy.HTTPClient = r.bootstrapAuthHTTPClient(copy.HTTPClient)
 		copy.FallbackHTTPClient = r.bootstrapAuthHTTPClient(copy.FallbackHTTPClient)
+		applyLoginIssuerOverride(&copy)
 		return &copy
 	}
 	options := &auth.OAuthOptions{CodexHome: r.codexHomeForRollout(), StoreOptions: r.authStoreOptions()}
@@ -13899,7 +13900,20 @@ func (r *RuntimeRouter) accountOAuthOptions() *auth.OAuthOptions {
 		base = network.NewHTTPClient(cfg != nil && cfg.RespectSystemProxyEnabled(), 30*time.Second)
 	}
 	options.HTTPClient = r.bootstrapAuthHTTPClient(base)
+	applyLoginIssuerOverride(options)
 	return options
+}
+
+// applyLoginIssuerOverride mirrors Rust #42811: packaged clients may point the
+// app-server login flow at a staging issuer through the environment. The
+// development success-page redirect override remains debug-only upstream.
+func applyLoginIssuerOverride(options *auth.OAuthOptions) {
+	if options == nil {
+		return
+	}
+	if issuer := strings.TrimSpace(os.Getenv(auth.LoginIssuerEnvOverride)); issuer != "" {
+		options.Issuer = issuer
+	}
 }
 
 func (r *RuntimeRouter) startAccountLoginRuntime(params *auth.LoginAccountParams, response *auth.LoginAccountResponse) error {
