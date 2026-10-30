@@ -3200,6 +3200,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go never had a ticket type; the reviewer already promotes the reviewed turn's latest response ID, the credits gate already excludes reviewer traffic, and turn metadata is the only place client-provided keys live. Rust #45441 later changed retry handling from clearing to retaining the last `response.created`, which Go already matches.
 - New `appserver/client_parent_response_id_like_rust_test.go` drives a real thread/turn and asserts `parent_response_id`/`fiber_run_id` appear only inside the turn-metadata document, while `model/client_metadata_parent_response_id_like_rust_test.go` proves the HTTP body and WebSocket `response.create` payload never promote them.
 - Verified with `go test ./appserver -run 'ParentResponseID|Guardian|ClientMetadata' -count=1`, `go test ./model -run 'Guardian|Metadata|ParentResponse|ReasoningEffort' -count=1`, `go test ./codexapi -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2170 complete`, `451 not_applicable`,
-`345 audit_pending`, `179 regression_pending`, `4 partial`,
+### Guardian permission context in the shared section registry (Round 1011)
+
+- Rust #43538 moves the Guardian permission evidence into the shared section registry: `PermissionContext` carries the reviewed profile's denied read paths and globs, the section is rendered synchronously only, policy resolution stays on the host, and the review prompt keeps the restriction warning (#43538, complete).
+- Go already formats the same evidence in `state/guardian_permission_context.go`, inserts it between node-REPL evidence and the planned action in `state/guardian.go`, and composes it from `turnPermissionProfile` plus the unreadable-roots/globs helpers in `appserver/guardian_reviewer.go`; `AsyncPermissionContextSectionItems` keeps the 3000-byte async limit for a future classifier, and Go has no async Guardian scorer.
+- New `TestGuardianSessionReuseKeepsPermissionContextLikeRust` reuses one `guardianSessionRunner` across two reviews and asserts the permission section, denied path, and denied glob appear in both the initial request and the second review's delta (which carries the first response ID).
+- Verified with `go test ./appserver -run 'GuardianSessionReuseKeepsPermissionContextLikeRust|ModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust' -count=1`, `go test ./appserver -run 'Guardian|Permission' -count=1`, `go test ./state -run 'Permission|Guardian' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2171 complete`, `451 not_applicable`,
+`345 audit_pending`, `178 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -89,6 +89,78 @@ func TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust(t *testing.
 	}
 }
 
+// Rust's session-reuse coverage (guardian-context/src/registry_tests.rs)
+// renders the permission section in the initial review request and again in
+// the next review's delta: the section is registry evidence composed from the
+// reviewed profile, not one-shot prompt state (#43538).
+func TestGuardianSessionReuseKeepsPermissionContextLikeRust(t *testing.T) {
+	var requests []*model.AgentRequest
+	agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		captured := *request
+		captured.InputItems = append([]any(nil), request.InputItems...)
+		requests = append(requests, &captured)
+		return &model.AgentResponse{
+			ResponseID: fmt.Sprintf("resp-%d", len(requests)),
+			Message:    `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`,
+		}, nil
+	})
+	cwd := t.TempDir()
+	secretPath := filepath.Join(cwd, "secret")
+	secretGlob := filepath.Join(cwd, "private", "**")
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{
+		{
+			Path:   sandbox.FileSystemPath{Type: "path", Path: secretPath},
+			Access: sandbox.FileSystemAccessDeny,
+		},
+		{
+			Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: filepath.Join("private", "**")},
+			Access: sandbox.FileSystemAccessDeny,
+		},
+	}
+	reviewer := &modelGuardianReviewer{
+		agent: &guardianSessionRunner{agent: agent},
+		store: state.NewReviewStore(),
+		turnPermissionProfile: func(threadID, turnID, environmentID string) (*sandbox.PermissionProfile, string, *string) {
+			return &profile, cwd, nil
+		},
+	}
+	for i := 0; i < 2; i++ {
+		decision, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", fmt.Sprintf("call-%d", i+1), state.Action{Type: "command", Command: "cat secret", CWD: cwd})
+		if err != nil {
+			t.Fatalf("Review() #%d error = %v", i+1, err)
+		}
+		if decision != state.DecisionApproved {
+			t.Fatalf("Review() #%d decision = %q, want approved", i+1, decision)
+		}
+	}
+	if len(requests) != 2 {
+		t.Fatalf("review requests = %d, want 2", len(requests))
+	}
+	if requests[0].PreviousResponseID != "" || requests[1].PreviousResponseID != "resp-1" {
+		t.Fatalf("previous response ids = %q/%q, want \"\"/\"resp-1\"", requests[0].PreviousResponseID, requests[1].PreviousResponseID)
+	}
+	for i, request := range requests {
+		rendered := request.Prompt
+		for _, item := range request.InputItems {
+			encoded, marshalErr := json.Marshal(item)
+			if marshalErr != nil {
+				t.Fatalf("request #%d input item marshal error = %v", i+1, marshalErr)
+			}
+			rendered += "\n" + string(encoded)
+		}
+		if !strings.Contains(rendered, ">>> PARENT TURN PERMISSION CONTEXT START") {
+			t.Fatalf("request #%d missing the permission section:\n%s", i+1, rendered)
+		}
+		if !strings.Contains(rendered, "- path `"+secretPath+"`") {
+			t.Fatalf("request #%d missing the denied read path:\n%s", i+1, rendered)
+		}
+		if !strings.Contains(rendered, "- glob `"+secretGlob+"`") {
+			t.Fatalf("request #%d missing the denied read glob:\n%s", i+1, rendered)
+		}
+	}
+}
+
 func TestModelGuardianReviewerSetsPermissionProfile(t *testing.T) {
 	var captured *model.AgentRequest
 	reviewer := &modelGuardianReviewer{

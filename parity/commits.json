@@ -8995,9 +8995,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1011 (回归+核对): #43538 把 Guardian permission context 移入共享 section registry。Rust 用 PermissionContext 表示 denied read paths/globs，经 codex-guardian-context 的 sync-only section 渲染，策略解析仍在 host，review prompt 中的 permission warning 保留。Go 已具备等价实现: state/guardian_permission_context.go 的 PermissionContext/RenderPermissionContextBody/PermissionContextSectionItems 渲染带 PARENT TURN PERMISSION CONTEXT 标记的同步 section (AsyncPermissionContextSectionItems 保留 3000 字节上限为未来 async scorer 使用，Go 无 async Guardian classifier，故只在同步 reviewer 渲染); state/guardian.go 的 BuildPromptOptions.PermissionContext 在 node-repl evidence 之后、planned action 之前插入; appserver/guardian_reviewer.go 从 turnPermissionProfile + sandbox.UnreadableRootsWithCWD/UnreadableGlobsWithCWD 构造 context 并在每次 Review 重建 prompt。本轮补充 appserver/guardian_reviewer_test.go 的 TestGuardianSessionReuseKeepsPermissionContextLikeRust: 同一 guardianSessionRunner 连续两次 Review，第二次携带 resp-1 作为 PreviousResponseID，断言首个请求与下一次 delta 的 Prompt/InputItems 都包含 permission section、denied path 和 denied glob。既有 TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust、state/guardian_permission_context_test.go 与 TestGuardianPromptIncludesPermissionContextLikeRust 覆盖 section 内容、环境作用域、无 deny 不渲染和 registry 顺序。验证: go test ./appserver -run 'GuardianSessionReuseKeepsPermissionContextLikeRust|ModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust' -count=1; go test ./appserver -run 'Guardian|Permission' -count=1; go test ./state -run 'Permission|Guardian' -count=1; go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {
