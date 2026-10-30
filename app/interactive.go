@@ -1419,6 +1419,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		// this process's sessions; side conversations follow their task's
 		// subtree only (Rust #58237).
 		OnAgentsOverviewRefresh:    embeddedAgentsOverviewRefresh(store, sideCoordinator.CloseRelated),
+		OnAcknowledgeThreadRead:    embeddedAgentsOverviewAcknowledgeThreadRead(store),
 		OnAgentsOverviewNewSession: embeddedAgentsOverviewNewSession(store),
 		OnAgentsOverviewStop:       embeddedAgentsOverviewStop(store),
 		OnAgentsOverviewRename:     embeddedAgentsOverviewRename(store),

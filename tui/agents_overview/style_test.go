@@ -48,8 +48,7 @@ func TestRenderStyledAppliesRustStyles(t *testing.T) {
 		"\x1b[36;1m›\x1b[0m",                 // cyan bold selection marker
 		"\x1b[32m●\x1b[0m",                   // green working dot
 		"\x1b[31m●\x1b[0m",                   // red needs-you dot
-		"\x1b[36m○\x1b[0m",                   // cyan ready dot
-		"\x1b[2m✓\x1b[0m",                    // dim finished dot
+		"\x1b[38;2;128;128;128m○\x1b[39m",    // gray read/idle result marker
 		"\x1b[1mTask details\x1b[0m",         // bold details title
 	} {
 		if !strings.Contains(styled, want) {
@@ -70,20 +69,46 @@ func TestRenderStyledHelpStopHint(t *testing.T) {
 	}
 }
 
-// Rust #47319: the selected row's status symbol uses the row selection style,
-// while unselected status symbols keep their group color.
+// Rust #47319/#58263: a selected working row's status symbol uses the selection
+// style; ready/finished rows use the result marker instead, which is not
+// recolored by selection.
 func TestSelectedAgentStatusSymbolUsesSelectionStyleLikeRust(t *testing.T) {
 	view := New([]Row{
-		{ThreadID: "selected", Name: "Selected", Group: GroupReady},
-		{ThreadID: "other", Name: "Other", Group: GroupReady},
+		{ThreadID: "selected", Name: "Selected", Group: GroupWorking},
+		{ThreadID: "other", Name: "Other", Group: GroupWorking},
 	}, "selected", false)
 	view.Selected = 0
 	styled := strings.Join(view.RenderStyled(100, 12), "\n")
-	if !strings.Contains(styled, "\x1b[36;1m○\x1b[0m") {
+	if !strings.Contains(styled, "\x1b[36;1m●\x1b[0m") {
 		t.Fatalf("selected status symbol did not use the row selection style:\n%s", styled)
 	}
-	if !strings.Contains(styled, "\x1b[36m○\x1b[0m") {
+	if !strings.Contains(styled, "\x1b[32m●\x1b[0m") {
 		t.Fatalf("unselected status symbol lost its group color:\n%s", styled)
+	}
+}
+
+// Rust #58263: an unread result paints a filled blue dot, while a read idle
+// task paints a hollow gray dot. On narrow rows the status moves into the
+// title because the shared working/alert marker slot now belongs to the result.
+func TestUnreadResultMarkersLikeRust(t *testing.T) {
+	view := New([]Row{
+		{ThreadID: "unread", Name: "Unread task", Group: GroupWorking, Unread: true, UnreadRevision: "revision-1"},
+		{ThreadID: "ready", Name: "Read task", Group: GroupReady},
+	}, "", false)
+	styled := strings.Join(view.RenderStyled(100, 14), "\n")
+	if !strings.Contains(styled, "\x1b[38;2;59;130;246m●\x1b[39m") {
+		t.Fatalf("unread result marker is not filled blue:\n%s", styled)
+	}
+	if !strings.Contains(styled, "\x1b[38;2;128;128;128m○\x1b[39m") {
+		t.Fatalf("read idle marker is not hollow gray:\n%s", styled)
+	}
+
+	narrow := strings.Join(view.Render(50, 14), "\n")
+	if !strings.Contains(narrow, "Working: Unread task") {
+		t.Fatalf("narrow unread row did not move its status into the title:\n%s", narrow)
+	}
+	if strings.Contains(narrow, "Unread task  Working") {
+		t.Fatalf("narrow unread row still rendered a separate status column:\n%s", narrow)
 	}
 }
 

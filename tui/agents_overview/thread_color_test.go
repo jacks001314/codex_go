@@ -38,7 +38,7 @@ func TestRenderStyledWithoutThemeColorsKeepsBoldTitles(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	view.ThreadColor = func(string) string { return "#ff8000" }
 	styled := strings.Join(view.RenderStyled(120, 24), "\n")
-	if strings.Contains(styled, "\x1b[38;2;") {
+	if strings.Contains(styled, "\x1b[38;2;255;128;0m") {
 		t.Fatalf("theme colors disabled but identity color emitted:\n%s", styled)
 	}
 }

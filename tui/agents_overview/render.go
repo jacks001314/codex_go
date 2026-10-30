@@ -594,17 +594,31 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span {
 	row := &v.Rows[index]
 	marker := span{text: " ", style: spanPlain}
-	statusStyle := groupDotStyle(row.Group)
+	dot := span{text: row.Group.Dot(), style: groupDotStyle(row.Group)}
+	idle := row.Group == GroupReady || row.Group == GroupFinished
+	if row.Unread || idle {
+		// Rust #58263: the result marker replaces the status dot; it inherits the
+		// row fill instead of the status color.
+		dot = taskMarkerSpan(row.Unread)
+	} else if v.Selected == index {
+		dot.style = spanCyanBold
+	}
 	if v.Selected == index {
 		marker = span{text: "›", style: spanCyanBold}
-		statusStyle = spanCyanBold
+	}
+	title := row.Title()
+	// On narrow rows the result dot shares the only slot for the working or
+	// alert icon, so an unread status moves into the title.
+	statusInTitle := width < 56 && row.Unread && !idle
+	if statusInTitle {
+		title = row.Group.StatusLabelForRow(row) + ": " + title
 	}
 	spans := []span{
 		marker,
 		{text: " ", style: spanPlain},
-		{text: row.Group.Dot(), style: statusStyle},
+		dot,
 		{text: " ", style: spanPlain},
-		v.titleSpan(row.ThreadID, row.Title(), spanPlain),
+		v.titleSpan(row.ThreadID, title, spanPlain),
 	}
 	if row.HasVoice {
 		voiceStyle := spanPlain
@@ -640,7 +654,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		spans = append(spans, span{text: rightPadLeft(updated, updatedWidth), style: spanDim})
 		return spans
 	}
-	if projectGrouping {
+	if projectGrouping && !statusInTitle {
 		spans = append(spans, span{text: "  " + row.Group.StatusLabelForRow(row), style: spanDim})
 	}
 	return spans

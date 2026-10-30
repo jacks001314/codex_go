@@ -63,6 +63,35 @@ var newAgentsDashboardStore = newSessionStore
 // keeping only root sessions (Rust agents_overview: roots with subagent status
 // folded into the root's group).
 func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID string) []agentsoverview.Row {
+	return agentsOverviewRowsFromThreadsWithReadReceipts(threads, currentThreadID, nil)
+}
+
+// agentsOverviewReadReceipt is the part of ThreadReadState the command center
+// renders and later uses to acknowledge a focused conversation (Rust #58263).
+type agentsOverviewReadReceipt struct {
+	Unread   bool
+	Revision string
+}
+
+func agentsOverviewReadReceiptsFromThreadList(states map[string]appserver.ThreadReadState) map[string]agentsOverviewReadReceipt {
+	if len(states) == 0 {
+		return nil
+	}
+	receipts := make(map[string]agentsOverviewReadReceipt, len(states))
+	for threadID, state := range states {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			continue
+		}
+		receipts[threadID] = agentsOverviewReadReceipt{
+			Unread:   state.FirstUnread != nil,
+			Revision: strings.TrimSpace(state.Revision),
+		}
+	}
+	return receipts
+}
+
+func agentsOverviewRowsFromThreadsWithReadReceipts(threads []*appserver.Thread, currentThreadID string, receipts map[string]agentsOverviewReadReceipt) []agentsoverview.Row {
 	currentThreadID = strings.TrimSpace(currentThreadID)
 	childrenByRoot := agentsOverviewChildrenByRoot(threads)
 	rows := make([]agentsoverview.Row, 0, len(threads))
@@ -111,6 +140,10 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 		row.StatusType = strings.TrimSpace(thread.Status.Type)
 		row.StatusActive = strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active")
 		row.IsCurrent = strings.EqualFold(row.ThreadID, currentThreadID)
+		if receipt, ok := receipts[row.ThreadID]; ok {
+			row.Unread = receipt.Unread
+			row.UnreadRevision = receipt.Revision
+		}
 		rows = append(rows, row)
 	}
 	return rows
@@ -313,9 +346,10 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 	// Rust agents_overview_threads seeds the command center with up to
 	// RECENT_SESSION_LIMIT recent sessions in addition to loaded sessions. A
 	// failed seed only logs: the dashboard still shows the loaded threads.
-	recent, err := s.listRecentThreads(ctx)
+	recent, receipts, err := s.listRecentThreadsWithReadReceipts(ctx)
 	if err != nil {
 		recent = nil
+		receipts = nil
 	}
 	byID := make(map[string]*appserver.Thread, len(recent)+len(threadIDs))
 	order := make([]string, 0, len(recent)+len(threadIDs))
@@ -348,16 +382,34 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 	}
 	threads := make([]*appserver.Thread, 0, len(order))
 	for _, id := range order {
-		if thread, ok := byID[id]; ok && thread != nil {
-			threads = append(threads, thread)
-			continue
+		thread := byID[id]
+		_, hasReceipt := receipts[id]
+		if !hasReceipt {
+			// Recent/pinned/loaded listings normally carry readStates. A loaded
+			// or pinned id outside those pages still needs a receipt, so read it
+			// without turns (Rust #58263 agents_overview_threads.rs).
+			response, err := remoteThreadReadResponse(ctx, s.client, id, false)
+			if err == nil && response != nil {
+				if response.Thread != nil {
+					thread = response.Thread
+				}
+				if response.ReadState != nil {
+					receipt := agentsOverviewReadReceipt{
+						Unread:   response.ReadState.FirstUnread != nil,
+						Revision: strings.TrimSpace(response.ReadState.Revision),
+					}
+					if receipts == nil {
+						receipts = map[string]agentsOverviewReadReceipt{}
+					}
+					receipts[id] = receipt
+				}
+			}
 		}
-		thread, err := remoteThreadRead(ctx, s.client, id, false)
-		if err == nil && thread != nil {
+		if thread != nil {
 			threads = append(threads, thread)
 		}
 	}
-	rows := agentsOverviewRowsFromThreads(threads, "")
+	rows := agentsOverviewRowsFromThreadsWithReadReceipts(threads, "", receipts)
 	s.attachLastMessages(ctx, rows)
 	return rows, nil
 }
@@ -410,23 +462,38 @@ func appserverThreadID(thread *appserver.Thread) string {
 // then exec/app-server sessions sorted by recency, merge, sort by recency, and
 // truncate to recentSessionLimit.
 func (s *remoteAgentsDashboardSource) listRecentThreads(ctx context.Context) ([]*appserver.Thread, error) {
+	recent, _, err := s.listRecentThreadsWithReadReceipts(ctx)
+	return recent, err
+}
+
+// listRecentThreadsWithReadReceipts also returns the readStates from the same
+// thread/list pages, so the recent seed can paint unread results without a
+// second request (Rust #58263).
+func (s *remoteAgentsDashboardSource) listRecentThreadsWithReadReceipts(ctx context.Context) ([]*appserver.Thread, map[string]agentsOverviewReadReceipt, error) {
 	if s == nil || s.client == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	interactive, err := s.listRecentThreadsForSourceKinds(ctx, nil)
+	interactive, interactiveReceipts, err := s.listRecentThreadsForSourceKindsWithReadReceipts(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Default interactive sources include Atlas/ChatGPT, which have no explicit
 	// source kind; exec/app-server sessions need their own query.
-	nonInteractive, err := s.listRecentThreadsForSourceKinds(ctx, []appserver.ThreadSourceKind{
+	nonInteractive, nonInteractiveReceipts, err := s.listRecentThreadsForSourceKindsWithReadReceipts(ctx, []appserver.ThreadSourceKind{
 		appserver.ThreadSourceKindExec,
 		appserver.ThreadSourceKindAppServer,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	recent := append(interactive, nonInteractive...)
+	receipts := make(map[string]agentsOverviewReadReceipt, len(interactiveReceipts)+len(nonInteractiveReceipts))
+	for id, receipt := range interactiveReceipts {
+		receipts[id] = receipt
+	}
+	for id, receipt := range nonInteractiveReceipts {
+		receipts[id] = receipt
+	}
 	sort.SliceStable(recent, func(i, j int) bool {
 		left, right := threadRecencyKey(recent[i]), threadRecencyKey(recent[j])
 		if left != right {
@@ -437,7 +504,7 @@ func (s *remoteAgentsDashboardSource) listRecentThreads(ctx context.Context) ([]
 	if len(recent) > recentSessionLimit {
 		recent = recent[:recentSessionLimit]
 	}
-	return recent, nil
+	return recent, receipts, nil
 }
 
 func threadRecencyKey(thread *appserver.Thread) int64 {
@@ -453,10 +520,16 @@ func threadRecencyKey(thread *appserver.Thread) int64 {
 // listRecentThreadsForSourceKinds pages thread/list by recency. An older server
 // that rejects `recency_at` falls back to its activity-sorted history.
 func (s *remoteAgentsDashboardSource) listRecentThreadsForSourceKinds(ctx context.Context, kinds []appserver.ThreadSourceKind) ([]*appserver.Thread, error) {
+	recent, _, err := s.listRecentThreadsForSourceKindsWithReadReceipts(ctx, kinds)
+	return recent, err
+}
+
+func (s *remoteAgentsDashboardSource) listRecentThreadsForSourceKindsWithReadReceipts(ctx context.Context, kinds []appserver.ThreadSourceKind) ([]*appserver.Thread, map[string]agentsOverviewReadReceipt, error) {
 	limit := recentSessionLimit
 	archived := false
 	sortKey := appserver.SortRecencyAt
 	recent := make([]*appserver.Thread, 0, limit)
+	receipts := make(map[string]agentsOverviewReadReceipt)
 	var cursor *string
 	for len(recent) < limit {
 		params := appserver.ThreadListParams{
@@ -476,9 +549,13 @@ func (s *remoteAgentsDashboardSource) listRecentThreadsForSourceKinds(ctx contex
 				sortKey = appserver.SortUpdatedAt
 				cursor = nil
 				recent = recent[:0]
+				receipts = make(map[string]agentsOverviewReadReceipt)
 				continue
 			}
-			return nil, err
+			return nil, nil, err
+		}
+		for id, receipt := range agentsOverviewReadReceiptsFromThreadList(response.ReadStates) {
+			receipts[id] = receipt
 		}
 		for index := range response.Data {
 			thread := &response.Data[index]
@@ -496,7 +573,7 @@ func (s *remoteAgentsDashboardSource) listRecentThreadsForSourceKinds(ctx contex
 		next := strings.TrimSpace(*response.NextCursor)
 		cursor = &next
 	}
-	return recent, nil
+	return recent, receipts, nil
 }
 
 // recencySortUnsupportedError matches an older server that does not understand

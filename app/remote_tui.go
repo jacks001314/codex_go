@@ -567,6 +567,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		AgentsOverviewEmbedded:  false,
 		OnAgentsOverviewRefresh: interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
+		OnAcknowledgeThreadRead: interactiveRemoteAgentsOverviewAcknowledgeThreadRead(ctx, endpoint),
 		// Rust #51500: the shared pinned section backs the dashboard's pin
 		// group and its `p` shortcut.
 		OnAgentsOverviewPinnedThreads:    interactiveRemoteAgentsOverviewPinnedThreads(agentsOverviewPinRequest),
@@ -2489,15 +2490,23 @@ func remoteTUILoadedThreadIDs(ctx context.Context, client *remoteAppServerTUICli
 }
 
 func remoteTUIReadThread(ctx context.Context, client *remoteAppServerTUIClient, threadID string, includeTurns bool) (*appserver.Thread, error) {
-	var response appserver.ThreadReadResponse
-	params := appserver.ThreadReadParams{ThreadID: strings.TrimSpace(threadID), IncludeTurns: includeTurns}
-	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadRead, params, &response); err != nil {
+	response, err := remoteThreadReadResponse(ctx, client, threadID, includeTurns)
+	if err != nil {
 		return nil, err
 	}
 	if response.Thread == nil || strings.TrimSpace(response.Thread.ID) == "" {
 		return nil, fmt.Errorf("thread/read returned no thread for %s", strings.TrimSpace(threadID))
 	}
 	return response.Thread, nil
+}
+
+func remoteThreadReadResponse(ctx context.Context, client *remoteAppServerTUIClient, threadID string, includeTurns bool) (*appserver.ThreadReadResponse, error) {
+	var response appserver.ThreadReadResponse
+	params := appserver.ThreadReadParams{ThreadID: strings.TrimSpace(threadID), IncludeTurns: includeTurns}
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadRead, params, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // remoteTUIReadOnlyHistoryTurnLimit bounds the summary recovery page.
@@ -4776,6 +4785,17 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return err
 		}
 		c.send(codextea.AgentThreadVisibilityMsg{ThreadID: payload.ThreadID, Archived: false})
+		return nil
+	case appserver.NotificationThreadReadStateChanged:
+		var payload appserver.ThreadReadStateChangedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		c.send(codextea.AgentThreadReadStateMsg{
+			ThreadID: payload.ThreadID,
+			Unread:   payload.ReadState.FirstUnread != nil,
+			Revision: payload.ReadState.Revision,
+		})
 		return nil
 	case appserver.NotificationThreadStarted:
 		var payload appserver.ThreadStartedNotification

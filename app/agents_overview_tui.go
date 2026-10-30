@@ -2,10 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
@@ -169,6 +172,86 @@ func interactiveRemoteAgentsOverviewDelete(ctx context.Context, endpoint *appser
 		defer client.close()
 		return newRemoteAgentsDashboardSource(client, "").Delete(ctx, threadID)
 	}
+}
+
+// interactiveRemoteAgentsOverviewAcknowledgeThreadRead acknowledges the
+// receipt revision observed while a conversation is focused (Rust #58263
+// acknowledge_read). It uses a short-lived connection so viewing a task never
+// competes with the interactive notification stream.
+func interactiveRemoteAgentsOverviewAcknowledgeThreadRead(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ThreadReadAcknowledgeFunc {
+	return func(threadID, expectedRevision string) {
+		threadID = strings.TrimSpace(threadID)
+		expectedRevision = strings.TrimSpace(expectedRevision)
+		if threadID == "" || expectedRevision == "" {
+			return
+		}
+		go func() {
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				slog.Warn("could not connect to acknowledge viewed conversation", "thread_id", threadID, "error", err)
+				return
+			}
+			defer client.close()
+			if err := remoteAcknowledgeThreadRead(ctx, client, threadID, expectedRevision); err != nil {
+				slog.Warn("could not acknowledge viewed conversation", "thread_id", threadID, "error", err)
+			}
+		}()
+	}
+}
+
+// remoteAcknowledgeThreadRead mirrors AppServerSession::acknowledge_read:
+// retry once on the server's transient codes, and treat a receipt conflict as
+// success because the server reported the newer state.
+func remoteAcknowledgeThreadRead(ctx context.Context, client *remoteAppServerTUIClient, threadID, expectedRevision string) error {
+	params := appserver.ThreadReadStateUpdateParams{
+		ThreadID:         strings.TrimSpace(threadID),
+		Operation:        appserver.ThreadReadStateOperation{Type: "read"},
+		ExpectedRevision: strings.TrimSpace(expectedRevision),
+	}
+	send := func() error {
+		var response appserver.ThreadReadStateUpdateResponse
+		return remoteSessionRequest(ctx, client, appserver.MethodThreadReadStateUpdate, params, &response)
+	}
+	err := send()
+	if remoteReadStateTransientError(err) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+		err = send()
+	}
+	if err == nil {
+		return nil
+	}
+	if _, conflict := remoteReadStateConflict(err); conflict {
+		return nil
+	}
+	return err
+}
+
+func remoteReadStateTransientError(err error) bool {
+	var rpc *remoteRPCError
+	if !errors.As(err, &rpc) {
+		return false
+	}
+	return rpc.Code == -32603 || rpc.Code == -32001
+}
+
+func remoteReadStateConflict(err error) (appserver.ThreadReadState, bool) {
+	var rpc *remoteRPCError
+	if !errors.As(err, &rpc) || rpc.Data == nil || rpc.Data["reason"] != "readStateConflict" {
+		return appserver.ThreadReadState{}, false
+	}
+	encoded, marshalErr := json.Marshal(rpc.Data["readState"])
+	if marshalErr != nil {
+		return appserver.ThreadReadState{}, false
+	}
+	var state appserver.ThreadReadState
+	if unmarshalErr := json.Unmarshal(encoded, &state); unmarshalErr != nil {
+		return appserver.ThreadReadState{}, false
+	}
+	return state, true
 }
 
 // interactiveRemoteAgentsOverviewUsage reads the selected task's usage

@@ -22,8 +22,12 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	m.readOnlyThread = readOnly
 	if readOnly {
 		m.threadUnavailable = false
+		if m.State != nil {
+			m.freezeViewedReadReceipt(m.State.ThreadID)
+		}
 	}
 	if !readOnly {
+		m.frozenReadReceipt = nil
 		return
 	}
 	// Block input while preserving the transcript; drafts and queued messages

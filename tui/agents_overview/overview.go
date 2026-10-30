@@ -310,6 +310,12 @@ type Row struct {
 	// (Rust #51500 supports_shared_pinning). The host maps
 	// appserver.SessionSource to this string; empty means unknown.
 	Source string
+	// Unread marks a task with an unacknowledged result (Rust #58263
+	// ThreadReadState.first_unread). The command center paints a filled blue dot.
+	Unread bool
+	// UnreadRevision is the receipt revision behind Unread. The host sends it
+	// as expectedRevision when the focused conversation is viewed.
+	UnreadRevision string
 }
 
 // Title mirrors Rust: thread name, else preview, else "Untitled task".

@@ -1058,6 +1058,15 @@ type AgentThreadVisibilityMsg struct {
 	Archived bool
 }
 
+// AgentThreadReadStateMsg carries a thread/readState/changed notification into
+// the command center and focused-conversation acknowledgement state (Rust
+// #58263).
+type AgentThreadReadStateMsg struct {
+	ThreadID string
+	Unread   bool
+	Revision string
+}
+
 type AgentSwitchResultMsg struct {
 	ThreadID string
 	Response AgentThreadSwitchResponse
@@ -1254,6 +1263,9 @@ type Options struct {
 	OnSwitchAgent           AgentThreadSwitchFunc
 	AgentsOverviewEmbedded  bool
 	OnAgentsOverviewRefresh AgentsOverviewRefreshFunc
+	// OnAcknowledgeThreadRead marks a focused conversation's observed receipt
+	// read. Nil disables automatic read acknowledgement (Rust #58263).
+	OnAcknowledgeThreadRead ThreadReadAcknowledgeFunc
 	// OnAgentsOverviewUsage reads the selected task's usage estimate for the
 	// dashboard details (Rust #44970). Nil disables the token/usage surface.
 	OnAgentsOverviewUsage       AgentsOverviewUsageReaderFunc
@@ -1840,6 +1852,13 @@ type Model struct {
 	agentsOverviewRefresh    int
 	agentsOverviewPending    bool
 	agentsOverviewInflight   bool
+	// unreadThreadRevisions retains the receipt revision behind each visible
+	// unread result. A focused conversation acknowledges it at most once per
+	// view (Rust #58263).
+	unreadThreadRevisions map[string]string
+	focusedConversation   string
+	attemptedReadRevision string
+	frozenReadReceipt     *threadReadReceipt
 	// agentsOverviewGrouping is the live Command Center grouping kept across
 	// dashboard opens (Rust #50786 AgentsOverviewState::grouping).
 	agentsOverviewGrouping agentsoverview.Grouping
@@ -2344,6 +2363,7 @@ type Model struct {
 	queueAutoSendSuppressed       bool
 	agentsOverviewEmbedded        bool
 	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
+	onAcknowledgeThreadRead       ThreadReadAcknowledgeFunc
 	onAgentsOverviewUsage         AgentsOverviewUsageReaderFunc
 	onAgentsOverviewNewSession    AgentsOverviewNewSessionFunc
 	onAgentsOverviewNewWorktree   AgentsOverviewNewWorktreeFunc
@@ -3010,6 +3030,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		sizeMonitorEnabled:               terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
 		agentsOverviewEmbedded:           options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:          options.OnAgentsOverviewRefresh,
+		onAcknowledgeThreadRead:          options.OnAcknowledgeThreadRead,
 		onAgentsOverviewUsage:            options.OnAgentsOverviewUsage,
 		agentsOverviewUsage:              map[string]*agentsOverviewUsageEntry{},
 		onAgentsOverviewNewSession:       options.OnAgentsOverviewNewSession,
@@ -3602,6 +3623,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case bubbletea.BlurMsg:
 		m.clearLeaderChord()
 		m.terminalFocused = false
+		m.focusedConversation = ""
 		m.composerSelection.clear()
 		m.renderedSelection.clear()
 		if m.animEngine != nil {
@@ -3968,6 +3990,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applyAgentListResult(msg)
 	case AgentThreadVisibilityMsg:
 		return m, m.setAgentPickerThreadVisibility(msg.ThreadID, msg.Archived)
+	case AgentThreadReadStateMsg:
+		m.applyAgentThreadReadState(msg)
+		return m, nil
 	case agentsOverviewListMsg:
 		return m, m.applyAgentsOverviewList(msg)
 	case agentsOverviewUsageLoadedMsg:
@@ -4573,6 +4598,7 @@ func (m *Model) View() string {
 	// the synchronized render, matching Rust's "only a draw may deliver a read".
 	m.deliverRightClickPasteAtRender()
 	m.ensureSize()
+	m.observeFocusedThreadRead()
 	m.syncStatusTimerPause(m.currentTime())
 	m.syncTranscriptHeight()
 	m.storePetDrawRequest()

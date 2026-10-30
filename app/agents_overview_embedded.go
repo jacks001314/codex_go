@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"codex_go/appserver"
 	"codex_go/session"
+	"codex_go/state"
 	agentsoverview "codex_go/tui/agents_overview"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
@@ -30,7 +32,7 @@ func newEmbeddedAgentsDashboardSource(store *session.Store, closeSideConversatio
 	return &embeddedAgentsDashboardSource{store: store, closeSideConversations: closeSideConversations}
 }
 
-func (s *embeddedAgentsDashboardSource) List(context.Context) ([]agentsoverview.Row, error) {
+func (s *embeddedAgentsDashboardSource) List(ctx context.Context) ([]agentsoverview.Row, error) {
 	if s == nil || s.store == nil {
 		return nil, errors.New("session store is unavailable")
 	}
@@ -38,7 +40,49 @@ func (s *embeddedAgentsDashboardSource) List(context.Context) ([]agentsoverview.
 	if err != nil {
 		return nil, err
 	}
-	return agentsOverviewRowsFromRecords(records, ""), nil
+	rows := agentsOverviewRowsFromRecords(records, "")
+	s.attachReadReceipts(ctx, rows)
+	return rows, nil
+}
+
+// attachReadReceipts reads the same durable receipts the embedded app server
+// exposes through thread/list and thread/read, so the command center marks
+// unread results in the no-daemon path too (Rust #58263).
+func (s *embeddedAgentsDashboardSource) attachReadReceipts(ctx context.Context, rows []agentsoverview.Row) {
+	if s == nil || s.store == nil || len(rows) == 0 {
+		return
+	}
+	codexHome := sessionCodexHome(s.store)
+	if codexHome == "" {
+		return
+	}
+	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return
+	}
+	runtime, err := state.InitStateRuntime(ctx, sqliteConfig, "openai")
+	if err != nil {
+		return
+	}
+	defer runtime.Close()
+	threadIDs := make([]string, 0, len(rows))
+	for i := range rows {
+		if id := strings.TrimSpace(rows[i].ThreadID); id != "" {
+			threadIDs = append(threadIDs, id)
+		}
+	}
+	states, err := runtime.ThreadReadStates(ctx, threadIDs)
+	if err != nil {
+		return
+	}
+	for i := range rows {
+		value, ok := states[strings.TrimSpace(rows[i].ThreadID)]
+		if !ok {
+			continue
+		}
+		rows[i].Unread = value.FirstUnreadTurn != nil
+		rows[i].UnreadRevision = strings.TrimSpace(value.Revision)
+	}
 }
 
 func (s *embeddedAgentsDashboardSource) NewSession(_ context.Context, cwd string) (string, error) {
@@ -234,4 +278,28 @@ func embeddedAgentsOverviewArchive(store *session.Store, closeSideConversations 
 func embeddedAgentsOverviewDelete(store *session.Store, closeSideConversations func(map[string]struct{}) bool) codextea.AgentsOverviewDeleteFunc {
 	source := newEmbeddedAgentsDashboardSource(store, closeSideConversations)
 	return func(threadID string) error { return source.Delete(context.Background(), threadID) }
+}
+
+// embeddedAgentsOverviewAcknowledgeThreadRead marks the viewed receipt read in
+// the embedded app server's durable state (Rust #58263 acknowledge_read). It is
+// best-effort: the next unread notification or dashboard refresh repairs the row.
+func embeddedAgentsOverviewAcknowledgeThreadRead(store *session.Store) codextea.ThreadReadAcknowledgeFunc {
+	return func(threadID, expectedRevision string) {
+		threadID = strings.TrimSpace(threadID)
+		expectedRevision = strings.TrimSpace(expectedRevision)
+		if store == nil || threadID == "" || expectedRevision == "" {
+			return
+		}
+		_, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadReadStateUpdate, appserver.ThreadReadStateUpdateParams{
+			ThreadID:         threadID,
+			Operation:        appserver.ThreadReadStateOperation{Type: "read"},
+			ExpectedRevision: expectedRevision,
+		})
+		if closeRuntime != nil {
+			closeRuntime()
+		}
+		if err != nil {
+			slog.Warn("could not acknowledge viewed conversation", "thread_id", threadID, "error", err)
+		}
+	}
 }

@@ -142,6 +142,16 @@ func groupDotStyle(group Group) spanStyle {
 	}
 }
 
+// taskMarkerSpan renders the result marker (Rust #58263 style::task_marker):
+// a blue filled dot for an unread result and a gray hollow dot for a read idle
+// task. The plain renderer keeps just the glyph.
+func taskMarkerSpan(unread bool) span {
+	if unread {
+		return span{text: "●", color: "#3b82f6"}
+	}
+	return span{text: "○", color: "#808080"}
+}
+
 // joinSpans returns the unstyled text of a line.
 func joinSpans(spans []span) string {
 	var builder strings.Builder

@@ -44,6 +44,11 @@ type AgentsOverviewTogglePinFunc func(threadID string, pinned bool) error
 type AgentsOverviewArchiveFunc func(threadID string) error
 type AgentsOverviewDeleteFunc func(threadID string) error
 
+// ThreadReadAcknowledgeFunc marks the observed unread receipt revision read.
+// The host sends expectedRevision and treats a newer server receipt as success
+// (Rust #58263 AppServerSession::acknowledge_read).
+type ThreadReadAcknowledgeFunc func(threadID, expectedRevision string)
+
 // Agents overview lifecycle confirmation (Rust #44433): archive or permanently
 // delete the selected task and its child agents after explicit confirmation.
 const agentsOverviewLifecycleModalID = "agents-overview-lifecycle"
@@ -310,6 +315,7 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		message.rows = rows
 	}
 	message.rows = m.mergeAgentsOverviewRows(message.rows)
+	m.rememberAgentsOverviewReadStates(message.rows)
 	switch {
 	case message.pinErr != nil:
 		// Rust #51500: a failed pin listing keeps the pins the dashboard already
