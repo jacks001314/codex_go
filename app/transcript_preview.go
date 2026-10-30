@@ -10,6 +10,7 @@ import (
 	"codex_go/eventmap"
 	"codex_go/session"
 	codextui "codex_go/tui"
+	"codex_go/tui/markdown"
 	codextea "codex_go/tui/tea"
 )
 
@@ -159,7 +160,7 @@ func appendTranscriptPreviewItem(lines *[]codextui.TranscriptPreviewLine, item a
 // preserving assistant display rewrites (Rust append_transcript_preview_text).
 func appendTranscriptPreviewText(lines *[]codextui.TranscriptPreviewLine, speaker codextui.TranscriptPreviewSpeaker, text string, cwd string) {
 	if speaker == codextui.TranscriptPreviewAssistant {
-		text = transcriptPreviewAssistantMarkdown(text)
+		text = transcriptPreviewAssistantMarkdown(text, cwd)
 	}
 	remaining := transcriptPreviewMaxLines - len(*lines)
 	if remaining <= 0 {
@@ -177,12 +178,16 @@ func appendTranscriptPreviewText(lines *[]codextui.TranscriptPreviewLine, speake
 	}
 }
 
-// transcriptPreviewAssistantMarkdown applies the assistant display rewrite
-// (hidden markup removal + inline visualizations) the preview shows.
-func transcriptPreviewAssistantMarkdown(text string) string {
+// transcriptPreviewAssistantMarkdown applies the assistant display rewrite the
+// preview shows: hidden markup removal, the completed-response directive strip
+// (Rust parse_assistant_markdown, #42640), inline visualizations, and file
+// citations rendered with the session cwd (Rust #42650's
+// render_transcript_content_lines).
+func transcriptPreviewAssistantMarkdown(text string, cwd string) string {
 	visible := eventmap.StripHiddenAssistantMarkup(text, false)
+	visible = codextui.NormalizeCompletedAssistantMarkdownForCWD(visible, cwd)
 	rewritten, _ := codextui.RewriteInlineVisualizations(visible, nil)
-	return rewritten
+	return markdown.RewriteFileCitationsForPlainText(rewritten, cwd)
 }
 
 // reverseTranscriptPreviewLines turns the newest-first accumulation into

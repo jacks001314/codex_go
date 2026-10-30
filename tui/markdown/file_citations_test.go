@@ -167,3 +167,28 @@ func TestFileCitationDirectiveWrapsClickableLocalLink(t *testing.T) {
 		t.Fatalf("citation display wrong:\n%s", clean)
 	}
 }
+
+// Rust #42650 also renders citations in plain-text consumers (the resume
+// preview), which show the local path without Markdown or link annotations.
+func TestRewriteFileCitationsForPlainTextUsesDisplayPath(t *testing.T) {
+	source := `See :codex-file-citation{path="src/report.md"} for details.`
+	if got := RewriteFileCitationsForPlainText(source, "/repo"); got != "See src/report.md for details." {
+		t.Fatalf("plain-text citation = %q", got)
+	}
+	if got := RewriteFileCitationsForPlainText(source, ""); got != `See ./src/report.md for details.` {
+		t.Fatalf("plain-text citation without cwd = %q", got)
+	}
+}
+
+func TestRewriteFileCitationsForPlainTextKeepsLiteralRegions(t *testing.T) {
+	citation := `:codex-file-citation{path=src/report.md}`
+	for _, source := range []string{
+		"`" + citation + "`",
+		`\` + citation,
+		`:unsupported{value="` + citation + `"}`,
+	} {
+		if got := RewriteFileCitationsForPlainText(source, "/repo"); got != source {
+			t.Fatalf("literal citation rewritten: %q -> %q", source, got)
+		}
+	}
+}

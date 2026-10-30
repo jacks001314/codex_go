@@ -7243,9 +7243,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1027 (fix): resume-picker transcript previews render assistant file citations as local paths with the row cwd and drop completed-response directives (app/transcript_preview.go, tui/markdown/file_citations.go). Regression contract: app/transcript_preview_file_citations_like_rust_test.go:TestTranscriptPreviewRendersAssistantFileCitationsLikeRust, app/transcript_preview_file_citations_like_rust_test.go:TestTranscriptPreviewKeepsCodeSpanCitationsLiteralLikeRust, app/transcript_preview_file_citations_like_rust_test.go:TestTranscriptPreviewStripsGitDirectivesLikeRust, tui/markdown/file_citations_test.go:TestRewriteFileCitationsForPlainTextUsesDisplayPath, tui/markdown/file_citations_test.go:TestRewriteFileCitationsForPlainTextKeepsLiteralRegions; verify with `go test ./app -run TranscriptPreview -count=1` and `go test ./tui/markdown ./tui -count=1`."
    ]
   },
   {

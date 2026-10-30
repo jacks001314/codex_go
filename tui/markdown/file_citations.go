@@ -34,13 +34,7 @@ type fileCitationSpan struct {
 // the link annotations needed for OSC-8 hyperlinks. Incomplete or malformed
 // directives stay literal.
 func rewriteFileCitations(source string, cwd string) (string, []localFileLink) {
-	if !strings.Contains(source, fileCitationName) {
-		return source, nil
-	}
-	data := []byte(source)
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
-	literalRanges := collectCitationLiteralRanges(document)
-	spans := findFileCitationSpans(source, literalRanges, cwd)
+	spans := fileCitationSpans(source, cwd)
 	if len(spans) == 0 {
 		return source, nil
 	}
@@ -61,6 +55,42 @@ func rewriteFileCitations(source string, cwd string) (string, []localFileLink) {
 	}
 	out.WriteString(source[cursor:])
 	return out.String(), links
+}
+
+// RewriteFileCitationsForPlainText converts complete file-citation directives
+// into their display path text for plain-text consumers, such as the
+// resume-picker transcript preview, which render assistant lines without a
+// Markdown pass (Rust #42650 renders preview citations through
+// render_streaming_markdown_lines_with_width_and_cwd). Directives inside code,
+// HTML, existing links, escaped text, or malformed candidates stay literal.
+func RewriteFileCitationsForPlainText(source string, cwd string) string {
+	spans := fileCitationSpans(source, cwd)
+	if len(spans) == 0 {
+		return source
+	}
+	var out strings.Builder
+	cursor := 0
+	for _, span := range spans {
+		if span.start < cursor {
+			continue
+		}
+		out.WriteString(source[cursor:span.start])
+		out.WriteString(span.display)
+		cursor = span.end
+	}
+	out.WriteString(source[cursor:])
+	return out.String()
+}
+
+// fileCitationSpans collects the complete file-citation directives that may be
+// rewritten, skipping every Markdown literal region.
+func fileCitationSpans(source string, cwd string) []fileCitationSpan {
+	if !strings.Contains(source, fileCitationName) {
+		return nil
+	}
+	data := []byte(source)
+	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	return findFileCitationSpans(source, collectCitationLiteralRanges(document), cwd)
 }
 
 func findFileCitationSpans(source string, literalRanges [][2]int, cwd string) []fileCitationSpan {

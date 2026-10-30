@@ -3317,6 +3317,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regression `TestServiceTierDefaultOverrideWarningLikeRust` pins the overridden warning beside the saved confirmation and proves a plain `ok` write reports no spurious override; `TestModelSelectionSyncSurfacesFailuresAndOverrides` keeps the model/effort half pinned.
 - Verified with `go build ./...`, `go test ./tui/tea -count=1`, `go test ./tui/... -count=1`, and `go test ./parity -run TestAlignment -count=1`. (`go test ./app` has two pre-existing failures unrelated to this change: `TestExecJSONEndToEnd` and `TestLocalSessionForksRustRolloutWithoutGoSnapshot`.)
 
-Status after reconciliation: `2191 complete`, `451 not_applicable`,
-`344 audit_pending`, `159 regression_pending`, `4 partial`,
+### Assistant file citations in previews (Round 1027)
+
+- Rust #42650 renders `:codex-file-citation{...}` directives as local file links in streaming output, finalized messages and plans, and resume-picker transcript previews: the preview now goes through `render_streaming_markdown_lines_with_width_and_cwd` with the row cwd instead of plain `append_markdown`.
+- Go already rendered citations for streaming, finalized, and plan markdown through `tui/markdown.rewriteFileCitations` (code-span/HTML/escaped literals, Windows separators, unicode, location suffixes, and the shared scan budget). The resume preview was plain text, so the directive itself leaked into the picker. `tui/markdown.RewriteFileCitationsForPlainText` now exports the same span scan for plain-text consumers, and `app/transcript_preview.go` runs the cwd-aware completed-markdown normalization, inline visualization rewrite, and citation rewrite before splitting preview lines (#42650, complete).
+- The preview therefore also drops `::git-*` receipts and hidden markup, reusing the Round 1025 directive parser so the picker, transcript, and `/copy` agree on visible assistant text.
+- New regressions: `app/transcript_preview_file_citations_like_rust_test.go` pins citation display with the row cwd, code-span literals, and Git-receipt stripping; `TestRewriteFileCitationsForPlainTextUsesDisplayPath` and `TestRewriteFileCitationsForPlainTextKeepsLiteralRegions` pin the plain-text helper including the cwd-less `./` prefix.
+- Verified with `go build ./...`, `go test ./app -run TranscriptPreview -count=1`, `go test ./tui/markdown ./tui -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2192 complete`, `451 not_applicable`,
+`344 audit_pending`, `158 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
