@@ -3793,6 +3793,28 @@ Status after this batch: `2268 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2279 complete`, `462 not_applicable`, `322 audit_pending`, `81 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1092)
+
+- #49069 log-database page reclamation: incremental auto-vacuum only for the logs DB plus startup/periodic bounded reclamation.
+- #49076 skill analytics read only the Git origin URL instead of full repository metadata.
+- #49119 content-filter recovery guidance: bundled/catalog-resolved guidance appended to retried sampling blocks and recorded in live history.
+- #49267 remote agent message boards: remote config parsing, backend, ephemeral multi-agent gate and credential resolution.
+- #49332 canceled exec-server RPCs release their pending waiter immediately.
+- #49339 Bedrock Mantle catalogs lead with GPT-6.1 Sol while preserving configured catalogs.
+- #49360 executor environment info round-trips `prependPathDirs` and reports the packaged PATH directory.
+- #49406 API-key sessions honor explicit cyber access programs behind the feature flag.
+- #49425 diagnostic logs prune by age and database size at startup and periodically.
+- #49437 machine-local audio device selection in TUI voice settings.
+- #49467 executor PATH directories restored after login-shell startup only with the feature enabled.
+- #49642 managed `windows.allow_mxc = false` blocks MXC selection with a sourced constraint.
+- #49710 SQLite corruption classified by typed result codes.
+- #49799 web-search settings: launch-origin precedence, legacy-key retirement and `--search` forwarding.
+- #49804 platform-specific modifier labels across TUI shortcut surfaces.
+- #49805 writable file streams capability-gated with cached environment info.
+- #49811 `fs/writeBlock` validates the executor capability before issuing writes.
+
+Status after this batch: `2296 complete`, `462 not_applicable`, `322 audit_pending`, `64 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

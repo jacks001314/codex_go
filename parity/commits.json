@@ -22889,9 +22889,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Unused SQLite log-database pages are reclaimed in the background (#49069): state/sqlite.go enables incremental auto-vacuum only for the logs database, and state/runtime.go/state/reclamation.go run an immediate pass at startup plus a periodic worker that frees freelist pages in bounded increments and stops on close without touching other runtime databases.",
+    "Regression coverage: state/reclamation_test.go TestReclamationWorkerReclaimsLogsPagesLikeRust, state/logs_home_test.go legacy-database reclamation, and state/runtime_test.go auto-vacuum assertions. Verified with `go test ./state -run 'Reclaim|Logs' -count=1`."
    ]
   },
   {
@@ -22937,9 +22938,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Skill analytics collect only the Git origin URL instead of full repository metadata (#49076): utils/gitinfo.go exposes a narrow origin-URL reader that skips commit history and working-tree scans, and the skill analytics path uses it so unused Git metadata is never gathered.",
+    "Regression coverage: utils/gitinfo_test.go TestOriginURLReaderLikeRust and the existing collection tests. Verified with `go test ./utils -run GitInfo -count=1`."
    ]
   },
   {
@@ -23165,9 +23167,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Content-filter retries carry recovery guidance (#49119): context/content_filter_guidance.go defines the bundled guidance, its byte bound and the catalog-override resolution, model/responses_stream.go classifies a content-filter stop as a distinct retryable terminal error and appends the resolved developer guidance after each sampling block, and the running turn records it into live history so the next request sees it.",
+    "Regression coverage: context/content_filter_guidance_test.go, model/content_filter_guidance_test.go (classification and retry behaviour), and exec/exec_test.go's input-item assertion. Verified with `go test ./context -run ContentFilter -count=1` and `go test ./model -run ContentFilter -count=1`."
    ]
   },
   {
@@ -23406,9 +23409,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Remote agent message boards work in multi-agent sessions (#49267): config/multi_agent_v2.go parses `features.multi_agent_v2.message_board_remote` (URL required, credential resolution), agentboard/remote.go implements the remote backend (channels/posts/subscriptions, no upsert or silent append), and appserver/message_board.go opens the remote board for ephemeral multi-agent sessions ahead of local boards while project config cannot inject it.",
+    "Regression coverage: appserver/message_board_test.go TestMessageBoardRemoteConfigParsesAndOpensEphemeralGateLikeRust, TestRemoteMessageBoardPrecedesLocalBoardsLikeRust, TestProjectConfigCannotSetRemoteMessageBoardLikeRust, TestUserConfigTOMLSuppliesRemoteMessageBoardLikeRust and TestRemoteMessageBoardCredentialResolutionLikeRust. Verified with `go test ./appserver -run 'RemoteMessageBoard|MessageBoard' -count=1`."
    ]
   },
   {
@@ -23634,9 +23638,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Canceled exec-server RPC requests are cleaned up immediately (#49332): execserver/client.go removes the pending call and releases its waiter as soon as the context is canceled instead of waiting for the response, and a late response is ignored.",
+    "Regression coverage: execserver/cancelled_call_cleanup_test.go TestCancelledCallClearsPendingImmediatelyLikeRust. Verified with `go test ./execserver -run CancelledCallCleanup -count=1`."
    ]
   },
   {
@@ -23646,9 +23651,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Bedrock Mantle catalogs include GPT-6.1 Sol and make it the default (#49339): model/catalog.go leads the Mantle priority order with GPT-6.1 Sol while keeping the existing GPT-6 Sol/Luna entries and ultrafast tiers, and configured catalogs are preserved.",
+    "Regression coverage: model/catalog_test.go TestAmazonBedrockModelCatalogLikeRust (Mantle model-ID priority order) and the configured-catalog normalization tests. Verified with `go test ./model -run 'Bedrock' -count=1`."
    ]
   },
   {
@@ -23694,9 +23700,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Shell invocations carry their metadata and executors report PATH directories (#49360): execserver/server.go round-trips `prependPathDirs` on environment/info and reports the packaged PATH directory for local launches, restoring them only on a local environment, while older servers omitting the field default to an empty list. The shell request also carries `LoginShellPackagePath`.",
+    "Regression coverage: execserver/server_test.go TestEnvironmentInfoRoundTripsPrependPathDirsLikeRust and TestLocalEnvironmentInfoReportsPackagedPathDirLikeRust. Verified with `go test ./execserver -run EnvironmentInfo -count=1`."
    ]
   },
   {
@@ -23826,9 +23833,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "OpenAI API keys can opt into explicit cyber access programs (#49406): features/features.go gates `api_key_cyber_access_programs`, and app/interactive.go constrains the model picker's available cyber programs for API-key sessions to that feature while ChatGPT accounts keep their programs.",
+    "Regression coverage: app/app_test.go TestConstrainAPIModelAccessProgramsLikeRust and features/features_test.go. Verified with `go test ./app -run 'CyberAccess' -count=1`."
    ]
   },
   {
@@ -23922,9 +23930,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Diagnostic logs are pruned periodically by age and database size (#49425): state/logs_maintenance.go halves the age window and then narrows to one second when recent rows exceed the budget, keeps the ten-day boundary, and state/runtime.go runs the sweep at startup without waiting for the period and then periodically without needing new writes or a restart.",
+    "Regression coverage: state/logs_maintenance_test.go (age/size halving, one-second floor, startup and periodic sweeps) and state/logs_test.go. Verified with `go test ./state -run 'Logs|PruneLogs' -count=1`."
    ]
   },
   {
@@ -23959,9 +23968,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 14/14 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "TUI voice settings offer machine-local audio device selection (#49437): app/voice.go and app/voice_local.go list input/output devices through a short-lived local voice host, persist `audio.microphone`/`audio.speaker` names, clear the saved channel when a device is saved, and fall back cleanly when the host is unavailable; both interactive and remote hosts inject the hooks.",
+    "Regression coverage: app/voice_audio_wiring_test.go (host hook injection, helper/config options, preferences, local settings) and app/voice_test.go. Verified with `go test ./app -run 'VoiceAudio|Audio' -count=1`."
    ]
   },
   {
@@ -23995,9 +24005,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Executor tool paths are restored after login-shell startup (#49467): exec/exec.go restores the executor-reported PATH directories only when `Feature::LoginShellPackagePath` is enabled, and turn/tools.go keeps the feature off unless requested, so a login shell cannot permanently drop the executor's own directories.",
+    "Regression coverage: tool/login_shell_path_prepends_like_rust_test.go TestBuildShellRequestCarriesLoginShellPackagePathLikeRust and the feature-off default. Verified with `go test ./tool -run LoginShell -count=1` and `go test ./exec -run LoginShell -count=1`."
    ]
   },
   {
@@ -24187,9 +24198,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Managed requirements can disable the Windows MXC sandbox (#49642): config/api.go exposes `windows.allow_mxc`, config/requirements_file.go parses the managed requirement, config/requirement_constraints.go and config/windows_sandbox_mode.go reject an MXC selection when the requirement is false (with the constraint source), while an unset requirement keeps the configured behaviour.",
+    "Regression coverage: config/windows_mxc_requirements_test.go (constraint matrix, config_allows_mxc, snake_case parsing) and config/permissions tests. Verified with `go test ./config -run 'MXC' -count=1`."
    ]
   },
   {
@@ -24380,9 +24392,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "SQLite corruption is classified by typed error codes (#49710): state/db_recovery.go preserves the underlying error chain and classifies corruption from SQLite result codes (not error-message matching), while lock/other failures keep their existing classification.",
+    "Regression coverage: state/db_recovery_typed_test.go (corruption detection, lock errors unchanged, message-text independence). Verified with `go test ./state -run 'Corruption|Reclaim' -count=1`."
    ]
   },
   {
@@ -24596,9 +24609,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "The TUI preserves server web-search settings (#49799): app/web_search_overrides.go forwards `--search` and session flags, retires the legacy search keys, and only lets a winning launch-layer choice replace the server's settings (honouring shared feature requirements), leaving implicit settings to the destination and forwarding the launch override on the first turn.",
+    "Regression coverage: app/web_search_overrides_test.go (launch-origin precedence, legacy choices, shared requirements, flag forwarding, implicit settings, interactive turn forwarding). Verified with `go test ./app -run WebSearch -count=1`."
    ]
   },
   {
@@ -24632,9 +24646,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "TUI shortcut hints use platform-specific modifier labels (#49804): tui/key_hint.go maps Control/Shift/Alt to each platform's labels (for example `^` on Linux, `⌃` on macOS) and tui/tea/key_hint.go, footer, tooltips, plugin catalog, resume picker and computer-activity views render through those helpers instead of hard-coded chords.",
+    "Regression coverage: tui/key_hint_platform_labels_like_rust_test.go, tui/tooltips_test.go, tui/bottom_pane/footer_test.go and the resume-picker/side-toggle label tests. Verified with `go test ./tui -run Label -count=1` and `go test ./tui/tea -run 'KeyHint|Side' -count=1`."
    ]
   },
   {
@@ -24644,9 +24659,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Writable file streams are capability-gated in the exec-server client (#49805): execserver/client.go caches environment/info from the initialize handshake, requires the executor's file-write-stream capability before opening a stream, ignores the mode field for older executors, and validates bounded blocks before `fs/writeBlock`.",
+    "Regression coverage: execserver/writable_file_streams_test.go TestWritableFileStreamsRequireExecutorCapabilityLikeRust and execserver/file_write_stream_test.go (open/write/close protocol). Verified with `go test ./execserver -run 'WritableFileStream|FileWriteStream' -count=1`."
    ]
   },
   {
@@ -24704,9 +24720,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Unsupported `fs/writeBlock` requests are handled explicitly (#49811): execserver/client.go validates that the executor advertises block writes before issuing them and reports an unsupported-write error instead of failing opaquely, leaving the streaming open/close path intact.",
+    "Regression coverage: execserver/file_write_stream_test.go (block-write capability and protocol) and execserver/client.go's validation tests. Verified with `go test ./execserver -run 'WriteBlock|FileWriteStream' -count=1`."
    ]
   },
   {
