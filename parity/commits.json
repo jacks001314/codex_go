@@ -17793,9 +17793,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go DeleteLocalBoardsWithOptions opens the board database for deletion and, only when state.IsSQLiteCorruptionError matches, closes the shared pool, backs the files up with state.BackupDBFilesForFreshStart and recreates the database before writing deleted_boards tombstones; other open errors return before deleting anything"
    ]
   },
   {
@@ -17805,9 +17805,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go localBoardPools caches one *sql.DB per canonical database path with a refcount, reuses it for concurrent handles, closes and evicts it when the last handle releases, and closeLocalBoardPool evicts it before corruption recovery or deletion"
    ]
   },
   {
@@ -17817,9 +17817,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go subscribedRecipients reads every subscriber with one SQL query and scans the single result set while the write transaction is held, so posting does not issue per-row queries"
    ]
   },
   {
@@ -17829,9 +17829,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go ListThreads materializes the page in a CTE and fetches root payload, reply count and latest reply in one query, preserving created and activity ordering, pagination and preview limits"
    ]
   },
   {
@@ -17853,9 +17853,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/tools.go messageBoardBoundedRead halves page and preview limits until the serialized result fits, stops once largestLimit/scale reaches one, and returns the metadata-budget error instead of repeating an identical read; call sites pass maxInt(page, preview) as largestLimit"
    ]
   },
   {
