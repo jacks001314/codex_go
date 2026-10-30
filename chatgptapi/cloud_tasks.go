@@ -409,11 +409,27 @@ func (c *CloudClient) SendAddCreditsNudgeEmail(ctx context.Context, creditType A
 }
 
 func (c *CloudClient) GetRateLimitsWithResetCredits(ctx context.Context) (*RateLimitsWithResetCredits, error) {
+	return c.getRateLimitsForUsage(ctx, false)
+}
+
+// GetRateLimitsWithLunaReserve opts the usage read into Luna Reserve exposure.
+// Only clients that can apply Reserve should call it (Rust #42358).
+func (c *CloudClient) GetRateLimitsWithLunaReserve(ctx context.Context) (*RateLimitsWithResetCredits, error) {
+	return c.getRateLimitsForUsage(ctx, true)
+}
+
+const lunaReserveUsageHeader = "x-openai-codex-luna-reserve"
+
+func (c *CloudClient) getRateLimitsForUsage(ctx context.Context, supportsLunaReserve bool) (*RateLimitsWithResetCredits, error) {
 	if c == nil {
 		return nil, errors.New("cloud client is nil")
 	}
 	var payload RateLimitStatusPayload
-	if err := c.doJSON(ctx, http.MethodGet, c.apiPath("usage"), nil, nil, &payload); err != nil {
+	var extraHeaders http.Header
+	if supportsLunaReserve {
+		extraHeaders = http.Header{lunaReserveUsageHeader: []string{"1"}}
+	}
+	if err := c.doJSONWithHeaders(ctx, http.MethodGet, c.apiPath("usage"), nil, nil, &payload, extraHeaders); err != nil {
 		return nil, err
 	}
 	return &RateLimitsWithResetCredits{
@@ -616,6 +632,13 @@ func (c *CloudClient) getTaskDetailsEnvelope(ctx context.Context, taskID string)
 }
 
 func (c *CloudClient) doJSON(ctx context.Context, method string, path string, query url.Values, body any, out any) error {
+	return c.doJSONWithHeaders(ctx, method, path, query, body, out, nil)
+}
+
+// doJSONWithHeaders sends a request with extra headers layered over the
+// client's shared headers; an extra header replaces a shared value of the same
+// name.
+func (c *CloudClient) doJSONWithHeaders(ctx context.Context, method string, path string, query url.Values, body any, out any, extraHeaders http.Header) error {
 	target, err := url.Parse(c.baseURL + path)
 	if err != nil {
 		return err
@@ -636,6 +659,12 @@ func (c *CloudClient) doJSON(ctx context.Context, method string, path string, qu
 		return err
 	}
 	for key, values := range c.headers {
+		for _, value := range values {
+			request.Header.Add(key, value)
+		}
+	}
+	for key, values := range extraHeaders {
+		request.Header.Del(key)
 		for _, value := range values {
 			request.Header.Add(key, value)
 		}

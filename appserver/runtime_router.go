@@ -14334,8 +14334,8 @@ func (r *RuntimeRouter) hydratePersonalAccessTokenAccount(ctx context.Context, s
 }
 
 func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetAccountRateLimitsResponse, error) {
+	var params auth.NullableGetAccountRateLimitsParams
 	if len(request.Params) > 0 {
-		var params struct{}
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
@@ -14348,7 +14348,15 @@ func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetA
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct backend client: %w", err)
 	}
-	response, err := client.GetRateLimitsWithResetCredits(context.Background())
+	var response *chatgptapi.RateLimitsWithResetCredits
+	if rateLimitsSupportsLunaReserve(snapshot, params) {
+		response, err = client.GetRateLimitsWithLunaReserve(context.Background())
+	} else {
+		// Go performs no separate reset-credit detail request, so
+		// excludeResetCreditDetails already yields Rust's fallback summary from
+		// the usage response.
+		response, err = client.GetRateLimitsWithResetCredits(context.Background())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch codex rate limits: %w", err)
 	}
@@ -14370,6 +14378,15 @@ func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetA
 	ordinary, accountID, upsell := accountBoundRateLimitExtras(response, activeAuth)
 	r.requireAccount().SetRateLimitExtras(ordinary, accountID, upsell)
 	return r.requireAccount().RateLimits(), nil
+}
+
+// rateLimitsSupportsLunaReserve reports whether the read may opt into Luna
+// Reserve exposure. Rust forwards the capability only for eligible ChatGPT
+// sessions, never FedRAMP accounts or other auth modes (Rust #42358).
+func rateLimitsSupportsLunaReserve(snapshot *auth.AuthDotJSON, params auth.NullableGetAccountRateLimitsParams) bool {
+	return params != nil && params.SupportsLunaReserve &&
+		snapshot != nil && snapshot.Mode() == "chatgpt" &&
+		!auth.IsFedrampAccount(snapshot)
 }
 
 func (r *RuntimeRouter) handleGetAccountTokenUsage(request *Request) (*auth.GetAccountTokenUsageResponse, error) {

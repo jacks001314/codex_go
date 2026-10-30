@@ -6469,9 +6469,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: NullableGetAccountRateLimitsParams, get_rate_limits_with_luna_reserve"
+    "Round 1048: added auth.GetAccountRateLimitsParams/NullableGetAccountRateLimitsParams, decoded account/rateLimits/read params as nullable (omitted and null preserved), and added chatgptapi.GetRateLimitsWithLunaReserve which layers x-openai-codex-luna-reserve: 1 via doJSONWithHeaders. appserver/runtime_router.go forwards the capability only for opted-in, non-FedRAMP chatgpt sessions (rateLimitsSupportsLunaReserve); chatgptAuthTokens and FedRAMP stay on the plain read. Go has no separate reset-credit detail request, so excludeResetCreditDetails already yields the usage-payload availableCount fallback, and ordinaryUsageAllowed/rateLimitUpsell remain filtered by the re-resolved active identity (accountBoundRateLimitExtras). Covered by TestRuntimeRouterRateLimitsUsageCapabilitiesLikeRust and TestRuntimeRouterRateLimitsRejectsNonBooleanCapabilitiesLikeRust. Verified with go test ./appserver -run 'RateLimit|Account' -count=1, go test ./chatgptapi ./auth -count=1, go test ./parity -count=1, go build ./..."
    ]
   },
   {

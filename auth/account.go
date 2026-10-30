@@ -590,6 +590,23 @@ type GetAccountRateLimitsResponse struct {
 	RateLimitUpsell json.RawMessage `json:"rateLimitUpsell"`
 }
 
+// GetAccountRateLimitsParams carries the usage-read capabilities of the
+// requesting client (Rust v2 GetAccountRateLimitsParams, #42358). Capabilities
+// are never inferred from the caller's experiment arm.
+type GetAccountRateLimitsParams struct {
+	// SupportsLunaReserve lets an eligible ChatGPT session record automatic
+	// Luna Reserve fallback exposure after ordinary usage is blocked.
+	SupportsLunaReserve bool `json:"supportsLunaReserve,omitempty"`
+	// ExcludeResetCreditDetails skips the separate reset-credit detail lookup
+	// for background polls; the usage response still carries the available
+	// count.
+	ExcludeResetCreditDetails bool `json:"excludeResetCreditDetails,omitempty"`
+}
+
+// NullableGetAccountRateLimitsParams preserves omitted and null parameters,
+// mirroring Rust's Option<GetAccountRateLimitsParams>.
+type NullableGetAccountRateLimitsParams = *GetAccountRateLimitsParams
+
 func (r *GetAccountRateLimitsResponse) MarshalJSON() ([]byte, error) {
 	rateLimits := RateLimitSnapshot{}
 	var byLimitID map[string]RateLimitSnapshot
