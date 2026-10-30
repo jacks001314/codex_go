@@ -8537,9 +8537,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1122: Go already routes managed Windows app-server shutdown through the protected control socket. `RequestDaemonShutdown` dials `ws://localhost/daemon/shutdown`, sends the PID and requires the same PID in the acknowledgment; `requestGracefulPIDShutdown` uses it only for the app-server kind while the detached updater keeps the plain-PID shutdown file. The server accepts the route only when `DaemonShutdownSocketEnv` marks a managed launch (`DaemonShutdownManaged`, wired in app/app.go) and invokes the drain callback after the handshake; forced termination remains the timeout fallback. Tests: TestWindowsDaemonShutdownWatcherConsumesMatchingPID, TestWindowsDaemonShutdownWatcherIgnoresOtherRequests, TestRequestGracefulPIDShutdownBranchesLikeRust, plus the Unix control-socket limit tests TestControlSocketAdvertisesUnfragmentedMessageLimitLikeRust, TestManagedShutdownSocketAdvertisesUnfragmentedMessageLimitLikeRust, TestRejectedShutdownSocketOmitsUnfragmentedMessageLimitLikeRust; targeted appserverdaemon tests pass."
    ]
   },
   {

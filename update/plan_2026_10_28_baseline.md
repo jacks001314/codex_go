@@ -4055,3 +4055,11 @@ Status after this batch: `2339 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestRuntimeRouterUserVerificationUnavailableSurface`, `TestUserVerificationMethodsRequireExperimentalAPICapability`, `TestRuntimeRouterUserVerificationVerifyValidation`, `TestRuntimeRouterUserVerificationCancelValidatesParams`, `TestRuntimeRouterUserVerificationParamsRejectUnknownFields`, `TestRuntimeRouterUserVerificationPeerOriginLikeRust`, `TestRuntimeRouterUserVerificationProviderSeamLikeRust`; `go test ./appserver -run UserVerification` passes.
 
 Status after this batch: `2340 complete`, `465 not_applicable`, `322 audit_pending`, `17 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Windows app-server shutdown uses the control socket (Round 1122)
+
+- #43308 was already implemented: `RequestDaemonShutdown` opens `ws://localhost/daemon/shutdown`, sends the managed PID and requires the matching acknowledgment, and `requestGracefulPIDShutdown` uses that path only for app-server records while the detached updater keeps the plain-PID shutdown file.
+- The server exposes the route only when `CODEX_DAEMON_SHUTDOWN_SOCKET` marks a managed launch (`DaemonShutdownManaged`, wired from `app/app.go`), invokes the drain callback after acknowledging, and keeps forced termination as the manager's timeout fallback.
+- Tests: `TestWindowsDaemonShutdownWatcherConsumesMatchingPID`, `TestWindowsDaemonShutdownWatcherIgnoresOtherRequests`, `TestRequestGracefulPIDShutdownBranchesLikeRust`, plus the Unix control-socket limit tests (`TestControlSocketAdvertisesUnfragmentedMessageLimitLikeRust`, `TestManagedShutdownSocketAdvertisesUnfragmentedMessageLimitLikeRust`, `TestRejectedShutdownSocketOmitsUnfragmentedMessageLimitLikeRust`); targeted appserverdaemon tests pass.
+
+Status after this batch: `2341 complete`, `465 not_applicable`, `322 audit_pending`, `16 regression_pending`, `5 partial`, `6 blocked_precondition`.
