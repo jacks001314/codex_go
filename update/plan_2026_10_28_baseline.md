@@ -3993,3 +3993,11 @@ Status after this batch: `2333 complete`, `464 not_applicable`, `322 audit_pendi
 - Tests: `TestRequestManualUpdateRetriesReplacementUpdaterLikeRust`, `TestRequestManualUpdateFallsBackWhenReplacementIsGoneLikeRust`, plus the existing `TestRunPIDUpdateLoopServesManualRequestsLikeRust`, `TestRequestManualUpdateUnsupportedLikeRust`, `TestRequestManualUpdatePinnedPackageStartsAWorkerLikeRust`, `TestExchangeManualUpdateDecodesUpdaterErrorsLikeRust` and `TestUpdateFromCLIPinsTheCLIPackage`; `go build ./...` and full `go test ./appserverdaemon` pass.
 
 Status after this batch: `2334 complete`, `464 not_applicable`, `322 audit_pending`, `24 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Bounded TUI task responses preserve answers (Round 1115)
+
+- #47100 task-tool responses now share Rust's 8,000-byte budget instead of the old 999-byte shape. When a turn response is oversized, only each turn's latest `agentMessage` survives with its id/status/error; wait responses keep every target's `latestAssistantMessage`; thread lists keep every entry so the server pagination cursor remains valid. Supporting `text`/`title`/`summary`/`message` fields are shortened with a binary search recomputed from the compact response, and failure text is capped at 248 characters.
+- `read_thread` no longer pre-truncates assistant messages at 2,000 characters and now reports the message phase; archived list calls return the requested page directly instead of shrinking the limit and retrying.
+- Tests: `TestDynamicToolResponsePreservesWaitTargetsLikeRust`, `TestDynamicToolResponsePreservesListEntriesLikeRust`, `TestDynamicToolResponsePreservesReadAnswerLikeRust`, `TestDynamicItemSummaryKeepsFullAssistantAnswerLikeRust`; `go build ./...` and `go test ./app -run 'Dynamic|TaskTool'` pass.
+
+Status after this batch: `2335 complete`, `464 not_applicable`, `322 audit_pending`, `23 regression_pending`, `5 partial`, `6 blocked_precondition`.

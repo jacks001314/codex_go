@@ -12,13 +12,17 @@ import (
 const (
 	DynamicToolNamespace = "codex_tui"
 
-	dynamicDefaultListLimit       = 10
-	dynamicMaxListLimit           = 50
-	dynamicDefaultReadTurnLimit   = 1
-	dynamicMaxReadTurnLimit       = 10
-	dynamicDefaultOutputChars     = 2000
-	dynamicMaxOutputChars         = 20000
-	dynamicMaxResponseBytes       = 999
+	dynamicDefaultListLimit     = 10
+	dynamicMaxListLimit         = 50
+	dynamicDefaultReadTurnLimit = 1
+	dynamicMaxReadTurnLimit     = 10
+	dynamicDefaultOutputChars   = 2000
+	dynamicMaxOutputChars       = 20000
+	// Leave room below the harness's default 10,000-byte fallback budget,
+	// including tool wrappers (Rust #47100).
+	dynamicMaxResponseBytes = 8000
+	// dynamicMaxErrorChars bounds failure text (Rust MAX_ERROR_CHARS).
+	dynamicMaxErrorChars          = 248
 	dynamicMaxInputBytes          = 1000
 	dynamicMaxDelegatedInputBytes = dynamicMaxInputBytes + 256
 	dynamicMaxWaitTargets         = 8

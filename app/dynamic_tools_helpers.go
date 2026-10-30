@@ -214,9 +214,10 @@ func dynamicItemSummary(item appserver.ThreadItem, includeOutputs bool, outputCh
 		return summary
 	case "agentmessage":
 		return map[string]any{
-			"type": "agentMessage",
-			"id":   item.ID,
-			"text": truncateDynamicText(item.Text, dynamicDefaultOutputChars),
+			"type":  "agentMessage",
+			"id":    item.ID,
+			"text":  item.Text,
+			"phase": dynamicStringPointerValue(stringPointerOrNil(remoteTUIAnyString(item.Data["phase"]))),
 		}
 	case "plan":
 		return map[string]any{
@@ -337,120 +338,212 @@ func dynamicToolFailureResponse(message string) appserver.DynamicToolCallRespons
 		Success: false,
 		ContentItems: []appserver.DynamicToolCallOutputContent{{
 			Type: "inputText",
-			Text: truncateDynamicText(message, dynamicMaxResponseBytes/4-1),
+			Text: truncateDynamicText(message, dynamicMaxErrorChars),
 		}},
 	}
 }
 
-// dynamicToolSuccessResponse serializes the value, shrinking it to fit the
-// response budget (Rust success_response).
+// dynamicToolSuccessResponse serializes the value without cutting JSON or
+// sacrificing answers to supporting history (Rust #47100
+// dynamic_tools_response::serialize).
 func dynamicToolSuccessResponse(value map[string]any) appserver.DynamicToolCallResponse {
+	text, err := dynamicSerializeToolResponse(value)
+	if err != nil {
+		return dynamicToolFailureResponse(err.Error())
+	}
+	return appserver.DynamicToolCallResponse{
+		Success:      true,
+		ContentItems: []appserver.DynamicToolCallOutputContent{{Type: "inputText", Text: text}},
+	}
+}
+
+func dynamicSerializeToolResponse(value map[string]any) (string, error) {
 	var serialized any = value
-	maxChars := dynamicMaxResponseBytes / 2
-	for {
-		text, err := json.Marshal(serialized)
+	text, err := dynamicMarshalResponse(serialized)
+	if err != nil {
+		return "", err
+	}
+	if len(text) <= dynamicMaxResponseBytes {
+		return text, nil
+	}
+	value["truncated"] = true
+	dynamicCompactResponseMetadata(value)
+	if text, err = dynamicMarshalResponse(value); err != nil {
+		return "", err
+	}
+	if len(text) <= dynamicMaxResponseBytes {
+		return text, nil
+	}
+	// Search from the compact result each time: a failed fit must not
+	// permanently erase text that fits once a smaller per-field limit is
+	// chosen.
+	low, high := 0, dynamicMaxResponseBytes
+	best := ""
+	for low <= high {
+		limit := low + (high-low)/2
+		candidate := dynamicCloneResponseValue(value)
+		dynamicTruncateResponseContent(candidate, limit)
+		text, err := dynamicMarshalResponse(candidate)
 		if err != nil {
-			return dynamicToolFailureResponse(err.Error())
+			return "", err
 		}
 		if len(text) <= dynamicMaxResponseBytes {
-			return appserver.DynamicToolCallResponse{
-				Success:      true,
-				ContentItems: []appserver.DynamicToolCallOutputContent{{Type: "inputText", Text: string(text)}},
-			}
-		}
-		if maxChars == 0 {
-			if dynamicDropOneSummaryItem(serialized) {
-				continue
-			}
-			return dynamicToolFailureResponse("Dynamic tool response exceeded the maximum context budget")
-		}
-		maxChars /= 2
-		dynamicTruncateResponse(serialized, maxChars)
-		if fields, ok := serialized.(map[string]any); ok {
-			fields["truncated"] = true
+			best = text
+			low = limit + 1
+		} else if limit == 0 {
+			break
+		} else {
+			high = limit - 1
 		}
 	}
+	if best == "" {
+		return "", errors.New("Task response metadata exceeds the output budget")
+	}
+	return best, nil
 }
 
-// dynamicDropOneSummaryItem removes the least important entry so the response
-// can still fit (Rust success_response's fallback).
-func dynamicDropOneSummaryItem(value any) bool {
-	fields, ok := value.(map[string]any)
-	if !ok {
-		return false
+func dynamicMarshalResponse(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
 	}
-	if turns, ok := fields["turns"].([]any); ok {
-		for index := len(turns) - 1; index >= 0; index-- {
-			turnFields, ok := turns[index].(map[string]any)
+	return string(data), nil
+}
+
+// dynamicCompactResponseMetadata keeps every target and answer while dropping
+// supporting history that no longer fits (Rust #47100). Lists retain every
+// entry so the server's pagination cursor remains valid.
+func dynamicCompactResponseMetadata(value map[string]any) {
+	if turns, ok := value["turns"].([]any); ok {
+		for index, rawTurn := range turns {
+			turn, ok := rawTurn.(map[string]any)
 			if !ok {
 				continue
 			}
-			items, ok := turnFields["items"].([]any)
-			if !ok || len(items) == 0 {
-				continue
-			}
-			turnFields["items"] = items[1:]
-			return true
-		}
-	}
-	if threads, ok := fields["threads"].([]any); ok && len(threads) > 1 {
-		fields["threads"] = threads[:len(threads)-1]
-		return true
-	}
-	if polls, ok := fields["polls"].([]any); ok {
-		for index := len(polls) - 1; index >= 0; index-- {
-			pollFields, ok := polls[index].(map[string]any)
-			if !ok {
-				continue
-			}
-			for _, name := range []string{"latestAssistantMessage", "latestToolMarker", "latestTurn", "latestAssistantMessageId", "latestToolMarkerId", "revision", "schemaVersion", "changed", "cursor"} {
-				if _, present := pollFields[name]; present {
-					delete(pollFields, name)
-					return true
+			var answer any
+			if items, ok := turn["items"].([]any); ok {
+				for itemIndex := len(items) - 1; itemIndex >= 0; itemIndex-- {
+					item, ok := items[itemIndex].(map[string]any)
+					if !ok || item["type"] != "agentMessage" {
+						continue
+					}
+					answer = item
+					break
 				}
 			}
+			compactedItems := []any{}
+			if answer != nil {
+				compactedItems = append(compactedItems, answer)
+			}
+			turns[index] = map[string]any{
+				"id":        turn["id"],
+				"status":    turn["status"],
+				"error":     dynamicCompactTurnError(turn["error"]),
+				"items":     compactedItems,
+				"truncated": true,
+			}
+		}
+		if thread, ok := value["thread"].(map[string]any); ok {
+			value["thread"] = map[string]any{"id": thread["id"], "status": thread["status"]}
+		}
+		return
+	}
+	if polls, ok := value["polls"].([]any); ok {
+		for index, rawPoll := range polls {
+			poll, ok := rawPoll.(map[string]any)
+			if !ok {
+				continue
+			}
+			var latestTurn any
+			if turn, ok := poll["latestTurn"].(map[string]any); ok {
+				latestTurn = map[string]any{
+					"id":     turn["id"],
+					"status": turn["status"],
+					"error":  dynamicCompactTurnError(turn["error"]),
+				}
+			}
+			polls[index] = map[string]any{
+				"schemaVersion":          poll["schemaVersion"],
+				"thread":                 poll["thread"],
+				"cursor":                 poll["cursor"],
+				"changed":                poll["changed"],
+				"latestTurn":             latestTurn,
+				"latestAssistantMessage": poll["latestAssistantMessage"],
+				"truncated":              true,
+			}
+		}
+		return
+	}
+	if threads, ok := value["threads"].([]any); ok {
+		for index, rawThread := range threads {
+			thread, ok := rawThread.(map[string]any)
+			if !ok {
+				continue
+			}
+			threads[index] = map[string]any{
+				"id":        thread["id"],
+				"kind":      thread["kind"],
+				"title":     thread["title"],
+				"summary":   thread["summary"],
+				"status":    thread["status"],
+				"truncated": true,
+			}
 		}
 	}
-	return false
 }
 
-func dynamicTruncateResponse(value any, limit int) {
+func dynamicCompactTurnError(raw any) any {
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return map[string]any{"message": fields["message"]}
+}
+
+func dynamicTruncateResponseContent(value any, limit int) {
 	switch typed := value.(type) {
-	case string:
-		// Strings are only replaced in place through their parent object.
+	case map[string]any:
+		truncated := false
+		for name, item := range typed {
+			if name == "text" || name == "title" || name == "summary" || name == "message" {
+				if text, ok := item.(string); ok {
+					runes := []rune(text)
+					if len(runes) > limit {
+						typed[name] = string(runes[:limit])
+						truncated = true
+					}
+					continue
+				}
+			}
+			dynamicTruncateResponseContent(item, limit)
+		}
+		if truncated {
+			typed["truncated"] = true
+		}
 	case []any:
 		for _, item := range typed {
-			dynamicTruncateResponse(item, limit)
-		}
-	case map[string]any:
-		if text, ok := typed["text"].(string); ok {
-			if _, hasFlag := typed["truncated"].(bool); hasFlag && utf8.RuneCountInString(text) > limit {
-				typed["truncated"] = true
-				if _, exists := typed["originalChars"]; !exists {
-					typed["originalChars"] = utf8.RuneCountInString(text)
-				}
-			}
-		}
-		for name, item := range typed {
-			if dynamicTruncateResponseSkipKey(name) {
-				continue
-			}
-			if text, ok := item.(string); ok {
-				typed[name] = truncateDynamicText(text, limit)
-				continue
-			}
-			dynamicTruncateResponse(item, limit)
+			dynamicTruncateResponseContent(item, limit)
 		}
 	}
 }
 
-func dynamicTruncateResponseSkipKey(name string) bool {
-	switch name {
-	case "id", "cursor", "type", "status", "kind", "reason", "namespace", "tool", "server":
-		return true
+func dynamicCloneResponseValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for name, item := range typed {
+			out[name] = dynamicCloneResponseValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = dynamicCloneResponseValue(item)
+		}
+		return out
+	default:
+		return value
 	}
-	return strings.HasSuffix(name, "Id") || strings.HasSuffix(name, "Ids") ||
-		strings.HasSuffix(name, "Cursor") || strings.HasSuffix(name, "Status")
 }
 
 // ---- app-server access ----
@@ -775,7 +868,7 @@ func dynamicLatestAssistantMessage(turnRecord *appserver.Turn) (any, any) {
 			"id":     item.ID,
 			"turnId": turnRecord.ID,
 			"phase":  dynamicStringPointerValue(stringPointerOrNil(remoteTUIAnyString(item.Data["phase"]))),
-			"text":   truncateDynamicText(item.Text, dynamicDefaultOutputChars),
+			"text":   item.Text,
 		}
 	}
 	return nil, nil
