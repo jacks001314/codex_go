@@ -3577,6 +3577,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `appserverdaemon/publish_release_windows.go` already implemented the same retry loop and predicate, `prepare_install.go` uses it on Windows, and the POSIX path keeps one rename. Round 1064 adds the missing Windows regression that holds the staged directory open without delete sharing and proves publication waits and then succeeds.
 - Verified with `go test ./appserverdaemon -run 'PublishDaemonRelease|TransientPublish' -count=1`, `go test ./appserverdaemon -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2218 complete`, `461 not_applicable`,
-`322 audit_pending`, `143 regression_pending`, `5 partial`,
+### Persisted Command Center grouping (Round 1065)
+
+- Rust #50786 saves the Command Center grouping to `tui.agents_overview_grouping` (project/status/model, project by default), restores it at startup, and reports save failures while keeping the live choice.
+- Complete: `tui/agents_overview` owns grouping and config parsing, `tui/tea/agents_overview.go` persists cycles through the shared settings writer, `Options.AgentsOverviewGrouping` seeds startup, and `app/interactive.go` reads the config value. Round 1065 re-verified persistence, failure messaging, and restore.
+- Verified with `go test ./app -run 'AgentsOverviewGrouping|SettingsCarryAgentsOverview' -count=1`, `go test ./tui/tea -run AgentsOverviewGrouping -count=1`, `go test ./tui/agents_overview -run Grouping -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2219 complete`, `461 not_applicable`,
+`322 audit_pending`, `142 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

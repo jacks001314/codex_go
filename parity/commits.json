@@ -9768,9 +9768,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/agents_overview/overview.go owns the project/status/model (plus later directory) grouping with ParseGroupingConfig defaulting to project, matching Rust AgentsOverviewGrouping; tui/tea/agents_overview.go persists cycles through the shared settings writer as `tui.agents_overview_grouping` and keeps the live grouping active, and settings-write failures surface in Command Center",
+    "Startup restore: tui/tea/model.go Options.AgentsOverviewGrouping seeds the dashboard, app/interactive.go forwards it from interactiveTUISettings, and app/interactive.go reads `agents_overview_grouping` from the config values (Rust local_settings -> AgentsOverviewState::new)",
+    "Regression coverage: tui/tea/agents_overview_grouping_persist_like_rust_test.go cycles and persists all modes, checks the exact `tui.agents_overview_grouping` write, save-failure messaging, and configured restore including the project default for unknown/empty values; app/agents_overview_grouping_settings_like_rust_test.go pins the config -> settings read",
+    "Residual: Go's persistence test asserts the SettingsEdit handed to the shared writer rather than rewriting a custom config file end-to-end; unrelated-key preservation is owned by the shared config edit writer",
+    "Verified with `go test ./app -run 'AgentsOverviewGrouping|SettingsCarryAgentsOverview' -count=1`, `go test ./tui/tea -run AgentsOverviewGrouping -count=1`, `go test ./tui/agents_overview -run Grouping -count=1`, and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {
