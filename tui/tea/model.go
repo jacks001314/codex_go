@@ -2068,6 +2068,11 @@ type Model struct {
 	mentionPluginInventoryErr     string
 	modelPickerOpts               []codextui.ModelPickerOption
 	serviceTierCommands           []bottompane.ServiceTierCommand
+
+	// savedServiceTier is Rust's config.service_tier: the user's persisted
+	// selection that the effective tier is recomputed from when the model or
+	// catalog changes (Rust #50472 refresh_effective_service_tier).
+	savedServiceTier string
 	// serviceTierRequirements is the server's configRequirements/read snapshot
 	// the catalog constraining is driven from (Rust #51253).
 	serviceTierRequirements *config.ConfigRequirementsReadResponse
@@ -2903,6 +2908,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		bottomStyle:                     lipgloss.NewStyle(),
 		modelPickerOpts:                 codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...), options.ServiceTierRequirements),
 		serviceTierCommands:             serviceTierCommandsForPolicy(options.FeatureSettings, constrainServiceTierCommandsByRequirements(options.ServiceTierRequirements, options.ServiceTierCommands)),
+		savedServiceTier:                strings.TrimSpace(state.ServiceTier),
 		serviceTierRequirements:         options.ServiceTierRequirements,
 		sessionItems:                    append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                      strings.TrimSpace(options.SessionPickerCWD),
@@ -5631,6 +5637,10 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		m.composerMentionBindings = nil
 		return nil
 	}
+	if tier, ok := m.serviceTierCommandForInput(input); ok {
+		m.composerMentionBindings = nil
+		return m.applyServiceTierCommand(*tier)
+	}
 	if invocation, ok := codextui.ParseCommand(input); ok && slashInvocationDispatchable(invocation) {
 		m.composerMentionBindings = nil
 		if invocation.Command == codextui.CommandGoal && len(m.attachments) > 0 {
@@ -5665,6 +5675,11 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	input := strings.TrimSpace(m.composerText())
 	if input == "" {
 		return nil, false
+	}
+	if tier, ok := m.serviceTierCommandForInput(input); ok {
+		m.slashPopup = slashCommandPopup{}
+		m.skillPopup = skillPopupState{}
+		return m.applyServiceTierCommand(*tier), true
 	}
 	invocation, ok := codextui.ParseCommand(input)
 	if !ok || !slashInvocationDispatchable(invocation) {

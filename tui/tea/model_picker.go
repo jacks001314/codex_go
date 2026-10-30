@@ -103,12 +103,53 @@ func (m *Model) refreshServiceTierCommands() {
 	}
 	for _, option := range options {
 		if option.ID == m.State.Model {
-			commands := bottompane.ServiceTierCommandsFromIDs(option.ServiceTiers)
+			commands := serviceTierCommandsForCatalog(option)
 			commands = serviceTierCommandsForPolicy(m.featureSettings, commands)
 			m.serviceTierCommands = constrainServiceTierCommandsByRequirements(m.serviceTierRequirements, commands)
+			m.refreshEffectiveServiceTier(option)
 			return
 		}
 	}
+}
+
+// refreshEffectiveServiceTier recomputes the session tier after the model or
+// catalog changed (Rust #50472 set_model -> refresh_effective_service_tier): a
+// saved tier the new model does not advertise clears, and a model with no saved
+// selection falls back to its catalog default.
+func (m *Model) refreshEffectiveServiceTier(option codextui.ModelPickerOption) {
+	if m == nil || m.State == nil {
+		return
+	}
+	m.State.ServiceTier = codextui.EffectiveServiceTier(m.savedServiceTier, option, m.featureSettings)
+}
+
+// serviceTierCommandsForCatalog builds the slash-command entries from the
+// model's catalog tier metadata, lowercasing each name and keeping the
+// catalog's description (Rust #50472 service_tiers.rs
+// current_model_service_tier_commands). Options without catalog definitions
+// keep the ID-based fallback.
+func serviceTierCommandsForCatalog(option codextui.ModelPickerOption) []bottompane.ServiceTierCommand {
+	const defaultRequestValue = "default"
+	if len(option.ServiceTierDefinitions) == 0 {
+		return bottompane.ServiceTierCommandsFromIDs(option.ServiceTiers)
+	}
+	commands := make([]bottompane.ServiceTierCommand, 0, len(option.ServiceTierDefinitions))
+	for _, tier := range option.ServiceTierDefinitions {
+		id := strings.TrimSpace(tier.ID)
+		if id == "" || id == defaultRequestValue {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(tier.Name))
+		if name == "" {
+			name = id
+		}
+		commands = append(commands, bottompane.ServiceTierCommand{
+			ID:          id,
+			Name:        name,
+			Description: tier.Description,
+		})
+	}
+	return commands
 }
 
 // constrainServiceTierCommandsByRequirements drops the service tiers the

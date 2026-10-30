@@ -383,7 +383,7 @@ func summaryFromModel(info ModelInfo, hidden bool) ModelSummary {
 		DefaultReasoningEffort:    firstNonEmpty(info.DefaultReasoningLevel, "medium"),
 		SupportedReasoningEfforts: reasoningOptions(info.SupportedReasoningLevels),
 		AdditionalSpeedTiers:      append([]string(nil), info.AdditionalSpeedTiers...),
-		ServiceTiers:              serviceTiers(info.ServiceTiers),
+		ServiceTiers:              ServiceTierDefinitionsFor(&info),
 		ContextWindow:             info.ContextWindow,
 		InputModalities:           append([]string(nil), info.InputModalities...),
 		SupportsPersonality:       (&info).SupportsPersonality(),
@@ -476,22 +476,6 @@ func reasoningOptions(levels []string) []ReasoningEffortOption {
 		out = append(out, ReasoningEffortOption{
 			ReasoningEffort: level,
 			Description:     level,
-		})
-	}
-	return out
-}
-
-func serviceTiers(ids []string) []ModelServiceTier {
-	out := make([]ModelServiceTier, 0, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		out = append(out, ModelServiceTier{
-			ID:          id,
-			Name:        id,
-			Description: id,
 		})
 	}
 	return out

@@ -278,6 +278,7 @@ func (m *Model) applyModelCommandArgs(args string) bubbletea.Cmd {
 	}
 	if selection.hasTier {
 		m.State.ServiceTier = selection.serviceTier
+		m.savedServiceTier = selection.serviceTier
 	}
 	m.refreshServiceTierCommands()
 	if modelChanged {

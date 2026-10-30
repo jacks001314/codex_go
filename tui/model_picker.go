@@ -23,6 +23,13 @@ type ModelPickerOption struct {
 	DefaultReasoningEffort    string
 	SupportedReasoningEfforts []ReasoningEffortOption
 	ServiceTiers              []string
+	// ServiceTierDefinitions carries the catalog's tier display metadata so the
+	// slash-command surface can use the catalog's names and descriptions
+	// (Rust #50472 / service_tiers.rs current_model_service_tier_commands).
+	ServiceTierDefinitions []model.ModelServiceTier
+	// DefaultServiceTier is the model catalog's implicit tier, applied when the
+	// user has no saved selection (Rust effective_service_tier).
+	DefaultServiceTier string
 	// AvailableCyberPrograms is the catalog-advertised cyber access list for
 	// this model (standard/daybreak_blue/daybreak_red).
 	AvailableCyberPrograms []string
@@ -91,6 +98,8 @@ func ModelPickerOptionsFromPresets(presets []model.ModelPreset) []ModelPickerOpt
 			DefaultReasoningEffort:    strings.TrimSpace(preset.DefaultReasoningLevel),
 			SupportedReasoningEfforts: reasoningOptionsForModelPreset(preset),
 			ServiceTiers:              append([]string(nil), preset.ServiceTiers...),
+			ServiceTierDefinitions:    append([]model.ModelServiceTier(nil), preset.ServiceTierDefinitions...),
+			DefaultServiceTier:        preset.DefaultServiceTier,
 			AvailableCyberPrograms:    modelPickerCyberPrograms(preset),
 		})
 	}
@@ -121,6 +130,8 @@ func ModelPickerOptionsFromPresetsIncludingHidden(presets []model.ModelPreset) [
 			DefaultReasoningEffort:    strings.TrimSpace(preset.DefaultReasoningLevel),
 			SupportedReasoningEfforts: reasoningOptionsForModelPreset(preset),
 			ServiceTiers:              append([]string(nil), preset.ServiceTiers...),
+			ServiceTierDefinitions:    append([]model.ModelServiceTier(nil), preset.ServiceTierDefinitions...),
+			DefaultServiceTier:        preset.DefaultServiceTier,
 			AvailableCyberPrograms:    modelPickerCyberPrograms(preset),
 		})
 	}
@@ -248,6 +259,8 @@ func normalizeModelPickerOptions(options []ModelPickerOption, current string) []
 			DefaultReasoningEffort:    strings.TrimSpace(option.DefaultReasoningEffort),
 			SupportedReasoningEfforts: cloneReasoningEffortOptions(option.SupportedReasoningEfforts),
 			ServiceTiers:              append([]string(nil), option.ServiceTiers...),
+			ServiceTierDefinitions:    append([]model.ModelServiceTier(nil), option.ServiceTierDefinitions...),
+			DefaultServiceTier:        option.DefaultServiceTier,
 			AvailableCyberPrograms:    append([]string(nil), option.AvailableCyberPrograms...),
 		})
 	}

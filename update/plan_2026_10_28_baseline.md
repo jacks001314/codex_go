@@ -3524,6 +3524,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Residual: the Rust `rmcp-client` change is test-only cleanup that waits for the helper PID; Go's `mcp/http_headers_helper.go` already shares one helper attempt across a refresh cohort, so there is no behavior to port.
 - Verified with `go test ./execserver -run 'RemoteReconnectBackoff|RegistrationRetry|RegistrationConflictRetryDelay|RegistryRegistrationPreWriteRetry|RegistryErrorDetail|RegistryAuthOutage' -count=1`, `go test ./execserver -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2210 complete`, `461 not_applicable`,
-`322 audit_pending`, `151 regression_pending`, `5 partial`,
+### Bedrock Ultrafast service tiers (Round 1057)
+
+- Rust #50472 advertises `ultrafast` for the Bedrock Mantle GPT-6 Astra entry and the Runtime `global.`/`us.` variants, keeps custom catalog speed tiers, service-tier definitions and defaults, sends a Bedrock tier only when the model advertises it (including flex), and exposes the catalog tier through `model/list` and the TUI slash commands.
+- Complete: the catalogs already advertised the tier and the request path already filtered to advertised tiers (#50472 landed in `9b6ac1ab`'s era). The remaining divergence was metadata: `ModelInfo.service_tiers` was flattened to IDs, so `model/list` reported `{"id":"ultrafast","name":"ultrafast","description":"ultrafast"}` and the TUI named every command from the ID. `model.ModelInfo` now keeps the catalog `{id,name,description}` definitions, `summaryFromModel` and `ModelPreset` carry them, and the TUI builds commands from catalog names/descriptions.
+- TUI behavior: service-tier slash rows dispatch as tier selections (`/ultrafast`, custom `/express`) instead of being swallowed by the builtin parser, `/fast` keeps its builtin alias path, and the effective tier recomputes on model/catalog change (`tui.EffectiveServiceTier` mirrors Rust `effective_service_tier`: unsupported saved tier clears, an absent selection falls back to the catalog default, a supported saved tier returns) while selections persist through the existing settings write.
+- Regression coverage: `model/bedrock_service_tiers_like_rust_test.go` pins the Mantle/Runtime Ultrafast definitions, the bundled Fast metadata and custom-catalog preservation through `model/list` and presets; `tui/tea/bedrock_service_tier_commands_like_rust_test.go` pins select/clear/model-switch and the custom `/express` command.
+- Residual: Go keeps the saved tier in the TUI settings write rather than re-reading `config.service_tier`, so a session that never persisted a selection recomputes from the catalog default on each refresh; the legacy `tui/chatwidget` state helpers are unchanged.
+- Verified with `go test ./model -run 'Bedrock|CustomBedrock' -count=1`, `go test ./tui/tea -count=1`, `go test ./tui/... ./model -count=1`, `go test ./app -run 'ServiceTier|ModelPicker' -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2211 complete`, `461 not_applicable`,
+`322 audit_pending`, `150 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

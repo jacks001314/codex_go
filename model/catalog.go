@@ -735,7 +735,13 @@ type ModelInfo struct {
 	Priority                 int      `json:"priority"`
 	AdditionalSpeedTiers     []string `json:"additional_speed_tiers"`
 	ServiceTiers             []string `json:"service_tiers"`
-	DefaultServiceTier       string   `json:"default_service_tier"`
+	// ServiceTierDefinitions keeps the catalog's tier display metadata. Rust's
+	// ModelInfo.service_tiers is a Vec<ModelServiceTier>; ServiceTiers above is
+	// the ordered ID list request support checks consume, while this field
+	// carries the names and descriptions `model/list` and the TUI commands
+	// report (#50472).
+	ServiceTierDefinitions []ModelServiceTier `json:"-"`
+	DefaultServiceTier     string             `json:"default_service_tier"`
 	// AvailableAccessPrograms is nil when the catalog does not provide
 	// access-program metadata (Rust #44893).
 	AvailableAccessPrograms        *ModelAccessPrograms `json:"available_access_programs,omitempty"`
@@ -991,6 +997,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
+	serviceTierDefinitions := serviceTierDefinitionsFromJSON(raw.ServiceTiers)
 	*m = ModelInfo{
 		Slug:                           raw.Slug,
 		DisplayName:                    raw.DisplayName,
@@ -1001,7 +1008,8 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		SupportedInAPI:                 raw.SupportedInAPI,
 		Priority:                       raw.Priority,
 		AdditionalSpeedTiers:           cloneStrings(raw.AdditionalSpeedTiers),
-		ServiceTiers:                   serviceTierIDsFromJSON(raw.ServiceTiers),
+		ServiceTiers:                   serviceTierIDs(serviceTierDefinitions),
+		ServiceTierDefinitions:         serviceTierDefinitions,
 		DefaultServiceTier:             stringFromJSONValue(raw.DefaultServiceTier),
 		AvailableAccessPrograms:        raw.AvailableAccessPrograms,
 		BaseInstructions:               raw.BaseInstructions,
@@ -1067,6 +1075,13 @@ type ModelPreset struct {
 	SupportedReasoningLevels []string
 	MultiAgentVersion        string
 	ServiceTiers             []string
+	// ServiceTierDefinitions carries the catalog's tier display metadata so the
+	// TUI can name and describe each slash command from the catalog instead of
+	// the raw ID (Rust #50472).
+	ServiceTierDefinitions []ModelServiceTier
+	// DefaultServiceTier is the catalog's implicit tier for the model (Rust
+	// ModelPreset.default_service_tier).
+	DefaultServiceTier string
 	// AvailableAccessPrograms is the model's catalog-advertised cyber program
 	// list (Rust ModelInfo.available_access_programs), used by the TUI to choose
 	// standard vs Daybreak per turn.
@@ -1559,6 +1574,7 @@ func normalizeBundledBedrockCatalog(catalog ModelsResponse, endpoint bedrockEndp
 		model := &catalog.Models[i]
 		model.AdditionalSpeedTiers = nil
 		model.ServiceTiers = nil
+		model.ServiceTierDefinitions = nil
 		model.DefaultServiceTier = ""
 		advertisesUltrafast := (endpoint == bedrockEndpointMantle &&
 			(model.Slug == AmazonBedrockGPT6AstraModelID || model.Slug == AmazonBedrockGPT61SolModelID)) ||
@@ -1569,6 +1585,7 @@ func normalizeBundledBedrockCatalog(catalog ModelsResponse, endpoint bedrockEndp
 					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT61SolModelID))
 		if advertisesUltrafast {
 			model.ServiceTiers = []string{bedrockUltrafastServiceTierID}
+			model.ServiceTierDefinitions = []ModelServiceTier{bedrockUltrafastServiceTierDefinition}
 		}
 	}
 	return normalizeBedrockCatalog(catalog)
@@ -1651,6 +1668,7 @@ func WithDefaultOnlyServiceTier(catalog ModelsResponse) ModelsResponse {
 	for i := range models {
 		models[i].AdditionalSpeedTiers = nil
 		models[i].ServiceTiers = nil
+		models[i].ServiceTierDefinitions = nil
 		models[i].DefaultServiceTier = ""
 	}
 	return ModelsResponse{Models: models}
@@ -1676,6 +1694,8 @@ func BuildAvailableModels(remoteModels []ModelInfo) []ModelPreset {
 			SupportedReasoningLevels: cloneStrings(model.SupportedReasoningLevels),
 			MultiAgentVersion:        model.MultiAgentVersion,
 			ServiceTiers:             cloneStrings(model.ServiceTiers),
+			ServiceTierDefinitions:   ServiceTierDefinitionsFor(&model),
+			DefaultServiceTier:       model.DefaultServiceTier,
 			AvailableAccessPrograms:  cloneModelAccessPrograms(model.AvailableAccessPrograms),
 		})
 	}
@@ -1822,24 +1842,111 @@ func reasoningLevelsFromJSON(values []json.RawMessage) []string {
 	return out
 }
 
-func serviceTierIDsFromJSON(values []json.RawMessage) []string {
-	out := make([]string, 0, len(values))
+// serviceTierDefinitionsFromJSON parses Rust's service_tiers array, which
+// accepts either bare IDs (legacy catalogs) or {id,name,description} objects
+// (#50472 keeps a custom catalog's tier metadata). Entries without an ID are
+// dropped, matching Rust's ModelServiceTier deserialization.
+func serviceTierDefinitionsFromJSON(values []json.RawMessage) []ModelServiceTier {
+	out := make([]ModelServiceTier, 0, len(values))
 	for _, value := range values {
+		var tier ModelServiceTier
 		var id string
 		if err := json.Unmarshal(value, &id); err == nil {
-			id = strings.TrimSpace(id)
+			tier.ID = strings.TrimSpace(id)
 		}
-		if id == "" {
-			var object map[string]any
+		if tier.ID == "" {
+			var object struct {
+				ID          any `json:"id"`
+				Name        any `json:"name"`
+				Description any `json:"description"`
+			}
 			if err := json.Unmarshal(value, &object); err == nil {
-				id = stringFromJSONValue(object["id"])
+				tier = ModelServiceTier{
+					ID:          stringFromJSONValue(object.ID),
+					Name:        stringFromJSONValue(object.Name),
+					Description: stringFromJSONValue(object.Description),
+				}
 			}
 		}
-		if id != "" {
+		if strings.TrimSpace(tier.ID) == "" {
+			continue
+		}
+		out = append(out, tier)
+	}
+	return out
+}
+
+func serviceTierIDs(definitions []ModelServiceTier) []string {
+	out := make([]string, 0, len(definitions))
+	for _, tier := range definitions {
+		if id := strings.TrimSpace(tier.ID); id != "" {
 			out = append(out, id)
 		}
 	}
 	return out
+}
+
+// bundledServiceTierDefinitions carries the display metadata the bundled
+// models-manager/models.json catalog gives each tier it advertises. The offline
+// fallback catalog builds its entries as literals, so it has to stamp these on
+// (Rust #50472 exposes them through model/list and the TUI slash commands).
+var bundledServiceTierDefinitions = map[string]ModelServiceTier{
+	"priority": {
+		ID:          "priority",
+		Name:        "Fast",
+		Description: "2x speed, increased usage",
+	},
+}
+
+// bedrockUltrafastServiceTierDefinition mirrors Rust
+// amazon_bedrock/catalog.rs normalize_bundled_bedrock_catalog (#50472).
+var bedrockUltrafastServiceTierDefinition = ModelServiceTier{
+	ID:          bedrockUltrafastServiceTierID,
+	Name:        "Ultrafast",
+	Description: "The fastest available responses for latency-sensitive work.",
+}
+
+// ServiceTierDefinitionsFor returns the display metadata for a model's
+// advertised service tiers in catalog order. Definitions the catalog supplied
+// win; IDs without one fall back to the bundled metadata, then to the ID itself
+// (Rust ModelInfo.service_tiers).
+func ServiceTierDefinitionsFor(info *ModelInfo) []ModelServiceTier {
+	if info == nil {
+		return nil
+	}
+	known := make(map[string]ModelServiceTier, len(info.ServiceTierDefinitions))
+	for _, tier := range info.ServiceTierDefinitions {
+		if id := strings.TrimSpace(tier.ID); id != "" {
+			known[id] = tier
+		}
+	}
+	if len(info.ServiceTiers) == 0 {
+		return cloneModelServiceTiers(info.ServiceTierDefinitions)
+	}
+	out := make([]ModelServiceTier, 0, len(info.ServiceTiers))
+	for _, id := range info.ServiceTiers {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if tier, ok := known[id]; ok {
+			out = append(out, tier)
+			continue
+		}
+		if tier, ok := bundledServiceTierDefinitions[id]; ok {
+			out = append(out, tier)
+			continue
+		}
+		out = append(out, ModelServiceTier{ID: id, Name: id, Description: id})
+	}
+	return out
+}
+
+func cloneModelServiceTiers(tiers []ModelServiceTier) []ModelServiceTier {
+	if tiers == nil {
+		return nil
+	}
+	return append([]ModelServiceTier(nil), tiers...)
 }
 
 func modelVisibleInCatalog(visibility string) bool {
@@ -2170,6 +2277,7 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 	out.SupportedReasoningLevels = cloneStrings(out.SupportedReasoningLevels)
 	out.AdditionalSpeedTiers = cloneStrings(out.AdditionalSpeedTiers)
 	out.ServiceTiers = cloneStrings(out.ServiceTiers)
+	out.ServiceTierDefinitions = cloneModelServiceTiers(out.ServiceTierDefinitions)
 	out.InputModalities = cloneStrings(out.InputModalities)
 	if out.ModelMessages != nil {
 		messages := *out.ModelMessages

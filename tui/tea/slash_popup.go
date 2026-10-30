@@ -302,6 +302,11 @@ func (m *Model) dispatchSelectedSlashCommand() (bubbletea.Cmd, bool) {
 	// Rust #41921: slash-command dispatch returns the composer to Vim Insert.
 	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
+	// Rust #50472: a catalog service-tier row dispatches as a tier selection
+	// rather than a builtin command.
+	if tier, ok := m.serviceTierCommandForInput("/" + item.Name); ok {
+		return m.applyServiceTierCommand(*tier), true
+	}
 	invocation, ok := codextui.ParseCommand("/" + item.Name)
 	if !ok {
 		return nil, true

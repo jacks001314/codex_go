@@ -58,6 +58,7 @@ func (m *Model) applyFastServiceTier() bubbletea.Cmd {
 		next = chatwidget.ServiceTierDefaultRequestValue
 	}
 	m.State.ServiceTier = next
+	m.savedServiceTier = next
 	if m.onWriteSettings == nil {
 		m.notice = "Service tier set to " + next
 		m.refreshTranscript()

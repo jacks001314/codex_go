@@ -170,3 +170,51 @@ func ResolveServiceTier(configured string, fallback string) string {
 	}
 	return fallback
 }
+
+// ModelSupportsServiceTier reports whether the model catalog advertises a tier
+// (Rust service_tier_resolution::model_supports_service_tier).
+func ModelSupportsServiceTier(option ModelPickerOption, serviceTier string) bool {
+	serviceTier = strings.TrimSpace(serviceTier)
+	if serviceTier == "" {
+		return false
+	}
+	for _, tier := range option.ServiceTiers {
+		if strings.TrimSpace(tier) == serviceTier {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveServiceTier mirrors Rust service_tier_resolution::effective_service_tier
+// (#50472): the saved selection wins when the model advertises it, an
+// unsupported selection clears to no tier, and a model with no saved selection
+// falls back to the catalog's implicit default tier. The result still has to
+// pass the speed-policy gate.
+func EffectiveServiceTier(configured string, option ModelPickerOption, featureSettings map[string]bool) string {
+	configured = model.NormalizeServiceTierRequestValue(configured)
+	if configured == ServiceTierFlexRequestValue {
+		return configured
+	}
+	effective := ""
+	switch {
+	case configured == ServiceTierDefaultRequestValue:
+		effective = configured
+	case configured != "" && ModelSupportsServiceTier(option, configured):
+		effective = configured
+	case configured != "":
+		effective = ""
+	default:
+		defaultTier := model.NormalizeServiceTierRequestValue(option.DefaultServiceTier)
+		if defaultTier != "" && ModelSupportsServiceTier(option, defaultTier) {
+			effective = defaultTier
+		}
+	}
+	if effective == "" {
+		return ""
+	}
+	if !ServiceTierEnabled(featureSettings, effective) {
+		return ""
+	}
+	return effective
+}

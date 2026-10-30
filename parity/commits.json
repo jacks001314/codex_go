@@ -26038,9 +26038,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Bedrock catalogs already advertised ultrafast for the Mantle GPT-6 Astra / GPT-6.1 Sol entries and the Runtime global/us variants, and the request path already filtered tiers to catalog-advertised values including flex; Round 1057 closed the metadata gap: model.ModelInfo keeps the catalog's {id,name,description} service-tier definitions, model/list and TUI presets carry them, and the TUI builds slash commands (and applies them) from catalog names",
+    "TUI: catalog tier rows now dispatch as tier selections instead of being swallowed by the builtin parser (`/ultrafast`, custom `/express`), the effective tier recomputes on model/catalog changes through model.service_tier semantics (unsupported saved tier clears, an absent selection falls back to the catalog default, a supported saved tier returns), and tier selections persist through the /fast settings path",
+    "Regression coverage: model/bedrock_service_tiers_like_rust_test.go pins the Mantle/Runtime ultrafast definitions, the bundled Fast tier metadata, and custom-catalog preservation (speed tiers, definitions, default, web-search normalization) through model/list and presets; tui/tea/bedrock_service_tier_commands_like_rust_test.go pins /ultrafast select-clear-model-switch and the custom /express command",
+    "Residual: the legacy chatwidget TUI (tui/chatwidget) mirrors the same service-tier state helpers but the tea TUI is the interactive surface exercised here; Go does not store a per-thread saved tier beyond the settings write, so a session that never persisted a selection recomputes from the catalog default each time"
    ]
   },
   {
