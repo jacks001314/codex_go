@@ -359,6 +359,7 @@ type RuntimeRouter struct {
 	requestAttestation   map[string]bool
 	mcpOpenAIForm        map[string]bool
 	mcpStandardFormInput map[string]bool
+	userVerification     map[string]bool
 	// mcpToolApprovalsMu guards mcpToolApprovals, the per-thread store of
 	// session-remembered custom MCP tool approvals (Rust
 	// session.tool_approvals).
@@ -887,6 +888,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		requestAttestation:      map[string]bool{},
 		mcpOpenAIForm:           map[string]bool{},
 		mcpStandardFormInput:    map[string]bool{},
+		userVerification:        map[string]bool{},
 		mcpRuntimes:             newMCPRuntimeCoordinator(),
 		authChanged:             make(chan struct{}),
 		authChangeTracker:       auth.NewAuthChangeTracker(nil),
@@ -2572,12 +2574,14 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	r.clearConnectionRequestAttestation(connectionID)
 	r.clearConnectionMCPOpenAIForm(connectionID)
 	r.clearConnectionMCPStandardFormInput(connectionID)
+	r.clearConnectionUserVerification(connectionID)
 	r.cancelThreadSamplesForConnection(connectionID)
 	if r.mcpEventStreams != nil {
 		r.mcpEventStreams.stopConnection(connectionID)
 	}
 	r.syncMCPOpenAIFormElicitationCapability()
 	r.syncMCPStandardFormInputCapability()
+	r.syncMCPUserVerificationCapability()
 	if r.services.CommandExec != nil {
 		r.services.CommandExec.ConnectionClosed(connectionID)
 	}
@@ -2869,6 +2873,39 @@ func (r *RuntimeRouter) rememberConnectionMCPStandardFormInput(connectionID stri
 	r.mcpStandardFormInput[connectionID] = enabled
 }
 
+// rememberConnectionUserVerification mirrors Rust #44613's initialize projection:
+// only the embedded TUI and the local Codex Desktop stdio host may receive the
+// native verification extension. Client names never opt another transport in.
+func (r *RuntimeRouter) rememberConnectionUserVerification(connectionID string, info ClientInfo, capabilities *InitializeCapabilities) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	enabled := r.userVerificationEligible(info, capabilities)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.userVerification == nil {
+		r.userVerification = map[string]bool{}
+	}
+	r.userVerification[connectionID] = enabled
+}
+
+func (r *RuntimeRouter) userVerificationEligible(info ClientInfo, capabilities *InitializeCapabilities) bool {
+	if r == nil || capabilities == nil || !capabilities.ExperimentalAPI {
+		return false
+	}
+	name := info.Name
+	transport := strings.ToLower(strings.TrimSpace(r.requestTransport))
+	if transport == "" {
+		transport = "in-process"
+	}
+	if !((transport == "in-process" && name == "codex-tui") ||
+		(transport == "stdio" && name == "Codex Desktop")) {
+		return false
+	}
+	return userVerificationDeviceSupported(r.services.UserVerificationProvider)
+}
+
 func (r *RuntimeRouter) rememberConnectionRequestAttestation(connectionID string, capabilities *InitializeCapabilities) {
 	if r == nil {
 		return
@@ -2960,6 +2997,16 @@ func (r *RuntimeRouter) clearConnectionMCPStandardFormInput(connectionID string)
 	delete(r.mcpStandardFormInput, connectionID)
 }
 
+func (r *RuntimeRouter) clearConnectionUserVerification(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	delete(r.userVerification, connectionID)
+}
+
 func (r *RuntimeRouter) clearConnectionRequestAttestation(connectionID string) {
 	if r == nil {
 		return
@@ -3034,6 +3081,42 @@ func (r *RuntimeRouter) anyConnectionMCPStandardFormInput() bool {
 	return false
 }
 
+func (r *RuntimeRouter) anyConnectionUserVerification() bool {
+	if r == nil {
+		return false
+	}
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	for _, enabled := range r.userVerification {
+		if enabled {
+			return true
+		}
+	}
+	return false
+}
+
+// userVerificationConnection returns the eligible connection that owns native
+// verification requests. The stdio and websocket transports create one router
+// per peer; a shared router still routes to exactly one trusted connection.
+func (r *RuntimeRouter) userVerificationConnection() string {
+	if r == nil {
+		return ""
+	}
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	connectionIDs := make([]string, 0, len(r.userVerification))
+	for connectionID, enabled := range r.userVerification {
+		if enabled {
+			connectionIDs = append(connectionIDs, connectionID)
+		}
+	}
+	sort.Strings(connectionIDs)
+	if len(connectionIDs) == 0 {
+		return ""
+	}
+	return connectionIDs[0]
+}
+
 func (r *RuntimeRouter) syncMCPOpenAIFormElicitationCapability() {
 	if r == nil {
 		return
@@ -3044,6 +3127,20 @@ func (r *RuntimeRouter) syncMCPOpenAIFormElicitationCapability() {
 	}
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.setOpenAIFormElicitationEnabled(enabled)
+	}
+	r.prewarmLoadedMCPThreads()
+}
+
+func (r *RuntimeRouter) syncMCPUserVerificationCapability() {
+	if r == nil {
+		return
+	}
+	enabled := r.anyConnectionUserVerification()
+	if r.services.MCP != nil {
+		r.services.MCP.SetUserVerificationEnabled(enabled)
+	}
+	if r.mcpRuntimes != nil {
+		r.mcpRuntimes.setUserVerificationEnabled(enabled)
 	}
 	r.prewarmLoadedMCPThreads()
 }
@@ -7727,8 +7824,10 @@ func (r *RuntimeRouter) handleInitialize(request *Request) (*InitializeResponse,
 	r.rememberConnectionRequestAttestation(connectionID, params.Capabilities)
 	r.rememberConnectionMCPOpenAIForm(connectionID, params.Capabilities)
 	r.rememberConnectionMCPStandardFormInput(connectionID, params.Capabilities)
+	r.rememberConnectionUserVerification(connectionID, params.ClientInfo, params.Capabilities)
 	r.syncMCPOpenAIFormElicitationCapability()
 	r.syncMCPStandardFormInputCapability()
+	r.syncMCPUserVerificationCapability()
 	codexHome := ""
 	if r.services.Config != nil {
 		codexHome = r.services.Config.CodexHome()
@@ -15090,13 +15189,14 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 		reviewer = r.ensureGuardianReviewer(r.services.Agent)
 	}
 	service.SetElicitationHandler(&appserverMCPElicitationHandler{
-		broker:           r.requireServerRequests(),
-		service:          service,
-		reviewer:         reviewer,
-		authority:        r.currentMCPElicitationAuthority,
-		persist:          r.persistMCPToolApprovalAmendment,
-		record:           r.recordMCPToolApprovalResolution,
-		invalidateTiming: r.invalidateTurnCriticalPath,
+		broker:                     r.requireServerRequests(),
+		service:                    service,
+		reviewer:                   reviewer,
+		authority:                  r.currentMCPElicitationAuthority,
+		persist:                    r.persistMCPToolApprovalAmendment,
+		record:                     r.recordMCPToolApprovalResolution,
+		invalidateTiming:           r.invalidateTurnCriticalPath,
+		userVerificationConnection: r.userVerificationConnection,
 	})
 	service.SetProgressHandler(&appserverMCPProgressHandler{notify: r.notify})
 	service.SetRootsProvider(mcp.MCPRootsProviderFunc(func(threadID string) []mcp.MCPRoot {
@@ -15107,6 +15207,7 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 		invalidateRuntimes: r.mcpRuntimes.invalidateAll,
 	})
 	service.SetOpenAIFormElicitationEnabled(r.anyConnectionMCPOpenAIFormElicitation())
+	service.SetUserVerificationEnabled(r.anyConnectionUserVerification())
 	// Opted-in stdio servers receive auth change notifications (Rust #43428).
 	service.SetAuthChangeSource(routerMCPAuthChangeSource{router: r})
 	if handler, ok := service.ElicitationHandler().(*appserverMCPElicitationHandler); ok && r.anyConnectionMCPStandardFormInput() {

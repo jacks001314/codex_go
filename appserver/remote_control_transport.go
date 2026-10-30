@@ -44,6 +44,11 @@ type remoteControlTransportConnection struct {
 }
 
 func NewRemoteControlTransportServer(router *RuntimeRouter, events <-chan remotecontrol.RemoteClientTransportEvent) *RemoteControlTransportServer {
+	if router != nil {
+		// Remote-control peers are a network origin (Rust ConnectionOrigin::
+		// RemoteControl), never the in-process default used by embedded clients.
+		router.SetRequestTransport("remote_control")
+	}
 	return &RemoteControlTransportServer{
 		Router: router,
 		Events: events,

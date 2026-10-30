@@ -25,6 +25,10 @@ type appserverMCPElicitationHandler struct {
 	// request ID is not a reliable tool invocation owner (Rust #57207).
 	invalidateTiming    func(threadID, turnID string)
 	fullAccessFormInput atomic.Bool
+	// userVerificationConnection identifies the one trusted local connection
+	// activated at initialize. Verification requests never broadcast to other
+	// clients (Rust #44613).
+	userVerificationConnection func() string
 }
 
 // EnableFullAccessFormInput turns on surfacing non-approval MCP forms in
@@ -199,8 +203,20 @@ func (h *appserverMCPElicitationHandler) requestMCPElicitation(ctx context.Conte
 		return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 	}
 	params := appserverMCPElicitationParams(request)
+	connectionID := ""
+	if mcp.IsUserVerificationElicitation(request) {
+		if h.userVerificationConnection != nil {
+			connectionID = strings.TrimSpace(h.userVerificationConnection())
+		}
+		if connectionID == "" {
+			return &mcp.MCPElicitationResponse{
+				Action: mcp.MCPElicitationActionCancel,
+				Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonApprovalUnavailable),
+			}, nil
+		}
+	}
 	var response MCPElicitationRequestResponse
-	if err := h.broker.Request(ctx, ServerRequestMCPElicitation, params, &response); err != nil {
+	if err := h.broker.RequestToConnection(ctx, connectionID, ServerRequestMCPElicitation, params, &response); err != nil {
 		if mcp.IsUserVerificationElicitation(request) {
 			reason := mcp.UserVerificationReasonResponseError
 			if errors.Is(err, ErrServerRequestConnectionClosed) {

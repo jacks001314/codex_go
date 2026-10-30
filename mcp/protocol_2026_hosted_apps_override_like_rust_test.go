@@ -26,7 +26,7 @@ func TestHostedAppsProtocolOverridePreservesUserVerificationLikeRust(t *testing.
 	runtime.Servers[CodexAppsServerName] = registration
 
 	service := NewMCPService(runtime)
-	service.SetOpenAIFormElicitationEnabled(true)
+	service.SetUserVerificationEnabled(true)
 	apps, ok := service.serverConfig(CodexAppsServerName)
 	if !ok || apps.ProtocolMode != MCPProtocol20260728 {
 		t.Fatalf("apps protocol mode = %#v, ok=%v, want the registration override", apps, ok)
@@ -49,7 +49,7 @@ func TestHostedAppsProtocolOverridePreservesUserVerificationLikeRust(t *testing.
 		},
 	}
 	extensionService := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{CodexAppsServerName: extension}})
-	extensionService.SetOpenAIFormElicitationEnabled(true)
+	extensionService.SetUserVerificationEnabled(true)
 	extensionApps, ok := extensionService.serverConfig(CodexAppsServerName)
 	if !ok || extensionApps.ProtocolMode != MCPProtocol20260728 {
 		t.Fatalf("extension apps protocol mode = %#v, ok=%v, want the registration override", extensionApps, ok)

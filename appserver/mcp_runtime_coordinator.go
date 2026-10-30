@@ -250,6 +250,23 @@ func (c *mcpRuntimeCoordinator) setOpenAIFormElicitationEnabled(enabled bool) {
 	}
 }
 
+func (c *mcpRuntimeCoordinator) setUserVerificationEnabled(enabled bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	services := make([]*mcp.MCPService, 0, len(c.bindings))
+	for _, binding := range c.bindings {
+		if binding != nil && binding.service != nil {
+			services = append(services, binding.service)
+		}
+	}
+	c.mu.Unlock()
+	for _, service := range services {
+		service.SetUserVerificationEnabled(enabled)
+	}
+}
+
 func (c *mcpRuntimeCoordinator) invalidateAll() {
 	if c == nil {
 		return

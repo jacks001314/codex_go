@@ -11491,9 +11491,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1032 (实现+回归): #44613 让 initialize 只在 experimentalApi 开启、设备支持验证、且来源恰为 in-process codex-tui 或 stdio Codex Desktop 时激活 userVerification；其他 transport、名字、缺少 opt-in 或不支持设备均不投影。Go 在 RuntimeRouter 按连接记录该激活决定，initialize/connection-close 时同步到 MCPService 与 per-thread MCP runtimes。MCPService 将 userVerification 与 openAIForm 解耦：新增 SetUserVerificationEnabled，独立控制 openai/elicitation.userVerification，且仍只投影给 host-owned apps；能力切换会重建 HTTP/stdio 连接与资源缓存。appserverMCPElicitationHandler 对验证请求使用 RequestToConnection 定向投递到唯一可信连接，无目标时直接 cancel/approvalUnavailable，绝不广播；remote-control transport 显式标记为网络来源。Provider 通过可选 DeviceSupported() 提供平台探测，默认 unsupported provider 保持不广告。新增 appserver/user_verification_desktop_activation_like_rust_test.go 覆盖 13 项来源/名字/opt-in/设备矩阵、定向投递与拒绝路径；mcp 测试冻结 userVerification 与 openAIForm 的独立能力形状。原失败原因测试注入可信目标后继续固定 responseError/interrupted/responseChannelClosed/approvalUnavailable。验证: go build ./...; go test ./appserver -run 'UserVerification|Initialize|RemoteControl|MCP' -count=1; go test ./mcp -count=1; go test ./app -run 'UserVerification|Elicitation' -count=1; go test ./parity -run TestAlignment -count=1。完整 ./appserver 仅剩既有 7 个 manifest/surface/analytics 失败。"
    ]
   },
   {

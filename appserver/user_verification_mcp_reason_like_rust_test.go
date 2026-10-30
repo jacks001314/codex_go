@@ -12,7 +12,11 @@ func TestAppserverUserVerificationFailureReasonsLikeRust(t *testing.T) {
 		Method: "openai/userVerification",
 		Mode:   "openai/userVerification",
 	}
-	handler := &appserverMCPElicitationHandler{broker: NewServerRequestBroker()}
+	trustedConnection := func() string { return "verification-connection" }
+	handler := &appserverMCPElicitationHandler{
+		broker:                     NewServerRequestBroker(),
+		userVerificationConnection: trustedConnection,
+	}
 
 	response, err := handler.HandleMCPElicitation(context.Background(), request)
 	if err != nil {
@@ -24,7 +28,10 @@ func TestAppserverUserVerificationFailureReasonsLikeRust(t *testing.T) {
 	cancel()
 	cancelledBroker := NewServerRequestBroker()
 	cancelledBroker.SetSink(ServerRequestSinkFunc(func(*ServerRequest) {}))
-	response, err = (&appserverMCPElicitationHandler{broker: cancelledBroker}).HandleMCPElicitation(cancelled, request)
+	response, err = (&appserverMCPElicitationHandler{
+		broker:                     cancelledBroker,
+		userVerificationConnection: trustedConnection,
+	}).HandleMCPElicitation(cancelled, request)
 	if err != nil {
 		t.Fatalf("HandleMCPElicitation(cancelled) error = %v", err)
 	}
@@ -35,11 +42,14 @@ func TestAppserverUserVerificationFailureReasonsLikeRust(t *testing.T) {
 	closedBroker.SetSink(ServerRequestSinkFunc(func(*ServerRequest) { close(requestSeen) }))
 	result := make(chan *mcp.MCPElicitationResponse, 1)
 	go func() {
-		response, _ := (&appserverMCPElicitationHandler{broker: closedBroker}).HandleMCPElicitation(context.Background(), request)
+		response, _ := (&appserverMCPElicitationHandler{
+			broker:                     closedBroker,
+			userVerificationConnection: trustedConnection,
+		}).HandleMCPElicitation(context.Background(), request)
 		result <- response
 	}()
 	<-requestSeen
-	closedBroker.RejectPending("", ErrServerRequestConnectionClosed)
+	closedBroker.RejectPending("verification-connection", ErrServerRequestConnectionClosed)
 	assertAppserverUserVerificationReason(t, <-result, mcp.UserVerificationReasonResponseChannelClosed)
 
 	response, err = (&appserverMCPElicitationHandler{}).HandleMCPElicitation(context.Background(), request)

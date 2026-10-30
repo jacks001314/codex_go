@@ -25,7 +25,7 @@ func TestUserVerificationCapabilityRestrictedToHostOwnedAppsLikeRust(t *testing.
 
 func TestConfiguredMCPServerCannotRequestUserVerificationLikeRust(t *testing.T) {
 	service := NewMCPService(nil)
-	service.SetOpenAIFormElicitationEnabled(true)
+	service.SetUserVerificationEnabled(true)
 	called := 0
 	service.SetElicitationHandler(MCPElicitationHandlerFunc(func(context.Context, *MCPElicitationRequest) (*MCPElicitationResponse, error) {
 		called++
@@ -59,5 +59,29 @@ func TestConfiguredMCPServerCannotRequestUserVerificationLikeRust(t *testing.T) 
 	}
 	if called != 1 {
 		t.Fatalf("host-owned apps handler calls = %d, want 1", called)
+	}
+}
+
+// Mirrors Rust #44613: app-server activates the verification extension
+// separately from the legacy OpenAI form capability.
+func TestUserVerificationExtensionIsIndependentOfOpenAIFormLikeRust(t *testing.T) {
+	verificationOnly := mcpClientCapabilitiesForFeatures(mcpClientFeatures{UserVerification: true})
+	extensions, _ := verificationOnly["extensions"].(map[string]any)
+	elicitation, _ := extensions["openai/elicitation"].(map[string]any)
+	if _, ok := elicitation["userVerification"]; !ok {
+		t.Fatalf("userVerification extension = %#v", extensions)
+	}
+	if _, ok := elicitation["form"]; ok {
+		t.Fatalf("verification-only extension advertised form: %#v", elicitation)
+	}
+	if _, ok := extensions["openai/form"]; ok {
+		t.Fatalf("verification-only capabilities advertised openai/form: %#v", extensions)
+	}
+
+	formOnly := mcpClientCapabilitiesForFeatures(mcpClientFeatures{OpenAIForm: true})
+	formExtensions, _ := formOnly["extensions"].(map[string]any)
+	formElicitation, _ := formExtensions["openai/elicitation"].(map[string]any)
+	if _, ok := formElicitation["userVerification"]; ok {
+		t.Fatalf("form-only capabilities advertised userVerification: %#v", formElicitation)
 	}
 }

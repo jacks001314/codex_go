@@ -776,6 +776,7 @@ type MCPService struct {
 	oauthCompleteListeners map[uint64]MCPOAuthLoginCompletionHandlerFunc
 	nextOAuthListenerID    uint64
 	openAIForm             bool
+	userVerification       bool
 	generation             uint64
 	// resourceGeneration advances when resource catalogs and contents must be
 	// refreshed even if the connection set is reused (Rust #46033).
@@ -1005,7 +1006,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 			sharedHTTPClientKey = mcpHTTPDoerIdentity(config.HTTPClient)
 		}
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == refreshed.mcpHTTPClientCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm), sharedHTTPClientKey) {
+			cached.key == refreshed.mcpHTTPClientCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.userVerification), sharedHTTPClientKey) {
 			nextHTTPClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -1017,7 +1018,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	for name, cached := range s.stdioClients {
 		config, ok := refreshed.configs[name]
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == refreshed.mcpStdioClientCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm)) {
+			cached.key == refreshed.mcpStdioClientCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.userVerification)) {
 			nextStdioClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -1289,15 +1290,34 @@ func (s *MCPService) AddOAuthLoginCompletionListener(listener MCPOAuthLoginCompl
 }
 
 func (s *MCPService) SetOpenAIFormElicitationEnabled(enabled bool) {
+	s.setElicitationCapabilities(&enabled, nil)
+}
+
+// SetUserVerificationEnabled controls the native user-verification extension
+// independently of the legacy OpenAI form capability. App-server activates it
+// only for trusted local clients (Rust #44613).
+func (s *MCPService) SetUserVerificationEnabled(enabled bool) {
+	s.setElicitationCapabilities(nil, &enabled)
+}
+
+func (s *MCPService) setElicitationCapabilities(openAIForm *bool, userVerification *bool) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	if s.openAIForm == enabled {
+	changed := false
+	if openAIForm != nil && s.openAIForm != *openAIForm {
+		s.openAIForm = *openAIForm
+		changed = true
+	}
+	if userVerification != nil && s.userVerification != *userVerification {
+		s.userVerification = *userVerification
+		changed = true
+	}
+	if !changed {
 		s.mu.Unlock()
 		return
 	}
-	s.openAIForm = enabled
 	s.generation++
 	oldHTTPClients := s.httpClientsForCloseLocked()
 	oldStdioClients := s.stdioClientsForCloseLocked()
@@ -2989,7 +3009,7 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 		s.httpClients = map[string]*cachedMCPHTTPClient{}
 	}
 	openAIForm := s.openAIForm
-	userVerification := openAIForm && s.serverAllowsUserVerificationLocked(name)
+	userVerification := s.serverAllowsUserVerificationLocked(name)
 	sharedHTTPClient := s.sharedHTTPClient
 	sharedHTTPClientKey := s.sharedHTTPClientKey
 	if config.HTTPClient != nil {
@@ -3148,7 +3168,7 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 		s.stdioClients = map[string]*cachedMCPStdioClient{}
 	}
 	openAIForm := s.openAIForm
-	userVerification := openAIForm && s.serverAllowsUserVerificationLocked(name)
+	userVerification := s.serverAllowsUserVerificationLocked(name)
 	authChanges := s.authChangeSource
 	key := s.mcpStdioClientCacheKey(config, openAIForm, userVerification)
 	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
@@ -3295,11 +3315,11 @@ func (s *MCPService) serverAllowsUserVerification(serverName string) bool {
 }
 
 func (s *MCPService) serverAllowsUserVerificationLocked(serverName string) bool {
-	return mcpServerAllowsUserVerification(s.servers, serverName, s.openAIForm)
+	return mcpServerAllowsUserVerification(s.servers, serverName, s.userVerification)
 }
 
-func mcpServerAllowsUserVerification(servers map[string]MCPServerStatus, serverName string, openAIForm bool) bool {
-	if !openAIForm {
+func mcpServerAllowsUserVerification(servers map[string]MCPServerStatus, serverName string, userVerification bool) bool {
+	if !userVerification {
 		return false
 	}
 	status, ok := servers[strings.TrimSpace(serverName)]

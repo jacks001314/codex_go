@@ -29,10 +29,27 @@ type UserVerificationProvider interface {
 	Verify(params UserVerificationVerifyParams) (*UserVerificationVerifyResponse, error)
 }
 
+// userVerificationDeviceSupport is the optional platform probe used when a
+// trusted local client initializes. Rust's initialize processor only activates
+// the extension when Service::device_supported() is true (#44613); providers
+// without a native backend omit this method and remain ineligible.
+type userVerificationDeviceSupport interface {
+	DeviceSupported() bool
+}
+
+func userVerificationDeviceSupported(provider UserVerificationProvider) bool {
+	support, ok := provider.(userVerificationDeviceSupport)
+	return ok && support.DeviceSupported()
+}
+
 // UnsupportedUserVerificationProvider is Rust's
 // `unsupported::UnsupportedProvider`: every operation reports
 // `providerUnavailable`.
 type UnsupportedUserVerificationProvider struct{}
+
+func (UnsupportedUserVerificationProvider) DeviceSupported() bool {
+	return false
+}
 
 func (UnsupportedUserVerificationProvider) Status() (*UserVerificationStatusResponse, error) {
 	return userVerificationUnavailableStatus(), nil

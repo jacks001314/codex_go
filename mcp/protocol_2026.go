@@ -155,17 +155,21 @@ func mcpClientCapabilitiesForFeatures(features mcpClientFeatures) map[string]any
 	capabilities := map[string]any{
 		"roots": map[string]any{"listChanged": false},
 	}
-	if features.OpenAIForm {
-		elicitation := map[string]any{"form": map[string]any{}}
+	if features.OpenAIForm || features.UserVerification {
+		elicitation := map[string]any{}
+		if features.OpenAIForm {
+			elicitation["form"] = map[string]any{}
+		}
 		if features.UserVerification {
 			elicitation["userVerification"] = map[string]any{}
 		}
-		capabilities["extensions"] = map[string]any{
+		extensions := map[string]any{"openai/elicitation": elicitation}
+		if features.OpenAIForm {
 			// Rust #41447 advertises the umbrella elicitation form capability
 			// alongside the legacy openai/form extension.
-			"openai/form":        map[string]any{},
-			"openai/elicitation": elicitation,
+			extensions["openai/form"] = map[string]any{}
 		}
+		capabilities["extensions"] = extensions
 	}
 	if features.AuthChange {
 		mcpAdvertiseAuthChangeCapability(capabilities)

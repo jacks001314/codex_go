@@ -3359,6 +3359,15 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already matched the wire shape from `4817c58b`: `SkillInvocationEventParams` has no repository URL field and `trackSkillInvocationEvent` does not populate one. The new `telemetry/skill_invocation_event_like_rust_test.go` freezes the complete `event_params` key set and rejects any future `repo_url` serialization.
 - Verified with `go build ./...`, `go test ./telemetry -run SkillInvocation -count=1`, `go test ./appserver -run SkillInvocation -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2196 complete`, `451 not_applicable`,
-`341 audit_pending`, `157 regression_pending`, `4 partial`,
+### User verification for local Codex Desktop sessions (Round 1032)
+
+- Rust #44613 activates `openai/elicitation.userVerification` only for `experimentalApi` clients whose origin and name are exactly in-process `codex-tui` or stdio `Codex Desktop`, provided the device supports verification. Other transports, names, missing opt-ins, and unsupported devices stay ineligible.
+- Go now records that decision per initialized connection and synchronizes it to the MCP service and per-thread runtimes. `MCPService.SetUserVerificationEnabled` is independent of the legacy OpenAI form flag; the capability is still projected only to host-owned apps, and changing it rebuilds MCP connections and resource caches.
+- Verification elicitations are delivered with `RequestToConnection` to the single trusted connection. When none is eligible, the handler returns `cancel` with `approvalUnavailable` instead of broadcasting. Remote-control transports are explicitly marked as a network origin.
+- Hosts can expose `DeviceSupported()` on their `UserVerificationProvider`; the default unsupported provider remains ineligible and does not advertise the capability.
+- New regressions in `appserver/user_verification_desktop_activation_like_rust_test.go` cover the full origin/name/opt-in/device matrix plus targeted delivery and rejection. MCP tests pin the independent capability shape.
+- Verified with `go build ./...`, `go test ./appserver -run 'UserVerification|Initialize|RemoteControl|MCP' -count=1`, `go test ./mcp -count=1`, `go test ./app -run 'UserVerification|Elicitation' -count=1`, and `go test ./parity -run TestAlignment -count=1`. The full `./appserver` package still reports only the seven known manifest/surface/analytics failures.
+
+Status after reconciliation: `2197 complete`, `451 not_applicable`,
+`340 audit_pending`, `157 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
