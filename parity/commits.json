@@ -27982,9 +27982,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1079 (audit): already implemented by sync630. network/proxy_server_51650_test.go and network/proxy_server.go enforce Rust #51650 end to end: the pre-approval local/private guard only performs its DNS-backed check for an allowlisted host (baselineLocalBindingReason), so an unapproved or merely decidable hostname never reaches proxyLookupIPAddr; after either a local or remote decider approves, evaluateProxyPolicy re-runs the literal and DNS-backed local/private guard (approvedLocalBindingReason) so approval cannot bypass private-address restrictions, while explicit denies are matched before the decider; and inner HTTPS requests after an approved CONNECT re-enter evaluateProxyPolicy without an allowlist entry, preserving the DNS check. The Seatbelt half is vacuous in Go: sandbox/seatbelt.go has no dynamic managed-network policy and never emitted the removed (allow network-outbound (remote ip \"*:53\")) grant, so no external-DNS allowance exists to remove (verified by rg over sandbox and network). Regression tests: TestProxyServerRequiresHostAuthorizationBeforeDNSLikeRust (zero lookups for an unapproved host), TestProxyServerRechecksPrivateAddressAfterApprovalLikeRust (approval then non-public address rejected with one lookup), TestProxyServerMITMInnerRequestRechecksDNSForApprovedUnlistedHostLikeRust (approved CONNECT then inner request rejected after exactly one lookup), TestApprovedTargetsRecheckExplicitDenialsLikeRust, plus the sandbox Seatbelt policy suite. Verified with go test ./network -count=1, go test ./sandbox -run 'Seatbelt' -count=1, go build ./..., and go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

@@ -3671,6 +3671,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: section order, instruction-prefix stability across growing and evicting assistant context, notice-only suppression without a split, split-notice preservation, and presentation-dependent omission state.
 - Verified with `go test ./state -count=1`, `go test ./appserver -run 'Guardian' -count=1`, `go test ./context -run 'Guardian' -count=1`, and `go test ./state -race -run 'AsyncGuardian|CurrentRetainedOmissions|SplitAssistant' -count=1`.
 
-Status after reconciliation: `2231 complete`, `462 not_applicable`,
-`322 audit_pending`, `129 regression_pending`, `5 partial`,
+### Hostname authorization before proxy DNS (Round 1079)
+
+- Rust #51650 requires an allowlist match or policy approval before a hostname is resolved for address checks, rechecks baseline restrictions after approval, keeps DNS checks for inner HTTPS requests after an approved CONNECT, and removes the Seatbelt external-DNS allowance.
+- Complete: already implemented by sync630. `network/proxy_server.go` gates the DNS-backed local/private guard on an allowlisted host before approval, re-runs the literal and DNS-backed guard after approval, matches explicit denies before the decider, and re-enters the policy for MITM inner requests. `sandbox/seatbelt.go` never emitted the removed `*:53` grant, so the Seatbelt half is vacuous.
+- Regression: zero lookups for unapproved hosts, private-address rejection after approval, approved-CONNECT inner-request DNS recheck, explicit-denial rechecks, and Seatbelt policy generation.
+- Verified with `go test ./network -count=1`, `go test ./sandbox -run 'Seatbelt' -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2232 complete`, `462 not_applicable`,
+`322 audit_pending`, `128 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
