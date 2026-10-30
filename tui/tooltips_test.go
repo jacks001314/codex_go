@@ -235,6 +235,20 @@ target_plan_types = ["ent26"]
 	}
 }
 
+func TestAnnouncementTipTOMLAcceptsProMaxPlan(t *testing.T) {
+	toml := `
+[[announcements]]
+content = "pro max announcement"
+target_plan_types = ["promax"]
+`
+
+	plan := auth.PlanProMax
+	got, ok := ParseAnnouncementTipTOML(toml, &plan, "0.0.0", dateForTooltipTest("2026-07-08"), TooltipTargetOSWindows)
+	if !ok || got != "pro max announcement" {
+		t.Fatalf("promax announcement = %q, %v", got, ok)
+	}
+}
+
 func TestAnnouncementTipTOMLRejectsInvalidEntries(t *testing.T) {
 	toml := `
 [[announcements]]

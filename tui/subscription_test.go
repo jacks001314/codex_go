@@ -21,7 +21,7 @@ func TestSubscriptionLabelsMatchRust(t *testing.T) {
 		{auth.PlanPlus, "Plus", "Plus"},
 		{auth.PlanPro, "Pro 200", "Pro 200"},
 		{auth.PlanProlite, "Pro 100", "Pro 100"},
-		{PlanProMax, "Pro 500", "Pro 500"},
+		{auth.PlanProMax, "Pro 500", "Pro 500"},
 		{auth.PlanTeam, "Business", "Business"},
 		{auth.PlanSelfServeBusinessUsageBased, "Business", "Business"},
 		{auth.PlanBusiness, "Enterprise", "Business"},

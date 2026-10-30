@@ -362,7 +362,7 @@ func dateOnly(value time.Time) time.Time {
 
 func normalizeAnnouncementPlan(plan auth.PlanType) (auth.PlanType, bool) {
 	switch plan {
-	case auth.PlanFree, auth.PlanGo, auth.PlanPlus, auth.PlanPro, auth.PlanProlite,
+	case auth.PlanFree, auth.PlanGo, auth.PlanPlus, auth.PlanPro, auth.PlanProlite, auth.PlanProMax,
 		auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased, auth.PlanBusiness,
 		auth.PlanEnt26, auth.PlanEnterpriseCBPAutomation, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise, auth.PlanEdu:
 		return plan, true

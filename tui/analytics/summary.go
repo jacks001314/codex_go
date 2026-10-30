@@ -303,9 +303,11 @@ func analyticsPlanLabel(plan auth.PlanType) string {
 	case auth.PlanPlus:
 		return "Plus"
 	case auth.PlanPro:
-		return "Pro"
+		return "Pro 200"
 	case auth.PlanProlite:
-		return "Pro Lite"
+		return "Pro 100"
+	case auth.PlanProMax:
+		return "Pro 500"
 	case auth.PlanTeam, auth.PlanBusiness, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased:
 		return "Business"
 	case auth.PlanEnt26, auth.PlanEnterpriseCBPAutomation, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise:

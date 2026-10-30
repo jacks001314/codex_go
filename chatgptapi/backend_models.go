@@ -80,6 +80,7 @@ const (
 	PlanPlus                        PlanType = "plus"
 	PlanPro                         PlanType = "pro"
 	PlanProLite                     PlanType = "prolite"
+	PlanProMax                      PlanType = "promax"
 	PlanFreeWorkspace               PlanType = "free_workspace"
 	PlanTeam                        PlanType = "team"
 	PlanSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"

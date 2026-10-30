@@ -4747,6 +4747,32 @@ func TestAccountPlanTypeFromBackendMapsEnt26(t *testing.T) {
 	}
 }
 
+// Rust #47971 recognizes `promax` in backend rate-limit responses.
+func TestAccountPlanTypeFromBackendMapsProMax(t *testing.T) {
+	plan := accountPlanTypeFromBackend(chatgptapi.PlanProMax)
+	if plan == nil || *plan != auth.PlanProMax {
+		t.Fatalf("plan = %+v, want promax", plan)
+	}
+}
+
+// Rust #47971 makes Pro Max eligible for experimental context management.
+func TestChatGPTPlanEligibleForExperimentalContextLikeRust(t *testing.T) {
+	cases := map[auth.PlanType]bool{
+		auth.PlanPlus:       true,
+		auth.PlanPro:        true,
+		auth.PlanProlite:    true,
+		auth.PlanProMax:     true,
+		auth.PlanFree:       false,
+		auth.PlanEnterprise: false,
+		auth.PlanUnknown:    false,
+	}
+	for plan, want := range cases {
+		if got := chatGPTPlanEligibleForExperimentalContext(plan); got != want {
+			t.Fatalf("chatGPTPlanEligibleForExperimentalContext(%q) = %v, want %v", plan, got, want)
+		}
+	}
+}
+
 func TestAccountPlanTypeFromBackendMapsEnterpriseAutomation(t *testing.T) {
 	plan := accountPlanTypeFromBackend(chatgptapi.PlanEnterpriseCbpAutomation)
 	if plan == nil || *plan != auth.PlanEnterpriseCBPAutomation {

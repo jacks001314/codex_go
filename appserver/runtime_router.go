@@ -14668,6 +14668,9 @@ func accountPlanTypeFromBackend(plan chatgptapi.PlanType) *auth.PlanType {
 	case chatgptapi.PlanProLite:
 		value := auth.PlanProlite
 		return &value
+	case chatgptapi.PlanProMax:
+		value := auth.PlanProMax
+		return &value
 	case chatgptapi.PlanTeam:
 		value := auth.PlanTeam
 		return &value
@@ -17619,8 +17622,15 @@ func (r *RuntimeRouter) experimentalContextManagementEligible(cfg *config.Config
 	if account == nil {
 		return false
 	}
-	switch account.PlanType {
-	case auth.PlanPlus, auth.PlanPro, auth.PlanProlite:
+	return chatGPTPlanEligibleForExperimentalContext(account.PlanType)
+}
+
+// chatGPTPlanEligibleForExperimentalContext mirrors the plan half of Rust's
+// experimental_context_is_eligible (#47971): Pro Max joins the paid consumer
+// tiers that may use token-budget context management.
+func chatGPTPlanEligibleForExperimentalContext(plan auth.PlanType) bool {
+	switch plan {
+	case auth.PlanPlus, auth.PlanPro, auth.PlanProlite, auth.PlanProMax:
 		return true
 	default:
 		return false

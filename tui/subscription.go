@@ -17,11 +17,6 @@ const (
 	SubscriptionAnalytics
 )
 
-// PlanProMax is the raw ChatGPT plan string for Rust's PlanType::ProMax.
-// Go's auth package does not declare a named constant for it yet; the shared
-// label table still maps the raw value so every Rust row has a counterpart.
-const PlanProMax auth.PlanType = "promax"
-
 // SubscriptionLabel returns the shared subscription label for a plan.
 // Rust parity: SubscriptionDisplay::label.
 func SubscriptionLabel(plan auth.PlanType, display SubscriptionDisplay) string {
@@ -36,7 +31,7 @@ func SubscriptionLabel(plan auth.PlanType, display SubscriptionDisplay) string {
 		return "Pro 200"
 	case auth.PlanProlite:
 		return "Pro 100"
-	case PlanProMax:
+	case auth.PlanProMax:
 		return "Pro 500"
 	case auth.PlanTeam, auth.PlanSelfServeBusinessUsageBased:
 		return "Business"

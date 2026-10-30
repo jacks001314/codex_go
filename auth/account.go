@@ -20,6 +20,7 @@ const (
 	PlanPlus                        PlanType = "plus"
 	PlanPro                         PlanType = "pro"
 	PlanProlite                     PlanType = "prolite"
+	PlanProMax                      PlanType = "promax"
 	PlanTeam                        PlanType = "team"
 	PlanSelfServeBusinessProlite    PlanType = "self_serve_business_prolite"
 	PlanSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"
@@ -1748,6 +1749,8 @@ func planFromString(value string) PlanType {
 		return PlanPro
 	case string(PlanProlite):
 		return PlanProlite
+	case string(PlanProMax):
+		return PlanProMax
 	case string(PlanTeam):
 		return PlanTeam
 	case string(PlanSelfServeBusinessProlite):

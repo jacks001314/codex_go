@@ -154,6 +154,16 @@ func TestPlanFromStringParsesEducationVariants(t *testing.T) {
 	}
 }
 
+// Rust #47971 adds the `promax` raw plan name to KnownPlan.
+func TestPlanFromStringParsesProMax(t *testing.T) {
+	if got := planFromString("promax"); got != PlanProMax {
+		t.Fatalf("planFromString(promax) = %q, want %q", got, PlanProMax)
+	}
+	if got := PlanTypeFromString(" promax "); got != PlanProMax {
+		t.Fatalf("PlanTypeFromString( promax ) = %q, want %q", got, PlanProMax)
+	}
+}
+
 func TestAccountFromAuthParsesEnterpriseCBPAutomation(t *testing.T) {
 	account := AccountFromAuth(&AuthDotJSON{
 		AuthMode: "chatgpt",

@@ -8630,9 +8630,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go has no app-server-backed CLI fork startup: picker fork uses session.Store.Fork and remote fork sends only threadId/historyMode, so no client model, reasoning effort, service tier, migration prompt, or config/read can override the fork destination"
    ]
   },
   {
@@ -21310,9 +21310,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Added auth.PlanProMax and chatgptapi.PlanProMax with promax parsing, backend plan mapping, experimental-context eligibility, subscription/status/analytics labels, and announcement targeting; tests added"
    ]
   },
   {

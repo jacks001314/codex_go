@@ -77,7 +77,7 @@ func TestAnalyticsSummaryRendersProfileLikeRust(t *testing.T) {
 	for _, want := range []string{
 		"Test user",
 		"@test.user",
-		"Pro",
+		"Pro 200",
 		"Lifetime tokens",
 		"142.3B",
 		"Peak tokens",
@@ -258,5 +258,20 @@ func TestAnalyticsSummaryInvocationLimitAndUnknownKindsLikeRust(t *testing.T) {
 	}
 	if strings.Count(joined, "1 run ")+strings.Count(joined, "1 run\n") != 5 {
 		t.Fatalf("want five one-run rows:\n%s", joined)
+	}
+}
+
+// Rust #47971 recognizes Pro Max, and #49079 moved the summary plan label onto
+// SubscriptionDisplay::Analytics, so the Pro tiers render as 100/200/500.
+func TestAnalyticsPlanLabelMatchesSubscriptionAnalyticsLabels(t *testing.T) {
+	cases := map[auth.PlanType]string{
+		auth.PlanPro:     "Pro 200",
+		auth.PlanProlite: "Pro 100",
+		auth.PlanProMax:  "Pro 500",
+	}
+	for plan, want := range cases {
+		if got := analyticsPlanLabel(plan); got != want {
+			t.Fatalf("analyticsPlanLabel(%q) = %q, want %q", plan, got, want)
+		}
 	}
 }
