@@ -3285,6 +3285,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions: `TestFallbackBundledCatalogDropsRetiredModelsLikeRust` pins the removed entries plus the retained GPT-6 Luna target, and `TestRetiredSavedModelMigrationStillPromptsLikeRust` exercises the migration against the real bundled catalog.
 - Verified with `go build ./...`, `go test ./model -count=1`, `go test ./tui/... ./config -count=1`, and `go test ./appserver -run 'Catalog|Model' -count=1`.
 
-Status after reconciliation: `2186 complete`, `451 not_applicable`,
-`345 audit_pending`, `163 regression_pending`, `4 partial`,
+### Shared footer hints and executor build identity (Round 1023)
+
+- Rust #44354 routes both footer-bearing overlays through `footer_hint::wrap_hint_rows`. Go already had the shared `tui/footerhint.WrapHintRows` helper, but the request-user-input overlay kept a private duplicate; it now uses the shared helper, so whole-hint grouping, display-width/separator accounting, oversized hints, and the single empty row for empty input match Rust. Go's MCP elicitation overlay has no footer row, so it has no caller to convert (#44354, complete).
+- Rust #43513 exposes a stable `providerId` (SHA-256 of `git:<commit>:<target>`) in exec-server environment metadata. Go had the encoder and metadata field but never stamped the inputs, so the id was always omitted. `execserver.buildCommit`/`buildTarget` are now `-ldflags`-stamped and captured at startup, and `npm/scripts/build-packages.mjs` injects the commit (`STABLE_GIT_COMMIT` or `git rev-parse HEAD`) plus each target's Rust triple (#43513, complete).
+- New regressions: empty/zero-width footer tip rows in `request_user_input_test.go`, and `TestExecServerBuildIdentityUsesStampedVariables`; an `-ldflags` build was verified to print the expected `sha256:` provider id.
+- Verified with `go build ./...`, `go test ./execserver -count=1`, `go test ./tui/bottom_pane/... ./tui/footerhint ./tui/agents_overview -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2188 complete`, `451 not_applicable`,
+`345 audit_pending`, `161 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

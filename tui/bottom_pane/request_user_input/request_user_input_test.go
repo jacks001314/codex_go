@@ -69,6 +69,14 @@ func TestRenderHelpersWrapBottomAlignFooterAndTruncateMatchRustCore(t *testing.T
 	if got := WrapFooterTips(6, []FooterTip{{Text: "averylongtip"}, {Text: "ok"}}); !reflect.DeepEqual(got, []string{"averylongtip", "ok"}) {
 		t.Fatalf("long footer tip should not split = %#v", got)
 	}
+	// Rust #44354 footer_hint::wrap_hint_rows: an empty hint list is one empty
+	// row, and a zero width still gives every whole hint its own row.
+	if got := WrapFooterTips(20, nil); !reflect.DeepEqual(got, []string{""}) {
+		t.Fatalf("empty footer tips = %#v", got)
+	}
+	if got := WrapFooterTips(0, []FooterTip{{Text: "one"}, {Text: "two"}}); !reflect.DeepEqual(got, []string{"one", "two"}) {
+		t.Fatalf("zero-width footer tips = %#v", got)
+	}
 	optionTips := FooterTipsWithOptionProgress([]FooterTip{{Text: "enter submit", Highlight: true}}, true, 1, 5)
 	if got := WrapFooterTips(32, optionTips); !reflect.DeepEqual(got, []string{"option 2/5 | [enter submit]"}) {
 		t.Fatalf("option progress footer tips = %#v", got)

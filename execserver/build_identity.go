@@ -16,7 +16,17 @@ type BuildIdentity struct {
 }
 
 var (
-	execServerBuildIdentity BuildIdentity
+	// buildCommit is the git commit stamped into the release binary through
+	// -ldflags; `dev` when unstamped (Rust initialize!(option_env!
+	// ("STABLE_GIT_COMMIT").unwrap_or("dev"))).
+	buildCommit = "dev"
+	// buildTarget is the Rust target triple the package was built for, stamped
+	// through -ldflags. Go has no compile-time equivalent of Cargo's TARGET, so
+	// an unstamped build leaves it empty and the provider id is omitted.
+	buildTarget = ""
+	// execServerBuildIdentity captures the stamp once at startup. Runtime
+	// environment overrides must not replace it (Rust #43513).
+	execServerBuildIdentity = BuildIdentity{Commit: buildCommit, Target: buildTarget}
 	execServerVersion       = "0.0.0"
 )
 

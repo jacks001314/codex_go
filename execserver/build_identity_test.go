@@ -94,3 +94,26 @@ func TestExecServerBuildIdentityMetadata(t *testing.T) {
 		t.Fatalf("stamped environment info = %s", encoded)
 	}
 }
+
+// TestExecServerBuildIdentityUsesStampedVariables covers Rust #43513's
+// startup cache: release builds stamp execserver.buildCommit/buildTarget with
+// -ldflags, the package captures them into execServerBuildIdentity, and the
+// environment metadata exposes the derived provider id. An unstamped source
+// build keeps the "dev" commit and omits the id.
+func TestExecServerBuildIdentityUsesStampedVariables(t *testing.T) {
+	if buildCommit != "dev" {
+		t.Fatalf("default buildCommit = %q, want dev", buildCommit)
+	}
+	previous := execServerBuildIdentity
+	t.Cleanup(func() { execServerBuildIdentity = previous })
+
+	commit := strings.Repeat("A", 40)
+	execServerBuildIdentity = BuildIdentity{Commit: commit, Target: "x86_64-unknown-linux-gnu"}
+	want, ok := BuildID(commit, "x86_64-unknown-linux-gnu")
+	if !ok {
+		t.Fatal("BuildID rejected a valid stamp")
+	}
+	if got := ExecServerProviderID(); got != want {
+		t.Fatalf("stamped provider id = %q, want %q", got, want)
+	}
+}

@@ -12,7 +12,7 @@
 | 项 | 现状 | 说明 |
 | --- | --- | --- |
 | 版本来源 | 分散 | `npm/codex/package.json` = `0.0.0-dev`；Go 内 `doctor`/`appserver`/`mcp` 各有一个 `buildVersion`，默认 `0.0.0`；`appserver.defaultCodexVersion = "0.0.0"` |
-| 版本注入 | ldflags | `-X codex_go/doctor.buildVersion=${V} -X codex_go/appserver.buildVersion=${V} -X codex_go/mcp.buildVersion=${V}` |
+| 版本注入 | ldflags | `-X codex_go/doctor.buildVersion=${V} -X codex_go/appserver.buildVersion=${V} -X codex_go/mcp.buildVersion=${V}`；发布包另注入 `-X codex_go/execserver.buildCommit=${GIT_COMMIT} -X codex_go/execserver.buildTarget=${RUST_TARGET}`（Rust #43513 的 `providerId`） |
 | 运行时版本 | 支持 env 覆盖 | `doctor.Version()` 优先读 `CODEX_GO_VERSION`；`appserver` 也支持构建期版本 |
 | Git 标签 | **无** | 尚未打任何 release tag |
 | 分支/远程 | `main`；`origin=https://github.com/jacks001314/codex_go.git` | 个人空间 scope |
@@ -88,9 +88,12 @@ go build -trimpath -buildvcs=false \
   -ldflags "-s -w \
     -X codex_go/doctor.buildVersion=${V} \
     -X codex_go/appserver.buildVersion=${V} \
-    -X codex_go/mcp.buildVersion=${V}" \
+    -X codex_go/mcp.buildVersion=${V} \
+    -X codex_go/execserver.buildCommit=${GIT_COMMIT} \
+    -X codex_go/execserver.buildTarget=${RUST_TARGET}" \
   -o bin/codex ./cmd/codex
 ```
+`GIT_COMMIT` 为 40 位十六进制提交（`npm/scripts/build-packages.mjs` 优先读取 `STABLE_GIT_COMMIT`，否则用 `git rev-parse HEAD`），`RUST_TARGET` 为该平台对应的 Rust target triple；未注入时 exec-server 环境元数据省略 `providerId`，与 Rust 的未打戳构建一致。
 运行时 `codex --version` / `codex doctor` 即输出该版本；也支持 `CODEX_GO_VERSION` 覆盖（开发期便利）。
 
 ### 3.5 发布产物

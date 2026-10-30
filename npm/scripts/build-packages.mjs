@@ -23,6 +23,13 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
   throw new Error("Usage: node npm/scripts/build-packages.mjs --version 1.2.3 [--output-dir dist/npm]");
 }
 
+// Rust #43513: exec-server environment metadata advertises a stable
+// `providerId` derived from the stamped git commit and target triple. Release
+// builds pass STABLE_GIT_COMMIT like the Rust workflow; a source checkout falls
+// back to HEAD, and an unstamped build omits the id.
+const stampedCommit = (process.env.STABLE_GIT_COMMIT || spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout || "").trim();
+const buildCommitFlag = /^[0-9a-f]{40}$/i.test(stampedCommit) ? ` -X codex_go/execserver.buildCommit=${stampedCommit.toLowerCase()}` : "";
+
 const outputDir = path.resolve(root, valueOf("--output-dir") || `dist/v${version}/npm`);
 const stageRoot = path.join(outputDir, "stage");
 rmSync(stageRoot, { recursive: true, force: true });
@@ -65,7 +72,7 @@ for (const target of targets) {
       if (digest) bwrapDigestFlag = ` -X codex_go/sandbox/linuxsandbox.bundledBwrapSHA256=${digest}`;
     }
   }
-  const ldflags = `-s -w -X codex_go/doctor.buildVersion=${version} -X codex_go/appserver.buildVersion=${version} -X codex_go/mcp.buildVersion=${version}${bwrapDigestFlag}`;
+  const ldflags = `-s -w -X codex_go/doctor.buildVersion=${version} -X codex_go/appserver.buildVersion=${version} -X codex_go/mcp.buildVersion=${version}${buildCommitFlag} -X codex_go/execserver.buildTarget=${target.targetTriple}${bwrapDigestFlag}`;
   run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", executable, "./cmd/codex"], { env });
   // Best-effort exec bit: required for Unix targets when built on a host that
   // does not preserve mode bits. No-op on Windows.

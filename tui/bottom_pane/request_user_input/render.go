@@ -6,12 +6,16 @@ import (
 	"unicode"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/footerhint"
 	"github.com/rivo/uniseg"
 )
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/request_user_input/render.rs.
 
 const MinOverlayHeight = 8
+
+// footerTipSeparator is Rust's TIP_SEPARATOR.
+const footerTipSeparator = " | "
 
 type FooterTip struct {
 	Text      string
@@ -150,7 +154,15 @@ func WrapFooterTips(width int, tips []FooterTip) []string {
 		}
 		parts = append(parts, text)
 	}
-	return wrapJoinedParts(parts, " | ", width)
+	// Rust #44354: both footer-bearing overlays share footer_hint's whole-hint
+	// wrapping, so a shortcut and its label never split and a single oversized
+	// hint still gets its own row.
+	rows := footerhint.WrapHintRows(parts, width, codextui.DisplayWidth(footerTipSeparator), codextui.DisplayWidth)
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		lines = append(lines, strings.Join(row, footerTipSeparator))
+	}
+	return lines
 }
 
 func WrapText(text string, width int) []string {
@@ -177,40 +189,6 @@ func WrapText(text string, width int) []string {
 	}
 	if current != "" {
 		lines = append(lines, breakLongWord(current, width)...)
-	}
-	return lines
-}
-
-func wrapJoinedParts(parts []string, separator string, width int) []string {
-	if width <= 0 {
-		return []string{strings.Join(parts, separator)}
-	}
-	lines := []string{}
-	current := ""
-	used := 0
-	separatorWidth := codextui.DisplayWidth(separator)
-	for _, part := range parts {
-		partWidth := minInt(codextui.DisplayWidth(part), width)
-		extra := partWidth
-		if current != "" {
-			extra = separatorWidth + partWidth
-		}
-		if current != "" && used+extra > width {
-			lines = append(lines, current)
-			current = part
-			used = partWidth
-			continue
-		}
-		if current != "" {
-			current += separator + part
-			used += extra
-			continue
-		}
-		current = part
-		used = partWidth
-	}
-	if current != "" {
-		lines = append(lines, current)
 	}
 	return lines
 }

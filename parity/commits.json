@@ -8899,9 +8899,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1023 (fix): the BuildID encoder existed but nothing stamped it, so providerId could never appear. execserver.buildCommit/buildTarget are now -ldflags-stamped variables captured once into execServerBuildIdentity at startup (runtime overrides still cannot replace them), and npm/scripts/build-packages.mjs injects buildCommit from STABLE_GIT_COMMIT or git rev-parse HEAD plus the per-target Rust triple. Unstamped source builds keep commit \"dev\" and omit providerId, matching Rust initialize! semantics. Regression contract: execserver/build_identity_test.go:TestBuildIDVectorsMatchRust, TestExecServerBuildIdentityMetadata, TestExecServerBuildIdentityUsesStampedVariables; verified with `go build ./...`, `go test ./execserver -count=1`, and an -ldflags build printing the expected sha256 provider id."
    ]
   },
   {
@@ -11143,9 +11143,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1023 (fix): the request-user-input overlay now packs whole footer hints through the shared ./tui/footerhint.WrapHintRows instead of its private wrapJoinedParts duplicate, matching Rust footer_hint::wrap_hint_rows for display-width accounting, separator width, whole-hint grouping, oversized hints, and the single empty row for empty input. Go's MCP elicitation overlay renders no footer hint row, so only that caller differs. Regression contract: tui/footerhint/footerhint_test.go:TestWrapHintRowsWrapsWholeHintsUsingDisplayWidth and TestWrapHintRowsRetainsOversizedHintsAndAnEmptyRow, plus tui/bottom_pane/request_user_input/request_user_input_test.go (empty and zero-width footer tip rows); verify with `go test ./tui/bottom_pane/... ./tui/footerhint ./tui/agents_overview -count=1`."
    ]
   },
   {
