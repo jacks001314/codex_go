@@ -5098,9 +5098,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 3/5; needs review: observe_item, send_realtime_history_effects"
+    "Round 1031 audit: Go canonical realtime reducer already lives in the shared realtime package (history.go) and app-server notifications derive from the same effects (history_wiring.go), so segmentation, promotions, and session boundaries match Rust for every Manager host. Completed transcript chunks and tails are persisted into the thread store (appserver/realtime_runtime.go recordRealtimeTranscriptMessage, #58221/#50531), including ephemeral and repeated sessions. Missing from #41924: canonical RealtimeItem rollout entries are not stored, so promotions and session boundaries are notification-only and a resumed paginated thread replays flattened transcript messages instead of the canonical item timeline. The Go session model has no realtime rollout item variant; completing this needs a dedicated storage round. go test ./realtime passes."
    ]
   },
   {
