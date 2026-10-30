@@ -7870,9 +7870,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1052: Go already lists gpt-6-astra in the picker: model/catalog.go fallbackBundledModelsResponse sets visibility list, and model/catalog_test.go:TestFallbackBundledCatalogCarriesGPT6FamilyLikeRust pins gpt-6-astra as the second picker entry after gpt-6.1-sol. The vendored codex-rs/models-manager/models.json at the frozen baseline also carries visibility list. No Go change required; verified with `go test ./model -run TestFallbackBundled -count=1`."
    ]
   },
   {
