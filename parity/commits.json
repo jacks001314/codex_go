@@ -6910,9 +6910,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1106 (audit): Rust-only memory/layout change: Box::pin around the TUI resume picker future in event_dispatch. Go event dispatch returns bubbletea commands and opens the resume picker synchronously; there is no boxed future, large stack future, or equivalent allocation/lifetime knob. No behavior or API delta to port. Validation: go build ./tui/tea ./voicehost ./model ./execserver."
    ]
   },
   {
@@ -9454,9 +9454,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1106 (audit): Rust voice-host GStreamer sink stops clock synchronization (slave-method none, set_sync false). Go does not use GStreamer: voicehost/miniaudio.go opens a malgo/miniaudio playback device whose Data callback fills each device buffer from pcmPipeline in renderPlayback, so playback is driven by the device callback clock and there is no slave/resample sync property to disable. No behavior delta. Validation: go test ./voicehost -count=1."
    ]
   },
   {
@@ -20225,9 +20225,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1106 (audit): Rust-only test cleanup. The Rust lagged-event test kept an unused command receiver alive, so shutdown enqueued a command nobody handled and waited for the response timeout. Go equivalent coverage, TestProcessEventSubscriptionReportsLagAndRetainsNewestEventsLikeRust in execserver/client_test.go, builds a clientProcessSession and subscription directly with no command channel or shutdown join, so that timeout cannot occur. No Go change required. Validation: go test ./execserver -run Lag -count=1."
    ]
   },
   {
@@ -23218,9 +23218,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1106 (audit): documentation-only upstream change clarifying that requires_openai_auth credentials use the backend selected by cli_auth_credentials_store rather than always auth.json, and that env_key names the API-key environment variable. Go stores credentials through the auth storage selected by cli_auth_credentials_store and reads ProviderInfo.EnvKey; mirrored the corrected documentation on ProviderInfo.RequiresOpenAIAuth in model/provider_info.go. Go has no config.schema.json artifact. Validation: go test ./model -run Provider|Auth -count=1 and go build ./model/...."
    ]
   },
   {

@@ -515,6 +515,12 @@ type ProviderInfo struct {
 	StreamMaxRetries            *uint64              `json:"stream_max_retries,omitempty"`
 	StreamIdleTimeoutMS         *uint64              `json:"stream_idle_timeout_ms,omitempty"`
 	WebsocketConnectTimeoutMS   *uint64              `json:"websocket_connect_timeout_ms,omitempty"`
+	// RequiresOpenAIAuth reports whether the provider requires an OpenAI API
+	// key or ChatGPT login token (Rust #49118). When true, the user sees a
+	// login screen on first run and credentials are stored through the backend
+	// selected by cli_auth_credentials_store. When false (the default), the
+	// login screen is skipped and EnvKey names the environment variable that
+	// supplies the API key.
 	RequiresOpenAIAuth          bool                 `json:"requires_openai_auth,omitempty"`
 	SupportsWebsockets          bool                 `json:"supports_websockets,omitempty"`
 	SupportsStandaloneWebSearch bool                 `json:"supports_standalone_web_search,omitempty"`
