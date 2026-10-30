@@ -16467,9 +16467,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "TUI activity groups preserve reasoning order (#46565): tui/activity_group.go renders a group's reasoning blocks in transcript order, tui/exec_cell/render.go and tui/history_cell/computer_activity.go keep intervening reasoning attached to the active cell in Rich mode while raw lines stay reasoning-free, and tui/tea/model.go routes transcript-only reasoning to the active exploring/computer cell instead of opening a new one.",
+    "Regression coverage: tui/activity_group_test.go, tui/tea/exploring_group_test.go TestExploringGroupKeepsReasoningInOrderLikeRust and tui/tea/computer_activity_test.go TestComputerActivityKeepsReasoningInOrderLikeRust. Verified with `go test ./tui/tea -run 'ReasoningInOrder|ExploringGroup' -count=1`."
    ]
   },
   {
@@ -21451,9 +21452,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Exec-server shell snapshots replay through unnamed files (#48078): shell/snapshot_capture.go captures the shell state in a script that feeds unnamed (process-substitution style) files instead of writing temporary paths, and the incremental variant groups options and aliases so replay stays side-effect free.",
+    "Regression coverage: shell/snapshot_capture_test.go (named/unnamed capture and incremental grouping). Verified with `go test ./shell -count=1`."
    ]
   },
   {
@@ -21475,9 +21477,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Legacy shell snapshots honour the shell environment policy (#48099): tool/shell_snapshot_builder.go renders a snapshot under its environment's resolved policy, keeps only the exports that policy allows, and includes the policy in the cache key, so a snapshot persisted under one environment is not replayed under another; appserver/shell_snapshot_test.go exercises the thread-level path.",
+    "Regression coverage: shell/snapshot_capture_test.go's policy-rendering case, tool/shell_snapshot_builder_test.go, and appserver/shell_snapshot_test.go. Verified with `go test ./shell -count=1` and `go test ./tool -run ShellSnapshot -count=1`."
    ]
   },
   {
@@ -21681,9 +21684,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "`thread/items/list` accepts item anchors in pagination (#48151): appserver/protocol.go models the cursor as an opaque string or an item anchor, appserver/router.go validates the anchor against the thread scope and returns invalid params for unresolvable anchors, and state/thread_history_query.go resolves the anchor as an exclusive position (including inherited fork history) with the same continuation semantics as offsets.",
+    "Regression coverage: state/thread_history_anchor_test.go (pagination, scope validation, fork history) and appserver/thread_items_anchor_test.go (cursor decoding, validation/paging, paginated-store resolution). Verified with `go test ./state -run ThreadHistoryItemAnchor -count=1` and `go test ./appserver -run ThreadItemsList -count=1`."
    ]
   },
   {
@@ -21933,9 +21937,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Local Windows MCP servers never flash a console window (#48238): mcp/stdio_command_windows.go adds CREATE_NO_WINDOW for stdio launches, mcp/stdio_process_windows.go keeps the flag alongside the job-object creation flags when it replaces them, and mcp/http_headers_helper.go treats the headers helper as stdio-only so it inherits the same suppression.",
+    "Regression coverage: mcp/stdio_command_windows_test.go (direct and replaced-command launches) and mcp/console_state_windows_test.go. Verified with `go test ./mcp -run Console -count=1`."
    ]
   },
   {
@@ -22951,9 +22956,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "TUI subscription labels are centralized (#49079): tui/subscription.go maps every plan to one shared label (`Pro 100/200/500` for the Pro tiers) with status and analytics variants only where Rust differs (Enterprise, Business Premium, Enterprise (Automation), Education, Account), and tui/status/helpers.go reads the shared mapping.",
+    "Regression coverage: tui/subscription_test.go TestSubscriptionLabelsMatchRust pins every Rust row for both display variants. Verified with `go test ./tui -run SubscriptionLabels -count=1`."
    ]
   },
   {
@@ -23614,9 +23620,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Windows sandbox runner logon retries once on error 1056 (#49325): sandbox/windowssandbox/elevated/runner_client.go retries a runner spawn whose logon fails with ERROR_SERVICE_ALREADY_RUNNING, reusing the original credentials without refreshing them, and surfaces the original error if the retry fails too; child-process 1056 failures are not retried.",
+    "Regression coverage: sandbox/windowssandbox/elevated/runner_client_test.go (successful retry without credential refresh, second failure, child-process case). Verified with `go test ./sandbox/windowssandbox/elevated -run Retry -count=1`."
    ]
   },
   {

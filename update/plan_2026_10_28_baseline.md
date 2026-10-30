@@ -3815,6 +3815,18 @@ Status after this batch: `2279 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2296 complete`, `462 not_applicable`, `322 audit_pending`, `64 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1093)
+
+- #48078 shell snapshots replay through unnamed files, with incremental capture grouping options and aliases.
+- #48099 legacy snapshots render under the environment's shell policy and key the cache by it.
+- #48151 `thread/items/list` item anchors: cursor decoding, scope validation and exclusive-position paging including fork history.
+- #48238 local Windows MCP stdio servers suppress console windows through the job-object flag replacement and headers helper.
+- #46565 activity groups keep intervening reasoning in transcript order across exploring and computer cells.
+- #49079 centralized subscription labels with Pro 100/200/500; added `tui/subscription_test.go` pinning every status/analytics row.
+- #49325 Windows runner logon retries 1056 once without refreshing credentials; child failures are not retried.
+
+Status after this batch: `2303 complete`, `462 not_applicable`, `322 audit_pending`, `57 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
