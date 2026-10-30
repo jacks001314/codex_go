@@ -261,6 +261,15 @@ func (s *ModelService) Presets(strategy RefreshStrategy) []ModelPreset {
 	return s.manager.ListModels(strategy)
 }
 
+// ModelCatalogWithOrigins exposes the effective catalog with each entry's
+// source (Rust model_catalog_with_origins, #57770).
+func (s *ModelService) ModelCatalogWithOrigins(strategy RefreshStrategy) []CatalogModel {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+	return s.manager.ModelCatalogWithOrigins(strategy)
+}
+
 // SetAPIKeyModelDiscoveryEnabled applies the API-key model discovery policy to
 // the underlying model manager when it supports it (Rust #44392).
 func (s *ModelService) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
@@ -365,7 +374,7 @@ func parseStrategy(value string) RefreshStrategy {
 		return RefreshOnlineIfUncached
 	}
 	switch RefreshStrategy(value) {
-	case RefreshOnline, RefreshOffline, RefreshOnlineIfUncached:
+	case RefreshInMemory, RefreshOnline, RefreshOffline, RefreshOnlineIfUncached:
 		return RefreshStrategy(value)
 	default:
 		return RefreshOnlineIfUncached

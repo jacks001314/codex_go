@@ -21,6 +21,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"codex_go/agent"
 	"codex_go/agentboard"
 	"codex_go/apps"
@@ -338,17 +340,21 @@ type RuntimeRouter struct {
 	// validate against one mode and then run after another settings write.
 	turnAdmissionMu       sync.Mutex
 	emittedConfigWarnings map[string]bool
-	sink                  NotificationSink
-	requests              ServerRequestSink
-	turnsMu               *sync.Mutex
-	active                map[string]*activeRuntimeTurn
-	diffs                 map[string]*runtimeutil.DiffTracker
-	ephemeralMu           *sync.RWMutex
-	ephemeralThreads      map[string]*session.Record
-	subscriptionsMu       *sync.Mutex
-	threadSubscriptions   map[string]map[string]struct{}
-	clientInfoMu          sync.RWMutex
-	clientInfo            map[string]ClientInfo
+	// guardianCatalogRefreshMu guards guardianCatalogRefreshes, the one shared
+	// model-catalog refresh per parent thread (Rust #57789).
+	guardianCatalogRefreshMu sync.Mutex
+	guardianCatalogRefreshes map[string]*guardianCatalogRefreshAttempt
+	sink                     NotificationSink
+	requests                 ServerRequestSink
+	turnsMu                  *sync.Mutex
+	active                   map[string]*activeRuntimeTurn
+	diffs                    map[string]*runtimeutil.DiffTracker
+	ephemeralMu              *sync.RWMutex
+	ephemeralThreads         map[string]*session.Record
+	subscriptionsMu          *sync.Mutex
+	threadSubscriptions      map[string]map[string]struct{}
+	clientInfoMu             sync.RWMutex
+	clientInfo               map[string]ClientInfo
 	// closedConnections records transports that already reported closure, so a
 	// request that outlived its connection cannot re-subscribe it after slow
 	// startup (Rust #50380).
@@ -991,6 +997,9 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 			router.notify(NotificationSkillsChanged, &SkillsChangedNotification{})
 		})
 	}
+	if router.services.ThreadRouter != nil {
+		router.services.ThreadRouter.resumeModelProviderCheck = router.validateResumeModelProvider
+	}
 	router.captureStartupModelProviderRoute()
 	router.configureOAuthStorageTelemetry()
 	threads.SetThreadRetainedHook(router.scheduleThreadIdleUnload)
@@ -1297,10 +1306,17 @@ func (r *RuntimeRouter) initializeRemoteControlStatusNotification() *Notificatio
 }
 
 func (r *RuntimeRouter) resolveServerResponse(response *Response) bool {
+	return r.resolveServerResponseFromConnection("", response)
+}
+
+// resolveServerResponseFromConnection resolves a client response with the
+// responding connection's identity, so a managed humanCommand checkpoint can
+// only be answered by a connection it was delivered to (Rust #58045).
+func (r *RuntimeRouter) resolveServerResponseFromConnection(connectionID string, response *Response) bool {
 	if r == nil || response == nil || response.ID.IsZero() {
 		return false
 	}
-	resolved, _ := r.requireServerRequests().Resolve(response)
+	resolved, _ := r.requireServerRequests().ResolveFromConnection(connectionID, response)
 	return resolved
 }
 
@@ -1860,13 +1876,38 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	return router
 }
 
+// sampleCodeModeProcessMetrics mirrors Rust ThreadManager::
+// sample_code_mode_process_metrics (#57841): a host observation that creates no
+// thread and no session. Providers without the capability report Unsupported.
+func (r *RuntimeRouter) sampleCodeModeProcessMetrics(ctx context.Context) (tool.CodeModeProcessMetricsSample, error) {
+	if r == nil || r.services.CodeModeProvider == nil {
+		return tool.CodeModeProcessMetricsSample{Kind: tool.CodeModeProcessMetricsUnsupported}, nil
+	}
+	sampler, ok := r.services.CodeModeProvider.(tool.CodeModeProcessMetricsSampler)
+	if !ok {
+		return tool.CodeModeProcessMetricsSample{Kind: tool.CodeModeProcessMetricsUnsupported}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return sampler.SampleProcessMetrics(ctx)
+}
+
 // newRuntimeCodeModeProcessProvider mirrors Rust #52723's feature selection:
 // code_mode_host_grpc selects gRPC over stdio for the process-owned host.
 func newRuntimeCodeModeProcessProvider(options *RuntimeRouterOptions, program string) tool.CodeModeRemoteProvider {
+	var provider tool.CodeModeRemoteProvider
 	if options != nil && options.FeatureEnablement["code_mode_host_grpc"] {
-		return codemode.NewGrpcProcessProvider(program)
+		provider = codemode.NewGrpcProcessProvider(program)
+	} else {
+		provider = codemode.NewProcessProvider(program)
 	}
-	return codemode.NewProcessProvider(program)
+	// Rust #58159: LocalServerOutputProvider wraps only Core's built-in
+	// providers; injected providers retain control of their session settings.
+	if options != nil && options.FeatureEnablement["code_mode_host_output_truncation"] {
+		provider = codemode.NewLocalServerOutputProvider(provider)
+	}
+	return provider
 }
 
 // taskMetrics exposes the router's metrics sink. Startup corruption telemetry
@@ -2578,6 +2619,7 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	r.clearConnectionClientInfo(connectionID)
 	r.clearConnectionNotificationOptOut(connectionID)
 	r.clearConnectionExperimentalAPI(connectionID)
+	r.requireServerRequests().DisableHumanApprovalConnection(connectionID)
 	r.clearConnectionRequestAttestation(connectionID)
 	r.clearConnectionMCPOpenAIForm(connectionID)
 	r.clearConnectionMCPStandardFormInput(connectionID)
@@ -3358,6 +3400,7 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadItemsRead,
 		MethodThreadPredictionRequest,
 		MethodThreadSample,
+		MethodThreadGuardianReview,
 		MethodThreadSampleCancel,
 		MethodThreadQueueAdd,
 		MethodThreadQueueDelete,
@@ -3490,14 +3533,15 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 	}
 	if threadLifecycleSensitiveMethod(request.Method) {
 		if threadID := threadLifecycleRequestThreadID(request); threadID != "" {
-			if err := r.awaitPendingThreadUnload(threadID); err != nil {
+			// Rust #57787: startup and teardown for a thread are serialized. Holding
+			// the residency pin for the whole request keeps an idle eviction from
+			// racing a cold resume between runtime install and subscription.
+			release, err := r.acquireThreadResidencyPin(threadID)
+			if err != nil {
 				return nil, err
 			}
+			defer release()
 			r.noteThreadActivity(threadID)
-			if request.Method == MethodTurnStart {
-				release := r.pinThreadResidency(threadID)
-				defer release()
-			}
 		}
 	}
 	if err := r.rejectRemoteControlDisabledByRequirements(request); err != nil {
@@ -3536,6 +3580,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		}
 		if request.Method == MethodThreadSample {
 			return r.handleThreadSampleRuntime(request)
+		}
+		if request.Method == MethodThreadGuardianReview {
+			return r.handleThreadGuardianReviewRuntime(request)
 		}
 		if request.Method == MethodThreadSampleCancel {
 			return r.handleThreadSampleCancelRuntime(request)
@@ -3668,7 +3715,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 				return nil, err
 			}
 			r.markThreadResumeSessionStartSource(result, request)
-			r.markResponseThreadLoaded(result, request.normalizedConnectionID())
+			if err := r.installThreadSubscription(result, request.normalizedConnectionID()); err != nil {
+				return nil, err
+			}
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
 				// A resume that loads a cold thread spawns a session in Rust
 				// (ThreadManager::spawn_thread), so it opens the same thread_spawn
@@ -3687,7 +3736,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 				r.emitThreadResumeAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 				r.emitThreadStartedMetric(context.Background(), response.Thread)
 			}
-			r.replayPendingServerRequestsForThread(result)
+			r.replayPendingServerRequestsForThread(result, request.normalizedConnectionID())
 			r.notifyRestoredTokenUsage(result)
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
 				// Rust #43795: a resumed session re-establishes the selected effort.
@@ -4915,11 +4964,18 @@ func (r *RuntimeRouter) handleThreadUnsubscribeRuntime(request *Request) (*Threa
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	if r.requireThreadStatus().LoadedStatusForThread(params.ThreadID).Type == NotLoadedStatus().Type {
-		r.clearThreadSubscriptions(params.ThreadID)
+	// Rust #57788: remove this connection before deciding the thread is gone, and
+	// only finalize terminal bookkeeping once the last subscriber is gone. A cold
+	// resume may have published a replacement that must not be cleared here.
+	notLoaded := r.requireThreadStatus().LoadedStatusForThread(params.ThreadID).Type == NotLoadedStatus().Type
+	wasSubscribed := r.unsubscribeThreadConnection(params.ThreadID, request.normalizedConnectionID())
+	if notLoaded {
+		if len(r.threads.Subscribers(params.ThreadID)) == 0 {
+			r.clearThreadSubscriptions(params.ThreadID)
+		}
 		return &ThreadUnsubscribeResponse{Status: ThreadUnsubscribeStatusNotLoaded}, nil
 	}
-	if r.unsubscribeThreadConnection(params.ThreadID, request.normalizedConnectionID()) {
+	if wasSubscribed {
 		if r.mcpEventStreams != nil {
 			r.mcpEventStreams.stopThreadConnection(params.ThreadID, request.normalizedConnectionID())
 		}
@@ -5400,7 +5456,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.applyThreadStartOriginator(response, request)
 			r.emitThreadReadyLifecycle(response.Thread.ID)
 			r.markRuntimeSeedRollout(response, request)
-			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			if err := r.installThreadSubscription(response, request.normalizedConnectionID()); err != nil {
+				return nil, err
+			}
 			if request.Method == MethodThreadStart {
 				// Rust reports the session-start telemetry when the core session is
 				// constructed, before the thread-started event.
@@ -5452,7 +5510,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 					r.networkApproval.syncApprovedHostsForFork(forkParams.ThreadID, response.Thread.ID)
 				}
 			}
-			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			if err := r.installThreadSubscription(response, request.normalizedConnectionID()); err != nil {
+				return nil, err
+			}
 			// A fork replays the source history into a fresh thread, so the
 			// reusable Guardian reviewer must not carry the source's rationale
 			// (Rust #45413).
@@ -6782,21 +6842,58 @@ func lifecycleIDsWithFallback(request *Request, ids []session.ThreadID) []sessio
 	return []session.ThreadID{session.ThreadID(threadID)}
 }
 
+func responseThread(result any) *Thread {
+	switch response := result.(type) {
+	case *ThreadStartResponse:
+		return response.Thread
+	case *ThreadResumeResponse:
+		return response.Thread
+	case *ThreadForkResponse:
+		return response.Thread
+	default:
+		return nil
+	}
+}
+
+// installThreadSubscription attaches the requesting connection to the runtime a
+// start/resume/fork just published. Rust #57787 re-checks that the runtime is
+// still the registered one after listener startup awaits I/O and rejects with
+// the thread-closing error otherwise, so a client never attaches to a runtime
+// that was evicted underneath the request.
+func (r *RuntimeRouter) installThreadSubscription(result any, connectionID string) error {
+	if r == nil {
+		return nil
+	}
+	thread := responseThread(result)
+	if thread == nil || strings.TrimSpace(thread.ID) == "" {
+		return nil
+	}
+	if !r.threadRuntimeRegistered(thread.ID) {
+		return jsonRPCInvalidRequest(fmt.Sprintf("thread %s is closing; retry thread/resume after the thread is closed", thread.ID))
+	}
+	r.markResponseThreadLoaded(result, connectionID)
+	return nil
+}
+
+// threadRuntimeRegistered reports whether an in-memory runtime still backs the
+// thread, either as a retained live thread or an ephemeral client root.
+func (r *RuntimeRouter) threadRuntimeRegistered(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	if r.threads != nil && r.threads.HasLiveThread(session.ThreadID(threadID)) {
+		return true
+	}
+	_, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false)
+	return ok
+}
+
 func (r *RuntimeRouter) markResponseThreadLoaded(result any, connectionID string) {
 	if r == nil {
 		return
 	}
-	var thread *Thread
-	switch response := result.(type) {
-	case *ThreadStartResponse:
-		thread = response.Thread
-	case *ThreadResumeResponse:
-		thread = response.Thread
-	case *ThreadForkResponse:
-		thread = response.Thread
-	default:
-		return
-	}
+	thread := responseThread(result)
 	if thread == nil || strings.TrimSpace(thread.ID) == "" {
 		return
 	}
@@ -6900,6 +6997,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.forgetGuardianReviewHistory(threadID)
 	r.internalHost.forgetThread(threadID)
 	r.forgetGuardianBlocking(threadID)
+	r.forgetGuardianCatalogRefresh(threadID)
 	r.forgetPermissionGrants(threadID)
 	r.forgetThreadSessionState(threadID)
 	// Cloud catalog cooldowns and per-turn discovery reuse live in thread
@@ -7056,7 +7154,7 @@ func (r *RuntimeRouter) notifyRestoredTokenUsage(result any) {
 	})
 }
 
-func (r *RuntimeRouter) replayPendingServerRequestsForThread(result any) {
+func (r *RuntimeRouter) replayPendingServerRequestsForThread(result any, connectionID string) {
 	if r == nil {
 		return
 	}
@@ -7068,7 +7166,7 @@ func (r *RuntimeRouter) replayPendingServerRequestsForThread(result any) {
 	if threadID == "" {
 		return
 	}
-	r.requireServerRequests().ReplayThread(threadID)
+	r.requireServerRequests().ReplayThreadToConnection(threadID, connectionID)
 }
 
 func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {
@@ -7859,6 +7957,11 @@ func (r *RuntimeRouter) handleInitialize(request *Request) (*InitializeResponse,
 	r.rememberConnectionMCPOpenAIForm(connectionID, params.Capabilities)
 	r.rememberConnectionMCPStandardFormInput(connectionID, params.Capabilities)
 	r.rememberConnectionUserVerification(connectionID, params.ClientInfo, params.Capabilities)
+	// Rust #58045: only a connection that enabled both experimentalApi and
+	// requiredHumanApproval may receive or answer a managed checkpoint.
+	if params.Capabilities != nil && params.Capabilities.ExperimentalAPI && params.Capabilities.RequiredHumanApproval {
+		r.requireServerRequests().EnableHumanApprovalConnection(connectionID)
+	}
 	r.syncMCPOpenAIFormElicitationCapability()
 	r.syncMCPStandardFormInputCapability()
 	r.syncMCPUserVerificationCapability()
@@ -13252,6 +13355,16 @@ func (r *RuntimeRouter) prepareFeedbackResponse(params FeedbackUploadParams, req
 				}
 			}
 			feedbackThreadIDs = FeedbackThreadIDs(threadID, descendants)
+			// Rust #57824: directly attached threads carry their own logs and
+			// rollouts, so diagnostics include them alongside the spawned subtree.
+			if r.services.StateRuntime != nil {
+				attached, err := r.services.StateRuntime.ListAttachedThreadIDs(context.Background(), threadID)
+				if err != nil {
+					slog.Warn("failed to list attached threads for feedback", "thread_id", threadID, "error", err)
+				} else {
+					feedbackThreadIDs = appendUniqueThreadIDs(feedbackThreadIDs, attached)
+				}
+			}
 		}
 		if r.services.StateRuntime != nil && len(feedbackThreadIDs) > 0 {
 			queryCtx := context.Background()
@@ -16260,6 +16373,9 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 			includeToolInfo = cfg.ToolRegistryTurnMetadataIncludesToolInfo()
 		}
 	}
+	// Rust #57864: the interrupt-on-cancel feature makes a cancelled
+	// Responses Lite turn interrupt the upstream response.
+	interruptOnCancel := turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "interrupt_on_cancel")
 	indirectPrefixes, err := resolvedIndirectDescriptionPrefixesForTurn(r, router, params, turnConfig)
 	if err != nil {
 		return nil, err
@@ -16340,6 +16456,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		// sampling response's remaining tool calls when inter-agent mail is queued
 		// at a commentary or partial-answer boundary.
 		DeferMailboxPreemption:      turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "defer_mailbox_preemption"),
+		InterruptOnCancel:           interruptOnCancel,
 		IndirectDescriptionPrefixes: indirectPrefixes,
 		DynamicToolCaller:           dynamicCaller,
 		DynamicToolThreadID:         strings.TrimSpace(params.ThreadID),
@@ -18285,6 +18402,7 @@ func terminalWriteApprovalAction(request *tool.WriteStdinApprovalRequest, permis
 		EnvironmentID:      strings.TrimSpace(request.EnvironmentID),
 		SessionID:          &processID,
 		Chars:              request.Chars,
+		OriginalCommand:    strings.TrimSpace(request.OriginalCommand),
 		ApprovalID:         strings.TrimSpace(request.CallID),
 		ProcessID:          strconv.Itoa(processID),
 		CWD:                strings.TrimSpace(request.CWD),
@@ -18529,9 +18647,7 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if request == nil || request.Request == nil {
 			return tool.ShellApprovalDecision{}, nil
 		}
-		if r.commandApprovalForSession(threadID) {
-			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
-		}
+		command := strings.TrimSpace(request.Request.HookCommand)
 		invocation := request.Invocation
 		itemID := ""
 		if invocation != nil {
@@ -18540,9 +18656,21 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if itemID == "" {
 			itemID = "command-" + safeIdentifier(turnID)
 		}
+		// Rust #58045: a managed checkpoint requires a fresh human decision, so it
+		// must be detected before session-wide approval or hook allows can short
+		// circuit it.
+		humanReason, humanOnce := r.managedHumanApprovalCheckpoint(threadID, command)
+		if humanOnce {
+			if reason, rejected := r.humanApprovalRejectionForTurn(threadID, turnID); rejected {
+				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+					telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceUser)
+				return tool.ShellApprovalDecision{DenyReason: reason}, nil
+			}
+		} else if r.commandApprovalForSession(threadID) {
+			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
+		}
 		userWaitOwner := r.userWaitTimingOwner(threadID, turnID, itemID)
 		environmentID := firstNonEmpty(strings.TrimSpace(request.Request.UnifiedExecEnvironmentID), execserver.LocalEnvironmentID)
-		command := strings.TrimSpace(request.Request.HookCommand)
 		cwd := strings.TrimSpace(request.Request.CWD)
 		reason := strings.TrimSpace(request.Request.ApprovalReason)
 		params := &CommandExecutionRequestApprovalParams{
@@ -18569,9 +18697,12 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "Bash", nil, shellPermissionRequestToolInput(request.Request), localHookToolCWD(environmentID, cwd), environmentID); ok && verdict != nil {
 			switch verdict.Kind {
 			case HookPermissionRequestAllow:
-				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
-					telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceConfig)
-				return tool.ShellApprovalDecision{Approved: true}, nil
+				// A hook allow never satisfies a managed checkpoint.
+				if !humanOnce {
+					r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+						telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceConfig)
+					return tool.ShellApprovalDecision{Approved: true}, nil
+				}
 			case HookPermissionRequestDeny:
 				reason := ""
 				if verdict.Message != nil {
@@ -18584,7 +18715,7 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		}
 		// Rust Session::request_approval: an auto-review turn routes the command
 		// through the Guardian review, which replaces the user approval request.
-		if reviewer := r.approvalsReviewerForTurn(threadID, turnID); reviewer.RoutesToGuardian() {
+		if reviewer := r.approvalsReviewerForTurn(threadID, turnID); !humanOnce && reviewer.RoutesToGuardian() {
 			outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, itemID, commandApprovalAction(request.Request))
 			if outcome.Abort {
 				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
@@ -18600,12 +18731,26 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 				telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
 			return tool.ShellApprovalDecision{DenyReason: outcome.DenyReason}, nil
 		}
-		// Rust e734a1a5c1: cyber-specialized models and models listed in
-		// auto_review.ignore_rules get one-time decisions without proposing reusable
-		// exec-policy amendments.
-		if !ignoreAllowPrefixRules {
-			if amendment := commandExecutionProposedExecPolicyAmendment(request.Request.PrefixRule); len(amendment) > 0 {
-				params.ProposedExecPolicyAmendment = amendment
+		if humanOnce {
+			// Rust #58045: a managed checkpoint uses a unique approval id, keeps
+			// its own reason, and never proposes reusable amendments or network
+			// policy changes.
+			approvalID := uuid.NewString()
+			params.Kind = ExecApprovalKindHumanCommand
+			params.ApprovalID = &approvalID
+			params.ProposedExecPolicyAmendment = nil
+			params.NetworkApprovalContext = nil
+			if humanReason != "" {
+				params.Reason = &humanReason
+			}
+		} else {
+			// Rust e734a1a5c1: cyber-specialized models and models listed in
+			// auto_review.ignore_rules get one-time decisions without proposing reusable
+			// exec-policy amendments.
+			if !ignoreAllowPrefixRules {
+				if amendment := commandExecutionProposedExecPolicyAmendment(request.Request.PrefixRule); len(amendment) > 0 {
+					params.ProposedExecPolicyAmendment = amendment
+				}
 			}
 		}
 		userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
@@ -18618,6 +18763,23 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		// (ApprovalResolutionSource::User).
 		r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
 			commandExecutionApprovalToolDecision(response.Decision), telemetry.ToolDecisionSourceUser)
+		if humanOnce {
+			// Only accept, decline, and cancel are valid for a managed checkpoint;
+			// anything else is denied (Rust PendingApproval::validate).
+			switch approvalDecisionString(response.Decision) {
+			case string(CommandExecutionApprovalAccept):
+				return tool.ShellApprovalDecision{Approved: true}, nil
+			case string(CommandExecutionApprovalDecline):
+				return tool.ShellApprovalDecision{DenyReason: "rejected by user"}, nil
+			case string(CommandExecutionApprovalCancel):
+				if r.hasRuntimeThreadStore() {
+					_, _ = r.interruptRuntimeTurn(threadID, turnID, nil, turnAbortReasonInterrupted)
+				}
+				return tool.ShellApprovalDecision{}, nil
+			default:
+				return tool.ShellApprovalDecision{DenyReason: "Managed command policy requires a one-time human approval."}, nil
+			}
+		}
 		switch approvalDecisionString(response.Decision) {
 		case string(CommandExecutionApprovalAccept):
 			return tool.ShellApprovalDecision{Approved: true}, nil
@@ -20203,6 +20365,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
 		MethodThreadTurnsList, MethodThreadRevert,
 		MethodThreadSample,
+		MethodThreadGuardianReview,
 		MethodThreadSampleCancel,
 		MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate,
 		MethodThreadQueueDelete, MethodThreadQueueReorder, MethodThreadQueueStart,

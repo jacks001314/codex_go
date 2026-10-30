@@ -455,6 +455,10 @@ func AugmentToolSpec(spec tool.Spec) tool.Spec {
 	if spec.Name.Key() == tool.ToolSearchName {
 		return spec
 	}
+	outputSchema := spec.OutputSchema
+	if len(spec.CodeModeOutputSchema) != 0 {
+		outputSchema = spec.CodeModeOutputSchema
+	}
 	definition := ToolDefinition{
 		Name:                NameForToolName(spec.Name),
 		ToolName:            spec.Name,
@@ -462,7 +466,7 @@ func AugmentToolSpec(spec tool.Spec) tool.Spec {
 		Kind:                ToolKindFunction,
 		InputSchema:         spec.InputSchema,
 		InputSchemaMaxBytes: spec.InputSchemaMaxBytes,
-		OutputSchema:        spec.OutputSchema,
+		OutputSchema:        outputSchema,
 	}
 	if spec.Freeform != nil {
 		definition.Kind = ToolKindFreeform
@@ -1221,13 +1225,17 @@ const (
 )
 
 type Cell struct {
-	ID        string
-	Source    string
-	Output    string
-	Status    CellStatus
-	Error     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID     string
+	Source string
+	Output string
+	// OutputItems retains the typed content items the cell produced. A
+	// server-truncated observation renders them through the bounded collector
+	// instead of flattening media into text (Rust #57848).
+	OutputItems []ContentItem
+	Status      CellStatus
+	Error       string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 	// CompletedAt records when the cell produced its terminal Result, so waits
 	// and terminations can report how long that result stayed buffered
 	// (Rust #55653).
@@ -1375,6 +1383,36 @@ func (s *CellStore) Terminate(id string) (*Cell, error) {
 // cell was terminated, so observers receive it in the terminated event instead
 // of losing it with the detached observation (Rust #48207). It never changes the
 // cell's status.
+// AppendOutputItems records typed output on the cell and keeps the flattened
+// text view in sync for callers that still read Output.
+func (s *CellStore) AppendOutputItems(id string, items []ContentItem) (*Cell, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cell, ok := s.cells[id]
+	if !ok {
+		return nil, ErrCellNotFound
+	}
+	cell.OutputItems = append(cell.OutputItems, cloneContentItems(items)...)
+	cell.Output += contentItemsOutput(items)
+	cell.UpdatedAt = s.now()
+	return cell, nil
+}
+
+// AppendTerminatedOutputItems records typed output that arrived after the cell
+// was terminated.
+func (s *CellStore) AppendTerminatedOutputItems(id string, items []ContentItem) (*Cell, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cell, ok := s.cells[id]
+	if !ok {
+		return nil, ErrCellNotFound
+	}
+	cell.OutputItems = append(cell.OutputItems, cloneContentItems(items)...)
+	cell.Output += contentItemsOutput(items)
+	cell.UpdatedAt = s.now()
+	return cell, nil
+}
+
 func (s *CellStore) AppendTerminatedOutput(id string, output string) (*Cell, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

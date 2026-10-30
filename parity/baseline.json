@@ -1,44 +1,44 @@
 {
-  "schemaVersion": 1,
-  "frozenAt": "2026-10-28",
-  "plan": "update/plan_2026_10_28_baseline.md",
-  "verified": {
-    "rustCommit": "7ac6081623928adead75caa2882e307444edad82",
-    "parityManifest": "parity.json"
-  },
-  "target": {
-    "rustCommit": "7ac6081623928adead75caa2882e307444edad82",
-    "rustBranch": "main",
-    "goStartCommit": "5073f4dfdbe20bdabde8e8d9ec6742b384aee029"
-  },
-  "requirements": {
-    "minimumSQLiteVersion": "3.51.3",
-    "zeroExceptions": true,
-    "requiredPlatforms": [
-      "windows/amd64",
-      "windows/arm64",
-      "linux/amd64",
-      "linux/arm64",
-      "darwin/amd64",
-      "darwin/arm64"
-    ],
-    "requiredConsecutiveDifferentialRuns": 3,
-    "requiredConsecutiveSDKRuns": 3
-  },
-  "evidence": {
-    "cleanSDKRuns": [
-      "sdktests/artifacts/suites/2026-08-01T024647417Z-parity",
-      "sdktests/artifacts/suites/2026-08-01T033419130Z-parity"
-    ],
-    "finalRawFork": "sdktests/artifacts/2026-08-01T065723289Z-raw_paginated_fork",
-    "finalRawConfigRequirements": "sdktests/artifacts/2026-08-01T065723280Z-raw_config_requirements",
-    "nativeSQLite": [
-      "windows/amd64: SQLite 3.51.3, lifecycle and WAL recovery pass"
-    ]
-  },
-  "certificationBlockers": [
-    "Per-commit certification of the 3155 upstream commits in bd19459358..7ac60816 is in progress; parity/commits.json records every commit with its audit status (2234 complete, 462 not applicable, 322 audit_pending, 126 regression_pending, 5 partial, 6 blocked_precondition)",
-    "6 commits are blocked on architecture (local unified-exec routing for in-memory shell snapshots, Unix PTY shutdown, closed-agent navigation, TUI Super key, Windows MXC, native cloud conversation TUI); Windows proxy CONNECT auth (#55994) is implemented"
+ "schemaVersion": 1,
+ "frozenAt": "2026-10-30",
+ "plan": "update/plan_2026_10_30.md",
+ "verified": {
+  "rustCommit": "c9750d7f50052b29f53def02b5cf2160ae49a3d9",
+  "parityManifest": "parity.json"
+ },
+ "target": {
+  "rustCommit": "c9750d7f50052b29f53def02b5cf2160ae49a3d9",
+  "rustBranch": "main",
+  "goStartCommit": "5e25b91daebea89b54db643b2d70ee4c930f9cd7"
+ },
+ "requirements": {
+  "minimumSQLiteVersion": "3.51.3",
+  "zeroExceptions": true,
+  "requiredPlatforms": [
+   "windows/amd64",
+   "windows/arm64",
+   "linux/amd64",
+   "linux/arm64",
+   "darwin/amd64",
+   "darwin/arm64"
   ],
-  "certificationReady": false
+  "requiredConsecutiveDifferentialRuns": 3,
+  "requiredConsecutiveSDKRuns": 3
+ },
+ "evidence": {
+  "cleanSDKRuns": [
+   "sdktests/artifacts/suites/2026-08-01T024647417Z-parity",
+   "sdktests/artifacts/suites/2026-08-01T033419130Z-parity"
+  ],
+  "finalRawFork": "sdktests/artifacts/2026-08-01T065723289Z-raw_paginated_fork",
+  "finalRawConfigRequirements": "sdktests/artifacts/2026-08-01T065723280Z-raw_config_requirements",
+  "nativeSQLite": [
+   "windows/amd64: SQLite 3.51.3, lifecycle and WAL recovery pass"
+  ]
+ },
+ "certificationBlockers": [
+  "Per-commit certification of the 3155 upstream commits in bd19459358..7ac60816 is in progress; parity/commits.json records every commit with its audit status (2311 complete, 487 not applicable, 322 audit_pending, 126 regression_pending, 5 partial, 6 blocked_precondition)",
+  "6 commits are blocked on architecture (local unified-exec routing for in-memory shell snapshots, Unix PTY shutdown, closed-agent navigation, TUI Super key, Windows MXC, native cloud conversation TUI); Windows proxy CONNECT auth (#55994) is implemented"
+ ],
+ "certificationReady": false
 }

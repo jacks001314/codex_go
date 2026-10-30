@@ -273,6 +273,12 @@ type responsesWebsocketSessionCache struct {
 type responsesWebsocketSession struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
+	// routingAffinity is the parent routing pin the cached connection was
+	// opened for, and capturedAffinity is the pin its handshake returned
+	// (Rust #57710). A Guardian review reconnects when its parent affinity
+	// differs from the one the socket was opened for.
+	routingAffinity  *network.RoutingAffinity
+	capturedAffinity *network.RoutingAffinity
 	// messages is owned by the session's single reader goroutine. The request
 	// loop consumes it instead of calling conn.Read directly so that mailbox
 	// preemption can be observed while a frame is outstanding without closing
@@ -1233,6 +1239,16 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		timeout = 15 * time.Second
 	}
 	conn := session.conn
+	// Rust #57710: only a Guardian reviewer request carries the parent pin, and
+	// a cached socket opened for a different parent affinity is replaced.
+	var desiredAffinity *network.RoutingAffinity
+	if request.RoutingAffinity != nil && isGuardianReviewRequest(request) {
+		desiredAffinity = request.RoutingAffinity
+	}
+	if session.conn != nil && session.routingAffinity != desiredAffinity {
+		closeResponsesWebsocketSession(session, "parent routing affinity changed")
+		conn = session.conn
+	}
 	// A dial only happens when the session had no connection, so an existing
 	// connection means this request reused it (Rust's connection_reused).
 	connectionReused := conn != nil
@@ -1244,7 +1260,20 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		// Rust websocket-client connect_with_route (#46506): the handshake
 		// reuses the shared ChatGPT cookies unless the request set its own, and
 		// both successful and rejected upgrades may refresh them.
-		dialOptions := &websocket.DialOptions{HTTPHeader: network.WebsocketHandshakeCookies(endpoint, httpRequest.Header)}
+		dialHeader := httpRequest.Header
+		if desiredAffinity != nil {
+			// Rust #57710 replaces the routing cookies with the scoped pin while
+			// keeping unrelated cookies, falling back to the shared jar's header.
+			existing := dialHeader.Get("Cookie")
+			if existing == "" {
+				existing = network.ChatGPTCookieHeader(endpoint)
+			}
+			if merged, ok := desiredAffinity.MergeCookieHeader(endpoint, existing); ok {
+				dialHeader = dialHeader.Clone()
+				dialHeader.Set("Cookie", merged)
+			}
+		}
+		dialOptions := &websocket.DialOptions{HTTPHeader: network.WebsocketHandshakeCookies(endpoint, dialHeader)}
 		if client := r.websocketHTTPClient(); client != nil {
 			dialOptions.HTTPClient = client
 		}
@@ -1282,6 +1311,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			return nil, err
 		}
 		session.conn = conn
+		session.routingAffinity = desiredAffinity
+		if response != nil {
+			session.capturedAffinity = network.RoutingAffinityFromResponse(endpoint, response.Header)
+		}
 		// Rust's websocket connect records the handshake response's turn state once
 		// per request (`connect_websocket`'s `turn_state.set`), so the next request
 		// in the turn carries it.
@@ -1312,6 +1345,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	activeHandler := handler
 	accumulator := newResponsesStreamAccumulator(request)
+	accumulator.routingAffinity = session.capturedAffinity
 	var outputText strings.Builder
 	receivedEvent := false
 	// Rust #55969: a mailbox preemption interrupts a Responses Lite stream
@@ -1320,14 +1354,37 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	preempt := request.Preempt
 	preemptPending := false
 	draining := false
+	// Rust #57864: a cancelled Responses Lite turn interrupts the upstream
+	// response instead of abandoning it. canceled marks that drain, ctxDone is
+	// disabled once the cancellation is handled, and cancelDeadline bounds how
+	// long the terminal event may take.
+	ctxDone := ctx.Done()
+	canceled := false
+	var cancelDeadline <-chan time.Time
 	messages := startResponsesWebsocketReader(session)
 	for {
 		messageStartedAt := time.Now()
 		var read responsesWebsocketReadResult
 		var readOK bool
 		select {
-		case <-ctx.Done():
+		case <-ctxDone:
+			ctxDone = nil
+			if request.InterruptOnCancel && apiRequest.UseResponsesLite && strings.TrimSpace(accumulator.responseID) != "" {
+				interruptCtx, interruptCancel := context.WithTimeout(context.Background(), time.Second)
+				interruptErr := writeResponsesWebsocketInterrupt(interruptCtx, conn, accumulator.responseID)
+				interruptCancel()
+				if interruptErr == nil {
+					canceled = true
+					cancelDeadline = time.After(time.Second)
+					draining = true
+					activeHandler = newResponsesDrainStreamHandler(handler)
+					continue
+				}
+			}
 			closeResponsesWebsocketSession(session, "response read canceled")
+			return nil, ctx.Err()
+		case <-cancelDeadline:
+			closeResponsesWebsocketSession(session, "canceled response drain timed out")
 			return nil, ctx.Err()
 		case <-preempt:
 			preempt = nil
@@ -1357,6 +1414,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		if err != nil {
 			closeResponsesWebsocketSession(session, "response read failed")
 			if draining {
+				if canceled {
+					// The cancellation drain ended without a terminal event.
+					return nil, ctx.Err()
+				}
 				// Mail already requires a follow-up even when the producer
 				// exited before receiving the interrupt.
 				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
@@ -1399,6 +1460,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				// server error frame into the turn's terminal error while mail
 				// still needs a follow-up request.
 				closeResponsesWebsocketSession(session, "response failed while draining")
+				if canceled {
+					return nil, ctx.Err()
+				}
 				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
 			}
 			closeResponsesWebsocketSession(session, "response failed")
@@ -1462,6 +1526,16 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			accumulator.recordAgentItem(&AgentItem{Type: "agent_message", Text: outputText.String()})
 		}
 		if draining {
+			if canceled {
+				// Rust #57864: the interrupted response keeps whatever it
+				// completed, including usage, and leaves the socket reusable.
+				response, err := accumulator.agentResponse(request, r.ProviderID)
+				if err != nil || response == nil {
+					return nil, ctx.Err()
+				}
+				response.Canceled = true
+				return response, nil
+			}
 			return drainedAgentResponse(accumulator, request, r.ProviderID), nil
 		}
 		return accumulator.agentResponse(request, r.ProviderID)
@@ -3117,6 +3191,10 @@ func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.
 // original reference; only the prepared request is projected.
 const UnavailableImagePlaceholder = "[image unavailable]"
 
+// maxConcurrentImageAvailabilityChecks bounds how many distinct file images are
+// probed at once (Rust #57835).
+const maxConcurrentImageAvailabilityChecks = 8
+
 // replaceUnresolvableImageFiles checks every distinct file image in the
 // prepared request concurrently and replaces the confirmed-missing ones with a
 // text placeholder in messages and tool outputs. References whose store cannot
@@ -3139,11 +3217,14 @@ func replaceUnresolvableImageFiles(items []any, store attachmentstore.Store) []a
 	sort.Strings(ids)
 	var missing sync.Map
 	var wait sync.WaitGroup
+	semaphore := make(chan struct{}, maxConcurrentImageAvailabilityChecks)
 	for _, fileID := range ids {
 		fileID := fileID
+		semaphore <- struct{}{}
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
+			defer func() { <-semaphore }()
 			if !attachmentstore.IsResolvable(store, fileID) {
 				missing.Store(fileID, true)
 			}

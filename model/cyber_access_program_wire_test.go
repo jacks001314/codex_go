@@ -92,10 +92,10 @@ func TestApiKeyCyberAccessProgramsFromConfigLikeRust(t *testing.T) {
 			if forwarding {
 				want = ApiKeyCyberAccessProgramsEnabled
 			}
-			if got := ApiKeyCyberAccessProgramsFromConfig(settings, OpenAIProviderID); got != want {
+			if got := ApiKeyCyberAccessProgramsFromConfig(settings, OpenAIProviderID, ProviderInfo{}); got != want {
 				t.Fatalf("ApiKeyCyberAccessProgramsFromConfig(model discovery %v, forwarding %v) = %v, want %v", discovery, forwarding, got, want)
 			}
-			if got := ApiKeyCyberAccessProgramsFromConfig(settings, "bedrock"); got != ApiKeyCyberAccessProgramsUnsupportedProvider {
+			if got := ApiKeyCyberAccessProgramsFromConfig(settings, "bedrock", ProviderInfo{}); got != ApiKeyCyberAccessProgramsUnsupportedProvider {
 				t.Fatalf("ApiKeyCyberAccessProgramsFromConfig(bedrock) = %v, want UnsupportedProvider", got)
 			}
 		}
@@ -103,11 +103,11 @@ func TestApiKeyCyberAccessProgramsFromConfigLikeRust(t *testing.T) {
 	// Rust declares `api_key_cyber_access_programs` Stable and default-enabled
 	// (`FeatureSpec::ApiKeyCyberAccessPrograms`, features/src/lib.rs), so an
 	// absent entry is the enabled policy.
-	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{}, OpenAIProviderID); got != ApiKeyCyberAccessProgramsEnabled {
+	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{}, OpenAIProviderID, ProviderInfo{}); got != ApiKeyCyberAccessProgramsEnabled {
 		t.Fatalf("default policy = %v, want Enabled", got)
 	}
 	// A blank provider id is not the OpenAI provider id.
-	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{"api_key_cyber_access_programs": true}, "  "); got != ApiKeyCyberAccessProgramsUnsupportedProvider {
+	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{"api_key_cyber_access_programs": true}, "  ", ProviderInfo{}); got != ApiKeyCyberAccessProgramsUnsupportedProvider {
 		t.Fatalf("blank provider policy = %v, want UnsupportedProvider", got)
 	}
 }

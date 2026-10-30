@@ -69,6 +69,15 @@ func (r *RuntimeRouter) sessionTelemetryForThread(threadID string) *telemetry.Se
 		return nil
 	}
 	session := telemetry.NewSessionTelemetry(r.sessionTelemetryMetadataForThread(threadID))
+	// Rust #58034: `otel.log_sse_deltas = false` suppresses successful SSE
+	// delta log records for this session while errors and metrics keep reporting.
+	if r.services.Config != nil {
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			if !(&config.Config{Values: read.Config}).Otel().LogSSEDeltas {
+				session = session.WithoutSSEDeltaLogs()
+			}
+		}
+	}
 	if provider := r.currentOtelProvider(); provider != nil {
 		if client := provider.Logs(); client != nil {
 			session.Logs = client

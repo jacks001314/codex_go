@@ -17,12 +17,12 @@ func (s *delayedHostTimingSession) Execute(context.Context, CodeModeRemoteExecut
 	return s.response, nil
 }
 
-func (s *delayedHostTimingSession) Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error) {
+func (s *delayedHostTimingSession) Wait(context.Context, string, uint64, *int, *YieldSignal) (CodeModeRemoteResponse, error) {
 	time.Sleep(s.delay)
 	return s.response, nil
 }
 
-func (s *delayedHostTimingSession) Terminate(context.Context, string) (CodeModeRemoteResponse, error) {
+func (s *delayedHostTimingSession) Terminate(context.Context, string, *int) (CodeModeRemoteResponse, error) {
 	time.Sleep(s.delay)
 	return s.response, nil
 }

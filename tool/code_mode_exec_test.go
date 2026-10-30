@@ -1114,11 +1114,11 @@ func (s *recordingCodeModeRemoteSession) Execute(_ context.Context, request Code
 	return s.response, s.err
 }
 
-func (s *recordingCodeModeRemoteSession) Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error) {
+func (s *recordingCodeModeRemoteSession) Wait(context.Context, string, uint64, *int, *YieldSignal) (CodeModeRemoteResponse, error) {
 	return s.response, s.err
 }
 
-func (s *recordingCodeModeRemoteSession) Terminate(context.Context, string) (CodeModeRemoteResponse, error) {
+func (s *recordingCodeModeRemoteSession) Terminate(context.Context, string, *int) (CodeModeRemoteResponse, error) {
 	return s.response, s.err
 }
 
@@ -1140,11 +1140,11 @@ func (s *yieldedCodeModeSession) Execute(context.Context, CodeModeRemoteExecuteR
 	return s.executeResponse, nil
 }
 
-func (s *yieldedCodeModeSession) Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error) {
+func (s *yieldedCodeModeSession) Wait(context.Context, string, uint64, *int, *YieldSignal) (CodeModeRemoteResponse, error) {
 	return s.settleResponse, nil
 }
 
-func (s *yieldedCodeModeSession) Terminate(context.Context, string) (CodeModeRemoteResponse, error) {
+func (s *yieldedCodeModeSession) Terminate(context.Context, string, *int) (CodeModeRemoteResponse, error) {
 	return s.settleResponse, nil
 }
 
@@ -1158,11 +1158,11 @@ func (*perCallYieldedCodeModeSession) Execute(_ context.Context, request CodeMod
 	return CodeModeRemoteResponse{CellID: "cell-" + request.ToolCallID, State: "yielded"}, nil
 }
 
-func (*perCallYieldedCodeModeSession) Wait(_ context.Context, cellID string, _ uint64, _ *YieldSignal) (CodeModeRemoteResponse, error) {
+func (*perCallYieldedCodeModeSession) Wait(_ context.Context, cellID string, _ uint64, _ *int, _ *YieldSignal) (CodeModeRemoteResponse, error) {
 	return CodeModeRemoteResponse{CellID: cellID, State: "completed"}, nil
 }
 
-func (*perCallYieldedCodeModeSession) Terminate(_ context.Context, cellID string) (CodeModeRemoteResponse, error) {
+func (*perCallYieldedCodeModeSession) Terminate(_ context.Context, cellID string, _ *int) (CodeModeRemoteResponse, error) {
 	return CodeModeRemoteResponse{CellID: cellID, State: "completed"}, nil
 }
 

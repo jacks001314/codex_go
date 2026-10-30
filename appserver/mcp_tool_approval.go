@@ -412,6 +412,10 @@ func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
 	if request.Arguments != nil {
 		meta["tool_params"] = request.Arguments
 	}
+	if annotations := mcpToolApprovalAnnotations(request.Annotations); len(annotations) > 0 {
+		// Rust #58161: approvals carry the registered tool's annotation hints.
+		meta["tool_annotations"] = annotations
+	}
 	if title := strings.TrimSpace(request.ToolTitle); title != "" {
 		meta["tool_title"] = title
 	}
@@ -473,6 +477,26 @@ func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
 		}
 	}
 	return decision, reason, nil
+}
+
+func mcpToolApprovalAnnotations(annotations *mcp.RuntimeToolAnnotations) map[string]any {
+	if annotations == nil {
+		return nil
+	}
+	out := map[string]any{}
+	if annotations.ReadOnlyHint != nil {
+		out["readOnlyHint"] = *annotations.ReadOnlyHint
+	}
+	if annotations.DestructiveHint != nil {
+		out["destructiveHint"] = *annotations.DestructiveHint
+	}
+	if annotations.IdempotentHint != nil {
+		out["idempotentHint"] = *annotations.IdempotentHint
+	}
+	if annotations.OpenWorldHint != nil {
+		out["openWorldHint"] = *annotations.OpenWorldHint
+	}
+	return out
 }
 
 // persistApproval reuses the elicitation-path persistence so the amendment lands

@@ -143,14 +143,52 @@ func TestManagedModelProviderUnrelatedChangeKeepsRetainedThread(t *testing.T) {
 	router := newManagedProviderRouter(t, home)
 	threadID := startManagedProviderThread(t, router)
 
-	// Changing a provider the thread does not use, or the local config, must not
-	// invalidate the retained route (Rust local_config_changes_do_not_block).
+	// Changing a provider the thread does not use must not invalidate the
+	// retained route.
 	writeManagedProviderRequirements(t, home, strings.Replace(managedProviderRequirements, "https://other.example/v1", "https://elsewhere.example/v1", 1))
+	if err := router.checkThreadModelProviderForID(threadID); err != nil {
+		t.Fatalf("unrelated requirement change rejected the thread: %v", err)
+	}
+}
+
+// Rust #57840 replaces `local_config_changes_do_not_block_existing_threads`:
+// selecting another provider in the local configuration now rejects the
+// thread with a structured mismatch until the selection is restored.
+func TestManagedModelProviderLocalSelectionChangeReportsMismatchLikeRust(t *testing.T) {
+	home := t.TempDir()
+	// Managed requirements keep both provider definitions but pin no selection,
+	// so the local configuration decides which provider is current.
+	writeManagedProviderRequirements(t, home, strings.Replace(managedProviderRequirements, `model_provider = "gateway"`, "", 1))
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("model_provider = 'gateway'\n"), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+	router := newManagedProviderRouter(t, home)
+	threadID := startManagedProviderThread(t, router)
+
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("model_provider = 'openai'\n"), 0o600); err != nil {
 		t.Fatalf("write config.toml: %v", err)
 	}
+	response := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input:    []turn.TurnUserInput{{Text: "continue"}},
+	}))
+	if response.Error == nil {
+		t.Fatalf("expected the provider selection change to reject the turn, got %#v", response.Result)
+	}
+	if response.Error.Code != -32600 {
+		t.Fatalf("error code = %d, want -32600", response.Error.Code)
+	}
+	data := response.Error.Data
+	if data == nil || data["type"] != "modelProviderMismatch" || data["modelProvider"] != "gateway" || data["currentModelProvider"] != "openai" {
+		t.Fatalf("error data = %#v, want a modelProviderMismatch for gateway/openai", data)
+	}
+
+	// Restoring the selection admits the thread again.
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("model_provider = 'gateway'\n"), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
 	if err := router.checkThreadModelProviderForID(threadID); err != nil {
-		t.Fatalf("unrelated requirement change rejected the thread: %v", err)
+		t.Fatalf("restored provider selection rejected the thread: %v", err)
 	}
 }
 
@@ -248,8 +286,24 @@ func assertManagedProviderRejection(t *testing.T, response *Response) {
 	if response.Error.Code != -32600 {
 		t.Fatalf("error code = %d, want -32600", response.Error.Code)
 	}
-	want := "failed to load configuration: " + errModelProviderRequirementsChanged.Error()
+	// Rust #57840 reports a structured provider error whose message is the
+	// rendered provider failure (no configuration prefix) and whose data names
+	// the blocked provider.
+	data := response.Error.Data
+	if data == nil || data["type"] != "modelProviderPolicyConflict" {
+		t.Fatalf("error data = %#v, want a modelProviderPolicyConflict", data)
+	}
+	want := (&ModelProviderError{
+		Kind:                  ModelProviderPolicyConflict,
+		ModelProvider:         dataStringValue(data["modelProvider"]),
+		RequiredModelProvider: dataStringValue(data["requiredModelProvider"]),
+	}).Error()
 	if response.Error.Message != want {
 		t.Fatalf("error message = %q, want %q", response.Error.Message, want)
 	}
+}
+
+func dataStringValue(value any) string {
+	out, _ := value.(string)
+	return out
 }

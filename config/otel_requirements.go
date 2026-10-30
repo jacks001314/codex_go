@@ -17,6 +17,7 @@ import (
 type OtelRequirements struct {
 	ToolResult             *OtelToolResultLogConfig     `json:"tool_result"`
 	LogUserPrompt          *bool                        `json:"log_user_prompt"`
+	LogSSEDeltas           *bool                        `json:"log_sse_deltas"`
 	LogAgentResponses      *bool                        `json:"log_agent_responses"`
 	LogGuardianAssessments *bool                        `json:"log_guardian_assessments"`
 	Environment            *string                      `json:"environment"`
@@ -105,6 +106,7 @@ func otelRequirementsEmpty(value *OtelRequirements) bool {
 	}
 	return value.ToolResult == nil &&
 		value.LogUserPrompt == nil &&
+		value.LogSSEDeltas == nil &&
 		value.LogAgentResponses == nil &&
 		value.LogGuardianAssessments == nil &&
 		value.Environment == nil &&
@@ -157,6 +159,7 @@ func otelRequirementsFromMap(values map[string]any) (*OtelRequirements, error) {
 		dst  **bool
 	}{
 		{[]string{"log_user_prompt", "logUserPrompt"}, &out.LogUserPrompt},
+		{[]string{"log_sse_deltas", "logSSEDeltas"}, &out.LogSSEDeltas},
 		{[]string{"log_agent_responses", "logAgentResponses"}, &out.LogAgentResponses},
 		{[]string{"log_guardian_assessments", "logGuardianAssessments"}, &out.LogGuardianAssessments},
 	} {
@@ -253,6 +256,7 @@ func rejectUnknownOtelRequirementKeys(values map[string]any) error {
 		switch key {
 		case "tool_result", "toolResult",
 			"log_user_prompt", "logUserPrompt",
+			"log_sse_deltas", "logSSEDeltas",
 			"log_agent_responses", "logAgentResponses",
 			"log_guardian_assessments", "logGuardianAssessments",
 			"environment",
@@ -435,6 +439,9 @@ func applyManagedOtelOverrides(values map[string]any, requirements *ConfigRequir
 	if req.LogUserPrompt != nil {
 		otel["log_user_prompt"] = *req.LogUserPrompt
 	}
+	if req.LogSSEDeltas != nil {
+		otel["log_sse_deltas"] = *req.LogSSEDeltas
+	}
 	if req.LogAgentResponses != nil {
 		otel["log_agent_responses"] = *req.LogAgentResponses
 	}
@@ -512,6 +519,9 @@ func otelRequirementsConflict(values map[string]any, requirements *OtelRequireme
 	if requirements.LogUserPrompt != nil {
 		scalar("log_user_prompt", *requirements.LogUserPrompt)
 	}
+	if requirements.LogSSEDeltas != nil {
+		scalar("log_sse_deltas", *requirements.LogSSEDeltas)
+	}
 	if requirements.LogAgentResponses != nil {
 		scalar("log_agent_responses", *requirements.LogAgentResponses)
 	}
@@ -572,6 +582,7 @@ func otelRequirementForConfigPath(requirements *OtelRequirements, segments []str
 	}{
 		{"tool_result", requirements.ToolResult != nil},
 		{"log_user_prompt", requirements.LogUserPrompt != nil},
+		{"log_sse_deltas", requirements.LogSSEDeltas != nil},
 		{"log_agent_responses", requirements.LogAgentResponses != nil},
 		{"log_guardian_assessments", requirements.LogGuardianAssessments != nil},
 		{"environment", requirements.Environment != nil},
@@ -628,6 +639,7 @@ func cloneOtelRequirements(value *OtelRequirements) *OtelRequirements {
 	}
 	out := *value
 	out.LogUserPrompt = cloneBoolPtr(value.LogUserPrompt)
+	out.LogSSEDeltas = cloneBoolPtr(value.LogSSEDeltas)
 	out.LogAgentResponses = cloneBoolPtr(value.LogAgentResponses)
 	out.LogGuardianAssessments = cloneBoolPtr(value.LogGuardianAssessments)
 	out.Environment = cloneStringPtr(value.Environment)
@@ -695,6 +707,9 @@ func mergeOtelRequirements(lower, higher *OtelRequirements) *OtelRequirements {
 	if higher.LogUserPrompt != nil {
 		out.LogUserPrompt = cloneBoolPtr(higher.LogUserPrompt)
 	}
+	if higher.LogSSEDeltas != nil {
+		out.LogSSEDeltas = cloneBoolPtr(higher.LogSSEDeltas)
+	}
 	if higher.LogAgentResponses != nil {
 		out.LogAgentResponses = cloneBoolPtr(higher.LogAgentResponses)
 	}
@@ -740,6 +755,45 @@ func mergeOtelRequirements(lower, higher *OtelRequirements) *OtelRequirements {
 
 // redactedOtelRequirements returns the API projection with every exporter
 // header value replaced by [redacted] (Rust #57654).
+// wireOtelRequirements is the app-server ConfigRequirements.otel shape (Rust
+// #57638). The managed TOML surface carries three extra requirements
+// (`log_sse_deltas`, `span_attributes`, `tracestate`) that the protocol type
+// does not expose, so they stay off the wire.
+type wireOtelRequirements struct {
+	ToolResult             *OtelToolResultLogConfig `json:"tool_result"`
+	LogUserPrompt          *bool                    `json:"log_user_prompt"`
+	LogAgentResponses      *bool                    `json:"log_agent_responses"`
+	LogGuardianAssessments *bool                    `json:"log_guardian_assessments"`
+	Environment            *string                  `json:"environment"`
+	Exporter               *OtelExporter            `json:"exporter"`
+	TraceExporter          *OtelExporter            `json:"trace_exporter"`
+	MetricsExporter        *OtelExporter            `json:"metrics_exporter"`
+}
+
+// otelRequirementsForWire projects managed OTEL requirements onto the
+// app-server wire shape, redacting exporter header values (Rust #57654).
+func otelRequirementsForWire(value *OtelRequirements) *wireOtelRequirements {
+	redacted := redactedOtelRequirements(value)
+	if redacted == nil {
+		return nil
+	}
+	out := &wireOtelRequirements{
+		ToolResult:             redacted.ToolResult,
+		LogUserPrompt:          cloneBoolPtr(redacted.LogUserPrompt),
+		LogAgentResponses:      cloneBoolPtr(redacted.LogAgentResponses),
+		LogGuardianAssessments: cloneBoolPtr(redacted.LogGuardianAssessments),
+		Environment:            cloneStringPtr(redacted.Environment),
+		Exporter:               redacted.Exporter,
+		TraceExporter:          redacted.TraceExporter,
+		MetricsExporter:        redacted.MetricsExporter,
+	}
+	if redacted.ToolResult != nil {
+		copied := *redacted.ToolResult
+		out.ToolResult = &copied
+	}
+	return out
+}
+
 func redactedOtelRequirements(value *OtelRequirements) *OtelRequirements {
 	out := cloneOtelRequirements(value)
 	if out == nil {

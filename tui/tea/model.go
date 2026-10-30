@@ -251,6 +251,10 @@ type SessionResumeResponse struct {
 	// HistoryNotice is shown after a read-only snapshot recovered only turn
 	// summaries (Rust #45980). Empty for a complete snapshot.
 	HistoryNotice string
+	// ProviderError carries the model provider admission failure that made this
+	// resume a read-only snapshot (Rust #58202), so the transcript stays readable
+	// and the composer offers continuing the chat in a fresh session.
+	ProviderError *appserver.ModelProviderError
 	// CompletedTurns seeds the automatic-recap accounting for the resumed thread
 	// (Rust RecapState::seed_from_turns).
 	CompletedTurns int
@@ -288,6 +292,12 @@ type AgentThreadSwitchResponse struct {
 	// HistoryNotice is shown after a read-only snapshot recovered only turn
 	// summaries (Rust #45980). Empty for a complete snapshot.
 	HistoryNotice string
+	// ProviderError carries the provider admission failure that made this
+	// switch a read-only snapshot (Rust #58202).
+	ProviderError *appserver.ModelProviderError
+	// RolloutPath is the frozen conversation's saved history path, offered by
+	// the continuation draft.
+	RolloutPath string
 }
 
 type TokenActivityReaderFunc func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error)
@@ -1847,6 +1857,11 @@ type Model struct {
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
 	readOnlyThread bool
+	// providerError carries the provider admission failure that kept the chat
+	// readable but read-only (Rust #58202), and providerErrorRolloutPath is the
+	// frozen conversation's saved history path used by the continuation draft.
+	providerError            *appserver.ModelProviderError
+	providerErrorRolloutPath string
 	// threadUnavailable marks a replay-only conversation whose server is still
 	// connected (Rust #46566). Drafts stay editable and recovery/local commands
 	// remain available, but ordinary submissions are rejected.
@@ -4154,6 +4169,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.updateAgentsOverviewKey(msg)
 		}
 		if m.readOnlyThread {
+			if m.providerError != nil {
+				// Rust #58202: a chat blocked by a provider change advertises
+				// continue/new/other-chats instead of the external-writer keys.
+				return m, m.handleProviderErrorKey(msg, keySpecFromKeyMsg(msg))
+			}
 			// Rust #43253: a conversation owned by another app accepts only the
 			// notice's advertised keys (R retry, exit, transcript).
 			return m, m.handleReadOnlyThreadKey(msg, keySpecFromKeyMsg(msg))
@@ -4621,6 +4641,10 @@ func (m *Model) View() string {
 			warningBodyIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(viewer))
 		}
+	} else if m.providerError != nil {
+		// Rust #58202: a provider admission failure keeps the transcript
+		// readable and replaces the composer with the recovery notice.
+		sections = append(sections, m.bottomStyle.Render(m.renderProviderErrorNotice()))
 	} else if m.readOnlyThread {
 		// Rust #43253: the read-only notice replaces the composer.
 		sections = append(sections, m.bottomStyle.Render(m.renderReadOnlyThreadNotice()))
@@ -5674,7 +5698,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	m.clearPromptSuggestion()
 	input := strings.TrimSpace(m.composerText())
 	if m.threadUnavailable && !unavailableThreadCommand(input) {
-		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, or /copy."
+		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, /warnings, /config, /copy, or /quit."
 		m.refreshTranscript()
 		return nil
 	}
@@ -9243,22 +9267,37 @@ func (m *Model) addStartupSessionHeader(version string) {
 	if width < 20 {
 		width = 20
 	}
-	tooltipLines := renderStartupTooltipLines(
-		m.startupSessionTooltip(),
-		width,
-		m.keymapConfig,
-		m.activeTUITheme(),
-		m.sessionCWD,
-	)
-	cell := historycell.NewSessionInfoWithTooltipLines(header, false, nil)
+	// Rust #58127: a first event renders the startup help block instead of a
+	// tip, and both honor `tui.show_tooltips`.
+	firstEvent := m.startupSessionFirstEvent()
+	cell := historycell.NewSessionInfoWithTooltipLines(header, firstEvent, m.showTooltips, nil)
 	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
-	if len(tooltipLines) > 0 {
-		tip := historyMessageFromCell(historycell.NewPlainHistoryCell(tooltipLines), width)
-		tip.StartupTip = true
-		m.State.AddHistoryMessage(tip)
+	if !firstEvent {
+		tooltipLines := renderStartupTooltipLines(
+			m.startupSessionTooltip(),
+			width,
+			m.keymapConfig,
+			m.activeTUITheme(),
+			m.sessionCWD,
+		)
+		if len(tooltipLines) > 0 {
+			tip := historyMessageFromCell(historycell.NewPlainHistoryCell(tooltipLines), width)
+			tip.StartupTip = true
+			m.State.AddHistoryMessage(tip)
+		}
 	}
 	// The startup warnings entry waits for the splash (Rust pending_header).
 	m.renderStartupWarnings()
+}
+
+// startupSessionFirstEvent reports whether the startup header is the first
+// event of a fresh session, which is when Rust renders the startup help block
+// (#58127). Resumed, forked, and cleared sessions keep the tooltip path.
+func (m *Model) startupSessionFirstEvent() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	return strings.TrimSpace(m.State.ThreadID) == "" && len(m.State.Messages) == 0
 }
 
 // sessionHeaderCell builds the compact borderless session header shared by

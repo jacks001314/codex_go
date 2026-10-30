@@ -1,10 +1,12 @@
 package chatwidget
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode"
 
+	"codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 
 	"github.com/rivo/uniseg"
@@ -635,6 +637,12 @@ func (d *StatusSurfacePreviewData) SuppressPlaceholder(item StatusSurfacePreview
 }
 
 func (d StatusSurfacePreviewData) StatusLineForItems(items []bottompane.StatusLineItem, useThemeColors bool) (bottompane.StatusLine, bool) {
+	return bottompane.StatusLineFromSegments(d.StatusLineSegmentsForItems(items), useThemeColors)
+}
+
+// StatusLineSegmentsForItems returns the configured segments with their live
+// values, shared by the native and extension renderers (Rust #57970).
+func (d StatusSurfacePreviewData) StatusLineSegmentsForItems(items []bottompane.StatusLineItem) []bottompane.StatusLineSegment {
 	segments := []bottompane.StatusLineSegment{}
 	for _, item := range items {
 		previewItem := StatusLineItemPreviewItem(item)
@@ -645,7 +653,31 @@ func (d StatusSurfacePreviewData) StatusLineForItems(items []bottompane.StatusLi
 			segments = append(segments, bottompane.StatusLineSegment{Item: item, Text: value})
 		}
 	}
-	return bottompane.StatusLineFromSegments(segments, useThemeColors)
+	return segments
+}
+
+// StatusLineExtensionsTree builds the shared UI tree used by the extension
+// status-line renderer (Rust #57970 status_line_content.rs). The pull-request
+// number becomes a link when its URL is a safe absolute HTTP(S) destination;
+// every other segment stays plain text.
+func StatusLineExtensionsTree(segments []bottompane.StatusLineSegment, pullRequestURL string) *tui.UINode {
+	children := make([]*tui.UINode, 0, len(segments)*2)
+	for index, segment := range segments {
+		if index > 0 {
+			children = append(children, &tui.UINode{Kind: tui.UINodeText, Text: bottompane.StatusLineSeparator})
+		}
+		key, _ := json.Marshal(StatusLineItemID(segment.Item))
+		text := &tui.UINode{Kind: tui.UINodeText, Key: key, Text: segment.Text}
+		if segment.Item == bottompane.StatusLinePullRequestNumber {
+			if href, err := tui.NewLinkHref(pullRequestURL); err == nil {
+				children = append(children, &tui.UINode{Kind: tui.UINodeLink, Key: key, Href: href, Children: []*tui.UINode{text}})
+				continue
+			}
+		}
+		children = append(children, text)
+	}
+	key, _ := json.Marshal("status-line")
+	return &tui.UINode{Kind: tui.UINodeRow, Key: key, Children: children}
 }
 
 func (d StatusSurfacePreviewData) RateLimitItemName(item StatusSurfacePreviewItem, fallback string) string {

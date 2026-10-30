@@ -50,8 +50,10 @@ const (
 // `ApiKeyCyberAccessPrograms::from_config` (#49714): only the OpenAI provider id
 // and the `api_key_cyber_access_programs` feature decide the policy, so enabling
 // the forwarding feature is enough on its own.
-func ApiKeyCyberAccessProgramsFromConfig(featureSettings map[string]bool, providerID string) ApiKeyCyberAccessPrograms {
-	if strings.TrimSpace(providerID) != OpenAIProviderID {
+func ApiKeyCyberAccessProgramsFromConfig(featureSettings map[string]bool, providerID string, provider ProviderInfo) ApiKeyCyberAccessPrograms {
+	// Rust #58190: the provider definition may opt a non-OpenAI provider into
+	// Cyber access programs through `capabilities.cyber_access_programs`.
+	if !provider.SupportsCyberAccessPrograms(providerID) {
 		return ApiKeyCyberAccessProgramsUnsupportedProvider
 	}
 	if features.Enabled(featureSettings, "api_key_cyber_access_programs") {

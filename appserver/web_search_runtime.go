@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"strings"
 
 	"codex_go/auth"
@@ -47,6 +48,37 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 	if err != nil {
 		return nil, err
 	}
+	// Rust #58140: standalone web search routes through the thread's workspace
+	// backend exactly like a model request, and a routed request never follows a
+	// redirect because it carries an origin-scoped account-routing credential.
+	// Rust resolves that routing inside WebSearchTool::run, so discovery runs
+	// per search request and a failure fails the tool call rather than turn
+	// preparation; PrepareRequest keeps the same timing here.
+	var prepareRequest func(context.Context) (*turn.WebSearchRequestContext, error)
+	if providerInfo.SupportsCodexBackendRoutes() && strings.EqualFold(strings.TrimSpace(providerInfo.Name), model.OpenAIProviderName) {
+		baseProvider := apiProvider
+		baseAuth := authHeaders
+		prepareRequest = func(ctx context.Context) (*turn.WebSearchRequestContext, error) {
+			routing, routingErr := r.workspaceRoutingForAccountRead(ctx, snapshot)
+			if routingErr != nil {
+				return nil, routingErr
+			}
+			prepared := &turn.WebSearchRequestContext{Provider: baseProvider, Auth: baseAuth}
+			if routing == nil {
+				return prepared, nil
+			}
+			// Copy the header map: routing mutates it and the shared base
+			// provider must stay on the bootstrap origin for other requests.
+			provider := baseProvider
+			provider.Headers = baseProvider.Headers.Clone()
+			if err := model.ApplyWorkspaceRouting(&provider, routing); err != nil {
+				return nil, err
+			}
+			prepared.Provider = provider
+			prepared.RejectRedirects = true
+			return prepared, nil
+		}
+	}
 	threadID := ""
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
@@ -72,6 +104,7 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 		Provider:                 apiProvider,
 		Auth:                     authHeaders,
 		HTTPClient:               r.httpClientForConfig(cfg),
+		PrepareRequest:           prepareRequest,
 		InputItems:               r.webSearchInputItemsForTurn(threadID, params),
 		Settings:                 webSearchSettingsFromConfig(cfg, mode),
 		MaxOutputTokens:          turn.WebSearchMaxOutputTokens(modelInfo, cfg.ToolOutputTokenLimit()),

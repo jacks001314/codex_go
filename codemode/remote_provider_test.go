@@ -110,7 +110,7 @@ func TestRemoteSessionTerminateStalledTimesOutAndInvalidatesSession(t *testing.T
 		session.openedOn = connection
 		session.mu.Unlock()
 
-		_, err := session.Terminate(context.Background(), "cell-timeout")
+		_, err := session.Terminate(context.Background(), "cell-timeout", nil)
 		if !errors.Is(err, errCodeModeHostRequestTimeout) {
 			t.Fatalf("Terminate() error = %v, want errCodeModeHostRequestTimeout", err)
 		}

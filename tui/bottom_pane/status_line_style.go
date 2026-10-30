@@ -2,7 +2,11 @@ package bottompane
 
 // Rust parity: codex-rs/tui/src/bottom_pane/status_line_style.rs.
 
-import "strings"
+import (
+	"strings"
+
+	"codex_go/tui"
+)
 
 const StatusLineSeparator = " \u00b7 "
 
@@ -115,6 +119,63 @@ func StatusLineFromSegments(segments []StatusLineSegment, useThemeColors bool) (
 		spans = append(spans, span)
 	}
 	return StatusLine{Spans: spans}, true
+}
+
+// StatusLineRenderer selects how the configured status line is materialized
+// (Rust #57970 StatusLineRenderer).
+type StatusLineRenderer string
+
+const (
+	// StatusLineRendererNative renders the span-based status line.
+	StatusLineRendererNative StatusLineRenderer = "native"
+	// StatusLineRendererExtension renders through the shared UI tree.
+	StatusLineRendererExtension StatusLineRenderer = "extension"
+)
+
+// StatusLineRendererFromFeature maps the tui_extensions_statusline feature to
+// its renderer.
+func StatusLineRendererFromFeature(extensionEnabled bool) StatusLineRenderer {
+	if extensionEnabled {
+		return StatusLineRendererExtension
+	}
+	return StatusLineRendererNative
+}
+
+// FitToWidth renders the plain status line truncated to width, keeping the
+// truncation ellipsis outside any hyperlink and clipping the link range to the
+// visible prefix (Rust #57883 footer hyperlink fitting).
+func (l StatusLine) FitToWidth(width int, pullRequestURL string) (string, []tui.TerminalHyperlink) {
+	text := l.PlainText()
+	links := l.PullRequestHyperlinks(pullRequestURL)
+	if width <= 0 {
+		return "", nil
+	}
+	if tui.DisplayWidth(text) <= width {
+		return text, links
+	}
+	keep := width - 1
+	fitted := tui.TruncateToWidth(text, keep) + "…"
+	return fitted, tui.ClipHyperlinksToWidth(links, keep)
+}
+
+// PullRequestHyperlinks returns a hyperlink covering the pull-request-number
+// span when its URL is a safe absolute HTTP(S) destination.
+func (l StatusLine) PullRequestHyperlinks(pullRequestURL string) []tui.TerminalHyperlink {
+	if strings.TrimSpace(pullRequestURL) == "" {
+		return nil
+	}
+	if _, err := tui.NewLinkHref(pullRequestURL); err != nil {
+		return nil
+	}
+	column := 0
+	for _, span := range l.Spans {
+		width := tui.DisplayWidth(span.Text)
+		if span.Underline && !span.Separator {
+			return []tui.TerminalHyperlink{{Start: column, End: column + width, Destination: pullRequestURL}}
+		}
+		column += width
+	}
+	return nil
 }
 
 func (l StatusLine) PlainText() string {

@@ -141,6 +141,10 @@ type stdioCallOptions struct {
 	Roots       []MCPRoot
 	Elicitation MCPElicitationHandler
 	Progress    MCPProgressHandler
+	// Lease is the calling chat's server-side connection lease. It is opened
+	// after initialization and tags the request with the host-owned id, so a
+	// release can cancel exactly this chat's pending requests (Rust #57978).
+	Lease *mcpChatLease
 }
 
 type stdioRPCResponse struct {
@@ -170,10 +174,13 @@ func listMCPStdioInventory(config *ServerConfig) (*stdioInventory, error) {
 }
 
 func listMCPStdioInventoryWithClient(client *stdioClient) (*stdioInventory, error) {
-	return listMCPStdioInventoryWithOptions(client, "", "", nil)
+	return listMCPStdioInventoryWithOptions(client, "", "", nil, false)
 }
 
-func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, threadID string, roots []MCPRoot) (*stdioInventory, error) {
+// listMCPStdioInventoryWithOptions lists one local server's catalog. When
+// skipResourceTemplates is set the template listing is not requested and the
+// reported template list stays empty (Rust #57861).
+func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, threadID string, roots []MCPRoot, skipResourceTemplates bool) (*stdioInventory, error) {
 	result := &stdioInventory{}
 	options := &stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
 	tools, toolListMeta, err := listMCPStdioTools(client, options)
@@ -191,8 +198,10 @@ func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, th
 	if resources, err := listMCPStdioResources(client, options); err == nil {
 		result.Resources = resources
 	}
-	if templates, err := listMCPStdioResourceTemplates(client, options); err == nil {
-		result.ResourceTemplates = templates
+	if !skipResourceTemplates {
+		if templates, err := listMCPStdioResourceTemplates(client, options); err == nil {
+			result.ResourceTemplates = templates
+		}
 	}
 	return result, nil
 }
@@ -244,12 +253,36 @@ func callMCPStdioTool(config *ServerConfig, serverName string, threadID string, 
 }
 
 func callMCPStdioToolWithClient(client *stdioClient, serverName string, threadID string, turnID string, itemID string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
+	return callMCPStdioToolWithLease(client, nil, serverName, threadID, turnID, itemID, roots, elicitation, progress, tool, arguments, meta)
+}
+
+// callMCPStdioToolWithLease tags the call with the chat's server-side lease.
+// The host owns the lease metadata, so any caller-supplied value is replaced
+// (Rust #57978).
+func callMCPStdioToolWithLease(client *stdioClient, lease *mcpChatLease, serverName string, threadID string, turnID string, itemID string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
 	params := mcpToolCallParams(client.config, tool, arguments, meta)
 	var response MCPToolCallResponse
-	if err := client.CallWithOptions(&stdioCallOptions{ServerName: serverName, ThreadID: threadID, TurnID: turnID, ItemID: itemID, Roots: roots, Elicitation: elicitation, Progress: progress}, "tools/call", params, &response); err != nil {
+	if err := client.CallWithOptions(&stdioCallOptions{ServerName: serverName, ThreadID: threadID, TurnID: turnID, ItemID: itemID, Roots: roots, Elicitation: elicitation, Progress: progress, Lease: lease}, "tools/call", params, &response); err != nil {
 		return nil, withMCPRequestErrorCode(err)
 	}
 	return &response, nil
+}
+
+// mcpParamsWithConnectionLease attaches or replaces the host-owned lease id on
+// a request that already carries `_meta`.
+func mcpParamsWithConnectionLease(params any, leaseID string) any {
+	values, ok := params.(map[string]any)
+	if !ok || strings.TrimSpace(leaseID) == "" {
+		return params
+	}
+	meta, _ := values["_meta"].(map[string]any)
+	clone := cloneAnyMap(meta)
+	if clone == nil {
+		clone = map[string]any{}
+	}
+	clone[ConnectionLeaseMetaKey] = leaseID
+	values["_meta"] = clone
+	return values
 }
 
 func readMCPStdioResource(config *ServerConfig, serverName string, elicitation MCPElicitationHandler, progress MCPProgressHandler, params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {
@@ -259,6 +292,12 @@ func readMCPStdioResource(config *ServerConfig, serverName string, elicitation M
 }
 
 func readMCPStdioResourceWithClient(client *stdioClient, serverName string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {
+	return readMCPStdioResourceWithLease(client, nil, serverName, roots, elicitation, progress, params)
+}
+
+// readMCPStdioResourceWithLease carries the chat's server-side lease id, which
+// the host owns, on the resource-read request (Rust #57978).
+func readMCPStdioResourceWithLease(client *stdioClient, lease *mcpChatLease, serverName string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {
 	if params == nil || strings.TrimSpace(params.URI) == "" {
 		return nil, invalidMCPRequest("server and uri are required")
 	}
@@ -267,7 +306,7 @@ func readMCPStdioResourceWithClient(client *stdioClient, serverName string, root
 		threadID = strings.TrimSpace(*params.ThreadID)
 	}
 	var response MCPResourceReadResponse
-	if err := client.CallWithOptions(&stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots, Elicitation: elicitation, Progress: progress}, "resources/read", mcpResourceReadRequestParams(params), &response); err != nil {
+	if err := client.CallWithOptions(&stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots, Elicitation: elicitation, Progress: progress, Lease: lease}, "resources/read", mcpResourceReadRequestParams(params), &response); err != nil {
 		return nil, err
 	}
 	return &response, nil
@@ -426,6 +465,15 @@ func (b *mcpCallBudget) pause(elapsed time.Duration) {
 }
 
 func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, method string, params any) (*stdioRPCResponse, error) {
+	// Leases cover chat-scoped work only: catalog and lifecycle requests stay
+	// independent of any one chat (Rust #57978).
+	if options != nil && options.Lease != nil && mcpMethodUsesConnectionLease(method) {
+		leaseID, err := options.Lease.ensureOpen(c)
+		if err != nil {
+			return nil, err
+		}
+		params = mcpParamsWithConnectionLease(params, leaseID)
+	}
 	params = mcpParamsWithProtocolMetadataForFeatures(params, c.protocolModeSnapshot(), c.clientFeatures())
 	cmd := c.currentCommand()
 	id := c.nextRequestID()
@@ -488,6 +536,95 @@ func (c *stdioClient) cancelRemoteRequest(owner *exec.Cmd, id int64, reason erro
 		c.failTransportFor(owner, err)
 	}
 }
+
+// supportsConnectionLease reports whether the helper negotiated the per-chat
+// connection-lease extension (Rust #57978). Catalog requests do not need it.
+func (c *stdioClient) supportsConnectionLease() bool {
+	if c == nil {
+		return false
+	}
+	capabilities := c.serverCapabilitiesRaw()
+	if len(capabilities) == 0 {
+		return false
+	}
+	var parsed struct {
+		Extensions map[string]json.RawMessage `json:"extensions"`
+	}
+	if json.Unmarshal(capabilities, &parsed) != nil {
+		return false
+	}
+	_, ok := parsed.Extensions[ConnectionLeaseCapability]
+	return ok
+}
+
+// openConnectionLease registers this chat as a logical owner of the shared
+// helper. A bounded wait keeps a wedged helper from stalling startup.
+func (c *stdioClient) openConnectionLease(leaseID string) error {
+	if c == nil || strings.TrimSpace(leaseID) == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), connectionLeaseTimeout)
+	defer cancel()
+	if err := c.CallWithOptionsContext(ctx, &stdioCallOptions{}, "codex/connection/open", map[string]any{"leaseId": leaseID}, nil); err != nil {
+		return fmt.Errorf("open MCP connection lease: %w", err)
+	}
+	return nil
+}
+
+// releaseConnectionLease cancels this chat's pending requests before writing
+// the release. MCP cancellation has no acknowledgement: the helper owns any
+// handler still winding down once it receives both writes in this order.
+func (c *stdioClient) releaseConnectionLease(leaseID string) error {
+	if c == nil || strings.TrimSpace(leaseID) == "" {
+		return nil
+	}
+	c.cancelPendingForLease(leaseID)
+	ctx, cancel := context.WithTimeout(context.Background(), connectionLeaseTimeout)
+	defer cancel()
+	if err := c.CallWithOptionsContext(ctx, &stdioCallOptions{}, "codex/connection/release", map[string]any{"leaseId": leaseID}, nil); err != nil {
+		return fmt.Errorf("release MCP connection lease: %w", err)
+	}
+	return nil
+}
+
+// cancelPendingForLease writes cancellations for the chat's in-flight requests
+// only, so releasing one lease never disturbs another chat.
+func (c *stdioClient) cancelPendingForLease(leaseID string) {
+	if c == nil || strings.TrimSpace(leaseID) == "" {
+		return
+	}
+	c.mu.Lock()
+	owner := c.cmd
+	order := append([]int64(nil), c.pendingOrder...)
+	released := make([]*stdioPendingCall, 0, len(order))
+	for _, id := range order {
+		call := c.pending[id]
+		if call != nil && call.Options != nil && call.Options.Lease != nil && call.Options.Lease.ID() == leaseID {
+			released = append(released, c.removePendingLocked(id))
+		}
+	}
+	c.mu.Unlock()
+	for _, call := range released {
+		if call == nil {
+			continue
+		}
+		c.cancelRemoteRequest(owner, call.ID, errMCPConnectionLeaseReleased)
+		select {
+		case call.Result <- stdioCallResult{Error: errMCPConnectionLeaseReleased}:
+		default:
+		}
+	}
+}
+
+// mcpMethodUsesConnectionLease reports whether a request carries chat scope.
+func mcpMethodUsesConnectionLease(method string) bool {
+	return method == "tools/call" || method == "resources/read"
+}
+
+// errMCPConnectionLeaseReleased fails this chat's in-flight requests locally
+// after their cancellations are written, so a release never waits on a helper
+// that has already dropped the lease (Rust's RequestScope::cancel_and_wait).
+var errMCPConnectionLeaseReleased = errors.New("MCP connection lease released")
 
 func isMCPRemoteError(err error) bool {
 	var remoteErr *MCPRemoteError

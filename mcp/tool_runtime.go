@@ -57,6 +57,7 @@ const RuntimeCodexAppsMCPServerName = "codex_apps"
 type RuntimeToolAnnotations struct {
 	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
 	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
 	OpenWorldHint   *bool `json:"openWorldHint,omitempty"`
 }
 

@@ -20,9 +20,9 @@ func NewSessionHost(runtime *SessionRuntime) *SessionHost {
 	return &SessionHost{runtime: runtime, outputTruncation: OutputTruncationClient}
 }
 
-// OutputTruncation reports who applies output budgets for this session. Server
-// truncation is not implemented yet, so the captured setting only identifies
-// the contract the client asked for (Rust #57272).
+// OutputTruncation reports who applies output budgets for this session
+// (Rust #57272). The runtime honors the setting so each observation is bounded
+// before transmission.
 func (h *SessionHost) OutputTruncation() OutputTruncation {
 	if h == nil {
 		return OutputTruncationClient
@@ -50,6 +50,7 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 		if request.OutputTruncation != nil {
 			h.outputTruncation = *request.OutputTruncation
 		}
+		h.runtime.SetOutputTruncation(h.outputTruncation)
 		return &HostResponse{Type: "session/ready", SessionID: request.SessionID}, nil, nil
 	case "session/execute":
 		if request.Request == nil {
@@ -72,6 +73,10 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 		}
 		clamped := *request.Wait
 		clamped.YieldTimeMS = h.cellExecutionLimits.ClampYieldTimeMS(request.Wait.YieldTimeMS)
+		// The wire carries the budget on the enclosing host request (Rust #57870).
+		if request.MaxOutputTokens != nil {
+			clamped.MaxOutputTokens = request.MaxOutputTokens
+		}
 		outcome, err := h.runtime.Wait(ctx, &clamped, yield)
 		if err != nil {
 			return nil, nil, err

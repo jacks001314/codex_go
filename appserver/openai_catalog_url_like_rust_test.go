@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -39,8 +40,11 @@ func TestChangedOpenAICatalogRequirementRejectsRetainedRoute(t *testing.T) {
 		"https://chatgpt-staging.com/backend-api/codex/model-catalog",
 		1,
 	))
+	// Rust #57840 replaces the restart-guidance text with a structured policy
+	// conflict naming the provider.
 	err := router.checkStartupModelProvider()
-	if err == nil || !strings.Contains(err.Error(), errModelProviderRequirementsChanged.Error()) {
-		t.Fatalf("checkStartupModelProvider() error = %v", err)
+	var providerErr *ModelProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != ModelProviderPolicyConflict || providerErr.ModelProvider != "openai" {
+		t.Fatalf("checkStartupModelProvider() error = %v, want a policy conflict for openai", err)
 	}
 }

@@ -12,8 +12,15 @@ import (
 // `local_settings.tui.show_tooltips` is enabled, resolved against the current
 // keybindings; a disabled preference leaves the header without a tip.
 func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T) {
+	// Resumed sessions take the tooltip path; a fresh session's first event
+	// renders the startup help block instead (Rust #58127).
+	resumed := func() *codextui.State {
+		state := codextui.NewState(nil)
+		state.ThreadID = "thread-resumed"
+		return state
+	}
 	off := false
-	disabled := NewModel(codextui.NewState(nil), Options{
+	disabled := NewModel(resumed(), Options{
 		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &off,
 	})
 	if view := utils.StripANSI(disabled.View()); strings.Contains(view, "Tip: ") {
@@ -21,7 +28,7 @@ func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T
 	}
 
 	on := true
-	enabled := NewModel(codextui.NewState(nil), Options{
+	enabled := NewModel(resumed(), Options{
 		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &on,
 	})
 	view := utils.StripANSI(enabled.View())
@@ -35,13 +42,13 @@ func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T
 	enabled.rawOutput = false
 
 	fullscreenOff := false
-	inline := NewModel(codextui.NewState(nil), Options{
+	inline := NewModel(resumed(), Options{
 		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &on, FullscreenTranscript: &fullscreenOff,
 	})
 	if inlineView := utils.StripANSI(inline.View()); !strings.Contains(inlineView, "Tip: ") {
 		t.Fatalf("inline scrollback must retain the startup tip:\n%s", inlineView)
 	}
-	narrow := NewModel(codextui.NewState(nil), Options{
+	narrow := NewModel(resumed(), Options{
 		Width: 32, Height: 24, ShowSessionHeader: true, ShowTooltips: &on,
 	})
 	narrowView := utils.StripANSI(narrow.View())

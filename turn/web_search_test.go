@@ -11,7 +11,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"codex_go/codemode"
 	"codex_go/codexapi"
@@ -245,6 +247,48 @@ func TestWebSearchHandlerPostsAlphaSearchAndReturnsRustOutputShape(t *testing.T)
 		!strings.Contains(string(data), `"type":"input_text"`) ||
 		!strings.Contains(string(data), `"text":"Search result"`) {
 		t.Fatalf("response json = %s", data)
+	}
+}
+
+// Rust #58147: failures are returned to the model as bounded failed tool
+// output instead of aborting the turn.
+func TestWebSearchHandlerReturnsBoundedFailureToModelLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, strings.Repeat("λ", 16*1024))
+	}))
+	defer server.Close()
+	handler := NewWebSearchHandler(&WebSearchOptions{
+		SessionID:  "thread-failure",
+		Model:      "mock-model",
+		Provider:   model.APIProvider{BaseURL: server.URL + "/api/codex"},
+		Auth:       model.BearerAuthHeaders("test-token", "", false),
+		HTTPClient: server.Client(),
+	})
+	invocation := &tool.Invocation{
+		CallID:   "call-web-search-failure",
+		ToolName: tool.NamespacedName(WebSearchNamespace, WebSearchRunTool),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"search_query":[{"q":"fail"}]}`,
+		},
+	}
+	output, err := handler.Execute(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want model-facing output", err)
+	}
+	if output == nil || output.Success || !output.ContainsExternalContext {
+		t.Fatalf("output = %#v", output)
+	}
+	if len(output.Body) > 1024 || !strings.HasSuffix(output.Body, "… [truncated]") || !utf8.ValidString(output.Body) {
+		t.Fatalf("bounded error = %q (%d bytes)", output.Body, len(output.Body))
+	}
+	if !strings.Contains(output.Body, "web search request failed") {
+		t.Fatalf("error message = %q", output.Body)
+	}
+	contentItems, ok := output.Data["content_items"].([]FunctionCallOutputContentItem)
+	if !ok || len(contentItems) != 1 || contentItems[0].Text != output.Body {
+		t.Fatalf("content_items = %#v", output.Data["content_items"])
 	}
 }
 
@@ -545,4 +589,50 @@ func searchInputMessageText(value any) string {
 	block := content[0].(map[string]any)
 	text, _ := block["text"].(string)
 	return text
+}
+
+// TestWebSearchHandlerRejectsRedirectsWhenRoutedLikeRust covers Rust #58140:
+// a workspace-routed search client must not follow a redirect away from the
+// origin its account-routing credential is scoped to.
+func TestWebSearchHandlerRejectsRedirectsWhenRoutedLikeRust(t *testing.T) {
+	var redirected int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&redirected, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(codexapi.SearchResponse{Output: "redirected"})
+	}))
+	defer target.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/elsewhere", http.StatusFound)
+	}))
+	defer server.Close()
+
+	handler := NewWebSearchHandler(&WebSearchOptions{
+		SessionID:       "thread-1",
+		Model:           "mock-model",
+		Provider:        model.APIProvider{BaseURL: server.URL + "/api/codex"},
+		Auth:            model.BearerAuthHeaders("test-token", "", false),
+		HTTPClient:      server.Client(),
+		RejectRedirects: true,
+		InputItems:      []any{model.UserMessageInputItem("Search the web")},
+		Settings:        &codexapi.SearchSettings{AllowedCallers: []codexapi.AllowedCaller{codexapi.AllowedCallerDirect}},
+	})
+	invocation := &tool.Invocation{
+		CallID:   "call-web-search",
+		ToolName: tool.NamespacedName(WebSearchNamespace, WebSearchRunTool),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"search_query":[{"q":"redirected search"}]}`,
+		},
+	}
+	output, err := handler.Execute(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || output.Success {
+		t.Fatalf("output = %#v, want a failed search", output)
+	}
+	if atomic.LoadInt32(&redirected) != 0 {
+		t.Fatal("the routed search followed a redirect")
+	}
 }

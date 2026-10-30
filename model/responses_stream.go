@@ -22,6 +22,7 @@ import (
 
 	"codex_go/codexapi"
 	contextfrag "codex_go/context"
+	"codex_go/network"
 )
 
 // Rust 5a0d0929e2: connection failures during sampling are retried with
@@ -33,15 +34,20 @@ const maxConnectionRetryDelay = 60 * time.Second
 type ResponsesStreamEventKind string
 
 const (
-	ResponsesStreamEventHeaders                   ResponsesStreamEventKind = "response.headers"
-	ResponsesStreamEventServerModel               ResponsesStreamEventKind = "response.server_model"
-	ResponsesStreamEventRateLimits                ResponsesStreamEventKind = "response.rate_limits"
-	ResponsesStreamEventModelsETag                ResponsesStreamEventKind = "response.models_etag"
-	ResponsesStreamEventReasoning                 ResponsesStreamEventKind = "response.server_reasoning_included"
-	ResponsesStreamEventTimingMetrics             ResponsesStreamEventKind = "responsesapi.websocket_timing"
-	ResponsesStreamEventModelReroute              ResponsesStreamEventKind = "response.model_reroute"
-	ResponsesStreamEventModelVerify               ResponsesStreamEventKind = "response.model_verification"
-	ResponsesStreamEventModeration                ResponsesStreamEventKind = "response.turn_moderation_metadata"
+	ResponsesStreamEventHeaders       ResponsesStreamEventKind = "response.headers"
+	ResponsesStreamEventServerModel   ResponsesStreamEventKind = "response.server_model"
+	ResponsesStreamEventRateLimits    ResponsesStreamEventKind = "response.rate_limits"
+	ResponsesStreamEventModelsETag    ResponsesStreamEventKind = "response.models_etag"
+	ResponsesStreamEventReasoning     ResponsesStreamEventKind = "response.server_reasoning_included"
+	ResponsesStreamEventTimingMetrics ResponsesStreamEventKind = "responsesapi.websocket_timing"
+	ResponsesStreamEventModelReroute  ResponsesStreamEventKind = "response.model_reroute"
+	ResponsesStreamEventModelVerify   ResponsesStreamEventKind = "response.model_verification"
+	ResponsesStreamEventModeration    ResponsesStreamEventKind = "response.turn_moderation_metadata"
+	// ResponsesStreamEventGuardianAssessment carries action-bound Guardian
+	// evidence from a `response.metadata` event (Rust #57757). It is
+	// request-scoped evidence: it never enters conversation history and does not
+	// authorize a tool by itself.
+	ResponsesStreamEventGuardianAssessment        ResponsesStreamEventKind = "response.guardian_assessment"
 	ResponsesStreamEventSafetyBuffer              ResponsesStreamEventKind = "response.safety_buffering"
 	ResponsesStreamEventCreated                   ResponsesStreamEventKind = "response.created"
 	ResponsesStreamEventOutputAdded               ResponsesStreamEventKind = "response.output_item.added"
@@ -57,18 +63,22 @@ const (
 )
 
 type ResponsesStreamEvent struct {
-	Kind               ResponsesStreamEventKind
-	RetryAttempt       uint64
-	RetryMax           uint64
-	RetryError         string
-	RetryDelay         time.Duration
-	RetryHTTPStatus    *uint16
-	RetryStatus        string
-	ResponseID         string
-	RequestID          string
-	Model              string
-	TurnState          string
-	ModelsETag         string
+	Kind            ResponsesStreamEventKind
+	RetryAttempt    uint64
+	RetryMax        uint64
+	RetryError      string
+	RetryDelay      time.Duration
+	RetryHTTPStatus *uint16
+	RetryStatus     string
+	ResponseID      string
+	RequestID       string
+	Model           string
+	TurnState       string
+	ModelsETag      string
+	// RoutingAffinity is the handshake pin of the connection that produced
+	// this event. It never leaves the transport: RuntimeRouter keeps it beside
+	// the parent response id for Guardian routing only (Rust #57710).
+	RoutingAffinity    *network.RoutingAffinity
 	Headers            map[string]string
 	RateLimit          *ResponsesRateLimitSnapshot
 	TimingMetrics      map[string]any
@@ -76,6 +86,7 @@ type ResponsesStreamEvent struct {
 	Reroute            *ResponsesModelReroute
 	Verification       *ResponsesModelVerification
 	ModerationMetadata any
+	GuardianAssessment *ResponsesGuardianAssessment
 	SafetyBuffering    *ResponsesSafetyBuffering
 	Item               *AgentItem
 	RawItem            json.RawMessage
@@ -230,6 +241,7 @@ type responsesStreamAccumulator struct {
 	functionCallArgDeltas map[string]string
 	customToolInputDeltas map[string]string
 	declaredCustomTools   map[string]struct{}
+	routingAffinity       *network.RoutingAffinity
 	// safetyBufferingTreatment carries the response-side safety-buffering
 	// headers: the HTTP response headers for a streamed response, or the JSON
 	// `headers` of each WebSocket event (Rust's `safety_buffering_for_event`).
@@ -1203,7 +1215,11 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 	}
 	if len(bytes.TrimSpace(sse.Data)) == 0 {
 		if rawType == string(ResponsesStreamEventCreated) {
-			emitResponsesStreamEvent(handler, &ResponsesStreamEvent{Kind: ResponsesStreamEventCreated, RawType: rawType})
+			emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
+				Kind:            ResponsesStreamEventCreated,
+				RoutingAffinity: a.routingAffinity,
+				RawType:         rawType,
+			})
 		}
 		return false, nil
 	}
@@ -1253,9 +1269,10 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		responseID := responseIDFromEventData(sse.Data)
 		a.responseID = firstNonEmptyResponseValue(a.responseID, responseID)
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
-			Kind:       ResponsesStreamEventCreated,
-			ResponseID: a.responseID,
-			RawType:    rawType,
+			Kind:            ResponsesStreamEventCreated,
+			ResponseID:      a.responseID,
+			RoutingAffinity: a.routingAffinity,
+			RawType:         rawType,
 		})
 	case "response.output_item.added":
 		item, rawItem, err := agentItemAndRawFromStreamEventData(sse.Data, len(a.items), true)
@@ -2029,6 +2046,13 @@ func (a *responsesStreamAccumulator) emitMetadataEvents(data []byte, handler Res
 			RawType:            string(ResponsesStreamEventModeration),
 		})
 	}
+	if assessment := guardianAssessmentFromStreamMetadata(data); assessment != nil {
+		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
+			Kind:               ResponsesStreamEventGuardianAssessment,
+			GuardianAssessment: assessment,
+			RawType:            string(ResponsesStreamEventGuardianAssessment),
+		})
+	}
 }
 
 func (a *responsesStreamAccumulator) emitServerModelMetadata(data []byte, handler ResponsesStreamHandler) {
@@ -2074,6 +2098,51 @@ func modelVerificationFromStreamMetadata(data []byte) *ResponsesModelVerificatio
 		return nil
 	}
 	return &ResponsesModelVerification{Verifications: verifications}
+}
+
+// ResponsesGuardianAssessment is the serving-side assessment a response may
+// carry outside model-visible items (Rust #57757). Consumers must validate the
+// response, the completed action and the current authorization before using a
+// low-risk result; it does not grant permission to execute.
+type ResponsesGuardianAssessment struct {
+	ResponseID     string
+	ItemID         string
+	RequiresReview bool
+}
+
+// guardianAssessmentFromStreamMetadata decodes Rust's
+// `parse_guardian_assessment`: the event carries `response_id`, and its
+// metadata object holds `guardian: {item_id, requires_review}`. A missing,
+// malformed or empty assessment stays unavailable.
+func guardianAssessmentFromStreamMetadata(data []byte) *ResponsesGuardianAssessment {
+	if !bytes.Contains(data, []byte("guardian")) {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil
+	}
+	responseID, ok := payload["response_id"].(string)
+	if !ok || responseID == "" {
+		return nil
+	}
+	metadata, ok := payload["metadata"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	guardian, ok := metadata["guardian"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	itemID, ok := guardian["item_id"].(string)
+	if !ok || itemID == "" {
+		return nil
+	}
+	requiresReview, ok := guardian["requires_review"].(bool)
+	if !ok {
+		return nil
+	}
+	return &ResponsesGuardianAssessment{ResponseID: responseID, ItemID: itemID, RequiresReview: requiresReview}
 }
 
 func turnModerationMetadataFromStreamMetadata(data []byte) (any, bool) {
@@ -2220,13 +2289,14 @@ func (a *responsesStreamAccumulator) agentResponse(request *AgentRequest, provid
 		usage = AgentUsage{OutputTokens: outputTokens, TotalTokens: outputTokens}
 	}
 	return &AgentResponse{
-		ResponseID:    a.responseID,
-		Message:       message,
-		Items:         append([]AgentItem(nil), a.items...),
-		Usage:         usage,
-		Model:         requestModel(request),
-		ProviderID:    firstNonEmptyResponseValue(providerID, requestProviderID(request)),
-		TimingMetrics: cloneMapAny(a.timingMetrics),
+		ResponseID:      a.responseID,
+		Message:         message,
+		Items:           append([]AgentItem(nil), a.items...),
+		Usage:           usage,
+		Model:           requestModel(request),
+		ProviderID:      firstNonEmptyResponseValue(providerID, requestProviderID(request)),
+		TimingMetrics:   cloneMapAny(a.timingMetrics),
+		RoutingAffinity: a.routingAffinity,
 	}, nil
 }
 

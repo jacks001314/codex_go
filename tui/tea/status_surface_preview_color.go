@@ -3,10 +3,15 @@ package tea
 import (
 	"strings"
 
+	"codex_go/features"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	"codex_go/tui/chatwidget"
 )
+
+// statusLineExtensionPreviewWidth is wide enough that the extension preview
+// never truncates; the modal does the final fitting.
+const statusLineExtensionPreviewWidth = 1 << 20
 
 // Rust parity: codex-rs/tui/src/bottom_pane/status_surface_preview.rs (#44857).
 //
@@ -17,7 +22,14 @@ import (
 // statusLinePreviewStyled renders the status line setup preview for the given
 // items with the footer's accent resolution and thread identity color.
 func (m *Model) statusLinePreviewStyled(previewData chatwidget.StatusSurfacePreviewData, items []bottompane.StatusLineItem, useThemeColors bool) string {
-	line, ok := previewData.StatusLineForItems(items, useThemeColors)
+	segments := previewData.StatusLineSegmentsForItems(items)
+	if features.Enabled(m.featureSettings, "tui_extensions_statusline") {
+		// Rust #57970: the extension renderer draws plain text through the
+		// shared UI tree; the picker preview drops theme colors.
+		tree := chatwidget.StatusLineExtensionsTree(segments, m.statusControls.StatusLineHyperlink)
+		return tree.RenderLine(statusLineExtensionPreviewWidth).Text
+	}
+	line, ok := bottompane.StatusLineFromSegments(segments, useThemeColors)
 	if !ok {
 		return ""
 	}

@@ -2318,11 +2318,11 @@ func (s *originCodeModeSession) Execute(ctx context.Context, _ tool.CodeModeRemo
 	}, nil
 }
 
-func (s *originCodeModeSession) Wait(context.Context, string, uint64, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
+func (s *originCodeModeSession) Wait(context.Context, string, uint64, *int, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{CellID: "turn-origin-cell", State: "completed"}, nil
 }
 
-func (s *originCodeModeSession) Terminate(context.Context, string) (tool.CodeModeRemoteResponse, error) {
+func (s *originCodeModeSession) Terminate(context.Context, string, *int) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{}, nil
 }
 

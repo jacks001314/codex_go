@@ -22,6 +22,9 @@ type ThreadSampleParams struct {
 	// DisableMCP disables MCP servers when the inherited window uses
 	// incremental tools on Responses Lite (Rust #57287).
 	DisableMCP bool `json:"disableMCP,omitempty"`
+	// InterruptOnCancel overrides upstream interruption on cancellation for
+	// this sample; nil inherits the parent configuration (Rust #57864).
+	InterruptOnCancel *bool `json:"interruptOnCancel,omitempty"`
 }
 
 type ThreadSampleResponse struct {

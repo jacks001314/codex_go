@@ -94,8 +94,12 @@ type Spec struct {
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
 	// InputSchemaMaxBytes is the internal Code Mode type-rendering budget for
 	// this tool (Rust #47936). Zero uses the registry default.
-	InputSchemaMaxBytes  int            `json:"-"`
-	OutputSchema         map[string]any `json:"outputSchema,omitempty"`
+	InputSchemaMaxBytes int            `json:"-"`
+	OutputSchema        map[string]any `json:"outputSchema,omitempty"`
+	// CodeModeOutputSchema declares a code-mode return type without changing
+	// the direct Responses API tool payload (Rust #57836 keeps the namespace
+	// function's output_schema out of serialization).
+	CodeModeOutputSchema map[string]any `json:"-"`
 	Freeform             *FreeformSpec  `json:"freeform,omitempty"`
 	Search               *SearchInfo    `json:"search,omitempty"`
 	Exposure             Exposure       `json:"exposure,omitempty"`
@@ -143,13 +147,17 @@ type Payload struct {
 }
 
 type Invocation struct {
-	CallID    string
-	ToolName  ToolName
-	Payload   Payload
-	Source    string
-	StartedAt time.Time
-	Context   map[string]any
-	Cancel    context.CancelCauseFunc
+	CallID   string
+	ToolName ToolName
+	Payload  Payload
+	Source   string
+	// NativeCall is the original function-call item retained through dispatch
+	// for tools whose registry policy requires native review (Rust #58040). It
+	// is Guardian evidence only: it is never logged or serialized.
+	NativeCall json.RawMessage
+	StartedAt  time.Time
+	Context    map[string]any
+	Cancel     context.CancelCauseFunc
 	// Truncation is the effective model's output-truncation policy for this
 	// call (Rust `ToolCall::truncation_policy`). It bounds a direct call's
 	// response-content budget through ResponseByteBudget; Code Mode calls
@@ -246,6 +254,15 @@ type GuardianReviewOptIn interface {
 	RequiresGuardianReview(invocation *Invocation) bool
 }
 
+// NativeReviewPolicyProvider declares at registration time whether an
+// executor requires synchronous native-call review (Rust #58040's
+// NativeReview::Required captured with the tool plan). The registry remembers
+// the answer so dispatch can retain the original call without probing the
+// executor with an invocation it does not own yet.
+type NativeReviewPolicyProvider interface {
+	NativeReviewRequired() bool
+}
+
 // GuardianReviewFunc reviews one opted-in invocation after its pre-tool hooks
 // produced the final arguments. A non-nil error is the model-facing rejection.
 type GuardianReviewFunc func(ctx context.Context, invocation *Invocation) error
@@ -296,6 +313,7 @@ type Registry struct {
 	mu                         sync.RWMutex
 	executors                  map[string]Executor
 	specs                      map[string]Spec
+	nativeReview               map[string]bool
 	order                      []string
 	defaultInputSchemaMaxBytes int
 }
@@ -308,6 +326,7 @@ func NewRegistry() *Registry {
 	return &Registry{
 		executors:                  map[string]Executor{},
 		specs:                      map[string]Spec{},
+		nativeReview:               map[string]bool{},
 		order:                      []string{},
 		defaultInputSchemaMaxBytes: DefaultCodeModeInputSchemaMaxBytes,
 	}
@@ -469,6 +488,7 @@ func (r *Registry) register(executor Executor, skipDuplicate bool, prepend bool)
 	}
 	r.executors[key] = executor
 	r.specs[key] = spec
+	r.nativeReview[key] = registryRequiresNativeReview(executor)
 	if prepend {
 		r.order = append([]string{key}, r.order...)
 	} else {
@@ -490,6 +510,7 @@ func (r *Registry) Remove(name ToolName) (Executor, bool) {
 	}
 	delete(r.executors, key)
 	delete(r.specs, key)
+	delete(r.nativeReview, key)
 	for index, orderedKey := range r.order {
 		if orderedKey == key {
 			r.order = append(r.order[:index], r.order[index+1:]...)
@@ -576,6 +597,22 @@ func liveDescriptionSpec(executor Executor, spec Spec) Spec {
 	}
 	spec.Description = description
 	return spec
+}
+
+// NativeReviewRequired reports the native-review policy captured for the
+// registered tool (Rust #58040 RegisteredTool::native_review).
+func (r *Registry) NativeReviewRequired(name ToolName) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.nativeReview[name.Key()]
+}
+
+func registryRequiresNativeReview(executor Executor) bool {
+	provider, ok := executor.(NativeReviewPolicyProvider)
+	return ok && provider.NativeReviewRequired()
 }
 
 // SetExposure replaces one registered tool's exposure. It backs Rust's
@@ -802,6 +839,12 @@ func (r *Router) RequiresGuardianReview(invocation *Invocation) bool {
 		return false
 	}
 	optIn, ok := executor.(GuardianReviewOptIn)
+	// The plan captured at registration already settles native-review tools
+	// (Rust #58040); the executor opt-in remains for runtimes whose eligibility
+	// depends on the invocation itself.
+	if r.registry.NativeReviewRequired(invocation.ToolName) {
+		return true
+	}
 	return ok && optIn.RequiresGuardianReview(invocation)
 }
 
@@ -1138,6 +1181,14 @@ func (r *Router) BuildToolCall(item ResponseItem) (*Invocation, bool, error) {
 		source = "direct_plaintext_message"
 	}
 	invocation := &Invocation{CallID: item.CallID, ToolName: name, Payload: payload, Source: source, StartedAt: r.now().UTC()}
+	if item.Type == "function_call" && r != nil && r.registry != nil && r.registry.NativeReviewRequired(name) {
+		// Rust #58040 retains the original call for native-review tools so the
+		// evidence survives even when live history no longer holds it.
+		invocation.NativeCall = cloneResponseItemRaw(item.Raw)
+		if len(invocation.NativeCall) == 0 {
+			invocation.NativeCall = synthesizeNativeCallJSON(item)
+		}
+	}
 	if origin := strings.TrimSpace(item.ID); origin != "" {
 		// Rust ToolInvocation::originating_call: a non-code-mode call reports the
 		// item that requested it, which is the dispatched call item itself.
@@ -1161,6 +1212,38 @@ func directPlaintextCollaborationCall(name ToolName, encryptedFunctionArgs *[]st
 	default:
 		return false
 	}
+}
+
+func cloneResponseItemRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
+}
+
+// synthesizeNativeCallJSON rebuilds the function-call item from the dispatch
+// view when the dispatcher could not supply the original wire item.
+func synthesizeNativeCallJSON(item ResponseItem) json.RawMessage {
+	call := map[string]any{
+		"type":      "function_call",
+		"name":      item.Name,
+		"arguments": item.Arguments,
+		"call_id":   item.CallID,
+	}
+	if strings.TrimSpace(item.ID) != "" {
+		call["id"] = item.ID
+	}
+	if namespace := strings.TrimSpace(item.Namespace); namespace != "" {
+		call["namespace"] = namespace
+	}
+	if item.EncryptedFunctionArgs != nil {
+		call["encrypted_function_args"] = append([]string{}, (*item.EncryptedFunctionArgs)...)
+	}
+	raw, err := json.Marshal(call)
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 func applySpecInvocationContext(invocation *Invocation, spec Spec) {
@@ -1378,6 +1461,9 @@ type ResponseItem struct {
 	Input                 string
 	Execution             string
 	Search                map[string]any
+	// Raw is the original wire item when the dispatcher has it, so a tool that
+	// requires native review can retain the exact evidence (Rust #58040).
+	Raw json.RawMessage
 }
 
 type LifecycleEvent struct {

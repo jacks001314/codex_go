@@ -149,7 +149,7 @@ func TestListInventoryRejectsExecutorDiscoveryBeforeConnecting(t *testing.T) {
 		Enabled:          true,
 		CredentialPolicy: CredentialPolicyExecutorOnly,
 	}
-	_, err := service.listInventoryForConfig("exec-server", config, "")
+	_, err := service.listInventoryForConfig("exec-server", config, "", false)
 	if err == nil || !strings.Contains(err.Error(), "requires a remote HTTP transport without host environment headers or helpers") {
 		t.Fatalf("inventory error = %v", err)
 	}

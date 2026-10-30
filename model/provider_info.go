@@ -195,12 +195,16 @@ func (a ProviderAuthRefreshInfo) Format(f fmt.State, verb rune) {
 // (#46482): secondary OAuth credentials delivered alongside the provider's
 // primary authentication.
 type GatewayOAuthConfig struct {
-	AuthorizationURL string               `json:"authorization_url,omitempty"`
-	TokenURL         string               `json:"token_url,omitempty"`
-	ClientID         string               `json:"client_id,omitempty"`
-	Resource         *string              `json:"resource,omitempty"`
-	Scopes           []string             `json:"scopes,omitempty"`
-	RedirectPort     *uint16              `json:"redirect_port,omitempty"`
+	AuthorizationURL string   `json:"authorization_url,omitempty"`
+	TokenURL         string   `json:"token_url,omitempty"`
+	ClientID         string   `json:"client_id,omitempty"`
+	Resource         *string  `json:"resource,omitempty"`
+	Scopes           []string `json:"scopes,omitempty"`
+	RedirectPort     *uint16  `json:"redirect_port,omitempty"`
+	// CredentialsStore selects where this gateway's OAuth grants are stored
+	// (Rust #58219 GatewayOAuthConfig::credentials_store). The empty value is
+	// the keyring-backed default and stays out of the serialized identity.
+	CredentialsStore string               `json:"credentials_store,omitempty"`
 	Delivery         GatewayOAuthDelivery `json:"delivery"`
 }
 
@@ -473,6 +477,19 @@ type ProviderCapabilitiesOverride struct {
 	ExternalWebAccess *bool `json:"external_web_access,omitempty"`
 	// RemoteCompaction overrides the remote compaction protocol.
 	RemoteCompaction *RemoteCompactionSupport `json:"remote_compaction,omitempty"`
+	// CyberAccessPrograms lets a non-OpenAI provider opt into Cyber access
+	// programs (Rust #58190 ModelProviderCapabilities::cyber_access_programs).
+	CyberAccessPrograms *bool `json:"cyber_access_programs,omitempty"`
+}
+
+// SupportsCyberAccessPrograms mirrors Rust
+// ModelProviderInfo::supports_cyber_access_programs: the OpenAI provider always
+// qualifies, and every other provider only with an explicit capability opt-in.
+func (p ProviderInfo) SupportsCyberAccessPrograms(providerID string) bool {
+	if strings.TrimSpace(providerID) == OpenAIProviderID {
+		return true
+	}
+	return p.Capabilities != nil && p.Capabilities.CyberAccessPrograms != nil && *p.Capabilities.CyberAccessPrograms
 }
 
 type ProviderInfo struct {

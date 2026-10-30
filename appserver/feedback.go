@@ -693,3 +693,28 @@ func FeedbackSortedTagKeys(tags map[string]string) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// appendUniqueThreadIDs appends extra thread ids that are not already present,
+// preserving the existing order (Rust #57824 extends the spawned subtree with
+// directly attached threads before selection).
+func appendUniqueThreadIDs(existing []string, extra []string) []string {
+	if len(extra) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(extra))
+	for _, id := range existing {
+		seen[id] = struct{}{}
+	}
+	for _, id := range extra {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		existing = append(existing, id)
+	}
+	return existing
+}

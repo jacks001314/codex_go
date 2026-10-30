@@ -145,10 +145,10 @@ func (e *multiAgentV2ToolExecutor) overrideFor(toolName string) (MultiAgentToolO
 	return override, ok
 }
 
-// RequiresGuardianReview mirrors Rust MultiAgentV2ToolOverrides: with native
-// MAv2 history enabled, state-changing calls in the configured namespace are
-// reviewed before dispatch.
-func (e *multiAgentV2ToolExecutor) RequiresGuardianReview(*tool.Invocation) bool {
+// NativeReviewRequired mirrors Rust #58040: with native MAv2 history enabled,
+// state-changing calls in the configured namespace are reviewed before
+// dispatch, and the registry captures that policy when the tool is registered.
+func (e *multiAgentV2ToolExecutor) NativeReviewRequired() bool {
 	if e == nil || !e.guardianNativeMultiAgentReview {
 		return false
 	}
@@ -157,6 +157,12 @@ func (e *multiAgentV2ToolExecutor) RequiresGuardianReview(*tool.Invocation) bool
 		namespace = MultiAgentV2Namespace
 	}
 	return tool.IsStateChangingMultiAgentTool(tool.NamespacedName(namespace, string(e.kind)), &namespace)
+}
+
+// RequiresGuardianReview mirrors Rust MultiAgentV2ToolOverrides for callers
+// that still query the executor directly.
+func (e *multiAgentV2ToolExecutor) RequiresGuardianReview(*tool.Invocation) bool {
+	return e.NativeReviewRequired()
 }
 
 func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHandlerOptions) error {

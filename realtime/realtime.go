@@ -1791,7 +1791,13 @@ func (m *Manager) Stop(params *StopParams, reason string) (*SessionState, []Noti
 	snapshot := cloneState(state)
 	m.mu.Unlock()
 	if connection != nil {
-		_ = connection.close()
+		if snapshot != nil && snapshot.Config.Transport.Type == "existingCall" {
+			// Rust #57817: the call belongs to the frontend, so detaching the
+			// observer closes only its transport and never sends session.close.
+			connection.closeTransport()
+		} else {
+			_ = connection.close()
+		}
 		m.flushRealtimeTranscriptTail(connection)
 	}
 	// Closing the timeline publishes the sealed segments and the session
@@ -1994,7 +2000,9 @@ type Event struct {
 	ItemID            string
 	InputTranscript   string
 	ActiveTranscript  []TranscriptEntry
-	transcriptFrame   *realtimeTranscriptFrame
+	// CompletedTranscript carries the speech flushed out of the active
+	// transcript by this event (Rust #58221).
+	CompletedTranscript []TranscriptEntry
 }
 
 type TranscriptEntry struct {

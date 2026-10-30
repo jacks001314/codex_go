@@ -7,6 +7,7 @@ const (
 	AuthChoiceDeviceCode AuthChoice = "device_code"
 	AuthChoiceAPIKey     AuthChoice = "api_key"
 	AuthChoiceBedrock    AuthChoice = "bedrock"
+	AuthChoiceGCP        AuthChoice = "gcp"
 )
 
 type SignInState string
@@ -21,6 +22,8 @@ const (
 	SignInAPIKeyConfigured         SignInState = "api_key_configured"
 	SignInBedrock                  SignInState = "bedrock"
 	SignInBedrockConfigured        SignInState = "bedrock_configured"
+	SignInGCP                      SignInState = "gcp"
+	SignInGCPConfigured            SignInState = "gcp_configured"
 )
 
 type AuthOption struct {
@@ -43,6 +46,13 @@ func AuthOptionsForPolicy(chatGPTAllowed bool, apiKeyAllowed bool) []AuthOption 
 }
 
 func AuthOptionsForPolicyWithBedrock(chatGPTAllowed bool, apiKeyAllowed bool, bedrockAllowed bool) []AuthOption {
+	return AuthOptionsForPolicyWithProviders(chatGPTAllowed, apiKeyAllowed, bedrockAllowed, false)
+}
+
+// AuthOptionsForPolicyWithProviders builds the provider sign-in menu, offering
+// the Amazon Bedrock and Google Cloud Vertex AI setup wizards only when API
+// login and the matching feature are allowed (Rust #57857).
+func AuthOptionsForPolicyWithProviders(chatGPTAllowed bool, apiKeyAllowed bool, bedrockAllowed bool, gcpAllowed bool) []AuthOption {
 	defaults := DefaultAuthOptions(!apiKeyAllowed)
 	options := []AuthOption{{
 		Choice:      defaults[0].Choice,
@@ -63,12 +73,19 @@ func AuthOptionsForPolicyWithBedrock(chatGPTAllowed bool, apiKeyAllowed bool, be
 			Description: "Use an AWS profile, access keys, environment credentials, or a Bedrock API key",
 		})
 	}
+	if apiKeyAllowed && gcpAllowed {
+		options = append(options, AuthOption{
+			Choice:      AuthChoiceGCP,
+			Label:       "Use Google Cloud Vertex AI",
+			Description: "Connect using your Google Cloud credentials",
+		})
+	}
 	return options
 }
 
 func AuthStepState(state SignInState) StepState {
 	switch state {
-	case SignInChatGPTSuccess, SignInAPIKeyConfigured, SignInBedrockConfigured:
+	case SignInChatGPTSuccess, SignInAPIKeyConfigured, SignInBedrockConfigured, SignInGCPConfigured:
 		return StepComplete
 	default:
 		return StepInProgress

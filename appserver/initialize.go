@@ -27,7 +27,10 @@ type ClientInfo struct {
 }
 
 type InitializeCapabilities struct {
-	ExperimentalAPI                bool     `json:"experimentalApi,omitempty"`
+	ExperimentalAPI bool `json:"experimentalApi,omitempty"`
+	// RequiredHumanApproval presents humanCommand approvals and returns only a
+	// one-time decision. It requires experimentalApi (Rust #58045).
+	RequiredHumanApproval          bool     `json:"requiredHumanApproval,omitempty"`
 	RequestAttestation             bool     `json:"requestAttestation,omitempty"`
 	OptOutNotificationMethods      []string `json:"optOutNotificationMethods,omitempty"`
 	MCPServerOpenAIFormElicitation bool     `json:"mcpServerOpenaiFormElicitation,omitempty"`

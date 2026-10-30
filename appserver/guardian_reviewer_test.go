@@ -556,8 +556,12 @@ func TestGuardianReviewRequestUsesSelectedModelAndEffortLikeRust(t *testing.T) {
 				return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"selection"}`}, nil
 			})
 			router := NewRuntimeRouter(RuntimeServices{
-				Agent:        agent,
-				Models:       model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: testCase.models})),
+				Agent: agent,
+				// Rust #57770: the reviewer must be advertised by the provider (or
+				// explicitly configured); a bundled entry is not selectable.
+				Models: model.NewModelService(model.NewStaticModelsManagerWithOrigin(
+					model.ModelsResponse{Models: testCase.models}, model.ModelOriginProvider,
+				)),
 				ThreadStatus: NewThreadStatusManager(),
 			})
 			effort := testCase.parentEffort
@@ -641,8 +645,12 @@ func TestGuardianReviewRequestCarriesThePolicyInstructionsLikeRust(t *testing.T)
 				return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"instructions"}`}, nil
 			})
 			router := NewRuntimeRouter(RuntimeServices{
-				Agent:        agent,
-				Models:       model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: testCase.models})),
+				Agent: agent,
+				// Rust #57770: the reviewer must be advertised by the provider (or
+				// explicitly configured); a bundled entry is not selectable.
+				Models: model.NewModelService(model.NewStaticModelsManagerWithOrigin(
+					model.ModelsResponse{Models: testCase.models}, model.ModelOriginProvider,
+				)),
 				ThreadStatus: NewThreadStatusManager(),
 			})
 			if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{

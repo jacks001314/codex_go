@@ -86,8 +86,14 @@ func (m *Model) updateManageSkillsModal(message bubbletea.KeyMsg) bubbletea.Cmd 
 	if state.closing {
 		return nil
 	}
-	for _, key := range manageSkillsKeyNames(message) {
-		state.view.HandleKey(key)
+	// Rust #58130: a paste is appended to the search query as normalized text
+	// (whitespace-only pastes are ignored) instead of being replayed as keys.
+	if message.Paste {
+		state.view.HandlePaste(string(message.Runes))
+	} else {
+		for _, key := range manageSkillsKeyNames(message) {
+			state.view.HandleKey(key)
+		}
 	}
 	for state.eventCursor < len(state.view.Events) {
 		event := state.view.Events[state.eventCursor]

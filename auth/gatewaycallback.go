@@ -17,7 +17,9 @@ import (
 	"time"
 )
 
-const gatewayBrowserTimeout = 180 * time.Second
+// gatewayBrowserTimeout gives users enough time to complete provider browser
+// sign-in, including MFA when required (Rust #57859).
+const gatewayBrowserTimeout = 10 * time.Minute
 
 // gatewayCallbackListener serves exactly one `/callback` request and validates
 // its state before accepting a code or propagating a provider denial.

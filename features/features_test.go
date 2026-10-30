@@ -1,6 +1,9 @@
 package features
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestKnownFeature(t *testing.T) {
 	if !Known("unified_exec") {
@@ -108,6 +111,39 @@ func TestIncrementalToolsFeatureRegisteredLikeRust(t *testing.T) {
 	}
 	if !Defaults()["incremental_tools"] {
 		t.Fatal("incremental_tools default = false, want true")
+	}
+}
+
+func TestIncrementalExecToolsFeatureRegisteredLikeRust(t *testing.T) {
+	// Rust (codex-rs/features/src/lib.rs #58122): the incremental exec catalog
+	// diff is under development and off by default.
+	const key = "incremental_exec_tools"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	if got := StageFor(key); got != StageUnderDevelopment {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageUnderDevelopment)
+	}
+	if Defaults()[key] {
+		t.Fatalf("%s default = true, want false", key)
+	}
+}
+
+func TestRespectSystemProxyFeatureIsExperimentalLikeRust(t *testing.T) {
+	// Rust #58157: the system-proxy opt-in appears in the experimental menu.
+	const key = "respect_system_proxy"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	if got := StageFor(key); got != StageExperimental {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageExperimental)
+	}
+	spec, ok := byKey()[key]
+	if !ok || spec.ExperimentalName != "System proxy" || !strings.Contains(spec.ExperimentalMenuDescription, "system proxy settings") {
+		t.Fatalf("spec = %#v, ok = %v", spec, ok)
+	}
+	if Defaults()[key] {
+		t.Fatalf("%s default = true, want false", key)
 	}
 }
 

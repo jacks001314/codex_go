@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"codex_go/apps"
+	"codex_go/execpolicy"
 	"codex_go/network"
 	"codex_go/sandbox"
 )
@@ -618,6 +619,11 @@ type ConfigRequirements struct {
 	// `# Policy Configuration` section of the Guardian reviewer prompt. Like
 	// Permissions it is internal and not part of the app-server wire schema.
 	GuardianPolicyConfig *string `json:"-"`
+	// Rules is the managed `[rules]` exec-policy requirement (Rust #58045
+	// ConfigRequirementsToml.rules). It is internal, like Permissions, and stays
+	// off the app-server wire schema; the checkpoint decision `prompt-user` is
+	// only accepted here.
+	Rules *execpolicy.RequirementsPolicy `json:"-"`
 	// GuardianExtraPolicy is the managed `guardian_extra_policy` requirement
 	// (Rust ConfigRequirementsToml.guardian_extra_policy, #47125): it fills the
 	// Guardian template's `{{ extra_policy }}` slot and replaces the
@@ -692,7 +698,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		CheckForUpdateOnStartup              *bool                          `json:"checkForUpdateOnStartup"`
 		AllowLoginShell                      *bool                          `json:"allowLoginShell"`
 		Feedback                             *FeedbackRequirements          `json:"feedback"`
-		Otel                                 *OtelRequirements              `json:"otel"`
+		Otel                                 *wireOtelRequirements          `json:"otel"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
@@ -729,7 +735,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		CheckForUpdateOnStartup:              cloneBoolPtr(r.CheckForUpdateOnStartup),
 		AllowLoginShell:                      cloneBoolPtr(r.AllowLoginShell),
 		Feedback:                             cloneFeedbackRequirements(r.Feedback),
-		Otel:                                 redactedOtelRequirements(r.Otel),
+		Otel:                                 otelRequirementsForWire(r.Otel),
 	})
 }
 
@@ -4136,6 +4142,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AdditionalDeveloperInstructions = cloneStringPtr(requirements.AdditionalDeveloperInstructions)
 	clone.GuardianPolicyConfig = cloneStringPtr(requirements.GuardianPolicyConfig)
 	clone.GuardianExtraPolicy = cloneStringPtr(requirements.GuardianExtraPolicy)
+	clone.Rules = requirements.Rules.Clone()
 	clone.AllowManagedHooksOnly = cloneBoolPtr(requirements.AllowManagedHooksOnly)
 	clone.AllowBrowserAndComputerUse = cloneBoolPtr(requirements.AllowBrowserAndComputerUse)
 	clone.AllowAppshots = cloneBoolPtr(requirements.AllowAppshots)

@@ -31,6 +31,8 @@ func AppendNetworkRule(policyPath string, host string, protocol string, decision
 		decisionValue = "allow"
 	case DecisionPrompt:
 		decisionValue = "prompt"
+	case DecisionPromptUser:
+		return fmt.Errorf("prompt-user is only supported in managed command rules")
 	case DecisionForbidden:
 		decisionValue = "deny"
 	default:

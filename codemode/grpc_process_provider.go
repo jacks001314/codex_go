@@ -29,6 +29,7 @@ type GrpcProcessProvider struct {
 
 	mu                 sync.Mutex
 	connection         *remoteConnection
+	grpcConn           *grpc.ClientConn
 	process            *exec.Cmd
 	stdin              io.WriteCloser
 	stdout             io.ReadCloser
@@ -61,8 +62,14 @@ func (p *GrpcProcessProvider) TakeUnavailableWarning(effectiveToolMode string) s
 }
 
 func (p *GrpcProcessProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
+	return p.NewSessionWithOptions(delegate, tool.CodeModeSessionOptions{})
+}
+
+// NewSessionWithOptions honors the requested session options (Rust
+// CodeModeSessionProvider::create_session_with_options, #58125).
+func (p *GrpcProcessProvider) NewSessionWithOptions(delegate tool.CodeModeRemoteDelegate, options tool.CodeModeSessionOptions) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
-	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
+	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value)), options: sessionOptionsFromTool(options)}
 }
 
 // nextGeneration keeps a reloaded thread's replacement session from reusing
@@ -136,6 +143,7 @@ func (p *GrpcProcessProvider) connect(ctx context.Context) (*remoteConnection, e
 		return nil, err
 	}
 	p.connection = connection
+	p.grpcConn = grpcConn
 	p.process = cmd
 	p.stdin = stdin
 	p.stdout = stdout
@@ -156,6 +164,10 @@ func (p *GrpcProcessProvider) stopLocked() error {
 	if p.connection != nil {
 		closeErr = p.connection.Close()
 		p.connection = nil
+	}
+	if p.grpcConn != nil {
+		_ = p.grpcConn.Close()
+		p.grpcConn = nil
 	}
 	if p.stdin != nil {
 		_ = p.stdin.Close()

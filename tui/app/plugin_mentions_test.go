@@ -32,7 +32,14 @@ func TestPluginMentionsUsePluginListSummariesAndGUIEligibilityMatchRust(t *testi
 		Plugins: []plugin.PluginSummary{pluginMentionSummary("top-level-is-ignored")},
 	}
 
-	got := PluginMentionsFromListResponse(response)
+	installed := plugin.PluginInstalledResponse{
+		Marketplaces: response.Marketplaces,
+		Plugins:      response.Plugins,
+	}
+	got := PluginMentionsFromInstalledResponse(installed)
+	if listMentions := PluginMentionsFromListResponse(response); !reflect.DeepEqual(listMentions, got) {
+		t.Fatalf("catalog and installed mention inventories differ: %#v vs %#v", listMentions, got)
+	}
 	want := []plugin.CapabilitySummary{
 		{
 			Name:           "active",

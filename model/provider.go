@@ -17,8 +17,8 @@ import (
 const (
 	DefaultApprovalReviewPreferredModel      = "codex-auto-review"
 	APIKeyApprovalReviewPreferredModel       = "gpt-5.6-luna"
-	DefaultMemoryExtractionPreferredModel    = "gpt-5.4-mini"
-	DefaultMemoryConsolidationPreferredModel = "gpt-5.4"
+	DefaultMemoryExtractionPreferredModel    = "gpt-6-luna"
+	DefaultMemoryConsolidationPreferredModel = "gpt-6.1-terra"
 )
 
 type ProviderCapabilities struct {
@@ -293,7 +293,9 @@ func (p *ConfiguredProvider) GatewayAuthManager() (*auth.GatewayAuthManager, err
 
 func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager {
 	if configCatalog != nil {
-		return NewStaticModelsManager(*configCatalog)
+		// Rust #57770: a configured catalog is explicit configuration, so its
+		// entries may still name a reviewer for a custom gateway.
+		return NewStaticModelsManagerWithOrigin(*configCatalog, ModelOriginExplicitConfig)
 	}
 	if IsOSSProviderID(p.providerID) {
 		return NewStaticModelsManager(OSSModelCatalog(p.providerID))
@@ -618,21 +620,23 @@ func bedrockAccessKeysValue(value any) *auth.BedrockAccessKeysAuth {
 func (p *AmazonBedrockProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager {
 	if configCatalog != nil {
 		catalog := WithDefaultOnlyServiceTier(*configCatalog)
-		return NewStaticModelsManager(catalog)
+		// Rust #57770: config_model_catalog is ExplicitConfig, the provider's own
+		// Bedrock catalogs are Provider.
+		return NewStaticModelsManagerWithOrigin(catalog, ModelOriginExplicitConfig)
 	}
 	// Rust AmazonBedrockModelProvider::default_model_catalog (#38470): the
 	// Bedrock Runtime endpoint serves its own cross-region catalog, not the
 	// Mantle slugs.
 	if p.info.IsAmazonBedrockRuntime() {
-		return NewStaticModelsManager(AmazonBedrockRuntimeModelCatalog())
+		return NewStaticModelsManagerWithOrigin(AmazonBedrockRuntimeModelCatalog(), ModelOriginProvider)
 	}
 	// Rust #47657: only a GovCloud Mantle front door is restricted to the
 	// GPT-5.6 Terra/Luna catalog; every other Mantle endpoint keeps the full
 	// shared catalog.
 	if isAmazonBedrockGovCloudMantleEndpoint(p.info.BaseURL) {
-		return NewStaticModelsManager(AmazonBedrockGovCloudModelCatalog())
+		return NewStaticModelsManagerWithOrigin(AmazonBedrockGovCloudModelCatalog(), ModelOriginProvider)
 	}
-	return NewStaticModelsManager(AmazonBedrockModelCatalog())
+	return NewStaticModelsManagerWithOrigin(AmazonBedrockModelCatalog(), ModelOriginProvider)
 }
 
 // isAmazonBedrockGovCloudMantleEndpoint mirrors the GovCloud host test inside
@@ -882,8 +886,12 @@ func (p *GCPProvider) GatewayAuthManager() (*auth.GatewayAuthManager, error) {
 
 func (p *GCPProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager {
 	catalog := BundledModelsResponse()
+	// Rust GcpModelProvider::models_manager (#57770): a configured catalog is
+	// ExplicitConfig, the provider's own Vertex catalog is Provider.
+	origin := ModelOriginProvider
 	if configCatalog != nil {
 		catalog = *configCatalog
+		origin = ModelOriginExplicitConfig
 	}
 	allowed := map[string]struct{}{
 		"gpt-6-astra": {}, "gpt-6-luna": {}, "gpt-6.1-sol": {}, "gpt-6.1-terra": {},
@@ -900,5 +908,5 @@ func (p *GCPProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager
 		item.ApplyPatchToolType = ""
 		filtered.Models = append(filtered.Models, item)
 	}
-	return NewStaticModelsManager(filtered)
+	return NewStaticModelsManagerWithOrigin(filtered, origin)
 }

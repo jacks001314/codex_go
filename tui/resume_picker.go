@@ -280,6 +280,14 @@ type SessionPickerState struct {
 	// session titles (Rust #44857). ThemeID selects the accent palette.
 	UseThemeColors bool
 	ThemeID        string
+	// MorePagesAvailable reports whether a page-down past the last row may wait
+	// for the catalog to serve another page (Rust PaginationState.next_cursor).
+	MorePagesAvailable bool
+	// pendingPageDownTarget keeps a page-down distance while rows are still
+	// arriving so a delayed page cannot drop the user's position (Rust
+	// PickerState.pending_page_down_target, #57862).
+	pendingPageDownTarget int
+	hasPendingPageDown    bool
 }
 
 func NewSessionPickerState(action SessionPickerAction, items []SessionSummary, filterCWD string, filterCWDs ...string) *SessionPickerState {
@@ -404,14 +412,25 @@ func (s *SessionPickerState) MovePage(delta int) {
 	visible := s.VisibleItems()
 	if len(visible) == 0 {
 		s.Selected = 0
+		s.hasPendingPageDown = false
 		return
 	}
-	s.Selected += delta
+	target := s.Selected + delta
+	maxIndex := len(visible) - 1
+	// Rust #57862: a forward page-down that runs past the loaded rows with more
+	// pages still on the way keeps its distance until those rows arrive.
+	if delta > 0 && target > maxIndex && s.MorePagesAvailable {
+		s.pendingPageDownTarget = target
+		s.hasPendingPageDown = true
+		return
+	}
+	s.hasPendingPageDown = false
+	s.Selected = target
 	if s.Selected < 0 {
 		s.Selected = 0
 	}
 	if s.Selected >= len(visible) {
-		s.Selected = len(visible) - 1
+		s.Selected = maxIndex
 	}
 }
 
@@ -556,6 +575,105 @@ func (s *SessionPickerState) Selection() (SessionSelection, bool) {
 		selection.Kind = SessionSelectionResume
 	}
 	return selection, true
+}
+
+// SelectedTarget returns the identity of the selected session independent of
+// its index in the lazily sorted list (Rust Row::seen_key). It survives rows
+// arriving later and reordering the picker (#57862).
+func (s *SessionPickerState) SelectedTarget() (SessionTarget, bool) {
+	item, ok := s.SelectedItem()
+	if !ok {
+		return SessionTarget{}, false
+	}
+	return s.itemTarget(item), true
+}
+
+// SelectTarget re-selects the session with the given identity after a merge
+// reordered the rows. It reports whether the session is still visible.
+func (s *SessionPickerState) SelectTarget(target SessionTarget) bool {
+	if s == nil {
+		return false
+	}
+	key := sessionTargetRowKey(target)
+	visible := s.VisibleItems()
+	for index, item := range visible {
+		if sessionTargetRowKey(s.itemTarget(item)) == key {
+			s.Selected = index
+			return true
+		}
+	}
+	return false
+}
+
+// IngestItems merges newly-arrived sessions, keeps the list globally ordered by
+// the selected timestamp, and restores the selected session plus any pending
+// page-down distance (Rust PickerState::ingest_page, #57862).
+func (s *SessionPickerState) IngestItems(items []SessionSummary) {
+	if s == nil || len(items) == 0 {
+		return
+	}
+	selected, hasSelected := s.SelectedTarget()
+	distance := 0
+	if s.hasPendingPageDown {
+		distance = s.pendingPageDownTarget - s.Selected
+		if distance < 0 {
+			distance = 0
+		}
+	}
+	seen := make(map[string]bool, len(s.Items)+len(items))
+	for _, item := range s.Items {
+		seen[sessionTargetRowKey(s.itemTarget(item))] = true
+	}
+	for _, item := range items {
+		key := sessionTargetRowKey(s.itemTarget(item))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		s.Items = append(s.Items, item)
+	}
+	// VisibleItems sorts on demand, so appending already keeps the merged list
+	// globally ordered.
+	if hasSelected {
+		s.SelectTarget(selected)
+	}
+	if s.hasPendingPageDown {
+		visible := s.VisibleItems()
+		maxIndex := len(visible) - 1
+		target := s.Selected + distance
+		if target > maxIndex && s.MorePagesAvailable {
+			s.pendingPageDownTarget = target
+			return
+		}
+		s.hasPendingPageDown = false
+		if len(visible) > 0 {
+			if target < 0 {
+				target = 0
+			}
+			if target > maxIndex {
+				target = maxIndex
+			}
+			s.Selected = target
+		}
+	}
+}
+
+func (s *SessionPickerState) itemTarget(item SessionSummary) SessionTarget {
+	backendID := item.BackendID
+	if backendID.IsZero() {
+		backendID = s.BackendID
+	}
+	return SessionTarget{BackendID: backendID, Path: item.Path, ThreadID: item.ThreadID, CWD: item.CWD}
+}
+
+// sessionTargetRowKey mirrors Rust Row::seen_key: a path identifies the row when
+// present, otherwise the thread id does. The backend is part of the key so
+// identical ids from different backends stay distinct.
+func sessionTargetRowKey(target SessionTarget) string {
+	if path := strings.TrimSpace(target.Path); path != "" {
+		return "path\x00" + target.BackendID.String() + "\x00" + path
+	}
+	return "thread\x00" + target.BackendID.String() + "\x00" + target.ThreadID
 }
 
 func (s *SessionPickerState) NeedsNextPage() bool {

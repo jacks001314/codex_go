@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 type stdioHostServer struct {
@@ -395,7 +396,7 @@ func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *
 		_, _ = s.host.requestDelegate(ctx, s.id, NotifyRequest(callID, cellID, text))
 	})
 	output, execErr := s.exec.Execute(ctx, invocation)
-	return hostRuntimeResponse(cellID, output, execErr)
+	return s.observeResponse(cellID, output, execErr, request.MaxOutputTokens)
 }
 
 func (s *stdioHostSession) wait(ctx context.Context, request *WaitRequest, terminate bool, yield *tool.YieldSignal) WaitOutcome {
@@ -419,7 +420,7 @@ func (s *stdioHostSession) wait(ctx context.Context, request *WaitRequest, termi
 		message := err.Error()
 		return MissingCell(Result(request.CellID, nil, &message))
 	}
-	response := hostRuntimeResponse(request.CellID, output, err)
+	response := s.observeResponse(request.CellID, output, err, request.MaxOutputTokens)
 	return LiveCell(response)
 }
 
@@ -533,6 +534,28 @@ func hostSourceWithOptions(source string, yieldTimeMS *uint64, maxOutputTokens *
 	}
 	encoded, _ := json.Marshal(options)
 	return "// @exec: " + string(encoded) + "\n" + source
+}
+
+// observeResponse renders a host observation under the session's output policy.
+// Server truncation bounds the typed items with the observation's own budget and
+// sends an independently bounded diagnostic (Rust #57870).
+func (s *stdioHostSession) observeResponse(cellID CellID, output *tool.Output, err error, maxOutputTokens *int) RuntimeResponse {
+	response := hostRuntimeResponse(cellID, output, err)
+	if s == nil || s.outputTruncation != OutputTruncationServer {
+		return response
+	}
+	collector := newOutputCollector(OutputTruncationServer)
+	for _, item := range response.ContentItems {
+		collector.push(item)
+	}
+	response.ContentItems = renderOutput(collector.intoCollectedOutput(), maxOutputTokens)
+	// The diagnostic is already part of the observation, so only bound the
+	// logging copy here instead of appending it again.
+	if response.ErrorText != nil && len(*response.ErrorText) > maxServerDiagnosticBytes {
+		bounded := utils.TruncateMiddleWithMarker(*response.ErrorText, maxServerDiagnosticBytes, "…")
+		response.ErrorText = &bounded
+	}
+	return response
 }
 
 func hostRuntimeResponse(cellID CellID, output *tool.Output, err error) RuntimeResponse {

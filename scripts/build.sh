@@ -121,6 +121,16 @@ set -- "$@" ./cmd/codex-code-mode-host
 (cd "$ROOT" && go "$@")
 echo "==> Built $HOST_OUTPUT"
 
+# The standalone executor ships beside the CLI (Rust #57837). A managed daemon
+# resolves it from the package layout, so a package without it is incomplete.
+EXEC_SERVER_OUTPUT=$(dirname -- "$OUTPUT")/codex-exec-server$EXT
+set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION -X codex_go/mcp.buildVersion=$VERSION" -o "$EXEC_SERVER_OUTPUT"
+[ "$RACE" -eq 1 ] && set -- "$@" -race
+[ "$REBUILD" -eq 1 ] && set -- "$@" -a
+set -- "$@" ./cmd/codex-exec-server
+(cd "$ROOT" && go "$@")
+echo "==> Built $EXEC_SERVER_OUTPUT"
+
 # The voice helper ships inside the package's private voice runtime. It is
 # stamped with the same identity as the CLI so the same-build handshake holds.
 VOICE_BIN_DIR=$(dirname -- "$OUTPUT")/codex-resources/voice/bin
@@ -178,6 +188,7 @@ if [ "$(basename -- "$OUTPUT_DIR")" = bin ]; then
   "target": "$TRIPLE",
   "variant": "codex",
   "entrypoint": "codex$EXT",
+  "execServer": "codex-exec-server$EXT",
   "resourcesDir": "codex-resources",
   "pathDir": "codex-path"
 }

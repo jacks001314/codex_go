@@ -320,6 +320,12 @@ func (r *RuntimeRouter) pinThreadResidency(threadID string) func() {
 	r.idleLifecycle.ensureMapsLocked()
 	r.idleLifecycle.pins[threadID]++
 	r.idleLifecycle.mu.Unlock()
+	return r.releaseThreadResidencyPin(threadID)
+}
+
+// releaseThreadResidencyPin drops one residency pin, re-arming the idle unload
+// timer once the thread has no pins left.
+func (r *RuntimeRouter) releaseThreadResidencyPin(threadID string) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -333,6 +339,36 @@ func (r *RuntimeRouter) pinThreadResidency(threadID string) func() {
 				r.scheduleThreadIdleUnload(threadID)
 			}
 		})
+	}
+}
+
+// acquireThreadResidencyPin pins a thread for the whole request and waits out an
+// idle eviction that already started. The pin and the pending entry are read
+// under the same lock, so once the pin is held no new eviction can claim the
+// thread (Rust #57787 serializes cold resume and listener install against the
+// thread's unload by locking the thread state). Without the pin a cold resume
+// could install its runtime, then lose it to a stale idle-unload timer before
+// the subscribing connection was attached.
+func (r *RuntimeRouter) acquireThreadResidencyPin(threadID string) (func(), error) {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return func() {}, nil
+	}
+	for {
+		r.idleLifecycle.mu.Lock()
+		r.idleLifecycle.ensureMapsLocked()
+		done := r.idleLifecycle.pending[threadID]
+		if done == nil {
+			r.idleLifecycle.pins[threadID]++
+			r.idleLifecycle.mu.Unlock()
+			return r.releaseThreadResidencyPin(threadID), nil
+		}
+		r.idleLifecycle.mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(threadUnloadCleanupWait):
+			return nil, fmt.Errorf("%w: thread %s is closing; retry after the thread is closed", session.ErrConflict, threadID)
+		}
 	}
 }
 

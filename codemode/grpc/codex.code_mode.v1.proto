@@ -8,6 +8,10 @@ option go_package = "codex_go/codemode/grpc/codemodev1";
 // session owner. Large tool inputs and outputs stay off the session event
 // stream so independent HTTP/2 streams can make progress concurrently.
 service CodeModeHost {
+  // Optional host-level observation. UNIMPLEMENTED means no collector. Sampling
+  // never opens/closes a session and failures affect only this RPC stream.
+  rpc GetProcessMetrics(GetProcessMetricsRequest) returns (GetProcessMetricsResponse);
+
   // Generic framing transport: carries the code-mode IPC JSON framing over a
   // single bidirectional gRPC stream. Used when a host exposes the same
   // protocol over gRPC instead of WebSocket or stdio.
@@ -43,6 +47,15 @@ service CodeModeHost {
   // Acknowledges that a canceled wait has retired before another wait starts.
   rpc CancelWait(CancelWaitRequest) returns (CancelWaitResponse);
   rpc Terminate(TerminateRequest) returns (WaitResponse);
+}
+
+message GetProcessMetricsRequest {}
+
+message GetProcessMetricsResponse {
+  uint32 process_id = 1;
+  double process_start_time_seconds = 2;
+  double cpu_seconds_total = 3;
+  uint64 resident_memory_bytes = 4;
 }
 
 // FramedMessage carries one code-mode IPC framing payload (JSON) over the

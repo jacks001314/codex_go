@@ -258,10 +258,14 @@ func listMCPHTTPInventory(config *ServerConfig) (*stdioInventory, error) {
 }
 
 func listMCPHTTPInventoryWithClient(client *httpClient) (*stdioInventory, error) {
-	return listMCPHTTPInventoryWithOptions(client, "", "", nil)
+	return listMCPHTTPInventoryWithOptions(client, "", "", nil, false)
 }
 
-func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, threadID string, roots []MCPRoot) (*stdioInventory, error) {
+// listMCPHTTPInventoryWithOptions lists one remote server's catalog. When
+// skipResourceTemplates is set the template listing is not requested and the
+// reported template list stays empty (Rust #57861: hosted Apps always answers
+// `resources/templates/list` with an empty list).
+func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, threadID string, roots []MCPRoot, skipResourceTemplates bool) (*stdioInventory, error) {
 	result := &stdioInventory{}
 	options := &httpClientCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
 	tools, toolListMeta, err := listMCPHTTPTools(client, options)
@@ -279,8 +283,10 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 	if resources, err := listMCPHTTPResources(client, options); err == nil {
 		result.Resources = resources
 	}
-	if templates, err := listMCPHTTPResourceTemplates(client, options); err == nil {
-		result.ResourceTemplates = templates
+	if !skipResourceTemplates {
+		if templates, err := listMCPHTTPResourceTemplates(client, options); err == nil {
+			result.ResourceTemplates = templates
+		}
 	}
 	return result, nil
 }

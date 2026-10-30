@@ -87,6 +87,10 @@ func (m *LazyModelsManager) RawModelCatalog(strategy RefreshStrategy) ModelsResp
 	return m.resolve().RawModelCatalog(strategy)
 }
 
+func (m *LazyModelsManager) ModelCatalogWithOrigins(strategy RefreshStrategy) []CatalogModel {
+	return m.resolve().ModelCatalogWithOrigins(strategy)
+}
+
 func (m *LazyModelsManager) GetRemoteModels() []ModelInfo {
 	return m.resolve().GetRemoteModels()
 }

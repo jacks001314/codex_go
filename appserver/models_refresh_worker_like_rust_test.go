@@ -36,6 +36,10 @@ func (m *countingModelsManager) RawModelCatalog(strategy model.RefreshStrategy) 
 
 func (m *countingModelsManager) GetRemoteModels() []model.ModelInfo { return nil }
 
+func (m *countingModelsManager) ModelCatalogWithOrigins(model.RefreshStrategy) []model.CatalogModel {
+	return nil
+}
+
 func (m *countingModelsManager) GetDefaultModel(string, bool, model.RefreshStrategy) string {
 	return ""
 }

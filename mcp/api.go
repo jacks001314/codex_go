@@ -854,6 +854,10 @@ type cachedMCPStdioClient struct {
 	// release returns a shared connection to the process-wide pool (Rust
 	// #57211). It is nil for private connections, which Close owns.
 	release func()
+	// lease is this chat's server-side lease handle on a shared connection. It
+	// stays closed unless the helper negotiated codex/connection-lease (Rust
+	// #57978).
+	lease *mcpChatLease
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
@@ -1673,9 +1677,9 @@ func retainedToolCatalogInventory(status MCPServerStatus) *stdioInventory {
 // revision it was listed at and whether that listing stayed stable across its
 // own pages. A listing that raced a notification is reported as not stable, so
 // it is never published as the current catalog (Rust #54656).
-func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, threadID string) (*stdioInventory, uint64, bool, error) {
+func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, threadID string, skipResourceTemplates bool) (*stdioInventory, uint64, bool, error) {
 	revision := s.cachedToolListRevision(name)
-	inventory, err := s.listInventoryForConfig(name, config, threadID)
+	inventory, err := s.listInventoryForConfig(name, config, threadID, skipResourceTemplates)
 	if err != nil {
 		return nil, revision, false, err
 	}
@@ -1691,8 +1695,9 @@ func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, thre
 // starts a short retry cooldown, so a flapping server neither drops its catalog
 // nor hammers the connection.
 func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerConfig, threadID string, retained MCPServerStatus) (*stdioInventory, error) {
+	skipResourceTemplates := retained.hostOwnedApps
 	if !s.mcpToolListRefreshApplies(name) {
-		return s.listInventoryForConfig(name, config, threadID)
+		return s.listInventoryForConfig(name, config, threadID, skipResourceTemplates)
 	}
 	state := s.toolListRefreshStateFor(name)
 	state.mu.Lock()
@@ -1708,7 +1713,7 @@ func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerCon
 	case mcpToolListNoChange:
 		// Nothing was invalidated on this connection, so the read lists the
 		// server exactly as a read without the feature does.
-		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID)
+		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID, skipResourceTemplates)
 		if err != nil {
 			return nil, err
 		}
@@ -1722,7 +1727,7 @@ func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerCon
 	// own pages is published.
 	var lastErr error
 	for attempt := 0; attempt < mcpToolListNotificationRefreshAttempts; attempt++ {
-		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID)
+		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID, skipResourceTemplates)
 		if err != nil {
 			lastErr = err
 			break
@@ -2549,7 +2554,7 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			return response, nil
 		}
 		if strings.TrimSpace(config.Command) != "" {
-			response, err = readMCPStdioResourceWithClient(s.stdioClientForServer(server, &config), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
+			response, err = readMCPStdioResourceWithLease(s.stdioClientForServer(server, &config), s.stdioConnectionLease(server), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
 			if err != nil {
 				return nil, err
 			}
@@ -2686,7 +2691,7 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 		if err != nil {
 			return nil, err
 		}
-		return callMCPStdioToolWithClient(stdioTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, resolvedMeta)
+		return callMCPStdioToolWithLease(stdioTarget, s.stdioConnectionLease(server), server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, resolvedMeta)
 	}
 	encoded, err := json.Marshal(params.Arguments)
 	if err != nil {
@@ -2972,7 +2977,7 @@ func (s *MCPService) serverEnvironmentID(server string) string {
 	return strings.TrimSpace(config.EffectiveEnvironmentID())
 }
 
-func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string) (*stdioInventory, error) {
+func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string, skipResourceTemplates bool) (*stdioInventory, error) {
 	// Rust #48143: an executor-discovered declaration may only reach a remote
 	// HTTP transport that needs no host environment headers, helpers or bearer
 	// tokens, and the rejection happens before any host value is read.
@@ -2984,10 +2989,10 @@ func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, t
 		if err := ValidateServerAuth(name, config); err != nil {
 			return nil, err
 		}
-		return listMCPHTTPInventoryWithOptions(s.httpClientForServer(name, config), name, threadID, roots)
+		return listMCPHTTPInventoryWithOptions(s.httpClientForServer(name, config), name, threadID, roots, skipResourceTemplates)
 	}
 	if config != nil && strings.TrimSpace(config.Command) != "" {
-		return listMCPStdioInventoryWithOptions(s.stdioClientForServer(name, config), name, threadID, roots)
+		return listMCPStdioInventoryWithOptions(s.stdioClientForServer(name, config), name, threadID, roots, skipResourceTemplates)
 	}
 	return listMCPInventory(config)
 }
@@ -3148,6 +3153,26 @@ func mcpReferencedEnvironmentVariables(config *ServerConfig) []string {
 	return references
 }
 
+// stdioConnectionLease reports this chat's server-side lease id for a pooled
+// stdio server, or an empty string when the helper did not negotiate the
+// extension (Rust #57978).
+func (s *MCPService) stdioConnectionLease(name string) *mcpChatLease {
+	if s == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cached := s.stdioClients[name]
+	if cached == nil {
+		return nil
+	}
+	return cached.lease
+}
+
 func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *stdioClient {
 	if config == nil {
 		return newMCPStdioClient(nil)
@@ -3180,9 +3205,10 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	var (
 		client  *stdioClient
 		release func()
+		lease   *mcpChatLease
 	)
 	if s.mcpStdioSharingEligible(name, config) {
-		client, release = sharedMCPStdioConnections.acquire(mcpStdioPoolKey(key, config), func() *stdioClient {
+		client, lease, release = sharedMCPStdioConnections.acquire(mcpStdioPoolKey(key, config), func() *stdioClient {
 			created := newMCPStdioClientWithCapabilities(config, mcpClientFeatures{
 				OpenAIForm:       openAIForm,
 				UserVerification: userVerification,
@@ -3211,7 +3237,7 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 		client.legacyFallback = previous
 		old = nil
 	}
-	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout, release: release}
+	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout, release: release, lease: lease}
 	s.mu.Unlock()
 	closeCachedStdioClients([]*cachedMCPStdioClient{old})
 	return client

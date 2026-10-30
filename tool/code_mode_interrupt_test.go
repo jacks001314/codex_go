@@ -27,14 +27,14 @@ func (s *interruptRecordingSession) Execute(ctx context.Context, request CodeMod
 	return CodeModeRemoteResponse{CellID: cellID, State: "yielded"}, nil
 }
 
-func (s *interruptRecordingSession) Wait(ctx context.Context, cellID string, ms uint64, _ *YieldSignal) (CodeModeRemoteResponse, error) {
+func (s *interruptRecordingSession) Wait(ctx context.Context, cellID string, ms uint64, _ *int, _ *YieldSignal) (CodeModeRemoteResponse, error) {
 	s.mu.Lock()
 	s.waited = append(s.waited, cellID)
 	s.mu.Unlock()
 	return CodeModeRemoteResponse{}, nil
 }
 
-func (s *interruptRecordingSession) Terminate(ctx context.Context, cellID string) (CodeModeRemoteResponse, error) {
+func (s *interruptRecordingSession) Terminate(ctx context.Context, cellID string, _ *int) (CodeModeRemoteResponse, error) {
 	s.mu.Lock()
 	s.ended = append(s.ended, cellID)
 	s.mu.Unlock()

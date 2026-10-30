@@ -13,7 +13,11 @@ import (
 func startupTipTestModel(t *testing.T, width int, fullscreen bool) *Model {
 	t.Helper()
 	show := true
-	model := NewModel(codextui.NewState(nil), Options{
+	// A resumed session keeps the tooltip path: only a fresh session's first
+	// event renders the startup help block (Rust #58127).
+	state := codextui.NewState(nil)
+	state.ThreadID = "thread-startup-tip"
+	model := NewModel(state, Options{
 		Width:                width,
 		Height:               30,
 		FullscreenTranscript: &fullscreen,

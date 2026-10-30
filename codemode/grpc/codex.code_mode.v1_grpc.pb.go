@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	CodeModeHost_GetProcessMetrics_FullMethodName       = "/codex.code_mode.v1.CodeModeHost/GetProcessMetrics"
 	CodeModeHost_Transport_FullMethodName               = "/codex.code_mode.v1.CodeModeHost/Transport"
 	CodeModeHost_OpenSession_FullMethodName             = "/codex.code_mode.v1.CodeModeHost/OpenSession"
 	CodeModeHost_CloseSession_FullMethodName            = "/codex.code_mode.v1.CodeModeHost/CloseSession"
@@ -40,6 +41,9 @@ const (
 // session owner. Large tool inputs and outputs stay off the session event
 // stream so independent HTTP/2 streams can make progress concurrently.
 type CodeModeHostClient interface {
+	// Optional host-level observation. UNIMPLEMENTED means no collector. Sampling
+	// never opens/closes a session and failures affect only this RPC stream.
+	GetProcessMetrics(ctx context.Context, in *GetProcessMetricsRequest, opts ...grpc.CallOption) (*GetProcessMetricsResponse, error)
 	// Generic framing transport: carries the code-mode IPC JSON framing over a
 	// single bidirectional gRPC stream. Used when a host exposes the same
 	// protocol over gRPC instead of WebSocket or stdio.
@@ -74,6 +78,16 @@ type codeModeHostClient struct {
 
 func NewCodeModeHostClient(cc grpc.ClientConnInterface) CodeModeHostClient {
 	return &codeModeHostClient{cc}
+}
+
+func (c *codeModeHostClient) GetProcessMetrics(ctx context.Context, in *GetProcessMetricsRequest, opts ...grpc.CallOption) (*GetProcessMetricsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetProcessMetricsResponse)
+	err := c.cc.Invoke(ctx, CodeModeHost_GetProcessMetrics_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *codeModeHostClient) Transport(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[FramedMessage, FramedMessage], error) {
@@ -224,6 +238,9 @@ func (c *codeModeHostClient) Terminate(ctx context.Context, in *TerminateRequest
 // session owner. Large tool inputs and outputs stay off the session event
 // stream so independent HTTP/2 streams can make progress concurrently.
 type CodeModeHostServer interface {
+	// Optional host-level observation. UNIMPLEMENTED means no collector. Sampling
+	// never opens/closes a session and failures affect only this RPC stream.
+	GetProcessMetrics(context.Context, *GetProcessMetricsRequest) (*GetProcessMetricsResponse, error)
 	// Generic framing transport: carries the code-mode IPC JSON framing over a
 	// single bidirectional gRPC stream. Used when a host exposes the same
 	// protocol over gRPC instead of WebSocket or stdio.
@@ -260,6 +277,9 @@ type CodeModeHostServer interface {
 // pointer dereference when methods are called.
 type UnimplementedCodeModeHostServer struct{}
 
+func (UnimplementedCodeModeHostServer) GetProcessMetrics(context.Context, *GetProcessMetricsRequest) (*GetProcessMetricsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetProcessMetrics not implemented")
+}
 func (UnimplementedCodeModeHostServer) Transport(grpc.BidiStreamingServer[FramedMessage, FramedMessage]) error {
 	return status.Error(codes.Unimplemented, "method Transport not implemented")
 }
@@ -312,6 +332,24 @@ func RegisterCodeModeHostServer(s grpc.ServiceRegistrar, srv CodeModeHostServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&CodeModeHost_ServiceDesc, srv)
+}
+
+func _CodeModeHost_GetProcessMetrics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetProcessMetricsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeModeHostServer).GetProcessMetrics(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CodeModeHost_GetProcessMetrics_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeModeHostServer).GetProcessMetrics(ctx, req.(*GetProcessMetricsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _CodeModeHost_Transport_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -487,6 +525,10 @@ var CodeModeHost_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "codex.code_mode.v1.CodeModeHost",
 	HandlerType: (*CodeModeHostServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetProcessMetrics",
+			Handler:    _CodeModeHost_GetProcessMetrics_Handler,
+		},
 		{
 			MethodName: "CloseSession",
 			Handler:    _CodeModeHost_CloseSession_Handler,

@@ -506,6 +506,17 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 		m.applyThreadSettingsValues(*response.ThreadSettings)
 	}
 	m.setReadOnlyThread(response.ReadOnly)
+	if response.ProviderError != nil {
+		// Rust #58202: the chat stays readable but read-only, and the composer
+		// is replaced by the provider recovery notice.
+		rolloutPath := ""
+		if response.Summary != nil {
+			rolloutPath = response.Summary.Path
+		}
+		m.showProviderError(response.ProviderError, rolloutPath)
+	} else {
+		m.clearProviderError()
+	}
 	m.setThreadUnavailable(false)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	m.State.BumpMessagesRevision()

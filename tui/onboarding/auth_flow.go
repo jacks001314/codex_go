@@ -53,6 +53,11 @@ type AuthFlowOptions struct {
 	BedrockLoginAPIKey     func(context.Context, string, string) error
 	BedrockLoginAccessKeys func(context.Context, auth.LoginAccountParams) error
 	BedrockCheckGovCloud   func(context.Context) (bool, error)
+	// GcpAllowed enables the Google Cloud Vertex AI setup wizard. GcpSetup
+	// persists the collected settings through the local app server; a nil
+	// callback disables the wizard.
+	GcpAllowed bool
+	GcpSetup   func(context.Context, appserver.GcpSetupParams) error
 
 	services *authFlowServices
 }
@@ -106,6 +111,7 @@ type authFlowModel struct {
 	activeAttemptCtx    context.Context
 	activeAttemptCancel context.CancelFunc
 	bedrock             *bedrockState
+	gcp                 *gcpState
 	completed           bool
 	shouldExit          bool
 }
@@ -217,6 +223,8 @@ func (m *authFlowModel) Update(message bubbletea.Msg) (bubbletea.Model, bubblete
 		return m.handleBedrockConfigured(message)
 	case bedrockGovCloudMsg:
 		return m.handleBedrockGovCloud(message)
+	case gcpConfiguredMsg:
+		return m.handleGCPConfigured(message)
 	case bubbletea.KeyMsg:
 		return m.handleKey(message)
 	default:
@@ -248,6 +256,13 @@ func (m *authFlowModel) View() string {
 		return m.bedrock.render(m.width, m.errorMessage)
 	case SignInBedrockConfigured:
 		return authSuccessStyle.Render("? Amazon Bedrock configured")
+	case SignInGCP:
+		if m.gcp == nil {
+			return ""
+		}
+		return m.gcp.render(m.width, m.errorMessage)
+	case SignInGCPConfigured:
+		return authSuccessStyle.Render("? Google Cloud Vertex AI configured")
 	default:
 		return m.renderPickMode()
 	}
@@ -264,6 +279,9 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 	}
 	if m.state == SignInBedrock {
 		return m.handleBedrockKey(message)
+	}
+	if m.state == SignInGCP {
+		return m.handleGCPKey(message)
 	}
 	if m.state == SignInAPIKeyEntry {
 		return m.handleAPIKeyEntryKey(message)
@@ -466,6 +484,19 @@ func (m *authFlowModel) startChoice(choice AuthChoice) (bubbletea.Model, bubblet
 		m.errorMessage = ""
 		m.bedrock = newBedrockStateDiscovering()
 		return m, m.discoverBedrockCmd()
+	case AuthChoiceGCP:
+		if !m.options.APIKeyAllowed || !m.options.GcpAllowed {
+			m.errorMessage = apiKeyLoginDisabledMessage
+			return m, nil
+		}
+		if m.options.GcpSetup == nil {
+			m.errorMessage = "Google Cloud Vertex AI setup is unavailable in this build."
+			return m, nil
+		}
+		m.state = SignInGCP
+		m.errorMessage = ""
+		m.gcp = newGCPState()
+		return m, nil
 	}
 	return m, nil
 }
@@ -607,7 +638,7 @@ func (m *authFlowModel) oauthOptions(openBrowser bool) *auth.OAuthOptions {
 }
 
 func (m *authFlowModel) displayedOptions() []AuthOption {
-	return AuthOptionsForPolicyWithBedrock(m.options.ChatGPTAllowed, m.options.APIKeyAllowed, m.options.BedrockAllowed)
+	return AuthOptionsForPolicyWithProviders(m.options.ChatGPTAllowed, m.options.APIKeyAllowed, m.options.BedrockAllowed, m.options.GcpAllowed)
 }
 
 func (m *authFlowModel) selectableChoices() []AuthChoice {

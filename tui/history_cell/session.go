@@ -106,19 +106,29 @@ type SessionInfoCell struct {
 	Parts []HistoryCell
 }
 
-func NewSessionInfo(header SessionHeaderHistoryCell, isFirstEvent bool, tooltip string) SessionInfoCell {
+// newSessionStartupHelpLines renders the first-event help block Rust shows
+// beneath a new session header when the tooltip preference is enabled
+// (#58127).
+func newSessionStartupHelpLines() []string {
+	return []string{
+		"  To get started, describe a task or try one of these commands:",
+		"",
+		"  /init - create an AGENTS.md file with instructions for Codex",
+		"  /status - show current session configuration",
+		"  /permissions - choose what Codex is allowed to do",
+		"  /model - choose what model and reasoning effort to use",
+		"  /review - review any changes and find issues",
+	}
+}
+
+// NewSessionInfo builds a session header cell. The startup help block is a
+// tooltip too, so a first event renders it only when showTooltips is enabled;
+// a later event renders the supplied tooltip instead (Rust #58127).
+func NewSessionInfo(header SessionHeaderHistoryCell, isFirstEvent bool, showTooltips bool, tooltip string) SessionInfoCell {
 	parts := []HistoryCell{header}
-	if isFirstEvent {
-		parts = append(parts, NewPlainHistoryCell([]string{
-			"  To get started, describe a task or try one of these commands:",
-			"",
-			"  /init - create an AGENTS.md file with instructions for Codex",
-			"  /status - show current session configuration",
-			"  /permissions - choose what Codex is allowed to do",
-			"  /model - choose what model and reasoning effort to use",
-			"  /review - review any changes and find issues",
-		}))
-	} else if strings.TrimSpace(tooltip) != "" {
+	if isFirstEvent && showTooltips {
+		parts = append(parts, NewPlainHistoryCell(newSessionStartupHelpLines()))
+	} else if !isFirstEvent && strings.TrimSpace(tooltip) != "" {
 		parts = append(parts, NewPrefixedWrappedHistoryCell("Tip: "+strings.TrimSpace(tooltip), "  ", "  "))
 	}
 	return SessionInfoCell{Parts: parts}
@@ -126,20 +136,14 @@ func NewSessionInfo(header SessionHeaderHistoryCell, isFirstEvent bool, tooltip 
 
 // NewSessionInfoWithTooltipLines inserts an already rendered, width-aware
 // tooltip beneath the session header. The rendered lines may carry ANSI styling
-// and OSC 8 hyperlinks, so the transcript must not re-wrap them.
-func NewSessionInfoWithTooltipLines(header SessionHeaderHistoryCell, isFirstEvent bool, tooltipLines []string) SessionInfoCell {
+// and OSC 8 hyperlinks, so the transcript must not re-wrap them. The startup
+// help block is gated by showTooltips and only belongs to a first event
+// (Rust #58127).
+func NewSessionInfoWithTooltipLines(header SessionHeaderHistoryCell, isFirstEvent bool, showTooltips bool, tooltipLines []string) SessionInfoCell {
 	parts := []HistoryCell{header}
-	if isFirstEvent {
-		parts = append(parts, NewPlainHistoryCell([]string{
-			"  To get started, describe a task or try one of these commands:",
-			"",
-			"  /init - create an AGENTS.md file with instructions for Codex",
-			"  /status - show current session configuration",
-			"  /permissions - choose what Codex is allowed to do",
-			"  /model - choose what model and reasoning effort to use",
-			"  /review - review any changes and find issues",
-		}))
-	} else if len(tooltipLines) > 0 {
+	if isFirstEvent && showTooltips {
+		parts = append(parts, NewPlainHistoryCell(newSessionStartupHelpLines()))
+	} else if !isFirstEvent && len(tooltipLines) > 0 {
 		parts = append(parts, NewPlainHistoryCell(tooltipLines))
 	}
 	return SessionInfoCell{Parts: parts}

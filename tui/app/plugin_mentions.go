@@ -13,9 +13,22 @@ type PluginMention struct {
 	Name string
 }
 
+// PluginMentionsFromListResponse mirrors the pre-#57855 helper: it derives
+// mention candidates from the browsable plugin catalog.
 func PluginMentionsFromListResponse(response plugin.PluginListResponse) []plugin.CapabilitySummary {
+	return pluginMentionsFromMarketplaces(response.Marketplaces)
+}
+
+// PluginMentionsFromInstalledResponse derives mention candidates from
+// `plugin/installed`, so loading mentions never fetches the browsable catalog
+// (Rust #57855 plugin_mentions_from_installed_response).
+func PluginMentionsFromInstalledResponse(response plugin.PluginInstalledResponse) []plugin.CapabilitySummary {
+	return pluginMentionsFromMarketplaces(response.Marketplaces)
+}
+
+func pluginMentionsFromMarketplaces(marketplaces []plugin.PluginMarketplaceEntry) []plugin.CapabilitySummary {
 	mentions := []plugin.CapabilitySummary{}
-	for _, marketplace := range response.Marketplaces {
+	for _, marketplace := range marketplaces {
 		marketplaceName := marketplace.Name
 		for _, summary := range marketplace.Plugins {
 			mention, ok := PluginMentionFromSummary(marketplaceName, summary)

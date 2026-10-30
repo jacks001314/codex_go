@@ -4784,7 +4784,8 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/list cwd params = %#v", params.CWD))
 					return
 				}
-				if len(params.ModelProviders) != 1 || params.ModelProviders[0] != "server-provider" {
+				// Rust #58202: the resume picker no longer filters by provider.
+				if len(params.ModelProviders) != 0 {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/list providers = %#v", params.ModelProviders))
 					return
 				}
@@ -4817,14 +4818,12 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 		t.Fatalf("remote session backends = (%v, %v), want %v", items[0].BackendID, items[1].BackendID, backendID)
 	}
 	initialize := remoteTUITestReadCapturedRequest(t, requests)
-	configRead := remoteTUITestReadCapturedRequest(t, requests)
 	activeList := remoteTUITestReadCapturedRequest(t, requests)
 	archivedList := remoteTUITestReadCapturedRequest(t, requests)
 	if initialize.Method != string(appserver.MethodInitialize) ||
-		configRead.Method != string(appserver.MethodConfigRead) ||
 		activeList.Method != string(appserver.MethodThreadList) ||
 		archivedList.Method != string(appserver.MethodThreadList) {
-		t.Fatalf("methods = %q, %q, %q, %q", initialize.Method, configRead.Method, activeList.Method, archivedList.Method)
+		t.Fatalf("methods = %q, %q, %q", initialize.Method, activeList.Method, archivedList.Method)
 	}
 	select {
 	case err := <-serverErrs:
@@ -4895,7 +4894,9 @@ func TestInteractiveRemoteSessionPickerPreservesItemsOnLaterPageFailureLikeRust(
 	}
 }
 
-func TestInteractiveSessionPickerFiltersByConfiguredProviderLikeRust(t *testing.T) {
+// Rust #58202: the resume picker lists chats from every provider so switching
+// providers cannot hide saved conversations.
+func TestInteractiveSessionPickerIncludesAllProvidersLikeRust(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
@@ -4922,8 +4923,12 @@ func TestInteractiveSessionPickerFiltersByConfiguredProviderLikeRust(t *testing.
 		}
 	}
 	items := interactiveSessionPickerItems(&cli.RootOptions{Shared: cli.SharedOptions{CWD: cwd}})
-	if len(items) != 1 || items[0].ThreadID != "thread-ollama" || items[0].Provider != "ollama" {
-		t.Fatalf("session picker items = %#v", items)
+	providers := map[string]string{}
+	for _, item := range items {
+		providers[item.ThreadID] = item.Provider
+	}
+	if len(items) != 2 || providers["thread-ollama"] != "ollama" || providers["thread-openai"] != "openai" {
+		t.Fatalf("session picker items = %#v, want both providers", items)
 	}
 }
 

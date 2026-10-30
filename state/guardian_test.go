@@ -462,7 +462,7 @@ func TestGuardianActionJSONMatchesRust(t *testing.T) {
 				Type: "write_stdin", EnvironmentID: "local", SessionID: &sessionID, Chars: "ls\n",
 				CWD: "/repo", SandboxPermissions: "use_default",
 			},
-			want: "{\n  \"chars\": \"ls\\n\",\n  \"cwd\": \"/repo\",\n  \"environment_id\": \"local\",\n  \"sandbox_permissions\": \"use_default\",\n  \"session_id\": 7,\n  \"tool\": \"write_stdin\",\n  \"tty\": false\n}",
+			want: "{\n  \"chars\": \"ls\\n\",\n  \"cwd\": \"/repo\",\n  \"environment_id\": \"local\",\n  \"original_command\": \"\",\n  \"sandbox_permissions\": \"use_default\",\n  \"session_id\": 7,\n  \"tool\": \"write_stdin\",\n  \"tty\": false\n}",
 		},
 	}
 	for _, testCase := range tests {

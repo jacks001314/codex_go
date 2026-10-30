@@ -144,6 +144,16 @@ func EstimateAudioTokenCount(audioURL string) int {
 	if cached, ok := audioTokenCache.get(audioURL); ok {
 		return cached
 	}
+	estimate := EstimateAudioTokenCountUncached(audioURL)
+	audioTokenCache.put(audioURL, estimate)
+	return estimate
+}
+
+// EstimateAudioTokenCountUncached applies the same duration-based estimate
+// without touching the cache. Bounded Code Mode output renders on a current
+// thread and must not share the client's cache (Rust
+// `estimate_audio_token_count_without_cache`, #57870).
+func EstimateAudioTokenCountUncached(audioURL string) int {
 	estimate := approxTokenCount(audioURL)
 	if seconds, ok := DurationSeconds(audioURL); ok {
 		tokens := seconds * tokensPerSecond
@@ -153,7 +163,6 @@ func EstimateAudioTokenCount(audioURL string) int {
 			estimate = int(ceil(tokens))
 		}
 	}
-	audioTokenCache.put(audioURL, estimate)
 	return estimate
 }
 

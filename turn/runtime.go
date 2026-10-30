@@ -68,6 +68,11 @@ type RuntimeOptions struct {
 	// calls even though inter-agent mail is queued at a commentary or
 	// partial-answer boundary (#49262, #51249).
 	DeferMailboxPreemption bool
+	// InterruptOnCancel mirrors the `features.interrupt_on_cancel` gate
+	// (#57864): a cancelled Responses Lite sampling request interrupts the
+	// upstream response and drains its terminal event, keeping the socket
+	// reusable and the completed usage.
+	InterruptOnCancel bool
 	// IndirectDescriptionPrefixes carries the active model's indirect namespace
 	// guidance for Code Mode rendering (Rust #47642).
 	IndirectDescriptionPrefixes *tool.IndirectNamespacePrefixes
@@ -108,6 +113,7 @@ type Runtime struct {
 	onToolOutputExternalContext  func(ctx context.Context, threadID string, invocation *tool.Invocation)
 	instantInterrupt             bool
 	deferMailboxPreemption       bool
+	interruptOnCancel            bool
 	indirectDescriptionPrefixes  *tool.IndirectNamespacePrefixes
 	codeModeMessages             *model.CodeModeToolMessages
 	allowedTools                 *[]string
@@ -162,6 +168,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		onToolOutputExternalContext:  options.OnToolOutputExternalContext,
 		instantInterrupt:             options.InstantInterrupt,
 		deferMailboxPreemption:       options.DeferMailboxPreemption,
+		interruptOnCancel:            options.InterruptOnCancel,
 		indirectDescriptionPrefixes:  options.IndirectDescriptionPrefixes,
 		codeModeMessages:             options.CodeModeMessages,
 		allowedTools:                 options.AllowedTools,
@@ -453,6 +460,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	}
 	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
 	loopRequest.Tools = filterAllowedHostedTools(loopRequest.Tools, r.allowedTools)
+	loopRequest.InterruptOnCancel = r.interruptOnCancel
 	return NewAgentLoop(&AgentLoopOptions{
 		Agent:                   r.agent,
 		SteerMailbox:            r.steerMailbox,

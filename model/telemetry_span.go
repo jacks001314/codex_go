@@ -160,6 +160,8 @@ func responsesTypeName(event *ResponsesStreamEvent) string {
 		return "model_verifications"
 	case ResponsesStreamEventModeration:
 		return "turn_moderation_metadata"
+	case ResponsesStreamEventGuardianAssessment:
+		return "guardian_assessment"
 	case ResponsesStreamEventSafetyBuffer:
 		return "safety_buffering"
 	case ResponsesStreamEventReasoning:

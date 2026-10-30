@@ -12,6 +12,15 @@ const (
 	ArtifactOperationStartedMetric             = "codex.artifact.operation.started"
 	ArtifactOperationExpectedOutputCountMetric = "codex.artifact.operation.expected_output_count"
 	ProcessStartMetric                         = "codex.process.start"
+	// AdditionalContextCountMetric counts submitted additional-context entries,
+	// including entries that did not change, by kind and truncation status. The
+	// `name` tag appears only when the entry supplies one; opaque source keys
+	// never become tags (Rust #58144).
+	AdditionalContextCountMetric = "codex.additional_context"
+	// AdditionalContextValueBytesMetric measures UTF-8 value bytes before and
+	// after the truncation limit, excluding message wrappers and including the
+	// truncation marker after truncation.
+	AdditionalContextValueBytesMetric = "codex.additional_context.value_bytes"
 	// ExecServerClientRequestCountMetric counts caller-side exec-server RPC
 	// attempts, including local admission and transport failures.
 	ExecServerClientRequestCountMetric          = metrics.ExecServerClientRequestCountMetric
@@ -138,3 +147,10 @@ const (
 // ConversationTurnCountMetric mirrors config.rs's local
 // CONVERSATION_TURN_COUNT_METRIC.
 const ConversationTurnCountMetric = "codex.conversation.turn.count"
+
+// AdditionalContextValueBytesBuckets mirrors Rust
+// ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS (#58144): the size histogram buckets
+// for additional-context values.
+var AdditionalContextValueBytesBuckets = []float64{
+	0, 256, 512, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000, 1024000, 4096000,
+}

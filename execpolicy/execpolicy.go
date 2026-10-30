@@ -14,9 +14,10 @@ import (
 type Decision string
 
 const (
-	DecisionAllow     Decision = "allow"
-	DecisionPrompt    Decision = "prompt"
-	DecisionForbidden Decision = "forbidden"
+	DecisionAllow      Decision = "allow"
+	DecisionPrompt     Decision = "prompt"
+	DecisionPromptUser Decision = "prompt-user"
+	DecisionForbidden  Decision = "forbidden"
 )
 
 type CheckOptions struct {
@@ -136,6 +137,21 @@ func Check(opts *CheckOptions) (*CheckOutput, error) {
 		output.Decision = &decision
 	}
 	return output, nil
+}
+
+// EvaluateCommand matches a tokenized command against the policy's prefix
+// rules without probing the filesystem for executable mappings. It mirrors
+// `Policy::check` for callers that already have the command tokens (Rust
+// #58045's managed command checkpoints).
+func (p *Policy) EvaluateCommand(command []string) *CheckOutput {
+	if p == nil {
+		return &CheckOutput{MatchedRules: []RuleMatch{}}
+	}
+	output := &CheckOutput{MatchedRules: p.matchesForCommand(command, false)}
+	if decision := strictestDecision(output.MatchedRules); decision != "" {
+		output.Decision = &decision
+	}
+	return output
 }
 
 func (p *Policy) matchesForCommand(command []string, resolveHostExecutables bool) []RuleMatch {
@@ -327,7 +343,7 @@ func parsePrefixRule(eval *policyEval, source string, body string) (PrefixRule, 
 		}
 		parsed := Decision(value)
 		switch parsed {
-		case DecisionAllow, DecisionPrompt, DecisionForbidden:
+		case DecisionAllow, DecisionPrompt, DecisionPromptUser, DecisionForbidden:
 			decision = parsed
 		default:
 			return PrefixRule{}, fmt.Errorf("unsupported decision %q", parsed)
@@ -1187,8 +1203,10 @@ func decisionRank(decision Decision) int {
 		return 1
 	case DecisionPrompt:
 		return 2
-	case DecisionForbidden:
+	case DecisionPromptUser:
 		return 3
+	case DecisionForbidden:
+		return 4
 	default:
 		return 0
 	}

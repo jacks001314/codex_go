@@ -136,6 +136,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.persistFeedback = r.persistGuardianReviewFeedback
 		modelReviewer.reviewPlan = r.guardianReviewPlanForTurn
 		modelReviewer.contextMode = r.guardianContextModeForTurn
+		modelReviewer.reviewPlanContext = r.guardianReviewPlanForTurnContext
 		modelReviewer.reviewEndpoint = r.guardianReviewEndpointForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.maxToolCallLagFor = r.guardianMaxToolCallLagForTurn
@@ -149,6 +150,9 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.turnPermissionProfile = r.guardianTurnPermissionProfileForTurn
 		modelReviewer.targetEnvironmentAvailable = r.guardianTargetEnvironmentAvailableForTurn
 		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
+		modelReviewer.parentResponse = r.guardianLatestParentResponseForTurn
+		modelReviewer.servingAssessment = r.guardianServingAssessmentFor
+		modelReviewer.servingAuthorization = r.guardianServingAuthorization
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.syncImageContextWindow = func(threadID, modelID string) (int64, bool) {
 			window := r.effectiveModelContextWindowForModel(modelID, &turn.TurnStartParams{ThreadID: threadID})
@@ -196,11 +200,20 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 // guardianLatestResponseIDForTurn resolves the reviewed turn's newest response id
 // for the review request's `parent_response_id` client metadata (Rust #45441).
 func (r *RuntimeRouter) guardianLatestResponseIDForTurn(threadID, turnID string) string {
+	id, _ := r.guardianLatestParentResponseForTurn(threadID, turnID)
+	return id
+}
+
+// guardianLatestParentResponseForTurn resolves the reviewed turn's newest
+// response id together with the routing pin captured from its WebSocket
+// handshake (Rust #57710). The pin stays paired with that id so a Guardian
+// review only applies it to a request carrying the matching parent response.
+func (r *RuntimeRouter) guardianLatestParentResponseForTurn(threadID, turnID string) (string, *network.RoutingAffinity) {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil {
-		return ""
+		return "", nil
 	}
-	return strings.TrimSpace(active.LatestResponseID)
+	return strings.TrimSpace(active.LatestResponseID), active.LatestRoutingAffinity
 }
 
 // guardianMaxToolCallLagForTurn resolves the stale-score bound for the review's
@@ -226,6 +239,11 @@ func (r *RuntimeRouter) guardianMaxToolCallLagForTurn(threadID, turnID string) i
 func (r *RuntimeRouter) guardianReviewTimeoutForTurn(threadID, turnID string) (time.Duration, bool) {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.Params == nil {
+		// A direct review of an idle thread has no turn, so Rust's
+		// `session.get_config().guardian_review_timeout` applies (#58028).
+		if cfg := r.effectiveMCPConfigForThread(strings.TrimSpace(threadID)); cfg != nil {
+			return cfg.GuardianReviewTimeout()
+		}
 		return state.ReviewTimeout, true
 	}
 	cfg, err := r.effectiveConfigForTurn(active.Params)
@@ -632,9 +650,21 @@ type guardianReviewPlan struct {
 // request-level reasoning effort (#46292), and the reviewer's policy
 // instructions.
 func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guardianReviewPlan {
+	return r.guardianReviewPlanForTurnContext(context.Background(), threadID, turnID)
+}
+
+// guardianReviewPlanForTurnContext is guardianReviewPlanForTurn with the review
+// deadline and cancellation, which Rust #57789 also applies to reviewer
+// configuration setup.
+func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, threadID, turnID string) guardianReviewPlan {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.RunConfig == nil {
-		return guardianReviewPlan{}
+		// Rust #58028 starts a direct review in a fresh turn that inherits the
+		// thread's settings, so an idle thread still resolves its reviewer plan.
+		active = r.guardianReviewIdleTurn(threadID)
+		if active == nil || active.RunConfig == nil {
+			return guardianReviewPlan{}
+		}
 	}
 	cfg, _ := r.effectiveConfigForTurn(active.Params)
 	parentModel := strings.TrimSpace(firstNonEmpty(active.RunConfig.Model, turnParamModel(active.Params)))
@@ -651,12 +681,49 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 			AutoReviewModelOverride: strings.TrimSpace(active.RunConfig.AutoReviewModelOverride),
 		}
 	}
+	parentEffort := appReasoningEffortForTurn(cfg, active.Params)
+	preferredReviewModel := r.guardianReviewPreferredModel(cfg, active.Params)
+	// Rust #57789: check before resolving, so a refresh that finished during the
+	// lookup still forces one reread while later calls resolve the catalog only
+	// once. The lookup itself uses the in-memory catalog, so a recovered
+	// reviewer survives a failed disk-cache write.
+	refreshCompleted := r.guardianCatalogRefreshCompleted(threadID)
+	// Rust #57770: only reviewer entries the provider advertised or the
+	// configuration supplied can be selected; a bundled entry does not prove a
+	// custom gateway offers it unless the parent set an explicit override.
+	reviewCatalog := func() []model.ModelPreset {
+		return model.BuildAvailableModels(guardianReviewCatalogModels(
+			r.requireModels().ModelCatalogWithOrigins(model.RefreshInMemory), parentInfo,
+		))
+	}
 	selection := model.SelectApprovalReviewModel(
 		parentInfo,
-		appReasoningEffortForTurn(cfg, active.Params),
-		r.guardianReviewPreferredModel(cfg, active.Params),
-		r.requireModels().Presets(model.RefreshOffline),
+		parentEffort,
+		preferredReviewModel,
+		reviewCatalog(),
 	)
+	if !refreshCompleted && ctx != nil {
+		// Rust retries once, and only for a session whose reviewer comes from the
+		// built-in catalog rather than an override, a custom catalog, or a
+		// provider-supplied one.
+		var provider *model.ProviderInfo
+		if info, providerErr := model.ProviderForConfigID(configValues(cfg), active.RunConfig.ProviderID, stringConfigValue(cfg, "openai_base_url")); providerErr == nil {
+			provider = info
+		}
+		var record *session.Record
+		if loaded, recordErr := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false); recordErr == nil {
+			record = loaded
+		}
+		if guardianReviewModelNeedsCatalogRefresh(selection, stringConfigValue(cfg, "model_catalog_json") != "", provider, r.guardianThreadIsBasicSessionSource(record)) {
+			r.ensureGuardianCatalogRefresh(ctx, threadID)
+			selection = model.SelectApprovalReviewModel(
+				parentInfo,
+				parentEffort,
+				preferredReviewModel,
+				reviewCatalog(),
+			)
+		}
+	}
 	// Rust resolve_review_model returns the reviewer's catalog entry as a second
 	// value: the review model's entry when the catalog lists the preferred
 	// review model or the parent model overrode it, and the parent's otherwise.
@@ -736,6 +803,36 @@ func guardianContextModeForConfig(cfg *config.Config) state.GuardianContextMode 
 		return state.GuardianContextModeThreadOwned
 	}
 	return state.GuardianContextModeIndependent
+}
+
+// guardianReviewIdleTurn synthesizes the turn a direct review of an idle thread
+// would run in (Rust's `new_turn_with_default_settings`).
+func (r *RuntimeRouter) guardianReviewIdleTurn(threadID string) *activeRuntimeTurn {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	params := r.guardianReviewTurnParams(threadID, record)
+	providerID := strings.TrimSpace(record.Metadata.SelectedModelProvider)
+	if providerID == "" {
+		providerID = strings.TrimSpace(record.Metadata.ModelProvider)
+	}
+	return &activeRuntimeTurn{
+		ThreadID: threadID,
+		TurnID:   newMemoryTurnID(),
+		Params:   params,
+		RunConfig: &appTurnRunConfig{
+			Model:          strings.TrimSpace(params.Model),
+			ProviderID:     providerID,
+			SessionID:      strings.TrimSpace(record.SessionID),
+			Ephemeral:      boolFromMap(record.Metadata.Extra, "ephemeral"),
+			ApprovalPolicy: stringFromAny(params.ApprovalPolicy),
+		},
+	}
 }
 
 // guardianNodeReplPolicy mirrors Rust
@@ -1097,6 +1194,7 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	agent.ApiKeyCyberAccessPrograms = model.ApiKeyCyberAccessProgramsFromConfig(
 		cfg.FeatureSettings(),
 		firstNonEmpty(runConfig.ProviderID, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID),
+		*provider,
 	)
 	agent.Residency = managedResidencyForConfig(cfg)
 	agent.AWS = provider.AWS

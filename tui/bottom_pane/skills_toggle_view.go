@@ -193,6 +193,30 @@ func (v *SkillsToggleView) BackspaceSearch() {
 	v.ApplyFilter()
 }
 
+// NormalizePastedSearchQuery collapses pasted text to a single-line query
+// (Rust clipboard_paste::normalize_pasted_search_query). Whitespace-only pastes
+// yield false so callers can ignore them.
+func NormalizePastedSearchQuery(pasted string) (string, bool) {
+	normalized := strings.Join(strings.Fields(pasted), " ")
+	return normalized, normalized != ""
+}
+
+// HandlePaste appends pasted text to the search query and refreshes the
+// filtered list (Rust #58130 SkillsToggleView::handle_paste). It reports
+// whether the paste changed the view.
+func (v *SkillsToggleView) HandlePaste(pasted string) bool {
+	if v == nil {
+		return false
+	}
+	normalized, ok := NormalizePastedSearchQuery(pasted)
+	if !ok {
+		return false
+	}
+	v.SearchQuery += normalized
+	v.ApplyFilter()
+	return true
+}
+
 func (v *SkillsToggleView) ToggleSelected() {
 	if v == nil {
 		return

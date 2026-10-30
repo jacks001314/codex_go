@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"codex_go/sandbox"
 	"codex_go/sandbox/sandboxpath"
@@ -35,6 +36,7 @@ func PrepareFileSystemPolicy(
 	if err != nil {
 		return nil, err
 	}
+	implicitReads := ImplicitReadRoots(volumes, policyCWD, commandCWD)
 	write := pathSet{}
 	read := pathSet{}
 	if profile.SandboxPolicy.HasFullDiskWriteAccess() {
@@ -50,7 +52,7 @@ func PrepareFileSystemPolicy(
 		}
 	}
 	if profile.SandboxPolicy.HasFullDiskReadAccess() {
-		for _, volume := range volumes {
+		for _, volume := range implicitReads {
 			read.add(volume)
 		}
 	} else if !write.has(policyCWD) {
@@ -74,6 +76,11 @@ func PrepareFileSystemPolicy(
 			denyPolicy.Paths = append(denyPolicy.Paths, entry.Path.Path)
 		}
 	}
+	// Rust #58168: MXC requires deny paths to have existing parents, and the
+	// directories must exist before deny globs are expanded.
+	if err := ensureDenyParentDirectories(denyPolicy.Paths); err != nil {
+		return nil, err
+	}
 	denied, err := windowssandbox.ResolveWindowsDenyReadPathsInEnvironment(
 		denyPolicy,
 		policyCWD,
@@ -92,7 +99,9 @@ func PrepareFileSystemPolicy(
 	for path := range deny.paths {
 		delete(expandedWrite, path)
 	}
-	expandedRead := expandVolumeRootPaths(read.values(), volumes)
+	// Rust #57985: read-only volume-root grants already recurse in MXC, so only
+	// writable roots are expanded into their current children.
+	expandedRead := expandReadVolumeRoots(read.values())
 	for path := range expandedWrite {
 		delete(expandedRead, path)
 	}
@@ -121,6 +130,7 @@ func PrepareEntriesPolicy(
 	if err != nil {
 		return nil, err
 	}
+	implicitReads := ImplicitReadRoots(volumes, policyCWD, commandCWD)
 	write := pathSet{}
 	read := pathSet{}
 	fullWrite := false
@@ -204,7 +214,7 @@ func PrepareEntriesPolicy(
 		}
 	}
 	if fullRead {
-		for _, volume := range volumes {
+		for _, volume := range implicitReads {
 			read.add(volume)
 		}
 	}
@@ -217,6 +227,10 @@ func PrepareEntriesPolicy(
 		for _, carveout := range root.ReadOnlySubpaths {
 			read.add(carveout)
 		}
+	}
+	// Rust #58168: create missing deny parents before glob expansion.
+	if err := ensureDenyParentDirectories(denyPolicy.Paths); err != nil {
+		return nil, err
 	}
 	denied, err := windowssandbox.ResolveWindowsDenyReadPathsInEnvironment(
 		denyPolicy,
@@ -235,7 +249,7 @@ func PrepareEntriesPolicy(
 	for path := range deny.paths {
 		delete(expandedWrite, path)
 	}
-	expandedRead := expandVolumeRootPaths(read.values(), volumes)
+	expandedRead := expandReadVolumeRoots(read.values())
 	for path := range expandedWrite {
 		delete(expandedRead, path)
 	}
@@ -364,6 +378,103 @@ func expandVolumeRootPaths(paths []string, volumeRoots []string) map[string]stri
 		add(path)
 	}
 	return expanded
+}
+
+// expandReadVolumeRoots keeps read-only grants as-is. MXC already grants
+// recursive read access to a volume root, so enumerating its children would
+// only widen the policy to directories created later (Rust #57985).
+func expandReadVolumeRoots(paths []string) map[string]string {
+	expanded := make(map[string]string, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if key := windowssandbox.CanonicalPathKey(path); key != "" {
+			expanded[key] = filepath.Clean(path)
+		}
+	}
+	return expanded
+}
+
+// ImplicitReadRoots filters the default read volume roots (Rust #57783):
+// local volumes and remote shares that contain the policy or command cwd stay,
+// while unrelated network shares are neither probed nor enumerated.
+func ImplicitReadRoots(volumeRoots []string, policyCWD, commandCWD string) []string {
+	roots := make([]string, 0, len(volumeRoots))
+	policyCWD = filepath.Clean(policyCWD)
+	commandCWD = filepath.Clean(commandCWD)
+	for _, root := range volumeRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		if driveTypeOfRoot(root) != driveRemote {
+			roots = append(roots, root)
+			continue
+		}
+		if pathWithinRoot(policyCWD, root) || pathWithinRoot(commandCWD, root) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// driveRemote is DRIVE_REMOTE from GetDriveTypeW.
+const driveRemote = 4
+
+// driveTypeOfRoot probes a volume root's drive type. It is a variable so tests
+// can model network shares without a real mapped drive.
+var driveTypeOfRoot = windowsDriveType
+
+func windowsDriveType(root string) uint32 {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	getDriveType := kernel32.NewProc("GetDriveTypeW")
+	pathPtr, err := syscall.UTF16PtrFromString(strings.TrimSuffix(root, `\`) + `\`)
+	if err != nil {
+		return 0
+	}
+	driveType, _, _ := getDriveType.Call(uintptr(unsafe.Pointer(pathPtr)))
+	return uint32(driveType)
+}
+
+func pathWithinRoot(path string, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
+	root = strings.TrimSuffix(filepath.Clean(root), string(filepath.Separator))
+	path = filepath.Clean(path)
+	if strings.EqualFold(path, root) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(path), strings.ToLower(root)+string(filepath.Separator))
+}
+
+// ensureDenyParentDirectories creates missing parent directories for explicit
+// deny paths (Rust #58168). MXC cannot evaluate a deny path whose parent does
+// not exist, so the parents are created while the path itself is left absent.
+func ensureDenyParentDirectories(paths []string) error {
+	for _, denied := range paths {
+		denied = strings.TrimSpace(denied)
+		if denied == "" {
+			continue
+		}
+		cleaned := filepath.Clean(denied)
+		parent := filepath.Dir(cleaned)
+		if parent == cleaned {
+			continue
+		}
+		if info, err := os.Stat(parent); err == nil {
+			_ = info
+			continue
+		} else if !os.IsNotExist(err) {
+			continue
+		}
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return fmt.Errorf("MXC currently requires deny paths to have existing parent directories. Could not create %s: %w. Create this directory manually or correct the path/permissions, then retry", parent, err)
+		}
+	}
+	return nil
 }
 
 type pathSet struct {
