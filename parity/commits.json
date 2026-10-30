@@ -4684,9 +4684,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 990 (回归证书): #41743 让会话在 history-notes 的 token-budget 扩展启用时，把 history_ingest_requested=true 写进 Responses turn metadata，并把该键加入保留键集合（调用方不能覆盖），扩展关闭时省略。Go 侧实现此前已存在：codexapi/responses_metadata.go 定义 HistoryIngestRequestedKey 并列入保留键；codexapi/client_context.go 的 ClientMetadata.HistoryIngestRequested 只在 true 时序列化、MCPTurnMetadataValue 不携带该键、ClientReservedMetadataKeys 阻止 Extra/ResponsesAPIMetadata 注入；appserver/turn_runtime.go 的 historyIngestRequestedForTurn 依据 cfg.TokenBudgetConfig().UseHistoryNotesExtension 决定，activeTurnClientMetadata 与 compactRemote 两条 Responses 请求路径都已接线；turn.BuildResponsesClientMetadata 透传该选项。本轮补一条覆盖生产入口的回归：appserver/history_ingest_metadata_like_rust_test.go 通过 RegisterTurn + activeTurnClientMetadata 断言扩展启用时 turn metadata 含 history_ingest_requested=true，扩展关闭时键缺失，并且调用方 metadata 既不能把 true 改成 false 也不能在关闭时伪造出该键；既有 appserver/compact_remote_metadata_test.go（historyIngestRequestedForTurn 与 compaction 路径）、turn/turn_test.go（构建与省略）、codexapi/client_context_test.go（MCP 排除与保留键校验）继续覆盖其余面。验证：go test ./appserver -run 'TestActiveTurnClientMetadataCarriesHistoryIngest|TestHistoryIngestRequestedForTurn|TestCompactResponsesClientMetadataCarriesHistoryIngest' -count=1、go test ./turn -run HistoryIngest -count=1、go test ./codexapi -run 'HistoryIngest|Reserved' -count=1。"
    ]
   },
   {

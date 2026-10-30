@@ -3053,6 +3053,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Resources Go builds in code instead of vendoring (`agent_names.txt`, agent builtins, consequential tool templates, inline-visualization viewer html/css) are implementation details with no asset counterpart, not behavioral drift from the move.
 - Verified with `go test ./parity -run 'TestRustTuiAssetsMatchGo|TestRustPersistentModePromptMatchesGo|TestRustGuardianPolicyPrompt|TestRustApplyPatchFreeformSpecMatchesGo' -count=1` and `go test ./tui/... -count=1`.
 
-Status after reconciliation: `2149 complete`, `450 not_applicable`,
-`346 audit_pending`, `199 regression_pending`, `5 partial`,
+### History ingestion turn metadata (Round 990)
+
+- Rust #41743 sets `history_ingest_requested` in Responses turn metadata whenever the history-notes token-budget extension is enabled, reserves the key against caller override, and omits it when the extension is off (#41743, complete).
+- Go already carried the field end to end: `codexapi/responses_metadata.go` reserves the key, `codexapi/client_context.go` serializes it only when true and keeps it out of MCP metadata, and `appserver/turn_runtime.go` derives it from `TokenBudgetConfig().UseHistoryNotesExtension` on both the turn and compaction request paths.
+- The new `appserver/history_ingest_metadata_like_rust_test.go` exercises the production entry point (`RegisterTurn` + `activeTurnClientMetadata`): the key is true with the extension on, absent when off, and caller metadata can neither flip it to false nor forge it.
+- Verified with `go test ./appserver -run 'TestActiveTurnClientMetadataCarriesHistoryIngest|TestHistoryIngestRequestedForTurn|TestCompactResponsesClientMetadataCarriesHistoryIngest' -count=1`, `go test ./turn -run HistoryIngest -count=1`, and `go test ./codexapi -run 'HistoryIngest|Reserved' -count=1`.
+
+Status after reconciliation: `2150 complete`, `450 not_applicable`,
+`346 audit_pending`, `198 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
