@@ -15,11 +15,200 @@ import (
 	"strings"
 
 	"codex_go/model"
+	"codex_go/utils"
 )
 
 type HistoryBuildOptions struct {
 	IncludeToolOutputs bool
 	CWD                string
+	// TruncationPolicy is the replaying model's tool-output policy. A saved
+	// history budget always wins; this policy only bounds outputs recorded
+	// before #44248 or authored outside the harness.
+	TruncationPolicy *utils.TruncationPolicy
+}
+
+const historyTruncationTokenLimitKey = "fallback_token_limit_override"
+
+// ApplyHistoryTruncationBudget records the originating history budget on a
+// function or custom tool output and bounds its persisted body with it (Rust
+// #44248 `record_annotated_conversation_items` +
+// `ContextManager::record_annotated_items`). The token budget includes the 20%
+// serialization allowance exactly once; a budget already carried by the output
+// is a tool-specific override and is preserved unchanged.
+func ApplyHistoryTruncationBudget(item *Item, policy *utils.TruncationPolicy, functionOrCustom bool) {
+	if item == nil || !functionOrCustom {
+		return
+	}
+	limit, ok := historyTruncationTokenLimit(item)
+	if !ok {
+		if policy == nil {
+			return
+		}
+		allowance := policy.WithSerializationAllowance()
+		limit = (&allowance).TokenBudget()
+		mergeHistoryHarnessMetadata(item, map[string]any{historyTruncationTokenLimitKey: limit})
+	}
+	truncation := utils.TokensPolicy(limit)
+	if item.Data != nil {
+		if output, present := item.Data["content_items"]; present {
+			if truncated, ok := truncateHistoryOutputValue(output, truncation); ok {
+				item.Data["content_items"] = truncated
+				return
+			}
+		}
+		if output, present := item.Data["output"]; present {
+			if truncated, ok := truncateHistoryOutputValue(output, truncation); ok {
+				item.Data["output"] = truncated
+				if text, ok := truncated.(string); ok {
+					item.Text = text
+				}
+				return
+			}
+		}
+	}
+	item.Text = utils.TruncateText(item.Text, truncation)
+}
+
+func historyTruncationTokenLimit(item *Item) (int, bool) {
+	if item == nil {
+		return 0, false
+	}
+	metadata := harnessMetadata(item.Data)
+	value, ok := metadata[historyTruncationTokenLimitKey]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, typed >= 0
+	case int64:
+		return int(typed), typed >= 0
+	case float64:
+		return int(typed), typed >= 0 && typed <= float64(^uint(0)>>1)
+	case json.Number:
+		parsed, err := typed.Int64()
+		return int(parsed), err == nil && parsed >= 0
+	default:
+		return 0, false
+	}
+}
+
+func mergeHistoryHarnessMetadata(item *Item, fields map[string]any) {
+	if item == nil || len(fields) == 0 {
+		return
+	}
+	metadata := map[string]any{}
+	if existing := harnessMetadata(item.Data); existing != nil {
+		for key, value := range existing {
+			metadata[key] = value
+		}
+	}
+	for key, value := range fields {
+		metadata[key] = value
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	item.Data["harness_metadata"] = json.RawMessage(encoded)
+}
+
+// truncateHistoryOutputValue applies Rust's
+// `truncate_function_output_payload` to a plain-text body or a content-item
+// list. It returns false when the value is not a recognized tool-output body.
+func truncateHistoryOutputValue(value any, policy utils.TruncationPolicy) (any, bool) {
+	if text, ok := value.(string); ok {
+		if historyOutputCarriesTruncationMarker(text) {
+			return text, true
+		}
+		return utils.TruncateText(text, policy), true
+	}
+	items, ok := historyContentItemsFromValue(value)
+	if !ok {
+		return nil, false
+	}
+	for _, item := range items {
+		if item.Kind == utils.ContentInputText && historyOutputCarriesTruncationMarker(item.Text) {
+			return value, true
+		}
+	}
+	return historyContentItemsValue(utils.TruncateFunctionOutputItemsWithPolicy(items, policy)), true
+}
+
+func historyOutputCarriesTruncationMarker(text string) bool {
+	return strings.Contains(text, "tokens truncated") || strings.Contains(text, "chars truncated")
+}
+
+func historyContentItemsFromValue(value any) ([]utils.FunctionCallOutputContentItem, bool) {
+	if value == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		return nil, false
+	}
+	items := make([]utils.FunctionCallOutputContentItem, 0, len(raw))
+	for _, entry := range raw {
+		kind := historyString(entry["type"])
+		item := utils.FunctionCallOutputContentItem{
+			Text:             stringValue(entry, "text"),
+			ImageURL:         stringValue(entry, "image_url"),
+			FileID:           stringValue(entry, "file_id"),
+			AudioURL:         stringValue(entry, "audio_url"),
+			EncryptedContent: stringValue(entry, "encrypted_content"),
+		}
+		if detail, ok := entry["detail"].(string); ok {
+			item.Detail = &detail
+		}
+		switch kind {
+		case "input_text", "text":
+			item.Kind = utils.ContentInputText
+		case "input_image", "image":
+			item.Kind = utils.ContentInputImage
+		case "input_audio", "audio":
+			item.Kind = utils.ContentInputAudio
+		case "encrypted_content":
+			item.Kind = utils.ContentEncryptedContent
+		default:
+			return nil, false
+		}
+		items = append(items, item)
+	}
+	return items, true
+}
+
+func historyContentItemsValue(items []utils.FunctionCallOutputContentItem) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		entry := map[string]any{"type": string(item.Kind)}
+		switch item.Kind {
+		case utils.ContentInputText:
+			entry["text"] = item.Text
+		case utils.ContentInputImage:
+			if item.ImageURL != "" {
+				entry["image_url"] = item.ImageURL
+			}
+			if item.FileID != "" {
+				entry["file_id"] = item.FileID
+			}
+			if item.Detail != nil {
+				entry["detail"] = *item.Detail
+			}
+		case utils.ContentInputAudio:
+			entry["audio_url"] = item.AudioURL
+		case utils.ContentEncryptedContent:
+			entry["encrypted_content"] = item.EncryptedContent
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func InputItemsFromRecord(record *Record, options *HistoryBuildOptions) []any {
@@ -163,6 +352,15 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 		var raw any
 		if err := json.Unmarshal(item.Raw, &raw); err == nil {
 			if object, ok := raw.(map[string]any); !ok || !legacyRolloutItemWrapper(object) {
+				if object, ok := raw.(map[string]any); ok {
+					if limit, ok := historyToolOutputTruncationLimit(item, options); ok && historyToolOutputType(historyString(object["type"])) {
+						if output, present := object["output"]; present {
+							if truncated, ok := truncateHistoryOutputValue(output, utils.TokensPolicy(limit)); ok {
+								object["output"] = truncated
+							}
+						}
+					}
+				}
 				return sanitizeHistoryInputItem(raw)
 			}
 		}
@@ -181,7 +379,7 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 		if options != nil && !options.IncludeToolOutputs {
 			return nil
 		}
-		return toolOutputInputItem(item)
+		return toolOutputInputItem(item, options)
 	default:
 		if strings.TrimSpace(item.Text) == "" {
 			return nil
@@ -429,7 +627,7 @@ func nonModelVisibleHistoryItemType(itemType string) bool {
 	}
 }
 
-func toolOutputInputItem(item *Item) map[string]any {
+func toolOutputInputItem(item *Item, options *HistoryBuildOptions) map[string]any {
 	// Rust #39782: call_id is optional for standalone named outputs; the item
 	// id is never used as a call id.
 	callID := firstNonEmpty(item.CallID, stringValue(item.Data, "call_id"), stringValue(item.Metadata, "callId"))
@@ -472,8 +670,28 @@ func toolOutputInputItem(item *Item) map[string]any {
 		}
 		return out
 	}
+	if limit, ok := historyToolOutputTruncationLimit(item, options); ok && outputType != "tool_search_output" {
+		if truncated, ok := truncateHistoryOutputValue(output, utils.TokensPolicy(limit)); ok {
+			output = truncated
+		}
+	}
 	out["output"] = output
 	return out
+}
+
+func historyToolOutputType(itemType string) bool {
+	return itemType == "function_call_output" || itemType == "custom_tool_call_output"
+}
+
+func historyToolOutputTruncationLimit(item *Item, options *HistoryBuildOptions) (int, bool) {
+	if limit, ok := historyTruncationTokenLimit(item); ok {
+		return limit, true
+	}
+	if options == nil || options.TruncationPolicy == nil {
+		return 0, false
+	}
+	allowance := options.TruncationPolicy.WithSerializationAllowance()
+	return (&allowance).TokenBudget(), true
 }
 
 func contentBlocksFromSessionItem(item *Item, role string, options *HistoryBuildOptions) []map[string]any {

@@ -10663,9 +10663,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1014 (implementation): Rust #44248 now has a Go implementation. Ordinary function/custom tool outputs stamp the originating history token budget on harness metadata as fallback_token_limit_override (the 20% serialization allowance is applied exactly once before byte-to-token conversion), and their persisted body is bounded with that token budget while an existing tool-specific override is preserved. session.ApplyHistoryTruncationBudget implements the record-side behavior and is wired into appserver/turn_runtime.go sessionItemForAppToolOutput and exec/exec.go sessionItemForToolOutput; app-server output items now persist payloadKind so custom outputs replay as custom_tool_call_output. HistoryBuildOptions.TruncationPolicy supplies the replay contract: a saved budget wins over the replaying model, while a legacy output without a stamp falls back to the current model policy. The main app-server turn history and exec resume paths pass the effective model policy. Tests: session/history_truncation_budget_like_rust_test.go (function output stamping, bytes(101)->31-token conversion, existing override preservation, raw rollout replay), appserver/tool_output_truncation_budget_like_rust_test.go (function/custom outputs, saved budget beats a different replay model, legacy fallback), and exec/tool_output_truncation_budget_like_rust_test.go (function/custom stamping and tool-search exclusion). Verified with go test ./session -count=1, go test ./rollout -count=1, go test ./state -count=1, the three new test files by name, go test ./appserver -count=1 (only the seven known pre-existing failures remain), and go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

@@ -7726,6 +7726,7 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 	}
 	outputMetadata := appTimingMetadata(appTurnMetadata(turnID, cloneAnyMap(responseMetadata)), execution.StartedAt, execution.FinishedAt)
 	outputMetadata["toolName"] = execution.Invocation.ToolName.Key()
+	outputMetadata["payloadKind"] = string(execution.Invocation.Payload.Kind)
 	outputMetadata["success"] = execution.Output.Success
 	if strings.TrimSpace(execution.Output.Error) != "" {
 		outputMetadata["error"] = execution.Output.Error
@@ -7739,7 +7740,7 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 	if hiddenApplyPatchValidationExecution(execution) {
 		outputMetadata["hiddenFromThread"] = true
 	}
-	return session.Item{
+	item := session.Item{
 		ID:        "tool-output-" + safeIdentifier(turnID) + "-" + safeIdentifier(callID),
 		Type:      "tool_output",
 		Name:      execution.Invocation.ToolName.Key(),
@@ -7748,7 +7749,11 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 		Data:      appToolOutputData(execution.Invocation, execution.Output),
 		CreatedAt: outputCreatedAt,
 		Metadata:  outputMetadata,
-	}, true
+	}
+	functionOrCustom := execution.Invocation.Payload.Kind == tool.PayloadFunction ||
+		execution.Invocation.Payload.Kind == tool.PayloadCustom
+	session.ApplyHistoryTruncationBudget(&item, execution.Invocation.Truncation, functionOrCustom)
+	return item, true
 }
 
 // sessionItemForAppAsyncMessage converts a send_user_message_async tool
@@ -8034,7 +8039,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			instructions = promptctx.WithoutUpdatePlanInstructions(instructions)
 		}
 	}
-	historyItems, previousResponseID := r.historyInputItemsForTurn(threadID)
+	historyItems, previousResponseID := r.historyInputItemsForTurnWithPolicy(threadID, appModelTruncationPolicy(modelInfo))
 	previousResponseFromPrewarm := false
 	// Rust #46291: disabling the override feature must also recover threads
 	// whose persisted history still carries configuration_update items. Only
@@ -9615,6 +9620,10 @@ func (r *RuntimeRouter) currentTurnEnvironmentSelections(threadID string, expect
 }
 
 func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string) {
+	return r.historyInputItemsForTurnWithPolicy(threadID, nil)
+}
+
+func (r *RuntimeRouter) historyInputItemsForTurnWithPolicy(threadID string, policy *utils.TruncationPolicy) ([]any, string) {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
 		return nil, ""
 	}
@@ -9623,8 +9632,22 @@ func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string
 		return nil, ""
 	}
 	previousResponseID := firstNonEmpty(record.Metadata.LastResponseID, record.Metadata.PreviousResponseID)
-	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: strings.TrimSpace(record.Metadata.CWD)})
+	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{
+		IncludeToolOutputs: true,
+		CWD:                strings.TrimSpace(record.Metadata.CWD),
+		TruncationPolicy:   policy,
+	})
 	return items, previousResponseID
+}
+
+func appModelTruncationPolicy(info *model.ModelInfo) *utils.TruncationPolicy {
+	if info == nil || info.TruncationPolicy.Limit <= 0 {
+		return nil
+	}
+	return &utils.TruncationPolicy{
+		Mode:  utils.PolicyMode(info.TruncationPolicy.Mode),
+		Limit: int(info.TruncationPolicy.Limit),
+	}
 }
 
 // responsesLiteWindowDeclarationItemsForTurn resolves the responses-lite tool

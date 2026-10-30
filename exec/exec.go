@@ -452,7 +452,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ExecPermissionApprovalsEnabled: features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
 		RequestPermissionsToolEnabled:  features.Enabled(cfg.FeatureSettings(), "request_permissions_tool"),
 	}, r.now(), cfg.IncludeEnvironmentContextTime())
-	historyInputItems := resumeInputItems(resumeContext)
+	historyInputItems := resumeInputItemsWithPolicy(resumeContext, execModelTruncationPolicy(&modelInfo))
 	if resumeContext != nil {
 		// Rust #43795: a resumed session re-establishes the selected effort.
 		r.setReasoningEffortPinState(threadID, reasoningoverride.Pin{})
@@ -2145,10 +2145,28 @@ type execResumeContext struct {
 }
 
 func resumeInputItems(ctx *execResumeContext) []any {
+	return resumeInputItemsWithPolicy(ctx, nil)
+}
+
+func resumeInputItemsWithPolicy(ctx *execResumeContext, policy *utils.TruncationPolicy) []any {
 	if ctx == nil || ctx.Record == nil {
 		return nil
 	}
-	return session.InputItemsFromRecord(ctx.Record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: strings.TrimSpace(ctx.Record.Metadata.CWD)})
+	return session.InputItemsFromRecord(ctx.Record, &session.HistoryBuildOptions{
+		IncludeToolOutputs: true,
+		CWD:                strings.TrimSpace(ctx.Record.Metadata.CWD),
+		TruncationPolicy:   policy,
+	})
+}
+
+func execModelTruncationPolicy(info *model.ModelInfo) *utils.TruncationPolicy {
+	if info == nil || info.TruncationPolicy.Limit <= 0 {
+		return nil
+	}
+	return &utils.TruncationPolicy{
+		Mode:  utils.PolicyMode(info.TruncationPolicy.Mode),
+		Limit: int(info.TruncationPolicy.Limit),
+	}
 }
 
 func resumePreviousResponseID(ctx *execResumeContext) string {
@@ -6632,7 +6650,7 @@ func sessionItemForToolOutput(turnID string, suffix string, execution *turn.Tool
 	if outputCreatedAt.IsZero() {
 		outputCreatedAt = createdAt
 	}
-	return session.Item{
+	item := session.Item{
 		ID:        newToolOutputResponseItemID(execution.Invocation.Payload.Kind),
 		Type:      "tool_output",
 		CallID:    callID,
@@ -6640,7 +6658,11 @@ func sessionItemForToolOutput(turnID string, suffix string, execution *turn.Tool
 		Data:      toolOutputData(execution.Output),
 		CreatedAt: outputCreatedAt,
 		Metadata:  outputMetadata,
-	}, true
+	}
+	functionOrCustom := execution.Invocation.Payload.Kind == tool.PayloadFunction ||
+		execution.Invocation.Payload.Kind == tool.PayloadCustom
+	session.ApplyHistoryTruncationBudget(&item, execution.Invocation.Truncation, functionOrCustom)
+	return item, true
 }
 
 func newToolOutputResponseItemID(kind tool.PayloadKind) string {

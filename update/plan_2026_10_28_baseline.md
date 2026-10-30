@@ -3220,6 +3220,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - `appTurnRunConfig` now captures the turn's `ModelInfo`; `guardianReviewPlanForTurn` and `guardianReviewNodeReplAutoReviewRequiredForTurn` prefer it for the reviewed action, and `guardianReviewPlan.ReasoningSummary` travels into the review request (`RunConfig.ReasoningSummary`, falling back to `TurnStartParams.Summary`). Personality stays disabled in the isolated reviewer config because the Guardian base instructions are custom and Go has no extension-owned reviewer session cache.
 - New `appserver/guardian_action_settings_like_rust_test.go` pins captured metadata over a refreshed catalog, the review request's captured model/summary, and the parameter-summary fallback.
 - Verified with the new test, `go test ./appserver -run 'Guardian|ReasoningEffort|Permission' -count=1`, `go test ./model -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2173 complete`, `451 not_applicable`,
-`345 audit_pending`, `176 regression_pending`, `4 partial`,
+### Tool output truncation budgets across resume and fork (Round 1014)
+
+- Rust #44248 saves the originating history truncation budget on every function and custom tool output and reuses it during resume/fork replay, preserving tool-specific overrides and applying the 20% serialization allowance once before byte-to-token conversion (#44248, complete).
+- Go already had the metadata field and the allowance helper, but ordinary function/custom outputs never stamped `fallback_token_limit_override`, never bounded their persisted body through the history record path, and ignored a saved budget while replaying.
+- `session.ApplyHistoryTruncationBudget` now stamps and applies the saved token budget, preserving existing overrides; `appserver/turn_runtime.go` and `exec/exec.go` call it for function/custom outputs and skip tool-search outputs. App-server output items also persist `payloadKind`, so custom outputs replay with the correct response-item type.
+- `HistoryBuildOptions.TruncationPolicy` makes replay deterministic: a saved budget wins over the new model, while legacy outputs without a stamp use the replaying model's policy. The main app-server turn and exec resume paths pass the effective model policy.
+- New tests: `session/history_truncation_budget_like_rust_test.go`, `appserver/tool_output_truncation_budget_like_rust_test.go`, and `exec/tool_output_truncation_budget_like_rust_test.go`.
+- Verified with `go test ./session -count=1`, `go test ./rollout -count=1`, `go test ./state -count=1`, the new tests by name, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2174 complete`, `451 not_applicable`,
+`345 audit_pending`, `175 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
