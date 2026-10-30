@@ -10,6 +10,7 @@ package appserver
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -103,7 +104,7 @@ func (r *RuntimeRouter) messageBoardOptionsForTurn(ctx context.Context, cfg *con
 		CallerPath:           agent.AgentPath(callerPath),
 		Namespace:            v2Config.ToolNamespace,
 		NamespaceDescription: agent.MultiAgentV2NamespaceDescription,
-		ToolOverrides:        messageBoardToolOverridesFromCatalog(turnModelInfo),
+		ToolOverrides:        agentboard.NewMessageBoardToolOverrides(messageBoardToolOverridesFromCatalog(turnModelInfo)),
 	}, nil
 }
 
@@ -243,10 +244,14 @@ func messageBoardToolOverridesFromCatalog(info *model.ModelInfo) map[string]agen
 	out := map[string]agentboard.MessageBoardToolOverride{}
 	for _, name := range agentboard.MessageBoardToolNames {
 		description := info.ModelMessages.MultiAgentToolDescriptionOverride(name)
-		if description == nil {
-			continue
+		// Rust #47670 keeps the bundled schema and warns when a catalog entry
+		// supplies parameters for a channel tool; only descriptions apply.
+		if info.ModelMessages.MultiAgentToolParametersOverride(name) != nil {
+			slog.Warn("ignoring channel tool parameter override; the bundled schema is kept", "tool", name)
 		}
-		out[name] = agentboard.MessageBoardToolOverride{Description: description}
+		if description != nil {
+			out[name] = agentboard.MessageBoardToolOverride{Description: description}
+		}
 	}
 	if len(out) == 0 {
 		return nil

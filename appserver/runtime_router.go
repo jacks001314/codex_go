@@ -16182,10 +16182,11 @@ func (r *RuntimeRouter) buildTurnRuntime(params *turn.TurnStartParams, turnID st
 }
 
 // multiAgentOverrideRefresher returns the per-step refresh that replaces the
-// turn's Multi-Agent V2 catalog overrides with the sampling step's model
-// catalog, so a mid-turn model change publishes that model's tool schemas on
-// the next step (Rust #46505 step settings). It returns nil when the turn has
-// no override store, leaving unaffected turns on their turn-start tool list.
+// turn's Multi-Agent V2 catalog overrides and message-board descriptions with
+// the sampling step's model catalog, so a mid-turn model change publishes that
+// model's tool schemas and channel texts on the next step (Rust #46505/#47670
+// step settings). It returns nil when the turn has neither store, leaving
+// unaffected turns on their turn-start tool list.
 func (r *RuntimeRouter) multiAgentOverrideRefresher(params *turn.TurnStartParams, turnID string, cfg *config.Config) func(string) {
 	if r == nil || params == nil || cfg == nil {
 		return nil
@@ -16196,10 +16197,11 @@ func (r *RuntimeRouter) multiAgentOverrideRefresher(params *turn.TurnStartParams
 		return nil
 	}
 	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
-	if active == nil || active.MultiAgentOverrides == nil {
+	if active == nil || (active.MultiAgentOverrides == nil && active.MessageBoardOverrides == nil) {
 		return nil
 	}
 	store := active.MultiAgentOverrides
+	boardOverrides := active.MessageBoardOverrides
 	originator := params.Originator
 	lastModel := ""
 	return func(modelID string) {
@@ -16209,11 +16211,23 @@ func (r *RuntimeRouter) multiAgentOverrideRefresher(params *turn.TurnStartParams
 		}
 		lastModel = modelID
 		info := r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
+		applyStepModelToolMessages(store, boardOverrides, info)
+	}
+}
+
+// applyStepModelToolMessages refreshes the turn's multi-agent overrides and
+// channel-tool descriptions for one sampling step. A model that cannot be
+// resolved clears both stores so the bundled texts and schemas apply.
+func applyStepModelToolMessages(store *agent.MultiAgentToolOverrideStore, board *agentboard.MessageBoardToolOverrides, info *model.ModelInfo) {
+	if store != nil {
 		if info == nil {
 			store.Replace(nil)
-			return
+		} else {
+			store.Replace(turn.MultiAgentToolOverridesFromCatalog(info.ModelMessages))
 		}
-		store.Replace(turn.MultiAgentToolOverridesFromCatalog(info.ModelMessages))
+	}
+	if board != nil {
+		board.Replace(messageBoardToolOverridesFromCatalog(info))
 	}
 }
 
@@ -17126,6 +17140,15 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				return nil, boardErr
 			}
 			options.MessageBoard = boardOptions
+			// Rust #47670 resolves channel tool descriptions for every sampling
+			// step. Keep the live store reachable so a mid-turn model change
+			// replaces the texts before the next step's tool list is built.
+			if boardOptions != nil && boardOptions.ToolOverrides != nil && threadID != "" && strings.TrimSpace(turnID) != "" {
+				trimmedTurnID := strings.TrimSpace(turnID)
+				r.threads.UpdateTurn(threadID, trimmedTurnID, func(active *activeRuntimeTurn) {
+					active.MessageBoardOverrides = boardOptions.ToolOverrides
+				})
+			}
 		}
 	}
 	// The caller stays configured even for an empty catalog so a mid-turn

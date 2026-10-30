@@ -687,6 +687,64 @@ func TestModelMessagesMultiAgentToolOverridesLikeRust(t *testing.T) {
 	}
 }
 
+// TestModelMessagesChannelToolOverridesLikeRust mirrors Rust #47670's
+// MultiAgentToolMessages::by_name: the nine channel tools resolve in the same
+// multi_agent catalog independently of their runtime namespace, a null entry
+// keeps the bundled text, and an empty string suppresses it.
+func TestModelMessagesChannelToolOverridesLikeRust(t *testing.T) {
+	document := `{
+		"tools": {
+			"multi_agent": {
+				"create_channel": {"description": "Catalog create_channel."},
+				"get_channels": {"description": "Catalog get_channels."},
+				"list_threads": {"description": "Catalog list_threads."},
+				"search_posts": {"description": "Catalog search_posts."},
+				"read_thread": {"description": null},
+				"read_post": {"description": "Catalog read_post.", "parameters": "{\"type\":\"object\"}"},
+				"subscribe": {"description": ""},
+				"unsubscribe": {"description": "Catalog unsubscribe."},
+				"post": {"description": "Catalog post."}
+			}
+		}
+	}`
+	var messages ModelMessages
+	if err := json.Unmarshal([]byte(document), &messages); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	want := map[string]string{
+		"create_channel": "Catalog create_channel.",
+		"get_channels":   "Catalog get_channels.",
+		"list_threads":   "Catalog list_threads.",
+		"search_posts":   "Catalog search_posts.",
+		"read_post":      "Catalog read_post.",
+		"subscribe":      "",
+		"unsubscribe":    "Catalog unsubscribe.",
+		"post":           "Catalog post.",
+	}
+	for name, expected := range want {
+		got := messages.MultiAgentToolDescriptionOverride(name)
+		if got == nil || *got != expected {
+			t.Fatalf("%s description = %#v, want %q", name, got, expected)
+		}
+	}
+	if got := messages.MultiAgentToolDescriptionOverride("read_thread"); got != nil {
+		t.Fatalf("read_thread description = %#v, want nil", got)
+	}
+	if got := messages.MultiAgentToolParametersOverride("read_post"); got == nil || *got != `{"type":"object"}` {
+		t.Fatalf("read_post parameters = %#v", got)
+	}
+	// The model-info clone deep-copies channel entries like the other tool
+	// message groups.
+	cloned := cloneModelInfo(ModelInfo{ModelMessages: &messages})
+	if cloned.ModelMessages == nil || cloned.ModelMessages.MultiAgentToolDescriptionOverride("post") == messages.MultiAgentToolDescriptionOverride("post") {
+		t.Fatal("the clone shares the channel description pointer")
+	}
+	*cloned.ModelMessages.MultiAgentToolDescriptionOverride("post") = "rewritten"
+	if got := messages.MultiAgentToolDescriptionOverride("post"); got == nil || *got != "Catalog post." {
+		t.Fatalf("mutating the clone changed the original: %#v", got)
+	}
+}
+
 func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	desc := "Ask the user a clarifying question."
 	updateHint := "Catalog update."

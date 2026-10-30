@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"codex_go/agent"
+	"codex_go/agentboard"
 	"codex_go/applypatch"
 	"codex_go/apps"
 	"codex_go/auth"
@@ -108,6 +109,10 @@ type activeRuntimeTurn struct {
 	// store. A mid-turn model change replaces its contents so the next sampling
 	// step publishes that model's tool schemas (Rust #46505).
 	MultiAgentOverrides *agent.MultiAgentToolOverrideStore
+	// MessageBoardOverrides is the turn's live channel-tool description store.
+	// A mid-turn model change replaces its contents so the next sampling step
+	// publishes that model's message-board descriptions (Rust #47670).
+	MessageBoardOverrides *agentboard.MessageBoardToolOverrides
 }
 
 // recordRuntimeTurnResponseID stores the turn's newest response id (Rust #45441).

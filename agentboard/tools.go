@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -109,6 +110,65 @@ type MessageBoardToolOverride struct {
 	Description *string
 }
 
+// MessageBoardToolOverrides holds a caller's model-owned channel tool
+// descriptions. It is live: a mid-turn model change replaces the entries and
+// the next sampling step reads the new descriptions (Rust #47670 step
+// settings). Parameter overrides are not representable because channel tool
+// schemas are fixed.
+type MessageBoardToolOverrides struct {
+	mu      sync.RWMutex
+	entries map[string]MessageBoardToolOverride
+}
+
+// NewMessageBoardToolOverrides returns a live store holding the initial
+// descriptions.
+func NewMessageBoardToolOverrides(entries map[string]MessageBoardToolOverride) *MessageBoardToolOverrides {
+	return &MessageBoardToolOverrides{entries: cloneMessageBoardToolOverrides(entries)}
+}
+
+// Replace swaps the store contents for the sampling step's model. A nil or
+// empty map restores every bundled description.
+func (o *MessageBoardToolOverrides) Replace(entries map[string]MessageBoardToolOverride) {
+	if o == nil {
+		return
+	}
+	cloned := cloneMessageBoardToolOverrides(entries)
+	o.mu.Lock()
+	o.entries = cloned
+	o.mu.Unlock()
+}
+
+// DescriptionFor returns the model-owned description, or nil to keep the
+// bundled text. An explicit empty string suppresses the static description.
+func (o *MessageBoardToolOverrides) DescriptionFor(name string) *string {
+	if o == nil {
+		return nil
+	}
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	override, ok := o.entries[name]
+	if !ok {
+		return nil
+	}
+	return override.Description
+}
+
+func cloneMessageBoardToolOverrides(entries map[string]MessageBoardToolOverride) map[string]MessageBoardToolOverride {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make(map[string]MessageBoardToolOverride, len(entries))
+	for name, override := range entries {
+		cloned := override
+		if override.Description != nil {
+			description := *override.Description
+			cloned.Description = &description
+		}
+		out[name] = cloned
+	}
+	return out
+}
+
 // NewMessageBoardTools builds the ten collaboration tools bound to one caller.
 // The host supplies the namespace and its description; an empty namespace
 // publishes plain function tools. The caller and its path must come from the
@@ -120,17 +180,30 @@ func NewMessageBoardTools(board Board, caller string, callerPath agent.AgentPath
 // NewMessageBoardToolsWithOverrides mirrors Rust's
 // message_board_tools_with_descriptions for the registered discussion set.
 func NewMessageBoardToolsWithOverrides(board Board, caller string, callerPath agent.AgentPath, namespace string, namespaceDescription string, overrides map[string]MessageBoardToolOverride) []tool.Executor {
+	return NewMessageBoardToolsWithOverrideStore(board, caller, callerPath, namespace, namespaceDescription, NewMessageBoardToolOverrides(overrides))
+}
+
+// NewMessageBoardToolsWithOverrideStore mirrors Rust's
+// message_board_tools_with_descriptions with a live description source, so a
+// mid-turn model change updates the next step's descriptions.
+func NewMessageBoardToolsWithOverrideStore(board Board, caller string, callerPath agent.AgentPath, namespace string, namespaceDescription string, overrides *MessageBoardToolOverrides) []tool.Executor {
 	selection := make([]MessageBoardTool, 0, len(MessageBoardToolNames))
 	for _, name := range MessageBoardToolNames {
 		selection = append(selection, MessageBoardTool(name))
 	}
-	return NewMessageBoardToolsWithSelection(board, selection, caller, callerPath, namespace, namespaceDescription, overrides)
+	return NewMessageBoardToolsWithSelectionStore(board, selection, caller, callerPath, namespace, namespaceDescription, overrides)
 }
 
 // NewMessageBoardToolsWithSelection builds only the selected tools, in the
 // supplied order, bound to one caller. Selection does not grant storage
 // permissions the board connection lacks (Rust's message_board_tools, #55973).
 func NewMessageBoardToolsWithSelection(board Board, selected []MessageBoardTool, caller string, callerPath agent.AgentPath, namespace string, namespaceDescription string, overrides map[string]MessageBoardToolOverride) []tool.Executor {
+	return NewMessageBoardToolsWithSelectionStore(board, selected, caller, callerPath, namespace, namespaceDescription, NewMessageBoardToolOverrides(overrides))
+}
+
+// NewMessageBoardToolsWithSelectionStore builds only the selected tools from a
+// live description store.
+func NewMessageBoardToolsWithSelectionStore(board Board, selected []MessageBoardTool, caller string, callerPath agent.AgentPath, namespace string, namespaceDescription string, overrides *MessageBoardToolOverrides) []tool.Executor {
 	namespace = strings.TrimSpace(namespace)
 	executors := make([]tool.Executor, 0, len(selected))
 	for _, selectedTool := range selected {
@@ -138,18 +211,15 @@ func NewMessageBoardToolsWithSelection(board Board, selected []MessageBoardTool,
 		if name == "" {
 			continue
 		}
-		executor := &messageBoardTool{
+		executors = append(executors, &messageBoardTool{
 			board:                board,
 			caller:               caller,
 			callerPath:           callerPath,
 			name:                 name,
 			namespace:            namespace,
 			namespaceDescription: namespaceDescription,
-		}
-		if override, ok := overrides[name]; ok {
-			executor.description = override.Description
-		}
-		executors = append(executors, executor)
+			overrides:            overrides,
+		})
 	}
 	return executors
 }
@@ -161,7 +231,7 @@ type messageBoardTool struct {
 	name                 string
 	namespace            string
 	namespaceDescription string
-	description          *string
+	overrides            *MessageBoardToolOverrides
 }
 
 type messageBoardToolSpec struct {
@@ -170,12 +240,22 @@ type messageBoardToolSpec struct {
 	required    []string
 }
 
+// LiveDescription returns the description for the current sampling step. The
+// registry overlays it so a mid-turn model change reaches the next request
+// without re-registering the tool.
+func (t *messageBoardTool) LiveDescription() (string, bool) {
+	if t == nil {
+		return "", false
+	}
+	if description := t.overrides.DescriptionFor(t.name); description != nil {
+		return *description, true
+	}
+	return messageBoardSpecFor(t.name).description, true
+}
+
 func (t *messageBoardTool) Spec() tool.Spec {
 	bundled := messageBoardSpecFor(t.name)
-	description := bundled.description
-	if t.description != nil {
-		description = *t.description
-	}
+	description, _ := t.LiveDescription()
 	name := tool.PlainName(t.name)
 	namespaceDescription := ""
 	if t.namespace != "" {

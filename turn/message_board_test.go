@@ -3,12 +3,15 @@ package turn
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"codex_go/agent"
 	"codex_go/agentboard"
+	"codex_go/codemode"
 	"codex_go/tool"
 )
 
@@ -63,7 +66,7 @@ func TestMessageBoardOptionsRegisterTheNineToolsLikeRust(t *testing.T) {
 		CallerPath:           agent.AgentPathRoot,
 		Namespace:            "delegation",
 		NamespaceDescription: agent.MultiAgentV2NamespaceDescription,
-		ToolOverrides:        map[string]agentboard.MessageBoardToolOverride{"post": {Description: &override}},
+		ToolOverrides:        agentboard.NewMessageBoardToolOverrides(map[string]agentboard.MessageBoardToolOverride{"post": {Description: &override}}),
 	}
 	if err := registerMessageBoardTools(registry, options); err != nil {
 		t.Fatalf("registerMessageBoardTools() error = %v", err)
@@ -89,5 +92,81 @@ func TestMessageBoardOptionsRegisterTheNineToolsLikeRust(t *testing.T) {
 	}
 	if specs := empty.ModelVisibleSpecs(); len(specs) != 0 {
 		t.Fatalf("empty options registered %d tools", len(specs))
+	}
+}
+
+// TestMessageBoardDescriptionsFollowStepModelLikeRust mirrors Rust #47670: the
+// catalog description replaces only the selected channel tool's text, missing
+// or null entries keep the bundled text, an empty string suppresses it, the
+// parameter schema never changes, and a live store update reaches the next
+// sampling step, including Code Mode declarations.
+func TestMessageBoardDescriptionsFollowStepModelLikeRust(t *testing.T) {
+	root := "root-thread"
+	host := &stubBoardHost{members: map[string]agent.AgentPath{root: agent.AgentPathRoot}}
+	board := (&agentboard.InMemoryMessageBoards{}).Open(root, host)
+	store := agentboard.NewMessageBoardToolOverrides(nil)
+	options := &MessageBoardOptions{
+		Board:                board,
+		Caller:               root,
+		CallerPath:           agent.AgentPathRoot,
+		Namespace:            "delegation",
+		NamespaceDescription: agent.MultiAgentV2NamespaceDescription,
+		ToolOverrides:        store,
+	}
+	registry := tool.NewRegistry()
+	if err := registerMessageBoardTools(registry, options); err != nil {
+		t.Fatalf("registerMessageBoardTools() error = %v", err)
+	}
+	specs := map[string]tool.Spec{}
+	for _, spec := range registry.ModelVisibleSpecs() {
+		specs[spec.Name.Name] = spec
+	}
+	bundledPost := specs["post"].Description
+	bundledSubscribe := specs["subscribe"].Description
+	if bundledPost == "" || bundledSubscribe == "" {
+		t.Fatalf("bundled descriptions missing: %#v", specs)
+	}
+	postSchema := specs["post"].InputSchema
+
+	catalogPost := "Catalog post."
+	catalogRead := "Catalog read_thread."
+	store.Replace(map[string]agentboard.MessageBoardToolOverride{
+		"post":        {Description: &catalogPost},
+		"read_thread": {Description: &catalogRead},
+		"subscribe":   {Description: stringPointer("")},
+	})
+	specs = map[string]tool.Spec{}
+	for _, spec := range registry.ModelVisibleSpecs() {
+		specs[spec.Name.Name] = spec
+	}
+	if specs["post"].Description != catalogPost || specs["read_thread"].Description != catalogRead {
+		t.Fatalf("catalog descriptions = %q/%q", specs["post"].Description, specs["read_thread"].Description)
+	}
+	// An explicit empty string suppresses the bundled text, and tools without
+	// an entry keep it.
+	if specs["subscribe"].Description != "" || specs["get_channels"].Description == "" {
+		t.Fatalf("subscribe/get_channels descriptions = %q/%q", specs["subscribe"].Description, specs["get_channels"].Description)
+	}
+	if !reflect.DeepEqual(specs["post"].InputSchema, postSchema) {
+		t.Fatalf("channel schema changed with a description override: %#v", specs["post"].InputSchema)
+	}
+
+	// Code Mode keeps the declaration suffix after the model-owned text.
+	codeMode := codemode.AugmentToolSpec(specs["post"]).Description
+	if !strings.HasPrefix(codeMode, catalogPost+"\n\nexec tool declaration:") {
+		t.Fatalf("code-mode post description = %q", codeMode)
+	}
+	if strings.Count(codeMode, "exec tool declaration:") != 1 {
+		t.Fatalf("code-mode post declaration repeated: %q", codeMode)
+	}
+
+	// The next step's model restores every bundled description.
+	store.Replace(nil)
+	specs = map[string]tool.Spec{}
+	for _, spec := range registry.ModelVisibleSpecs() {
+		specs[spec.Name.Name] = spec
+	}
+	if specs["post"].Description != bundledPost || specs["subscribe"].Description != bundledSubscribe {
+		t.Fatalf("bundled descriptions after reset = %q/%q", specs["post"].Description, specs["subscribe"].Description)
 	}
 }

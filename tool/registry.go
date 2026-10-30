@@ -542,7 +542,35 @@ func (r *Registry) Spec(name ToolName) (Spec, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	spec, ok := r.specs[name.Key()]
-	return spec, ok
+	if !ok {
+		return spec, false
+	}
+	return liveDescriptionSpec(r.executors[name.Key()], spec), true
+}
+
+// LiveDescriptionProvider lets a turn-scoped executor publish a model-facing
+// description that follows the sampling step's model. The registry keeps the
+// registered schema and overlays the live text on every read, so a mid-turn
+// model change reaches the next step without re-registering the tool
+// (Rust step settings: model-owned tool messages).
+type LiveDescriptionProvider interface {
+	LiveDescription() (string, bool)
+}
+
+func liveDescriptionSpec(executor Executor, spec Spec) Spec {
+	if executor == nil {
+		return spec
+	}
+	provider, ok := executor.(LiveDescriptionProvider)
+	if !ok {
+		return spec
+	}
+	description, ok := provider.LiveDescription()
+	if !ok {
+		return spec
+	}
+	spec.Description = description
+	return spec
 }
 
 // SetExposure replaces one registered tool's exposure. It backs Rust's
@@ -593,7 +621,7 @@ func (r *Registry) ModelVisibleSpecs() []Spec {
 	for _, key := range r.order {
 		spec := r.specs[key]
 		if IsModelVisible(spec.Exposure) {
-			out = append(out, spec)
+			out = append(out, liveDescriptionSpec(r.executors[key], spec))
 		}
 	}
 	return out
@@ -606,7 +634,7 @@ func (r *Registry) DiscoverableSpecs() []Spec {
 	for _, key := range r.order {
 		spec := r.specs[key]
 		if IsDeferred(spec.Exposure) {
-			out = append(out, spec)
+			out = append(out, liveDescriptionSpec(r.executors[key], spec))
 		}
 	}
 	return out

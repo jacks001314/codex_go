@@ -462,6 +462,17 @@ type MultiAgentToolMessages struct {
 	WaitAgent      *ToolMessage `json:"wait_agent,omitempty"`
 	InterruptAgent *ToolMessage `json:"interrupt_agent,omitempty"`
 	ListAgents     *ToolMessage `json:"list_agents,omitempty"`
+	// Channel tools consume only the description; their parameter schemas are
+	// fixed by the message-board extension (Rust #47670).
+	CreateChannel *ToolMessage `json:"create_channel,omitempty"`
+	GetChannels   *ToolMessage `json:"get_channels,omitempty"`
+	ListThreads   *ToolMessage `json:"list_threads,omitempty"`
+	SearchPosts   *ToolMessage `json:"search_posts,omitempty"`
+	ReadThread    *ToolMessage `json:"read_thread,omitempty"`
+	ReadPost      *ToolMessage `json:"read_post,omitempty"`
+	Subscribe     *ToolMessage `json:"subscribe,omitempty"`
+	Unsubscribe   *ToolMessage `json:"unsubscribe,omitempty"`
+	Post          *ToolMessage `json:"post,omitempty"`
 }
 
 // McpResourceToolMessages mirrors Rust protocol::openai_models::
@@ -493,6 +504,24 @@ func (m *ModelMessages) MultiAgentToolMessage(toolName string) *ToolMessage {
 		return tools.InterruptAgent
 	case "list_agents":
 		return tools.ListAgents
+	case "create_channel":
+		return tools.CreateChannel
+	case "get_channels":
+		return tools.GetChannels
+	case "list_threads":
+		return tools.ListThreads
+	case "search_posts":
+		return tools.SearchPosts
+	case "read_thread":
+		return tools.ReadThread
+	case "read_post":
+		return tools.ReadPost
+	case "subscribe":
+		return tools.Subscribe
+	case "unsubscribe":
+		return tools.Unsubscribe
+	case "post":
+		return tools.Post
 	}
 	return nil
 }
@@ -2418,6 +2447,15 @@ func cloneMultiAgentToolMessages(in *MultiAgentToolMessages) *MultiAgentToolMess
 		WaitAgent:      cloneToolMessage(in.WaitAgent),
 		InterruptAgent: cloneToolMessage(in.InterruptAgent),
 		ListAgents:     cloneToolMessage(in.ListAgents),
+		CreateChannel:  cloneToolMessage(in.CreateChannel),
+		GetChannels:    cloneToolMessage(in.GetChannels),
+		ListThreads:    cloneToolMessage(in.ListThreads),
+		SearchPosts:    cloneToolMessage(in.SearchPosts),
+		ReadThread:     cloneToolMessage(in.ReadThread),
+		ReadPost:       cloneToolMessage(in.ReadPost),
+		Subscribe:      cloneToolMessage(in.Subscribe),
+		Unsubscribe:    cloneToolMessage(in.Unsubscribe),
+		Post:           cloneToolMessage(in.Post),
 	}
 }
 

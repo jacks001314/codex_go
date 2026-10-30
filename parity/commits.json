@@ -20002,9 +20002,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "All nine channel tools (`create_channel`, `get_channels`, `list_threads`, `search_posts`, `read_thread`, `read_post`, `subscribe`, `unsubscribe`, `post`) resolve model-catalog descriptions: `model.MultiAgentToolMessages` parses and deep-clones each entry, `MultiAgentToolMessage` dispatches by name, and the bundled texts plus field descriptions match Rust spec.rs verbatim.",
+    "Description semantics match Rust: missing/null keeps the bundled text, an explicit empty string suppresses it, and parameter overrides never replace the fixed schema (appserver logs a warning only).",
+    "`agentboard.MessageBoardToolOverrides` is a live RWMutex store; `messageBoardTool.LiveDescription` feeds `tool.Registry.Spec`, `ModelVisibleSpecs` and `DiscoverableSpecs`, so Code Mode declaration augmentation and mid-turn model switches see the new text without re-registering tools.",
+    "`appserver.multiAgentOverrideRefresher` now refreshes both multi-agent schema overrides and board descriptions per sampling step via `applyStepModelToolMessages`; an unresolvable model clears both to the bundled texts.",
+    "Tests: `model.TestModelMessagesChannelToolOverridesLikeRust`, `agentboard.TestMessageBoardDescriptionsFollowLiveStoreLikeRust`, `turn.TestMessageBoardDescriptionsFollowStepModelLikeRust` (including a single Code Mode declaration) and the existing `appserver` message-board suite; `go build ./model ./tool ./agentboard ./turn ./appserver` plus the focused `go test` runs pass."
    ]
   },
   {

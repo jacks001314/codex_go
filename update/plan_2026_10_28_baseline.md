@@ -3849,3 +3849,11 @@ Status after this batch: `2306 complete`, `462 not_applicable`, `322 audit_pendi
 - #47605 piped children now launch through a shared child-launcher contract in Go: `processgroup.PrepareChildSession` starts a new session and adds Linux parent-death `SIGTERM`, `TerminateProcessTree`/`InterruptProcessTree` keep cleanup on the child's own process group with a direct-child fallback, and every Go pipe carrier (unified exec, `command/exec`, `process/exec`, exec-server `process/start`) uses them. NUL argv/cwd/env rejection is pinned by a no-side-effect test, and descriptor closure plus explicit-environment isolation by re-executed children.
 
 Status after this batch: `2307 complete`, `462 not_applicable`, `322 audit_pending`, `53 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Channel tool descriptions batch (Round 1097)
+
+- #47670 channel tool descriptions now follow the model catalog: the nine message-board tools parse `MultiAgentToolMessages` entries, missing/null keeps the bundled text, an empty string suppresses it, and parameter overrides only warn while the fixed schema is kept.
+- `agentboard.MessageBoardToolOverrides` is a live store read through `tool.Registry.Spec`/`ModelVisibleSpecs`/`DiscoverableSpecs`, so Code Mode declarations and mid-turn model switches see updated descriptions on the next sampling step.
+- Descriptions refresh in `appserver.multiAgentOverrideRefresher` for every step; the bundled texts and field descriptions were aligned verbatim with Rust `spec.rs`.
+
+Status after this batch: `2308 complete`, `462 not_applicable`, `322 audit_pending`, `52 regression_pending`, `5 partial`, `6 blocked_precondition`.

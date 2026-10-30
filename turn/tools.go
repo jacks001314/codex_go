@@ -295,10 +295,12 @@ type MessageBoardOptions struct {
 	// the merged namespace.
 	Namespace            string
 	NamespaceDescription string
-	// ToolOverrides carries the active model catalog's per-tool overrides keyed
-	// by tool name (Rust `MultiAgentToolMessages::by_name`, which the board
-	// tools look up by their own names).
-	ToolOverrides map[string]agentboard.MessageBoardToolOverride
+	// ToolOverrides carries the active model catalog's live per-tool
+	// descriptions keyed by tool name (Rust `MultiAgentToolMessages::by_name`,
+	// which the board tools look up by their own names). A mid-turn model
+	// change replaces the store contents so the next step follows the new
+	// model.
+	ToolOverrides *agentboard.MessageBoardToolOverrides
 }
 
 // registerMessageBoardTools mirrors Rust's
@@ -308,7 +310,7 @@ func registerMessageBoardTools(registry *tool.Registry, options *MessageBoardOpt
 	if options == nil || options.Board == nil {
 		return nil
 	}
-	for _, executor := range agentboard.NewMessageBoardToolsWithOverrides(
+	for _, executor := range agentboard.NewMessageBoardToolsWithOverrideStore(
 		options.Board,
 		options.Caller,
 		options.CallerPath,
