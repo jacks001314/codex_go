@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "frozenAt": "2026-10-31",
-  "plan": "update/plan_2026_10_31_round1090.md",
+  "plan": "update/plan_2026_10_31_round1091.md",
  "verified": {
   "rustCommit": "cbe16d525c2d7362fc3d4726143288e932905daa",
   "parityManifest": "parity.json"
@@ -37,7 +37,7 @@
   ]
  },
  "certificationBlockers": [
-  "Per-commit certification of the 3287 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..cbe16d525c2d7362fc3d4726143288e932905daa is in progress; parity/commits.json records every commit with its audit status (2533 complete, 499 not applicable, 236 audit_pending, 0 regression_pending, 11 partial, 8 blocked_precondition)",
+  "Per-commit certification of the 3287 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..cbe16d525c2d7362fc3d4726143288e932905daa is in progress; parity/commits.json records every commit with its audit status (2536 complete, 499 not applicable, 233 audit_pending, 0 regression_pending, 11 partial, 8 blocked_precondition)",
   "6 commits are blocked on architecture (local unified-exec routing for in-memory shell snapshots, Unix PTY shutdown, closed-agent navigation, TUI Super key, Windows MXC, native cloud conversation TUI); Windows proxy CONNECT auth (#55994) is implemented"
  ],
  "certificationReady": false

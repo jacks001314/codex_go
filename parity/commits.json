@@ -10137,9 +10137,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "model/usage_limit.go already renders every usage-limit variant with curly apostrophes, and codexapi/error.go keeps the ASCII context-window prefix; Go surfaces provider internal-server messages instead of synthesizing the Rust InternalServerError high-demand display string, so no straight-apostrophe variant remains"
    ]
   },
   {
@@ -18131,9 +18131,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "tui/tea/read_only_thread.go renders the external-writer retry hint as `r to retry` and styles only the key, matching Rust #47112; tui/tea/read_only_thread_test.go asserts the lowercase hint in the rendered notice"
    ]
   },
   {
@@ -18239,9 +18239,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "model/catalog.go bundled GPT-5.6-Sol advertises only `priority` in ServiceTiers, matching the Rust models.json after #47130 removed `ultrafast`"
    ]
   },
   {

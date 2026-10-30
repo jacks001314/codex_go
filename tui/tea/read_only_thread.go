@@ -196,7 +196,10 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 	width := max(m.width, 20)
 	contentWidth := max(width-4, 10)
 	title := "\U0001f512  This conversation is open in another app"
-	retry := "R to Retry"
+	// Rust #47112: the retry hint is lowercase ("r to retry") and only the key
+	// itself carries the accent style.
+	retry := "r to retry"
+	retryStyled := m.readOnlyAccentText("r") + " to retry"
 	lines := codextui.AdaptiveWrapLine(title, codextui.WrapOptions{
 		Width:      contentWidth,
 		BreakWords: true,
@@ -206,9 +209,9 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 	}
 	if len(lines) == 1 && codextui.DisplayWidth(lines[0])+codextui.DisplayWidth(retry)+2 <= contentWidth {
 		gap := contentWidth - codextui.DisplayWidth(lines[0]) - codextui.DisplayWidth(retry)
-		lines[0] = lines[0] + strings.Repeat(" ", gap) + m.readOnlyAccentText(retry)
+		lines[0] = lines[0] + strings.Repeat(" ", gap) + retryStyled
 	} else {
-		lines = append(lines, m.readOnlyAccentText(retry))
+		lines = append(lines, retryStyled)
 	}
 	lines = append(lines, codextui.AdaptiveWrapLine(
 		"Close it there and press R to continue here.",

@@ -8,6 +8,7 @@ import (
 
 	"codex_go/appserver"
 	codextui "codex_go/tui"
+	"codex_go/utils"
 )
 
 func readOnlyResumeModel(t *testing.T, responses []SessionResumeResponse) (*Model, *int) {
@@ -49,7 +50,9 @@ func TestReadOnlyResumeShowsNoticeAndBlocksInput(t *testing.T) {
 		t.Fatal("a read-only resume must enter the external-writer state")
 	}
 	view := model.View()
-	if !strings.Contains(view, "This conversation is open in another app") || !strings.Contains(view, "R to Retry") {
+	// Rust #47112: the retry hint is rendered lowercase.
+	plainView := utils.StripANSI(view)
+	if !strings.Contains(plainView, "This conversation is open in another app") || !strings.Contains(plainView, "r to retry") {
 		t.Fatalf("read-only notice missing:\n%s", view)
 	}
 	if strings.Contains(view, "Type your message") {
