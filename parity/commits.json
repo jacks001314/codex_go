@@ -7858,9 +7858,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go has no FileSystemSandboxPolicy entry/carveout pipeline or exec-server fs_sandbox runner; GetWritableRootsWithCWD builds de-duplicated roots in one pass, so both upstream optimizations target code Go does not have"
    ]
   },
   {
