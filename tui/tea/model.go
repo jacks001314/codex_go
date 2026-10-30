@@ -338,6 +338,11 @@ type SettingsEdit struct {
 
 type SettingsWriteResult struct {
 	FeatureSettings   map[string]bool
+	// WriteStatus is the config batch write's outcome (Rust
+	// WriteStatus::OkOverridden, #42639). A successful write can still be
+	// overridden by a higher-priority configuration layer, and the TUI reports
+	// that instead of a plain success message.
+	WriteStatus config.WriteStatus
 	// MultiAgentV2MaxConcurrentThreads carries
 	// features.multi_agent_v2.max_concurrent_threads_per_session for the
 	// Ultra reasoning warning (Rust #45831).

@@ -2240,6 +2240,7 @@ func interactiveSettingsWriteHandler(root *cli.RootOptions) codextea.SettingsWri
 		}
 		if response != nil {
 			result.FilePath = response.FilePath
+			result.WriteStatus = response.Status
 		}
 		return result, nil
 	}

@@ -3310,6 +3310,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `tui/git_action_directives_like_rust_test.go` mirror Rust's directive, malformed-input, unquoted-flag/braced-attribute, code-comment snapshot, non-directive-preservation, and last-created-branch cases plus the completed-markdown integration; `tui/markdown/foreign_windows_links_like_rust_test.go` covers the foreign link snapshot.
 - Verified with `go build ./...`, `go test ./tui/... -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2190 complete`, `451 not_applicable`,
-`344 audit_pending`, `160 regression_pending`, `4 partial`,
+### Saved-default override warnings (Round 1026)
+
+- Rust #42639 routes the TUI's model, reasoning-effort, service-tier, and Plan mode effort config writes through `App::persist_model_defaults`, which reports `WriteStatus::OkOverridden` as `Saved <setting>, but a higher-priority configuration layer overrides the saved value.` while keeping the active conversation's explicit selection.
+- Go already reported overrides for the model/reasoning-effort picker and Plan mode effort through `ModelSelectionSyncMsg.PersistOverridden`; the service-tier path lost the write status because `SettingsWriteResult` carried only the reloaded settings. `SettingsWriteResult.WriteStatus` now carries the batch-write status from both `app/interactive.go` and `app/remote_tui.go`, and the service-tier success path adds Rust's override warning (#42639, complete).
+- New regression `TestServiceTierDefaultOverrideWarningLikeRust` pins the overridden warning beside the saved confirmation and proves a plain `ok` write reports no spurious override; `TestModelSelectionSyncSurfacesFailuresAndOverrides` keeps the model/effort half pinned.
+- Verified with `go build ./...`, `go test ./tui/tea -count=1`, `go test ./tui/... -count=1`, and `go test ./parity -run TestAlignment -count=1`. (`go test ./app` has two pre-existing failures unrelated to this change: `TestExecJSONEndToEnd` and `TestLocalSessionForksRustRolloutWithoutGoSnapshot`.)
+
+Status after reconciliation: `2191 complete`, `451 not_applicable`,
+`344 audit_pending`, `159 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

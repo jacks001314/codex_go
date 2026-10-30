@@ -1060,6 +1060,7 @@ func interactiveRemoteSettingsWriteHandler(ctx context.Context, endpoint *appser
 			return codextea.SettingsWriteResult{}, err
 		}
 		result.FilePath = response.FilePath
+		result.WriteStatus = response.Status
 		return result, nil
 	}
 }

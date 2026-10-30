@@ -6,6 +6,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/config"
 	"codex_go/features"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
@@ -496,6 +497,13 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	if experimentalOverridden {
 		m.notice = "Changes were saved, but the configured values differ from your selections. A higher-priority setting may override them."
+	}
+	// Rust #42639: a successful write can still be overridden by a higher
+	// priority configuration layer. The confirmation stays, but the saved
+	// default's effective status is reported as a warning.
+	if msg.Kind == settingsWriteKindServiceTier && msg.Result.WriteStatus == config.WriteOKOverridden {
+		m.applyHistoryCell(historycell.NewWarningEvent(
+			"Saved default service tier, but a higher-priority configuration layer overrides the saved value."))
 	}
 	if msg.Kind == settingsWriteKindQuickDial && m.quickDialWriteSlot >= 0 {
 		if m.quickDialWriteDelete {

@@ -7207,9 +7207,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1026 (fix): tui/tea/model.go, tui/tea/settings_commands.go, app/interactive.go, app/remote_tui.go carry the config batch write status into the TUI settings result and warn when a saved default service tier is overridden by a higher-priority configuration layer, matching Rust app/model_defaults.rs persist_model_defaults; the saved model/reasoning-effort and Plan mode reasoning-effort writes already report overrides through ModelSelectionSyncMsg. Regression contract: tui/tea/service_tier_override_warning_like_rust_test.go:TestServiceTierDefaultOverrideWarningLikeRust, tui/tea/model_selection_test.go:TestModelSelectionSyncSurfacesFailuresAndOverrides; verify with `go test ./tui/tea -count=1`."
    ]
   },
   {
