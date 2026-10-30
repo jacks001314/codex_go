@@ -989,6 +989,54 @@ func TestStoreRevertTruncatesPaginatedHistoryBeforeTurn(t *testing.T) {
 	}
 }
 
+// TestStoreRevertPreservesMultiAgentVersionLikeRust covers Rust #43000: a
+// paginated revert replaces the durable history, so the resolved multi-agent
+// version must survive reloads instead of being dropped with the turn context
+// that first selected it. Go persists the version on the thread record and
+// Revert only truncates items/turns, so repeated reverts keep it.
+func TestStoreRevertPreservesMultiAgentVersionLikeRust(t *testing.T) {
+	for _, version := range []string{"v1", "v2", "disabled"} {
+		t.Run(version, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			if err := store.Create(&Record{
+				ID: ThreadID("thread-" + version),
+				Metadata: Metadata{
+					HistoryMode:       "paginated",
+					MultiAgentVersion: version,
+					RolloutTurns: []TurnSnapshot{
+						{ID: "turn-1", Status: "completed"},
+						{ID: "turn-2", Status: "completed"},
+						{ID: "turn-3", Status: "completed"},
+					},
+				},
+				Items: []Item{
+					{ID: "item-1", Metadata: map[string]any{"turnId": "turn-1"}},
+					{ID: "item-2", Metadata: map[string]any{"turnId": "turn-2"}},
+					{ID: "item-3", Metadata: map[string]any{"turnId": "turn-3"}},
+				},
+			}); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			for _, beforeTurnID := range []string{"turn-3", "turn-2"} {
+				reverted, err := store.Revert(ThreadID("thread-"+version), beforeTurnID)
+				if err != nil {
+					t.Fatalf("Revert(%s) error = %v", beforeTurnID, err)
+				}
+				if reverted.Metadata.MultiAgentVersion != version {
+					t.Fatalf("multi-agent version after revert %s = %q, want %q", beforeTurnID, reverted.Metadata.MultiAgentVersion, version)
+				}
+			}
+			reloaded, err := store.Read(ThreadID("thread-"+version), false, false)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if reloaded.Metadata.MultiAgentVersion != version {
+				t.Fatalf("persisted multi-agent version = %q, want %q", reloaded.Metadata.MultiAgentVersion, version)
+			}
+		})
+	}
+}
+
 func TestStoreQueueSubmissionCRUD(t *testing.T) {
 	store := NewStore(t.TempDir())
 	record := &Record{ID: "thread", Metadata: Metadata{HistoryMode: "legacy"}}

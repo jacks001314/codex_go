@@ -8026,9 +8026,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "session.Store.Revert truncates items/turn snapshots in place, so record metadata (including multi_agent_version) survives; runtimeMultiAgentVersionForTurn prefers it; session/store_test.go covers v1/v2/disabled across repeated reverts"
    ]
   },
   {
