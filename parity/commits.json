@@ -6866,9 +6866,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserverdaemon/publish_release_windows.go mirrors Rust prepare_install_windows::publish_release: os.Rename is retried at 50 ms intervals up to 100 times for fs.ErrPermission, ERROR_SHARING_VIOLATION and ERROR_ACCESS_DENIED, and exhaustion reports `failed to publish managed daemon release from <stage> to <release>`; appserverdaemon/prepare_install.go routes Windows publication through it, while publish_release_other.go keeps the single POSIX rename",
+    "Regression coverage: appserverdaemon/publish_release_windows_test.go::TestIsTransientPublishErrorLikeRust pins the retry predicate; Round 1064 adds TestPublishDaemonReleaseRetriesTransientLockLikeRust, which holds the staged directory open without FILE_SHARE_DELETE, releases it after 150 ms, and verifies publication succeeds with the payload intact (the 0.16 s runtime shows real retries); appserverdaemon/publish_release_test.go covers the move and the path-bearing failure message",
+    "Verified with `go test ./appserverdaemon -run 'PublishDaemonRelease|TransientPublish' -count=1`, `go test ./appserverdaemon -count=1`, and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {

@@ -3571,6 +3571,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `tui/bottom_pane/command_popup.go`, `tui/bottom_pane/slash_commands.go` and `tui/tea/slash_popup.go` already carried the catalog/ranking/disabled-row behavior. This round fixed the remaining Tab divergence: an exact selectable command now queues while a turn runs instead of being silently completed, while disabled matches remain swallowed and `/` still inserts normally.
 - Verified with `go test ./tui/tea -count=1`, `go test ./tui/bottom_pane/... -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2217 complete`, `461 not_applicable`,
-`322 audit_pending`, `144 regression_pending`, `5 partial`,
+### Retry Windows daemon release publication on file locks (Round 1064)
+
+- Rust #50782 retries the Windows publication rename on permission-denied/sharing-violation errors every 50 ms up to 100 times, and reports the staging and release paths when publication still fails.
+- Complete: `appserverdaemon/publish_release_windows.go` already implemented the same retry loop and predicate, `prepare_install.go` uses it on Windows, and the POSIX path keeps one rename. Round 1064 adds the missing Windows regression that holds the staged directory open without delete sharing and proves publication waits and then succeeds.
+- Verified with `go test ./appserverdaemon -run 'PublishDaemonRelease|TransientPublish' -count=1`, `go test ./appserverdaemon -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2218 complete`, `461 not_applicable`,
+`322 audit_pending`, `143 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
