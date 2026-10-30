@@ -123,3 +123,33 @@ func TestSlashSideRanksAvailableMatchesFirstLikeRust(t *testing.T) {
 		t.Fatal("popup should close after completing the available match")
 	}
 }
+
+// Rust #50756 chat_composer/slash_input.rs tests: Tab queues an exact available
+// match while a turn is running, but a disabled match is swallowed instead of
+// queueing the unavailable command.
+func TestSlashSideTabQueuesOnlyAvailableMatchesWhileRunningLikeRust(t *testing.T) {
+	model, now := newSideConversationModel(t)
+	model.State.SetStatus("running")
+	typeText(t, model, "/agents")
+	*now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
+	model.Update(key(bubbletea.KeyTab))
+	if got := model.ComposerValue(); got != "" {
+		t.Fatalf("composer after queueing Tab = %q, want empty", got)
+	}
+	queued := model.QueuedRequests()
+	if len(queued) != 1 || queued[0].Prompt != "/agents" {
+		t.Fatalf("queued after Tab = %#v, want /agents", queued)
+	}
+
+	model, now = newSideConversationModel(t)
+	model.State.SetStatus("running")
+	typeText(t, model, "/arch")
+	*now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
+	model.Update(key(bubbletea.KeyTab))
+	if got := model.ComposerValue(); got != "/arch" {
+		t.Fatalf("composer after disabled Tab = %q, want /arch", got)
+	}
+	if queued := model.QueuedRequests(); len(queued) != 0 {
+		t.Fatalf("disabled command was queued: %#v", queued)
+	}
+}

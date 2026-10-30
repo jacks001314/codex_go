@@ -6478,9 +6478,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/bottom_pane/command_popup.go mirrors Rust command_popup.rs: the full catalog is built with side-conversation filtering disabled and unavailable commands are marked disabled, so they stay hidden from the unfiltered `/` menu but appear (dimmed with `not available in a side conversation`) when searched; available matches rank first and navigation/selection skip disabled rows",
+    "tui/bottom_pane/slash_commands.go keeps has_slash_command_prefix on the full catalog while dispatch still rejects unavailable commands; tui/tea/slash_popup.go carries the same behavior for the interactive model and this round aligned Tab: an exact selectable command queues while a turn runs (Rust side_conversation_tab_queues_exact_available_match_while_task_running), a disabled-only match is swallowed without queueing, and `/` falls through to normal insertion",
+    "Regression coverage: tui/bottom_pane/command_popup_side_unavailable_like_rust_test.go pins discovery, ranking, disabled reason and navigation; tui/tea/slash_side_unavailable_like_rust_test.go pins hidden/disabled rows, rendering, Tab completion of an available match after disabled rows, blocked queueing of unavailable commands, `/` insertion, and the new exact-match queue path",
+    "Verified with `go test ./tui/tea -count=1`, `go test ./tui/bottom_pane/... -count=1`, and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {

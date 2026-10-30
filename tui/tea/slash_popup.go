@@ -245,8 +245,7 @@ func (m *Model) updateSlashPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) 
 		m.slashPopup = slashCommandPopup{}
 		return nil, true
 	case bubbletea.KeyTab:
-		m.completeSelectedSlashCommand()
-		return nil, true
+		return m.completeSelectedSlashCommand(), true
 	case bubbletea.KeyEnter:
 		if cmd, ok := m.dispatchSelectedSlashCommand(); ok {
 			return cmd, true
@@ -278,16 +277,32 @@ func (m *Model) moveSlashPopupSelection(delta int) {
 	m.slashPopup.Selected = -1
 }
 
-func (m *Model) completeSelectedSlashCommand() {
+func (m *Model) completeSelectedSlashCommand() bubbletea.Cmd {
 	if m == nil || !m.slashPopup.Active {
-		return
+		return nil
 	}
 	item, ok := m.currentSlashPopupItem()
 	if !ok {
-		return
+		return nil
 	}
-	m.setComposerPrompt("/" + item.Name + " ")
+	firstLine := m.composerText()
+	if index := strings.IndexByte(firstLine, '\n'); index >= 0 {
+		firstLine = firstLine[:index]
+	}
+	selected := "/" + item.Name
+	// Rust #50756: an exact match has nothing to complete. While a turn runs,
+	// Tab queues the typed command instead of rewriting the composer; an idle
+	// composer keeps the text as-is.
+	if strings.HasPrefix(strings.TrimLeft(firstLine, " \t"), selected) {
+		m.slashPopup = slashCommandPopup{}
+		if m.isUserTurnPendingOrRunning() {
+			return m.queueComposer(true)
+		}
+		return nil
+	}
+	m.setComposerPrompt(selected + " ")
 	m.slashPopup = slashCommandPopup{}
+	return nil
 }
 
 func (m *Model) dispatchSelectedSlashCommand() (bubbletea.Cmd, bool) {
