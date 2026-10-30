@@ -187,6 +187,7 @@ func pluralS(count int) string {
 func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 	return SubmitRequest{
 		Prompt:                     request.Prompt,
+		ClientID:                   request.ClientID,
 		Model:                      request.Model,
 		ServiceTier:                request.ServiceTier,
 		AdditionalInstructions:     request.AdditionalInstructions,

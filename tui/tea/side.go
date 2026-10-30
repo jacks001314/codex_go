@@ -80,7 +80,7 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		side.SideMessages = cloneSideMessages(m.State.Messages)
 		side.SideStatus = strings.TrimSpace(m.State.Status)
 		side.SidePlaceholder = m.composer.Placeholder
-		m.State.SetThreadID(side.ParentThreadID)
+		m.switchThreadID(side.ParentThreadID)
 		m.State.Messages = cloneSideMessages(side.ParentMessages)
 		m.State.BumpMessagesRevision()
 		m.setStatus(firstNonEmpty(side.ParentStatus, "idle"))
@@ -90,7 +90,7 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		side.ParentMessages = cloneSideMessages(m.State.Messages)
 		side.ParentStatus = strings.TrimSpace(m.State.Status)
 		side.ParentPlaceholder = m.composer.Placeholder
-		m.State.SetThreadID(side.SideThreadID)
+		m.switchThreadID(side.SideThreadID)
 		m.State.Messages = cloneSideMessages(side.SideMessages)
 		m.State.BumpMessagesRevision()
 		m.setStatus(firstNonEmpty(side.SideStatus, "idle"))
@@ -259,7 +259,7 @@ func (m *Model) activateRetainedSideConversation(side *activeSideConversation, u
 	m.activeSide = side
 	side.ShowingSide = true
 	m.sideStartPending = false
-	m.State.SetThreadID(side.SideThreadID)
+	m.switchThreadID(side.SideThreadID)
 	m.State.Messages = cloneSideMessages(side.SideMessages)
 	m.State.BumpMessagesRevision()
 	m.setStatus(firstNonEmpty(strings.TrimSpace(side.SideStatus), "idle"))
@@ -446,7 +446,7 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 		ShowingSide:       true,
 	}
 	m.retainSideConversation(m.activeSide)
-	m.State.SetThreadID(sideThreadID)
+	m.switchThreadID(sideThreadID)
 	m.State.Messages = nil
 	m.State.BumpMessagesRevision()
 	m.setStatus("idle")
@@ -533,7 +533,7 @@ func (m *Model) finishReturnFromSideConversation(side *activeSideConversation, n
 	m.forgetRetainedSideConversation(side)
 	m.activeSide = nil
 	m.sideStartPending = false
-	m.State.SetThreadID(side.ParentThreadID)
+	m.switchThreadID(side.ParentThreadID)
 	m.State.Messages = cloneSideMessages(side.ParentMessages)
 	m.State.BumpMessagesRevision()
 	if strings.TrimSpace(side.ParentStatus) != "" {
@@ -625,6 +625,9 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 	if threadID == "" {
 		return nil
 	}
+	// Rust #42451 acknowledges a matching receipt for an inactive thread before
+	// routing (or discarding) its notifications.
+	m.acknowledgePendingSteerForThread(threadID, msg.Event)
 	if m.sideThreadAbandoned(threadID) {
 		return nil
 	}

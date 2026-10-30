@@ -254,7 +254,7 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 		if m.State != nil {
 			m.invalidateAppsScope()
 			m.deactivateSideConversation()
-			m.State.SetThreadID(threadID)
+			m.switchThreadID(threadID)
 			m.State.Messages = nil
 			m.State.BumpMessagesRevision()
 			m.insertSessionHeader()
@@ -305,7 +305,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// Rust #43994: the switched-to thread must not inherit transcript state
 		// (tool-call display, retry, review) from the thread that was active.
 		m.resetThreadScopedState()
-		m.State.SetThreadID(entry.ThreadID)
+		m.switchThreadID(entry.ThreadID)
 		messages := append([]codextui.Message(nil), message.Response.Messages...)
 		buffered := m.backgroundThreadEvents[entry.ThreadID]
 		// Only replay the buffer when the persisted thread is empty (the typical
@@ -701,6 +701,9 @@ func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) b
 		if archived {
 			m.archivedAgentThreads[visibleID] = true
 			m.agentsOverviewRemoved[visibleID] = true
+			// Rust #42451 keeps pending steer state only for live threads; an
+			// archived thread must not restore it later.
+			m.dropPendingSteersForThread(visibleID)
 			if visibleID == threadID {
 				m.agentThreadArchiveCause[visibleID] = "self"
 			} else if m.agentThreadArchiveCause[visibleID] == "" {

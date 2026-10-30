@@ -3970,3 +3970,11 @@ Status after this batch: `2328 complete`, `464 not_applicable`, `322 audit_pendi
 - #43079 the protocol carries `openDevices`/`setAudioControls`/`listDevices`/`inspectAudio`, devices open only after runtime and transport readiness, sessions start muted and suppressed, and controls are serviced every 5 ms ahead of capture; bounded queues, generation epochs and stale-backlog rejection are covered by existing `voicehost` tests. The Go helper uses miniaudio instead of CPAL/GStreamer.
 
 Status after this batch: `2331 complete`, `464 not_applicable`, `322 audit_pending`, `27 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Pending steer acknowledgement by submission ID (Round 1112)
+
+- #42451 every TUI submission now carries `SubmitRequest.ClientID` into remote `turn/start` and `turn/steer` as `clientUserMessageId`. Completed `userMessage` receipts expose `clientId` and an image count to the TUI, which acknowledges the front pending steer by submission id; only older app servers that omit ids fall back to the wire item id and then to the Rust-compatible text/image compare key.
+- Pending steers are parked per thread across switches (previously dropped) and restored with their ids; inactive-thread receipts are acknowledged before the notification is buffered, and archiving or removing a dashboard task drops its parked state. Embedded turns keep the count-based `SteerCommittedMsg` path because their runner owns one displayed thread.
+- Tests: `TestPendingSteerReceiptAcknowledgesByIdentityLikeRust`, `TestPendingSteerReceiptFallsBackToContentLikeRust`, `TestInactiveThreadReceiptAcknowledgesParkedSteerLikeRust`, `TestPendingSteerSurvivesThreadSwitchLikeRust`, `TestSubmitRequestAssignsUniqueClientMessageID`, `TestRemoteTurnStartCarriesClientMessageIDLikeRust`, `TestRemoteTurnSteerParamsFallsBackToRequestClientIDLikeRust`, `TestRemoteProtocolUserMessageCarriesClientIDAndImageCountLikeRust`; full `go test ./tui/tea` and focused `go test ./app` pass (the pre-existing `TestLocalSessionForksRustRolloutWithoutGoSnapshot` and `TestExecJSONEndToEnd` failures remain at HEAD).
+
+Status after this batch: `2332 complete`, `464 not_applicable`, `322 audit_pending`, `26 regression_pending`, `5 partial`, `6 blocked_precondition`.

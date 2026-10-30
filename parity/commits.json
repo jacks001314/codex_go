@@ -6914,9 +6914,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1112: every TUI submission now carries SubmitRequest.ClientID into turn/start and turn/steer; completed userMessage receipts expose clientId and image count to the TUI, which acknowledges the front pending steer by submission id and only falls back to the wire item id or the text/image compare key for older app servers that omit ids. Pending steers are parked per thread across switches and inactive-thread receipts are acknowledged before buffering; archiving or removing a dashboard task drops its parked state. Tests: TestPendingSteerReceiptAcknowledgesByIdentityLikeRust, TestPendingSteerReceiptFallsBackToContentLikeRust, TestInactiveThreadReceiptAcknowledgesParkedSteerLikeRust, TestPendingSteerSurvivesThreadSwitchLikeRust, TestSubmitRequestAssignsUniqueClientMessageID, TestRemoteTurnStartCarriesClientMessageIDLikeRust, TestRemoteTurnSteerParamsFallsBackToRequestClientIDLikeRust, TestRemoteProtocolUserMessageCarriesClientIDAndImageCountLikeRust; full go test ./tui/tea and focused go test ./app pass. Embedded turns keep the existing count-based SteerCommittedMsg acknowledgement because their runner owns a single displayed thread."
    ]
   },
   {

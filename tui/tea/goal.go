@@ -437,7 +437,7 @@ func (m *Model) applyGoalUpdated(goal appserver.Goal, notify bool) {
 		goal.ThreadID = strings.TrimSpace(m.State.ThreadID)
 	}
 	if m.State != nil && goal.ThreadID != "" {
-		m.State.SetThreadID(goal.ThreadID)
+		m.switchThreadID(goal.ThreadID)
 	}
 	m.currentGoal = cloneGoalTea(&goal)
 	m.goalObservedAt = m.currentTime()

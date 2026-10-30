@@ -72,7 +72,10 @@ func (m *Model) resetThreadScopedState() {
 	m.resetReviewModeState()
 	// Rust #50140 clears the cached server permission catalog with the session.
 	m.invalidatePermissionDiscoveryCache()
-	m.pendingSteers = nil
+	// Rust #42451 keeps pending steer submissions (and their client ids) in the
+	// per-thread ThreadInputState; switching away parks them, and switching back
+	// restores them unless a completion receipt already acknowledged them.
+	m.stashPendingSteers()
 	m.rejectedSteers = nil
 	m.mainFind = mainTranscriptFind{}
 	m.activityFocus = transcriptActivityFocus{}

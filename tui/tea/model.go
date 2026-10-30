@@ -74,6 +74,11 @@ type SubmitFunc func(prompt string) bubbletea.Cmd
 
 type SubmitRequest struct {
 	Prompt string
+	// ClientID identifies this TUI submission. Rust #42451 assigns one id per
+	// submission and passes it through turn/start and turn/steer so a completion
+	// receipt acknowledges the matching pending steer, even when two submissions
+	// have identical text. It stays stable across retries and queueing.
+	ClientID string
 	// Model, when set, overrides the session model for this submission (used
 	// by safety-buffered retries with the server-selected faster model).
 	Model                  string
@@ -2635,17 +2640,22 @@ type Model struct {
 	submitRequests                   []SubmitRequest
 	queued                           []queuedSubmission
 	pendingSteers                    []pendingSteerSubmission
-	rejectedSteers                   []queuedSubmission
-	editorActive                     bool
-	toolCalls                        map[string]*toolCallDisplayState
-	mcpToolCalls                     map[string]*mcpToolCallDisplayState
-	webSearches                      map[string]*webSearchDisplayState
-	renderedFileChanges              map[string]bool
-	activeProposedPlans              map[string]*proposedPlanDisplayState
-	startedThreadIDs                 map[string]bool
-	completedThreadIDs               map[string]bool
-	pendingThreadName                bool
-	taskStartedAt                    time.Time
+	// pendingSteersThreadID is the thread that owns pendingSteers. Steers for
+	// other threads are parked in threadPendingSteers, mirroring Rust #42451's
+	// per-thread ThreadInputState snapshots.
+	pendingSteersThreadID string
+	threadPendingSteers   map[string][]pendingSteerSubmission
+	rejectedSteers        []queuedSubmission
+	editorActive          bool
+	toolCalls             map[string]*toolCallDisplayState
+	mcpToolCalls          map[string]*mcpToolCallDisplayState
+	webSearches           map[string]*webSearchDisplayState
+	renderedFileChanges   map[string]bool
+	activeProposedPlans   map[string]*proposedPlanDisplayState
+	startedThreadIDs      map[string]bool
+	completedThreadIDs    map[string]bool
+	pendingThreadName     bool
+	taskStartedAt         time.Time
 	// statusIndicatorHidden mirrors Rust bottom_pane::hide_status_indicator: a
 	// streamed assistant tail owns the surface, so the inline working row is
 	// removed until tool activity or commentary completion re-shows it.
@@ -5792,6 +5802,11 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	if request.Prompt == "" && len(request.Attachments) == 0 {
 		return nil
 	}
+	// Rust #42451: every TUI submission owns a client message id that reaches
+	// turn/start (or turn/steer) and comes back on the committed user message.
+	if strings.TrimSpace(request.ClientID) == "" {
+		request.ClientID = uuid.NewString()
+	}
 	// Rust holds a user turn while the session waits for the Reserve switch, so
 	// the queued prompt is not sent on the blocked model.
 	if m.rateLimitRecoveryPending {
@@ -5898,6 +5913,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		MentionCatalog:  m.submissionMentionCatalog(),
 		TextElements:    textElements,
 	}
+	request.ClientID = uuid.NewString()
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	// Rust #44328: queueing a new prompt clears the previous prompt's pending
@@ -5942,7 +5958,9 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	m.captureIDEContext(&request)
-	clientID := "tui-steer-" + uuid.NewString()
+	clientID := uuid.NewString()
+	request.ClientID = clientID
+	m.setPendingSteerThread(m.currentThreadID())
 	m.pendingSteers = append(m.pendingSteers, pendingSteerSubmission{ID: clientID, Request: cloneSubmitRequest(request)})
 	if strings.TrimSpace(request.Prompt) != "" {
 		m.inputHistory = append(m.inputHistory, request.Prompt)
@@ -5987,6 +6005,146 @@ func (m *Model) commitPendingSteers(count int) {
 	}
 	m.pendingSteers = append([]pendingSteerSubmission(nil), m.pendingSteers[count:]...)
 	m.refreshTranscript()
+}
+
+// setPendingSteerThread materializes the pending steers owned by threadID.
+// Rust #42451 preserves each thread's pending steer ids in its ThreadInputState
+// snapshot, so switching away must park the current list instead of dropping
+// it and switching back must restore it.
+func (m *Model) setPendingSteerThread(threadID string) {
+	if m == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if m.pendingSteersThreadID == threadID {
+		return
+	}
+	m.stashPendingSteers()
+	if threadID != "" {
+		if saved := m.threadPendingSteers[threadID]; len(saved) > 0 {
+			m.pendingSteers = saved
+			delete(m.threadPendingSteers, threadID)
+		}
+	}
+	m.pendingSteersThreadID = threadID
+}
+
+// switchThreadID changes the displayed thread and swaps its pending steer
+// snapshot, so a steer submitted before switching away is restored (with its
+// submission id) when the user returns.
+func (m *Model) switchThreadID(threadID string) {
+	if m == nil || m.State == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	m.State.SetThreadID(threadID)
+	m.setPendingSteerThread(threadID)
+}
+
+// stashPendingSteers parks the materialized pending steers under the thread
+// that owns them without resubmitting them.
+func (m *Model) stashPendingSteers() {
+	if m == nil {
+		return
+	}
+	threadID := strings.TrimSpace(m.pendingSteersThreadID)
+	if threadID == "" {
+		threadID = m.currentThreadID()
+	}
+	if len(m.pendingSteers) > 0 && threadID != "" {
+		if m.threadPendingSteers == nil {
+			m.threadPendingSteers = map[string][]pendingSteerSubmission{}
+		}
+		m.threadPendingSteers[threadID] = append(m.threadPendingSteers[threadID], m.pendingSteers...)
+	}
+	m.pendingSteers = nil
+	m.pendingSteersThreadID = ""
+}
+
+// dropPendingSteersForThread discards a thread's parked pending steers when the
+// thread is archived or removed from the dashboard.
+func (m *Model) dropPendingSteersForThread(threadID string) {
+	if m == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	delete(m.threadPendingSteers, threadID)
+	if strings.TrimSpace(m.pendingSteersThreadID) == threadID {
+		m.pendingSteers = nil
+		m.pendingSteersThreadID = ""
+	}
+}
+
+// acknowledgePendingSteerForThread mirrors Rust #42451: a receipt for a thread
+// that is not displayed confirms its front pending steer before routing can
+// discard the notification. ID-less receipts cannot safely distinguish equal
+// pending submissions, so they are left alone.
+func (m *Model) acknowledgePendingSteerForThread(threadID string, event protocol.ThreadEvent) {
+	if m == nil || event.Type != "item.completed" || event.Item == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || !isUserMessageThreadItem(event.Item) {
+		return
+	}
+	clientID := strings.TrimSpace(event.Item.ClientID)
+	if clientID == "" {
+		return
+	}
+	pending := m.threadPendingSteers[threadID]
+	if len(pending) == 0 || pending[0].ID != clientID {
+		return
+	}
+	if len(pending) == 1 {
+		delete(m.threadPendingSteers, threadID)
+		return
+	}
+	m.threadPendingSteers[threadID] = pending[1:]
+}
+
+func isUserMessageThreadItem(item *protocol.ThreadItem) bool {
+	return item != nil && (item.Type == "user_message" || item.Type == "userMessage")
+}
+
+// pendingSteerMatchesReceipt mirrors Rust #42451's completion matching. A
+// receipt that echoes a submission id must match that id; only ID-less receipts
+// from older app servers fall back to the wire item id and then to the content
+// compare key.
+func pendingSteerMatchesReceipt(pending pendingSteerSubmission, item *protocol.ThreadItem) bool {
+	if item == nil {
+		return false
+	}
+	if clientID := strings.TrimSpace(item.ClientID); clientID != "" {
+		return strings.TrimSpace(pending.ID) == clientID
+	}
+	if itemID := strings.TrimSpace(item.ID); itemID != "" && strings.TrimSpace(pending.ID) == itemID {
+		return true
+	}
+	return pendingSteerRequestCompareKey(pending.Request) == pendingSteerReceiptCompareKey(item)
+}
+
+func pendingSteerRequestCompareKey(request SubmitRequest) chatwidget.PendingSteerCompareKey {
+	key := chatwidget.PendingSteerCompareKey{Message: strings.TrimSpace(request.Prompt)}
+	for _, attachment := range request.Attachments {
+		switch attachment.Kind {
+		case bottompane.AttachmentImage, bottompane.AttachmentRemoteImage:
+			key.ImageCount++
+		}
+	}
+	return key
+}
+
+func pendingSteerReceiptCompareKey(item *protocol.ThreadItem) chatwidget.PendingSteerCompareKey {
+	if item == nil {
+		return chatwidget.PendingSteerCompareKey{}
+	}
+	return chatwidget.PendingSteerCompareKey{
+		Message:    strings.TrimSpace(item.Text),
+		ImageCount: item.ImageCount,
+	}
 }
 
 func (m *Model) deferPendingSteers() {
@@ -6655,7 +6813,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		// cell and set the status; finalize without a completion footer.
 		if m.State != nil {
 			if strings.TrimSpace(message.ThreadID) != "" {
-				m.State.SetThreadID(message.ThreadID)
+				m.switchThreadID(message.ThreadID)
 			}
 			m.markThreadCompleted(m.State.ThreadID)
 		}
@@ -6666,7 +6824,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		return m.refreshThreadUsageAfterTurn()
 	}
 	if strings.TrimSpace(message.ThreadID) != "" {
-		m.State.SetThreadID(message.ThreadID)
+		m.switchThreadID(message.ThreadID)
 		m.markThreadCompleted(message.ThreadID)
 	} else if m.State != nil {
 		m.markThreadCompleted(m.State.ThreadID)
@@ -6791,7 +6949,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			cmd = bubbletea.Batch(cmd, m.closeTranscriptOverlay())
 			m.resetThreadScopedState()
 		}
-		m.State.SetThreadID(event.ThreadID)
+		m.switchThreadID(event.ThreadID)
 		// The startup warnings entry was waiting for a thread id (Rust
 		// pending_header).
 		m.renderStartupWarnings()
@@ -7110,7 +7268,10 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		if _, ok := chatwidget.RealtimeDelegationInput(firstNonEmpty(item.Text, item.Message)); ok {
 			m.VoiceConversation.MarkVoiceDelegatedTurn()
 		}
-		if len(m.pendingSteers) > 0 && m.pendingSteers[0].ID == strings.TrimSpace(item.ID) {
+		// Rust #42451: completion receipts acknowledge the front pending steer
+		// by submission id, falling back to the content compare key only for
+		// older app servers that do not echo ids.
+		if len(m.pendingSteers) > 0 && pendingSteerMatchesReceipt(m.pendingSteers[0], item) {
 			m.commitPendingSteers(1)
 		}
 		// Rust #40492: an unnamed thread gets a provisional title from the first
@@ -8955,7 +9116,7 @@ func (m *Model) applyHookRun(message HookRunMsg) bubbletea.Cmd {
 		return nil
 	}
 	if strings.TrimSpace(message.ThreadID) != "" {
-		m.State.SetThreadID(strings.TrimSpace(message.ThreadID))
+		m.switchThreadID(message.ThreadID)
 	}
 	entries := make([]historycell.HookOutputEntry, 0, len(message.Entries))
 	for _, entry := range message.Entries {

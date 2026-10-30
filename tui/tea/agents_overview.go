@@ -1237,6 +1237,7 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 	}
 	// Rust #45255: a removed task drops its retained (unmaterialized) session.
 	m.clearAgentsOverviewBlankSession(msg.threadID)
+	m.dropPendingSteersForThread(msg.threadID)
 	var agentCmd bubbletea.Cmd
 	if msg.action == agentsOverviewActionArchive {
 		agentCmd = m.setAgentPickerThreadVisibility(msg.threadID, true)
@@ -1245,7 +1246,7 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 	}
 	// Removing the current task leaves the dashboard open but unattached.
 	if m.State != nil && strings.TrimSpace(m.State.ThreadID) == strings.TrimSpace(msg.threadID) {
-		m.State.SetThreadID("")
+		m.switchThreadID("")
 		m.State.SetThreadName("")
 	}
 	if m.agentsOverview != nil {

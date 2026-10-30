@@ -182,6 +182,15 @@ type ThreadItem struct {
 	Success      *bool          `json:"success,omitempty"`
 	Items        []TodoItem     `json:"items,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
+	// ClientID is the app server's echoed clientUserMessageId on a completed
+	// user message (Rust #42451). It lets the TUI acknowledge the exact pending
+	// steer even when several submissions carry identical content. The value is
+	// in-process only: the exec/SDK item shape does not carry it.
+	ClientID string `json:"-"`
+	// ImageCount counts the image parts of a completed user message. Together
+	// with Text it forms the legacy compare key used for older app servers that
+	// do not echo submission IDs.
+	ImageCount int `json:"-"`
 }
 
 type TodoItem struct {

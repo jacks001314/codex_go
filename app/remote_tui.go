@@ -5446,8 +5446,11 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if requestModel := strings.TrimSpace(request.Model); requestModel != "" {
 		turnModel = requestModel
 	}
+	// Rust #42451 passes the TUI submission id through turn/start so the
+	// committed user message echoes it for pending-steer acknowledgement.
 	params := turn.TurnStartParams{
 		ThreadID:              threadID,
+		ClientUserMessageID:   strings.TrimSpace(request.ClientID),
 		Input:                 inputs,
 		CWD:                   strings.TrimSpace(shared.CWD),
 		Model:                 turnModel,
@@ -5510,6 +5513,10 @@ func remoteAdditionalContext(values map[string]any) map[string]turn.AdditionalCo
 func remoteTurnSteerParams(threadID string, turnID string, clientID string, request codextea.SubmitRequest) (turn.TurnSteerParams, error) {
 	threadID = strings.TrimSpace(threadID)
 	turnID = strings.TrimSpace(turnID)
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = strings.TrimSpace(request.ClientID)
+	}
 	if threadID == "" || turnID == "" {
 		return turn.TurnSteerParams{}, errors.New("remote turn/steer requires active thread and turn ids")
 	}
@@ -5534,7 +5541,7 @@ func remoteTurnSteerParams(threadID string, turnID string, clientID string, requ
 		ThreadID:            threadID,
 		ExpectedTurnID:      turnID,
 		Input:               inputs,
-		ClientUserMessageID: strings.TrimSpace(clientID),
+		ClientUserMessageID: clientID,
 	}, nil
 }
 
@@ -5598,7 +5605,15 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 	wireType := remotePayloadString(payload, "type")
 	switch wireType {
 	case "userMessage":
-		return protocol.ThreadItem{ID: id, Type: "user_message", Text: remoteUserMessageText(payload)}
+		item := protocol.ThreadItem{ID: id, Type: "user_message", Text: remoteUserMessageText(payload)}
+		// Rust #42451: the receipt echoes clientUserMessageId so the TUI can
+		// acknowledge the exact pending steer even when contents are identical.
+		item.ClientID = remotePayloadString(payload, "clientId")
+		if item.ClientID == "" {
+			item.ClientID = remotePayloadString(payload, "client_id")
+		}
+		item.ImageCount = remoteUserMessageImageCount(payload)
+		return item
 	case "agentMessage":
 		item := protocol.AgentMessageItemWithPhase(id, remotePayloadString(payload, "text"), remotePayloadString(payload, "phase"))
 		// Rust v2 AgentMessage carries the async delivery marker and the
@@ -5742,6 +5757,28 @@ func remoteUserMessageText(payload appserver.ThreadItemPayload) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// remoteUserMessageImageCount counts the image parts of a committed user
+// message. Together with its text this is the legacy pending-steer compare key
+// used when an older app server does not echo submission IDs (Rust #42451).
+func remoteUserMessageImageCount(payload appserver.ThreadItemPayload) int {
+	content, ok := payload["content"].([]any)
+	if !ok {
+		return 0
+	}
+	count := 0
+	for _, value := range content {
+		block, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(remotePayloadString(block, "type")) {
+		case "image", "localImage", "local_image", "input_image", "inputImage":
+			count++
+		}
+	}
+	return count
 }
 
 // remoteProtocolCommandActions decodes a commandExecution payload's

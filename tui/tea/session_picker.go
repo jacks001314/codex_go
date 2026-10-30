@@ -351,7 +351,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			m.applyResumeResponseWithResolvedCWD(threadID, response, resolvedCWD)
 		} else if m.State != nil {
 			m.deactivateSideConversation()
-			m.State.SetThreadID(threadID)
+			m.switchThreadID(threadID)
 			m.State.Messages = nil
 			m.State.BumpMessagesRevision()
 			m.insertSessionHeader()
@@ -382,7 +382,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			}
 			m.upsertSessionItem(*summary)
 			m.deactivateSideConversation()
-			m.State.SetThreadID(summary.ThreadID)
+			m.switchThreadID(summary.ThreadID)
 			m.inheritTaskToolCapability(threadID, summary.ThreadID)
 			decision.Value = summary.ThreadID
 			return decision, "Forked session " + summary.ThreadID, true
@@ -475,7 +475,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	// Rust #43994: the resumed thread's replay must not inherit transcript
 	// state from the thread that was open before.
 	m.resetThreadScopedState()
-	m.State.SetThreadID(threadID)
+	m.switchThreadID(threadID)
 	m.seedRecapProgress(response.CompletedTurns)
 	if response.Summary != nil {
 		m.State.SetThreadName(response.Summary.Title)
