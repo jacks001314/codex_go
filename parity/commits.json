@@ -26790,9 +26790,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1040 (audit): N/A - Rust #51192 hardens its Unix Ctrl+Z path by installing a temporary SIGCONT handler, unblocking SIGCONT, sending SIGTSTP, waiting up to ~1000 ms for the handler to confirm resumption (TimedOut error otherwise), and restoring the signal mask/handler, terminal stderr, and terminal modes even when suspension fails. Go ports only the resume state machine (SuspendContext/PrepareResumeAction) and TerminalStderr pause/resume state; nothing under tui/ or elsewhere sends SIGTSTP, calls unix.Kill/syscall.Kill, installs a SIGCONT handler, or adjusts the thread signal mask, so there is no suspend_process equivalent with a resume wait, timeout, or signal-state restoration to align. Verified by rg over SIGTSTP|SIGCONT|SigTstp|SigCont|unix.Kill|syscall.Kill|SuspendKey: no Go job-control delivery site exists."
    ]
   },
   {

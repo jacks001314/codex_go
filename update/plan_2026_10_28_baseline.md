@@ -3414,6 +3414,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - N/A by architecture: Go dispatches typed app-server requests directly and has no core `Op` enum, `Submission` struct, or central submission-debug log. Its diagnostics record only explicitly chosen identifiers and errors, never request params or payload text, so there is no equivalent unsafe formatting site or Go carrier for the added metadata shape.
 - Audited `appserver/router.go`, `appserver/runtime_router.go`, and diagnostics/error logging call sites; no request body or operation payload is logged.
 
-Status after reconciliation: `2201 complete`, `454 not_applicable`,
-`334 audit_pending`, `156 regression_pending`, `4 partial`,
+### Unix job-control resume wait (Round 1040)
+
+- Rust #51192 installs a temporary `SIGCONT` handler, unblocks `SIGCONT`, sends `SIGTSTP` for `Ctrl+Z` suspension, and waits up to roughly one second for the handler to confirm resumption before restoring the previous signal handler, thread signal mask, terminal stderr suppression, and terminal modes. Signal setup, delivery, and restoration errors are propagated even when suspension fails.
+- N/A by architecture: Go ports the resume state machine (`SuspendContext`/`PrepareResumeAction`) and `TerminalStderr` pause/resume state but never delivers `SIGTSTP`, installs signal handlers, or changes the thread signal mask. There is no Go `suspend_process` equivalent, so the bounded resume wait, timeout error, and signal-state restoration have no carrier.
+- Verified with `rg` for `SIGTSTP|SIGCONT|SigTstp|SigCont|unix.Kill|syscall.Kill|SuspendKey` plus `go test ./tui/tui -run 'Suspend|TerminalStderr' -count=1` and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2201 complete`, `455 not_applicable`,
+`333 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
