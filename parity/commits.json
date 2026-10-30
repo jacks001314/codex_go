@@ -8086,9 +8086,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "app/agents_dashboard.go listRecentThreadsForSourceKindsWithReadReceipts seeds recent threads with UseStateDBOnly true, as do app/agents_overview_tui.go and tui/tea/agents_overview_pin.go, so overview seeding never triggers a rollout filesystem scan"
    ]
   },
   {
@@ -9188,9 +9188,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust deleted a stale assignment to a field its TranscriptState no longer declares; Go keeps HadWorkActivity on ToolLifecycleState where tui/chatwidget/tool_lifecycle.go still defines and consumes it, so there is no stale field to remove"
    ]
   },
   {
