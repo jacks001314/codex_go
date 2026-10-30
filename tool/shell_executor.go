@@ -952,10 +952,11 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	body := shellResultModelTextWithMetadata(result, result.MaxOutputTokensUsed, result.ChunkID)
 	return &Output{
-		Success:    true,
-		Body:       body,
-		Data:       shellResultData(result, result.MaxOutputTokensUsed, result.ChunkID),
-		LogPreview: shellLogPreview(body),
+		Success:     true,
+		Body:        body,
+		Data:        shellResultData(result, result.MaxOutputTokensUsed, result.ChunkID),
+		LogPreview:  shellLogPreview(body),
+		SandboxType: cloneSandboxTypePtr(result.SandboxType),
 	}, nil
 }
 
@@ -1167,7 +1168,22 @@ func (e *ShellExecutor) shouldUseUnifiedExec(req *ShellRequest) bool {
 }
 
 func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
-	if req == nil || strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil || req.UnifiedExecRemoteStdioCommand != nil || req.PermissionProfile == nil || req.PermissionProfile.Disabled {
+	if req == nil {
+		return req, nil
+	}
+	remote := strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil || req.UnifiedExecRemoteStdioCommand != nil
+	if req.PermissionProfile == nil || req.PermissionProfile.Disabled {
+		if remote || req.ProcessSandboxType != nil {
+			return req, nil
+		}
+		// A local unified-exec launch outside the sandbox still has a known
+		// backend (Rust #47568): the process ran, and analytics must distinguish
+		// that explicit `none` from an unobserved/legacy launch.
+		prepared := *req
+		prepared.ProcessSandboxType = cloneSandboxType(sandbox.SandboxTypeNone)
+		return &prepared, nil
+	}
+	if remote {
 		return req, nil
 	}
 	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
@@ -1225,6 +1241,13 @@ func applyInternalPermissionsToLaunch(req *ShellRequest, internal *sandbox.Addit
 func cloneSandboxType(value sandbox.SandboxType) *sandbox.SandboxType {
 	cloned := value
 	return &cloned
+}
+
+func cloneSandboxTypePtr(value *sandbox.SandboxType) *sandbox.SandboxType {
+	if value == nil {
+		return nil
+	}
+	return cloneSandboxType(*value)
 }
 
 func clampShellMaxOutputTokens(requested *int, policy *int) *int {

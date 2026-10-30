@@ -1014,6 +1014,12 @@ type ThreadItem struct {
 	// keys are always present and serialize as null when the time is unknown.
 	StartedAtMS   *int64 `json:"startedAtMs"`
 	CompletedAtMS *int64 `json:"completedAtMs"`
+	// sandboxBackend is the observed process backend for a command execution
+	// item. Rust #47568 keeps this analytics-only value out of the serialized
+	// item, schemas and TypeScript surface; a nil pointer means the launch was
+	// not observed (or predates sandbox reporting), while "none" is an explicit
+	// unsandboxed execution.
+	sandboxBackend *string
 }
 
 // UnmarshalJSON accepts the polymorphic content field emitted by Rust. User

@@ -61,7 +61,15 @@ func (r *LocalShellRunner) Run(ctx context.Context, req *ShellRequest) (*ShellRe
 	if req.PermissionProfile != nil {
 		return r.runWithPermissionProfile(ctx, req, env, started)
 	}
-	return r.runDirect(ctx, req.Command, req.CWD, env, started)
+	result, err := r.runDirect(ctx, req.Command, req.CWD, env, started)
+	if err == nil && result != nil {
+		// The direct runner is the explicit unsandboxed path (Rust #47568).
+		result.SandboxType = cloneSandboxTypePtr(req.ProcessSandboxType)
+		if result.SandboxType == nil {
+			result.SandboxType = cloneSandboxType(sandbox.SandboxTypeNone)
+		}
+	}
+	return result, err
 }
 
 func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *ShellRequest, env map[string]string, started time.Time) (*ShellResult, error) {
@@ -90,6 +98,7 @@ func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *Sh
 		result, err = r.runDirect(ctx, plan.Command, plan.CWD, env, started)
 	}
 	if err == nil && result != nil {
+		result.SandboxType = cloneSandboxType(plan.SandboxType)
 		sandbox.RecordFileSystemSandboxViolation(plan.SandboxType, sandbox.SandboxExecOutput{
 			ExitCode:         result.ExitCode,
 			Stdout:           result.Stdout,
@@ -156,11 +165,12 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 		return nil, errors.New("windows sandbox returned nil result")
 	}
 	return &ShellResult{
-		ExitCode: result.ExitCode,
-		Stdout:   string(result.Stdout),
-		Stderr:   string(result.Stderr),
-		Duration: time.Since(started),
-		TimedOut: result.TimedOut || errors.Is(ctx.Err(), context.DeadlineExceeded),
+		ExitCode:    result.ExitCode,
+		SandboxType: cloneSandboxType(plan.SandboxType),
+		Stdout:      string(result.Stdout),
+		Stderr:      string(result.Stderr),
+		Duration:    time.Since(started),
+		TimedOut:    result.TimedOut || errors.Is(ctx.Err(), context.DeadlineExceeded),
 	}, nil
 }
 

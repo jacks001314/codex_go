@@ -3114,6 +3114,9 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		}
 		item.Data["completedAtMs"] = completedAt.UTC().UnixMilli()
 		item.Data["completed_at_ms"] = completedAt.UTC().UnixMilli()
+		if execution.Output != nil {
+			item.sandboxBackend = sandboxBackendTag(execution.Output.SandboxType)
+		}
 		r.attributeCommandExecutionItem(&item)
 		r.notify(NotificationItemCompleted, &ItemCompletedNotification{
 			Item:          threadItemPayload(item),
@@ -3678,11 +3681,12 @@ func unifiedExecThreadItem(event tool.UnifiedExecEvent, status CommandExecutionS
 		data["duration_ms"] = event.Duration.Milliseconds()
 	}
 	return ThreadItem{
-		ID:        event.CallID,
-		Type:      "commandExecution",
-		TurnID:    "",
-		CreatedAt: event.StartedAt.UTC().UnixMilli(),
-		Data:      data,
+		ID:             event.CallID,
+		Type:           "commandExecution",
+		TurnID:         "",
+		CreatedAt:      event.StartedAt.UTC().UnixMilli(),
+		Data:           data,
+		sandboxBackend: sandboxBackendTag(event.SandboxType),
 	}
 }
 

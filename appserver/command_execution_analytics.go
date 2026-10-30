@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"codex_go/plugin"
+	"codex_go/sandbox"
 	"codex_go/telemetry"
 )
 
@@ -58,13 +59,17 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 	// Rust #45445: the event is attributed to the model that invoked the command.
 	// The start-time context wins; only when no start was observed does the
 	// completion-time run config stand in (the carry the unified-exec path hands
-	// the emitter is already the start-time config).
-	modelContext, _ := r.takeToolItemModelContext(threadID, turnID, threadItemExternalID(item))
-	if modelContext.isZero() {
-		// No start was observed: the completion-time resolved settings stand in,
-		// still reporting the model's default reasoning level when the step did
-		// not select one.
-		modelContext = r.modelInvocationContextForRunConfig(runConfig)
+	// the emitter is already the start-time config). User shell commands carry no
+	// model context at all in Rust (#47568), so they never fall back to the turn.
+	var modelContext modelInvocationContext
+	if threadItemCommandSource(item) != CommandExecutionSourceUserShell {
+		modelContext, _ = r.takeToolItemModelContext(threadID, turnID, threadItemExternalID(item))
+		if modelContext.isZero() {
+			// No start was observed: the completion-time resolved settings stand in,
+			// still reporting the model's default reasoning level when the step did
+			// not select one.
+			modelContext = r.modelInvocationContextForRunConfig(runConfig)
+		}
 	}
 	base := telemetry.CodexToolItemEventBase{
 		ThreadID:                       threadID,
@@ -95,6 +100,7 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 	r.enrichToolEventBase(&base, threadID, turnID)
 	params := telemetry.CodexCommandExecutionEventParams{
 		CodexToolItemEventBase:      base,
+		SandboxBackend:              cloneStringPtrAppserver(item.sandboxBackend),
 		ModelSlug:                   optionalModelLabel(modelContext.ModelSlug),
 		ReasoningEffort:             optionalModelLabel(modelContext.ReasoningEffort),
 		PluginID:                    pluginID,
@@ -115,6 +121,25 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 // optionalModelLabel reports a non-empty label and leaves the field absent (JSON
 // null) when the execution carried no context, mirroring Rust's Option fields.
 func optionalModelLabel(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+// sandboxBackendTag converts the item's internal backend into the bounded
+// analytics label. A nil backend stays nil so an unobserved launch is reported
+// as null rather than being conflated with explicit unsandboxed execution.
+func sandboxBackendTag(value *sandbox.SandboxType) *string {
+	if value == nil {
+		return nil
+	}
+	tag := value.MetricTag()
+	return &tag
+}
+
+func sandboxBackendTagValue(value string) *string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil

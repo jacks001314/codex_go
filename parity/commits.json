@@ -19454,9 +19454,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "sandbox.SandboxType.MetricTag mirrors Rust SandboxType::as_metric_tag (none/seatbelt/seccomp/windows_sandbox/windows_mxc). telemetry.CodexCommandExecutionEventParams now carries nullable sandbox_backend; appserver command analytics reads an internal analytics-only ThreadItem backend that is never serialized. Unified-exec terminal events, one-shot tool outputs and user-shell completions carry the observed backend, while begin events and unobserved/legacy launches stay nil; a legacy executor response without sandboxType remains unknown instead of being guessed as none.",
+    "Regression coverage: sandbox/sandbox_metric_tag_like_rust_test.go pins the metric labels; telemetry/sandbox_backend_event_like_rust_test.go pins null versus explicit none; tool/sandbox_backend_propagation_like_rust_test.go pins result propagation and remote unknown handling; appserver/sandbox_backend_analytics_like_rust_test.go covers all backend labels, failed executions, user shell `none`, unified-exec begin/end, and asserts the value never appears on the serialized item. Verified with `go test ./sandbox ./telemetry ./tool ./appserver -run 'SandboxBackend|SandboxTypeMetricTag' -count=1`."
    ]
   },
   {

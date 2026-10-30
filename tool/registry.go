@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/sandbox"
 	"codex_go/utils"
 )
 
@@ -210,6 +211,9 @@ type Output struct {
 	Error       string         `json:"error,omitempty"`
 	LogPreview  string         `json:"logPreview,omitempty"`
 	CompletedAt time.Time      `json:"completedAt"`
+	// SandboxType is the observed process backend for a command execution
+	// (Rust #47568). It is analytics-only and never serialized or model-visible.
+	SandboxType *sandbox.SandboxType `json:"-"`
 	// ToolResultMetadata is the raw tool-result `_meta` a tool exposes for the
 	// internal executed-tool-call record (Rust `ToolOutput::tool_result_metadata`,
 	// #46010). It is never serialized: the model-visible data carries the

@@ -25,6 +25,25 @@ const (
 	SandboxTypeWindowsMxc SandboxType = "windowsMxc"
 )
 
+// MetricTag is the bounded analytics label for a sandbox backend (Rust
+// SandboxType::as_metric_tag, #47568). It is deliberately distinct from the
+// protocol wire spelling: analytics uses stable short names while the executor
+// protocol keeps the camelCase SandboxType values.
+func (s SandboxType) MetricTag() string {
+	switch s {
+	case SandboxTypeMacosSeatbelt:
+		return "seatbelt"
+	case SandboxTypeLinuxSeccomp:
+		return "seccomp"
+	case SandboxTypeWindowsRestrictedToken:
+		return "windows_sandbox"
+	case SandboxTypeWindowsMxc:
+		return "windows_mxc"
+	default:
+		return "none"
+	}
+}
+
 // SandboxViolationEvent is a normalized violation observed by sandbox enforcement.
 type SandboxViolationEvent interface {
 	sandboxViolationEvent()

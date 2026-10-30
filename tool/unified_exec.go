@@ -270,6 +270,10 @@ type UnifiedExecEvent struct {
 	Duration  time.Duration
 	StartedAt time.Time
 	TimedOut  bool
+	// SandboxType is the executor-observed backend for a terminal event
+	// (Rust #47568). Start events leave it nil because the backend is only
+	// known once the process has launched.
+	SandboxType *sandbox.SandboxType
 }
 
 type UnifiedExecEventSink func(UnifiedExecEvent)
@@ -1437,6 +1441,7 @@ func (m *UnifiedExecManager) collect(ctx context.Context, process *unifiedExecPr
 	result := &ShellResult{
 		Stdout:              output,
 		OmittedBytes:        omittedBytes,
+		SandboxType:         cloneSandboxTypePtr(process.sandboxType),
 		Duration:            time.Since(started),
 		TimedOut:            timedOut,
 		ChunkID:             generateShellChunkID(),
@@ -1668,6 +1673,7 @@ func (p *unifiedExecProcess) finishWithExit(err error, exitCode *int) {
 				Duration:    time.Since(p.startedAt),
 				StartedAt:   p.startedAt,
 				TimedOut:    p.timedOut,
+				SandboxType: cloneSandboxTypePtr(p.sandboxType),
 			}
 			p.mu.Unlock()
 			p.emitOutputDeltas(deltas)

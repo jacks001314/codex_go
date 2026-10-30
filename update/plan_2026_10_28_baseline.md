@@ -3837,3 +3837,9 @@ Status after reconciliation: `2234 complete`, `462 not_applicable`,
 - #49480 thread prediction protocol types: `thread/prediction/request` (threadId/sourceTurnId) and `thread/prediction/updated` (`completed` with optional text or `failed`) are registered as experimental, the request stays method-not-found, and the notification routes to its named thread.
 
 Status after this batch: `2305 complete`, `462 not_applicable`, `322 audit_pending`, `55 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Sandbox backend analytics batch (Round 1095)
+
+- #47568 command execution analytics now reports a nullable `sandbox_backend`: `SandboxType::as_metric_tag` maps to `none`/`seatbelt`/`seccomp`/`windows_sandbox`/`windows_mxc`, unified-exec terminal events carry the executor-observed backend, one-shot shell outputs propagate it through the tool result, and user-shell completions report explicit `none`. Begin events, cancelled launches and legacy remote executors without `sandboxType` stay null rather than being guessed, and the internal value never reaches the serialized command item, schemas or TypeScript surface.
+
+Status after this batch: `2306 complete`, `462 not_applicable`, `322 audit_pending`, `54 regression_pending`, `5 partial`, `6 blocked_precondition`.

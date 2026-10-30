@@ -17,6 +17,7 @@ import (
 	"codex_go/envutil"
 	"codex_go/execpolicy"
 	"codex_go/model"
+	"codex_go/sandbox"
 	"codex_go/session"
 	usershell "codex_go/shell"
 	"codex_go/tool"
@@ -31,6 +32,11 @@ type threadShellCommandRun struct {
 	Standalone bool
 	StartedAt  int64
 	TimeoutMs  *int64
+	// ConnectionID and RunConfig carry the app-server connection and step
+	// settings for command analytics (Rust #47568); a standalone shell command
+	// has no inherited model context.
+	ConnectionID string
+	RunConfig    *appTurnRunConfig
 }
 
 // threadShellCommandLaunch prepares a user shell command the way Rust's
@@ -202,6 +208,7 @@ func (r *RuntimeRouter) handleThreadShellCommand(request *Request, params *Shell
 	if err != nil {
 		return nil, err
 	}
+	run.ConnectionID = request.normalizedConnectionID()
 	go r.runThreadShellCommand(context.Background(), run)
 	return response, nil
 }
@@ -236,6 +243,7 @@ func (r *RuntimeRouter) prepareThreadShellCommandRun(threadID string, command st
 			Standalone: false,
 			StartedAt:  active.StartedAtMS,
 			TimeoutMs:  cloneInt64(timeoutMs),
+			RunConfig:  active.RunConfig,
 		}, nil
 	}
 	start := &turn.TurnStartParams{
@@ -301,7 +309,7 @@ func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadSh
 	r.registerThreadShellCommandTerminal(run, itemID, processID, cancel)
 	defer r.requireThreadExtras().RemoveBackgroundTerminal(run.ThreadID, processID)
 	startedAtMS := time.Now().UTC().UnixMilli()
-	started := threadShellCommandItem(run, itemID, processID, CommandExecutionInProgress, "", nil, nil, startedAtMS)
+	started := threadShellCommandItem(run, itemID, processID, CommandExecutionInProgress, "", nil, nil, startedAtMS, nil)
 	r.notify(NotificationItemStarted, &ItemStartedNotification{
 		Item:        threadItemPayload(started),
 		ThreadID:    run.ThreadID,
@@ -316,7 +324,7 @@ func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadSh
 		itemID:   itemID,
 	}
 	startedAt := time.Now()
-	exitCode, status := r.runThreadShellCommandProcess(runCtx, run, processID, output)
+	exitCode, status, sandboxBackend := r.runThreadShellCommandProcess(runCtx, run, processID, output)
 	durationMS := time.Since(startedAt).Milliseconds()
 	outputText := output.String()
 	record := threadShellCommandRecord(run, exitCode, time.Duration(durationMS)*time.Millisecond, outputText)
@@ -325,13 +333,18 @@ func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadSh
 	}
 	r.persistThreadShellCommandRecord(run, record)
 	completedAtMS := time.Now().UTC().UnixMilli()
-	completed := threadShellCommandItem(run, itemID, processID, status, outputText, &exitCode, &durationMS, startedAtMS)
+	completed := threadShellCommandItem(run, itemID, processID, status, outputText, &exitCode, &durationMS, startedAtMS, sandboxBackend)
 	r.notify(NotificationItemCompleted, &ItemCompletedNotification{
 		Item:          threadItemPayload(completed),
 		ThreadID:      run.ThreadID,
 		TurnID:        run.TurnID,
 		CompletedAtMS: completedAtMS,
 	})
+	analyticsConfig := run.RunConfig
+	if analyticsConfig == nil {
+		analyticsConfig = &appTurnRunConfig{}
+	}
+	r.emitCommandExecutionAnalyticsEvent(context.Background(), run.ConnectionID, run.ThreadID, run.TurnID, &completed, analyticsConfig)
 	if run.Standalone {
 		_ = r.requireTurns().Complete(&turn.TurnCompleteParams{ThreadID: run.ThreadID, TurnID: run.TurnID, Status: string(TurnStatusCompleted)})
 		duration := completedAtMS - startedAtMS
@@ -414,7 +427,7 @@ func (r *RuntimeRouter) persistThreadShellCommandRecord(run *threadShellCommandR
 	_ = r.appendRuntimeRollout(run.ThreadID, []session.Item{item}, now)
 }
 
-func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *threadShellCommandRun, processID string, output *threadShellCommandOutput) (int64, CommandExecutionStatus) {
+func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *threadShellCommandRun, processID string, output *threadShellCommandOutput) (int64, CommandExecutionStatus, *string) {
 	argv, commandEnv := r.threadShellCommandLaunch(ctx, run)
 	cmd := osexec.CommandContext(ctx, argv[0], argv[1:]...)
 	if strings.TrimSpace(run.CWD) != "" {
@@ -427,21 +440,24 @@ func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *t
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		output.WriteString("failed to capture stdout: " + err.Error())
-		return 1, CommandExecutionFailed
+		return 1, CommandExecutionFailed, nil
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		output.WriteString("failed to capture stderr: " + err.Error())
-		return 1, CommandExecutionFailed
+		return 1, CommandExecutionFailed, nil
 	}
 	if err := cmd.Start(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			output.WriteString("Timeout")
-			return -1, CommandExecutionFailed
+			return -1, CommandExecutionFailed, nil
 		}
 		output.WriteString("failed to start shell command: " + err.Error())
-		return 1, CommandExecutionFailed
+		return 1, CommandExecutionFailed, nil
 	}
+	// The command left the launch gate, so its process backend is known:
+	// `/shell` is the explicit full-access escape hatch (Rust #47568).
+	sandboxBackend := sandboxBackendTagValue(sandbox.SandboxTypeNone.MetricTag())
 	r.updateThreadShellCommandTerminalOSPID(run, processID, cmd)
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -455,6 +471,11 @@ func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *t
 	}()
 	err = cmd.Wait()
 	wg.Wait()
+	if ctx.Err() == context.Canceled {
+		// Rust's cancelled user-shell path reports the item without an observed
+		// backend, unlike a command that ran to completion or timed out.
+		sandboxBackend = nil
+	}
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		// Rust's user-shell task surfaces an expired deadline as the command's
 		// own failure (status failed, exit code -1, "Timeout" in the output)
@@ -463,7 +484,7 @@ func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *t
 			output.WriteString("\n")
 		}
 		output.WriteString("Timeout")
-		return -1, CommandExecutionFailed
+		return -1, CommandExecutionFailed, sandboxBackend
 	}
 	exitCode, waitErr := commandExecExitCode(ctx, err)
 	if waitErr != nil {
@@ -471,12 +492,12 @@ func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *t
 			output.WriteString("\n")
 		}
 		output.WriteString(waitErr.Error())
-		return 1, CommandExecutionFailed
+		return 1, CommandExecutionFailed, nil
 	}
 	if exitCode != 0 {
-		return int64(exitCode), CommandExecutionFailed
+		return int64(exitCode), CommandExecutionFailed, sandboxBackend
 	}
-	return int64(exitCode), CommandExecutionCompleted
+	return int64(exitCode), CommandExecutionCompleted, sandboxBackend
 }
 
 func (r *RuntimeRouter) updateThreadShellCommandTerminalOSPID(run *threadShellCommandRun, processID string, cmd *osexec.Cmd) {
@@ -498,7 +519,7 @@ func threadShellCommandArgv(command string) []string {
 	return []string{"/bin/sh", "-lc", command}
 }
 
-func threadShellCommandItem(run *threadShellCommandRun, itemID string, processID string, status CommandExecutionStatus, aggregatedOutput string, exitCode *int64, durationMS *int64, createdAtMS int64) ThreadItem {
+func threadShellCommandItem(run *threadShellCommandRun, itemID string, processID string, status CommandExecutionStatus, aggregatedOutput string, exitCode *int64, durationMS *int64, createdAtMS int64, sandboxBackend *string) ThreadItem {
 	data := map[string]any{
 		"command":   run.Command,
 		"cwd":       run.CWD,
@@ -512,15 +533,26 @@ func threadShellCommandItem(run *threadShellCommandRun, itemID string, processID
 	if exitCode != nil {
 		data["exitCode"] = *exitCode
 	}
+	if createdAtMS > 0 {
+		data["startedAtMs"] = createdAtMS
+		data["started_at_ms"] = createdAtMS
+	}
 	if durationMS != nil {
 		data["durationMs"] = *durationMS
+		data["duration_ms"] = *durationMS
+		if status != CommandExecutionInProgress {
+			completedAtMS := createdAtMS + *durationMS
+			data["completedAtMs"] = completedAtMS
+			data["completed_at_ms"] = completedAtMS
+		}
 	}
 	return ThreadItem{
-		ID:        itemID,
-		Type:      "commandExecution",
-		TurnID:    run.TurnID,
-		CreatedAt: createdAtMS,
-		Data:      data,
+		ID:             itemID,
+		Type:           "commandExecution",
+		TurnID:         run.TurnID,
+		CreatedAt:      createdAtMS,
+		Data:           data,
+		sandboxBackend: cloneStringPtrAppserver(sandboxBackend),
 	}
 }
 

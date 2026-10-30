@@ -132,6 +132,10 @@ type CodexCommandExecutionEventRequest struct {
 
 type CodexCommandExecutionEventParams struct {
 	CodexToolItemEventBase
+	// SandboxBackend is the observed process backend for the command (Rust
+	// #47568). It is serialized as null when no launch was observed, which keeps
+	// "unknown" distinguishable from an explicit unsandboxed run ("none").
+	SandboxBackend *string `json:"sandbox_backend"`
 	// ModelSlug and ReasoningEffort attribute the command to the model that
 	// invoked it (Rust #45445): they are captured from the resolved step settings
 	// when the command starts and carried to completion, so a model switch during

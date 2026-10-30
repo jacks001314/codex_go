@@ -283,9 +283,13 @@ type ShellSandboxProfile struct {
 }
 
 type ShellResult struct {
-	ExitCode            int
-	HasExitCode         bool
-	ProcessID           *int
+	ExitCode    int
+	HasExitCode bool
+	ProcessID   *int
+	// SandboxType is the backend the launched process actually ran under (Rust
+	// #47568). A nil pointer means no launch was observed or the executor
+	// predates sandbox reporting; SandboxTypeNone is explicit full access.
+	SandboxType         *sandbox.SandboxType
 	Stdout              string
 	Stderr              string
 	Duration            time.Duration
