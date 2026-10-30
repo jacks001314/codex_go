@@ -343,6 +343,7 @@ type SkillsService struct {
 	configFingerprint string
 	configService     *config.ConfigService
 	cache             map[string]skillsCacheEntry
+	cacheOrder        []string
 	watchMu           sync.Mutex
 	watchCallback     func()
 	watchedRoots      map[string]string
@@ -350,6 +351,10 @@ type SkillsService struct {
 	watchDone         chan struct{}
 	watchInterval     time.Duration
 }
+
+// skillsConfigCacheCapacity bounds the effective-config skill snapshots kept
+// by SkillsService, mirroring Rust's CONFIG_SKILLS_CACHE_CAPACITY (Rust #42284).
+const skillsConfigCacheCapacity = 32
 
 type skillsCacheEntry struct {
 	skills []SkillsListEntry
@@ -408,7 +413,7 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	if hasPersistentConfig && persistentFingerprint != s.configFingerprint {
 		s.config = persistentConfig
 		s.configFingerprint = persistentFingerprint
-		s.cache = map[string]skillsCacheEntry{}
+		s.resetCacheLocked()
 	}
 	configEntries := cloneConfigEntries(s.config)
 	configEntries = append(configEntries, cloneConfigEntries(params.Config)...)
@@ -432,6 +437,7 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	}
 	if !params.ForceReload {
 		if cached, ok := s.cache[key]; ok {
+			s.touchCacheKeyLocked(key)
 			return skillsListResponse(cloneSkills(cached.skills), cloneSkillErrors(cached.errors), params.CWDs, bundledEnabled), nil
 		}
 	}
@@ -464,7 +470,7 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 		}
 		return entries[i].Name < entries[j].Name
 	})
-	s.cache[key] = skillsCacheEntry{skills: cloneSkills(entries), errors: cloneSkillErrors(skillErrors)}
+	s.cacheSkillsLocked(key, skillsCacheEntry{skills: cloneSkills(entries), errors: cloneSkillErrors(skillErrors)})
 	return skillsListResponse(entries, skillErrors, params.CWDs, bundledEnabled), nil
 }
 
@@ -482,7 +488,39 @@ func (s *SkillsService) ClearCache() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.resetCacheLocked()
+}
+
+// resetCacheLocked drops every cached effective-config snapshot.
+func (s *SkillsService) resetCacheLocked() {
 	s.cache = map[string]skillsCacheEntry{}
+	s.cacheOrder = nil
+}
+
+// touchCacheKeyLocked marks key as most recently used and evicts the least
+// recently used snapshot beyond the capacity bound. Responses handed to callers
+// are copies, so evicted snapshots stay usable by their holders.
+func (s *SkillsService) touchCacheKeyLocked(key string) {
+	for i, existing := range s.cacheOrder {
+		if existing != key {
+			continue
+		}
+		copy(s.cacheOrder[1:i+1], s.cacheOrder[:i])
+		s.cacheOrder[0] = key
+		return
+	}
+	s.cacheOrder = append([]string{key}, s.cacheOrder...)
+	if len(s.cacheOrder) <= skillsConfigCacheCapacity {
+		return
+	}
+	evicted := s.cacheOrder[len(s.cacheOrder)-1]
+	s.cacheOrder = s.cacheOrder[:len(s.cacheOrder)-1]
+	delete(s.cache, evicted)
+}
+
+func (s *SkillsService) cacheSkillsLocked(key string, entry skillsCacheEntry) {
+	s.cache[key] = entry
+	s.touchCacheKeyLocked(key)
 }
 
 func (s *SkillsService) SetChangedCallback(callback func()) {
@@ -662,7 +700,7 @@ func (s *SkillsService) SetExtraRoots(params *SkillsExtraRootsSetParams) (*Skill
 		roots = params.Roots
 	}
 	s.extraRoots = cleanStringSlice(roots)
-	s.cache = map[string]skillsCacheEntry{}
+	s.resetCacheLocked()
 	registeredRoots := skillsRootsFromPaths(s.extraRoots, "user")
 	s.mu.Unlock()
 	s.registerWatchedRoots(registeredRoots)
@@ -692,7 +730,7 @@ func (s *SkillsService) WriteConfig(params *SkillsConfigWriteParams) (*SkillsCon
 		s.mu.Lock()
 		s.config = persistentConfig
 		s.configFingerprint = persistentFingerprint
-		s.cache = map[string]skillsCacheEntry{}
+		s.resetCacheLocked()
 		s.mu.Unlock()
 		return &SkillsConfigWriteResponse{EffectiveEnabled: params.Enabled, Updated: true}, nil
 	}
@@ -700,7 +738,7 @@ func (s *SkillsService) WriteConfig(params *SkillsConfigWriteParams) (*SkillsCon
 	defer s.mu.Unlock()
 	s.config = applyConfigEntryEdit(s.config, &ConfigEntry{Name: strings.TrimSpace(params.Name), Path: normalizeSkillConfigPathAppserver(params.Path), Enabled: params.Enabled})
 	s.configFingerprint = configEntriesFingerprint(s.config)
-	s.cache = map[string]skillsCacheEntry{}
+	s.resetCacheLocked()
 	return &SkillsConfigWriteResponse{EffectiveEnabled: params.Enabled, Updated: true}, nil
 }
 
@@ -728,7 +766,7 @@ func (s *SkillsService) applyConfigEntries(entries []SkillsListEntry, turnConfig
 	if hasPersistentConfig && persistentFingerprint != s.configFingerprint {
 		s.config = persistentConfig
 		s.configFingerprint = persistentFingerprint
-		s.cache = map[string]skillsCacheEntry{}
+		s.resetCacheLocked()
 	}
 	configEntries := cloneConfigEntries(s.config)
 	s.mu.Unlock()

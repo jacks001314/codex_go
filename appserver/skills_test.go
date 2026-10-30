@@ -15,6 +15,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/install"
+	"codex_go/plugin"
 	promptctx "codex_go/prompt"
 	"codex_go/systemskills"
 )
@@ -1695,6 +1696,127 @@ func TestSkillsListEntryPathIsLegacyAppPathStringLikeRust(t *testing.T) {
 		}
 		if key := skillPathIdentityKey(native); key == "" {
 			t.Fatalf("skillPathIdentityKey(%q) = empty; wire paths must resolve to an identity", native)
+		}
+	}
+}
+
+func TestSkillsServiceBoundsConfigCacheLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "sample")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: sample\ndescription: cached\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{Roots: []string{root}})
+	heldParams := &SkillsListParams{
+		CWDs:   []string{root},
+		Config: []ConfigEntry{{Name: "held-snapshot", Enabled: true}},
+	}
+	held, err := service.List(heldParams)
+	if err != nil {
+		t.Fatalf("List(held) error = %v", err)
+	}
+	if len(held.Skills) != 1 || held.Skills[0].Name != "sample" {
+		t.Fatalf("held skills = %#v, want sample", held.Skills)
+	}
+	service.mu.Lock()
+	heldKey := service.cacheOrder[0]
+	service.mu.Unlock()
+
+	for i := 0; i < skillsConfigCacheCapacity+8; i++ {
+		_, err := service.List(&SkillsListParams{
+			CWDs:   []string{root},
+			Config: []ConfigEntry{{Name: fmt.Sprintf("generation-%d", i), Enabled: true}},
+		})
+		if err != nil {
+			t.Fatalf("List(generation %d) error = %v", i, err)
+		}
+	}
+
+	service.mu.Lock()
+	cachedSize := len(service.cache)
+	orderSize := len(service.cacheOrder)
+	_, heldStillCached := service.cache[heldKey]
+	service.mu.Unlock()
+	if cachedSize != skillsConfigCacheCapacity || orderSize != skillsConfigCacheCapacity {
+		t.Fatalf("cache size = %d/%d, want %d", cachedSize, orderSize, skillsConfigCacheCapacity)
+	}
+	if heldStillCached {
+		t.Fatalf("oldest snapshot %q was not evicted", heldKey)
+	}
+	if len(held.Skills) != 1 || held.Skills[0].Name != "sample" {
+		t.Fatalf("held response changed after eviction: %#v", held.Skills)
+	}
+
+	reused, err := service.List(heldParams)
+	if err != nil {
+		t.Fatalf("List(reused) error = %v", err)
+	}
+	if len(reused.Skills) != 1 || reused.Skills[0].Name != "sample" {
+		t.Fatalf("reused skills = %#v, want sample", reused.Skills)
+	}
+	service.mu.Lock()
+	frontKey := service.cacheOrder[0]
+	cachedSize = len(service.cache)
+	service.mu.Unlock()
+	if frontKey != heldKey {
+		t.Fatalf("most recent cache key = %q, want reloaded %q", frontKey, heldKey)
+	}
+	if cachedSize != skillsConfigCacheCapacity {
+		t.Fatalf("cache size after reuse = %d, want %d", cachedSize, skillsConfigCacheCapacity)
+	}
+}
+
+func TestRuntimeRouterSkillsListRefreshesExternallyChangedPluginSkillLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	pluginRoot := t.TempDir()
+	skillDir := filepath.Join(pluginRoot, "skills", "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	writeSkill := func(version string) {
+		body := fmt.Sprintf("---\nname: review\ndescription: version %s\n---\n", version)
+		if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile(plugin skill %s) error = %v", version, err)
+		}
+	}
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		MarketplaceRoot: pluginRoot,
+		Summary: plugin.PluginSummary{
+			Name:            "docs",
+			MarketplaceName: "local",
+			Installed:       true,
+			Enabled:         true,
+			HasSkills:       true,
+		},
+	})
+	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: cwd, Skills: NewSkillsService(nil), Plugins: plugins})
+
+	for _, version := range []string{"1.0.0", "2.0.0", "0.9.0"} {
+		writeSkill(version)
+		// The first request warms app-server caches; the second reads them warm,
+		// mirroring the Rust out-of-process upgrade and rollback coverage.
+		for attempt := 0; attempt < 2; attempt++ {
+			result := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{}))
+			if result.Error != nil {
+				t.Fatalf("skills/list(%s) error = %+v", version, result.Error)
+			}
+			response := result.Result.(*SkillsListResponse)
+			found := ""
+			for _, data := range response.Data {
+				for _, skill := range data.Skills {
+					if skill.Name == "docs:review" {
+						found = skill.Description
+					}
+				}
+			}
+			if found != "version "+version {
+				t.Fatalf("attempt %d plugin skill description = %q, want %q", attempt, found, "version "+version)
+			}
 		}
 	}
 }

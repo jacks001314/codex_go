@@ -6131,9 +6131,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1046: SkillsService now keeps at most 32 most-recently-used effective-config snapshots (cacheOrder plus eviction, cleared on every reset), and responses are clones so caller-held snapshots survive eviction like Rust's VecDeque LRU; covered by TestSkillsServiceBoundsConfigCacheLikeRust. Go has no PluginsManager/LoadedPluginsCache and app-server re-discovers plugin skill roots on every skills/list via Plugins.EnabledSkillRoots (stable materialization roots; the versioned PluginStore is not used for served plugin details, and the owned manifestCache revalidates revisions), so an out-of-process upgrade or rollback is visible on cold and warm reads; covered by TestRuntimeRouterSkillsListRefreshesExternallyChangedPluginSkillLikeRust. Verified with go test ./appserver -count=1, go test ./parity -count=1, go build ./..."
    ]
   },
   {
