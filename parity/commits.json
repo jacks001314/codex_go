@@ -7510,9 +7510,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 10/13; needs review: CompactedMessageIdentity, enable_user_message_retention, restore_retained_context"
+    "Go already implements the retained-instruction contract: retainedctx records user/assistant messages with arrival order and independent completeness, appserver/retained_context.go captures and replays them, rollout rolls back at the steer-aware message boundary, and compact preserves message identity; upstream later retired guardianv2.thread_context and Go captures unconditionally"
    ]
   },
   {
