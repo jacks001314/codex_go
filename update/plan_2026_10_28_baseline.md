@@ -4135,3 +4135,11 @@ Status after this batch: `2348 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestMCPClientCapabilitiesAdvertiseAuthChangeOnDemand`, `TestMCPServerSupportsAuthChangeReadsExperimentalCapability`, `TestStdioAuthChangeNotificationsFollowOptIn`, `TestStdioAuthChangeNotificationsRequireOptIn`, `TestRuntimeRouterAuthOwnerRevisionTracksIdentityChanges`, plus `auth/change_state_test.go`; `go test -run AuthChange ./mcp ./appserver ./auth` passes. No source change needed.
 
 Status after this batch: `2349 complete`, `465 not_applicable`, `322 audit_pending`, `7 regression_pending`, `5 partial`, `7 blocked_precondition`.
+
+### Worktree owner details and confirmed deletion are already present (Round 1132)
+
+- #43942 is already implemented. The managed worktree browser classifies owners as none/unavailable/archived/resumable, shows thread titles, relative update times and archived/unavailable states, and offers Resume only for resumable owners; the app resolves owners through the session store, which reads archived and compressed rollouts.
+- Delete opens a confirmation whose first (default) row is Cancel and whose delete row states that thread history is kept. `worktree.WorktreeManager.RemoveManaged` only removes a managed checkout of the current repository, refuses the current checkout through path aliases, and rejects dirty, untracked, and ignored files.
+- Tests: the `tui/worktree_browser_test.go` row/owner/action/confirmation cases, `TestWorktreeManagerRemoveManagedSafety`, and `TestInteractiveWorktreeOwnerLookupResolvesThreads`; `go test -run Worktree ./worktree ./tui ./tui/tea ./app` passes. No source change needed.
+
+Status after this batch: `2350 complete`, `465 not_applicable`, `322 audit_pending`, `6 regression_pending`, `5 partial`, `7 blocked_precondition`.

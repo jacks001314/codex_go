@@ -10000,9 +10000,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1132 (lead): #43942 is already implemented in Go. `tui/worktree_browser.go` mirrors Rust's browser: entries carry both `Root` and `CWD`, owners are classified None/Unavailable/Archived/Resumable through `ResolveWorktreeOwnerSummaries` (title from thread name, else first preview line, else 'Untitled conversation', truncated to 80 runes, plus relative update times), archived owners render an `Archived` prefix, unavailable owners show 'Owner thread unavailable', and `WorktreeBrowserActionItems` offers Resume only for resumable owners; the app's `interactiveWorktreeOwnerLookup` resolves owners through the session store, which reads archived and compressed rollouts, so compressed history still resumes. Delete opens `WorktreeDeleteConfirmationItems`, where Cancel is the first (default) row and the delete row states that thread history is kept. `worktree.WorktreeManager.RemoveManaged` restricts removal to a managed checkout of the current repository, resolves symlinks to refuse the current checkout through path aliases, rejects ignored files explicitly (git already refuses dirty/untracked files), and cleans the empty allocation bucket. Tests: TestWorktreeOwnerTitleFallbackAndTruncationLikeRust, TestWorktreeUpdatedAgoLikeRust, TestWorktreeBrowserRowLikeRust, TestResolveWorktreeOwnerSummariesLikeRust, TestWorktreeBrowserActionItemsLikeRust, TestWorktreeDeleteConfirmationItemsLikeRust, TestListManagedWorktreeEntriesLikeRust, TestWorktreeManagerRemoveManagedSafety, TestInteractiveWorktreeOwnerLookupResolvesThreads; `go test -run Worktree ./worktree ./tui ./tui/tea ./app` passes. No source change needed."
    ]
   },
   {
