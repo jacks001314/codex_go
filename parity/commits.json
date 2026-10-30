@@ -7966,9 +7966,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1063: Go already uses the static Default collaboration-mode instructions from Rust #42904. tui/chatwidget/collaboration_modes.go and appserver/turn_runtime.go hard-code Known mode names are Default and Plan instead of rendering a KNOWN_MODE_NAMES placeholder, and the packaged collaboration-mode default template text matches otherwise. parity/collaboration_mode_templates_test.go:TestRustCollaborationModeTemplatesMatchGo compares Go against the frozen Rust default.md and asserts the placeholder is absent. No Go change required."
    ]
   },
   {
