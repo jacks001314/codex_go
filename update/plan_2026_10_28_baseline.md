@@ -3181,6 +3181,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already implements this in `reasoningoverride.RequestEffort`, `appserver/reasoning_effort_override.go`, and `compactRunnerForRecord`/`markReasoningEffortPinCompacted`; the success mark runs only after the full `compactThreadWithHistory` write.
 - New `appserver/reasoning_effort_compaction_like_rust_test.go` covers fallback effort selection with pin preservation, override-disabled compaction, runner effort from the pin, pin survival on a failing compaction, and the successful `Compacted` reset followed by a fresh baseline and a single later selection update.
 - Verified with `go test ./appserver -run 'ReasoningEffort|Compact' -count=1`, the three new tests by name, and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2167 complete`, `451 not_applicable`,
-`345 audit_pending`, `182 regression_pending`, `4 partial`,
+### Reasoning effort across WebSocket prewarm (Round 1008)
+
+- Rust #43795 pins the request-level effort per model while configuration overrides are active, including the WebSocket prewarm, and re-establishes the selection after rollback, resume, or a model switch; overrides-unavailable sessions keep using the selected effort (#43795, complete).
+- Go already had the pin, `OverrideInputItems` tail-reuse rule, resume-time reset, and single-slot model switch behavior, but `scheduleStartupPrewarm`/`scheduleHistoryPrewarm` passed only model and service tier, so the warmup neither resolved nor pinned an effort.
+- `appserver/session_startup_prewarm.go` now resolves the effort with the same feature/provider/model-support/exempt gates and `effortForConfigurationUpdate` path as sampling, pins it before launching the warmup goroutine, and sends it on both startup and idle-history warmup requests.
+- New `appserver/reasoning_effort_prewarm_like_rust_test.go` covers the prewarm baseline surviving a later high selection, overrides-disabled warmup, history warmup effort, model-switch re-baselining, and resume clearing the pin.
+- Verified with `go test ./appserver -run 'Prewarm|ReasoningEffort|ThreadResume' -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2168 complete`, `451 not_applicable`,
+`345 audit_pending`, `181 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

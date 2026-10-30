@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
@@ -74,9 +75,27 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 	r.startupPrewarmMu.Unlock()
 
 	modelID := strings.TrimSpace(response.Model)
+	cwd := strings.TrimSpace(response.CWD)
+	if cwd == "" && response.Thread != nil {
+		cwd = strings.TrimSpace(response.Thread.CWD)
+	}
+	providerID := strings.TrimSpace(response.ModelProvider)
 	serviceTier := ""
 	if response.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*response.ServiceTier)
+	}
+	// Rust #43795: the warmup request resolves the request effort exactly like a
+	// sampling request, so the pin is established before the first turn can
+	// change the selection.
+	params := &turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      cwd,
+		Model:    modelID,
+		Effort:   response.ReasoningEffort,
+	}
+	effort := ""
+	if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
+		effort = r.reasoningEffortForPrewarm(cfg, params, modelID, providerID)
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
@@ -84,9 +103,10 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 		var responseID string
 		status := "failed"
 		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
-			Model:       modelID,
-			ServiceTier: serviceTier,
-			Originator:  "session_startup",
+			Model:           modelID,
+			ServiceTier:     serviceTier,
+			ReasoningEffort: effort,
+			Originator:      "session_startup",
 		})
 		if err == nil {
 			status = "ready"
@@ -133,7 +153,11 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 	if err != nil || record == nil {
 		return
 	}
-	params := &turn.TurnStartParams{ThreadID: threadID, CWD: strings.TrimSpace(record.Metadata.CWD)}
+	params := &turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      strings.TrimSpace(record.Metadata.CWD),
+		Model:    strings.TrimSpace(record.Metadata.Model),
+	}
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil || cfg == nil {
 		return
@@ -145,6 +169,16 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 	if modelID == "" {
 		return
 	}
+	params.Model = modelID
+	providerID := strings.TrimSpace(record.Metadata.ModelProvider)
+	if providerID == "" && record.Metadata.Extra != nil {
+		providerID = firstNonEmpty(
+			stringFromMap(record.Metadata.Extra, "model_provider"),
+			stringFromMap(record.Metadata.Extra, "modelProvider"),
+			stringFromMap(record.Metadata.Extra, "provider"),
+		)
+	}
+	effort := r.reasoningEffortForPrewarm(cfg, params, modelID, providerID)
 	instructions, _ := appBaseInstructionsForConfig(cfg)
 	settingsKey := prewarmSettingsKey(modelID, instructions, record.Metadata.ServiceTier)
 	historyKeys := prewarmHistoryKeys(historyItems)
@@ -177,6 +211,7 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
 			Model:            modelID,
 			ServiceTier:      strings.TrimSpace(record.Metadata.ServiceTier),
+			ReasoningEffort:  effort,
 			Instructions:     instructions,
 			InputItems:       historyItems,
 			ThreadID:         threadID,
@@ -201,6 +236,27 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
 		r.recordStartupPrewarmDuration(status, "history", finishedAt.Sub(startedAt))
 	}()
+}
+
+// reasoningEffortForPrewarm mirrors Rust #43795: a WebSocket prewarm resolves
+// the request effort through the same pinning path as sampling, so later
+// settings changes only add configuration updates instead of replacing the
+// request baseline.
+func (r *RuntimeRouter) reasoningEffortForPrewarm(cfg *config.Config, params *turn.TurnStartParams, modelID, providerID string) string {
+	if r == nil || cfg == nil || params == nil || strings.TrimSpace(modelID) == "" {
+		return ""
+	}
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(params.ThreadID, cfg, params, info, providerID)
+	return r.reasoningEffortForRequest(
+		params.ThreadID,
+		reasoningEffortModelSlug(info, modelID),
+		appReasoningEffortForTurn(cfg, params),
+		r.reasoningEffortOverrideEnabled(params.ThreadID, cfg, info, providerID),
+		overrideEffort,
+		overrideAvailable,
+		requestEffortSampling,
+	)
 }
 
 func (r *RuntimeRouter) scheduleCodeModeHostPrewarm(threadID, cwd string) {

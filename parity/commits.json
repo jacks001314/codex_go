@@ -9475,9 +9475,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1008 (实现+回归): #43795 要求 reasoning-effort override 激活时按模型 pin 请求级 effort (包括 WebSocket prewarm)，在 rollback/resume/model switch 后重新建立所选 effort 并刷新可信 override，同时 override 不可用时继续使用所选 effort。Go 已有 reasoningoverride.Pin/RequestEffort、OverrideInputItems、resume 时 clearReasoningEffortPin 与按模型单槽 pin，但 startup/history WebSocket prewarm 只传 Model/ServiceTier，既不解析也不 pin effort，导致 prewarm 后第一次改选 effort 会替换请求 baseline (Rust 测试期望仍为 prewarm 的 medium 并只追加 configuration_update high)。本轮在 appserver/session_startup_prewarm.go 新增 reasoningEffortForPrewarm，用与 sampling 相同的 gate (feature/provider/model support/exempt sources) 与 effortForConfigurationUpdate 解析 effort，并在启动 goroutine 前同步 pin; startup prewarm 使用 response.CWD/ModelProvider/ReasoningEffort 与 effectiveConfigForTurn，history prewarm 使用 record 的 model/provider。新增 appserver/reasoning_effort_prewarm_like_rust_test.go: prewarm 建立 medium baseline 后改选 high 仍以 medium 发请求且只追加一条 update、feature 关闭时 prewarm 用所选 effort 且不 pin、history prewarm 携带 pin、model switch 重新建立新模型 baseline、thread/resume 清除 pin 后下一次 sampling 重建。验证: go test ./appserver -run 'Prewarm|ReasoningEffort|ThreadResume' -count=1; go test ./appserver -count=1 (仅剩 7 个既有失败); go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {
