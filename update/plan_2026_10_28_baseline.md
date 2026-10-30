@@ -3450,6 +3450,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: Go already carries `appserver.CodexErrorInfo` as untyped JSON, so unknown string/object variants decode without failing `TurnError`, `ErrorNotification`, or stored turn errors; known structured variants keep their payloads and downstream classifiers treat unrecognized shapes as non-matching, the behavioral equivalent of Rust's `Other` fallback. The vendored precomputed exports are byte-for-byte Rust output and already contain the open-ended `anyOf` schema. New `appserver/codex_error_info_unknown_variants_like_rust_test.go` pins the contract across all three decode paths.
 - Verified with `go test ./appserver -run AppServerCodexErrorInfoAcceptsUnknownVariantsLikeRust -count=1`. The Rust tree is currently 93 commits past the certified baseline, so pre-existing snapshot drift tests fail independently of this change.
 
-Status after reconciliation: `2202 complete`, `459 not_applicable`,
-`328 audit_pending`, `156 regression_pending`, `4 partial`,
+### Per-turn host extension data (Round 1046)
+
+- Rust #49846 adds a core-only per-turn extension-data capture: `WithTurnExtensionData` wraps turn input/recovery/settings requests, thread startup/settings carry `turn_extension_init`, each new turn captures the configured initializer (including automatic turns), accepted steering updates future turns without changing the running turn's capture, and `CodexThread::current_turn_extension_data` returns typed data only for a running, non-cancelled turn. It is not exposed through the app-server protocol (`turn_processor` passes `None`) and is explicitly not persisted.
+- N/A by architecture: Go has no core `CodexThread`/`turn_extension_init` API, and its host-owned extension model exposes only session and thread `ExtensionStore`s (used by the Guardian thread context). No Go host supplies turn-scoped extension data and no Go extension reads it, so capture, inheritance, steering, clearing, and the running-turn lookup gate have no carrier.
+- Verified with `rg` over `ExtensionData|turn_extension|current_turn_extension_data|turnStore`, `go test ./appserver -run 'InternalSession|ThreadReady|GuardianThreadContext|TurnInput' -count=1`, `go test ./turn -run 'Steer|Input|Recover|Start' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2202 complete`, `460 not_applicable`,
+`327 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
