@@ -53,6 +53,9 @@ type taskToolsMCPServer struct {
 	server   *http.Server
 	token    string
 	config   map[string]any
+	// worktrees exposes the local managed-worktree tools alongside the task
+	// namespace when this session is eligible (Rust ToolServices.worktrees).
+	worktrees *managedWorktreeTools
 
 	mu         sync.Mutex
 	connection *taskToolsMCPConnection
@@ -61,7 +64,7 @@ type taskToolsMCPServer struct {
 // startTaskToolsMCPServer binds a loopback listener, serves the MCP endpoints and
 // returns the server plus the `mcp_servers.codex_tui` config the TUI injects into
 // thread start/fork params (Rust DynamicToolMcpServer::start).
-func startTaskToolsMCPServer(connection *taskToolsMCPConnection) (*taskToolsMCPServer, error) {
+func startTaskToolsMCPServer(connection *taskToolsMCPConnection, worktrees *managedWorktreeTools) (*taskToolsMCPServer, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -70,6 +73,7 @@ func startTaskToolsMCPServer(connection *taskToolsMCPConnection) (*taskToolsMCPS
 		listener:   listener,
 		token:      "Bearer " + uuid.NewString(),
 		connection: connection,
+		worktrees:  worktrees,
 	}
 	server.config = map[string]any{
 		"url":          "http://" + listener.Addr().String() + taskToolsMCPPath,
@@ -81,6 +85,7 @@ func startTaskToolsMCPServer(connection *taskToolsMCPConnection) (*taskToolsMCPS
 			"create_thread":          map[string]any{"approval_mode": "prompt"},
 			"send_message_to_thread": map[string]any{"approval_mode": "prompt"},
 			"fork_thread":            map[string]any{"approval_mode": "prompt"},
+			"create_worktree":        map[string]any{"approval_mode": "approve"},
 		},
 	}
 	server.server = &http.Server{Handler: &taskToolsMCPHandler{server: server}}
@@ -249,7 +254,7 @@ func (h *taskToolsMCPHandler) dispatch(ctx context.Context, method string, param
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":
-		return map[string]any{"tools": taskToolsMCPToolList()}, nil
+		return map[string]any{"tools": h.server.toolList()}, nil
 	case "tools/call":
 		result, rpcErr := h.callTool(ctx, params)
 		if rpcErr != nil {
@@ -261,9 +266,10 @@ func (h *taskToolsMCPHandler) dispatch(ctx context.Context, method string, param
 	}
 }
 
-// taskToolsMCPToolList mirrors Rust DynamicToolMcpHandler::list_tools: every
-// function in the namespace, with a read-only annotation for the query tools.
-func taskToolsMCPToolList() []map[string]any {
+// toolList mirrors Rust DynamicToolMcpHandler::list_tools: every function in
+// the namespace, with a read-only annotation for the query tools, plus the
+// managed-worktree tools when this session hosts them.
+func (s *taskToolsMCPServer) toolList() []map[string]any {
 	tools := make([]map[string]any, 0, 9)
 	for _, spec := range DynamicToolSpecs() {
 		if spec.Namespace == nil {
@@ -276,6 +282,18 @@ func taskToolsMCPToolList() []map[string]any {
 				"inputSchema": function.InputSchema,
 				"annotations": map[string]any{
 					"readOnlyHint": taskToolsMCPReadOnlyTools[function.Name],
+				},
+			})
+		}
+	}
+	if s != nil && s.worktrees != nil {
+		for _, spec := range ManagedWorktreeDynamicToolSpecs() {
+			tools = append(tools, map[string]any{
+				"name":        spec.Name,
+				"description": spec.Description,
+				"inputSchema": spec.InputSchema,
+				"annotations": map[string]any{
+					"readOnlyHint": managedWorktreeReadOnlyTools[spec.Name],
 				},
 			})
 		}
@@ -295,6 +313,22 @@ func (h *taskToolsMCPHandler) callTool(ctx context.Context, params json.RawMessa
 	name := strings.TrimSpace(call.Name)
 	if name == "" {
 		return nil, &taskToolsMCPError{Code: -32602, Message: "tool name is required"}
+	}
+	if isManagedWorktreeTool(name) {
+		service := h.server.worktrees
+		if service == nil {
+			return nil, &taskToolsMCPError{Code: -32602, Message: managedWorktreeUnavailableOnConnection}
+		}
+		meta := taskToolsMCPMeta(call.Meta)
+		threadID := strings.TrimSpace(stringFromAny(taskToolsMCPMetaValue(meta, "threadId")))
+		if threadID == "" {
+			return nil, &taskToolsMCPError{Code: -32602, Message: "missing task metadata"}
+		}
+		text, success := service.executeTool(ctx, threadID, name, call.Arguments)
+		return map[string]any{
+			"content": []map[string]any{{"type": "text", "text": text}},
+			"isError": !success,
+		}, nil
 	}
 	connection, err := h.server.currentConnection()
 	if err != nil {
@@ -439,6 +473,9 @@ func taskToolsMCPConfigName() string {
 type taskToolsMCPHost struct {
 	mu     sync.Mutex
 	server *taskToolsMCPServer
+	// worktrees is set for trusted local sessions that may expose the
+	// managed-worktree tools (Rust ToolServices.worktrees).
+	worktrees *managedWorktreeTools
 }
 
 // configValues returns the `mcp_servers.codex_tui` thread-config override, or
@@ -466,7 +503,7 @@ func (h *taskToolsMCPHost) attach(client *remoteAppServerTUIClient, template app
 	h.mu.Lock()
 	server := h.server
 	if server == nil {
-		started, err := startTaskToolsMCPServer(&taskToolsMCPConnection{})
+		started, err := startTaskToolsMCPServer(&taskToolsMCPConnection{}, h.worktrees)
 		if err != nil {
 			h.mu.Unlock()
 			return

@@ -438,6 +438,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	taskToolsHost := &taskToolsMCPHost{}
 	if !interactiveRemoteEndpointIsLocal(endpoint) {
 		taskToolsHost = nil
+	} else if loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root)); err != nil || remoteTUIToolsNamespaceConflict(loaded.Values, DynamicToolNamespace) {
+		// Rust #50148: a configured MCP server that owns the TUI tools namespace
+		// blocks hosting; the thread then keeps the dynamic-tools callback
+		// transport instead.
+		taskToolsHost = nil
+	} else {
+		taskToolsHost.worktrees = interactiveManagedWorktreeToolsForRemoteSession(endpoint, root, state)
 	}
 	defer taskToolsHost.close()
 	// The TUI owns the voice helper and relays its handshake through the

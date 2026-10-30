@@ -25456,9 +25456,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 4/7; needs review: ManagedWorktreeTools, ToolServices, with_source_config_builder"
+    "Round 1050: the local-daemon TUI now hosts create_worktree, get_worktree_creation_status, and list_worktrees through the existing authenticated MCP server. app/managed_worktree_tools.go ports the deferred tool specs, 1024-byte argument and 999-byte result bounds, 64-entry thread-scoped operation registry with pending reuse and one-hour completed-result retention, asynchronous worktree creation, BindThread ownership, worktree/archived_worktree attachment listing, attachment registration, ephemeral/local-environment/explicit-untrusted rejection, and registrationFailed guidance. app/task_tools_mcp.go advertises the tools with Rust's read-only annotations, routes worktree calls, and applies the create_worktree approval mode; app/remote_tui.go enables the service only for an eligible local daemon and checks the hosted namespace; tui/tea/side.go adds Rust's side-conversation worktree prohibition.",
+    "Residual: Rust #50148 starts the same worktree MCP service for embedded app-server sessions (ToolServices task_tools=false, namespace codex_worktrees). Go's embedded TUI uses the local runner/MCP runtime rather than an AppServerSession request handle, and this round does not add that embedded transport, so embedded worktree-tool hosting remains unimplemented.",
+    "Tests: app/managed_worktree_tools_like_rust_test.go covers the exact tool contracts and annotations, hosted MCP routing, unavailable-service rejection, registry pending reuse/thread isolation/pruning/bounds, strict arguments and aliases, result limits, and namespace-scoped conflict handling; tui/tea/side_worktree_prompt_like_rust_test.go covers both side prompts. Verified with go test ./app -run 'ManagedWorktree|WorktreeTools|TaskToolsMCPHostsManaged|TaskToolsMCPRejectsWorktree' -count=1, go test ./tui/tea -run Side -count=1, go build ./app ./tui/..., and go test ./parity -run TestAlignment -count=1."
    ]
   },
   {
