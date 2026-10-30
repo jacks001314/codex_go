@@ -21201,9 +21201,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1108 (audit): already equivalent. Go InMemoryMessageBoards tracks refs on each handle, deletes zero-ref entries on Close, and Open replaces released state; TestInMemoryBoardsShareStateAndReleaseItLikeRust checks Len drops to zero after release, a fresh handle cannot read released posts, and live shared handles keep one entry. No source change. Validation: go test ./agentboard -run TestInMemoryBoardsShareStateAndReleaseItLikeRust -count=1."
    ]
   },
   {
@@ -21225,9 +21225,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1108: implemented #47956. codexapi.ImageEditRequest now carries ImageReference values, each serializing exactly one of image_url or file_id; turn/image_generation.go recentImageReferences walks history newest-first, keeps file-backed images in the selected window, and passes inline and file references through in chronological selection order instead of rejecting the window. Tests: codexapi/images_like_rust_test.go checks mixed-reference JSON, TestRecentImageReferencesPassesFileBackedWindowsLikeRust covers inline, file_id, camelCase and tool-output references, and TestImageGenerationEditPassesFileBackedRecentWindow drives the tool path. Validation: go test ./codexapi -run ImageEditRequest -count=1; go test ./turn -run Image -count=1; go build ./...."
    ]
   },
   {
@@ -23255,9 +23255,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1108 (audit): already equivalent. Go handles content-filter guidance inside the sampling retry loop in model/responses_stream.go: after a content-filter stream error it resolves the model guidance through contentFilterGuidanceInputItem, appends the developer item to the retried input, and reports it through OnConversationItem before the retry decision. Remote compaction uses a separate request path, so sampling-only recording is preserved. Tests: TestResponsesStreamingAppendsContentFilterGuidanceLikeRust and TestResponsesStreamingUsesBundledContentFilterGuidanceLikeRust. Validation: go test ./model -run ContentFilter -count=1."
    ]
   },
   {
@@ -23607,9 +23607,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1108 (audit): Rust-only streaming-parser optimization. InlineHiddenTagParser::push_str now tracks a consumed offset and drains its pending buffer once per chunk instead of after every delimiter. Go has no streaming inline-hidden-tag parser: eventmap.stripInlineHiddenTag performs a single non-streaming string removal for memory-citation delimiters, so there is no pending buffer, delimiter loop, or repeated drain to compact. No Go change required."
    ]
   },
   {
@@ -24146,9 +24146,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1108 (audit): Rust-only regression coverage plus dead-code cleanup (an unused ToolCallSource import and an empty login internal_identity module). The debug-only test asserts an account switch after the first isolated analytics batch does not send old credentials; it validates existing Rust behavior rather than changing it. Go analytics emits events through in-process sinks and has no batched credential-bearing HTTP analytics client of this shape, so there is no behavior or test carrier to port. No Go change required."
    ]
   },
   {

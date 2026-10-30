@@ -332,20 +332,20 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 			},
 		}, nil, nil
 	}
-	var images []codexapi.ImageURL
+	var images []codexapi.ImageReference
 	var inputImages []imageGenerationInputImage
 	switch {
 	case len(paths) > 0 && args.NumLastImagesToInclude != nil:
 		return nil, nil, fmt.Errorf("provide only one of `referenced_image_paths` or `num_last_images_to_include`")
 	case len(paths) > 0:
-		images = make([]codexapi.ImageURL, 0, len(paths))
+		images = make([]codexapi.ImageReference, 0, len(paths))
 		inputImages = make([]imageGenerationInputImage, 0, len(paths))
 		for _, path := range paths {
 			imageURL, identity, err := imageURLForLocalPath(path)
 			if err != nil {
 				return nil, nil, err
 			}
-			images = append(images, codexapi.ImageURL{ImageURL: imageURL})
+			images = append(images, codexapi.ImageReference{ImageURL: imageURL})
 			// Rust #54420: a completed generation records the local inputs that
 			// produced it, identified by the bytes read before normalization.
 			inputImages = append(inputImages, imageGenerationInputImage{Path: path, SHA256: identity})
@@ -358,7 +358,7 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 		if count < 1 || count > imageGenerationMaxEditImages {
 			return nil, nil, fmt.Errorf("`num_last_images_to_include` must be between 1 and %d", imageGenerationMaxEditImages)
 		}
-		recent, err := recentImageURLs(h.options.InputItems, count)
+		recent, err := recentImageReferences(h.options.InputItems, count)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -663,11 +663,12 @@ type recentImageEntry struct {
 
 func (e recentImageEntry) inline() bool { return strings.TrimSpace(e.imageURL) != "" }
 
-// recentImageURLs mirrors Rust's `recent_images`: it walks the history
+// recentImageReferences mirrors Rust's `recent_images`: it walks the history
 // newest-first, counts the last `count` images including file references (so
-// numbering matches Rust), then rejects a window that is incomplete or that
-// contains a file-backed image instead of silently editing an older inline one.
-func recentImageURLs(items []any, count int) ([]codexapi.ImageURL, error) {
+// numbering matches Rust), and passes inline and file-backed references through
+// in selection order. A window shorter than requested still reports how many
+// images were available.
+func recentImageReferences(items []any, count int) ([]codexapi.ImageReference, error) {
 	if count <= 0 {
 		return nil, nil
 	}
@@ -686,12 +687,13 @@ func recentImageURLs(items []any, count int) ([]codexapi.ImageURL, error) {
 	if len(entries) != count {
 		return nil, fmt.Errorf("requested the last %d conversation images, but only %d were available", count, len(entries))
 	}
-	out := make([]codexapi.ImageURL, 0, count)
+	out := make([]codexapi.ImageReference, 0, count)
 	for _, entry := range entries {
-		if !entry.inline() {
-			return nil, fmt.Errorf("requested the last %d conversation images, but that window includes a file-backed image that cannot be used for editing", count)
+		if entry.inline() {
+			out = append(out, codexapi.ImageReference{ImageURL: strings.TrimSpace(entry.imageURL)})
+			continue
 		}
-		out = append(out, codexapi.ImageURL{ImageURL: strings.TrimSpace(entry.imageURL)})
+		out = append(out, codexapi.ImageReference{FileID: strings.TrimSpace(entry.fileID)})
 	}
 	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
 		out[left], out[right] = out[right], out[left]

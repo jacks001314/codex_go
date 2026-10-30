@@ -10,7 +10,7 @@ type ImageGenerationRequest struct {
 }
 
 type ImageEditRequest struct {
-	Images     []ImageURL       `json:"images"`
+	Images     []ImageReference `json:"images"`
 	Prompt     string           `json:"prompt"`
 	Background *ImageBackground `json:"background,omitempty"`
 	Model      string           `json:"model"`
@@ -19,8 +19,12 @@ type ImageEditRequest struct {
 	Size       *string          `json:"size,omitempty"`
 }
 
-type ImageURL struct {
-	ImageURL string `json:"image_url"`
+// ImageReference mirrors Rust codex_protocol::models::ImageReference: an image
+// is either an inline URL/data URL or a server-side file id. Callers set
+// exactly one field, and the zero value is skipped before serialization.
+type ImageReference struct {
+	ImageURL string `json:"image_url,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
 }
 
 type ImageBackground string
