@@ -67,6 +67,7 @@ func TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust(t *testing.T) 
 		{
 			name:         "profiled user layer opts out of the managed model pair",
 			requirements: managedRequirements,
+			root:         cli.RootOptions{Shared: cli.SharedOptions{Profile: profile}},
 			layers: []any{map[string]any{
 				"name":   map[string]any{"type": "user", "profile": profile},
 				"config": map[string]any{"model": "gpt-5-profile"},
@@ -103,14 +104,14 @@ func TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust(t *testing.T) 
 			wantTier:     "flex",
 		},
 		{
-			// Rust #50913: the connected fresh start is server-owned, so with no
-			// server model, no catalog default and no managed defaults the model
-			// stays unset and the app server resolves its own new-thread default;
-			// the client's implicit model is not forwarded.
+			// Rust #50013: with no server model, no catalog default and no managed
+			// defaults the model and reasoning effort stay unset and the app server
+			// resolves its own new-thread default; neither implicit client value is
+			// forwarded.
 			name:       "no server model and no managed defaults leaves the model to the server",
 			state:      codextui.NewState(&codextui.Options{Model: "gpt-5.4", ReasoningEffort: "low"}),
 			wantModel:  "",
-			wantEffort: "low",
+			wantEffort: "",
 		},
 	}
 	for _, tc := range cases {

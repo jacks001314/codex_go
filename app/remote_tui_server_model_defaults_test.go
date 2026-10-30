@@ -18,13 +18,14 @@ import (
 	"github.com/coder/websocket"
 )
 
-// TestRemoteFreshStartUsesServerModelDefaultsLikeRust covers Rust #50913
-// (c2f7fe89d8, "Use server model defaults for connected TUI fresh starts"): a
-// connected TUI fresh start without an explicit profile lets the app server own
-// the new-thread model, so an implicit client model and reasoning effort are
-// never forwarded to thread/start; explicit launch choices, the server's
-// configured model, the server catalog default and the managed new-thread
-// defaults still apply in that order.
+// TestRemoteFreshStartUsesServerModelDefaultsLikeRust covers Rust #50013
+// (b527ce4734, "Honor server model defaults when starting fresh TUI threads")
+// and #50913 (c2f7fe89d8): a connected TUI fresh start without an explicit
+// profile lets the app server own the new-thread model, so neither an implicit
+// client model nor an implicit reasoning effort is forwarded to thread/start,
+// and the server's configured model/catalog default are not echoed back as
+// explicit overrides. Explicit launch choices and the managed new-thread
+// defaults still apply, and an explicit profile keeps the resolved path.
 //
 // Rust tests:
 // app/tests/startup_defaults_tests.rs::fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
@@ -53,32 +54,33 @@ func TestRemoteFreshStartUsesServerModelDefaultsLikeRust(t *testing.T) {
 		state        *codextui.State
 		wantModel    string
 		wantEffort   string
+		wantProvider string
 	}{
 		{
-			// The Rust #50913 regression: the client's stale settings used to seed
+			// The Rust #50013 regression: the client's stale settings used to seed
 			// the request before (or without) the server configuration read.
-			// (The reasoning-effort half of the same request-shape rule is tracked
-			// separately; Go clears it only when `config/read` is unsupported.)
 			name:         "stale client model is not forwarded",
 			serverConfig: map[string]any{},
 			state:        codextui.NewState(&codextui.Options{Model: "stale-client-model", ReasoningEffort: "low"}),
 			wantModel:    "",
-			wantEffort:   "low",
+			wantEffort:   "",
 		},
 		{
-			name:         "server configured model wins",
+			// Rust #50013: the server's own configuration is not echoed back as an
+			// explicit model/effort override; the server resolves it.
+			name:         "server configuration stays server-owned",
 			serverConfig: map[string]any{"model": "server-model", "model_reasoning_effort": "high"},
 			state:        codextui.NewState(&codextui.Options{Model: "stale-client-model", ReasoningEffort: "low"}),
-			wantModel:    "server-model",
-			wantEffort:   "high",
+			wantModel:    "",
+			wantEffort:   "",
 		},
 		{
-			name:         "server catalog default fills an unconfigured server",
+			name:         "server catalog default is not forwarded",
 			serverConfig: map[string]any{},
 			catalog:      catalogDefault,
 			state:        codextui.NewState(&codextui.Options{Model: "stale-client-model", ReasoningEffort: "low"}),
-			wantModel:    "catalog-model",
-			wantEffort:   "low",
+			wantModel:    "",
+			wantEffort:   "",
 		},
 		{
 			name:         "managed new-thread default supplies a model with an empty catalog",
@@ -100,7 +102,48 @@ func TestRemoteFreshStartUsesServerModelDefaultsLikeRust(t *testing.T) {
 			},
 			state:      codextui.NewState(&codextui.Options{Model: "cli-model", ReasoningEffort: "low"}),
 			wantModel:  "cli-model",
+			wantEffort: "",
+		},
+		{
+			// Rust #50013: repeated `-c model=` assignments keep the last value.
+			name:         "repeated generic model override keeps the last value",
+			serverConfig: map[string]any{},
+			root: func() *cli.RootOptions {
+				return &cli.RootOptions{ConfigOverrides: []string{"model=earlier-model", "model=kv-model"}}
+			},
+			state:      codextui.NewState(&codextui.Options{Model: "earlier-model", ReasoningEffort: "low"}),
+			wantModel:  "kv-model",
+			wantEffort: "",
+		},
+		{
+			name:         "explicit reasoning effort survives",
+			serverConfig: map[string]any{"model": "server-model", "model_reasoning_effort": "high"},
+			root: func() *cli.RootOptions {
+				return &cli.RootOptions{ConfigOverrides: []string{"model_reasoning_effort=low"}}
+			},
+			state:      codextui.NewState(&codextui.Options{Model: "stale-client-model", ReasoningEffort: "low"}),
+			wantModel:  "",
 			wantEffort: "low",
+		},
+		{
+			name:         "explicit typed provider survives",
+			serverConfig: map[string]any{},
+			root: func() *cli.RootOptions {
+				root := &cli.RootOptions{}
+				root.Shared.OSSProvider = "openai"
+				return root
+			},
+			state:        codextui.NewState(&codextui.Options{Model: "stale-client-model", Provider: "openai", ReasoningEffort: "low"}),
+			wantProvider: "openai",
+		},
+		{
+			name:         "explicit generic provider override survives",
+			serverConfig: map[string]any{},
+			root: func() *cli.RootOptions {
+				return &cli.RootOptions{ConfigOverrides: []string{"model_provider=openai"}}
+			},
+			state:        codextui.NewState(&codextui.Options{Model: "stale-client-model", Provider: "openai", ReasoningEffort: "low"}),
+			wantProvider: "openai",
 		},
 		{
 			name:         "explicit profile keeps its resolved client model",
@@ -207,6 +250,9 @@ func TestRemoteFreshStartUsesServerModelDefaultsLikeRust(t *testing.T) {
 			configValues, _ := params["config"].(map[string]any)
 			if got := stringOrEmpty(configValues["model_reasoning_effort"]); got != tc.wantEffort {
 				t.Fatalf("thread/start model_reasoning_effort = %q, want %q (config %#v)", got, tc.wantEffort, configValues)
+			}
+			if got := stringOrEmpty(params["modelProvider"]); got != tc.wantProvider {
+				t.Fatalf("thread/start modelProvider = %q, want %q (params %#v)", got, tc.wantProvider, params)
 			}
 			select {
 			case err := <-serverErrs:

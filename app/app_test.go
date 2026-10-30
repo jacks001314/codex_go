@@ -3934,10 +3934,12 @@ func TestInteractiveRemoteTurnStartsThreadThenTurnAndStreamsEvents(t *testing.T)
 	if err := json.Unmarshal(threadStart.Params, &threadParams); err != nil {
 		t.Fatalf("unmarshal thread/start params: %v", err)
 	}
-	if threadParams.Prompt != "" || threadParams.CWD != `D:\repo` || threadParams.Model != "gpt-remote" {
+	// Rust #50013: the fresh thread carries only the explicit launch model; the
+	// implicit live-state model and effort stay out of thread/start.
+	if threadParams.Prompt != "" || threadParams.CWD != `D:\repo` || threadParams.Model != "gpt-root" {
 		t.Fatalf("thread/start params = %+v", threadParams)
 	}
-	if threadParams.Config["model_provider"] != "openai" || threadParams.Config["model_reasoning_effort"] != "high" {
+	if threadParams.Config["model_provider"] != "openai" || threadParams.Config["model_reasoning_effort"] != nil {
 		t.Fatalf("thread/start config = %#v", threadParams.Config)
 	}
 	var turnParams turn.TurnStartParams

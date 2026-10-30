@@ -3953,3 +3953,12 @@ Status after this batch: `2324 complete`, `464 not_applicable`, `322 audit_pendi
 - #44693 managed `models.newThread` defaults apply only where no higher-precedence selection exists: generic `-c` overrides and enabled user-profile layers win, project layers shadow the profile.
 
 Status after this batch: `2327 complete`, `464 not_applicable`, `322 audit_pending`, `31 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Fresh-thread launch choices (Round 1110)
+
+- #50013 added `app/startup_launch_choices.go`, the Go analogue of Rust `StartupLaunchChoices`: the first thread carries only an explicit model (`-m` or `-c model=`, last assignment wins), provider (`--local-provider` or `-c model_provider=`) and reasoning effort (`-c model_reasoning_effort=`).
+- Resolved client model/effort no longer reach `thread/start`; the key is deleted from the config map instead of being forwarded, and the server's configured model, catalog default and managed new-thread defaults are never echoed back as explicit overrides. Managed `models.newThread` defaults still supply model/effort when no launch selection exists.
+- Explicit profile launches keep the resolved-configuration path. The embedded bootstrap applies the same omission rule, and `interactiveStartLocalTUIThread` stamps the resolved model/provider onto the reserved session metadata the raw router would otherwise leave empty.
+- Tests: `TestStartupLaunchChoicesOmitUnselectedSettingsLikeRust`, `TestLocalThreadStartOmitsImplicitModelLikeRust`, updated `TestRemoteFreshStartUsesServerModelDefaultsLikeRust` and `TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust`; `go build ./...` and focused `go test ./app` pass (the pre-existing `TestExecJSONEndToEnd` and `TestLocalSessionForksRustRolloutWithoutGoSnapshot` failures reproduce at HEAD).
+
+Status after this batch: `2328 complete`, `464 not_applicable`, `322 audit_pending`, `30 regression_pending`, `5 partial`, `6 blocked_precondition`.

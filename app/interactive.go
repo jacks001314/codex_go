@@ -1531,12 +1531,21 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
 		}
 	}
 	defaults, layers, hasManagedDefaults := localNewThreadModelDefaults(root, threadStart.CWD)
-	threadStart.ModelProvider = interactiveThreadStartModelProvider(root, state, layers)
+	// Rust #50013: the bootstrap thread sends only explicit launch model,
+	// provider and reasoning-effort choices; an explicit profile keeps its
+	// resolved configuration.
+	launchChoices := startupLaunchChoicesFromLaunch(root)
+	if launchChoices.selectedProfile {
+		threadStart.ModelProvider = interactiveThreadStartModelProvider(root, state, layers)
+	} else {
+		launchChoices.configure(&threadStart)
+	}
 	if hasManagedDefaults {
 		applyManagedDefaultsToThreadStartParams(&threadStart, state, defaults, layers,
 			remoteCLIConfigOverrideKeys(root),
 			root != nil && strings.TrimSpace(root.Shared.Model) != "",
-			false)
+			false,
+			launchChoices.selectedProfile)
 	}
 	// Rust #49861 (app_server_session.rs:873/1830): a new thread stages the
 	// configured Daybreak preference as its initial value
@@ -1651,7 +1660,22 @@ func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State
 		state.AgentsSummary = codextui.FormatInstructionSources(result.InstructionSources, cwd, home)
 	}
 	source := string(appserver.SessionSourceCli)
-	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Source: &source}, false); err != nil {
+	patch := session.MetadataPatch{Source: &source}
+	// Rust #50013: the bootstrap request omits implicitly selected model and
+	// provider, and the embedded app server resolves them from configuration.
+	// The raw router records the request values, so stamp the resolved values the
+	// TUI already holds onto the reserved session.
+	if strings.TrimSpace(threadStart.Model) == "" {
+		if model := strings.TrimSpace(state.Model); model != "" {
+			patch.Model = &model
+		}
+	}
+	if strings.TrimSpace(threadStart.ModelProvider) == "" {
+		if provider := strings.TrimSpace(state.Provider); provider != "" {
+			patch.ModelProvider = &provider
+		}
+	}
+	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &patch, false); err != nil {
 		return "", fmt.Errorf("mark TUI bootstrap thread as CLI: %w", err)
 	}
 	// Rust's interactive TUI connects to the app-server as "codex-tui" and the

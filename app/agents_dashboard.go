@@ -605,8 +605,8 @@ func (s *remoteAgentsDashboardSource) StartSession(ctx context.Context, cwd stri
 		// The dashboard's new-session path is not a fresh-start bootstrap, so the
 		// server-owned rule (Rust #50913) does not apply; the launch carries no
 		// client model here either way.
-		applyServerEffectiveLaunchDefaults(&params, effective, layers, nil, false, s.client.serverCatalogDefaultModel(ctx), false)
-		applyManagedDefaultsToThreadStartParams(&params, s.client.state, defaults, layers, nil, false, false)
+		applyServerEffectiveLaunchDefaults(&params, effective, layers, nil, false, s.client.serverCatalogDefaultModel(ctx))
+		applyManagedDefaultsToThreadStartParams(&params, s.client.state, defaults, layers, nil, false, false, true)
 	}
 	var started appserver.ThreadStartResponse
 	if err := remoteSessionRequest(ctx, s.client, appserver.MethodThreadStart, params, &started); err != nil {

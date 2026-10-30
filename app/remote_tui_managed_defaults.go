@@ -8,7 +8,6 @@ package app
 
 import (
 	"context"
-	"slices"
 	"strings"
 
 	"codex_go/appserver"
@@ -35,37 +34,43 @@ func (c *remoteAppServerTUIClient) remoteManagedThreadStartParams(ctx context.Co
 	cwd := strings.TrimSpace(params.CWD)
 	cliKVOverrides := remoteCLIConfigOverrideKeys(root)
 	harnessModelSet := root != nil && strings.TrimSpace(root.Shared.Model) != ""
-	// Rust #50913 (`uses_server_owned_fresh_bootstrap`): a connected fresh start
-	// that did not select an explicit profile is server-owned, so the client's
-	// implicit model is never forwarded and the app server resolves its own
-	// new-thread defaults (its configured model, the catalog default or the
-	// managed new-thread defaults).
-	serverOwned := !remoteTUILaunchSelectedProfile(root)
+	// Rust #50013 (`StartupLaunchChoices::configure`): a launch without an
+	// explicit profile forwards only the model, provider and reasoning effort the
+	// invocation selected. The resolved client configuration stays out of the
+	// request so the app server owns its own new-thread defaults.
+	launchChoices := startupLaunchChoicesFromLaunch(root)
 	defaults, layers, effective, ok := c.remoteNewThreadModelDefaults(ctx, cwd)
 	if !ok {
 		// Rust #50913 (`bootstrap_server_owned_start`): when the server does not
 		// support `config/read` the implicit client settings are cleared instead
 		// of being restored.
-		if serverOwned {
-			clearImplicitLaunchModelSettings(&params, root)
-		}
+		launchChoices.configure(&params)
 		return params, nil
 	}
-	// Rust #43177: the server's config/read values seed model and reasoning
-	// effort for launches that did not choose them explicitly.
-	applyServerEffectiveLaunchDefaults(
-		&params,
-		effective,
-		layers,
-		cliKVOverrides,
-		harnessModelSet,
-		c.serverCatalogDefaultModel(ctx),
-		serverOwned,
-	)
+	if launchChoices.selectedProfile {
+		// An explicit profile launch keeps the resolved-configuration path
+		// (Rust #50013: `selected_profile` short-circuits `configure`).
+		if launchChoices.hasProvider {
+			params.ModelProvider = launchChoices.provider
+		}
+		// Rust #43177: the server's config/read values seed model and reasoning
+		// effort for launches that did not choose them explicitly.
+		applyServerEffectiveLaunchDefaults(
+			&params,
+			effective,
+			layers,
+			cliKVOverrides,
+			harnessModelSet,
+			c.serverCatalogDefaultModel(ctx),
+		)
+	} else {
+		launchChoices.configure(&params)
+	}
 	applyManagedDefaultsToThreadStartParams(&params, state, defaults, layers,
 		cliKVOverrides,
 		harnessModelSet,
-		params.ServiceTierSet)
+		params.ServiceTierSet,
+		launchChoices.selectedProfile)
 	return params, nil
 }
 
@@ -81,46 +86,14 @@ func remoteTUILaunchSelectedProfile(root *cli.RootOptions) bool {
 	return strings.TrimSpace(root.Shared.Profile) != ""
 }
 
-// clearImplicitLaunchModelSettings mirrors the Rust #50913
-// `bootstrap_server_owned_start` branch for an app server whose `config/read` is
-// unsupported: the launch's own model and reasoning-effort choices survive,
-// while the implicit client settings are cleared so the server owns them.
-func clearImplicitLaunchModelSettings(params *appserver.ThreadStartParams, root *cli.RootOptions) {
-	if params == nil {
-		return
-	}
-	cliKVOverrides := remoteCLIConfigOverrideKeys(root)
-	if !(root != nil && strings.TrimSpace(root.Shared.Model) != "") &&
-		!slices.Contains(cliKVOverrides, "model") {
-		params.Model = ""
-	}
-	if !(root != nil && strings.TrimSpace(root.Shared.ModelReasoningEffort) != "") &&
-		!slices.Contains(cliKVOverrides, "model_reasoning_effort") {
-		clearThreadStartEffort(params)
-	}
-}
-
-// clearThreadStartEffort drops an implicit reasoning effort from a thread/start
-// request (Rust #50913: `config.model_reasoning_effort = None`).
-func clearThreadStartEffort(params *appserver.ThreadStartParams) {
-	if params == nil || params.Config == nil {
-		return
-	}
-	delete(params.Config, "model_reasoning_effort")
-	if len(params.Config) == 0 {
-		params.Config = nil
-	}
-}
-
 // applyServerEffectiveLaunchDefaults overlays the server's effective config
 // onto a thread/start request for settings the user did not choose explicitly
 // (Rust #43177). Explicit CLI `--model`/profile/generic overrides win; when the
 // server reports no configured model the server catalog's default is used.
-//
-// Rust #50913: for a server-owned connected fresh start (`serverOwned`) an
-// implicit client model is dropped rather than forwarded, so the app server
-// resolves the new-thread default from its own configuration; an explicit
-// profile launch keeps its resolved model.
+// This is the resolved-configuration path: an explicit profile launch (Rust
+// #50013) resolves model and effort from the merged configuration. Launches
+// without a profile use startupLaunchChoices instead, so their resolved defaults
+// never reach the request as explicit overrides.
 func applyServerEffectiveLaunchDefaults(
 	params *appserver.ThreadStartParams,
 	effective map[string]any,
@@ -128,7 +101,6 @@ func applyServerEffectiveLaunchDefaults(
 	cliKVOverrides []string,
 	harnessModelSet bool,
 	catalogDefault func() (string, bool),
-	serverOwned bool,
 ) {
 	if params == nil {
 		return
@@ -145,12 +117,7 @@ func applyServerEffectiveLaunchDefaults(
 				model = strings.TrimSpace(fallback)
 			}
 		}
-		if serverOwned {
-			// Rust #50913: never forward the client's implicit model. An empty
-			// value leaves the launch unset so the server's configured or managed
-			// new-thread defaults supply the model.
-			params.Model = model
-		} else if model != "" {
+		if model != "" {
 			params.Model = model
 		}
 	}
@@ -209,6 +176,7 @@ func applyManagedDefaultsToThreadStartParams(
 	cliKVOverrides []string,
 	harnessModelSet bool,
 	harnessServiceTierSet bool,
+	seedModelFromState bool,
 ) {
 	if params == nil || defaults == nil {
 		return
@@ -227,7 +195,7 @@ func applyManagedDefaultsToThreadStartParams(
 	} else if target.ServiceTier == "" && state != nil {
 		target.ServiceTier = strings.TrimSpace(state.ServiceTier)
 	}
-	if target.Model == "" && state != nil {
+	if target.Model == "" && state != nil && seedModelFromState {
 		target.Model = strings.TrimSpace(state.Model)
 	}
 	codextui.ApplyManagedNewThreadDefaults(

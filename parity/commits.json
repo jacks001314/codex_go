@@ -8369,7 +8369,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "Audited upstream 9587c9ef36 (#43177): already implemented. app/remote_tui_managed_defaults.go reads config/read from the embedded or remote server working directory, overlays server model/reasoning-effort defaults unless an explicit CLI/profile launch setting wins, applies managed new-thread defaults, and clears implicit client settings when the server has no model or config/read is unsupported. Tests: TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestApplyServerEffectiveLaunchDefaults, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust."
+    "Audited upstream 9587c9ef36 (#43177): implemented. app/remote_tui_managed_defaults.go reads config/read from the embedded or remote server working directory and applies managed new-thread defaults. After Rust #50013 (Round 1110) the server's effective model/effort seed only the resolved-configuration path (explicit profile launches); launches without a profile forward explicit launch choices only, so resolved defaults never become overrides. Tests: TestApplyServerEffectiveLaunchDefaults, TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust."
    ]
   },
   {
@@ -25239,9 +25239,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1110: added app/startup_launch_choices.go mirroring Rust StartupLaunchChoices. The first thread forwards only an explicit model (`-m`/`-c model=`, last assignment wins), provider (`--local-provider`/`-c model_provider=`) and reasoning effort (`-c model_reasoning_effort=`); resolved client defaults are deleted from thread/start, and an explicit profile keeps the resolved-configuration path. Applied to both the connected TUI (remote_tui_managed_defaults.go) and the embedded bootstrap (interactiveLocalThreadStartParams); managed new-thread defaults still supply a model/effort, and the preserved session metadata is stamped with the resolved embedded model/provider. Tests: TestStartupLaunchChoicesOmitUnselectedSettingsLikeRust, TestLocalThreadStartOmitsImplicitModelLikeRust, updated TestRemoteFreshStartUsesServerModelDefaultsLikeRust (omitted defaults, typed/generic model and provider, repeated model override, explicit effort, profile) and TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust; focused go test ./app passes apart from the pre-existing TestExecJSONEndToEnd/TestLocalSessionForksRustRolloutWithoutGoSnapshot failures."
    ]
   },
   {
@@ -26629,7 +26629,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "Round 398 (audit): connected fresh starts read the destination configuration before model bootstrap, preserve explicit model/effort overrides, clear implicit client model settings when config/read is unsupported, use the launch directory for local daemon reads and the remote directory for remote reads, and let managed new-thread defaults satisfy an empty catalog. Tests: TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust."
+    "Round 398 (audit), reaffirmed in Round 1110: connected fresh starts read the destination configuration before model bootstrap, preserve explicit model/effort overrides, keep implicit client model/effort out of thread/start (Rust #50013), clear implicit client settings when config/read is unsupported, use the launch directory for local daemon reads and the remote directory for remote reads, and let managed new-thread defaults satisfy an empty catalog. Tests: TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust, TestStartupLaunchChoicesOmitUnselectedSettingsLikeRust."
    ]
   },
   {
