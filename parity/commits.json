@@ -9673,9 +9673,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go already records every completed commentary as an assistant message with phase commentary (tui/tea/transcript.go completeAssistantCommentary) and LastAssistantMarkdown returns the newest assistant message regardless of phase, so /copy offers commentary and its code blocks during an active turn; added TestCompletedCommentaryIsCopyableDuringActiveTurnLikeRust covering the whole-response and sh code targets"
    ]
   },
   {

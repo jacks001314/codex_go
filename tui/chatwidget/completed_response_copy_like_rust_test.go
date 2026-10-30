@@ -50,3 +50,28 @@ func TestCompletedResponseCopyDropsOnlyTrailingBlankLines(t *testing.T) {
 		}
 	}
 }
+
+// Rust #43846: a completed commentary message during an active turn becomes
+// the latest copyable agent message even after an earlier final response, and
+// its shell code block is offered by the /copy picker.
+func TestCompletedCommentaryIsCopyableDuringActiveTurnLikeRust(t *testing.T) {
+	const commentary = "Here is the command:\n\n```sh\necho current\n```"
+	messages := []codextui.Message{
+		{Role: codextui.RoleAssistant, Text: "Previous final response", Phase: "final_answer"},
+		{Role: codextui.RoleAssistant, Text: commentary, Phase: "commentary"},
+	}
+	text, ok := LastAssistantMarkdown(messages)
+	if !ok || text != commentary {
+		t.Fatalf("LastAssistantMarkdown() = %q ok=%v, want the completed commentary", text, ok)
+	}
+	targets := CopyTargetsFromMarkdown(text)
+	if len(targets) != 2 {
+		t.Fatalf("targets = %#v, want the whole response and its shell block", targets)
+	}
+	if targets[0].ID != CopyTargetWholeID || targets[0].Text != commentary {
+		t.Fatalf("whole response target = %#v", targets[0])
+	}
+	if targets[1].Label != "Code block (sh)" || targets[1].Text != "echo current\n" {
+		t.Fatalf("code target = %#v", targets[1])
+	}
+}
