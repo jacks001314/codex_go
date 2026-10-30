@@ -8289,7 +8289,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "Round 764 (audit): #43120 implemented at tui/tea/worktree_browser.go:14 - // Managed worktree support mirrors Rust's TUI worktree commands Behaviour: `/worktree` offers starting or continuing a conversation in a new managed checkout or browsing existing ones, local-repository only. Regression contract: tui/tea/worktree_browser_test.go -run 'TestWorktreeCommandStartsManagedSession|TestWorktreeCommandAvailability'; verify with `go test ./tui/tea -run 'TestWorktreeCommandStartsManagedSession|TestWorktreeCommandAvailability' -count=1`."
+    "Round 764 (audit): #43120 implemented at tui/tea/worktree_browser.go:14 - // Managed worktree support mirrors Rust's TUI worktree commands Behaviour: `/worktree` offers starting or continuing a conversation in a new managed checkout or browsing existing ones, local-repository only. Regression contract: tui/tea/worktree_browser_test.go -run 'TestWorktreeCommandStartsManagedSession|TestWorktreeCommandAvailability'; verify with `go test ./tui/tea -run 'TestWorktreeCommandStartsManagedSession|TestWorktreeCommandAvailability' -count=1`.",
+    "Round 1051: the shared `/new` and `/fork` checkout picker that the Round 764 audit had omitted is now implemented in `showSessionCheckoutPicker`; tests in `tui/tea/session_checkout_picker_like_rust_test.go` cover both commands and the unavailable fallback."
    ]
   },
   {
@@ -25770,9 +25771,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1051: Rust #50416 copy is mirrored in `tui/tea/worktree_browser.go` (`showSessionCheckoutPicker`): `/new` and `/fork` open a checkout picker titled `Where should the new conversation run?` / `Where should the forked conversation run?`, with rows `Use current Git worktree` (`Keep using the current working directory`) and `Create new Git worktree` (`Create a separate checkout of this repository in another directory`). The picker is gated by `managedWorktreeAvailable` and falls back to the direct command when unavailable; the requested name is preserved for both current-worktree forks and managed checkout creation (`app/interactive.go` now titles the fork). Regression contract: `tui/tea/session_checkout_picker_like_rust_test.go`; verify with `go test ./tui/tea -run 'TestNewCommandShowsCheckoutPickerLikeRust|TestForkCommandCheckoutPickerCreatesNamedWorktreeLikeRust|TestCheckoutPickerFallsBackWhenWorktreesUnavailable' -count=1` and `go test ./app -run Worktree -count=1`."
    ]
   },
   {

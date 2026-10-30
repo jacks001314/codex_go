@@ -46,6 +46,19 @@ const (
 	managedWorktreeModeFork = "fork"
 )
 
+const (
+	sessionCheckoutCurrentChoice = "current"
+	sessionCheckoutCreateChoice  = "create"
+	sessionCheckoutModalID       = "session-checkout"
+)
+
+// sessionCheckoutPickerState carries the `/new` or `/fork` checkout choice
+// while the picker is open (Rust worktree_picker.rs).
+type sessionCheckoutPickerState struct {
+	Mode string
+	Name string
+}
+
 // worktreeBrowserChoice is one row of the `/worktree` chooser.
 type worktreeBrowserChoice struct {
 	ID          string
@@ -79,6 +92,58 @@ func (m *Model) managedWorktreeAvailable() bool {
 		return m.worktreeRepoCheck(cwd)
 	}
 	return codextui.ManagedWorktreeRepositoryAvailable(cwd)
+}
+
+// showSessionCheckoutPicker mirrors Rust's show_session_checkout_picker: with
+// managed worktrees available, `/new` and `/fork` ask whether the conversation
+// should stay in the current Git worktree or run in a separate checkout;
+// otherwise the command starts the session immediately.
+func (m *Model) showSessionCheckoutPicker(mode string, name string) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	if !m.managedWorktreeAvailable() {
+		return m.startSessionCheckout(mode, name)
+	}
+	title := "Where should the new conversation run?"
+	if mode == managedWorktreeModeFork {
+		title = "Where should the forked conversation run?"
+	}
+	m.replaceModal(&modalState{
+		id:    sessionCheckoutModalID,
+		kind:  ModalKindPicker,
+		title: title,
+		sessionCheckout: &sessionCheckoutPickerState{
+			Mode: mode,
+			Name: strings.TrimSpace(name),
+		},
+		options: []ModalOption{
+			{
+				ID:          sessionCheckoutCurrentChoice,
+				Label:       "Use current Git worktree",
+				Description: "Keep using the current working directory",
+			},
+			{
+				ID:          sessionCheckoutCreateChoice,
+				Label:       "Create new Git worktree",
+				Description: "Create a separate checkout of this repository in another directory",
+			},
+		},
+	})
+	m.notice = ""
+	return nil
+}
+
+// startSessionCheckout runs the session command in the current checkout.
+func (m *Model) startSessionCheckout(mode string, name string) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	if mode == managedWorktreeModeFork {
+		return m.applyForkCurrentSession(name)
+	}
+	m.startFreshNamedSession(name, "Started a new local thread.")
+	return nil
 }
 
 // applyWorktreeCommand mirrors Rust's `/worktree` command: unavailable
@@ -412,7 +477,7 @@ func (m *Model) updateWorktreeChooser(message bubbletea.KeyMsg) bubbletea.Cmd {
 		if choice.ID == "browse" {
 			return m.startWorktreeBrowser()
 		}
-		return m.startManagedWorktree(choice.ID)
+		return m.startManagedWorktree(choice.ID, "")
 	}
 	return nil
 }
@@ -520,7 +585,7 @@ func (m *Model) updateWorktreeConfirm(message bubbletea.KeyMsg) bubbletea.Cmd {
 
 // startManagedWorktree runs the local creation handler and attaches the
 // resulting session.
-func (m *Model) startManagedWorktree(mode string) bubbletea.Cmd {
+func (m *Model) startManagedWorktree(mode string, name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
@@ -538,7 +603,7 @@ func (m *Model) startManagedWorktree(mode string) bubbletea.Cmd {
 	m.managedWorktreeStarting = true
 	start := m.onStartManagedWorktree
 	return func() bubbletea.Msg {
-		response, err := start(mode, "", cwd, threadID)
+		response, err := start(mode, strings.TrimSpace(name), cwd, threadID)
 		return managedWorktreeStartMsg{
 			threadID: threadID,
 			cwd:      cwd,

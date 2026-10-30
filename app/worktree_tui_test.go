@@ -79,7 +79,7 @@ func TestInteractiveStartManagedWorktreeForkBindsAndInheritsHistory(t *testing.T
 	sourceID := createAppThreadRecord(t, store, source, "carry me over")
 
 	handler := interactiveStartManagedWorktreeHandler(settings)
-	response, err := handler("fork", "", source, string(sourceID))
+	response, err := handler("fork", "named fork", source, string(sourceID))
 	if err != nil {
 		t.Fatalf("start managed worktree: %v", err)
 	}
@@ -89,9 +89,15 @@ func TestInteractiveStartManagedWorktreeForkBindsAndInheritsHistory(t *testing.T
 	if response.Summary.ThreadID == string(sourceID) {
 		t.Fatal("fork must create a new thread id")
 	}
+	if response.Summary.Title != "named fork" {
+		t.Fatalf("forked title = %q, want the requested name", response.Summary.Title)
+	}
 	record, err := store.Read(session.ThreadID(response.Summary.ThreadID), true, false)
 	if err != nil || record == nil {
 		t.Fatalf("read forked record: %v", err)
+	}
+	if record.Title != "named fork" {
+		t.Fatalf("forked record title = %q, want the requested name", record.Title)
 	}
 	worktreeRoot := filepath.Clean(settings.Root)
 	if !strings.HasPrefix(filepath.Clean(record.Metadata.CWD), worktreeRoot) {

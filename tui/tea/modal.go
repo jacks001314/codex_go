@@ -222,6 +222,10 @@ type modalState struct {
 	hooksBrowser           *hooksBrowserModalState
 	pluginBrowser          *pluginBrowserModalState
 	worktreeBrowser        *worktreeBrowserState
+	// sessionCheckout hosts the `/new` and `/fork` choice between staying in
+	// the current Git worktree and creating a managed checkout (Rust #43120,
+	// #50416).
+	sessionCheckout *sessionCheckoutPickerState
 	// voiceChannels hosts the microphone channel multi-select and the device it
 	// belongs to (Rust #49836 open_realtime_input_channels).
 	voiceChannels      *bottompane.MultiSelectPicker
@@ -1033,6 +1037,22 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		response.Picker = decision
 		notice = pickerNotice
+	}
+	if modal.kind == ModalKindPicker && modal.sessionCheckout != nil {
+		checkout := modal.sessionCheckout
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		switch response.OptionID {
+		case sessionCheckoutCreateChoice:
+			return m.startManagedWorktree(checkout.Mode, checkout.Name)
+		case sessionCheckoutCurrentChoice:
+			return m.startSessionCheckout(checkout.Mode, checkout.Name)
+		default:
+			return nil
+		}
 	}
 	if modal.kind == ModalKindUserInput && modal.userInput != nil {
 		decision, complete, ok := m.resolveRequestUserInputModal(modal, response.OptionID, cancelled)

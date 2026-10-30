@@ -3481,6 +3481,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Residual: Rust also starts this service for embedded app-server sessions (with `task_tools=false` and the `codex_worktrees` namespace). Go's embedded TUI drives a local runner/MCP runtime and has no equivalent AppServerSession request handle in this path, so embedded worktree-tool hosting remains unimplemented.
 - Regression coverage: `app/managed_worktree_tools_like_rust_test.go` covers contracts, annotations, routing, unavailable-service rejection, registry behavior, strict argument parsing, result bounds, and namespace conflicts; `tui/tea/side_worktree_prompt_like_rust_test.go` covers both side prompts. Verified with `go test ./app -run 'ManagedWorktree|WorktreeTools|TaskToolsMCPHostsManaged|TaskToolsMCPRejectsWorktree' -count=1`, `go test ./tui/tea -run Side -count=1`, `go build ./app ./tui/...`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2204 complete`, `461 not_applicable`,
-`323 audit_pending`, `156 regression_pending`, `5 partial`,
+### Git worktree choices (Round 1051)
+
+- Rust #50416 relabels the shared `/new` and `/fork` checkout picker to `Use current Git worktree` / `Create new Git worktree` and explains that creating a worktree makes a separate checkout in another directory.
+- Complete: Go previously ran `/new` and `/fork` directly and had no checkout picker, so the Round 764 #43120 audit had over-claimed that command surface. `tui/tea/worktree_browser.go` now provides `showSessionCheckoutPicker`: when `managedWorktreeAvailable` holds, both commands open a picker titled `Where should the new conversation run?` / `Where should the forked conversation run?` with the two Rust rows and descriptions; the current-worktree row keeps the existing session path and the create row starts a managed checkout. When unavailable, the commands keep their direct behavior. The requested name now flows into managed checkout creation, and `app/interactive.go` titles named forks.
+- Regression coverage: `tui/tea/session_checkout_picker_like_rust_test.go` covers both commands, copy, selection routing, and the unavailable fallback; `app/worktree_tui_test.go` asserts a named fork keeps its title.
+- Verified with `go test ./tui/tea -count=1`, `go test ./app -run Worktree -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2205 complete`, `461 not_applicable`,
+`322 audit_pending`, `156 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

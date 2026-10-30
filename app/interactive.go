@@ -200,7 +200,10 @@ func interactiveStartManagedWorktreeHandler(settings worktree.WorktreeSettings) 
 				_ = manager.Remove(created.Root)
 				return codextea.SessionResumeResponse{}, errors.New("continuing a conversation requires a thread id")
 			}
-			record, err = store.Fork(session.ThreadID(threadID), session.ForkOptions{Mode: session.ForkAll})
+			record, err = store.Fork(session.ThreadID(threadID), session.ForkOptions{
+				Mode:  session.ForkAll,
+				Title: strings.TrimSpace(name),
+			})
 			if err == nil {
 				worktreeCWD := created.CWD
 				record, err = store.UpdateMetadata(record.ID, &session.MetadataPatch{CWD: &worktreeCWD}, false)

@@ -9593,7 +9593,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandDebugConfig:
 		return m.applyDebugConfigCommand()
 	case codextui.CommandNew:
-		m.startFreshNamedSession(invocation.Args, "Started a new local thread.")
+		return m.showSessionCheckoutPicker(managedWorktreeModeNew, invocation.Args)
 	case codextui.CommandWorktree:
 		return m.applyWorktreeCommand(invocation.Args)
 	case codextui.CommandInit:
@@ -9642,7 +9642,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandResume:
 		return m.applyResumeCommand(invocation.Args)
 	case codextui.CommandFork:
-		return m.applyForkCurrentSession(invocation.Args)
+		return m.showSessionCheckoutPicker(managedWorktreeModeFork, invocation.Args)
 	case codextui.CommandCd:
 		return m.applyWorkingDirectoryChangeCommand(invocation.Args)
 	case codextui.CommandPwd:
