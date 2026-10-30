@@ -7054,9 +7054,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1057: Go app.runSandbox now hardens macOS Seatbelt plans before execution: sandbox.HardenSeatbeltArgsForInheritedTerminal appends (deny file-ioctl (ioctl-command TIOCSTI)) after every generated policy allowance and errors when the -p policy is missing, mirroring Rust #42590's debug-sandbox path. Because the CLI inherits the controlling terminal, a sandboxed child can no longer queue input for the unsandboxed shell resumed after exit. Regression contract: sandbox/seatbelt_tty_injection_like_rust_test.go:TestHardenSeatbeltArgsForInheritedTerminalDeniesTIOCSTILikeRust. Verified with go test ./sandbox -count=1 and go test ./app -run Sandbox -count=1."
    ]
   },
   {

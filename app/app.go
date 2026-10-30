@@ -335,6 +335,13 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 	if err := plan.UnsupportedError(); err != nil {
 		return err
 	}
+	if plan.SandboxType == sandbox.SandboxTypeMacosSeatbelt {
+		hardened, err := sandbox.HardenSeatbeltArgsForInheritedTerminal(plan.Command)
+		if err != nil {
+			return err
+		}
+		plan.Command = hardened
+	}
 	if plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
 		integrityCWD := plan.CWD
 		if integrityCWD == "" {

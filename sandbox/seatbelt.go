@@ -58,6 +58,27 @@ func createSeatbeltCommandArgsWithManagedNetwork(command []string, cwd string, p
 	return append(args, command...), nil
 }
 
+// HardenSeatbeltArgsForInheritedTerminal mirrors Rust #42590: a CLI that
+// inherits the user's controlling terminal must not let the sandboxed child
+// queue input for the unsandboxed shell that resumes when Codex exits. The
+// deny is appended after every shared policy allowance so it cannot be
+// reopened, and the original argument slice is left untouched.
+func HardenSeatbeltArgsForInheritedTerminal(args []string) ([]string, error) {
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] != "-p" {
+			continue
+		}
+		policy := args[index+1]
+		if strings.TrimSpace(policy) == "" {
+			break
+		}
+		hardened := append([]string(nil), args...)
+		hardened[index+1] = strings.TrimRight(policy, "\n") + "\n(deny file-ioctl (ioctl-command TIOCSTI))\n"
+		return hardened, nil
+	}
+	return nil, fmt.Errorf("seatbelt command is missing its generated policy")
+}
+
 func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSockets []string, allowedSymlinkedCodexHome string) (string, []seatbeltParameter, error) {
 	return buildSeatbeltPolicyWithManagedNetwork(cwd, profile, allowUnixSockets, nil, allowedSymlinkedCodexHome)
 }
