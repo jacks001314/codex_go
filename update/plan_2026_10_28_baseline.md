@@ -3444,6 +3444,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - N/A by architecture: Go has no replay-only side-conversation restore path or thread-event attachment check at close. Embedded side close interrupts locally and then deletes the record without a blocking server error; remote close logs interrupt failures as best-effort warnings before `thread/unsubscribe`, which reports `notLoaded` for a gone thread instead of failing. Go's `turn/interrupt` also requires a non-empty `turnId`, so the empty-turn startup interrupt has no carrier.
 - Verified with `rg` over `replayOnly|ReplayOnly|interrupt_side_thread|thread/unsubscribe`, `go test ./tui/tea -run Side -count=1`, `go test ./app -run 'Side|Archive' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2201 complete`, `459 not_applicable`,
-`329 audit_pending`, `156 regression_pending`, `4 partial`,
+### Unknown Codex error variants (Round 1045)
+
+- Rust #49806 makes v2 `CodexErrorInfo` open-ended: unknown strings and objects deserialize as `Other`, known variants and `"other"` serialization are preserved, and exported JSON schemas plus TypeScript/Python types accept arbitrary strings and objects.
+- Complete: Go already carries `appserver.CodexErrorInfo` as untyped JSON, so unknown string/object variants decode without failing `TurnError`, `ErrorNotification`, or stored turn errors; known structured variants keep their payloads and downstream classifiers treat unrecognized shapes as non-matching, the behavioral equivalent of Rust's `Other` fallback. The vendored precomputed exports are byte-for-byte Rust output and already contain the open-ended `anyOf` schema. New `appserver/codex_error_info_unknown_variants_like_rust_test.go` pins the contract across all three decode paths.
+- Verified with `go test ./appserver -run AppServerCodexErrorInfoAcceptsUnknownVariantsLikeRust -count=1`. The Rust tree is currently 93 commits past the certified baseline, so pre-existing snapshot drift tests fail independently of this change.
+
+Status after reconciliation: `2202 complete`, `459 not_applicable`,
+`328 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

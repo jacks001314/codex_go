@@ -24604,9 +24604,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1045 (complete): Rust #49806 makes the v2 CodexErrorInfo enum open-ended - unknown strings and objects deserialize as Other, known variants and the \"other\" serialization are preserved, and the exported JSON schemas/TypeScript/Python types accept arbitrary strings and objects. Go already carries appserver.CodexErrorInfo as untyped JSON (any), so unknown string and object variants decode without failing the enclosing TurnError, ErrorNotification, or stored turn error, known structured variants keep their object payload, and \"other\" round-trips; downstream classifiers (normalizeCodexErrorKind, rollout codex_error_info) treat unrecognized shapes as non-matching, which is the behavioral equivalent of Rust's Other fallback. The vendored appserver/schema/precomputed exports come byte-for-byte from the Rust tree and already carry the open-ended anyOf schema. New regression appserver/codex_error_info_unknown_variants_like_rust_test.go pins unknown string, unknown object, other, and known structured variants across TurnError, ErrorNotification, and stateThreadTurnToAPI. Verified with go test ./appserver -run AppServerCodexErrorInfoAcceptsUnknownVariantsLikeRust -count=1; the Rust tree is currently 93 commits past the certified baseline, so the pre-existing Rust snapshot drift tests (Cargo.toml hash, fixture counts, precomputed stable artifact) fail independently of this audit."
    ]
   },
   {
