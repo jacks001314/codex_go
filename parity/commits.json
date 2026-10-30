@@ -7126,9 +7126,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: connect_loopback_direct, upsert_environment_with_options"
+    "execserver/connection_headers.go restricts header-bearing ws:// dials to resolved loopback addresses with a proxy-free direct connection; execserver/client.go reuses the direct client across reconnects; connection_headers_loopback_test.go covers filtering, rejection, proxy bypass, and a real handshake"
    ]
   },
   {

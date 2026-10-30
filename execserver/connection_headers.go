@@ -10,6 +10,7 @@ package execserver
 // destination, and values are never echoed in diagnostics.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -145,4 +146,100 @@ func RedactedExecServerHeaders(headers http.Header) string {
 		parts = append(parts, fmt.Sprintf("%s=[redacted]", name))
 	}
 	return "{" + strings.Join(parts, " ") + "}"
+}
+
+// lookupHost resolves a header-bearing loopback WebSocket host. It is a
+// variable so tests can pin mixed or non-loopback DNS answers.
+var lookupHost = net.DefaultResolver.LookupHost
+
+// isPlainWebSocketURL reports whether the destination uses the unencrypted ws
+// scheme; only those connections take the loopback-direct path (Rust #42606).
+func isPlainWebSocketURL(serverURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(serverURL))
+	return err == nil && strings.EqualFold(parsed.Scheme, "ws")
+}
+
+// loopbackWebSocketAddresses resolves a header-bearing ws:// destination and
+// keeps only loopback addresses, mirroring Rust's `connect_loopback_direct`
+// (#42606): trusted headers never travel to a peer that resolves elsewhere.
+func loopbackWebSocketAddresses(ctx context.Context, serverURL string) ([]string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(serverURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid exec-server WebSocket URL: %w", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return nil, errors.New("exec-server WebSocket URL requires a host")
+	}
+	port := parsed.Port()
+	if port == "" {
+		port = "80"
+	}
+	var resolved []string
+	if address := net.ParseIP(host); address != nil {
+		resolved = []string{address.String()}
+	} else {
+		addresses, err := lookupHost(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve exec-server WebSocket host %q: %w", host, err)
+		}
+		resolved = addresses
+	}
+	loopback := make([]string, 0, len(resolved))
+	for _, address := range resolved {
+		parsedIP := net.ParseIP(address)
+		if parsedIP == nil || !parsedIP.IsLoopback() {
+			continue
+		}
+		loopback = append(loopback, net.JoinHostPort(parsedIP.String(), port))
+	}
+	if len(loopback) == 0 {
+		return nil, errors.New("direct WebSocket connections must resolve to a loopback address")
+	}
+	return loopback, nil
+}
+
+// loopbackDirectWebSocketClient mirrors Rust's loopback-direct dial: the
+// connection bypasses configured proxies and dials only resolved loopback
+// addresses. A caller-supplied plain *http.Transport keeps its settings; other
+// custom clients are used as-is after the loopback resolution check.
+func loopbackDirectWebSocketClient(ctx context.Context, serverURL string, base *http.Client) (*http.Client, error) {
+	addresses, err := loopbackWebSocketAddresses(ctx, serverURL)
+	if err != nil {
+		return nil, err
+	}
+	var transport *http.Transport
+	if base != nil {
+		if existing, ok := base.Transport.(*http.Transport); ok && existing != nil {
+			transport = existing.Clone()
+		} else if base.Transport != nil {
+			return base, nil
+		}
+	}
+	if transport == nil {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	}
+	transport.Proxy = nil
+	dialer := &net.Dialer{}
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var lastErr error
+		for _, address := range addresses {
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		if lastErr == nil {
+			lastErr = errors.New("no loopback address to dial")
+		}
+		return nil, lastErr
+	}
+	client := &http.Client{Transport: transport}
+	if base != nil {
+		client.Timeout = base.Timeout
+		client.CheckRedirect = base.CheckRedirect
+		client.Jar = base.Jar
+	}
+	return client, nil
 }

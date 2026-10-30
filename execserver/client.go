@@ -457,6 +457,13 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 	if err != nil {
 		return nil, err
 	}
+	httpClient := options.HTTPClient
+	if len(headers) > 0 && isPlainWebSocketURL(url) {
+		httpClient, err = loopbackDirectWebSocketClient(ctx, url, options.HTTPClient)
+		if err != nil {
+			return nil, err
+		}
+	}
 	client := &Client{
 		url:          url,
 		clientName:   clientName,
@@ -470,7 +477,7 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		done:         make(chan struct{}),
 	}
 	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
-		conn, initialized, err := dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient, headers, options.InitializeTimeout)
+		conn, initialized, err := dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, httpClient, headers, options.InitializeTimeout)
 		return conn, initialized, clientConnectMetadata{}, err
 	}
 	conn, initialized, _, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
