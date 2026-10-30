@@ -3936,3 +3936,12 @@ Status after this batch: `2318 complete`, `462 not_applicable`, `322 audit_pendi
 - #50531 realtime transcript tails land in thread history on `transcript_tail.flush` without starting or steering a turn, joining a running turn or completing their own idle history turn.
 
 Status after this batch: `2321 complete`, `462 not_applicable`, `322 audit_pending`, `39 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Certification and Rust-only refactors (Round 1108)
+
+- #44631 is subsumed by the command-center rework: Go has no inline overview composer (Rust removed it in #45255), so reopening always focuses the task list, and per-thread composer drafts survive overview refreshes.
+- #47856 Go's audio estimate cache computes outside the cache mutex (`get` → estimate unlocked → `put`), and image byte estimates are uncached, so no global lock is held during initialization.
+- #48200 JSON-to-HTTP header conversion already lives in `model/responses_headers.go`, preserving string/number/boolean values and skipping invalid names/values; `safetyBufferingTreatmentFromJSONHeaders` consumes it.
+- #47713 and #50058 are Rust-only dependency/crate refactors (Provider/RetryConfig relocation, cargo feature flags, `windows-sys` 0.61.2 and handle owners); Go has no crate graph or windows-sys bindings, so both are not applicable.
+
+Status after this batch: `2324 complete`, `464 not_applicable`, `322 audit_pending`, `34 regression_pending`, `5 partial`, `6 blocked_precondition`.

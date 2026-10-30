@@ -11641,9 +11641,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Go's command center has no inline composer (Rust removed it in #45255, already complete), so reopening the overview always lands on the task list: tui/tea/agents_overview.go documents that the list owns focus, and arrow/Vim navigation acts on the list immediately.",
+   "Unsent drafts are per-thread composer drafts captured by captureAgentsOverviewDraft when leaving a session, so a populated refresh cannot drop them; the empty-list composer fallback no longer exists upstream.",
+   "Tests: `go test ./tui/tea -run 'AgentsOverview|CommandCenter' -count=1` passes."
    ]
   },
   {
@@ -20282,9 +20284,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Rust-only crate dependency refactor: moves Provider/RetryConfig into codex-client, moves feature-state metrics into codex-core, and adjusts tonic/reqwest/png cargo features. Go has no codex-api/codex-client/codex-features crate split or cargo feature graph; provider and retry configuration already live in the model/config packages."
    ]
   },
   {
@@ -20618,9 +20620,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Go's audio token estimate cache never computes under the cache mutex: `estimateAudioTokenCount` reads with `get` (lock held only for the lookup), decodes and estimates unlocked, then stores with `put` (audioutil/audio.go). Image byte estimates are not cached in Go, so initialization cannot block unrelated keys.",
+   "Tests: `go test ./audioutil -count=1` passes."
    ]
   },
   {
@@ -21851,9 +21854,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Go already keeps the shared conversion in model/responses_headers.go (`jsonHeadersToHTTPHeaders`): string, number and boolean values convert, invalid header names and unsupported values are skipped, and sorted keys preserve Rust's last-wins behaviour for case variants (#51440).",
+   "`safetyBufferingTreatmentFromJSONHeaders` consumes it for WebSocket event headers, the same call site Rust moved to responses_headers.",
+   "Tests: `go test ./model -run 'ResponseHeader|JSONHeader|SafetyBuffering' -count=1` passes."
    ]
   },
   {
@@ -25362,9 +25367,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "not_applicable",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Rust dependency bump (workspace `windows-sys` 0.61.2) plus an OwnedHandle/BorrowedHandle ownership refactor. Go has no windows-sys crate, handle-owner types, or cargo dependency graph; Windows process and socket handling use Go syscalls and os/exec."
    ]
   },
   {
