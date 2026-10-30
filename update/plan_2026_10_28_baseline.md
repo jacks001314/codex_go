@@ -3085,6 +3085,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already splits the equivalent code by platform and concern (`pid_process_windows.go`, `managed_command_darwin.go`, `pid_identity_linux.go`), so there is no behavior to port; existing `appserverdaemon` tests cover detached launch probing/reaping, the restricted error contract, PID start timeouts, shutdown watching, and lifecycle start/restart/stop.
 - Verified with `go test ./appserverdaemon -count=1`.
 
-Status after reconciliation: `2153 complete`, `451 not_applicable`,
-`346 audit_pending`, `194 regression_pending`, `5 partial`,
+### Bedrock GPT-6-Astra catalog entry (Round 995)
+
+- Rust #42619 adds `openai.gpt-6-astra` to the Amazon Bedrock Mantle catalog ahead of the 5.6 series and emits global/US cross-region Runtime variants that keep bundled metadata (#42619, complete).
+- Go already carries the newer shape of that catalog: `AmazonBedrockGPT6AstraModelID`, priority 1 in `AmazonBedrockModelCatalog`, and both Runtime prefixes. Existing tests pin ordering, display names, context windows, the Runtime variant list (with a comment naming #42619), and Astra's inherited `ultrafast` capability.
+- Verified with `go test ./model -run 'Bedrock|AmazonBedrock' -count=1`.
+
+Status after reconciliation: `2154 complete`, `451 not_applicable`,
+`346 audit_pending`, `193 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

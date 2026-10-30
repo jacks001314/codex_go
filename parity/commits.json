@@ -7135,9 +7135,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 995 (回归证书): #42619 向 Amazon Bedrock 目录新增 openai.gpt-6-astra（Mantle 静态目录 priority 1，并把它插到 5.6 系列之前），同时让 Bedrock Runtime 目录生成 openai.gpt-6-astra 的 global 与 US cross-region 变体，并保留 bundled metadata 只覆盖 Bedrock 特有字段。Go 的等价实现已存在且已演进到更晚的上游形状：model/catalog.go 的 AmazonBedrockGPT6AstraModelID、bedrockModel(bundled, \"gpt-6-astra\", ..., 1) 以及运行时变体列表（bedrockRuntimeGlobalSlugPrefix/USSlugPrefix + Astra）都在位。既有测试已按本提交的四个测试面覆盖：TestAmazonBedrockModelCatalogLikeRust 断言目录顺序、display name、priority、visibility 与 context/max-context（Astra 272k/872k）；TestAmazonBedrockRuntimeModelCatalogLikeRust 断言 Astra 的 global 与 US cross-region 变体及顺序（注释显式引用 #42619）；TestBedrockGPT56ModelsUseLongContextWindowLikeRust 覆盖长上下文名单；TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust 覆盖 Astra 继承 bundled 能力。本次无代码改动。验证：go test ./model -run 'Bedrock|AmazonBedrock' -count=1。"
    ]
   },
   {
