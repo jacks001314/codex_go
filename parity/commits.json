@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "b0f977c3a9c2e68e46e58e589e98f5297d2c8c10",
+ "rustToInclusive": "4c8f6971cb12b6ce859c0551d0172fd1ad53efe3",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -39878,6 +39878,30 @@
    "status": "complete",
    "evidence": [
     "auth/chatgpt_refresh_progress.go records the auth JSON tokens, not the workspace-rewritten claims, when an exchange starts; a workspace switch is therefore still detected as unsettled. auth/chatgpt_refresh_progress_like_rust_test.go TestChatGPTRefreshProgressDetectsWorkspaceSwitchLikeRust covers account_id=workspace-b with an id_token for another workspace"
+   ]
+  },
+  {
+   "sha": "a727f1f11ae06dcb196cd028a31900dbfd2f68ed",
+   "subject": "Test V8 inline typed array storage limits (#58385)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Test-only change in codex-rs/v8-poc/src/lib.rs (inline typed array storage helper); codex_go has no V8 runtime counterpart"
+   ]
+  },
+  {
+   "sha": "4c8f6971cb12b6ce859c0551d0172fd1ad53efe3",
+   "subject": "Add whole-entry elastic allocation for Guardian context (#58388)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "state/guardian_elastic_budget.go renames the optional allocation groups to their source sections, keeps the pre-#58388 serialized names as aliases, and resolves unconfigured groups to the synchronous entry caps with 900-token instruction default. state/guardian_elastic_allocation.go adds whole-entry elastic allocation that reserves required evidence, history, and the omission notice, then admits optional groups by quota, recent-first selection, and least-served redistribution with shared user-content framing charged at selection time. Tests: state/guardian_elastic_allocation_like_rust_test.go"
    ]
   }
  ]
