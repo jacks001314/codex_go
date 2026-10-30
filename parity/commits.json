@@ -4627,9 +4627,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "model/catalog.go: GuardianModelPolicy.InitialCUACall + AllowsInitialCUACall (explicit value wins, omission keeps adaptive computer use), ModelInfo delegation",
+    "appserver/guardian_reviewer.go: jsExecutions counted only for Node REPL-backed js/browser_js with retry dedupe; first execution fast-approved before serving assessment and full review",
+    "appserver/agent_runtime.go: guardianAllowsInitialCUACallForTurn resolves the turn's captured model Guardian policy",
+    "Regression contract: appserver/guardian_initial_cua_like_rust_test.go -run 'InitialCUA|FastApprovesFirstNodeReplJSExecution'; verify with go test ./appserver -run 'InitialCUA|FastApprovesFirstNodeReplJSExecution' -count=1"
    ]
   },
   {

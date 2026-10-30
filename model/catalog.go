@@ -856,6 +856,24 @@ type GuardianModelPolicy struct {
 	MCP         *GuardianReviewMode `json:"mcp,omitempty"`
 	Network     *GuardianReviewMode `json:"network,omitempty"`
 	Permissions *GuardianReviewMode `json:"permissions,omitempty"`
+	// InitialCUACall overrides whether the first computer-use call may skip the
+	// synchronous Guardian wait (Rust #41666). Omission keeps the allowance for
+	// adaptive computer use.
+	InitialCUACall *bool `json:"initial_cua_call,omitempty"`
+}
+
+// AllowsInitialCUACall mirrors Rust
+// `GuardianModelPolicy::allows_initial_cua_call`: an explicit catalog value
+// wins, and an omitted value retains the allowance only while computer use is
+// adaptive.
+func (p *GuardianModelPolicy) AllowsInitialCUACall() bool {
+	if p == nil {
+		return false
+	}
+	if p.InitialCUACall != nil {
+		return *p.InitialCUACall
+	}
+	return p.ComputerUse != nil && *p.ComputerUse == GuardianReviewModeAdaptive
 }
 
 // GuardianScope identifies an approval category understood by the model-owned
@@ -925,6 +943,16 @@ func (m *ModelInfo) ComputerUseReviewRequired() bool {
 		return *mode != GuardianReviewModeDisabled
 	}
 	return m != nil && m.NodeReplAutoReviewRequired
+}
+
+// AllowsInitialCUACall reports whether the first computer-use call may proceed
+// without waiting for Guardian review (Rust ModelInfo's Guardian policy,
+// #41666).
+func (m *ModelInfo) AllowsInitialCUACall() bool {
+	if m == nil {
+		return false
+	}
+	return m.Guardian.AllowsInitialCUACall()
 }
 
 // ModelInfoUpgrade carries the replacement model and informational retirement

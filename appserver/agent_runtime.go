@@ -154,6 +154,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.trustedRootTurnID = r.guardianTrustedRootTurnIDForTurn
 		modelReviewer.servingAssessment = r.guardianServingAssessmentFor
 		modelReviewer.servingAuthorization = r.guardianServingAuthorization
+		modelReviewer.allowsInitialCUACall = r.guardianAllowsInitialCUACallForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.syncImageContextWindow = func(threadID, modelID string) (int64, bool) {
 			window := r.effectiveModelContextWindowForModel(modelID, &turn.TurnStartParams{ThreadID: threadID})
@@ -1031,6 +1032,30 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 		info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
 	}
 	return info != nil && info.NodeReplAutoReviewRequired
+}
+
+// guardianAllowsInitialCUACallForTurn resolves the parent model's Guardian
+// allowance for the first computer-use call (Rust #41666
+// `GuardianModelPolicy::allows_initial_cua_call`). An omitted catalog value
+// keeps the allowance only while computer use is adaptive.
+func (r *RuntimeRouter) guardianAllowsInitialCUACallForTurn(threadID, turnID string) bool {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	modelID := turnParamModel(active.Params)
+	if active.RunConfig != nil {
+		modelID = firstNonEmpty(active.RunConfig.Model, modelID)
+	}
+	info := capturedModelInfoForRunConfig(active.RunConfig, modelID)
+	if info == nil {
+		info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	}
+	return info.AllowsInitialCUACall()
 }
 
 // capturedModelInfoForRunConfig returns the turn's captured model metadata when

@@ -267,7 +267,11 @@ type modelGuardianReviewer struct {
 	servingAssessment func(threadID, turnID, callID string) *state.ServingAssessment
 	// servingAuthorization captures the current authorization and policy the
 	// assessment is revalidated against.
-	servingAuthorization  func(threadID, turnID string) state.ServingAuthorization
+	servingAuthorization func(threadID, turnID string) state.ServingAuthorization
+	// allowsInitialCUACall reports whether the reviewed model permits its first
+	// computer-use call to skip the synchronous review while the asynchronous
+	// classification continues (Rust #41666).
+	allowsInitialCUACall  func(threadID, turnID string) bool
 	nodeReplEvidence      func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
 	rootUserAuthorization func(threadID, turnID string) []state.RootMessage
 	// syncImageContextWindow resolves the review model's usable context window.
@@ -334,6 +338,11 @@ type guardianScoreProgress struct {
 	latestToolCall       int
 	latestScoredToolCall int
 	wrapperStarts        []guardianWrapperStart
+	// jsExecutions counts `js` executions from Node REPL-backed servers.
+	// Setup and reset tools must not consume the first-execution allowance
+	// (Rust #41666).
+	jsExecutions int
+	jsCallIDs    map[string]struct{}
 }
 
 func (r *modelGuardianReviewer) reviewTurnTiming(threadID, turnID string) *turn.TimingState {
@@ -408,6 +417,55 @@ func (r *modelGuardianReviewer) markScored(threadID string) {
 	if progress := r.scoreProgress[threadID]; progress != nil {
 		progress.latestScoredToolCall = progress.latestToolCall
 	}
+}
+
+// observeNodeReplJSExecution mirrors Rust's `observe_js_execution`: it counts
+// only `js` executions on a Node REPL-backed server, so `js_reset` and
+// `js_add_node_module_dir` keep the first-execution allowance available
+// (Rust #41666). The call id dedupes review retries for one invocation.
+func (r *modelGuardianReviewer) observeNodeReplJSExecution(threadID, toolCallID string) int {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return 0
+	}
+	threadID = strings.TrimSpace(threadID)
+	toolCallID = strings.TrimSpace(toolCallID)
+	r.scoreMu.Lock()
+	defer r.scoreMu.Unlock()
+	if r.scoreProgress == nil {
+		r.scoreProgress = map[string]*guardianScoreProgress{}
+	}
+	progress := r.scoreProgress[threadID]
+	if progress == nil {
+		progress = &guardianScoreProgress{}
+		r.scoreProgress[threadID] = progress
+	}
+	if toolCallID != "" {
+		if _, seen := progress.jsCallIDs[toolCallID]; seen {
+			return progress.jsExecutions
+		}
+		if progress.jsCallIDs == nil {
+			progress.jsCallIDs = map[string]struct{}{}
+		}
+		progress.jsCallIDs[toolCallID] = struct{}{}
+	}
+	progress.jsExecutions++
+	return progress.jsExecutions
+}
+
+// guardianInitialCUAExecution reports whether the action is a Node REPL `js`
+// execution, the operation Rust #41666 fast-approves on its first occurrence.
+// Setup and reset tools (`js_reset`, `js_add_node_module_dir`) are deliberately
+// excluded so they cannot consume the allowance.
+func guardianInitialCUAExecution(action state.Action) bool {
+	if strings.TrimSpace(action.Type) != "mcp_tool_call" {
+		return false
+	}
+	switch strings.TrimSpace(action.ToolName) {
+	case "js", "browser_js":
+	default:
+		return false
+	}
+	return mcp.IsNodeReplBackedConnector(strings.TrimSpace(action.Server), action.ConnectorID)
 }
 
 // recordNonDenial mirrors Rust's record_guardian_non_denial: only a completed
@@ -964,6 +1022,24 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 			r.fastDecision(ctx, threadID, turnID, targetItemID)
 		}
 		return state.DecisionApproved, nil, "full access", nil
+	}
+	// Rust #41666: the first `js` execution from a Node REPL-backed server never
+	// waits for synchronous review. The asynchronous classifier still runs, and
+	// setup/reset tools do not consume the allowance, so every later execution
+	// follows the normal policy.
+	if guardianInitialCUAExecution(action) {
+		if executions := r.observeNodeReplJSExecution(threadID, targetItemID); executions == 1 &&
+			r.allowsInitialCUACall != nil && r.allowsInitialCUACall(threadID, turnID) {
+			if r.fastDecision != nil {
+				r.fastDecision(ctx, threadID, turnID, targetItemID)
+			}
+			if r.metrics != nil {
+				r.metrics.Counter(telemetry.GuardianV2FastDecisionMetric, 1, map[string]string{
+					"decision": "approved", "reason": "initial_cua_call",
+				})
+			}
+			return state.DecisionApproved, nil, "initial computer use call", nil
+		}
 	}
 	requiredReview := r.requiredReview != nil && r.requiredReview(threadID, turnID)
 	// Rust #58075: a final serving assessment may replace the synchronous
