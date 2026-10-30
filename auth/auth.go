@@ -402,6 +402,28 @@ func (s *Store) saveLocked(auth AuthDotJSON) (err error) {
 	return nil
 }
 
+// saveRefreshedFallbackLocked persists rotated fallback tokens to the file
+// store when the keyring could not be read, leaving a keyring generation whose
+// contents are unknown untouched (Rust #58343 AutoAuthStorage::compare_and_save).
+// Ordinary saves still prefer the keyring.
+func (s *Store) saveRefreshedFallbackLocked(auth AuthDotJSON, keyringErr error) error {
+	auto, ok := s.backend().(*autoAuthStorage)
+	if !ok {
+		return s.saveLocked(auth)
+	}
+	attempt := newStorageAttempt(AuthCredentialsStoreAuto, auto.keyring.backend, "save", auto.originator)
+	defer attempt.finish()
+	attempt.recordLoadAttempt(auto.keyring.telemetryStoreName(), nil, keyringErr)
+	attempt.recordSecureError(keyringErr)
+	err := auto.file.Save(auth)
+	attempt.recordSaveAttempt("file", err)
+	if err != nil {
+		return err
+	}
+	ClearPermanentRefreshFailure(s.CodexHome)
+	return nil
+}
+
 // Delete removes the stored credential atomically with other in-process
 // commits.
 func (s *Store) Delete() (bool, error) {

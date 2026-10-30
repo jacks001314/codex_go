@@ -732,6 +732,11 @@ func persistRefreshedChatGPTTokens(codexHome string, expected *AuthDotJSON, toke
 		return err
 	}
 	defer guard.release()
+	commit, err := store.lockCommit()
+	if err != nil {
+		return err
+	}
+	defer commit.release()
 	current, err := store.loadLocked()
 	if err != nil {
 		return err
@@ -777,6 +782,18 @@ func persistRefreshedChatGPTTokens(codexHome string, expected *AuthDotJSON, toke
 	next.Tokens["access_token"] = strings.TrimSpace(tokens.AccessToken)
 	next.Tokens["refresh_token"] = refreshToken
 	next.LastRefresh = time.Now().UTC().Format(time.RFC3339)
+	if auto, ok := store.backend().(*autoAuthStorage); ok {
+		keyringAuth, keyringErr := auto.keyring.Load()
+		if keyringErr != nil {
+			// Rust #58343: the keyring generation is unknown, so the rotated
+			// fallback tokens belong in the file store; never overwrite the
+			// unread keyring entry, even if it recovered before this commit.
+			return store.saveRefreshedFallbackLocked(next, keyringErr)
+		}
+		if keyringAuth != nil && !AuthsEqualForRefresh(keyringAuth, expected) {
+			return errAccountCredentialsChangedDuringRefresh
+		}
+	}
 	return store.saveLocked(next)
 }
 

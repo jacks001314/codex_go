@@ -62,11 +62,16 @@ func (s *Store) lockCommit() (*authCommitGuard, error) {
 }
 
 // commitLockPath resolves the credential symlink chain so aliases of auth.json
-// share the lock of the file they write (Rust #58251).
+// share the lock of the file they write (Rust #58251). A keyring commit can
+// unlink an intermediate fallback symlink, so an unresolvable chain must not
+// block it (Rust #58343); valid chains keep sharing the resolved target lock.
 func (s *Store) commitLockPath() (string, error) {
 	resolved, err := resolveAuthFile(s.Path())
 	if err != nil {
-		return "", err
+		if s.options.Mode != AuthCredentialsStoreKeyring {
+			return "", err
+		}
+		resolved = s.Path()
 	}
 	return strings.TrimSuffix(resolved, filepath.Ext(resolved)) + ".json.lock", nil
 }
