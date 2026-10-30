@@ -7678,9 +7678,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1062: Go already exposes the managed browser_use.allow_webmcp policy. config/api.go BrowserUseRequirements carries AllowWebmcp (allowWebmcp, nullable), requirements_file.go parses allow_webmcp/allowWebmcp and treats an otherwise empty browser_use table as absent, cloneBrowserUse preserves it, and configRequirements/read serializes it as null when omitted. config/requirements_file_test.go pins false, absent, and null serialization. This is requirements-only; ordinary config.toml does not populate it. No Go change required; verified with go test ./config -run TestParseRequirements -count=1."
    ]
   },
   {
