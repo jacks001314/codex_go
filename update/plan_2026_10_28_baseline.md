@@ -3777,6 +3777,22 @@ Status after this batch: `2263 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2268 complete`, `462 not_applicable`, `322 audit_pending`, `92 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1091)
+
+- #47967 Flex capacity failures terminate the turn with the dedicated `flex_unavailable` code on streamed and HTTP errors without retries.
+- #48135 opt-in instant interrupt: user-input watch, preemptible code-mode exec cells and queued-input delivery gated behind `features.instant_interrupt`.
+- #48141 response preemption: in-flight streams drop connection and continuation, retry backoff is interruptible, and preempted steps emit no assistant output.
+- #48491 restrictive Windows launchers fall back to embedded mode with the `windows_detach_restricted` selection reason.
+- #48544 onboarding exposes a copy shortcut for the sign-in URL with success/failure feedback.
+- #48549 completed-response copy keeps Markdown tables and per-line whitespace, dropping only trailing blank lines.
+- #48611 persistent-mode enablement is a single explicit boolean shared by instruction rendering and effort selection.
+- #48754 `/status` is borderless and wraps long values on narrow terminals.
+- #48814 Mermaid labels keep punctuation and semicolons while invalid forms stay rejected.
+- #48819 context-budget histograms use explicit Rust-matching boundaries.
+- #48982 message-board notifications cannot reopen a final answer; commentary turns still drain queued mail.
+
+Status after this batch: `2279 complete`, `462 not_applicable`, `322 audit_pending`, `81 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

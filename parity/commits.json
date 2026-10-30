@@ -21222,9 +21222,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Flex capacity failures surface as a distinct terminal error (#47967): codexapi/error.go exposes the `flex_unavailable` code, model/responses_stream.go and model/responses_agent.go detect it on streamed and HTTP error objects (including malformed extra fields) and terminate the turn without retries instead of falling back to a generic retry loop.",
+    "Regression coverage: model/responses_stream_test.go TestFlexCapacityFailuresTerminateLikeRust and model/responses_http_classification_test.go TestResponsesHTTPErrorRecognizesFlexUnavailableLikeRust. Verified with `go test ./model -run FlexUnavailable -count=1`."
    ]
   },
   {
@@ -21630,9 +21631,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Opt-in code-mode yielding on new user input (#48135): features/features.go gates `instant_interrupt`, turn/steer_mailbox.go WatchUserInput watches only queued user input (never mailbox mail), turn/tool_dispatcher.go BeginStepPreempt yields a running code-mode exec cell at sampling boundaries, and turn/agent_loop.go wires the preemption ownership so the queued input is delivered while the cell stays alive.",
+    "Regression coverage: turn/instant_interrupt_test.go (yield and deliver, code-mode exec yield, disabled keeps blocking) and turn/steer_mailbox_watch_test.go. Verified with `go test ./turn -run 'InstantInterrupt|SteerMailbox' -count=1`."
    ]
   },
   {
@@ -21654,9 +21656,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Model responses are preempted when new user input arrives (#48141): model/responses_stream.go and model/responses_agent.go expose preemptible sampling runs that drop the in-flight connection and its continuation and make the retry backoff interruptible, model/agent.go exposes the step context, and turn/agent_loop.go signals it from the user-input watch so no assistant output is produced for the preempted step.",
+    "Regression coverage: model/responses_preempt_test.go (before request, mid-stream, retry backoff, drop connection/continuation) and turn/model_preempt_test.go TestAgentLoopModelPreemptionDeliversQueuedInput plus the no-signal-without-instant-interrupt case. Verified with `go test ./model -run Preempt -count=1` and `go test ./turn -run Preempt -count=1`."
    ]
   },
   {
@@ -22050,9 +22053,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Under a Windows launcher that forbids detaching a background process, the TUI falls back to embedded mode (#48491): app/daemon_startup.go reports the `this Windows launcher` exclusion reason with selection telemetry `windows_detach_restricted` instead of attempting daemon discovery/startup, keeping the local session usable.",
+    "Regression coverage: app/daemon_startup_test.go TestInteractiveDaemonAutoStartFallsBackUnderRestrictiveLauncherLikeRust and the telemetry case in app/tui_telemetry_like_rust_test.go. Verified with `go test ./app -run 'Restrictive|DetachedLaunch' -count=1`."
    ]
   },
   {
@@ -22110,9 +22114,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Onboarding login links are easier to copy (#48544): tui/onboarding advertises `press c to copy it:` for the browser sign-in URL, copies through the injected clipboard service and renders a success or `Could not copy link: <reason>` result without leaving the step.",
+    "Regression coverage: tui/onboarding/auth_flow_test.go (hint, successful copy, clipboard failure). Verified with `go test ./tui/onboarding -run 'Auth|Copy' -count=1`."
    ]
   },
   {
@@ -22146,9 +22151,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Copying a completed TUI response preserves Markdown tables and per-line whitespace (#48549): tui/completed_assistant_markdown.go normalizes the assistant Markdown by keeping each line's own trailing spaces, and tui/chatwidget/transcript_state.go copies it verbatim except for trailing blank lines.",
+    "Regression coverage: tui/completed_assistant_markdown_test.go TestNormalizeCompletedAssistantMarkdownMatchesRustLines and tui/chatwidget/completed_response_copy_like_rust_test.go TestCompletedResponseCopyPreservesMarkdownLineEndings and TestCompletedResponseCopyDropsOnlyTrailingBlankLines. Verified with `go test ./tui/chatwidget -run Copy -count=1`."
    ]
   },
   {
@@ -22254,9 +22260,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Persistent-mode enablement is centralized (#48611): features/persistent_mode.go decides enablement from the persistent reasoning effort and helpers, context/persistent_mode.go renders persistent instructions from that explicit boolean instead of re-deriving reasoning-effort state, so instruction rendering and effort selection stay independent.",
+    "Regression coverage: features/persistent_mode_test.go TestPersistentModeEnabledMatchesRust and context/fragments_test.go persistent-mode cases. Verified with `go test ./features -run PersistentMode -count=1`."
    ]
   },
   {
@@ -22386,9 +22393,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "`/status` renders without borders and wraps long values (#48754): tui/state.go drops the card border, keeps a two-column title mark, fits the value column to the terminal, wraps (never truncates) directories and other values, and removes the old 44-column floor so narrow terminals wrap.",
+    "Regression coverage: tui/state_test.go TestStateRenderStatusCardWrapsLongValuesLikeRust plus the borderless status and wide-layout cases. Verified with `go test ./tui -run Status -count=1`."
    ]
   },
   {
@@ -22566,9 +22574,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Mermaid labels preserve punctuation and semicolons (#48814): mermaid/syntax.go keeps quoted and unquoted labels' punctuation, accepts semicolons in flowchart statements, and leaves entity labels on the source fallback when decoding fails, while the previously rejected invalid forms stay rejected.",
+    "Regression coverage: mermaid/mermaid_test.go TestPreservesPunctuationAndSemicolonsLikeRust and the quoted-label/entity/rejection cases. Verified with `go test ./mermaid -run 'Punctuation|Semicolon' -count=1`."
    ]
   },
   {
@@ -22578,9 +22587,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Tool and skill context metrics use explicit histogram buckets (#48819): telemetry/metric_buckets.go defines the explicit boundaries for the context-budget histograms (including zero and the log-family ranges) instead of relying on default buckets, matching Rust's boundary tables.",
+    "Regression coverage: telemetry/metric_buckets_test.go TestContextMetricBoundariesPreserveZeroAndFamilyRanges, TestContextLogBoundariesMatchRust and TestGuardianContextHistogramBoundariesLikeRust. Verified with `go test ./telemetry -run Bucket -count=1`."
    ]
   },
   {
@@ -22674,9 +22684,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Message-board notifications never reopen a final answer (#48982): turn/steer_mailbox.go gates mailbox delivery on the running turn's phase, turn/agent_loop.go stops accepting queued mail once the final answer is committed, and appserver message-board notification delivery follows the same rule while commentary turns still drain queued mail.",
+    "Regression coverage: turn/steer_mailbox_delivery_phase_test.go TestSteerMailboxGatesDeliveryOnPhaseLikeRust, TestAgentLoopFinalAnswerDoesNotReopenForQueuedMailLikeRust and TestAgentLoopCommentaryStillDrainsQueuedMailLikeRust, plus appserver/message_board_notification_delivery_test.go. Verified with `go test ./turn -run 'MailboxDelivery|SteerMailbox' -count=1` and `go test ./appserver -run MessageBoard -count=1`."
    ]
   },
   {
