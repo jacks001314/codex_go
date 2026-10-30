@@ -65,6 +65,33 @@ func TestPrepareResponseInputImagesUploadsWithPersistenceIntentLikeRust(t *testi
 	}
 }
 
+// TestPrepareResponseInputImagesUploadsToolOutputsWithThreadIDLikeRust covers
+// the tool-output half of Rust #47121: prepare_tool_output's ImageOrigin now
+// carries the receiving thread id, so images embedded in a
+// function_call_output reach the store with the same thread id as message
+// images.
+func TestPrepareResponseInputImagesUploadsToolOutputsWithThreadIDLikeRust(t *testing.T) {
+	items := append(attachmentStoreTestItems(), map[string]any{
+		"type":    "function_call_output",
+		"call_id": "call-1",
+		"output": []any{map[string]any{
+			"type":      "input_image",
+			"image_url": "data:image/png;base64," + attachmentStoreTestPNG,
+			"detail":    "high",
+		}},
+	})
+	store := &recordingModelImageStore{}
+	prepareResponseInputImagesWithStore(items, store, eventmap.ImagePrepOrigin{ThreadID: "thread-tool"})
+	if len(store.requests) != 2 {
+		t.Fatalf("uploads = %d, want 2 (message and tool output)", len(store.requests))
+	}
+	for _, request := range store.requests {
+		if got := request.ThreadID; got != "thread-tool" {
+			t.Fatalf("upload thread id = %q, want thread-tool", got)
+		}
+	}
+}
+
 // TestPrepareResponseInputImagesCarriesEphemeralIntentLikeRust covers the
 // ephemeral half of Rust #51517: an ephemeral thread's uploads are marked so the
 // store can skip durable persistence.

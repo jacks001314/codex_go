@@ -18191,9 +18191,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "attachmentstore/attachment_store.go already models UploadRequest.ThreadID and renders it as thread_id in the redacted Debug output; model/responses_agent.go carries AgentRequest.ThreadID through responsesImagePrepOrigin into PrepareImagePrepImageWithStoreResult, so both message and tool-output images upload with the receiving thread id. Tests: model/image_prep_attachment_store_test.go adds a function_call_output case alongside the message/ephemeral cases; appserver/attachment_store_session_like_rust_test.go asserts a real turn uploads through the thread manager store with the turn thread id"
    ]
   },
   {
