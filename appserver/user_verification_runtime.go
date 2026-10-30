@@ -3,6 +3,7 @@ package appserver
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Runtime handlers for the experimental user-verification RPCs.
@@ -72,6 +73,63 @@ func (UnsupportedUserVerificationProvider) Verify(UserVerificationVerifyParams) 
 // platform provider performs them.
 type userVerificationService struct {
 	provider UserVerificationProvider
+	// acquire and release own Rust #43568's one-permit native worker slot. A nil
+	// pair leaves the service unguarded, which only direct test construction does.
+	acquire func() bool
+	release func()
+	// timeout overrides userVerificationWorkerTimeout in tests.
+	timeout time.Duration
+}
+
+// userVerificationWorkerTimeout bounds one native provider operation, matching
+// Rust #43568's 120-second worker timeout.
+const userVerificationWorkerTimeout = 120 * time.Second
+
+// userVerificationWorkResult carries one worker's provider result back to the
+// request goroutine.
+type userVerificationWorkResult struct {
+	value any
+	err   error
+}
+
+// runNativeWork runs one provider operation on its own goroutine. Rust keeps a
+// single native worker per service, rejects a concurrent operation with a
+// provider error, and times the work out after 120 seconds; the worker slot
+// stays taken until the provider actually returns, including after a timeout.
+func (s *userVerificationService) runNativeWork(run func() (any, error)) (any, error) {
+	if s != nil && s.acquire != nil && !s.acquire() {
+		return nil, newUserVerificationError(
+			UserVerificationErrorDetails{Type: "failed", Reason: string(UserVerificationFailureProviderError)},
+			"Another user verification operation is still running.",
+			false,
+		)
+	}
+	release := func() {}
+	if s != nil && s.release != nil {
+		release = s.release
+	}
+	timeout := userVerificationWorkerTimeout
+	if s != nil && s.timeout > 0 {
+		timeout = s.timeout
+	}
+	results := make(chan userVerificationWorkResult, 1)
+	go func() {
+		defer release()
+		value, err := run()
+		results <- userVerificationWorkResult{value: value, err: err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case result := <-results:
+		return result.value, result.err
+	case <-timer.C:
+		return nil, newUserVerificationError(
+			UserVerificationErrorDetails{Type: "failed", Reason: string(UserVerificationFailureTimeout)},
+			"User verification timed out.",
+			false,
+		)
+	}
 }
 
 // userVerificationPeerRestricted reports whether the transport is a network
@@ -104,7 +162,9 @@ func (s *userVerificationService) handle(request *Request, transport string) (an
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
-		return s.platformProvider().Status()
+		return s.runNativeWork(func() (any, error) {
+			return s.platformProvider().Status()
+		})
 	case MethodUserVerificationEnroll:
 		var params UserVerificationEnrollParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -113,7 +173,9 @@ func (s *userVerificationService) handle(request *Request, transport string) (an
 		if userVerificationPeerRestricted(transport) {
 			return nil, userVerificationUnavailableError()
 		}
-		return s.platformProvider().EnsureKey()
+		return s.runNativeWork(func() (any, error) {
+			return s.platformProvider().EnsureKey()
+		})
 	case MethodUserVerificationDelete:
 		var params UserVerificationDeleteParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -122,7 +184,9 @@ func (s *userVerificationService) handle(request *Request, transport string) (an
 		if userVerificationPeerRestricted(transport) {
 			return nil, userVerificationUnavailableError()
 		}
-		return s.platformProvider().Delete()
+		return s.runNativeWork(func() (any, error) {
+			return s.platformProvider().Delete()
+		})
 	case MethodUserVerificationVerify:
 		var params UserVerificationVerifyParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -136,7 +200,9 @@ func (s *userVerificationService) handle(request *Request, transport string) (an
 		if err := validateUserVerificationRequest(&params); err != nil {
 			return nil, err
 		}
-		return s.platformProvider().Verify(params)
+		return s.runNativeWork(func() (any, error) {
+			return s.platformProvider().Verify(params)
+		})
 	case MethodUserVerificationCancel:
 		var params UserVerificationCancelParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -166,5 +232,32 @@ func (r *RuntimeRouter) handleUserVerificationRuntime(request *Request) (any, er
 		return nil, fmt.Errorf("%w: user verification request is nil", ErrUnknownMethod)
 	}
 	service := &userVerificationService{provider: r.services.UserVerificationProvider}
+	service.acquire = r.acquireUserVerificationWork
+	service.release = r.releaseUserVerificationWork
 	return service.handle(request, r.requestTransport)
+}
+
+// acquireUserVerificationWork takes Rust #43568's single native worker slot,
+// reporting false when another operation still owns it.
+func (r *RuntimeRouter) acquireUserVerificationWork() bool {
+	if r == nil {
+		return true
+	}
+	r.userVerificationWorkMu.Lock()
+	defer r.userVerificationWorkMu.Unlock()
+	if r.userVerificationWork {
+		return false
+	}
+	r.userVerificationWork = true
+	return true
+}
+
+// releaseUserVerificationWork returns the native worker slot.
+func (r *RuntimeRouter) releaseUserVerificationWork() {
+	if r == nil {
+		return
+	}
+	r.userVerificationWorkMu.Lock()
+	r.userVerificationWork = false
+	r.userVerificationWorkMu.Unlock()
 }

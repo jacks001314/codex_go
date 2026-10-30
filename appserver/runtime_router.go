@@ -314,12 +314,17 @@ type RuntimeRouter struct {
 	idleLifecycle threadIdleLifecycle
 	// threadUnloadDelays holds runtime-only per-thread retention overrides
 	// (Rust #55270). They are not persisted, so a cold resume uses the default.
-	threadUnloadDelayMu   sync.Mutex
-	threadUnloadDelays    map[string]time.Duration
-	servicesMu            sync.Mutex
-	mu                    sync.RWMutex
-	configWarningsMu      sync.Mutex
-	logDBWriteWarningOnce sync.Once
+	threadUnloadDelayMu sync.Mutex
+	threadUnloadDelays  map[string]time.Duration
+	servicesMu          sync.Mutex
+	// userVerificationWorkMu guards userVerificationWork, Rust #43568's single
+	// native worker slot. The worker goroutine releases it, so an operation that
+	// timed out keeps the slot busy until the provider actually returns.
+	userVerificationWorkMu sync.Mutex
+	userVerificationWork   bool
+	mu                     sync.RWMutex
+	configWarningsMu       sync.Mutex
+	logDBWriteWarningOnce  sync.Once
 	// itemStartedTimesMu guards itemStartedTimes, the start times published on
 	// ItemStarted notifications so the matching ItemCompleted can report the
 	// same startedAtMs (Rust #57172 turn timing state).

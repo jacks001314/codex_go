@@ -9126,9 +9126,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 9/15; needs review: BlockingProvider, GuardedResponse, into_parts, send_response_as_checked, start_verify"
+    "userVerificationService runs native work through a single router-owned slot with a 120s timeout, rejecting concurrent operations as failed/providerError; appserver/user_verification_worker_like_rust_test.go covers concurrency, timeout and slot release"
    ]
   },
   {
