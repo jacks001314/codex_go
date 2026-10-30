@@ -25563,9 +25563,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "The per-connection capability is a bounded slot channel before the file open: in-flight opens consume capacity, a full table rejects with the Rust message before touching the filesystem, and failed or duplicate opens return their reservation (`execserver/server.go`).",
+    "Go keeps Rust #50162's retained-descriptor lifetime: `fileHandleEntry` counts in-flight reads/writes, `fs/close` frees capacity immediately but defers the descriptor close until the last pin is released, and a stale read error can only retire its own entry.",
+    "Tests: `TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust`, `TestFilesystemConcurrentDuplicateHandleIDsLikeRust` (now also verifies the winning handle still reads its content), and `TestFilesystemCloseReleasesCapacityWhileReadUsesFileLikeRust`; `go test ./execserver`, `-race` on the filesystem tests and Linux/Darwin vet pass."
    ]
   },
   {

@@ -3857,3 +3857,11 @@ Status after this batch: `2307 complete`, `462 not_applicable`, `322 audit_pendi
 - Descriptions refresh in `appserver.multiAgentOverrideRefresher` for every step; the bundled texts and field descriptions were aligned verbatim with Rust `spec.rs`.
 
 Status after this batch: `2308 complete`, `462 not_applicable`, `322 audit_pending`, `52 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Exec-server file-open bound certification (Round 1098)
+
+- #50162 exec-server file handles keep the Rust capacity contract: a per-connection slot is reserved before the open so in-flight opens count, failed and duplicate opens return their reservation, and `fs/close` frees capacity immediately.
+- Go now also matches the retained-descriptor lifetime: in-flight reads/writes pin the entry, a close retires it without closing the descriptor, and the last pin closes it; a stale read error cannot retire a newer handle.
+- Tests: `TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust`, the concurrent-duplicate test (plus content read-back) and `TestFilesystemCloseReleasesCapacityWhileReadUsesFileLikeRust`; full `go test ./execserver`, filesystem tests under `-race`, and Linux/Darwin vet pass.
+
+Status after this batch: `2309 complete`, `462 not_applicable`, `322 audit_pending`, `51 regression_pending`, `5 partial`, `6 blocked_precondition`.

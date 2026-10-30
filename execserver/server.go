@@ -346,6 +346,11 @@ func (c *FileSystemSandboxContext) SetAllowedSymlinkedCodexHome(path string) {
 
 type fileHandleEntry struct {
 	file *os.File
+	// refs counts in-flight reads and writes that still hold the descriptor.
+	// Closing a handle releases its slot immediately, but the descriptor stays
+	// open until the last operation drops its pin (Rust #50162 Arc<File>).
+	refs    int
+	retired bool
 }
 
 type serverSessionEntry struct {
@@ -1269,7 +1274,10 @@ func (s *Server) shutdown() {
 	}
 	handles := make([]*os.File, 0, len(s.handles))
 	for _, handle := range s.handles {
-		handles = append(handles, handle.file)
+		handle.retired = true
+		if handle.refs == 0 {
+			handles = append(handles, handle.file)
+		}
 	}
 	s.processes = map[string]*processState{}
 	s.handles = map[string]*fileHandleEntry{}
@@ -2898,6 +2906,85 @@ func (s *Server) releaseFileSlot() {
 	}
 }
 
+// acquireFileHandle pins a handle for one read or write. A concurrent close
+// retires the entry but leaves the descriptor open until every pin is
+// released, matching Rust #50162's Arc<File> lifetime.
+func (s *Server) acquireFileHandle(handleID string) (*fileHandleEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.handles[handleID]
+	if entry == nil {
+		return nil, requestError(-32004, fmt.Sprintf("unknown file handle `%s`", handleID))
+	}
+	entry.refs++
+	return entry, nil
+}
+
+// releaseFileHandle drops one pin and closes the descriptor once a retired
+// handle has no operation left using it.
+func (s *Server) releaseFileHandle(entry *fileHandleEntry) {
+	var closeFile *os.File
+	s.mu.Lock()
+	entry.refs--
+	if entry.retired && entry.refs == 0 {
+		closeFile = entry.file
+	}
+	s.mu.Unlock()
+	if closeFile != nil {
+		_ = closeFile.Close()
+	}
+}
+
+// retireFileHandleLocked removes one entry and reports the descriptor to close
+// when no operation still holds it. The caller must hold s.mu.
+func (s *Server) retireFileHandleLocked(handleID string, entry *fileHandleEntry) *os.File {
+	delete(s.handles, handleID)
+	entry.retired = true
+	if entry.refs == 0 {
+		return entry.file
+	}
+	return nil
+}
+
+// retireFileHandle removes a handle and frees its capacity immediately.
+func (s *Server) retireFileHandle(handleID string) bool {
+	var closeFile *os.File
+	s.mu.Lock()
+	entry := s.handles[handleID]
+	if entry != nil {
+		closeFile = s.retireFileHandleLocked(handleID, entry)
+	}
+	s.mu.Unlock()
+	if entry == nil {
+		return false
+	}
+	s.releaseFileSlot()
+	if closeFile != nil {
+		_ = closeFile.Close()
+	}
+	return true
+}
+
+// retireFileHandleIfCurrent retires entry only while it is still the handle's
+// current entry, so a stale read error cannot close a newer handle.
+func (s *Server) retireFileHandleIfCurrent(handleID string, entry *fileHandleEntry) bool {
+	var closeFile *os.File
+	s.mu.Lock()
+	removed := entry != nil && s.handles[handleID] == entry
+	if removed {
+		closeFile = s.retireFileHandleLocked(handleID, entry)
+	}
+	s.mu.Unlock()
+	if !removed {
+		return false
+	}
+	s.releaseFileSlot()
+	if closeFile != nil {
+		_ = closeFile.Close()
+	}
+	return true
+}
+
 func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, error) {
 	if params == nil {
 		return nil, errors.New("fs/readBlock params are required")
@@ -2911,19 +2998,18 @@ func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, err
 	if params.Offset > uint64(^uint64(0)>>1) {
 		return nil, requestError(-32600, "file read offset overflowed")
 	}
-	s.mu.Lock()
-	entry := s.handles[params.HandleID]
-	s.mu.Unlock()
-	if entry == nil {
-		return nil, requestError(-32004, fmt.Sprintf("unknown file handle `%s`", params.HandleID))
+	entry, err := s.acquireFileHandle(params.HandleID)
+	if err != nil {
+		return nil, err
 	}
+	defer s.releaseFileHandle(entry)
 	file := entry.file
 	buffer := make([]byte, params.Len)
 	bytesRead := 0
 	for bytesRead < params.Len {
 		readOffset := params.Offset + uint64(bytesRead)
 		if readOffset > uint64(^uint64(0)>>1) {
-			s.closeHandleAfterReadError(params.HandleID, file)
+			s.closeHandleAfterReadError(params.HandleID, entry)
 			return nil, requestError(-32600, "file read offset overflowed")
 		}
 		n, err := file.ReadAt(buffer[bytesRead:], int64(readOffset))
@@ -2932,7 +3018,7 @@ func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, err
 			break
 		}
 		if err != nil {
-			s.closeHandleAfterReadError(params.HandleID, file)
+			s.closeHandleAfterReadError(params.HandleID, entry)
 			return nil, err
 		}
 	}
@@ -2964,12 +3050,11 @@ func (s *Server) writeBlock(params *FSWriteBlockParams) (*FSWriteBlockResponse, 
 	if end < params.Offset || end > uint64(math.MaxInt64) {
 		return nil, requestError(-32600, "file write range exceeds the signed 64-bit file offset limit")
 	}
-	s.mu.Lock()
-	entry := s.handles[params.HandleID]
-	s.mu.Unlock()
-	if entry == nil {
-		return nil, requestError(-32004, fmt.Sprintf("unknown file handle `%s`", params.HandleID))
+	entry, err := s.acquireFileHandle(params.HandleID)
+	if err != nil {
+		return nil, err
 	}
+	defer s.releaseFileHandle(entry)
 	file := entry.file
 	position := 0
 	for position < len(chunk) {
@@ -2994,31 +3079,12 @@ func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
 	if err := validateFileHandleID(params.HandleID); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	entry := s.handles[params.HandleID]
-	delete(s.handles, params.HandleID)
-	s.mu.Unlock()
-	if entry != nil {
-		s.releaseFileSlot()
-		if err := entry.file.Close(); err != nil {
-			return nil, err
-		}
-	}
+	s.retireFileHandle(params.HandleID)
 	return &FSCloseResponse{}, nil
 }
 
-func (s *Server) closeHandleAfterReadError(handleID string, file *os.File) {
-	s.mu.Lock()
-	removed := false
-	if entry := s.handles[handleID]; entry != nil && entry.file == file {
-		delete(s.handles, handleID)
-		removed = true
-	}
-	s.mu.Unlock()
-	if removed {
-		s.releaseFileSlot()
-	}
-	_ = file.Close()
+func (s *Server) closeHandleAfterReadError(handleID string, entry *fileHandleEntry) {
+	s.retireFileHandleIfCurrent(handleID, entry)
 }
 
 func validateFileHandleID(handleID string) error {

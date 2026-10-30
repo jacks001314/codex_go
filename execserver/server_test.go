@@ -1452,6 +1452,45 @@ func TestFilesystemConcurrentDuplicateHandleIDsLikeRust(t *testing.T) {
 	if len(server.fileSlots) != 1 {
 		t.Fatalf("slots in use = %d, want 1", len(server.fileSlots))
 	}
+	response, err := server.readBlock(&FSReadBlockParams{HandleID: "race", Len: 6})
+	if err != nil || response.Chunk != base64.StdEncoding.EncodeToString([]byte("abcdef")) || response.EOF {
+		t.Fatalf("readBlock(race) = %#v, %v", response, err)
+	}
+}
+
+// Mirrors Rust #50162's retained-descriptor coverage: closing a handle frees
+// its capacity immediately, while an operation that already pinned the file
+// finishes on the still-open descriptor and only then releases it.
+func TestFilesystemCloseReleasesCapacityWhileReadUsesFileLikeRust(t *testing.T) {
+	server := NewServer()
+	path := filepath.Join(t.TempDir(), "value.txt")
+	if err := os.WriteFile(path, []byte("abcdef"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := server.openFile(&FSOpenParams{HandleID: "live", Path: path}); err != nil {
+		t.Fatalf("openFile(live) error = %v", err)
+	}
+	entry, err := server.acquireFileHandle("live")
+	if err != nil {
+		t.Fatalf("acquireFileHandle(live) error = %v", err)
+	}
+	if _, err := server.closeFile(&FSCloseParams{HandleID: "live"}); err != nil {
+		t.Fatalf("closeFile(live) error = %v", err)
+	}
+	if len(server.fileSlots) != 0 {
+		t.Fatalf("slots in use after close = %d, want 0", len(server.fileSlots))
+	}
+	if _, err := server.openFile(&FSOpenParams{HandleID: "next", Path: path}); err != nil {
+		t.Fatalf("openFile(next) error = %v", err)
+	}
+	buffer := make([]byte, 3)
+	if count, readErr := entry.file.ReadAt(buffer, 1); readErr != nil || count != 3 || string(buffer) != "bcd" {
+		t.Fatalf("retained read = %q, %v", buffer, readErr)
+	}
+	server.releaseFileHandle(entry)
+	if _, readErr := entry.file.ReadAt(make([]byte, 1), 0); readErr == nil {
+		t.Fatal("descriptor still open after the last pin was released")
+	}
 }
 
 func TestFilesystemSandboxContextRunsThroughHelperLikeRust(t *testing.T) {
