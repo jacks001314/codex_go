@@ -306,6 +306,9 @@ func materializePermissionGlobForConvention(pattern string, cwd string, conventi
 	if convention == "" {
 		return materializePermissionGlob(trimmed, cwd)
 	}
+	if materialized, ok := materializeHomeRelativePermissionGlob(trimmed, convention); ok {
+		return materialized
+	}
 	if convention == utils.ConventionWindows {
 		trimmed = strings.ReplaceAll(trimmed, `\`, "/")
 		if !windowsPathAbsoluteForConvention(trimmed) && strings.TrimSpace(cwd) != "" {
@@ -317,6 +320,45 @@ func materializePermissionGlobForConvention(pattern string, cwd string, conventi
 		trimmed = pathpkg.Join(cwd, trimmed)
 	}
 	return pathpkg.Clean(trimmed)
+}
+
+// materializeHomeRelativePermissionGlob resolves a home-relative glob against
+// the native home directory instead of the working directory, mirroring Rust
+// #41909's executor-context materialization. It reports whether pattern was
+// home-relative and could be resolved.
+func materializeHomeRelativePermissionGlob(pattern string, convention utils.PathConvention) (string, bool) {
+	suffix, ok := homeRelativePermissionGlobSuffix(pattern, convention)
+	if !ok {
+		return "", false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "", false
+	}
+	if convention == utils.ConventionWindows {
+		joined := pathpkg.Join(strings.ReplaceAll(home, `\`, "/"), suffix)
+		return strings.ReplaceAll(pathpkg.Clean(joined), "/", `\`), true
+	}
+	return pathpkg.Clean(pathpkg.Join(home, suffix)), true
+}
+
+func homeRelativePermissionGlobSuffix(pattern string, convention utils.PathConvention) (string, bool) {
+	var suffix string
+	switch {
+	case pattern == "~":
+		suffix = ""
+	case strings.HasPrefix(pattern, "~/"):
+		suffix = pattern[2:]
+	case convention == utils.ConventionWindows && strings.HasPrefix(pattern, `~\`):
+		suffix = pattern[2:]
+	default:
+		return "", false
+	}
+	separators := "/"
+	if convention == utils.ConventionWindows {
+		separators = `/\`
+	}
+	return strings.TrimLeft(suffix, separators), true
 }
 
 func slashPathForConvention(value string, convention utils.PathConvention) string {
@@ -486,6 +528,9 @@ func uriFromPolicyPath(nativePath string) (*utils.PathURI, error) {
 }
 
 func materializePermissionGlob(pattern, cwd string) string {
+	if materialized, ok := materializeHomeRelativePermissionGlob(strings.TrimSpace(pattern), utils.NativePathConvention()); ok {
+		return materialized
+	}
 	if filepath.IsAbs(pattern) || strings.TrimSpace(cwd) == "" {
 		return filepath.Clean(pattern)
 	}

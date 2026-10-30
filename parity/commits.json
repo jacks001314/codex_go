@@ -4966,9 +4966,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/7; needs review: file_system_root, from_context, intersect_permission_profiles_with_context, is_read_denied_uri, materialize_additional_permissions_with_context"
+    "Executor-context permission transforms were already ported through Rust #41928: sandbox/policy_transforms.go normalizes, materializes, and intersects RequestPermissionProfile with the executor path convention, retains constraining deny entries, fails closed on unresolved slash_tmp/tmpdir, and appserver/server_request_broker.go wires it into permission approvals. This round closed the remaining #41909 gap: home-relative glob entries (~/secrets/**, ~, Windows ~\\...) now materialize against the user home before cwd joining, so a home grant keeps its home-relative deny. Added TestIntersectPermissionProfilesExpandsHomeRelativeDenyGlobLikeRust, TestMaterializePermissionGlobExpandsHomeLikeRust, and TestMaterializePermissionGlobForConventionExpandsHomeLikeRust; go test ./sandbox/... and go build ./... pass."
    ]
   },
   {

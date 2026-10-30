@@ -1,9 +1,13 @@
 package sandbox
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	"codex_go/utils"
 )
 
 func TestIntersectPermissionProfilesRejectsSymbolicSlashTmpGrantsOnWindowsLikeRust(t *testing.T) {
@@ -107,5 +111,70 @@ func TestPathsMayOverlapMatchesAncestorDescendantAndDisjointLikeRust(t *testing.
 	}
 	if pathsMayOverlap(filepath.Join(base, "a"), filepath.Join(base, "b")) {
 		t.Fatal("pathsMayOverlap(disjoint) = true, want false")
+	}
+}
+
+// Mirrors Rust #41909: home-relative deny globs resolve against the executor's
+// home directory, so intersecting a home grant keeps the deny constraint.
+func TestIntersectPermissionProfilesExpandsHomeRelativeDenyGlobLikeRust(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		t.Skip("no home directory available")
+	}
+	cwd := t.TempDir()
+	requested := RequestPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{Entries: []FileSystemSandboxEntry{
+		{Path: FileSystemPath{Type: "path", Path: home}, Access: FileSystemAccessWrite},
+		{Path: FileSystemPath{Type: "glob_pattern", Pattern: "~/secrets/**"}, Access: FileSystemAccessDeny},
+	}}}
+	granted := RequestPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{Write: []string{home}}}
+
+	got := IntersectPermissionProfiles(requested, granted, cwd)
+	if got.FileSystem == nil {
+		t.Fatal("intersection dropped the accepted grant")
+	}
+	want := cleanRunPath(filepath.Join(home, "secrets", "**"))
+	for _, entry := range got.FileSystem.Entries {
+		if entry.Access != FileSystemAccessDeny {
+			continue
+		}
+		if entry.Path.Type != "glob_pattern" || cleanRunPath(entry.Path.Pattern) != want {
+			t.Fatalf("retained deny = %#v, want pattern %q", entry, want)
+		}
+		return
+	}
+	t.Fatalf("home-relative deny glob was dropped: %#v", got.FileSystem.Entries)
+}
+
+func TestMaterializePermissionGlobExpandsHomeLikeRust(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		t.Skip("no home directory available")
+	}
+	cwd := t.TempDir()
+	if got, want := materializePermissionGlob("~/keys/*.pem", cwd), cleanRunPath(filepath.Join(home, "keys", "*.pem")); got != want {
+		t.Fatalf("materializePermissionGlob(~/keys/*.pem) = %q, want %q", got, want)
+	}
+	if got, want := materializePermissionGlob("~", cwd), cleanRunPath(home); got != want {
+		t.Fatalf("materializePermissionGlob(~) = %q, want %q", got, want)
+	}
+	if got, want := materializePermissionGlob("~user/keys", cwd), cleanRunPath(filepath.Join(cwd, "~user", "keys")); got != want {
+		t.Fatalf("materializePermissionGlob(~user/keys) = %q, want %q", got, want)
+	}
+}
+
+func TestMaterializePermissionGlobForConventionExpandsHomeLikeRust(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		t.Skip("no home directory available")
+	}
+	if runtime.GOOS == "windows" {
+		want := cleanRunPath(filepath.Join(home, "keys", "*.pem"))
+		if got := materializePermissionGlobForConvention(`~\keys\*.pem`, `C:\work`, utils.ConventionWindows); got != want {
+			t.Fatalf("materializePermissionGlobForConvention(Windows home) = %q, want %q", got, want)
+		}
+	}
+	// Rust only treats ~\ as home-relative under the Windows convention.
+	if got := materializePermissionGlobForConvention(`~\keys`, "/work", utils.ConventionPosix); got != "/work/~\\keys" {
+		t.Fatalf("materializePermissionGlobForConvention(POSIX, ~\\keys) = %q", got)
 	}
 }
