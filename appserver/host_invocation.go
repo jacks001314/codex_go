@@ -2,13 +2,16 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"codex_go/agent"
 	"codex_go/config"
-	"codex_go/mcp"
+	"codex_go/execpolicy"
+	"codex_go/features"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -58,32 +61,29 @@ func (r *RuntimeRouter) ToolInvocation(threadID string, turnID string, callID st
 // CreateChild creates an idle V2 child here from a live invocation, using the
 // host-reserved thread ID. Compatible children share the parent's exec policy
 // and live bindings. Ending the invocation aborts pending startup
-// (Rust CodexThread::create_child).
+// (Rust CodexThread::create_child). Reserved startup always happens on the
+// invoking thread's manager, so there is no prepared-start entry point
+// (Rust #58390 removed ThreadManager::create_prepared_child).
 func (r *RuntimeRouter) CreateChild(ctx context.Context, threadID string, invocation *agent.ToolInvocationContext, request agent.ThreadCreateRequest, reservation agent.HostThreadSpawnReservation) (*agent.SpawnAgentResult, error) {
-	prepared, err := r.prepareChild(ctx, threadID, invocation, request, false)
+	created, err := r.prepareChildContext(ctx, threadID, invocation)
 	if err != nil {
 		return nil, err
 	}
-	return r.startPreparedChild(ctx, prepared, reservation, invocation)
+	return r.createReservedChild(ctx, threadID, created, request, reservation, invocation)
 }
 
-// PrepareChild captures inputs from a live invocation so a host can start the
-// child later, even after the parent shuts down. Detached preparation rejects
-// managed application network, auth, cloud config, EMA-authenticated MCP and
-// unresolved environment bindings that Go cannot transfer
+// PrepareChild captures the parent inputs from a live invocation so a host can
+// start or fork a child with its own destination services. Hosts choose the
+// child's name, role, and history and apply the requested child settings
 // (Rust CodexThread::prepare_child).
-func (r *RuntimeRouter) PrepareChild(ctx context.Context, threadID string, invocation *agent.ToolInvocationContext, request agent.ThreadCreateRequest) (*agent.PreparedThreadSpawn, error) {
-	return r.prepareChild(ctx, threadID, invocation, request, true)
+func (r *RuntimeRouter) PrepareChild(ctx context.Context, threadID string, invocation *agent.ToolInvocationContext) (*agent.PreparedChildContext, error) {
+	return r.prepareChildContext(ctx, threadID, invocation)
 }
 
-// StartPreparedChild starts a prepared child on this router using the
-// host-reserved thread ID. On error any provisional child is cleaned up; already
-// durable history may remain (Rust ThreadManager::create_prepared_child).
-func (r *RuntimeRouter) StartPreparedChild(ctx context.Context, prepared *agent.PreparedThreadSpawn, reservation agent.HostThreadSpawnReservation) (*agent.SpawnAgentResult, error) {
-	return r.startPreparedChild(ctx, prepared, reservation, nil)
-}
-
-func (r *RuntimeRouter) prepareChild(ctx context.Context, threadID string, invocation *agent.ToolInvocationContext, request agent.ThreadCreateRequest, detached bool) (*agent.PreparedThreadSpawn, error) {
+// prepareChildContext captures the parent inputs a host needs before choosing a
+// child request, keeping only the invocation-lifetime checks of Rust's
+// with_live_invocation.
+func (r *RuntimeRouter) prepareChildContext(ctx context.Context, threadID string, invocation *agent.ToolInvocationContext) (*agent.PreparedChildContext, error) {
 	if r == nil {
 		return nil, errors.New("agent runtime is unavailable")
 	}
@@ -111,28 +111,124 @@ func (r *RuntimeRouter) prepareChild(ctx context.Context, threadID string, invoc
 	if err != nil {
 		return nil, fmt.Errorf("cannot prepare child: %w", err)
 	}
+	cwd := firstNonEmpty(strings.TrimSpace(params.CWD), r.childPreparationCWD(threadID))
+	instructions := ""
+	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
+		instructions = record.Metadata.Instructions
+	}
+	return &agent.PreparedChildContext{
+		Originator:                   strings.TrimSpace(params.Originator),
+		UserInstructions:             instructions,
+		CWD:                          cwd,
+		Environments:                 cloneMapSlice(params.Environments),
+		SelectedCapabilityRoots:      preparedChildCapabilityRoots(r.readySelectedCapabilityRootsForStep(threadID, params)),
+		ResolvedPermissionProfile:    r.preparedChildPermissionProfile(cfg, cwd, params),
+		ApprovalPolicy:               string(turnApprovalPolicyForTurn(cfg, params)),
+		ApprovalsReviewer:            stringPtrValue(params.ApprovalsReviewer),
+		ExecPolicy:                   r.managedCommandPolicyForThread(threadID),
+		ExecPolicySourceRequirements: r.managedExecPolicyRequirements(),
+		DynamicTools:                 r.inheritedChildDynamicTools(threadID, cfg),
+		DisabledPluginIDs:            r.threadDisabledPluginIDs(threadID),
+	}, nil
+}
+
+// preparedChildCapabilityRoots projects the step's roots into the host-facing
+// prepared context.
+func preparedChildCapabilityRoots(roots []SelectedCapabilityRoot) []agent.PreparedChildCapabilityRoot {
+	if len(roots) == 0 {
+		return nil
+	}
+	out := make([]agent.PreparedChildCapabilityRoot, 0, len(roots))
+	for _, root := range roots {
+		out = append(out, agent.PreparedChildCapabilityRoot{
+			ID:            root.ID,
+			EnvironmentID: root.Location.EnvironmentID,
+			Path:          root.Location.Path,
+		})
+	}
+	return out
+}
+
+func (r *RuntimeRouter) preparedChildPermissionProfile(cfg *config.Config, cwd string, params *turn.TurnStartParams) *sandbox.PermissionProfile {
+	resolution, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil || resolution == nil || resolution.Profile == nil {
+		return nil
+	}
+	profile := *resolution.Profile
+	return &profile
+}
+
+// managedExecPolicyRequirements returns the managed `[rules]` requirement used
+// to load the session policy (Rust ExecPolicyManager source requirements).
+// Go reloads it from the host configuration, so it survives per-thread MCP
+// configuration refreshes that no longer carry the requirement.
+func (r *RuntimeRouter) managedExecPolicyRequirements() *execpolicy.RequirementsPolicy {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	read := r.services.Config.Requirements()
+	if read == nil || read.Requirements == nil {
+		return nil
+	}
+	return read.Requirements.Rules
+}
+
+// inheritedChildDynamicTools copies the live parent declarations a fresh V2
+// child may inherit (Rust inherited_dynamic_tools).
+func (r *RuntimeRouter) inheritedChildDynamicTools(threadID string, cfg *config.Config) []json.RawMessage {
+	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "multi_agent_v2_dynamic_tools") {
+		return nil
+	}
+	agentsConfig, _ := r.configAgentsConfig(cfg)
+	if r.runtimeMultiAgentVersionForTurn(threadID, cfg, agentsConfig) != agent.VersionV2 {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	return cloneRawMessages(record.Metadata.DynamicTools)
+}
+
+func (r *RuntimeRouter) createReservedChild(ctx context.Context, threadID string, created *agent.PreparedChildContext, request agent.ThreadCreateRequest, reservation agent.HostThreadSpawnReservation, invocation *agent.ToolInvocationContext) (*agent.SpawnAgentResult, error) {
+	if r == nil {
+		return nil, errors.New("agent runtime is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if created == nil {
+		return nil, errors.New("prepared child context is unavailable")
+	}
+	callerThreadID := strings.TrimSpace(threadID)
+	reservedThreadID := session.ThreadID(strings.TrimSpace(reservation.ThreadID))
+	if reservedThreadID == "" {
+		return nil, errors.New("prepared child startup requires a reserved thread ID")
+	}
+	if string(reservedThreadID) == callerThreadID {
+		return nil, errors.New("reservation does not match prepared child")
+	}
+	if r.threads != nil && r.threads.HasLiveThread(reservedThreadID) {
+		return nil, fmt.Errorf("thread %s is already running", reservedThreadID)
+	}
+	if invocation != nil && !invocation.Active() {
+		return nil, fmt.Errorf("spawning tool call finished")
+	}
+	params := r.activeTurnParams(callerThreadID)
+	if params == nil {
+		params = &turn.TurnStartParams{ThreadID: callerThreadID, CWD: created.CWD}
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		return nil, fmt.Errorf("cannot prepare child: %w", err)
+	}
 	agentsConfig, agentsErr := r.configAgentsConfig(cfg)
 	if agentsErr != nil {
 		return nil, agentsErr
 	}
-	version := r.runtimeMultiAgentVersionForTurn(threadID, cfg, agentsConfig)
+	version := r.runtimeMultiAgentVersionForTurn(callerThreadID, cfg, agentsConfig)
 	if version != agent.VersionV2 {
 		return nil, fmt.Errorf("host child creation requires multi-agent v2")
-	}
-	if detached {
-		if err := r.detachedChildRejection(cfg, params); err != nil {
-			return nil, err
-		}
-	}
-	rootID, scopePath := r.runtimeAgentIdentity(threadID)
-	taskName := strings.TrimSpace(request.TaskName)
-	if taskName == "" {
-		taskName = "agent_" + strings.ToLower(safeIdentifier(string(newThreadID())))
-	}
-	request.TaskName = taskName
-	agentPath := runtimeCanonicalAgentPath(scopePath, taskName)
-	if rootID == "" {
-		return nil, errors.New("agent runtime is unavailable")
 	}
 	maxThreads := 0
 	if agentsConfig != nil {
@@ -143,55 +239,17 @@ func (r *RuntimeRouter) prepareChild(ctx context.Context, threadID string, invoc
 			maxThreads = v2Config.MaxConcurrentThreadsPerSession
 		}
 	}
-	model := strings.TrimSpace(params.Model)
-	reasoningEffort := ""
-	if params.Effort != nil {
-		reasoningEffort = strings.TrimSpace(*params.Effort)
-	}
-	return &agent.PreparedThreadSpawn{
-		CallerThreadID:    threadID,
-		AgentPath:         agentPath,
-		Request:           request,
-		Version:           version,
-		Model:             model,
-		ReasoningEffort:   reasoningEffort,
-		CWD:               firstNonEmpty(strings.TrimSpace(params.CWD), r.childPreparationCWD(threadID)),
-		MaxThreads:        maxThreads,
-		Environments:      cloneMapSlice(params.Environments),
-		DisabledPluginIDs: r.threadDisabledPluginIDs(threadID),
-	}, nil
-}
-
-func (r *RuntimeRouter) startPreparedChild(ctx context.Context, prepared *agent.PreparedThreadSpawn, reservation agent.HostThreadSpawnReservation, invocation *agent.ToolInvocationContext) (*agent.SpawnAgentResult, error) {
-	if r == nil {
-		return nil, errors.New("agent runtime is unavailable")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if prepared == nil {
-		return nil, errors.New("prepared child is unavailable")
-	}
-	reservedThreadID := session.ThreadID(strings.TrimSpace(reservation.ThreadID))
-	if reservedThreadID == "" {
-		return nil, errors.New("prepared child startup requires a reserved thread ID")
-	}
-	if string(reservedThreadID) == prepared.CallerThreadID {
-		return nil, errors.New("reservation does not match prepared child")
-	}
-	if r.threads != nil && r.threads.HasLiveThread(reservedThreadID) {
-		return nil, fmt.Errorf("thread %s is already running", reservedThreadID)
-	}
-	if invocation != nil && !invocation.Active() {
-		return nil, fmt.Errorf("spawning tool call finished")
-	}
-	controller := newRuntimeAgentControllerForTurn(r, prepared.CallerThreadID, "", "", "", "", prepared.CWD, prepared.MaxThreads, prepared.Version, prepared.Environments)
+	controller := newRuntimeAgentControllerForTurn(r, callerThreadID, "", "", "", "", created.CWD, maxThreads, version, created.Environments)
 	runtimeController, _ := controller.(*runtimeAgentController)
 	if runtimeController == nil {
 		return nil, errors.New("agent runtime is unavailable")
 	}
-	runtimeController.disabledPluginIDs = append([]string{}, prepared.DisabledPluginIDs...)
-	request := prepared.Request
+	runtimeController.disabledPluginIDs = append([]string{}, created.DisabledPluginIDs...)
+	taskName := strings.TrimSpace(request.TaskName)
+	if taskName == "" {
+		taskName = "agent_" + strings.ToLower(safeIdentifier(string(newThreadID())))
+	}
+	request.TaskName = taskName
 	// Rust's ThreadCreateRequest.fork_mode is None for a fresh child and
 	// FullHistory for a fork. Go's spawn args default a nil ForkTurns to "all",
 	// so a fresh host child must say "none" explicitly.
@@ -211,12 +269,12 @@ func (r *RuntimeRouter) startPreparedChild(ctx context.Context, prepared *agent.
 		ForkContext:     request.ForkContext,
 		ForkTurns:       forkTurns,
 	}
-	if args.Model == nil && prepared.Model != "" {
-		value := prepared.Model
+	if args.Model == nil && strings.TrimSpace(params.Model) != "" {
+		value := strings.TrimSpace(params.Model)
 		args.Model = &value
 	}
-	if args.ReasoningEffort == nil && prepared.ReasoningEffort != "" {
-		value := prepared.ReasoningEffort
+	if args.ReasoningEffort == nil && params.Effort != nil && strings.TrimSpace(*params.Effort) != "" {
+		value := strings.TrimSpace(*params.Effort)
 		args.ReasoningEffort = &value
 	}
 	result, err := runtimeController.SpawnReservedAgent(ctx, args, reservedThreadID)
@@ -228,59 +286,6 @@ func (r *RuntimeRouter) startPreparedChild(ctx context.Context, prepared *agent.
 		return nil, fmt.Errorf("spawning tool call finished")
 	}
 	return result, nil
-}
-
-// detachedChildRejection mirrors Rust prepare_spawn's detached checks: every
-// binding below belongs to the source runtime and Go cannot hand it to a
-// destination manager.
-func (r *RuntimeRouter) detachedChildRejection(cfg *config.Config, params *turn.TurnStartParams) error {
-	if cfg == nil {
-		return nil
-	}
-	if policy := cfg.ApplicationNetworkPolicy; policy != nil && policy.IsManaged() {
-		return errors.New("prepared spawn requires destination binding for host-managed application authority")
-	}
-	if cfg.CloudConfigBinding() != nil {
-		return errors.New("prepared spawn requires destination binding for host-managed application authority")
-	}
-	if configHasEnabledEMAMCPServer(cfg) {
-		return errors.New("prepared spawn requires destination binding for EMA-authenticated MCP servers")
-	}
-	if params != nil && environmentsHavePendingConfiguration(params.Environments) {
-		return errors.New("prepared spawn requires resolved environment configuration")
-	}
-	return nil
-}
-
-func configHasEnabledEMAMCPServer(cfg *config.Config) bool {
-	if cfg == nil || cfg.Values == nil {
-		return false
-	}
-	runtimeConfig := mcp.RuntimeConfigFromValues(cfg.Values, "")
-	// Rust prepare_spawn gates this check on the XAA feature and a configured
-	// enterprise MCP IdP.
-	if runtimeConfig == nil || runtimeConfig.EnterpriseManagedAuth == nil {
-		return false
-	}
-	for _, registration := range runtimeConfig.Servers {
-		if registration.Config.Enabled && registration.Config.Auth == config.MCPServerAuthEMAAuth {
-			return true
-		}
-	}
-	return false
-}
-
-func environmentsHavePendingConfiguration(environments []map[string]any) bool {
-	for _, selection := range environments {
-		state, err := environmentConfigStateFromAnyMap(selection)
-		if err != nil {
-			continue
-		}
-		if state.Kind == EnvironmentConfigPending {
-			return true
-		}
-	}
-	return false
 }
 
 func (r *RuntimeRouter) configAgentsConfig(cfg *config.Config) (*config.AgentsConfig, error) {

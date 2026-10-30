@@ -1,13 +1,13 @@
 {
  "schemaVersion": 1,
  "frozenAt": "2026-10-31",
- "plan": "update/plan_2026_10_31_round1018.md",
+ "plan": "update/plan_2026_10_31_round1019.md",
  "verified": {
-  "rustCommit": "4c8f6971cb12b6ce859c0551d0172fd1ad53efe3",
+  "rustCommit": "cbe16d525c2d7362fc3d4726143288e932905daa",
   "parityManifest": "parity.json"
  },
  "target": {
-  "rustCommit": "4c8f6971cb12b6ce859c0551d0172fd1ad53efe3",
+  "rustCommit": "cbe16d525c2d7362fc3d4726143288e932905daa",
   "rustBranch": "main",
   "goStartCommit": "5e25b91daebea89b54db643b2d70ee4c930f9cd7"
  },

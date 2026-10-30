@@ -2,13 +2,18 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/agent"
 	"codex_go/config"
-	"codex_go/network"
+	"codex_go/execpolicy"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -57,85 +62,19 @@ func TestHostToolInvocationRegistriesArePerThreadLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust prepare_spawn: detached preparation captures the caller's
-// settings but rejects bindings the destination manager cannot transfer.
-func TestPrepareChildRejectsDetachedBindingsLikeRust(t *testing.T) {
-	router := NewRuntimeRouter(RuntimeServices{})
-	policyController := network.NewNetworkPolicyController()
-	managedPolicy := policyController.Policy()
-	emaValues := map[string]any{
-		"mcp_enterprise_managed_auth": map[string]any{
-			"idp": map[string]any{"issuer": "https://idp.example", "client_id": "idp-client"},
-		},
-		"mcp_servers": map[string]any{
-			"enterprise": map[string]any{
-				"url":     "https://resource.example/mcp",
-				"auth":    config.MCPServerAuthEMAAuth,
-				"enabled": true,
-			},
-		},
-	}
-	pending := []map[string]any{{
-		"environmentId": "workspace",
-		"cwd":           "/remote",
-		"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigPending}),
-	}}
-	cases := []struct {
-		name   string
-		cfg    *config.Config
-		params *turn.TurnStartParams
-		want   string
-	}{
-		{
-			name: "managed network policy",
-			cfg:  &config.Config{Values: map[string]any{}, ApplicationNetworkPolicy: &managedPolicy},
-			want: "host-managed application authority",
-		},
-		{
-			name: "ema authenticated mcp",
-			cfg:  &config.Config{Values: emaValues},
-			want: "EMA-authenticated MCP servers",
-		},
-		{
-			name:   "pending environment configuration",
-			cfg:    &config.Config{Values: map[string]any{}},
-			params: &turn.TurnStartParams{Environments: pending},
-			want:   "resolved environment configuration",
-		},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			err := router.detachedChildRejection(testCase.cfg, testCase.params)
-			if err == nil || !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("detachedChildRejection() error = %v, want %q", err, testCase.want)
-			}
-		})
-	}
-	if err := router.detachedChildRejection(&config.Config{Values: map[string]any{}}, nil); err != nil {
-		t.Fatalf("unmanaged configuration error = %v", err)
-	}
-}
-
-// Mirrors Rust create_child/create_prepared_child: the host supplies the child
-// ID, preparation captures the caller, and the started child is idle with the
-// reserved ID and canonical agent path.
-func TestStartPreparedChildUsesHostReservedIDLikeRust(t *testing.T) {
+// Mirrors Rust #58390 create_child: reserved startup always runs on the invoking
+// thread's manager, so the host supplies only the child ID and request and the
+// started child is idle with the reserved ID and canonical agent path.
+func TestCreateChildUsesHostReservedIDLikeRust(t *testing.T) {
 	router, store := newEnvironmentSubagentTestRouter(t, string(agent.VersionV2))
 	_, guard, invocation := activateHostInvocation(t, router, "root", "turn-1", "spawn-call")
 	defer guard.Release()
-	prepared, err := router.PrepareChild(context.Background(), "root", invocation, agent.ThreadCreateRequest{TaskName: "worker"})
-	if err != nil {
-		t.Fatalf("PrepareChild() error = %v", err)
-	}
-	if prepared.CallerThreadID != "root" || prepared.AgentPath != "/root/worker" || prepared.Request.TaskName != "worker" || prepared.Version != agent.VersionV2 {
-		t.Fatalf("prepared child = %#v", prepared)
-	}
-	if _, err := router.StartPreparedChild(context.Background(), prepared, agent.HostThreadSpawnReservation{ThreadID: "root"}); err == nil || !strings.Contains(err.Error(), "reservation does not match prepared child") {
+	if _, err := router.CreateChild(context.Background(), "root", invocation, agent.ThreadCreateRequest{TaskName: "worker"}, agent.HostThreadSpawnReservation{ThreadID: "root"}); err == nil || !strings.Contains(err.Error(), "reservation does not match prepared child") {
 		t.Fatalf("caller reservation error = %v", err)
 	}
-	result, err := router.StartPreparedChild(context.Background(), prepared, agent.HostThreadSpawnReservation{ThreadID: "reserved-child"})
+	result, err := router.CreateChild(context.Background(), "root", invocation, agent.ThreadCreateRequest{TaskName: "worker"}, agent.HostThreadSpawnReservation{ThreadID: "reserved-child"})
 	if err != nil {
-		t.Fatalf("StartPreparedChild() error = %v", err)
+		t.Fatalf("CreateChild() error = %v", err)
 	}
 	if result.AgentID != "reserved-child" || result.TaskName != "/root/worker" {
 		t.Fatalf("spawn result = %#v", result)
@@ -152,15 +91,11 @@ func TestStartPreparedChildUsesHostReservedIDLikeRust(t *testing.T) {
 	if got := record.Metadata.Extra[session.HistoryInitializationExtraKey]; got != string(session.HistoryInitializationNew) {
 		t.Fatalf("fresh child history initialization = %#v, want new", got)
 	}
-	if _, err := router.StartPreparedChild(context.Background(), prepared, agent.HostThreadSpawnReservation{ThreadID: "reserved-child"}); err == nil {
+	if _, err := router.CreateChild(context.Background(), "root", invocation, agent.ThreadCreateRequest{TaskName: "worker"}, agent.HostThreadSpawnReservation{ThreadID: "reserved-child"}); err == nil {
 		t.Fatal("reused reserved ID was accepted")
 	}
-	forked, err := router.PrepareChild(context.Background(), "root", invocation, agent.ThreadCreateRequest{TaskName: "forked", ForkContext: true})
-	if err != nil {
-		t.Fatalf("PrepareChild(fork) error = %v", err)
-	}
-	if _, err := router.StartPreparedChild(context.Background(), forked, agent.HostThreadSpawnReservation{ThreadID: "reserved-forked"}); err != nil {
-		t.Fatalf("StartPreparedChild(fork) error = %v", err)
+	if _, err := router.CreateChild(context.Background(), "root", invocation, agent.ThreadCreateRequest{TaskName: "forked", ForkContext: true}, agent.HostThreadSpawnReservation{ThreadID: "reserved-forked"}); err != nil {
+		t.Fatalf("CreateChild(fork) error = %v", err)
 	}
 	forkedRecord, err := store.Load(session.ThreadID("reserved-forked"))
 	if err != nil || forkedRecord == nil {
@@ -189,5 +124,106 @@ func TestCreateChildRequiresLiveInvocationLikeRust(t *testing.T) {
 	}
 	if result.AgentID != "reserved-child" {
 		t.Fatalf("CreateChild() agent = %q", result.AgentID)
+	}
+}
+
+// Mirrors Rust #58390 prepare_child: a live invocation captures the parent's
+// instructions, environments, permissions, approval settings, execution-policy
+// snapshot with its managed requirements, inheritable dynamic tools and
+// disabled plugins without requiring a child request.
+func TestPrepareChildCapturesParentContextLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("sandbox_mode = \"workspace-write\"\n\n[features]\nmulti_agent_v2_dynamic_tools = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	cwd := t.TempDir()
+	dynamicTools := []json.RawMessage{json.RawMessage(`{"type":"function","name":"echo"}`)}
+	if err := store.Create(&session.Record{
+		ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:               cwd,
+			AgentPath:         "/root",
+			MultiAgentVersion: string(agent.VersionV2),
+			Instructions:      "parent instructions",
+			DynamicTools:      dynamicTools,
+			Extra:             map[string]any{"disabled_plugin_ids": []any{"calendar@market"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	configService := config.NewConfigService(home)
+	managed := mustRequirementsPolicy(t, `prefix_rule(pattern=["managed-command"], decision="forbidden")`)
+	configService.SetRequirements(&config.ConfigRequirements{Rules: managed})
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Config: configService, DefaultCWD: cwd})
+	reviewer := "auto_review"
+	environments := []map[string]any{{"environmentId": "env-1", "cwd": cwd}}
+	params := &turn.TurnStartParams{
+		ThreadID:          "root",
+		CWD:               cwd,
+		Originator:        "codex_app_server",
+		ApprovalPolicy:    sandbox.ApprovalOnRequest,
+		ApprovalsReviewer: &reviewer,
+		Environments:      environments,
+	}
+	if err := router.threads.RegisterTurn("root", "turn-1", nil, 0, params); err != nil {
+		t.Fatal(err)
+	}
+	_, guard, invocation := activateHostInvocation(t, router, "root", "turn-1", "spawn-call")
+	defer guard.Release()
+
+	prepared, err := router.PrepareChild(context.Background(), "root", invocation)
+	if err != nil {
+		t.Fatalf("PrepareChild() error = %v", err)
+	}
+	if prepared.Originator != "codex_app_server" || prepared.UserInstructions != "parent instructions" || prepared.CWD != cwd {
+		t.Fatalf("prepared context = %#v", prepared)
+	}
+	if !reflect.DeepEqual(prepared.Environments, environments) {
+		t.Fatalf("prepared environments = %#v, want %#v", prepared.Environments, environments)
+	}
+	if prepared.ResolvedPermissionProfile == nil {
+		t.Fatal("prepared permission profile is nil")
+	}
+	if prepared.ApprovalPolicy != string(sandbox.ApprovalOnRequest) || prepared.ApprovalsReviewer != reviewer {
+		t.Fatalf("prepared approvals = %q/%q", prepared.ApprovalPolicy, prepared.ApprovalsReviewer)
+	}
+	if !reflect.DeepEqual(prepared.DisabledPluginIDs, []string{"calendar@market"}) {
+		t.Fatalf("prepared disabled plugins = %#v", prepared.DisabledPluginIDs)
+	}
+	if len(prepared.DynamicTools) != 1 || !strings.Contains(string(prepared.DynamicTools[0]), `"echo"`) {
+		t.Fatalf("prepared dynamic tools = %#v", prepared.DynamicTools)
+	}
+	if prepared.ExecPolicy == nil || prepared.ExecPolicySourceRequirements == nil {
+		t.Fatalf("prepared exec policy = %#v / %#v", prepared.ExecPolicy, prepared.ExecPolicySourceRequirements)
+	}
+	if !reflect.DeepEqual(prepared.ExecPolicySourceRequirements.Fingerprint(), managed.Fingerprint()) {
+		t.Fatalf("source requirements = %v, want %v", prepared.ExecPolicySourceRequirements.Fingerprint(), managed.Fingerprint())
+	}
+	if evaluation := prepared.ExecPolicy.Policy().EvaluateCommand([]string{"managed-command"}); evaluation.Decision == nil || *evaluation.Decision != execpolicy.DecisionForbidden {
+		t.Fatalf("managed command decision = %#v", evaluation)
+	}
+
+	// A configuration refresh rebuilds the turn without the managed requirement,
+	// but the captured source requirements and policy must survive.
+	if _, ok := router.threads.ConsumeTurn("root", "turn-1", false); !ok {
+		t.Fatal("ConsumeTurn() did not consume the active turn")
+	}
+	refreshed := *params
+	refreshed.Config = map[string]any{"refreshed": true}
+	if err := router.threads.RegisterTurn("root", "turn-2", nil, 0, &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	refreshedContext, err := router.PrepareChild(context.Background(), "root", invocation)
+	if err != nil {
+		t.Fatalf("PrepareChild(refreshed) error = %v", err)
+	}
+	if refreshedContext.ExecPolicySourceRequirements == nil ||
+		!reflect.DeepEqual(refreshedContext.ExecPolicySourceRequirements.Fingerprint(), managed.Fingerprint()) {
+		t.Fatalf("refreshed source requirements = %#v", refreshedContext.ExecPolicySourceRequirements)
+	}
+	if evaluation := refreshedContext.ExecPolicy.Policy().EvaluateCommand([]string{"managed-command"}); evaluation.Decision == nil || *evaluation.Decision != execpolicy.DecisionForbidden {
+		t.Fatalf("refreshed managed command decision = %#v", evaluation)
 	}
 }

@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "4c8f6971cb12b6ce859c0551d0172fd1ad53efe3",
+ "rustToInclusive": "cbe16d525c2d7362fc3d4726143288e932905daa",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -39902,6 +39902,18 @@
    "status": "complete",
    "evidence": [
     "state/guardian_elastic_budget.go renames the optional allocation groups to their source sections, keeps the pre-#58388 serialized names as aliases, and resolves unconfigured groups to the synchronous entry caps with 900-token instruction default. state/guardian_elastic_allocation.go adds whole-entry elastic allocation that reserves required evidence, history, and the omission notice, then admits optional groups by quota, recent-first selection, and least-served redistribution with shared user-content framing charged at selection time. Tests: state/guardian_elastic_allocation_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "cbe16d525c2d7362fc3d4726143288e932905daa",
+   "subject": "Expose parent context for host-managed child startup (#58390)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "agent/invocation.go replaces PreparedThreadSpawn with PreparedChildContext, exposing the originator, captured instructions, cwd, environments, selected capability roots, resolved permission profile, approval policy and reviewer, exec-policy snapshot with its managed source requirements, inheritable dynamic tools and disabled plugin IDs. appserver/host_invocation.go drops the prepared-start and detached-rejection paths so CreateChild always starts the reserved child on the invoking thread's manager, while PrepareChild takes no child request. Tests: appserver/host_child_like_rust_test.go covers captured parent inputs, managed requirements surviving a configuration refresh, and fresh versus forked reserved startup"
    ]
   }
  ]

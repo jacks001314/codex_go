@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
+
+	"codex_go/execpolicy"
+	"codex_go/sandbox"
 )
 
 // ErrToolCallNotActive reports a lookup for a call that ended, was cancelled or
@@ -193,28 +197,44 @@ type ThreadCreateRequest struct {
 	ForkTurns       *string
 }
 
-// PreparedThreadSpawn is an opaque, in-process snapshot for starting a child
-// without its source runtime. Settings and authority reflect preparation time.
-// A detached start rejects thread attachments, live instruction providers and
-// enabled EMA-authenticated MCP servers because Go cannot transfer those
-// bindings; the destination must supply compatible services and register the
-// captured environment IDs with matching working directories
-// (Rust #57586 PreparedThreadSpawn).
-type PreparedThreadSpawn struct {
-	// CallerThreadID is the thread whose live invocation prepared this child.
-	CallerThreadID string
-	// AgentPath is the child's canonical path in the agent tree.
-	AgentPath string
-	// Request is the host's requested child configuration with the resolved
-	// task name filled in.
-	Request ThreadCreateRequest
-	// Version, Model, ReasoningEffort, CWD, MaxThreads, Environments and
-	// DisabledPluginIDs are captured at preparation time.
-	Version           MultiAgentVersion
-	Model             string
-	ReasoningEffort   string
-	CWD               string
-	MaxThreads        int
-	Environments      []map[string]any
+// PreparedChildCapabilityRoot names one capability root captured from the
+// parent invocation (Rust SelectedCapabilityRoot).
+type PreparedChildCapabilityRoot struct {
+	ID            string
+	EnvironmentID string
+	Path          string
+}
+
+// PreparedChildContext holds the parent inputs captured from a live tool
+// invocation for a host starting or forking a child (Rust #58390
+// PreparedChildContext). The host binds the destination's services, chooses the
+// child's name, role, and history, and applies the requested child settings;
+// repository instructions are discovered at the destination.
+type PreparedChildContext struct {
+	Originator string
+	// UserInstructions and ThreadInstructions collapse into Go's single
+	// captured developer-instruction field because a live Go step has no
+	// separate AGENTS.md instruction providers; the destination rediscovers
+	// repository instructions.
+	UserInstructions   string
+	ThreadInstructions string
+	CWD                string
+	Environments       []map[string]any
+	// SelectedCapabilityRoots are the roots visible to the invoking step.
+	SelectedCapabilityRoots []PreparedChildCapabilityRoot
+	// ResolvedPermissionProfile is the parent's resolved permission profile at
+	// preparation time.
+	ResolvedPermissionProfile *sandbox.PermissionProfile
+	ApprovalPolicy            string
+	ApprovalsReviewer         string
+	// ExecPolicy is the parent's merged managed command policy at preparation
+	// time. Inherit it only for compatible policy sources.
+	ExecPolicy *execpolicy.RequirementsPolicy
+	// ExecPolicySourceRequirements is the managed requirement used to load the
+	// policy, before any session amendments.
+	ExecPolicySourceRequirements *execpolicy.RequirementsPolicy
+	// DynamicTools lists the current tool declarations a fresh child can
+	// inherit. The host supplies their execution route.
+	DynamicTools      []json.RawMessage
 	DisabledPluginIDs []string
 }
