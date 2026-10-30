@@ -8,11 +8,48 @@ import (
 func TestBoundedMCPNamespaceDescriptionPreservesUTF8Boundary(t *testing.T) {
 	expected := strings.Repeat("é", 499)
 	full := expected + "🦀keep the complete MCP metadata"
-	if got := BoundedMCPNamespaceDescription(full); got != expected || len(got) > MaxMCPNamespaceDescriptionBytes {
+	if got := BoundedAgentPluginMCPNamespaceDescription(full); got != expected || len(got) > MaxAgentPluginMCPNamespaceDescriptionBytes {
 		t.Fatalf("bounded description bytes=%d value=%q", len(got), got)
 	}
 	if full == expected {
 		t.Fatal("test metadata unexpectedly mutated")
+	}
+	// Non-agent-plugin descriptions keep Rust's much larger tool-spec budget.
+	general := strings.Repeat("é", 2000)
+	if got := EffectiveMCPNamespaceDescription(general, false); got != general {
+		t.Fatalf("general description was truncated to %d bytes", len(got))
+	}
+	if got := EffectiveMCPNamespaceDescription(full, true); got != expected {
+		t.Fatalf("agent-plugin description bytes=%d value=%q", len(got), got)
+	}
+}
+
+// Rust #51755 compares incoming metadata with the handler's own tool_info and
+// keeps the complete description in that handler metadata.
+func TestSharedMCPDefinitionsReuseFullHandlerMetadataLikeRust(t *testing.T) {
+	shared := newSharedMCPDefinitions()
+	info := MCPToolInfo{
+		Name:        "create_doc",
+		Title:       "Create document",
+		Description: "Create a Google Docs file",
+		InputSchema: map[string]any{"type": "object"},
+	}
+	first := shared.getOrCreate(info, "drive", true, 0)
+	second := shared.getOrCreate(info, "drive", true, 0)
+	if first != second {
+		t.Fatal("equivalent tool metadata did not reuse the cached definition")
+	}
+	if first.toolInfo.Description != info.Description || first.toolInfo.Title != info.Title {
+		t.Fatalf("cached handler metadata = %#v", first.toolInfo)
+	}
+	changed := info
+	changed.Description = "Create a differently described file"
+	third := shared.getOrCreate(changed, "drive", true, 0)
+	if third == first {
+		t.Fatal("changed tool metadata reused a stale cached definition")
+	}
+	if third.toolInfo.Description != changed.Description {
+		t.Fatalf("cached handler metadata = %#v", third.toolInfo)
 	}
 }
 

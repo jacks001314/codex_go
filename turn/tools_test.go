@@ -1761,6 +1761,7 @@ func TestBuildToolRegistryBoundsMCPNamespaceDescriptionAndForwardsReadiness(t *t
 	options.MCPTools = []mcp.RuntimeToolInfo{{
 		ServerName:           "drive",
 		NamespaceDescription: full,
+		AgentPlugin:          true,
 		Tool:                 mcp.RuntimeTool{Name: "create_doc", Description: "Create a document"},
 	}}
 	registry, err := BuildToolRegistry(options)
@@ -1775,8 +1776,35 @@ func TestBuildToolRegistryBoundsMCPNamespaceDescriptionAndForwardsReadiness(t *t
 	if full == spec.NamespaceDescription {
 		t.Fatal("model-facing namespace description was not bounded")
 	}
+	if options.MCPTools[0].NamespaceDescription != full {
+		t.Fatal("handler metadata lost the complete namespace description")
+	}
 	if !tool.NewRouter(registry).HasReadinessWait(name) {
 		t.Fatal("MCP readiness hook was not forwarded through the spec override")
+	}
+}
+
+// Rust #51755 bounds only Agent Plugins v1 descriptions at 1,000 bytes; other
+// MCP namespaces keep the larger tool-spec budget.
+func TestBuildToolRegistryKeepsLongOrdinaryMCPNamespaceDescriptionLikeRust(t *testing.T) {
+	full := strings.Repeat("é", 1000)
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.MCPTools = []mcp.RuntimeToolInfo{{
+		ServerName:           "drive",
+		NamespaceDescription: full,
+		Tool:                 mcp.RuntimeTool{Name: "create_doc", Description: "Create a document"},
+	}}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.Spec(tool.NamespacedName("mcp__drive", "create_doc"))
+	if !ok || spec.NamespaceDescription != full {
+		t.Fatalf("MCP spec namespace description bytes=%d, want the complete %d", len(spec.NamespaceDescription), len(full))
 	}
 }
 

@@ -28102,9 +28102,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Complete: Rust #51755 removes CachedMcpHandler's duplicate ToolInfo, compares incoming metadata with McpHandler::tool_info(), keeps the complete agent-plugin namespace description in the handler, and applies the 1,000-byte limit only when building tool specs and search metadata. Go already compares shared definitions against the executor's own MCPToolInfo (mcp/tool_definition_cache.go matches on the tool metadata, server, agent-plugin flag and schema budget, so it never stored a second truncated copy), but it applied the 1,000-byte bound to every MCP namespace. mcp/tool_runtime.go now separates MaxAgentPluginMCPNamespaceDescriptionBytes (1,000) from MaxMCPNamespaceDescriptionBytes (512 KiB) and adds EffectiveMCPNamespaceDescription, truncating on UTF-8 boundaries; turn/tools.go uses that helper with the tool's agent-plugin flag, so Agent Plugins v1 specs and search source metadata stay within 1,000 bytes while ordinary MCP namespaces keep Rust's larger budget, and the RuntimeToolInfo carried by the catalog keeps the complete description. Regression tests: TestBoundedMCPNamespaceDescriptionPreservesUTF8Boundary (agent-plugin boundary, general description preserved, UTF-8 truncation), TestSharedMCPDefinitionsReuseFullHandlerMetadataLikeRust (equivalent metadata reuses the cached definition and changed metadata does not), TestBuildToolRegistryBoundsMCPNamespaceDescriptionAndForwardsReadiness (agent-plugin spec/search bounded at 998 bytes while the catalog keeps the full description), and TestBuildToolRegistryKeepsLongOrdinaryMCPNamespaceDescriptionLikeRust (2,000-byte non-agent-plugin description retained). Verified with go test ./mcp -count=1, go test ./turn -count=1, go vet ./mcp, go build ./..., and go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

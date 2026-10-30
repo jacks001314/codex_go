@@ -1166,7 +1166,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 		})
 		spec := executor.Spec()
 		spec.ThirdParty = true
-		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)
+		spec.NamespaceDescription = mcp.EffectiveMCPNamespaceDescription(info.NamespaceDescription, info.AgentPlugin)
 		if spec.Search != nil && spec.Search.Source != nil {
 			spec.Search.Source.Description = spec.NamespaceDescription
 		}

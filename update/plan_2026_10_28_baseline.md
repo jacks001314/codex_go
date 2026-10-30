@@ -3678,6 +3678,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: zero lookups for unapproved hosts, private-address rejection after approval, approved-CONNECT inner-request DNS recheck, explicit-denial rechecks, and Seatbelt policy generation.
 - Verified with `go test ./network -count=1`, `go test ./sandbox -run 'Seatbelt' -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2232 complete`, `462 not_applicable`,
-`322 audit_pending`, `128 regression_pending`, `5 partial`,
+### MCP handler metadata reuse and namespace bounds (Round 1080)
+
+- Rust #51755 compares MCP cache entries against the handler's own metadata and keeps the complete agent-plugin namespace description while bounding specs and search metadata at 1,000 bytes.
+- Complete: Go's shared definition cache already compares the executor's `MCPToolInfo` rather than a duplicate truncated copy. `mcp/tool_runtime.go` now separates the 1,000-byte agent-plugin bound from the 512 KiB general bound and adds `EffectiveMCPNamespaceDescription` with UTF-8-safe truncation; `turn/tools.go` applies it per tool, so ordinary MCP namespaces keep their longer descriptions.
+- Regression: UTF-8 boundary truncation, general-description preservation, cache reuse across equivalent metadata and invalidation on change, bounded agent-plugin spec/search metadata with a complete catalog copy, and long ordinary namespace retention.
+- Verified with `go test ./mcp -count=1`, `go test ./turn -count=1`, `go vet ./mcp`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2233 complete`, `462 not_applicable`,
+`322 audit_pending`, `127 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

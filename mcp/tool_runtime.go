@@ -9,14 +9,43 @@ import (
 	"unicode/utf8"
 )
 
-const MaxMCPNamespaceDescriptionBytes = 1000
+const (
+	// MaxAgentPluginMCPNamespaceDescriptionBytes mirrors Rust's stricter bound
+	// for Agent Plugins v1 namespace descriptions (#51755).
+	MaxAgentPluginMCPNamespaceDescriptionBytes = 1000
+	// MaxMCPNamespaceDescriptionBytes mirrors Rust's general tool-spec bound.
+	MaxMCPNamespaceDescriptionBytes = 512 * 1024
+)
 
+// BoundedMCPNamespaceDescription bounds a non-agent-plugin namespace
+// description for the model-facing tool spec (Rust's 512 KiB limit).
 func BoundedMCPNamespaceDescription(description string) string {
+	return boundedMCPNamespaceDescription(description, MaxMCPNamespaceDescriptionBytes)
+}
+
+// BoundedAgentPluginMCPNamespaceDescription bounds an Agent Plugins v1
+// namespace description to Rust's stricter 1,000-byte limit.
+func BoundedAgentPluginMCPNamespaceDescription(description string) string {
+	return boundedMCPNamespaceDescription(description, MaxAgentPluginMCPNamespaceDescriptionBytes)
+}
+
+// EffectiveMCPNamespaceDescription mirrors Rust's
+// effective_namespace_description (#51755): the handler keeps the complete
+// description, and only the model-facing spec and search metadata apply the
+// agent-plugin bound. Truncation stays on UTF-8 character boundaries.
+func EffectiveMCPNamespaceDescription(description string, agentPlugin bool) string {
+	if agentPlugin {
+		return BoundedAgentPluginMCPNamespaceDescription(description)
+	}
+	return BoundedMCPNamespaceDescription(description)
+}
+
+func boundedMCPNamespaceDescription(description string, limit int) string {
 	description = strings.TrimSpace(description)
-	if len(description) <= MaxMCPNamespaceDescriptionBytes {
+	if len(description) <= limit {
 		return description
 	}
-	end := MaxMCPNamespaceDescriptionBytes
+	end := limit
 	for end > 0 && !utf8.ValidString(description[:end]) {
 		end--
 	}
