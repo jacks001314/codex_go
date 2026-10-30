@@ -154,8 +154,28 @@ func (r *RuntimeRouter) restoreRetainedContextCheckpoint(threadID string) *retai
 	if !hasCheckpoint {
 		return context
 	}
-	context.Restore(checkpoint, nil)
+	record, err := r.threadRecord(session.ThreadID(threadID), false, true)
+	var surviving []*retainedctx.HarnessMetadata
+	var excerptForID func(string) (string, bool)
+	if err == nil && record != nil {
+		surviving = survivingRetainedMetadata(record.Items)
+		excerptForID = r.guardianRootExcerptLookup(record)
+	}
+	context.Restore(checkpoint, surviving)
+	if excerptForID != nil {
+		// Rust recovers bounded excerpts from the surviving source before the
+		// legacy transcript is discarded; storage limits still apply.
+		context.RecoverUserMessageExcerpts(excerptForID)
+	}
 	return context
+}
+
+func survivingRetainedMetadata(items []session.Item) []*retainedctx.HarnessMetadata {
+	metadata := make([]*retainedctx.HarnessMetadata, 0, len(items))
+	for index := range items {
+		metadata = append(metadata, harnessMetadataFromSessionItem(&items[index]))
+	}
+	return metadata
 }
 
 // retainedContextEvents reads the sparse retained-context facts the thread's

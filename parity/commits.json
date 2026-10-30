@@ -8815,9 +8815,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1005 (实现+回归): #43472 要求把 retained evidence 与仍然存活的本地 user message 按 source identity 和持久化 acceptance order 对齐，在 recovered instruction 缺少 order 或 order 冲突时保留检查点缺口并标记 incomplete，同时在没有 retained snapshot 的 legacy checkpoint 上也从 surviving local metadata 恢复 input-order 计数器。Go 已有 retainedctx.ReconciledRetainedContext 及其单元测试，但 Guardian root 投影没有使用它，resume 时没有把 surviving metadata 传给 Restore，也不会恢复 checkpoint 清空的超大指令 excerpt。本轮把 reconciliation 接入 appserver/agent_runtime.go 的 guardianRootConversationWithHandoff: 从 record items 构造 live user messages (排除 inherited、summary、user_action、contextual fragment，保留 user_input_order)，与 retained 快照按来源身份对齐并按 acceptance order 排序; guardianRootUserCandidatesFromEntries 对 empty+incomplete 记录按 message ID 从 checkpoint backup 或存活 item 恢复 bounded excerpt，恢复不到才标记 missing。restoreRetainedContextCheckpoint 现在把存活 item 的 harness metadata 传给 RetainedContext.Restore (推进 next_order)，并在存在 checkpoint 时调用 RecoverUserMessageExcerpts。新增 appserver/retained_reconciled_authorization_like_rust_test.go: queued approval 在 restrictive instruction 之后才进入 model history 但仍按 accepted order 排序、resume 恢复被清空的超大指令 excerpt 且保留缺口标记、legacy checkpoint 下新答案 order 排在 surviving order 5 之后。验证: go test ./appserver -run Guardian|Retained|Verified|Root|Compaction -count=1; go test ./retainedctx ./rollout -count=1; go test ./appserver -count=1 (仅剩 7 个既有失败); go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

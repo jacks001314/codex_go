@@ -364,27 +364,37 @@ func guardianRootRetainedMessageID(messageID *string) string {
 	return strings.TrimSpace(*messageID)
 }
 
-// guardianRootRetainedUserCandidates selects the retained user instructions and
-// verified answers that can authorize an action. It also reports evidence the
-// retained snapshot could not recover.
-func guardianRootRetainedUserCandidates(
-	retained *retainedctx.RetainedContext,
+// guardianRootUserCandidatesFromEntries applies the authorization policy to
+// retained, recovered and checkpoint-only evidence in persisted order. An
+// omitted instruction keeps its source identity, so the exact surviving text
+// can fill it in before review (#43472).
+func guardianRootUserCandidatesFromEntries(
+	entries []retainedctx.OrderedEntry,
 	missingRootInstructions bool,
+	excerptForID func(string) (string, bool),
 ) ([]guardianRootCandidate, []retainedctx.RetainedUserMessage, bool) {
-	if retained == nil {
-		return nil, nil, missingRootInstructions
-	}
 	var candidates []guardianRootCandidate
 	var sources []retainedctx.RetainedUserMessage
-	for _, ordered := range retained.OrderedEntries() {
+	for _, ordered := range entries {
 		switch {
 		case ordered.Entry.UserMessage != nil:
 			message := *ordered.Entry.UserMessage
 			sources = append(sources, message)
 			text := message.Text
-			if strings.TrimSpace(text) == "" {
-				missingRootInstructions = true
-				continue
+			if strings.TrimSpace(text) == "" && !message.Complete {
+				// Older records may omit a large instruction. Recover that exact
+				// source while it remains available in the root history.
+				recovered := false
+				if excerptForID != nil && message.MessageID != nil {
+					if original, ok := excerptForID(*message.MessageID); ok {
+						text = original
+						recovered = true
+					}
+				}
+				if !recovered {
+					missingRootInstructions = true
+					continue
+				}
 			}
 			isGoalUpdate := codexctx.UserGoalUpdateMatchesText(text)
 			if isGoalUpdate && !message.Complete {
@@ -410,6 +420,74 @@ func guardianRootRetainedUserCandidates(
 		}
 	}
 	return candidates, sources, missingRootInstructions
+}
+
+// guardianRootLiveUserMessages exposes eligible live instructions with their
+// persisted acceptance order, mirroring Rust's reconciliation input. Inherited
+// parent context supplies no local order.
+func guardianRootLiveUserMessages(items []session.Item) []retainedctx.LiveUserMessage {
+	live := make([]retainedctx.LiveUserMessage, 0, len(items))
+	for index := range items {
+		item := &items[index]
+		if !guardianRootItemIsUserMessage(item) || guardianRootItemIsSummary(item) {
+			continue
+		}
+		text := guardianRootMessageText(item)
+		if strings.HasPrefix(strings.TrimSpace(text), "<user_action>") || guardianRootContextualUserText(text) {
+			continue
+		}
+		message := retainedctx.RetainedUserMessage{
+			TurnID: guardianRootItemTurnID(item),
+			Text:   text,
+		}
+		if id := strings.TrimSpace(item.ID); id != "" {
+			messageID := id
+			message.MessageID = &messageID
+		}
+		var order *uint64
+		if value, ok := guardianRootItemOrder(item); ok {
+			order = &value
+		}
+		live = append(live, retainedctx.LiveUserMessage{Order: order, Message: message})
+	}
+	return live
+}
+
+// guardianRootExcerptLookup finds the original bounded text for a retained
+// source. A checkpoint backup wins over a compacted copy that kept the same
+// identity, matching Rust's recovery order.
+func (r *RuntimeRouter) guardianRootExcerptLookup(record *session.Record) func(string) (string, bool) {
+	if r == nil || record == nil {
+		return nil
+	}
+	backup := r.guardianRootLegacyUserMessages(record)
+	items := record.Items
+	return func(id string) (string, bool) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return "", false
+		}
+		for index := range backup {
+			message := &backup[index]
+			if message.MessageID == nil || strings.TrimSpace(*message.MessageID) != id {
+				continue
+			}
+			if strings.TrimSpace(message.Text) == "" {
+				continue
+			}
+			text, _ := codexctx.GuardianTruncateText(message.Text, guardianMaxRootMessageTokens)
+			return text, true
+		}
+		for index := range items {
+			item := &items[index]
+			if strings.TrimSpace(item.ID) != id || !guardianRootItemIsUserMessage(item) {
+				continue
+			}
+			text, _ := codexctx.GuardianTruncateText(guardianRootMessageText(item), guardianMaxRootMessageTokens)
+			return text, true
+		}
+		return "", false
+	}
 }
 
 // guardianRootItemUserCandidates is the fallback snapshot when no retained

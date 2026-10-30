@@ -458,7 +458,15 @@ func (r *RuntimeRouter) guardianRootConversationWithHandoff(workerThreadID strin
 	var userCandidates []guardianRootCandidate
 	var retainedUserSources []retainedctx.RetainedUserMessage
 	if retained != nil {
-		userCandidates, retainedUserSources, missingRootInstructions = guardianRootRetainedUserCandidates(retained, missingRootInstructions)
+		// Rust #43472: reconcile surviving local instructions with the retained
+		// snapshot by source identity and persisted acceptance order, so queued
+		// input that reached history late still sorts where it was accepted.
+		reconciled := retainedctx.NewReconciledRetainedContext(retained, guardianRootLiveUserMessages(record.Items))
+		userCandidates, retainedUserSources, missingRootInstructions = guardianRootUserCandidatesFromEntries(
+			reconciled.OrderedEntries(),
+			reconciled.MissingUserMessages,
+			r.guardianRootExcerptLookup(record),
+		)
 	} else {
 		userCandidates = guardianRootItemUserCandidates(record.Items)
 	}
