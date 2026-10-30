@@ -5634,7 +5634,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "Round 1055: `session/delegated_preview.go` mirrors `codex_state::delegated_output_preview` (only `codex_app`/`codex_tui` `create_thread`/`send_message_to_thread` outputs, exact `<codex_delegation>` unwrapping with ordered `&lt;`/`&gt;`/`&amp;` decoding, raw text for other non-blank bodies, blank ignored); `state/backfill.go` fills only an empty preview during metadata extraction, `appserver/thread_manager.go` and `rollout/session_items.go` do the same for live/ephemeral metadata without touching title or first_user_message. Regression coverage: `state/delegated_preview_test.go` (user-message preservation and listing before follow-up in legacy and paginated modes), `appserver/thread_manager_test.go` (first live preview wins), and `session` decoding tests. Verify with `go test ./state -run Delegated -count=1`, `go test ./appserver -run ThreadManagerDelegatedPreviewLikeRust -count=1`, and `go test ./session -run Delegated -count=1`."
+    "Round 1058 (correcting a Round 1055 evidence attachment): `appserver/bundled_hooks.go` holds the shared allowlist (including `unified-computer-use` through `cua_repl`) used by local and executor plugin discovery; `hooks_discovery.go` marks matches builtin, `hookEnabled` keeps builtins enabled regardless of hook state, and `hookTrustStatus` reports them trusted without saved trust; `hooks.go` keeps `Builtin json:\"-\"` so the classification never serializes; `hideBuiltinHooks` drops them from public hook listings and the runtime router applies it to merged responses",
+    "Regression coverage: `appserver/bundled_hooks_test.go` covers the allowlist boundary, builtin trust/enablement, hiding from the public list, and non-serialization; `appserver/bundled_hooks_interrupt_like_rust_test.go` covers the interrupt cleanup path. Verified with `go test ./appserver -run 'Bundled|Hook' -count=1`."
    ]
   },
   {
@@ -25976,9 +25977,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1058 (confirming Round 1055): `session/delegated_preview.go` mirrors `codex_state::delegated_output_preview` (only `codex_app`/`codex_tui` `create_thread`/`send_message_to_thread` outputs, exact `<codex_delegation>` unwrapping with ordered `&lt;`/`&gt;`/`&amp;` decoding, raw text for other non-blank bodies, blank ignored); `state/backfill.go` fills only an empty preview during metadata extraction, `appserver/thread_manager.go` and `rollout/session_items.go` do the same for live/ephemeral metadata without touching title or first_user_message",
+    "Regression coverage: `state/delegated_preview_test.go` (user-message preservation and listing before follow-up in legacy and paginated modes), `appserver/thread_manager_test.go` (first live preview wins), and `session` decoding tests; verified with `go test ./state -run Delegated -count=1`, `go test ./appserver -run ThreadManagerDelegatedPreviewLikeRust -count=1`, and `go test ./session -run Delegated -count=1`"
    ]
   },
   {

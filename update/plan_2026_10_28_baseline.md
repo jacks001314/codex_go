@@ -3533,6 +3533,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Residual: Go keeps the saved tier in the TUI settings write rather than re-reading `config.service_tier`, so a session that never persisted a selection recomputes from the catalog default on each refresh; the legacy `tui/chatwidget` state helpers are unchanged.
 - Verified with `go test ./model -run 'Bedrock|CustomBedrock' -count=1`, `go test ./tui/tea -count=1`, `go test ./tui/... ./model -count=1`, `go test ./app -run 'ServiceTier|ModelPicker' -count=1`, `go build ./...`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2211 complete`, `461 not_applicable`,
-`322 audit_pending`, `150 regression_pending`, `5 partial`,
+### Delegated previews and bundled cleanup-hook ledger repair (Round 1058)
+
+- Round 1055 verified Rust #50462's delegated thread previews but wrote that evidence onto the #42110 entry (`c7c824dce4`) and left the #50462 commit (`09bced5ad9`) at `regression_pending`.
+- Repaired: `09bced5ad9` now records the Round 1055 implementation and regression evidence for `session/delegated_preview.go`, `state/backfill.go`, `appserver/thread_manager.go` and `rollout/session_items.go`, re-confirmed this round; `c7c824dce4` (#42110) instead records a fresh audit of the bundled cleanup-hook built-ins.
+- #42110 audit: `appserver/bundled_hooks.go` owns the shared allowlist (including `unified-computer-use` via `cua_repl`); discovery marks matches builtin, `hookEnabled` keeps them enabled regardless of hook state, `hookTrustStatus` reports them trusted without saved trust, `hooks.go` keeps `Builtin json:"-"`, and `hideBuiltinHooks` strips them from public listings.
+- Verified with `go test ./state -run Delegated -count=1`, `go test ./session -run Delegated -count=1`, `go test ./appserver -run 'ThreadManagerDelegatedPreview|Bundled|Hook' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2212 complete`, `461 not_applicable`,
+`322 audit_pending`, `149 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
