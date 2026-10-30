@@ -38,11 +38,10 @@ type appserverMCPToolApprovalHandler struct {
 	// enablement as the persistent-approval option, since Rust gates both on the
 	// same feature).
 	elicitationEnabled bool
-	// allowUserInteraction mirrors Rust #46066's
-	// ElicitationAuthority::allow_user_interaction: only the root thread may
-	// present interactive MCP requests, so a subagent's prompt is denied with the
-	// handoff guidance while automatic approvals and review decisions still run.
-	allowUserInteraction bool
+	// nonRootAgent mirrors Rust #46877's remaining root-only path: the legacy
+	// request_user_input approval prompt stays restricted to the root thread,
+	// while MCP elicitation prompts may be surfaced by subagents.
+	nonRootAgent bool
 }
 
 // appsRequirementsForConfig returns the managed app requirements, if any.
@@ -101,7 +100,7 @@ func (r *RuntimeRouter) newAppserverMCPToolApprovalOptions(
 			approvalPolicy:            approvalPolicy,
 			persistentApprovalAllowed: persistent,
 			elicitationEnabled:        persistent,
-			allowUserInteraction:      !r.turnThreadIsSubagent(threadID),
+			nonRootAgent:              r.turnThreadIsSubagent(threadID),
 		},
 	}
 }
@@ -147,17 +146,6 @@ func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context
 	if h.responder == nil {
 		return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
 	}
-	// Rust #46066: only the root thread may present an interactive MCP request;
-	// a subagent's prompt is denied with the handoff guidance so it asks its
-	// parent instead. Automatic approvals, remembered choices, permission hooks
-	// and Guardian review decisions are unaffected, so this guard sits after
-	// them.
-	if !h.allowUserInteraction {
-		return mcp.MCPToolApprovalOutcome{
-			Decision: mcp.MCPToolApprovalDeny,
-			Message:  mcp.MCPElicitationHandoffMessage,
-		}, nil
-	}
 	promptOptions := mcp.MCPToolApprovalPromptOptionsFor(
 		request.AllowSessionRemember,
 		request.AllowPersistentApproval,
@@ -192,6 +180,15 @@ func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context
 		decision = elicitationDecision
 		cancellationReason = elicitationReason
 	} else {
+		// Rust #46877: the legacy request_user_input approval flow remains
+		// restricted to the root thread; a subagent hands the blocker to its
+		// parent instead of prompting.
+		if h.nonRootAgent {
+			return mcp.MCPToolApprovalOutcome{
+				Decision: mcp.MCPToolApprovalDeny,
+				Message:  mcp.MCPToolApprovalUserInputRootThreadMessage,
+			}, nil
+		}
 		response, err := h.responder(ctx, strings.TrimSpace(request.CallID), &tool.RequestUserInputArgs{Questions: []tool.UserInputQuestion{question}})
 		if err != nil {
 			// Rust's request_user_input failure aborts the call, and #54679

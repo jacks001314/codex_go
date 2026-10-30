@@ -48,7 +48,6 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 			approvalPolicy:            sandbox.ApprovalOnRequest,
 			persistentApprovalAllowed: true,
 			elicitationEnabled:        true,
-			allowUserInteraction:      true,
 		}
 		sessionKey := mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}
 		readOnly, destructive, idempotent, openWorld := false, false, true, true
@@ -140,11 +139,56 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 	}
 }
 
-// TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust mirrors
-// Rust #46066's request_mcp_tool_user_approval: a delegated subagent never
-// prompts the user, so the call is denied with the handoff guidance that tells
-// the agent to ask its parent and to wait before retrying.
-func TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust(t *testing.T) {
+// TestAppserverMCPToolApprovalLetsSubagentPromptLikeRust mirrors Rust #46877:
+// when MCP elicitation approvals are enabled, a delegated subagent may surface
+// the prompt and wait for the client's answer like a root thread.
+func TestAppserverMCPToolApprovalLetsSubagentPromptLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	t.Cleanup(func() { _ = router.Close() })
+	prompted := false
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestMCPElicitation {
+			t.Fatalf("method = %s", request.Method)
+		}
+		prompted = true
+		router.requireServerRequests().Resolve(OK(request.ID, &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept}))
+	}))
+	handler := &appserverMCPToolApprovalHandler{
+		router: router,
+		responder: func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			t.Fatal("elicitation approvals must not fall back to request_user_input")
+			return nil, nil
+		},
+		threadID:           "thread-1",
+		turnID:             "turn-1",
+		approvalPolicy:     sandbox.ApprovalOnRequest,
+		elicitationEnabled: true,
+		nonRootAgent:       true,
+	}
+	sessionKey := mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}
+	outcome, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
+		Server:               "docs",
+		Tool:                 "search",
+		ApprovalMode:         apps.AppToolApprovalAuto,
+		CallID:               "call-1",
+		SessionKey:           &sessionKey,
+		AllowSessionRemember: true,
+	})
+	if err != nil {
+		t.Fatalf("ApproveMCPToolCall() error = %v", err)
+	}
+	if outcome.Decision != mcp.MCPToolApprovalApprove {
+		t.Fatalf("decision = %v, want approve", outcome.Decision)
+	}
+	if !prompted {
+		t.Fatal("the subagent's elicitation approval must reach the client")
+	}
+}
+
+// TestAppserverMCPToolApprovalKeepsLegacySubagentHandoffLikeRust mirrors Rust
+// #46877: tool approvals that still use request_user_input stay restricted to
+// the root thread, so a subagent is denied with the handoff guidance.
+func TestAppserverMCPToolApprovalKeepsLegacySubagentHandoffLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	t.Cleanup(func() { _ = router.Close() })
 	prompted := false
@@ -155,11 +199,11 @@ func TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust(t *tes
 			prompted = true
 			return nil, nil
 		},
-		threadID:             "thread-1",
-		turnID:               "turn-1",
-		approvalPolicy:       sandbox.ApprovalOnRequest,
-		elicitationEnabled:   true,
-		allowUserInteraction: false,
+		threadID:           "thread-1",
+		turnID:             "turn-1",
+		approvalPolicy:     sandbox.ApprovalOnRequest,
+		nonRootAgent:       true,
+		elicitationEnabled: false,
 	}
 	sessionKey := mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}
 	outcome, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
@@ -176,11 +220,11 @@ func TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust(t *tes
 	if outcome.Decision != mcp.MCPToolApprovalDeny {
 		t.Fatalf("decision = %v, want deny", outcome.Decision)
 	}
-	if outcome.Message != mcp.MCPElicitationHandoffMessage {
-		t.Fatalf("message = %q, want the handoff guidance", outcome.Message)
+	if outcome.Message != mcp.MCPToolApprovalUserInputRootThreadMessage {
+		t.Fatalf("message = %q, want the request_user_input handoff guidance", outcome.Message)
 	}
 	if prompted {
-		t.Fatal("a subagent must not prompt the user")
+		t.Fatal("a subagent must not prompt through request_user_input")
 	}
 	if router.mcpToolApprovalRemembered("thread-1", sessionKey) {
 		t.Fatal("a handed-off request must not be remembered")
@@ -198,8 +242,6 @@ func newMCPToolApprovalTestHandler(
 		turnID:                    "turn-1",
 		approvalPolicy:            sandbox.ApprovalOnRequest,
 		persistentApprovalAllowed: persistent,
-		// The root thread may present interactive MCP prompts (Rust #46066).
-		allowUserInteraction: true,
 	}
 }
 

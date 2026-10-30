@@ -782,12 +782,11 @@ func TestToolExecutorLeavesResultWhenAuthElicitationIsDeclined(t *testing.T) {
 	}
 }
 
-// TestToolExecutorPreservesAuthDiagnosticsOnHandoffLikeRust mirrors Rust
-// #46066: when the Codex Apps auth elicitation cannot be requested - a subagent
-// is handed the blocker instead of prompting the user - the connector's own
-// diagnostic is preserved as text alongside the recovery guidance, and the
-// preferred structured content is flattened into that text rather than dropped.
-func TestToolExecutorPreservesAuthDiagnosticsOnHandoffLikeRust(t *testing.T) {
+// TestToolExecutorPreservesAuthDiagnosticsOnDeliveryFailureLikeRust verifies
+// that a failed Codex Apps auth elicitation delivery preserves the connector's
+// own diagnostic as text alongside the recovery guidance, and flattens the
+// preferred structured content into that text rather than dropping it.
+func TestToolExecutorPreservesAuthDiagnosticsOnDeliveryFailureLikeRust(t *testing.T) {
 	executor := NewToolExecutor(&ToolExecutorOptions{
 		ServerName:    RuntimeCodexAppsMCPServerName,
 		ConnectorID:   "connector_calendar",
@@ -795,7 +794,7 @@ func TestToolExecutorPreservesAuthDiagnosticsOnHandoffLikeRust(t *testing.T) {
 	})
 	executor.authElicitation = &AuthElicitationOptions{
 		Request: func(context.Context, *MCPElicitationRequest) (*MCPElicitationResponse, error) {
-			return nil, errors.New(MCPElicitationHandoffMessage)
+			return nil, errors.New("elicitation delivery failed")
 		},
 		InstallURL: func(string, string) string { return "https://example.com/install" },
 	}
@@ -821,8 +820,8 @@ func TestToolExecutorPreservesAuthDiagnosticsOnHandoffLikeRust(t *testing.T) {
 	if !strings.Contains(guidance, "Authentication for Google Calendar could not be completed.") {
 		t.Fatalf("guidance = %q", guidance)
 	}
-	if !strings.Contains(guidance, MCPElicitationHandoffMessage) {
-		t.Fatalf("guidance must carry the handoff message: %q", guidance)
+	if !strings.Contains(guidance, "elicitation delivery failed") {
+		t.Fatalf("guidance must carry the delivery failure: %q", guidance)
 	}
 	if got.Content[1].Text != "diagnostic detail" {
 		t.Fatalf("diagnostic = %q", got.Content[1].Text)

@@ -149,7 +149,6 @@ func TestMCPToolCallApprovalClassificationLikeRust(t *testing.T) {
 			approvalPolicy:            sandbox.ApprovalOnRequest,
 			persistentApprovalAllowed: true,
 			elicitationEnabled:        true,
-			allowUserInteraction:      true,
 		}
 		outcome, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
 			Server:       "docs",

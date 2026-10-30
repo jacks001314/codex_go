@@ -96,11 +96,11 @@ const MCPToolApprovalRejectedMessage = "user rejected MCP tool call"
 // (notify_mcp_tool_call_skip "MCP tool call blocked by app configuration").
 const MCPToolCallBlockedByAppConfigurationMessage = "MCP tool call blocked by app configuration"
 
-// MCPElicitationHandoffMessage is Rust's recovery guidance for a request a
-// non-root agent cannot present to the user (#46066): automatic decisions still
-// apply, but interactive MCP elicitations and approval prompts are denied so the
-// subagent hands the blocker to its parent instead.
-const MCPElicitationHandoffMessage = "MCP server elicitations can only be requested by the root thread. " +
+// MCPToolApprovalUserInputRootThreadMessage is Rust #46877's recovery guidance
+// for the legacy request_user_input approval path, which stays restricted to
+// the root thread even though MCP elicitations may now be surfaced by
+// subagents.
+const MCPToolApprovalUserInputRootThreadMessage = "MCP tool approval via request_user_input requires the root thread. " +
 	"Ask the parent agent to handle this request. " +
 	"Do not retry the blocked action until the parent confirms the blocker is resolved."
 

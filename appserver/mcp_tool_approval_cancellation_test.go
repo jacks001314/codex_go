@@ -33,7 +33,6 @@ func newMCPToolApprovalProvenanceHandler(t *testing.T, resolve func(*ServerReque
 		approvalPolicy:            sandbox.ApprovalOnRequest,
 		persistentApprovalAllowed: true,
 		elicitationEnabled:        true,
-		allowUserInteraction:      true,
 	}
 }
 

@@ -17295,9 +17295,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "MCP elicitations now reach root and subagent clients: removed the root-only guard and AllowUserInteraction plumbing from appserver/mcp_elicitation.go and runtime_router.go, while the legacy request_user_input approval path keeps a nonRootAgent guard with the new root-thread message. Connector auth keeps retry guidance on acceptance and the original failure on decline. mcp and appserver MCP elicitation/approval tests pass"
    ]
   },
   {

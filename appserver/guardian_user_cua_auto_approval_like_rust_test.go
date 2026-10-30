@@ -46,7 +46,6 @@ func userCUAAuthority(reviewer string) mcpElicitationAuthority {
 		ApprovalPolicy:        sandbox.ApprovalOnRequest,
 		ApprovalsReviewer:     reviewer,
 		AllowsMCPElicitations: true,
-		AllowUserInteraction:  true,
 	}
 }
 

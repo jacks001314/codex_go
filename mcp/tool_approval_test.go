@@ -445,7 +445,7 @@ func TestToolExecutorSurfacesHandlerMessagesLikeRust(t *testing.T) {
 		TurnID:     "turn-1",
 		ToolApproval: &ToolApprovalOptions{
 			Handler: MCPToolApprovalHandlerFunc(func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
-				return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny, Message: MCPElicitationHandoffMessage}, nil
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny, Message: MCPToolApprovalUserInputRootThreadMessage}, nil
 			}),
 			ApprovalPolicy: sandbox.ApprovalOnRequest,
 		},
@@ -454,7 +454,7 @@ func TestToolExecutorSurfacesHandlerMessagesLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("approveToolCallIfNeeded() error = %v", err)
 	}
-	if denied == nil || denied.Success || denied.Body != MCPElicitationHandoffMessage {
+	if denied == nil || denied.Success || denied.Body != MCPToolApprovalUserInputRootThreadMessage {
 		t.Fatalf("handoff output = %#v", denied)
 	}
 }

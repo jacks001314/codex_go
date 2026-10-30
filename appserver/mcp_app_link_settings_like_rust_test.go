@@ -111,11 +111,10 @@ func TestMCPToolApprovalElicitationCarriesAppLinkLikeRust(t *testing.T) {
 				t.Error("the elicitation transport must not fall back to user input")
 				return nil, nil
 			},
-			threadID:             "thread-link",
-			turnID:               "turn-link",
-			approvalPolicy:       sandbox.ApprovalOnRequest,
-			elicitationEnabled:   true,
-			allowUserInteraction: true,
+			threadID:           "thread-link",
+			turnID:             "turn-link",
+			approvalPolicy:     sandbox.ApprovalOnRequest,
+			elicitationEnabled: true,
 		}
 		outcome, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
 			Server:       mcp.RuntimeCodexAppsMCPServerName,
