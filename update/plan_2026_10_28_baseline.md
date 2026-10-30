@@ -4102,3 +4102,11 @@ Status after this batch: `2345 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestLifecycleRunnerBootstrapPreservesUpdaterPreferencesLikeRust`, `TestLifecycleRunnerRestartStopsUpdaterBeforeRestartWhenDisabledLikeRust`, `TestLifecycleRunnerStartStopsUpdaterWhenDisabledLikeRust`, `TestLifecycleRunnerSetRemoteControlStopsUpdaterWhenDisabledLikeRust`, `TestNextUpdateDelayReadsPersistedSettingsLikeRust`, `TestScheduledUpdateOnceStopsWhenDisabledLikeRust`, `TestStoppingUpdaterSignalsItsInstallerProcessGroup`; `go build ./...`, `go vet ./appserverdaemon`, `go test ./appserverdaemon ./cli`, and a Linux cross-compile of the package tests pass.
 
 Status after this batch: `2346 complete`, `465 not_applicable`, `322 audit_pending`, `11 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Marketplace source policy for curated plugins is a missing precondition (Round 1128)
+
+- #41953 hardens an existing marketplace allowlist: the curated repository is validated through `MarketplacePolicy::validate_git_source(OPENAI_PLUGINS_GIT_URL, None)` before curated marketplace install, inside `policy_filtered_plugin_config`, during catalog discovery/cached-plugin and skill loading, and when the curated repo is synced at startup.
+- Go has no marketplace policy surface to tighten. There is no `MarketplacePolicy` type, no `restrict_to_allowed_sources` / `allowed_sources` / `host_pattern` settings, and `config.ConfigRequirements` carries no marketplaces section; `plugin/curated_sync.go` only pins `OpenAIPluginsGitURL`. This matches the gap already recorded in `update/plan_2026_10_27_nontui.md` (source of #56263's N/A verdict) and earlier in this file.
+- Marked `blocked_precondition` rather than `not_applicable`: the upstream behavior is a real hardening Go should eventually carry, but porting it means introducing the whole allowed-source policy (config requirements, Git source and host-pattern validation) as a separate piece of work, not a per-PR shim.
+
+Status after this batch: `2346 complete`, `465 not_applicable`, `322 audit_pending`, `10 regression_pending`, `5 partial`, `7 blocked_precondition`.

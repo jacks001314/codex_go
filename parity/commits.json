@@ -5284,8 +5284,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
-   "evidence": ["Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"]
+   "status": "blocked_precondition",
+   "evidence": [
+    "Round 1128 (lead): the upstream change enforces a marketplace Git-source allowlist around curated plugins: Rust validates the curated repository through `MarketplacePolicy::validate_git_source(OPENAI_PLUGINS_GIT_URL, None)` before curated marketplace install, inside `policy_filtered_plugin_config`, during catalog discovery/cached-plugin and skill loading, and when syncing the curated repo at startup. Go has no such policy surface: no `MarketplacePolicy`, no `restrict_to_allowed_sources` / `allowed_sources` / `host_pattern` fields, and `config.ConfigRequirements` has no marketplaces section, so there is nothing for the change to tighten. `plugin/curated_sync.go` only pins `OpenAIPluginsGitURL`.",
+    "Precondition: port the marketplace allowed-source policy (config requirements + Git source/host-pattern validation) before this hardening can be reflected in Go; tracked by the open marketplace-policy gap recorded in update/plan_2026_10_27_nontui.md and update/plan_2026_10_28_baseline.md."
+   ]
   },
   {
    "sha": "c7fced56eb3f5b0b96f4957caefc06b07ef65940",
