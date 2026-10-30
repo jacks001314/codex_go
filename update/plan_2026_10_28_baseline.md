@@ -4022,3 +4022,11 @@ Status after this fix: `2336 complete`, `464 not_applicable`, `322 audit_pending
 - No code change; ledger evidence updated to point at the shared rationale.
 
 Status after this batch: `2336 complete`, `465 not_applicable`, `322 audit_pending`, `21 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Elevated Windows TUI launches stay embedded (Round 1118)
+
+- #49855 policy was already present in Go: `daemonElevatedLaunchExcluded` checks `IsElevated` before daemon discovery/auto-start (and only when neither `--no-daemon` nor the agents overview applies), so an elevated local Windows TUI launch uses embedded mode without creating or attaching to the shared daemon. Explicit daemon `start`/`restart` still reject elevation via `EnsureNonElevated`.
+- `daemonStartupWarning` returns Rust's exact administrator warning and takes precedence over auto-start exclusion warnings; `tui_telemetry.go` records `elevated_windows` as the daemon selection reason.
+- Tests: `TestElevatedWindowsLaunchUsesEmbeddedModeLikeRust`, `TestElevatedWindowsLaunchEmbeddedWithoutAutoStartLikeRust`, `TestInteractiveDaemonSelectionReasonLikeRust`; targeted `go test ./app -run Elevated` and the telemetry test pass.
+
+Status after this batch: `2337 complete`, `465 not_applicable`, `322 audit_pending`, `20 regression_pending`, `5 partial`, `6 blocked_precondition`.

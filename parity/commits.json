@@ -24961,9 +24961,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1118: Go already carried the #49855 policy. `app/daemon_startup.go` checks `daemonElevatedLaunchExcluded` (Rust is_elevated plus !--no-daemon and !agents-overview) before daemon discovery or auto-start, so an elevated local Windows TUI launch stays embedded without creating or attaching to the shared daemon; explicit daemon start/restart still reject elevation through `EnsureNonElevated`. `daemonStartupWarning` emits Rust's exact administrator warning with priority over auto-start exclusion warnings, and `tui_telemetry.go` records `elevated_windows` as the selection reason. Tests: TestElevatedWindowsLaunchUsesEmbeddedModeLikeRust, TestElevatedWindowsLaunchEmbeddedWithoutAutoStartLikeRust, TestInteractiveDaemonSelectionReasonLikeRust; go test ./app -run Elevated passes."
    ]
   },
   {
