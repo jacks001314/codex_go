@@ -8011,9 +8011,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1010 (回归+核对): #43002 用父响应 ID 取代 Guardian ticket: 从 response.created 取得 ID 并在 Guardian review/classifier 请求的 parent_response_id 中传递，重试/失败路径不得借用失败响应的 ID; 合格的父请求带 guardian_credits_requested，Guardian reviewer 请求不带; 删除 ticket 协议/传输附件/专用 body 脱敏; 普通 app-server 客户端的 parent_response_id 只能留在 x-codex-turn-metadata 内，不得提升为顶层 client metadata。Go 无需 ticket 实现: reasoning 之后未引入 GuardianTicket; guardian review 已通过 latestResponseID 取当前 turn 最新 response.created ID 并写入顶层 parent_response_id (appserver/guardian_reviewer.go)，reviewer 请求用 x-codex-guardian: reviewer 且由 model/responses_agent.go 处理 guardian_credits_requested (仅普通 Codex 后端请求添加，reviewer 分支不加); 普通 turn 的客户端 metadata 经 turn.BuildResponsesClientMetadata 只嵌入 x-codex-turn-metadata，顶层 map 只含固定键。Rust #45441 后续把 '重试前清空 response ID' 改为 '保留最近一次 response.created 直到新的创建事件'，Go 的 LatestResponseID/recordRuntimeTurnResponseID 与当前上游一致。本轮补充 appserver/client_parent_response_id_like_rust_test.go (真实 thread/start + turn/start: parent_response_id 与 fiber_run_id 均不出现在顶层 ClientMetadata，只出现在 x-codex-turn-metadata JSON 内) 和 model/client_metadata_parent_response_id_like_rust_test.go (HTTP body 与 WebSocket response.create payload 的 client_metadata 都不提升 parent_response_id/fiber_run_id，仍携带完整 turn metadata)。既有 appserver/guardian_parent_response_id_test.go 覆盖 review 顶层 parent_response_id 与缺失时省略，model/responses_agent_test.go 覆盖 guardian credits 的 provider/auth/reviewer gating。验证: go test ./appserver -run 'ParentResponseID|Guardian|ClientMetadata' -count=1; go test ./model -run 'Guardian|Metadata|ParentResponse|ReasoningEffort' -count=1; go test ./codexapi -count=1; go test ./appserver -count=1 (仅剩 7 个既有失败); go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

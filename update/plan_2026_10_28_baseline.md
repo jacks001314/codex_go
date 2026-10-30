@@ -3194,6 +3194,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already implements the decision in `reasoningoverride`, the persistence/replay path, the exec entry point, and the appserver turn wiring; existing tests cover gating, exec end-to-end persistence, rollout round-trips, and model normalization.
 - New `appserver/reasoning_effort_history_like_rust_test.go` covers append-only-on-change with a stable request baseline, ultra normalization before comparison, and `persistent` ↔ `high` transitions appending `disabled`/`high` exactly once.
 - Verified with the three new tests, `go test ./exec -run 'ReasoningEffort|ConfigurationUpdate' -count=1`, `go test ./model -run ReasoningEffort -count=1`, `go test ./appserver -run 'ReasoningEffort|Prewarm' -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2169 complete`, `451 not_applicable`,
-`345 audit_pending`, `180 regression_pending`, `4 partial`,
+### Guardian parent response IDs (Round 1010)
+
+- Rust #43002 replaces the Guardian ticket protocol with the parent response ID from `response.created`, requests Guardian credits on eligible parent requests, and keeps ordinary client `parent_response_id` values inside `x-codex-turn-metadata` (#43002, complete).
+- Go never had a ticket type; the reviewer already promotes the reviewed turn's latest response ID, the credits gate already excludes reviewer traffic, and turn metadata is the only place client-provided keys live. Rust #45441 later changed retry handling from clearing to retaining the last `response.created`, which Go already matches.
+- New `appserver/client_parent_response_id_like_rust_test.go` drives a real thread/turn and asserts `parent_response_id`/`fiber_run_id` appear only inside the turn-metadata document, while `model/client_metadata_parent_response_id_like_rust_test.go` proves the HTTP body and WebSocket `response.create` payload never promote them.
+- Verified with `go test ./appserver -run 'ParentResponseID|Guardian|ClientMetadata' -count=1`, `go test ./model -run 'Guardian|Metadata|ParentResponse|ReasoningEffort' -count=1`, `go test ./codexapi -count=1`, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2170 complete`, `451 not_applicable`,
+`345 audit_pending`, `179 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
