@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"sort"
@@ -1955,7 +1956,7 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 		status.State = MCPServerReady
 		status.Error = nil
 	} else if isRunnableMCPConfig(config) {
-		message := err.Error()
+		message := mcpStartupErrorMessage(err)
 		authStatus := s.authStatusForConfig(name, config)
 		if display, ok := mcpInitAuthErrorDisplay(name, config, authStatus, err); ok {
 			message = display
@@ -1967,6 +1968,12 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 		status.State = MCPServerFailed
 		status.Error = &message
 		status.ToolsError = &message
+		if !errors.Is(err, context.Canceled) {
+			// Rust #42370: log exactly once per startup attempt, including
+			// attempts whose optional-startup result is dropped before any
+			// observer notification, and keep the wrapped causes visible.
+			slog.Warn("MCP server startup failed", "server_name", name, "error", message)
+		}
 		// Rust #53672: startup recovery must not remove Codex Apps functions the
 		// model already discovered. The failed state still reports the error, but
 		// the retained catalog remains available to binding capture and a later
@@ -1995,6 +2002,27 @@ func notifyMCPStartupObserver(observer MCPStartupObserver, name string, status M
 	if observer != nil {
 		observer(name, status, cloneStringPtr(failureReason), err)
 	}
+}
+
+// mcpStartupErrorMessage renders err together with its wrapped causes,
+// mirroring Rust's format!("{error:#}") for cloneable startup outcomes
+// (Rust #42370). Wrappers that already embed their cause are not repeated.
+func mcpStartupErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := ""
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		text := strings.TrimSpace(current.Error())
+		if text == "" || strings.HasSuffix(message, text) {
+			continue
+		}
+		if message != "" {
+			message += ": "
+		}
+		message += text
+	}
+	return message
 }
 
 // mcpInitAuthErrorDisplay returns the user-facing startup error for a server

@@ -6521,9 +6521,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1047: MCPService.inventoryStatusForConfig now logs one slog.Warn(\"MCP server startup failed\") per failed startup attempt, including optional-grace results that are dropped before any observer notification, and skips context cancellation like Rust's Cancelled outcome. Startup failure text now renders the errors.Unwrap chain via mcpStartupErrorMessage (embedding wrappers are not repeated), matching anyhow {:#}; status.Error, ToolsError, and the observer error all carry it. Covered by TestMCPStartupFailureLogsOncePerAttemptLikeRust, TestMCPStartupFailureLogsDiscoveryResultWithoutNotificationLikeRust, and TestMCPStartupErrorMessageKeepsErrorChainLikeRust. Verified with go test ./mcp -count=1, go test ./appserver -run 'MCP|Mcp' -count=1, go test ./parity -count=1, go build ./..."
    ]
   },
   {
