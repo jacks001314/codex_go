@@ -8,6 +8,7 @@ import (
 
 	"codex_go/codexapi"
 	"codex_go/protocol"
+	"codex_go/retainedctx"
 	"codex_go/sandbox"
 )
 
@@ -76,6 +77,11 @@ type AgentRequest struct {
 	// only for a ChatGPT-authenticated account (Rust #44893 / for_auth).
 	CyberAccessProgram string
 	ClientMetadata     map[string]string
+	// MCPAttribution is the thread's cumulative MCP tools/call attribution
+	// snapshot (Rust CodexResponsesMetadata::mcp_attribution). It is body-only
+	// and reaches the request only when the resolved provider is granted
+	// internal metadata (Rust #47899).
+	MCPAttribution *retainedctx.McpAttribution
 	// Trace is the W3C trace context of the request that started this turn
 	// (Rust's `request_trace`): the websocket payload carries it so the model
 	// call stays inside the caller's trace.

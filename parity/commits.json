@@ -20790,9 +20790,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "retainedctx/mcp_attribution.go carries Rust #47899's bounded diagnostics: McpAttributionErrorReason decodes every upstream variant with `#[serde(other)]`-style `unknown` fallback, a non-string or absent reason is dropped without failing the checkpoint, and turn/mcp_attribution.go keeps the first observed reason across checkpoints, compaction, resume and fork (`restored_error_unknown` for older error checkpoints, `checkpoint_invalid`/`checkpoint_source_conflict`/`source_invalid`/`history_missing_checkpoint`). Go mutexes never poison, so `recorder_poisoned` exists only as a decoded value.",
+    "model/agent.go + model/responses_agent.go now report the snapshot on Responses requests: a provider granted internal metadata receives a body-only `client_metadata.mcp_attribution` document bounded to 16 KiB (Rust MAX_MCP_ATTRIBUTION_BYTES), falling back to `payload_too_large` when oversized and `serialization_failed` on any other marshal error; untrusted providers never see the member and it is never promoted to a compatibility header. turn/runtime.go and turn/agent_loop.go pass the recorder snapshot on every sampling request regardless of the executed-tool-call feature gate, and appserver/compact_remote.go does the same for remote compaction.",
+    "Regression coverage: turn/mcp_attribution_test.go (first reason survives later sources, restored diagnostics, legacy/conflict rows), retainedctx/harness_metadata_test.go (lenient reason decoding), appserver/mcp_attribution_persist_test.go (checkpoint batches and seeded restore), model/mcp_attribution_metadata_like_rust_test.go (grant gating, exact JSON, oversized fallback), turn/mcp_attribution_request_metadata_like_rust_test.go (snapshot per request with metadata capture disabled). Verified with `go test ./model ./turn -count=1` and `go test ./appserver -run 'McpAttribution|Compaction' -count=1`."
    ]
   },
   {
@@ -24073,9 +24075,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/thread_prediction.go defines Rust #49480's API types: ThreadPredictionRequestParams (threadId/sourceTurnId), the empty ThreadPredictionRequestResponse, ThreadPredictionUpdatedNotification and ThreadPredictionResult (`completed` with optional text, `failed` with no text member). appserver/protocol.go and appserver/schema.go register `thread/prediction/request` and `thread/prediction/updated` as experimental methods; the request has no handler, so a capability-enabled call returns JSON-RPC method-not-found.",
+    "TUI routing matches the Rust commit: tui/app/app_server_event_targets.go routes `thread_prediction_updated` to the notification's own thread, while the generic chat-widget dispatch leaves the unimplemented notification inert because no producer emits it yet.",
+    "Regression coverage: appserver/thread_prediction_protocol_like_rust_test.go pins the camelCase wire shape, completed with and without text, the failed variant, both experimental method lists and the method-not-found response; tui/app/prediction_notification_target_like_rust_test.go pins thread and invalid-id routing. Verified with `go test ./appserver -run ThreadPrediction -count=1` and `go test ./tui/app -run PredictionNotificationTarget -count=1`."
    ]
   },
   {

@@ -11,6 +11,7 @@ import (
 	contextfrag "codex_go/context"
 	"codex_go/install"
 	"codex_go/model"
+	"codex_go/retainedctx"
 	"codex_go/session"
 	"codex_go/tool"
 	"codex_go/turn"
@@ -255,6 +256,16 @@ type agentCompactRunner struct {
 	executedToolCallMetadataEnabled bool
 }
 
+// mcpAttributionSnapshot reports the thread's cumulative MCP attribution for
+// the compaction request (Rust `Session::compaction_responses_metadata`).
+func (r *agentCompactRunner) mcpAttributionSnapshot() *retainedctx.McpAttribution {
+	if r == nil || r.executedToolCalls == nil {
+		return nil
+	}
+	snapshot := r.executedToolCalls.McpAttributionSnapshot()
+	return &snapshot
+}
+
 func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
 	if r == nil || r.agent == nil {
 		return nil, nil
@@ -291,6 +302,7 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		TurnID:          request.TurnID,
 		Store:           false,
 		ClientMetadata:  clientMetadata,
+		MCPAttribution:  r.mcpAttributionSnapshot(),
 		ServiceTier:     r.serviceTier,
 		ReasoningEffort: strings.TrimSpace(r.effort),
 		// Rust passes the compaction turn's access program into the local prompt

@@ -3830,3 +3830,10 @@ Status after this batch: `2303 complete`, `462 not_applicable`, `322 audit_pendi
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
+
+### Requests metadata and prediction protocol batch (Round 1094)
+
+- #47899 MCP attribution diagnostics: every upstream reason decodes leniently (unknown/malformed reasons never flip the status), the first recorder error survives checkpoints, compaction, resume and fork, and first-party Responses requests now carry the body-only 16 KiB-bounded `mcp_attribution` client-metadata document with `payload_too_large`/`serialization_failed` fallbacks. The snapshot is reported on every sampling request even when executed-tool-call capture is disabled, and remote compaction reports it too.
+- #49480 thread prediction protocol types: `thread/prediction/request` (threadId/sourceTurnId) and `thread/prediction/updated` (`completed` with optional text or `failed`) are registered as experimental, the request stays method-not-found, and the notification routes to its named thread.
+
+Status after this batch: `2305 complete`, `462 not_applicable`, `322 audit_pending`, `55 regression_pending`, `5 partial`, `6 blocked_precondition`.
