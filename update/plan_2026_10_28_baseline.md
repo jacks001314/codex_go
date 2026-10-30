@@ -3636,6 +3636,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: `appserver/managed_daemon_test.go` covers raising a lower soft limit, preserving a higher one, capping at a lower hard limit, an already-at-target limit, and an unlimited hard limit.
 - Verified with `go test ./appserver -run 'ManagedDaemonNoFileTarget|UnixSocket' -count=1` and a `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./appserver` cross-build.
 
-Status after reconciliation: `2226 complete`, `462 not_applicable`,
-`322 audit_pending`, `134 regression_pending`, `5 partial`,
+### Shared task pinning in the agent command center (Round 1074)
+
+- Rust #51500 adds `p` / configurable `agents.toggle_pin` to pin or unpin the selected task, renders pinned tasks first under a `Pinned` group while preserving shared section order and filters, discovers pins from the shared section (including tasks outside the recent window), refreshes after changes, and disables pinning when the server lacks shared sections.
+- Complete: `tui/agents_overview/pin.go` owns section ranks, Pinned grouping, search/status filtering, source gating, pending-action suppression, and the shortcut hint; `tui/tea/agents_overview_pin.go` pages `thread/list` by `section_position` for both source-kind passes and sends `thread/section/move` with `PinnedThreadSectionID` (null section to unpin). `app/agents_overview_tui.go` and `app/agents_dashboard.go` seed pinned rows from the real app-server client, including tasks outside the recent window, and `tui/keymap.go` exposes the default `p` binding.
+- Regression: pin-related tests cover core grouping/order/filtering, shortcut and duplicate suppression, configurable hints, tea dispatch, pagination, unsupported-server fallback, transport calls, host row seeding, and the real dashboard integration.
+- Verified with `go test ./tui/agents_overview -run 'Pin|Pinned' -count=1`, `go test ./tui/tea -run 'Pin|Pinned' -count=1`, `go test ./app -run 'Pin|Pinned' -count=1`, and `go test ./tui -run 'TogglePin|Pin' -count=1`.
+
+Status after reconciliation: `2227 complete`, `462 not_applicable`,
+`322 audit_pending`, `133 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

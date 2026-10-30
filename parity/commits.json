@@ -27749,9 +27749,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Complete: the command center implements shared task pinning end to end. tui/agents_overview/pin.go owns section-order ranks, the Pinned group, search/status filtering, source gating (cli/vscode/exec/appServer/atlas/chatgpt), pending-action suppression, and the configurable agents.toggle_pin hint; tui/tea/agents_overview_pin.go pages thread/list by section_position for both default interactive and exec/app-server sources, treats JSON-RPC -32600..-32602 as unsupported, and moves threads through thread/section/move with PinnedThreadSectionID (nil section to unpin). app/agents_overview_tui.go and app/agents_dashboard.go seed pinned rows outside the recent window and wire the real app-server client; tui/keymap.go exposes the default `p` binding. Regression tests: TestPinnedTasksRenderFirstInPinnedGroupLikeRust, TestPinnedTasksKeepSharedSectionOrderLikeRust, TestPinnedTasksRespectSearchFiltersLikeRust, TestTogglePinSelectedLikeRust, TestSupportsSharedPinningLikeRust, TestRefreshKeepsPinsAndPendingStateLikeRust, TestPinnedFooterHintLikeRust, TestAgentsOverviewTogglePinDispatchesLikeRust, TestAgentsOverviewPinnedThreadsRefreshLikeRust, TestListPinnedThreadsPagesSharedSectionLikeRust, TestListPinnedThreadsReportsUnsupportedServerLikeRust, TestPinTogglerMovesThreadToSharedSectionLikeRust, TestAgentsOverviewPinRequestDrivesRealDashboardLikeRust, and TestPinnedTaskRendersInPinnedGroupThroughRealListingLikeRust. Verified with go test ./tui/agents_overview -run 'Pin|Pinned' -count=1, go test ./tui/tea -run 'Pin|Pinned' -count=1, go test ./app -run 'Pin|Pinned' -count=1, and go test ./tui -run 'TogglePin|Pin' -count=1."
    ]
   },
   {
