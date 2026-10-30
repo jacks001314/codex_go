@@ -19752,9 +19752,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1012 (实现+回归): #47630 把 Guardian review 绑定到 action 所属的目标环境。Rust 在 env-scoped approval 中携带 environment_id，用目标环境选择/标注 permission context，并在推断前拒绝不可用目标环境与超过 256 字节的 environment id，超限 ID 仍保留手动审批路由。Go 已具备大部分: command/apply_patch/request_permissions/network_access/write_stdin/execve 的 planned-action JSON 都显式输出 environment_id (state/guardian_action_prompt.go guardianActionJSONValue)，reviewer 用 turnPermissionProfile(threadID, turnID, action.EnvironmentID) 解析目标环境 profile，state.BuildPromptOptions.PermissionContext 按环境标注并显式声明 no explicit denied-read paths/globs。本轮修复三个真实缺口: (1) 目标环境不可用时 guardianTurnPermissionProfileForTurn 返回 nil 导致 review 继续且无 permission 证据，现在新增 targetEnvironmentAvailable 回调 (agent_runtime.guardianTargetEnvironmentAvailableForTurn 复用 guardianTurnEnvironmentForTurn 的 found 判定)，Review 在推断前 fail-closed 拒绝，消息对齐 Rust: write_stdin 为 automatic approval review cannot access the terminal's environment; select it before retrying，其他为 automatic approval review cannot access the request's environment，MCP action 无目标环境不受影响; (2) 新增 GuardianMaxEnvironmentIDBytes=256 与 joinPlannedAction 的字节上限检查 (UTF-8 字节，与 Rust .len() 一致)，超限返回 approval environment id exceeds Guardian's 256-byte limit，而 FormatGuardianActionPretty 仍完整渲染 environment_id 以保留手动审批路由; (3) state.Action.Validate 之前拒绝 write_stdin，使模型 reviewer 无法评审终端输入，现要求 session_id 与 cwd 后允许该 action 走完整 prompt。新增 appserver/guardian_environments_like_rust_test.go (不可用环境拒绝且不调用模型、write_stdin 专用消息与可用路径、超限 ID 拒绝且 action 可渲染、secondary→primary 切换时复用同一 session 前缀并各自渲染目标环境证据与 planned-action environment_id) 和 state/guardian_environment_limit_like_rust_test.go (256 字节边界: ASCII/控制字符/多字节 UTF-8; 257 字节拒绝; 手动审批 JSON 完整)。验证: go test ./state -count=1; go test ./appserver -run 'GuardianReviewRejectsUnavailableTargetEnvironmentLikeRust|GuardianReviewRejectsOversizedEnvironmentIDLikeRust|GuardianReviewsTargetEnvironmentAndReusesPrefixLikeRust' -count=1; go test ./appserver -count=1 (仅剩 7 个既有失败); go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

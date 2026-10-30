@@ -201,6 +201,10 @@ func (a *Action) Validate() error {
 		if len(a.Permissions) == 0 {
 			return fmt.Errorf("%w: permissions are required", ErrInvalidGuardianRequest)
 		}
+	case "write_stdin":
+		if a.SessionID == nil || a.CWD == "" {
+			return fmt.Errorf("%w: session id and cwd are required", ErrInvalidGuardianRequest)
+		}
 	case ActionNativeToolCall:
 		if len(a.NativeCall) == 0 {
 			return fmt.Errorf("%w: native call is required", ErrInvalidGuardianRequest)

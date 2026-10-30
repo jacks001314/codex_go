@@ -37,7 +37,7 @@
     ]
   },
   "certificationBlockers": [
-    "Per-commit certification of the 3155 upstream commits in bd19459358..7ac60816 is in progress; parity/commits.json records every commit with its audit status (2171 complete, 451 not applicable, 345 audit_pending, 178 regression_pending, 4 partial, 6 blocked_precondition)",
+    "Per-commit certification of the 3155 upstream commits in bd19459358..7ac60816 is in progress; parity/commits.json records every commit with its audit status (2172 complete, 451 not applicable, 345 audit_pending, 177 regression_pending, 4 partial, 6 blocked_precondition)",
     "6 commits are blocked on architecture (local unified-exec routing for in-memory shell snapshots, Unix PTY shutdown, closed-agent navigation, TUI Super key, Windows MXC, native cloud conversation TUI); Windows proxy CONNECT auth (#55994) is implemented"
   ],
   "certificationReady": false

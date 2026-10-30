@@ -147,6 +147,11 @@ type modelGuardianReviewer struct {
 	// one was resolved. The last argument is the tool payload's own environment
 	// id when it names one (Rust's `for_tool`).
 	turnPermissionProfile func(threadID, turnID, environmentID string) (*sandbox.PermissionProfile, string, *string)
+	// targetEnvironmentAvailable reports whether an environment-scoped action's
+	// environment belongs to the reviewed turn's captured selections (Rust
+	// ReviewAction::validate). An unavailable target is denied before inference
+	// instead of being reviewed against the primary environment.
+	targetEnvironmentAvailable func(threadID, turnID, environmentID string) bool
 	// latestResponseID resolves the reviewed turn's newest response id for the
 	// review request's `parent_response_id` client metadata (Rust #45441).
 	latestResponseID      func(threadID, turnID string) string
@@ -872,6 +877,23 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		return state.DecisionAborted, "", err
 	}
 	emit(threadID, event)
+	// Rust #47630 ReviewAction::validate: an action may only be reviewed against
+	// the environment that owns it. Manual approval routing still sees the
+	// action JSON; Guardian inference never runs for a missing environment.
+	if environmentID := strings.TrimSpace(action.EnvironmentID); environmentID != "" && r.targetEnvironmentAvailable != nil &&
+		!r.targetEnvironmentAvailable(threadID, turnID, environmentID) {
+		message := "automatic approval review cannot access the request's environment"
+		if strings.TrimSpace(action.Type) == "write_stdin" {
+			message = "automatic approval review cannot access the terminal's environment; select it before retrying"
+		}
+		completed, _ := store.FailClosed(event.ID, message)
+		emit(threadID, completed)
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
+		attribution.FailureReason = "environment_unavailable"
+		emitReviewMetrics()
+		return state.DecisionDenied, message, nil
+	}
 	if r.tracer != nil {
 		if tracer := r.tracer(); tracer != nil {
 			span := tracer.StartSpan("guardian_review", map[string]string{

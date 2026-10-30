@@ -23,6 +23,12 @@ const (
 	// guardianApprovalReasonTokens is Rust's MAX_APPROVAL_REASON_TOKENS, applied
 	// during synchronous Guardian request preparation (#57494).
 	guardianApprovalReasonTokens = 512
+
+	// GuardianMaxEnvironmentIDBytes is Rust's MAX_GUARDIAN_ENVIRONMENT_ID_BYTES
+	// (#47630): an environment-scoped approval above this bound never reaches
+	// Guardian inference, while its action JSON still renders for manual
+	// approval routing.
+	GuardianMaxEnvironmentIDBytes = 256
 )
 
 // renderGuardianToolDescriptions mirrors Rust's planned-action composition: the
@@ -369,6 +375,9 @@ func renderPlannedAction(actionJSON string, kind plannedActionKind, hasTrigger b
 
 // joinPlannedAction renders the framing the way the review prompt consumes it.
 func joinPlannedAction(action Action, presentation ActionPresentation) (string, error) {
+	if len(action.EnvironmentID) > GuardianMaxEnvironmentIDBytes {
+		return "", fmt.Errorf("approval environment id exceeds Guardian's 256-byte limit")
+	}
 	if strings.TrimSpace(action.Type) == ActionNativeToolCall {
 		// Native calls use message delivery: the text section only points the
 		// reviewer at the evidence, which the composer emits as response items.

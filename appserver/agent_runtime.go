@@ -143,6 +143,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.rolloverForTokenBudget = r.guardianReviewTokenBudgetReached
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
 		modelReviewer.turnPermissionProfile = r.guardianTurnPermissionProfileForTurn
+		modelReviewer.targetEnvironmentAvailable = r.guardianTargetEnvironmentAvailableForTurn
 		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.syncImageContextWindow = func(threadID, modelID string) (int64, bool) {
@@ -871,6 +872,18 @@ func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID st
 		return nil, "", environmentID
 	}
 	return resolution.Profile, active.Params.CWD, environmentID
+}
+
+// guardianTargetEnvironmentAvailableForTurn mirrors Rust's ReviewAction::validate
+// (#47630): an environment-scoped approval may only reach Guardian when the
+// action's environment is part of the turn's captured selections.
+func (r *RuntimeRouter) guardianTargetEnvironmentAvailableForTurn(threadID, turnID, environmentID string) bool {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return false
+	}
+	_, _, _, found := r.guardianTurnEnvironmentForTurn(active.Params, strings.TrimSpace(environmentID))
+	return found
 }
 
 // guardianTurnEnvironmentForTurn resolves the reviewed turn's environment: the

@@ -3206,6 +3206,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Go already formats the same evidence in `state/guardian_permission_context.go`, inserts it between node-REPL evidence and the planned action in `state/guardian.go`, and composes it from `turnPermissionProfile` plus the unreadable-roots/globs helpers in `appserver/guardian_reviewer.go`; `AsyncPermissionContextSectionItems` keeps the 3000-byte async limit for a future classifier, and Go has no async Guardian scorer.
 - New `TestGuardianSessionReuseKeepsPermissionContextLikeRust` reuses one `guardianSessionRunner` across two reviews and asserts the permission section, denied path, and denied glob appear in both the initial request and the second review's delta (which carries the first response ID).
 - Verified with `go test ./appserver -run 'GuardianSessionReuseKeepsPermissionContextLikeRust|ModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust' -count=1`, `go test ./appserver -run 'Guardian|Permission' -count=1`, `go test ./state -run 'Permission|Guardian' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2171 complete`, `451 not_applicable`,
-`345 audit_pending`, `178 regression_pending`, `4 partial`,
+### Guardian reviews bound to the target environment (Round 1012)
+
+- Rust #47630 carries `environment_id` through environment-scoped approvals, selects and labels permission evidence from the action's own environment, rejects unavailable targets before inference, and caps ids at 256 bytes while keeping oversized ids routable to manual approval (#47630, complete).
+- Go already rendered `environment_id` in every planned-action JSON and resolved the target profile, but an unavailable target silently produced no evidence and was reviewed against nothing; `state.Action.Validate` also rejected `write_stdin`, so the model reviewer could not review terminal input at all.
+- `modelGuardianReviewer.targetEnvironmentAvailable` (wired to `guardianTurnEnvironmentForTurn` in `appserver/agent_runtime.go`) now denies unavailable environments before inference with Rust's request/terminal messages, while MCP actions without a target are unaffected. `state.GuardianMaxEnvironmentIDBytes` rejects ids over 256 UTF-8 bytes in `joinPlannedAction`, and `FormatGuardianActionPretty` still renders them for manual approval.
+- New `appserver/guardian_environments_like_rust_test.go` covers the unavailable/environment-specific/session-reuse and oversized-id paths; `state/guardian_environment_limit_like_rust_test.go` pins the byte boundary across ASCII, control, and multi-byte ids.
+- Verified with `go test ./state -count=1`, the three new appserver tests by name, `go test ./appserver -count=1` (only the seven known pre-existing failures remain), and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2172 complete`, `451 not_applicable`,
+`345 audit_pending`, `177 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
