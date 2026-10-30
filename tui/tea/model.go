@@ -635,6 +635,14 @@ type TurnInterruptedMsg struct {
 	Err      error
 }
 
+// NewSessionStartFailedMsg reports that a replacement thread could not be
+// started before any thread existed (Rust #42671): the submitted message goes
+// back to the composer and the active thread stays untouched.
+type NewSessionStartFailedMsg struct {
+	ErrorMessage string
+	Request      SubmitRequest
+}
+
 // AppServerDisconnectMsg reports that the TUI's app-server connection failed at
 // the transport level. Rust recovers through App::begin_reconnect, whose
 // ChatWidget::pause_for_disconnect retires local voice media before the TUI
@@ -3621,6 +3629,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.refreshStatusControlsCmd()
 		}
 		return m, nil
+	case NewSessionStartFailedMsg:
+		m.applyNewSessionStartFailed(msg)
+		return m, m.refreshStatusControlsCmd()
 	case TurnCompletedMsg:
 		if m.applyInactiveThreadTurnCompleted(msg) {
 			return m, m.refreshStatusControlsCmd()

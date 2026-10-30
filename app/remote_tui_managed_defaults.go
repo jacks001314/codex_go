@@ -8,6 +8,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"codex_go/appserver"
@@ -39,7 +40,10 @@ func (c *remoteAppServerTUIClient) remoteManagedThreadStartParams(ctx context.Co
 	// invocation selected. The resolved client configuration stays out of the
 	// request so the app server owns its own new-thread defaults.
 	launchChoices := startupLaunchChoicesFromLaunch(root)
-	defaults, layers, effective, ok := c.remoteNewThreadModelDefaults(ctx, cwd)
+	defaults, layers, effective, ok, readErr := c.remoteNewThreadModelDefaults(ctx, cwd)
+	if readErr != nil {
+		return params, readErr
+	}
 	if !ok {
 		// Rust #50913 (`bootstrap_server_owned_start`): when the server does not
 		// support `config/read` the implicit client settings are cleared instead
@@ -227,21 +231,68 @@ func applyManagedDefaultsToThreadStartParams(
 // the relevant working directory). It reports ok=false when config/read fails,
 // leaving the launch selection untouched; a nil defaults value means the server
 // configures no managed new-thread defaults.
-func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaults(ctx context.Context, cwd string) (*codextui.ManagedNewThreadDefaults, []config.Layer, map[string]any, bool) {
+func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaults(ctx context.Context, cwd string) (*codextui.ManagedNewThreadDefaults, []config.Layer, map[string]any, bool, error) {
 	params := config.ConfigReadParams{IncludeLayers: true}
 	if trimmed := strings.TrimSpace(cwd); trimmed != "" {
 		params.CWD = &trimmed
 	}
 	var read config.ConfigReadResponse
 	if err := c.remoteConfigRequest(ctx, appserver.MethodConfigRead, params, &read); err != nil {
-		return nil, nil, nil, false
+		if remoteNewSessionDefaultsUnsupported(err) {
+			// Rust read_effective_config_if_supported: a server without
+			// config/read still starts threads from the client defaults.
+			return nil, nil, nil, false, nil
+		}
+		// Any other failure aborts the replacement thread before thread/start so
+		// the active session and the composed message stay intact (Rust #42671).
+		return nil, nil, nil, false, &remoteNewSessionDefaultsError{err: err}
 	}
 	var requirements config.ConfigRequirementsReadResponse
 	if err := c.remoteConfigRequest(ctx, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err != nil {
-		return nil, read.Layers, read.Config, true
+		return nil, read.Layers, read.Config, true, nil
 	}
 	defaults := newThreadModelDefaultsFromRequirements(requirements.Requirements)
-	return defaults, read.Layers, read.Config, true
+	return defaults, read.Layers, read.Config, true, nil
+}
+
+// remoteNewSessionDefaultsError marks a real config/read failure for a
+// replacement thread so the TUI reports Rust's "Failed to read new session
+// defaults" message instead of the generic thread-start error.
+type remoteNewSessionDefaultsError struct {
+	err error
+}
+
+func (e *remoteNewSessionDefaultsError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *remoteNewSessionDefaultsError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+// remoteNewSessionDefaultsUnsupported mirrors Rust's
+// read_effective_config_if_supported matcher: only "method/variant unknown"
+// means the server is too old to answer config/read.
+func remoteNewSessionDefaultsUnsupported(err error) bool {
+	var rpcErr *remoteRPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	if rpcErr.Code == appserver.JSONRPCMethodNotFoundErrorCode {
+		return true
+	}
+	if rpcErr.Code != jsonRPCInvalidRequestCode {
+		return false
+	}
+	message := strings.ToLower(rpcErr.Message)
+	return strings.Contains(message, "config/read") &&
+		(strings.Contains(message, "unknown variant") || strings.Contains(message, "unknown method"))
 }
 
 // newThreadModelDefaultsFromRequirements converts the wire requirements into

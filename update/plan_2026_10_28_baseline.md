@@ -4119,3 +4119,11 @@ Status after this batch: `2346 complete`, `465 not_applicable`, `322 audit_pendi
 - Known unrelated failure: the full `go test ./appserver` run still fails only the Rust-protocol coverage checks for the not-yet-ported `thread/guardianReview` method, because the local Rust checkout is ahead of Go; no skill-shadow test fails.
 
 Status after this batch: `2347 complete`, `465 not_applicable`, `322 audit_pending`, `9 regression_pending`, `5 partial`, `7 blocked_precondition`.
+
+### Failed replacement threads keep the session and composed input (Round 1130)
+
+- #42671 has two halves. The server-defaults half was already in Go: `remoteManagedThreadStartParams` reads `config/read` (and requirements) before `thread/start` with the remote cwd override, applies the server model/reasoning-effort only where `config.HasLaunchSetting` shows no explicit launch choice, and keeps the client launch choices for servers without `config/read`.
+- The failure half is now closed. `remoteNewThreadModelDefaults` distinguishes an unsupported server (`-32601`, or `-32600` naming `config/read` as an unknown method/variant) from a real failure; a real failure aborts the replacement-thread start with Rust's `Failed to read new session defaults: …`. A `thread/start` failure for a session with no thread emits `codextea.NewSessionStartFailedMsg` with the submission, and the TUI restores the prompt, structured text elements, attachments and mention bindings to the composer, drops the optimistic transcript entry Rust never renders, keeps the active thread intact, and renders `Failed to start a fresh session through the app server: …`. The agents-overview new-session source propagates the same failure instead of silently using defaults.
+- Tests: `TestRemoteNewSessionStartFailurePreservesComposedInputLikeRust`, `TestRemoteNewSessionDefaultsUnsupportedOnlyForOldServersLikeRust`, `TestNewSessionStartFailureRestoresComposedInputLikeRust`; `go build ./...`, `go test ./tui/...` and the targeted `./app` runs pass. `TestExecJSONEndToEnd` and `TestLocalSessionForksRustRolloutWithoutGoSnapshot` fail identically on the parent commit and are unrelated.
+
+Status after this batch: `2348 complete`, `465 not_applicable`, `322 audit_pending`, `8 regression_pending`, `5 partial`, `7 blocked_precondition`.

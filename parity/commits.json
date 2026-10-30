@@ -7325,9 +7325,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1130 (lead): #42671 has two halves. The server-defaults half was already in Go: `remoteManagedThreadStartParams` reads `config/read` (plus requirements) before `thread/start` using the remote cwd override, applies the server model/reasoning-effort only where `config.HasLaunchSetting` shows no explicit launch choice, and falls back to the client launch choices on servers without `config/read`. This round closes the failure half. `remoteNewThreadModelDefaults` now distinguishes an unsupported server (`-32601`, or `-32600` naming config/read as an unknown method/variant) from a real failure; a real failure aborts the replacement-thread start with Rust's `Failed to read new session defaults: ...` message. A `thread/start` failure for a session with no thread emits `codextea.NewSessionStartFailedMsg` carrying the submission, and the TUI restores the prompt, structured text elements, attachments and mention bindings to the composer, drops the optimistic transcript entry Rust never renders, keeps the active thread/config intact, and renders `Failed to start a fresh session through the app server: ...`; the agents-overview new-session source propagates the same config-read failure instead of silently using defaults. Tests: TestRemoteNewSessionStartFailurePreservesComposedInputLikeRust, TestRemoteNewSessionDefaultsUnsupportedOnlyForOldServersLikeRust, TestNewSessionStartFailureRestoresComposedInputLikeRust; `go build ./...`, `go test ./tui/...` and the targeted `./app` runs pass. The pre-existing `./app` failures TestExecJSONEndToEnd and TestLocalSessionForksRustRolloutWithoutGoSnapshot reproduce on the parent commit and are unrelated."
    ]
   },
   {

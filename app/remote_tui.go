@@ -3345,12 +3345,14 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 		threadID = strings.TrimSpace(state.ThreadID)
 	}
 	if threadID == "" {
-		var err error
-		threadID, err = client.startThread(ctx, root, state)
+		startedThreadID, err := client.startThread(ctx, root, state)
 		if err != nil {
-			sendRemoteTurnError(messages, err)
+			// Rust #42671: the replacement thread never started, so the composed
+			// message returns to the composer and the active session survives.
+			sendRemoteNewSessionStartError(messages, err, request)
 			return
 		}
+		threadID = startedThreadID
 		if state != nil {
 			state.SetThreadID(threadID)
 		}
@@ -6014,6 +6016,26 @@ func remoteRequestIDString(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	return id.String(), nil
+}
+
+// sendRemoteNewSessionStartError reports a replacement-thread start that failed
+// before any thread existed, handing the submitted message back to the composer
+// (Rust #42671). A real config/read failure keeps Rust's distinct message; an
+// older server without config/read still starts from the client defaults.
+func sendRemoteNewSessionStartError(messages chan<- bubbletea.Msg, err error, request codextea.SubmitRequest) {
+	prefix := "Failed to start a fresh session through the app server: "
+	var defaultsErr *remoteNewSessionDefaultsError
+	if errors.As(err, &defaultsErr) {
+		prefix = "Failed to read new session defaults: "
+	}
+	text := strings.TrimSpace(err.Error())
+	if text == "" {
+		text = "remote app-server error"
+	}
+	if isRemoteTransportError(err) {
+		messages <- codextea.AppServerDisconnectMsg{}
+	}
+	messages <- codextea.NewSessionStartFailedMsg{ErrorMessage: prefix + text, Request: request}
 }
 
 func sendRemoteTurnError(messages chan<- bubbletea.Msg, err error) {
