@@ -87,10 +87,7 @@ func (r *RuntimeRouter) retainedLiveContextLocked(threadID string) *retainedctx.
 	context := r.retainedContexts[threadID]
 	created := false
 	if context == nil {
-		context = r.checkpointRetainedContext(threadID)
-		if context == nil {
-			context = &retainedctx.RetainedContext{}
-		}
+		context = r.restoreRetainedContextCheckpoint(threadID)
 		if r.retainedContexts == nil {
 			r.retainedContexts = map[string]*retainedctx.RetainedContext{}
 		}
@@ -128,22 +125,37 @@ func (r *RuntimeRouter) forgetThreadRetainedContext(threadID string) {
 }
 
 // checkpointRetainedContext reads the newest compaction checkpoint's retained
-// snapshot, which is what a resumed thread restores before later evidence is
-// replayed.
-func (r *RuntimeRouter) checkpointRetainedContext(threadID string) *retainedctx.RetainedContext {
+// snapshot and reports whether the rollout has a compaction checkpoint at all.
+// A checkpoint without a retained snapshot still replaced the model window, so
+// its earlier user instructions cannot be proven complete.
+func (r *RuntimeRouter) checkpointRetainedContext(threadID string) (*retainedctx.RetainedContext, bool) {
 	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
 	if err != nil || record == nil {
-		return nil
+		return nil, false
 	}
 	path := r.services.ThreadRouter.threadRolloutPath(record)
 	if strings.TrimSpace(path) == "" {
-		return nil
+		return nil, false
 	}
 	lines, _, err := rollout.Load(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	return rollout.CompactedRetainedContext(lines)
+	return rollout.CompactedRetainedContext(lines), rollout.HasCompactionCheckpoint(lines)
+}
+
+// restoreRetainedContextCheckpoint mirrors Rust's
+// `ContextManager::restore_retained_context`: restoring a saved thread must pass
+// through the live bound/order repair, and an older compaction checkpoint without
+// retained context leaves the user-instruction history incomplete.
+func (r *RuntimeRouter) restoreRetainedContextCheckpoint(threadID string) *retainedctx.RetainedContext {
+	checkpoint, hasCheckpoint := r.checkpointRetainedContext(threadID)
+	context := &retainedctx.RetainedContext{}
+	if !hasCheckpoint {
+		return context
+	}
+	context.Restore(checkpoint, nil)
+	return context
 }
 
 // retainedContextEvents reads the sparse retained-context facts the thread's
@@ -183,10 +195,7 @@ func (r *RuntimeRouter) recordRetainedContextEvent(threadID string, event retain
 	context := r.retainedContexts[threadID]
 	created := false
 	if context == nil {
-		context = r.checkpointRetainedContext(threadID)
-		if context == nil {
-			context = &retainedctx.RetainedContext{}
-		}
+		context = r.restoreRetainedContextCheckpoint(threadID)
 		if r.retainedContexts == nil {
 			r.retainedContexts = map[string]*retainedctx.RetainedContext{}
 		}

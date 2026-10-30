@@ -3146,6 +3146,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New `rollout/retained_context_steer_rollback_test.go` covers legacy and paginated rollouts, delayed answers, checkpoint snapshots, and the no-rollback case; `appserver/retained_steer_rollback_like_rust_test.go` covers resume from a persisted steer rollback.
 - Verified with `go test ./rollout -run 'RetainedContext|SteerRollback|CompactedRetained' -count=1`, `go test ./rollout ./retainedctx -count=1`, and `go test ./appserver -run 'Retained|Verified|Guardian' -count=1`.
 
-Status after reconciliation: `2162 complete`, `451 not_applicable`,
-`346 audit_pending`, `185 regression_pending`, `5 partial`,
+### Retained context restore on resume (Round 1003)
+
+- Rust #42293 preserves host-verified `request_user_input` answers across history compaction by persisting a bounded, model-invisible retained context in rollout events and compaction checkpoints, restoring it when a thread resumes, removing answers whose source turns were rolled back, and never inheriting parent-local answers into child forks (#42293, complete).
+- Go previously treated the newest checkpoint snapshot as the live retained context, so resuming skipped Rust `ContextManager::restore_retained_context`: a legacy checkpoint without a snapshot never marked earlier user instructions incomplete, families were not re-bounded, `next_order` was not repaired, and inherited user messages did not imply incomplete verified answers.
+- `rollout/rollout.go` now exposes `HasCompactionCheckpoint`, distinguishing a checkpoint that replaced the model window from one that also carried retained facts. `appserver/retained_context.go` restores through `retainedctx.RetainedContext.Restore` (nil snapshot marks user instructions incomplete) and shares that entry point between live-context construction and event recording, keeping Rust replay order: restore checkpoint, then record the thread history, then replay suffix `RetainedContext` events.
+- New `appserver/retained_context_restore_like_rust_test.go` covers a legacy checkpoint without retained context, checkpoint `next_order` repair with a newly accepted answer sorting after stored facts, and re-bounding an oversized checkpoint answer; child forks keep dropping parent-local retained facts through the existing inherited handling.
+- Verified with `go test ./appserver -run 'TestRuntimeRouterMarksLegacyCheckpointWithoutRetainedContextIncompleteLikeRust|TestRuntimeRouterRestoresRetainedCheckpointOrderLikeRust|TestRuntimeRouterBoundsOversizedCheckpointAnswerLikeRust' -count=1`, `go test ./appserver -run 'Retained|Verified|Guardian|Compaction' -count=1`, `go test ./rollout ./retainedctx -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2163 complete`, `451 not_applicable`,
+`345 audit_pending`, `185 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

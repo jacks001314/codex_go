@@ -6149,9 +6149,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 11/13; needs review: remove_turns, restore_retained_context"
+    "Round 1003 (实现+回归): #42293 让 verified answers 跨越 history compaction 保留，并把 compaction checkpoint 纳入 resume 恢复语义。Go 原先在 appserver/retained_context.go 直接把 checkpoint 当作 live context，绕过 Rust ContextManager::restore_retained_context: 没有 retained_context 的 legacy checkpoint 必须把 user instructions 标为 incomplete，恢复时还必须重新 bound 各 family、修复 next_order、由 inherited user message 推出 verifiedAnswersIncomplete，并重新应用存储上限。新增 rollout.HasCompactionCheckpoint 区分存在 compaction 但没有 retained snapshot 的 legacy checkpoint; checkpointRetainedContext 改为返回 (snapshot, hasCheckpoint)，restoreRetainedContextCheckpoint 在无 checkpoint 时返回空 context、有 checkpoint 时调用 retainedctx.RetainedContext.Restore，live context 构建与事件记录共用同一入口。Rust 在 resume 时先 restore checkpoint 再重放后缀 RolloutItem::RetainedContext，Go 的 retainedLiveContextLocked 保持同样顺序 (Restore -> recordRetainedUserMessages -> 重放 retainedContextEvents); fork 不继承父线程 retained facts 由既有 inherited 处理覆盖。新增 appserver/retained_context_restore_like_rust_test.go 覆盖 legacy checkpoint incomplete、checkpoint order 修复与新答案排序、超限 checkpoint answer 重新 bound。验证: go test ./appserver -run TestRuntimeRouterMarksLegacyCheckpointWithoutRetainedContextIncompleteLikeRust|TestRuntimeRouterRestoresRetainedCheckpointOrderLikeRust|TestRuntimeRouterBoundsOversizedCheckpointAnswerLikeRust -count=1; go test ./appserver -run Retained|Verified|Guardian|Compaction -count=1; go test ./rollout ./retainedctx -count=1; go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

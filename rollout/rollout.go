@@ -2266,6 +2266,23 @@ func CompactedRetainedContext(lines []Line) *retainedctx.RetainedContext {
 	return nil
 }
 
+// HasCompactionCheckpoint reports whether the rollout contains a compaction
+// checkpoint, whether or not that checkpoint carries retained context. A
+// checkpoint written before retained context existed still replaced the model
+// window, so a resumed thread cannot prove its earlier user instructions are
+// complete.
+func HasCompactionCheckpoint(lines []Line) bool {
+	for i := range lines {
+		if lines[i].Type != "compacted" {
+			continue
+		}
+		if compactedEventFromPayload(lines[i].Payload) != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func compactedReplacementItems(payload json.RawMessage) ([]Item, bool) {
 	event := compactedEventFromPayload(payload)
 	if event == nil || len(event.ReplacementHistory) == 0 {
