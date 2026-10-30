@@ -74,6 +74,62 @@ func TestRestrictCapabilityRootsToSelectionsLikeRust(t *testing.T) {
 	if got := restrictCapabilityRootsToSelections(roots, nil); !sameRootIDs(got, roots) {
 		t.Fatalf("no selections = %v, want %v", rootIDs(got), rootIDs(roots))
 	}
+	// An explicit empty turn selection captures no environments, so it exposes
+	// no capability roots (Rust #49280).
+	if got := restrictCapabilityRootsToSelections(roots, []map[string]any{}); len(got) != 0 {
+		t.Fatalf("explicit empty selections = %v, want none", rootIDs(got))
+	}
+}
+
+// Rust #49280: stale thread roots must not reconnect an unselected executor or
+// shadow a selected root with the same ID. Filtering by the captured turn
+// environments happens before readiness resolution and ID deduplication.
+func TestRestrictCapabilityRootsFiltersStaleShadowBeforeDeduplicationLikeRust(t *testing.T) {
+	selected := provisionedRoot("shared-root", "selected")
+	stale := provisionedRoot("shared-root", "previous")
+	roots := []SelectedCapabilityRoot{stale, selected}
+	selection := []map[string]any{{"environmentId": "selected", "cwd": "/tmp/selected"}}
+
+	got := restrictCapabilityRootsToSelections(roots, selection)
+	if len(got) != 1 {
+		t.Fatalf("filtered roots = %#v, want only the selected root", got)
+	}
+	if got[0].Location.EnvironmentID != "selected" {
+		t.Fatalf("kept root = %#v, want the selected environment", got[0])
+	}
+	if merged := combineSelectedCapabilityRoots(got, nil); len(merged) != 1 || merged[0].Location.EnvironmentID != "selected" {
+		t.Fatalf("combined roots = %#v, want the selected root to survive deduplication", merged)
+	}
+}
+
+// Rust #49280: a turn whose captured environment snapshot is empty exposes no
+// capability roots. Omitting the environments field remains the legacy unset
+// path used by older Go clients and keeps the thread's retained roots.
+func TestStepCapabilityRootsRequireCapturedEnvironmentsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	raw, err := json.Marshal(provisionedRoot("selected-root", "selected"))
+	if err != nil {
+		t.Fatalf("marshal root: %v", err)
+	}
+	record := &session.Record{
+		ID: session.ThreadID("thread-empty-environments"),
+		Metadata: session.Metadata{
+			CWD:                     t.TempDir(),
+			SelectedCapabilityRoots: []json.RawMessage{raw},
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("save record: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	t.Cleanup(func() { _ = router.Close() })
+
+	if got := router.readySelectedCapabilityRootsForStep(string(record.ID), &turn.TurnStartParams{Environments: []map[string]any{}}); len(got) != 0 {
+		t.Fatalf("explicit empty environments = %v, want no capability roots", rootIDs(got))
+	}
+	if got := router.readySelectedCapabilityRootsForStep(string(record.ID), &turn.TurnStartParams{}); !sameRootIDs(got, []SelectedCapabilityRoot{provisionedRoot("selected-root", "selected")}) {
+		t.Fatalf("unset environments = %v, want the retained root", rootIDs(got))
+	}
 }
 
 // Rust #51493 (`remote_env_capability_roots_tests`): the discovery view follows

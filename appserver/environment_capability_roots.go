@@ -62,14 +62,19 @@ func CollectEnvironmentCapabilityRoots(selections []EnvironmentCapabilityRoots) 
 // current turn, and reselecting an environment restores its roots because the
 // thread's retained root list is unchanged.
 //
-// A thread without any environment selection keeps its full root list: the Go
-// port accepts roots at thread start without tying them to a selection, and the
-// app-server normalizes an empty selection list to "unset"
-// (persistThreadEnvironmentSelections deletes the key). Rust always starts a
-// thread with at least one selection, so it can observe an explicit empty set.
+// A thread without a recorded selection keeps its full root list because the Go
+// port accepts roots at thread start without tying them to a selection. An
+// explicit empty selection is different: it captures no turn environments, so
+// no root may reconnect an executor for that turn (Rust #49280).
 func restrictCapabilityRootsToSelections(roots []SelectedCapabilityRoot, selections []map[string]any) []SelectedCapabilityRoot {
-	if len(roots) == 0 || len(selections) == 0 {
+	if len(roots) == 0 {
 		return roots
+	}
+	if selections == nil {
+		return roots
+	}
+	if len(selections) == 0 {
+		return nil
 	}
 	perEnvironment := make([]EnvironmentCapabilityRoots, 0, len(selections))
 	for _, selection := range selections {

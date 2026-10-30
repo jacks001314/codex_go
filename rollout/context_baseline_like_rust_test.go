@@ -2,6 +2,7 @@ package rollout
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -282,5 +283,36 @@ func TestRecordFromPathIgnoresBareTurnContextBaselineLikeRust(t *testing.T) {
 	}
 	if strings.TrimSpace(record.Metadata.Model) != "gpt-bare" {
 		t.Fatalf("recovered model = %q, want the projected turn-context model", record.Metadata.Model)
+	}
+}
+
+// Rust #41901: paginated rollouts can contain repeated wake turns with no user
+// message boundary. A full world-state snapshot after the turn's latest
+// compaction, paired with that turn's context, is still a durable baseline, so
+// the newest empty wake turn supplies resume settings and world state.
+func TestReconstructContextBaselineUsesEmptyWakeTurnSnapshotsLikeRust(t *testing.T) {
+	lines := []Line{
+		contextBaselineEventLine(t, "turn_started", "user-turn"),
+		contextBaselineUserItemLine(t, "keep working"),
+		contextBaselineTurnContextLine(t, "user-turn", "initial-model"),
+		contextBaselineWorldStateLine(t, true, map[string]any{"environment": map[string]any{"status": "ready", "window": 0}}),
+		contextBaselineEventLine(t, "turn_complete", "user-turn"),
+	}
+	for window := 1; window <= 3; window++ {
+		turnID := fmt.Sprintf("wake-%d", window)
+		lines = append(lines,
+			contextBaselineEventLine(t, "turn_started", turnID),
+			contextBaselineCompactedLine(t),
+			contextBaselineWorldStateLine(t, true, map[string]any{"environment": map[string]any{"status": "starting", "window": window}}),
+			contextBaselineTurnContextLine(t, turnID, fmt.Sprintf("model-%d", window)),
+			contextBaselineWorldStateLine(t, false, map[string]any{"environment": map[string]any{"status": "ready"}}),
+			contextBaselineEventLine(t, "turn_complete", turnID),
+		)
+	}
+
+	baseline := ReconstructContextBaseline(lines)
+	assertContextBaselineTurnContext(t, baseline, "model-3", true)
+	if got := string(baseline.WorldState); got != `{"environment":{"status":"ready","window":3}}` {
+		t.Fatalf("world state = %s, want the newest empty wake turn baseline", got)
 	}
 }

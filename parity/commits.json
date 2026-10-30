@@ -4918,9 +4918,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go resumes through full rollout replay, and rollout/context_baseline.go already applies Rust's surviving-segment baseline: a full WorldState snapshot after the segment's latest compaction plus a compatible TurnContext supplies the newest resume settings and world state. Added TestReconstructContextBaselineUsesEmptyWakeTurnSnapshotsLikeRust for repeated empty wake turns across successive compactions; go test ./rollout -run 'ContextBaseline' -count=1."
    ]
   },
   {
@@ -5496,9 +5496,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/8; needs review: ContextSection, RenderedContext, build_context, collect_guardian_sections"
+    "state.BuildPromptPartsWithSectionCosts collects root conversation, trusted user answers, and conversation transcript in shared order for both synchronous and asynchronous Guardian presentations. RootMessage rendering and TrustedUserAnswersSectionItems preserve source-role labels, verified answers are delivered once as user-role evidence, and invalid composition returns an error instead of a partial prompt. Added TestGuardianSharedSectionsAppearOnceForBothTargetsLikeRust; go test ./state -run 'GuardianSharedSections|GuardianRootSections' -count=1."
    ]
   },
   {
@@ -23528,9 +23528,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "restrictCapabilityRootsToSelections now distinguishes an absent legacy selection from a non-nil empty turn snapshot: an explicit empty selection exposes no capability roots, while unset compatibility remains. Filtering happens before attachment combination, ID deduplication, and readiness resolution, so stale same-ID roots cannot shadow a selected root. Added stale-shadow and explicit-empty step regressions; go test ./appserver -run 'CapabilityRoot|StepCapability' -count=1."
    ]
   },
   {
