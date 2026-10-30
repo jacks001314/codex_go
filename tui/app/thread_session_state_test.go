@@ -69,7 +69,6 @@ func TestSyncActiveThreadPermissionSettingsToCachedSessionMatchRust(t *testing.T
 
 func TestSessionStateForThreadReadClearsThreadScopedStateMatchRust(t *testing.T) {
 	collab := "plan"
-	personality := "warm"
 	threadName := "Read Thread"
 	readModel := "gpt-read"
 	rollout := "rollout.jsonl"
@@ -80,7 +79,6 @@ func TestSessionStateForThreadReadClearsThreadScopedStateMatchRust(t *testing.T)
 		CWD:                    "/repo/primary",
 		RuntimeWorkspaceRoots:  []string{"/repo/primary"},
 		CollaborationMode:      &collab,
-		Personality:            &personality,
 		MessageHistory:         []string{"old"},
 		InstructionSourcePaths: []string{"AGENTS.md"},
 	}
@@ -100,8 +98,8 @@ func TestSessionStateForThreadReadClearsThreadScopedStateMatchRust(t *testing.T)
 	if session.ThreadID != "thread-read" || session.ThreadName == nil || *session.ThreadName != "Read Thread" {
 		t.Fatalf("thread identity = %#v", session)
 	}
-	if session.CollaborationMode != nil || session.Personality != nil {
-		t.Fatalf("thread-scoped state not cleared: collab=%#v personality=%#v", session.CollaborationMode, session.Personality)
+	if session.CollaborationMode != nil {
+		t.Fatalf("thread-scoped state not cleared: collab=%#v", session.CollaborationMode)
 	}
 	if session.Model != "gpt-read" || session.ModelProviderID != "provider-read" {
 		t.Fatalf("model fields = %#v", session)

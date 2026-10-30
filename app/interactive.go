@@ -3122,20 +3122,6 @@ func interactivePersonalityFromConfig(values map[string]any) chatwidget.Personal
 	}
 }
 
-// interactiveTurnPersonalityOverrides keeps the explicit `none` opt-out while
-// dropping retired Friendly/Pragmatic selection from turn-start config
-// (Rust #44946).
-func interactiveTurnPersonalityOverrides(state *codextui.State) []string {
-	if state == nil {
-		return nil
-	}
-	personality := chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(state.Personality))))
-	if personality == "" {
-		return nil
-	}
-	return []string{"personality=" + string(personality)}
-}
-
 func interactiveHideRateLimitModelNudgeFromConfig(values map[string]any) *bool {
 	if values == nil {
 		return nil
@@ -4420,9 +4406,6 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		if tier := strings.TrimSpace(state.ServiceTier); tier != "" {
 			turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "service_tier="+tier)
 		}
-	}
-	if state != nil {
-		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), interactiveTurnPersonalityOverrides(state)...)
 	}
 	// Rust #50811: new embedded threads follow the server's and the model's
 	// reasoning-summary defaults; only explicit launch choices (profile or

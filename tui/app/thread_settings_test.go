@@ -23,7 +23,6 @@ func TestThreadSettingsUpdateHasChangesMatchRustFields(t *testing.T) {
 		{"effort", appserver.SettingsUpdateParams{Effort: &text}},
 		{"summary", appserver.SettingsUpdateParams{Summary: &text}},
 		{"collaboration mode", appserver.SettingsUpdateParams{CollaborationMode: map[string]any{"mode": "default"}}},
-		{"personality", appserver.SettingsUpdateParams{Personality: &text}},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -32,6 +31,9 @@ func TestThreadSettingsUpdateHasChangesMatchRustFields(t *testing.T) {
 				t.Fatalf("ThreadSettingsUpdateHasChanges(%s) = false, want true", tt.name)
 			}
 		})
+	}
+	if ThreadSettingsUpdateHasChanges(&appserver.SettingsUpdateParams{ThreadID: "thread-1", Personality: &text}) {
+		t.Fatal("ThreadSettingsUpdateHasChanges(personality) = true, want false (Rust #49876)")
 	}
 }
 

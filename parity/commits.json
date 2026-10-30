@@ -24952,9 +24952,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1047 (complete): Rust #49876 removes personality from TUI turn commands and cached thread session state, stops applying personality from thread settings notifications, sends no personality in turn/start, and forwards personality through session configuration only when a CLI override supplied it. Go had the older #44946 pipeline: app/remote_tui.go copied State.Personality into thread/start, turn/start (PersonalitySet), and turn config overrides; tui/tea/thread_settings.go applied notification Personality to State; app/side_tui.go and tui/tea/side.go forwarded it into side forks; tui/app/thread_session_state.go, tui/chatwidget/session_flow.go, tui/chatwidget/settings_collaboration_runtime.go, and tui/app/thread_settings.go carried the residual plumbing. This round removes all of it, so thread/start and turn/start now leave personality unset for every local value, thread settings updates no longer count personality as a change, notifications no longer rewrite local state, and interactiveTurnPersonalityOverrides/PersonalityOptOutOnly are gone. remoteConfigValues continues to source personality solely from explicit CLI config overrides and now forwards the value verbatim, matching Rust's SessionFlags-layer collection. New app/personality_opt_out_like_rust_test.go pins unset wire fields for friendly/pragmatic/none/empty states and CLI-only config forwarding. Verified with go test ./app -run 'Personality|Side|ThreadSettings', go test ./tui/... -count=1, and go test ./parity -run TestAlignment -count=1; the two ./app failures (TestExecJSONEndToEnd websocket handshake, TestLocalSessionForksRustRolloutWithoutGoSnapshot rollout-path check) reproduce on the unmodified tree."
    ]
   },
   {

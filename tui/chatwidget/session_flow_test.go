@@ -27,7 +27,6 @@ func TestSessionFlowConfigureNormalMatchesRustCore(t *testing.T) {
 		PermissionProfile:       "workspace-write",
 		ActivePermissionProfile: "custom",
 		ApprovalsReviewer:       "guardian",
-		Personality:             "concise",
 		InstructionSourcePaths:  []string{"AGENTS.md"},
 	}, SessionConfiguredDisplayNormal)
 

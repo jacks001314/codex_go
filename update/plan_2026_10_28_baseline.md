@@ -3456,6 +3456,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - N/A by architecture: Go has no core `CodexThread`/`turn_extension_init` API, and its host-owned extension model exposes only session and thread `ExtensionStore`s (used by the Guardian thread context). No Go host supplies turn-scoped extension data and no Go extension reads it, so capture, inheritance, steering, clearing, and the running-turn lookup gate have no carrier.
 - Verified with `rg` over `ExtensionData|turn_extension|current_turn_extension_data|turnStore`, `go test ./appserver -run 'InternalSession|ThreadReady|GuardianThreadContext|TurnInput' -count=1`, `go test ./turn -run 'Steer|Input|Recover|Start' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2202 complete`, `460 not_applicable`,
-`327 audit_pending`, `156 regression_pending`, `4 partial`,
+### TUI personality plumbing removal (Round 1047)
+
+- Rust #49876 removes personality from TUI turn commands and cached thread session state, stops applying it from thread settings notifications, sends no personality in `turn/start`, and forwards personality through session configuration only when a CLI override supplied it.
+- Complete: Go still ran the #44946 opt-out pipeline. The TUI copied `State.Personality` into `thread/start`, `turn/start` (`PersonalitySet`), the embedded turn config overrides, and side-conversation forks, and applied notification personality back into local state. This round removes that plumbing (`app/interactive.go`, `app/remote_tui.go`, `app/side_tui.go`, `tui/tea/side.go`, `tui/tea/thread_settings.go`, `tui/app/thread_session_state.go`, `tui/app/thread_settings.go`, `tui/chatwidget/session_flow.go`, `tui/chatwidget/settings_collaboration_runtime.go`), so local values never reach the wire and personality-only settings updates are no-ops. `remoteConfigValues` sources personality solely from explicit CLI overrides and forwards it verbatim, matching Rust's `SessionFlags` layer; `PersonalityOptOutOnly` is removed.
+- Verified with `go test ./app -run 'Personality|Side|ThreadSettings' -count=1`, `go test ./tui/... -count=1`, and `go test ./parity -run TestAlignment -count=1`. The two `./app` failures (`TestExecJSONEndToEnd` websocket handshake, `TestLocalSessionForksRustRolloutWithoutGoSnapshot` rollout-path check) reproduce on the unmodified tree.
+
+Status after reconciliation: `2203 complete`, `460 not_applicable`,
+`326 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

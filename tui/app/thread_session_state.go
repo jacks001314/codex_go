@@ -20,7 +20,6 @@ type ThreadSessionState struct {
 	InstructionSourcePaths  []string
 	ReasoningEffort         *string
 	CollaborationMode       *string
-	Personality             *string
 	MessageHistory          any
 	NetworkProxy            any
 	RolloutPath             *string
@@ -120,7 +119,6 @@ func SessionStateForThreadRead(primary *ThreadSessionState, defaults ThreadSessi
 		session = primary.Clone()
 		if session.ThreadID != thread.ThreadID {
 			session.CollaborationMode = nil
-			session.Personality = nil
 		}
 	} else {
 		session = ThreadSessionState{
@@ -167,7 +165,6 @@ func (s ThreadSessionState) Clone() ThreadSessionState {
 	clone.InstructionSourcePaths = append([]string(nil), s.InstructionSourcePaths...)
 	clone.ReasoningEffort = cloneStringPointer(s.ReasoningEffort)
 	clone.CollaborationMode = cloneStringPointer(s.CollaborationMode)
-	clone.Personality = cloneStringPointer(s.Personality)
 	clone.RolloutPath = cloneStringPointer(s.RolloutPath)
 	return clone
 }

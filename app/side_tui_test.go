@@ -49,7 +49,6 @@ func TestInteractiveLocalSideCoordinatorForksInjectsAndDeletes(t *testing.T) {
 		ReasoningEffort: "high",
 		ApprovalPolicy:  "on-request",
 		Sandbox:         "workspace-write",
-		Personality:     "pragmatic",
 		ServiceTier:     "priority",
 	})
 	if err != nil {

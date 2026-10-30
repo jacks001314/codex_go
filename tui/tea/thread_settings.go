@@ -131,11 +131,8 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	} else if sandbox := strings.TrimSpace(settings.SandboxPolicy); sandbox != "" {
 		m.State.Sandbox = sandbox
 	}
-	personality := ""
-	if settings.Personality != nil {
-		personality = strings.TrimSpace(*settings.Personality)
-	}
-	m.State.Personality = personality
+	// Rust #49876: thread settings notifications no longer apply personality;
+	// it travels only through explicit session configuration.
 
 	m.refreshServiceTierCommands()
 	if cwdChanged {

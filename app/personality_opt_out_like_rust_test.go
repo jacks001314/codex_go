@@ -8,14 +8,11 @@ import (
 	codextea "codex_go/tui/tea"
 )
 
-// Rust #44946 retires Friendly/Pragmatic overrides from TUI requests while
-// preserving an explicit `personality = "none"` opt-out.
-func TestTUIRequestsForwardPersonalityOptOutOnlyLikeRust(t *testing.T) {
-	for _, personality := range []string{"friendly", "pragmatic", ""} {
+// Rust #49876: the TUI no longer derives personality from local state, so
+// thread/start and turn/start leave personality unset for every local value.
+func TestTUIRequestsDoNotForwardLocalPersonalityLikeRust(t *testing.T) {
+	for _, personality := range []string{"friendly", "pragmatic", "none", ""} {
 		state := &codextui.State{Personality: personality}
-		if overrides := interactiveTurnPersonalityOverrides(state); len(overrides) != 0 {
-			t.Fatalf("%q turn overrides = %#v, want none", personality, overrides)
-		}
 		start, err := remoteThreadStartParams(&cli.RootOptions{}, state)
 		if err != nil {
 			t.Fatalf("%q thread start: %v", personality, err)
@@ -31,51 +28,43 @@ func TestTUIRequestsForwardPersonalityOptOutOnlyLikeRust(t *testing.T) {
 			t.Fatalf("%q turn personality = %#v set=%v, want unset", personality, turn.Personality, turn.PersonalitySet)
 		}
 	}
-
-	state := &codextui.State{Personality: "none"}
-	overrides := interactiveTurnPersonalityOverrides(state)
-	if len(overrides) != 1 || overrides[0] != "personality=none" {
-		t.Fatalf("none turn overrides = %#v", overrides)
-	}
-	start, err := remoteThreadStartParams(&cli.RootOptions{}, state)
-	if err != nil {
-		t.Fatalf("none thread start: %v", err)
-	}
-	if start.Personality == nil || *start.Personality != "none" {
-		t.Fatalf("none thread start personality = %#v", start.Personality)
-	}
-	turn, err := remoteTurnStartParams(&cli.RootOptions{}, state, "thread-1", codextea.SubmitRequest{Prompt: "hello"})
-	if err != nil {
-		t.Fatalf("none turn start: %v", err)
-	}
-	if turn.Personality == nil || *turn.Personality != "none" || !turn.PersonalitySet {
-		t.Fatalf("none turn personality = %#v set=%v", turn.Personality, turn.PersonalitySet)
-	}
 }
 
-func TestRemoteConfigDropsRetiredPersonalityOverridesLikeRust(t *testing.T) {
-	valuesFor := func(value string) map[string]any {
+// Rust #49876 forwards personality through session configuration only when a
+// CLI override supplied it, and then verbatim rather than opt-out-only.
+func TestRemoteConfigForwardsPersonalityOnlyFromCLIOverridesLikeRust(t *testing.T) {
+	valuesFor := func(overrides ...string) map[string]any {
 		t.Helper()
-		requirement := ""
-		if value != "" {
-			requirement = "personality=\"" + value + "\""
-		}
-		root := &cli.RootOptions{}
-		if requirement != "" {
-			root.ConfigOverrides = []string{requirement}
-		}
-		values, err := remoteConfigValues(root, cli.SharedOptions{})
+		values, err := remoteConfigValues(&cli.RootOptions{ConfigOverrides: overrides}, cli.SharedOptions{})
 		if err != nil {
-			t.Fatalf("remoteConfigValues(%q): %v", value, err)
+			t.Fatalf("remoteConfigValues(%v): %v", overrides, err)
 		}
 		return values
 	}
-	for _, retired := range []string{"friendly", "pragmatic"} {
-		if values := valuesFor(retired); values["personality"] != nil {
-			t.Fatalf("%q personality override forwarded: %#v", retired, values["personality"])
-		}
+	if values := valuesFor(); values["personality"] != nil {
+		t.Fatalf("implicit personality forwarded: %#v", values["personality"])
 	}
-	if values := valuesFor("none"); values["personality"] != "none" {
+	if values := valuesFor(`personality="none"`); values["personality"] != "none" {
 		t.Fatalf("none personality override = %#v, want none", values["personality"])
+	}
+	if values := valuesFor(`personality="friendly"`); values["personality"] != "friendly" {
+		t.Fatalf("explicit friendly personality override = %#v, want friendly", values["personality"])
+	}
+
+	root := &cli.RootOptions{ConfigOverrides: []string{`personality="none"`}}
+	state := &codextui.State{Personality: "friendly"}
+	start, err := remoteThreadStartParams(root, state)
+	if err != nil {
+		t.Fatalf("thread start: %v", err)
+	}
+	if start.Personality != nil || start.Config["personality"] != "none" {
+		t.Fatalf("thread start personality = %#v config = %#v", start.Personality, start.Config["personality"])
+	}
+	turn, err := remoteTurnStartParams(root, state, "thread-1", codextea.SubmitRequest{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("turn start: %v", err)
+	}
+	if turn.Personality != nil || turn.PersonalitySet || turn.Config["personality"] != "none" {
+		t.Fatalf("turn start personality = %#v set=%v config = %#v", turn.Personality, turn.PersonalitySet, turn.Config["personality"])
 	}
 }

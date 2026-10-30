@@ -53,7 +53,6 @@ func TestApplyThreadSettingsUpdatedAppliesServerSettings(t *testing.T) {
 
 	effort := "high"
 	tier := "flex"
-	personality := "friendly"
 	model.applyThreadSettingsUpdated(ThreadSettingsUpdatedMsg{
 		ThreadID: "thread-a",
 		Settings: appserver.Settings{
@@ -64,7 +63,6 @@ func TestApplyThreadSettingsUpdatedAppliesServerSettings(t *testing.T) {
 			SandboxPolicy:  "workspace-write",
 			Effort:         &effort,
 			ServiceTier:    &tier,
-			Personality:    &personality,
 		},
 	})
 	if model.State.CWD != `D:\other` || model.sessionCWD != `D:\other` {
@@ -76,7 +74,7 @@ func TestApplyThreadSettingsUpdatedAppliesServerSettings(t *testing.T) {
 	if model.State.ApprovalPolicy != "on-request" || model.State.Sandbox != "workspace-write" {
 		t.Fatalf("permissions = (%q, %q)", model.State.ApprovalPolicy, model.State.Sandbox)
 	}
-	if model.State.ReasoningEffort != "high" || model.State.ServiceTier != "flex" || model.State.Personality != "friendly" {
+	if model.State.ReasoningEffort != "high" || model.State.ServiceTier != "flex" || model.State.Personality != "pragmatic" {
 		t.Fatalf("optional settings = (%q, %q, %q)", model.State.ReasoningEffort, model.State.ServiceTier, model.State.Personality)
 	}
 
@@ -86,7 +84,8 @@ func TestApplyThreadSettingsUpdatedAppliesServerSettings(t *testing.T) {
 		ThreadID: "thread-a",
 		Settings: appserver.Settings{Model: "server-model", ApprovalPolicy: "on-request", SandboxPolicy: "workspace-write"},
 	})
-	if model.State.ReasoningEffort != "" || model.State.ServiceTier != "" || model.State.Personality != "" {
+	// Rust #49876: notifications never rewrite the local personality.
+	if model.State.ReasoningEffort != "" || model.State.ServiceTier != "" || model.State.Personality != "pragmatic" {
 		t.Fatalf("cleared optional settings = (%q, %q, %q)", model.State.ReasoningEffort, model.State.ServiceTier, model.State.Personality)
 	}
 }

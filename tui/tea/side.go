@@ -61,7 +61,6 @@ type SideStartParams struct {
 	ReasoningEffort string
 	ApprovalPolicy  string
 	Sandbox         string
-	Personality     string
 	ServiceTier     string
 	// RuntimeWorkspaceRoots carries the active session's server-resolved
 	// runtime workspace roots into a Session-sourced fork (Rust #46494).
@@ -389,7 +388,6 @@ func (m *Model) startSideConversation(commandName string, userMessage string) bu
 		ReasoningEffort: strings.TrimSpace(m.State.EffectiveReasoningEffort()),
 		ApprovalPolicy:  strings.TrimSpace(m.State.ApprovalPolicy),
 		Sandbox:         strings.TrimSpace(m.State.Sandbox),
-		Personality:     strings.TrimSpace(m.State.Personality),
 		ServiceTier:     strings.TrimSpace(m.State.ServiceTier),
 		// Rust #46494: a side conversation is a Session-sourced fork, so it
 		// forwards the active session's server-resolved runtime workspace roots

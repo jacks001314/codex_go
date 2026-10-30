@@ -103,7 +103,6 @@ func TestThreadSettingsApplyUpdatesCWDWorkspaceRootsAndRefreshes(t *testing.T) {
 		ServiceTier:       "default",
 		ApprovalPolicy:    "on-request",
 		ApprovalsReviewer: "codex",
-		Personality:       PersonalityPragmatic,
 		Model:             "gpt-5.4",
 		ReasoningEffort:   "high",
 		CollaborationMode: NewCollaborationMode(CollaborationModeKindPlan, "ignored", "low", "plan"),

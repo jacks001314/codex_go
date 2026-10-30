@@ -33,7 +33,6 @@ type ThreadSessionSnapshot struct {
 	PermissionProfile       string
 	ActivePermissionProfile string
 	ApprovalsReviewer       string
-	Personality             string
 	InstructionSourcePaths  []string
 	// DaybreakEnabled is the thread's persisted Daybreak preference
 	// (Rust `session.daybreak_enabled`; see #54097).
@@ -98,7 +97,6 @@ type SessionFlowState struct {
 	PermissionProfile                   string
 	ActivePermissionProfile             string
 	ApprovalsReviewer                   string
-	Personality                         string
 	InstructionSourcePaths              []string
 	QueueSubmissions                    bool
 	ActiveSessionHeader                 bool
@@ -160,7 +158,6 @@ func (s *SessionFlowState) ConfigureSession(session ThreadSessionSnapshot, displ
 	s.PermissionProfile = session.PermissionProfile
 	s.ActivePermissionProfile = session.ActivePermissionProfile
 	s.ApprovalsReviewer = session.ApprovalsReviewer
-	s.Personality = session.Personality
 	s.InstructionSourcePaths = append([]string(nil), session.InstructionSourcePaths...)
 	s.QueueSubmissions = false
 	// Rust session_flow.rs:76-78 re-derives the thread's Daybreak state from

@@ -50,7 +50,6 @@ type ThreadSettingsRuntimeState struct {
 	ServiceTier       string
 	ApprovalPolicy    string
 	ApprovalsReviewer string
-	Personality       Personality
 	Model             string
 	ReasoningEffort   string
 	Collaboration     CollaborationRuntimeState
@@ -63,7 +62,6 @@ type ThreadSettingsRuntimeUpdate struct {
 	ServiceTier             string
 	ApprovalPolicy          string
 	ApprovalsReviewer       string
-	Personality             Personality
 	Model                   string
 	ReasoningEffort         string
 	CollaborationMode       CollaborationMode
@@ -290,7 +288,6 @@ func (s *ThreadSettingsRuntimeState) ApplyThreadSettings(update ThreadSettingsRu
 	s.ServiceTier = strings.TrimSpace(update.ServiceTier)
 	s.ApprovalPolicy = strings.TrimSpace(update.ApprovalPolicy)
 	s.ApprovalsReviewer = strings.TrimSpace(update.ApprovalsReviewer)
-	s.Personality = update.Personality
 	s.Model = strings.TrimSpace(update.Model)
 	s.ReasoningEffort = strings.TrimSpace(update.ReasoningEffort)
 	update.CollaborationMode.Settings.Model = s.Model

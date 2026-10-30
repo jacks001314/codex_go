@@ -5,8 +5,7 @@ import "codex_go/appserver"
 // Rust parity subset: codex-rs/tui/src/app/thread_settings.rs.
 
 type ThreadSettings struct {
-	Model       string
-	Personality string
+	Model string
 }
 
 func ThreadModelSettingUpdateParams(threadID string, model string, collaborationMode map[string]any) *appserver.SettingsUpdateParams {
@@ -57,7 +56,6 @@ func ThreadSettingsUpdateHasChanges(params *appserver.SettingsUpdateParams) bool
 		params.Effort != nil ||
 		params.Summary != nil ||
 		params.CollaborationMode != nil ||
-		params.Personality != nil ||
 		params.MultiAgentMode != nil ||
 		len(params.RuntimeWorkspaceRoots) > 0 ||
 		len(params.Extra) > 0

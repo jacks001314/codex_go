@@ -4,17 +4,6 @@ import (
 	"testing"
 )
 
-func TestPersonalityOptOutOnlyLikeRust(t *testing.T) {
-	for _, retired := range []Personality{PersonalityFriendly, PersonalityPragmatic, ""} {
-		if got := PersonalityOptOutOnly(retired); got != "" {
-			t.Fatalf("PersonalityOptOutOnly(%q) = %q, want empty", retired, got)
-		}
-	}
-	if got := PersonalityOptOutOnly(PersonalityNone); got != PersonalityNone {
-		t.Fatalf("PersonalityOptOutOnly(none) = %q, want none", got)
-	}
-}
-
 func TestExperimentalFeaturesViewUsesRegistryExperimentalStage(t *testing.T) {
 	view := NewExperimentalFeaturesView(map[string]bool{
 		"worktrees":     true,

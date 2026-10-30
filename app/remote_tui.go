@@ -5351,13 +5351,6 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 	if specs, err := DynamicToolSpecsRaw(); err == nil {
 		params.DynamicTools = specs
 	}
-	if state != nil {
-		personality := chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(state.Personality))))
-		if personality != "" {
-			value := string(personality)
-			params.Personality = &value
-		}
-	}
 	source := appserver.ThreadSourceUser
 	params.ThreadSource = &source
 	return params, nil
@@ -5464,14 +5457,6 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if program := strings.TrimSpace(request.CyberAccessProgram); program != "" {
 		value := turn.CyberAccessProgram(program)
 		params.CyberAccessProgram = &value
-	}
-	if state != nil {
-		personality := chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(state.Personality))))
-		if personality != "" {
-			value := string(personality)
-			params.Personality = &value
-			params.PersonalitySet = true
-		}
 	}
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
 		params.Effort = &effort
@@ -5586,12 +5571,8 @@ func remoteConfigValues(root *cli.RootOptions, shared cli.SharedOptions) (map[st
 	// destination server's default or a saved thread's search setting; a losing
 	// legacy `[features] web_search*` flag is dropped from the request.
 	applyWebSearchLaunchOverride(root, webSearchParamsRemote, values)
-	if raw, ok := values["personality"]; ok {
-		personality, _ := raw.(string)
-		if chatwidget.PersonalityOptOutOnly(chatwidget.Personality(strings.ToLower(strings.TrimSpace(personality)))) == "" {
-			delete(values, "personality")
-		}
-	}
+	// Rust #49876: personality travels through session configuration only when
+	// the launch supplied it explicitly; the TUI state never seeds it.
 	if len(values) == 0 {
 		return nil, nil
 	}
