@@ -3368,6 +3368,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `appserver/user_verification_desktop_activation_like_rust_test.go` cover the full origin/name/opt-in/device matrix plus targeted delivery and rejection. MCP tests pin the independent capability shape.
 - Verified with `go build ./...`, `go test ./appserver -run 'UserVerification|Initialize|RemoteControl|MCP' -count=1`, `go test ./mcp -count=1`, `go test ./app -run 'UserVerification|Elicitation' -count=1`, and `go test ./parity -run TestAlignment -count=1`. The full `./appserver` package still reports only the seven known manifest/surface/analytics failures.
 
-Status after reconciliation: `2197 complete`, `451 not_applicable`,
-`340 audit_pending`, `157 regression_pending`, `4 partial`,
+### Enterprise OAuth callback settings consolidation (Round 1033)
+
+- Rust #44616 consolidates callback URL validation, loopback address selection, and registered-port parsing in `enterprise_callback_settings`, reuses `has_refresh_token`, and makes the enterprise OAuth HTTP wrapper private with the same authorization-code resource stripping behavior.
+- Go already had equivalent behavior in `mcp/enterprise_oauth_login.go`: the default bind address is `127.0.0.1`, callback URLs must be HTTP loopback endpoints, URL ports are inherited, conflicting listener ports are rejected, and blank refresh tokens are refused. The Rust helper/visibility changes are implementation-only and require no Go production change.
+- `TestEnterpriseCallbackSettingsMatchesRust` is now a table-driven matrix covering listener-only ports, localhost, alternate IPv4 and IPv6 loopback addresses, URL port inheritance, matching and conflicting URL/listener ports, missing client IDs, non-HTTPS issuers, and non-loopback callbacks. `TestValidateEnterpriseOAuthCredentialsMatchesRust` now also rejects whitespace-only refresh tokens.
+- Verified with `go build ./...`, `go test ./mcp -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2198 complete`, `451 not_applicable`,
+`339 audit_pending`, `157 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

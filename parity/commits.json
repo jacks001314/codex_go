@@ -4192,9 +4192,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1033 (audit): Go's enterpriseCallbackSettings and validateEnterpriseOAuthCredentials already match Rust #44616's callback and credential behavior; the private helper inlining is an implementation-only refactor. Expanded mcp/enterprise_oauth_login_test.go to cover listener-only ports, IPv4/IPv6 loopback, URL port inheritance, matching and conflicting URL/listener ports, invalid callback/issuer/client ID, and whitespace-only refresh tokens. Validation: go build ./...; go test ./mcp -count=1; go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

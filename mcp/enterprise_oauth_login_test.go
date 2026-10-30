@@ -317,53 +317,62 @@ func TestOAuthTokenSetCapturesIDToken(t *testing.T) {
 }
 
 // TestEnterpriseCallbackSettingsMatchesRust covers Rust #43844's callback
-// policy: a registered client ID and an HTTP loopback callback are required,
-// and the URL and listener must agree on the port.
+// policy and the expanded #44616 matrix: a registered client ID and an HTTP
+// loopback callback are required, and the URL and listener must agree on the
+// port.
 func TestEnterpriseCallbackSettingsMatchesRust(t *testing.T) {
-	ip, port, err := enterpriseCallbackSettings("https://idp.example.com", "client-1", "", nil)
-	if err != nil {
-		t.Fatalf("default callback settings: %v", err)
+	const issuer = "https://idp.example.com"
+	const clientID = "client-1"
+	port := func(value uint16) *uint16 { return &value }
+	tests := []struct {
+		name         string
+		issuer       string
+		clientID     string
+		callbackURL  string
+		callbackPort *uint16
+		wantIP       string
+		wantPort     *uint16
+		wantErr      bool
+	}{
+		{name: "default", issuer: issuer, clientID: clientID, wantIP: "127.0.0.1"},
+		{name: "listener port only", issuer: issuer, clientID: clientID, callbackPort: port(8080), wantIP: "127.0.0.1", wantPort: port(8080)},
+		{name: "localhost", issuer: issuer, clientID: clientID, callbackURL: "http://localhost/callback", wantIP: "127.0.0.1"},
+		{name: "alternate IPv4 loopback", issuer: issuer, clientID: clientID, callbackURL: "http://127.0.0.2/callback", wantIP: "127.0.0.2"},
+		{name: "IPv6 loopback", issuer: issuer, clientID: clientID, callbackURL: "http://[::1]/callback", wantIP: "::1"},
+		{name: "URL port", issuer: issuer, clientID: clientID, callbackURL: "http://localhost:8080/callback", wantIP: "127.0.0.1", wantPort: port(8080)},
+		{name: "matching URL and listener port", issuer: issuer, clientID: clientID, callbackURL: "http://localhost:8080/callback", callbackPort: port(8080), wantIP: "127.0.0.1", wantPort: port(8080)},
+		{name: "conflicting URL and listener port", issuer: issuer, clientID: clientID, callbackURL: "http://localhost:8080/callback", callbackPort: port(9090), wantErr: true},
+		{name: "missing client ID", issuer: issuer, clientID: "   ", wantErr: true},
+		{name: "non-HTTPS issuer", issuer: "http://idp.example.com", clientID: clientID, wantErr: true},
+		{name: "HTTPS callback", issuer: issuer, clientID: clientID, callbackURL: "https://idp.example.com/callback", wantErr: true},
+		{name: "remote callback host", issuer: issuer, clientID: clientID, callbackURL: "http://example.com/callback", wantErr: true},
 	}
-	if !ip.Equal(net.IPv4(127, 0, 0, 1)) || port != nil {
-		t.Fatalf("default = (%v, %v), want (127.0.0.1, nil)", ip, port)
-	}
-
-	ip, port, err = enterpriseCallbackSettings("https://idp.example.com", "client-1", "http://localhost:1455/callback", nil)
-	if err != nil {
-		t.Fatalf("localhost callback: %v", err)
-	}
-	if !ip.Equal(net.IPv4(127, 0, 0, 1)) || port == nil || *port != 1455 {
-		t.Fatalf("localhost callback = (%v, %v), want (127.0.0.1, 1455)", ip, port)
-	}
-
-	ip, port, err = enterpriseCallbackSettings("https://idp.example.com", "client-1", "http://127.0.0.1:1455/callback", nil)
-	if err != nil {
-		t.Fatalf("loopback IPv4 callback: %v", err)
-	}
-	if !ip.Equal(net.IPv4(127, 0, 0, 1)) || port == nil || *port != 1455 {
-		t.Fatalf("loopback IPv4 = (%v, %v)", ip, port)
-	}
-
-	listener := uint16(1456)
-	if _, _, err := enterpriseCallbackSettings("https://idp.example.com", "client-1", "http://127.0.0.1:1455/callback", &listener); err == nil {
-		t.Fatal("a URL/listener port mismatch must be rejected")
-	}
-	listener = 1455
-	if _, port, err := enterpriseCallbackSettings("https://idp.example.com", "client-1", "http://127.0.0.1:1455/callback", &listener); err != nil || port == nil || *port != 1455 {
-		t.Fatalf("matching listener = (%v, %v)", port, err)
-	}
-
-	if _, _, err := enterpriseCallbackSettings("https://idp.example.com", "   ", "", nil); err == nil {
-		t.Fatal("a missing registered client ID must be rejected")
-	}
-	if _, _, err := enterpriseCallbackSettings("http://idp.example.com", "client-1", "", nil); err == nil {
-		t.Fatal("a non-HTTPS issuer must be rejected")
-	}
-	if _, _, err := enterpriseCallbackSettings("https://idp.example.com", "client-1", "https://idp.example.com/callback", nil); err == nil {
-		t.Fatal("a non-loopback callback URL must be rejected")
-	}
-	if _, _, err := enterpriseCallbackSettings("https://idp.example.com", "client-1", "http://example.com/callback", nil); err == nil {
-		t.Fatal("a non-loopback host must be rejected")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, gotPort, err := enterpriseCallbackSettings(tt.issuer, tt.clientID, tt.callbackURL, tt.callbackPort)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("enterpriseCallbackSettings(%q, %q, %q, %v) succeeded, want error", tt.issuer, tt.clientID, tt.callbackURL, tt.callbackPort)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("enterpriseCallbackSettings(%q, %q, %q, %v): %v", tt.issuer, tt.clientID, tt.callbackURL, tt.callbackPort, err)
+			}
+			wantIP := net.ParseIP(tt.wantIP)
+			if !ip.Equal(wantIP) {
+				t.Fatalf("IP = %v, want %v", ip, wantIP)
+			}
+			if tt.wantPort == nil {
+				if gotPort != nil {
+					t.Fatalf("port = %d, want nil", *gotPort)
+				}
+				return
+			}
+			if gotPort == nil || *gotPort != *tt.wantPort {
+				t.Fatalf("port = %v, want %d", gotPort, *tt.wantPort)
+			}
+		})
 	}
 }
 
@@ -411,6 +420,9 @@ func TestValidateEnterpriseOAuthCredentialsMatchesRust(t *testing.T) {
 	}
 	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, IDToken: assertion}); err == nil {
 		t.Fatal("missing refresh token must be rejected")
+	}
+	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, RefreshToken: " \t ", IDToken: assertion}); err == nil {
+		t.Fatal("a whitespace-only refresh token must be rejected")
 	}
 	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, RefreshToken: "refresh-1"}); err == nil {
 		t.Fatal("missing OIDC identity assertion must be rejected")
