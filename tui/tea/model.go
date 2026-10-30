@@ -1901,6 +1901,11 @@ type Model struct {
 	// activityFocus is the owned transcript's activity-group disclosure state
 	// (Rust #46734). Expanded identities persist after focus is cleared.
 	activityFocus         transcriptActivityFocus
+	// resumeFollowAfterApproval records the patch-approval prompt that paused
+	// following because the reader expanded transcript details while it was
+	// open; ending or advancing that approval resumes the latest output
+	// (Rust #58281 resume_after_approval).
+	resumeFollowAfterApproval string
 	lastTranscriptContent string
 	lastTranscriptHeight  int
 
@@ -3465,6 +3470,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
 	}
+	m.syncPatchApprovalFollow()
 	if _, key := message.(bubbletea.KeyMsg); key {
 		// Rust #47847: a text read is bound to its UI owner; new input makes a
 		// late PRIMARY result stale.

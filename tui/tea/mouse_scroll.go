@@ -39,6 +39,9 @@ func (m *Model) scrollTranscriptRows(rows int) {
 	if m == nil || rows == 0 {
 		return
 	}
+	// Rust #58281: a manual scroll cancels the pending follow that an inline
+	// expansion during an approval prompt would otherwise restore.
+	m.resumeFollowAfterApproval = ""
 	if rows < 0 {
 		m.transcript.ScrollUp(-rows)
 	} else {

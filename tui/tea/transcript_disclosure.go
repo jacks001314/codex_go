@@ -238,7 +238,44 @@ func (m *Model) handleTranscriptDisclosureClick(msg bubbletea.MouseMsg) bool {
 	if !ok || msg.X < hit.start || msg.X >= hit.end {
 		return false
 	}
+	// Rust #58281: expanding details during a patch approval anchors the entry
+	// for inspection and resumes following the latest output once that prompt
+	// closes or advances to another patch. Manual scrolling cancels the
+	// pending resume instead.
+	approvalID := m.currentPatchApprovalID()
+	wasFollowing := m.activityFollow || m.transcript.AtBottom()
+	if wasFollowing && approvalID != "" {
+		m.activityFollow = false
+		m.resumeFollowAfterApproval = approvalID
+	}
 	return m.toggleTranscriptActivityMessage(hit.message)
+}
+
+// currentPatchApprovalID identifies the open apply-patch approval prompt. Rust's
+// sync_patch_approval compares this value across events.
+func (m *Model) currentPatchApprovalID() string {
+	if m == nil || m.modal == nil || m.modal.kind != ModalKindApproval {
+		return ""
+	}
+	return strings.TrimSpace(m.modal.id)
+}
+
+// syncPatchApprovalFollow resumes the latest output when the approval that was
+// open during an inline expansion ends or advances to another patch
+// (Rust #58281 TranscriptView::sync_patch_approval).
+func (m *Model) syncPatchApprovalFollow() {
+	if m == nil || m.resumeFollowAfterApproval == "" {
+		return
+	}
+	if m.currentPatchApprovalID() == m.resumeFollowAfterApproval {
+		return
+	}
+	m.resumeFollowAfterApproval = ""
+	m.renderedSelection.clear()
+	m.clearTranscriptActivityFocus()
+	m.activityFollow = true
+	m.refreshTranscript()
+	m.transcript.GotoBottom()
 }
 
 // dismissTranscriptActivityFocusOnClick mirrors Rust pointer_down: a left press
