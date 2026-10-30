@@ -88,10 +88,13 @@ const (
 	// check, tagged by outcome and input mode (Rust #48812).
 	StartupPrewarmWebsocketCheckMetric = "codex.startup_prewarm.websocket_check"
 	// ShellSnapshotDurationMetric measures one shell-snapshot capture attempt
-	// (Rust core/src/shell_snapshot.rs), tagged by version and success.
+	// (Rust core/src/shell_snapshot.rs), tagged by version and success. The v2
+	// exec-server sample also carries purpose, attempt, shell and sandbox plus
+	// the bounded failure reason (Rust #43454).
 	ShellSnapshotDurationMetric = "codex.shell_snapshot.duration_ms"
 	// ShellSnapshotCountMetric counts shell-snapshot capture attempts, tagged by
-	// version, success and the failure reason when one failed.
+	// version, success, the v2 diagnostic labels and the failure reason when one
+	// failed.
 	ShellSnapshotCountMetric = "codex.shell_snapshot"
 	// ShellSnapshotCommandMetric counts one eligible command preparation that
 	// considered the session's shell snapshot (Rust #51347

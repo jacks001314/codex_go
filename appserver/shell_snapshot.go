@@ -114,7 +114,7 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 		started := time.Now()
 		snapshot, reason := builder.Snapshot(ctx, captureRequest)
 		wait := time.Since(started)
-		r.recordShellSnapshot(wait, reason)
+		r.recordShellSnapshot(wait, reason, "execution", string(request.ShellType))
 		path := snapshot.Path()
 		if state == "" {
 			return tool.SnapshotProviderResult{Path: path}
@@ -205,7 +205,7 @@ func (r *RuntimeRouter) prewarmShellSnapshot(builder *tool.SnapshotBuilder, thre
 		// result without another capture or telemetry sample (#42137). A
 		// capture cancelled by thread unload is not a failure either.
 		if attempted && !builder.Closed() {
-			r.recordShellSnapshot(time.Since(started), reason)
+			r.recordShellSnapshot(time.Since(started), reason, "prewarm", string(shellType))
 		}
 	}()
 }
@@ -230,7 +230,7 @@ func (r *RuntimeRouter) shellSnapshotEnvironmentPolicyTable(cfg *config.Config) 
 // (core/src/shell_snapshot.rs): one duration sample and one count per capture
 // attempt, both tagged with the capture version and whether it succeeded, and
 // the count additionally tagged with the failure reason.
-func (r *RuntimeRouter) recordShellSnapshot(duration time.Duration, reason tool.SnapshotFailureReason) {
+func (r *RuntimeRouter) recordShellSnapshot(duration time.Duration, reason tool.SnapshotFailureReason, purpose string, shellName string) {
 	if r == nil || r.services.TurnMetrics == nil {
 		return
 	}
@@ -250,14 +250,18 @@ func (r *RuntimeRouter) recordShellSnapshot(duration time.Duration, reason tool.
 		tags["failure_reason"] = string(reason)
 	}
 	r.services.TurnMetrics.Counter(telemetry.ShellSnapshotCountMetric, 1, tags)
-	r.shellSnapshotCaptured(duration, reason)
+	r.shellSnapshotCaptured(duration, reason, purpose, shellName)
 }
 
 // shellSnapshotCaptured emits the exec-server v2 capture observation. Local
 // execution has no separate exec-server telemetry owner, so the host turn
 // metrics client observes the same capture attempt that produced the v1 core
-// signal (Rust exec-server telemetry, #40620).
-func (r *RuntimeRouter) shellSnapshotCaptured(duration time.Duration, reason tool.SnapshotFailureReason) {
+// signal (Rust exec-server telemetry, #40620). Rust #43454 tags every v2 sample
+// with the capture purpose, attempt, shell and sandbox so failures and retries
+// are distinguishable, and reports a bounded reason on the duration too. Go's
+// host-side builder captures once per purpose (no exec-server retry loop), so
+// the attempt label is always "1", and local captures run unsandboxed ("none").
+func (r *RuntimeRouter) shellSnapshotCaptured(duration time.Duration, reason tool.SnapshotFailureReason, purpose string, shellName string) {
 	if r == nil || r.services.TurnMetrics == nil {
 		return
 	}
@@ -268,11 +272,18 @@ func (r *RuntimeRouter) shellSnapshotCaptured(duration time.Duration, reason too
 	if reason != "" {
 		success = "false"
 	}
-	tags := map[string]string{"version": "v2", "success": success}
-	r.services.TurnMetrics.RecordDuration(telemetry.ShellSnapshotDurationMetric, duration, tags)
-	if reason != "" {
-		tags["failure_reason"] = "capture_failed"
+	tags := map[string]string{
+		"version": "v2",
+		"success": success,
+		"purpose": purpose,
+		"attempt": "1",
+		"shell":   shellName,
+		"sandbox": "none",
 	}
+	if reason != "" {
+		tags["failure_reason"] = string(reason)
+	}
+	r.services.TurnMetrics.RecordDuration(telemetry.ShellSnapshotDurationMetric, duration, tags)
 	r.services.TurnMetrics.Counter(telemetry.ShellSnapshotCountMetric, 1, tags)
 }
 

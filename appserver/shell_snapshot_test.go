@@ -488,6 +488,20 @@ func TestShellSnapshotRecordsMetricsLikeRust(t *testing.T) {
 			t.Fatalf("duration record = %#v", duration)
 		}
 	}
+	// Rust #43454 tags the exec-server v2 sample with the capture purpose,
+	// attempt, shell and sandbox; Go's host-side capture reports purpose as
+	// whichever side produced the snapshot (the prewarm or the command).
+	if purpose := v2Durations[0].Tags["purpose"]; purpose != "prewarm" && purpose != "execution" {
+		t.Fatalf("v2 duration purpose = %q, want prewarm or execution", purpose)
+	}
+	for _, tag := range []string{"attempt", "shell", "sandbox"} {
+		if v2Durations[0].Tags[tag] == "" {
+			t.Fatalf("v2 duration record missing %q tag: %#v", tag, v2Durations[0])
+		}
+	}
+	if v2Durations[0].Tags["attempt"] != "1" || v2Durations[0].Tags["shell"] != "bash" || v2Durations[0].Tags["sandbox"] != "none" {
+		t.Fatalf("v2 duration tags = %#v", v2Durations[0].Tags)
+	}
 	counts := snapshotMetricRecords(metrics, telemetry.ShellSnapshotCountMetric)
 	v1Counts := snapshotMetricVersion(counts, "v1")
 	v2Counts := snapshotMetricVersion(counts, "v2")
@@ -535,8 +549,17 @@ func TestShellSnapshotRecordsMetricsLikeRust(t *testing.T) {
 		t.Fatalf("failure record = %#v", failed)
 	}
 	failedExecServer := v2Counts[1]
-	if failedExecServer.Tags["success"] != "false" || failedExecServer.Tags["failure_reason"] != "capture_failed" {
+	if failedExecServer.Tags["success"] != "false" || failedExecServer.Tags["failure_reason"] != "validation_failed" ||
+		failedExecServer.Tags["purpose"] != "execution" || failedExecServer.Tags["attempt"] != "1" ||
+		failedExecServer.Tags["shell"] != "bash" || failedExecServer.Tags["sandbox"] != "none" {
 		t.Fatalf("exec-server failure record = %#v", failedExecServer)
+	}
+	v2Durations = snapshotMetricVersion(snapshotMetricRecords(metrics, telemetry.ShellSnapshotDurationMetric), "v2")
+	if len(v2Durations) != 2 {
+		t.Fatalf("v2 duration records = %#v", v2Durations)
+	}
+	if failedDuration := v2Durations[1]; failedDuration.Tags["success"] != "false" || failedDuration.Tags["failure_reason"] != "validation_failed" {
+		t.Fatalf("exec-server failure duration = %#v", failedDuration)
 	}
 }
 

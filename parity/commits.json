@@ -8798,9 +8798,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/shell_snapshot.go tags v2 samples with purpose/attempt/shell/sandbox and the bounded failure reason on both counter and duration; appserver/shell_snapshot_test.go asserts execution failure labels"
    ]
   },
   {
