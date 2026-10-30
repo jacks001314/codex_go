@@ -26862,9 +26862,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Equivalent implementation already present and certified: applypatch always preserves each source line's ending (and uses the file's first ending for inserted lines) without an opt-in; the legacy normalization mode and feature are removed; envutil.InjectApplyPatchEnv always sets CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS=1 case-insensitively, overriding stale values. Existing regressions cover the CLI, apply, tool-call and child-environment paths. Verified with go test ./applypatch ./envutil -count=1, go test ./tool -run 'ApplyPatch' -count=1, and go build ./... ."
    ]
   },
   {
@@ -27030,9 +27030,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Rust sets a default-enabled ultrafast_mode feature and per-tier service_tier_enabled. Go already had the feature, TUI filtering, supportsIndependentSpeedModes, and provider/catalog support checks. This round added features.ServiceTierEnabled, routed model.ServiceTierForConfiguredRequest through it so configured ultrafast is gated independently of fast_mode, and normalized legacy rbac-fast-mode cloud requirement fragments with fast_mode=false to also set ultrafast_mode=false while leaving other fragments and higher-priority enterprise overrides intact. New tests in config/cloud_config_speed_modes_like_rust_test.go and model/service_tier_flex_test.go cover the legacy denial, enterprise override precedence, and independent Ultra Fast gating. Verified with go build ./..., go test ./config ./model ./applypatch ./envutil -count=1, go test ./features -count=1, go test ./appserver -run 'ServiceTier|SpeedMode|Ultrafast|FastMode' -count=1, go test ./tui/... -run 'ServiceTier|Speed|Ultrafast|FastMode' -count=1, and full go test ./appserver -count=1 (only the known seven pre-existing failures remain)."
    ]
   },
   {

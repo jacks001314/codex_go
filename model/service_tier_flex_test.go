@@ -12,29 +12,39 @@ import (
 // without fast mode or catalog support, while every other tier still requires
 // fast mode and catalog support.
 func TestServiceTierForConfiguredRequestLikeRust(t *testing.T) {
-	supported := &ModelInfo{ServiceTiers: []string{"priority", "flex"}}
+	supported := &ModelInfo{ServiceTiers: []string{"priority", "ultrafast", "flex"}}
 	for _, fastModeEnabled := range []bool{false, true} {
-		if got := ServiceTierForConfiguredRequest(supported, "flex", fastModeEnabled); got != "flex" {
+		if got := ServiceTierForConfiguredRequest(supported, "flex", map[string]bool{"fast_mode": fastModeEnabled}); got != "flex" {
 			t.Fatalf("flex (fast_mode=%v) = %q, want flex", fastModeEnabled, got)
 		}
 	}
 	// Flex survives a catalog that does not advertise it.
 	noTiers := &ModelInfo{}
-	if got := ServiceTierForConfiguredRequest(noTiers, "flex", false); got != "flex" {
+	if got := ServiceTierForConfiguredRequest(noTiers, "flex", nil); got != "flex" {
 		t.Fatalf("flex without catalog support = %q, want flex", got)
 	}
 	// Ordinary tiers still need fast mode and support.
-	if got := ServiceTierForConfiguredRequest(supported, "priority", false); got != "" {
+	if got := ServiceTierForConfiguredRequest(supported, "priority", map[string]bool{"fast_mode": false}); got != "" {
 		t.Fatalf("priority without fast mode = %q, want empty", got)
 	}
-	if got := ServiceTierForConfiguredRequest(supported, "priority", true); got != "priority" {
+	if got := ServiceTierForConfiguredRequest(supported, "priority", map[string]bool{"fast_mode": true}); got != "priority" {
 		t.Fatalf("priority with fast mode = %q, want priority", got)
 	}
-	if got := ServiceTierForConfiguredRequest(noTiers, "priority", true); got != "" {
+	if got := ServiceTierForConfiguredRequest(noTiers, "priority", map[string]bool{"fast_mode": true}); got != "" {
 		t.Fatalf("unsupported priority = %q, want empty", got)
 	}
-	if got := ServiceTierForConfiguredRequest(supported, "default", true); got != "" {
+	if got := ServiceTierForConfiguredRequest(supported, "default", map[string]bool{"fast_mode": true}); got != "" {
 		t.Fatalf("default = %q, want empty on the wire", got)
+	}
+	// Rust #51253: Ultra Fast follows its own policy, not Fast mode.
+	if got := ServiceTierForConfiguredRequest(supported, "ultrafast", map[string]bool{"fast_mode": false, "ultrafast_mode": true}); got != "ultrafast" {
+		t.Fatalf("ultrafast with fast disabled = %q, want ultrafast", got)
+	}
+	if got := ServiceTierForConfiguredRequest(supported, "ultrafast", map[string]bool{"fast_mode": true, "ultrafast_mode": false}); got != "" {
+		t.Fatalf("ultrafast with ultrafast mode disabled = %q, want empty", got)
+	}
+	if got := ServiceTierForConfiguredRequest(supported, "ultrafast", nil); got != "ultrafast" {
+		t.Fatalf("ultrafast defaults to enabled = %q, want ultrafast", got)
 	}
 	// Rust compares the configured value exactly, so only whitespace is trimmed.
 	if !IsFlexServiceTier("  flex  ") || IsFlexServiceTier("FLEX") || IsFlexServiceTier("priority") {

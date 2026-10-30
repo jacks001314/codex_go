@@ -3251,6 +3251,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Existing regressions pin the Rust transition table (`TestRecordChangedToolMetricsTagsPerToolLikeRust`), the initial-catalog exclusion, unchanged/header exclusions, removed-namespace member counting, description-only changes through the turn path (`TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust`), and replacement-only description histograms.
 - Verified with `go test ./appserver -run 'IncrementalToolCatalogRecordsChangedToolMetrics|RecordChangedToolMetrics|ToolSpecDescriptionBytesBucketProbe' -count=1` and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2178 complete`, `451 not_applicable`,
-`345 audit_pending`, `171 regression_pending`, `4 partial`,
+### Apply-patch line endings and independent speed modes (Round 1018)
+
+- Rust #51203 makes apply_patch preserve each file's line endings unconditionally, removes the legacy normalization mode and feature, and always exports `CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS=1` for older patch binaries. Go already implemented this in `applypatch/line_endings.go` with CLI/apply/tool-call regressions, and `envutil.InjectApplyPatchEnv` overrides stale case-insensitive values (#51203, complete).
+- Rust #51253 adds default-enabled `ultrafast_mode` and routes service-tier policy per tier. Go already had the feature, TUI filtering, `supportsIndependentSpeedModes`, and provider/catalog checks, but configured requests still treated every non-flex tier as Fast-gated and legacy `rbac-fast-mode` cloud denials were not translated (#51253, complete).
+- `features.ServiceTierEnabled` now mirrors Rust, `model.ServiceTierForConfiguredRequest` takes feature settings, and `config.normalizeRequirementsFragmentContents` injects `ultrafast_mode = false` only for legacy `rbac-fast-mode` fragments with `fast_mode = false` before layer precedence is applied.
+- New regressions in `config/cloud_config_speed_modes_like_rust_test.go` and `model/service_tier_flex_test.go` pin legacy denial normalization, higher-priority enterprise overrides, and independent Ultra Fast gating; existing TUI and app-server tests cover the remaining surfaces.
+- Verified with `go build ./...`, `go test ./config ./model ./applypatch ./envutil -count=1`, `go test ./tool -run 'ApplyPatch' -count=1`, `go test ./features -count=1`, `go test ./appserver -run 'ServiceTier|SpeedMode|Ultrafast|FastMode' -count=1`, `go test ./tui/... -run 'ServiceTier|Speed|Ultrafast|FastMode' -count=1`, and full `go test ./appserver -count=1` (only the known seven pre-existing failures remain).
+
+Status after reconciliation: `2180 complete`, `451 not_applicable`,
+`345 audit_pending`, `169 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

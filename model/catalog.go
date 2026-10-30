@@ -1966,11 +1966,12 @@ func ServiceTierForSelectedRequest(info *ModelInfo, serviceTier string) string {
 	return serviceTier
 }
 
-// ServiceTierForConfiguredRequest mirrors Rust `get_service_tier` (#46230): a
-// configured `flex` tier is preserved even when fast mode is disabled or the
-// model catalog does not list it, while every other tier still requires fast
-// mode and catalog support.
-func ServiceTierForConfiguredRequest(info *ModelInfo, serviceTier string, fastModeEnabled bool) string {
+// ServiceTierForConfiguredRequest mirrors Rust `get_service_tier`
+// (#46230/#51253): a configured `flex` tier is preserved even when its policy is
+// disabled or the model catalog does not list it, while every other tier
+// requires the policy that owns it (Fast mode for ordinary tiers, Ultra Fast
+// mode for `ultrafast`) and catalog support.
+func ServiceTierForConfiguredRequest(info *ModelInfo, serviceTier string, featureSettings map[string]bool) string {
 	value := normalizeServiceTierRequestValue(serviceTier)
 	if value == "" {
 		return ""
@@ -1978,7 +1979,7 @@ func ServiceTierForConfiguredRequest(info *ModelInfo, serviceTier string, fastMo
 	if value == ServiceTierFlexRequestValue {
 		return value
 	}
-	if !fastModeEnabled {
+	if !features.ServiceTierEnabled(featureSettings, value) {
 		return ""
 	}
 	return ServiceTierForRequest(info, value)

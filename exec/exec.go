@@ -7252,7 +7252,6 @@ func effectiveServiceTier(cfg *config.Config, modelID string) string {
 	if cfg != nil {
 		settings = cfg.FeatureSettings()
 	}
-	fastModeEnabled := features.Enabled(settings, "fast_mode")
 	value := firstNonEmpty(
 		stringConfigValue(cfg, "service_tier"),
 		stringConfigValue(cfg, "serviceTier"),
@@ -7262,8 +7261,9 @@ func effectiveServiceTier(cfg *config.Config, modelID string) string {
 	}
 	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
 	info := manager.GetModelInfo(modelID, nil)
-	// Rust #46230: a configured flex tier survives a disabled fast mode.
-	return model.ServiceTierForConfiguredRequest(&info, value, fastModeEnabled)
+	// Rust #46230/#51253: a configured flex tier survives policy changes, while
+	// Fast and Ultra Fast each follow their own feature gate.
+	return model.ServiceTierForConfiguredRequest(&info, value, settings)
 }
 
 func effectiveIncludeTimingMetrics(cfg *config.Config) bool {

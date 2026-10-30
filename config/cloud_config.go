@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	"codex_go/apps"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 var ErrInvalidCloudConfig = errors.New("invalid cloud config")
@@ -113,7 +115,8 @@ func CloudConfigLayersFromBundle(bundle CloudConfigBundle, baseDir string) (*Clo
 		return nil, err
 	}
 	for _, fragment := range bundle.RequirementsTOML.EnterpriseManaged {
-		values, err := ParseCloudConfigFlatTOML(fragment.Contents)
+		contents := normalizeRequirementsFragmentContents(fragment)
+		values, err := ParseCloudConfigFlatTOML(contents)
 		if err != nil {
 			source := CloudConfigFragmentSource{ID: fragment.ID, Name: fragment.Name}
 			return nil, fmt.Errorf("%w: failed to parse cloud requirements fragment %s: %s", ErrInvalidCloudConfig, source.String(), err)
@@ -121,7 +124,7 @@ func CloudConfigLayersFromBundle(bundle CloudConfigBundle, baseDir string) (*Clo
 		requirements = append(requirements, CloudConfigRequirementsLayer{
 			Source:      CloudConfigLayerSource{Type: CloudConfigLayerEnterpriseManaged, ID: fragment.ID, Name: fragment.Name},
 			Values:      values,
-			RawTOML:     fragment.Contents,
+			RawTOML:     contents,
 			BaseDir:     baseDir,
 			PathContext: pathContext,
 		})
@@ -131,6 +134,35 @@ func CloudConfigLayersFromBundle(bundle CloudConfigBundle, baseDir string) (*Clo
 		EnterpriseManagedConfig:       configLayers,
 		EnterpriseManagedRequirements: requirements,
 	}, nil
+}
+
+// normalizeRequirementsFragmentContents preserves the meaning of the legacy
+// cloud denial fragment. Older backends used `rbac-fast-mode` with
+// `fast_mode = false` to deny every accelerated tier; #51253 keeps that meaning
+// when Ultra Fast became independently policy-controlled, while a fragment from
+// any other source or with `fast_mode = true` is left byte-for-byte unchanged.
+func normalizeRequirementsFragmentContents(fragment CloudConfigFragment) string {
+	if fragment.ID != "rbac-fast-mode" {
+		return fragment.Contents
+	}
+	var parsed map[string]any
+	if err := toml.Unmarshal([]byte(fragment.Contents), &parsed); err != nil {
+		return fragment.Contents
+	}
+	features, ok := parsed["features"].(map[string]any)
+	if !ok {
+		return fragment.Contents
+	}
+	fastMode, ok := features["fast_mode"].(bool)
+	if !ok || fastMode {
+		return fragment.Contents
+	}
+	features["ultrafast_mode"] = false
+	encoded, err := toml.Marshal(parsed)
+	if err != nil {
+		return fragment.Contents
+	}
+	return string(encoded)
 }
 
 type CloudConfigLoadErrorCode string

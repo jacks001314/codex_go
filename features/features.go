@@ -467,6 +467,21 @@ func Enabled(settings map[string]bool, key string) bool {
 	return enabled
 }
 
+// ServiceTierEnabled mirrors Rust Features::service_tier_enabled (#51253):
+// flex is never policy-gated, ultrafast follows features.ultrafast_mode, and
+// every other routing tier follows features.fast_mode. Both modes are
+// default-enabled, so an absent key does not disable them.
+func ServiceTierEnabled(settings map[string]bool, serviceTier string) bool {
+	switch strings.ToLower(strings.TrimSpace(serviceTier)) {
+	case "flex":
+		return true
+	case "ultrafast":
+		return Enabled(settings, "ultrafast_mode")
+	default:
+		return Enabled(settings, "fast_mode")
+	}
+}
+
 // PluginRecommendationsEnabled reports whether apps/plugins and either
 // plugin-suggestion surface are enabled (Rust
 // Features::plugin_recommendations_enabled, #41375).
