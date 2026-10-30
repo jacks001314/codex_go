@@ -8750,7 +8750,7 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
     "Partial symbol coverage 3/9; needs review: ParentCompactionError, ReviewAction, decide_approval, encrypted_parent_compaction, from_approval_action"
    ]
@@ -8774,9 +8774,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go does not package or download V8 artifacts and has no V8 release-manifest workflow. The repository also has no setup-rusty-v8 action or published V8 release assets to pin or protect."
    ]
   },
   {
@@ -10233,9 +10233,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: codex_go does not ship a Python SDK. The repository has no Python package or generated Python app-server types; JSON schema generation targets the Go protocol packages under jsonschema and parity, so repository-schema Python type generation has no counterpart."
    ]
   },
   {
@@ -10341,9 +10341,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: the Go repository does not build or publish Python SDK artifacts. Release packaging here produces the Go binary and npm runtime; there is no Python sdist/wheel pipeline to order before runtime publication."
    ]
   },
   {
@@ -10449,9 +10449,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go does not expose a Python SDK surface. History selection and per-turn options are modeled by appserver protocol types and the Go SDK-facing tests; there is no Python client API to extend."
    ]
   },
   {
@@ -10461,9 +10461,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go has no Python SDK message model. Untrusted external messages are represented in the shared app-server protocol and turn input paths used by the Go client, not in a Python SDK."
    ]
   },
   {
@@ -10773,9 +10773,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1113 (audit): Go never shipped the Windows /sandbox-add-read-dir command. A repository-wide search for sandbox-add-read-dir, sandboxAddReadDir and SandboxAddReadDir returns no Go matches, so there is no command, event handler, or read-root grant helper to remove."
    ]
   },
   {
@@ -11254,9 +11254,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go has no Python SDK turn-subscription client. Thread turn subscriptions are owned by appserver RuntimeRouter and the TypeScript SDK differential tests, which already attach subscriptions at the requested attachment point."
    ]
   },
   {
@@ -20381,9 +20381,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Build-toolchain only: the commit aligns Cargo and Bazel Rust debug-information defaults. codex_go is a Go module with no Cargo profile or Bazel Rust configuration to change."
    ]
   },
   {
