@@ -230,6 +230,28 @@ func cloneTransportBackendConfig(config *TransportBackendConfig) *TransportBacke
 	return &clone
 }
 
+// realtimeSidebandBackendForTransport applies an existing call's in-process
+// sideband endpoint override (Rust #41923). The override wins over the
+// configured endpoint for this call, while other transports keep using the
+// configured or default endpoint. Runtime authentication headers are preserved
+// because the clone keeps the backend's header configuration.
+func realtimeSidebandBackendForTransport(backend *TransportBackendConfig, transport StartTransport) *TransportBackendConfig {
+	override := strings.TrimSpace(transport.SidebandBaseURL)
+	if transport.Type != "existingCall" || override == "" {
+		return backend
+	}
+	clone := cloneTransportBackendConfig(backend)
+	if clone == nil {
+		clone = &TransportBackendConfig{
+			Headers:     make(http.Header),
+			HTTPClient:  &http.Client{},
+			QueryParams: map[string]string{},
+		}
+	}
+	clone.SidebandBaseURL = override
+	return clone
+}
+
 func createRealtimeWebRTCCall(ctx context.Context, backend *TransportBackendConfig, config *SessionConfig) (*realtimeWebRTCCall, error) {
 	endpoint, err := realtimeCallURL(backend.WebRTCCallBaseURL, config)
 	if err != nil {

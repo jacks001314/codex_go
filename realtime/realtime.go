@@ -211,6 +211,10 @@ type StartTransport struct {
 	Type   string `json:"type"`
 	SDP    string `json:"sdp,omitempty"`
 	CallID string `json:"callId,omitempty"`
+	// SidebandBaseURL overrides the sideband endpoint for this existing call.
+	// It is in-process metadata for embedding runtimes, never a client-supplied
+	// wire field (Rust #41923). Empty falls back to the configured endpoint.
+	SidebandBaseURL string `json:"-"`
 }
 
 func WebsocketTransport() *StartTransport {
@@ -225,6 +229,12 @@ func WebRTCTransport(sdp string) *StartTransport {
 // and negotiated. Core connects a sideband to the call instead of creating one.
 func ExistingCallTransport(callID string) *StartTransport {
 	return &StartTransport{Type: "existingCall", CallID: callID}
+}
+
+// ExistingCallTransportWithSideband joins a client-created call and overrides
+// the sideband endpoint for this call only (Rust #41923).
+func ExistingCallTransportWithSideband(callID, sidebandBaseURL string) *StartTransport {
+	return &StartTransport{Type: "existingCall", CallID: callID, SidebandBaseURL: sidebandBaseURL}
 }
 
 func (t *StartTransport) Validate() error {
@@ -1588,6 +1598,7 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 	if options != nil && options.Backend != nil {
 		backend = cloneTransportBackendConfig(options.Backend)
 	}
+	backend = realtimeSidebandBackendForTransport(backend, config.Transport)
 	m.mu.Unlock()
 	if previousConnection != nil {
 		m.flushRealtimeTranscriptTail(previousConnection)

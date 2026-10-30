@@ -41,6 +41,194 @@ func TestExistingCallTransportWireShape(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #41923: the per-call sideband endpoint is in-process metadata,
+// so it must not appear on the wire and a client cannot inject it.
+func TestExistingCallSidebandEndpointIsNotWireSerializedLikeRust(t *testing.T) {
+	transport := ExistingCallTransportWithSideband("rtc_123", "https://sideband.example/v1")
+	encoded, err := json.Marshal(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"type":"existingCall","callId":"rtc_123"}` {
+		t.Fatalf("encoded = %s", encoded)
+	}
+	var decoded StartTransport
+	if err := json.Unmarshal([]byte(`{"type":"existingCall","callId":"rtc_123","sidebandBaseUrl":"https://sideband.example/v1"}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.SidebandBaseURL != "" {
+		t.Fatalf("client-supplied sideband override was accepted: %#v", decoded)
+	}
+}
+
+// Mirrors Rust #41923: the per-call endpoint wins over the configured sideband
+// endpoint and keeps runtime auth headers without adding bearer authorization.
+func TestExistingCallSidebandPrefersPerCallEndpointLikeRust(t *testing.T) {
+	var configuredMu sync.Mutex
+	configuredRequests := 0
+	configuredServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		configuredMu.Lock()
+		configuredRequests++
+		configuredMu.Unlock()
+		http.Error(writer, "unexpected configured endpoint use", http.StatusInternalServerError)
+	}))
+	defer configuredServer.Close()
+
+	var perCallMu sync.Mutex
+	var perCallRequests []string
+	var perCallAuthorization []string
+	var perCallRuntimeAuth []string
+	perCallServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		perCallMu.Lock()
+		perCallRequests = append(perCallRequests, request.URL.String())
+		perCallAuthorization = append(perCallAuthorization, request.Header.Get("Authorization"))
+		perCallRuntimeAuth = append(perCallRuntimeAuth, request.Header.Get("x-runtime-auth"))
+		perCallMu.Unlock()
+		conn, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		<-request.Context().Done()
+	}))
+	defer perCallServer.Close()
+
+	manager := NewManager()
+	manager.SetTransportBackend(&TransportBackendConfig{
+		SidebandBaseURL: configuredServer.URL,
+		CallHeaders:     http.Header{"X-Runtime-Auth": []string{"runtime"}},
+	})
+	manager.SetNotificationSink(func(Notification) {})
+	includeStartupContext := false
+	if _, _, err := manager.Start(&StartParams{
+		ThreadID:              "thread-per-call-endpoint",
+		OutputModality:        OutputAudio,
+		Transport:             ExistingCallTransportWithSideband("rtc_per_call", perCallServer.URL),
+		IncludeStartupContext: &includeStartupContext,
+	}); err != nil {
+		t.Fatalf("start existing call: %v", err)
+	}
+	defer func() { _, _, _ = manager.Stop(&StopParams{ThreadID: "thread-per-call-endpoint"}, "requested") }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		perCallMu.Lock()
+		count := len(perCallRequests)
+		perCallMu.Unlock()
+		if count > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	configuredMu.Lock()
+	configuredCount := configuredRequests
+	configuredMu.Unlock()
+	if configuredCount != 0 {
+		t.Fatalf("configured endpoint received %d requests, want 0", configuredCount)
+	}
+	perCallMu.Lock()
+	defer perCallMu.Unlock()
+	if len(perCallRequests) == 0 {
+		t.Fatal("the per-call sideband never connected")
+	}
+	if !strings.Contains(perCallRequests[0], "call_id=rtc_per_call") {
+		t.Fatalf("sideband request = %q", perCallRequests[0])
+	}
+	if got := perCallAuthorization[0]; got != "" {
+		t.Fatalf("Authorization = %q, want empty", got)
+	}
+	if got := perCallRuntimeAuth[0]; got != "runtime" {
+		t.Fatalf("x-runtime-auth = %q, want runtime", got)
+	}
+}
+
+// Mirrors Rust #41923: reconnecting an existing call reuses the per-call
+// endpoint rather than the configured one.
+func TestExistingCallSidebandReconnectsToPerCallEndpointLikeRust(t *testing.T) {
+	var configuredMu sync.Mutex
+	configuredRequests := 0
+	configuredServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		configuredMu.Lock()
+		configuredRequests++
+		configuredMu.Unlock()
+		http.Error(writer, "unexpected configured endpoint use", http.StatusInternalServerError)
+	}))
+	defer configuredServer.Close()
+
+	var perCallMu sync.Mutex
+	perCallRequests := 0
+	perCallServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		perCallMu.Lock()
+		perCallRequests++
+		perCallMu.Unlock()
+		conn, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		<-request.Context().Done()
+	}))
+	defer perCallServer.Close()
+
+	manager := NewManager()
+	manager.SetTransportBackend(&TransportBackendConfig{SidebandBaseURL: configuredServer.URL})
+	manager.SetNotificationSink(func(Notification) {})
+	version := VersionV3
+	includeStartupContext := false
+	const threadID = "thread-per-call-reconnect"
+	if _, _, err := manager.Start(&StartParams{
+		ThreadID:              threadID,
+		OutputModality:        OutputAudio,
+		Version:               &version,
+		Transport:             ExistingCallTransportWithSideband("rtc_per_call", perCallServer.URL),
+		IncludeStartupContext: &includeStartupContext,
+	}); err != nil {
+		t.Fatalf("start existing call: %v", err)
+	}
+	defer func() { _, _, _ = manager.Stop(&StopParams{ThreadID: threadID}, "requested") }()
+
+	waitForCount := func(read func() int, want int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if read() >= want || time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitForCount(func() int {
+		perCallMu.Lock()
+		defer perCallMu.Unlock()
+		return perCallRequests
+	}, 1)
+	manager.mu.Lock()
+	connection := manager.connections[threadID]
+	manager.mu.Unlock()
+	if connection == nil {
+		t.Fatal("the sideband connection was not recorded")
+	}
+	connection.closeNow()
+	waitForCount(func() int {
+		perCallMu.Lock()
+		defer perCallMu.Unlock()
+		return perCallRequests
+	}, 2)
+
+	perCallMu.Lock()
+	perCallCount := perCallRequests
+	perCallMu.Unlock()
+	configuredMu.Lock()
+	configuredCount := configuredRequests
+	configuredMu.Unlock()
+	if perCallCount < 2 {
+		t.Fatalf("per-call endpoint connections = %d, want at least 2", perCallCount)
+	}
+	if configuredCount != 0 {
+		t.Fatalf("configured endpoint received %d reconnects, want 0", configuredCount)
+	}
+}
+
 func TestExistingCallRejectsSessionConfiguration(t *testing.T) {
 	falseValue := false
 	trueValue := true

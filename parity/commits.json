@@ -5086,9 +5086,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go already joined client-created calls with the configured experimental_realtime_ws_base_url sideband endpoint, the V1 call_id query and V3 /v1/live/<call> paths, activation retries (#51460), and runtime CallHeaders without bearer auth (#57817). This round added the in-process per-call override: realtime.StartTransport.SidebandBaseURL (never serialized and ignored on decode), ExistingCallTransportWithSideband, and realtimeSidebandBackendForTransport, which overrides only existingCall sidebands and falls back to the configured endpoint when empty. Initial dial and reconnect both use the override. Added wire-shape, endpoint-preference/header, and V3 reconnect tests in realtime/existing_call_test.go; go test ./realtime and go build ./... pass."
    ]
   },
   {
