@@ -3488,6 +3488,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression coverage: `tui/tea/session_checkout_picker_like_rust_test.go` covers both commands, copy, selection routing, and the unavailable fallback; `app/worktree_tui_test.go` asserts a named fork keeps its title.
 - Verified with `go test ./tui/tea -count=1`, `go test ./app -run Worktree -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2205 complete`, `461 not_applicable`,
-`322 audit_pending`, `156 regression_pending`, `5 partial`,
+### Rollout attachment archive (Round 1052)
+
+- Rust #50446 partitions buffered and file-backed rollouts from diagnostics, bundles the rollouts into a bounded `rollouts.tar.gz`, keeps diagnostics separate, skips invalid/duplicate archive names, falls back to individual rollouts only when archiving fails, and adds `rollout_archive_filename` to the report thread index.
+- Complete: the Go port already carried the archive, partition, bounded writer, thread-index field, and local-save nulling. This round fixed the remaining divergence in `FeedbackRolloutArchive`: Rust's `with_individual_fallback` only falls back on `Err`, so `Ok(None)` (every rollout skipped as invalid or oversized) uploads nothing; Go previously uploaded the individual rollouts in that case.
+- Regression coverage: `appserver/rollout_archive_test.go` now pins the no-fallback branch and the Rust upload-test cases for a compressed `.jsonl.zst` rollout (archived under the decoded `.jsonl` name) and a damaged compressed source (preserved verbatim as `.jsonl.zst`).
+- Residual: Go's feedback pipeline ends at the prepared attachment list and has no Sentry envelope or network upload, so Rust's envelope-framing size check has no carrier; the archive bytes themselves remain bounded by `MAX_DECODED_UPLOAD_BYTES`.
+- Verified with `go test ./appserver -run Feedback -count=1` and `go test ./parity -run TestAlignment -count=1`. Full `./appserver` still fails on pre-existing drift: the v2 suite manifest (`https_mock`) and two runtime-router analytics tests time out on the unmodified tree.
+
+Status after reconciliation: `2206 complete`, `461 not_applicable`,
+`322 audit_pending`, `155 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

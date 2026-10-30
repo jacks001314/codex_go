@@ -338,15 +338,24 @@ func FeedbackRolloutArchive(archiveDir string, rolloutPaths []FeedbackAttachment
 	if err == nil {
 		outputPath := filepath.Join(directory, FeedbackRolloutArchiveFilename)
 		ok, archiveErr := FeedbackArchiveRollouts(outputPath, rolloutPaths, rollouts, maxBytes)
-		if archiveErr == nil && ok {
-			attachment, read, readErr := FeedbackReadAttachmentPath(FeedbackAttachmentPath{Path: outputPath}, maxBytes)
-			if readErr == nil && read && int64(len(attachment.Buffer)) <= maxBytes {
-				attachment.ContentType = FeedbackRolloutArchiveContentType
-				// Rust keeps the archive in a temp dir until the envelope is written;
-				// the bytes are already in memory here, so the directory is released.
-				_ = os.RemoveAll(directory)
-				return []FeedbackAttachment{attachment}, nil
-			}
+		if archiveErr != nil {
+			_ = os.RemoveAll(directory)
+			return cloneAttachments(rollouts), cloneAttachmentPaths(rolloutPaths)
+		}
+		if !ok {
+			// Rust `archive_rollouts` returns `Ok(None)` when every rollout was
+			// skipped; `with_individual_fallback` only falls back on `Err`, so
+			// nothing is uploaded in this case.
+			_ = os.RemoveAll(directory)
+			return nil, nil
+		}
+		attachment, read, readErr := FeedbackReadAttachmentPath(FeedbackAttachmentPath{Path: outputPath}, maxBytes)
+		if readErr == nil && read && int64(len(attachment.Buffer)) <= maxBytes {
+			attachment.ContentType = FeedbackRolloutArchiveContentType
+			// Rust keeps the archive in a temp dir until the envelope is written;
+			// the bytes are already in memory here, so the directory is released.
+			_ = os.RemoveAll(directory)
+			return []FeedbackAttachment{attachment}, nil
 		}
 		_ = os.RemoveAll(directory)
 	}

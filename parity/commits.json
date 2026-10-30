@@ -8540,9 +8540,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1052: `appserver/rollout_archive.go` mirrors #50446: buffered and path-backed rollouts are partitioned from diagnostics, bundled into `rollouts.tar.gz` (GNU tar, mode 0600, mtime 0, path-backed then buffered order), diagnostics stay separate, invalid/traversal/duplicate names and oversized rollouts are skipped, a bounded writer caps the archive at `FeedbackMaxDecodedUploadBytes`, and only a complete archive is published. `FeedbackRolloutArchive` now matches Rust's `with_individual_fallback`: `Ok(None)` (every rollout skipped) uploads nothing, while archive/read failures fall back to the individual rollouts. The report thread index carries `rollout_archive_filename`; local saves null it. Regression contract: `appserver/rollout_archive_test.go` (compressed `.jsonl.zst` archived under its decoded `.jsonl` name, damaged source preserved as raw `.jsonl.zst`, and the no-fallback case) plus `appserver/feedback_save_like_rust_test.go`; verify with `go test ./appserver -run Feedback -count=1`. Residual: Go's feedback port stops at the prepared attachment list (no Sentry envelope or network upload), so Rust's envelope-framing size guard has no carrier; the archive itself is still bounded by `MAX_DECODED_UPLOAD_BYTES`."
    ]
   },
   {
