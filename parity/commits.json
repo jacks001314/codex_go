@@ -9070,9 +9070,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1119: `appserverdaemon.PIDRecord` already stores an optional `executableIdentity`, `PIDBackend.Start` resolves the configured binary before launch on Unix and Windows and digests the app-server launch image, `RunningExecutableIdentity` exposes the value only for an active process, and legacy records without the field read as nil. `install.ExecutableIdentity` streams the digest and keeps the path digest (#47591/#50559). Go also schedules updater checks against an explicit `nextCheck` deadline, preserving persisted intervals, settings-error retries and termination handling. Tests: TestPIDRecordRecordsLaunchedExecutableIdentityLikeRust, TestPIDRecordAcceptsLegacyRecordWithoutExecutableIdentityLikeRust (Unix-only, Linux/darwin vet typechecks) plus TestExecutableIdentityFromReaderMatchesWholeFileLikeRust and TestExecutableIdentityFromFileStreamsLikeRust; go test ./appserverdaemon ./install -run 'ExecutableIdentity|PIDRecord' passes. Accepted residual: Rust hashes with BLAKE3 while Go uses SHA-256, and the digest is only ever compared against Go-written records (documented in update/plan_2026_09_11.md)."
    ]
   },
   {

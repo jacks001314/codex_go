@@ -4030,3 +4030,12 @@ Status after this batch: `2336 complete`, `465 not_applicable`, `322 audit_pendi
 - Tests: `TestElevatedWindowsLaunchUsesEmbeddedModeLikeRust`, `TestElevatedWindowsLaunchEmbeddedWithoutAutoStartLikeRust`, `TestInteractiveDaemonSelectionReasonLikeRust`; targeted `go test ./app -run Elevated` and the telemetry test pass.
 
 Status after this batch: `2337 complete`, `465 not_applicable`, `322 audit_pending`, `20 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### PID files record the launch-time executable identity (Round 1119)
+
+- #43552 was already implemented in Go: `PIDRecord` carries optional `executableIdentity`, `PIDBackend.Start` resolves the selected binary before launching on Unix and Windows and digests the app-server image, `RunningExecutableIdentity` returns it only while the process is active, and legacy records without the field read as nil. `install.ExecutableIdentity` streams the digest and keeps the resolved path digest.
+- The updater check loop also uses an explicit `nextCheck` deadline, so persisted intervals, settings-error retries and termination handling keep working.
+- Tests: `TestPIDRecordRecordsLaunchedExecutableIdentityLikeRust`, `TestPIDRecordAcceptsLegacyRecordWithoutExecutableIdentityLikeRust` (Unix-only; Linux/darwin vet typechecks), `TestExecutableIdentityFromReaderMatchesWholeFileLikeRust`, `TestExecutableIdentityFromFileStreamsLikeRust`; targeted `go test ./appserverdaemon ./install` passes.
+- Accepted residual: Rust hashes with BLAKE3 while Go uses SHA-256; the digest is only compared against Go-written PID records, as already documented in `update/plan_2026_09_11.md`.
+
+Status after this batch: `2338 complete`, `465 not_applicable`, `322 audit_pending`, `19 regression_pending`, `5 partial`, `6 blocked_precondition`.
