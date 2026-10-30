@@ -34,6 +34,12 @@ func (m *Model) rememberThreadReadState(threadID string, unread bool, revision s
 	} else {
 		delete(m.unreadThreadRevisions, threadID)
 	}
+	// Rust #58264 keeps the resume picker's unread dots on the same receipt.
+	if unread && revision != "" {
+		m.setSessionUnreadRevision(threadID, revision)
+	} else {
+		m.setSessionUnreadRevision(threadID, "")
+	}
 	if row, ok := m.agentsOverviewKnownRows[threadID]; ok {
 		row.Unread = unread
 		row.UnreadRevision = revision

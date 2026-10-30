@@ -125,6 +125,20 @@ func SessionSummariesFromAppServerThreads(threads []appserver.Thread, archived b
 	return summaries
 }
 
+// SessionSummariesFromAppServerThreadsWithReadStates attaches the thread/list
+// read receipts so the resume picker can mark unread sessions (Rust #58264).
+func SessionSummariesFromAppServerThreadsWithReadStates(threads []appserver.Thread, archived bool, readStates map[string]appserver.ThreadReadState) []SessionSummary {
+	summaries := SessionSummariesFromAppServerThreads(threads, archived)
+	for i := range summaries {
+		state, ok := readStates[summaries[i].ThreadID]
+		if !ok || state.FirstUnread == nil {
+			continue
+		}
+		summaries[i].UnreadRevision = strings.TrimSpace(state.Revision)
+	}
+	return summaries
+}
+
 func loadSessionRecordsByArchived(store *session.Store, archived bool, options SessionSourceOptions) ([]session.Record, error) {
 	listOptions := session.ListOptions{
 		SortKey:        session.SortRecencyAt,

@@ -353,6 +353,7 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 	}
 	byID := make(map[string]*appserver.Thread, len(recent)+len(threadIDs))
 	order := make([]string, 0, len(recent)+len(threadIDs))
+	listed := make(map[string]bool, len(recent))
 	for _, thread := range recent {
 		id := appserverThreadID(thread)
 		if id == "" {
@@ -362,6 +363,7 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 			order = append(order, id)
 		}
 		byID[id] = thread
+		listed[id] = true
 	}
 	for _, threadID := range threadIDs {
 		id := strings.TrimSpace(threadID)
@@ -384,7 +386,7 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 	for _, id := range order {
 		thread := byID[id]
 		_, hasReceipt := receipts[id]
-		if !hasReceipt {
+		if thread == nil || (!hasReceipt && !listed[id]) {
 			// Recent/pinned/loaded listings normally carry readStates. A loaded
 			// or pinned id outside those pages still needs a receipt, so read it
 			// without turns (Rust #58263 agents_overview_threads.rs).

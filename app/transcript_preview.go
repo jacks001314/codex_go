@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -236,4 +237,70 @@ func interactiveSessionTranscriptHandler(showRawReasoning bool) codextea.Session
 		}
 		return interactiveSessionMessagesFromRecord(record, reasoningProjectionThreadTranscript, showRawReasoning), nil
 	}
+}
+
+// interactiveRemoteSessionReadAcknowledgeHandler acknowledges the picker
+// transcript's observed receipt through the app server and returns the
+// resulting state (Rust #58264).
+func interactiveRemoteSessionReadAcknowledgeHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SessionReadAcknowledgeFunc {
+	return func(threadID string, expectedRevision string) (bool, string, error) {
+		threadID = strings.TrimSpace(threadID)
+		expectedRevision = strings.TrimSpace(expectedRevision)
+		if threadID == "" || expectedRevision == "" {
+			return false, "", nil
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return false, "", err
+		}
+		defer client.close()
+		response, err := remoteAcknowledgeThreadReadResponse(ctx, client, threadID, expectedRevision)
+		if err != nil {
+			return false, "", err
+		}
+		unread, revision := threadReadReceiptFromReadState(response.ReadState)
+		return unread, revision, nil
+	}
+}
+
+// interactiveSessionReadAcknowledgeHandler acknowledges the picker transcript's
+// observed receipt in the embedded app server's durable state (Rust #58264).
+func interactiveSessionReadAcknowledgeHandler(store *session.Store) codextea.SessionReadAcknowledgeFunc {
+	return func(threadID string, expectedRevision string) (bool, string, error) {
+		threadID = strings.TrimSpace(threadID)
+		expectedRevision = strings.TrimSpace(expectedRevision)
+		if store == nil || threadID == "" || expectedRevision == "" {
+			return false, "", nil
+		}
+		result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadReadStateUpdate, appserver.ThreadReadStateUpdateParams{
+			ThreadID:         threadID,
+			Operation:        appserver.ThreadReadStateOperation{Type: "read"},
+			ExpectedRevision: expectedRevision,
+		})
+		if closeRuntime != nil {
+			closeRuntime()
+		}
+		if err != nil {
+			return false, "", err
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return false, "", err
+		}
+		var response appserver.ThreadReadStateUpdateResponse
+		if err := json.Unmarshal(encoded, &response); err != nil {
+			return false, "", err
+		}
+		unread, revision := threadReadReceiptFromReadState(response.ReadState)
+		return unread, revision, nil
+	}
+}
+
+// threadReadReceiptFromReadState maps a backend receipt onto the picker's
+// unread dot: a cleared first-unread position means the row is read.
+func threadReadReceiptFromReadState(readState appserver.ThreadReadState) (bool, string) {
+	if readState.FirstUnread == nil {
+		return false, ""
+	}
+	return true, strings.TrimSpace(readState.Revision)
 }

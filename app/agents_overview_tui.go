@@ -203,31 +203,39 @@ func interactiveRemoteAgentsOverviewAcknowledgeThreadRead(ctx context.Context, e
 // retry once on the server's transient codes, and treat a receipt conflict as
 // success because the server reported the newer state.
 func remoteAcknowledgeThreadRead(ctx context.Context, client *remoteAppServerTUIClient, threadID, expectedRevision string) error {
+	_, err := remoteAcknowledgeThreadReadResponse(ctx, client, threadID, expectedRevision)
+	return err
+}
+
+// remoteAcknowledgeThreadReadResponse is remoteAcknowledgeThreadRead with the
+// server's resulting read state, which the resume picker renders from
+// (Rust #58264 BackgroundEvent::Acknowledged).
+func remoteAcknowledgeThreadReadResponse(ctx context.Context, client *remoteAppServerTUIClient, threadID, expectedRevision string) (appserver.ThreadReadStateUpdateResponse, error) {
 	params := appserver.ThreadReadStateUpdateParams{
 		ThreadID:         strings.TrimSpace(threadID),
 		Operation:        appserver.ThreadReadStateOperation{Type: "read"},
 		ExpectedRevision: strings.TrimSpace(expectedRevision),
 	}
+	var response appserver.ThreadReadStateUpdateResponse
 	send := func() error {
-		var response appserver.ThreadReadStateUpdateResponse
 		return remoteSessionRequest(ctx, client, appserver.MethodThreadReadStateUpdate, params, &response)
 	}
 	err := send()
 	if remoteReadStateTransientError(err) {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return appserver.ThreadReadStateUpdateResponse{}, ctx.Err()
 		case <-time.After(250 * time.Millisecond):
 		}
 		err = send()
 	}
 	if err == nil {
-		return nil
+		return response, nil
 	}
-	if _, conflict := remoteReadStateConflict(err); conflict {
-		return nil
+	if state, conflict := remoteReadStateConflict(err); conflict {
+		return appserver.ThreadReadStateUpdateResponse{ReadState: state}, nil
 	}
-	return err
+	return appserver.ThreadReadStateUpdateResponse{}, err
 }
 
 func remoteReadStateTransientError(err error) bool {

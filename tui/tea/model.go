@@ -1349,6 +1349,10 @@ type Options struct {
 	// picker's ctrl+t overlay (Rust PickerLoadRequest::Transcript). Nil leaves
 	// the overlay showing a failure notice.
 	OnReadSessionTranscript SessionTranscriptFunc
+	// OnAcknowledgeSessionRead marks the picker transcript's observed receipt
+	// read and returns the resulting state (Rust #58264). Nil leaves unread
+	// dots until the next backend listing.
+	OnAcknowledgeSessionRead SessionReadAcknowledgeFunc
 	// OnAnalyticsChats lists recent local roots for the analytics Top chats
 	// section (Rust #45765). Nil leaves the section unavailable, as it does for
 	// runtimes without a thread source.
@@ -2412,31 +2416,37 @@ type Model struct {
 	// right-button press reads the clipboard off the update loop and the text is
 	// delivered at the next render while the same thread/draft/cursor stays
 	// eligible. clipboardReadPending is Rust's worker `is_busy` guard.
-	rightClickPasteMode     tuiapp.RightClickPasteMode
-	copyOnSelectMode        string
-	copyOnSelectClear       bool
-	rightClickPasteEnv      tuiapp.PasteEnvironment
-	rightClickPasteTarget   *tuiapp.RightClickPasteTarget
-	rightClickPasteResult   *rightClickPasteResult
-	clipboardRead           func() (string, error)
-	clipboardReadPending    bool
-	clipboardBusy           bool
-	clipboardForward        func(text string, tmux bool) error
-	clipboardEnvironment    *codextui.ClipboardEnvironment
-	clipboardWorker         *clipboardWorker
-	clipboardSetupTimeout   time.Duration
-	nextClipboardRequestID  uint64
-	pendingClipboardRequest uint64
-	onExportTranscript      TranscriptExportFunc
-	onGenerateRecap         RecapGenerateFunc
-	onSuggestThreadName     RecapGenerateFunc
-	recapInFlight           bool
-	onUpdateDaybreak        DaybreakUpdateFunc
-	onLoadTranscriptPreview TranscriptPreviewFunc
-	onReadSessionTranscript SessionTranscriptFunc
+	rightClickPasteMode      tuiapp.RightClickPasteMode
+	copyOnSelectMode         string
+	copyOnSelectClear        bool
+	rightClickPasteEnv       tuiapp.PasteEnvironment
+	rightClickPasteTarget    *tuiapp.RightClickPasteTarget
+	rightClickPasteResult    *rightClickPasteResult
+	clipboardRead            func() (string, error)
+	clipboardReadPending     bool
+	clipboardBusy            bool
+	clipboardForward         func(text string, tmux bool) error
+	clipboardEnvironment     *codextui.ClipboardEnvironment
+	clipboardWorker          *clipboardWorker
+	clipboardSetupTimeout    time.Duration
+	nextClipboardRequestID   uint64
+	pendingClipboardRequest  uint64
+	onExportTranscript       TranscriptExportFunc
+	onGenerateRecap          RecapGenerateFunc
+	onSuggestThreadName      RecapGenerateFunc
+	recapInFlight            bool
+	onUpdateDaybreak         DaybreakUpdateFunc
+	onLoadTranscriptPreview  TranscriptPreviewFunc
+	onReadSessionTranscript  SessionTranscriptFunc
+	onAcknowledgeSessionRead SessionReadAcknowledgeFunc
 	// sessionTranscriptThreadID identifies the picker transcript overlay's
 	// session so a late load result is ignored after the overlay changes.
 	sessionTranscriptThreadID string
+	// sessionTranscriptRevision is the receipt observed when the transcript
+	// overlay was opened; it is acknowledged once the overlay renders in a
+	// focused terminal (Rust #58264).
+	sessionTranscriptRevision string
+	sessionTranscriptReady    bool
 	// dynamicToolThreads tracks tasks the TUI started or resumed while serving a
 	// codex_tui dynamic tool call (Rust DynamicToolThreadStarted).
 	dynamicToolThreads map[string]bool
@@ -3078,6 +3088,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onUpdateDaybreak:                 options.OnUpdateDaybreak,
 		onLoadTranscriptPreview:          options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:          options.OnReadSessionTranscript,
+		onAcknowledgeSessionRead:         options.OnAcknowledgeSessionRead,
 		disableAutoRecap:                 options.AutoRecap != nil && !*options.AutoRecap,
 		promptSuggestionsEnabled:         options.PromptSuggestions != nil && *options.PromptSuggestions,
 		composerPlaceholder:              firstNonEmpty(options.Placeholder, "Ask Codex to do anything"),
@@ -3516,6 +3527,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return model, cmd
 	}
 	next.restoreParentModal()
+	if ackCmd := next.pickerTranscriptAckCmd(); ackCmd != nil {
+		cmd = bubbletea.Batch(cmd, ackCmd)
+	}
 	next.observeSparkleModel()
 	statusCmd := next.refreshTerminalProgramStatusCmd()
 	settleCmd := next.terminalSizeSettleCmd()
@@ -3867,6 +3881,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case SessionTranscriptMsg:
 		m.applySessionTranscript(msg)
+		return m, nil
+	case SessionTranscriptAcknowledgedMsg:
+		m.applySessionTranscriptAcknowledged(msg)
 		return m, nil
 	case DynamicToolThreadStartedMsg:
 		return m, m.applyDynamicToolThreadStarted(msg)
@@ -10960,6 +10977,8 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	m.overlayTranscript = false
 	m.overlayMouseCapture = mouseCaptureInherit
 	m.sessionTranscriptThreadID = ""
+	m.sessionTranscriptRevision = ""
+	m.sessionTranscriptReady = false
 	m.backtrack.OverlayPreviewActive = false
 	if wasBacktrack {
 		// Rust close_transcript_overlay: a closed preview clears all backtrack

@@ -8,7 +8,6 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/session"
-	"codex_go/state"
 	agentsoverview "codex_go/tui/agents_overview"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
@@ -52,29 +51,13 @@ func (s *embeddedAgentsDashboardSource) attachReadReceipts(ctx context.Context, 
 	if s == nil || s.store == nil || len(rows) == 0 {
 		return
 	}
-	codexHome := sessionCodexHome(s.store)
-	if codexHome == "" {
-		return
-	}
-	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
-	if err != nil {
-		return
-	}
-	runtime, err := state.InitStateRuntime(ctx, sqliteConfig, "openai")
-	if err != nil {
-		return
-	}
-	defer runtime.Close()
 	threadIDs := make([]string, 0, len(rows))
 	for i := range rows {
 		if id := strings.TrimSpace(rows[i].ThreadID); id != "" {
 			threadIDs = append(threadIDs, id)
 		}
 	}
-	states, err := runtime.ThreadReadStates(ctx, threadIDs)
-	if err != nil {
-		return
-	}
+	states := sessionThreadReadStates(ctx, s.store, threadIDs)
 	for i := range rows {
 		value, ok := states[strings.TrimSpace(rows[i].ThreadID)]
 		if !ok {

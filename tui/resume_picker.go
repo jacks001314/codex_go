@@ -247,6 +247,14 @@ type SessionSummary struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Archived        bool
+	// UnreadRevision is the backend read receipt behind an unacknowledged
+	// result (Rust #58264 resume_picker unread map). Empty means read.
+	UnreadRevision string
+}
+
+// Unread reports whether the row carries an unacknowledged result.
+func (s SessionSummary) Unread() bool {
+	return strings.TrimSpace(s.UnreadRevision) != ""
 }
 
 type SessionPickerState struct {
@@ -982,18 +990,29 @@ func (s *SessionPickerState) renderDenseSessionRow(item SessionSummary, selected
 	}
 	date := padDisplayRight(relativeTime(updated, now), sessionPickerDateWidth)
 	title := item.DisplayPreview()
+	unread := item.Unread()
+	markerWidth := 0
+	if unread {
+		// The marker glyph plus its separating space (Rust session_summary_line).
+		markerWidth = 2
+	}
 	if width > 0 {
-		available := width - DisplayWidth(prefix) - DisplayWidth(date)
+		available := width - DisplayWidth(prefix) - DisplayWidth(date) - markerWidth
 		if available < 0 {
 			available = 0
 		}
 		title = TruncateWithEllipsis(title, available)
 	}
-	row := prefix + date + title
+	row := prefix + date
+	if unread {
+		row += StyledTaskMarker(true) + " "
+	}
 	if color := s.sessionTitleColor(item); color != "" {
 		// Keep the identity accent on the title only; reset to the terminal
 		// default afterwards.
-		row = prefix + date + color + title + "\x1b[39m"
+		row += color + title + "\x1b[39m"
+	} else {
+		row += title
 	}
 	if selected {
 		row = RenderSelectedRow(row)
@@ -1003,9 +1022,19 @@ func (s *SessionPickerState) renderDenseSessionRow(item SessionSummary, selected
 
 func (s *SessionPickerState) renderComfortableSessionRow(item SessionSummary, selected bool, width int, now time.Time) []string {
 	prefix := SelectionPrefix(selected)
-	title := prefix + item.DisplayPreview()
+	unread := item.Unread()
+	wrapWidth := width
+	if unread && wrapWidth > 0 {
+		// Reserve the marker glyph plus its separating space (Rust #58264).
+		wrapWidth -= 2
+	}
+	title := prefix
+	if unread {
+		title += taskMarkerUnreadGlyph + " "
+	}
+	title += item.DisplayPreview()
 	lines := AdaptiveWrapLine(title, WrapOptions{
-		Width:            width,
+		Width:            wrapWidth,
 		SubsequentIndent: "  ",
 		BreakWords:       true,
 	})
@@ -1014,6 +1043,11 @@ func (s *SessionPickerState) renderComfortableSessionRow(item SessionSummary, se
 		if color != "" {
 			// The marker/indent occupies the first two display columns.
 			lines[i] = colorThreadTitleLine(lines[i], color)
+		}
+		if unread && i == 0 {
+			// Splice the fixed-color dot in place of the plain glyph so both the
+			// selection style and the thread accent leave it blue.
+			lines[i] = strings.Replace(lines[i], taskMarkerUnreadGlyph+" ", StyledTaskMarker(true)+" ", 1)
 		}
 		if selected {
 			// Selection bold/blue wraps the whole line; the identity color set

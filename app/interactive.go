@@ -1304,6 +1304,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnExportTranscript:          interactiveTranscriptExportHandler(interactiveShowRawAgentReasoning(root)),
 		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
 		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(interactiveShowRawAgentReasoning(root)),
+		OnAcknowledgeSessionRead:    interactiveSessionReadAcknowledgeHandler(store),
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnUpdateDaybreak:            interactiveDaybreakUpdateHandler(),
 		OnLogout:                    interactiveLogoutHandler(ctx, root),
@@ -3523,7 +3524,8 @@ func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSumm
 	// Rust #58202: the resume picker includes every provider so chats saved
 	// under a previous provider stay discoverable; fork lookups still filter by
 	// the current provider.
-	items, err := codextui.LoadSessionSummariesFromStore(newSessionStore(), codextui.SessionSourceOptions{
+	store := newSessionStore()
+	items, err := codextui.LoadSessionSummariesFromStore(store, codextui.SessionSourceOptions{
 		CWD:             interactiveSessionPickerCWD(root),
 		IncludeArchived: true,
 		// Rust #54175: local session discovery always groups linked checkouts;
@@ -3532,6 +3534,16 @@ func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSumm
 	})
 	if err != nil {
 		return nil
+	}
+	// Rust #58264: the picker marks unread sessions from the backend read
+	// receipts, which the embedded state database backs here.
+	states := sessionThreadReadStates(context.Background(), store, sessionThreadIDs(items))
+	for i := range items {
+		value, ok := states[strings.TrimSpace(items[i].ThreadID)]
+		if !ok || value.FirstUnreadTurn == nil {
+			continue
+		}
+		items[i].UnreadRevision = strings.TrimSpace(value.Revision)
 	}
 	return codextui.StampSessionSummariesBackend(items, codextui.ProcessBackendID())
 }

@@ -551,6 +551,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSuggestThreadName:         interactiveRemoteRecapGenerateHandler(ctx, endpoint),
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
+		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
 		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
 		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),
 		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
@@ -1620,7 +1621,11 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 				return nil, ""
 			}
 			page := codextui.SessionPage{
-				Rows:       codextui.SessionSummariesFromAppServerThreads(response.Data, archived),
+				Rows: codextui.SessionSummariesFromAppServerThreadsWithReadStates(
+					response.Data,
+					archived,
+					response.ReadStates,
+				),
 				NextCursor: response.NextCursor,
 			}
 			if page.NextCursor != nil {
