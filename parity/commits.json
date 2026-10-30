@@ -9664,9 +9664,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "app/daemon_startup_wsl_linux.go mirrors Rust daemon_startup::uses_wsl_drvfs: it gates on WSL hosting (WSL_INTEROP or a Microsoft/WSL /proc/version), walks up from CODEX_HOME to the first existing ancestor, and reports the 9p magic 0x01021997 via unix.Statfs; app/daemon_startup_wsl_other.go keeps the non-Linux branch false",
+    "app/daemon_startup.go interactiveDaemonEndpoint consults daemonWSLDrvfsDetector before daemonAutoStartStart and stays embedded with wslDrvfsExclusion; daemonAutoStartExclusionWarning emits the Rust startup warning text through daemonStartupWarning, and app/remote_control.go excludes the same homes from daemon eligibility while app/tui_telemetry.go tags the reason as wsl_drvfs",
+    "Regression coverage: app/daemon_startup_test.go::TestDaemonAutoStartSkipsWSLDrvfsHomeLikeRust pins embedded selection and the exact warning, app/remote_control_daemon_like_rust_test.go::TestRemoteControlDaemonEligibilityLikeRust pins remote-control ineligibility, and app/tui_telemetry_like_rust_test.go pins the telemetry mapping",
+    "Verified with `go test ./app -run 'WSL|DaemonStartup|DaemonAutoStart' -count=1`, a Linux cross-build (`GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./app`), and `go test ./parity -run TestAlignment -count=1`"
    ]
   },
   {

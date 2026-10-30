@@ -3559,6 +3559,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `appserver/realtime_runtime.go` already handled `transcript_tail.flush` without routing through a turn, and `realtime/transport.go` bounds and drains the tail once while `Manager.Stop` flushes it before the closed notifications. This round adds the missing next-turn visibility regression: the flushed tail appears in `historyInputItemsForTurn` and carries a completed turn id for both legacy and paginated threads.
 - Verified with `go test ./appserver -run 'TestRealtimeTranscriptTail' -count=1`, `go test ./realtime -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2215 complete`, `461 not_applicable`,
-`322 audit_pending`, `146 regression_pending`, `5 partial`,
+### Skip daemon auto-start for Windows-mounted WSL homes (Round 1062)
+
+- Rust #50555 probes `CODEX_HOME` (walking up to the first existing ancestor) for the 9p magic on WSL hosts and keeps the TUI embedded with a startup warning instead of starting the managed daemon on a Windows-mounted DrvFS home.
+- Complete: `app/daemon_startup_wsl_linux.go` already implemented the probe and `app/daemon_startup.go` short-circuits automatic startup with `wslDrvfsExclusion`; the warning flows through `daemonStartupWarning` to `app/interactive.go`, remote control excludes the same homes, and telemetry tags `wsl_drvfs`. Round 1062 re-verified the policy and the Linux build path.
+- Verified with `go test ./app -run 'WSL|DaemonStartup|DaemonAutoStart' -count=1`, `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./app`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2216 complete`, `461 not_applicable`,
+`322 audit_pending`, `145 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
