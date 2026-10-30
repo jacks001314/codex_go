@@ -700,9 +700,10 @@ type guardianPromptSection struct {
 // model (previous reviews, trusted tool/skills) come from the review's inherited
 // context instead. The stateful synchronous reviewer keeps the retained snapshot
 // in that single instructions section (#51627); only the asynchronous framing
-// separates the retained assistant context into its own section after the
-// transcript, so growing assistant evidence cannot invalidate the instruction
-// prefix for independent snapshots.
+// separates the retained assistant context into its own section. Rust #49993
+// also moves the whole asynchronous retained snapshot behind the transcript and
+// attestations, immediately before the planned action, so a rolling retained
+// window cannot invalidate the reusable transcript prefix.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
 	prompt, _, err := BuildPromptWithSectionCosts(action, transcript, options)
 	return prompt, err
@@ -811,13 +812,15 @@ func BuildPromptPartsWithSectionCosts(
 	}
 	// The retained snapshot layout follows the reviewed consumer's framing
 	// (#51627): the stateful synchronous reviewer renders one section ahead of the
-	// transcript, while the asynchronous independent snapshot keeps the
-	// instruction prefix there and moves the assistant context behind it.
+	// transcript, while the asynchronous independent snapshot separates the
+	// assistant context and, since #49993, places both retained sections behind
+	// the transcript and attestations.
 	// The asynchronous scorer omits instructions this request's own transcript
 	// already carries (#48110); the ordering banners remain, and nothing from a
 	// previous sample can suppress an original.
+	isAsync := options.Presentation == ActionPresentationAsync
 	var retainedSections RetainedInstructionSections
-	if options.Presentation == ActionPresentationAsync {
+	if isAsync {
 		retainedSections = DeduplicateRetainedInstructions(
 			options.RetainedContext,
 			GuardianTranscriptRetainedSources(transcript),
@@ -826,7 +829,7 @@ func BuildPromptPartsWithSectionCosts(
 		retainedSections = RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
 	}
 	retainedSections = ApplyRetainedOmissionDeduplication(retainedSections, options.PreviousRetainedOmissions, HasLegacyRetainedOrder(options.RetainedContext))
-	if len(retainedSections.Instructions) > 0 {
+	if !isAsync && len(retainedSections.Instructions) > 0 {
 		addSection("retained_user_instructions", strings.Join(retainedSections.Instructions, ""))
 	}
 	// Rust feeds the review's selected-answer evidence into the composer as
@@ -870,7 +873,7 @@ func BuildPromptPartsWithSectionCosts(
 		}
 		addSection("conversation_transcript", run.String())
 	}
-	if len(retainedSections.AssistantContext) > 0 {
+	if !isAsync && len(retainedSections.AssistantContext) > 0 {
 		addSection("retained_assistant_context", strings.Join(retainedSections.AssistantContext, ""))
 	}
 	if options.NodeReplEvidence != nil {
@@ -882,6 +885,17 @@ func BuildPromptPartsWithSectionCosts(
 		// Rust's marker opens with its own newline inside the message that carries
 		// it; the block separator already supplies that paragraph break here.
 		addSection("permissions", strings.TrimLeft(strings.Join(items, ""), "\n"))
+	}
+	if isAsync {
+		// Rust #49993: the asynchronous retained snapshot follows the transcript
+		// and the action-specific attestations, immediately before the planned
+		// action, keeping the history prefix reusable while the window rolls.
+		if len(retainedSections.Instructions) > 0 {
+			addSection("retained_user_instructions", strings.Join(retainedSections.Instructions, ""))
+		}
+		if len(retainedSections.AssistantContext) > 0 {
+			addSection("retained_assistant_context", strings.Join(retainedSections.AssistantContext, ""))
+		}
 	}
 	actionPrompt, err := joinPlannedAction(action, options.Presentation)
 	if err != nil {

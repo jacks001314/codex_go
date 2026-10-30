@@ -3462,6 +3462,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: Go still ran the #44946 opt-out pipeline. The TUI copied `State.Personality` into `thread/start`, `turn/start` (`PersonalitySet`), the embedded turn config overrides, and side-conversation forks, and applied notification personality back into local state. This round removes that plumbing (`app/interactive.go`, `app/remote_tui.go`, `app/side_tui.go`, `tui/tea/side.go`, `tui/tea/thread_settings.go`, `tui/app/thread_session_state.go`, `tui/app/thread_settings.go`, `tui/chatwidget/session_flow.go`, `tui/chatwidget/settings_collaboration_runtime.go`), so local values never reach the wire and personality-only settings updates are no-ops. `remoteConfigValues` sources personality solely from explicit CLI overrides and forwards it verbatim, matching Rust's `SessionFlags` layer; `PersonalityOptOutOnly` is removed.
 - Verified with `go test ./app -run 'Personality|Side|ThreadSettings' -count=1`, `go test ./tui/... -count=1`, and `go test ./parity -run TestAlignment -count=1`. The two `./app` failures (`TestExecJSONEndToEnd` websocket handshake, `TestLocalSessionForksRustRolloutWithoutGoSnapshot` rollout-path check) reproduce on the unmodified tree.
 
-Status after reconciliation: `2203 complete`, `460 not_applicable`,
-`326 audit_pending`, `156 regression_pending`, `4 partial`,
+### Async Guardian history prefix (Round 1048)
+
+- Rust #49993 moves retained user instructions and context after the transcript and action-specific attestations, immediately before the planned action, for asynchronous Guardian composition only; synchronous section ordering is unchanged.
+- Complete: Go's `state.BuildPromptPartsWithSectionCosts` still placed the async retained instruction section ahead of the transcript (the #51627 split moved only assistant context behind it), so the rolling retained window could invalidate the reusable prefix. Both async retained sections now follow the transcript, node-repl evidence, and permission context and land immediately before `planned_action`; `SyncFull`/`SyncDelta` keep the single section ahead of the transcript. `GuardianRetainedSnapshotSplitOnlyForAsyncPresentationLikeRust` pins the new async order and `TestGuardianAsyncRetainedGrowthKeepsHistoryPrefixLikeRust` grows assistant messages through buffer eviction while asserting a byte-identical transcript prefix.
+- Verified with `go test ./state -count=1`, `go test ./appserver -run Guardian -count=1`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2204 complete`, `460 not_applicable`,
+`325 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

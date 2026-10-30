@@ -25108,9 +25108,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1048 (complete): Rust #49993 moves retained user instructions and context after the transcript and action-specific attestations, immediately before the planned action, for asynchronous Guardian composition only; synchronous section order is unchanged. Go's state.BuildPromptPartsWithSectionCosts kept the asynchronous retained instruction section ahead of the transcript (the #51627 split only moved assistant context behind it), so a rolling retained window would invalidate the reusable prefix. This round defers both asynchronous retained sections (instructions and assistant context) until after the transcript, node-repl evidence, and permission context, immediately before planned_action; SyncFull/SyncDelta keep the single section ahead of the transcript. state/guardian_retained_context_test.go now pins the new async order, and the new TestGuardianAsyncRetainedGrowthKeepsHistoryPrefixLikeRust grows retained assistant messages through buffer eviction and asserts the transcript prefix stays byte-identical with retained context immediately before the action. Verified with go test ./state -count=1, go test ./appserver -run Guardian -count=1, and go test ./parity -run TestAlignment -count=1."
    ]
   },
   {
