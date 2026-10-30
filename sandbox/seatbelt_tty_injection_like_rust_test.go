@@ -32,7 +32,9 @@ func TestHardenSeatbeltArgsForInheritedTerminalDeniesTIOCSTILikeRust(t *testing.
 	if err != nil {
 		t.Fatalf("HardenSeatbeltArgsForInheritedTerminal: %v", err)
 	}
-	const deny = "(deny file-ioctl (ioctl-command TIOCSTI))"
+	// Rust #49028: emit the numeric Darwin TIOCSTI value (0x80017472) because
+	// older macOS policy compilers do not define the symbol.
+	const deny = "(deny file-ioctl (ioctl-command 2147578994))"
 	if !strings.HasSuffix(hardened[policyIndex+1], deny+"\n") {
 		t.Fatalf("hardened policy does not end with the TIOCSTI deny:\n%s", hardened[policyIndex+1])
 	}

@@ -58,6 +58,13 @@ func createSeatbeltCommandArgsWithManagedNetwork(command []string, cwd string, p
 	return append(args, command...), nil
 }
 
+// seatbeltTIOCSTIIoctlCommand is Darwin's numeric TIOCSTI value
+// (`syscall.TIOCSTI`, 0x80017472). Rust #49028 switched the generated deny
+// rule from the symbolic TIOCSTI name to `libc::TIOCSTI` because older macOS
+// policy compilers do not define the symbol; the numeric value keeps the rule
+// compilable while still blocking terminal input injection.
+const seatbeltTIOCSTIIoctlCommand = 0x80017472
+
 // HardenSeatbeltArgsForInheritedTerminal mirrors Rust #42590: a CLI that
 // inherits the user's controlling terminal must not let the sandboxed child
 // queue input for the unsandboxed shell that resumes when Codex exits. The
@@ -73,7 +80,7 @@ func HardenSeatbeltArgsForInheritedTerminal(args []string) ([]string, error) {
 			break
 		}
 		hardened := append([]string(nil), args...)
-		hardened[index+1] = strings.TrimRight(policy, "\n") + "\n(deny file-ioctl (ioctl-command TIOCSTI))\n"
+		hardened[index+1] = strings.TrimRight(policy, "\n") + fmt.Sprintf("\n(deny file-ioctl (ioctl-command %d))\n", seatbeltTIOCSTIIoctlCommand)
 		return hardened, nil
 	}
 	return nil, fmt.Errorf("seatbelt command is missing its generated policy")

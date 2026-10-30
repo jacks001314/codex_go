@@ -17585,9 +17585,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go agentMessageBoardSchema already declares CREATE INDEX posts_board_channel_timestamp ON posts(board,channel,timestamp,seq), copied verbatim from Rust local.rs, so channel latest-message lookups use the timestamp index"
    ]
   },
   {
@@ -17757,9 +17757,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust code-mode-runtime shares stored JSON payloads across cells with Arc<JsonValue>; codex_go runs code mode through the stdio/process host protocol (codemode/process_provider.go) and has no in-process cell store that deep-copies JSON payloads, so there is no Go analogue for the Arc change"
    ]
   },
   {
@@ -17841,9 +17841,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go agentMessageBoardSchema already declares the partial index posts_roots_created ON posts(board,channel,timestamp,seq) WHERE id=root, copied verbatim from Rust local.rs"
    ]
   },
   {
@@ -22792,9 +22792,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/seatbelt.go HardenSeatbeltArgsForInheritedTerminal appends the numeric Darwin TIOCSTI value seatbeltTIOCSTIIoctlCommand = 0x80017472 (matching syscall.TIOCSTI) instead of the TIOCSTI symbol, so older macOS policy compilers accept the deny rule; sandbox/seatbelt_tty_injection_like_rust_test.go asserts the numeric rule in the hardened policy"
    ]
   },
   {
