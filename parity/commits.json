@@ -25987,9 +25987,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 4/4 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "model/provider_info.go parses `model_providers.<id>.capabilities` into ProviderCapabilitiesOverride (#50459): `external_web_access` (bool) and `remote_compaction` (`v2` or `unsupported`) are optional, omitted capabilities keep the provider's existing defaults, and unknown fields or malformed values are rejected like Rust's deny_unknown_fields. ProviderInfo.ExternalWebAccess()/RemoteCompactionSupport() apply the overrides, ConfiguredProvider.Capabilities() reports them, provider-aware web-search resolution keeps hosted search off the live web when disabled, and `v2` sends compaction_trigger items over the Responses endpoint while `unsupported` keeps local compaction.",
+    "Regression coverage: model/provider_info_test.go TestProviderCapabilityOverridesLikeRust, exec/provider_capabilities_like_rust_test.go TestCustomProviderCapabilityOverridesDriveRequestsLikeRust (request snapshot for cached web search plus V2 compaction), and codexapi/search_config_test.go. Verified with `go test ./model -run Capabilities -count=1` and `go test ./exec -run Capabilit -count=1`."
    ]
   },
   {
@@ -26139,9 +26140,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/agents_overview and tui/tea/agents_overview.go implement adjacent Command Center selection (#50505): before archive/delete/hide removals the view records the next surviving task in displayed order and falls back to the previous one, respecting the active search filter and grouping. Pending selections survive view rebuilds, batched removals, duplicate server notifications and removal of the pending successor; a disappearing rename target falls back while the unsubmitted-title notice is kept.",
+    "Regression coverage: tui/agents_overview/selection_after_removal_like_rust_test.go (next-then-previous order, filter/hidden-anchor cases, pending successor through refresh), tui/agents_overview/hide_selection_like_rust_test.go, and tui/tea/agents_overview_lifecycle_test.go TestModelAgentsArchiveKeepsSelectionAdjacentLikeRust. Verified with `go test ./tui/agents_overview -run Selection -count=1` and `go test ./tui/tea -run AgentsArchiveKeepsSelection -count=1`."
    ]
   },
   {
@@ -26247,9 +26249,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "app/daemon_startup.go skips managed-daemon auto-start with the DrvFS/9p exclusion reason (`a Windows-mounted WSL CODEX_HOME (DrvFS/9p)`), keeps the TUI in embedded mode and surfaces the startup warning; appserverdaemon/daemon_startup_wsl_linux.go mirrors Rust's uses_wsl_drvfs probe (WSL interop environment plus the 9p superblock magic, checking the nearest existing ancestor when CODEX_HOME does not exist yet).",
+    "Regression coverage: app/daemon_startup_test.go TestDaemonAutoStartSkipsWSLDrvfsHomeLikeRust and the daemon-selection telemetry case in app/tui_telemetry_like_rust_test.go. Verified with `go test ./appserverdaemon -run WSLDrvfs -count=1` and `go test ./app -run WSLDrvfs -count=1`."
    ]
   },
   {
@@ -26380,9 +26383,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/bottom_pane/command_popup.go implements side-conversation command discovery (#50756): unavailable commands stay hidden from the unfiltered menu but appear as disabled rows with the `not available in a side conversation` reason when they match a search, available matches rank first, disabled rows are skipped for keyboard navigation and completion, Tab does not queue input when only disabled matches are visible, and `/` is inserted normally when nothing is selectable.",
+    "Regression coverage: tui/bottom_pane/command_popup_side_unavailable_like_rust_test.go TestCommandPopupSideUnavailableCommandShownOnlyWhenSearchedLikeRust plus the side-conversation cases in command_popup_test.go. Verified with `go test ./tui/bottom_pane -run CommandPopup -count=1`."
    ]
   },
   {
@@ -26416,9 +26420,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserverdaemon/publish_release_windows.go retries the release-publication rename on permission-denied and sharing-violation errors every 50 ms up to 100 times and reports the staging and release paths when publication still fails; non-transient errors fail immediately and non-Windows publication keeps a single atomic rename.",
+    "Regression coverage: appserverdaemon/publish_release_windows_test.go holds the staging directory open without delete sharing, releases it after a delay and verifies publication succeeds with an intact payload, plus TestIsTransientPublishErrorLikeRust for the retry predicate. Verified on Windows with `go test ./appserverdaemon -run 'PublishDaemonRelease|IsTransientPublish' -count=1`."
    ]
   },
   {
@@ -26428,9 +26433,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "app/interactive.go loads `tui.agents_overview_grouping` into the TUI settings and tui/tea/agents_overview.go persists grouping changes through the host settings writer before re-rendering; unsupported values fall back to `project`, a failed save is reported in Command Center while the selected grouping stays live, and startup restores the saved project/status/model choice instead of resetting to project.",
+    "Regression coverage: app/agents_overview_grouping_settings_like_rust_test.go and tui/tea/agents_overview_grouping_persist_like_rust_test.go (cycle and persist every mode, restore at startup, save-failure notice). Verified with `go test ./app -run AgentsOverviewGrouping -count=1` and `go test ./tui/tea -run AgentsOverviewGrouping -count=1`."
    ]
   },
   {

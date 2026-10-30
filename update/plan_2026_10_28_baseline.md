@@ -3718,6 +3718,17 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 
 Status after this batch: `2239 complete`, `462 not_applicable`, `322 audit_pending`, `121 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1085)
+
+- #50459 provider capability overrides: `model_providers.<id>.capabilities` parses `external_web_access` and `remote_compaction`, keeps omitted defaults, rejects unknown fields, and drives cached web search plus V2 compaction request snapshots.
+- #50505 Command Center adjacent selection: next-then-previous surviving task chosen before archive/delete/hide, with filter/grouping awareness, pending-successor handling and rename fallback.
+- #50786 grouping persistence: `tui.agents_overview_grouping` is saved through the host settings writer, restored at startup, and save failures are reported without dropping the live selection.
+- #50555 WSL DrvFS home: daemon auto-start is skipped on a 9p `CODEX_HOME` (nearest existing ancestor probed) and the TUI stays embedded with the exclusion warning.
+- #50756 side-conversation slash commands: unavailable matches render as disabled searched-only rows, rank after available ones, and cannot be selected, completed or queued with Tab.
+- #50782 Windows daemon publication retry: sharing-violation/permission-denied renames retry at 50 ms for up to 100 attempts and report both paths on failure.
+
+Status after this batch: `2245 complete`, `462 not_applicable`, `322 audit_pending`, `115 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
