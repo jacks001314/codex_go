@@ -3131,6 +3131,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New `appserver/guardian_user_cua_auto_approval_like_rust_test.go` covers both node-repl servers, all exclusion conditions, cancellation, and the unchanged automatic-review path.
 - Verified with `go test ./appserver -run 'UserApprovalAutoAccepts|UserApprovalKeepsSensitive|UserApprovalNodeReplAutoApproval|AutoReviewStillReviewsNodeRepl' -count=1` and `go test ./appserver -run 'Guardian|Elicitation|McpToolApproval|MCPToolApproval' -count=1`.
 
-Status after reconciliation: `2160 complete`, `451 not_applicable`,
-`346 audit_pending`, `187 regression_pending`, `5 partial`,
+### Structured asynchronous user input requests (Round 1001)
+
+- Rust #42178 replaces `send_user_message_async` with `request_user_input_async`: one or more questions with optional suggested answers return immediately, structured questions ride on the async agent message, and they survive events, history, and generated schemas; catalogs advertising either tool name keep the tool available (#42178, complete).
+- Go already implements the handler, validation, fallback text, accepted output, legacy-capability registration, catalog description/parameters reuse, session-item metadata, and the v2 `questions` wire field.
+- This round added a history round-trip test to `appserver/async_message_test.go`: questions survive session-item JSON persistence and project into `ThreadItem`, while older async messages without questions still decode with `questions: null`.
+- Verified with `go test ./tool -run 'RequestUserInputAsync|SendUserMessageAsync' -count=1`, `go test ./turn -run 'Async|RequestUserInput' -count=1`, and `go test ./appserver -run 'Async|StructuredAsyncQuestions' -count=1`.
+
+Status after reconciliation: `2161 complete`, `451 not_applicable`,
+`346 audit_pending`, `186 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

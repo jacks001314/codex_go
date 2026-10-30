@@ -237,6 +237,58 @@ func TestThreadItemAgentMessageWireShapeMatchesRust(t *testing.T) {
 	}
 }
 
+// TestStructuredAsyncQuestionsSurviveHistoryRoundTrip mirrors Rust #42178's
+// history preservation: structured questions remain on the persisted async
+// agent message and project back into the v2 item after deserialization, while
+// older messages without questions still decode with an absent payload.
+func TestStructuredAsyncQuestionsSurviveHistoryRoundTrip(t *testing.T) {
+	questions := []any{
+		map[string]any{"title": "Which environment?", "options": []any{"Staging", "Production"}},
+		map[string]any{"title": "Anything else?"},
+	}
+	original := session.Item{
+		ID:        "agent-message-questions",
+		Type:      "agent_message",
+		Role:      "assistant",
+		Text:      "Which environment?\n- Staging\n- Production\n\nAnything else?",
+		CreatedAt: time.Date(2026, 9, 12, 1, 0, 0, 0, time.UTC),
+		Metadata: map[string]any{
+			"delivery":  "async",
+			"questions": questions,
+		},
+	}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal persisted item: %v", err)
+	}
+	var restored session.Item
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("unmarshal persisted item: %v", err)
+	}
+	threadItem := BuildThreadItem(restored)
+	if threadItem.Delivery != "async" {
+		t.Fatalf("delivery = %q, want async", threadItem.Delivery)
+	}
+	restoredQuestions, _ := threadItem.Data["questions"].([]any)
+	if len(restoredQuestions) != 2 {
+		t.Fatalf("questions = %#v, want two entries", threadItem.Data["questions"])
+	}
+	first, _ := restoredQuestions[0].(map[string]any)
+	if first["title"] != "Which environment?" {
+		t.Fatalf("first question = %#v", first)
+	}
+	decoded := marshaledThreadItem(t, threadItem)
+	payload, ok := decoded["questions"].([]any)
+	if !ok || len(payload) != 2 {
+		t.Fatalf("wire questions = %#v", decoded["questions"])
+	}
+
+	legacy := BuildThreadItem(session.Item{ID: "legacy-async", Type: "agent_message", Text: "still working", Metadata: map[string]any{"delivery": "async"}})
+	if legacy.Data["questions"] != nil {
+		t.Fatalf("legacy questions = %#v, want nil", legacy.Data["questions"])
+	}
+}
+
 func marshaledThreadItem(t *testing.T, item ThreadItem) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(&item)

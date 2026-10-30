@@ -5944,9 +5944,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1001 (审计+回归): #42178 用 request_user_input_async 取代 send_user_message_async：接受一个或多个问题及可选建议答案，turn 继续执行；结构化 questions 附在 async agent message 上，并贯穿 app-server 事件、线程历史与生成 schema；旧 catalog 能力名继续注册新工具。Go 已完整实现：tool/request_user_input_async.go 校验 questions/title/options（空问题、空标题、空 options、空选项均 RespondToModel 拒绝），渲染可读 fallback 文本，输出 accepted 且带 async_questions(delivery=async)；turn/tools.go 对旧 send_user_message_async 能力名也注册 RequestUserInputAsyncHandler，并复用 catalog description/parameters（#47773）；appserver/turn_runtime.go 的 sessionItemForAppAsyncMessage 将 async_questions 写入 agent_message session item 的 delivery/questions metadata；appserver/protocol.go 的 BuildThreadItem/marshalPayloadJSON 始终序列化 questions（缺失为 null）；agent_message 不进入模型输入，turn 不结束。原有测试覆盖注册兼容、schema/描述、校验、输出与 v2 wire shape；本轮新增 appserver/async_message_test.go 的历史往返回归，验证 questions 经 session item JSON 持久化后仍投影到 v2 item，旧的无 questions 异步消息反序列化后 questions 保持 nil。验证：go test ./tool -run 'RequestUserInputAsync|SendUserMessageAsync' -count=1；go test ./turn -run 'Async|RequestUserInput' -count=1；go test ./appserver -run 'Async|StructuredAsyncQuestions' -count=1。"
    ]
   },
   {
