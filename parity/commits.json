@@ -9945,9 +9945,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1086: Rust #43927 renames the state tables/columns thread_artifacts->thread_attachments and artifact_type->attachment_type. Go does not have that SQLite storage: thread attachments are persisted through the thread record Extra key thread_attachments (appserver/thread_attachments.go) with the same bounded fields and wire contract (attachmentType, identityKey, payload, createdAt; add/list/remove and notification outcomes). Nothing to rename."
    ]
   },
   {
@@ -10641,9 +10641,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1086: appserver thread/search builds its record set from the session store plus rollout.ListThreads/RecordFromPath, skipping per-file load/decode errors (continue) and failed directory listings, so a damaged or unreadable compressed rollout does not abort the search, matching Rust #44226. Existing thread/search tests cover the multi-source scan; no code change was needed."
    ]
   },
   {
