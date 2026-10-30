@@ -7594,9 +7594,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "tui/bottom_pane/feedback_view.go renders the audience-specific disclosure with RowsWithHeight pinned layout, PageUp/PageDown paging, the new footer hint, and the Sentry ID/URL completion rows; feedback_view_test.go matches the Rust 80x8 and four-row layouts"
    ]
   },
   {

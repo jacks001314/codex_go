@@ -20,7 +20,7 @@ const (
 	FeedbackDoctorReportAttachmentFilename  = "codex-doctor-report.json"
 	FeedbackDiagnosticsAttachmentFilename   = "codex-connectivity-diagnostics.txt"
 	FeedbackWindowsSandboxLogFilename       = "windows-sandbox.log"
-	feedbackGutter                          = "\u2503 "
+	feedbackGutter                          = "\u258c "
 	feedbackBullet                          = "\u2022"
 	feedbackDefaultPlaceholder              = "(optional) Write a short description to help us further"
 	feedbackSafetyCheckPlaceholder          = "(optional) Share what was refused and why it should have been allowed"
@@ -29,6 +29,10 @@ const (
 	feedbackUploadConsentYesDescription     = "Share the current Codex session logs and diagnostics with the team for troubleshooting."
 	feedbackIssueThreadIDPrefix             = "  Or mention your thread ID "
 	feedbackEmployeeFollowUpThreadURLPrefix = "https://go/codex-feedback/"
+	feedbackPolicyURL                       = "https://help.openai.com/en/articles/5722486-how-your-data-is-used-to-improve-model-performance"
+	feedbackEmployeeFAQURL                  = "https://go/codex-employee-feedback-faq"
+	feedbackNoteHintLine                    = "Press enter to submit or esc to cancel"
+	feedbackDisclosureScrollHint            = "pgup/pgdn scroll disclosure"
 )
 
 type FeedbackChoice string
@@ -59,19 +63,31 @@ type FeedbackNoteView struct {
 	Category    FeedbackChoice
 	TurnID      string
 	IncludeLogs bool
-	TextArea    TextAreaState
-	Complete    bool
+	// Audience selects the data-use disclosure copy (Rust #42798).
+	Audience FeedbackAudience
+	TextArea TextAreaState
+	Complete bool
 	// pasteBurst mirrors Rust #45116: rapid unbracketed paste input inserts
 	// newlines, and Enter submits only once the paste burst window has lapsed.
 	pasteBurst PasteBurst
+	// introScroll and introPageHeight mirror Rust #42798: the disclosure
+	// scrolls with PageUp/PageDown while the editor and hints stay pinned.
+	introScroll     int
+	introPageHeight int
 }
 
 func NewFeedbackNoteView(category FeedbackChoice, turnID string, includeLogs bool) *FeedbackNoteView {
+	return NewFeedbackNoteViewWithAudience(category, turnID, includeLogs, FeedbackAudienceExternal)
+}
+
+func NewFeedbackNoteViewWithAudience(category FeedbackChoice, turnID string, includeLogs bool, audience FeedbackAudience) *FeedbackNoteView {
 	return &FeedbackNoteView{
-		Category:    category,
-		TurnID:      turnID,
-		IncludeLogs: includeLogs,
-		TextArea:    NewTextAreaState(""),
+		Category:        category,
+		TurnID:          turnID,
+		IncludeLogs:     includeLogs,
+		Audience:        audience,
+		TextArea:        NewTextAreaState(""),
+		introPageHeight: 1,
 	}
 }
 
@@ -125,6 +141,12 @@ func (v *FeedbackNoteView) HandleKeyAt(key string, now time.Time) (FeedbackSubmi
 	}
 	normalized := strings.ToLower(strings.TrimSpace(key))
 	switch normalized {
+	case "pageup", "pgup":
+		v.introScroll = max(v.introScroll-v.introPageHeight, 0)
+		return FeedbackSubmit{}, false
+	case "pagedown", "pgdown", "pgdn":
+		v.introScroll += v.introPageHeight
+		return FeedbackSubmit{}, false
 	case "esc", "ctrl+c":
 		v.Cancel()
 		return FeedbackSubmit{}, false
@@ -174,29 +196,124 @@ func isPlainFeedbackCharKey(key string) bool {
 	return r != utf8.RuneError && !unicode.IsControl(r)
 }
 
+// FeedbackDisclosureURL returns the audience-specific data-use policy link the
+// note view attaches to its disclosure (Rust #42798).
+func FeedbackDisclosureURL(audience FeedbackAudience) string {
+	if audience == FeedbackAudienceOpenAIEmployee {
+		return feedbackEmployeeFAQURL
+	}
+	return feedbackPolicyURL
+}
+
 func (v *FeedbackNoteView) Rows(width int) []string {
+	return v.RowsWithHeight(width, 0)
+}
+
+// RowsWithHeight lays the note view out in an optional fixed height. A zero
+// height renders every row; a positive height mirrors Rust #42798 by pinning
+// the editor and the submit/cancel hints while the disclosure scrolls.
+func (v *FeedbackNoteView) RowsWithHeight(width, height int) []string {
 	if v == nil {
 		return nil
 	}
 	if width <= 0 {
 		width = 1
 	}
-	title, placeholder := FeedbackTitleAndPlaceholder(v.Category)
-	rows := []string{feedbackGutter + title}
+	inputLines := v.renderedInputLines(width)
+	intro := v.introLines(width, false)
+	if height <= 0 {
+		rows := append([]string{}, intro...)
+		rows = append(rows, strings.TrimRight(feedbackGutter, " "))
+		for _, line := range inputLines {
+			rows = append(rows, strings.TrimRight(feedbackGutter+line, " "))
+		}
+		return append(rows, "", feedbackNoteHintLine)
+	}
+	// Four rows leave room for one disclosure row, so drop the title first.
+	if height == 4 {
+		intro = v.introLines(width, true)
+	}
+	footer := 1
+	if height > 4 {
+		footer = 2
+	}
+	inputHeight := min(min(max(len(inputLines), 1), 8)+1, max(height-footer-1, 2), height)
+	introHeight := max(height-inputHeight-footer, 0)
+	maxScroll := max(len(intro)-introHeight, 0)
+	v.introScroll = min(max(v.introScroll, 0), maxScroll)
+	if introHeight > 0 {
+		v.introPageHeight = introHeight
+	}
+	rows := []string{}
+	for offset := 0; offset < introHeight && v.introScroll+offset < len(intro); offset++ {
+		rows = append(rows, intro[v.introScroll+offset])
+	}
+	rows = append(rows, strings.TrimRight(feedbackGutter, " "))
+	for index := 0; index < inputHeight-1; index++ {
+		line := ""
+		if index < len(inputLines) {
+			line = inputLines[index]
+		}
+		rows = append(rows, strings.TrimRight(feedbackGutter+line, " "))
+	}
+	if footer == 2 {
+		spacer := ""
+		if maxScroll > 0 {
+			spacer = feedbackDisclosureScrollHint
+		}
+		rows = append(rows, spacer)
+	}
+	return append(rows, feedbackNoteHintLine)
+}
+
+// introLines renders the title plus the audience-specific data-use disclosure
+// wrapped with the note gutter (Rust #42798 intro_lines).
+func (v *FeedbackNoteView) introLines(width int, disclosureOnly bool) []string {
+	if width <= 0 {
+		width = 1
+	}
+	lines := []string{}
+	if !disclosureOnly {
+		title, _ := FeedbackTitleAndPlaceholder(v.Category)
+		lines = append(lines, feedbackGutter+title, strings.TrimRight(feedbackGutter, " "))
+	}
+	logical := []string{
+		"Your data may be used to improve our models and products",
+		"By submitting feedback, you agree that OpenAI can use your feedback for safety purposes and internal model training, as explained in more detail here. Please avoid sharing tented information under NDA, or privileged, HR-related, or sensitive personal information.",
+	}
+	if v.Audience != FeedbackAudienceOpenAIEmployee {
+		logical = []string{"Your feedback can be used to improve ChatGPT. Learn more."}
+	}
+	options := tui.WrapOptions{
+		Width:            width,
+		InitialIndent:    feedbackGutter,
+		SubsequentIndent: feedbackGutter,
+		BreakWords:       true,
+	}
+	for _, line := range logical {
+		lines = append(lines, tui.AdaptiveWrapLine(line, options)...)
+	}
+	return lines
+}
+
+func (v *FeedbackNoteView) renderedInputLines(width int) []string {
 	inputWidth := max(width-len(feedbackGutter), 1)
-	inputLines := v.TextArea.WrappedLines(inputWidth)
 	if v.TextArea.IsEmpty() {
-		inputLines = tui.AdaptiveWrapLine(placeholder, tui.WrapOptions{Width: inputWidth, BreakWords: true})
+		_, placeholder := FeedbackTitleAndPlaceholder(v.Category)
+		return tui.AdaptiveWrapLine(placeholder, tui.WrapOptions{Width: inputWidth, BreakWords: true})
 	}
-	for _, line := range inputLines {
-		rows = append(rows, feedbackGutter+line)
-	}
-	rows = append(rows, "", StandardPopupHintLine)
-	return rows
+	return v.TextArea.WrappedLines(inputWidth)
 }
 
 func (v *FeedbackNoteView) DesiredHeight(width int) int {
-	return len(v.Rows(width))
+	if v == nil {
+		return 0
+	}
+	if width <= 0 {
+		width = 1
+	}
+	inputHeight := min(max(len(v.renderedInputLines(width)), 1), 8) + 1
+	return len(v.introLines(width, false)) + inputHeight + 2
 }
 
 func (v *FeedbackNoteView) CursorPosition(width int, height int) (int, int) {
@@ -205,7 +322,7 @@ func (v *FeedbackNoteView) CursorPosition(width int, height int) (int, int) {
 	}
 	inputWidth := max(width-len(feedbackGutter), 1)
 	col, row := v.TextArea.CursorPosition(inputWidth, height)
-	return col + len(feedbackGutter), row + 1
+	return col + len(feedbackGutter), row + len(v.introLines(width, false)) + 1
 }
 
 func FeedbackTitleAndPlaceholder(category FeedbackChoice) (string, string) {
@@ -356,12 +473,12 @@ func FeedbackSuccessRows(category FeedbackChoice, includeLogs bool, threadID str
 	switch {
 	case issueURL != "" && audience == FeedbackAudienceOpenAIEmployee:
 		return []string{
-			prefix + " Please report this in #codex-feedback:",
+			prefix + " You can share this in #codex-feedback:",
 			"",
 			"  " + issueURL,
 			"",
-			"  Share this and add some info about your problem:",
-			"    " + feedbackEmployeeFollowUpThreadURLPrefix + threadID,
+			"  Sentry Feedback ID: " + threadID,
+			"  Sentry URL: " + feedbackEmployeeFollowUpThreadURLPrefix + threadID,
 		}
 	case issueURL != "":
 		return []string{

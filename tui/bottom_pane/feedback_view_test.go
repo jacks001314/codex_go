@@ -65,7 +65,7 @@ func TestFeedbackNoteViewSubmitCancelPasteAndRowsMatchRustCore(t *testing.T) {
 	for _, want := range []string{
 		feedbackGutter + "Tell us more (safety check)",
 		feedbackGutter + feedbackSafetyCheckPlaceholder,
-		StandardPopupHintLine,
+		feedbackNoteHintLine,
 	} {
 		if !bottomPaneContainsRow(rows, want) {
 			t.Fatalf("rows missing %q:\n%s", want, strings.Join(rows, "\n"))
@@ -230,9 +230,10 @@ func TestFeedbackIssueURLAndSuccessRowsMatchRust(t *testing.T) {
 	}
 	employeeRows := FeedbackSuccessRows(FeedbackBug, true, "thread-2", FeedbackAudienceOpenAIEmployee)
 	for _, want := range []string{
-		"\u2022 Feedback uploaded. Please report this in #codex-feedback:",
+		"\u2022 Feedback uploaded. You can share this in #codex-feedback:",
 		"  http://go/codex-feedback-internal",
-		"    https://go/codex-feedback/thread-2",
+		"  Sentry Feedback ID: thread-2",
+		"  Sentry URL: https://go/codex-feedback/thread-2",
 	} {
 		if !bottomPaneContainsRow(employeeRows, want) {
 			t.Fatalf("employee rows missing %q:\n%s", want, strings.Join(employeeRows, "\n"))
@@ -246,5 +247,65 @@ func TestFeedbackIssueURLAndSuccessRowsMatchRust(t *testing.T) {
 	}
 	if !reflect.DeepEqual(goodRows, wantGood) {
 		t.Fatalf("good result rows = %#v", goodRows)
+	}
+}
+
+// TestFeedbackNoteViewDisclosureScrollsLikeRust mirrors Rust #42798: the
+// audience-specific disclosure sits above the note editor, and a short pane
+// keeps the editor plus submit/cancel hints pinned while PageUp/PageDown page
+// through the disclosure.
+func TestFeedbackNoteViewDisclosureScrollsLikeRust(t *testing.T) {
+	view := NewFeedbackNoteViewWithAudience(FeedbackBug, "", false, FeedbackAudienceOpenAIEmployee)
+	view.Paste("A visible note.")
+	initial := []string{
+		"\u258c Tell us more (bug)",
+		"\u258c",
+		"\u258c Your data may be used to improve our models and products",
+		"\u258c By submitting feedback, you agree that OpenAI can use your feedback for safety",
+		"\u258c",
+		"\u258c A visible note.",
+		"pgup/pgdn scroll disclosure",
+		"Press enter to submit or esc to cancel",
+	}
+	if got := view.RowsWithHeight(80, 8); !reflect.DeepEqual(got, initial) {
+		t.Fatalf("initial rows = %#v", got)
+	}
+	view.HandleKey("pagedown")
+	scrolled := []string{
+		"\u258c By submitting feedback, you agree that OpenAI can use your feedback for safety",
+		"\u258c purposes and internal model training, as explained in more detail here. Please",
+		"\u258c avoid sharing tented information under NDA, or privileged, HR-related, or",
+		"\u258c sensitive personal information.",
+		"\u258c",
+		"\u258c A visible note.",
+		"pgup/pgdn scroll disclosure",
+		"Press enter to submit or esc to cancel",
+	}
+	if got := view.RowsWithHeight(80, 8); !reflect.DeepEqual(got, scrolled) {
+		t.Fatalf("scrolled rows = %#v", got)
+	}
+	view.HandleKey("pageup")
+	if got := view.RowsWithHeight(80, 8); !reflect.DeepEqual(got, initial) {
+		t.Fatalf("restored rows = %#v", got)
+	}
+
+	fourRows := view.RowsWithHeight(80, 4)
+	if len(fourRows) != 4 || fourRows[0] != "\u258c Your data may be used to improve our models and products" {
+		t.Fatalf("four-row layout = %#v", fourRows)
+	}
+	if fourRows[3] != "Press enter to submit or esc to cancel" {
+		t.Fatalf("four-row footer = %#v", fourRows)
+	}
+
+	external := NewFeedbackNoteView(FeedbackBug, "", false)
+	externalRows := external.Rows(80)
+	if !bottomPaneContainsRow(externalRows, "\u258c Your feedback can be used to improve ChatGPT. Learn more.") {
+		t.Fatalf("external disclosure missing: %#v", externalRows)
+	}
+	if got := FeedbackDisclosureURL(FeedbackAudienceOpenAIEmployee); got != "https://go/codex-employee-feedback-faq" {
+		t.Fatalf("employee disclosure url = %q", got)
+	}
+	if got := FeedbackDisclosureURL(FeedbackAudienceExternal); !strings.HasPrefix(got, "https://help.openai.com/") {
+		t.Fatalf("external disclosure url = %q", got)
 	}
 }
