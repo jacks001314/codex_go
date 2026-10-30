@@ -18383,9 +18383,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Already implemented: interactiveFullscreenTranscript defaults tui.fullscreen_transcript to true when the tui section is absent, interactiveNoAltScreen keeps --no-alt-screen and tui.alternate_screen restrictions authoritative with an explicit false restoring scrollback, doctor reports the true default, and app/tui_mode_launch_like_rust_test.go asserts the nil-config default"
    ]
   },
   {
@@ -18928,9 +18928,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go app-server forks use the already-loaded source record (applyThreadForkName) and never perform a thread-store title lookup during ephemeral fork initialization, so there is no read_thread call to skip; session.Store.ForkRecord copies the in-memory record without additional store reads"
    ]
   },
   {
@@ -20658,9 +20658,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "N/A by architecture: Go has no loaded-plugins cache with a mutex-protected LRU; plugin discovery owns only the manifest revision cache in plugin/manifest_cache.go and validates installation paths while loading, so the Arc, generation and lock-release protocol has no Go counterpart"
    ]
   },
   {
