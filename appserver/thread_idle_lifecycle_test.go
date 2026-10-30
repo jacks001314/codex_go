@@ -46,6 +46,24 @@ func retainIdleLifecycleThread(t *testing.T, router *RuntimeRouter, threadID str
 	}
 }
 
+func retainEphemeralIdleLifecycleThread(t *testing.T, router *RuntimeRouter, threadID string) {
+	t.Helper()
+	record := &session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Metadata: session.Metadata{
+			CWD:   t.TempDir(),
+			Extra: map[string]any{"ephemeral": true},
+		},
+	}
+	if !router.saveEphemeralThreadRecord(record) {
+		t.Fatalf("saveEphemeralThreadRecord(%s) = false", threadID)
+	}
+	if err := router.services.ThreadRouter.retainLiveThread(record); err != nil {
+		t.Fatalf("retainLiveThread(%s) error = %v", threadID, err)
+	}
+}
+
 func waitForIdleUnload(t *testing.T, router *RuntimeRouter, threadID string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -78,7 +96,7 @@ func TestIdleChildCreatedWithoutClientDisconnectsLikeRust(t *testing.T) {
 	waitForIdleUnload(t, router, "child")
 }
 
-func TestIdleLifecycleKeepsEphemeralAndRootThreadsLikeRust(t *testing.T) {
+func TestIdleLifecycleKeepsPersistentRootAndEphemeralChildThreadsLikeRust(t *testing.T) {
 	router, _ := newIdleLifecycleTestRouter(t, 0)
 	retainIdleLifecycleThread(t, router, "root")
 	retainIdleLifecycleThread(t, router, "child")
@@ -91,6 +109,18 @@ func TestIdleLifecycleKeepsEphemeralAndRootThreadsLikeRust(t *testing.T) {
 	}
 	if router.threads.LiveThread("child") == nil {
 		t.Fatal("ephemeral child was evicted")
+	}
+}
+
+// Rust #50380/#52081: an ephemeral client root has no durable record to resume,
+// so an idle, unsubscribed root is reclaimed instead of staying loaded forever.
+func TestIdleLifecycleReclaimsEphemeralRootThreadLikeRust(t *testing.T) {
+	router, _ := newIdleLifecycleTestRouter(t, 0)
+	retainEphemeralIdleLifecycleThread(t, router, "ephemeral-root")
+	router.scheduleThreadIdleUnload("ephemeral-root")
+	waitForIdleUnload(t, router, "ephemeral-root")
+	if _, ok := router.ephemeralThreadRecord(session.ThreadID("ephemeral-root"), false); ok {
+		t.Fatal("an unloaded ephemeral root kept its in-memory record")
 	}
 }
 

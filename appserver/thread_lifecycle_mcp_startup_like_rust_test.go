@@ -34,6 +34,31 @@ func TestThreadStartFinishingAfterConnectionCloseStillUnloadsLikeRust(t *testing
 	}
 }
 
+// Rust #50380's regression uses an ephemeral thread/start. The unpersisted root
+// must carry the same idle lifecycle after its requesting connection closes
+// during required MCP startup, rather than staying loaded without a subscriber.
+func TestEphemeralThreadStartFinishingAfterConnectionCloseStillUnloadsLikeRust(t *testing.T) {
+	router, _ := newIdleLifecycleTestRouter(t, 0)
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	retainEphemeralIdleLifecycleThread(t, router, "ephemeral-root")
+
+	router.ConnectionClosed("conn-owner")
+	router.markResponseThreadLoaded(&ThreadStartResponse{Thread: &Thread{ID: "ephemeral-root", Ephemeral: true}}, "conn-owner")
+	if subscribers := router.threads.Subscribers("ephemeral-root"); len(subscribers) != 0 {
+		t.Fatalf("closed connection was re-subscribed: %#v", subscribers)
+	}
+
+	waitForIdleUnload(t, router, "ephemeral-root")
+	if loaded := router.requireThreadStatus().LoadedThreadIDs(); len(loaded) != 0 {
+		t.Fatalf("thread/loaded/list = %#v, want empty", loaded)
+	}
+	closed := latestNotificationPayload[ThreadClosedNotification](t, sink, NotificationThreadClosed)
+	if closed.ThreadID != "ephemeral-root" {
+		t.Fatalf("thread/closed payload = %+v", closed)
+	}
+}
+
 // A live connection keeps the ordinary subscribe-then-idle path: the thread
 // stays loaded while the subscriber is attached and unloads after it leaves.
 func TestThreadStartWithLiveConnectionSubscribesThenUnloadsLikeRust(t *testing.T) {

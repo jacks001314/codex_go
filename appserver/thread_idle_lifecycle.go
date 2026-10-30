@@ -202,9 +202,9 @@ func (r *RuntimeRouter) stopThreadIdleLifecycle() {
 	r.idleLifecycle.mu.Unlock()
 }
 
-// scheduleThreadIdleUnload arms the one-shot unload timer for an idle child.
-// Running threads, subscribed threads, roots, ephemeral children and pinned
-// threads are never scheduled.
+// scheduleThreadIdleUnload arms the one-shot unload timer for an idle thread.
+// Running threads, subscribed threads, persistent roots, ephemeral children and
+// pinned threads are never scheduled.
 func (r *RuntimeRouter) scheduleThreadIdleUnload(threadID string) {
 	if r == nil || r.threads == nil {
 		return
@@ -254,8 +254,11 @@ func (r *RuntimeRouter) scheduleThreadIdleUnload(threadID string) {
 }
 
 // idleThreadEvictable reports whether local idle eviction may touch the thread.
-// Only persistent children qualify: roots are host-controlled and ephemeral
-// children must retain their model context for follow-up tasks.
+// Persistent roots stay host-controlled and ephemeral children must retain their
+// model context for follow-up tasks, but an ephemeral client root has no durable
+// record to resume and is reclaimed like any other owner-less thread (Rust
+// #50380/#52081). Internal sessions always carry a parent and keep their
+// explicit-delay rule.
 func (r *RuntimeRouter) idleThreadEvictable(threadID string) bool {
 	if r == nil {
 		return false
@@ -268,12 +271,16 @@ func (r *RuntimeRouter) idleThreadEvictable(threadID string) bool {
 		return false
 	}
 	if _, ephemeral := r.ephemeralThreadRecord(session.ThreadID(threadID), false); ephemeral {
-		// Rust #52081 keeps ephemeral children resident; Rust #55270 allows an
-		// explicit per-thread delay (typically zero for prediction threads).
 		if !runtimeRecordIsSubagent(record) {
+			if strings.TrimSpace(string(record.ParentThreadID)) == "" {
+				return true
+			}
+			// Rust #55270 allows an explicit per-thread delay (typically zero
+			// for prediction threads).
 			_, hasOverride := r.threadUnloadDelayOverride(threadID)
 			return hasOverride
 		}
+		// Rust #52081 keeps ephemeral children resident.
 		return false
 	}
 	if strings.TrimSpace(string(record.ParentThreadID)) == "" {
@@ -376,10 +383,16 @@ func (r *RuntimeRouter) unloadIdleChildThread(threadID string, generation uint64
 	}
 	done := make(chan struct{})
 	r.idleLifecycle.pending[threadID] = done
+	dropEphemeralRecord := r.idleEphemeralRootThread(threadID)
 	r.idleLifecycle.mu.Unlock()
 
 	r.markThreadUnloaded(threadID)
 	r.threads.ReleaseLiveThreads([]session.ThreadID{session.ThreadID(threadID)})
+	if dropEphemeralRecord {
+		// An ephemeral client root has no rollout, so Rust's closed thread is
+		// gone rather than resumable from an in-memory copy.
+		r.threads.DeleteEphemeralRecord(session.ThreadID(threadID))
+	}
 	// Rust #52081/#50380: a completed idle eviction broadcasts thread/closed,
 	// so clients drop the runtime they no longer have a subscriber for.
 	r.notify(NotificationThreadClosed, ThreadClosedNotification{ThreadID: threadID})
@@ -388,6 +401,22 @@ func (r *RuntimeRouter) unloadIdleChildThread(threadID string, generation uint64
 	delete(r.idleLifecycle.pending, threadID)
 	close(done)
 	r.idleLifecycle.mu.Unlock()
+}
+
+// idleEphemeralRootThread reports whether threadID is an ephemeral client root:
+// no parent, no subagent owner, and no internal host registration.
+func (r *RuntimeRouter) idleEphemeralRootThread(threadID string) bool {
+	if r == nil || r.threads == nil {
+		return false
+	}
+	record, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false)
+	if !ok || record == nil || runtimeRecordIsSubagent(record) {
+		return false
+	}
+	if strings.TrimSpace(string(record.ParentThreadID)) != "" {
+		return false
+	}
+	return !r.isInternalSessionThread(threadID)
 }
 
 // threadLifecycleRequestThreadID extracts the thread a lifecycle-sensitive
