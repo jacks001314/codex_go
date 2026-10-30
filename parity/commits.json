@@ -25156,9 +25156,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "`state/guardian_sender_messages.go` renders each sender exchange with its preceding assistant message as untrusted context, shares the 900-byte budget with user evidence priority, and emits the unavailable-context notice; the renderer is reviewer-only and never enters the worker prompt.",
+   "`appserver/retained_context.go` captures assistant adjacency at delivery, recognizes `cloud_threads.send_message`, and accepts compact and indented `<codex_delegation>` envelopes.",
+   "Tests: `go test ./state -run GuardianSender` and `go test ./appserver -run 'RetainedSender|Guardian'` pass (TestGuardianSenderMessagesRenderAssistantContextLikeRust, TestRuntimeRouterCapturesSenderUserMessagesLikeRust)."
    ]
   },
   {
@@ -25396,9 +25398,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "`features/features.go` registers the disabled-by-default `multi_agent_v2_dynamic_tools` flag, and `runtimeAgentController.SpawnAgent` copies the parent record's dynamic tools into a fresh V2 child's metadata when `forkTurns == none` and the flag is on (appserver/agent_controller.go multiAgentV2DynamicToolsEnabled).",
+   "Inherited definitions reach the child's turn because the router loads `record.Metadata.DynamicTools` into thread/turn params (appserver/router.go).",
+   "Tests: TestRuntimeAgentControllerSpawnInheritsDynamicToolsLikeRust covers V1-disabled, V2-disabled and V2-enabled inheritance; `go test ./appserver -run ...DynamicTools...` and `go test ./features` pass."
    ]
   },
   {
@@ -26291,9 +26295,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "`appserver/realtime_runtime.go` records `transcript_tail.flush` straight into thread history (`recordRealtimeTranscriptTail`) without starting or steering a turn, applying the active-transcript budget and holding the realtime event lock.",
+   "An idle thread records the tail as its own completed history turn; a running turn absorbs the items without a second turn/start.",
+   "Tests: TestRealtimeTranscriptTailFlushRecordsHistoryWithoutInferenceLikeRust and TestRealtimeTranscriptTailFlushJoinsActiveTurnWithoutSteeringLikeRust pass."
    ]
   },
   {

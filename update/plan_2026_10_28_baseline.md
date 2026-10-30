@@ -3928,3 +3928,11 @@ Status after this batch: `2316 complete`, `462 not_applicable`, `322 audit_pendi
 - Tests: `TestRuntimeAgentControllerClosesKnownUnloadedAgentLikeRust`, `TestCloseAgentCompletionItemUsesSnapshotLikeRust`, `TestRuntimeAgentControllerWaitAgentUsesInitialSnapshotsLikeRust`, updated `TestRuntimeAgentControllerReportsNotFound`; focused `go test ./appserver -run 'AgentController|Collab|CloseAgent|WaitAgent|Subagent'` passes.
 
 Status after this batch: `2318 complete`, `462 not_applicable`, `322 audit_pending`, `42 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Regression certification batch (Round 1107)
+
+- #49951 Guardian sender reviews carry the preceding assistant message as untrusted context inside the per-exchange 900-byte budget, recognize `cloud_threads.send_message` and both delegation envelope forms, and never add the evidence to the worker prompt. Covered by `state` and `appserver` sender tests.
+- #50082 the disabled-by-default `multi_agent_v2_dynamic_tools` flag makes fresh V2 subagents persist the parent's dynamic tools, and the router feeds `record.Metadata.DynamicTools` into the child's turn params; V1 and gated-off V2 inherit nothing.
+- #50531 realtime transcript tails land in thread history on `transcript_tail.flush` without starting or steering a turn, joining a running turn or completing their own idle history turn.
+
+Status after this batch: `2321 complete`, `462 not_applicable`, `322 audit_pending`, `39 regression_pending`, `5 partial`, `6 blocked_precondition`.
