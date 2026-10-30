@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"codex_go/guardiancontext"
 	"codex_go/utils"
 )
 
@@ -366,52 +367,11 @@ func takeBytesAtCharBoundary(value string, max int) string {
 }
 
 // GuardianTruncateText mirrors Rust guardian_truncate_text: it keeps the full
-// text when it fits the token budget, otherwise keeps a prefix and suffix with
-// a `<truncated omitted_approx_tokens="N" />` marker in between.
+// text when it fits the token budget, otherwise keeps a UTF-8-safe prefix and
+// suffix with a `<truncated omitted_approx_tokens="N" />` marker in between.
+//
+// The shared implementation lives in guardiancontext.TruncateText so
+// synchronous review and asynchronous scoring bound evidence identically.
 func GuardianTruncateText(content string, tokenCap int) (string, bool) {
-	if content == "" {
-		return "", false
-	}
-	maxBytes := utils.ApproxBytesForTokens(tokenCap)
-	if len(content) <= maxBytes {
-		return content, false
-	}
-	omittedTokens := utils.ApproxTokensFromByteCount(len(content) - maxBytes)
-	marker := fmt.Sprintf("<truncated omitted_approx_tokens=\"%d\" />", omittedTokens)
-	if maxBytes <= len(marker) {
-		return marker, true
-	}
-	availableBytes := maxBytes - len(marker)
-	prefixBudget := availableBytes / 2
-	suffixBudget := availableBytes - prefixBudget
-	prefix, suffix := splitGuardianTruncationBounds(content, prefixBudget, suffixBudget)
-	return prefix + marker + suffix, true
-}
-
-func splitGuardianTruncationBounds(content string, prefixBytes, suffixBytes int) (string, string) {
-	if content == "" {
-		return "", ""
-	}
-	length := len(content)
-	suffixStartTarget := length - suffixBytes
-	prefixEnd := 0
-	suffixStart := length
-	suffixStarted := false
-	for index, ch := range content {
-		charEnd := index + utf8.RuneLen(ch)
-		if charEnd <= prefixBytes {
-			prefixEnd = charEnd
-			continue
-		}
-		if index >= suffixStartTarget {
-			if !suffixStarted {
-				suffixStart = index
-				suffixStarted = true
-			}
-		}
-	}
-	if prefixEnd > suffixStart {
-		suffixStart = prefixEnd
-	}
-	return content[:prefixEnd], content[suffixStart:]
+	return guardiancontext.TruncateText(content, tokenCap), len(content) > utils.ApproxBytesForTokens(tokenCap)
 }

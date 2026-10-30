@@ -110,10 +110,10 @@ func TestGuardianReviewTranscriptAppliesPerEntryCapsLikeRust(t *testing.T) {
 	if got, limit := len(selection.Entries[3].Text), utils.ApproxBytesForTokens(state.MaxToolEntryTokens)+64; got > limit {
 		t.Fatalf("tool entry bytes = %d, want <= %d (marker allowance)", got, limit)
 	}
-	if !strings.Contains(selection.Entries[1].Text, "tokens truncated") {
+	if !strings.Contains(selection.Entries[1].Text, "<truncated omitted_approx_tokens=") {
 		t.Fatalf("assistant entry missing truncation marker: %q", selection.Entries[1].Text)
 	}
-	if !strings.Contains(selection.Entries[3].Text, "tokens truncated") {
+	if !strings.Contains(selection.Entries[3].Text, "<truncated omitted_approx_tokens=") {
 		t.Fatalf("tool entry missing truncation marker: %q", selection.Entries[3].Text)
 	}
 }

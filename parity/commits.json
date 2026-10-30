@@ -4206,7 +4206,7 @@
    ],
    "status": "audit_pending",
    "evidence": [
-    "Partial symbol coverage 6/14; needs review: ContextSection, ContextTarget, ConversationTranscriptEntry, ConversationTranscriptEntryKind, SectionContributor"
+    "Adds the shared guardiancontext package mirroring codex-guardian-context: ContextTarget (sync/async), SectionScope (shared/sync_only/async_only) with Includes, SectionInput (target plus parent history as []eventmap.ResponseItem), SectionContributor, SectionError/MissingRequiredEvidence with the ErrMissingRequiredEvidence sentinel, SectionRegistry.Register/Collect (registration order preserved, scope checked before invocation, optional nil sections skipped, first error aborts without partial context), ContextSection, ConversationTranscriptEntryKind with user/developer/assistant/protected-assistant/tool-call/tool-output/node-repl-output/reasoning roles, ConversationTranscriptEntry with Text and OriginalBytes, and TruncateText (UTF-8-safe prefix/suffix with <truncated omitted_approx_tokens=\"N\" />, marker-only when the budget cannot fit the marker). context.GuardianTruncateText now delegates to the shared primitive while keeping Rust's was_truncated = len(content) > approx_bytes_for_tokens(token_cap), and appserver per-entry Guardian transcript caps (truncateGuardianTranscriptEntry) use it, replacing the former ellipsis marker with Rust's collect_transcript marker. Tests: go test ./guardiancontext ./context -count=1; go test ./appserver -run Guardian -count=1"
    ]
   },
   {

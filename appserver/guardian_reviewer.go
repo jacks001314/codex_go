@@ -2534,12 +2534,12 @@ func guardianToolTranscriptName(item *session.Item) string {
 }
 
 // truncateGuardianTranscriptEntry applies the profile's per-entry token cap
-// before aggregate retention, matching Rust's collect_transcript.
+// before aggregate retention. Rust's collect_transcript bounds every non-user
+// entry with the shared guardian_context::truncate_text primitive, so both
+// transcript evidence and request budgeting use the same UTF-8-safe prefix,
+// suffix, and `<truncated omitted_approx_tokens="N" />` marker.
 func truncateGuardianTranscriptEntry(text string, tokenLimit int) (string, bool) {
-	if tokenLimit <= 0 || len(text) <= utils.ApproxBytesForTokens(tokenLimit) {
-		return text, false
-	}
-	return utils.TruncateText(text, utils.TokensPolicy(tokenLimit)), true
+	return codexctx.GuardianTruncateText(text, tokenLimit)
 }
 
 // guardianTranscriptAuthor mirrors Rust's ConversationTranscriptEntryKind

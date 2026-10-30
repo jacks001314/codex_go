@@ -42,7 +42,7 @@ func TestGuardianReviewTranscriptNodeReplOutputLimitLikeRust(t *testing.T) {
 
 	defaultSelection := router.guardianReviewTranscriptSelection(guardianProfileTestThreadID)
 	defaultOutput := guardianTranscriptOutputText(t, defaultSelection)
-	if !strings.Contains(defaultOutput, "tokens truncated") {
+	if !strings.Contains(defaultOutput, "<truncated omitted_approx_tokens=") {
 		t.Fatalf("default selection must cap the node_repl output at the tool entry cap: %q", defaultOutput[:min(len(defaultOutput), 96)])
 	}
 
