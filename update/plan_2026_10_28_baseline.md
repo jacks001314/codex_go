@@ -3708,6 +3708,16 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Re-verified with `go test ./state -run 'ThreadHistory|Paginated' -count=1`, `go test ./rollout -run 'Persisted|MCPResult|Truncate' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 - Net status change is zero: `2234 complete`, `462 not_applicable`, `322 audit_pending`, `126 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1084)
+
+- #49817 Bedrock GovCloud advisory check: app server reloads requirements per call, derives the region from official Mantle/Runtime hosts and warns only when GovCloud managed policy lacks API-only login or an allowed endpoint domain; covered by four GovCloud tests.
+- #49819 daemon/updater cwd recovery: `setWorkingDirectory` absolutizes CA/AWS paths, keeps `CODEX_HOME` verbatim and falls back to the daemon state directory after a deleted Unix cwd. Added `TestSetWorkingDirectoryFallsBackOnDeletedCwdLikeRust` and compiled the package for Linux.
+- #50131 tcp-tunnel JSON diagnostics: versioned stderr records with credential/address redaction, single terminal flush, validated CONNECT status and preserved human-readable default; `go test ./tcptunnel` passes.
+- #50209 configurable mouse scroll speed: accumulator defaults to one row, validates finite positives, carries fractional movement, resets on reversal; main viewport and fullscreen pager wired. Residual: no session-preview scroll surface.
+- #50128 `currentTurnModel`: returns the running turn's next-step model and rejects mismatched or completed turns; pinned by `TestCurrentTurnModelLikeRust`.
+
+Status after this batch: `2239 complete`, `462 not_applicable`, `322 audit_pending`, `121 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

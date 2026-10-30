@@ -24731,9 +24731,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/bedrock.go implements AccountRequestProcessor::bedrock_check_gov_cloud_requirements (#49817): each call reloads managed requirements from CODEX_HOME so a requirements.toml written after startup takes effect without a restart, resolves the provider from the latest config, returns both fields false for non-Bedrock providers, derives the region from official `bedrock-mantle.<region>.api.aws` and `bedrock-runtime(-fips).<region>.amazonaws.com` hostnames before falling back to the current authentication state, and warns in GovCloud when managed requirements lack API-only login or enabled application network restrictions with an explicit allow entry for the active endpoint domain. Configuration and region-resolution failures are JSON-RPC internal errors.",
+    "Regression coverage: appserver/bedrock_test.go TestBedrockCheckGovCloudTracksCurrentProviderLikeRust (config and requirements updates without a restart, login changes, unreadable saved credentials, Mantle and Runtime endpoints, custom proxies), TestBedrockCheckGovCloudRequiresPolicyBaselineLikeRust, TestBedrockCheckGovCloudEndpointPrecedenceLikeRust, TestBedrockCheckGovCloudReportsInvalidRequirementsLikeRust, and TestBedrockMethodsRequireExperimentalAPILikeRust. Verified with `go test ./appserver -run 'BedrockCheckGovCloud|BedrockMethodsRequireExperimental|BedrockSupportedRegions' -count=1`."
    ]
   },
   {
@@ -24755,9 +24756,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserverdaemon/working_dir.go setWorkingDirectory mirrors background_command::set_working_directory (#49819): it absolutizes process-scoped CA/AWS environment paths (including both `npm_config_cafile` and `NPM_CONFIG_CAFILE`, AWS config/shared-credentials/token files and every `SSL_CERT_DIR` entry) before a child changes cwd, keeps CODEX_HOME verbatim so configured paths and symlink aliases survive because filepath.Abs does not resolve links, preserves home-relative values that consumers expand themselves, trims CODEX_SQLITE_HOME, and falls back to the daemon state directory when a Unix cwd has been deleted while leaving a usable working directory intact. Both pid_process_unix.go and pid_process_windows.go call it before launching the managed daemon/updater; the Windows path always pins the daemon work directory.",
+    "Regression coverage: appserverdaemon/working_dir_test.go TestSetWorkingDirectoryAbsolutizesProcessPathsLikeRust (absolute paths, home-relative preservation, SSL_CERT_DIR splitting, Windows state-directory pin) and TestSetWorkingDirectoryFallsBackOnDeletedCwdLikeRust (deleted-cwd fallback plus usable-cwd preservation). Verified with `go test ./appserverdaemon -run WorkingDirectory -count=1` and a Linux test-binary compile."
    ]
   },
   {
@@ -25427,9 +25429,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/turn_runtime.go currentTurnModel mirrors CodexThread::current_turn_model (#50128): it returns the model slug selected for the named running turn's next step, reflects active-turn model updates while ignoring changes staged for future turns, and returns empty when the turn ID does not match the thread's running turn or the turn has completed.",
+    "Regression coverage: appserver/turn_step_settings_test.go TestCurrentTurnModelLikeRust pins mismatched IDs, the initial model, an active-turn update, future-turn isolation and the completed-turn empty result. Verified with `go test ./appserver -run CurrentTurnModel -count=1`."
    ]
   },
   {
@@ -25451,9 +25454,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tcptunnel implements `codex tcp-tunnel --diagnostics-json` (#50131): tcptunnel/diagnostics.go emits versioned newline-delimited JSON records on stderr classifying startup, CONNECT, transport and control failures without addresses, headers, credentials or raw error messages; fatal records are flushed once with the error chain suppressed, recoverable stream/transport events stay non-terminal, rejected CONNECT records carry only a validated `http_status`, and human-readable diagnostics remain the default. cli/tcp_tunnel.go parses the flag with clap-compatible rejection of an attached value, and tunnel.go keeps stdout readiness and credential acknowledgements intact in JSON mode.",
+    "Regression coverage: tcptunnel/diagnostics_test.go (fatal chain suppression and single flush, control-vs-input codes, CONNECT status validation, legacy and successful-shutdown silence), TestRunJSONDiagnosticsFatalStartupEmitsTerminalRecord, and TestParseArgsDiagnosticsJSON. Verified with `go test ./tcptunnel -count=1`."
    ]
   },
   {
@@ -25585,9 +25589,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "tui/mouse_scroll.go implements `tui.mouse_scroll_speed` (#50209): the default becomes one row per wheel event, configured values must be finite and positive (NormalizeMouseScrollSpeed falls back to the default), and MouseScrollAccumulator scales rows per event, carries fractional movement across events and drops the remainder when the direction reverses. app/interactive.go resolves the value from the `[tui]` table into local settings and forwards it to the TUI; both transcript surfaces consume it — the main viewport (tui/tea/mouse_scroll.go scrollTranscriptRows, which re-derives following from the viewport after the move so a fractional scroll that moves no row cannot pause following) and the fullscreen pager (tui/chatwidget/transcript_overlay.go). Residual: Go has no session-preview scroll surface, so Rust's preview wiring has no carrier.",
+    "Regression coverage: tui/mouse_scroll_like_rust_test.go (integer and fractional speeds, direction change, decimal accumulation, default of one row, nonpositive/nonfinite rejection) and app/mouse_scroll_wiring_test.go. Verified with `go test ./tui -run MouseScroll -count=1` and `go test ./app -run MouseScroll -count=1`."
    ]
   },
   {

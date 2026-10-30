@@ -69,3 +69,49 @@ func TestSetWorkingDirectoryAbsolutizesProcessPathsLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// TestSetWorkingDirectoryFallsBackOnDeletedCwdLikeRust mirrors Rust #49819:
+// a managed Unix child whose launch directory has been removed runs from the
+// daemon state directory instead of failing, while a usable directory is kept.
+func TestSetWorkingDirectoryFallsBackOnDeletedCwdLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix-only deleted-cwd recovery")
+	}
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	deleted := t.TempDir()
+	if err := os.Chdir(deleted); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(original); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.RemoveAll(deleted); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+
+	stateDir := t.TempDir()
+	command := exec.Command("echo")
+	if err := setWorkingDirectory(command, stateDir); err != nil {
+		t.Fatalf("setWorkingDirectory: %v", err)
+	}
+	if command.Dir != stateDir {
+		t.Fatalf("Dir = %q, want %q", command.Dir, stateDir)
+	}
+
+	usable := t.TempDir()
+	if err := os.Chdir(usable); err != nil {
+		t.Fatalf("Chdir usable: %v", err)
+	}
+	command = exec.Command("echo")
+	if err := setWorkingDirectory(command, stateDir); err != nil {
+		t.Fatalf("setWorkingDirectory usable: %v", err)
+	}
+	if command.Dir != "" {
+		t.Fatalf("Dir = %q, want the usable cwd preserved", command.Dir)
+	}
+}
