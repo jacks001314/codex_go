@@ -23314,6 +23314,7 @@ func TestRuntimeRouterThreadForkActivePaginatedTurnStoresInterruptedDelta(t *tes
 	if err := router.registerActiveRuntimeTurn("thread-active-paginated-fork", "turn-active", func() {}, startedAt.UnixMilli(), &turn.TurnStartParams{
 		ThreadID: "thread-active-paginated-fork",
 		Prompt:   "active prompt",
+		RootTurnID: "causal-root",
 	}); err != nil {
 		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
 	}
@@ -23336,6 +23337,42 @@ func TestRuntimeRouterThreadForkActivePaginatedTurnStoresInterruptedDelta(t *tes
 	activeTurn := turnByID(BuildThread(materialized, "", true).Turns, "turn-active")
 	if activeTurn == nil || activeTurn.Status != TurnStatusInterrupted || !turnHasItemText(activeTurn, "<turn_aborted>") {
 		t.Fatalf("materialized active turn = %+v", activeTurn)
+	}
+	// Rust #51415: the fork freezes the active turn as interrupted and keeps its
+	// causal root; a turn without a recorded root stays null.
+	if activeTurn.RootTurnID == nil || *activeTurn.RootTurnID != "causal-root" {
+		t.Fatalf("active turn root = %#v, want causal-root", activeTurn.RootTurnID)
+	}
+	if inherited := turnByID(BuildThread(materialized, "", true).Turns, "turn-1"); inherited == nil || inherited.RootTurnID != nil {
+		t.Fatalf("inherited turn-1 root = %#v, want null", inherited)
+	}
+	rolloutPath := router.services.ThreadRouter.threadRolloutPath(materialized)
+	lines, _, err := rollout.Load(rolloutPath)
+	if err != nil {
+		t.Fatalf("Load(fork rollout) error = %v", err)
+	}
+	roots := map[string]string{}
+	for _, line := range lines {
+		if line.Type != "event_msg" {
+			continue
+		}
+		var payload struct {
+			Type       string `json:"type"`
+			TurnID     string `json:"turn_id"`
+			RootTurnID string `json:"root_turn_id"`
+		}
+		if err := json.Unmarshal(line.Payload, &payload); err != nil {
+			t.Fatalf("decode fork rollout line: %v", err)
+		}
+		if payload.Type == "task_started" || payload.Type == "turn_aborted" {
+			roots[payload.Type+"|"+payload.TurnID] = payload.RootTurnID
+		}
+	}
+	if got := roots["task_started|turn-active"]; got != "causal-root" {
+		t.Fatalf("fork task_started root = %q, want causal-root", got)
+	}
+	if got := roots["turn_aborted|turn-active"]; got != "causal-root" {
+		t.Fatalf("fork turn_aborted root = %q, want causal-root", got)
 	}
 	physical, err := store.Load(session.ThreadID(forked.ID))
 	if err != nil {

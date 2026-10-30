@@ -4073,7 +4073,7 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	completedAt := time.Now().UTC()
 	completedAtUnix := completedAt.Unix()
 	durationMS := completedAt.UnixMilli() - startedAt.UnixMilli()
-	_ = r.appendRuntimeTurnComplete(params.ThreadID, turnID, completedAt, durationMS)
+	_ = r.appendRuntimeTurnComplete(params.ThreadID, turnID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(params.ThreadID, turnID, TurnStatusCompleted)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: params.ThreadID,
@@ -7603,7 +7603,9 @@ func appendActiveForkRolloutItems(recorder *rollout.Recorder, record *session.Re
 	if recorder == nil || record == nil {
 		return nil
 	}
+	roots := forkTurnRoots(record, active)
 	for _, group := range runtimeForkTurnItemGroups(record.Items, record.CreatedAt) {
+		rootTurnID := roots[group.TurnID]
 		startedAt := group.StartedAt
 		completedAt := group.CompletedAt
 		durationMS := runtimeForkDurationMS(startedAt, completedAt)
@@ -7612,19 +7614,19 @@ func appendActiveForkRolloutItems(recorder *rollout.Recorder, record *session.Re
 			completedAt = now.UTC()
 			durationMS = runtimeForkDurationMS(startedAt, completedAt)
 		}
-		if err := recorder.AppendTurnStarted(group.TurnID, startedAt); err != nil {
+		if err := recorder.AppendTurnStartedWithRoot(rootTurnID, group.TurnID, startedAt); err != nil {
 			return err
 		}
 		if err := rollout.AppendSessionItems(recorder, group.Items, now); err != nil {
 			return err
 		}
 		if group.TurnID == active.TurnID {
-			if err := recorder.AppendTurnAborted(group.TurnID, "interrupted", completedAt, durationMS); err != nil {
+			if err := recorder.AppendTurnAbortedWithRoot(rootTurnID, group.TurnID, "interrupted", completedAt, durationMS); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := recorder.AppendTurnComplete(group.TurnID, completedAt, durationMS); err != nil {
+		if err := recorder.AppendTurnCompleteWithRoot(rootTurnID, group.TurnID, completedAt, durationMS); err != nil {
 			return err
 		}
 	}
@@ -7639,6 +7641,7 @@ func activeForkTurnSnapshots(record *session.Record, active activeRuntimeTurnFor
 	if len(groups) == 0 {
 		return nil
 	}
+	roots := forkTurnRoots(record, active)
 	snapshots := make([]session.TurnSnapshot, 0, len(groups))
 	for _, group := range groups {
 		status := string(TurnStatusCompleted)
@@ -7653,12 +7656,35 @@ func activeForkTurnSnapshots(record *session.Record, active activeRuntimeTurnFor
 		snapshots = append(snapshots, session.TurnSnapshot{
 			ID:          group.TurnID,
 			Status:      status,
+			RootTurnID:  roots[group.TurnID],
 			StartedAt:   runtimeInt64Ptr(startedAt.UTC().Unix()),
 			CompletedAt: runtimeInt64Ptr(completedAt.UTC().Unix()),
 			DurationMS:  runtimeInt64Ptr(durationMS),
 		})
 	}
 	return snapshots
+}
+
+// forkTurnRoots maps each copied turn to its causal root. Completed turns keep
+// the root recorded on the source snapshots; the active turn that the fork
+// freezes as interrupted keeps the root resolved from its start parameters
+// (Rust #51415 carries lineage across fork boundaries).
+func forkTurnRoots(record *session.Record, active activeRuntimeTurnForkSnapshot) map[string]string {
+	roots := map[string]string{}
+	if record == nil {
+		return roots
+	}
+	for _, snapshot := range record.Metadata.RolloutTurns {
+		turnID := strings.TrimSpace(snapshot.ID)
+		if turnID == "" {
+			continue
+		}
+		roots[turnID] = strings.TrimSpace(snapshot.RootTurnID)
+	}
+	if turnID := strings.TrimSpace(active.TurnID); turnID != "" {
+		roots[turnID] = rootTurnIDForTurn(active.Params, turnID)
+	}
+	return roots
 }
 
 func runtimeForkTurnItemGroups(items []session.Item, fallback time.Time) []runtimeForkTurnItemGroup {

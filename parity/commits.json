@@ -27325,9 +27325,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "turn/start accepts parentTurnId/rootTurnId, defaults a new turn to its own root, and steering has no lineage fields so the active root is preserved; Turn.rootTurnId is always serialized (null when unknown) and flows through start/completion/interruption notifications (turn/api.go, appserver/protocol.go, appserver/turn_runtime.go)",
+    "Terminal events now persist lineage: rollout.AppendTurnCompleteWithRoot/AppendTurnAbortedWithRoot emit root_turn_id, the replay builder prefers a terminal event's root when turn_started lacks one, and app-server completion, interruption, shell, realtime and daemon-recovery paths pass the resolved root",
+    "Fork boundaries keep lineage: session.cloneTurnSnapshot no longer drops TurnSnapshot.RootTurnID (which previously erased roots on every fork/clone), fork snapshots and rollout records carry copied roots plus the active turn's resolved root, and appendThreadRolloutRecord re-emits them",
+    "Paginated history reads expose rootTurnId: the state thread-history projection writes thread_turns.root_turn_id with COALESCE(first known root), ListThreadHistoryTurns scans it, stateThreadTurnToAPI projects it, and older writers leave NULL",
+    "Verified by TestTurnLineageExposureLikeRust, TestTurnRootTurnIDExposureLikeRust, TestAppendTurnTerminalCarriesRoot, TestReplayBuilderCarriesRootFromTerminalEvents, TestThreadHistoryQueriesPageProjectedRowsLikeRust, TestRuntimeRouterThreadForkActivePaginatedTurnStoresInterruptedDelta, TestRouterPaginatedRolloutSupportsPagedHistoryReads, plus go test ./rollout ./state ./session -count=1"
    ]
   },
   {

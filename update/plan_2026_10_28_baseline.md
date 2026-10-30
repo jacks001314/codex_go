@@ -3622,6 +3622,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Regression: `TestImagePasteCompletionRefreshesWindowLikeRust` advances the clock inside a slow clipboard read and proves the window restarts at completion; `TestAltVPastesImageAndSuppressesRepeatsLikeRust` proves Alt+V pastes once for a repeated burst.
 - Verified with `go test ./tui/tea ./tui -count=1`.
 
-Status after reconciliation: `2224 complete`, `462 not_applicable`,
-`322 audit_pending`, `136 regression_pending`, `5 partial`,
+### Turn lineage persistence across the app server (Round 1072)
+
+- Rust #51415 accepts optional `parentTurnId`/`rootTurnId` on `turn/start`, exposes `rootTurnId` on turns and lifecycle notifications, defaults new turns to their own root, preserves the active root when steering, and carries roots through completion, interruption, recovery, fork boundaries and paginated history reads while older history stays null.
+- Go already exposed the protocol fields and defaults (sync349). This round closed the persistence gaps: `rollout.AppendTurnCompleteWithRoot`/`AppendTurnAbortedWithRoot` write `root_turn_id` and the replay builder falls back to it when `turn_started` lacks one; app-server completion/interruption/shell/realtime/daemon-recovery paths pass the resolved root; `session.cloneTurnSnapshot` now preserves `TurnSnapshot.RootTurnID` (it previously erased roots on every fork/clone); fork snapshots and fork rollouts re-emit the copied roots and the frozen active turn's resolved root.
+- Paginated reads now round-trip lineage through SQLite: `state/thread_history_projection.go` writes `thread_turns.root_turn_id` with `COALESCE` so the first known root survives terminal events without one, `ListThreadHistoryTurns` scans the column, and `stateThreadTurnToAPI` projects it into `Turn.rootTurnId`. Migration `0008_thread_turn_root.sql` already existed but was unused.
+- Verified with `go test ./rollout ./state ./session -count=1` and `go test ./appserver -run 'ThreadFork|TurnRoot|TurnLineage|DaemonRecovery|PaginatedRolloutSupportsPagedHistoryReads' -count=1`. The app-server full-surface audit still reports the pre-existing `thread/guardianReview` schema drift, unrelated to this commit.
+
+Status after reconciliation: `2225 complete`, `462 not_applicable`,
+`322 audit_pending`, `135 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

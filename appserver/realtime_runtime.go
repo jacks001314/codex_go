@@ -761,7 +761,7 @@ func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event real
 	}
 	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), item); err != nil {
 		if recordingTurn {
-			_ = r.appendRuntimeTurnComplete(threadID, turnID, now, 0)
+			_ = r.appendRuntimeTurnComplete(threadID, turnID, turnID, now, 0)
 		}
 		return
 	}
@@ -780,7 +780,7 @@ func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event real
 		CompletedAtMS: now.UnixMilli(),
 	})
 	if recordingTurn {
-		_ = r.appendRuntimeTurnComplete(threadID, turnID, now, 0)
+		_ = r.appendRuntimeTurnComplete(threadID, turnID, turnID, now, 0)
 	}
 }
 

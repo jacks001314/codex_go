@@ -1315,6 +1315,13 @@ func TurnContextSettings(raw json.RawMessage) (model string, compHash string, cy
 }
 
 func (r *Recorder) AppendTurnComplete(turnID string, completedAt time.Time, durationMS int64) error {
+	return r.AppendTurnCompleteWithRoot("", turnID, completedAt, durationMS)
+}
+
+// AppendTurnCompleteWithRoot persists completion together with the turn's
+// resolved causal root (Rust #51415). An empty root is omitted, matching older
+// rollout writers and Rust's absent `root_turn_id`.
+func (r *Recorder) AppendTurnCompleteWithRoot(rootTurnID string, turnID string, completedAt time.Time, durationMS int64) error {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return nil
@@ -1324,11 +1331,13 @@ func (r *Recorder) AppendTurnComplete(turnID string, completedAt time.Time, dura
 	}
 	payload, err := json.Marshal(struct {
 		Type        string `json:"type"`
+		RootTurnID  string `json:"root_turn_id,omitempty"`
 		TurnID      string `json:"turn_id"`
 		CompletedAt int64  `json:"completed_at"`
 		DurationMS  int64  `json:"duration_ms"`
 	}{
 		Type:        "task_complete",
+		RootTurnID:  strings.TrimSpace(rootTurnID),
 		TurnID:      turnID,
 		CompletedAt: completedAt.UTC().Unix(),
 		DurationMS:  durationMS,
@@ -1369,6 +1378,12 @@ func (r *Recorder) AppendTurnError(message string, now time.Time) error {
 }
 
 func (r *Recorder) AppendTurnAborted(turnID string, reason string, completedAt time.Time, durationMS int64) error {
+	return r.AppendTurnAbortedWithRoot("", turnID, reason, completedAt, durationMS)
+}
+
+// AppendTurnAbortedWithRoot persists an interruption together with the turn's
+// resolved causal root (Rust #51415).
+func (r *Recorder) AppendTurnAbortedWithRoot(rootTurnID string, turnID string, reason string, completedAt time.Time, durationMS int64) error {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return nil
@@ -1382,12 +1397,14 @@ func (r *Recorder) AppendTurnAborted(turnID string, reason string, completedAt t
 	}
 	payload, err := json.Marshal(struct {
 		Type        string `json:"type"`
+		RootTurnID  string `json:"root_turn_id,omitempty"`
 		TurnID      string `json:"turn_id"`
 		Reason      string `json:"reason"`
 		CompletedAt int64  `json:"completed_at"`
 		DurationMS  int64  `json:"duration_ms"`
 	}{
 		Type:        "turn_aborted",
+		RootTurnID:  strings.TrimSpace(rootTurnID),
 		TurnID:      turnID,
 		Reason:      reason,
 		CompletedAt: completedAt.UTC().Unix(),

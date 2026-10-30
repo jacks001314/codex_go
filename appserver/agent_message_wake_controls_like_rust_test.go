@@ -186,7 +186,7 @@ func TestFinishingTurnIgnoresInterruptLikeRust(t *testing.T) {
 				t.Fatal("finishing turn could not complete after the interrupt")
 			}
 			completedAt := time.Now().UTC()
-			if err := router.appendRuntimeTurnComplete("root", response.Turn.ID, completedAt, 1); err != nil {
+			if err := router.appendRuntimeTurnComplete("root", response.Turn.ID, response.Turn.ID, completedAt, 1); err != nil {
 				t.Fatalf("appendRuntimeTurnComplete() error = %v", err)
 			}
 			router.completeTurnRecord("root", response.Turn.ID, TurnStatusCompleted)

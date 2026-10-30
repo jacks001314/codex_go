@@ -159,7 +159,7 @@ func (r *RuntimeRouter) continueDaemonTurn(threadID string, saved daemonrecovery
 	// exposed (Rust daemon_continuation.rs:102-119). A write failure aborts the
 	// continuation.
 	if err := r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		return recorder.AppendTurnAborted(savedTurnID, "interrupted", time.Now().UTC(), 0)
+		return recorder.AppendTurnAbortedWithRoot(strings.TrimSpace(previous.RootTurnID), savedTurnID, "interrupted", time.Now().UTC(), 0)
 	}); err != nil {
 		slog.Warn("failed to close interrupted turn history", "thread_id", threadID, "error", err)
 		return

@@ -22,6 +22,7 @@ const maxSQLiteInteger = uint64(1<<63 - 1)
 
 type threadHistoryTurnChange struct {
 	TurnID      string
+	RootTurnID  *string
 	Status      string
 	Error       json.RawMessage
 	StartedAt   *int64
@@ -47,6 +48,8 @@ type threadHistoryEvent struct {
 	Type               string          `json:"type"`
 	TurnID             string          `json:"turn_id"`
 	TurnIDCamel        string          `json:"turnId"`
+	RootTurnID         *string         `json:"root_turn_id"`
+	RootTurnIDCamel    *string         `json:"rootTurnId"`
 	StartedAt          *int64          `json:"started_at"`
 	StartedAtCamel     *int64          `json:"startedAt"`
 	CompletedAt        *int64          `json:"completed_at"`
@@ -233,12 +236,13 @@ func projectThreadHistoryLine(line *rollout.Line) (threadHistoryChanges, error) 
 		return changes, err
 	}
 	turnID := firstHistoryString(event.TurnID, event.TurnIDCamel)
+	rootTurnID := firstHistoryStringPtr(event.RootTurnID, event.RootTurnIDCamel)
 	switch normalizeThreadHistoryEventType(event.Type) {
 	case "turn_started":
 		if turnID == "" {
 			return changes, errors.New("turn_started event is missing turn_id")
 		}
-		changes.Turns = append(changes.Turns, threadHistoryTurnChange{TurnID: turnID, Status: "inProgress", StartedAt: firstHistoryInt64(event.StartedAt, event.StartedAtCamel)})
+		changes.Turns = append(changes.Turns, threadHistoryTurnChange{TurnID: turnID, RootTurnID: rootTurnID, Status: "inProgress", StartedAt: firstHistoryInt64(event.StartedAt, event.StartedAtCamel)})
 	case "turn_complete":
 		if turnID == "" {
 			return changes, errors.New("turn_complete event is missing turn_id")
@@ -248,7 +252,7 @@ func projectThreadHistoryLine(line *rollout.Line) (threadHistoryChanges, error) 
 			status = "failed"
 		}
 		changes.Turns = append(changes.Turns, threadHistoryTurnChange{
-			TurnID: turnID, Status: status, Error: cloneRawJSON(event.Error),
+			TurnID: turnID, RootTurnID: rootTurnID, Status: status, Error: cloneRawJSON(event.Error),
 			StartedAt: firstHistoryInt64(event.StartedAt, event.StartedAtCamel), CompletedAt: firstHistoryInt64(event.CompletedAt, event.CompletedAtCamel), DurationMS: firstHistoryInt64(event.DurationMS, event.DurationMSCamel),
 		})
 	case "turn_aborted":
@@ -256,7 +260,7 @@ func projectThreadHistoryLine(line *rollout.Line) (threadHistoryChanges, error) 
 			return changes, nil
 		}
 		changes.Turns = append(changes.Turns, threadHistoryTurnChange{
-			TurnID: turnID, Status: "interrupted", StartedAt: firstHistoryInt64(event.StartedAt, event.StartedAtCamel), CompletedAt: firstHistoryInt64(event.CompletedAt, event.CompletedAtCamel), DurationMS: firstHistoryInt64(event.DurationMS, event.DurationMSCamel),
+			TurnID: turnID, RootTurnID: rootTurnID, Status: "interrupted", StartedAt: firstHistoryInt64(event.StartedAt, event.StartedAtCamel), CompletedAt: firstHistoryInt64(event.CompletedAt, event.CompletedAtCamel), DurationMS: firstHistoryInt64(event.DurationMS, event.DurationMSCamel),
 		})
 	case "item_completed":
 		if turnID == "" || !rawJSONPresent(event.Item) {
@@ -297,10 +301,11 @@ func applyThreadHistoryChanges(ctx context.Context, conn *sql.Conn, threadID str
 		}
 		if _, err := conn.ExecContext(ctx, `
 INSERT INTO thread_turns (
-    thread_id, turn_id, rollout_ordinal, rollout_byte_offset, rollout_end_ordinal,
+    thread_id, turn_id, root_turn_id, rollout_ordinal, rollout_byte_offset, rollout_end_ordinal,
     rollout_end_byte_offset, status, error_json, started_at, completed_at, duration_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, turn_id) DO UPDATE SET
+    root_turn_id = COALESCE(thread_turns.root_turn_id, excluded.root_turn_id),
     rollout_end_ordinal = excluded.rollout_end_ordinal,
     rollout_end_byte_offset = excluded.rollout_end_byte_offset,
     status = excluded.status,
@@ -309,7 +314,7 @@ ON CONFLICT(thread_id, turn_id) DO UPDATE SET
     completed_at = excluded.completed_at,
     duration_ms = excluded.duration_ms
 WHERE thread_turns.rollout_end_ordinal IS NULL
-  AND thread_turns.status = 'inProgress'`, threadID, turn.TurnID, ordinal, startOffset, terminalOrdinal, terminalOffset, turn.Status, errorJSON, nullableInt64(turn.StartedAt), nullableInt64(turn.CompletedAt), nullableInt64(turn.DurationMS)); err != nil {
+  AND thread_turns.status = 'inProgress'`, threadID, turn.TurnID, nullableStringPtr(turn.RootTurnID), ordinal, startOffset, terminalOrdinal, terminalOffset, turn.Status, errorJSON, nullableInt64(turn.StartedAt), nullableInt64(turn.CompletedAt), nullableInt64(turn.DurationMS)); err != nil {
 			return fmt.Errorf("project thread turn: %w", err)
 		}
 		if err := refreshThreadSummaryIDs(ctx, conn, threadID, turn.TurnID, ordinal); err != nil {
@@ -444,6 +449,30 @@ func firstHistoryString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstHistoryStringPtr(values ...*string) *string {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if trimmed := strings.TrimSpace(*value); trimmed != "" {
+			copy := trimmed
+			return &copy
+		}
+	}
+	return nil
+}
+
+func nullableStringPtr(value *string) any {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 func firstHistoryInt64(values ...*int64) *int64 {

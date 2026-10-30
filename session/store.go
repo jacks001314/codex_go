@@ -2803,6 +2803,7 @@ func cloneTurnSnapshot(snapshot TurnSnapshot) TurnSnapshot {
 	return TurnSnapshot{
 		ID:           snapshot.ID,
 		Status:       snapshot.Status,
+		RootTurnID:   snapshot.RootTurnID,
 		StartedAt:    cloneInt64Ptr(snapshot.StartedAt),
 		CompletedAt:  cloneInt64Ptr(snapshot.CompletedAt),
 		DurationMS:   cloneInt64Ptr(snapshot.DurationMS),

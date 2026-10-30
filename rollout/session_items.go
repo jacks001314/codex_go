@@ -292,10 +292,14 @@ func EnsureRustCompatibleSessionHistory(path string, record *session.Record) (bo
 			currentTurnID = turnID
 			if currentTurnID != "" {
 				startedAt := createdAt
+				rootTurnID := ""
 				if snapshot, ok := snapshots[currentTurnID]; ok && snapshot.StartedAt != nil {
 					startedAt = time.Unix(*snapshot.StartedAt, 0).UTC()
 				}
-				if err := recorder.AppendTurnStarted(currentTurnID, startedAt); err != nil {
+				if snapshot, ok := snapshots[currentTurnID]; ok {
+					rootTurnID = strings.TrimSpace(snapshot.RootTurnID)
+				}
+				if err := recorder.AppendTurnStartedWithRoot(rootTurnID, currentTurnID, startedAt); err != nil {
 					return false, err
 				}
 			}
@@ -343,13 +347,13 @@ func appendReplayedTurnTerminal(recorder *Recorder, turnID string, snapshot sess
 	}
 	switch status {
 	case "interrupted", "aborted", "cancelled", "canceled":
-		return recorder.AppendTurnAborted(turnID, firstNonEmptyString(snapshot.ErrorMessage, "interrupted"), completedAt, durationMS)
+		return recorder.AppendTurnAbortedWithRoot(snapshot.RootTurnID, turnID, firstNonEmptyString(snapshot.ErrorMessage, "interrupted"), completedAt, durationMS)
 	case "failed", "error":
 		if err := recorder.AppendTurnError(snapshot.ErrorMessage, completedAt); err != nil {
 			return err
 		}
 	}
-	return recorder.AppendTurnComplete(turnID, completedAt, durationMS)
+	return recorder.AppendTurnCompleteWithRoot(snapshot.RootTurnID, turnID, completedAt, durationMS)
 }
 
 func coreTurnItemIsInProgress(raw json.RawMessage) bool {
@@ -1399,6 +1403,7 @@ func (b *rolloutReplayBuilder) handleTurnStarted(payload rolloutEventPayload, li
 
 func (b *rolloutReplayBuilder) handleTurnComplete(payload rolloutEventPayload) {
 	turnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel)
+	rootTurnID := rolloutEventRootTurnID(payload)
 	errorMessage, codexErrorInfo, hasTerminalError, readable := rolloutEventError(payload.Error)
 	if !readable {
 		// Rust #46482: a known classification with an invalid payload makes the
@@ -1411,6 +1416,9 @@ func (b *rolloutReplayBuilder) handleTurnComplete(payload rolloutEventPayload) {
 	apply := func(snapshot *session.TurnSnapshot) {
 		if snapshot == nil {
 			return
+		}
+		if rootTurnID != "" {
+			snapshot.RootTurnID = rootTurnID
 		}
 		if hasTerminalError {
 			snapshot.Status = "failed"
@@ -1441,9 +1449,13 @@ func (b *rolloutReplayBuilder) handleTurnComplete(payload rolloutEventPayload) {
 
 func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, lineIndex int) {
 	turnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel)
+	rootTurnID := rolloutEventRootTurnID(payload)
 	apply := func(snapshot *session.TurnSnapshot) {
 		if snapshot == nil {
 			return
+		}
+		if rootTurnID != "" {
+			snapshot.RootTurnID = rootTurnID
 		}
 		snapshot.Status = "interrupted"
 		snapshot.CompletedAt = firstNonNilInt64(payload.CompletedAt, payload.CompletedAtCamel)
@@ -1472,6 +1484,19 @@ func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, li
 	snapshot := session.TurnSnapshot{ID: turnID}
 	apply(&snapshot)
 	b.turns = append(b.turns, snapshot)
+}
+
+// rolloutEventRootTurnID reads the optional causal root Rust #51415 persists on
+// completion and abort events; older writers omit it.
+func rolloutEventRootTurnID(payload rolloutEventPayload) string {
+	switch {
+	case payload.RootTurnID != nil:
+		return strings.TrimSpace(*payload.RootTurnID)
+	case payload.RootTurnIDCamel != nil:
+		return strings.TrimSpace(*payload.RootTurnIDCamel)
+	default:
+		return ""
+	}
 }
 
 func (b *rolloutReplayBuilder) handleTurnError(payload rolloutEventPayload, lineIndex int) {

@@ -26,7 +26,7 @@ func TestThreadHistoryQueriesPageProjectedRowsLikeRust(t *testing.T) {
 	t.Cleanup(func() { _ = runtime.Close() })
 
 	path := writePaginatedHistoryFixture(t, home, "thread-page", nil, []historyFixtureTurn{
-		{ID: "turn-1", Items: []historyFixtureItem{
+		{ID: "turn-1", RootTurnID: "root-turn", Items: []historyFixtureItem{
 			{ID: "user-1", Type: "userMessage", Text: "question"},
 			{ID: "middle-1", Type: "reasoning", Text: "thinking"},
 			{ID: "agent-1", Type: "agentMessage", Text: "answer", Phase: "final_answer"},
@@ -49,6 +49,14 @@ func TestThreadHistoryQueriesPageProjectedRowsLikeRust(t *testing.T) {
 	}
 	if got := historyItemIDs(turns.Turns[0].Items); !equalStrings(got, []string{"user-1", "agent-1"}) {
 		t.Fatalf("summary items = %v", got)
+	}
+	// Rust #51415: paginated reads expose the persisted causal root; turns from
+	// older writers stay unknown instead of inventing one.
+	if turns.Turns[0].RootTurnID == nil || *turns.Turns[0].RootTurnID != "root-turn" {
+		t.Fatalf("turn-1 root = %#v", turns.Turns[0].RootTurnID)
+	}
+	if turns.Turns[1].RootTurnID != nil {
+		t.Fatalf("turn-2 root = %#v, want nil", turns.Turns[1].RootTurnID)
 	}
 	if turns.NextCursor == nil || turns.BackwardsCursor == nil {
 		t.Fatalf("turn cursors = next %v backwards %v", turns.NextCursor, turns.BackwardsCursor)
@@ -219,6 +227,7 @@ func TestThreadHistoryQueriesFollowForkLineageAndBoundSource(t *testing.T) {
 
 type historyFixtureTurn struct {
 	ID         string
+	RootTurnID string
 	Items      []historyFixtureItem
 	InProgress bool
 }
@@ -239,7 +248,7 @@ func writePaginatedHistoryFixture(t *testing.T, home, threadID string, base *rol
 	}
 	for turnIndex, turn := range turns {
 		startedAt := now.Add(time.Duration(turnIndex) * time.Minute)
-		if err := recorder.AppendTurnStarted(turn.ID, startedAt); err != nil {
+		if err := recorder.AppendTurnStartedWithRoot(turn.RootTurnID, turn.ID, startedAt); err != nil {
 			t.Fatal(err)
 		}
 		for itemIndex, item := range turn.Items {
@@ -264,7 +273,7 @@ func writePaginatedHistoryFixture(t *testing.T, home, threadID string, base *rol
 		}
 		if !turn.InProgress {
 			completedAt := startedAt.Add(30 * time.Second)
-			if err := recorder.AppendTurnComplete(turn.ID, completedAt, 30_000); err != nil {
+			if err := recorder.AppendTurnCompleteWithRoot(turn.RootTurnID, turn.ID, completedAt, 30_000); err != nil {
 				t.Fatal(err)
 			}
 		}

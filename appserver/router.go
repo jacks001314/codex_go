@@ -409,7 +409,7 @@ func appendThreadRolloutRecord(recorder *rollout.Recorder, record *session.Recor
 			if err := rollout.AppendSessionItems(recorder, group.Items, now); err != nil {
 				return err
 			}
-			if err := recorder.AppendTurnComplete(group.TurnID, group.CompletedAt, runtimeForkDurationMS(group.StartedAt, group.CompletedAt)); err != nil {
+			if err := recorder.AppendTurnCompleteWithRoot("", group.TurnID, group.CompletedAt, runtimeForkDurationMS(group.StartedAt, group.CompletedAt)); err != nil {
 				return err
 			}
 			continue
@@ -417,7 +417,8 @@ func appendThreadRolloutRecord(recorder *rollout.Recorder, record *session.Recor
 		startedAt := timeFromUnixSnapshot(snapshot.StartedAt, group.StartedAt)
 		completedAt := timeFromUnixSnapshot(snapshot.CompletedAt, group.CompletedAt)
 		durationMS := int64FromSnapshot(snapshot.DurationMS, runtimeForkDurationMS(startedAt, completedAt))
-		if err := recorder.AppendTurnStarted(group.TurnID, startedAt); err != nil {
+		rootTurnID := strings.TrimSpace(snapshot.RootTurnID)
+		if err := recorder.AppendTurnStartedWithRoot(rootTurnID, group.TurnID, startedAt); err != nil {
 			return err
 		}
 		if err := rollout.AppendSessionItems(recorder, group.Items, now); err != nil {
@@ -428,15 +429,15 @@ func appendThreadRolloutRecord(recorder *rollout.Recorder, record *session.Recor
 			if err := recorder.AppendTurnError(snapshot.ErrorMessage, completedAt); err != nil {
 				return err
 			}
-			if err := recorder.AppendTurnComplete(group.TurnID, completedAt, durationMS); err != nil {
+			if err := recorder.AppendTurnCompleteWithRoot(rootTurnID, group.TurnID, completedAt, durationMS); err != nil {
 				return err
 			}
 		case TurnStatusInterrupted, TurnStatusInProgress:
-			if err := recorder.AppendTurnAborted(group.TurnID, "interrupted", completedAt, durationMS); err != nil {
+			if err := recorder.AppendTurnAbortedWithRoot(rootTurnID, group.TurnID, "interrupted", completedAt, durationMS); err != nil {
 				return err
 			}
 		default:
-			if err := recorder.AppendTurnComplete(group.TurnID, completedAt, durationMS); err != nil {
+			if err := recorder.AppendTurnCompleteWithRoot(rootTurnID, group.TurnID, completedAt, durationMS); err != nil {
 				return err
 			}
 		}
@@ -4355,7 +4356,8 @@ func deserializeStateThreadItem(stored state.ThreadHistoryItem) (ThreadItem, err
 func stateThreadTurnToAPI(stored state.ThreadHistoryTurn, itemsView TurnItemsView) (Turn, error) {
 	turn := Turn{
 		ID: stored.TurnID, Items: []ThreadItem{}, ItemsView: itemsView, Status: TurnStatus(stored.Status),
-		StartedAt: stored.StartedAt, CompletedAt: stored.CompletedAt, DurationMS: stored.DurationMS,
+		RootTurnID: trimmedStringPtr(stored.RootTurnID),
+		StartedAt:  stored.StartedAt, CompletedAt: stored.CompletedAt, DurationMS: stored.DurationMS,
 	}
 	if len(stored.ErrorJSON) > 0 {
 		var decoded struct {

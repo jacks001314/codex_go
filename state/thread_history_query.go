@@ -72,7 +72,10 @@ type ThreadHistoryItem struct {
 }
 
 type ThreadHistoryTurn struct {
-	TurnID       string
+	TurnID string
+	// RootTurnID is the causal root recorded by Rust #51415; nil when the
+	// writer predates lineage persistence.
+	RootTurnID   *string
 	Items        []ThreadHistoryItem
 	ItemsView    ThreadHistoryItemsView
 	Status       string
@@ -312,7 +315,7 @@ func (r *StateRuntime) ListThreadHistoryTurns(ctx context.Context, params Thread
 			break
 		}
 		query := `
-SELECT turn_id, rollout_ordinal, status, error_json, started_at, completed_at,
+SELECT turn_id, root_turn_id, rollout_ordinal, status, error_json, started_at, completed_at,
        duration_ms, first_user_item_id, final_agent_item_id
 FROM thread_turns
 WHERE thread_id = ? AND rollout_ordinal >= ?`
@@ -340,10 +343,10 @@ WHERE thread_id = ? AND rollout_ordinal >= ?`
 		for result.Next() {
 			var turn ThreadHistoryTurn
 			var ordinal int64
-			var errorJSON sql.NullString
+			var rootTurnID, errorJSON sql.NullString
 			var startedAt, completedAt, durationMS sql.NullInt64
 			var firstUserID, finalAgentID sql.NullString
-			if scanErr := result.Scan(&turn.TurnID, &ordinal, &turn.Status, &errorJSON, &startedAt, &completedAt, &durationMS, &firstUserID, &finalAgentID); scanErr != nil {
+			if scanErr := result.Scan(&turn.TurnID, &rootTurnID, &ordinal, &turn.Status, &errorJSON, &startedAt, &completedAt, &durationMS, &firstUserID, &finalAgentID); scanErr != nil {
 				_ = result.Close()
 				return nil, fmt.Errorf("scan thread history turn: %w", scanErr)
 			}
@@ -358,6 +361,7 @@ WHERE thread_id = ? AND rollout_ordinal >= ?`
 				return nil, fmt.Errorf("unknown stored turn status: %s", turn.Status)
 			}
 			turn.ErrorJSON = nullStringJSON(errorJSON)
+			turn.RootTurnID = nullStringPtr(rootTurnID)
 			turn.StartedAt = nullInt64Ptr(startedAt)
 			turn.CompletedAt = nullInt64Ptr(completedAt)
 			turn.DurationMS = nullInt64Ptr(durationMS)

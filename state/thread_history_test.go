@@ -21,7 +21,7 @@ func TestOpenThreadHistoryDBCreatesRustCompatibleSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	for table, columns := range map[string][]string{
-		"thread_turns":                    {"thread_id", "turn_id", "rollout_ordinal", "rollout_byte_offset", "rollout_end_ordinal", "rollout_end_byte_offset", "status", "error_json", "started_at", "completed_at", "duration_ms", "first_user_item_id", "final_agent_item_id"},
+		"thread_turns":                    {"thread_id", "turn_id", "root_turn_id", "rollout_ordinal", "rollout_byte_offset", "rollout_end_ordinal", "rollout_end_byte_offset", "status", "error_json", "started_at", "completed_at", "duration_ms", "first_user_item_id", "final_agent_item_id"},
 		"thread_items":                    {"thread_id", "turn_id", "item_id", "rollout_ordinal", "updated_at_ordinal", "created_at_ms", "item_type", "item_json"},
 		"thread_history_projection_state": {"thread_id", "next_rollout_byte_offset", "next_rollout_ordinal"},
 	} {

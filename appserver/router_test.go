@@ -2937,13 +2937,13 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
 	t.Cleanup(func() { _ = recorder.Close() })
-	if err := recorder.AppendTurnStarted("turn-1", fixedTime()); err != nil {
+	if err := recorder.AppendTurnStartedWithRoot("root-paginated", "turn-1", fixedTime()); err != nil {
 		t.Fatalf("AppendTurnStarted() error = %v", err)
 	}
 	if err := recorder.AppendItem(rollout.Item{ID: "user-1", Type: "message", Role: "user", Text: "from paginated rollout", Metadata: map[string]any{"turnId": "turn-1"}}); err != nil {
 		t.Fatalf("AppendItem() error = %v", err)
 	}
-	if err := recorder.AppendTurnComplete("turn-1", fixedTime().Add(time.Second), 1_000); err != nil {
+	if err := recorder.AppendTurnCompleteWithRoot("root-paginated", "turn-1", fixedTime().Add(time.Second), 1_000); err != nil {
 		t.Fatalf("AppendTurnComplete() error = %v", err)
 	}
 	if err := recorder.Close(); err != nil {
@@ -2966,6 +2966,10 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	if readTurnsPayload.HistoryMode != ThreadHistoryPaginated || len(readTurnsPayload.Turns) != 1 || len(readTurnsPayload.Turns[0].Items) != 1 || readTurnsPayload.Turns[0].Items[0].Text != "from paginated rollout" {
 		t.Fatalf("read turns thread = %+v", readTurnsPayload)
 	}
+	// Rust #51415: both history modes expose the persisted root on read.
+	if got := readTurnsPayload.Turns[0].RootTurnID; got == nil || *got != "root-paginated" {
+		t.Fatalf("thread/read turn root = %#v", got)
+	}
 	itemsList := router.Handle(requestWithParams(t, IntID(21), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-paginated"}))
 	if itemsList.Error != nil || len(itemsList.Result.(*ThreadItemsListResponse).Data) != 1 {
 		t.Fatalf("items list = %+v", itemsList)
@@ -2973,6 +2977,9 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	turnsList := router.Handle(requestWithParams(t, IntID(3), MethodThreadTurnsList, ThreadTurnsListParams{ThreadID: "thread-paginated"}))
 	if turnsList.Error != nil {
 		t.Fatalf("turns list = %+v", turnsList)
+	}
+	if page := turnsList.Result.(*TurnsPage); len(page.Data) != 1 || page.Data[0].RootTurnID == nil || *page.Data[0].RootTurnID != "root-paginated" {
+		t.Fatalf("thread/turns/list page = %+v", page)
 	}
 	resume := router.Handle(requestWithParams(t, IntID(4), MethodThreadResume, ThreadResumeParams{ThreadID: "thread-paginated"}))
 	if resume.Error != nil || resume.Result.(*ThreadResumeResponse).Thread.HistoryMode != ThreadHistoryPaginated {
@@ -2992,6 +2999,9 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	runtimeTurnsList := runtimeRouter.Handle(requestWithParams(t, IntID(7), MethodThreadTurnsList, ThreadTurnsListParams{ThreadID: "thread-paginated"}))
 	if runtimeTurnsList.Error != nil {
 		t.Fatalf("runtime turns list = %+v", runtimeTurnsList)
+	}
+	if page := runtimeTurnsList.Result.(*TurnsPage); len(page.Data) != 1 || page.Data[0].RootTurnID == nil || *page.Data[0].RootTurnID != "root-paginated" {
+		t.Fatalf("runtime thread/turns/list page = %+v", page)
 	}
 	runtimeFork := runtimeRouter.Handle(requestWithParams(t, IntID(8), MethodThreadFork, ThreadForkParams{
 		ThreadID:  "thread-paginated",
