@@ -3394,6 +3394,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New regressions in `sandbox/mxc/prepare_windows_test.go` cover case-insensitive `TEMP`/`TMP`, two distinct temporary roots, missing/empty/relative/home/drive-relative values, `/tmp` omission, minimal opt-in, and explicit deny preservation.
 - Verified with `go build ./...`, `go test ./sandbox/mxc -count=1`, `go test ./sandbox/integrity -count=1`, `go vet ./sandbox/mxc`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2199 complete`, `453 not_applicable`,
-`336 audit_pending`, `157 regression_pending`, `4 partial`,
+### Bounded MXC launcher environment transport (Round 1037)
+
+- Rust #44626 bounds MXC launch requests by reusing the shared Windows sandbox environment transport: entries use the `CODEX_SANDBOX_LAUNCH_` prefix, are split into 16 KiB chunks, and are capped at 16 MiB. Windows receives host-owned `SystemDrive`, `LOCALAPPDATA`, and (for `default_child_env`) `SystemRoot`; every launcher-only entry is scrubbed before spawn, including after malformed payload rejection. Oversized requests are rejected without replacing existing transport entries.
+- Go already had the same contract in `sandbox/windowssandbox/environment_transport.go` and `sandbox/mxc/command.go`, so no production change was needed. The authenticated Rust baseline no longer uses the older standalone `CODEX_MXC_LAUNCH_*` transport described by the original commit subject.
+- New regressions in `sandbox/mxc/transport_like_rust_test.go` cover a large Unicode launcher roundtrip under Windows environment limits, host-owned startup-value replacement, malformed payload rejection and scrub, oversized payload non-mutation, and clearing the default child environment.
+- Verified with `go build ./...`, `go test ./sandbox/mxc -count=1`, `go vet ./sandbox/mxc`, and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2200 complete`, `453 not_applicable`,
+`336 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.

@@ -5392,9 +5392,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Certified against Rust 4150a2c2 (#44626, Round 1037): the authenticated baseline reuses codex_windows_sandbox::environment_transport with the CODEX_SANDBOX_LAUNCH_ prefix, 16 KiB chunks, a 16 MiB payload cap, Windows startup-value injection, and launcher-entry scrubbing. Go already implements this in sandbox/windowssandbox/environment_transport.go and sandbox/mxc/command.go. sandbox/mxc/transport_like_rust_test.go now covers a large Unicode launcher roundtrip under Windows environment limits with host-owned SystemDrive/LOCALAPPDATA replacement, malformed payload rejection with scrub, oversized payload non-mutation, and default-child-environment clearing. Verified with go build ./..., go test ./sandbox/mxc -count=1, go vet ./sandbox/mxc, and go test ./parity -run TestAlignment -count=1."
    ]
   },
   {
