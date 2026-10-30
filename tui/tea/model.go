@@ -251,6 +251,10 @@ type SessionResumeResponse struct {
 	// HistoryNotice is shown after a read-only snapshot recovered only turn
 	// summaries (Rust #45980). Empty for a complete snapshot.
 	HistoryNotice string
+	// HasOlderHistory reports that only the newest history page was loaded, so
+	// the transcript footer advertises earlier messages (Rust
+	// TranscriptHistoryState::Partial).
+	HasOlderHistory bool
 	// ProviderError carries the model provider admission failure that made this
 	// resume a read-only snapshot (Rust #58202), so the transcript stays readable
 	// and the composer offers continuing the chat in a fresh session.
@@ -292,6 +296,9 @@ type AgentThreadSwitchResponse struct {
 	// HistoryNotice is shown after a read-only snapshot recovered only turn
 	// summaries (Rust #45980). Empty for a complete snapshot.
 	HistoryNotice string
+	// HasOlderHistory reports that only the newest history page was loaded
+	// (Rust TranscriptHistoryState::Partial).
+	HasOlderHistory bool
 	// ProviderError carries the provider admission failure that made this
 	// switch a read-only snapshot (Rust #58202).
 	ProviderError *appserver.ModelProviderError
@@ -1793,6 +1800,26 @@ type Model struct {
 	// prompt instead of living in the editable text (#54742).
 	composerPrefix composerPrefix
 	activityFollow bool
+	// transcriptUnseenActivity mirrors Rust's `TranscriptView::unseen_activity`:
+	// output arrived while the reader was paused away from the tail and stays
+	// flagged until the transcript returns to the latest row.
+	transcriptUnseenActivity bool
+	// transcriptSeenRevision is the message revision that produced the frame the
+	// reader is paused on; a newer revision marks unseen activity (Rust
+	// TranscriptView::sync_history_tail only reacts to a changed final cell).
+	transcriptSeenRevision    uint64
+	transcriptSeenRevisionSet bool
+	// transcriptHistoryPartial mirrors Rust's `TranscriptHistoryState::Partial`:
+	// the loaded snapshot is the newest page and older messages were not loaded.
+	transcriptHistoryPartial bool
+	// followControlRow/Column/Width locate the painted return-to-latest control
+	// in the composer gap so a click can jump back to the tail (Rust
+	// transcript_view::follow_control). followControlRow is -1 when hidden.
+	followControlRow     int
+	followControlColumn  int
+	followControlWidth   int
+	followControlHover   bool
+	followControlPressed bool
 	// windowsKeySequence buffers the seven-key Shift+Enter sequence emitted by
 	// Windows Terminal before deciding whether to replay it or insert a newline.
 	windowsKeySequence           []bubbletea.KeyMsg
@@ -2959,6 +2986,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		remoteCWDOverride:            strings.TrimSpace(options.RemoteCWDOverride),
 		transcript:                   transcript,
 		activityFollow:               true,
+		followControlRow:             -1,
 		mouseScroll:                  codextui.NewMouseScrollAccumulator(options.MouseScrollSpeed),
 		mouseScrollSpeed:             codextui.NormalizeMouseScrollSpeed(options.MouseScrollSpeed),
 		retryMessageIndex:            -1,
@@ -4365,7 +4393,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		switch msg.Type {
 		case bubbletea.KeyEsc:
 			if m.shouldHandleBacktrackEsc() {
-				return m, m.handleBacktrackEscKey()
+				cmd := m.handleBacktrackEscKey()
+				// Rust's owned-transcript Esc handler returns a paused viewport
+				// to latest in the same press that primes backtrack.
+				if m.canReturnToLatest() && !m.backtrack.OverlayPreviewActive {
+					m.jumpToTranscriptLatest()
+				}
+				return m, cmd
 			}
 			if m.shouldRejectSideBacktrackEsc() {
 				m.rejectSideBacktrackEsc()
@@ -4443,6 +4477,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, nil
 		}
 		if m.applyVimModeKey(msg, keySpec) {
+			return m, nil
+		}
+		if m.handleReturnToLatestKey(msg) {
 			return m, nil
 		}
 		if m.maybeBeginHistorySearch(keySpec) {
@@ -4535,6 +4572,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if m.handlePinnedPromptClick(msg) {
 			return m, nil
 		}
+		if handled, cmd := m.handleFollowControlMouse(msg); handled {
+			return m, cmd
+		}
 		if handled, cmd := m.startPrimarySelectionPaste(msg); handled {
 			return m, cmd
 		}
@@ -4619,6 +4659,9 @@ func (m *Model) View() string {
 	m.transcriptContentTopRow = -1
 	m.composerTopRow = -1
 	m.composerTextTopRow = -1
+	m.followControlRow = -1
+	m.followControlColumn = 0
+	m.followControlWidth = 0
 	m.flushMCPLoginResultsForCurrentThread()
 	// #48118: a completed right-click clipboard read is delivered only here, on
 	// the synchronized render, matching Rust's "only a draw may deliver a read".
@@ -4750,7 +4793,7 @@ func (m *Model) View() string {
 		// The overlay already ends with its own blank row, so the composer's
 		// shaded padding row is the single gap Rust paints above the prompt.
 		if m.popupRowCount() == 0 && overlay == "" {
-			sections = append(sections, "")
+			sections = append(sections, m.renderFollowControlRow())
 		}
 		composer := m.renderComposerWindow()
 		composerStripRows := 0
@@ -4772,6 +4815,9 @@ func (m *Model) View() string {
 		}
 		m.composerRows = m.composerSectionRows()
 		m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
+		if m.followControlWidth > 0 {
+			m.followControlRow = m.composerTopRow - 1
+		}
 		m.composerTextTopRow = m.composerTopRow + 1 + composerStripRows
 		m.composerTextLeft = 0
 		composerIndex = len(sections)
@@ -4861,6 +4907,10 @@ func (m *Model) footerHelpLine() (string, bool) {
 			// Rust #47096: the quota notice owns the composer gap row and
 			// prefers half its width over the passive key hints.
 			footerLine = usageNotice
+		} else if followLine := m.transcriptFollowFooterLine(); followLine != "" {
+			// Rust's transcript footer replaces the passive key hints while
+			// output is unseen or the reader can return to the latest row.
+			footerLine = followLine
 		} else {
 			agentsHint := ""
 			if m.agentsNavigationAvailable() {
@@ -4875,6 +4925,8 @@ func (m *Model) footerHelpLine() (string, bool) {
 			default:
 				footerLine = hint
 			}
+		}
+		if usageNotice == "" {
 			// Rust #48205/#48206: the passive hint row right-aligns the retained
 			// warning count (with its open-warnings shortcut) when it fits.
 			m.warningDisplay.SyncWarnings(m.retainedWarningCells())
@@ -10819,6 +10871,9 @@ func (m *Model) refreshTranscript() {
 	if m == nil {
 		return
 	}
+	if m.activityFollow {
+		m.transcriptUnseenActivity = false
+	}
 	defer m.publishTranscriptImages()
 	m.transcript.Height = m.transcriptHeightForLayout()
 	if m.mainFind.active() {
@@ -10892,6 +10947,15 @@ func (m *Model) refreshTranscript() {
 		return
 	}
 	wasAtBottom := m.activityFollow || m.transcript.AtBottom()
+	revision := uint64(0)
+	if m.State != nil {
+		revision = m.State.MessagesRevision
+	}
+	if !wasAtBottom && m.transcriptSeenRevisionSet && revision != m.transcriptSeenRevision {
+		m.transcriptUnseenActivity = true
+	}
+	m.transcriptSeenRevision = revision
+	m.transcriptSeenRevisionSet = true
 	yOffset := m.transcript.YOffset
 	var anchor transcriptScrollAnchor
 	if !wasAtBottom {
@@ -11606,6 +11670,9 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 		m.transcript.GotoBottom()
 	}
 	m.activityFollow = m.transcript.AtBottom()
+	if m.activityFollow {
+		m.transcriptUnseenActivity = false
+	}
 	return true
 }
 
@@ -11641,6 +11708,9 @@ func (m *Model) applyTranscriptPagerPageKey(msg bubbletea.KeyMsg) {
 			m.transcript.ScrollDown(action.delta)
 		}
 		m.activityFollow = m.transcript.AtBottom()
+		if m.activityFollow {
+			m.transcriptUnseenActivity = false
+		}
 		return
 	}
 }

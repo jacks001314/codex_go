@@ -516,6 +516,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	if response.ThreadSettings != nil {
 		m.applyThreadSettingsValues(*response.ThreadSettings)
 	}
+	m.transcriptHistoryPartial = response.HasOlderHistory
 	m.setReadOnlyThread(response.ReadOnly)
 	if response.ProviderError != nil {
 		// Rust #58202: the chat stays readable but read-only, and the composer

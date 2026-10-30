@@ -80,6 +80,9 @@ func (m *Model) resetThreadScopedState() {
 	m.mainFind = mainTranscriptFind{}
 	m.activityFocus = transcriptActivityFocus{}
 	m.activityFollow = true
+	m.transcriptUnseenActivity = false
+	m.transcriptHistoryPartial = false
+	m.transcriptSeenRevisionSet = false
 	// The transcript overlay is a snapshot of the previous thread; leaving it
 	// open would keep stale content on screen (Rust clears the overlay too).
 	if m.overlay != nil || m.overlayAltScreen {

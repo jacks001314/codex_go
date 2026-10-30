@@ -48,6 +48,9 @@ func (m *Model) scrollTranscriptRows(rows int) {
 		m.transcript.ScrollDown(rows)
 	}
 	m.activityFollow = m.transcript.AtBottom()
+	if m.activityFollow {
+		m.transcriptUnseenActivity = false
+	}
 }
 
 // setMouseScrollSpeed applies a resolved `tui.mouse_scroll_speed` to the live
