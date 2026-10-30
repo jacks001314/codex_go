@@ -29,6 +29,7 @@ type testHost struct {
 type notificationRecord struct {
 	recipient string
 	metadata  PostMetadata
+	preview   PostPreview
 }
 
 func newTestHost(t *testing.T, members map[string]agent.AgentPath) *testHost {
@@ -79,8 +80,40 @@ func (h *testHost) Notify(_ context.Context, recipient string, post PostPreview)
 	if !h.active {
 		return NotificationSkippedInactive, nil
 	}
-	h.notifications = append(h.notifications, notificationRecord{recipient: recipient, metadata: post.PostMetadata})
+	h.notifications = append(h.notifications, notificationRecord{recipient: recipient, metadata: post.PostMetadata, preview: post})
 	return NotificationAccepted, nil
+}
+
+// Rust parity: local.rs sends notified agents a 150-character preview, and
+// agent_message_board_notification.rs attributes it to the post's author,
+// channel, message and thread (Rust #47075).
+func TestInMemoryNotificationsCarryAttributedBoundedPreviewLikeRust(t *testing.T) {
+	host, root, _, childPath := testTree(t)
+	boards := &InMemoryMessageBoards{}
+	board := boards.Open(root, host)
+	defer board.Close()
+	text := strings.Repeat("a", 200)
+	metadata, err := board.Post(context.Background(), root, PostRequest{
+		RequestID:      "attributed-preview",
+		Destination:    PostDestination{Kind: "new_channel", Name: "work"},
+		Text:           text,
+		AgentsToNotify: []agent.AgentPath{childPath},
+	})
+	if err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	sent := host.sent()
+	if len(sent) != 1 {
+		t.Fatalf("notifications = %#v, want one delivery", sent)
+	}
+	preview := sent[0].preview
+	if preview.Author != agent.AgentPath("/root") || preview.ChannelName != "work" ||
+		preview.MessageID != metadata.MessageID || preview.ThreadID != metadata.ThreadID {
+		t.Fatalf("preview attribution = %#v, want post metadata %#v", preview.PostMetadata, metadata)
+	}
+	if !preview.Truncated || len([]rune(preview.TextPreview)) != 150 || preview.NChars != 200 {
+		t.Fatalf("preview bounds = %#v", preview)
+	}
 }
 
 func (h *testHost) sent() []notificationRecord {

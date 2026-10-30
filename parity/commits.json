@@ -17880,9 +17880,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Board notifications now carry a bounded `PostPreview` instead of bare metadata: `InMemoryBoard.Post` renders a 150-character preview and passes it to `Host.Notify`, and `agentboard.NewAgentMessageBoardNotification` renders the assistant-role, markerless `Message Type: CHANNEL_POST` body with sender, channel, message/thread IDs, payload and the `[Use read_post for the rest.]` suffix when truncated.",
+    "`appserver.messageBoardHost.Notify` wraps the rendered notice in the inter-agent MESSAGE envelope with the post author and recipient path and delivers it without triggering a turn, matching Rust's `InterAgentCommunication` with `trigger_turn=false`.",
+    "Tests: `TestAgentMessageBoardNotificationRendersLikeRust` (role, markers, body, truncation) plus the new `TestInMemoryNotificationsCarryAttributedBoundedPreviewLikeRust` (author/channel/message/thread attribution and the 150-character bound)."
    ]
   },
   {

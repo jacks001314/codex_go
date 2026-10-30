@@ -3872,3 +3872,11 @@ Status after this batch: `2309 complete`, `462 not_applicable`, `322 audit_pendi
 - Added `TestEnvironmentInfoCacheSharesCachedValueLikeRust` to pin pointer identity across cached lookups, the Go analogue of Rust's `Arc::ptr_eq`.
 
 Status after this batch: `2310 complete`, `462 not_applicable`, `322 audit_pending`, `50 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Attributed board notification certification (Round 1100)
+
+- #47075 message-board notifications carry an attributed bounded preview: the in-memory board renders 150 characters, and the notice renders `Message Type: CHANNEL_POST` with sender, channel, message/thread IDs, payload and a `read_post` suffix when truncated.
+- The app-server host wraps it in the inter-agent MESSAGE envelope without triggering a turn, matching Rust's `InterAgentCommunication` with `trigger_turn=false`.
+- Added `TestInMemoryNotificationsCarryAttributedBoundedPreviewLikeRust`; the existing notification-rendering test pins role, markers, body and truncation.
+
+Status after this batch: `2311 complete`, `462 not_applicable`, `322 audit_pending`, `49 regression_pending`, `5 partial`, `6 blocked_precondition`.
