@@ -11838,9 +11838,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust hardened the JS login success pages that build an org-setup redirect from platform_url; Go serves a static auth/oauth.go success page and never reads platform_url, so no redirect can leak the id token"
    ]
   },
   {
@@ -17307,9 +17307,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "app/tui_telemetry.go records codex.tui.fullscreen_transcript with an enabled tag from the resolved tui.fullscreen_transcript preference, gated on analytics not being explicitly disabled, a configured metrics exporter, and an installed global metrics client; tui_telemetry_like_rust_test.go covers the default, configured-off, analytics-disabled, and exporter-none cases"
    ]
   },
   {

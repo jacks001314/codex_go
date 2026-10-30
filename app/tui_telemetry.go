@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"codex_go/appserverdaemon"
@@ -9,6 +10,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/doctor"
+	"codex_go/metrics"
 	"codex_go/otelinit"
 	"codex_go/shell"
 	codextui "codex_go/tui"
@@ -106,6 +108,19 @@ func startInteractiveTUITelemetry(root *cli.RootOptions, selectionReason string,
 	tags["multiplexer"] = codextui.TerminalMultiplexerTag(terminalInfo)
 	// Pass a copy: the context below drops the size buckets from the same map.
 	sink.Counter(codextui.TUIStartMetric, 1, cloneTUITelemetryTags(tags))
+	// Rust #46879: count launches that reach final config resolution by their
+	// configured fullscreen transcript preference, regardless of screen policy.
+	// The launch counter only reaches the global client, so it stays quiet when
+	// analytics are explicitly disabled or no metrics exporter is configured.
+	if (telemetry.analyticsEnabled == nil || *telemetry.analyticsEnabled) &&
+		loaded.Otel().MetricsExporter.Kind != config.OtelExporterKindNone &&
+		metrics.Global() != nil {
+		fullscreen := interactiveFullscreenTranscript(loaded.Values)
+		enabled := fullscreen == nil || *fullscreen
+		metrics.Counter(codextui.TUIFullscreenTranscriptMetric, 1, map[string]string{
+			"enabled": strconv.FormatBool(enabled),
+		})
+	}
 	// Rust #57268: an embedded TUI records why the shared app server was not
 	// used, with a bounded tag value.
 	if appServerMode == "in_process" {

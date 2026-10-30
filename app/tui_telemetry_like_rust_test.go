@@ -3,12 +3,15 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/metrics"
 	codextui "codex_go/tui"
 )
 
@@ -216,6 +219,87 @@ func TestInteractiveDaemonSelectionReasonLikeRust(t *testing.T) {
 			}
 			if got := interactiveDaemonSelectionReason(root, tc.endpoint, tc.explicit); got != tc.want {
 				t.Fatalf("selection reason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+type captureTUITelemetryRecorder struct {
+	mu       sync.Mutex
+	counters []recordingTUISinkCall
+}
+
+func (r *captureTUITelemetryRecorder) Counter(name string, inc int, tags map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.counters = append(r.counters, recordingTUISinkCall{name: name, inc: inc, tags: cloneTUITelemetryTags(tags)})
+}
+
+func (r *captureTUITelemetryRecorder) Histogram(string, int, map[string]string) {}
+
+func (r *captureTUITelemetryRecorder) RecordDuration(string, time.Duration, map[string]string) {}
+
+func (r *captureTUITelemetryRecorder) calls(name string) []recordingTUISinkCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	matches := make([]recordingTUISinkCall, 0, len(r.counters))
+	for _, call := range r.counters {
+		if call.name == name {
+			matches = append(matches, call)
+		}
+	}
+	return matches
+}
+
+func writeTUITelemetryConfigContent(t *testing.T, content string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
+// TestTUIStartCountsFullscreenTranscriptLikeRust mirrors Rust #46879: the
+// launch counter records the configured fullscreen transcript preference for
+// every resolved launch, but stays silent when analytics are disabled or no
+// metrics exporter is configured.
+func TestTUIStartCountsFullscreenTranscriptLikeRust(t *testing.T) {
+	const otlpMetrics = "[otel.metrics_exporter.otlp-http]\nendpoint = \"http://127.0.0.1:4318/v1/metrics\"\nprotocol = \"json\"\n"
+	cases := []struct {
+		name     string
+		content  string
+		wantTags map[string]string
+	}{
+		{name: "default statsig exporter", content: "", wantTags: map[string]string{"enabled": "true"}},
+		{name: "default enabled", content: otlpMetrics, wantTags: map[string]string{"enabled": "true"}},
+		{name: "configured off", content: "[tui]\nfullscreen_transcript = false\n\n" + otlpMetrics, wantTags: map[string]string{"enabled": "false"}},
+		{name: "analytics disabled", content: "[analytics]\nenabled = false\n\n" + otlpMetrics, wantTags: nil},
+		{name: "metrics exporter none", content: "[otel]\nmetrics_exporter = \"none\"\n", wantTags: nil},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			writeTUITelemetryConfigContent(t, testCase.content)
+			previousSink := openTUIMetricSink
+			openTUIMetricSink = func(*config.Config) (tuiMetricSink, func(), bool) {
+				return &recordingTUISink{}, func() {}, true
+			}
+			t.Cleanup(func() { openTUIMetricSink = previousSink })
+			recorder := &captureTUITelemetryRecorder{}
+			previousRecorder := metrics.InstallGlobal(recorder)
+			t.Cleanup(func() { metrics.InstallGlobal(previousRecorder) })
+
+			_ = startInteractiveTUITelemetry(&cli.RootOptions{}, "auto_start_disabled", "in_process", nil)
+
+			calls := recorder.calls(codextui.TUIFullscreenTranscriptMetric)
+			if testCase.wantTags == nil {
+				if len(calls) != 0 {
+					t.Fatalf("fullscreen observations = %#v, want none", calls)
+				}
+				return
+			}
+			if len(calls) != 1 || calls[0].inc != 1 || calls[0].tags["enabled"] != testCase.wantTags["enabled"] {
+				t.Fatalf("fullscreen observations = %#v", calls)
 			}
 		})
 	}

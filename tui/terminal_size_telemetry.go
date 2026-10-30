@@ -17,6 +17,10 @@ import (
 // TUIStartMetric mirrors Rust's `codex.tui.start` counter.
 const TUIStartMetric = "codex.tui.start"
 
+// TUIFullscreenTranscriptMetric mirrors Rust #46879's launch counter for the
+// configured fullscreen transcript preference.
+const TUIFullscreenTranscriptMetric = "codex.tui.fullscreen_transcript"
+
 // TUIEmbeddedStartMetric mirrors Rust's `codex.tui.embedded_start` counter
 // (#57268), recorded with a bounded reason tag when the TUI falls back to the
 // embedded app server.
