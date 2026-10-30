@@ -3945,3 +3945,11 @@ Status after this batch: `2321 complete`, `462 not_applicable`, `322 audit_pendi
 - #47713 and #50058 are Rust-only dependency/crate refactors (Provider/RetryConfig relocation, cargo feature flags, `windows-sys` 0.61.2 and handle owners); Go has no crate graph or windows-sys bindings, so both are not applicable.
 
 Status after this batch: `2324 complete`, `464 not_applicable`, `322 audit_pending`, `34 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### TUI session and launch-default certification (Round 1109)
+
+- #43261 background tasks started from the command center read `config/read` for the destination CWD and apply the server's effective plus managed new-thread defaults before `thread/start`, keeping the older-server fallback. Added `TestDashboardNewSessionUsesServerDefaultsLikeRust` (managed defaults and config/read failure).
+- #43315 label resolution collects every match and rejects duplicate labels with a UUID-disambiguation error, including the rollout scan and the active+archived remote delete lookup.
+- #44693 managed `models.newThread` defaults apply only where no higher-precedence selection exists: generic `-c` overrides and enabled user-profile layers win, project layers shadow the profile.
+
+Status after this batch: `2327 complete`, `464 not_applicable`, `322 audit_pending`, `31 regression_pending`, `5 partial`, `6 blocked_precondition`.

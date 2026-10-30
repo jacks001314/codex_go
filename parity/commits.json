@@ -8427,9 +8427,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "`remoteAgentsDashboardSource.StartSession` reads `config/read` (and `configRequirements/read`) for the destination CWD before `thread/start`, then applies the server's effective launch defaults and the managed new-thread defaults, leaving explicit launch settings intact (app/agents_dashboard.go).",
+   "Servers without `config/read` keep the previous fallback: the start proceeds with just the destination CWD.",
+   "Tests: TestDashboardNewSessionUsesServerDefaultsLikeRust covers managed destination defaults and the older-server fallback, asserting the config/read CWD and the thread/start model/effort."
    ]
   },
   {
@@ -8547,9 +8549,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "Label resolution collects every match and rejects duplicates with a UUID-disambiguation error instead of picking the most recent entry, across local SQLite names plus the rollout scan and across the active/archived collections for remote delete (app/session.go).",
+   "Tests: TestSessionResumeAmbiguousNameRejectedLikeRust, TestSessionResumeChecksLabelsBeyondPickerPageLikeRust, TestSessionArchiveAmbiguousNameRejectedLikeRust, TestSessionIDByUniqueActiveNameLikeRust and TestSessionIDByUniqueActiveNameRejectsDuplicateLabelsLikeRust pass."
    ]
   },
   {
@@ -11875,9 +11878,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+  "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+   "The TUI layers managed `models.newThread` defaults only where no higher-precedence selection exists: generic -c overrides and enabled user-profile layers keep their model/effort/service tier, while project layers shadow the profile so managed defaults apply (app/remote_tui_managed_defaults.go).",
+   "Tests: TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust covers the managed, generic override, profiled, project-shadowed, explicit service-tier and server-owned cases."
    ]
   },
   {
