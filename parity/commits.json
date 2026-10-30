@@ -8942,9 +8942,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only crate attribute setting recursion_limit to 256; Go has no crate recursion budget or recursion_limit setting, so there is nothing to port"
    ]
   },
   {
