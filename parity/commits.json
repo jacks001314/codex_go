@@ -23387,9 +23387,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go history discovery already reads model_provider from the effective configuration map: app/interactive.go interactiveHistoryModelProvider uses config.LoadEffectiveWithOptions values and app/remote_tui.go remoteTUIHistoryModelProvider reads ConfigReadResponse.Config, each retaining the openai fallback, matching the nested effective-config lookup fixed upstream"
    ]
   },
   {
