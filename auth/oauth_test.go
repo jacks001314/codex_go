@@ -788,13 +788,17 @@ func TestStartBrowserLoginRedirectsToSuccessPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartBrowserLogin returned error: %v", err)
 	}
+	// Rust #47927: the authorize URL and success page use 127.0.0.1.
+	if !strings.Contains(server.AuthURL, "redirect_uri=http%3A%2F%2F127.0.0.1%3A"+portStringOAuthTest(server.Port)+"%2Fauth%2Fcallback") {
+		t.Fatalf("AuthURL = %q, want a 127.0.0.1 redirect_uri", server.AuthURL)
+	}
 	callback := "http://127.0.0.1:" + portStringOAuthTest(server.Port) + "/auth/callback?code=auth-code&state=state-browser"
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Get(callback)
 	if err != nil {
 		t.Fatalf("callback GET returned error: %v", err)
 	}
-	if resp.StatusCode != http.StatusFound || !strings.Contains(resp.Header.Get("Location"), "/success?") {
+	if resp.StatusCode != http.StatusFound || !strings.HasPrefix(resp.Header.Get("Location"), "http://127.0.0.1:") || !strings.Contains(resp.Header.Get("Location"), "/success?") {
 		t.Fatalf("callback status=%d location=%q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	_ = resp.Body.Close()

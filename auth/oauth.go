@@ -300,7 +300,9 @@ func StartBrowserLogin(ctx context.Context, opts *OAuthOptions) (*BrowserLoginSe
 		return nil, err
 	}
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
-	redirectURI := fmt.Sprintf("http://localhost:%d/auth/callback", port)
+	// Rust #47927: loopback redirects use 127.0.0.1 so the OAuth callback and
+	// success page do not depend on the localhost hostname resolving.
+	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/auth/callback", port)
 	authURL, err := BuildAuthorizeURL(opts, redirectURI, pkce, state)
 	if err != nil {
 		_ = listener.Close()
@@ -327,7 +329,7 @@ func StartBrowserLogin(ctx context.Context, opts *OAuthOptions) (*BrowserLoginSe
 			http.Redirect(w, request, outcome.successURL, http.StatusFound)
 			return
 		}
-		http.Redirect(w, request, fmt.Sprintf("http://localhost:%d/success", port), http.StatusFound)
+		http.Redirect(w, request, fmt.Sprintf("http://127.0.0.1:%d/success", port), http.StatusFound)
 	})
 	mux.HandleFunc("/success", func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1071,7 +1073,7 @@ func composeOAuthSuccessURL(request *http.Request, tokens *ExchangedTokens) stri
 	if strings.TrimSpace(claims.PlanType) != "" {
 		query.Set("plan_type", strings.TrimSpace(claims.PlanType))
 	}
-	return "http://localhost:" + port + "/success?" + query.Encode()
+	return "http://127.0.0.1:" + port + "/success?" + query.Encode()
 }
 
 func writeOAuthErrorPage(w http.ResponseWriter, err error) {

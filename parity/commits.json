@@ -21045,9 +21045,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1082: the local browser-login server now advertises http://127.0.0.1:<port>/auth/callback as its OAuth redirect URI, redirects to http://127.0.0.1:<port>/success, and composes the success page on 127.0.0.1, matching Rust #47927. The CLI start message still says localhost, as upstream does. TestStartBrowserLoginRedirectsToSuccessPage asserts the encoded redirect_uri and the success Location host; go test ./auth passes."
    ]
   },
   {
