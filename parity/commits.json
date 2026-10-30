@@ -6679,9 +6679,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Landed in 98a5c0e5: ProvisioningState recovers a failed environment from valid Ready, preserves the first failure, and rejects a late failure after Ready; StatusContext reports failure without dialing; tests cover recovery, capability roots, and the wrapped unavailable status"
    ]
   },
   {
