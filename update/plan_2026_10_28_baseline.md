@@ -3746,6 +3746,16 @@ Status after this batch: `2248 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2252 complete`, `462 not_applicable`, `322 audit_pending`, `108 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1088)
+
+- #46959 message-board contracts: backend-independent board/host interfaces with cursor pagination, clock and active-turn-only notifications, implemented by local and remote backends.
+- #46966 local board storage: session-scoped SQLite persistence, serialized immediate transactions, caller+request-ID idempotency and post-commit notifications.
+- #46985 message-board tools: nine identity-bound tools with the 8,000-byte response cap, budget-aware reads and mutation rejection, and turn/invocation-derived request IDs.
+- #47017 app-server wiring: `agent_message_board` + `multi_agent_v2` + non-ephemeral gate, shared board across the agent tree, runtime clock, ID-only notifications to running agents and fail-soft initialization.
+- #47028 namespace alignment: board tools use `multi_agent_v2.tool_namespace` and the shared description, including unnamespaced specs.
+
+Status after this batch: `2257 complete`, `462 not_applicable`, `322 audit_pending`, `103 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

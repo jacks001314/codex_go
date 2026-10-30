@@ -17494,9 +17494,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 25/25 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "agentboard defines the backend-independent message-board contract (#46959): AgentMessageBoard covers channel creation, posting, thread listing, post search, bounded reads and subscriptions with cursor pagination (Page/ChannelPage/ThreadPage with derived counts and continuation), while MessageBoardHost supplies agent resolution, the caller's clock and metadata notifications restricted to active turns; local and remote backends implement the same records and connection shapes.",
+    "Regression coverage: agentboard/api_serde_test.go, agentboard/inmemory_test.go, agentboard/connection_test.go TestLocalBoardConnectionsFixRuntimeAccessLikeRust and TestLegacyLocalBoardKeepsUnrestrictedShapeLikeRust. Verified with `go test ./agentboard -count=1`."
    ]
   },
   {
@@ -17518,9 +17519,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "agentboard/local.go implements LocalAgentMessageBoard (#46966): channels, posts and subscriptions persist in SQLite scoped by session identity, mutations serialize through immediate transactions across independent handles, retries deduplicate by caller plus request ID for the same request, changed requests reusing an ID are rejected, existing post metadata is returned without repeating notifications, and notification failures leave the committed post readable.",
+    "Regression coverage: agentboard/local_test.go TestLocalBoardPersistsPagesAndReadsLikeRust (reopen plus request-id idempotency), TestLocalBoardSubscriptionsOptOutsAndDeletionLikeRust, TestLocalBoardStoresRustCompatibleJSON, and TestLocalBoardSubscribedChannelsPagesLikeRust. Verified with `go test ./agentboard -count=1`."
    ]
   },
   {
@@ -17566,9 +17568,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 10/11 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "agentboard/tools.go exposes the nine message_board_tools (#46985): create/upsert channel, channel discovery, thread listing, post search/read, subscriptions and posting are bound to the host-supplied caller identity and resolve agent references relative to it. Responses stay valid JSON within the 8,000-byte cap and the call's output budget (reads/previews shrink to preserve backend pagination, and mutations are rejected when the budget cannot acknowledge them), with request IDs derived from turn and invocation metadata for direct and Code Mode calls.",
+    "Regression coverage: agentboard/tools_test.go (specs, invalid arguments, bounded results and mutation rejection, request IDs, external-context declaration) and agentboard/append_test.go. Verified with `go test ./agentboard -count=1`."
    ]
   },
   {
@@ -17638,9 +17641,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/message_board.go wires the message board into the app server through the runtime lifecycle (#47017): installation is gated on the `agent_message_board` and `multi_agent_v2` features plus non-ephemeral sessions, tools are bound to each agent's identity, the SQLite board is shared across the agent tree and runtime resumes, posts use the runtime clock, notifications carry IDs only to running agents (inactive recipients are skipped rather than woken), and an initialization failure warns and leaves the board tools unavailable without creating storage.",
+    "Regression coverage: appserver/message_board_test.go (feature gate, tree membership, active-only notifications, remote config and credential handling), appserver/message_board_unavailable_test.go TestDisableDirectMessageAllowsUnavailableBoardLikeRust, and appserver/message_board_notification_delivery_test.go. Verified with `go test ./appserver -run MessageBoard -count=1`."
    ]
   },
   {
@@ -17662,9 +17666,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/message_board.go resolves the message-board namespace from `multi_agent_v2.tool_namespace` and reuses `agent.MultiAgentV2NamespaceDescription` instead of hardcoding `collaboration` (#47028); agentboard/tools.go also accepts an empty namespace and emits unnamespaced specs, and board notifications no longer carry a hardcoded prefix.",
+    "Regression coverage: agentboard/tools_test.go TestMessageBoardToolSpecsMatchRust and TestMessageBoardToolsRunBoardScenariosLikeRust plus the appserver message-board scenarios that exercise the runtime namespace. Verified with `go test ./agentboard -count=1` and `go test ./appserver -run MessageBoard -count=1`."
    ]
   },
   {
