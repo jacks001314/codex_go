@@ -3316,9 +3316,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 988 (实现+回归): #41046 在 Go 侧分三块对齐。(1) 会话请求：app/dynamic_tools_helpers.go startTurn 已用空的用户 input + ToolOutput{Name: create_thread|send_message_to_thread, Namespace: codex_tui} 开始委派 turn（app/dynamic_tools_test.go 已断言 ToolOutput 与 codex_delegation wrapper）。(2) 活动摘要：dynamicParseDelegatedToolOutput 仅接受 codex_tui/codex_app 两个可信命名空间与两个工具名，并在 turn summary 中注入 codexDelegation。(3) 回放/会话渲染：本轮修正 context.ParseDelegatedPrompt 的实体解码顺序（&lt;/&gt; 先于 &amp;，使 &amp;lt; 保持为 &lt;）并将命名空间白名单从 collaboration 改为 codex_tui/codex_app；新增 context.DelegatedToolOutputNotice 与 tui/history_cell.NewDelegatedPromptCell（对齐 Rust PrefixedWrappedHistoryCell: \"• \" 前缀 + 两空格续行），以及 chatwidget.ReplayDelegatedToolOutput / ReplayDelegatedToolOutputCell 与 ReplayItemRouteFunctionCallOutput，提供 Rust replay.rs / thread_transcript.rs 中 \"Sent by Codex from task <id>\\n<prompt>\" 的渲染行为，且委派输出不进入 composer 历史。测试：context/delegation_like_rust_test.go（信任命名空间与双重转义）、tui/chatwidget/delegated_replay_like_rust_test.go（解析、非委派/非可信命名空间拒绝、渲染行形状、路由）。验证：go test ./context -count=1、go test ./tui/... -count=1、go test ./session -run Delegated -count=1、go test ./state -run Delegated -count=1。"
    ]
   },
   {

@@ -29,10 +29,12 @@ func ParseDelegatedPrompt(prompt string) (string, string, bool) {
 		return "", "", false
 	}
 	delegated := strings.TrimSuffix(rest, outputSuffix)
+	// Rust decodes `&lt;`/`&gt;` before `&amp;`, so `&amp;lt;` stays escaped
+	// (`&lt;`) instead of being decoded twice.
 	unescape := func(value string) string {
-		value = strings.ReplaceAll(value, "&amp;", "&")
 		value = strings.ReplaceAll(value, "&lt;", "<")
-		return strings.ReplaceAll(value, "&gt;", ">")
+		value = strings.ReplaceAll(value, "&gt;", ">")
+		return strings.ReplaceAll(value, "&amp;", "&")
 	}
 	return unescape(source), unescape(delegated), true
 }
@@ -40,11 +42,18 @@ func ParseDelegatedPrompt(prompt string) (string, string, bool) {
 // ParseDelegatedToolOutput reports whether a tool output is a delegation from a
 // trusted Codex namespace (#41046), returning the source thread id and prompt.
 func ParseDelegatedToolOutput(name string, namespace string, output string) (string, string, bool) {
-	if namespace != "collaboration" && namespace != "codex_app" {
+	if namespace != "codex_tui" && namespace != "codex_app" {
 		return "", "", false
 	}
 	if name != "create_thread" && name != "send_message_to_thread" {
 		return "", "", false
 	}
 	return ParseDelegatedPrompt(output)
+}
+
+// DelegatedToolOutputNotice is the history text Rust renders for a replayed
+// delegated tool output (#41046): the source task attribution followed by the
+// delegated prompt on the next line.
+func DelegatedToolOutputNotice(sourceThreadID string, prompt string) string {
+	return "Sent by Codex from task " + sourceThreadID + "\n" + prompt
 }

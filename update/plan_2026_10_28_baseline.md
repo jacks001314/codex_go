@@ -3038,6 +3038,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - The plaintext scan keeps Go's colon-qualified skill spelling (`$Docs:review`), matching the submission Rust produces after the composer binds a qualified skill, while linked mentions follow the codec's stricter name characters.
 - Tests: `tui/mention_codec_like_rust_test.go` mirrors the upstream UTF-8 byte-offset and malformed-link tables, and `tui/chatwidget/skills_mention_like_rust_test.go` covers Unicode/whitespace-trimmed paths, both sigils, env-var and non-skill links, and the qualified spelling. Verified with `go test ./tui/... -count=1`.
 
-Status after reconciliation: `2147 complete`, `450 not_applicable`,
-`346 audit_pending`, `201 regression_pending`, `5 partial`,
+### Delegated tool authority in the TUI (Round 988)
+
+- Rust #41046 starts delegated `create_thread` / `send_message_to_thread` turns as namespaced tool output with an empty user input list, keeps delegation parsing namespace-scoped, and renders replayed delegation outputs with their source task attribution (#41046, complete).
+- `app/dynamic_tools_helpers.go` `startTurn` already sent `ToolOutput{Name, Namespace: codex_tui}` with no user input, and `dynamicParseDelegatedToolOutput` already restricted summaries to `codex_tui`/`codex_app`.
+- `context.ParseDelegatedPrompt` now decodes `&lt;`/`&gt;` before `&amp;` (so `&amp;lt;` stays escaped) and `ParseDelegatedToolOutput` trusts `codex_tui`/`codex_app` only; `context.DelegatedToolOutputNotice` and `tui/history_cell.NewDelegatedPromptCell` provide the Rust `PrefixedWrappedHistoryCell` shape, and `chatwidget.ReplayDelegatedToolOutput(Cell)` plus `ReplayItemRouteFunctionCallOutput` expose the replay/transcript behavior without touching composer history.
+- Tests: `context/delegation_like_rust_test.go`, `tui/chatwidget/delegated_replay_like_rust_test.go`. Verified with `go test ./context -count=1`, `go test ./tui/... -count=1`, and the delegated session/state tests.
+
+Status after reconciliation: `2148 complete`, `450 not_applicable`,
+`346 audit_pending`, `200 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
