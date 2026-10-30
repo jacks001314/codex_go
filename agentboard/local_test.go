@@ -466,6 +466,55 @@ func pointerTo[T any](value T) *T {
 	return &value
 }
 
+// TestLocalBoardNewChannelSubscribesAuthorLikeRust covers Rust #47259: posting
+// to a new channel subscribes its author to new roots there, while an explicit
+// channel opt-out survives later posts.
+func TestLocalBoardNewChannelSubscribesAuthorLikeRust(t *testing.T) {
+	host, root, child, childPath := testTree(t)
+	sqlite := openBoardSqliteConfig(t)
+	board := openLocalBoard(t, sqlite, root, host)
+	defer board.Close()
+	ctx := context.Background()
+
+	// An explicit self-target must not notify the author either (Rust #47236).
+	if _, err := board.Post(ctx, child, PostRequest{
+		RequestID: "child-new-channel", Destination: PostDestination{Kind: "new_channel", Name: "ops"}, Text: "first",
+		AgentsToNotify: []agent.AgentPath{childPath},
+	}); err != nil {
+		t.Fatalf("new channel post error = %v", err)
+	}
+	if notifications := host.sent(); len(notifications) != 0 {
+		t.Fatalf("author was notified for its own post: %#v", notifications)
+	}
+	if _, err := board.Post(ctx, root, PostRequest{
+		RequestID: "root-new-root", Destination: PostDestination{Kind: "channel", Name: "ops"}, Text: "second",
+	}); err != nil {
+		t.Fatalf("root post error = %v", err)
+	}
+	if notifications := host.sent(); len(notifications) != 1 || notifications[0].recipient != child {
+		t.Fatalf("channel creator notification = %#v, want the child", notifications)
+	}
+
+	if _, err := board.SetSubscription(ctx, child, SubscriptionRequest{
+		Target: SubscriptionTarget{Kind: "channel", ChannelName: "ops"}, Change: Unsubscribe,
+	}); err != nil {
+		t.Fatalf("channel unsubscribe error = %v", err)
+	}
+	if _, err := board.Post(ctx, child, PostRequest{
+		RequestID: "child-after-opt-out", Destination: PostDestination{Kind: "channel", Name: "ops"}, Text: "third",
+	}); err != nil {
+		t.Fatalf("post after opt-out error = %v", err)
+	}
+	if _, err := board.Post(ctx, root, PostRequest{
+		RequestID: "root-after-opt-out", Destination: PostDestination{Kind: "channel", Name: "ops"}, Text: "fourth",
+	}); err != nil {
+		t.Fatalf("root post after opt-out error = %v", err)
+	}
+	if notifications := host.sent(); len(notifications) != 1 {
+		t.Fatalf("explicit opt-out was not preserved: %#v", notifications)
+	}
+}
+
 // TestLocalBoardSubscribedChannelsPagesLikeRust mirrors Rust #56495: the board
 // lists the caller's subscribed channels in name order across successive
 // one-item pages, reports no cursor after the final page, and skips channels

@@ -18491,9 +18491,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go postInner deletes the caller from merged notification recipients after explicit agents_to_notify and channel/thread subscribers, so authors never receive their own posts while their subscriptions stay intact; in-memory postInner does the same. Tests: agentboard/local_test.go TestLocalBoardNewChannelSubscribesAuthorLikeRust covers an explicit self-target and self-subscription"
    ]
   },
   {
@@ -18565,9 +18565,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go stores explicit opt-outs in subscription_opt_outs, subscribe() inserts only when no opt-out exists, SetSubscription writes/removes opt-outs, and board deletion clears the table; local_test.go TestLocalBoardSubscriptionsOptOutsAndDeletionLikeRust covers opt-outs surviving posts and reopen"
    ]
   },
   {
@@ -18589,9 +18589,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "agentboard/local.go resolvePostDestination subscribes the author to a channel created by a new_channel post in the same transaction; local_test.go TestLocalBoardNewChannelSubscribesAuthorLikeRust verifies later roots notify the creator and explicit opt-outs survive"
    ]
   },
   {
@@ -18820,9 +18820,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/feedback.go UploadTags bounds the reason tag to the first 200 Unicode characters and replaces CR/LF with spaces, keeping the full comment in the report body and reserved-tag override protection. Tests: appserver/feedback_test.go TestUploadReasonTagBoundedLikeRust"
    ]
   },
   {

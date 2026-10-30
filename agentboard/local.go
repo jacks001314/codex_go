@@ -567,7 +567,7 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 	if err != nil {
 		return nil, err
 	}
-	channelName, root, target, err := b.resolvePostDestination(ctx, tx, request.Destination, author, now, id)
+	channelName, root, target, err := b.resolvePostDestination(ctx, tx, request.Destination, author, now, caller, id, behavior)
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +617,7 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 	return &post.Metadata, nil
 }
 
-func (b *LocalAgentMessageBoard) resolvePostDestination(ctx context.Context, tx *localBoardWrite, destination PostDestination, author agent.AgentPath, now time.Time, id string) (string, string, SubscriptionTarget, error) {
+func (b *LocalAgentMessageBoard) resolvePostDestination(ctx context.Context, tx *localBoardWrite, destination PostDestination, author agent.AgentPath, now time.Time, caller string, id string, behavior postBehavior) (string, string, SubscriptionTarget, error) {
 	switch destination.Kind {
 	case "channel":
 		exists, err := b.channelExists(ctx, tx, destination.Name)
@@ -634,6 +634,13 @@ func (b *LocalAgentMessageBoard) resolvePostDestination(ctx context.Context, tx 
 		}
 		if err := b.insertChannel(ctx, tx, destination.Name, author, now, nil); err != nil {
 			return "", "", SubscriptionTarget{}, err
+		}
+		// Rust #47259: creating a channel while posting also subscribes its
+		// author to new roots there, in the same transaction.
+		if behavior == postDiscussion {
+			if err := b.subscribe(ctx, tx, SubscriptionTarget{Kind: "channel", ChannelName: destination.Name}, caller); err != nil {
+				return "", "", SubscriptionTarget{}, err
+			}
 		}
 		return destination.Name, id, SubscriptionTarget{Kind: "channel", ChannelName: destination.Name}, nil
 	case "thread":

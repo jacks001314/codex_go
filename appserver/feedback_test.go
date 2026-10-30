@@ -171,6 +171,28 @@ func TestUploadTagsPreserveReservedFields(t *testing.T) {
 	}
 }
 
+// TestUploadReasonTagBoundedLikeRust covers Rust #47325: the Sentry reason tag
+// is the first 200 Unicode characters with CR/LF replaced by spaces.
+func TestUploadReasonTagBoundedLikeRust(t *testing.T) {
+	reason := "line one\r\nline two\n" + strings.Repeat("é", 210)
+	snapshot := &FeedbackSnapshot{ThreadID: "thread-1"}
+	tags := snapshot.UploadTags("bug", &reason, map[string]string{"reason": "caller override"}, nil)
+	preview := tags["reason"]
+	if got := len([]rune(preview)); got != 200 {
+		t.Fatalf("reason tag length = %d, want 200", got)
+	}
+	if strings.ContainsAny(preview, "\r\n") {
+		t.Fatalf("reason tag contains a line break: %q", preview)
+	}
+	if !strings.HasPrefix(preview, "line one  line two ") {
+		t.Fatalf("reason tag prefix = %q", preview)
+	}
+	// A short reason is preserved verbatim.
+	short := "no line breaks"
+	if got := snapshot.UploadTags("bug", &short, nil, nil)["reason"]; got != short {
+		t.Fatalf("short reason tag = %q, want %q", got, short)
+	}
+}
 func TestAttachmentsGateDiagnosticsOnIncludeLogs(t *testing.T) {
 	snapshot := &FeedbackSnapshot{
 		Logs:        []byte("logs"),

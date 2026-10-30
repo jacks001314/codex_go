@@ -302,7 +302,7 @@ func (s *FeedbackSnapshot) UploadTags(classification string, reason *string, cli
 		"classification": classification,
 	}
 	if reason != nil {
-		tags["reason"] = *reason
+		tags["reason"] = sentryReasonTag(*reason)
 	}
 	if sessionSource != nil {
 		tags["session_source"] = *sessionSource
@@ -318,6 +318,22 @@ func (s *FeedbackSnapshot) UploadTags(classification string, reason *string, cli
 		}
 	}
 	return tags
+}
+
+// sentryReasonTag mirrors Rust #47325: Sentry tags cannot contain newlines or
+// exceed 200 characters, so the reason tag carries a bounded preview while the
+// full comment stays in the report body.
+func sentryReasonTag(reason string) string {
+	runes := []rune(reason)
+	if len(runes) > 200 {
+		runes = runes[:200]
+	}
+	for i, value := range runes {
+		if value == '\r' || value == '\n' {
+			runes[i] = ' '
+		}
+	}
+	return string(runes)
 }
 
 func (s *FeedbackSnapshot) Attachments(includeLogs bool, extra []FeedbackAttachment, logsOverride []byte) []FeedbackAttachment {
