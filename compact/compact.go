@@ -1219,16 +1219,18 @@ func isAgentCompletionMessage(item *Item) bool {
 }
 
 // isDescendantProgressMessage reports whether an agent message is a
-// descendant-authored progress update ("Message Type: MESSAGE") that remote
-// compaction v2 should not retain (Rust #39176). Descendant-authored tasks
-// (encrypted NEW_TASK payloads) are still retained.
+// descendant-authored progress update ("Message Type: MESSAGE" or
+// "Message Type: CHANNEL_POST") that remote compaction v2 should not retain
+// (Rust #39176, #47249). Descendant-authored tasks (encrypted NEW_TASK
+// payloads) are still retained.
 func isDescendantProgressMessage(item *Item) bool {
 	author, recipient := agentMessageAuthorRecipient(item)
 	if author == "" || recipient == "" || !strings.HasPrefix(author, recipient+"/") {
 		return false
 	}
 	text, ok := firstAgentMessageInputText(item)
-	return ok && strings.HasPrefix(text, "Message Type: MESSAGE\n")
+	return ok && (strings.HasPrefix(text, "Message Type: MESSAGE\n") ||
+		strings.HasPrefix(text, "Message Type: CHANNEL_POST\n"))
 }
 
 func agentMessageAuthorRecipient(item *Item) (string, string) {

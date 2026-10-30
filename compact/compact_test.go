@@ -536,6 +536,14 @@ func TestShouldKeepCompactedHistoryItemDropsDescendantProgressLikeRust(t *testin
 	if ShouldKeepCompactedHistoryItem(descendantProgress) {
 		t.Fatal("descendant MESSAGE progress must not be retained")
 	}
+	descendantChannelPost := Item{
+		ID:   "desc-channel-post",
+		Type: "agent_message",
+		Raw:  mustAgentMessageRaw(t, "/root/child", "/root", "Message Type: CHANNEL_POST\nSender: /root/child\nChannel: progress\nMessage ID: aaaabbbbcccc\nThread ID: aaaabbbbcccc\nPayload:\nchild channel progress"),
+	}
+	if ShouldKeepCompactedHistoryItem(descendantChannelPost) {
+		t.Fatal("descendant CHANNEL_POST progress must not be retained (Rust #47249)")
+	}
 	rootProgress := Item{
 		ID:   "root-progress",
 		Type: "agent_message",

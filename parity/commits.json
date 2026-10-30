@@ -18539,9 +18539,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1085: compact.isDescendantProgressMessage now also treats Message Type: CHANNEL_POST as descendant progress, so ShouldKeepCompactedHistoryItem drops descendant channel posts from remote compaction v2 retained history while keeping root-authored progress and descendant NEW_TASK tasks, matching Rust #47249. TestShouldKeepCompactedHistoryItemDropsDescendantProgressLikeRust adds the channel-post case; go test ./compact passes."
    ]
   },
   {
