@@ -11218,9 +11218,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1105 (audit, superseded by #45255): #44360 made Escape in the overview list return focus to the inline task composer and removed the exit_on_cancel argument. Upstream #45255 (516f2780fd) then replaced that composer with direct new-session shortcuts and removed AgentsOverviewFocus and the view-level ChatComposer; at the cbe16d52 baseline ListAction::Cancel still completes the view, so Escape closes the dashboard, including while a connection notice is shown. Go mirrors the successor design: tui/agents_overview has no overview composer, and tui/tea/agents_overview.go closes on Escape through Cancel -> CompletionCancelled -> closeAgentsOverview without emitting a quit or task-switch command. Regression coverage: TestModelAgentsDashboardEscapeClosesWhileReconnectingLikeRust and TestModelAgentsDashboardEscCloses. Validation: go test ./tui/tea -run Esc -count=1 and go build ./... pass."
    ]
   },
   {
