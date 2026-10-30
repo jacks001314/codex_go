@@ -9487,9 +9487,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1007 (回归+核对): #43796 把 request-effort 查询按用途拆分: sampling 建立 pin，compaction 在模型匹配时复用 pin，失败或 fallback 模型查询都不得修改 live pin，成功 compaction 后把 pin 置为 Compacted，使下一次 sampling 以所选 effort 重建 baseline 且不追加冗余 configuration_update。Go 的实现已完整: reasoningoverride.RequestEffort 区分 UsageSampling/UsageCompaction (compaction 命中 pin 直接返回、fallback 模型解析自身 effort 且不 mutate、override 不可用仅 sampling 清 pin)，appserver/reasoning_effort_override.go 的 reasoningEffortForRequest/OverrideInputItems 包装同一语义 (Compacted 在下一次 update 时重新激活 pin)，appserver/turn_runtime.go 的 compactRunnerForRecord 用 requestEffortCompaction 计算本地/远端 compaction effort，且仅在 compactThreadWithHistory 全部成功落盘后 markReasoningEffortPinCompacted。本轮补充 appserver/reasoning_effort_compaction_like_rust_test.go: fallback compaction 使用目标模型 effort 且保留原 pin、override 关闭时 compaction 用所选 effort 不建立 pin; compactRunnerForRecord 对同模型取 pinned medium、对 fallback 模型取自身 low 且 pin 不变; compactThread 失败保留 Active pin (下一次 sampling 仍用 pinned medium)、成功转为 Compacted 后下一次 sampling 以 high 重建 baseline 且不产生 update，随后改选 low 只追加一条 update。验证: go test ./appserver -run 'ReasoningEffort|Compact' -count=1; go test ./appserver -run 'TestReasoningEffortCompactionKeepsFallbackLookupSideEffectFreeLikeRust|TestCompactRunnerResolvesEffortFromPinWithoutMutatingItLikeRust|TestCompactionFailureKeepsPinAndSuccessRetiresItLikeRust' -count=1; go test ./parity -run TestAlignment -count=1。"
    ]
   },
   {

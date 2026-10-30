@@ -3175,6 +3175,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - This round certified the parity and added an end-to-end regression: a retained checkpoint carrying an oversized instruction resumes incomplete, the retained-instructions section keeps only the host notice, and no fragment exposes the oversized text even after the #43472 excerpt recovery refills the bounded source.
 - Existing `state/guardian_retained_context_test.go` covers source order, whole-record omission, legacy and inherited ordering, and `appserver/retained_inherited_test.go` covers fork marking plus worker exclusion.
 - Verified with `go test ./appserver -run 'OversizedCheckpointInstruction|QueuedApproval|OmittedInstructionExcerpt|InputOrderFromSurviving' -count=1`, `go test ./state -run Retained -count=1`, `go test ./appserver -run 'Guardian|Retained|Verified|Root|Compaction' -count=1`, and `go test ./parity -run TestAlignment -count=1`.
-Status after reconciliation: `2166 complete`, `451 not_applicable`,
-`345 audit_pending`, `183 regression_pending`, `4 partial`,
+### Reasoning effort through compaction (Round 1007)
+
+- Rust #43796 separates request-effort lookups by usage: sampling establishes the per-model pin, compaction reuses it when the model matches, fallback-model lookups never mutate the live pin, and a successful compaction retires the pin so the next sampling request rebuilds the baseline without a redundant `configuration_update` (#43796, complete).
+- Go already implements this in `reasoningoverride.RequestEffort`, `appserver/reasoning_effort_override.go`, and `compactRunnerForRecord`/`markReasoningEffortPinCompacted`; the success mark runs only after the full `compactThreadWithHistory` write.
+- New `appserver/reasoning_effort_compaction_like_rust_test.go` covers fallback effort selection with pin preservation, override-disabled compaction, runner effort from the pin, pin survival on a failing compaction, and the successful `Compacted` reset followed by a fresh baseline and a single later selection update.
+- Verified with `go test ./appserver -run 'ReasoningEffort|Compact' -count=1`, the three new tests by name, and `go test ./parity -run TestAlignment -count=1`.
+Status after reconciliation: `2167 complete`, `451 not_applicable`,
+`345 audit_pending`, `182 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
