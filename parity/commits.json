@@ -25132,9 +25132,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1049 (N/A): Rust #50018 is a test-infrastructure hardening pass that replaces direct executable fixture writes/copies in 70 Rust test modules with codex_utils_cargo_bin::write_executable/copy_executable, which complete the write in a separate process on Linux, and stages tampered bubblewrap bytes in a data file first. The hazard is Rust-specific: a concurrently forked test process can retain a writable descriptor for a not-yet-executable fixture. Go's os.WriteFile/os.OpenFile descriptors are close-on-exec and exec.Cmd passes only explicit stdio and ExtraFiles handles, so a concurrent Go test spawn cannot hold the fixture's writable fd; Go also has no codex_utils_cargo_bin module or write_executable/copy_executable helper (rg over codex_utils_cargo_bin|ETXTBSY|write_executable|copy_executable finds nothing in *.go). Fixture helpers such as envutil/trusted_executable_test.go, gitutil/gitutil_test.go, and appserverdaemon/prepare_install_test.go keep writing via os.WriteFile without a shared process boundary. No Go behavior or product surface changes. Verified with go test ./parity -run TestAlignment -count=1."
    ]
   },
   {

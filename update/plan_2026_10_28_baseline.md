@@ -3468,6 +3468,12 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: Go's `state.BuildPromptPartsWithSectionCosts` still placed the async retained instruction section ahead of the transcript (the #51627 split moved only assistant context behind it), so the rolling retained window could invalidate the reusable prefix. Both async retained sections now follow the transcript, node-repl evidence, and permission context and land immediately before `planned_action`; `SyncFull`/`SyncDelta` keep the single section ahead of the transcript. `GuardianRetainedSnapshotSplitOnlyForAsyncPresentationLikeRust` pins the new async order and `TestGuardianAsyncRetainedGrowthKeepsHistoryPrefixLikeRust` grows assistant messages through buffer eviction while asserting a byte-identical transcript prefix.
 - Verified with `go test ./state -count=1`, `go test ./appserver -run Guardian -count=1`, and `go test ./parity -run TestAlignment -count=1`.
 
-Status after reconciliation: `2204 complete`, `460 not_applicable`,
-`325 audit_pending`, `156 regression_pending`, `4 partial`,
+### Descriptor-safe executable fixtures (Round 1049)
+
+- Rust #50018 replaces direct executable fixture writes and copies across the Rust tests with `codex_utils_cargo_bin::write_executable`/`copy_executable`, which finish the write in a separate process on Linux, and stages tampered bubblewrap bytes in a data file first.
+- N/A by architecture: the hazard is a concurrently forked Rust test process retaining a writable descriptor for a fixture that is about to be executed. Go's `os.WriteFile`/`os.OpenFile` descriptors are close-on-exec and `exec.Cmd` passes only explicit stdio and `ExtraFiles` handles, so a concurrent Go test spawn cannot hold a fixture's writable fd. Go also has no `codex_utils_cargo_bin` module or `write_executable`/`copy_executable` helper; Go fixtures such as `envutil/trusted_executable_test.go`, `gitutil/gitutil_test.go`, and `appserverdaemon/prepare_install_test.go` stay on `os.WriteFile` with no shared process boundary.
+- Verified with `rg` over `codex_utils_cargo_bin|ETXTBSY|write_executable|copy_executable` (no Go matches) and `go test ./parity -run TestAlignment -count=1`.
+
+Status after reconciliation: `2204 complete`, `461 not_applicable`,
+`324 audit_pending`, `156 regression_pending`, `4 partial`,
 `6 blocked_precondition`.
