@@ -77,7 +77,11 @@ func TestMultilineAsyncQuestionPreservesLineBreaksAndLinkDestinationsLikeRust(t 
 			}
 			stripped := make([]string, 0, len(lines))
 			for _, line := range lines {
-				stripped = append(stripped, codextui.StripOSC8(line))
+				plain := codextui.StripOSC8(line)
+				if codextui.DisplayWidth(plain) > width {
+					t.Fatalf("line ending %q width %d: wrapped row %q is %d columns", lineEnding, width, plain, codextui.DisplayWidth(plain))
+				}
+				stripped = append(stripped, plain)
 			}
 			rendered[width][lineEnding] = stripped
 		}

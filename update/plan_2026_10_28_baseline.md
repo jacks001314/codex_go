@@ -3607,6 +3607,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Complete: `appserver/compaction_replacement_context.go` renders the replacement window's catalog, refreshed base-instruction developer message, world state, skills and environment context with the replacement model/program and without consuming the startup prewarm or mutating the reasoning-effort pin. `appserver/turn_runtime.go` installs that context, records the catalog baseline without prepending it twice, and appends the full `world_state` plus `turn_context` after the compacted checkpoint. `rollout/rollout.go` writes `{full:true,state}` and `rollout/session_items.go` unwraps it on replay.
 - Verified with `go test ./compact ./rollout ./appserver -run 'Compaction|Compact|TurnContext|PreviousModel|WorldState|Environment|Replacement' -count=1` and `go build ./...`.
 
-Status after reconciliation: `2222 complete`, `462 not_applicable`,
-`322 audit_pending`, `138 regression_pending`, `5 partial`,
+### Clickable URLs wrapped across async question title rows (Round 1070)
+
+- Rust #51391 makes web URLs in asynchronous question titles terminal hyperlinks and splits a too-long URL across rows while every fragment keeps the complete destination; trailing `?` question punctuation is excluded from the link and unbalanced closing delimiters are not swallowed.
+- Complete: `tui/tea/async_questions.go` replaces the single-token URL wrapper with `asyncQuestionTitleWriter`, which breaks URLs at `/`, `?` and `&` (grapheme fallback when a segment still exceeds the width) and re-emits `OSC8Hyperlink(destination, fragment)` for each row. `tui/terminal_hyperlinks.go` already implemented the Rust trailing-punctuation and balanced-delimiter rules.
+- Regression: `tui/tea/async_questions_test.go` pins the exact three-row snapshot (`Review this change (https://` / `github.com/openai/codex/pull/12345?` / `diff=split)?`), the full destination in the expanded view, per-row width, and the complete destination on a clipped leading fragment; `tui/tea/async_questions_multiline_like_rust_test.go` now asserts every wrapped row fits the target width.
+- Also fixed the Round 1068 ledger misalignment: the #51070 evidence had been written to `b995d060` (#42671), so #42671 is back to `regression_pending` with its own symbol-coverage note and #51070 keeps the `not_applicable` decision.
+- Verified with `go test ./tui/tea ./tui -count=1` and `go test ./tui -run 'TestWebLinksInText' -count=1`.
+
+Status after reconciliation: `2223 complete`, `462 not_applicable`,
+`322 audit_pending`, `137 regression_pending`, `5 partial`,
 `6 blocked_precondition`.

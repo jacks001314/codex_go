@@ -943,7 +943,7 @@ func TestAsyncQuestionsBufferedLiveQuestionsAppearOnAgentSwitch(t *testing.T) {
 // complete destination survives wrapping.
 func TestAsyncQuestionTitleLinksWrappedURLsLikeRust(t *testing.T) {
 	url := "https://github.com/openai/codex/pull/12345?diff=split"
-	title := "Open " + url + " to review, please?"
+	title := "Review this change (" + url + ")?"
 	model := NewModel(codextui.NewState(nil), Options{Width: 40, Height: 40})
 	model.State.SetThreadID("thread-question-url")
 	model = feedAsyncQuestions(t, model, "question-url", []any{map[string]any{"title": title}})
@@ -953,10 +953,50 @@ func TestAsyncQuestionTitleLinksWrappedURLsLikeRust(t *testing.T) {
 		t.Fatal("Alt+Up must focus the question editor")
 	}
 	view := model.View()
-	if !strings.Contains(view, "\x1b]8;;"+url+"\x07") {
-		t.Fatalf("view missing hyperlink to %q:\n%q", url, view)
+	if linked := linkedTextForDestination(t, view, url); linked != url {
+		t.Fatalf("linked text = %q, want the complete URL %q", linked, url)
 	}
-	if !strings.Contains(codextui.StripOSC8(view), url) {
-		t.Fatalf("view missing complete URL %q:\n%q", url, view)
+
+	// The question area wraps the URL across rows; a clipped render keeps only
+	// a leading fragment, which still carries the complete destination.
+	lines := wrapAsyncQuestionTitleLines(title, 38)
+	if len(lines) < 3 {
+		t.Fatalf("wrapped title = %#v, want the URL to span rows", lines)
 	}
+	for _, line := range lines {
+		if width := codextui.DisplayWidth(codextui.StripOSC8(line)); width > 38 {
+			t.Fatalf("wrapped row %q is %d columns, want <= 38", codextui.StripOSC8(line), width)
+		}
+	}
+	gotLines := make([]string, len(lines))
+	for index, line := range lines {
+		gotLines[index] = codextui.StripOSC8(line)
+	}
+	wantLines := []string{
+		"Review this change (https://",
+		"github.com/openai/codex/pull/12345?",
+		"diff=split)?",
+	}
+	if got, want := strings.Join(gotLines, "\n"), strings.Join(wantLines, "\n"); got != want {
+		t.Fatalf("wrapped title =\n%s\nwant\n%s", got, want)
+	}
+	clipped := strings.Join(lines[:min(2, len(lines))], "\n")
+	linked := linkedTextForDestination(t, clipped, url)
+	if linked == "" || !strings.HasPrefix(url, linked) {
+		t.Fatalf("clipped linked text = %q, want a prefix of %q", linked, url)
+	}
+}
+
+func linkedTextForDestination(t *testing.T, rendered string, destination string) string {
+	t.Helper()
+	linked := ""
+	for _, line := range strings.Split(rendered, "\n") {
+		for _, link := range osc8LinksInLine(line) {
+			if link.destination != destination {
+				t.Fatalf("hyperlink destination = %q, want %q", link.destination, destination)
+			}
+			linked += link.text
+		}
+	}
+	return linked
 }

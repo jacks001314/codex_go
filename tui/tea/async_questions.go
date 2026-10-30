@@ -8,6 +8,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rivo/uniseg"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
@@ -784,10 +785,10 @@ func wrapAsyncQuestionText(text string, width int, indent int) []string {
 	return out
 }
 
-// wrapAsyncQuestionTitleLines wraps an asynchronous question title with
-// URL-preserving wrapping and turns web URLs into terminal hyperlinks whose
-// complete destination survives wrapping and clipping (Rust #51391:
-// wrapped_question_lines renders through HyperlinkParagraph).
+// wrapAsyncQuestionTitleLines wraps an asynchronous question title and turns
+// web URLs into terminal hyperlinks whose complete destination survives
+// wrapping and clipping (Rust #51391: wrapped_question_lines renders through
+// HyperlinkParagraph after remap_source_wrapped_line).
 func wrapAsyncQuestionTitleLines(title string, width int) []string {
 	if width <= 0 {
 		width = 1
@@ -798,15 +799,162 @@ func wrapAsyncQuestionTitleLines(title string, width int) []string {
 		// each logical line is wrapped and annotated on its own, and one trailing CR
 		// is stripped first so LF and CRLF titles render identically.
 		logical = strings.TrimSuffix(logical, "\r")
-		wrapped := codextui.AdaptiveWrapLine(logical, codextui.WrapOptions{Width: width, BreakWords: true})
-		for _, line := range wrapped {
-			out = append(out, codextui.AnnotateCompleteWebURLsInLine(line))
-		}
+		out = append(out, wrapAsyncQuestionTitleLine(logical, width)...)
 	}
 	if len(out) == 0 {
 		return []string{""}
 	}
 	return out
+}
+
+// asyncQuestionTitleWriter wraps one logical title line. A web URL may span
+// rows; every fragment keeps the complete destination as its OSC-8 target.
+type asyncQuestionTitleWriter struct {
+	width int
+	lines []string
+	line  strings.Builder
+	used  int
+}
+
+func (w *asyncQuestionTitleWriter) flush() {
+	w.lines = append(w.lines, strings.TrimRight(w.line.String(), " "))
+	w.line.Reset()
+	w.used = 0
+}
+
+func (w *asyncQuestionTitleWriter) space() {
+	if w.used > 0 {
+		w.line.WriteByte(' ')
+		w.used++
+	}
+}
+
+func (w *asyncQuestionTitleWriter) addPlain(piece string) {
+	if piece == "" {
+		return
+	}
+	pieceWidth := codextui.DisplayWidth(piece)
+	if w.used > 0 && w.used+1+pieceWidth > w.width {
+		w.flush()
+	}
+	w.space()
+	w.line.WriteString(piece)
+	w.used += pieceWidth
+}
+
+func (w *asyncQuestionTitleWriter) addLinked(destination string, piece string) {
+	if piece == "" {
+		return
+	}
+	pieceWidth := codextui.DisplayWidth(piece)
+	if w.used > 0 && w.used+pieceWidth > w.width && pieceWidth <= w.width {
+		w.flush()
+	}
+	for piece != "" {
+		remaining := w.width - w.used
+		if remaining <= 0 {
+			w.flush()
+			remaining = w.width
+		}
+		chunk, rest := splitAsyncQuestionTitleChunk(piece, remaining)
+		if chunk == "" {
+			w.flush()
+			continue
+		}
+		w.line.WriteString(codextui.OSC8Hyperlink(destination, chunk))
+		w.used += codextui.DisplayWidth(chunk)
+		piece = rest
+		if piece != "" {
+			w.flush()
+		}
+	}
+}
+
+func (w *asyncQuestionTitleWriter) finish() []string {
+	if w.line.Len() > 0 || len(w.lines) == 0 {
+		w.flush()
+	}
+	return w.lines
+}
+
+func wrapAsyncQuestionTitleLine(text string, width int) []string {
+	tokens := strings.Fields(text)
+	if len(tokens) == 0 {
+		return []string{strings.TrimRight(text, " \t")}
+	}
+	writer := &asyncQuestionTitleWriter{width: width}
+	for _, token := range tokens {
+		candidate, offset := codextui.TrimWebURLToken(token)
+		destination, ok := codextui.WebDestination(candidate)
+		if !ok {
+			writer.addPlain(token)
+			continue
+		}
+		prefix := token[:offset]
+		suffix := token[offset+len(candidate):]
+		if prefix != "" {
+			writer.addPlain(prefix)
+		} else if writer.used > 0 {
+			if writer.used+1 > writer.width {
+				writer.flush()
+			} else {
+				writer.space()
+			}
+		}
+		for _, segment := range asyncQuestionURLSegments(candidate) {
+			writer.addLinked(destination, segment)
+		}
+		if suffix != "" {
+			if writer.used+codextui.DisplayWidth(suffix) > writer.width {
+				writer.flush()
+			}
+			writer.line.WriteString(suffix)
+			writer.used += codextui.DisplayWidth(suffix)
+		}
+	}
+	return writer.finish()
+}
+
+// asyncQuestionURLSegments breaks a web URL at path and query separators so the
+// wrapper prefers those boundaries, matching textwrap's word-like URL wrapping
+// (Rust #51391 snapshot).
+func asyncQuestionURLSegments(raw string) []string {
+	segments := []string{}
+	start := 0
+	for index, r := range raw {
+		switch r {
+		case '/', '?', '&':
+			end := index + utf8.RuneLen(r)
+			segments = append(segments, raw[start:end])
+			start = end
+		}
+	}
+	if start < len(raw) {
+		segments = append(segments, raw[start:])
+	}
+	if len(segments) == 0 {
+		return []string{raw}
+	}
+	return segments
+}
+
+func splitAsyncQuestionTitleChunk(piece string, width int) (string, string) {
+	if width <= 0 {
+		return "", piece
+	}
+	var out strings.Builder
+	used := 0
+	graphemes := uniseg.NewGraphemes(piece)
+	for graphemes.Next() {
+		cluster := graphemes.Str()
+		clusterWidth := codextui.DisplayWidth(cluster)
+		if used > 0 && used+clusterWidth > width {
+			break
+		}
+		out.WriteString(cluster)
+		used += clusterWidth
+	}
+	return out.String(), piece[out.Len():]
 }
 
 func questionCountLabel(count int) string {
