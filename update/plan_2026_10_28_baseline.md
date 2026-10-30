@@ -3629,6 +3629,13 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - Paginated reads now round-trip lineage through SQLite: `state/thread_history_projection.go` writes `thread_turns.root_turn_id` with `COALESCE` so the first known root survives terminal events without one, `ListThreadHistoryTurns` scans the column, and `stateThreadTurnToAPI` projects it into `Turn.rootTurnId`. Migration `0008_thread_turn_root.sql` already existed but was unused.
 - Verified with `go test ./rollout ./state ./session -count=1` and `go test ./appserver -run 'ThreadFork|TurnRoot|TurnLineage|DaemonRecovery|PaginatedRolloutSupportsPagedHistoryReads' -count=1`. The app-server full-surface audit still reports the pre-existing `thread/guardianReview` schema drift, unrelated to this commit.
 
-Status after reconciliation: `2225 complete`, `462 not_applicable`,
-`322 audit_pending`, `135 regression_pending`, `5 partial`,
+### Managed app-server file-descriptor limit on Unix (Round 1073)
+
+- Rust #51470 raises the managed app-server daemon's soft `RLIMIT_NOFILE` to 4096 on Unix, capped by the inherited hard limit, and keeps an already higher soft limit; only managed daemons apply this policy.
+- Complete: `appserver/managed_daemon_unix.go` already called `raiseManagedDaemonNoFileLimit` from `appserver/unix_socket.go` when `DaemonShutdownManaged` starts the managed socket, logging a warning on failure, and `app/app.go` selects that mode only when `CODEX_DAEMON_SHUTDOWN_SOCKET` is set. This round moves the 4096 target and the cap/preserve calculation into cross-platform `appserver/managed_daemon.go` so the policy is directly testable.
+- Regression: `appserver/managed_daemon_test.go` covers raising a lower soft limit, preserving a higher one, capping at a lower hard limit, an already-at-target limit, and an unlimited hard limit.
+- Verified with `go test ./appserver -run 'ManagedDaemonNoFileTarget|UnixSocket' -count=1` and a `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./appserver` cross-build.
+
+Status after reconciliation: `2226 complete`, `462 not_applicable`,
+`322 audit_pending`, `134 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
