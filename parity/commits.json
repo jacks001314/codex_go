@@ -8379,9 +8379,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1120: Rust gates its cached legacy-resume shortcut on the startup/workspace `background_paginated_rollout_migration` settings unless it can hold the rollout maintenance lock. Go has no such shortcut: the embedded TUI resume handler (`interactiveResumeSessionHandler`) reads the thread directly from the session store and never consults the migration feature, while the remote handler always sends a full `thread/resume` without `excludeTurns`. A legacy thread therefore resumes with nonempty history under every migration setting; `rollout.TryAcquireRolloutMaintenanceLock` still guards background migration jobs. Test: TestInteractiveResumeSessionHandlerReadsHistoryFromStore; go test ./app -run TestInteractiveResumeSessionHandlerReadsHistoryFromStore passes."
    ]
   },
   {

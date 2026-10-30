@@ -4039,3 +4039,11 @@ Status after this batch: `2337 complete`, `465 not_applicable`, `322 audit_pendi
 - Accepted residual: Rust hashes with BLAKE3 while Go uses SHA-256; the digest is only compared against Go-written PID records, as already documented in `update/plan_2026_09_11.md`.
 
 Status after this batch: `2338 complete`, `465 not_applicable`, `322 audit_pending`, `19 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Legacy resume ignores background-migration feature gates (Round 1120)
+
+- #43178 removes Rust's cached legacy-resume shortcut gate on `background_paginated_rollout_migration`; the shortcut works whenever the rollout maintenance lock can be held and the thread still reports legacy history.
+- Go has no cached shortcut to gate: `interactiveResumeSessionHandler` reads the thread directly from the session store and never consults the migration feature, while the remote handler always sends a full `thread/resume` without `excludeTurns`. A legacy thread therefore resumes with nonempty history under all migration settings, and `rollout.TryAcquireRolloutMaintenanceLock` still protects background migration jobs.
+- Test: `TestInteractiveResumeSessionHandlerReadsHistoryFromStore`; targeted `go test ./app` passes.
+
+Status after this batch: `2339 complete`, `465 not_applicable`, `322 audit_pending`, `18 regression_pending`, `5 partial`, `6 blocked_precondition`.
