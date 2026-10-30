@@ -6089,9 +6089,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Round 1000 (实现+回归): #42256 在 User approval mode（approvalsReviewer=user）下跳过 Guardian 预热/异步评分，并自动接受普通 node_repl.js 执行确认，同时保留敏感动作检查和需要用户输入的请求。Go 的 modelGuardianReviewer 已有 user 模式 node_repl 快路径，且 approvalsReviewer 回调按当前 turn 配置/参数实时解析；agent 首次创建时 requireAgentForTurn 也已在 user 模式或 Full Access 下关闭 Guardian 预热。本轮发现真实缺口：MCP elicitation 处理器在 guardian 审批请求且 reviewer 非 auto_review 时直接转给用户，导致 User 模式下普通 node_repl.js 确认仍弹窗。现于 appserver/mcp_elicitation.go 的 guardian 分支前加入 mcpElicitationUserCUAAutoApproved：reviewer=user、server 为 node_repl/cua_repl、tool_name=js、connector_id=node_repl、approval_kind=mcp_tool_call、codex_sensitive_action 与 codex_requires_user_input 均非 true，且空表单时自动 Accept（Content={}，Meta approvals_reviewer=auto_review）；取消的 ctx 返回 Cancel。敏感动作、需要用户输入、非空表单、非 node_repl/非 js 等仍保持原用户确认路径；auto_review 仍走 Guardian 审核。新增 appserver/guardian_user_cua_auto_approval_like_rust_test.go 覆盖 node_repl/cua_repl 自动接受、敏感/交互/非空表单/错误工具/错误 connector/错误 approval kind/非 node-repl 服务器不透传、取消语义与 auto_review 不回归。Go 无异步评分缓存，无需跳过评分；预热仅在 reviewer=user 时于 agent 首次创建关闭。验证：go test ./appserver -run 'UserApprovalAutoAccepts|UserApprovalKeepsSensitive|UserApprovalNodeReplAutoApproval|AutoReviewStillReviewsNodeRepl' -count=1；go test ./appserver -run 'Guardian|Elicitation|McpToolApproval|MCPToolApproval' -count=1。"
    ]
   },
   {

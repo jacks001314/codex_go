@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"codex_go/config"
 	"codex_go/mcp"
 	"codex_go/sandbox"
 	"codex_go/state"
@@ -101,6 +102,16 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 		}
 	}
 	if guardianMCPApprovalRequested(request) {
+		// Rust #42256: User approval mode skips ordinary node_repl.js execution
+		// confirmations, while sensitive actions and requests for user input keep
+		// their existing behavior.
+		if !legacyAuthority && mcpElicitationUserCUAAutoApproved(authority, request) && mcpElicitationHasEmptyForm(request) {
+			meta := map[string]any{"approvals_reviewer": "auto_review"}
+			if ctx != nil && ctx.Err() != nil {
+				return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel, Meta: meta}, nil
+			}
+			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionAccept, Content: map[string]any{}, Meta: meta}, nil
+		}
 		if !legacyAuthority && ((authority.ApprovalPolicy != sandbox.ApprovalOnRequest && authority.ApprovalPolicy != sandbox.ApprovalGranular) || !strings.EqualFold(strings.TrimSpace(authority.ApprovalsReviewer), "auto_review")) {
 			return h.requestMCPElicitation(ctx, request)
 		}
@@ -449,6 +460,30 @@ func guardianMCPApprovalRequested(request *mcp.MCPElicitationRequest) bool {
 	}
 	meta, ok := requestMetaMap(request)
 	return ok && strings.TrimSpace(stringFromMap(meta, "codex_request_type")) == "approval_request"
+}
+
+// mcpElicitationUserCUAAutoApproved mirrors Rust #42256's user_cua_execution:
+// in User approval mode, an ordinary node_repl.js tool-call confirmation is
+// accepted without review. Sensitive-action checks and requests that explicitly
+// need user input are excluded, as are non-node-repl servers and other tools.
+func mcpElicitationUserCUAAutoApproved(authority mcpElicitationAuthority, request *mcp.MCPElicitationRequest) bool {
+	if !strings.EqualFold(strings.TrimSpace(authority.ApprovalsReviewer), string(config.ApprovalsReviewerUser)) {
+		return false
+	}
+	if request == nil || !mcp.IsNodeReplBackedServer(strings.TrimSpace(request.ServerName)) {
+		return false
+	}
+	meta, ok := requestMetaMap(request)
+	if !ok {
+		return false
+	}
+	sensitive, _ := meta["codex_sensitive_action"].(bool)
+	requiresUserInput, _ := meta["codex_requires_user_input"].(bool)
+	return strings.TrimSpace(stringFromMap(meta, "tool_name")) == "js" &&
+		strings.TrimSpace(stringFromMap(meta, "connector_id")) == "node_repl" &&
+		strings.TrimSpace(stringFromMap(meta, "codex_approval_kind")) == "mcp_tool_call" &&
+		!sensitive &&
+		!requiresUserInput
 }
 
 func validateGuardianMCPElicitation(request *mcp.MCPElicitationRequest) string {

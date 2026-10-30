@@ -3123,6 +3123,14 @@ Five Rust release/dependency entries have no Go counterpart (not applicable).
 - New `appserver/turn_analytics_trigger_source_like_rust_test.go` covers configured-over-client precedence, client-only and empty sources, 128/130-byte boundaries, blank and whitespace-preserving triggers, and an accepted steer updating the reported source; `telemetry/turn_event_test.go` pins raw value preservation.
 - Verified with `go test ./telemetry ./turn -count=1`, `go test ./appserver -run 'TurnAnalyticsReportsTrigger|TurnAnalyticsReflectsAcceptedSteer' -count=1`, and `go test ./appserver -run 'Analytics|TurnTrigger|CodexTurn' -count=1` (only the two known pre-existing file-change analytics failures remain).
 
-Status after reconciliation: `2159 complete`, `451 not_applicable`,
-`346 audit_pending`, `188 regression_pending`, `5 partial`,
+### User-mode Guardian and node_repl execution (Round 1000)
+
+- Rust #42256 skips Guardian prewarming and asynchronous scoring in User approval mode (`approvalsReviewer: "user"`, including live reviewer changes) and auto-accepts ordinary `node_repl.js` execution confirmations while keeping sensitive-action checks and user-input requests (#42256, complete).
+- Go already had the reviewer-level user-mode fast path, a live reviewer resolver, and a startup prewarm gate; the missing piece was the MCP elicitation handler, which sent every non-`auto_review` approval straight to the user.
+- `appserver/mcp_elicitation.go` now recognizes ordinary node-REPL execution confirmations (node_repl/cua_repl + `js` + `node_repl` connector + `mcp_tool_call` + empty form, without `codex_sensitive_action` or `codex_requires_user_input`) and accepts them with an empty content object; a cancelled turn reports cancel instead. Sensitive checks, interactive forms, and other tools/servers still reach the user, and `auto_review` still samples Guardian.
+- New `appserver/guardian_user_cua_auto_approval_like_rust_test.go` covers both node-repl servers, all exclusion conditions, cancellation, and the unchanged automatic-review path.
+- Verified with `go test ./appserver -run 'UserApprovalAutoAccepts|UserApprovalKeepsSensitive|UserApprovalNodeReplAutoApproval|AutoReviewStillReviewsNodeRepl' -count=1` and `go test ./appserver -run 'Guardian|Elicitation|McpToolApproval|MCPToolApproval' -count=1`.
+
+Status after reconciliation: `2160 complete`, `451 not_applicable`,
+`346 audit_pending`, `187 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
