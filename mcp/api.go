@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"reflect"
 	"sort"
@@ -280,7 +281,11 @@ type MCPServerStatus struct {
 	// this server name (Rust #58378 AgentMcpMetadataRecipient matching).
 	// Internal-only: the wire status does not expose it.
 	pluginHostRoot string
-	ServerInfo     *MCPServerInfo `json:"serverInfo,omitempty"`
+	// HTTPOrigin is the effective configured endpoint's HTTP(S) origin without
+	// credentials, path, query, or fragment; nil for stdio and non-HTTP URLs
+	// (Rust #47159).
+	HTTPOrigin *string        `json:"httpOrigin,omitempty"`
+	ServerInfo *MCPServerInfo `json:"serverInfo,omitempty"`
 	// ServerCapabilities carries the initialized server's advertised
 	// capabilities object, or null when unavailable (Rust #44826).
 	ServerCapabilities json.RawMessage `json:"serverCapabilities,omitempty"`
@@ -321,6 +326,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		Name               string                            `json:"name"`
 		RuntimeStatus      *MCPConnectionStatus              `json:"runtimeStatus"`
 		PluginID           *string                           `json:"pluginId"`
+		HTTPOrigin         *string                           `json:"httpOrigin"`
 		ServerInfo         *MCPServerInfo                    `json:"serverInfo"`
 		ServerCapabilities json.RawMessage                   `json:"serverCapabilities"`
 		ToolListMeta       json.RawMessage                   `json:"toolListMeta"`
@@ -336,6 +342,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		Name:               name,
 		RuntimeStatus:      cloneMCPConnectionStatus(s.RuntimeStatus),
 		PluginID:           cloneStringPtr(s.PluginID),
+		HTTPOrigin:         cloneStringPtr(s.HTTPOrigin),
 		ServerInfo:         serverInfo,
 		ServerCapabilities: cloneMCPRawMessage(s.ServerCapabilities),
 		ToolListMeta:       cloneMCPRawMessage(s.ToolListMeta),
@@ -354,6 +361,37 @@ type MCPListServerStatusResponse struct {
 	Data       []MCPServerStatus `json:"data"`
 	NextCursor *string           `json:"nextCursor"`
 	Servers    []MCPServerStatus `json:"servers,omitempty"`
+}
+
+// mcpServerHTTPOrigin mirrors Rust's Url::origin().ascii_serialization for an
+// effective configured endpoint (#47159): HTTP(S) only, no credentials, path,
+// query, fragment, or default port. Nil means the server is stdio or the URL is
+// invalid/non-HTTP.
+func mcpServerHTTPOrigin(config *ServerConfig) *string {
+	if config == nil || strings.TrimSpace(config.URL) == "" {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(config.URL))
+	if err != nil || parsed.Hostname() == "" {
+		return nil
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	port := parsed.Port()
+	if scheme == "http" && port == "80" || scheme == "https" && port == "443" {
+		port = ""
+	}
+	origin := scheme + "://" + host
+	if port != "" {
+		origin += ":" + port
+	}
+	return &origin
 }
 
 func (r *MCPListServerStatusResponse) MarshalJSON() ([]byte, error) {
@@ -1358,6 +1396,7 @@ func (s *MCPService) ConfiguredStatuses() []MCPServerStatus {
 		cloned := cloneMCPServerStatus(status)
 		if config, ok := configs[cloned.effectiveName()]; ok {
 			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
+			cloned.HTTPOrigin = mcpServerHTTPOrigin(&config)
 		}
 		statuses = append(statuses, cloned)
 	}
@@ -1516,6 +1555,7 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		cloned.catalogSource = ""
 		if config, ok := configs[cloned.effectiveName()]; ok {
 			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
+			cloned.HTTPOrigin = mcpServerHTTPOrigin(&config)
 		}
 		if !detail.includesTools() {
 			cloned.Tools = nil
@@ -3730,6 +3770,7 @@ func cancelOAuthLogins(logins []*OAuthLoginServer) {
 func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 	status.RuntimeStatus = cloneMCPConnectionStatus(status.RuntimeStatus)
 	status.PluginID = cloneStringPtr(status.PluginID)
+	status.HTTPOrigin = cloneStringPtr(status.HTTPOrigin)
 	status.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
 	status.ToolListMeta = cloneMCPRawMessage(status.ToolListMeta)
 	status.FailureReason = cloneStringPtr(status.FailureReason)

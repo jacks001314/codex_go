@@ -18335,9 +18335,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1116 (parity): MCPServerStatus now exposes nullable httpOrigin derived from the effective configured endpoint for configured and plugin-provided servers: http/https only, lowercased host, no credentials/path/query/fragment and no default port; stdio, invalid and non-HTTP URLs serialize null. ListStatusChecked and ConfiguredStatuses derive it from the live config, and cloneMCPServerStatus preserves it. Tests: go test ./mcp -count=1."
    ]
   },
   {
