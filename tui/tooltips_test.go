@@ -28,22 +28,40 @@ func (r *scriptedTooltipRNG) Intn(n int) int {
 	return value % n
 }
 
-// Rust chains the platform Desktop-app tip onto the shared asset tips: macOS
-// always, Linux only for a desktop session, Windows never.
+// Rust #49093 chains one platform desktop-app tip onto the shared asset tips:
+// macOS and Windows always, Linux only for a graphical desktop session.
 func TestDefaultTooltipsMatchRustPlatformChain(t *testing.T) {
 	macos := tooltipsForOS(TooltipTargetOSMacOS)
 	if len(macos) == 0 || macos[len(macos)-1] != MacosAppTooltip {
 		t.Fatalf("macOS pool tail = %q, want the Desktop-app tip", macos)
 	}
-	for _, tip := range tooltipsForOS(TooltipTargetOSWindows) {
+	windows := tooltipsForOS(TooltipTargetOSWindows)
+	if len(windows) == 0 || windows[len(windows)-1] != WindowsAppTooltip {
+		t.Fatalf("Windows pool tail = %q, want the desktop-app tip", windows)
+	}
+	for _, tip := range windows {
 		if tip == MacosAppTooltip || tip == LinuxAppTooltip {
-			t.Fatalf("windows pool should carry no platform app tip: %q", tip)
+			t.Fatalf("windows pool should carry only the Windows app tip: %q", tip)
 		}
 	}
 	for _, tip := range tooltipsForOS(TooltipTargetOSLinux) {
-		if tip == MacosAppTooltip {
-			t.Fatalf("linux pool should carry no macOS app tip: %q", tip)
+		if tip == MacosAppTooltip || tip == WindowsAppTooltip {
+			t.Fatalf("linux pool should carry no other platform app tip: %q", tip)
 		}
+	}
+}
+
+// Rust #49093 replaced the rotating paid promotions with this exact
+// platform-specific copy.
+func TestDesktopAppTooltipCopyMatchesRust(t *testing.T) {
+	if WindowsAppTooltip != "Use the **desktop app**. Install it from https://chatgpt.com/codex?app-landing-page=true and run `codex app`." {
+		t.Fatalf("Windows tooltip = %q", WindowsAppTooltip)
+	}
+	if MacosAppTooltip != "Use the **desktop app**. Run `codex app` to open it. It installs automatically if needed." {
+		t.Fatalf("macOS tooltip = %q", MacosAppTooltip)
+	}
+	if LinuxAppTooltip != "Use the **desktop app**. Install it from https://learn.chatgpt.com/docs/linux/linux-app and run `chatgpt`." {
+		t.Fatalf("Linux tooltip = %q", LinuxAppTooltip)
 	}
 }
 
@@ -119,50 +137,36 @@ func TestTooltipTemplatesAppendExperimentalAnnouncementsLikeRust(t *testing.T) {
 	}
 }
 
-func TestSelectStartupTooltipMatchesRustPlanBranches(t *testing.T) {
+// Rust #49093: every plan takes the same 80% platform app-tip branch; plans no
+// longer select fast-mode or free-plan promotions. On a platform without an
+// app tip the call falls through to the keymap-resolved random pool.
+func TestSelectStartupTooltipUsesPlatformAppTipLikeRust(t *testing.T) {
 	pro := auth.PlanPro
-	got, ok := SelectStartupTooltip(&pro, false, nil, &scriptedTooltipRNG{values: []int{0, 1}})
-	if !ok || got != FastTooltip {
-		t.Fatalf("paid fast promo = %q, %v", got, ok)
-	}
-
 	ent26 := auth.PlanEnt26
-	got, ok = SelectStartupTooltip(&ent26, false, nil, &scriptedTooltipRNG{values: []int{0, 1}})
-	if !ok || got != FastTooltip {
-		t.Fatalf("ent26 paid fast promo = %q, %v", got, ok)
-	}
-
-	got, ok = SelectStartupTooltip(&pro, true, nil, &scriptedTooltipRNG{values: []int{0}})
-	if CurrentTooltipTargetOS() == TooltipTargetOSLinux {
-		if ok || got != "" {
-			t.Fatalf("linux paid app tooltip = %q, %v, want none", got, ok)
-		}
-	} else if !ok || got != AppTooltip {
-		t.Fatalf("paid app tooltip = %q, %v", got, ok)
-	}
-
 	free := auth.PlanFree
-	got, ok = SelectStartupTooltip(&free, false, nil, &scriptedTooltipRNG{values: []int{0}})
-	if !ok || got != FreeGoTooltip {
-		t.Fatalf("free/go tooltip = %q, %v", got, ok)
-	}
-
-	got, ok = SelectStartupTooltip(nil, false, nil, &scriptedTooltipRNG{values: []int{0}})
-	if !ok || strings.TrimSpace(got) == "" {
-		t.Fatalf("unknown plan fallback = %q, %v", got, ok)
+	goPlan := auth.PlanGo
+	for _, plan := range []*auth.PlanType{nil, &pro, &ent26, &free, &goPlan} {
+		got, ok := SelectStartupTooltip(plan, nil, &scriptedTooltipRNG{values: []int{0}})
+		if expected, available := appTooltip(); available {
+			if !ok || got != expected {
+				t.Fatalf("app tip = %q, %v, want %q", got, ok, expected)
+			}
+		} else if !ok || got != DefaultTooltips()[0] {
+			t.Fatalf("random fallback = %q, %v", got, ok)
+		}
 	}
 }
 
 func TestSelectStartupTooltipUsesAnnouncementBeforeRandom(t *testing.T) {
 	announcement := "  announcement wins  "
-	got, ok := SelectStartupTooltip(nil, false, &announcement, &scriptedTooltipRNG{values: []int{9}})
+	got, ok := SelectStartupTooltip(nil, &announcement, &scriptedTooltipRNG{values: []int{9}})
 	if !ok || got != "announcement wins" {
 		t.Fatalf("announcement tooltip = %q, %v", got, ok)
 	}
 }
 
 func TestSelectStartupTooltipFallsBackToRandomPool(t *testing.T) {
-	got, ok := SelectStartupTooltip(nil, false, nil, &scriptedTooltipRNG{values: []int{9, 0}})
+	got, ok := SelectStartupTooltip(nil, nil, &scriptedTooltipRNG{values: []int{9, 0}})
 	if !ok || got != DefaultTooltips()[0] {
 		t.Fatalf("random fallback = %q, %v", got, ok)
 	}

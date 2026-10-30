@@ -18,15 +18,11 @@ import (
 const (
 	AnnouncementTipURL = "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml"
 
-	// The copy mirrors Rust's `tooltips.rs` constants verbatim (including the
-	// en dash and right single quote in FreeGoTooltip).
-	AppTooltip         = "Try the **Desktop app**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true"
-	MacosAppTooltip    = "Run `codex app` to open the Desktop app (it installs on macOS if needed)."
-	LinuxAppTooltip    = "Try the **Desktop app** on Linux: install it from https://learn.chatgpt.com/docs/linux/linux-app and run 'chatgpt'."
-	FastTooltip        = "*New* Use **/fast** to enable our fastest inference with increased plan usage."
-	OtherTooltip       = "*New* Build faster with the **Desktop app**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true"
-	OtherTooltipNonMac = "*New* Build faster with Codex."
-	FreeGoTooltip      = "*New* For a limited time, Codex is included in your plan for free \u2013 let\u2019s build together."
+	// Rust #49093: startup promotions are one platform-specific desktop app
+	// tip. The copy mirrors `tooltips.rs` verbatim.
+	WindowsAppTooltip = "Use the **desktop app**. Install it from https://chatgpt.com/codex?app-landing-page=true and run `codex app`."
+	MacosAppTooltip   = "Use the **desktop app**. Run `codex app` to open it. It installs automatically if needed."
+	LinuxAppTooltip   = "Use the **desktop app**. Install it from https://learn.chatgpt.com/docs/linux/linux-app and run `chatgpt`."
 )
 
 //go:embed tooltips.txt
@@ -99,22 +95,21 @@ func CurrentTooltipTargetOS() TooltipTargetOS {
 	}
 }
 
-func GetTooltip(plan *auth.PlanType, fastModeEnabled bool) (string, bool) {
-	return GetTooltipWithKeymap(plan, fastModeEnabled, nil)
+func GetTooltip(plan *auth.PlanType) (string, bool) {
+	return GetTooltipWithKeymap(plan, nil)
 }
 
-// GetTooltipWithKeymap mirrors Rust's `get_tooltip(plan, fast_mode_enabled,
-// keymap)`: the announcement/promo policy first, then a random tip from the
-// keymap-resolved pool.
-func GetTooltipWithKeymap(plan *auth.PlanType, fastModeEnabled bool, keymap *KeymapConfig) (string, bool) {
-	return selectStartupTooltip(plan, fastModeEnabled, nil, globalTooltipRNG{}, keymap)
+// GetTooltipWithKeymap mirrors Rust's `get_tooltip(plan, keymap)`: the
+// announcement/app-tip policy first, then a random keymap-resolved tip.
+func GetTooltipWithKeymap(plan *auth.PlanType, keymap *KeymapConfig) (string, bool) {
+	return selectStartupTooltip(plan, nil, globalTooltipRNG{}, keymap)
 }
 
-func SelectStartupTooltip(plan *auth.PlanType, fastModeEnabled bool, announcement *string, rng TooltipRNG) (string, bool) {
-	return selectStartupTooltip(plan, fastModeEnabled, announcement, rng, nil)
+func SelectStartupTooltip(plan *auth.PlanType, announcement *string, rng TooltipRNG) (string, bool) {
+	return selectStartupTooltip(plan, announcement, rng, nil)
 }
 
-func selectStartupTooltip(plan *auth.PlanType, fastModeEnabled bool, announcement *string, rng TooltipRNG, keymap *KeymapConfig) (string, bool) {
+func selectStartupTooltip(plan *auth.PlanType, announcement *string, rng TooltipRNG, keymap *KeymapConfig) (string, bool) {
 	if announcement != nil {
 		if content := strings.TrimSpace(*announcement); content != "" {
 			return content, true
@@ -124,31 +119,15 @@ func selectStartupTooltip(plan *auth.PlanType, fastModeEnabled bool, announcemen
 		rng = globalTooltipRNG{}
 	}
 
+	// Rust #49093: every plan takes the same 80% app-tip branch; the plan only
+	// affects announcement targeting, not the static tip.
 	if rng.Intn(10) < 8 {
-		switch {
-		case plan != nil && paidTooltipPlan(*plan):
-			return PickPaidTooltip(rng, fastModeEnabled)
-		case plan != nil && (*plan == auth.PlanGo || *plan == auth.PlanFree):
-			return FreeGoTooltip, true
-		default:
-			if CurrentTooltipTargetOS() == TooltipTargetOSMacOS {
-				return OtherTooltip, true
-			}
-			return OtherTooltipNonMac, true
+		if tip, ok := appTooltip(); ok {
+			return tip, true
 		}
 	}
 
 	return PickTooltipWithKeymap(rng, keymap)
-}
-
-func PickPaidTooltip(rng TooltipRNG, fastModeEnabled bool) (string, bool) {
-	if rng == nil {
-		rng = globalTooltipRNG{}
-	}
-	if fastModeEnabled || rng.Intn(2) == 0 {
-		return paidAppTooltip()
-	}
-	return FastTooltip, true
 }
 
 func PickTooltip(rng TooltipRNG) (string, bool) {
@@ -202,25 +181,29 @@ func tooltipsForOS(targetOS TooltipTargetOS) []string {
 		}
 		tips = append(tips, line)
 	}
-	// Rust chains the platform app tip onto the asset tips: macOS always shows
-	// the Desktop-app tip, Linux only when a desktop session is present.
-	switch targetOS {
-	case TooltipTargetOSMacOS:
-		tips = append(tips, MacosAppTooltip)
-	case TooltipTargetOSLinux:
-		if tip, ok := linuxAppTooltip(); ok {
-			tips = append(tips, tip)
-		}
+	// Rust chains the platform app tip onto the asset tips.
+	if tip, ok := appTooltipForOS(targetOS); ok {
+		tips = append(tips, tip)
 	}
 	return tips
 }
 
-func paidAppTooltip() (string, bool) {
-	switch CurrentTooltipTargetOS() {
-	case TooltipTargetOSMacOS, TooltipTargetOSWindows:
-		return AppTooltip, true
-	default:
+// appTooltip mirrors Rust's `app_tooltip`: a platform-specific desktop app
+// promotion, or none on unsupported platforms (headless Linux).
+func appTooltip() (string, bool) {
+	return appTooltipForOS(CurrentTooltipTargetOS())
+}
+
+func appTooltipForOS(targetOS TooltipTargetOS) (string, bool) {
+	switch targetOS {
+	case TooltipTargetOSMacOS:
+		return MacosAppTooltip, true
+	case TooltipTargetOSWindows:
+		return WindowsAppTooltip, true
+	case TooltipTargetOSLinux:
 		return linuxAppTooltip()
+	default:
+		return "", false
 	}
 }
 
@@ -259,17 +242,6 @@ func isProbablyWSL() bool {
 	}
 	return strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "" ||
 		strings.TrimSpace(os.Getenv("WSL_INTEROP")) != ""
-}
-
-func paidTooltipPlan(plan auth.PlanType) bool {
-	switch plan {
-	case auth.PlanPlus, auth.PlanEnterprise, auth.PlanPro, auth.PlanProlite,
-		auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased,
-		auth.PlanBusiness, auth.PlanEnt26, auth.PlanEnterpriseCBPAutomation, auth.PlanEnterpriseCBPUsageBased:
-		return true
-	default:
-		return false
-	}
 }
 
 func parseAnnouncementRaw(text string) ([]announcementTipRaw, bool) {

@@ -23017,9 +23017,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Startup promotions now resolve to one platform-specific desktop-app tip: Windows, macOS and graphical non-WSL Linux copy matches Rust verbatim, and the tip is appended to the asset pool for those platforms only (`tui/tooltips.go`).",
+    "The 80% preferred-tip branch no longer branches on plan, fast mode or free/go status; it returns the platform tip when available and otherwise falls through to the keymap-resolved random pool, matching Rust's `preferred_tooltip(rng, plan)` and `get_tooltip(plan, keymap)` signatures.",
+    "Removed the fast/Other/Free promotions and the session fast-status helper that existed only to choose them; `SelectStartupTooltip`/`GetTooltipWithKeymap` no longer take a fast-mode argument, and the tea session header matches the new signature.",
+    "Tests: `TestDefaultTooltipsMatchRustPlatformChain`, `TestDesktopAppTooltipCopyMatchesRust`, `TestSelectStartupTooltipUsesPlatformAppTipLikeRust`, announcement/fallback tests; full `go test ./tui ./tui/tea` and `go vet` pass."
    ]
   },
   {

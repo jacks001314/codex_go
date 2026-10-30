@@ -58,19 +58,3 @@ func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T
 		t.Fatal("live settings off did not disable tooltips")
 	}
 }
-
-// The fast-status marker follows Rust's `ChatWidget::should_show_fast_status`:
-// only a ChatGPT account with a model-supported fast tier shows it.
-func TestModelSessionShowFastStatusLikeRust(t *testing.T) {
-	model := NewModel(codextui.NewState(nil), Options{
-		Width: 100, Height: 24, HasChatGPTAccount: true, ServiceTierCommands: nil,
-	})
-	model.State.ServiceTier = "priority"
-	if model.sessionShowFastStatus() {
-		t.Fatal("fast status shown without a fast service tier")
-	}
-	model.hasChatGPTAccount = false
-	if model.sessionShowFastStatus() {
-		t.Fatal("fast status shown without a ChatGPT account")
-	}
-}

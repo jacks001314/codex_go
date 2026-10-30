@@ -3880,3 +3880,11 @@ Status after this batch: `2310 complete`, `462 not_applicable`, `322 audit_pendi
 - Added `TestInMemoryNotificationsCarryAttributedBoundedPreviewLikeRust`; the existing notification-rendering test pins role, markers, body and truncation.
 
 Status after this batch: `2311 complete`, `462 not_applicable`, `322 audit_pending`, `49 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
+### Platform desktop-app tooltip batch (Round 1101)
+
+- #49093 startup promotions now use one platform-specific desktop-app tip (Windows/macOS/graphical non-WSL Linux) with Rust's exact copy; the pool only carries the tip for the matching platform.
+- The 80% preferred branch no longer selects fast/free/paid promotions by plan or fast mode; it returns the platform tip when available and otherwise falls back to the keymap-resolved random pool.
+- Removed the obsolete promotions and the session fast-status helper used only to choose them; tooltip APIs dropped the fast-mode argument.
+
+Status after this batch: `2312 complete`, `462 not_applicable`, `322 audit_pending`, `48 regression_pending`, `5 partial`, `6 blocked_precondition`.
