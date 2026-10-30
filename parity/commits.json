@@ -9511,9 +9511,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 8/8 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Configurable memory versions run on isolated storage (#43797): `memories.version` is a closed enum (v1/v2) resolved in config/memories.go, and v2 uses an isolated `memories_v2` SQLite store (state/memory_store.go, state.MemoriesV2DBPath) that shares the thread catalog while keeping memory state separate. The selected version drives tool developer instructions, the extraction contract and decode, consolidation prompts and artifact validation, and summary reads; shell memory-usage telemetry recognizes both roots, and reset/clear/delete cover every existing version.",
+    "Regression coverage: memories/version_test.go (root selection, extraction contract, decode, prompt/artifact validation, v2 template, usage kinds, Unicode chunking), memories/usage_test.go, and state/memory_store_test.go TestMemoryStoreForVersionIsolatesStateAndSharesThreadCatalog plus the clear-all and versioned-delete tests. Verified with `go test ./memories -run 'Version|Usage' -count=1` and `go test ./state -run 'MemoryStore|ClearAllMemory|DeleteVersionedThreadMemory' -count=1`."
    ]
   },
   {
@@ -9583,9 +9584,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "memories/pipeline.go and memories/prompts.go implement v2 extraction chunking (#43808): input is split into bounded, Unicode-safe user-message chunks with explicit token bounds that replace the single Input when non-empty, the extraction prompt budget carries them, and v2 startup stores the raw memory before sending the bounded chunks.",
+    "Regression coverage: memories/version_test.go TestExtractionMessageChunksPreserveUnicodeEvidence, memories/pipeline_test.go v2 startup coverage, and appserver/memory_startup.go v2 delivery. Verified with `go test ./memories -run 'Chunks|Pipeline' -count=1`."
    ]
   },
   {
@@ -9607,9 +9609,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 5/5 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "Memory dual writing and v2 readiness (#43827): `memories.dual_write` runs the v2 pipeline alongside the selected version in appserver/memory_startup.go, memories/consolidation.go persists the largest distinct-thread consolidation count and never lowers it, memories/readiness.go only supplies v2 context after background consolidation produced a valid v2 summary, and the app-server memory status reports v2 readiness with threshold and experimental-API validation.",
+    "Regression coverage: appserver/memory_dual_write_test.go TestMemoryStartupPipelinesHonorDualWrite, memories/readiness_test.go (summary validity, persisted count, root clearing), and appserver/memory_status_test.go TestMemoryStatusReportsV2Readiness. Verified with `go test ./memories -run 'Readiness|Consolidation' -count=1` and `go test ./appserver -run 'MemoryDualWrite|MemoryStatus' -count=1`."
    ]
   },
   {
@@ -11030,9 +11033,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "regression_pending",
+   "status": "complete",
    "evidence": [
-    "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+    "appserver/thread_attachments.go implements paginated thread attachment listing (#44330): attachments are stored independently of loading thread content, with cursor-based pagination, owner listing, per-thread limits and validation, and the RPCs are registered in the protocol surface.",
+    "Regression coverage: appserver/thread_attachments_test.go TestRuntimeRouterThreadAttachmentListPagination plus the lifecycle, owner-list, validation and limit tests. Verified with `go test ./appserver -run ThreadAttachment -count=1`."
    ]
   },
   {

@@ -3737,6 +3737,15 @@ Status after this batch: `2245 complete`, `462 not_applicable`, `322 audit_pendi
 
 Status after this batch: `2248 complete`, `462 not_applicable`, `322 audit_pending`, `112 regression_pending`, `5 partial`, `6 blocked_precondition`.
 
+### Regression certification batch (Round 1087)
+
+- #43797 configurable memory versions: v1/v2 enum, isolated `memories_v2` store sharing the thread catalog, version-aware instructions/extraction/consolidation/readiness and dual-root usage telemetry.
+- #43808 v2 extraction chunking: bounded Unicode-safe user-message chunks with prompt budget replace the single extraction input.
+- #43827 dual writing and v2 readiness: v2 pipeline alongside the selected version, monotone consolidation progress, gated v2 context and memory-status readiness reporting.
+- #44330 paginated thread attachment listing: cursor pagination, owner listing, per-thread limits and validation registered on the protocol surface.
+
+Status after this batch: `2252 complete`, `462 not_applicable`, `322 audit_pending`, `108 regression_pending`, `5 partial`, `6 blocked_precondition`.
+
 Status after reconciliation: `2234 complete`, `462 not_applicable`,
 `322 audit_pending`, `126 regression_pending`, `5 partial`,
 `6 blocked_precondition`.
