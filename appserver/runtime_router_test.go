@@ -21040,6 +21040,9 @@ func TestRuntimeRouterCollabAndImageToolAnalyticsLikeRust(t *testing.T) {
 		},
 	}
 	router.emitCollabAgentToolCallAnalyticsEvent(context.Background(), connectionID, threadID, turnID, &collabItem, &appTurnRunConfig{})
+	// Rust #42752 holds collaborator events until a sampling response can
+	// correlate them; a turn that ends without one flushes them at turn close.
+	router.flushPendingToolEvents(threadID, turnID)
 	collabEvent := waitForCollabAgentToolCallAnalyticsEvent(t, analyticsSink, turnID)
 	collabParams := collabEvent.EventParams
 	if collabEvent.EventType != telemetry.CodexCollabAgentToolCallEventType ||

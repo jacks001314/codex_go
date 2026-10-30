@@ -7474,9 +7474,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/tool_event_origin.go adds an await-response emission; remaining_tool_item_analytics.go holds collaborator tool events until sampling responses supply originating and subsequent ids; collab_agent_tool_response_ids_like_rust_test.go covers both arrival orderings"
    ]
   },
   {

@@ -43,7 +43,9 @@ func (r *RuntimeRouter) emitCollabAgentToolCallAnalyticsEvent(ctx context.Contex
 		CompletedAgentCount:      uint64PtrFromUint(completedCount),
 		FailedAgentCount:         uint64PtrFromUint(failedCount),
 	}
-	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+	// Rust #42752: collaborator tools can finish before their sampling response
+	// arrives, so hold the event until the response can supply its ids.
+	r.emitToolEventWithEmission(threadID, turnID, &params.CodexToolItemEventBase, toolEventEmissionAwaitResponse, func() {
 		sink.TrackCodexCollabAgentToolCallEvent(ctx, telemetry.NewCodexCollabAgentToolCallEvent(params))
 	})
 }

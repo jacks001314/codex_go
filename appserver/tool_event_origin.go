@@ -112,16 +112,37 @@ type pendingToolEvent struct {
 	emit func()
 }
 
+// toolEventEmission mirrors Rust's `ToolEventEmission`: most tool events are
+// published immediately unless they already carry correlation, while events
+// whose sampling response may still arrive wait for it (Rust #42752).
+type toolEventEmission int
+
+const (
+	toolEventEmissionImmediateUnlessCorrelated toolEventEmission = iota
+	toolEventEmissionAwaitResponse
+)
+
 // emitToolEvent publishes one tool event the way Rust's `record_tool_event`
 // does: an event with neither a cell nor an originating response is published
 // immediately, while a correlated one waits until a later sampled response
 // completes. The queue is bounded like Rust's MAX_TOOL_RESPONSE_ENTRIES, and the
 // oldest event is published first when it overflows.
 func (r *RuntimeRouter) emitToolEvent(threadID string, turnID string, base *telemetry.CodexToolItemEventBase, emit func()) {
+	r.emitToolEventWithEmission(threadID, turnID, base, toolEventEmissionImmediateUnlessCorrelated, emit)
+}
+
+// emitToolEventWithEmission is emitToolEvent with an explicit Rust
+// `ToolEventEmission` policy so collaborator tool events can wait for their
+// originating response even when it has not arrived yet.
+func (r *RuntimeRouter) emitToolEventWithEmission(threadID string, turnID string, base *telemetry.CodexToolItemEventBase, emission toolEventEmission, emit func()) {
 	if r == nil || emit == nil {
 		return
 	}
-	if base == nil || (base.CellID == nil && base.OriginatingResponseID == nil) {
+	if base == nil {
+		emit()
+		return
+	}
+	if emission == toolEventEmissionImmediateUnlessCorrelated && base.CellID == nil && base.OriginatingResponseID == nil {
 		r.refreshToolEventRootTurnID(base, threadID, turnID)
 		emit()
 		return
