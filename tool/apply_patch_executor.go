@@ -9,7 +9,10 @@ import (
 
 	"codex_go/applypatch"
 	"codex_go/execserver"
+	"codex_go/safety"
 	"codex_go/sandbox"
+	"codex_go/sandbox/sandboxpath"
+	"codex_go/utils"
 )
 
 const DefaultApplyPatchToolName = "apply_patch"
@@ -188,7 +191,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	// symlink traversal so a verified path cannot be swapped for a link to a
 	// different file.
 	applyOptions.NoFollowSymlinks = applyPatchSandboxBypassed(permissionProfile, sandboxPolicy)
-	if deniedPath := applyPatchDeniedPath(action, e.cwd(), permissionProfile, sandboxPolicy); deniedPath != "" {
+	if deniedPath := applyPatchDeniedPath(action, cwd, permissionProfile, sandboxPolicy); deniedPath != "" {
 		body := fmt.Sprintf("apply_patch verification failed: path %s is outside of the project workspace roots", deniedPath)
 		sandbox.RecordFileSystemPolicyViolation(sandbox.PlatformSandboxType(), deniedPath, body)
 		return &Output{
@@ -298,6 +301,12 @@ func applyPatchDeniedPath(action *applypatch.Action, cwd string, profile *sandbo
 	if action == nil || policy == nil || policy.HasFullDiskWriteAccess() {
 		return ""
 	}
+	// Rust #42391: patch targets can use a different path convention from the
+	// Codex host, so host-native conversion can misclassify writable roots.
+	// Compare those targets as path URIs under the executor's convention.
+	if patchPathUsesExecutorConvention(cwd) {
+		return applyPatchDeniedPathForConvention(action, cwd, policy)
+	}
 	roots := policy.GetWritableRootsWithCWD(cwd)
 	for _, path := range action.FilePaths() {
 		resolved := filepath.Clean(path)
@@ -316,6 +325,61 @@ func applyPatchDeniedPath(action *applypatch.Action, cwd string, profile *sandbo
 			}
 		}
 		if !writable {
+			return path
+		}
+	}
+	return ""
+}
+
+// patchPathUsesExecutorConvention reports whether the executor cwd is spelled
+// as a path URI or with a foreign path convention, in which case host filepath
+// operations cannot classify patch targets correctly (Rust #42391).
+func patchPathUsesExecutorConvention(cwd string) bool {
+	if strings.Contains(cwd, "://") {
+		return true
+	}
+	convention := PathConventionForPath(cwd)
+	return convention != "" && convention != utils.NativePathConvention()
+}
+
+// applyPatchDeniedPathForConvention classifies patch targets against the
+// executor's filesystem policy context. Mirrors Rust #42391: the workspace
+// cwd, the policy's writable roots, and the symbolic `/tmp` root are resolved
+// under the executor path convention, and workspace metadata names stay
+// read-only inside a writable root.
+func applyPatchDeniedPathForConvention(action *applypatch.Action, cwd string, policy *sandbox.SandboxPolicy) string {
+	paths := action.FilePaths()
+	denyFirst := func() string {
+		if len(paths) == 0 {
+			return ""
+		}
+		return paths[0]
+	}
+	cwdURI, ok := utils.InferredPathURI(cwd)
+	if !ok || cwdURI == nil {
+		return denyFirst()
+	}
+	if policy.Kind != sandbox.SandboxWorkspaceWrite {
+		return denyFirst()
+	}
+	context := safety.FileSystemPolicyContext{
+		CWD:                    cwdURI,
+		ExtraWritableRoots:     []*utils.PathURI{cwdURI},
+		ProtectedMetadataNames: sandboxpath.DefaultProtectedMetadataNames(),
+	}
+	// `:slash_tmp` is symbolic only under POSIX semantics (Rust #42391's
+	// `has_write_narrowing_entries` convention check). A POSIX executor also
+	// owns `/tmp`; the host temp directory is meaningless for a foreign
+	// executor, so it is never added here.
+	if convention, ok := cwdURI.InferConvention(); ok && convention == utils.ConventionPosix && !policy.ExcludeSlashTmp {
+		if tmpURI, err := utils.FromAbsoluteNativePath("/tmp", convention); err == nil {
+			context.ExtraWritableRoots = append(context.ExtraWritableRoots, tmpURI)
+		}
+	}
+	filePolicy := safety.FileSystemPolicy{WritableRoots: policy.WritableRoots}
+	for _, path := range paths {
+		target, ok := context.ResolvePath(path)
+		if !ok || !context.CanWritePath(&filePolicy, target) {
 			return path
 		}
 	}

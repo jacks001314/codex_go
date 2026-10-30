@@ -6691,9 +6691,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: PatchSandboxRoute, has_configured_writable_roots, has_full_disk_write_access_with_context"
+    "Context-aware apply_patch authorization implemented for Windows and POSIX executors addressed from a foreign host convention (safety.FileSystemPolicyContext, applyPatchDeniedPathForConvention); residuals: executor-managed write_permissions_for_paths requests, PatchSandboxRoute auto-approval routing, restricted entry-list special-path narrowing"
    ]
   },
   {

@@ -3,6 +3,8 @@ package safety
 import (
 	"path/filepath"
 	"strings"
+
+	"codex_go/utils"
 )
 
 const (
@@ -321,6 +323,221 @@ func CanWritePath(policy *FileSystemPolicy, cwd string, path string) bool {
 		}
 	}
 	return false
+}
+
+// FileSystemPolicyContext is the executor-side view of a filesystem policy.
+// Rust #42391 (`FileSystemSandboxPolicyContext`) evaluates patch targets
+// against the selected executor's path convention, so a target spelled with a
+// foreign convention is no longer misclassified by host-native path conversion.
+type FileSystemPolicyContext struct {
+	// CWD is the executor working directory. Its path convention decides how
+	// relative and absolute policy roots are resolved.
+	CWD *utils.PathURI
+	// ExtraWritableRoots are roots the caller resolved for the executor, such
+	// as the executor's cwd and temporary directory.
+	ExtraWritableRoots []*utils.PathURI
+	// ProtectedMetadataNames stay read-only inside every writable root unless a
+	// root grants them explicitly.
+	ProtectedMetadataNames []string
+}
+
+// ResolvePath resolves a patch path (absolute in the executor convention or
+// relative to the executor cwd) to a path URI without touching the filesystem.
+func (c FileSystemPolicyContext) ResolvePath(path string) (*utils.PathURI, bool) {
+	if c.CWD == nil {
+		return nil, false
+	}
+	resolved, err := c.CWD.Join(path)
+	if err != nil || resolved == nil {
+		return nil, false
+	}
+	return resolved, true
+}
+
+// CanWritePath reports whether policy grants write access to target when its
+// writable roots are interpreted under the executor path convention. Mirrors
+// Rust #42391 `FileSystemSandboxPolicy::can_write_path(path, context)`.
+func (c FileSystemPolicyContext) CanWritePath(policy *FileSystemPolicy, target *utils.PathURI) bool {
+	if policy == nil || target == nil || c.CWD == nil {
+		return false
+	}
+	if policy.FullDiskWrite {
+		return true
+	}
+	for _, root := range policy.WritableRoots {
+		rootURI, err := c.CWD.Join(root)
+		if err != nil || rootURI == nil {
+			continue
+		}
+		if c.permitsWrite(rootURI, target) {
+			return true
+		}
+	}
+	for _, rootURI := range c.ExtraWritableRoots {
+		if c.permitsWrite(rootURI, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasConfiguredWritableRoots mirrors Rust #42391
+// `has_configured_writable_roots(context)`: the policy configures a writable
+// root that resolves under the executor convention. Full-disk policies report
+// false because they carry no narrowing roots.
+func (c FileSystemPolicyContext) HasConfiguredWritableRoots(policy *FileSystemPolicy) bool {
+	if policy == nil || policy.FullDiskWrite {
+		return false
+	}
+	for _, root := range policy.WritableRoots {
+		rootURI, err := c.CWD.Join(root)
+		if err != nil || rootURI == nil {
+			continue
+		}
+		if c.CanWritePath(policy, rootURI) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c FileSystemPolicyContext) permitsWrite(root, target *utils.PathURI) bool {
+	if !target.StartsWith(root) {
+		return false
+	}
+	return !c.introducesProtectedMetadata(root, target)
+}
+
+func (c FileSystemPolicyContext) introducesProtectedMetadata(root, target *utils.PathURI) bool {
+	if len(c.ProtectedMetadataNames) == 0 {
+		return false
+	}
+	relative, ok := lexicalRelativeNativePath(root, target)
+	if !ok || relative == "" {
+		return false
+	}
+	first := relative
+	if index := strings.IndexAny(relative, `/\`); index >= 0 {
+		first = relative[:index]
+	}
+	convention, _ := target.InferConvention()
+	for _, name := range c.ProtectedMetadataNames {
+		if name == "" {
+			continue
+		}
+		if first == name || (convention == utils.ConventionWindows && strings.EqualFold(first, name)) {
+			return true
+		}
+	}
+	return false
+}
+
+// CanWritePathInContext mirrors Rust #42391's context-aware can_write_path.
+func CanWritePathInContext(policy *FileSystemPolicy, context FileSystemPolicyContext, target *utils.PathURI) bool {
+	return context.CanWritePath(policy, target)
+}
+
+// WritePatchConstrainedToWritablePathsInContext mirrors Rust #42391: patch
+// containment is decided with the executor's path convention instead of the
+// host's.
+func WritePatchConstrainedToWritablePathsInContext(action *PatchAction, policy *FileSystemPolicy, context FileSystemPolicyContext) bool {
+	if action == nil || policy == nil {
+		return false
+	}
+	if policy.FullDiskWrite {
+		return true
+	}
+	for _, change := range action.Changes {
+		target, ok := context.ResolvePath(change.Path)
+		if !ok || !context.CanWritePath(policy, target) {
+			return false
+		}
+		if change.Kind == FileUpdate && change.MovePath != "" {
+			moveTarget, ok := context.ResolvePath(change.MovePath)
+			if !ok || !context.CanWritePath(policy, moveTarget) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// AssessPatchSafetyWithContext mirrors Rust #42391's context-aware
+// `assess_patch_safety`: writable-root containment and read-only rejection
+// reasons follow the executor's path convention. The platform sandbox string
+// reports the sandbox the caller can enforce, if any.
+func AssessPatchSafetyWithContext(action *PatchAction, policy ApprovalPolicy, permissionKind PermissionProfileKind, filePolicy FileSystemPolicy, context FileSystemPolicyContext, platformSandbox string) PatchSafetyCheck {
+	if action == nil || len(action.Changes) == 0 {
+		return PatchSafetyCheck{Kind: SafetyReject, Reason: "empty patch"}
+	}
+	if policy.Mode == ApprovalUnlessTrusted {
+		return PatchSafetyCheck{Kind: SafetyAskUser}
+	}
+	rejectsSandboxApproval := policy.Mode == ApprovalNever || (policy.Mode == ApprovalGranular && !policy.SandboxApproval)
+	if WritePatchConstrainedToWritablePathsInContext(action, &filePolicy, context) {
+		if permissionKind == PermissionDisabled || permissionKind == PermissionExternal {
+			return PatchSafetyCheck{Kind: SafetyAutoApprove, SandboxType: "none"}
+		}
+		if platformSandbox != "" {
+			return PatchSafetyCheck{Kind: SafetyAutoApprove, SandboxType: platformSandbox}
+		}
+		if rejectsSandboxApproval {
+			return PatchSafetyCheck{Kind: SafetyReject, Reason: patchRejectionReasonInContext(permissionKind, &filePolicy, context)}
+		}
+		return PatchSafetyCheck{Kind: SafetyAskUser}
+	}
+	if rejectsSandboxApproval {
+		return PatchSafetyCheck{Kind: SafetyReject, Reason: patchRejectionReasonInContext(permissionKind, &filePolicy, context)}
+	}
+	return PatchSafetyCheck{Kind: SafetyAskUser}
+}
+
+func patchRejectionReasonInContext(permissionKind PermissionProfileKind, policy *FileSystemPolicy, context FileSystemPolicyContext) string {
+	if permissionKind == PermissionManaged && policy != nil && !policy.FullDiskWrite && !context.HasConfiguredWritableRoots(policy) {
+		return PatchRejectedReadOnlyReason
+	}
+	return PatchRejectedOutsideProjectReason
+}
+
+// lexicalRelativeNativePath returns the path of target below root using the
+// shared path convention, without touching the filesystem.
+func lexicalRelativeNativePath(root, target *utils.PathURI) (string, bool) {
+	if root == nil || target == nil {
+		return "", false
+	}
+	convention, ok := target.InferConvention()
+	if !ok {
+		return "", false
+	}
+	rootSegments := nonEmptyNativeSegments(convention, root.NativePathString())
+	targetSegments := nonEmptyNativeSegments(convention, target.NativePathString())
+	if len(rootSegments) > len(targetSegments) {
+		return "", false
+	}
+	for index := range rootSegments {
+		if convention == utils.ConventionWindows {
+			if !strings.EqualFold(rootSegments[index], targetSegments[index]) {
+				return "", false
+			}
+			continue
+		}
+		if rootSegments[index] != targetSegments[index] {
+			return "", false
+		}
+	}
+	return strings.Join(targetSegments[len(rootSegments):], "/"), true
+}
+
+func nonEmptyNativeSegments(convention utils.PathConvention, native string) []string {
+	segments := utils.PathSegments(convention, native)
+	out := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment == "" || segment == "." {
+			continue
+		}
+		out = append(out, segment)
+	}
+	return out
 }
 
 func patchRejectionReason(permissionKind PermissionProfileKind, policy *FileSystemPolicy, cwd string) string {
