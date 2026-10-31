@@ -1069,11 +1069,10 @@ one-off captures.
     Evidence: live comparisons against 0.166 - `out/round30-worktree.txt`
     (15/15), `out/round30-worktree-order.txt` (5/5),
     `out/round30-exec-review.txt` (4/4), `out/round30-strict-config.txt`
-    (10/12, both diffs are Rust `queue` runs waiting for a session),
-    `out/round30-remote-control.txt` (8/9, the diff is `app-server` holding
-    stdin open) and `out/round30-exec-review-globals.txt` (4/6, the diffs are
-    clap's did-you-mean). Round 29 regressions stay green: 14/14, 30/30 and
-    10/10. `go test ./cli` passes with `TestWorktreeSupportedCommandsLikeRust`,
+    (12/12), `out/round30-remote-control.txt` (9/9) and
+    `out/round30-exec-review-globals.txt` (4/6, the diffs are clap's
+    did-you-mean). The clean-worktree rerun on the commit reproduced every
+    count. Round 29 regressions stay green: 14/14, 30/30 and 10/10. `go test ./cli` passes with `TestWorktreeSupportedCommandsLikeRust`,
     `TestWorktreeRejectedCommandsLikeRust`,
     `TestWorktreeRunsBeforeSubcommandGatesLikeRust`,
     `TestStrictConfigGateLikeRust`,
@@ -1357,11 +1356,11 @@ one-off captures.
   rejections (`out/round30-worktree.txt`), the 5 ordering cases
   (`out/round30-worktree-order.txt`), the 4 `exec review --worktree` cases
   (`out/round30-exec-review.txt`), the 12 strict-config combinations
-  (`out/round30-strict-config.txt`) and the 9 remote-control names
-  (`out/round30-remote-control.txt`) are byte-identical except Rust runs that
-  wait for a session or keep stdin open. `go test ./cli ./sandbox ./applypatch
-  ./prompt ./review ./cmd/... ./tcptunnel` passes and `go test -vet=off ./app`
-  keeps only the two known baselines.
+  (`out/round30-strict-config.txt`), the 9 remote-control names
+  (`out/round30-remote-control.txt`) and the 10 round-29 mutation cases are
+  byte-identical on a clean worktree at `f3bb3db9`, which also passes
+  `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/...
+  ./tcptunnel`; `go test -vet=off ./app` keeps only the two known baselines.
 
 ## Still open
 
