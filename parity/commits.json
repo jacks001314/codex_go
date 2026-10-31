@@ -5634,7 +5634,8 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "N/A by tooling: the change widens the Rust repository's Ruff formatter pass to Python files outside scripts/ and updates its formatter-coverage test. The Go repository has no justfile, pyproject.toml, or Ruff configuration; its tracked Python files are SDK and fixture scripts with no repo-wide formatter, so there is no carrier or observable behavior."
+    "N/A by tooling: the change widens the Rust repository's Ruff formatter pass to Python files outside scripts/ and updates its formatter-coverage test. The Go repository has no justfile, pyproject.toml, or Ruff configuration; its tracked Python files are SDK and fixture scripts with no repo-wide formatter, so there is no carrier or observable behavior.",
+    "Content check: the only Go/Rust differences under `systemskills/assets/samples` are the 7 Ruff-formatted Python scripts (imagegen/scripts/image_gen.py, imagegen/scripts/remove_chroma_key.py, skill-creator/scripts/generate_openai_yaml.py, skill-creator/scripts/init_skill.py, skill-creator/scripts/quick_validate.py, skill-installer/scripts/install-skill-from-github.py, skill-installer/scripts/list-skills.py); they compare AST-equal (`ast.dump`) to the Rust anchor, so only formatting differs and no behavior needs porting."
    ]
   },
   {
@@ -33436,10 +33437,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:187: (`#55396`/`#55380`), docs scripts (`#55379`), and TUI commits",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "Go vendors the same openai-docs skill assets: `systemskills/assets/samples/openai-docs/scripts/fetch-codex-manual.mjs` and `resolve-latest-model-info.cjs` are byte-identical (SHA-256 6172BD2CAA95... / 2EEE6052AA77...) to the Rust anchor `codex-rs/skills/src/assets/samples/openai-docs/scripts/*`, including #55379's fix: the manual downloader reads the body inside the same timeout and transport fallback (`const response = await fetch(url, {`, `if (!response.ok || method === \"HEAD\") return response;`, `body: await response.text(),`) and the metadata reader awaits the body inside its retry attempt (`return await response.text();`). Test: TestOpenAIDocsScriptsKeepResponseBodyFailuresInsideFallbacksLikeRust (`go test ./systemskills -run TestOpenAIDocsScriptsKeepResponseBodyFailuresInsideFallbacksLikeRust -count=1`)."
    ]
   },
   {
@@ -33451,8 +33451,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:187: (`#55396`/`#55380`), docs scripts (`#55379`), and TUI commits",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by architecture: Rust keeps a pending-thread-metadata buffer in `thread-store/src/local/live_writer.rs` and `update_thread_metadata.rs` so a metadata patch on a paginated thread (no rollout file yet) survives until `naming_empty_paginated_thread_materializes_rollout` writes the first rollout. Go stores thread metadata as a SQLite row updated by `session.Store.UpdateMetadata` / `LiveThread.UpdateMetadata` (`appserver/runtime_router.go:11689`), never in or gated on the rollout file, so there is no pre-materialization window and no pending buffer to add."
    ]
   },
   {
@@ -33554,8 +33553,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:187: (`#55396`/`#55380`), docs scripts (`#55379`), and TUI commits",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by architecture: Rust prefetches sibling rollout paths (`rollout/src/list.rs`, `rollout/src/list_files.rs`) and walks `thread-store/src/local/rollout_lineage.rs` when reading a history page. Go answers paginated history from the SQLite thread-history projection (`app.MaterializeThreadHistory` plus store turn pages) instead of scanning the rollout directory per page, so there are no sibling rollout paths to prefetch; the observable page of turns and lineage is produced by index lookups."
    ]
   },
   {
@@ -33580,8 +33578,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:184: - Runtime-agent-instance commits (`#55398`, `#55402`, `#55413`), credential",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by subsystem absence: Rust adds the new `runtime-agent-instance` crate (`src/bootstrap.rs` wire types plus Cargo/BUILD.bazel entries) for runtime agent registration. Go has no runtime-agent-instance package, no runtime registration wire client and no `RuntimeAgentInstance` producer (app-server agent spawning is a separate in-process path), so there is no crate, Bazel target or bootstrap type to add."
    ]
   },
   {
@@ -33593,8 +33590,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:186: (`#55401`), Noise readiness tracing (`#55406`), rollout prefetch/metadata",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by subsystem absence: Rust adds `EnvironmentConnectionState::Recovering` and suppresses thread environment lifecycle notifications while an exec-server transport recovers (`core/src/environment_selection.rs`, `exec-server/src/client.rs`, `client_recovery.rs`). Go publishes no thread environment lifecycle notifications at all: `thread/environment/connected|disconnected` are registered in `appserver/protocol.go`/`schema.go` but nothing emits them, and `execserver` has no connection-status callback or environment state enum; recovery is retried synchronously per request, so there is no notification to defer."
    ]
   },
   {
@@ -33606,8 +33602,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:184: - Runtime-agent-instance commits (`#55398`, `#55402`, `#55413`), credential",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by subsystem absence: Rust adds ephemeral runtime registration and signed assertions inside the `runtime-agent-instance` crate (`src/registration.rs`, `src/runtime.rs`). Go has no runtime-agent-instance crate, registration service client or assertion envelope, so there is no signing or ephemeral-registration handshake carrier."
    ]
   },
   {
@@ -33619,8 +33614,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:186: (`#55401`), Noise readiness tracing (`#55406`), rollout prefetch/metadata",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by observability carrier: Rust only adds structured telemetry - `codex.exec_server.noise_handshake_failed` WARN events (reason plus environment/executor/stream ids) on harness handshake failure and timeout, and `.or_current()` span retention (`exec-server/src/client_transport.rs`, `noise_relay/harness.rs`). Go's exec-server has no OTEL tracing event emitter for a `codex_otel.trace_safe` target; the same failures already surface as typed errors with reasons (\"Noise relay transport expects binary protobuf frames\", \"Noise relay stream reset\") pinned by TestNoiseHandshakeReportsDisconnectReasonLikeRust, with diagnostics in `execserver/noise_transport_diagnostics.go`."
    ]
   },
   {
@@ -33657,8 +33651,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:185: source generations (`#55410`), environment recovery notifications",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by consumer contract: Rust adds `source_generation` plus `AuthManager::auth_change_state_for`/`same_source` (JWT session/issuer/claims continuity), consumed by the `runtime-agent-instance` manager and by `codex-mcp`'s pooled ConnectionKey. Go's `auth.AuthChangeTracker` tracks Generation, OwnerGeneration and LoginGeneration (login continuity, #55546) without an AuthManager object or `auth_change_state_for`; the runtime-agent-instance consumer does not exist, and the only Go analogue is MCP connection scoping, which keys on owner plus login generations (#57211), so there is no separate source revision to publish."
    ]
   },
   {
