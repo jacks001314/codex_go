@@ -424,7 +424,7 @@ func TestParseTUIOnlyFlagsForRootResumeAndFork(t *testing.T) {
 
 func TestParseRejectsRetiredUntrustedApprovalPolicyLikeRust(t *testing.T) {
 	_, err := Parse([]string{"--ask-for-approval", "untrusted"})
-	if err == nil || !strings.Contains(err.Error(), "must be one of on-request, never") {
+	if err == nil || !strings.Contains(err.Error(), "invalid value 'untrusted' for '--ask-for-approval <APPROVAL_POLICY>'\n  [possible values: on-request, never]") {
 		t.Fatalf("Parse(--ask-for-approval untrusted) error = %v", err)
 	}
 }
@@ -519,10 +519,27 @@ func TestParseExecCyberAccessProgram(t *testing.T) {
 		})
 	}
 
-	for _, value := range []string{"future_program", "Daybreak_Blue", ""} {
-		args := []string{"exec", "--cyber-access-program", value, "hello"}
+	for _, tc := range []struct {
+		value string
+		want  string
+	}{
+		{
+			value: "future_program",
+			want:  "invalid value 'future_program' for '--cyber-access-program <PROGRAM>'\n  [possible values: standard, daybreak_blue, daybreak_red]",
+		},
+		{
+			value: "Daybreak_Blue",
+			want:  "invalid value 'Daybreak_Blue' for '--cyber-access-program <PROGRAM>'\n  [possible values: standard, daybreak_blue, daybreak_red]\n\n  tip: a similar value exists: 'daybreak_blue'",
+		},
+		{
+			// clap reports an empty value for an enum option as a missing value.
+			value: "",
+			want:  "a value is required for '--cyber-access-program <PROGRAM>' but none was supplied",
+		},
+	} {
+		args := []string{"exec", "--cyber-access-program", tc.value, "hello"}
 		_, err := Parse(args)
-		if err == nil || !strings.Contains(err.Error(), "--cyber-access-program must be one of standard, daybreak_blue, daybreak_red") {
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("Parse(%v) error = %v", args, err)
 		}
 	}
@@ -560,9 +577,11 @@ func TestParseExecColorFlag(t *testing.T) {
 		t.Fatalf("Parse(--color rainbow) error = %q", err.Error())
 	}
 
+	// `codex exec` does not mark --color global, so clap rejects it after
+	// `resume` instead of running its value parser.
 	if _, err := Parse([]string{"exec", "resume", "--last", "--color", "bogus", "hello"}); err == nil {
-		t.Fatal("Parse(resume --color bogus) returned nil error, want validation failure")
-	} else if !strings.Contains(err.Error(), "invalid value 'bogus' for '--color <COLOR>'") {
+		t.Fatal("Parse(resume --color bogus) returned nil error, want a diagnostic")
+	} else if !strings.Contains(err.Error(), "unexpected argument '--color' found") {
 		t.Fatalf("Parse(resume --color bogus) error = %q", err.Error())
 	}
 }

@@ -323,7 +323,9 @@ type StdioToUDSOptions struct {
 }
 
 type ExecServerOptions struct {
-	StrictConfig         bool
+	StrictConfig bool
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides      []string
 	Listen               string
 	ListenSet            bool
 	Remote               string
@@ -356,6 +358,14 @@ type ExecServerOptions struct {
 	AWSRegion     string
 	AWSService    string
 	AWSServiceSet bool
+	// LinuxSandboxPIDNamespace mirrors the global
+	// `--linux-sandbox-pid-namespace <MODE>` flag: "isolate" (the default) or
+	// "inherit". The Go executor validates the value at parse time; the Linux
+	// bubblewrap planner owns the per-platform effect.
+	LinuxSandboxPIDNamespace string
+	// ConcurrentRequests mirrors `--concurrent-requests <COUNT>`, the
+	// RequestDispatchMode clap parses as a NonZeroUsize (1 = inline).
+	ConcurrentRequests int
 	WebSocketAuthOptions
 }
 
@@ -492,14 +502,16 @@ func applyWebSocketAuthFlag(args []string, index int, arg string, options *WebSo
 }
 
 type AppServerOptions struct {
-	Subcommand    []string
-	Daemon        AppServerDaemonOptions
-	Proxy         AppServerProxyOptions
-	Generate      AppServerGenerateOptions
-	StrictConfig  bool
-	Listen        string
-	Stdio         bool
-	RemoteControl bool
+	Subcommand []string
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
+	Daemon          AppServerDaemonOptions
+	Proxy           AppServerProxyOptions
+	Generate        AppServerGenerateOptions
+	StrictConfig    bool
+	Listen          string
+	Stdio           bool
+	RemoteControl   bool
 	// PrintStartupConfig validates configuration and emits startup requirements
 	// as JSON without starting the server (Rust #55300).
 	PrintStartupConfig bool
@@ -517,8 +529,10 @@ type AppServerOptions struct {
 }
 
 type AppServerDaemonOptions struct {
-	Action        string
-	RemoteControl bool
+	Action string
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
+	RemoteControl   bool
 	// FromCLI marks `app-server daemon update --from-cli`, which copies and pins
 	// this CLI's package (Rust AppServerDaemonSubcommand::Update).
 	FromCLI bool
@@ -537,18 +551,24 @@ type AppServerDaemonOptions struct {
 
 type AppServerProxyOptions struct {
 	SocketPath string
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
 }
 
 type AppServerGenerateOptions struct {
-	Action       string
-	OutDir       string
-	Prettier     string
-	Experimental bool
+	Action string
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
+	OutDir          string
+	Prettier        string
+	Experimental    bool
 }
 
 type AppOptions struct {
 	Path        string
 	DownloadURL string
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
 }
 
 type UpdateOptions struct {
@@ -588,6 +608,8 @@ type DoctorOptions struct {
 // temporary directory.
 type MigrateNFSDBOptions struct {
 	StagingDir string
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
 }
 
 type MigrateRolloutsOptions struct {
@@ -596,6 +618,8 @@ type MigrateRolloutsOptions struct {
 	MaxMibPerSecond uint64
 	JSON            bool
 	Verbose         bool
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
 }
 
 type ApplyOptions struct {
@@ -605,6 +629,8 @@ type ApplyOptions struct {
 
 type RemoteControlOptions struct {
 	JSON bool
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
 	// NoDaemon mirrors Rust RemoteControlCommand.no_daemon (#50803): run the
 	// embedded app-server in the foreground until Ctrl-C instead of the managed
 	// daemon. The top-level --no-daemon also sets it, matching Rust cli_main's
@@ -676,10 +702,14 @@ type DebugOptions struct {
 
 type ReviewOptions struct {
 	Uncommitted bool
-	Base        string
-	Commit      string
-	CommitTitle string
-	Prompt      string
+	// StrictConfig mirrors ReviewCommand's own `--strict-config` flag: the
+	// top-level `codex review` declares it on the subcommand instead of
+	// inheriting the root parser's copy.
+	StrictConfig bool
+	Base         string
+	Commit       string
+	CommitTitle  string
+	Prompt       string
 }
 
 type Parsed struct {
@@ -870,7 +900,7 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 	case CommandReview:
 		p.Command = CommandReview
 		p.Exec.Subcommand = "review"
-		return p, parseReview(args, &p.Exec.Review, nil)
+		return p, parseReview(args, &p.Exec.Review, nil, &p.Exec.ConfigOverrides)
 	case CommandLogin:
 		return p, parseLogin(args, &p.Login)
 	case CommandLogout:
@@ -1118,6 +1148,7 @@ func rootHelpTopic(args []string) error {
 
 func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 	var rest []string
+	var deferred error
 	promptSet := false
 	appendPrompt := func(value string) error {
 		if promptSet {
@@ -1130,11 +1161,17 @@ func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if handled, err := parseSharedOptionVariadicImages(args, &i, &root.Shared); err != nil {
+			if deferClapValueError(args, &i, &deferred, err) {
+				continue
+			}
 			return nil, false, err
 		} else if handled {
 			continue
 		}
 		if handled, err := parseTUIOnlyOption(args, &i, &root.Shared); err != nil {
+			if deferClapValueError(args, &i, &deferred, err) {
+				continue
+			}
 			return nil, false, err
 		} else if handled {
 			continue
@@ -1149,6 +1186,9 @@ func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 		}
 		if !promptSet {
 			if _, ok := knownCommands[arg]; ok {
+				if deferred != nil {
+					return nil, false, deferred
+				}
 				return append(rest, args[i:]...), false, nil
 			}
 		}
@@ -1228,13 +1268,20 @@ func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 			}
 		}
 	}
+	if deferred != nil {
+		return nil, false, deferred
+	}
 	return rest, false, nil
 }
 
 func parseExec(args []string, exec *ExecOptions) error {
+	var deferred error
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if handled, err := parseSharedOptionVariadicImages(args, &i, &exec.Shared); err != nil {
+			if deferClapValueError(args, &i, &deferred, err) {
+				continue
+			}
 			return err
 		} else if handled {
 			continue
@@ -1289,7 +1336,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 			return parseExecFork(args[i+1:], exec)
 		case arg == "review" && exec.Prompt == "":
 			exec.Subcommand = arg
-			return parseReview(args[i+1:], &exec.Review, exec)
+			return parseReview(args[i+1:], &exec.Review, exec, &exec.ConfigOverrides)
 		case arg == "--strict-config":
 			exec.StrictConfig = true
 		case arg == "--thread-source":
@@ -1305,12 +1352,16 @@ func parseExec(args []string, exec *ExecOptions) error {
 				return err
 			}
 			if err := setExecCyberAccessProgram(exec, value); err != nil {
-				return err
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
 			}
 			i = next
 		case strings.HasPrefix(arg, "--cyber-access-program="):
 			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
-				return err
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
 			}
 		case arg == "--skip-git-repo-check":
 			exec.SkipGitRepoCheck = true
@@ -1335,12 +1386,16 @@ func parseExec(args []string, exec *ExecOptions) error {
 				return missingValueError("--color <COLOR>", colorValues)
 			}
 			if err := setExecColor(exec, value); err != nil {
-				return err
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
 			}
 			i = next
 		case strings.HasPrefix(arg, "--color="):
 			if err := setExecColor(exec, strings.TrimPrefix(arg, "--color=")); err != nil {
-				return err
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
 			}
 		case arg == "--json" || arg == "--experimental-json":
 			exec.JSON = true
@@ -1376,16 +1431,45 @@ func parseExec(args []string, exec *ExecOptions) error {
 			exec.Prompt = arg
 		}
 	}
+	if deferred != nil {
+		return deferred
+	}
 	return nil
 }
 
 func parseExecResume(args []string, exec *ExecOptions) error {
 	var positionals []string
+	var deferred error
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if handled, err := parseSharedOption(args, &i, &exec.Shared); err != nil {
-			return err
-		} else if handled {
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			exec.ConfigOverrides = append(exec.ConfigOverrides, value)
+			i = next
+			continue
+		}
+		// ResumeArgsRaw declares --image itself; the other SharedCliOptions
+		// entries stay local to `codex exec`, so only the exec globals reach a
+		// nested subcommand.
+		if arg == "--image" || arg == "-i" {
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			exec.Shared.Images = append(exec.Shared.Images, splitComma(value)...)
+			i = next
+			continue
+		}
+		if strings.HasPrefix(arg, "--image=") {
+			exec.Shared.Images = append(exec.Shared.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
+			continue
+		}
+		if handled, err := parseExecGlobalOption(args, &i, exec, &deferred); handled {
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		if arg == "--" {
@@ -1415,78 +1499,14 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 			exec.Resume.Last = true
 		case arg == "--all":
 			exec.Resume.All = true
-		case arg == "--json" || arg == "--experimental-json":
-			exec.JSON = true
-		case arg == "--strict-config":
-			exec.StrictConfig = true
-		case arg == "--cyber-access-program":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			if err := setExecCyberAccessProgram(exec, value); err != nil {
-				return err
-			}
-			i = next
-		case strings.HasPrefix(arg, "--cyber-access-program="):
-			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
-				return err
-			}
-		case arg == "--skip-git-repo-check":
-			exec.SkipGitRepoCheck = true
-		case arg == "--ephemeral":
-			exec.Ephemeral = true
-		case arg == "--ignore-user-config":
-			exec.IgnoreUserConfig = true
-		case arg == "--ignore-rules":
-			exec.IgnoreRules = true
-		case arg == "--output-schema":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			exec.OutputSchema = value
-			i = next
-		case strings.HasPrefix(arg, "--output-schema="):
-			exec.OutputSchema = strings.TrimPrefix(arg, "--output-schema=")
-		case arg == "--output-last-message" || arg == "-o":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			exec.LastMessageFile = value
-			i = next
-		case strings.HasPrefix(arg, "--output-last-message="):
-			exec.LastMessageFile = strings.TrimPrefix(arg, "--output-last-message=")
-		case arg == "--color":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return missingValueError("--color <COLOR>", colorValues)
-			}
-			if err := setExecColor(exec, value); err != nil {
-				return err
-			}
-			i = next
-		case strings.HasPrefix(arg, "--color="):
-			if err := setExecColor(exec, strings.TrimPrefix(arg, "--color=")); err != nil {
-				return err
-			}
-		case arg == "-c" || arg == "--config":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			exec.ConfigOverrides = append(exec.ConfigOverrides, value)
-			i = next
-		case strings.HasPrefix(arg, "--config="):
-			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
-		case strings.HasPrefix(arg, "-c") && arg != "-C":
-			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return clapUnexpectedLongFlagError("exec resume", arg, args[:i])
 		default:
 			positionals = append(positionals, arg)
 		}
+	}
+	if deferred != nil {
+		return deferred
 	}
 	// Rust's ResumeArgsRaw binds SESSION_ID then PROMPT and lets clap reject a
 	// third positional, while `From<ResumeArgsRaw>` turns the single positional
@@ -1509,8 +1529,20 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 
 func parseExecFork(args []string, exec *ExecOptions) error {
 	var positionals []string
+	var deferred error
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			exec.ConfigOverrides = append(exec.ConfigOverrides, value)
+			i = next
+			continue
+		}
+		// ForkArgs declares --image itself; the other SharedCliOptions entries
+		// stay local to `codex exec`, so only the exec globals reach a nested
+		// subcommand.
 		if arg == "--image" || arg == "-i" {
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -1524,9 +1556,10 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 			exec.Fork.Images = append(exec.Fork.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
 			continue
 		}
-		if handled, err := parseSharedOption(args, &i, &exec.Shared); err != nil {
-			return err
-		} else if handled {
+		if handled, err := parseExecGlobalOption(args, &i, exec, &deferred); handled {
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		if arg == "--" {
@@ -1550,76 +1583,14 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 		case arg == "-V" || arg == "--version":
 			exec.Help = &ExecHelpRequest{Version: true}
 			return nil
-		case arg == "--strict-config":
-			exec.StrictConfig = true
-		case arg == "--cyber-access-program":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			if err := setExecCyberAccessProgram(exec, value); err != nil {
-				return err
-			}
-			i = next
-		case strings.HasPrefix(arg, "--cyber-access-program="):
-			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
-				return err
-			}
-		case arg == "--skip-git-repo-check":
-			exec.SkipGitRepoCheck = true
-		case arg == "--ephemeral":
-			exec.Ephemeral = true
-		case arg == "--ignore-user-config":
-			exec.IgnoreUserConfig = true
-		case arg == "--ignore-rules":
-			exec.IgnoreRules = true
-		case arg == "--json" || arg == "--experimental-json":
-			exec.JSON = true
-		case arg == "--output-schema" || arg == "--output-last-message" || arg == "-o":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			if arg == "--output-schema" {
-				exec.OutputSchema = value
-			} else {
-				exec.LastMessageFile = value
-			}
-			i = next
-		case strings.HasPrefix(arg, "--output-schema="):
-			exec.OutputSchema = strings.TrimPrefix(arg, "--output-schema=")
-		case strings.HasPrefix(arg, "--output-last-message="):
-			exec.LastMessageFile = strings.TrimPrefix(arg, "--output-last-message=")
-		case arg == "--color" || strings.HasPrefix(arg, "--color="):
-			value := strings.TrimPrefix(arg, "--color=")
-			if arg == "--color" {
-				var next int
-				var err error
-				value, next, err = requireValue(args, i, arg)
-				if err != nil {
-					return missingValueError("--color <COLOR>", colorValues)
-				}
-				i = next
-			}
-			if err := setExecColor(exec, value); err != nil {
-				return err
-			}
-		case arg == "-c" || arg == "--config":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			exec.ConfigOverrides = append(exec.ConfigOverrides, value)
-			i = next
-		case strings.HasPrefix(arg, "--config="):
-			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
-		case strings.HasPrefix(arg, "-c") && arg != "-C":
-			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return clapUnexpectedLongFlagError("exec fork", arg, args[:i])
 		default:
 			positionals = append(positionals, arg)
 		}
+	}
+	if deferred != nil {
+		return deferred
 	}
 	if len(positionals) == 0 {
 		return missingRequiredArgumentsError("exec fork", "<SESSION_ID>")
@@ -1702,9 +1673,31 @@ func parseLogin(args []string, login *LoginOptions) error {
 	return nil
 }
 
-func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error {
+func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overrides *[]string) error {
+	var deferred error
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			if overrides != nil {
+				*overrides = append(*overrides, value)
+			}
+			i = next
+			continue
+		}
+		if exec != nil {
+			// `codex exec` marks model, the dangerous bypasses and worktree global
+			// (mark_exec_global_args) and declares the rest of its options with
+			// clap's `global = true`, so they stay valid after `review`.
+			if handled, err := parseExecGlobalOption(args, &i, exec, &deferred); handled {
+				if err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		switch {
 		case exec != nil && (arg == "--help" || arg == "-h"):
 			// `codex exec review --help` prints the exec review page; the
@@ -1719,30 +1712,10 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 		case exec != nil && (arg == "-V" || arg == "--version"):
 			exec.Help = &ExecHelpRequest{Version: true}
 			return nil
-		case exec != nil && arg == "--cyber-access-program":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			if err := setExecCyberAccessProgram(exec, value); err != nil {
-				return err
-			}
-			i = next
-		case exec != nil && strings.HasPrefix(arg, "--cyber-access-program="):
-			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
-				return err
-			}
-		case exec != nil && isExecReviewGlobalOptionArg(arg):
-			// Rust marks these SharedCliOptions entries global inside `codex
-			// exec`, so clap accepts them after the review subcommand and the
-			// post-parse worktree gate decides what to do with them.
-			handled, err := parseSharedOption(args, &i, &exec.Shared)
-			if err != nil {
-				return err
-			}
-			if !handled {
-				return clapUnexpectedLongFlagError("exec review", arg, args[:i])
-			}
+		case arg == "--strict-config":
+			// ReviewCommand declares --strict-config itself; inside `codex exec
+			// review` the exec Cli marks the same flag global.
+			review.StrictConfig = true
 		case arg == "--uncommitted":
 			if review.Base != "" || review.Commit != "" || review.Prompt != "" {
 				return errors.New("--uncommitted conflicts with --base, --commit, and PROMPT")
@@ -1812,17 +1785,19 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 			review.Prompt = arg
 		}
 	}
+	if deferred != nil {
+		return deferred
+	}
 	if review.CommitTitle != "" && review.Commit == "" {
 		return errors.New("--title requires --commit")
 	}
 	return nil
 }
 
-// isExecReviewGlobalOptionArg lists the exec `SharedCliOptions` entries Rust
-// marks global (mark_exec_global_args): model, the two dangerous bypasses and
-// worktree. `codex exec review` therefore accepts them after the subcommand,
-// while the remaining shared options stay local to the exec root.
-func isExecReviewGlobalOptionArg(arg string) bool {
+// isExecGlobalSharedArg lists the exec `SharedCliOptions` entries Rust marks
+// global (mark_exec_global_args): model, the two dangerous bypasses and
+// worktree.
+func isExecGlobalSharedArg(arg string) bool {
 	switch {
 	case arg == "--worktree":
 		return true
@@ -1836,6 +1811,109 @@ func isExecReviewGlobalOptionArg(arg string) bool {
 		return true
 	}
 	return false
+}
+
+// parseExecGlobalOption handles the options clap marks global on `codex exec`:
+// the Cli-level `global = true` arguments plus mark_exec_global_args. clap
+// accepts them after a nested subcommand, so `codex exec review --json` and
+// `codex exec fork --thread-source x` parse. The exec-local shared options such
+// as --sandbox or --profile stay local to `codex exec` itself, which is why the
+// nested parsers no longer flatten the whole SharedCliOptions table.
+func parseExecGlobalOption(args []string, i *int, exec *ExecOptions, deferred *error) (bool, error) {
+	arg := args[*i]
+	switch {
+	case arg == "--strict-config":
+		exec.StrictConfig = true
+	case arg == "--thread-source":
+		value, next, err := requireValue(args, *i, arg)
+		if err != nil {
+			return true, err
+		}
+		exec.ThreadSource = value
+		*i = next
+	case strings.HasPrefix(arg, "--thread-source="):
+		exec.ThreadSource = strings.TrimPrefix(arg, "--thread-source=")
+	case arg == "--cyber-access-program":
+		value, next, err := requireValue(args, *i, arg)
+		if err != nil {
+			return true, err
+		}
+		if err := setExecCyberAccessProgram(exec, value); err != nil {
+			deferClapValueError(args, i, deferred, err)
+		}
+		*i = next
+	case strings.HasPrefix(arg, "--cyber-access-program="):
+		if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
+			deferClapValueError(args, i, deferred, err)
+		}
+	case arg == "--skip-git-repo-check":
+		exec.SkipGitRepoCheck = true
+	case arg == "--ephemeral":
+		exec.Ephemeral = true
+	case arg == "--ignore-user-config":
+		exec.IgnoreUserConfig = true
+	case arg == "--ignore-rules":
+		exec.IgnoreRules = true
+	case arg == "--output-schema":
+		value, next, err := requireValue(args, *i, arg)
+		if err != nil {
+			return true, err
+		}
+		exec.OutputSchema = value
+		*i = next
+	case strings.HasPrefix(arg, "--output-schema="):
+		exec.OutputSchema = strings.TrimPrefix(arg, "--output-schema=")
+	case arg == "--json" || arg == "--experimental-json":
+		exec.JSON = true
+	case arg == "--output-last-message" || arg == "-o":
+		value, next, err := requireValue(args, *i, arg)
+		if err != nil {
+			return true, err
+		}
+		exec.LastMessageFile = value
+		*i = next
+	case strings.HasPrefix(arg, "--output-last-message="):
+		exec.LastMessageFile = strings.TrimPrefix(arg, "--output-last-message=")
+	case isExecGlobalSharedArg(arg):
+		handled, err := parseSharedOption(args, i, &exec.Shared)
+		if err != nil {
+			return true, err
+		}
+		return handled, nil
+	default:
+		return false, nil
+	}
+	return true, nil
+}
+
+// deferClapValueError records a clap value-parser failure and keeps scanning
+// argv. clap matches every token before it validates option values, so an
+// undeclared flag later in argv wins with the unknown-argument diagnostic; the
+// recorded error is reported once the scan finishes. It reports whether err is
+// such a value diagnostic, in which case the value token is skipped.
+func deferClapValueError(args []string, i *int, deferred *error, err error) bool {
+	usageErr, ok := err.(*UsageError)
+	if !ok {
+		return false
+	}
+	// Raw diagnostics and clap's empty-value diagnostic are value-parser
+	// errors too: they defer so an undeclared flag later in argv still wins.
+	missingValue := strings.HasPrefix(usageErr.Message, "a value is required for '")
+	if !usageErr.Raw && !missingValue && !strings.HasPrefix(usageErr.Message, "invalid value '") {
+		return false
+	}
+	// An inline `--flag=` is one token that clap validates on the spot, so an
+	// empty inline value reports before the unknown-argument pass.
+	if missingValue && *i < len(args) && strings.Contains(args[*i], "=") {
+		return false
+	}
+	if *deferred == nil {
+		*deferred = err
+	}
+	if *i < len(args) && !strings.Contains(args[*i], "=") && *i+1 < len(args) {
+		*i++
+	}
+	return true
 }
 
 func parseLogout(args []string, login *LoginOptions) error {
@@ -2502,6 +2580,14 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 		sandbox.Uninstall = true
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
+			if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+				if err != nil {
+					return err
+				}
+				sandbox.ConfigOverrides = append(sandbox.ConfigOverrides, value)
+				i = next
+				continue
+			}
 			switch {
 			case arg == "-h" || arg == "--help":
 				sandbox.UninstallHelp = true
@@ -2856,6 +2942,18 @@ func execpolicyCheckMissingRequired(execpolicy *ExecpolicyOptions) error {
 func parseCloud(args []string, cloud *CloudOptions) error {
 	cloud.Attempts = 1
 	cloud.Limit = 20
+	// clap declares `-c/--config` global, so it may precede the subcommand.
+	for len(args) > 0 {
+		value, next, handled, err := clapConfigOverrideArg(args, 0)
+		if !handled {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		cloud.ConfigOverrides = append(cloud.ConfigOverrides, value)
+		args = args[next+1:]
+	}
 	if len(args) == 0 {
 		cloud.Action = "tui"
 		return nil
@@ -2863,6 +2961,7 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 	cloud.Action = args[0]
 	switch cloud.Action {
 	case "exec":
+		var deferred error
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
@@ -2880,18 +2979,24 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 				if err != nil {
 					return err
 				}
-				attempts, err := parseBoundedInt(value, "attempts", 1, 4)
+				attempts, err := clapBoundedIntValue(value, "--attempts", "<ATTEMPTS>", "attempts", 1, 4)
 				if err != nil {
-					return err
+					if !deferClapValueError(args, &i, &deferred, err) {
+						return err
+					}
+				} else {
+					cloud.Attempts = attempts
 				}
-				cloud.Attempts = attempts
 				i = next
 			case strings.HasPrefix(arg, "--attempts="):
-				attempts, err := parseBoundedInt(strings.TrimPrefix(arg, "--attempts="), "attempts", 1, 4)
+				attempts, err := clapBoundedIntValue(strings.TrimPrefix(arg, "--attempts="), "--attempts", "<ATTEMPTS>", "attempts", 1, 4)
 				if err != nil {
-					return err
+					if !deferClapValueError(args, &i, &deferred, err) {
+						return err
+					}
+				} else {
+					cloud.Attempts = attempts
 				}
-				cloud.Attempts = attempts
 			case arg == "--branch":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
@@ -2913,11 +3018,14 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				cloud.ConfigOverrides = append(cloud.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return unexpectedSubcommandArgumentError("cloud exec", arg)
+				return clapUnexpectedLongFlagError("cloud exec", arg, args[:i])
 			default:
 				cloud.Query = strings.Join(args[i:], " ")
 				i = len(args)
 			}
+		}
+		if deferred != nil {
+			return deferred
 		}
 		if cloud.Environment == "" {
 			return missingRequiredArgumentsError("cloud exec", "--env <ENV_ID>")
@@ -2925,9 +3033,17 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 	case "status":
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
+			if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+				if err != nil {
+					return err
+				}
+				cloud.ConfigOverrides = append(cloud.ConfigOverrides, value)
+				i = next
+				continue
+			}
 			switch {
 			case strings.HasPrefix(arg, "-"):
-				return unexpectedSubcommandArgumentError("cloud status", arg)
+				return clapUnexpectedLongFlagError("cloud status", arg, args[:i])
 			default:
 				if cloud.TaskID != "" {
 					return errors.New("cloud status accepts exactly one TASK_ID")
@@ -2939,6 +3055,7 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			return missingRequiredArgumentsError("cloud status", "<TASK_ID>")
 		}
 	case "list":
+		var deferred error
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
@@ -2956,18 +3073,24 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 				if err != nil {
 					return err
 				}
-				limit, err := parseBoundedInt64(value, "limit", 1, 20)
+				limit, err := clapBoundedIntValue(value, "--limit", "<N>", "limit", 1, 20)
 				if err != nil {
-					return err
+					if !deferClapValueError(args, &i, &deferred, err) {
+						return err
+					}
+				} else {
+					cloud.Limit = int64(limit)
 				}
-				cloud.Limit = limit
 				i = next
 			case strings.HasPrefix(arg, "--limit="):
-				limit, err := parseBoundedInt64(strings.TrimPrefix(arg, "--limit="), "limit", 1, 20)
+				limit, err := clapBoundedIntValue(strings.TrimPrefix(arg, "--limit="), "--limit", "<N>", "limit", 1, 20)
 				if err != nil {
-					return err
+					if !deferClapValueError(args, &i, &deferred, err) {
+						return err
+					}
+				} else {
+					cloud.Limit = int64(limit)
 				}
-				cloud.Limit = limit
 			case arg == "--cursor":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
@@ -2996,35 +3119,56 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 				return unexpectedSubcommandArgumentError("cloud list", arg)
 			}
 		}
+		if deferred != nil {
+			return deferred
+		}
 	case "apply", "diff":
+		var deferred error
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
+			if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+				if err != nil {
+					return err
+				}
+				cloud.ConfigOverrides = append(cloud.ConfigOverrides, value)
+				i = next
+				continue
+			}
 			switch {
 			case arg == "--attempt":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
 					return err
 				}
-				attempt, err := parseBoundedInt(value, "attempt", 1, 4)
+				attempt, err := clapBoundedIntValue(value, "--attempt", "<N>", "attempts", 1, 4)
 				if err != nil {
-					return err
+					if !deferClapValueError(args, &i, &deferred, err) {
+						return err
+					}
+				} else {
+					cloud.Attempt = attempt
 				}
-				cloud.Attempt = attempt
 				i = next
 			case strings.HasPrefix(arg, "--attempt="):
-				attempt, err := parseBoundedInt(strings.TrimPrefix(arg, "--attempt="), "attempt", 1, 4)
+				attempt, err := clapBoundedIntValue(strings.TrimPrefix(arg, "--attempt="), "--attempt", "<N>", "attempts", 1, 4)
 				if err != nil {
-					return err
+					if !deferClapValueError(args, &i, &deferred, err) {
+						return err
+					}
+				} else {
+					cloud.Attempt = attempt
 				}
-				cloud.Attempt = attempt
 			case strings.HasPrefix(arg, "-"):
-				return unexpectedSubcommandArgumentError("cloud "+cloud.Action, arg)
+				return clapUnexpectedLongFlagError("cloud "+cloud.Action, arg, args[:i])
 			default:
 				if cloud.TaskID != "" {
 					return fmt.Errorf("cloud %s accepts exactly one TASK_ID", cloud.Action)
 				}
 				cloud.TaskID = arg
 			}
+		}
+		if deferred != nil {
+			return deferred
 		}
 		if cloud.TaskID == "" {
 			return missingRequiredArgumentsError("cloud "+cloud.Action, "<TASK_ID>")
@@ -3129,18 +3273,31 @@ func parseStdioToUDS(args []string, stdio *StdioToUDSOptions) error {
 }
 
 func parseExecServer(args []string, execServer *ExecServerOptions) error {
+	var deferred error
+	execServer.ConcurrentRequests = 1
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			execServer.ConfigOverrides = append(execServer.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch {
 		case strings.HasPrefix(arg, "--ws-"):
 			// Rust #47601 shares WebsocketAuthArgs between the app-server and the
 			// exec-server listeners.
 			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &execServer.WebSocketAuthOptions)
-			if err != nil {
-				return err
-			}
 			if !handled {
 				return unexpectedSubcommandArgumentError("exec-server", arg)
+			}
+			if err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+				continue
 			}
 			i = next
 		case arg == "forward":
@@ -3212,6 +3369,50 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		case arg == "--proxy-private-ips-via-upstream":
 			// Rust #48568: clap `ArgAction::SetTrue`, so the flag takes no value.
 			execServer.ProxyPrivateIPsViaUpstream = true
+		case arg == "--linux-sandbox-pid-namespace":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if err := validateLinuxSandboxPIDNamespace(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				execServer.LinuxSandboxPIDNamespace = value
+			}
+			i = next
+		case strings.HasPrefix(arg, "--linux-sandbox-pid-namespace="):
+			value := strings.TrimPrefix(arg, "--linux-sandbox-pid-namespace=")
+			if err := validateLinuxSandboxPIDNamespace(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				execServer.LinuxSandboxPIDNamespace = value
+			}
+		case arg == "--concurrent-requests":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if parsed, err := parseConcurrentRequestsValue(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				execServer.ConcurrentRequests = parsed
+			}
+			i = next
+		case strings.HasPrefix(arg, "--concurrent-requests="):
+			value := strings.TrimPrefix(arg, "--concurrent-requests=")
+			if parsed, err := parseConcurrentRequestsValue(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				execServer.ConcurrentRequests = parsed
+			}
 		case arg == "--remote-transport":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -3266,6 +3467,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			}
 			return unexpectedSubcommandArgumentError("exec-server", arg)
 		}
+	}
+	if deferred != nil {
+		return deferred
 	}
 	if !execServer.ExitOnStdinClose {
 		if value, ok := os.LookupEnv(execServerExitOnStdinCloseEnv); ok {
@@ -3401,8 +3605,17 @@ func (o *WebSocketAuthOptions) Configured() bool {
 
 func parseAppServer(args []string, appServer *AppServerOptions) error {
 	listenSet := false
+	var deferred error
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			appServer.ConfigOverrides = append(appServer.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch {
 		case arg == "--strict-config":
 			appServer.StrictConfig = true
@@ -3432,33 +3645,45 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			if err != nil {
 				return err
 			}
-			if !json.Valid([]byte(value)) {
-				return fmt.Errorf("--startup-client-info must be valid JSON")
+			if err := validateStartupClientInfo(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				appServer.StartupClientInfo = json.RawMessage(value)
 			}
-			appServer.StartupClientInfo = json.RawMessage(value)
 			i = next
 		case strings.HasPrefix(arg, "--startup-client-info="):
 			value := strings.TrimPrefix(arg, "--startup-client-info=")
-			if !json.Valid([]byte(value)) {
-				return fmt.Errorf("--startup-client-info must be valid JSON")
+			if err := validateStartupClientInfo(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				appServer.StartupClientInfo = json.RawMessage(value)
 			}
-			appServer.StartupClientInfo = json.RawMessage(value)
 		case arg == "--code-mode-host":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
 			}
 			if err := validateAppServerCodeModeHostURL(value); err != nil {
-				return err
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				appServer.CodeModeHostURL = value
 			}
-			appServer.CodeModeHostURL = value
 			i = next
 		case strings.HasPrefix(arg, "--code-mode-host="):
 			value := strings.TrimPrefix(arg, "--code-mode-host=")
 			if err := validateAppServerCodeModeHostURL(value); err != nil {
-				return err
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				appServer.CodeModeHostURL = value
 			}
-			appServer.CodeModeHostURL = value
 		case arg == "--cloud-skills-snapshot":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -3470,21 +3695,26 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			appServer.CloudSkillsSnapshot = strings.TrimPrefix(arg, "--cloud-skills-snapshot=")
 		case strings.HasPrefix(arg, "--ws-"):
 			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &appServer.WebSocketAuthOptions)
-			if err != nil {
-				return err
-			}
 			if !handled {
 				return unexpectedSubcommandArgumentError("app-server", arg)
 			}
-			i = next
+			if err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+				continue
+			}
 			i = next
 		case strings.HasPrefix(arg, "--ws-max-clock-skew-seconds="):
 			value := strings.TrimPrefix(arg, "--ws-max-clock-skew-seconds=")
 			parsed, err := parseUint64Flag("--ws-max-clock-skew-seconds", value)
 			if err != nil {
-				return err
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				appServer.WSMaxClockSkewSeconds = &parsed
 			}
-			appServer.WSMaxClockSkewSeconds = &parsed
 		case strings.HasPrefix(arg, "-"):
 			return unexpectedSubcommandArgumentError("app-server", arg)
 		default:
@@ -3505,6 +3735,9 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			}
 			i = len(args)
 		}
+	}
+	if deferred != nil {
+		return deferred
 	}
 	if appServer.Stdio && listenSet {
 		return errors.New("--stdio conflicts with --listen")
@@ -3527,21 +3760,29 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 }
 
 func validateAppServerCodeModeHostURL(value string) error {
+	// clap prints every code-mode host rejection as a raw value-parser error,
+	// without the surrounding "invalid value" wrapper or a usage block.
+	raw := func(message string) error { return &UsageError{Message: message, Raw: true} }
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil {
-		return fmt.Errorf("invalid code-mode host URL: %w", err)
+		return raw("invalid code-mode host URL: " + err.Error())
+	}
+	if parsed.Scheme == "" && parsed.Host == "" {
+		// Rust's url crate rejects a relative URL before the gRPC endpoint
+		// checks run, and clap prints that value-parser error verbatim.
+		return raw("invalid code-mode host URL: relative URL without a base")
 	}
 	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
-		return errors.New("code-mode host URL must use http:// or https:// with a host")
+		return raw("code-mode host URL must use http:// or https:// with a host")
 	}
 	if parsed.Fragment != "" {
-		return errors.New("code-mode host URL must not contain a fragment")
+		return raw("code-mode host URL must not contain a fragment")
 	}
 	if parsed.User != nil {
-		return errors.New("gRPC code-mode host URL must not contain credentials")
+		return raw("gRPC code-mode host URL must not contain credentials")
 	}
 	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" {
-		return errors.New("gRPC code-mode host URL must not contain a path or query")
+		return raw("gRPC code-mode host URL must not contain a path or query")
 	}
 	return nil
 }
@@ -3676,6 +3917,14 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 		command := "app-server daemon " + daemon.Action
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
+			if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+				if err != nil {
+					return err
+				}
+				daemon.ConfigOverrides = append(daemon.ConfigOverrides, value)
+				i = next
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return clapUnexpectedLongFlagError(command, arg, args[1:i])
 			}
@@ -3697,19 +3946,38 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 			}
 		}
 	case "bootstrap":
-		for _, arg := range args[1:] {
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+				if err != nil {
+					return err
+				}
+				daemon.ConfigOverrides = append(daemon.ConfigOverrides, value)
+				i = next
+				continue
+			}
 			switch arg {
 			case "--remote-control":
 				daemon.RemoteControl = true
 			default:
 				if strings.HasPrefix(arg, "-") {
-					return unexpectedSubcommandArgumentError("app-server daemon bootstrap", arg)
+					return clapUnexpectedLongFlagError("app-server daemon bootstrap", arg, args[1:i])
 				}
 				return unexpectedSubcommandArgumentError("app-server daemon bootstrap", arg)
 			}
 		}
 	case "update":
-		for _, arg := range args[1:] {
+		command := "app-server daemon update"
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+				if err != nil {
+					return err
+				}
+				daemon.ConfigOverrides = append(daemon.ConfigOverrides, value)
+				i = next
+				continue
+			}
 			switch arg {
 			case "--from-cli":
 				daemon.FromCLI = true
@@ -3717,17 +3985,22 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 				daemon.Yes = true
 			default:
 				if strings.HasPrefix(arg, "-") {
-					return unexpectedSubcommandArgumentError("app-server daemon update", arg)
+					return clapUnexpectedLongFlagError(command, arg, args[1:i])
 				}
-				return unexpectedSubcommandArgumentError("app-server daemon update", arg)
+				return unexpectedSubcommandArgumentError(command, arg)
 			}
 		}
 		if daemon.Yes && !daemon.FromCLI {
 			// clap models this as `requires = "from_cli"`, so it reports the
-			// missing flag and echoes both options in the usage block.
+			// missing flag and echoes the accepted options in argv order after
+			// the requirement.
+			usage := "Usage: codex app-server daemon update --from-cli"
+			if used := clapUsageOptionTokens(command, args[1:], ""); len(used) > 0 {
+				usage += " " + strings.Join(used, " ")
+			}
 			return &UsageError{
 				Message: requiredArgumentsMessage("--from-cli"),
-				Usage:   "Usage: codex app-server daemon update --from-cli --yes",
+				Usage:   usage,
 			}
 		}
 	default:
@@ -4031,6 +4304,14 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 func parseAppServerProxy(args []string, proxy *AppServerProxyOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			proxy.ConfigOverrides = append(proxy.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch {
 		case arg == "--sock":
 			value, next, err := requireValue(args, i, arg)
@@ -4055,6 +4336,14 @@ func parseAppServerGenerate(action string, args []string, generate *AppServerGen
 	generate.Action = action
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			generate.ConfigOverrides = append(generate.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch {
 		case arg == "--out" || arg == "-o":
 			value, next, err := requireValue(args, i, arg)
@@ -4097,6 +4386,14 @@ func parseApp(args []string, app *AppOptions) error {
 	app.Path = "."
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			app.ConfigOverrides = append(app.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch {
 		case arg == "--download-url":
 			value, next, err := requireValue(args, i, arg)
@@ -4108,7 +4405,7 @@ func parseApp(args []string, app *AppOptions) error {
 		case strings.HasPrefix(arg, "--download-url="):
 			app.DownloadURL = strings.TrimPrefix(arg, "--download-url=")
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedSubcommandArgumentError("app", arg)
+			return clapUnexpectedLongFlagError("app", arg, args[:i])
 		default:
 			if app.Path != "." {
 				return errors.New("app accepts at most one PATH")
@@ -4224,16 +4521,24 @@ func parseMigrateNFSDB(args []string, options *MigrateNFSDBOptions) error {
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			options.ConfigOverrides = append(options.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch {
 		case arg == "--staging-dir" || strings.HasPrefix(arg, "--staging-dir="):
-			value, next, err := optionalFlagValue(args, i, arg, "--staging-dir")
+			value, next, err := optionalFlagValue(args, i, arg, "--staging-dir", "<STAGING_DIR>")
 			if err != nil {
 				return err
 			}
 			options.StagingDir = value
 			i = next
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedSubcommandArgumentError("migrate-nfs-db", arg)
+			return clapUnexpectedLongFlagError("migrate-nfs-db", arg, args[:i])
 		default:
 			return unexpectedSubcommandArgumentError("migrate-nfs-db", arg)
 		}
@@ -4242,8 +4547,17 @@ func parseMigrateNFSDB(args []string, options *MigrateNFSDBOptions) error {
 }
 
 func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error {
+	var deferred error
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			options.ConfigOverrides = append(options.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch {
 		case arg == "--apply":
 			options.Apply = true
@@ -4252,42 +4566,55 @@ func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error 
 		case arg == "--verbose":
 			options.Verbose = true
 		case arg == "--thread" || strings.HasPrefix(arg, "--thread="):
-			if arg == "--thread" && i+1 >= len(args) {
-				return &UsageError{Message: "a value is required for '--thread <THREAD_ID>' but none was supplied"}
-			}
-			value, next, err := optionalFlagValue(args, i, arg, "--thread")
+			value, next, err := optionalFlagValue(args, i, arg, "--thread", "<THREAD_ID>")
 			if err != nil {
 				return err
 			}
 			options.Threads = append(options.Threads, value)
 			i = next
 		case arg == "--max-mib-per-second" || strings.HasPrefix(arg, "--max-mib-per-second="):
-			value, next, err := optionalFlagValue(args, i, arg, "--max-mib-per-second")
+			value, next, err := optionalFlagValue(args, i, arg, "--max-mib-per-second", "<MIB>")
 			if err != nil {
 				return err
 			}
 			parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
-			if err != nil || parsed == 0 {
-				return fmt.Errorf("--max-mib-per-second must be a positive integer")
+			var invalid error
+			switch {
+			case err != nil:
+				invalid = &UsageError{Message: "invalid value '" + value + "' for '--max-mib-per-second <MIB>': invalid digit found in string"}
+			case parsed == 0:
+				invalid = &UsageError{Message: "invalid value '" + value + "' for '--max-mib-per-second <MIB>': 0 is not in 1..18446744073709551615"}
 			}
-			options.MaxMibPerSecond = parsed
+			if invalid != nil {
+				if !deferClapValueError(args, &i, &deferred, invalid) {
+					return invalid
+				}
+			} else {
+				options.MaxMibPerSecond = parsed
+			}
 			i = next
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return unexpectedSubcommandArgumentError("migrate-rollouts", arg)
+				return clapUnexpectedLongFlagError("migrate-rollouts", arg, args[:i])
 			}
 			return unexpectedSubcommandArgumentError("migrate-rollouts", arg)
 		}
 	}
+	if deferred != nil {
+		return deferred
+	}
 	return nil
 }
 
-func optionalFlagValue(args []string, index int, arg string, name string) (string, int, error) {
+func optionalFlagValue(args []string, index int, arg, name, placeholder string) (string, int, error) {
 	if strings.HasPrefix(arg, name+"=") {
 		return strings.TrimPrefix(arg, name+"="), index, nil
 	}
-	if index+1 >= len(args) {
-		return "", index, fmt.Errorf("%s requires a value", name)
+	// clap never binds a leading-dash token as an option value, so `--thread
+	// --apply` reports the pending value (or the undeclared flag) instead of
+	// swallowing the next flag as the value.
+	if index+1 >= len(args) || clapLooksLikeOption(args[index+1]) {
+		return "", index, pendingValueRequiredPlaceholderError(name, placeholder, args, index)
 	}
 	return args[index+1], index + 1, nil
 }
@@ -4326,6 +4653,14 @@ func parseApply(args []string, apply *ApplyOptions) error {
 func parseRemoteControl(args []string, remote *RemoteControlOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
+			if err != nil {
+				return err
+			}
+			remote.ConfigOverrides = append(remote.ConfigOverrides, value)
+			i = next
+			continue
+		}
 		switch arg {
 		case "--json":
 			remote.JSON = true
@@ -4342,7 +4677,7 @@ func parseRemoteControl(args []string, remote *RemoteControlOptions) error {
 				if remote.Subcommand != "" {
 					command += " " + remote.Subcommand
 				}
-				return unexpectedSubcommandArgumentError(command, arg)
+				return clapUnexpectedLongFlagError(command, arg, args[:i])
 			}
 			return unrecognizedSubcommandWithSuggestion(arg, subcommandUsageTexts["remote-control"].usage, subcommandCandidates["remote-control"])
 		}
@@ -4360,6 +4695,7 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 		command = "resume"
 	}
 	var positionals []string
+	var deferred error
 	bindPositional := func(value string) error {
 		if len(positionals) == len(clapCommandPositionalSlots[command]) {
 			return unexpectedPositionalError(value, subcommandUsageTexts[command].usage)
@@ -4370,11 +4706,17 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if handled, err := parseSharedOptionVariadicImages(args, &i, &session.Shared); err != nil {
+			if deferClapValueError(args, &i, &deferred, err) {
+				continue
+			}
 			return err
 		} else if handled {
 			continue
 		}
 		if handled, err := parseTUIOnlyOption(args, &i, &session.Shared); err != nil {
+			if deferClapValueError(args, &i, &deferred, err) {
+				continue
+			}
 			return err
 		} else if handled {
 			continue
@@ -4436,6 +4778,9 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 			}
 		}
 	}
+	if deferred != nil {
+		return deferred
+	}
 	if session.Last && len(positionals) > 1 {
 		return sessionLastPromptConflictError(command)
 	}
@@ -4457,9 +4802,13 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 }
 
 func parseSessionMutation(args []string, session *SessionOptions, command string, allowForce bool) error {
+	var deferred error
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if handled, err := parseSharedOptionVariadicImages(args, &i, &session.Shared); err != nil {
+			if deferClapValueError(args, &i, &deferred, err) {
+				continue
+			}
 			return err
 		} else if handled {
 			continue
@@ -4520,6 +4869,9 @@ func parseSessionMutation(args []string, session *SessionOptions, command string
 			}
 			session.Target = arg
 		}
+	}
+	if deferred != nil {
+		return deferred
 	}
 	if session.Target == "" {
 		return missingRequiredArgumentsError(command, "<SESSION>")
@@ -5057,12 +5409,15 @@ func parseTUIOnlyOption(args []string, i *int, shared *SharedOptions) (bool, err
 
 func setApprovalPolicy(shared *SharedOptions, value string) error {
 	value = strings.TrimSpace(value)
+	if value == "" {
+		return missingValueError("--ask-for-approval <APPROVAL_POLICY>", approvalPolicyValues)
+	}
 	switch value {
 	case "on-request", "never":
 		shared.ApprovalPolicy = value
 		return nil
 	default:
-		return errors.New("--ask-for-approval must be one of on-request, never")
+		return invalidValueError(value, "--ask-for-approval <APPROVAL_POLICY>", approvalPolicyValues)
 	}
 }
 
@@ -5081,12 +5436,15 @@ func setExecColor(exec *ExecOptions, value string) error {
 
 func setExecCyberAccessProgram(exec *ExecOptions, value string) error {
 	value = strings.TrimSpace(value)
+	if value == "" {
+		return missingValueError("--cyber-access-program <PROGRAM>", cyberAccessProgramValues)
+	}
 	switch value {
 	case "standard", "daybreak_blue", "daybreak_red":
 		exec.CyberAccessProgram = value
 		return nil
 	default:
-		return errors.New("--cyber-access-program must be one of standard, daybreak_blue, daybreak_red")
+		return invalidValueError(value, "--cyber-access-program <PROGRAM>", cyberAccessProgramValues)
 	}
 }
 
@@ -5151,6 +5509,65 @@ func parseKeyValueFlag(value string, flag string) (string, string, error) {
 	return key, parsed, nil
 }
 
+// validateStartupClientInfo mirrors the serde deserializer clap installs for
+// `--startup-client-info`: the value must decode into the ClientInfo struct, so
+// scalars, arrays and syntax errors are rejected before the server starts.
+// serde's wording is reproduced for the shapes encoding/json can classify.
+func validateStartupClientInfo(value string) error {
+	invalid := func(detail string) error {
+		return &UsageError{Message: "invalid value '" + value + "' for '--startup-client-info <STARTUP_CLIENT_INFO>': " + detail}
+	}
+	var raw any
+	if err := json.Unmarshal([]byte(value), &raw); err != nil {
+		if strings.Contains(err.Error(), "unexpected end of JSON input") {
+			return invalid("EOF while parsing an object at line 1 column 1")
+		}
+		return invalid("expected value at line 1 column 1")
+	}
+	column := strconv.Itoa(len(strings.TrimSpace(value)))
+	switch typed := raw.(type) {
+	case map[string]any:
+		return nil
+	case []any:
+		return invalid("invalid length " + strconv.Itoa(len(typed)) + ", expected struct ClientInfo with 3 elements at line 1 column " + column)
+	case string:
+		return invalid("invalid type: string " + strconv.Quote(typed) + ", expected struct ClientInfo at line 1 column " + column)
+	case bool:
+		return invalid("invalid type: boolean `" + strconv.FormatBool(typed) + "`, expected struct ClientInfo at line 1 column " + column)
+	case float64:
+		if typed == float64(int64(typed)) {
+			return invalid("invalid type: integer `" + strconv.FormatInt(int64(typed), 10) + "`, expected struct ClientInfo at line 1 column " + column)
+		}
+		return invalid("invalid type: floating point `" + strconv.FormatFloat(typed, 'g', -1, 64) + "`, expected struct ClientInfo at line 1 column " + column)
+	case nil:
+		return invalid("invalid type: null, expected struct ClientInfo at line 1 column " + column)
+	}
+	return invalid("expected struct ClientInfo at line 1 column " + column)
+}
+
+// validateLinuxSandboxPIDNamespace applies clap's value parser for the global
+// `--linux-sandbox-pid-namespace <MODE>` flag.
+func validateLinuxSandboxPIDNamespace(value string) error {
+	switch strings.TrimSpace(value) {
+	case "isolate", "inherit":
+		return nil
+	}
+	return &UsageError{Message: "invalid value '" + value + "' for '--linux-sandbox-pid-namespace <MODE>': expected 'isolate' or 'inherit'"}
+}
+
+// parseConcurrentRequestsValue applies clap's NonZeroUsize parser for
+// `--concurrent-requests <COUNT>`.
+func parseConcurrentRequestsValue(value string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, &UsageError{Message: "invalid value '" + value + "' for '--concurrent-requests <COUNT>': invalid digit found in string"}
+	}
+	if parsed <= 0 {
+		return 0, &UsageError{Message: "invalid value '" + value + "' for '--concurrent-requests <COUNT>': number would be zero for non-zero type"}
+	}
+	return parsed, nil
+}
+
 func parseBoundedInt(value string, name string, min int, max int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < min || parsed > max {
@@ -5170,7 +5587,23 @@ func parseBoundedInt64(value string, name string, min int64, max int64) (int64, 
 func parseUint64Flag(flag string, value string) (uint64, error) {
 	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("%s must be a non-negative integer", flag)
+		return 0, &UsageError{Message: "invalid value '" + value + "' for '" + flag + " <SECONDS>': invalid digit found in string"}
+	}
+	return parsed, nil
+}
+
+// clapBoundedIntValue applies clap's value parser for a bounded integer option:
+// the diagnostic repeats the range wording of the Rust parser and names the
+// option together with its placeholder.
+func clapBoundedIntValue(value, flag, placeholder, label string, min, max int) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, &UsageError{Message: "invalid value '" + value + "' for '" + flag + " " + placeholder + "': " +
+			label + " must be an integer between " + strconv.Itoa(min) + " and " + strconv.Itoa(max)}
+	}
+	if parsed < min || parsed > max {
+		return 0, &UsageError{Message: "invalid value '" + value + "' for '" + flag + " " + placeholder + "': " +
+			label + " must be between " + strconv.Itoa(min) + " and " + strconv.Itoa(max)}
 	}
 	return parsed, nil
 }

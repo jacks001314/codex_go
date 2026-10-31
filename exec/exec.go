@@ -245,12 +245,18 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	// Rust #42993 re-targeted the strict-config coverage to `codex exec`, which
 	// honors --strict-config from either the root or the exec subcommand.
+	// `codex review` declares the same flag on ReviewCommand, so a review-level
+	// value participates too.
+	strictConfig := req.Root.StrictConfig || req.Exec.StrictConfig
+	if req.Exec.Subcommand == "review" {
+		strictConfig = strictConfig || req.Exec.Review.StrictConfig
+	}
 	cfg, err := config.LoadEffectiveWithOptions(r.CodexHome, &config.EffectiveOptions{
 		RawOverrides:    mergedOverrides(req.Root.ConfigOverrides, req.Exec.ConfigOverrides),
 		EnableFeatures:  req.Root.EnableFeatures,
 		DisableFeatures: req.Root.DisableFeatures,
 		CWD:             requestCWD(req),
-		StrictConfig:    req.Root.StrictConfig || req.Exec.StrictConfig,
+		StrictConfig:    strictConfig,
 	})
 	if err != nil {
 		if r.NetworkPolicy != nil {

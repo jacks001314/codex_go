@@ -52,68 +52,69 @@ var approvalPolicyValues = []string{"on-request", "never"}
 // subcommand's `--help` page. Flags whose placeholder depends on the command are
 // absent here and handled at their call site.
 var subcommandValuePlaceholders = map[string]string{
-	"--attempt":                   "<N>",
-	"--attempts":                  "<ATTEMPTS>",
-	"--base":                      "<BRANCH>",
-	"--bearer-token-env-var":      "<ENV_VAR>",
-	"--branch":                    "<BRANCH>",
-	"--cloud-skills-snapshot":     "<PATH>",
-	"--code-mode-host":            "<URL>",
-	"--commit":                    "<SHA>",
-	"--concurrent-requests":       "<COUNT>",
-	"--cursor":                    "<CURSOR>",
-	"--download-url":              "<DOWNLOAD_URL_OVERRIDE>",
-	"--dump-dir":                  "<DIR>",
-	"--env":                       "<ENV_ID>",
-	"--environment-id":            "<ID>",
-	"--github-oidc-request-url":   "<URL>",
-	"--identity-provider-id":      "<ID>",
-	"--limit":                     "<N>",
-	"--listen":                    "<URL>",
-	"--marketplace":               "<MARKETPLACE>",
-	"--max-mib-per-second":        "<MIB>",
-	"--message":                   "<TEXT>",
-	"--name":                      "<NAME>",
-	"--oauth-client-id":           "<CLIENT_ID>",
-	"--oauth-client-secret":       "<CLIENT_SECRET>",
-	"--oauth-resource":            "<RESOURCE>",
-	"--oidc-audience":             "<AUDIENCE>",
-	"--out":                       "<DIR>",
-	"--output":                    "<FILE>",
-	"--port":                      "<PORT>",
-	"--prettier":                  "<PRETTIER_BIN>",
-	"--ref":                       "<REF>",
-	"--remote-transport":          "<REMOTE_TRANSPORT>",
-	"--restore-release":           "<RESTORE_RELEASE>",
-	"--rules":                     "<PATH>",
-	"--sandbox-state-json":        "<JSON>",
-	"--scopes":                    "<SCOPE,SCOPE>",
-	"--server-info":               "<FILE>",
-	"--service-account-id":        "<ID>",
-	"--sock":                      "<SOCKET_PATH>",
-	"--sparse":                    "<PATH>",
-	"--staging-dir":               "<STAGING_DIR>",
-	"--startup-client-info":       "<STARTUP_CLIENT_INFO>",
-	"--thread":                    "<THREAD>",
-	"--title":                     "<TITLE>",
-	"--upstream-url":              "<UPSTREAM_URL>",
-	"--url":                       "<URL>",
-	"--user":                      "<USER>",
-	"--codex-home":                "<DIR>",
-	"--ws-audience":               "<AUDIENCE>",
-	"--ws-issuer":                 "<ISSUER>",
-	"--ws-max-clock-skew-seconds": "<SECONDS>",
-	"--ws-shared-secret-file":     "<PATH>",
-	"--ws-token-file":             "<PATH>",
-	"--ws-token-sha256":           "<HEX>",
-	"--proxy-url":                 "<PROXY_URL>",
-	"--proxy-origins-file":        "<PROXY_ORIGINS_FILE>",
-	"--target":                    "<TARGET>",
-	"--thread-source":             "<SOURCE>",
-	"--cyber-access-program":      "<PROGRAM>",
-	"--output-schema":             "<FILE>",
-	"--output-last-message":       "<FILE>",
-	"--color":                     "<COLOR>",
+	"--attempt":                     "<N>",
+	"--attempts":                    "<ATTEMPTS>",
+	"--base":                        "<BRANCH>",
+	"--bearer-token-env-var":        "<ENV_VAR>",
+	"--branch":                      "<BRANCH>",
+	"--cloud-skills-snapshot":       "<PATH>",
+	"--code-mode-host":              "<URL>",
+	"--commit":                      "<SHA>",
+	"--concurrent-requests":         "<COUNT>",
+	"--cursor":                      "<CURSOR>",
+	"--download-url":                "<DOWNLOAD_URL_OVERRIDE>",
+	"--dump-dir":                    "<DIR>",
+	"--env":                         "<ENV_ID>",
+	"--environment-id":              "<ID>",
+	"--github-oidc-request-url":     "<URL>",
+	"--identity-provider-id":        "<ID>",
+	"--limit":                       "<N>",
+	"--linux-sandbox-pid-namespace": "<MODE>",
+	"--listen":                      "<URL>",
+	"--marketplace":                 "<MARKETPLACE>",
+	"--max-mib-per-second":          "<MIB>",
+	"--message":                     "<TEXT>",
+	"--name":                        "<NAME>",
+	"--oauth-client-id":             "<CLIENT_ID>",
+	"--oauth-client-secret":         "<CLIENT_SECRET>",
+	"--oauth-resource":              "<RESOURCE>",
+	"--oidc-audience":               "<AUDIENCE>",
+	"--out":                         "<DIR>",
+	"--output":                      "<FILE>",
+	"--port":                        "<PORT>",
+	"--prettier":                    "<PRETTIER_BIN>",
+	"--ref":                         "<REF>",
+	"--remote-transport":            "<REMOTE_TRANSPORT>",
+	"--restore-release":             "<RESTORE_RELEASE>",
+	"--rules":                       "<PATH>",
+	"--sandbox-state-json":          "<JSON>",
+	"--scopes":                      "<SCOPE,SCOPE>",
+	"--server-info":                 "<FILE>",
+	"--service-account-id":          "<ID>",
+	"--sock":                        "<SOCKET_PATH>",
+	"--sparse":                      "<PATH>",
+	"--staging-dir":                 "<STAGING_DIR>",
+	"--startup-client-info":         "<STARTUP_CLIENT_INFO>",
+	"--thread":                      "<THREAD>",
+	"--title":                       "<TITLE>",
+	"--upstream-url":                "<UPSTREAM_URL>",
+	"--url":                         "<URL>",
+	"--user":                        "<USER>",
+	"--codex-home":                  "<DIR>",
+	"--ws-audience":                 "<AUDIENCE>",
+	"--ws-issuer":                   "<ISSUER>",
+	"--ws-max-clock-skew-seconds":   "<SECONDS>",
+	"--ws-shared-secret-file":       "<PATH>",
+	"--ws-token-file":               "<PATH>",
+	"--ws-token-sha256":             "<HEX>",
+	"--proxy-url":                   "<PROXY_URL>",
+	"--proxy-origins-file":          "<PROXY_ORIGINS_FILE>",
+	"--target":                      "<TARGET>",
+	"--thread-source":               "<SOURCE>",
+	"--cyber-access-program":        "<PROGRAM>",
+	"--output-schema":               "<FILE>",
+	"--output-last-message":         "<FILE>",
+	"--color":                       "<COLOR>",
 }
 
 // valueRequiredError mirrors clap's missing-value diagnostic for a known flag
@@ -147,6 +148,37 @@ func pendingValueRequiredError(flag string, args []string, i int) error {
 		usageErr.PendingNext = args[i+1]
 	}
 	return usageErr
+}
+
+// pendingValueRequiredPlaceholderError is pendingValueRequiredError for a flag
+// whose clap placeholder depends on the enclosing subcommand.
+func pendingValueRequiredPlaceholderError(flag, placeholder string, args []string, i int) error {
+	err := &UsageError{Message: "a value is required for '" + flag + " " + placeholder + "' but none was supplied"}
+	if i+1 < len(args) {
+		err.PendingFlag = args[i]
+		err.PendingNext = args[i+1]
+	}
+	return err
+}
+
+// clapConfigOverrideArg matches clap's global `-c/--config` spelling at args[i]
+// and returns the override value plus the index of the token that carried it.
+// clap declares the argument global, so every subcommand accepts it.
+func clapConfigOverrideArg(args []string, i int) (string, int, bool, error) {
+	arg := args[i]
+	switch {
+	case arg == "-c" || arg == "--config":
+		value, next, err := requireValue(args, i, arg)
+		if err != nil {
+			return "", i, true, err
+		}
+		return value, next, true, nil
+	case strings.HasPrefix(arg, "--config="):
+		return strings.TrimPrefix(arg, "--config="), i, true, nil
+	case strings.HasPrefix(arg, "-c") && arg != "-C":
+		return strings.TrimPrefix(arg, "-c"), i, true, nil
+	}
+	return "", i, false, nil
 }
 
 // flagNameOnly is clap's rendering of an unexpected flag: the `=value` part of a
@@ -263,7 +295,7 @@ func clapSubcommandLongFlagSuggestion(flag string, remaining []string) (string, 
 		if _, ok := clapCommandLongFlags[token]; !ok || token == "" {
 			continue
 		}
-		if suggestion, ok := clapSuggestLongFlag(token, flag); ok {
+		if suggestion, ok := clapSuggestDeclaredLongFlag(token, flag); ok {
 			return token, suggestion.matched, true
 		}
 	}
@@ -433,6 +465,10 @@ var sandboxModeValues = []string{"read-only", "workspace-write", "danger-full-ac
 // colorValues are the `--color` values Rust's ColorCliArg accepts.
 var colorValues = []string{"always", "never", "auto"}
 
+// cyberAccessProgramValues are the `--cyber-access-program` values Rust's
+// CyberAccessProgramCliArg accepts.
+var cyberAccessProgramValues = []string{"standard", "daybreak_blue", "daybreak_red"}
+
 const (
 	execUsageText       = "Usage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]"
 	execResumeUsageText = "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]"
@@ -500,21 +536,36 @@ func missingValueError(flag string, possible []string) error {
 // are a prefix of (or extend) a possible value.
 func similarValueTip(value string, possible []string) string {
 	best := ""
+	bestScore := 0.0
 	for _, candidate := range possible {
 		if candidate == value {
 			return ""
 		}
-		if !strings.HasPrefix(candidate, value) && !strings.HasPrefix(value, candidate) {
+		// clap's did_you_mean keeps candidates whose Jaro-Winkler confidence
+		// clears 0.8 and prints the highest scoring one.
+		score := jaroWinklerSimilarity(value, candidate)
+		if score <= 0.8 || (best != "" && score <= bestScore) {
 			continue
 		}
-		if best == "" || len(candidate) < len(best) {
-			best = candidate
-		}
+		best, bestScore = candidate, score
 	}
 	if best == "" {
 		return ""
 	}
 	return "\n\n  tip: a similar value exists: '" + best + "'"
+}
+
+// jaroWinklerSimilarity is strsim::jaro_winkler: Jaro with the common-prefix
+// bonus clap applies when it looks for a likely misspelling.
+func jaroWinklerSimilarity(a, b string) float64 {
+	jaro := jaroSimilarity(a, b)
+	prefix := 0
+	arunes := []rune(a)
+	brunes := []rune(b)
+	for prefix < len(arunes) && prefix < len(brunes) && prefix < 4 && arunes[prefix] == brunes[prefix] {
+		prefix++
+	}
+	return jaro + 0.1*float64(prefix)*(1-jaro)
 }
 
 // validateSandboxMode applies clap's value parser for `--sandbox`.
@@ -778,7 +829,10 @@ func clapUsageOptionTokens(command string, args []string, stopAt string) []strin
 }
 
 // clapUsageOptionToken renders one option the way clap's usage block does and
-// reports whether the following argv token was its value.
+// reports whether the following argv token was its value. Long spellings go
+// through clapLongFlagUsageToken so the per-command placeholder overrides apply
+// to both spellings: `sandbox -p x` and `sandbox --profile x` both echo
+// `--profile <CONFIG_PROFILE>`.
 func clapUsageOptionToken(command, arg string) (string, bool) {
 	if strings.Contains(arg, " ") {
 		// Already rendered by clapLongFlagUsageToken: placeholders may carry an
@@ -789,16 +843,20 @@ func clapUsageOptionToken(command, arg string) (string, bool) {
 	if trimmed, _, ok := strings.Cut(arg, "="); ok {
 		name, hasInlineValue = trimmed, true
 	}
-	if spellings, ok := clapCommandShortFlagLongs[command]; ok {
-		if spec, known := spellings[name]; known {
-			if spec.placeholder == "" {
-				return spec.long, false
-			}
-			return spec.long + " " + spec.placeholder, !hasInlineValue
+	if strings.HasPrefix(name, "--") {
+		token := clapLongFlagUsageToken(command, strings.TrimPrefix(name, "--"))
+		// Only a flag whose rendering carries a placeholder eats the next
+		// token; a boolean flag leaves the following option alone.
+		return token, !hasInlineValue && strings.Contains(token, " ")
+	}
+	if spec, known := clapCommandShortFlagLongs[command][name]; known {
+		if spec.placeholder == "" {
+			return spec.long, false
 		}
+		return clapLongFlagUsageToken(command, strings.TrimPrefix(spec.long, "--")), !hasInlineValue
 	}
 	if spec, known := valueOptionSpecs[name]; known {
-		return spec.long + " " + spec.placeholder, !hasInlineValue
+		return clapLongFlagUsageToken(command, strings.TrimPrefix(spec.long, "--")), !hasInlineValue
 	}
 	if placeholder, known := subcommandValuePlaceholders[name]; known {
 		return name + " " + placeholder, !hasInlineValue
@@ -848,8 +906,14 @@ func usageWithUsedOptions(usage string, used []string) string {
 		return strings.Join(kept, " ")
 	}
 	joined := strings.Join(echoed, " ")
-	if strings.Contains(usage, "[OPTIONS]") {
+	if strings.Contains(usage, "[OPTIONS]") && !clapOptionsPrecedesRequired(usage) {
 		return strings.Replace(usage, "[OPTIONS]", joined, 1)
+	}
+	if strings.Contains(usage, "[OPTIONS]") {
+		// clap writes the requirements first and the used options after them,
+		// so a static page whose `[OPTIONS]` sits in front of the required
+		// options drops it and appends the echo behind them.
+		usage = strings.Replace(usage, "[OPTIONS] ", "", 1)
 	}
 	fields := strings.Fields(usage)
 	for idx, field := range fields {
@@ -858,7 +922,7 @@ func usageWithUsedOptions(usage string, used []string) string {
 		}
 		// A placeholder that renders an option's value (`--thread <THREAD>`) is
 		// part of the option, not a positional, so keep looking.
-		if idx > 0 && clapOptionPlaceholder(fields[idx-1]) == field {
+		if idx > 0 && strings.HasPrefix(fields[idx-1], "-") && fields[idx-1] != "--" {
 			continue
 		}
 		expanded := make([]string, 0, len(fields)+1)
@@ -868,6 +932,20 @@ func usageWithUsedOptions(usage string, used []string) string {
 		return strings.Join(expanded, " ")
 	}
 	return usage + " " + joined
+}
+
+// clapOptionsPrecedesRequired reports whether a usage block lists `[OPTIONS]` in
+// front of required options, which clap's smart usage renders in the opposite
+// order (requirements first, then the used options).
+func clapOptionsPrecedesRequired(usage string) bool {
+	fields := strings.Fields(usage)
+	for i, field := range fields {
+		if field != "[OPTIONS]" {
+			continue
+		}
+		return i+1 < len(fields) && strings.HasPrefix(fields[i+1], "-")
+	}
+	return false
 }
 
 // clapOptionPlaceholder returns the value placeholder clap renders for an
@@ -1208,13 +1286,36 @@ var clapLongFlagAliases = map[string]string{
 // command: `--image` is num_args = 1.. at the root and on the session commands
 // but takes a single value inside `codex exec resume`/`fork`.
 var clapLongFlagPlaceholderOverrides = map[string]map[string]string{
-	"exec resume":         {"image": "<FILE>"},
-	"exec fork":           {"image": "<FILE>"},
-	"mcp add":             {"env": "<KEY=VALUE>"},
-	"sandbox":             {"profile": "<CONFIG_PROFILE>"},
-	"exec-server":         {"remote": "<URL>"},
-	"exec-server forward": {"remote": "<URL>"},
-	"migrate-rollouts":    {"thread": "<THREAD_ID>"},
+	"exec resume": {"image": "<FILE>"},
+	"exec fork":   {"image": "<FILE>"},
+	"mcp add":     {"env": "<KEY=VALUE>"},
+	"sandbox": {
+		"profile":                     "<CONFIG_PROFILE>",
+		"permission-profile":          "<NAME>",
+		"sandbox-state-readable-root": "<SANDBOX_STATE_READABLE_ROOT>",
+	},
+	"app-server": {
+		"ws-auth": "<MODE>",
+	},
+	"exec-server": {
+		"remote":                      "<URL>",
+		"ws-auth":                     "<MODE>",
+		"aws-profile":                 "<PROFILE>",
+		"aws-region":                  "<REGION>",
+		"aws-service":                 "<SERVICE>",
+		"concurrent-requests":         "<COUNT>",
+		"linux-sandbox-pid-namespace": "<MODE>",
+	},
+	"exec-server forward": {
+		"remote":                      "<URL>",
+		"ws-auth":                     "<MODE>",
+		"aws-profile":                 "<PROFILE>",
+		"aws-region":                  "<REGION>",
+		"aws-service":                 "<SERVICE>",
+		"concurrent-requests":         "<COUNT>",
+		"linux-sandbox-pid-namespace": "<MODE>",
+	},
+	"migrate-rollouts": {"thread": "<THREAD_ID>"},
 }
 
 // clapCommandShortFlags lists the short aliases each command declares,
@@ -1303,10 +1404,28 @@ type clapLongFlagSuggestion struct {
 // strsim's Jaro score above 0.7, highest wins, and a tie keeps the candidate
 // declared last because clap pops the tail of its ascending list.
 func clapSuggestLongFlag(command, flag string) (clapLongFlagSuggestion, bool) {
+	return clapSuggestLongFlagScored(command, flag, false)
+}
+
+// clapSuggestDeclaredLongFlag is clapSuggestLongFlag without the self-reference
+// guard: clap's second did-you-mean pass walks the top-level subcommands and
+// happily names a flag the subcommand declares verbatim, as in
+// `codex --skip-git-repo-check exec`.
+func clapSuggestDeclaredLongFlag(command, flag string) (clapLongFlagSuggestion, bool) {
+	return clapSuggestLongFlagScored(command, flag, true)
+}
+
+func clapSuggestLongFlagScored(command, flag string, allowExact bool) (clapLongFlagSuggestion, bool) {
 	name := strings.TrimPrefix(flag, "--")
 	best := ""
 	bestScore := 0.0
 	for _, candidate := range clapCommandLongFlags[command] {
+		// A spelling clap declares never reaches the did-you-mean pass, so an
+		// identical candidate means the parser rejected a flag the table still
+		// lists: suggesting it back is never what clap prints.
+		if !allowExact && candidate == name {
+			continue
+		}
 		score := jaroSimilarity(name, candidate)
 		if score <= 0.7 || (best != "" && score < bestScore) {
 			continue
@@ -1384,8 +1503,9 @@ func clapUnexpectedLongFlagError(command, arg string, consumed []string) error {
 			trailingTip = ""
 		}
 		return &UsageError{
-			Message: message + trailingTip,
-			Usage:   clapCommandUsageAfter(command, consumed),
+			Message:    message + trailingTip,
+			Usage:      clapCommandUsageAfter(command, consumed),
+			SmartUsage: clapUsageIsSmart(command),
 		}
 	}
 	if clapTrailingPositionalCommands[command] {
@@ -1395,9 +1515,18 @@ func clapUnexpectedLongFlagError(command, arg string, consumed []string) error {
 	}
 	echoed := append(append([]string{}, consumed...), clapLongFlagUsageToken(command, suggestion.primary))
 	return &UsageError{
-		Message: message + "\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'",
-		Usage:   clapCommandUsageAfter(command, echoed),
+		Message:    message + "\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'",
+		Usage:      clapCommandUsageAfter(command, echoed),
+		SmartUsage: clapUsageIsSmart(command),
+		Suggested:  clapLongFlagUsageToken(command, suggestion.primary),
 	}
+}
+
+// clapUsageIsSmart reports whether the command's unknown-argument diagnostic
+// renders clap's smart usage block. The root command and `codex exec` keep the
+// static page, so decorators must not echo options into them.
+func clapUsageIsSmart(command string) bool {
+	return command != "" && command != "exec"
 }
 
 // clapCommandUsageAfter returns the usage block for an unknown-argument
@@ -1456,11 +1585,13 @@ func sessionUnexpectedArgumentError(command string, consumed []string, arg strin
 			Message: "unexpected argument '" + name + "' found\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'",
 			Usage: sessionClapUsage(command, append(append([]string{}, consumed...),
 				clapLongFlagUsageToken(command, suggestion.primary))),
+			SmartUsage: true,
 		}
 	}
 	return &UsageError{
-		Message: "unexpected argument '" + name + "' found\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'",
-		Usage:   sessionClapUsage(command, consumed),
+		Message:    "unexpected argument '" + name + "' found\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'",
+		Usage:      sessionClapUsage(command, consumed),
+		SmartUsage: true,
 	}
 }
 

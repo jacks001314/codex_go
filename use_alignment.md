@@ -1224,7 +1224,72 @@ one-off captures.
    `TestSubcommandConfigOverrideAcceptanceLikeRust` pinning the Rust-captured
    cases.
 
+49. **The global option surface, deferred value checks and clap's value hints** -
+   entries 47 and 48 taught the flag tables and the pending-value order, but the
+   global `-c`/`--config` only reached part of the tree, the `exec` family
+   accepted shared options clap never marks global, and a bad value aborted the
+   scan before an undeclared flag later in argv could win.
+   - `clapConfigOverrideArg` centralises clap's global override spelling
+     (`-c`, `--config`, `-cvalue`, `--config=value`) and every leaf parser now
+     calls it, so `-c` is accepted on all 18 paths the 0.166 help tree exposes
+     (root, the `exec` family, the session commands, `doctor`, `update`,
+     `completion`, `features`, `debug`, `app-server` (+ daemon / generate /
+     proxy), `cloud`, `exec-server` (+ forward), `mcp`, `plugin`, `sandbox`,
+     `migrate-*`, `remote-control` and `app`). `app-server daemon update
+     -c a=b -y` keeps clap's argv order in the required-argument block.
+   - `exec review` accepts exactly the options `codex exec` marks global
+     (`--model`, the two dangerous bypasses, `--worktree`, plus exec's own
+     `global = true` set), so `exec review --json --strict-config
+     --thread-source --cyber-access-program --skip-git-repo-check --ephemeral
+     --ignore-user-config --ignore-rules --output-schema
+     --output-last-message` parse like Rust, while `--sandbox`, `--color`,
+     `--profile`, `--cd` and `--oss` stay undeclared after `exec resume` /
+     `exec fork` (`unexpected argument '--color' found`, with clap's `--yolo`
+     did-you-mean tip).
+   - `deferClapValueError` records a clap value-parser failure and keeps
+     scanning, so an undeclared flag later in argv still wins
+     (`exec --sandbox x --bogus` reports `--bogus`); the recorded error is
+     reported once the scan ends (`cloud list --limit x`). Raw value-parser
+     diagnostics take part too, which fixed `app-server --code-mode-host`: Go
+     used to drop the URL rejection and start the server.
+   - clap's empty-value rule: `--flag=` (one token) reports on the spot, while
+     `--flag ""` defers, and an enum option reports a *missing* value
+     (`a value is required for '--color <COLOR>' but none was supplied` plus the
+     possible values) instead of an invalid one.
+   - Missing-value placeholders come from the flag itself instead of Go's
+     generic `requires a value`: `--thread <THREAD_ID>`,
+     `--max-mib-per-second <MIB>`, `--linux-sandbox-pid-namespace <MODE>`, and
+     `optionalFlagValue` never binds a leading-dash token as a value
+     (`migrate-rollouts --thread --apply` reports the pending value).
+   - Numeric value parsers distinguish the two clap messages: `--limit`,
+     `--attempts` and `--attempt` report `must be an integer between 1 and 20`
+     for a non-number and `must be between 1 and 20` for a range violation.
+   - `similarValueTip` scores possible values with Jaro-Winkler (> 0.8), the
+     metric behind clap's `did_you_mean`: `--sandbox dangr` suggests
+     `danger-full-access`, `readonly` suggests `read-only` and `on_request`
+     suggests `on-request`, while `onc`, `bogs` and `ON-REQUEST` stay silent.
+   - The flag clap suggests also joins the smart usage block
+     (`doctor --summary --jso` prints `Usage: codex doctor --summary --json`),
+     and a boolean long flag no longer eats the following token while that
+     block is built (`exec review --uncommitted -m x --bogus` echoes
+     `--uncommitted --model <MODEL>`).
+   Evidence: the whole 0.166 option surface - 68 command paths x every declared
+   flag with a bad value plus a trailing `--bogus` (`out/r34-flag-surface.txt`,
+   497/497 byte-identical) - and the 78 cases this round fixed
+   (`out/round34-fixed.txt`, 78/78), plus 400+ round 29-33 regression cases at
+   0 diffs. `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/...
+   ./tcptunnel` passes, with `TestGlobalOptionSurfaceLikeRust` (17
+   Rust-captured diagnostics) and `TestExecReviewAcceptsGlobalOptionsLikeRust`
+   pinning the new surface; `go test -vet=off ./app` keeps only the known
+   baselines.
+
 ## Verification
+
+- The global option surface matches Rust 0.166: `out/r34-flag-surface.txt`
+  walks 68 command paths and probes every declared value flag with a bad value,
+  a bare flag and a trailing `--bogus` (497 cases, 497 identical), and
+  `out/round34-fixed.txt` replays the 78 cases this round fixed. Both compare
+  stdout, stderr and exit status against 0.166.
 
 - The remaining command groups match Rust 0.166 on clap's flag diagnostics:
   127 live cases cover the did-you-mean tip, the `--` workaround tip, clap's
@@ -1555,10 +1620,10 @@ one-off captures.
   - clap's flag did-you-mean now covers the whole command tree (entries 46 and
     47); see the dedicated Still open bullet for the two remaining details.
   - shared options inside a subcommand (entry 37): `--enable`/`--disable` are
-    accepted everywhere and rendered in the usage block, but the hand-written
-    `exec` family usage lines (`exec resume --last --enable f --bogus`,
-    `exec fork --enable f`) do not echo them yet - Rust prints
-    `--last --enable <FEATURE>` / `--enable <FEATURE> <SESSION_ID>`. The
+    accepted everywhere and rendered in the usage block; since entry 49 the
+    only ordering gap left is `exec resume --last --enable f --bogus`, where Go
+    prints `--last [SESSION_ID] --enable <FEATURE> [PROMPT]` and Rust keeps the
+    options together (`--last --enable <FEATURE> [SESSION_ID] [PROMPT]`). The
     pending-value order is aligned since entry 48 (`codex mcp get -c -x1`
     reports `unexpected argument '-x' found`), and `codex review --config a=b`
     keeps working through the subcommand parser's own `-c` handling, which
