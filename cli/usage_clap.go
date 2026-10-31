@@ -757,26 +757,39 @@ func sandboxSetupError(message, usage string) error {
 	return &sandboxSetupDiagnostic{text: clapErrorText(message, usage)}
 }
 
-// sandboxSetupUnexpectedUsage renders clap's smart usage for an unexpected
-// argument: supplied options replace the [OPTIONS] placeholder.
-func sandboxSetupUnexpectedUsage(sandbox *SandboxOptions) string {
-	if sandbox == nil {
-		return sandboxSetupUsageText
-	}
-	user := strings.TrimSpace(sandbox.User) != ""
-	codexHome := strings.TrimSpace(sandbox.CodexHome) != ""
-	if !sandbox.Elevated && !user && !codexHome {
-		return sandboxSetupUsageText
+// sandboxSetupUsageParts renders clap's smart usage for the nested setup
+// parser. codexHomeFirst mirrors the diagnostics where clap lists the missing
+// or required --codex-home before the options it already consumed; the consumed
+// options themselves keep their argv order.
+func sandboxSetupUsageParts(sandbox *SandboxOptions, requireCodexHome bool) string {
+	consumedCodexHome := false
+	if sandbox != nil {
+		for _, option := range sandbox.setupEchoOptions {
+			if option == "--codex-home <DIR>" {
+				consumedCodexHome = true
+			}
+		}
 	}
 	parts := []string{"Usage: setup"}
-	if sandbox.Elevated {
-		parts = append(parts, "--elevated")
-	}
-	if user || codexHome {
+	// A required --codex-home that was never parsed is listed first; an already
+	// consumed one keeps its argv position.
+	if requireCodexHome && !consumedCodexHome {
 		parts = append(parts, "--codex-home <DIR>")
+	}
+	if sandbox != nil {
+		parts = append(parts, sandbox.setupEchoOptions...)
 	}
 	parts = append(parts, "<--user <USER>|--current-user>")
 	return strings.Join(parts, " ")
+}
+
+// sandboxSetupUnexpectedUsage renders clap's smart usage for an unexpected
+// argument: supplied options replace the [OPTIONS] placeholder.
+func sandboxSetupUnexpectedUsage(sandbox *SandboxOptions) string {
+	if sandbox == nil || !sandbox.setupAnyOption {
+		return sandboxSetupUsageText
+	}
+	return sandboxSetupUsageParts(sandbox, false)
 }
 
 // sandboxSetupArgumentError mirrors clap's unexpected-argument diagnostic for
@@ -789,24 +802,14 @@ func sandboxSetupArgumentError(sandbox *SandboxOptions, arg string) error {
 // sandboxSetupMissingUserError mirrors clap's diagnostic when neither --user nor
 // --current-user was supplied.
 func sandboxSetupMissingUserError(sandbox *SandboxOptions) error {
-	parts := []string{"Usage: setup"}
-	if sandbox != nil && sandbox.Elevated {
-		parts = append(parts, "--elevated")
-	}
-	parts = append(parts, "<--user <USER>|--current-user>")
-	return sandboxSetupError(requiredArgumentsMessage("<--user <USER>|--current-user>"), strings.Join(parts, " "))
+	return sandboxSetupError(requiredArgumentsMessage("<--user <USER>|--current-user>"), sandboxSetupUsageParts(sandbox, false))
 }
 
 // sandboxSetupMissingCodexHomeError mirrors clap's diagnostic for --user without
 // the --codex-home it requires. clap lists the missing requirement first and the
 // supplied optional flag after it.
 func sandboxSetupMissingCodexHomeError(sandbox *SandboxOptions) error {
-	parts := []string{"Usage: setup", "--codex-home <DIR>"}
-	if sandbox != nil && sandbox.Elevated {
-		parts = append(parts, "--elevated")
-	}
-	parts = append(parts, "<--user <USER>|--current-user>")
-	return sandboxSetupError(requiredArgumentsMessage("--codex-home <DIR>"), strings.Join(parts, " "))
+	return sandboxSetupError(requiredArgumentsMessage("--codex-home <DIR>"), sandboxSetupUsageParts(sandbox, true))
 }
 
 // sandboxSetupConflictError mirrors clap's conflict diagnostic for --user and
@@ -814,20 +817,7 @@ func sandboxSetupMissingCodexHomeError(sandbox *SandboxOptions) error {
 // block keeps the --codex-home dependency of --user plus the flags already
 // supplied.
 func sandboxSetupConflictError(first, second string, sandbox *SandboxOptions) error {
-	parts := []string{"Usage: setup"}
-	if first == "--user <USER>" {
-		parts = append(parts, "--codex-home <DIR>")
-		if sandbox != nil && sandbox.Elevated {
-			parts = append(parts, "--elevated")
-		}
-	} else {
-		if sandbox != nil && sandbox.Elevated {
-			parts = append(parts, "--elevated")
-		}
-		if sandbox != nil && strings.TrimSpace(sandbox.CodexHome) != "" {
-			parts = append(parts, "--codex-home <DIR>")
-		}
-	}
-	parts = append(parts, "<--user <USER>|--current-user>")
-	return sandboxSetupError("the argument '"+first+"' cannot be used with '"+second+"'", strings.Join(parts, " "))
+	// A conflict that names --user keeps the --codex-home it requires in front
+	// of the consumed options, matching clap's usage builder.
+	return sandboxSetupError("the argument '"+first+"' cannot be used with '"+second+"'", sandboxSetupUsageParts(sandbox, first == "--user <USER>"))
 }

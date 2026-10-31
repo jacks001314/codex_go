@@ -943,6 +943,30 @@ one-off captures.
     `go test -vet=off ./app -run 'MCP|OAuth'` passes with
     `app/mcp_oauth_registration_meta_like_rust_test.go`.
 
+42. **Nested `sandbox setup` presence semantics and usage echo** - Rust's
+    nested clap parser keys the required `<--user <USER>|--current-user>` group,
+    the `--user`/`--current-user` conflict and `--user requires = "codex_home"`
+    off *presence*, so `--user=` and `--user ""` satisfy the group and only fail
+    later on the codex-home requirement or the elevation gate; an empty
+    `--codex-home` value is rejected by clap's `PathBuf` parser.
+    - `SandboxOptions` now records `--user` presence plus the consumed setup
+      options in argv order. `validateSandboxSetupParseDependencies` uses that
+      presence, and `--codex-home` with an empty value (either spelling) reports
+      `a value is required for '--codex-home <DIR>' but none was supplied`.
+    - The nested usage blocks echo consumed options in argv order
+      (`setup --elevated --codex-home <DIR> <--user <USER>|--current-user>`),
+      list a required `--codex-home` first only when it was never parsed, drop
+      `[OPTIONS]` once any option was consumed, and keep `--user` first in the
+      conflict when it preceded `--current-user`, even with an empty value.
+    - `sandbox.SetupCommand.UserSet` carries the presence into the run layer, so
+      `--user "" --codex-home <dir>` reaches the elevation gate like Rust
+      instead of failing the Go-only "user required" validation.
+    Evidence: 26 live comparisons against 0.166
+    (`out/round27-sandbox-setup.txt`) are byte-identical on stderr and exit
+    status; `go test ./cli ./sandbox` passes with the extended
+    `TestSandboxSetupClapDiagnosticsLikeRust`,
+    `TestSandboxSetupUserPresenceLikeRust` and `TestValidateUserPresence`.
+
 ## Verification
 
 - The missing-required surface matches Rust 0.166: `probe_missing_r25` and
@@ -1189,6 +1213,16 @@ one-off captures.
   `--oauth-client-registration` accepts `auto|cimd|dcr` with clap's invalid and
   missing-value diagnostics.
 
+- `sandbox setup` presence round: `go build -o bin\codex.exe .\cmd\codex`
+  succeeds, `gofmt -l` is clean for the touched files,
+  `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/... ./tcptunnel`
+  pass and `go test -vet=off ./app` keeps the two known failures plus the flaky
+  auth-concurrency case, which passes standalone. 26 live comparisons against
+  0.166 (`out/round27-sandbox-setup.txt`) are byte-identical: `--user=` honours
+  the required group and codex-home dependency, empty `--codex-home` values
+  report clap's missing-value block, and the usage blocks echo consumed options
+  in argv order.
+
 ## Still open
 
 - `codex resume -i a.png b.png` (TUI picker path) also uses Rust's variadic
@@ -1232,8 +1266,6 @@ one-off captures.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
-  - clap treats `--user=` as a satisfied (empty) value for the nested `setup`
-    parser where Go reports the missing group.
 - `apply_patch` on 2026-10-31: Rust 0.166 (`sandbox = "unelevated"`) refused to
   write under `%TEMP%` (`Access ... is denied`) while Go wrote the file; that
   sandbox-policy difference is still unaligned. Go also still appends

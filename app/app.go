@@ -296,6 +296,7 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 			User:        opts.User,
 			CurrentUser: opts.CurrentUser,
 			CodexHome:   opts.CodexHome,
+			UserSet:     opts.SetupUserProvided(),
 		}
 		if err := cmd.Validate(); err != nil {
 			return err

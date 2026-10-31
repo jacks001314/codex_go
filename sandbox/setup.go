@@ -16,6 +16,9 @@ type SetupCommand struct {
 	User        string
 	CurrentUser bool
 	CodexHome   string
+	// UserSet records that --user was supplied even when its value is empty,
+	// mirroring clap's presence-based required group in the Rust parser.
+	UserSet bool
 }
 
 type SetupIdentity struct {
@@ -40,6 +43,7 @@ func ParseSetupCommand(args []string) (*SetupCommand, bool, error) {
 				return nil, true, fmt.Errorf("--user requires a value")
 			}
 			cmd.User = args[i]
+			cmd.UserSet = true
 		case "--codex-home":
 			i++
 			if i >= len(args) {
@@ -63,13 +67,14 @@ func (c *SetupCommand) Validate() error {
 	if !c.Elevated {
 		return fmt.Errorf("`codex sandbox setup` currently requires --elevated")
 	}
-	if c.CurrentUser && c.User != "" {
+	userSet := c.UserSet || strings.TrimSpace(c.User) != ""
+	if c.CurrentUser && userSet {
 		return fmt.Errorf("--user conflicts with --current-user")
 	}
-	if !c.CurrentUser && strings.TrimSpace(c.User) == "" {
+	if !c.CurrentUser && !userSet {
 		return fmt.Errorf("--user or --current-user is required")
 	}
-	if strings.TrimSpace(c.User) != "" && strings.TrimSpace(c.CodexHome) == "" {
+	if userSet && strings.TrimSpace(c.CodexHome) == "" {
 		return fmt.Errorf("--codex-home is required with --user")
 	}
 	return nil

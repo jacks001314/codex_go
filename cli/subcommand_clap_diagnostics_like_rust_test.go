@@ -437,6 +437,51 @@ func TestSandboxSetupClapDiagnosticsLikeRust(t *testing.T) {
 			args:    []string{"sandbox", "setup", "--current-user", "--user", "a"},
 			message: "error: the argument '--current-user' cannot be used with '--user <USER>'\n\nUsage: setup <--user <USER>|--current-user>" + hint,
 		},
+		{
+			name:    "empty user still requires codex home",
+			args:    []string{"sandbox", "setup", "--elevated", "--user="},
+			message: "error: the following required arguments were not provided:\n  --codex-home <DIR>\n\nUsage: setup --codex-home <DIR> --elevated <--user <USER>|--current-user>" + hint,
+		},
+		{
+			name:    "empty user without elevated",
+			args:    []string{"sandbox", "setup", "--user="},
+			message: "error: the following required arguments were not provided:\n  --codex-home <DIR>\n\nUsage: setup --codex-home <DIR> <--user <USER>|--current-user>" + hint,
+		},
+		{
+			name:    "missing user group echoes codex home",
+			args:    []string{"sandbox", "setup", "--elevated", "--codex-home", `C:\tmp`},
+			message: "error: the following required arguments were not provided:\n  <--user <USER>|--current-user>\n\nUsage: setup --elevated --codex-home <DIR> <--user <USER>|--current-user>" + hint,
+		},
+		{
+			name:    "missing user group keeps argv order",
+			args:    []string{"sandbox", "setup", "--codex-home", `C:\tmp`, "--elevated"},
+			message: "error: the following required arguments were not provided:\n  <--user <USER>|--current-user>\n\nUsage: setup --codex-home <DIR> --elevated <--user <USER>|--current-user>" + hint,
+		},
+		{
+			name:    "current user conflicts with empty user",
+			args:    []string{"sandbox", "setup", "--elevated", "--current-user", "--user="},
+			message: "error: the argument '--current-user' cannot be used with '--user <USER>'\n\nUsage: setup --elevated <--user <USER>|--current-user>" + hint,
+		},
+		{
+			name:    "empty user conflicts with current user",
+			args:    []string{"sandbox", "setup", "--elevated", "--user=", "--current-user"},
+			message: "error: the argument '--user <USER>' cannot be used with '--current-user'\n\nUsage: setup --codex-home <DIR> --elevated <--user <USER>|--current-user>" + hint,
+		},
+		{
+			name:    "conflict keeps consumed codex home in argv order",
+			args:    []string{"sandbox", "setup", "--elevated", "--codex-home", `C:\tmp`, "--user=", "--current-user"},
+			message: "error: the argument '--user <USER>' cannot be used with '--current-user'\n\nUsage: setup --elevated --codex-home <DIR> <--user <USER>|--current-user>" + hint,
+		},
+		{
+			name:    "empty codex home value",
+			args:    []string{"sandbox", "setup", "--codex-home="},
+			message: "error: a value is required for '--codex-home <DIR>' but none was supplied" + hint,
+		},
+		{
+			name:    "unexpected flag after user drops options placeholder",
+			args:    []string{"sandbox", "setup", "--user", "bob", "--bogus"},
+			message: "error: unexpected argument '--bogus' found\n\nUsage: setup <--user <USER>|--current-user>" + hint,
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -519,5 +564,25 @@ func TestJaroSimilarityMatchesStrsimLikeRust(t *testing.T) {
 	}
 	if suggestions := suggestedSubcommands("logot", subcommandCandidates["mcp"]); strings.Join(suggestions, ",") != "login,logout" {
 		t.Fatalf("suggestedSubcommands(logot, mcp) = %v, want [login logout]", suggestions)
+	}
+}
+
+// TestSandboxSetupUserPresenceLikeRust keeps clap's presence semantics: an empty
+// `--user=` satisfies the required group and the value is preserved.
+func TestSandboxSetupUserPresenceLikeRust(t *testing.T) {
+	for _, args := range [][]string{
+		{"sandbox", "setup", "--elevated", "--user", "", "--codex-home", `C:\tmp`},
+		{"sandbox", "setup", "--elevated", "--user=", "--codex-home", `C:\tmp`},
+	} {
+		parsed, err := Parse(args)
+		if err != nil {
+			t.Fatalf("Parse(%v) error = %v, want the empty user accepted", args, err)
+		}
+		if !parsed.Sandbox.SetupUserProvided() {
+			t.Fatalf("Parse(%v) SetupUserProvided() = false, want true", args)
+		}
+		if parsed.Sandbox.User != "" {
+			t.Fatalf("Parse(%v) User = %q, want empty", args, parsed.Sandbox.User)
+		}
 	}
 }

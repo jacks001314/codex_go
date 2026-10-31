@@ -268,6 +268,21 @@ type SandboxOptions struct {
 	// `--current-user`, so the nested setup parser names the arguments in
 	// clap's order when it reports the conflict.
 	setupUserFirst bool
+	// setupUserSet records that `--user` was supplied at all: clap's required
+	// group and conflicts fire on presence, so `--user=` still counts.
+	setupUserSet bool
+	// setupEchoOptions records the standalone nested-setup options in argv
+	// order; clap echoes them in the usage block of its diagnostics.
+	setupEchoOptions []string
+	// setupAnyOption records that the nested parser consumed any option, which
+	// makes clap drop the [OPTIONS] placeholder from the usage block.
+	setupAnyOption bool
+}
+
+// SetupUserProvided reports whether `--user` was supplied, including with an
+// empty value: clap's required group and `requires` relations fire on presence.
+func (o *SandboxOptions) SetupUserProvided() bool {
+	return o != nil && o.setupUserSet
 }
 
 type ExecpolicyOptions struct {
@@ -2360,11 +2375,14 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			switch {
 			case arg == "--elevated":
 				sandbox.Elevated = true
+				sandbox.setupEchoOptions = append(sandbox.setupEchoOptions, "--elevated")
+				sandbox.setupAnyOption = true
 			case arg == "--current-user":
-				if strings.TrimSpace(sandbox.User) == "" {
+				if !sandbox.setupUserSet {
 					sandbox.setupUserFirst = false
 				}
 				sandbox.CurrentUser = true
+				sandbox.setupAnyOption = true
 			case arg == "--user":
 				if i+1 >= len(args) {
 					return sandboxSetupMissingValueError("--user <USER>")
@@ -2374,12 +2392,16 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 					return err
 				}
 				sandbox.User = value
+				sandbox.setupUserSet = true
+				sandbox.setupAnyOption = true
 				if !sandbox.CurrentUser {
 					sandbox.setupUserFirst = true
 				}
 				i = next
 			case strings.HasPrefix(arg, "--user="):
 				sandbox.User = strings.TrimPrefix(arg, "--user=")
+				sandbox.setupUserSet = true
+				sandbox.setupAnyOption = true
 				if !sandbox.CurrentUser {
 					sandbox.setupUserFirst = true
 				}
@@ -2391,10 +2413,21 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 				if err != nil {
 					return err
 				}
+				if value == "" {
+					return sandboxSetupMissingValueError("--codex-home <DIR>")
+				}
 				sandbox.CodexHome = value
+				sandbox.setupEchoOptions = append(sandbox.setupEchoOptions, "--codex-home <DIR>")
+				sandbox.setupAnyOption = true
 				i = next
 			case strings.HasPrefix(arg, "--codex-home="):
-				sandbox.CodexHome = strings.TrimPrefix(arg, "--codex-home=")
+				value := strings.TrimPrefix(arg, "--codex-home=")
+				if value == "" {
+					return sandboxSetupMissingValueError("--codex-home <DIR>")
+				}
+				sandbox.CodexHome = value
+				sandbox.setupEchoOptions = append(sandbox.setupEchoOptions, "--codex-home <DIR>")
+				sandbox.setupAnyOption = true
 			default:
 				return sandboxSetupArgumentError(sandbox, arg)
 			}
@@ -2580,16 +2613,18 @@ func validateSandboxSetupParseDependencies(sandbox *SandboxOptions) error {
 	if sandbox == nil {
 		return nil
 	}
-	if sandbox.CurrentUser && strings.TrimSpace(sandbox.User) != "" {
+	if sandbox.CurrentUser && sandbox.setupUserSet {
 		if sandbox.setupUserFirst {
 			return sandboxSetupConflictError("--user <USER>", "--current-user", sandbox)
 		}
 		return sandboxSetupConflictError("--current-user", "--user <USER>", sandbox)
 	}
-	if !sandbox.CurrentUser && strings.TrimSpace(sandbox.User) == "" {
+	if !sandbox.CurrentUser && !sandbox.setupUserSet {
 		return sandboxSetupMissingUserError(sandbox)
 	}
-	if strings.TrimSpace(sandbox.User) != "" && strings.TrimSpace(sandbox.CodexHome) == "" {
+	// `--user` requires a codex home; clap keys off the parsed value, so a
+	// whitespace-only path satisfies the requirement like Rust's PathBuf.
+	if sandbox.setupUserSet && sandbox.CodexHome == "" {
 		return sandboxSetupMissingCodexHomeError(sandbox)
 	}
 	return nil
